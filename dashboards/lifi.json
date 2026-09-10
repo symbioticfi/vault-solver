@@ -7,9 +7,7 @@
           "kind": "DataQuery",
           "group": "grafana",
           "version": "v0",
-          "datasource": {
-            "name": "-- Grafana --"
-          },
+          "datasource": {"name": "-- Grafana --"},
           "spec": {}
         },
         "enable": true,
@@ -17,14 +15,12 @@
         "iconColor": "rgba(0, 211, 255, 1)",
         "name": "Annotations & Alerts",
         "builtIn": true,
-        "legacyOptions": {
-          "type": "dashboard"
-        }
+        "legacyOptions": {"type": "dashboard"}
       }
     }
   ],
   "cursorSync": "Crosshair",
-  "description": "Single-instance LI.FI standing-quote, feed, worker-queue, and fill dashboard. Native Grafana Dashboard Schema v2 delivery; Prometheus queries are scoped by namespace, pod, job, and instance. Requires the metric families documented in the repository README.",
+  "description": "Grafana v2 example for vault-solver metrics. Uses example scrape labels namespace and pod; adapt selectors, grouping and table fields to your collection setup. Choose a Prometheus-compatible datasource. Counters cover the selected interval; current state uses current samples. Missing data is not a healthy state.",
   "editable": true,
   "elements": {
     "panel-10": {
@@ -32,7 +28,7 @@
       "spec": {
         "id": 10,
         "title": "Advertised input ceiling by pair",
-        "description": "Maximum active input per pair; alternative curves are maxed, not summed.",
+        "description": "Maximum active input per pair; alternative curves are maxed, not summed. Values are shown per namespace/pod across matching scrape targets.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -45,12 +41,10 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "label_replace((label_replace(((max by (token_in, token_out, token_in_decimals, token_out_decimals) (lifi_active_quote_max_input_atomic_units{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"})) > 0), \"token_in_display\", \"\u200b$1\", \"token_in\", \"(.*)\")), \"token_out_display\", \"\u200b$1\", \"token_out\", \"(.*)\")",
+                      "expr": "label_replace((label_replace(((max by (namespace, pod, token_in, token_out, token_in_decimals, token_out_decimals) (lifi_active_quote_max_input_atomic_units{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"})) > 0), \"token_in_display\", \"​$1\", \"token_in\", \"(.*)\")), \"token_out_display\", \"​$1\", \"token_out\", \"(.*)\")",
                       "format": "table",
                       "instant": true,
                       "legendFormat": "",
@@ -64,22 +58,15 @@
             ],
             "transformations": [
               {
-                "kind": "organize",
+                "kind": "Transformation",
                 "spec": {
-                  "id": "organize",
                   "options": {
-                    "excludeByName": {
-                      "Time": true,
-                      "token_in": true,
-                      "token_out": true
-                    },
-                    "indexByName": {},
-                    "renameByName": {
-                      "token_in_display": "token_in",
-                      "token_out_display": "token_out"
-                    }
+                    "excludeByName": {"Time": true, "token_in": true, "token_out": true, "job": true, "instance": true},
+                    "indexByName": {"namespace": 0, "pod": 1},
+                    "renameByName": {"token_in_display": "token_in", "token_out_display": "token_out", "namespace": "Namespace", "pod": "Pod"}
                   }
-                }
+                },
+                "group": "organize"
               }
             ],
             "queryOptions": {}
@@ -90,69 +77,42 @@
           "group": "table",
           "version": "",
           "spec": {
-            "options": {
-              "cellHeight": "sm",
-              "showHeader": true
-            },
+            "options": {"cellHeight": "sm", "showHeader": true, "enablePagination": true},
             "fieldConfig": {
               "defaults": {
-                "unit": "none",
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
-                    {
-                      "value": null,
-                      "color": "green"
-                    }
+                    {"value": 0, "color": "green"}
                   ]
                 },
-                "color": {
-                  "mode": "palette-classic"
-                }
+                "color": {"mode": "palette-classic"}
               },
               "overrides": [
                 {
-                  "matcher": {
-                    "id": "byName",
-                    "options": "Value"
-                  },
+                  "matcher": {"id": "byName", "options": "Value"},
                   "properties": [
-                    {
-                      "id": "unit",
-                      "value": "sci"
-                    },
-                    {
-                      "id": "decimals",
-                      "value": 3
-                    },
-                    {
-                      "id": "custom.width",
-                      "value": 180
-                    }
+                    {"id": "unit", "value": "sci"},
+                    {"id": "decimals", "value": 3},
+                    {"id": "custom.width", "value": 180}
                   ]
                 },
                 {
-                  "matcher": {
-                    "id": "byName",
-                    "options": "token_in"
-                  },
+                  "matcher": {"id": "byName", "options": "token_in"},
                   "properties": [
-                    {
-                      "id": "custom.width",
-                      "value": 260
-                    }
+                    {"id": "custom.width", "value": 260}
                   ]
                 },
                 {
-                  "matcher": {
-                    "id": "byName",
-                    "options": "token_out"
-                  },
+                  "matcher": {"id": "byName", "options": "token_out"},
                   "properties": [
-                    {
-                      "id": "custom.width",
-                      "value": 260
-                    }
+                    {"id": "custom.width", "value": 260}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Pod"},
+                  "properties": [
+                    {"id": "custom.width", "value": 360}
                   ]
                 }
               ]
@@ -167,7 +127,7 @@
       "spec": {
         "id": 11,
         "title": "Published quote state",
-        "description": "Current standing quote and range population over time.",
+        "description": "Current standing quote and range population over time. Values are shown per namespace/pod across matching scrape targets.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -180,13 +140,11 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "lifi_active_quotes{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
-                      "legendFormat": "quotes",
+                      "expr": "max by (namespace, pod) (lifi_active_quotes{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"})",
+                      "legendFormat": "{{pod}} · quotes",
                       "range": true
                     }
                   },
@@ -201,13 +159,11 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "lifi_active_quote_ranges{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
-                      "legendFormat": "ranges",
+                      "expr": "max by (namespace, pod) (lifi_active_quote_ranges{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"})",
+                      "legendFormat": "{{pod}} · ranges",
                       "range": true
                     }
                   },
@@ -227,19 +183,12 @@
           "spec": {
             "options": {
               "legend": {
-                "calcs": [
-                  "lastNotNull",
-                  "max"
-                ],
+                "calcs": ["lastNotNull", "max"],
                 "displayMode": "table",
                 "placement": "bottom",
                 "showLegend": true
               },
-              "tooltip": {
-                "hideZeros": false,
-                "mode": "multi",
-                "sort": "desc"
-              }
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
             },
             "fieldConfig": {
               "defaults": {
@@ -247,45 +196,23 @@
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
-                    {
-                      "value": null,
-                      "color": "green"
-                    }
+                    {"value": 0, "color": "green"}
                   ]
                 },
-                "color": {
-                  "mode": "palette-classic"
-                },
+                "color": {"mode": "palette-classic"},
                 "custom": {
-                  "axisBorderShow": false,
-                  "axisCenteredZero": false,
                   "axisColorMode": "text",
                   "axisLabel": "",
                   "axisPlacement": "auto",
-                  "barAlignment": 0,
-                  "drawStyle": "line",
                   "fillOpacity": 12,
-                  "gradientMode": "none",
-                  "hideFrom": {
-                    "legend": false,
-                    "tooltip": false,
-                    "viz": false
-                  },
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
                   "lineInterpolation": "smooth",
                   "lineWidth": 2,
                   "pointSize": 5,
-                  "scaleDistribution": {
-                    "type": "linear"
-                  },
+                  "scaleDistribution": {"type": "linear"},
                   "showPoints": "never",
                   "spanNulls": false,
-                  "stacking": {
-                    "group": "A",
-                    "mode": "none"
-                  },
-                  "thresholdsStyle": {
-                    "mode": "off"
-                  }
+                  "thresholdsStyle": {"mode": "off"}
                 }
               },
               "overrides": []
@@ -300,7 +227,7 @@
       "spec": {
         "id": 12,
         "title": "Quote/recovery operation p95",
-        "description": "Publication, suspension, and recovery latency trends.",
+        "description": "Publication, suspension, and recovery latency trends. Values are shown per namespace/pod across matching scrape targets.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -313,13 +240,11 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "histogram_quantile(0.95, sum by (le, operation) (rate(solver_bot_external_operation_duration_seconds_bucket{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"lifi-samechain\"}[$__rate_interval])))",
-                      "legendFormat": "{{operation}}",
+                      "expr": "histogram_quantile(0.95, sum by (namespace, pod, le, operation) (rate(solver_bot_external_operation_duration_seconds_bucket{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"lifi-samechain\"}[$__rate_interval])))",
+                      "legendFormat": "{{pod}} · {{operation}}",
                       "range": true
                     }
                   },
@@ -339,19 +264,12 @@
           "spec": {
             "options": {
               "legend": {
-                "calcs": [
-                  "lastNotNull",
-                  "max"
-                ],
+                "calcs": ["lastNotNull", "max"],
                 "displayMode": "table",
                 "placement": "bottom",
                 "showLegend": true
               },
-              "tooltip": {
-                "hideZeros": false,
-                "mode": "multi",
-                "sort": "desc"
-              }
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
             },
             "fieldConfig": {
               "defaults": {
@@ -359,45 +277,23 @@
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
-                    {
-                      "value": null,
-                      "color": "green"
-                    }
+                    {"value": 0, "color": "green"}
                   ]
                 },
-                "color": {
-                  "mode": "palette-classic"
-                },
+                "color": {"mode": "palette-classic"},
                 "custom": {
-                  "axisBorderShow": false,
-                  "axisCenteredZero": false,
                   "axisColorMode": "text",
                   "axisLabel": "",
                   "axisPlacement": "auto",
-                  "barAlignment": 0,
-                  "drawStyle": "line",
                   "fillOpacity": 12,
-                  "gradientMode": "none",
-                  "hideFrom": {
-                    "legend": false,
-                    "tooltip": false,
-                    "viz": false
-                  },
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
                   "lineInterpolation": "smooth",
                   "lineWidth": 2,
                   "pointSize": 5,
-                  "scaleDistribution": {
-                    "type": "linear"
-                  },
+                  "scaleDistribution": {"type": "linear"},
                   "showPoints": "never",
                   "spanNulls": false,
-                  "stacking": {
-                    "group": "A",
-                    "mode": "none"
-                  },
-                  "thresholdsStyle": {
-                    "mode": "off"
-                  }
+                  "thresholdsStyle": {"mode": "off"}
                 }
               },
               "overrides": []
@@ -412,7 +308,7 @@
       "spec": {
         "id": 14,
         "title": "Processing and queue-drop totals",
-        "description": "Submitted/deferred/dropped decisions plus bounded queue-full drops.",
+        "description": "Submitted/deferred/dropped decisions plus bounded queue-full drops. Values are shown per namespace/pod across matching scrape targets.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -425,14 +321,12 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(sum by (outcome) (increase(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"lifi-samechain\",event=\"order_processing\"}[$__range])) or label_replace(sum by (outcome) (increase(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"lifi-samechain\",event=\"queue_drop\"}[$__range])), \"outcome\", \"queue_drop:$1\", \"outcome\", \"(.*)\")) > 0",
+                      "expr": "(sum by (namespace, pod, outcome) (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"lifi-samechain\",event=\"order_processing\"}[$__range])) or label_replace(sum by (namespace, pod, outcome) (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"lifi-samechain\",event=\"queue_drop\"}[$__range])), \"outcome\", \"queue_drop:$1\", \"outcome\", \"(.*)\")) > 0",
                       "instant": true,
-                      "legendFormat": "{{outcome}}",
+                      "legendFormat": "{{pod}} · {{outcome}}",
                       "range": false
                     }
                   },
@@ -457,9 +351,7 @@
               "namePlacement": "top",
               "orientation": "horizontal",
               "reduceOptions": {
-                "calcs": [
-                  "lastNotNull"
-                ],
+                "calcs": ["lastNotNull"],
                 "fields": "",
                 "values": false
               },
@@ -475,15 +367,10 @@
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
-                    {
-                      "value": null,
-                      "color": "green"
-                    }
+                    {"value": 0, "color": "green"}
                   ]
                 },
-                "color": {
-                  "mode": "palette-classic"
-                }
+                "color": {"mode": "palette-classic"}
               },
               "overrides": []
             }
@@ -497,7 +384,7 @@
       "spec": {
         "id": 15,
         "title": "Queued backlog",
-        "description": "Backlog growth and failure to drain by retry stage.",
+        "description": "Backlog growth and failure to drain by retry stage. Values are shown per namespace/pod across matching scrape targets.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -510,13 +397,11 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "lifi_order_backlog{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
-                      "legendFormat": "{{stage}}",
+                      "expr": "max by (namespace, pod, stage) (lifi_order_backlog{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"})",
+                      "legendFormat": "{{pod}} · {{stage}}",
                       "range": true
                     }
                   },
@@ -536,19 +421,12 @@
           "spec": {
             "options": {
               "legend": {
-                "calcs": [
-                  "lastNotNull",
-                  "max"
-                ],
+                "calcs": ["lastNotNull", "max"],
                 "displayMode": "table",
                 "placement": "bottom",
                 "showLegend": true
               },
-              "tooltip": {
-                "hideZeros": false,
-                "mode": "multi",
-                "sort": "desc"
-              }
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
             },
             "fieldConfig": {
               "defaults": {
@@ -556,45 +434,24 @@
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
-                    {
-                      "value": null,
-                      "color": "green"
-                    }
+                    {"value": 0, "color": "green"}
                   ]
                 },
-                "color": {
-                  "mode": "palette-classic"
-                },
+                "color": {"mode": "palette-classic"},
                 "custom": {
-                  "axisBorderShow": false,
-                  "axisCenteredZero": false,
                   "axisColorMode": "text",
                   "axisLabel": "",
                   "axisPlacement": "auto",
-                  "barAlignment": 0,
-                  "drawStyle": "line",
                   "fillOpacity": 28,
-                  "gradientMode": "none",
-                  "hideFrom": {
-                    "legend": false,
-                    "tooltip": false,
-                    "viz": false
-                  },
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
                   "lineInterpolation": "smooth",
                   "lineWidth": 2,
                   "pointSize": 5,
-                  "scaleDistribution": {
-                    "type": "linear"
-                  },
+                  "scaleDistribution": {"type": "linear"},
                   "showPoints": "never",
                   "spanNulls": false,
-                  "stacking": {
-                    "group": "A",
-                    "mode": "normal"
-                  },
-                  "thresholdsStyle": {
-                    "mode": "off"
-                  }
+                  "stacking": {"group": "A", "mode": "normal"},
+                  "thresholdsStyle": {"mode": "off"}
                 }
               },
               "overrides": []
@@ -609,7 +466,7 @@
       "spec": {
         "id": 16,
         "title": "Nearest queued deadline",
-        "description": "Remaining protocol time for each non-empty queue stage.",
+        "description": "Remaining protocol time for each non-empty queue stage. Values are shown per namespace/pod across matching scrape targets.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -622,14 +479,12 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(clamp_min((lifi_order_nearest_deadline_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}) - time(), 0) * ((lifi_order_nearest_deadline_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}) > bool time())) > 0",
+                      "expr": "max by (namespace, pod, stage) ((clamp_min((lifi_order_nearest_deadline_timestamp{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"}) - time(), 0) * ((lifi_order_nearest_deadline_timestamp{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"}) > bool time())) > 0)",
                       "instant": true,
-                      "legendFormat": "{{stage}}",
+                      "legendFormat": "{{pod}} · {{stage}}",
                       "range": false
                     }
                   },
@@ -654,9 +509,7 @@
               "namePlacement": "top",
               "orientation": "horizontal",
               "reduceOptions": {
-                "calcs": [
-                  "lastNotNull"
-                ],
+                "calcs": ["lastNotNull"],
                 "fields": "",
                 "values": false
               },
@@ -671,15 +524,10 @@
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
-                    {
-                      "value": null,
-                      "color": "blue"
-                    }
+                    {"value": 0, "color": "blue"}
                   ]
                 },
-                "color": {
-                  "mode": "palette-classic"
-                }
+                "color": {"mode": "palette-classic"}
               },
               "overrides": []
             }
@@ -693,7 +541,7 @@
       "spec": {
         "id": 18,
         "title": "Fill transaction outcomes",
-        "description": "Exact terminal txmanager outcomes over the selected range.",
+        "description": "Exact terminal txmanager outcomes over the selected range. Values are shown per namespace/pod across matching scrape targets.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -706,12 +554,10 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(sum by (outcome) (increase(solver_bot_txmanager_requests_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",label=\"lifi-fill\"}[$__range]))) > 0",
+                      "expr": "(sum by (namespace, pod, outcome) (increase(solver_bot_txmanager_requests_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",label=\"lifi-fill\"}[$__range]))) > 0",
                       "format": "table",
                       "instant": true,
                       "legendFormat": "",
@@ -725,17 +571,15 @@
             ],
             "transformations": [
               {
-                "kind": "organize",
+                "kind": "Transformation",
                 "spec": {
-                  "id": "organize",
                   "options": {
-                    "excludeByName": {
-                      "Time": true
-                    },
-                    "indexByName": {},
-                    "renameByName": {}
+                    "excludeByName": {"Time": true, "job": true, "instance": true},
+                    "indexByName": {"namespace": 0, "pod": 1},
+                    "renameByName": {"namespace": "Namespace", "pod": "Pod"}
                   }
-                }
+                },
+                "group": "organize"
               }
             ],
             "queryOptions": {}
@@ -746,45 +590,30 @@
           "group": "table",
           "version": "",
           "spec": {
-            "options": {
-              "cellHeight": "sm",
-              "showHeader": true
-            },
+            "options": {"cellHeight": "sm", "showHeader": true, "enablePagination": true},
             "fieldConfig": {
               "defaults": {
-                "unit": "none",
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
-                    {
-                      "value": null,
-                      "color": "green"
-                    }
+                    {"value": 0, "color": "green"}
                   ]
                 },
-                "color": {
-                  "mode": "palette-classic"
-                }
+                "color": {"mode": "palette-classic"}
               },
               "overrides": [
                 {
-                  "matcher": {
-                    "id": "byName",
-                    "options": "Value"
-                  },
+                  "matcher": {"id": "byName", "options": "Value"},
                   "properties": [
-                    {
-                      "id": "unit",
-                      "value": "short"
-                    },
-                    {
-                      "id": "decimals",
-                      "value": 0
-                    },
-                    {
-                      "id": "custom.width",
-                      "value": 140
-                    }
+                    {"id": "unit", "value": "short"},
+                    {"id": "decimals", "value": 0},
+                    {"id": "custom.width", "value": 140}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Pod"},
+                  "properties": [
+                    {"id": "custom.width", "value": 360}
                   ]
                 }
               ]
@@ -799,7 +628,7 @@
       "spec": {
         "id": 19,
         "title": "Successful fill amounts",
-        "description": "Receipt-confirmed token amounts; planned surplus is not realized PnL.",
+        "description": "Receipt-confirmed token amounts; planned surplus is not realized PnL. Values are shown per namespace/pod across matching scrape targets.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -812,12 +641,10 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "label_replace(((sum by (asset, kind) (increase(solver_bot_workflow_amount_atomic_units_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"lifi-samechain\",event=\"fill\"}[$__range]))) > 0), \"token_display\", \"\u200b$1\", \"asset\", \"(.*)\")",
+                      "expr": "label_replace(((sum by (namespace, pod, asset, kind) (increase(solver_bot_workflow_amount_atomic_units_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"lifi-samechain\",event=\"fill\"}[$__range]))) > 0), \"token_display\", \"​$1\", \"asset\", \"(.*)\")",
                       "format": "table",
                       "instant": true,
                       "legendFormat": "",
@@ -831,20 +658,15 @@
             ],
             "transformations": [
               {
-                "kind": "organize",
+                "kind": "Transformation",
                 "spec": {
-                  "id": "organize",
                   "options": {
-                    "excludeByName": {
-                      "Time": true,
-                      "asset": true
-                    },
-                    "indexByName": {},
-                    "renameByName": {
-                      "token_display": "token"
-                    }
+                    "excludeByName": {"Time": true, "asset": true, "job": true, "instance": true},
+                    "indexByName": {"namespace": 0, "pod": 1},
+                    "renameByName": {"token_display": "token", "namespace": "Namespace", "pod": "Pod"}
                   }
-                }
+                },
+                "group": "organize"
               }
             ],
             "queryOptions": {}
@@ -855,57 +677,36 @@
           "group": "table",
           "version": "",
           "spec": {
-            "options": {
-              "cellHeight": "sm",
-              "showHeader": true
-            },
+            "options": {"cellHeight": "sm", "showHeader": true, "enablePagination": true},
             "fieldConfig": {
               "defaults": {
-                "unit": "none",
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
-                    {
-                      "value": null,
-                      "color": "green"
-                    }
+                    {"value": 0, "color": "green"}
                   ]
                 },
-                "color": {
-                  "mode": "palette-classic"
-                }
+                "color": {"mode": "palette-classic"}
               },
               "overrides": [
                 {
-                  "matcher": {
-                    "id": "byName",
-                    "options": "Value"
-                  },
+                  "matcher": {"id": "byName", "options": "Value"},
                   "properties": [
-                    {
-                      "id": "unit",
-                      "value": "sci"
-                    },
-                    {
-                      "id": "decimals",
-                      "value": 3
-                    },
-                    {
-                      "id": "custom.width",
-                      "value": 140
-                    }
+                    {"id": "unit", "value": "sci"},
+                    {"id": "decimals", "value": 3},
+                    {"id": "custom.width", "value": 140}
                   ]
                 },
                 {
-                  "matcher": {
-                    "id": "byName",
-                    "options": "token"
-                  },
+                  "matcher": {"id": "byName", "options": "token"},
                   "properties": [
-                    {
-                      "id": "custom.width",
-                      "value": 220
-                    }
+                    {"id": "custom.width", "value": 220}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Pod"},
+                  "properties": [
+                    {"id": "custom.width", "value": 360}
                   ]
                 }
               ]
@@ -920,7 +721,6 @@
       "spec": {
         "id": 2,
         "title": "Order feed",
-        "description": "",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -933,14 +733,12 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "lifi_order_feed_connected{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "expr": "min(min by (namespace, pod) (lifi_order_feed_connected{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"}))",
                       "instant": true,
-                      "legendFormat": "connection",
+                      "legendFormat": "Order feed",
                       "range": false
                     }
                   },
@@ -959,19 +757,18 @@
           "version": "",
           "spec": {
             "options": {
-              "colorMode": "background_solid",
+              "colorMode": "value",
               "graphMode": "none",
-              "justifyMode": "auto",
+              "justifyMode": "center",
               "orientation": "auto",
               "reduceOptions": {
-                "calcs": [
-                  "lastNotNull"
-                ],
+                "calcs": ["lastNotNull"],
                 "fields": "",
                 "values": false
               },
-              "textMode": "auto",
-              "wideLayout": true
+              "textMode": "value",
+              "wideLayout": true,
+              "text": {"valueSize": 38}
             },
             "fieldConfig": {
               "defaults": {
@@ -979,19 +776,11 @@
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
-                    {
-                      "value": null,
-                      "color": "dark-red"
-                    },
-                    {
-                      "value": 1,
-                      "color": "dark-green"
-                    }
+                    {"value": 0, "color": "dark-red"},
+                    {"value": 1, "color": "dark-green"}
                   ]
                 },
-                "color": {
-                  "mode": "thresholds"
-                }
+                "color": {"mode": "thresholds"}
               },
               "overrides": []
             }
@@ -1005,7 +794,7 @@
       "spec": {
         "id": 20,
         "title": "Execution cost",
-        "description": "Receipt-backed transaction count, gas, and native fee over the selected range.",
+        "description": "Receipt-backed transaction count, gas, and native fee over the selected range. Values are shown per namespace/pod across matching scrape targets.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1014,158 +803,134 @@
               {
                 "kind": "PanelQuery",
                 "spec": {
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "sum(increase(solver_bot_txmanager_requests_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",label=\"lifi-fill\",outcome=~\"confirmed|included_unconfirmed\"}[$__range]))",
-                      "instant": true,
-                      "legendFormat": "included tx",
-                      "range": false
-                    }
-                  },
                   "refId": "A",
-                  "hidden": false
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (namespace, pod) (increase(solver_bot_txmanager_requests_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",label=\"lifi-fill\",outcome=~\"confirmed|included_unconfirmed\"}[$__range]))",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
                 }
               },
               {
                 "kind": "PanelQuery",
                 "spec": {
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "sum(increase(solver_bot_txmanager_gas_used_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",label=\"lifi-fill\"}[$__range]))",
-                      "instant": true,
-                      "legendFormat": "gas used",
-                      "range": false
-                    }
-                  },
                   "refId": "B",
-                  "hidden": false
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (namespace, pod) (increase(solver_bot_txmanager_gas_used_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",label=\"lifi-fill\"}[$__range]))",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
                 }
               },
               {
                 "kind": "PanelQuery",
                 "spec": {
+                  "refId": "C",
+                  "hidden": false,
                   "query": {
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum(increase(solver_bot_txmanager_fee_paid_wei_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",label=\"lifi-fill\"}[$__range])) / 1e18",
+                      "expr": "max by (namespace, pod) (sum by (namespace, pod) (increase(solver_bot_txmanager_fee_paid_wei_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",label=\"lifi-fill\"}[$__range])) / 1e18)",
                       "instant": true,
-                      "legendFormat": "fee paid",
-                      "range": false
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
                     }
-                  },
-                  "refId": "C",
-                  "hidden": false
+                  }
                 }
               }
             ],
-            "transformations": [],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "merge",
+                "spec": {
+                  "options": {}
+                }
+              },
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "namespace": true, "__name__": true},
+                    "indexByName": {"pod": 0, "Value #A": 1, "Value #B": 2, "Value #C": 3},
+                    "renameByName": {"pod": "Pod", "Value #A": "Included tx", "Value #B": "Gas used", "Value #C": "Fee paid"}
+                  }
+                }
+              }
+            ],
             "queryOptions": {}
           }
         },
         "vizConfig": {
           "kind": "VizConfig",
-          "group": "stat",
+          "group": "table",
           "version": "",
           "spec": {
-            "options": {
-              "colorMode": "background_solid",
-              "graphMode": "none",
-              "justifyMode": "auto",
-              "orientation": "auto",
-              "reduceOptions": {
-                "calcs": [
-                  "lastNotNull"
-                ],
-                "fields": "",
-                "values": false
-              },
-              "textMode": "auto",
-              "wideLayout": true
-            },
+            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": true},
             "fieldConfig": {
               "defaults": {
-                "unit": "short",
-                "decimals": 0,
-                "thresholds": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "value": null,
-                      "color": "blue"
-                    }
-                  ]
-                },
-                "color": {
-                  "mode": "thresholds"
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
                 }
               },
               "overrides": [
                 {
-                  "matcher": {
-                    "id": "byName",
-                    "options": "included tx"
-                  },
+                  "matcher": {"id": "byName", "options": "Pod"},
                   "properties": [
-                    {
-                      "id": "unit",
-                      "value": "short"
-                    },
-                    {
-                      "id": "decimals",
-                      "value": 0
-                    }
+                    {"id": "custom.width", "value": 360}
                   ]
                 },
                 {
-                  "matcher": {
-                    "id": "byName",
-                    "options": "gas used"
-                  },
+                  "matcher": {"id": "byName", "options": "Included tx"},
                   "properties": [
-                    {
-                      "id": "unit",
-                      "value": "short"
-                    },
-                    {
-                      "id": "decimals",
-                      "value": 0
-                    }
+                    {"id": "custom.width", "value": 155},
+                    {"id": "unit", "value": "short"},
+                    {"id": "decimals", "value": 0}
                   ]
                 },
                 {
-                  "matcher": {
-                    "id": "byName",
-                    "options": "fee paid"
-                  },
+                  "matcher": {"id": "byName", "options": "Gas used"},
                   "properties": [
-                    {
-                      "id": "unit",
-                      "value": "suffix: ETH"
-                    },
-                    {
-                      "id": "decimals",
-                      "value": 9
-                    }
+                    {"id": "custom.width", "value": 155},
+                    {"id": "unit", "value": "short"},
+                    {"id": "decimals", "value": 0}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Fee paid"},
+                  "properties": [
+                    {"id": "custom.width", "value": 155},
+                    {"id": "unit", "value": "suffix: ETH"},
+                    {"id": "decimals", "value": 9}
                   ]
                 }
               ]
@@ -1180,7 +945,6 @@
       "spec": {
         "id": 3,
         "title": "Recovery ready",
-        "description": "",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1193,14 +957,12 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "lifi_order_recovery_ready{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "expr": "min(min by (namespace, pod) (lifi_order_recovery_ready{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"}))",
                       "instant": true,
-                      "legendFormat": "recovery",
+                      "legendFormat": "Recovery ready",
                       "range": false
                     }
                   },
@@ -1219,19 +981,18 @@
           "version": "",
           "spec": {
             "options": {
-              "colorMode": "background_solid",
+              "colorMode": "value",
               "graphMode": "none",
-              "justifyMode": "auto",
+              "justifyMode": "center",
               "orientation": "auto",
               "reduceOptions": {
-                "calcs": [
-                  "lastNotNull"
-                ],
+                "calcs": ["lastNotNull"],
                 "fields": "",
                 "values": false
               },
-              "textMode": "auto",
-              "wideLayout": true
+              "textMode": "value",
+              "wideLayout": true,
+              "text": {"valueSize": 38}
             },
             "fieldConfig": {
               "defaults": {
@@ -1239,19 +1000,11 @@
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
-                    {
-                      "value": null,
-                      "color": "dark-red"
-                    },
-                    {
-                      "value": 1,
-                      "color": "dark-green"
-                    }
+                    {"value": 0, "color": "dark-red"},
+                    {"value": 1, "color": "dark-green"}
                   ]
                 },
-                "color": {
-                  "mode": "thresholds"
-                }
+                "color": {"mode": "thresholds"}
               },
               "overrides": []
             }
@@ -1265,7 +1018,6 @@
       "spec": {
         "id": 4,
         "title": "Active quotes",
-        "description": "",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1278,14 +1030,12 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "lifi_active_quotes{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "expr": "sum(max by (namespace, pod) (lifi_active_quotes{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"}))",
                       "instant": true,
-                      "legendFormat": "current",
+                      "legendFormat": "Active quotes",
                       "range": false
                     }
                   },
@@ -1304,19 +1054,18 @@
           "version": "",
           "spec": {
             "options": {
-              "colorMode": "background_solid",
+              "colorMode": "value",
               "graphMode": "none",
-              "justifyMode": "auto",
+              "justifyMode": "center",
               "orientation": "auto",
               "reduceOptions": {
-                "calcs": [
-                  "lastNotNull"
-                ],
+                "calcs": ["lastNotNull"],
                 "fields": "",
                 "values": false
               },
-              "textMode": "auto",
-              "wideLayout": true
+              "textMode": "value",
+              "wideLayout": true,
+              "text": {"valueSize": 38}
             },
             "fieldConfig": {
               "defaults": {
@@ -1325,15 +1074,10 @@
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
-                    {
-                      "value": null,
-                      "color": "green"
-                    }
+                    {"value": 0, "color": "green"}
                   ]
                 },
-                "color": {
-                  "mode": "thresholds"
-                }
+                "color": {"mode": "thresholds"}
               },
               "overrides": []
             }
@@ -1347,7 +1091,6 @@
       "spec": {
         "id": 5,
         "title": "Active ranges",
-        "description": "",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1360,14 +1103,12 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "lifi_active_quote_ranges{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
+                      "expr": "sum(max by (namespace, pod) (lifi_active_quote_ranges{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"}))",
                       "instant": true,
-                      "legendFormat": "current",
+                      "legendFormat": "Active ranges",
                       "range": false
                     }
                   },
@@ -1386,19 +1127,18 @@
           "version": "",
           "spec": {
             "options": {
-              "colorMode": "background_solid",
+              "colorMode": "value",
               "graphMode": "none",
-              "justifyMode": "auto",
+              "justifyMode": "center",
               "orientation": "auto",
               "reduceOptions": {
-                "calcs": [
-                  "lastNotNull"
-                ],
+                "calcs": ["lastNotNull"],
                 "fields": "",
                 "values": false
               },
-              "textMode": "auto",
-              "wideLayout": true
+              "textMode": "value",
+              "wideLayout": true,
+              "text": {"valueSize": 38}
             },
             "fieldConfig": {
               "defaults": {
@@ -1407,15 +1147,10 @@
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
-                    {
-                      "value": null,
-                      "color": "green"
-                    }
+                    {"value": 0, "color": "green"}
                   ]
                 },
-                "color": {
-                  "mode": "thresholds"
-                }
+                "color": {"mode": "thresholds"}
               },
               "overrides": []
             }
@@ -1429,7 +1164,6 @@
       "spec": {
         "id": 6,
         "title": "Quote refresh age",
-        "description": "",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1442,14 +1176,12 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "clamp_min(time() - (lifi_last_successful_refresh_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}), 0) * ((lifi_last_successful_refresh_timestamp{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}) > bool 0)",
+                      "expr": "max(max by (namespace, pod) (clamp_min(time() - (lifi_last_successful_refresh_timestamp{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"}), 0) * ((lifi_last_successful_refresh_timestamp{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"}) > bool 0)))",
                       "instant": true,
-                      "legendFormat": "freshness",
+                      "legendFormat": "Quote refresh age",
                       "range": false
                     }
                   },
@@ -1468,19 +1200,18 @@
           "version": "",
           "spec": {
             "options": {
-              "colorMode": "background_solid",
+              "colorMode": "value",
               "graphMode": "none",
-              "justifyMode": "auto",
+              "justifyMode": "center",
               "orientation": "auto",
               "reduceOptions": {
-                "calcs": [
-                  "lastNotNull"
-                ],
+                "calcs": ["lastNotNull"],
                 "fields": "",
                 "values": false
               },
-              "textMode": "auto",
-              "wideLayout": true
+              "textMode": "value",
+              "wideLayout": true,
+              "text": {"valueSize": 38}
             },
             "fieldConfig": {
               "defaults": {
@@ -1489,26 +1220,17 @@
                   {
                     "type": "value",
                     "options": {
-                      "0": {
-                        "text": "Not observed",
-                        "color": "gray",
-                        "index": 0
-                      }
+                      "0": {"text": "Not observed", "color": "gray", "index": 0}
                     }
                   }
                 ],
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
-                    {
-                      "value": null,
-                      "color": "blue"
-                    }
+                    {"value": 0, "color": "blue"}
                   ]
                 },
-                "color": {
-                  "mode": "thresholds"
-                }
+                "color": {"mode": "thresholds"}
               },
               "overrides": []
             }
@@ -1522,7 +1244,6 @@
       "spec": {
         "id": 7,
         "title": "Successful fills",
-        "description": "",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1535,14 +1256,12 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum(increase(solver_bot_workflow_events_total{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\",solver=\"lifi-samechain\",event=\"fill\",outcome=\"success\"}[$__range]))",
+                      "expr": "sum(sum by (namespace, pod) (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"lifi-samechain\",event=\"fill\",outcome=\"success\"}[$__range])))",
                       "instant": true,
-                      "legendFormat": "selected range",
+                      "legendFormat": "Successful fills",
                       "range": false
                     }
                   },
@@ -1561,19 +1280,18 @@
           "version": "",
           "spec": {
             "options": {
-              "colorMode": "background_solid",
+              "colorMode": "value",
               "graphMode": "none",
-              "justifyMode": "auto",
+              "justifyMode": "center",
               "orientation": "auto",
               "reduceOptions": {
-                "calcs": [
-                  "lastNotNull"
-                ],
+                "calcs": ["lastNotNull"],
                 "fields": "",
                 "values": false
               },
-              "textMode": "auto",
-              "wideLayout": true
+              "textMode": "value",
+              "wideLayout": true,
+              "text": {"valueSize": 38}
             },
             "fieldConfig": {
               "defaults": {
@@ -1582,15 +1300,10 @@
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
-                    {
-                      "value": null,
-                      "color": "green"
-                    }
+                    {"value": 0, "color": "green"}
                   ]
                 },
-                "color": {
-                  "mode": "thresholds"
-                }
+                "color": {"mode": "thresholds"}
               },
               "overrides": []
             }
@@ -1604,7 +1317,7 @@
       "spec": {
         "id": 9,
         "title": "Feed and recovery history",
-        "description": "Connection continuity and convergent-recovery readiness.",
+        "description": "Connection continuity and convergent-recovery readiness. Values are shown per namespace/pod across matching scrape targets.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1617,13 +1330,11 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "lifi_order_feed_connected{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
-                      "legendFormat": "feed",
+                      "expr": "min by (namespace, pod) (lifi_order_feed_connected{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"})",
+                      "legendFormat": "{{pod}} · feed",
                       "range": true
                     }
                   },
@@ -1638,13 +1349,11 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "lifi_order_recovery_ready{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",job=~\"${job:regex}\",instance=~\"${instance:regex}\"}",
-                      "legendFormat": "recovery",
+                      "expr": "min by (namespace, pod) (lifi_order_recovery_ready{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"})",
+                      "legendFormat": "{{pod}} · recovery",
                       "range": true
                     }
                   },
@@ -1664,19 +1373,11 @@
           "spec": {
             "options": {
               "alignValue": "left",
-              "legend": {
-                "displayMode": "list",
-                "placement": "bottom",
-                "showLegend": false
-              },
+              "legend": {"displayMode": "list", "placement": "bottom", "showLegend": false},
               "mergeValues": true,
               "rowHeight": 0.8,
               "showValue": "never",
-              "tooltip": {
-                "hideZeros": false,
-                "mode": "single",
-                "sort": "none"
-              }
+              "tooltip": {"hideZeros": false, "mode": "single", "sort": "none"}
             },
             "fieldConfig": {
               "defaults": {
@@ -1685,37 +1386,328 @@
                   {
                     "type": "value",
                     "options": {
-                      "0": {
-                        "text": "Down",
-                        "color": "dark-red",
-                        "index": 0
-                      },
-                      "1": {
-                        "text": "Up",
-                        "color": "dark-green",
-                        "index": 1
-                      }
+                      "0": {"text": "Down", "color": "dark-red", "index": 0},
+                      "1": {"text": "Up", "color": "dark-green", "index": 1}
                     }
                   }
                 ],
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
+                    {"value": 0, "color": "dark-red"},
+                    {"value": 1, "color": "dark-green"}
+                  ]
+                },
+                "color": {"mode": "thresholds"}
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-90": {
+      "kind": "Panel",
+      "spec": {
+        "id": 90,
+        "title": "Pod details",
+        "description": "Per-pod values. Counters cover the selected interval; readiness and gauges use current samples. Retired pods have no current state.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "min by (namespace, pod) (lifi_order_feed_connected{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"})",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "min by (namespace, pod) (lifi_order_recovery_ready{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"})",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "C",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (namespace, pod) (lifi_active_quotes{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"})",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "D",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (namespace, pod) (lifi_active_quote_ranges{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"})",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "E",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (namespace, pod) (clamp_min(time() - (lifi_last_successful_refresh_timestamp{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"}), 0) * ((lifi_last_successful_refresh_timestamp{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"}) > bool 0))",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "F",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (namespace, pod) (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"lifi-samechain\",event=\"fill\",outcome=\"success\"}[$__range]))",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "merge",
+                "spec": {
+                  "options": {}
+                }
+              },
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "namespace": true, "__name__": true},
+                    "indexByName": {"pod": 0, "Value #A": 1, "Value #B": 2, "Value #C": 3, "Value #D": 4, "Value #E": 5, "Value #F": 6},
+                    "renameByName": {
+                      "pod": "Pod",
+                      "Value #A": "Order feed",
+                      "Value #B": "Recovery ready",
+                      "Value #C": "Active quotes",
+                      "Value #D": "Active ranges",
+                      "Value #E": "Quote refresh age",
+                      "Value #F": "Successful fills"
+                    }
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": true},
+            "fieldConfig": {
+              "defaults": {
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "Pod"},
+                  "properties": [
+                    {"id": "custom.width", "value": 360}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Order feed"},
+                  "properties": [
+                    {"id": "custom.width", "value": 155},
+                    {"id": "unit", "value": "bool"},
+                    {"id": "decimals", "value": 0},
                     {
-                      "value": null,
-                      "color": "dark-red"
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "0": {"text": "No", "color": "red"},
+                            "1": {"text": "Yes", "color": "green"}
+                          }
+                        },
+                        {
+                          "type": "special",
+                          "options": {
+                            "match": "null",
+                            "result": {"text": "No current sample", "color": "gray"}
+                          }
+                        }
+                      ]
                     },
                     {
-                      "value": 1,
-                      "color": "dark-green"
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
                     }
                   ]
                 },
-                "color": {
-                  "mode": "thresholds"
+                {
+                  "matcher": {"id": "byName", "options": "Recovery ready"},
+                  "properties": [
+                    {"id": "custom.width", "value": 155},
+                    {"id": "unit", "value": "bool"},
+                    {"id": "decimals", "value": 0},
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "0": {"text": "No", "color": "red"},
+                            "1": {"text": "Yes", "color": "green"}
+                          }
+                        },
+                        {
+                          "type": "special",
+                          "options": {
+                            "match": "null",
+                            "result": {"text": "No current sample", "color": "gray"}
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Active quotes"},
+                  "properties": [
+                    {"id": "custom.width", "value": 155},
+                    {"id": "unit", "value": "short"},
+                    {"id": "decimals", "value": 0}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Active ranges"},
+                  "properties": [
+                    {"id": "custom.width", "value": 155},
+                    {"id": "unit", "value": "short"},
+                    {"id": "decimals", "value": 0}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Quote refresh age"},
+                  "properties": [
+                    {"id": "custom.width", "value": 155},
+                    {"id": "unit", "value": "s"},
+                    {"id": "decimals", "value": 1},
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "0": {"text": "Not observed", "color": "gray", "index": 0}
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Successful fills"},
+                  "properties": [
+                    {"id": "custom.width", "value": 155},
+                    {"id": "unit", "value": "short"},
+                    {"id": "decimals", "value": 0}
+                  ]
                 }
-              },
-              "overrides": []
+              ]
             }
           }
         },
@@ -1742,11 +1734,8 @@
                       "x": 0,
                       "y": 0,
                       "width": 4,
-                      "height": 6,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-2"
-                      }
+                      "height": 4,
+                      "element": {"kind": "ElementReference", "name": "panel-2"}
                     }
                   },
                   {
@@ -1755,11 +1744,8 @@
                       "x": 4,
                       "y": 0,
                       "width": 4,
-                      "height": 6,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-3"
-                      }
+                      "height": 4,
+                      "element": {"kind": "ElementReference", "name": "panel-3"}
                     }
                   },
                   {
@@ -1768,11 +1754,8 @@
                       "x": 8,
                       "y": 0,
                       "width": 4,
-                      "height": 6,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-4"
-                      }
+                      "height": 4,
+                      "element": {"kind": "ElementReference", "name": "panel-4"}
                     }
                   },
                   {
@@ -1781,11 +1764,8 @@
                       "x": 12,
                       "y": 0,
                       "width": 4,
-                      "height": 6,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-5"
-                      }
+                      "height": 4,
+                      "element": {"kind": "ElementReference", "name": "panel-5"}
                     }
                   },
                   {
@@ -1794,11 +1774,8 @@
                       "x": 16,
                       "y": 0,
                       "width": 4,
-                      "height": 6,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-6"
-                      }
+                      "height": 4,
+                      "element": {"kind": "ElementReference", "name": "panel-6"}
                     }
                   },
                   {
@@ -1807,11 +1784,32 @@
                       "x": 20,
                       "y": 0,
                       "width": 4,
-                      "height": 6,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-7"
-                      }
+                      "height": 4,
+                      "element": {"kind": "ElementReference", "name": "panel-7"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Pods",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 24,
+                      "height": 12,
+                      "element": {"kind": "ElementReference", "name": "panel-90"}
                     }
                   }
                 ]
@@ -1833,25 +1831,9 @@
                     "spec": {
                       "x": 0,
                       "y": 0,
-                      "width": 8,
+                      "width": 24,
                       "height": 8,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-9"
-                      }
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 8,
-                      "y": 0,
-                      "width": 16,
-                      "height": 8,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-10"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-9"}
                     }
                   },
                   {
@@ -1859,25 +1841,29 @@
                     "spec": {
                       "x": 0,
                       "y": 8,
+                      "width": 24,
+                      "height": 10,
+                      "element": {"kind": "ElementReference", "name": "panel-10"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 18,
                       "width": 12,
                       "height": 8,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-11"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-11"}
                     }
                   },
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
                       "x": 12,
-                      "y": 8,
+                      "y": 18,
                       "width": 12,
                       "height": 8,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-12"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-12"}
                     }
                   }
                 ]
@@ -1901,10 +1887,7 @@
                       "y": 0,
                       "width": 8,
                       "height": 8,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-14"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-14"}
                     }
                   },
                   {
@@ -1914,10 +1897,7 @@
                       "y": 0,
                       "width": 8,
                       "height": 8,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-15"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-15"}
                     }
                   },
                   {
@@ -1927,10 +1907,7 @@
                       "y": 0,
                       "width": 8,
                       "height": 8,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-16"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-16"}
                     }
                   }
                 ]
@@ -1952,38 +1929,29 @@
                     "spec": {
                       "x": 0,
                       "y": 0,
-                      "width": 8,
-                      "height": 8,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-18"
-                      }
+                      "width": 24,
+                      "height": 10,
+                      "element": {"kind": "ElementReference", "name": "panel-18"}
                     }
                   },
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
-                      "x": 8,
-                      "y": 0,
-                      "width": 8,
-                      "height": 8,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-19"
-                      }
+                      "x": 0,
+                      "y": 10,
+                      "width": 24,
+                      "height": 10,
+                      "element": {"kind": "ElementReference", "name": "panel-19"}
                     }
                   },
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
-                      "x": 16,
-                      "y": 0,
-                      "width": 8,
-                      "height": 8,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-20"
-                      }
+                      "x": 0,
+                      "y": 20,
+                      "width": 24,
+                      "height": 10,
+                      "element": {"kind": "ElementReference", "name": "panel-20"}
                     }
                   }
                 ]
@@ -2000,9 +1968,7 @@
       "type": "dashboards",
       "icon": "dashboard",
       "tooltip": "",
-      "tags": [
-        "vault-solver-compact"
-      ],
+      "tags": ["vault-solver-compact"],
       "asDropdown": true,
       "targetBlank": false,
       "includeVars": true,
@@ -2011,35 +1977,17 @@
   ],
   "liveNow": false,
   "preload": false,
-  "tags": [
-    "dashboard-schema-v2",
-    "kubernetes",
-    "single-instance",
-    "solver-metrics",
-    "vault-solver",
-    "vault-solver-compact"
-  ],
+  "tags": ["dashboard-schema-v2", "kubernetes", "solver-metrics", "vault-solver", "vault-solver-compact"],
   "timeSettings": {
     "timezone": "browser",
-    "from": "now-1h",
+    "from": "now-7d",
     "to": "now",
     "autoRefresh": "15s",
-    "autoRefreshIntervals": [
-      "5s",
-      "10s",
-      "30s",
-      "1m",
-      "5m",
-      "15m",
-      "30m",
-      "1h",
-      "2h",
-      "1d"
-    ],
+    "autoRefreshIntervals": ["5s", "10s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "1d"],
     "hideTimepicker": false,
     "fiscalYearStartMonth": 0
   },
-  "title": "Vault Solver \u00b7 LI.FI",
+  "title": "Vault Solver · LI.FI",
   "variables": [
     {
       "kind": "DatasourceVariable",
@@ -2048,10 +1996,7 @@
         "pluginId": "prometheus",
         "refresh": "onDashboardLoad",
         "regex": "",
-        "current": {
-          "text": "",
-          "value": ""
-        },
+        "current": {"text": "", "value": ""},
         "options": [],
         "multi": false,
         "includeAll": false,
@@ -2073,9 +2018,7 @@
           "kind": "DataQuery",
           "group": "prometheus",
           "version": "v0",
-          "datasource": {
-            "name": "${datasource}"
-          },
+          "datasource": {"name": "${datasource}"},
           "spec": {
             "query": "label_values(solver_bot_solver_info{solver=\"lifi-samechain\"}, namespace)",
             "refId": "PrometheusVariableQueryEditor-namespace"
@@ -2085,124 +2028,43 @@
         "sort": "alphabeticalAsc",
         "definition": "label_values(solver_bot_solver_info{solver=\"lifi-samechain\"}, namespace)",
         "options": [],
-        "multi": true,
-        "includeAll": true,
+        "multi": false,
+        "includeAll": false,
         "allowCustomValue": true,
-        "current": {
-          "text": [
-            "All"
-          ],
-          "value": [
-            "$__all"
-          ]
-        },
-        "allValue": ".*"
+        "current": {"text": "", "value": ""}
       }
     },
     {
       "kind": "QueryVariable",
       "spec": {
-        "name": "pod_regex",
+        "name": "pods",
         "label": "Pods",
         "hide": "dontHide",
-        "refresh": "onDashboardLoad",
+        "refresh": "onTimeRangeChanged",
         "skipUrlSync": false,
         "query": {
           "kind": "DataQuery",
           "group": "prometheus",
           "version": "v0",
-          "datasource": {
-            "name": "${datasource}"
-          },
+          "datasource": {"name": "${datasource}"},
           "spec": {
-            "query": "label_values(solver_bot_solver_info{solver=\"lifi-samechain\",namespace=~\"${namespace:regex}\"}, pod)",
-            "refId": "PrometheusVariableQueryEditor-pod"
+            "query": "label_values(solver_bot_solver_info{solver=\"lifi-samechain\",namespace=\"${namespace}\"}, pod)",
+            "refId": "PrometheusVariableQueryEditor-pods"
           }
         },
         "regex": "",
         "sort": "alphabeticalAsc",
-        "definition": "label_values(solver_bot_solver_info{solver=\"lifi-samechain\",namespace=~\"${namespace:regex}\"}, pod)",
+        "definition": "label_values(solver_bot_solver_info{solver=\"lifi-samechain\",namespace=\"${namespace}\"}, pod)",
         "options": [],
         "multi": true,
         "includeAll": true,
         "allowCustomValue": true,
         "current": {
-          "text": [
-            "All"
-          ],
-          "value": [
-            "$__all"
-          ]
+          "text": ["All"],
+          "value": ["$__all"]
         },
-        "allValue": ".*"
-      }
-    },
-    {
-      "kind": "QueryVariable",
-      "spec": {
-        "name": "job",
-        "label": "Prometheus job",
-        "hide": "dontHide",
-        "refresh": "onDashboardLoad",
-        "skipUrlSync": false,
-        "query": {
-          "kind": "DataQuery",
-          "group": "prometheus",
-          "version": "v0",
-          "datasource": {
-            "name": "${datasource}"
-          },
-          "spec": {
-            "query": "label_values(solver_bot_solver_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",solver=\"lifi-samechain\"}, job)",
-            "refId": "PrometheusVariableQueryEditor-job"
-          }
-        },
-        "regex": "",
-        "sort": "alphabeticalAsc",
-        "definition": "label_values(solver_bot_solver_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",solver=\"lifi-samechain\"}, job)",
-        "options": [],
-        "multi": false,
-        "includeAll": false,
-        "allowCustomValue": true,
-        "current": {
-          "text": "",
-          "value": ""
-        }
-      }
-    },
-    {
-      "kind": "QueryVariable",
-      "spec": {
-        "name": "instance",
-        "label": "Instance",
-        "hide": "dontHide",
-        "refresh": "onDashboardLoad",
-        "skipUrlSync": false,
-        "query": {
-          "kind": "DataQuery",
-          "group": "prometheus",
-          "version": "v0",
-          "datasource": {
-            "name": "${datasource}"
-          },
-          "spec": {
-            "query": "label_values(solver_bot_solver_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",solver=\"lifi-samechain\",job=~\"${job:regex}\"}, instance)",
-            "refId": "PrometheusVariableQueryEditor-instance"
-          }
-        },
-        "regex": "",
-        "sort": "alphabeticalAsc",
-        "definition": "label_values(solver_bot_solver_info{namespace=~\"${namespace:regex}\",pod=~\"${pod_regex:regex}\",solver=\"lifi-samechain\",job=~\"${job:regex}\"}, instance)",
-        "options": [],
-        "multi": false,
-        "includeAll": false,
-        "allowCustomValue": true,
-        "current": {
-          "text": "",
-          "value": ""
-        }
+        "description": "All expands to the pod names discovered for this solver and selected time range."
       }
     }
-  ],
-  "uid": "vault-solver-lifi"
+  ]
 }
