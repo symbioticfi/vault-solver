@@ -29,16 +29,15 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 	validAfter := input.QuoteExpiresAt.Add(s.executionBuffer)
 	liveInventory := liquidgreedy.FilterLiveInventory(input.Inventory, validAfter)
 	pairInventory := make([]liquidlane.Inventory, 0, len(liveInventory))
-	for _, item := range liveInventory {
+	allocatedInventory := liquidgreedy.AllocateInventoryCapacity(
+		liveInventory, input.Reservations, s.cfg.InventoryReserveBps,
+	)
+	for _, item := range allocatedInventory {
 		if item.TokenIn == input.TokenIn && item.TokenOut == input.TokenOut {
 			pairInventory = append(pairInventory, item)
 		}
 	}
-	inventory := liquidgreedy.AllocateInventoryCapacity(
-		pairInventory,
-		input.Reservations,
-		s.cfg.InventoryReserveBps,
-	)
+	inventory := pairInventory
 	candidates := make([]liquidlane.QuoteCandidate, 0, len(inventory))
 	for _, item := range inventory {
 		candidate := liquidgreedy.NewQuoteCandidate(

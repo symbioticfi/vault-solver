@@ -105,7 +105,7 @@ func TestStrategyTreatsDirectAndDiscountAsRouteAlternatives(t *testing.T) {
 
 func TestBuildFillPlanUsesTypedCandidateWithoutRepricing(t *testing.T) {
 	discountID := common.HexToHash("0x01")
-	candidate := quoteCandidate(vlt, 2, 50, 100, &discountID)
+	candidate := quoteCandidate(vlt, 2, 100, 200, &discountID)
 	input := baseInput(candidate)
 	input.RequiredAmountOut = big.NewInt(100)
 
@@ -115,7 +115,7 @@ func TestBuildFillPlanUsesTypedCandidateWithoutRepricing(t *testing.T) {
 	}
 	leg := plan.Legs[0]
 	if leg.Adapter != vlt || leg.AmountIn.Cmp(big.NewInt(100)) != 0 ||
-		leg.AmountOut.Cmp(big.NewInt(100)) != 0 ||
+		leg.AmountOut.Cmp(big.NewInt(200)) != 0 ||
 		leg.MaxRate.Cmp(big.NewInt(2_000_000_000_000_000_000)) != 0 ||
 		leg.DiscountID == nil || *leg.DiscountID != discountID {
 		t.Fatalf("leg = %+v", leg)

@@ -109,9 +109,8 @@ vault-solver/
 A single service owns the on-chain sending EOA. Before readiness it requires the latest and pending
 nonces from one non-fallback write endpoint to agree, then admits one signed lifecycle at a time. The
 worker signs, broadcasts, replaces or cancels that nonce, and tracks every exact signed hash through a
-terminal receipt. A positive `tipGwei` floors the node suggestion; zero derives the tip from the minimum
-gas-weighted p25 reward in the latest five blocks, aligned with the observed behavior of Etherscan Gas
-Tracker's Fast tier. Normal replacements respect both request and global fee caps, while cancellation may
+terminal receipt. A positive `tipGwei` floors the node suggestion; zero derives the tip from the median
+gas-weighted p25 reward in the latest five blocks, preventing one anomalous block from setting a zero tip. Normal replacements respect both request and global fee caps, while cancellation may
 leave the request's profitability cap but never the global cap. During replacement, a fresh-fee timeout
 falls back to bumping the last signed fees. A transport-ambiguous attempt receives one exact-byte rebroadcast
 before fee escalation; cancellation deadlines and shutdown bypass that grace retry.
@@ -253,6 +252,7 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
    type LiveOffer struct {
        AdapterID string
        AuctionID int64
+       Principal uint256 // decimal string on the webhook wire
    }
    ```
 
@@ -272,7 +272,10 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
    The default local strategy: process auctions in API order, filter adapter eligibility (collateral
    match, no live offer for the pair, the auction max rate can reach the adapter's `minYieldPerRequest`),
    compute each adapter's capacity from its raw caps, rank by available capacity (largest first), clamp
-   each offer to the still-uncovered remainder, and track local adapter commitments across the pass. Each
+   each offer to the still-uncovered remainder, and track adapter commitments across the pass. Live offer
+   principals and slots initialize those commitments, including auctions absent from the current listing.
+   When possible, sizing leaves enough remainder to clear the next adapter's minimum rather than stranding
+   a too-small final offer. Each
    offer is **priced at the adapter's `minYieldPerRequest` floor plus a partial-consumption margin** of
    `max(2, ceil(principal/1e6))` base units (~1 ppm). A floor-exact offer reverts `TooLowYield` whenever
    the keeper consumes it partially, because `consume()` pro-rates the return with floor division while
@@ -405,7 +408,7 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
   advances the aggregate observation after the sends. Malformed sub-call data withholds
   freshness while valid ready requests are still redeemed best-effort.
   Malformed live-offer status, expiration, or amount likewise withholds
-  offer-view freshness. The generic external-operation histogram times the fixed
+  offer-view freshness and stops new offer submission until commitments are complete. The generic external-operation histogram times the fixed
   `target_refresh`, `offer_refresh`, `active_request_refresh`, and `redeemable_refresh` read phases.
   Complete (including empty), partial/last-known-good, shutdown-interrupted, and failed passes map to
   bounded `success`, `degraded`, `skipped`, and `error` outcomes. Offer strategy execution and API

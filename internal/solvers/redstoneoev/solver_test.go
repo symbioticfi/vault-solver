@@ -3,6 +3,7 @@ package redstoneoev
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"testing"
 	"time"
@@ -551,14 +552,14 @@ func TestBuildBidReservesPendingPosition(t *testing.T) {
 	}
 	s.reserve(d1.nonce, time.Unix(1781243340, 0), a.ID, d1.bidWei)
 
-	if d2 := s.buildBid(t.Context(), a, auctionClock()); d2.skip != types.SkipReasonNoLegs {
+	if d2 := s.buildBid(t.Context(), a, auctionClock()); d2.skip != types.SkipReasonInFlight {
 		t.Fatalf("the reserved position must not be selected twice, got %q", d2.skip)
 	}
 
 	// Once the bid resolves, the strategy keeps its accounting reservation until callback balance has been
 	// refreshed after resolution. This prevents bidding against a balance spent by a winning settlement.
 	s.pruneReservations(d1.nonce, time.Unix(1781243340, 0))
-	if d3 := s.buildBid(t.Context(), a, auctionClock()); d3.skip != types.SkipReasonNoLegs {
+	if d3 := s.buildBid(t.Context(), a, auctionClock()); d3.skip != types.SkipReasonInFlight {
 		t.Fatalf("resolved position should remain reserved until balance refresh, got %q", d3.skip)
 	}
 	seedDefaultDecisionStateAt(t, s, auctionClock()().Add(time.Second))
@@ -799,11 +800,13 @@ func TestFeedAuctionDoesNotBuildLiquidationBid(t *testing.T) {
 
 func TestHandleMessageDispatchesAuctionBidAsync(t *testing.T) {
 	s, _ := seededSolver(t)
+	metrics, reg := newOEVTestMetrics(t, s.wonReservationMetrics)
+	s.metrics = metrics
 	blocking := &blockingBidStrategy{
 		started: make(chan struct{}, 1),
 		release: make(chan struct{}),
 	}
-	defer close(blocking.release)
+	defer func() { close(blocking.release); s.auctionWorkers.Wait() }()
 
 	a := decodeAuction(t)
 	setAuctionPrice(&a, seedLiquidatablePrice)
@@ -827,6 +830,16 @@ func TestHandleMessageDispatchesAuctionBidAsync(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("bid strategy was not called")
 	}
+	for i := range 1000 {
+		a.ID = fmt.Sprintf("burst-%d", i)
+		s.handleMessage(t.Context(), marshal(a))
+	}
+	// No backlog may reach the strategy after the single in-progress decision completes.
+	// Admission stays busy while the blocked strategy holds this decision.
+	if !s.auctionBusy.Load() {
+		t.Fatal("decision unexpectedly released admission")
+	}
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "auction", types.SkipReasonInFlight, 1000)
 }
 
 // TestRedstoneClosedPositionNotBid proves we bid off our own tracked on-chain state, not the frame's

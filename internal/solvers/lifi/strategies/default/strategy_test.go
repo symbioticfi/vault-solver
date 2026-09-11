@@ -1390,7 +1390,7 @@ func TestDecideQuotesAppliesReserveBeforeInFlightReservations(t *testing.T) {
 	}
 }
 
-func TestDecideQuotesPublishesFullSharedCapacityForEachPair(t *testing.T) {
+func TestDecideQuotesSplitsSharedCapacityAcrossPairs(t *testing.T) {
 	strategy, err := New(testStrategyConfig(Config{MinAmount: "2"}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1419,11 +1419,11 @@ func TestDecideQuotesPublishesFullSharedCapacityForEachPair(t *testing.T) {
 		reservations liquidlane.CapacityReservations
 		want         string
 	}{
-		{name: "available", want: "1000"},
+		{name: "available", want: "500"},
 		{
 			name:         "reserved",
 			reservations: liquidlane.CapacityReservations{"capacity-1": big.NewInt(400)},
-			want:         "600",
+			want:         "300",
 		},
 	}
 	for _, tt := range tests {

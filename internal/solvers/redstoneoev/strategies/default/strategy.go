@@ -205,9 +205,13 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 	if skip := snapshotFreshForAuction(snap, input.Auction); skip != "" {
 		return skipBid(skip), nil
 	}
-	reserved := s.reservations.reconcile(input.PendingAuctions, input.Now, st.CallbackUpdatedAt)
+	hasReservation := s.reservations.reconcile(input.PendingAuctions, input.Now, st.CallbackUpdatedAt)
+	// Every bundle shares this adapter's routing liquidity and potentially Morpho market state.
+	// Position-only reservations cannot authorize a second bundle against the same snapshot.
+	if len(input.PendingAuctions) > 0 || hasReservation {
+		return skipBid(types.SkipReasonInFlight), nil
+	}
 	scored := s.scoredLegs(input.Auction, input.Now, input.Adapter)
-	scored = filterReservedPositions(scored, reserved.positions)
 	if len(scored) == 0 {
 		return skipBid(skipNoLegs), nil
 	}
@@ -242,24 +246,22 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 	if skip != "" {
 		return types.BidOutput{Decision: types.DecisionSkip, Reason: skip}, nil
 	}
-	reservedAndCurrentGas := new(big.Int).Add(reserved.gasNative, priced.gasNative)
-	if !depositCoversSettlementGas(input.Context.ExecutorDeposit, input.Context.ExecutorMinDeposit, reservedAndCurrentGas) {
+	if !depositCoversSettlementGas(input.Context.ExecutorDeposit, input.Context.ExecutorMinDeposit, priced.gasNative) {
 		s.log.Info("bid skipped: executor deposit cannot cover predicted settlement gas",
 			"auction", input.Auction.ID,
 			"depositWei", input.Context.ExecutorDeposit,
-			"requiredWei", executorDepositRequired(input.Context.ExecutorMinDeposit, reservedAndCurrentGas),
-			"reservedGasWei", reserved.gasNative,
+			"requiredWei", executorDepositRequired(input.Context.ExecutorMinDeposit, priced.gasNative),
 			"minDepositWei", input.Context.ExecutorMinDeposit,
 			"gasUnits", priced.gas.Units,
 			"gasNative", priced.gasNative,
 			"gasPriceWei", gasPrice)
 		return skipBid(types.SkipReasonDepositLow), nil
 	}
-	availableCallback := new(big.Int).Sub(orZero(st.CallbackNative), reserved.bidNative)
+	availableCallback := orZero(st.CallbackNative)
 	if availableCallback.Cmp(priced.bidNative) < 0 {
 		s.log.Info("bid skipped: callback balance cannot cover bid",
 			"auction", input.Auction.ID, "callback", s.callback.Hex(),
-			"callbackWei", st.CallbackNative, "reservedBidWei", reserved.bidNative,
+			"callbackWei", st.CallbackNative,
 			"availableWei", availableCallback, "requiredWei", priced.bidNative)
 		return skipBid(types.SkipReasonCallbackBalance), nil
 	}
@@ -267,7 +269,7 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 	if err != nil {
 		return types.BidOutput{}, err
 	}
-	s.reservations.reserve(input.Auction.ID, priced)
+	s.reservations.reserve(input.Auction.ID)
 	return out, nil
 }
 
@@ -278,13 +280,13 @@ func (s *Strategy) scoredLegs(a types.AuctionSnapshot, now time.Time, adapter ty
 	for _, it := range cands {
 		if sized, ok := sizeLeg(it.cand, it.price, it.quote, it.accrued, s.cfg.Sizing); ok {
 			out = append(out, scoredLeg{
-				selectedLeg:     sized.leg,
-				expectedLoanOut: sized.expectedLoanOut,
-				collateral:      it.cand.Market.Params.CollateralToken,
-				profit:          sized.profit,
-				maxAssets:       it.quote.MaxAssets,
-				source:          it,
-				replay:          true,
+				selectedLeg:       sized.leg,
+				settlementLoanOut: sized.settlementLoanOut,
+				collateral:        it.cand.Market.Params.CollateralToken,
+				profit:            sized.profit,
+				maxAssets:         it.quote.MaxAssets,
+				source:            it,
+				replay:            true,
 			})
 		}
 	}
@@ -344,7 +346,7 @@ func legHints(in []bundleLeg) []legHint {
 		out[i] = legHint{
 			selectedLeg:     leg.selectedLeg,
 			Collateral:      leg.collateral,
-			ExpectedLoanOut: cloneBig(leg.expectedLoanOut),
+			ExpectedLoanOut: cloneBig(leg.settlementLoanOut),
 		}
 	}
 	return out

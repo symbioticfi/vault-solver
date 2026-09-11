@@ -8,6 +8,7 @@ package redstoneoev
 import (
 	"math/big"
 	"sync"
+	"sync/atomic"
 
 	"github.com/go-logr/logr"
 
@@ -58,6 +59,9 @@ type Solver struct {
 	// bidMu keeps bid decisions ordered while auction frames are dispatched off the WS read loop. This
 	// preserves the pending-auction snapshot semantics strategies use to avoid overlapping bids.
 	bidMu sync.Mutex
+	// Admission happens on the WS reader before spawning; at most one decision runs.
+	auctionBusy    atomic.Bool
+	auctionWorkers sync.WaitGroup
 }
 
 // Name identifies the solver.

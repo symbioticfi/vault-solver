@@ -74,12 +74,12 @@ func (s *Solver) buildSignedOffer(
 }
 
 // offerExpiration anchors a signed offer's expiration to the auction's solve_start_time plus buffer.
-// If the auction omits solve_start_time, the offer expires now+buffer.
+// A missing or past solve_start_time retains the now+buffer floor.
 // The buffer is long enough to cover a full auction solve window plus slack.
 func offerExpiration(av auctionView, buffer time.Duration, now time.Time) *big.Int {
 	exp := now.Add(buffer)
 	if s, ok := av.dto.GetSolveStartTimeOk(); ok && s != nil && *s != "" {
-		if t, err := time.Parse(time.RFC3339, *s); err == nil {
+		if t, err := time.Parse(time.RFC3339, *s); err == nil && t.After(now) {
 			exp = t.Add(buffer)
 		}
 	}

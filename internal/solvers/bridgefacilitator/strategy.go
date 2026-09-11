@@ -59,6 +59,7 @@ func buildStrategyInput(
 		input.LiveOffers = append(input.LiveOffers, types.LiveOffer{
 			AdapterID: adapterID(k.adapter),
 			AuctionID: k.auction,
+			Principal: cloneBig(offers.offers[k].principal),
 		})
 	}
 	return input

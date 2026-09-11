@@ -304,7 +304,7 @@ func TestTipGweiFloorsNodeSuggestionWithoutBreakingFeeCap(t *testing.T) {
 	}
 }
 
-func TestTipGweiZeroUsesEtherscanFastFeeHistoryPolicy(t *testing.T) {
+func TestTipGweiZeroUsesMedianFeeHistoryPolicy(t *testing.T) {
 	b := newMockBackend()
 	b.history = &ethereum.FeeHistory{Reward: [][]*big.Int{
 		{big.NewInt(3_000_000_000)},
@@ -321,8 +321,8 @@ func TestTipGweiZeroUsesEtherscanFastFeeHistoryPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("currentFees: %v", err)
 	}
-	if want := big.NewInt(500_000_000); fees.tip.Cmp(want) != 0 {
-		t.Fatalf("tip = %s, want minimum p25 reward %s", fees.tip, want)
+	if want := big.NewInt(1_500_000_000); fees.tip.Cmp(want) != 0 {
+		t.Fatalf("tip = %s, want median p25 reward %s", fees.tip, want)
 	}
 	if b.historyReq.blocks != 5 || b.historyReq.newest != nil ||
 		len(b.historyReq.percentiles) != 1 || b.historyReq.percentiles[0] != 25.0 {
@@ -339,8 +339,8 @@ func TestTipGweiZeroUsesEtherscanFastFeeHistoryPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("currentFees with zero reward: %v", err)
 	}
-	if fees.tip.Sign() != 0 {
-		t.Fatalf("tip = %s, want zero minimum reward", fees.tip)
+	if fees.tip.Cmp(big.NewInt(1_000_000_000)) != 0 {
+		t.Fatalf("tip = %s, want median unaffected by a single zero reward", fees.tip)
 	}
 	b.history = constantFeeHistory(big.NewInt(30_000_000_000))
 	fees, err = m.currentFees(t.Context(), limit)

@@ -299,8 +299,8 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		refreshOutcome = observability.ExternalOperationDegraded
 	}
 	observeRefresh(refreshOutcome)
-	if len(offerings) == 0 {
-		return // every adapter's liquidity read failed this pass
+	if len(offerings) == 0 || !offersComplete {
+		return // incomplete live commitments cannot safely authorize another offer
 	}
 	input := buildStrategyInput(auctions, offerings, s.offers, now)
 	if len(input.Auctions) == 0 {

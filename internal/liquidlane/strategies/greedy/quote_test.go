@@ -195,3 +195,25 @@ func FuzzSolveQuoteExactOutputFindsNoMoreInputThanExactInput(f *testing.F) {
 		}
 	})
 }
+
+func TestSolveQuoteNeverAbsorbsInputIntoDiscount(t *testing.T) {
+	discountID := common.HexToHash("0x01")
+	for _, tc := range []struct {
+		name      string
+		discount  bool
+		wantQuote bool
+	}{
+		{"direct cap", false, true}, {"discount has no cap", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := candidate("only", "route", 100, 60)
+			if tc.discount {
+				c.DiscountID = &discountID
+			}
+			got, err := SolveQuote(QuoteTask{ExactInput: big.NewInt(100), Candidates: []Candidate{c}, MaxRoutes: 1, InputPolicy: AbsorbUncoveredInput})
+			if err != nil || (got != nil) != tc.wantQuote {
+				t.Fatalf("quote = %+v, err %v", got, err)
+			}
+		})
+	}
+}

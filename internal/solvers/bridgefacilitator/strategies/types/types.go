@@ -53,10 +53,11 @@ type AuctionSnapshot struct {
 }
 
 // LiveOffer is one offer the solver already holds through an adapter on an auction. The strategy uses
-// these to avoid re-offering through the same adapter while one is live.
+// these to reserve principal and request slots across discovery passes, and deduplicate pairs.
 type LiveOffer struct {
 	AdapterID string
 	AuctionID int64
+	Principal *big.Int
 }
 
 type OfferOutput struct {

@@ -82,13 +82,9 @@ func (s *store) sweep() {
 
 /* ───────── orders ───────── */
 
-// upsertQueued creates a queued order if absent, or refreshes the existing record's poll fields. A
-// still-open order that previously failed a fill is re-armed to queued for another attempt (mirrors the
-// TS filler, whose status precedence excludes `failed`): upsertQueued is only called for orders the
-// backend still lists as open, so a transient failure (e.g. a fill that lost a race) gets retried while
-// the order is live, and a deterministic one just re-fails cheaply via the pre-submit guards
-// (deadline / strategy-binding / filler checks fail before any tx is sent). In-flight and terminal
-// states (submitting / submitted / filled / expired) are left untouched so we never regress them.
+// upsertQueued retries failed work only while no transaction hash has been recorded.
+// A reverted/cancelled or ambiguously tracked transaction must not be paid for again just because
+// the backend still lists the order as open. Polls keep terminal records alive until it disappears.
 func (s *store) upsertQueued(in queuedOrder) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -99,7 +95,7 @@ func (s *store) upsertQueued(in queuedOrder) bool {
 		rec = &orderRecord{OrderID: in.OrderID, Status: statusQueued, CreatedAt: now}
 		s.orders[in.OrderID] = rec
 	}
-	if rec.Status == statusFailed {
+	if rec.Status == statusFailed && rec.TxHash == (common.Hash{}) {
 		rec.Status = statusQueued
 		rec.LastError = ""
 	}

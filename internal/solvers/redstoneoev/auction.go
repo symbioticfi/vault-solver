@@ -60,7 +60,14 @@ func (s *Solver) handleMessage(ctx context.Context, raw []byte) {
 		if !ok {
 			return
 		}
-		go s.handleAuction(ctx, a, start)
+		if !s.auctionBusy.CompareAndSwap(false, true) {
+			s.metrics.auctionDecision(types.SkipReasonInFlight, time.Since(start))
+			return
+		}
+		s.auctionWorkers.Go(func() {
+			defer s.auctionBusy.Store(false)
+			s.handleAuction(ctx, a, start)
+		})
 	case "auction-result":
 		s.handleAuctionResult(raw)
 	case "liquidation-result":
@@ -162,6 +169,10 @@ func (s *Solver) parseAuctionFrame(raw []byte) (AuctionMessage, time.Time, bool)
 	var a AuctionMessage
 	if err := json.Unmarshal(raw, &a); err != nil {
 		s.log.V(1).Error(err, "drop malformed auction")
+		return AuctionMessage{}, time.Time{}, false
+	}
+	if a.TimeoutMs <= 0 {
+		s.metrics.auctionDecision(auctionOutcomeTooLate, time.Since(start))
 		return AuctionMessage{}, time.Time{}, false
 	}
 	a.ID = normalizeAuctionID(a.ID)
