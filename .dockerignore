@@ -4,6 +4,7 @@
 bin/
 dist/
 .tools/
+.e2e/
 
 # Secrets / local config — never bake into an image.
 *.local.yaml

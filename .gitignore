@@ -22,6 +22,7 @@ dev-account.local.txt
 
 # Tooling
 /.tools/
+/.e2e/
 
 # Editor / OS
 .idea/

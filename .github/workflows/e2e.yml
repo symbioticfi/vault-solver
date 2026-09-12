@@ -1,0 +1,79 @@
+name: e2e
+
+on:
+  pull_request:
+    branches: [stage, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  local-profile:
+    name: e2e / ${{ matrix.profile }}
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
+    environment: Integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [3f, rfq, lifi, uniswapx, redstoneoev]
+    steps:
+      - name: Checkout vault-solver
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pin@v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Create private-repository token
+        id: e2e-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # pin@v3.2.0
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: symbioticfi
+          repositories: rfq-integration,rfq-backend,rfq-indexer
+          permission-contents: read
+
+      - name: Initialize pinned E2E sources
+        env:
+          E2E_GITHUB_TOKEN: ${{ steps.e2e-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          auth_config="$(mktemp "$RUNNER_TEMP/e2e-git-auth.XXXXXX")"
+          trap 'rm -f "$auth_config"' EXIT
+          git config --file "$auth_config" \
+            url."https://x-access-token:${E2E_GITHUB_TOKEN}@github.com/symbioticfi/".insteadOf \
+            "https://github.com/symbioticfi/"
+          export GIT_CONFIG_GLOBAL="$auth_config"
+
+          make e2e-init
+          ./.e2e/setup.sh
+
+      - name: Run ${{ matrix.profile }} E2E profile
+        env:
+          ANVIL_PORT: "0"
+          BACKEND_PORT: "0"
+          E2E_PROFILE: ${{ matrix.profile }}
+          FIXTURE_PORT: "0"
+          SOLVER_PORT: "0"
+          UNISWAPX_QUOTE_PORT: "0"
+          VAULT_SOLVER_E2E_ARTIFACT_DIR: ${{ runner.temp }}/vault-solver-e2e/${{ matrix.profile }}
+          VAULT_SOLVER_E2E_SKIP_SETUP: "1"
+          VAULT_SOLVER_METRICS_PORT: "0"
+        run: make test-e2e
+
+      - name: Upload E2E diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # pin@v7.0.1
+        with:
+          name: e2e-${{ matrix.profile }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vault-solver-e2e/${{ matrix.profile }}
+          if-no-files-found: ignore
+          retention-days: 7
