@@ -245,7 +245,12 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 			err = errors.Errorf("unknown transaction outcome %q", outcome)
 		}
 		e.log.Error(err, "fill failed", "orderId", orderID, "attempt", attempt, "tx", res.Hash.Hex())
-		e.fail(orderID, err.Error())
+		status := statusFailed
+		if outcome == txmanager.OutcomeTrackingStopped {
+			// Inclusion is unknown; reconcile the backend without sending another transaction.
+			status = statusSubmitted
+		}
+		e.store.markStatus(orderID, status, res.Hash, err.Error())
 		return
 	}
 	if outcome == txmanager.OutcomeConfirmed {

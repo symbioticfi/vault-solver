@@ -389,11 +389,23 @@ overhead stays in the default strategy:
 first-leg and marginal gas. The current no-preview fork calibration is: acquire `300k` first / `140k`
 marginal, allocate `530k` first / `350k` marginal, deallocate `650k` first / `450k` marginal, unknown
 `850k` first / `650k` marginal. Beam search is bounded by candidate
-count `N`, gas-fit depth `L`, and fixed width `W = 64`. It first sorts candidates in `O(N log N)`, then each
-depth evaluates at most `W*N` extensions and sorts at most `W*N` trial states, so the practical bound is
-`O(N log N + L*W*N*log(W*N))` time with `O(W*N)` transient states per depth. With
-`maxTrackedPositions=10000`, `W=64`, and the observed 2M RedStone settlement cap, `L` is about 2 worst-route
-legs or 10 acquire-only legs before other filters.
+count `N`, gas-fit depth `L`, and fixed width `W = 64`. Above 512 candidates, it ranks single-leg
+candidates by the selected objective (net after route gas in gas-aware mode) and keeps at most 512 for
+replay. This preserves cheap lower-gross routes that a gross-only cutoff would discard. Each depth keeps
+only the best 64 trials incrementally, preserving deterministic tie order. It never retains `W*N` replay
+states at once. Shortlisting is `O(N log N)`; extension work is bounded by `L*64*512`, with at most 64
+retained trials per depth. The shortlist remains a heuristic and does not guarantee a global optimum.
+
+The default strategy permits one pending bundle per adapter. Position-only reservations cannot model the
+free/withdrawable/acquire liquidity and Morpho state shared by separate pending bundles. The strategy retains only lifecycle
+reservations until the callback balance has refreshed after resolution; no position set or per-bid funding
+ledger is needed while a second bundle is blocked. WS auction admission permits one
+active decision and drops concurrent auction frames, while result frames continue to be processed. Auctions
+must carry a positive timeout, and the decision worker is joined on shutdown.
+
+Profit uses `SwapHaircutBps`; sizing, cumulative liquidity and route/gas prediction instead use full cached
+callback output, rounded up to cover rate rounding. This is an estimate against the cached rate, not a signed
+output cap: later oracle/liquidity changes still require the callback's live checks and profit floor.
 
 A per-collateral cumulative `getMaxAssets` cap skips a leg that would over-commit a collateral's shared
 adapter liquidity (several same-collateral legs would otherwise revert `InsufficientAllocate` on settlement).

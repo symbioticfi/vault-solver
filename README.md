@@ -321,6 +321,20 @@ Defaults, fee headroom, request/result semantics, nonce recovery and internal ow
 in the [transaction manager plan](docs/TXMANAGER-PLAN.md). Integration-specific deadline and capacity
 rules remain in each solver's plan.
 
+For liquidity commitments, the built-in strategies apply these limits:
+
+- 3F counts all live offer principals and request slots before creating offers for another auction.
+  Expiration is at least `now + offerExpiryBuffer`. Webhook `liveOffers[]` now includes decimal-string
+  `principal`; remote strategies must reserve it as well as the live request slot.
+- RFQ external mode excludes discount inventory at quote time. Excess input can be absorbed only by a
+  direct swap, whose calldata caps output. A failed transaction with a recorded hash is not resubmitted;
+  uncertain inclusion is reconciled through the backend.
+- LI.FI and UniswapX split shared vault capacity across token pairs before quoting. A pair can therefore
+  quote less than the vault's total free liquidity. This does not reserve every repeated quote request.
+- The default OEV strategy permits one pending bundle per adapter. New auction frames arriving during a
+  decision are skipped; liquidity and gas use the full estimated callback output, while the configured
+  haircut applies to profit. Search shortlists at most 512 candidates using the selected profit objective.
+
 ## Requirements
 
 - Go (toolchain version pinned in [`go.mod`](./go.mod); auto-fetched by recent Go releases).

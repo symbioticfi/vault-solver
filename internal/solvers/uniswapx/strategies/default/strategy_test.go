@@ -146,7 +146,7 @@ func TestDecideQuoteUsesCurrentCapacityAndReservations(t *testing.T) {
 	}
 }
 
-func TestDecideQuoteDoesNotSplitCapacityWithUnrelatedPairs(t *testing.T) {
+func TestDecideQuoteSplitsSharedCapacityAcrossPairs(t *testing.T) {
 	strategy, err := New(Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -164,14 +164,20 @@ func TestDecideQuoteDoesNotSplitCapacityWithUnrelatedPairs(t *testing.T) {
 	}
 
 	quote, err := strategy.DecideQuote(context.Background(), input)
-	if err != nil || quote == nil || quote.AmountOut.String() != "100" {
+	if err != nil || quote != nil {
 		t.Fatalf("quote = %+v, err %v", quote, err)
 	}
 
+	input.AmountIn = big.NewInt(33)
+	quote, err = strategy.DecideQuote(t.Context(), input)
+	if err != nil || quote == nil || quote.AmountOut.Int64() != 33 {
+		t.Fatalf("within-share quote = %+v, err %v", quote, err)
+	}
+	input.AmountIn = big.NewInt(100)
 	input.AmountOut = input.AmountIn
 	input.AmountIn = nil
 	quote, err = strategy.DecideQuote(context.Background(), input)
-	if err != nil || quote == nil || quote.AmountIn.String() != "100" {
+	if err != nil || quote != nil {
 		t.Fatalf("exact-output quote = %+v, err %v", quote, err)
 	}
 }

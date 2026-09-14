@@ -63,10 +63,10 @@ Account refresh uses a 5-second context. Backends must honor cancellation.
 ## 4. Fees, replacements and cancellation
 
 A positive `tipGwei` is mandatory; a larger node suggestion is advisory and clamped to available headroom.
-With zero tip, pricing uses the minimum gas-weighted p25 priority reward from the latest five blocks,
-also clamped to headroom. Missing/invalid fee history fails new submissions closed; a positive floor
-provides an operator-controlled fallback. Startup rejects a floor leaving no base-fee room under the
-initial cap; runtime admission also checks the current base fee.
+With zero tip, pricing uses the median gas-weighted p25 priority reward from the latest five blocks,
+also clamped to headroom, so one low-reward block cannot drag the tip to zero. Missing/invalid fee history
+fails new submissions closed; a positive floor provides an operator-controlled fallback. Startup rejects
+a floor leaving no base-fee room under the initial cap; runtime admission also checks the current base fee.
 
 Normal calls reserve one 12.5% bump below the global ceiling for cancellation. Initial sends reserve
 another bump inside their normal ceiling for a replacement. Request profitability limits also bound
@@ -172,6 +172,8 @@ The generic manager logs with the request's solver and operation label. Receipt 
 one error at streak start, debug while repeating, an error reminder every five minutes and an info on
 recovery. A successful RPC is not evidence of mined inclusion. Grouping/log transport is implemented in
 [observability](../internal/observability/sentry.go), independently of protocol integrations.
+Gas-estimation and receipt-revert logs omit calldata and simulator URLs to avoid copying transaction
+authorizations into logs or Sentry; receipt-revert diagnostics retain the hash, label and nonce.
 
 An active manager refreshes balance, latest nonce and pending nonce into one complete snapshot. Failed
 refreshes retain the previous snapshot; account gauges are absent before first success. A locked
