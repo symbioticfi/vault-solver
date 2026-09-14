@@ -82,9 +82,8 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   framework tees Error+ log entries to Sentry (a zap core in `internal/observability`), flushed on
   shutdown. Strictly opt-in: unset DSN ⇒ no sink. This is richer than the prior filler, which only
   init'd Sentry for uncaught crashes.
-- **Fills go through the shared `txmanager`** (CLAUDE: solvers never send directly). The RFQ package
-  builds the `Executor.fill` calldata; txmanager owns admission, fees, nonce,
-  replacement/cancellation, and confirmed receipt. Each request uses the earliest signed-order or selected
+- **Fills use the [shared transaction manager](TXMANAGER-PLAN.md).** RFQ builds `Executor.fill` calldata
+  and consumes the manager result. Each request uses the earliest signed-order or selected
   discount/protocol deadline, translated from an observed chain timestamp to wall time after planning, so it
   expires while waiting for admission and switches to same-nonce cancellation before dead calldata can hold
   the shared nonce lane.

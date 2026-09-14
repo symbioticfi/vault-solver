@@ -134,9 +134,9 @@ the input, redeems it through LiquidLane, and fills the output via
 decisions and standing quotes until those transactions complete. Each token pair advertises the full currently
 available capacity even when several pairs share one vault; accepting a fill reserves its shared `CapacityID`
 and immediately refreshes every affected quote. The reservation remains until the shared tx manager returns a
-terminal result. Receipted fills, reverts, and cancellations wait for the configured confirmation depth;
-pre-sign or definitive broadcast failures end earlier and release the reservation without a receipt. Before
-signing and on every receipt poll, the tx manager rechecks the LI.FI order status. An observed `Claimed` or
+terminal result under the [shared confirmation policy](docs/TXMANAGER-PLAN.md#5-receipt-polling-and-confirmation).
+Pre-sign or definitive broadcast failures release the reservation without a receipt. Before
+signing and on pending poll ticks, the tx manager rechecks the LI.FI order status. An observed `Claimed` or
 `Refunded` status makes the fill obsolete and immediately switches its owned nonce to cancellation instead of
 retaining liquidity until `pendingTimeoutMs`. `None`, an unrecognized status, or an unavailable status read
 leaves the current lifecycle unchanged and is retried, so a lagging latest-state RPC cannot cancel a fresh fill.
@@ -300,55 +300,20 @@ The solvers split protocol plumbing (reads, signing, submission — fixed) from 
 This is the seam for customizing a solver without forking. Contract and trust model:
 [`docs/strategy-plan.md`](docs/strategy-plan.md).
 
-When used, the shared `txManager` owns one unresolved signed nonce lifecycle at a time. Later
-submissions are neither accepted nor signed until the active lifecycle has a terminal receipt. Every
-`replacementIntervalMs` it attempts a replacement using fresh fees and at least a 12.5% bump over the
-previous attempt; if fresh fees are unavailable, it bumps the cached fees. When a submission returns an
-ambiguous transport error, the first replacement tick instead rebroadcasts those exact signed bytes once
-without changing the hash or fees; a later tick may fee-bump it. Cancellation deadlines and shutdown bypass
-that grace retry. At `pendingTimeoutMs` (or the request's earlier deadline), replacements switch to a
-same-nonce cancellation. Each submission RPC is bounded independently by `broadcastTimeoutMs` (5 seconds
-by default), so a short replacement cadence does not prematurely time out a private write RPC. Every
-`accountPollIntervalMs` (30 seconds by default), an active txmanager refreshes the sender's native balance
-plus latest and pending nonces through the write endpoint; a failed refresh retains the last complete snapshot.
-Account identity and snapshot series are absent when no configured solver starts txmanager, and the values from
-each successful refresh are exported as one scrape-consistent snapshot.
+The shared `txManager` serializes transaction-sending solvers on one EOA. While a transaction is queued
+or active, RFQ/UniswapX decline new quotes, LI.FI retires standing curves, and 3F stops new offers;
+reconciliation continues. Pending calls can be replaced or cancelled with the same nonce. Each pending
+receipt RPC has its own timeout and does not block the lifecycle loop's replacement/cancellation timers.
 
-After lifecycle admission and immediately before signing, requests without an explicit gas limit run
-`eth_estimateGas` against their exact sender, target, value, and calldata. The manager adds 5% headroom
-to that estimate. A request may also supply a protocol-owned obsolescence check: the manager evaluates it
-before signing and at every receipt poll, drops an obsolete unsigned call, and switches an obsolete signed
-call to same-nonce cancellation. Check errors preserve the current lifecycle because the execution contract
-remains authoritative. Normal replacements reuse the admitted gas limit; same-nonce cancellations use 21,000.
+Configure `maxFeeGwei` for every transaction-sending process. It also caps cancellation; `tipGwei` sets a
+priority-fee floor, or selects fee-history pricing when zero. `replacementIntervalMs`, `pendingTimeoutMs`,
+`broadcastTimeoutMs` and `shutdownTimeoutMs` control replacement, cancellation and shutdown bounds.
+The manager remains alive while solvers drain accepted work; orchestrator SIGTERM grace must cover both
+solver preparation/drain and manager shutdown. A timeout does not guarantee that a signed call cannot land.
 
-The transaction lane is ready for new external commitments only while it has no queued or admitted
-lifecycle and nonce ownership is certain. While the lane is occupied or conflicted, UniswapX and RFQ
-decline new quotes, LI.FI retires its active standing curves, and 3F stops posting new offers.
-Reconciliation and already-accepted work continue. A normal submission that races a nonce conflict waits
-without signing until exact-hash reconciliation restores the lane, its request deadline expires, or shutdown
-begins; non-blocking admission declines immediately. This lets the process recover without abandoning an
-immutable order that has already been accepted from an upstream protocol.
-
-During graceful shutdown the manager remains alive while solvers stop external commitments and drain
-already-accepted work. The solver drain is bounded by its preparation timeout plus `pendingTimeoutMs`
-and `replacementIntervalMs`. When manager shutdown begins, new admission stops and it requests
-same-nonce cancellation when nonce ownership is not conflicted. It keeps draining exact signed attempts
-for at most `shutdownTimeoutMs`; if no terminal receipt is available by then, callers receive a
-shutdown-deadline error and the process exits instead of hanging indefinitely. Configure the
-orchestrator's SIGTERM grace to cover the sum of those bounds.
-
-The required `maxFeeGwei` is the global EIP-1559 fee cap, including cancellation. Normal transactions
-stay one 12.5% bump below it so cancellation has headroom, and the initial send reserves another bump
-inside its normal cap for a replacement. A solver-supplied request cap applies to the original call
-and its replacements; cancellation may exceed that request cap but never `maxFeeGwei`. A positive
-`tipGwei` is the only mandatory priority-fee floor. A higher node suggestion is advisory and is clamped
-to the fee cap's available headroom instead of blocking an otherwise valid send. Startup rejects a
-positive floor that leaves no base-fee headroom after both reserved bumps, and runtime submission fails
-when the current base fee leaves insufficient room for that floor. With `tipGwei: 0` (or the field omitted),
-txmanager instead uses the minimum gas-weighted p25 priority reward from the latest five blocks, matching
-the observed behavior of Etherscan Gas Tracker's Fast tier, and likewise clamps it to available headroom.
-Invalid or unavailable `eth_feeHistory` fails new submissions closed; setting a positive floor provides the
-operator-controlled fallback.
+Defaults, fee headroom, request/result semantics, nonce recovery and internal ownership are documented
+in the [transaction manager plan](docs/TXMANAGER-PLAN.md). Integration-specific deadline and capacity
+rules remain in each solver's plan.
 
 ## Requirements
 
@@ -384,6 +349,9 @@ liveness and metrics remain available until the shared transaction manager finis
 
 ### Metrics
 
+The [txmanager metric reference](docs/TXMANAGER-PLAN.md#metrics) covers transaction outcomes, admission,
+replacements, phase timing and account snapshots, including labels and units.
+
 The registry also includes standard Go/process collectors,
 `solver_bot_build_info{version,commit}`, and `solver_bot_solver_info{solver}`. The first identifies the exact
 binary behind a sample; the second exposes bounded config-time process membership so fleet dashboards can
@@ -400,21 +368,6 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | RPC | `solver_bot_rpc_request_duration_seconds` | `role`, `method`, `outcome` | End-to-end HTTP JSON-RPC latency through response-body consumption. |
 | RPC | `solver_bot_rpc_last_successful_request_timestamp` | `role` | Last successful logical call by endpoint role. |
 | RPC | `solver_bot_rpc_last_successful_attempt_timestamp` | `role`, `endpoint` | Last successful endpoint attempt, so an idle or dead fallback can be distinguished from a healthy primary. |
-| Txmanager | `solver_bot_txmanager_requests_total` | `label`, `outcome` | Terminal results of logical on-chain operations. This is the primary confirmed/reverted/submission-failure funnel for every solver. |
-| Txmanager | `solver_bot_txmanager_inflight` | `label` | Requests accepted by the txmanager worker and still awaiting a terminal result; sustained values expose stuck transactions or nonce congestion. |
-| Txmanager | `solver_bot_txmanager_gas_used_total` | `label`, `outcome` | Receipt gas for mined transactions, including reverts. Divide by the matching request count for average gas; this is gas units, not native-token cost. |
-| Txmanager | `solver_bot_txmanager_fee_paid_wei_total` | `label`, `outcome` | Actual native-token fee paid by mined transactions, calculated from receipt `gasUsed × effectiveGasPrice`, including reverted and mined cancellation transactions. |
-| Txmanager | `solver_bot_txmanager_replacements_total` | `label`, `kind` | Successfully broadcast replacements and cancellations. Spikes expose fee-policy or congestion problems that terminal outcomes alone cannot show. |
-| Txmanager | `solver_bot_txmanager_admission_rejections_total` | `label`, `reason` | Requests rejected before the signed worker lifecycle. Reasons are `manager_stopped`, `nonce_conflict`, `deadline_exceeded`, `caller_cancelled`, or bounded fallback `other`; an expected busy `TrySend` probe is excluded. |
-| Txmanager | `solver_bot_txmanager_admission_wait_duration_seconds` | `label`, `outcome` | Time from a real send request until worker admission or a terminal pre-admission outcome. `outcome` is `admitted` or one of the bounded rejection reasons; expected busy `TrySend` probes are excluded. |
-| Txmanager | `solver_bot_txmanager_lifecycle_duration_seconds` | `label`, `outcome` | Time from worker admission through broadcast and terminal tracking. It excludes pre-admission nonce-lane wait, so use admission rejections alongside its latency distribution. |
-| Txmanager | `solver_bot_txmanager_phase_duration_seconds` | `label`, `phase`, `outcome` | Time spent in each reached worker phase: `prebroadcast`, `pending`, or `confirming`. Reorgs may return a lifecycle to `pending`; the emitted sample contains the cumulative time spent in that phase. |
-| Txmanager | `solver_bot_txmanager_account_info` | `address` | Constant `1` identifying the active public transaction-sender address; absent when no configured solver starts txmanager. Private key material is never exposed. |
-| Txmanager | `solver_bot_txmanager_account_balance_wei` | — | Last complete native-token balance snapshot of the sender; absent until the first successful complete refresh. A distinct write endpoint is tried first, then the fallback-capable read client if the submission endpoint does not serve balance reads. |
-| Txmanager | `solver_bot_txmanager_account_latest_nonce` | — | Mined nonce from the same complete snapshot; absent until the first successful refresh. |
-| Txmanager | `solver_bot_txmanager_account_pending_nonce` | — | Pending nonce from the same complete snapshot; compare with latest nonce to detect unknown pending work. It is absent until the first successful refresh. |
-| Txmanager | `solver_bot_txmanager_account_refreshes_total` | `outcome` | Complete periodic account snapshots classified as `success` or `error`; failed reads retain the previous scrape-consistent snapshot. |
-| Txmanager | `solver_bot_txmanager_account_last_successful_refresh_timestamp` | — | Freshness of the retained balance and nonce snapshot; absent until the first successful refresh. |
 | Workflow | `solver_bot_workflow_events_total` | `solver`, `strategy`, `event`, `outcome` | Bounded solver events. Event/outcome pairs are fixed at construction; request data and errors cannot create labels. |
 | Workflow | `solver_bot_workflow_dropped_observations_total` | `solver`, `strategy`, `reason` | Observations rejected because code used an undeclared event/outcome, amount kind, or state view. Any increase is an instrumentation contract drift signal; reasons are bounded. |
 | Workflow | `solver_bot_workflow_last_event_timestamp` | `solver`, `strategy`, `event`, `outcome` | Last occurrence of the matching bounded event, including successful fills, quotes, wins, settlements, and refreshes. |
@@ -473,10 +426,7 @@ External-operation labels are fixed at construction: 3F exposes `target_refresh`
 partial or last-known-good path remained usable, while `skipped` means a deliberate gate, stale-plan
 discard, or shutdown cancellation. Transaction sends are outside these timers.
 
-Txmanager `label` values are stable operation names (`redeem`, `rfq-fill`, `lifi-fill`,
-`uniswapx-fill`). Terminal outcomes are `confirmed`, `included_unconfirmed`, `reverted`, `cancelled`,
-`submission_error`, and `tracking_stopped`. LiquidLane counters include successful receipts reported as
-`included_unconfirmed`; they are operational telemetry rather than an accounting ledger, and amounts for
+LiquidLane counters include successful receipts reported as `included_unconfirmed`; they are operational telemetry rather than an accounting ledger, and amounts for
 different token labels must not be added without price/decimal normalization. An inclusion observed only
 during shutdown can still be reorged after process exit, so it may overcount a success and, for UniswapX,
 clear the local fill-failure breaker; accounting systems must use canonical on-chain data instead.
@@ -504,9 +454,9 @@ The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — H
 in order for reads when the primary is unavailable. Signed broadcasts and both startup nonce reads
 are pinned to `writeRpcUrl`, or the primary `rpcUrl` when it is omitted, and never fall over across
 endpoints. Sender-balance telemetry prefers that endpoint but falls back to the ordinary read client when a
-submission-only relay rejects `eth_getBalance`. Receipt confirmation does not rely on endpoint affinity: it requires a stable head and proves
-that the receipt block belongs to that head by following hash-addressed parent headers. Each request keeps
-normal read fallback behavior. An HTTP 3xx response is not followed and falls through to the next read
+submission-only relay rejects `eth_getBalance`. Receipt confirmation uses the
+[canonicality checks](docs/TXMANAGER-PLAN.md#5-receipt-polling-and-confirmation) independently of endpoint
+affinity, while retaining normal read fallbacks. An HTTP 3xx response is not followed and falls through to the next read
 endpoint. A non-final endpoint's JSON-RPC `null` receipt or header result falls through
 to the next read endpoint; the final endpoint's `null` remains the ordinary not-found result. Unavailable
 multi-read snapshots retry on a later poll; OEV compares both number and hash around each latest-state
@@ -526,13 +476,9 @@ fail-closed for operator investigation; automatic restart does not recover the l
 For controlled maintenance, stop the service and reconcile outstanding private submissions before bringing
 the EOA back.
 
-At runtime, a post-signing `nonce too low` makes `txManager` check every exact signed attempt. During a
-replacement of an already tracked lifecycle, a receipt proven canonical against a stable head resolves
-ownership immediately. The lane remains non-ready only because that owned lifecycle is still active until
-its confirmation depth is reached, not because ownership is uncertain. An initial-broadcast collision, or a
-replacement with no owned canonical receipt, keeps new transactions and readiness paused until terminal
-reconciliation or operator action; a later receipt reorg restores that pause. The calldata is not re-signed
-at another nonce solely from that response. LiquidLane state reads always use RPC `latest`; an archive node
+Runtime nonce collisions pause admission/readiness until ownership is established. See
+[nonce conflict and restart behavior](docs/TXMANAGER-PLAN.md#6-rpc-routing-nonce-conflicts-and-restart)
+for exact-hash reconciliation and reorg handling. LiquidLane state reads always use RPC `latest`; an archive node
 is not required.
 
 **Never commit a real key or live config** — keys are supplied via env/file behind the `Signer`

@@ -152,52 +152,18 @@ assertion because the PR19 ABI has no getter.
   later runtime recovery records each terminal outcome so a breaker-opening miss always has a matching metric.
   Exact names and labels are in the
   [README metrics table](../README.md#metrics).
-- **Fills go through the shared `txmanager` asynchronously** (CLAUDE: solvers never send directly). It keeps
-  at most one unresolved signed lifecycle; later fills wait outside admission and signing, so the process
-  cannot create a future transaction queued behind a missing lower nonce. `CancelAt` is the earliest order,
-  signed-discount, or protocol-signature deadline. It is derived from chain time, translated to a wall-clock
-  deadline without extending the remaining validity, and also bounds the pre-sign wait. The wall-clock
-  observation anchor is captured before the chain-time RPC so lookup and planning latency consume, rather
-  than extend, the remaining validity. The active lifecycle is replaced by a same-nonce cancellation on
-  expiry or, when nonce ownership is not conflicted, shutdown, and drained to a terminal result. Shutdown
-  stops waiting after `shutdownTimeoutMs`, cancels outstanding RPC work, and returns a deadline error so
-  SIGTERM cannot hang indefinitely; the deployment grace period must be longer than that bound.
-  UniswapX treats the lane as busy from lifecycle-slot acquisition through the terminal result: quote
-  responses and solver readiness stay blocked while a request is queued or admitted, including receipt
-  confirmation. Pending capacity reservations independently protect already-awarded orders; installing one
-  is not a signal to reopen quoting.
-- **Fees remain dynamic within explicit ceilings.** A positive `tipGwei` is the mandatory priority-fee
-  floor. A higher node suggestion is advisory and is clamped to available fee-cap headroom; zero uses the
-  minimum gas-weighted p25 priority reward from the latest five blocks, aligned with the observed behavior
-  of Etherscan Gas Tracker's Fast tier, also clamped to headroom, and fails new submissions closed when
-  `eth_feeHistory` is unavailable or invalid. Replacements use the greater of fresh fees and a 12.5% bump;
-  when a replacement fee read is unavailable, the cached fees are bumped instead. `maxFeeGwei` is the
-  absolute global ceiling and normal sends reserve cancellation headroom below it. With gas accounting
-  disabled, UniswapX supplies no request ceiling. With gas accounting enabled, `MaxFeePerGas` returns the
-  profitability ceiling including one normal replacement, and the initial send reserves that replacement
-  inside the ceiling. Cancellation may exceed the request ceiling but never the global ceiling. Startup
-  rejects a configured positive tip floor that leaves no base-fee headroom beneath the initial cap after
-  both reserved bumps.
-- **Signed attempts are retained by exact hash.** An ambiguous send is never treated as definitely absent or
-  re-signed at another nonce. Before escalating fees, the next normal replacement tick rebroadcasts the
-  latest transport-ambiguous attempt's exact signed bytes once; it does not append a duplicate attempt or
-  change cached fees. A later tick may apply the normal bump. `CancelAt`, pending timeout, and shutdown skip
-  this grace retry and proceed directly to same-nonce cancellation. A consumed/colliding nonce is reconciled
-  against every exact attempt. During a replacement of an already tracked lifecycle, a receipt proven
-  canonical against a stable head resolves
-  ownership conflict immediately, but the single lifecycle still holds the lane through its configured
-  confirmation depth, so UniswapX quote responses and readiness remain blocked until it is terminal.
-  Initial-broadcast collisions, and replacements without an owned canonical receipt, keep further sends,
-  quotes, and readiness fail-closed until terminal reconciliation or operator action; a later receipt reorg
-  restores the conflict pause. Each confirmation check proves that the receipt
-  block is in the stable head's
-  ancestry by following hash-addressed parent headers, so correctness does not depend on endpoint affinity
-  or a load balancer serving one fork. Unavailable or incoherent snapshots are retried through the normal
-  read fallbacks. Startup likewise rejects any write-endpoint latest/pending nonce mismatch before readiness.
-  Exact-attempt ownership is in-memory: the packaged Compose deployment restarts automatically after an
-  unclean exit even though nonce equality cannot prove that a private hidden attempt is gone. If such an
-  attempt later consumes the reused nonce, admission and readiness remain fail-closed for operator
-  reconciliation; automatic restart does not reconstruct ownership.
+- **Fills use the [shared transaction manager](TXMANAGER-PLAN.md)** asynchronously. `CancelAt` is the
+  earliest order, signed-discount or protocol-signature deadline. Its wall-clock observation anchor is
+  captured before the chain-time RPC, so lookup/planning latency consumes rather than extends validity.
+  UniswapX treats the lane as busy from lifecycle-slot acquisition through terminal result: quotes and
+  readiness stay blocked during queuing, admission and confirmation. Capacity reservations independently
+  protect already-awarded orders; installing one does not reopen quoting.
+- **The request fee ceiling is protocol policy.** With gas accounting disabled, UniswapX supplies no
+  request ceiling. With it enabled, `MaxFeePerGas` supplies the decision-time profitability ceiling
+  including one normal replacement. The manager owns [fee selection and headroom](TXMANAGER-PLAN.md#4-fees-replacements-and-cancellation).
+- **Signed lifecycle ownership remains in txmanager.** UniswapX consumes its
+  [nonce safety and terminal results](TXMANAGER-PLAN.md#6-rpc-routing-nonce-conflicts-and-restart),
+  retaining its own quote/readiness gates while a request is active or ownership is uncertain.
 - **Pending capacity stays reserved through transaction completion**, then remains unavailable to quotes
   until a fresh post-fill snapshot is published.
 - **On-chain reads use `chain.Multicall`** through the solver's LiquidLane reader; the strategy receives
@@ -231,9 +197,10 @@ the executor ABI and generated binding under `api/bindings/uniswapx/` — see §
 ### 2.4 Configuration (`solver.config`)
 
 One code path; per-environment differences are pure YAML (CLAUDE.md "config is king"). Secrets via `*Env`
-indirection (read with `os.Getenv` at point of use, never stored in the parsed config). `chain` / `signer` /
-`txManager` / `observability` use the same shared framework schema as the `rfq` profile, with
-UniswapX-specific timing and fee values. The current profile is
+indirection (read with `os.Getenv` at point of use, never stored in the parsed config). `chain`, `signer`
+and `observability` use the shared framework schema. The
+[transaction settings](TXMANAGER-PLAN.md#3-configuration-and-time-budgets) have UniswapX-specific values
+in the example, not a separate schema. The current profile is
 [`config/uniswapx.example.yaml`](../config/uniswapx.example.yaml); the abbreviated shape is:
 
 ```yaml
@@ -271,19 +238,10 @@ solvers:
       strategy: { name: default, config: { priceBufferBps: 20 } }
 ```
 
-The `gas:` block is optional. When omitted, quote and fill decisions do not subtract gas and the solver
-skips gas-state and Chainlink reads. Transaction submission remains dynamically priced, but the first fee
-quote is not reused as a hard replacement ceiling, so the solver pays the cost without passing it through to
-the quote. With `tipGwei: 0`, the fee-history policy aligned with observed Etherscan Fast behavior avoids
-relying on a potentially unusable node tip suggestion. Suggestions and rewards are advisory and are clamped
-to available headroom; a positive value remains the mandatory operator-controlled floor and fallback.
-`maxFeeGwei` remains the absolute ceiling described in §2.2.
-
-The configured write RPC is chain-ID checked at startup. Signed broadcasts plus both mined and pending
-account-nonce reads are pinned to that endpoint; fee, receipt, and other state reads use the primary/read
-fallbacks. A signed broadcast is never replayed across those endpoints. Startup requires the write endpoint's
-mined and pending nonces to match. Because standard nonce methods cannot reveal a future transaction queued
-beyond a nonce gap, the signer EOA must remain exclusive to this process.
+The `gas:` block is optional. When omitted, quote/fill decisions skip gas-state and Chainlink reads
+and do not subtract gas. Transaction submission remains dynamically priced without a request ceiling;
+the solver pays that cost without passing it through to the quote. Shared pricing, RPC routing and EOA
+startup requirements are specified in the [transaction manager plan](TXMANAGER-PLAN.md).
 
 Startup scans the executor's indexed `callers(uint256)` entries for the framework signer and checks
 executor bytecode. In external mode it also requires every configured adapter to authorize the executor as a

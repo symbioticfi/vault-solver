@@ -104,7 +104,7 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` â€
   management is out-of-band. The solver returns false from `RequiresTxManager`, so an OEV-only process does
   not require `txManager.maxFeeGwei` and neither initializes nor starts the nonce lane. `deps.TxManager` remains
   unused and the example needs no `txManager` section; a mixed process still starts the one shared manager for
-  its transaction-sending solvers.
+  its transaction-sending solvers under the [shared manager contract](TXMANAGER-PLAN.md#1-ownership-and-admission).
 - **`deps.Signer` is the EXECUTOR_V6 signer.** The bid digest is `keccak256(abi.encode("EXECUTOR_V6",
   chainId, callback, keccak256(operationData), bidWei, nonce, maxTxGasPrice))` wrapped in EIP-191
   (`personal_sign`), signed via `Signer.SignHash`. The signer EOA **is** the wallet holding the Executor
