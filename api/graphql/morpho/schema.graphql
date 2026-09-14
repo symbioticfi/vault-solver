@@ -140,7 +140,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 	): PaginatedAddressMetadata!
@@ -150,6 +150,31 @@ Number of items skipped
 42 character long hex address
 """
 scalar Address
+
+type BigIntDataPoint {
+	x: Float!
+	y: BigInt
+}
+
+"""
+The `Float` scalar type represents signed double-precision fractional values as specified by [IEEE 754](https://en.wikipedia.org/wiki/IEEE_floating_point).
+"""
+scalar Float
+
+"""
+The `BigInt` scalar type represents non-fractional signed whole numeric values.
+"""
+scalar BigInt
+
+type FloatDataPoint {
+	x: Float!
+	y: Float
+}
+
+type IntDataPoint {
+	x: Float!
+	y: Int
+}
 
 """
 Asset yield
@@ -166,11 +191,6 @@ Lookback period used to compute the APR, in seconds.
 }
 
 """
-The `Float` scalar type represents signed double-precision fractional values as specified by [IEEE 754](https://en.wikipedia.org/wiki/IEEE_floating_point).
-"""
-scalar Float
-
-"""
 Asset price
 """
 type AssetPrice {
@@ -183,11 +203,6 @@ Timestamp of the price returned.
 """
 	timestamp: BigInt!
 }
-
-"""
-The `BigInt` scalar type represents non-fractional signed whole numeric values.
-"""
-scalar BigInt
 
 """
 Asset
@@ -214,10 +229,6 @@ Token logo URI, for display purpose
 Either the asset is listed or not
 """
 	isListed: Boolean!
-"""
-Either the asset is whitelisted or not
-"""
-	isWhitelisted: Boolean! @deprecated(reason: "Use isListed instead.")
 """
 Current price in USD together with the timestamp of the price returned.
 """
@@ -247,12 +258,6 @@ Current spot price in ETH.
 ERC-20 token total supply
 """
 	totalSupply: BigInt! @deprecated(reason: "Deprecated.")
-"""
-Historical spot price in ETH
-"""
-	historicalSpotPriceEth(
-		options: TimeseriesOptions
-	): [FloatDataPoint!]! @deprecated(reason: "Use historicalPriceUsd instead.")
 	oraclePriceUsd(
 		timestamp: Float
 	): Float @deprecated(reason: "Use price.usd instead.")
@@ -336,7 +341,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 	): PaginatedAddressMetadata
@@ -368,7 +373,6 @@ The chain on which the entity is deployed.
 	creationBlockNumber: Int!
 	creationTimestamp: BigInt!
 	creatorAddress: Address
-	id: ID! @deprecated(reason: "Use address and chainId instead.")
 """
 The vault's displayed name.
 """
@@ -416,7 +420,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 		where: VaultAdminEventsFilters
@@ -441,21 +445,6 @@ Filtering options for vault admin events. AND operator is used for multiple filt
 type PaginatedAssets {
 	items: [Asset!]
 	pageInfo: PageInfo
-}
-
-type BigIntDataPoint {
-	x: Float!
-	y: BigInt
-}
-
-type FloatDataPoint {
-	x: Float!
-	y: Float
-}
-
-type IntDataPoint {
-	x: Float!
-	y: Int
 }
 
 """
@@ -510,7 +499,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 	): PaginatedAddressMetadata
@@ -528,10 +517,6 @@ type Curator {
 Curator logo URI, for display purpose
 """
 	image: String
-"""
-Link to curator website
-"""
-	url: String @deprecated(reason: "Use socials instead.")
 	socials: [CuratorSocial!]!
 	addresses: [CuratorAddress!]!
 	ownerOnly: Boolean!
@@ -560,14 +545,6 @@ The asset.
 """
 	asset: Asset!
 """
-Amount of reward tokens per year on the supply side. Scaled to reward asset decimals.
-"""
-	yearlySupplyTokens: BigInt! @deprecated(reason: "Deprecated.")
-"""
-Amount of reward tokens per year on the borrow side. Scaled to reward asset decimals.
-"""
-	yearlyBorrowTokens: BigInt! @deprecated(reason: "Deprecated.")
-"""
 Supply rewards APR.
 """
 	supplyApr: Float
@@ -575,14 +552,6 @@ Supply rewards APR.
 Borrow rewards APR.
 """
 	borrowApr: Float
-"""
-Amount of reward tokens per supplied token (annualized). Scaled to reward asset decimals.
-"""
-	amountPerSuppliedToken: BigInt! @deprecated(reason: "Deprecated.")
-"""
-Amount of reward tokens per borrowed token (annualized). Scaled to reward asset decimals.
-"""
-	amountPerBorrowedToken: BigInt! @deprecated(reason: "Deprecated.")
 	id: ID!
 }
 
@@ -941,18 +910,6 @@ Borrow APY excluding rewards
 		options: TimeseriesOptions
 	): [FloatDataPoint!]!
 """
-Fee rate
-"""
-	fee(
-		options: TimeseriesOptions
-	): [FloatDataPoint!] @deprecated(reason: "Deprecated.")
-"""
-Collateral price
-"""
-	price(
-		options: TimeseriesOptions
-	): [FloatDataPoint!]! @deprecated(reason: "Deprecated.")
-"""
 Daily Supply APY excluding rewards
 """
 	dailySupplyApy(
@@ -1236,12 +1193,7 @@ The chain on which the entity is deployed.
 Feed contract address
 """
 	address: Address!
-	description: String @deprecated(reason: "Deprecated.")
-	vendor: String @deprecated(reason: "Deprecated.")
-	pair: [String!] @deprecated(reason: "Deprecated.")
 	decimals: Int
-	historicalPrice: [BigIntDataPoint!] @deprecated(reason: "Deprecated.")
-	price: BigIntDataPoint @deprecated(reason: "Deprecated.")
 }
 
 """
@@ -1257,9 +1209,6 @@ The chain on which the entity is deployed.
 Vault contract address
 """
 	address: Address!
-	vendor: String @deprecated(reason: "Deprecated.")
-	pair: [String!] @deprecated(reason: "Deprecated.")
-	decimals: Int @deprecated(reason: "Deprecated.")
 	price: BigIntDataPoint
 	historicalPrice: [BigIntDataPoint!]
 """
@@ -1354,17 +1303,9 @@ The asset.
 """
 	asset: Asset!
 """
-Amount of reward tokens distributed to MetaMorpho vault suppliers (annualized). Scaled to reward asset decimals.
-"""
-	yearlySupplyTokens: BigInt! @deprecated(reason: "Deprecated.")
-"""
 Rewards APR.
 """
 	supplyApr: Float
-"""
-Amount of reward tokens earned per supplied token (annualized). Scaled to reward asset decimals.
-"""
-	amountPerSuppliedToken: BigInt! @deprecated(reason: "Deprecated.")
 }
 
 """
@@ -1446,7 +1387,6 @@ Timestamp at which the adapter was added to the vault. If the adapter was remove
 """
 	creationTimestamp: BigInt!
 	type: VaultV2AdapterType!
-	vault: VaultV2!
 	factory: VaultV2AdapterFactory!
 """
 The assets managed by the adapter (includes virtually accrued interest).
@@ -1456,6 +1396,7 @@ The assets managed by the adapter (includes virtually accrued interest).
 The USD value of assets managed by the adapter (includes virtually accrued interest).
 """
 	assetsUsd: Float
+	vault: VaultV2!
 """
 The current active force deallocate penalty for this adapter. Returns 0 if unset.
 """
@@ -1471,10 +1412,10 @@ interface VaultV2Adapter {
 	creationBlockNumber: BigInt!
 	creationTimestamp: BigInt!
 	type: VaultV2AdapterType!
-	vault: VaultV2!
 	factory: VaultV2AdapterFactory!
 	assets: BigInt!
 	assetsUsd: Float
+	vault: VaultV2!
 	forceDeallocatePenalty: BigInt!
 }
 
@@ -1500,7 +1441,6 @@ Timestamp at which the adapter was added to the vault. If the adapter was remove
 """
 	creationTimestamp: BigInt!
 	type: VaultV2AdapterType!
-	vault: VaultV2!
 	factory: VaultV2AdapterFactory!
 """
 The assets managed by the adapter (includes virtually accrued interest).
@@ -1510,6 +1450,7 @@ The assets managed by the adapter (includes virtually accrued interest).
 The USD value of assets managed by the adapter (includes virtually accrued interest).
 """
 	assetsUsd: Float
+	vault: VaultV2!
 """
 The current active force deallocate penalty for this adapter. Returns 0 if unset.
 """
@@ -1536,7 +1477,6 @@ Timestamp at which the adapter was added to the vault. If the adapter was remove
 """
 	creationTimestamp: BigInt!
 	type: VaultV2AdapterType!
-	vault: VaultV2!
 	factory: VaultV2AdapterFactory!
 """
 The assets managed by the adapter (includes virtually accrued interest).
@@ -1546,6 +1486,7 @@ The assets managed by the adapter (includes virtually accrued interest).
 The USD value of assets managed by the adapter (includes virtually accrued interest).
 """
 	assetsUsd: Float
+	vault: VaultV2!
 """
 The current active force deallocate penalty for this adapter. Returns 0 if unset.
 """
@@ -1556,7 +1497,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 	): PaginatedMarketPositions!
@@ -1660,89 +1601,6 @@ type PaginatedVaultV2Caps {
 }
 
 """
-Transaction
-"""
-type Transaction implements ChainReference{
-"""
-The chain on which the entity is deployed.
-"""
-	chain: Chain!
-	id: ID!
-	timestamp: BigInt!
-	hash: HexString!
-	logIndex: Int!
-	blockNumber: BigInt!
-	type: TransactionType!
-	data: TransactionData!
-	user: User!
-}
-
-enum TransactionType {
-	MetaMorphoDeposit
-	MetaMorphoWithdraw
-	MetaMorphoTransfer
-	MetaMorphoFee
-	MarketBorrow
-	MarketLiquidation
-	MarketRepay
-	MarketSupply
-	MarketSupplyCollateral
-	MarketWithdraw
-	MarketWithdrawCollateral
-}
-
-union TransactionData =VaultTransactionData | MarketCollateralTransferTransactionData | MarketTransferTransactionData | MarketLiquidationTransactionData
-
-"""
-Morpho Vault V1 transaction data
-"""
-type VaultTransactionData {
-	shares: BigInt!
-	assets: BigInt!
-	timestamp: BigInt!
-	vault: Vault!
-	assetsUsd: Float
-}
-
-"""
-Market collateral transfer transaction data
-"""
-type MarketCollateralTransferTransactionData {
-	assets: BigInt!
-	timestamp: BigInt!
-	market: Market!
-	assetsUsd: Float
-}
-
-"""
-Market transfer transaction data
-"""
-type MarketTransferTransactionData {
-	shares: BigInt!
-	assets: BigInt!
-	timestamp: BigInt!
-	market: Market!
-	assetsUsd: Float
-}
-
-"""
-Market liquidation transaction data
-"""
-type MarketLiquidationTransactionData {
-	repaidAssets: BigInt!
-	repaidShares: BigInt!
-	seizedAssets: BigInt!
-	badDebtShares: BigInt!
-	badDebtAssets: BigInt!
-	liquidator: Address!
-	timestamp: BigInt!
-	market: Market!
-	repaidAssetsUsd: Float
-	seizedAssetsUsd: Float
-	badDebtAssetsUsd: Float
-}
-
-"""
 User state history
 """
 type UserHistory {
@@ -1822,13 +1680,10 @@ type User implements ChainReference{
 The chain on which the entity is deployed.
 """
 	chain: Chain!
-	id: ID! @deprecated(reason: "Use address and chainId instead.")
 	address: Address!
-	tag: String @deprecated(reason: "Deprecated.")
 	marketPositions: [MarketPosition!]!
 	vaultPositions: [VaultPosition!]!
 	vaultV2Positions: [VaultV2Position!]!
-	transactions: [Transaction!]! @deprecated(reason: "Use vaultV1Transactions or marketTransactions instead.")
 	state: UserState!
 	historicalState: UserHistory!
 }
@@ -1864,7 +1719,6 @@ The chain on which the entity is deployed.
 	chain: Chain!
 	id: ID!
 	user: User!
-	vault: VaultV2!
 """
 Amount of vault shares
 """
@@ -1881,6 +1735,7 @@ Value of vault shares held, in USD.
 Timeseries history for each of this position's stats.
 """
 	history: VaultV2PositionHistory!
+	vault: VaultV2!
 """
 Profit & Loss of the position (due to interest and bad debt) since its inception, in loan assets.
 """
@@ -2030,6 +1885,38 @@ type VaultV2ListingMetadataHistoryChange {
 	timestamp: Float!
 }
 
+type VaultV2MarketAdapterReference {
+	address: Address!
+}
+
+type VaultV2VaultAdapterReference {
+	address: Address!
+	targetAddress: Address!
+}
+
+type BadDebtUnrealizedVaultV2MarketExposure {
+	chainId: Int!
+	marketId: MarketId!
+	exposureAssets: BigInt!
+}
+
+"""
+66 character long hexadecimal market ID
+"""
+scalar MarketId
+
+type OracleUnusableVaultV2MarketExposure {
+	chainId: Int!
+	marketId: MarketId!
+	exposureAssets: BigInt!
+}
+
+type OraclePriceDerivationVaultV2MarketExposure {
+	chainId: Int!
+	marketId: MarketId!
+	exposureAssets: BigInt!
+}
+
 type VaultV2Warning {
 	type: String!
 	level: VaultV2WarningLevel!
@@ -2045,7 +1932,7 @@ enum VaultV2WarningLevel {
 	GREEN
 }
 
-union VaultV2WarningMetadata =UnrecognizedAssetVaultWarningMetadata | TimelockVaultV2WarningMetadata | NotWhitelistedVaultV2WarningMetadata | CustomMetadata
+union VaultV2WarningMetadata =UnrecognizedAssetVaultWarningMetadata | TimelockVaultV2WarningMetadata | NotWhitelistedVaultV2WarningMetadata | MultipleMarketV1AdaptersVaultV2WarningMetadata | MultipleVaultAdaptersVaultV2WarningMetadata | LowLiquidityVaultV2WarningMetadata | BadDebtUnrealizedVaultV2WarningMetadata | OracleUnusableVaultV2WarningMetadata | OraclePriceDerivationVaultV2WarningMetadata | CustomMetadata
 
 type UnrecognizedAssetVaultWarningMetadata implements AssetReference{
 """
@@ -2060,6 +1947,34 @@ type TimelockVaultV2WarningMetadata {
 
 type NotWhitelistedVaultV2WarningMetadata {
 	history: [VaultV2ListingMetadataHistoryChange!]!
+}
+
+type MultipleMarketV1AdaptersVaultV2WarningMetadata {
+	adapters: [VaultV2MarketAdapterReference!]!
+}
+
+type MultipleVaultAdaptersVaultV2WarningMetadata {
+	adapters: [VaultV2VaultAdapterReference!]!
+}
+
+type LowLiquidityVaultV2WarningMetadata {
+	withdrawableLiquidity: BigInt!
+	totalAssets: BigInt!
+}
+
+type BadDebtUnrealizedVaultV2WarningMetadata {
+	totalAssets: BigInt!
+	markets: [BadDebtUnrealizedVaultV2MarketExposure!]!
+}
+
+type OracleUnusableVaultV2WarningMetadata {
+	totalAssets: BigInt!
+	markets: [OracleUnusableVaultV2MarketExposure!]!
+}
+
+type OraclePriceDerivationVaultV2WarningMetadata {
+	totalAssets: BigInt!
+	markets: [OraclePriceDerivationVaultV2MarketExposure!]!
 }
 
 type CustomMetadata {
@@ -2327,7 +2242,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 	): PaginatedCurators!
@@ -2341,7 +2256,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 	): PaginatedVaultV2Adapters!
@@ -2401,7 +2316,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 	): PaginatedVaultV2Caps!
@@ -2420,7 +2335,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 		where: VaultV2PositionFilters
@@ -2431,7 +2346,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 """
@@ -2462,16 +2377,7 @@ The USD value of free force-deallocatable liquidity.
 """
 	forceDeallocatableLiquidityUsd: Float
 """
-Realized average APY of the vault, calculated from share price evolution over a predefined lookback period. Uses normalized timestamps (rounded to hour/day/week boundaries) for optimal caching and performance. Available periods: 1h, 6h (default), 1d, 7d, 30d, 90d, 1y, or 'inception' for all-time APY.
-"""
-	avgApy(
-"""
-Predefined lookback period for APY calculation. Using preset periods improves query performance through timestamp normalization.
-"""
-		lookback: VaultV2LookbackPeriod
-	): Float @deprecated(reason: "Use avgNetApyExcludingRewards instead.")
-"""
-Realized average net APY of the vault (after fees, with rewards), calculated from share price evolution over a predefined lookback period. Uses normalized timestamps (rounded to hour/day/week boundaries) for optimal caching and performance. Available periods: 1h, 6h (default), 1d, 7d, 30d, 90d, 1y, or 'inception' for all-time net APY.
+Realized average net APY of the vault (after fees, with rewards), calculated from share price evolution over a predefined lookback period. Rewards are averaged from hourly historical APR snapshots over the same exact lookback period. Available periods: 1h, 6h (default), 1d, 7d, 30d, 90d, 1y, or 'inception' for all-time net APY.
 """
 	avgNetApy(
 """
@@ -2626,7 +2532,7 @@ enum WarningLevel {
 	RED
 }
 
-union MarketWarningMetadata =BadDebtRealizedMarketWarningMetadata | BadDebtUnrealizedMarketWarningMetadata | IncorrectOracleConfigurationMarketWarningMetadata | OraclePriceDerivationMarketWarningMetadata | UnrecognizedCollateralAssetMarketWarningMetadata | UnrecognizedLoanAssetMarketWarningMetadata | CustomMetadata
+union MarketWarningMetadata =BadDebtRealizedMarketWarningMetadata | BadDebtUnrealizedMarketWarningMetadata | IncorrectOracleConfigurationMarketWarningMetadata | OraclePriceDerivationMarketWarningMetadata | OracleUnusableMarketWarningMetadata | UnrecognizedCollateralAssetMarketWarningMetadata | UnrecognizedLoanAssetMarketWarningMetadata | CustomMetadata
 
 type BadDebtRealizedMarketWarningMetadata {
 	badDebtUsd: Float
@@ -2643,10 +2549,10 @@ type BadDebtUnrealizedMarketWarningMetadata {
 }
 
 type IncorrectOracleConfigurationMarketWarningMetadata {
-	type: String!
-	scaleFactor: BigInt
-	expectedScaleFactor: BigInt
-	expectedScaleFactorExponent: BigInt
+	type: String! @deprecated(reason: "Never emitted.")
+	scaleFactor: BigInt @deprecated(reason: "Never emitted.")
+	expectedScaleFactor: BigInt @deprecated(reason: "Never emitted.")
+	expectedScaleFactorExponent: BigInt @deprecated(reason: "Never emitted.")
 }
 
 type OraclePriceDerivationMarketWarningMetadata {
@@ -2668,6 +2574,13 @@ Ratio between on-chain and expected prices.
 	deviationFactor: Float!
 }
 
+type OracleUnusableMarketWarningMetadata {
+"""
+Oracle unusable warning subtype ("reverted" or "zero_price").
+"""
+	type: String!
+}
+
 type UnrecognizedCollateralAssetMarketWarningMetadata implements AssetReference{
 """
 The asset.
@@ -2680,20 +2593,6 @@ type UnrecognizedLoanAssetMarketWarningMetadata implements AssetReference{
 The asset.
 """
 	asset: Asset!
-}
-
-"""
-Morpho Blue supply and borrow side concentrations
-"""
-type MarketConcentration {
-"""
-Borrowers Herfindahl-Hirschman Index
-"""
-	supplyHhi: Float @deprecated(reason: "Deprecated.")
-"""
-Borrowers Herfindahl-Hirschman Index
-"""
-	borrowHhi: Float @deprecated(reason: "Deprecated.")
 }
 
 """
@@ -2758,33 +2657,6 @@ type MarketOracleInfo {
 }
 
 """
-Market oracle feeds
-"""
-type MarketOracleFeed {
-	baseFeedOneAddress: Address!
-	baseFeedOneDescription: String
-	baseFeedOneVendor: String
-	baseFeedTwoAddress: Address!
-	baseFeedTwoDescription: String
-	baseFeedTwoVendor: String
-	baseVault: Address
-	baseVaultDescription: String
-	baseVaultVendor: String
-	baseVaultConversionSample: BigInt
-	quoteFeedOneAddress: Address!
-	quoteFeedOneDescription: String
-	quoteFeedOneVendor: String
-	quoteFeedTwoAddress: Address!
-	quoteFeedTwoDescription: String
-	quoteFeedTwoVendor: String
-	quoteVault: Address
-	quoteVaultDescription: String
-	quoteVaultVendor: String
-	quoteVaultConversionSample: BigInt
-	scaleFactor: BigInt
-}
-
-"""
 Morpho Blue market
 """
 type Market implements ChainReference{
@@ -2812,7 +2684,6 @@ Block number at which the market was created
 Timestamp at which the market was created
 """
 	creationTimestamp: BigInt!
-	id: ID! @deprecated(reason: "Use marketId and chainId instead.")
 	targetBorrowUtilization: BigInt! @deprecated(reason: "Deprecated. This field always returns 90%.")
 	targetWithdrawUtilization: BigInt! @deprecated(reason: "Deprecated. This field always returns 90%.")
 """
@@ -2820,7 +2691,6 @@ State history
 """
 	historicalState: MarketHistory
 	listed: Boolean!
-	creatorAddress: Address @deprecated(reason: "Deprecated.")
 	collateralAsset: Asset
 	loanAsset: Asset!
 	morphoBlue: MorphoBlue!
@@ -2829,10 +2699,8 @@ Current state
 """
 	state: MarketState
 	oracleInfo: MarketOracleInfo @deprecated(reason: "Use oracle entity instead.")
-	oracleFeed: MarketOracleFeed @deprecated(reason: "Use oracle entity instead.")
 	oracle: Oracle
 	oracleAddress: Address! @deprecated(reason: "Use oracle.address instead.")
-	concentration: MarketConcentration @deprecated(reason: "Deprecated.")
 """
 Market bad debt values
 """
@@ -2841,7 +2709,6 @@ Market bad debt values
 Market realized bad debt values
 """
 	realizedBadDebt: MarketBadDebt
-	dailyApys: MarketApyAggregates @deprecated(reason: "Use market.state daily average APYs instead.")
 	monthlyApys: MarketApyAggregates @deprecated(reason: "Use market.state monthly average APYs instead.")
 """
 Current IRM curve at different utilization thresholds for display purpose
@@ -2849,10 +2716,6 @@ Current IRM curve at different utilization thresholds for display purpose
 	currentIrmCurve(
 		numberOfPoints: Int
 	): [IRMCurveDataPoint!]
-"""
-Underlying amount of assets that can be reallocated to this market
-"""
-	collateralPrice: BigInt @deprecated(reason: "Use state.price instead.")
 	reallocatableLiquidityAssets: BigInt!
 	warnings: [MarketWarning!]!
 """
@@ -2876,16 +2739,11 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 	): PaginatedPreLiquidations!
 }
-
-"""
-66 character long hexadecimal market ID
-"""
-scalar MarketId
 
 type PaginatedMarkets {
 	items: [Market!]
@@ -2949,21 +2807,6 @@ Total collateral at risk of liquidation at certain prices thresholds.
 """
 	collateralAtRisk: [CollateralAtRiskDataPoint!]
 	market: Market!
-}
-
-"""
-Market oracle accuracy versus spot price
-"""
-type MarketOracleAccuracy {
-	market: Market!
-"""
-Average oracle/spot prices deviation
-"""
-	averagePercentDifference: Float @deprecated(reason: "Deprecated.")
-"""
-Maximum oracle/spot prices deviation
-"""
-	maxPercentDifference: Float @deprecated(reason: "Deprecated.")
 }
 
 """
@@ -3060,10 +2903,6 @@ The latest supply assets indexed for this position.
 """
 	supplyAssets: BigInt
 """
-The latest supply assets indexed for this position, in USD.
-"""
-	supplyAssetsUsd: Float
-"""
 The latest supply shares indexed for this position.
 """
 	supplyShares: BigInt!
@@ -3087,6 +2926,10 @@ Value of the collateral in loan asset units, as computed by the market oracle.
 Margin of the position (collateralValue - borrowAssets).
 """
 	margin: BigInt
+"""
+The latest supply assets indexed for this position, in USD.
+"""
+	supplyAssetsUsd: Float
 """
 Profit & Loss of the position's borrow side (due to the loan interest) since its inception, in loan assets.
 """
@@ -3273,16 +3116,6 @@ enum PublicAllocatorReallocateType {
 
 type PaginatedPublicAllocatorReallocates {
 	items: [PublicAllocatorReallocate!]
-	pageInfo: PageInfo
-}
-
-type PaginatedTransactions {
-	items: [Transaction!]
-	pageInfo: PageInfo
-}
-
-type PaginatedUsers {
-	items: [User!]
 	pageInfo: PageInfo
 }
 
@@ -3498,10 +3331,6 @@ Vault allocation on Morpho Blue markets.
 """
 	allocation: [VaultAllocation!]!
 """
-Vault state ID
-"""
-	id: ID! @deprecated(reason: "Use Vault.address and Vault.chainId instead.")
-"""
 Value of shares quoted in assets
 """
 	sharePriceNumber: Float
@@ -3513,10 +3342,6 @@ Value of WAD shares in USD
 Vault performance fee.
 """
 	fee: Float!
-"""
-Stores the total assets managed by this vault when the fee was last accrued, in underlying token units.
-"""
-	lastTotalAssets: BigInt! @deprecated(reason: "Use totalAssets instead.")
 """
 Vault curator address.
 """
@@ -3583,7 +3408,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 	): PaginatedAddressMetadata
@@ -3596,7 +3421,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 	): PaginatedAddressMetadata
@@ -3609,7 +3434,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 	): PaginatedAddressMetadata
@@ -3622,7 +3447,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 """
@@ -3843,13 +3668,25 @@ type VaultListingMetadataHistoryChange {
 	timestamp: Float!
 }
 
+type OracleUnusableVaultMarketExposure {
+	chainId: Int!
+	marketId: MarketId!
+	exposureAssets: BigInt!
+}
+
+type OraclePriceDerivationVaultMarketExposure {
+	chainId: Int!
+	marketId: MarketId!
+	exposureAssets: BigInt!
+}
+
 type VaultWarning {
 	type: String!
 	level: WarningLevel!
 	metadata: VaultWarningMetadata
 }
 
-union VaultWarningMetadata =InvalidNameVaultWarningMetadata | InvalidSymbolVaultWarningMetadata | ShortTimelockVaultWarningMetadata | UnrecognizedDepositAssetVaultWarningMetadata | NotWhitelistedVaultWarningMetadata | CustomMetadata
+union VaultWarningMetadata =InvalidNameVaultWarningMetadata | InvalidSymbolVaultWarningMetadata | ShortTimelockVaultWarningMetadata | UnrecognizedDepositAssetVaultWarningMetadata | NotWhitelistedVaultWarningMetadata | LowLiquidityVaultWarningMetadata | OracleUnusableVaultWarningMetadata | OraclePriceDerivationVaultWarningMetadata | CustomMetadata
 
 type InvalidNameVaultWarningMetadata {
 	reason: String!
@@ -3872,6 +3709,21 @@ The asset.
 
 type NotWhitelistedVaultWarningMetadata {
 	history: [VaultListingMetadataHistoryChange!]!
+}
+
+type LowLiquidityVaultWarningMetadata {
+	withdrawableLiquidity: BigInt!
+	totalAssets: BigInt!
+}
+
+type OracleUnusableVaultWarningMetadata {
+	totalAssets: BigInt!
+	markets: [OracleUnusableVaultMarketExposure!]!
+}
+
+type OraclePriceDerivationVaultWarningMetadata {
+	totalAssets: BigInt!
+	markets: [OraclePriceDerivationVaultMarketExposure!]!
 }
 
 type PaginatedMetaMorphos {
@@ -3929,10 +3781,6 @@ Pending maximum amount of asset that can be supplied on market by the vault, in 
 """
 	pendingSupplyCapUsd: Float
 	removableAt: BigInt
-"""
-Whether realtime allocation is enabled for this market
-"""
-	enabled: Boolean! @deprecated(reason: "Deprecated.")
 """
 Block information
 """
@@ -4413,43 +4261,17 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 		where: AssetsFilters
 		orderBy: AssetOrderBy
 		orderDirection: OrderDirection
 	): PaginatedAssets!
-	transactions(
-"""
-Number of items requested
-"""
-		first: Int
-"""
-Number of items skipped
-"""
-		skip: Int
-		orderBy: TransactionsOrderBy
-		orderDirection: OrderDirection
-		where: TransactionFilters
-	): PaginatedTransactions! @deprecated(reason: "Use vaultV1Transactions or marketTransactions instead.")
 	userByAddress(
 		address: String!
 		chainId: Int
 	): User!
-	users(
-"""
-Number of items requested
-"""
-		first: Int
-"""
-Number of items skipped
-"""
-		skip: Int
-		orderBy: UsersOrderBy
-		orderDirection: OrderDirection
-		where: UsersFilters
-	): PaginatedUsers! @deprecated(reason: "Use userByAddress or address-scoped queries instead.")
 	marketCollateralAtRisk(
 		uniqueKey: String!
 		chainId: Int
@@ -4465,7 +4287,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 		orderBy: MarketOrderBy
@@ -4481,15 +4303,11 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 		where: CuratorFilters
 	): PaginatedCurators!
-	marketOracleAccuracy(
-		marketId: String!
-		options: TimeseriesOptions
-	): MarketOracleAccuracy! @deprecated(reason: "Use marketById instead.")
 	morphoBlueByAddress(
 		address: String!
 		chainId: Int
@@ -4500,7 +4318,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 		orderBy: MorphoBlueOrderBy
@@ -4518,7 +4336,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 		orderBy: MarketPositionOrderBy
@@ -4528,33 +4346,33 @@ Number of items skipped
 	oracleFeedByAddress(
 		address: String!
 		chainId: Int
-	): OracleFeed!
+	): OracleFeed! @deprecated(reason: "Deprecated due to low usage.")
 	oracleFeeds(
 """
 Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 		where: OracleFeedsFilters
-	): PaginatedOracleFeeds!
+	): PaginatedOracleFeeds! @deprecated(reason: "Deprecated due to low usage.")
 	oracleVaultByAddress(
 		address: String!
 		chainId: Int
-	): OracleVault!
+	): OracleVault! @deprecated(reason: "Deprecated due to low usage.")
 	oracleVaults(
 """
 Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 		where: OracleVaultsFilters
-	): PaginatedOracleVaults!
+	): PaginatedOracleVaults! @deprecated(reason: "Deprecated due to low usage.")
 	oracleByAddress(
 		address: String!
 		chainId: Int
@@ -4565,7 +4383,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 		where: OraclesFilters
@@ -4573,27 +4391,27 @@ Number of items skipped
 	publicAllocator(
 		address: String!
 		chainId: Int
-	): PublicAllocator!
+	): PublicAllocator! @deprecated(reason: "Deprecated due to low usage.")
 	publicAllocators(
 """
 Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 		orderBy: PublicAllocatorOrderBy
 		orderDirection: OrderDirection
 		where: PublicAllocatorFilters
-	): PaginatedPublicAllocator!
+	): PaginatedPublicAllocator! @deprecated(reason: "Deprecated due to low usage.")
 	publicAllocatorReallocates(
 """
 Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 		orderBy: PublicAllocatorReallocateOrderBy
@@ -4603,8 +4421,8 @@ Number of items skipped
 	vaultFactoryByAddress(
 		address: String!
 		chainId: Int
-	): VaultFactory!
-	vaultFactories: PaginatedMetaMorphoFactories!
+	): VaultFactory! @deprecated(reason: "Deprecated due to low usage.")
+	vaultFactories: PaginatedMetaMorphoFactories! @deprecated(reason: "Deprecated due to low usage.")
 	vaultByAddress(
 		address: String!
 		chainId: Int
@@ -4615,7 +4433,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 		orderBy: VaultOrderBy
@@ -4633,7 +4451,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 		orderBy: VaultPositionOrderBy
@@ -4646,7 +4464,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 		orderBy: VaultReallocateOrderBy
@@ -4675,15 +4493,15 @@ Number of items skipped. Maximum 10000.
 		orderDirection: OrderDirection
 		where: MarketTransactionFilters
 	): PaginatedMarketTransactions!
-	vaultV2Factories: PaginatedVaultV2Factories!
-	vaultV2MetaMorphoAdapterFactories: PaginatedMetaMorphoAdapterFactories!
+	vaultV2Factories: PaginatedVaultV2Factories! @deprecated(reason: "Deprecated due to low usage.")
+	vaultV2MetaMorphoAdapterFactories: PaginatedMetaMorphoAdapterFactories! @deprecated(reason: "Deprecated due to low usage.")
 	vaultV2s(
 """
 Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 		where: VaultV2sFilters
@@ -4700,7 +4518,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 """
@@ -4726,7 +4544,7 @@ Number of items requested
 """
 		first: Int
 """
-Number of items skipped
+Number of items skipped. Maximum 10000.
 """
 		skip: Int
 		orderBy: VaultV2TransactionOrderBy
@@ -4751,167 +4569,11 @@ input AssetsFilters {
 
 enum AssetOrderBy {
 	Address
-	CredoraRiskScore @deprecated(reason: "Deprecated.")
 }
 
 enum OrderDirection {
 	Asc
 	Desc
-}
-
-enum TransactionsOrderBy {
-	Timestamp
-	Shares
-	Assets
-	RepaidShares
-	RepaidAssets
-	SeizedAssets
-	BadDebtShares
-	BadDebtAssets
-}
-
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-input TransactionFilters {
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	search: String
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	assetAddress_in: [String!]
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	vaultAddress_in: [String!]
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	marketUniqueKey_in: [String!]
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	userAddress_in: [String!]
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	type_in: [TransactionType!]
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	hash: String
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	timestamp_gte: Int
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	timestamp_lte: Int
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	chainId_in: [Int!]
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	shares_gte: BigInt
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	shares_lte: BigInt
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	assets_gte: BigInt
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	assets_lte: BigInt
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	repaidAssets_gte: BigInt
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	repaidAssets_lte: BigInt
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	repaidShares_gte: BigInt
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	repaidShares_lte: BigInt
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	seizedAssets_gte: BigInt
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	seizedAssets_lte: BigInt
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	badDebtShares_gte: BigInt
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	badDebtShares_lte: BigInt
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	badDebtAssets_gte: BigInt
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	badDebtAssets_lte: BigInt
-"""
-Filtering options for transactions. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	liquidator_in: [String!]
-}
-
-enum UsersOrderBy {
-	Address
-}
-
-"""
-Filtering options for users. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-input UsersFilters {
-"""
-Filtering options for users. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	search: String
-"""
-Filtering options for users. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	address_in: [String!]
-"""
-Filtering options for users. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	assetSymbol_in: [String!]
-"""
-Filtering options for users. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	assetAddress_in: [String!]
-"""
-Filtering options for users. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	vaultAddress_in: [String!]
-"""
-Filtering options for users. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	marketUniqueKey_in: [String!]
-"""
-Filtering options for users. AND operator is used for multiple filters, while OR operator is used for multiple values in the same filter.
-"""
-	chainId_in: [Int!]
 }
 
 enum MarketOrderBy {
@@ -4938,7 +4600,6 @@ enum MarketOrderBy {
 	AvgNetBorrowApy
 	DailyBorrowApy
 	DailyNetBorrowApy
-	CredoraRiskScore @deprecated(reason: "Deprecated.")
 	SizeUsd
 }
 
@@ -5369,7 +5030,6 @@ enum VaultOrderBy {
 	AvgNetApy
 	DailyApy
 	DailyNetApy
-	CredoraRiskScore @deprecated(reason: "Deprecated.")
 }
 
 input VaultFilters {

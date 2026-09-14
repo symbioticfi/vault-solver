@@ -49,7 +49,8 @@ type ChainConfig struct {
 	// WSURL is optional; when set it enables live log subscriptions (a latency optimization only).
 	WSURL string `yaml:"wsUrl,omitempty"`
 	// MulticallAddress overrides the Multicall3 contract used to batch reads. Defaults to the
-	// canonical cross-chain Multicall3 deployment when unset.
+	// canonical cross-chain Multicall3 deployment when unset. With gas accounting enabled,
+	// it must also support getCurrentBlockTimestamp(); startup checks this selector.
 	MulticallAddress string `yaml:"multicallAddress,omitempty"`
 }
 

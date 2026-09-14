@@ -63,10 +63,10 @@ type chainReader interface {
 	) error
 	validateZeroGovernanceFee(ctx context.Context, inputSettler common.Address) error
 	validateDirectAuthorization(ctx context.Context, executor common.Address, routes []route) error
-	validateGasTokens(routes []route) error
-	quoteSnapshots(ctx context.Context, routes []route, executor common.Address, chainTime time.Time) (quoteSnapshotSet, error)
+	validateGasOracles(ctx context.Context, routes []route) error
+	quoteSnapshots(ctx context.Context, routes []route, executor common.Address) (quoteSnapshotSet, error)
 	fillSnapshots(
-		ctx context.Context, routes []route, executor, tokenIn common.Address, amountIn *big.Int, chainTime time.Time,
+		ctx context.Context, routes []route, executor, tokenIn common.Address, amountIn *big.Int,
 	) (fillSnapshotSet, error)
 	orderIdentifier(ctx context.Context, inputSettler common.Address, order inputsettler.StandardOrder) (common.Hash, error)
 	orderStatus(ctx context.Context, inputSettler common.Address, orderID common.Hash) (uint8, error)
@@ -153,7 +153,7 @@ func (s *Solver) Run(ctx context.Context) error {
 			"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
 		return startupErr
 	}
-	if err := s.reader.validateGasTokens(routes); err != nil {
+	if err := s.reader.validateGasOracles(ctx, routes); err != nil {
 		startupErr := errors.Errorf("lifi: validate gas oracles: %w", err)
 		s.log.Error(startupErr, "gas oracle validation failed",
 			"routes", len(routes), "gasAccounting", s.cfg.Gas != nil)

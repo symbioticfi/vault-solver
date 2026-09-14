@@ -278,15 +278,13 @@ func (s *Strategy) scoredLegs(a types.AuctionSnapshot, now time.Time, adapter ty
 	for _, it := range cands {
 		if sized, ok := sizeLeg(it.cand, it.price, it.quote, it.accrued, s.cfg.Sizing); ok {
 			out = append(out, scoredLeg{
-				bundleLeg: bundleLeg{
-					selectedLeg:     sized.leg,
-					expectedLoanOut: sized.expectedLoanOut,
-					collateral:      it.cand.Market.Params.CollateralToken,
-				},
-				profit:    sized.profit,
-				maxAssets: it.quote.MaxAssets,
-				source:    it,
-				replay:    true,
+				selectedLeg:     sized.leg,
+				expectedLoanOut: sized.expectedLoanOut,
+				collateral:      it.cand.Market.Params.CollateralToken,
+				profit:          sized.profit,
+				maxAssets:       it.quote.MaxAssets,
+				source:          it,
+				replay:          true,
 			})
 		}
 	}

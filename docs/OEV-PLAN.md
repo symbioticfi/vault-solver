@@ -648,7 +648,7 @@ referenced by env-var name and read at point of use. The full annotated profile 
 | `strategy.config.{url,timeout,headers,maxRequestBytes,maxResponseBytes}` | webhook base URL and transport limits/headers; env-backed values remain env-var names in parsed config and resolve only while constructing the HTTP client; OEV route is `POST /decide-bid` |
 | `strategy.config.morphoApiUrl` / `discoveryMaxHealthFactor` | default-strategy production Morpho snapshot endpoint and API health-factor band |
 | `strategy.config.maxTrackedPositions` | logical cap for at-risk positions retained from Morpho API pages |
-| `gas.{nativeUsdFeed,nativeMaxAge,tokenUsdFeeds[]}` | optional shared token/native gas conversion; the token entry must cover the adapter loan asset |
+| `gas.{nativeUsdFeed,nativeMaxAge,tokenUsdFeeds[]}` | optional shared token/native gas conversion; the token entry must cover the adapter loan asset; age limits follow [shared freshness rules](LIQUIDLANE-CONVENTIONS.md#reads-and-freshness); gas batch time must match the stable snapshot head |
 | `strategy.config.bid.{bidEth,authTtlMs,totalBundleProfitBps,minBundleProfitBidBps}` | default-strategy minimum bid, callback-auth replay window, optional gross-profit bid share, and optional bundle margin after gas + bid; the bps fields require `gas:` |
 | `strategy.config.{monitorPollMs,maxStateAgeMs}` | default-strategy refresh cadence and cache staleness cutoff |
 | `maxTxGasPriceWei` | always-on signed gas-price cap and native reservation assumption; also prices converted economics when `gas:` is enabled |

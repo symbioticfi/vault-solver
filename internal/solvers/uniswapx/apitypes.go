@@ -44,11 +44,6 @@ type quoteResponse struct {
 	quotedPairBounded bool
 }
 
-type orderPage struct {
-	Orders []orderEntry `json:"orders"`
-	Cursor string       `json:"cursor,omitempty"`
-}
-
 type orderEntry struct {
 	Type         string        `json:"type"`
 	EncodedOrder string        `json:"encodedOrder"`
@@ -57,6 +52,7 @@ type orderEntry struct {
 	OrderStatus  string        `json:"orderStatus"`
 	ChainID      int64         `json:"chainId"`
 	QuoteID      string        `json:"quoteId"`
+	CreatedAt    int64         `json:"createdAt"`
 	Input        orderToken    `json:"input"`
 	Outputs      []orderOutput `json:"outputs"`
 }

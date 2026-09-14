@@ -127,7 +127,9 @@ resolved adapter loan asset and a readable initial oracle snapshot. Design, conf
 A same-chain LI.FI Intents solver for LiquidLane-backed RWA → underlying routes. It publishes standing quotes
 from current adapter liquidity with optional gas accounting and receives matched, already-opened escrow orders over the
 LI.FI WebSocket feed. On startup and reconnect it catches up active matches through `GET /orders` before
-publishing quotes; while disconnected it suspends renewal and retries expiry of known curves. Before each fill it
+publishing quotes; while disconnected it suspends renewal and retries expiry of known curves.
+After REST recovery completes, WebSocket closes 1000/1001/1005/1006/1012/1013 are logged at Info.
+Earlier disconnects and other errors remain Error; reconnect backoff resets only after recovery. Before each fill it
 rechecks the canonical order status, adapter state, configured gas cost, and strategy decision, then atomically claims
 the input, redeems it through LiquidLane, and fills the output via
 `LiquidLaneLifiExecutor`. Capacity reserved by already-submitted fills is deducted from both later fill
@@ -255,6 +257,10 @@ An already-terminal miss found only by initial startup history reconciliation is
 without opening a fresh local breaker.
 If terminal status or receipt time cannot be established, quoting stops without opening the breaker until
 reconciliation succeeds.
+The upstream `/orders` endpoint returns only the newest 50 rows and no longer paginates. A full 50-row open
+snapshot is processed but treated as incomplete; exclusive quoting and readiness stay blocked. Recovery
+filters the newest all-status snapshot locally and clears the unknown state only when that snapshot reaches
+the configured lookback cutoff.
 
 In internal mode, advertised LiquidLane routes are resolved on-chain and checked against their advertised
 asset and decimals, current physical capacity/rate, adapter minimum discount, token policy, and configured
@@ -444,6 +450,11 @@ UID is embedded. Namespace/pod selectors are query-driven over the standard Kube
 
 ## Configuration
 
+For LI.FI, UniswapX, and RedStone OEV gas accounting, choose feed age limits using the
+[shared oracle freshness rules](docs/LIQUIDLANE-CONVENTIONS.md#reads-and-freshness).
+A `chain.multicallAddress` override must support `aggregate3` and `getCurrentBlockTimestamp`;
+incompatible contracts fail startup when gas accounting is enabled.
+
 Config is YAML with a two-stage decode: the framework reads `solver.name` to select the
 implementation and hands the opaque `solver.config` block to that solver to type. Each solver has its
 own fully annotated example under `config/` (see the *Example config* column above) — every field,
@@ -498,6 +509,6 @@ make generate                           # regenerate bindings + API client
 ## Contributing
 
 Engineering conventions — the modular framework/integration boundary, config-driven configuration,
-modern Go 1.26 style, the required test/lint/format gate, and secure-coding rules — are in
+modern Go 1.27 style, the required test/lint/format gate, and secure-coding rules — are in
 [`CLAUDE.md`](./CLAUDE.md) (`AGENTS.md` is a symlink to it). Every change must keep
 `make format && make test && make lint` green and unit-test new logic.

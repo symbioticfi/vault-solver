@@ -34,6 +34,8 @@ type Token struct {
 }
 
 type PriceSnapshot struct {
+	// BlockTime is the timestamp returned alongside prices in the same latest-state batch.
+	BlockTime         time.Time
 	tokenOutPerNative map[common.Address]*big.Int
 }
 
@@ -65,7 +67,7 @@ func (s *PriceSnapshot) MarshalJSON() ([]byte, error) {
 }
 
 type multicaller interface {
-	Multicall(ctx context.Context, calls []chain.Call) ([]chain.CallResult, error)
+	MulticallWithTime(ctx context.Context, calls []chain.Call) ([]chain.CallResult, time.Time, error)
 }
 
 type OracleReader struct {
@@ -100,6 +102,18 @@ func NewOracleReader(c multicaller, cfg OracleConfig) (*OracleReader, error) {
 	return &OracleReader{chain: c, cfg: cfg}, nil
 }
 
+// Validate checks configured tokens and the timed Multicall3 surface before quoting starts.
+func (r *OracleReader) Validate(ctx context.Context, tokens []Token) error {
+	if err := r.ValidateTokens(tokens); err != nil {
+		return err
+	}
+	_, _, err := r.chain.MulticallWithTime(ctx, nil)
+	if err != nil {
+		return errors.Errorf("gas oracle: validate multicall timestamp: %w", err)
+	}
+	return nil
+}
+
 func (r *OracleReader) ValidateTokens(tokens []Token) error {
 	decimals := make(map[common.Address]int, len(tokens))
 	for _, token := range tokens {
@@ -124,7 +138,8 @@ func (r *OracleReader) ValidateTokens(tokens []Token) error {
 	return nil
 }
 
-func (r *OracleReader) Read(ctx context.Context, tokens []Token, now time.Time) (*PriceSnapshot, error) {
+// Read validates prices against the block timestamp returned in the same latest-state batch.
+func (r *OracleReader) Read(ctx context.Context, tokens []Token) (*PriceSnapshot, error) {
 	if err := r.ValidateTokens(tokens); err != nil {
 		return nil, err
 	}
@@ -134,7 +149,7 @@ func (r *OracleReader) Read(ctx context.Context, tokens []Token, now time.Time) 
 	for _, token := range tokens {
 		calls = appendFeedCalls(calls, r.cfg.TokenUSDFeeds[token.Address].Address)
 	}
-	results, err := r.chain.Multicall(ctx, calls)
+	results, blockTime, err := r.chain.MulticallWithTime(ctx, calls)
 	if err != nil {
 		return nil, errors.Errorf("gas oracle: multicall: %w", err)
 	}
@@ -142,7 +157,7 @@ func (r *OracleReader) Read(ctx context.Context, tokens []Token, now time.Time) 
 		return nil, errors.Errorf("gas oracle: got %d results, want %d", len(results), len(calls))
 	}
 	native, err := decodeFeed(
-		results[:2], r.cfg.NativeUSDFeed.Address, now, r.cfg.NativeUSDFeed.MaxAge,
+		results[:2], r.cfg.NativeUSDFeed.Address, blockTime, r.cfg.NativeUSDFeed.MaxAge,
 	)
 	if err != nil {
 		return nil, err
@@ -150,7 +165,7 @@ func (r *OracleReader) Read(ctx context.Context, tokens []Token, now time.Time) 
 	rates := make(map[common.Address]*big.Int, len(tokens))
 	for i, token := range tokens {
 		feed := r.cfg.TokenUSDFeeds[token.Address]
-		price, decodeErr := decodeFeed(results[2+i*2:4+i*2], feed.Address, now, feed.MaxAge)
+		price, decodeErr := decodeFeed(results[2+i*2:4+i*2], feed.Address, blockTime, feed.MaxAge)
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
@@ -160,7 +175,9 @@ func (r *OracleReader) Read(ctx context.Context, tokens []Token, now time.Time) 
 		}
 		rates[token.Address] = rate
 	}
-	return NewPriceSnapshot(rates), nil
+	snapshot := NewPriceSnapshot(rates)
+	snapshot.BlockTime = blockTime
+	return snapshot, nil
 }
 
 type feedPrice struct {
@@ -175,7 +192,7 @@ func appendFeedCalls(calls []chain.Call, feed common.Address) []chain.Call {
 	)
 }
 
-func decodeFeed(results []chain.CallResult, feed common.Address, now time.Time, maxAge time.Duration) (feedPrice, error) {
+func decodeFeed(results []chain.CallResult, feed common.Address, blockTime time.Time, maxAge time.Duration) (feedPrice, error) {
 	if len(results) != 2 || !results[0].Success || !results[1].Success {
 		return feedPrice{}, errors.Errorf("gas oracle: feed %s call failed", feed.Hex())
 	}
@@ -194,16 +211,12 @@ func decodeFeed(results []chain.CallResult, feed common.Address, now time.Time, 
 		round.UpdatedAt.Sign() <= 0 || !round.UpdatedAt.IsInt64() {
 		return feedPrice{}, errors.Errorf("gas oracle: feed %s returned invalid round data", feed.Hex())
 	}
-	const maxFutureSkewSeconds = 15
-	age := now.Unix() - round.UpdatedAt.Int64()
-	if age < -maxFutureSkewSeconds {
+	age := blockTime.Unix() - round.UpdatedAt.Int64()
+	if age < 0 {
 		return feedPrice{}, errors.Errorf(
 			"gas oracle: feed %s updated %ds in the future", feed.Hex(), -age,
 		)
 	}
-	// A new Ethereum block can land between the caller's timestamp read and this latest-state
-	// multicall. Accept only that small race, not arbitrary future timestamps.
-	age = max(age, 0)
 	maxAgeSeconds := int64(maxAge / time.Second)
 	if maxAge%time.Second != 0 {
 		maxAgeSeconds++

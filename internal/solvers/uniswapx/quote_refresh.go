@@ -62,7 +62,7 @@ func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Rout
 	}
 	decisionRoutes := discountRoutes.routes
 	listed := discountRoutes.listed
-	current, err := s.reader.quoteSnapshot(ctx, decisionRoutes, s.cfg.Executor, now)
+	current, err := s.reader.quoteSnapshot(ctx, decisionRoutes, s.cfg.Executor)
 	if err != nil {
 		return err
 	}

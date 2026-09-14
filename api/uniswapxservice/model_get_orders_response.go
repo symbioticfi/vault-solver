@@ -20,7 +20,7 @@ var _ MappedNullable = &GetOrdersResponse{}
 // GetOrdersResponse struct for GetOrdersResponse
 type GetOrdersResponse struct {
 	Orders []GetOrdersResponseOrdersInner `json:"orders,omitempty"`
-	// Defined when the results are paginated. Pass back via the cursor query parameter to fetch the next page.
+	// GET /limit-orders only. Defined when the results are paginated; pass back via the cursor query parameter to fetch the next page.
 	Cursor               *string `json:"cursor,omitempty"`
 	AdditionalProperties map[string]interface{}
 }

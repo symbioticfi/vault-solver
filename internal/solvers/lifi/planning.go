@@ -460,7 +460,7 @@ func (s *Solver) readFillSnapshot(
 	if err != nil {
 		return fillSnapshotObservation{}, errors.Errorf("read latest block time: %w", err)
 	}
-	snapshots, err := s.reader.fillSnapshots(ctx, routes, s.cfg.Executor, order.TokenIn, order.AmountIn, chainTime)
+	snapshots, err := s.reader.fillSnapshots(ctx, routes, s.cfg.Executor, order.TokenIn, order.AmountIn)
 	if err != nil {
 		return fillSnapshotObservation{}, errors.Errorf("read routes: %w", err)
 	}

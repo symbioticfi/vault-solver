@@ -3,7 +3,6 @@ package redstoneoev
 import (
 	"context"
 	"math/big"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
@@ -104,7 +103,6 @@ func (r *reader) ReadAdapterSnapshot(
 func (r *reader) ReadGasPrices(
 	ctx context.Context,
 	adapter types.AdapterSnapshot,
-	now time.Time,
 ) (*liquidlanegas.PriceSnapshot, error) {
 	if r.gas == nil {
 		return nil, nil
@@ -112,5 +110,5 @@ func (r *reader) ReadGasPrices(
 	return r.gas.Read(ctx, []liquidlanegas.Token{{
 		Address:  adapter.Loan,
 		Decimals: adapter.LoanDecimals,
-	}}, now)
+	}})
 }

@@ -17,9 +17,9 @@ type unexpectedGasMulticaller struct {
 	t *testing.T
 }
 
-func (m unexpectedGasMulticaller) Multicall(context.Context, []chain.Call) ([]chain.CallResult, error) {
+func (m unexpectedGasMulticaller) MulticallWithTime(context.Context, []chain.Call) ([]chain.CallResult, time.Time, error) {
 	m.t.Fatal("gas multicall reached before token coverage validation")
-	return nil, nil
+	return nil, time.Time{}, nil
 }
 
 func TestReadGasPricesValidatesConfiguredMode(t *testing.T) {
@@ -27,7 +27,7 @@ func TestReadGasPricesValidatesConfiguredMode(t *testing.T) {
 	adapter := types.AdapterSnapshot{Loan: loan, LoanDecimals: 6}
 
 	t.Run("gas omitted", func(t *testing.T) {
-		prices, err := (&reader{}).ReadGasPrices(t.Context(), adapter, time.Unix(1, 0))
+		prices, err := (&reader{}).ReadGasPrices(t.Context(), adapter)
 		if err != nil || prices != nil {
 			t.Fatalf("prices = %v, error = %v; want nil, nil", prices, err)
 		}
@@ -45,7 +45,7 @@ func TestReadGasPricesValidatesConfiguredMode(t *testing.T) {
 		if err != nil {
 			t.Fatalf("new gas reader: %v", err)
 		}
-		_, err = (&reader{gas: oracle}).ReadGasPrices(t.Context(), adapter, time.Unix(1, 0))
+		_, err = (&reader{gas: oracle}).ReadGasPrices(t.Context(), adapter)
 		if err == nil || !strings.Contains(err.Error(), "missing USD feed for token "+loan.Hex()) {
 			t.Fatalf("error = %v, want missing adapter-loan feed", err)
 		}

@@ -117,15 +117,6 @@ func TestParseSubmittedOrderKeepsInvalidOrdersActionable(t *testing.T) {
 			},
 			wantReason: "outputs[0].settler does not match outputSettler",
 		},
-		{
-			name: "malformed foreign order",
-			mutate: func(body map[string]any) {
-				order := mapField(t, body, "order")
-				order["originChainId"] = "1"
-				sliceField(t, order, "inputs")[0].([]any)[1] = float64(1_000_000)
-			},
-			wantReason: "expected decimal string",
-		},
 	}
 
 	for _, tt := range tests {
@@ -574,4 +565,48 @@ func sliceField(t *testing.T, m map[string]any, field string) []any {
 		t.Fatalf("%s type = %T", field, m[field])
 	}
 	return out
+}
+
+// LI.FI's feed carries every network it serves and cross-chain orders. Both chains are checked
+// before any address is read, so a Solana submission (base58 settler, chain 1151111081099710), an
+// order leaving this chain, or a malformed payload for a foreign chain is expected traffic.
+func TestParseSubmittedOrderClassifiesForeignChainBeforeAddresses(t *testing.T) {
+	for name, mutate := range map[string]func(map[string]any){
+		"solana submission": func(body map[string]any) {
+			body["inputSettler"] = "LiFiRp8RM7nJUZyUYC9FPPpDr7sAy5XPfBN6ABzBgT7"
+			mapField(t, body, "order")["originChainId"] = "1151111081099710"
+		},
+		"foreign destination with native output": func(body map[string]any) {
+			output := sliceField(t, mapField(t, body, "order"), "outputs")[0].(map[string]any)
+			output["chainId"] = "8453"
+			output["token"] = "0x" + strings.Repeat("0", 64)
+		},
+		"malformed foreign order": func(body map[string]any) {
+			order := mapField(t, body, "order")
+			order["originChainId"] = "1"
+			sliceField(t, order, "inputs")[0].([]any)[1] = float64(1_000_000)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := testLifiConfig()
+			_, err := parseSubmittedOrder(mutatedTestOrderJSON(t, cfg, mutate), cfg, 11155111)
+			if !errors.Is(err, errOrderForDifferentChain) {
+				t.Fatalf("error = %v, want errOrderForDifferentChain", err)
+			}
+		})
+	}
+}
+
+// A same-chain order paying out the native asset (zero token identifier) is a kind this solver never
+// fills, not a malformed message.
+func TestParseSubmittedOrderClassifiesNativeOutputAsUnsupported(t *testing.T) {
+	cfg := testLifiConfig()
+	raw := mutatedTestOrderJSON(t, cfg, func(body map[string]any) {
+		output := sliceField(t, mapField(t, body, "order"), "outputs")[0].(map[string]any)
+		output["token"] = "0x" + strings.Repeat("0", 64)
+	})
+	_, err := parseSubmittedOrder(raw, cfg, 11155111)
+	if !errors.Is(err, errOrderUnsupported) {
+		t.Fatalf("error = %v, want errOrderUnsupported", err)
+	}
 }

@@ -93,6 +93,10 @@ func (r *startupChainReader) unauthorizedAdapters(
 
 func (r *startupChainReader) validateGasTokens([]liquidlane.Route) error { return nil }
 
+func (r *startupChainReader) validateGasOracles(context.Context, []liquidlane.Route) error {
+	return nil
+}
+
 func TestRunLogsStartupValidationFailures(t *testing.T) {
 	adapter := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	executor := common.HexToAddress("0x2222222222222222222222222222222222222222")

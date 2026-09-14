@@ -50,14 +50,22 @@ func (f *orderFeed) run(
 ) error {
 	backoff := initialWSBackoff
 	for {
-		connected, err := f.watchOnce(ctx, hooks, handle)
+		ready, err := f.watchOnce(ctx, hooks, handle)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if connected {
+		if ready {
 			backoff = initialWSBackoff
 		}
-		f.log.Error(err, "order feed disconnected; reconnecting", "backoff", backoff.String())
+		var closeErr *websocket.CloseError
+		if ready && errors.As(err, &closeErr) && (closeErr.Code == websocket.CloseNormalClosure ||
+			closeErr.Code == websocket.CloseGoingAway || closeErr.Code == websocket.CloseNoStatusReceived ||
+			closeErr.Code == websocket.CloseAbnormalClosure || closeErr.Code == websocket.CloseServiceRestart ||
+			closeErr.Code == websocket.CloseTryAgainLater) {
+			f.log.Info("order feed disconnected; reconnecting", "error", err.Error(), "backoff", backoff.String())
+		} else {
+			f.log.Error(err, "order feed disconnected; reconnecting", "backoff", backoff.String())
+		}
 		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
@@ -76,7 +84,7 @@ func (f *orderFeed) watchOnce(
 	ctx context.Context,
 	hooks orderFeedConnectionHooks,
 	handle func(context.Context, orderMessage),
-) (bool, error) {
+) (ready bool, err error) {
 	headers := http.Header{}
 	if f.apiKey != "" {
 		headers.Set("x-api-key", f.apiKey)
@@ -109,6 +117,8 @@ func (f *orderFeed) watchOnce(
 	connectionCtx, cancelConnection := context.WithCancel(ctx)
 	var work sync.WaitGroup
 	defer func() {
+		// Preserve whether this connection recovered before clearing its readiness.
+		ready = f.recoveryReady.Load()
 		f.connected.Store(false)
 		cancelConnection()
 		work.Wait()
@@ -127,14 +137,14 @@ func (f *orderFeed) watchOnce(
 	for {
 		messageType, msg, err := conn.ReadMessage()
 		if err != nil {
-			return true, errors.Errorf("read websocket: %w", err)
+			return false, errors.Errorf("read websocket: %w", err)
 		}
 		if messageType != websocket.TextMessage {
 			continue
 		}
 		if pong, ok := pongFor(msg); ok {
 			if err := conn.WriteMessage(websocket.TextMessage, pong); err != nil {
-				return true, errors.Errorf("write websocket pong: %w", err)
+				return false, errors.Errorf("write websocket pong: %w", err)
 			}
 			continue
 		}

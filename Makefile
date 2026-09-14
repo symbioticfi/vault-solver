@@ -7,14 +7,14 @@ SHELL := bash
 .DEFAULT_GOAL := help
 
 # Pinned codegen tool versions.
-ABIGEN_VERSION           ?= v1.17.4
-GOLANGCI_LINT_VERSION    ?= v2.11.4
+ABIGEN_VERSION           ?= v1.17.5
+GOLANGCI_LINT_VERSION    ?= v2.13.2
 GENQLIENT_VERSION        ?= v0.8.1
 GQLFETCH_VERSION         ?= v0.7.0
-GENQLIENT_X_TOOLS_VERSION ?= v0.48.0
+GENQLIENT_X_TOOLS_VERSION ?= v0.49.0
 # Java openapi-generator (downloaded on demand by hack/openapi-generator-cli.sh). 7.12.0 is the floor:
 # it ingests OpenAPI 3.1 (the RFQ backend spec); 5.4.0/7.0.1 fail on it.
-OPENAPI_GENERATOR_VERSION ?= 7.24.0
+OPENAPI_GENERATOR_VERSION ?= 7.25.0
 
 # Foundry build output to vendor ABIs from (sibling rfq repo by default).
 FORGE_OUT ?= ../rfq/out
@@ -81,7 +81,8 @@ BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
 # uses erc20.
 # Multicall3 is v2 like everything else — api/abi/Multicall3.json is hand-vendored (not a Foundry contract),
 # so it's in BINDINGS_V2 but not ABIS. The chain.Multicall transport packs/unpacks aggregate3 and does its
-# own eth_call.
+# own eth_call. getCurrentBlockTimestamp is sourced from
+# https://github.com/mds1/multicall3/blob/main/src/Multicall3.sol for time-sensitive latest reads.
 
 BIN     := bin/vault-solver
 PKG     := github.com/symbioticfi/vault-solver
@@ -159,8 +160,12 @@ refresh-redstone-guide: ## Re-pull RedStone's public Atom OEV integration guide 
 .PHONY: refresh-morpho-graphql-schema
 refresh-morpho-graphql-schema: ## Re-pull the live Morpho GraphQL schema SDL (MORPHO_GRAPHQL_URL=...)
 	@mkdir -p api/graphql/morpho
-	go run github.com/suessflorian/gqlfetch/gqlfetch@$(GQLFETCH_VERSION) \
-		-endpoint "$(MORPHO_GRAPHQL_URL)" > api/graphql/morpho/schema.graphql
+	@tmp="$$(mktemp)"; \
+		trap 'rm -f "$$tmp"' EXIT; \
+		go run github.com/suessflorian/gqlfetch/gqlfetch@$(GQLFETCH_VERSION) \
+			-endpoint "$(MORPHO_GRAPHQL_URL)" > "$$tmp"; \
+		python3 -c 'from pathlib import Path; import sys; path = Path(sys.argv[1]); path.write_text(path.read_text().rstrip() + "\n")' "$$tmp"; \
+		mv "$$tmp" api/graphql/morpho/schema.graphql
 	@echo "vendored api/graphql/morpho/schema.graphql"
 
 .PHONY: bindings
@@ -207,7 +212,7 @@ refresh-3f-client: ## Generate the 3F API client (openapi-generator, Go) from th
 
 .PHONY: refresh-rfq-client
 # `null=interface{}`: this spec has a property whose whole schema is `{type: null}` (zod's z.null()),
-# which openapi-generator 7.24.0 otherwise renders as the uncompilable Go type `nil`.
+# which openapi-generator 7.25.0 otherwise renders as the uncompilable Go type `nil`.
 # `integer=int64`: the backend emits unformatted integers with a 2^53-1 maximum (deadlines), which
 # the generator would otherwise narrow to int32.
 RFQ_TYPE_MAPPINGS = --type-mappings null=interface{},integer=int64

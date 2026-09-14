@@ -47,13 +47,15 @@ solvers:
       # Optional. Omit to use zero economic gas cost and skip gas-state/Chainlink reads; txmanager still
       # prices actual transactions under global maxFeeGwei. When present, configure one token/USD feed for
       # every distinct adapter vault asset (tokenOut), or startup fails.
+      # Feed age limits: docs/LIQUIDLANE-CONVENTIONS.md#reads-and-freshness
+      # Examples below include slack; verify the selected feed and network before deploying.
       gas:
         nativeUsdFeed: ${ETH_USD_FEED}
-        nativeMaxAge: 2h          # actual heartbeat plus testnet publication slack
+        nativeMaxAge: 2h
         tokenUsdFeeds:
           - token: "0x468BB3245BF520a0CD030BDE029c98aCEAF84C9d" # TLOAN (6 decimals)
             feed: ${TLOAN_USD_FEED}
-            maxAge: 24h           # set independently for every token/USD feed
+            maxAge: 24h5m
 
       # External strategy alternative:
       # strategy:

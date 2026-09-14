@@ -237,7 +237,7 @@ func TestOrderClientEnsureSupportedContractsPutsWhenMissing(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.Method {
 		case http.MethodGet:
-			_, _ = w.Write([]byte(`{"data":{"oracle":[{"chain":"eip155:1","address":"0x3333333333333333333333333333333333333333"}],"inputSettler":[{"chain":"eip155:1","address":"0x4444444444444444444444444444444444444444"}],"outputSettler":[{"chain":"eip155:1","address":"0x5555555555555555555555555555555555555555"}]}}`))
+			_, _ = w.Write([]byte(`{"data":{"oracle":[],"inputSettler":[{"chain":"eip155:1","address":"0x4444444444444444444444444444444444444444"}],"outputSettler":[{"chain":"eip155:1","address":"0x5555555555555555555555555555555555555555"}]}}`))
 		case http.MethodPut:
 			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 				t.Fatalf("decode body: %v", err)
@@ -282,12 +282,8 @@ func TestOrderClientEnsureSupportedContractsPutsWhenMissing(t *testing.T) {
 	if got := outputSettlers[1].Address; got != "0x2222222222222222222222222222222222222222" {
 		t.Fatalf("configured outputSettler address = %v", got)
 	}
-	oracles := gotBody.Oracle
-	if got := len(oracles); got != 1 {
-		t.Fatalf("oracle count = %d", got)
-	}
-	if got := oracles[0].Address; got != "0x3333333333333333333333333333333333333333" {
-		t.Fatalf("preserved oracle address = %v", got)
+	if gotBody.Oracle != nil {
+		t.Fatalf("oracles = %+v, want omitted deprecated field", gotBody.Oracle)
 	}
 }
 
@@ -432,8 +428,8 @@ func TestOrderClientListRecoverableOrdersPaginationLimit(t *testing.T) {
 func TestOrderClientEnsureSupportedContractsRejectsIncompleteSnapshot(t *testing.T) {
 	for name, body := range map[string]string{
 		"no data":        `{}`,
-		"missing a kind": `{"data":{"oracle":[],"inputSettler":[]}}`,
-		"null kind":      `{"data":{"oracle":[],"inputSettler":[],"outputSettler":null}}`,
+		"missing a kind": `{"data":{"inputSettler":[]}}`,
+		"null kind":      `{"data":{"inputSettler":[],"outputSettler":null}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			var methods []string

@@ -19,6 +19,7 @@ import (
 const (
 	rpcAttemptTimeout              = 20 * time.Second
 	jsonRPCVersion                 = "2.0"
+	rpcMethodCall                  = "eth_call"
 	rpcMethodChainID               = "eth_chainId"
 	rpcMethodGetBalance            = "eth_getBalance"
 	rpcMethodGetTransactionCount   = "eth_getTransactionCount"
@@ -222,7 +223,7 @@ func boundedRPCMethod(body []byte) string {
 func boundedRPCMethodName(method string) string {
 	// The client is internal, but keep the label bounded if a future raw-RPC call is added.
 	switch method {
-	case "eth_blockNumber", "eth_call", rpcMethodChainID, "eth_estimateGas", "eth_feeHistory",
+	case "eth_blockNumber", rpcMethodCall, rpcMethodChainID, "eth_estimateGas", "eth_feeHistory",
 		"eth_gasPrice", rpcMethodGetBalance, "eth_getBlockByHash", "eth_getBlockByNumber",
 		"eth_getBlockReceipts", "eth_getCode", "eth_getLogs", "eth_getStorageAt",
 		"eth_getTransactionByHash", rpcMethodGetTransactionCount, rpcMethodGetTransactionReceipt,

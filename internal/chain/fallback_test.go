@@ -909,7 +909,7 @@ func TestMulticallUsesLatestBlockTag(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		_ = json.Unmarshal(body, &req)
 		result := `"0x7a69"`
-		if req.Method == "eth_call" {
+		if req.Method == rpcMethodCall {
 			callParams = req.Params
 			// ABI encoding of an empty aggregate3 Result[] return.
 			result = `"0x0000000000000000000000000000000000000000000000000000000000000020` +

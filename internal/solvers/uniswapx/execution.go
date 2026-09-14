@@ -152,7 +152,6 @@ func (s *Solver) startFill(
 		order.Executor,
 		order.TokenIn,
 		order.AmountIn,
-		now,
 	)
 	if err != nil {
 		return nil, err

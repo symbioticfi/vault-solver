@@ -115,12 +115,10 @@ func rfqFillTask(
 		}
 		sources[candidateID] = candidate
 		quotes = append(quotes, liquidlane.FillQuote{
-			Inventory: liquidlane.Inventory{
-				Route: route, MaxAssets: liquidlane.CloneBig(candidate.MaxAmountOut),
-				MaxRate: liquidlane.CloneBig(candidate.Rate), DiscountID: liquidlane.CloneHash(candidate.DiscountID),
-				ValidUntil: candidate.ValidUntil,
-			},
-			AmountIn: liquidlane.CloneBig(input.AmountIn),
+			Route: route, MaxAssets: liquidlane.CloneBig(candidate.MaxAmountOut),
+			MaxRate: liquidlane.CloneBig(candidate.Rate), DiscountID: liquidlane.CloneHash(candidate.DiscountID),
+			ValidUntil: candidate.ValidUntil,
+			AmountIn:   liquidlane.CloneBig(input.AmountIn),
 			MaxAmountOut: liquidlane.AmountOutForRate(
 				input.AmountIn, candidate.Rate, route.TokenInDecimals, route.TokenOutDecimals,
 			),

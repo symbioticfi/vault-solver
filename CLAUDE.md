@@ -64,9 +64,9 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
   `passphraseEnv`, `apiKeyEnv`) and read with `os.Getenv` at point of use, so dumping/logging config
   can never leak them. New secret-bearing config must follow the same `*Env` indirection.
 
-## Go style (modern Go 1.26)
+## Go style (modern Go 1.27)
 
-- Toolchain is pinned: module declares `go 1.26`, builds run `GOTOOLCHAIN=go1.26.7`. Match it.
+- Toolchain is pinned: module declares `go 1.27`, builds run `GOTOOLCHAIN=go1.27.1`. Match it.
 - **Errors:** use `github.com/go-errors/errors` — `errors.Errorf("...: %w", err)` (NOT `fmt.Errorf`;
   `forbidigo` enforces this) and `errors.New` for sentinels. Wrap with `%w` and add context at each
   boundary; compare with `errors.Is`/`errors.As`. Return errors, don't log-and-continue silently —
@@ -97,10 +97,10 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
 Nothing merges red. Before considering a change done, all of these must pass:
 
 ```
-GOTOOLCHAIN=go1.26.7 golangci-lint run --fix   # make format — formats + lints + autofixes
-GOTOOLCHAIN=go1.26.7 go build ./...
-GOTOOLCHAIN=go1.26.7 go test -race -cover ./...  # make test
-GOTOOLCHAIN=go1.26.7 golangci-lint run            # make lint — must report 0 issues
+GOTOOLCHAIN=go1.27.1 golangci-lint run --fix   # make format — formats + lints + autofixes
+GOTOOLCHAIN=go1.27.1 go build ./...
+GOTOOLCHAIN=go1.27.1 go test -race -cover ./...  # make test
+GOTOOLCHAIN=go1.27.1 golangci-lint run            # make lint — must report 0 issues
 ```
 
 - **Unit-test all new logic.** Pure logic (pricing/sizing, EIP-712 digests, config parsing/validation)

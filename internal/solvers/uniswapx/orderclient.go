@@ -4,7 +4,6 @@ import (
 	"context"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -18,12 +17,13 @@ import (
 
 const (
 	maxOrderResponseBytes = 4 << 20
-	orderPageLimit        = 1000
-	maxOrderPages         = 10
+	orderPageLimit        = 50
 	maxOrderHashBatch     = 50
 	minOrderRequestGap    = time.Second / 6
 	betaRFQHeaderValue    = "true"
 )
+
+var errOrderSnapshotTruncated = errors.New("orders snapshot may be truncated")
 
 type orderClient struct {
 	client *uniswapxservice.APIClient
@@ -51,7 +51,7 @@ func newOrderClient(cfg OrderServerConfig, apiKey string) *orderClient {
 }
 
 func (c *orderClient) openOrders(ctx context.Context, chainID int64, filler *common.Address) ([]orderEntry, error) {
-	return c.orders(ctx, chainID, filler, orderStatusOpen, time.Time{})
+	return c.orders(ctx, chainID, filler, orderStatusOpen)
 }
 
 func (c *orderClient) recentOrders(
@@ -66,7 +66,26 @@ func (c *orderClient) recentOrders(
 	if createdAfter.IsZero() {
 		return nil, errors.New("GET /orders history: zero created-after time")
 	}
-	return c.orders(ctx, chainID, &filler, "", createdAfter)
+	orders, snapshotErr := c.orders(ctx, chainID, &filler, "")
+	filtered := make([]orderEntry, 0, len(orders))
+	previousCreatedAt := int64(^uint64(0) >> 1)
+	for i, order := range orders {
+		if order.CreatedAt <= 0 {
+			return filtered, errors.Join(snapshotErr, errors.Errorf("GET /orders history: order %d has no valid createdAt", i))
+		}
+		if order.CreatedAt > previousCreatedAt {
+			return filtered, errors.Join(snapshotErr, errors.New("GET /orders history: response is not newest-first"))
+		}
+		previousCreatedAt = order.CreatedAt
+		if order.CreatedAt > createdAfter.Unix() {
+			filtered = append(filtered, order)
+		}
+	}
+	if errors.Is(snapshotErr, errOrderSnapshotTruncated) &&
+		len(orders) > 0 && orders[len(orders)-1].CreatedAt <= createdAfter.Unix() {
+		return filtered, nil
+	}
+	return filtered, snapshotErr
 }
 
 func (c *orderClient) orders(
@@ -74,27 +93,43 @@ func (c *orderClient) orders(
 	chainID int64,
 	filler *common.Address,
 	status string,
-	createdAfter time.Time,
 ) ([]orderEntry, error) {
-	var orders []orderEntry
-	var cursor string
-	seenCursors := make(map[string]bool)
-	for range maxOrderPages {
-		page, err := c.orderPage(ctx, chainID, filler, status, createdAfter, cursor)
-		if err != nil {
-			return orders, err
-		}
-		orders = append(orders, page.Orders...)
-		if page.Cursor == "" {
-			return orders, nil
-		}
-		if seenCursors[page.Cursor] {
-			return orders, errors.New("orders response repeated its cursor")
-		}
-		seenCursors[page.Cursor] = true
-		cursor = page.Cursor
+	if err := c.waitForRequestSlot(ctx); err != nil {
+		return nil, errors.Errorf("wait for orders rate limit: %w", err)
 	}
-	return orders, errors.Errorf("orders response exceeds %d pages", maxOrderPages)
+	response, err := c.executeOrderRequest(ctx, chainID, filler, status)
+	if err != nil {
+		return nil, err
+	}
+	if response == nil {
+		return nil, errors.New("GET /orders: empty response")
+	}
+	if len(response.Orders) > orderPageLimit {
+		return nil, errors.Errorf(
+			"GET /orders: response contains %d orders, max %d",
+			len(response.Orders),
+			orderPageLimit,
+		)
+	}
+	orders := make([]orderEntry, 0, len(response.Orders))
+	for i := range response.Orders {
+		order := response.Orders[i].DutchV2OrderEntity
+		if order == nil {
+			return nil, errors.Errorf("GET /orders: order %d is not Dutch_V2", i)
+		}
+		entry, convertErr := orderEntryFromAPI(order)
+		if convertErr != nil {
+			return nil, errors.Errorf("GET /orders: order %d: %w", i, convertErr)
+		}
+		orders = append(orders, entry)
+	}
+	if response.GetCursor() != "" {
+		return orders, errors.New("GET /orders: unexpected cursor from non-paginated endpoint")
+	}
+	if len(orders) == orderPageLimit {
+		return orders, errors.Errorf("%w: response reached the %d-order server limit", errOrderSnapshotTruncated, orderPageLimit)
+	}
+	return orders, nil
 }
 
 func (c *orderClient) ordersByHash(
@@ -153,7 +188,7 @@ func (c *orderClient) fetchOrderHashBatch(
 		defer httpResponse.Body.Close()
 	}
 	if err != nil {
-		return errors.Errorf("GET /orders by hash: %w", err)
+		return apiErr("GET /orders by hash", httpResponse, err)
 	}
 	if response == nil {
 		return errors.New("GET /orders by hash: empty response")
@@ -186,82 +221,42 @@ func (c *orderClient) fetchOrderHashBatch(
 	return nil
 }
 
-func (c *orderClient) orderPage(
-	ctx context.Context,
-	chainID int64,
-	filler *common.Address,
-	status string,
-	createdAfter time.Time,
-	cursor string,
-) (orderPage, error) {
-	if err := c.waitForRequestSlot(ctx); err != nil {
-		return orderPage{}, errors.Errorf("wait for orders rate limit: %w", err)
-	}
-	response, err := c.executeOrderRequest(ctx, chainID, filler, status, createdAfter, cursor)
-	if err != nil {
-		return orderPage{}, err
-	}
-	if response == nil {
-		return orderPage{}, errors.New("GET /orders: empty response")
-	}
-	if len(response.Orders) > orderPageLimit {
-		return orderPage{}, errors.Errorf(
-			"GET /orders: response contains %d orders, max %d",
-			len(response.Orders),
-			orderPageLimit,
-		)
-	}
-	orders := make([]orderEntry, 0, len(response.Orders))
-	for i := range response.Orders {
-		order := response.Orders[i].DutchV2OrderEntity
-		if order == nil {
-			return orderPage{}, errors.Errorf("GET /orders: order %d is not Dutch_V2", i)
-		}
-		entry, err := orderEntryFromAPI(order)
-		if err != nil {
-			return orderPage{}, errors.Errorf("GET /orders: order %d: %w", i, err)
-		}
-		orders = append(orders, entry)
-	}
-	return orderPage{Orders: orders, Cursor: response.GetCursor()}, nil
-}
-
 func (c *orderClient) executeOrderRequest(
 	ctx context.Context,
 	chainID int64,
 	filler *common.Address,
 	status string,
-	createdAfter time.Time,
-	cursor string,
 ) (*uniswapxservice.GetOrdersResponse, error) {
 	request := c.client.OrdersAPI.OrdersGet(ctx).
 		ChainId(uniswapxservice.ChainId(chainID)).
 		Limit(orderPageLimit).
-		SortKey(uniswapxservice.CREATED_AT).
-		Desc(true).
 		OrderType(uniswapxservice.DUTCH_V2)
 	if status != "" {
 		request = request.OrderStatus(uniswapxservice.OrderStatus(status))
 	}
-	if createdAfter.IsZero() {
-		request = request.Sort("gt(0)")
-	} else {
-		request = request.Sort("gt(" + strconv.FormatInt(createdAfter.Unix(), 10) + ")")
-	}
 	if filler != nil {
 		request = request.Filler(filler.Hex())
-	}
-	if cursor != "" {
-		request = request.Cursor(cursor)
 	}
 	response, httpResponse, err := request.Execute()
 	if httpResponse != nil && httpResponse.Body != nil {
 		defer httpResponse.Body.Close()
 	}
 	if err != nil {
-		return nil, errors.Errorf("GET /orders: %w", err)
+		return nil, apiErr("GET /orders", httpResponse, err)
 	}
 	return response, nil
+}
+
+// apiErr reports the status line and response body: the generated client formats the error
+// model's pointer fields with %s, which renders as %!s(*string=0x...) instead of the detail.
+func apiErr(what string, resp *http.Response, err error) error {
+	var genErr *uniswapxservice.GenericOpenAPIError
+	if resp != nil && errors.As(err, &genErr) {
+		if body := strings.TrimSpace(string(genErr.Body())); body != "" {
+			return errors.Errorf("%s: %s: %s", what, resp.Status, body)
+		}
+	}
+	return errors.Errorf("%s: %w", what, err)
 }
 
 func orderTerminalFromAPI(
@@ -337,7 +332,7 @@ func orderEntryFromAPI(order *uniswapxservice.DutchV2OrderEntity) (orderEntry, e
 	return orderEntry{
 		Type: order.Type, EncodedOrder: order.EncodedOrder, Signature: order.Signature,
 		OrderHash: order.OrderHash, OrderStatus: string(order.OrderStatus), ChainID: int64(order.ChainId),
-		QuoteID: order.GetQuoteId(),
+		QuoteID: order.GetQuoteId(), CreatedAt: int64(order.GetCreatedAt()),
 		Input: orderToken{
 			Token: order.Input.Token, StartAmount: order.Input.GetStartAmount(), EndAmount: order.Input.GetEndAmount(),
 		},
