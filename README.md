@@ -490,13 +490,18 @@ clear the local fill-failure breaker; accounting systems must use canonical on-c
 ### Grafana dashboards
 
 Six native Grafana Dashboard Schema v2 templates are committed under
-[`dashboards/`](dashboards/): a fleet-safe Runtime dashboard and single-instance dashboards for 3F,
-RFQ, LI.FI, UniswapX, and OEV. Each JSON file carries a repository-level `uid`; a Schema v2 provisioner
-must copy it to the Dashboard resource's `metadata.name` and omit it from `spec`, because Grafana derives
-the stable dashboard URL from resource metadata rather than a `DashboardSpec` field. The selectable
-`${datasource}` has a schema-required empty current value that Grafana resolves on load, so no datasource
-UID is embedded. Namespace/pod selectors are query-driven over the standard Kubernetes target labels
-`namespace`, `pod`, `job`, and `instance`; no cluster namespace or pod-name pattern is embedded.
+[`dashboards/`](dashboards/): one unified dashboard each for Runtime, 3F, RFQ, LI.FI, UniswapX, and OEV.
+Choose **Workload** and **Pod** to inspect a deployment or replica; **All / All** gives the combined
+view. **Include old pods** adds replicas observed earlier in the selected time range. The workload
+comparison and **Current pods** tables provide links for narrowing the selection. Counter increases
+are calculated per process before summing, percentiles use combined histogram buckets, and shared
+account balances are not summed across replicas.
+
+Each JSON file contains a Dashboard Schema v2 specification. Assign its dashboard identity through
+the Dashboard resource's `metadata.name` when provisioning; neither a dashboard UID nor a datasource
+UID is embedded in the template. Grafana resolves the empty `${datasource}` selection on load.
+Discovery uses the scrape labels `namespace` and `pod`; adapt these labels and the Deployment pod-name
+regex to your collector if needed.
 
 ## Configuration
 

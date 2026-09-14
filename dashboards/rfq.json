@@ -20,15 +20,15 @@
     }
   ],
   "cursorSync": "Crosshair",
-  "description": "Grafana v2 example for vault-solver metrics. Uses example scrape labels namespace and pod; adapt selectors, grouping and table fields to your collection setup. Choose a Prometheus-compatible datasource. Counters cover the selected interval; current state uses current samples. Missing data is not a healthy state.",
+  "description": "One dashboard for fleet overview and individual-pod diagnosis. Workload=All and Pod=All show the combined selection; choose a workload or pod to narrow it. Include old pods adds retired replicas observed in the selected period. Compare workloads in the table; use Current pods to inspect a replica. Counters sum process observations after reset handling, percentiles use combined buckets, and shared balances are not added across replicas. Missing data remains unknown.",
   "editable": true,
   "elements": {
     "panel-10": {
       "kind": "Panel",
       "spec": {
         "id": 10,
-        "title": "Quote decisions",
-        "description": "Selected pods and time range. Fixed-height, sortable rows; use the horizontal scrollbar or choose fewer pods for details.",
+        "title": "Why quotes were returned or skipped",
+        "description": "Selected workloads and time range. Fixed-height, sortable rows; use the horizontal scrollbar or choose fewer workloads for details. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -46,7 +46,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(sum by (outcome) (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\",event=\"quote\"}[$__range]))) > 0",
+                      "expr": "(sum by (outcome) (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\",event=\"quote\"}[$__range]))) > 0",
                       "instant": true,
                       "range": false,
                       "legendFormat": "",
@@ -80,9 +80,9 @@
             "options": {
               "showHeader": true,
               "cellHeight": "sm",
-              "enablePagination": true,
+              "enablePagination": false,
               "sortBy": [
-                {"displayName": "Outcome", "desc": false}
+                {"displayName": "Count", "desc": true}
               ]
             },
             "fieldConfig": {
@@ -119,9 +119,71 @@
                   ]
                 },
                 {
-                  "matcher": {"id": "byName", "options": "Pod"},
+                  "matcher": {"id": "byName", "options": "Workload"},
                   "properties": [
-                    {"id": "custom.width", "value": 360}
+                    {"id": "custom.width", "value": 220}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Outcome"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "active_requests": {"text": "Active requests"},
+                            "redeemable": {"text": "Ready to redeem"},
+                            "offers": {"text": "Offers"},
+                            "targets": {"text": "Targets"},
+                            "quoted": {"text": "Quote returned"},
+                            "no_candidates": {"text": "No eligible candidates"},
+                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
+                            "not_quotable": {"text": "Order not quotable"},
+                            "below_minimum": {"text": "Below minimum amount"},
+                            "strategy_declined": {"text": "Strategy declined"},
+                            "bad_request": {"text": "Invalid request"},
+                            "error": {"text": "Error"},
+                            "success": {"text": "Success"},
+                            "failed": {"text": "Failed"},
+                            "failure": {"text": "Failed"},
+                            "ok": {"text": "Success"},
+                            "won": {"text": "Won"},
+                            "confirmed": {"text": "Confirmed"},
+                            "reverted": {"text": "Reverted"},
+                            "not_admitted": {"text": "Not admitted"},
+                            "submission_error": {"text": "Submission error"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
+                            "settled_success": {"text": "Settlement succeeded"},
+                            "settled_failed": {"text": "Settlement failed"},
+                            "enqueued": {"text": "Enqueued"},
+                            "would_bid": {"text": "Would bid (dry run)"},
+                            "unresolved": {"text": "Unresolved"},
+                            "settled_in_time": {"text": "Settled on time"},
+                            "missed": {"text": "Missed"},
+                            "declined_blocked": {"text": "Blocked"},
+                            "declined_invalid_request": {"text": "Invalid request"},
+                            "declined_pair_out_of_scope": {"text": "Pair outside scope"},
+                            "declined_invalid_amount": {"text": "Invalid amount"},
+                            "declined_quote_state_unavailable": {"text": "Quote state unavailable"},
+                            "declined_strategy": {"text": "Strategy declined"},
+                            "declined_state_changed": {"text": "State changed"},
+                            "declined_unknown": {"text": "Declined: unknown reason"},
+                            "active_request_refresh": {"text": "Refresh active requests"},
+                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
+                            "offer_refresh": {"text": "Refresh offers"},
+                            "target_refresh": {"text": "Refresh targets"},
+                            "expected_yield": {"text": "Expected yield"},
+                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "lifi-samechain": {"text": "LI.FI"},
+                            "rfq-filler": {"text": "RFQ"},
+                            "uniswapx-filler": {"text": "UniswapX"},
+                            "redstone-oev": {"text": "RedStone OEV"}
+                          }
+                        }
+                      ]
+                    }
                   ]
                 }
               ]
@@ -135,8 +197,8 @@
       "kind": "Panel",
       "spec": {
         "id": 11,
-        "title": "Quote latency — selected pods",
-        "description": "Percentiles from the combined histogram buckets of the selected pods; not an average of pod percentiles. Individual pod p95 is in Pod details.",
+        "title": "Quote response time",
+        "description": "Percentiles use combined histogram buckets from selected workloads. Workload details uses the same calculation separately for each workload. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -152,7 +214,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "histogram_quantile(0.50, sum by (le) (rate(rfq_filler_http_request_duration_seconds_bucket{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",route=\"/quote\"}[$__rate_interval])))",
+                      "expr": "histogram_quantile(0.50, sum by (le) (rate(rfq_filler_http_request_duration_seconds_bucket{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",route=\"/quote\"}[$__rate_interval])))",
                       "legendFormat": "p50",
                       "range": true
                     }
@@ -171,7 +233,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "histogram_quantile(0.95, sum by (le) (rate(rfq_filler_http_request_duration_seconds_bucket{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",route=\"/quote\"}[$__rate_interval])))",
+                      "expr": "histogram_quantile(0.95, sum by (le) (rate(rfq_filler_http_request_duration_seconds_bucket{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",route=\"/quote\"}[$__rate_interval])))",
                       "legendFormat": "p95",
                       "range": true
                     }
@@ -190,7 +252,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "histogram_quantile(0.99, sum by (le) (rate(rfq_filler_http_request_duration_seconds_bucket{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",route=\"/quote\"}[$__rate_interval])))",
+                      "expr": "histogram_quantile(0.99, sum by (le) (rate(rfq_filler_http_request_duration_seconds_bucket{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",route=\"/quote\"}[$__rate_interval])))",
                       "legendFormat": "p99",
                       "range": true
                     }
@@ -255,7 +317,7 @@
       "spec": {
         "id": 13,
         "title": "HTTP status totals",
-        "description": "Selected pods and time range. Fixed-height, sortable rows; use the horizontal scrollbar or choose fewer pods for details.",
+        "description": "Selected workloads and time range. Fixed-height, sortable rows; use the horizontal scrollbar or choose fewer workloads for details. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -273,7 +335,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(sum by (status) (increase(rfq_filler_http_request_duration_seconds_count{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",route=\"/quote\"}[$__range]))) > 0",
+                      "expr": "(sum by (status) (increase(rfq_filler_http_request_duration_seconds_count{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",route=\"/quote\"}[$__range]))) > 0",
                       "instant": true,
                       "range": false,
                       "legendFormat": "",
@@ -307,9 +369,9 @@
             "options": {
               "showHeader": true,
               "cellHeight": "sm",
-              "enablePagination": true,
+              "enablePagination": false,
               "sortBy": [
-                {"displayName": "Status", "desc": false}
+                {"displayName": "Count", "desc": true}
               ]
             },
             "fieldConfig": {
@@ -346,9 +408,9 @@
                   ]
                 },
                 {
-                  "matcher": {"id": "byName", "options": "Pod"},
+                  "matcher": {"id": "byName", "options": "Workload"},
                   "properties": [
-                    {"id": "custom.width", "value": 360}
+                    {"id": "custom.width", "value": 220}
                   ]
                 }
               ]
@@ -363,7 +425,7 @@
       "spec": {
         "id": 14,
         "title": "Quoted token amounts",
-        "description": "Input/output atomic units are tabular because token decimals differ. Values are shown per namespace/pod across matching scrape targets.",
+        "description": "Input/output atomic units are tabular because token decimals differ. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -379,7 +441,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "label_replace(((sum by (namespace, pod, asset, kind) (increase(solver_bot_workflow_amount_atomic_units_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\",event=\"quote\"}[$__range]))) > 0), \"token_display\", \"​$1\", \"asset\", \"(.*)\")",
+                      "expr": "label_replace(((sum by (namespace, workload, asset, kind) (label_replace(increase(solver_bot_workflow_amount_atomic_units_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\",event=\"quote\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))) > 0), \"token_display\", \"​$1\", \"asset\", \"(.*)\")",
                       "format": "table",
                       "instant": true,
                       "legendFormat": "",
@@ -396,9 +458,9 @@
                 "kind": "Transformation",
                 "spec": {
                   "options": {
-                    "excludeByName": {"Time": true, "asset": true, "job": true, "instance": true},
-                    "indexByName": {"namespace": 0, "pod": 1},
-                    "renameByName": {"kind": "side", "token_display": "token", "namespace": "Namespace", "pod": "Pod"}
+                    "excludeByName": {"Time": true, "asset": true, "job": true, "instance": true, "namespace": true},
+                    "indexByName": {"namespace": 0, "workload": 1},
+                    "renameByName": {"kind": "side", "token_display": "token", "namespace": "Namespace", "workload": "Workload"}
                   }
                 },
                 "group": "organize"
@@ -412,7 +474,7 @@
           "group": "table",
           "version": "",
           "spec": {
-            "options": {"cellHeight": "sm", "showHeader": true, "enablePagination": true},
+            "options": {"cellHeight": "sm", "showHeader": true, "enablePagination": false},
             "fieldConfig": {
               "defaults": {
                 "thresholds": {
@@ -421,7 +483,8 @@
                     {"value": 0, "color": "green"}
                   ]
                 },
-                "color": {"mode": "palette-classic"}
+                "color": {"mode": "palette-classic"},
+                "noValue": "—"
               },
               "overrides": [
                 {
@@ -439,9 +502,9 @@
                   ]
                 },
                 {
-                  "matcher": {"id": "byName", "options": "Pod"},
+                  "matcher": {"id": "byName", "options": "Workload"},
                   "properties": [
-                    {"id": "custom.width", "value": 360}
+                    {"id": "custom.width", "value": 220}
                   ]
                 }
               ]
@@ -455,8 +518,8 @@
       "kind": "Panel",
       "spec": {
         "id": 15,
-        "title": "Pod details",
-        "description": "One row per pod observed in the selected interval. Readiness and active orders are current samples; quotes/wins/fills cover the selected interval. Retired pods have no current state. Zero event timestamps display Not observed, never as a fresh event. Per-pod quote p95 keeps slow pods visible.",
+        "title": "Workload comparison",
+        "description": "Compare the selected workloads. Period counts cover the selected pods and time range; readiness, backlog and balances describe current samples. Click a workload to aggregate its listed pods.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -474,7 +537,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "max by (namespace, pod) (max_over_time(solver_bot_solver_info{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\"}[$__range]))",
+                      "expr": "max by (namespace, workload) (label_replace(max_over_time(solver_bot_solver_info{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
                       "instant": true,
                       "range": false,
                       "legendFormat": "",
@@ -495,7 +558,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "min by (namespace, pod) (solver_bot_service_ready{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"})",
+                      "expr": "min by (namespace, workload) (label_replace(solver_bot_service_ready{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
                       "instant": true,
                       "range": false,
                       "legendFormat": "",
@@ -516,7 +579,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum by (namespace, pod) (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\",event=\"quote\",outcome=\"quoted\"}[$__range]))",
+                      "expr": "sum by (namespace, workload) (label_replace(increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\",event=\"quote\",outcome=\"quoted\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
                       "instant": true,
                       "range": false,
                       "legendFormat": "",
@@ -537,7 +600,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum by (namespace, pod) (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\",event=\"order\",outcome=\"won\"}[$__range]))",
+                      "expr": "sum by (namespace, workload) (label_replace(increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\",event=\"order\",outcome=\"won\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
                       "instant": true,
                       "range": false,
                       "legendFormat": "",
@@ -558,7 +621,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum by (namespace, pod) (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\",event=\"fill\",outcome=\"success\"}[$__range]))",
+                      "expr": "sum by (namespace, workload) (label_replace(increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\",event=\"fill\",outcome=\"success\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
                       "instant": true,
                       "range": false,
                       "legendFormat": "",
@@ -579,7 +642,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "max by (namespace, pod) (rfq_active_orders{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"})",
+                      "expr": "max by (namespace, workload) (label_replace(rfq_active_orders{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
                       "instant": true,
                       "range": false,
                       "legendFormat": "",
@@ -600,7 +663,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "max by (namespace, pod) (rfq_oldest_active_order_age_seconds{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"})",
+                      "expr": "max by (namespace, workload) (label_replace(rfq_oldest_active_order_age_seconds{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
                       "instant": true,
                       "range": false,
                       "legendFormat": "",
@@ -621,7 +684,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "clamp_min(time() - (max by (namespace, pod) (solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\",event=\"order_poll\",outcome=\"success\"}) > 0), 0) or ((max by (namespace, pod) (solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\",event=\"order_poll\",outcome=\"success\"}) == 0) - 1)",
+                      "expr": "clamp_min(time() - (max by (namespace, workload) (label_replace(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\",event=\"order_poll\",outcome=\"success\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) > 0), 0) or ((max by (namespace, workload) (label_replace(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\",event=\"order_poll\",outcome=\"success\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) == 0) - 1)",
                       "instant": true,
                       "range": false,
                       "legendFormat": "",
@@ -642,7 +705,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "clamp_min(time() - (max by (namespace, pod) (max_over_time(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\",event=\"fill\",outcome=\"success\"}[$__range])) > 0), 0) or ((max by (namespace, pod) (max_over_time(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\",event=\"fill\",outcome=\"success\"}[$__range])) == 0) - 1)",
+                      "expr": "clamp_min(time() - (max by (namespace, workload) (label_replace(max_over_time(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\",event=\"fill\",outcome=\"success\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) > 0), 0) or ((max by (namespace, workload) (label_replace(max_over_time(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\",event=\"fill\",outcome=\"success\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) == 0) - 1)",
                       "instant": true,
                       "range": false,
                       "legendFormat": "",
@@ -663,7 +726,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "histogram_quantile(0.95, sum by (namespace, pod, le) (rate(rfq_filler_http_request_duration_seconds_bucket{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",route=\"/quote\"}[$__rate_interval])))",
+                      "expr": "histogram_quantile(0.95, sum by (namespace, workload, le) (label_replace(increase(rfq_filler_http_request_duration_seconds_bucket{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",route=\"/quote\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
                       "instant": true,
                       "range": false,
                       "legendFormat": "",
@@ -688,7 +751,7 @@
                   "options": {
                     "excludeByName": {"Time": true, "namespace": true, "job": true, "instance": true, "__name__": true, "Value #A": true},
                     "indexByName": {
-                      "pod": 0,
+                      "workload": 0,
                       "Value #B": 1,
                       "Value #C": 2,
                       "Value #D": 3,
@@ -700,7 +763,7 @@
                       "Value #J": 9
                     },
                     "renameByName": {
-                      "pod": "Pod",
+                      "workload": "Workload",
                       "Value #B": "Ready",
                       "Value #C": "Quotes",
                       "Value #D": "Wins",
@@ -726,9 +789,9 @@
             "options": {
               "showHeader": true,
               "cellHeight": "sm",
-              "enablePagination": true,
+              "enablePagination": false,
               "sortBy": [
-                {"displayName": "Pod", "desc": false}
+                {"displayName": "Workload", "desc": false}
               ]
             },
             "fieldConfig": {
@@ -741,6 +804,12 @@
                       "match": "nan",
                       "result": {"text": "—", "color": "gray"}
                     }
+                  },
+                  {
+                    "type": "value",
+                    "options": {
+                      "-1": {"text": "Not seen", "color": "gray"}
+                    }
                   }
                 ],
                 "custom": {
@@ -751,9 +820,9 @@
               },
               "overrides": [
                 {
-                  "matcher": {"id": "byName", "options": "Pod"},
+                  "matcher": {"id": "byName", "options": "Workload"},
                   "properties": [
-                    {"id": "custom.width", "value": 360}
+                    {"id": "custom.width", "value": 220}
                   ]
                 },
                 {
@@ -852,7 +921,7 @@
                         {
                           "type": "value",
                           "options": {
-                            "-1": {"text": "Not observed", "color": "gray"}
+                            "-1": {"text": "Not seen", "color": "gray"}
                           }
                         }
                       ]
@@ -875,7 +944,7 @@
                         {
                           "type": "value",
                           "options": {
-                            "-1": {"text": "Not observed", "color": "gray"}
+                            "-1": {"text": "Not seen", "color": "gray"}
                           }
                         }
                       ]
@@ -893,6 +962,21 @@
                     {"id": "unit", "value": "s"},
                     {"id": "decimals", "value": 1}
                   ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Workload"},
+                  "properties": [
+                    {
+                      "id": "links",
+                      "value": [
+                        {
+                          "title": "View workload",
+                          "url": "/d/${__dashboard.uid}?${__url_time_range}&${datasource:queryparam}&${namespace:queryparam}&${history:queryparam}&var-workloads=${__value.raw}&var-instance=%24__all",
+                          "targetBlank": true
+                        }
+                      ]
+                    }
+                  ]
                 }
               ]
             }
@@ -906,7 +990,7 @@
       "spec": {
         "id": 16,
         "title": "Order-poll outcomes",
-        "description": "Selected pods and time range. Fixed-height, sortable rows; use the horizontal scrollbar or choose fewer pods for details.",
+        "description": "Selected workloads and time range. Fixed-height, sortable rows; use the horizontal scrollbar or choose fewer workloads for details. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -924,7 +1008,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(sum by (outcome) (increase(solver_bot_external_operation_duration_seconds_count{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\",operation=\"order_poll\"}[$__range]))) > 0",
+                      "expr": "(sum by (outcome) (increase(solver_bot_external_operation_duration_seconds_count{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\",operation=\"order_poll\"}[$__range]))) > 0",
                       "instant": true,
                       "range": false,
                       "legendFormat": "",
@@ -958,9 +1042,9 @@
             "options": {
               "showHeader": true,
               "cellHeight": "sm",
-              "enablePagination": true,
+              "enablePagination": false,
               "sortBy": [
-                {"displayName": "Outcome", "desc": false}
+                {"displayName": "Count", "desc": true}
               ]
             },
             "fieldConfig": {
@@ -997,9 +1081,71 @@
                   ]
                 },
                 {
-                  "matcher": {"id": "byName", "options": "Pod"},
+                  "matcher": {"id": "byName", "options": "Workload"},
                   "properties": [
-                    {"id": "custom.width", "value": 360}
+                    {"id": "custom.width", "value": 220}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Outcome"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "active_requests": {"text": "Active requests"},
+                            "redeemable": {"text": "Ready to redeem"},
+                            "offers": {"text": "Offers"},
+                            "targets": {"text": "Targets"},
+                            "quoted": {"text": "Quote returned"},
+                            "no_candidates": {"text": "No eligible candidates"},
+                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
+                            "not_quotable": {"text": "Order not quotable"},
+                            "below_minimum": {"text": "Below minimum amount"},
+                            "strategy_declined": {"text": "Strategy declined"},
+                            "bad_request": {"text": "Invalid request"},
+                            "error": {"text": "Error"},
+                            "success": {"text": "Success"},
+                            "failed": {"text": "Failed"},
+                            "failure": {"text": "Failed"},
+                            "ok": {"text": "Success"},
+                            "won": {"text": "Won"},
+                            "confirmed": {"text": "Confirmed"},
+                            "reverted": {"text": "Reverted"},
+                            "not_admitted": {"text": "Not admitted"},
+                            "submission_error": {"text": "Submission error"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
+                            "settled_success": {"text": "Settlement succeeded"},
+                            "settled_failed": {"text": "Settlement failed"},
+                            "enqueued": {"text": "Enqueued"},
+                            "would_bid": {"text": "Would bid (dry run)"},
+                            "unresolved": {"text": "Unresolved"},
+                            "settled_in_time": {"text": "Settled on time"},
+                            "missed": {"text": "Missed"},
+                            "declined_blocked": {"text": "Blocked"},
+                            "declined_invalid_request": {"text": "Invalid request"},
+                            "declined_pair_out_of_scope": {"text": "Pair outside scope"},
+                            "declined_invalid_amount": {"text": "Invalid amount"},
+                            "declined_quote_state_unavailable": {"text": "Quote state unavailable"},
+                            "declined_strategy": {"text": "Strategy declined"},
+                            "declined_state_changed": {"text": "State changed"},
+                            "declined_unknown": {"text": "Declined: unknown reason"},
+                            "active_request_refresh": {"text": "Refresh active requests"},
+                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
+                            "offer_refresh": {"text": "Refresh offers"},
+                            "target_refresh": {"text": "Refresh targets"},
+                            "expected_yield": {"text": "Expected yield"},
+                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "lifi-samechain": {"text": "LI.FI"},
+                            "rfq-filler": {"text": "RFQ"},
+                            "uniswapx-filler": {"text": "UniswapX"},
+                            "redstone-oev": {"text": "RedStone OEV"}
+                          }
+                        }
+                      ]
+                    }
                   ]
                 }
               ]
@@ -1014,7 +1160,7 @@
       "spec": {
         "id": 18,
         "title": "Fill transaction outcomes",
-        "description": "Exact terminal txmanager outcomes over the selected range. Values are shown per namespace/pod across matching scrape targets.",
+        "description": "Exact terminal txmanager outcomes over the selected range. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1030,7 +1176,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(sum by (namespace, pod, outcome) (increase(solver_bot_txmanager_requests_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",label=\"rfq-fill\"}[$__range]))) > 0",
+                      "expr": "(sum by (namespace, workload, outcome) (label_replace(increase(solver_bot_txmanager_requests_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",label=\"rfq-fill\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))) > 0",
                       "format": "table",
                       "instant": true,
                       "legendFormat": "",
@@ -1047,9 +1193,9 @@
                 "kind": "Transformation",
                 "spec": {
                   "options": {
-                    "excludeByName": {"Time": true, "job": true, "instance": true},
-                    "indexByName": {"namespace": 0, "pod": 1},
-                    "renameByName": {"namespace": "Namespace", "pod": "Pod"}
+                    "excludeByName": {"Time": true, "job": true, "instance": true, "namespace": true},
+                    "indexByName": {"namespace": 0, "workload": 1},
+                    "renameByName": {"namespace": "Namespace", "workload": "Workload"}
                   }
                 },
                 "group": "organize"
@@ -1063,7 +1209,7 @@
           "group": "table",
           "version": "",
           "spec": {
-            "options": {"cellHeight": "sm", "showHeader": true, "enablePagination": true},
+            "options": {"cellHeight": "sm", "showHeader": true, "enablePagination": false},
             "fieldConfig": {
               "defaults": {
                 "thresholds": {
@@ -1072,7 +1218,8 @@
                     {"value": 0, "color": "green"}
                   ]
                 },
-                "color": {"mode": "palette-classic"}
+                "color": {"mode": "palette-classic"},
+                "noValue": "—"
               },
               "overrides": [
                 {
@@ -1084,9 +1231,9 @@
                   ]
                 },
                 {
-                  "matcher": {"id": "byName", "options": "Pod"},
+                  "matcher": {"id": "byName", "options": "Workload"},
                   "properties": [
-                    {"id": "custom.width", "value": 360}
+                    {"id": "custom.width", "value": 220}
                   ]
                 }
               ]
@@ -1101,7 +1248,7 @@
       "spec": {
         "id": 19,
         "title": "Successful fill amounts",
-        "description": "Receipt-confirmed token amounts; planned surplus is not realized PnL. Values are shown per namespace/pod across matching scrape targets.",
+        "description": "Receipt-confirmed token amounts; planned surplus is not realized PnL. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1117,7 +1264,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "label_replace(((sum by (namespace, pod, asset, kind) (increase(solver_bot_workflow_amount_atomic_units_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\",event=\"fill\"}[$__range]))) > 0), \"token_display\", \"​$1\", \"asset\", \"(.*)\")",
+                      "expr": "label_replace(((sum by (namespace, workload, asset, kind) (label_replace(increase(solver_bot_workflow_amount_atomic_units_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\",event=\"fill\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))) > 0), \"token_display\", \"​$1\", \"asset\", \"(.*)\")",
                       "format": "table",
                       "instant": true,
                       "legendFormat": "",
@@ -1134,9 +1281,9 @@
                 "kind": "Transformation",
                 "spec": {
                   "options": {
-                    "excludeByName": {"Time": true, "asset": true, "job": true, "instance": true},
-                    "indexByName": {"namespace": 0, "pod": 1},
-                    "renameByName": {"token_display": "token", "namespace": "Namespace", "pod": "Pod"}
+                    "excludeByName": {"Time": true, "asset": true, "job": true, "instance": true, "namespace": true},
+                    "indexByName": {"namespace": 0, "workload": 1},
+                    "renameByName": {"token_display": "token", "namespace": "Namespace", "workload": "Workload"}
                   }
                 },
                 "group": "organize"
@@ -1150,7 +1297,7 @@
           "group": "table",
           "version": "",
           "spec": {
-            "options": {"cellHeight": "sm", "showHeader": true, "enablePagination": true},
+            "options": {"cellHeight": "sm", "showHeader": true, "enablePagination": false},
             "fieldConfig": {
               "defaults": {
                 "thresholds": {
@@ -1159,7 +1306,8 @@
                     {"value": 0, "color": "green"}
                   ]
                 },
-                "color": {"mode": "palette-classic"}
+                "color": {"mode": "palette-classic"},
+                "noValue": "—"
               },
               "overrides": [
                 {
@@ -1177,9 +1325,9 @@
                   ]
                 },
                 {
-                  "matcher": {"id": "byName", "options": "Pod"},
+                  "matcher": {"id": "byName", "options": "Workload"},
                   "properties": [
-                    {"id": "custom.width", "value": 360}
+                    {"id": "custom.width", "value": 220}
                   ]
                 }
               ]
@@ -1193,8 +1341,8 @@
       "kind": "Panel",
       "spec": {
         "id": 2,
-        "title": "Pods ready",
-        "description": "Ready pods / currently observed RFQ pods. A missing readiness sample does not count as ready. Historical pods remain in the table, not in this current-state percentage.",
+        "title": "Ready replicas",
+        "description": "Fraction of reporting configured replicas whose readiness gate admits work. Current value at the end of the selected time range. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1212,10 +1360,10 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum(min by (namespace, pod) (solver_bot_service_ready{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"})) / count(max by (namespace, pod) (solver_bot_solver_info{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\"}))",
+                      "expr": "sum(min by (namespace, pod) (solver_bot_service_ready{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"})) / count(max by (namespace, pod) (solver_bot_solver_info{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\"}))",
                       "instant": true,
                       "range": false,
-                      "legendFormat": "Pods ready"
+                      "legendFormat": "Workloads ready"
                     }
                   }
                 }
@@ -1242,7 +1390,7 @@
               },
               "textMode": "value",
               "wideLayout": true,
-              "text": {"valueSize": 40}
+              "text": {"valueSize": 30}
             },
             "fieldConfig": {
               "defaults": {
@@ -1272,7 +1420,8 @@
                     {"value": 0, "color": "red"},
                     {"value": 1, "color": "green"}
                   ]
-                }
+                },
+                "displayName": "Ready"
               },
               "overrides": []
             }
@@ -1285,8 +1434,8 @@
       "kind": "Panel",
       "spec": {
         "id": 20,
-        "title": "Execution cost by pod",
-        "description": "Receipt-based transaction costs by pod. Fees are native-token units (wei / 1e18), not profit. Included transaction count includes confirmed and included_unconfirmed outcomes.",
+        "title": "Execution cost",
+        "description": "Receipt-based transaction costs by workload. Fees are native-token units (wei / 1e18), not profit. Included transaction count includes confirmed and included_unconfirmed outcomes. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1304,7 +1453,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum by (namespace, pod) (increase(solver_bot_txmanager_requests_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",label=\"rfq-fill\",outcome=~\"confirmed|included_unconfirmed\"}[$__range]))",
+                      "expr": "sum by (namespace, workload) (label_replace(increase(solver_bot_txmanager_requests_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",label=\"rfq-fill\",outcome=~\"confirmed|included_unconfirmed\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
                       "instant": true,
                       "range": false,
                       "legendFormat": "",
@@ -1325,7 +1474,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum by (namespace, pod) (increase(solver_bot_txmanager_gas_used_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",label=\"rfq-fill\"}[$__range]))",
+                      "expr": "sum by (namespace, workload) (label_replace(increase(solver_bot_txmanager_gas_used_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",label=\"rfq-fill\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
                       "instant": true,
                       "range": false,
                       "legendFormat": "",
@@ -1346,7 +1495,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum by (namespace, pod) (increase(solver_bot_txmanager_fee_paid_wei_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",label=\"rfq-fill\"}[$__range])) / 1e18",
+                      "expr": "sum by (namespace, workload) (label_replace(increase(solver_bot_txmanager_fee_paid_wei_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",label=\"rfq-fill\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) / 1e18",
                       "instant": true,
                       "range": false,
                       "legendFormat": "",
@@ -1370,8 +1519,8 @@
                 "spec": {
                   "options": {
                     "excludeByName": {"Time": true, "namespace": true, "job": true, "instance": true, "__name__": true},
-                    "indexByName": {"pod": 0, "Value #A": 1, "Value #B": 2, "Value #C": 3},
-                    "renameByName": {"pod": "Pod", "Value #A": "Included transactions", "Value #B": "Gas used", "Value #C": "Fees paid"}
+                    "indexByName": {"workload": 0, "Value #A": 1, "Value #B": 2, "Value #C": 3},
+                    "renameByName": {"workload": "Workload", "Value #A": "Included transactions", "Value #B": "Gas used", "Value #C": "Fees paid"}
                   }
                 }
               }
@@ -1387,9 +1536,9 @@
             "options": {
               "showHeader": true,
               "cellHeight": "sm",
-              "enablePagination": true,
+              "enablePagination": false,
               "sortBy": [
-                {"displayName": "Pod", "desc": false}
+                {"displayName": "Workload", "desc": false}
               ]
             },
             "fieldConfig": {
@@ -1412,9 +1561,9 @@
               },
               "overrides": [
                 {
-                  "matcher": {"id": "byName", "options": "Pod"},
+                  "matcher": {"id": "byName", "options": "Workload"},
                   "properties": [
-                    {"id": "custom.width", "value": 360}
+                    {"id": "custom.width", "value": 220}
                   ]
                 },
                 {
@@ -1452,7 +1601,7 @@
       "kind": "Panel",
       "spec": {
         "id": 3,
-        "title": "Quotes",
+        "title": "Quotes · period",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1470,7 +1619,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\",event=\"quote\",outcome=\"quoted\"}[$__range]))",
+                      "expr": "sum (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\",event=\"quote\",outcome=\"quoted\"}[$__range]))",
                       "instant": true,
                       "range": false,
                       "legendFormat": "Quotes"
@@ -1500,7 +1649,7 @@
               },
               "textMode": "value",
               "wideLayout": true,
-              "text": {"valueSize": 40}
+              "text": {"valueSize": 30}
             },
             "fieldConfig": {
               "defaults": {
@@ -1523,21 +1672,23 @@
                       "result": {"text": "No data", "color": "gray"}
                     }
                   }
-                ]
+                ],
+                "displayName": "Quotes"
               },
               "overrides": []
             }
           }
         },
-        "transparent": true
+        "transparent": true,
+        "description": "Total or ratio over the time range selected above. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas."
       }
     },
     "panel-4": {
       "kind": "Panel",
       "spec": {
         "id": 4,
-        "title": "Conversion",
-        "description": "Quoted decisions / all quote decisions across the selected pods and time range. No activity means zero quote decisions; missing samples remain No data.",
+        "title": "Quote acceptance",
+        "description": "Quoted decisions / all quote decisions across the selected workloads and time range. No activity means zero quote decisions; missing samples remain No data. Total or ratio over the time range selected above. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1555,7 +1706,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "((sum (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\",event=\"quote\",outcome=\"quoted\"}[$__range])) / sum (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\",event=\"quote\"}[$__range]))) >= 0) or ((sum (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\",event=\"quote\"}[$__range])) == 0) - 1)",
+                      "expr": "((sum (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\",event=\"quote\",outcome=\"quoted\"}[$__range])) / sum (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\",event=\"quote\"}[$__range]))) >= 0) or ((sum (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\",event=\"quote\"}[$__range])) == 0) - 1)",
                       "instant": true,
                       "range": false,
                       "legendFormat": "Conversion"
@@ -1585,7 +1736,7 @@
               },
               "textMode": "value",
               "wideLayout": true,
-              "text": {"valueSize": 40}
+              "text": {"valueSize": 30}
             },
             "fieldConfig": {
               "defaults": {
@@ -1614,7 +1765,8 @@
                       "result": {"text": "No data", "color": "gray"}
                     }
                   }
-                ]
+                ],
+                "displayName": "Conversion"
               },
               "overrides": []
             }
@@ -1627,7 +1779,7 @@
       "kind": "Panel",
       "spec": {
         "id": 5,
-        "title": "Wins",
+        "title": "Wins · period",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1645,7 +1797,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\",event=\"order\",outcome=\"won\"}[$__range]))",
+                      "expr": "sum (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\",event=\"order\",outcome=\"won\"}[$__range]))",
                       "instant": true,
                       "range": false,
                       "legendFormat": "Wins"
@@ -1675,7 +1827,7 @@
               },
               "textMode": "value",
               "wideLayout": true,
-              "text": {"valueSize": 40}
+              "text": {"valueSize": 30}
             },
             "fieldConfig": {
               "defaults": {
@@ -1698,20 +1850,22 @@
                       "result": {"text": "No data", "color": "gray"}
                     }
                   }
-                ]
+                ],
+                "displayName": "Wins"
               },
               "overrides": []
             }
           }
         },
-        "transparent": true
+        "transparent": true,
+        "description": "Total or ratio over the time range selected above. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas."
       }
     },
     "panel-6": {
       "kind": "Panel",
       "spec": {
         "id": 6,
-        "title": "Fills",
+        "title": "Fills · period",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1729,7 +1883,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\",solver=\"rfq-filler\",event=\"fill\",outcome=\"success\"}[$__range]))",
+                      "expr": "sum (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"rfq-filler\",event=\"fill\",outcome=\"success\"}[$__range]))",
                       "instant": true,
                       "range": false,
                       "legendFormat": "Fills"
@@ -1759,7 +1913,7 @@
               },
               "textMode": "value",
               "wideLayout": true,
-              "text": {"valueSize": 40}
+              "text": {"valueSize": 30}
             },
             "fieldConfig": {
               "defaults": {
@@ -1782,13 +1936,15 @@
                       "result": {"text": "No data", "color": "gray"}
                     }
                   }
-                ]
+                ],
+                "displayName": "Fills"
               },
               "overrides": []
             }
           }
         },
-        "transparent": true
+        "transparent": true,
+        "description": "Total or ratio over the time range selected above. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas."
       }
     },
     "panel-7": {
@@ -1813,7 +1969,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum(max by (namespace, pod) (rfq_active_orders{namespace=\"${namespace}\",pod=~\"${pods}\",pod!=\"\"}))",
+                      "expr": "sum(max by (namespace, workload) (label_replace(rfq_active_orders{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
                       "instant": true,
                       "range": false,
                       "legendFormat": "Active orders"
@@ -1843,7 +1999,7 @@
               },
               "textMode": "value",
               "wideLayout": true,
-              "text": {"valueSize": 40}
+              "text": {"valueSize": 30}
             },
             "fieldConfig": {
               "defaults": {
@@ -1866,9 +2022,195 @@
                       "result": {"text": "No data", "color": "gray"}
                     }
                   }
-                ]
+                ],
+                "displayName": "Active orders"
               },
               "overrides": []
+            }
+          }
+        },
+        "transparent": true,
+        "description": "Sum of the maximum current replica count for each selected workload. Shared observations are not multiplied by the replica count; this is not a deduplicated count of distinct orders. Current value at the end of the selected time range. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas."
+      }
+    },
+    "panel-91": {
+      "kind": "Panel",
+      "spec": {
+        "id": 91,
+        "title": "Current pods",
+        "description": "Pods reporting at the end of the selected range, across the selected workloads. This list stays independent of the Pod filter so you can switch replicas. Click a pod to inspect it.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "label_replace(max by (namespace, pod) (solver_bot_solver_info{solver=\"rfq-filler\",namespace=\"${namespace}\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(label_replace(min by (namespace, pod) (solver_bot_service_ready{namespace=\"${namespace}\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\",pod!=\"\"}), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) and on (namespace, pod) (label_replace(max by (namespace, pod) (solver_bot_solver_info{solver=\"rfq-filler\",namespace=\"${namespace}\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "C",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(label_replace(min by (namespace, pod) ((time() - process_start_time_seconds{namespace=\"${namespace}\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\",pod!=\"\"}) and on (namespace, pod) solver_bot_solver_info{solver=\"rfq-filler\",namespace=\"${namespace}\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) and on (namespace, pod) (label_replace(max by (namespace, pod) (solver_bot_solver_info{solver=\"rfq-filler\",namespace=\"${namespace}\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "merge",
+                "spec": {
+                  "options": {}
+                }
+              },
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "namespace": true, "Value #A": true},
+                    "indexByName": {"workload": 0, "pod": 1, "Value #B": 2, "Value #C": 3},
+                    "renameByName": {"workload": "Workload", "pod": "Pod", "Value #B": "Ready", "Value #C": "Uptime"}
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": false,
+              "sortBy": [
+                {"displayName": "Workload", "desc": false}
+              ]
+            },
+            "fieldConfig": {
+              "defaults": {
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "Workload"},
+                  "properties": [
+                    {"id": "custom.width", "value": 220}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Pod"},
+                  "properties": [
+                    {"id": "custom.width", "value": 420}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Ready"},
+                  "properties": [
+                    {"id": "custom.width", "value": 160},
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "0": {"text": "Not ready", "color": "red"},
+                            "1": {"text": "Ready", "color": "green"}
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Uptime"},
+                  "properties": [
+                    {"id": "custom.width", "value": 160},
+                    {"id": "unit", "value": "s"}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Pod"},
+                  "properties": [
+                    {
+                      "id": "links",
+                      "value": [
+                        {
+                          "title": "Inspect pod",
+                          "url": "/d/${__dashboard.uid}?${__url_time_range}&${datasource:queryparam}&${namespace:queryparam}&${history:queryparam}&var-workloads=${__data.fields.Workload}&var-instance=${__value.raw}",
+                          "targetBlank": true
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
             }
           }
         },
@@ -1883,7 +2225,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Fleet overview",
+            "title": "Current health and selected-period results",
             "collapse": false,
             "layout": {
               "kind": "GridLayout",
@@ -1906,7 +2248,7 @@
                       "y": 0,
                       "width": 4,
                       "height": 4,
-                      "element": {"kind": "ElementReference", "name": "panel-3"}
+                      "element": {"kind": "ElementReference", "name": "panel-7"}
                     }
                   },
                   {
@@ -1916,7 +2258,7 @@
                       "y": 0,
                       "width": 4,
                       "height": 4,
-                      "element": {"kind": "ElementReference", "name": "panel-4"}
+                      "element": {"kind": "ElementReference", "name": "panel-3"}
                     }
                   },
                   {
@@ -1926,7 +2268,7 @@
                       "y": 0,
                       "width": 4,
                       "height": 4,
-                      "element": {"kind": "ElementReference", "name": "panel-5"}
+                      "element": {"kind": "ElementReference", "name": "panel-4"}
                     }
                   },
                   {
@@ -1936,7 +2278,7 @@
                       "y": 0,
                       "width": 4,
                       "height": 4,
-                      "element": {"kind": "ElementReference", "name": "panel-6"}
+                      "element": {"kind": "ElementReference", "name": "panel-5"}
                     }
                   },
                   {
@@ -1946,7 +2288,7 @@
                       "y": 0,
                       "width": 4,
                       "height": 4,
-                      "element": {"kind": "ElementReference", "name": "panel-7"}
+                      "element": {"kind": "ElementReference", "name": "panel-6"}
                     }
                   }
                 ]
@@ -1957,7 +2299,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Pods",
+            "title": "Compare workloads",
             "collapse": false,
             "layout": {
               "kind": "GridLayout",
@@ -1969,7 +2311,7 @@
                       "x": 0,
                       "y": 0,
                       "width": 24,
-                      "height": 18,
+                      "height": 8,
                       "element": {"kind": "ElementReference", "name": "panel-15"}
                     }
                   }
@@ -1981,7 +2323,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Quote service",
+            "title": "Quote decisions and response time",
             "collapse": false,
             "layout": {
               "kind": "GridLayout",
@@ -1992,37 +2334,17 @@
                     "spec": {
                       "x": 0,
                       "y": 0,
-                      "width": 24,
-                      "height": 10,
+                      "width": 12,
+                      "height": 8,
                       "element": {"kind": "ElementReference", "name": "panel-10"}
                     }
                   },
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
-                      "x": 0,
-                      "y": 10,
-                      "width": 24,
-                      "height": 10,
-                      "element": {"kind": "ElementReference", "name": "panel-13"}
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 0,
-                      "y": 20,
-                      "width": 24,
-                      "height": 10,
-                      "element": {"kind": "ElementReference", "name": "panel-16"}
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 0,
-                      "y": 30,
-                      "width": 24,
+                      "x": 12,
+                      "y": 0,
+                      "width": 12,
                       "height": 8,
                       "element": {"kind": "ElementReference", "name": "panel-11"}
                     }
@@ -2035,7 +2357,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Execution and token amounts",
+            "title": "Fill results and execution cost",
             "collapse": false,
             "layout": {
               "kind": "GridLayout",
@@ -2046,28 +2368,76 @@
                     "spec": {
                       "x": 0,
                       "y": 0,
-                      "width": 24,
-                      "height": 12,
-                      "element": {"kind": "ElementReference", "name": "panel-20"}
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 0,
-                      "y": 12,
-                      "width": 24,
-                      "height": 10,
+                      "width": 12,
+                      "height": 6,
                       "element": {"kind": "ElementReference", "name": "panel-18"}
                     }
                   },
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 12,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-20"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "HTTP and order polling details",
+            "collapse": true,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
                       "x": 0,
-                      "y": 22,
+                      "y": 0,
+                      "width": 12,
+                      "height": 7,
+                      "element": {"kind": "ElementReference", "name": "panel-13"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 12,
+                      "height": 7,
+                      "element": {"kind": "ElementReference", "name": "panel-16"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Token amounts",
+            "collapse": true,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
                       "width": 24,
-                      "height": 10,
+                      "height": 7,
                       "element": {"kind": "ElementReference", "name": "panel-19"}
                     }
                   },
@@ -2075,10 +2445,34 @@
                     "kind": "GridLayoutItem",
                     "spec": {
                       "x": 0,
-                      "y": 32,
+                      "y": 7,
+                      "width": 24,
+                      "height": 7,
+                      "element": {"kind": "ElementReference", "name": "panel-14"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Current pods",
+            "collapse": true,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
                       "width": 24,
                       "height": 10,
-                      "element": {"kind": "ElementReference", "name": "panel-14"}
+                      "element": {"kind": "ElementReference", "name": "panel-91"}
                     }
                   }
                 ]
@@ -2091,20 +2485,28 @@
   },
   "links": [
     {
-      "title": "Vault Solver dashboards",
+      "icon": "",
+      "tooltip": "Open another solver dashboard",
+      "title": "Solver dashboards",
       "type": "dashboards",
-      "icon": "dashboard",
-      "tooltip": "",
-      "tags": ["vault-solver-compact"],
+      "tags": ["vault-solver-unified"],
       "asDropdown": true,
-      "targetBlank": false,
-      "includeVars": true,
-      "keepTime": true
+      "includeVars": false,
+      "keepTime": true,
+      "targetBlank": false
     }
   ],
   "liveNow": false,
   "preload": false,
-  "tags": ["dashboard-schema-v2", "kubernetes", "solver-metrics", "vault-solver", "vault-solver-compact"],
+  "tags": [
+    "dashboard-schema-v2",
+    "kubernetes",
+    "solver-metrics",
+    "vault-solver",
+    "vault-solver-compact",
+    "vault-solver-rfq",
+    "vault-solver-unified"
+  ],
   "timeSettings": {
     "timezone": "browser",
     "from": "now-7d",
@@ -2114,7 +2516,7 @@
     "hideTimepicker": false,
     "fiscalYearStartMonth": 0
   },
-  "title": "Vault Solver · RFQ Fleet",
+  "title": "Vault Solver · RFQ",
   "variables": [
     {
       "kind": "DatasourceVariable",
@@ -2162,10 +2564,23 @@
       }
     },
     {
+      "kind": "SwitchVariable",
+      "spec": {
+        "name": "history",
+        "label": "Include old pods",
+        "description": "Off: pods reporting at the end of the selected time range. On: also include pods observed earlier in that range. This changes the chooser only; panel time ranges stay unchanged.",
+        "hide": "dontHide",
+        "skipUrlSync": false,
+        "current": "0",
+        "enabledValue": "1",
+        "disabledValue": "0"
+      }
+    },
+    {
       "kind": "QueryVariable",
       "spec": {
-        "name": "pods",
-        "label": "Pods",
+        "name": "workloads",
+        "label": "Workload",
         "hide": "dontHide",
         "refresh": "onTimeRangeChanged",
         "skipUrlSync": false,
@@ -2175,22 +2590,49 @@
           "version": "v0",
           "datasource": {"name": "${datasource}"},
           "spec": {
-            "query": "label_values(solver_bot_solver_info{solver=\"rfq-filler\",namespace=\"${namespace}\"}, pod)",
-            "refId": "PrometheusVariableQueryEditor-pods"
+            "query": "query_result(max by (workload) (label_replace((max by (pod) (solver_bot_solver_info{solver=\"rfq-filler\",namespace=\"${namespace}\",pod!=\"\"}) or (max by (pod) (max_over_time(solver_bot_solver_info{solver=\"rfq-filler\",namespace=\"${namespace}\",pod!=\"\"}[$__range])) and on () (vector(${history}) == 1))), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
+            "refId": "PrometheusVariableQueryEditor-workloads"
           }
         },
-        "regex": "",
+        "regex": "/workload=\"([^\"]+)\"/",
         "sort": "alphabeticalAsc",
-        "definition": "label_values(solver_bot_solver_info{solver=\"rfq-filler\",namespace=\"${namespace}\"}, pod)",
+        "definition": "query_result(max by (workload) (label_replace((max by (pod) (solver_bot_solver_info{solver=\"rfq-filler\",namespace=\"${namespace}\",pod!=\"\"}) or (max by (pod) (max_over_time(solver_bot_solver_info{solver=\"rfq-filler\",namespace=\"${namespace}\",pod!=\"\"}[$__range])) and on () (vector(${history}) == 1))), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
         "options": [],
-        "multi": true,
+        "multi": false,
         "includeAll": true,
-        "allowCustomValue": true,
-        "current": {
-          "text": ["All"],
-          "value": ["$__all"]
+        "allowCustomValue": false,
+        "current": {"text": "All", "value": "$__all"},
+        "description": "Choose the deployment first. The Pod chooser contains only its replicas. All lists replicas across the available workloads; Overview links retain that selection.",
+        "allValue": ".*"
+      }
+    },
+    {
+      "kind": "QueryVariable",
+      "spec": {
+        "name": "instance",
+        "label": "Pod",
+        "hide": "dontHide",
+        "refresh": "onTimeRangeChanged",
+        "skipUrlSync": false,
+        "query": {
+          "kind": "DataQuery",
+          "group": "prometheus",
+          "version": "v0",
+          "datasource": {"name": "${datasource}"},
+          "spec": {
+            "query": "query_result(max by (pod) (solver_bot_solver_info{solver=\"rfq-filler\",namespace=\"${namespace}\",pod!=\"\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}) or (max by (pod) (max_over_time(solver_bot_solver_info{solver=\"rfq-filler\",namespace=\"${namespace}\",pod!=\"\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}[$__range])) and on () (vector(${history}) == 1)))",
+            "refId": "PrometheusVariableQueryEditor-instance"
+          }
         },
-        "description": "All expands to the pod names discovered for this solver and selected time range."
+        "regex": "/pod=\"(?<value>.+?-(?<text>[a-z0-9]{8,10}-[a-z0-9]{5})|[^\"]+)\"/",
+        "sort": "alphabeticalAsc",
+        "definition": "query_result(max by (pod) (solver_bot_solver_info{solver=\"rfq-filler\",namespace=\"${namespace}\",pod!=\"\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}) or (max by (pod) (max_over_time(solver_bot_solver_info{solver=\"rfq-filler\",namespace=\"${namespace}\",pod!=\"\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}[$__range])) and on () (vector(${history}) == 1)))",
+        "options": [],
+        "multi": false,
+        "includeAll": true,
+        "allowCustomValue": false,
+        "current": {"text": "All", "value": "$__all"},
+        "description": "Choose one pod, or All to aggregate the pods listed for this workload. Include old pods adds retired replicas to the selected set. Short labels keep full pod names as values."
       }
     }
   ]
