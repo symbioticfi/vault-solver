@@ -795,8 +795,8 @@ func (m *Manager) confirmations(req Request) uint64 {
 func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendingTransaction) Result {
 	reader := m.startReceiptReader(ctx)
 	defer reader.stop()
-	sweep := newReceiptSweep(pending)
-	seenAttempts := len(pending.attempts)
+	knownAttempts := len(pending.attempts)
+	sweep := newReceiptSweep(pending, knownAttempts)
 	var receiptResults <-chan receiptRead
 	poll := time.NewTicker(m.cfg.PollInterval)
 	defer poll.Stop()
@@ -839,10 +839,9 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 	}
 	for {
 		// New variants arriving between sweeps also get an immediate priority read.
-		if sweep == nil && seenAttempts != len(pending.attempts) {
-			sweep = newReceiptSweep(pending)
-			sweep.seen = seenAttempts
-			seenAttempts = len(pending.attempts)
+		if sweep == nil && knownAttempts != len(pending.attempts) {
+			sweep = newReceiptSweep(pending, knownAttempts)
+			knownAttempts = len(pending.attempts)
 		}
 		var reads chan<- txAttempt
 		var next txAttempt
@@ -869,8 +868,8 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 				sweep = nil
 			} else if sweep.nextIndex(pending) < 0 {
 				m.finishReceiptSweep(pending, sweep)
-				// Include variants already checked through the priority path.
-				seenAttempts = sweep.seen
+				// Include superseded variants considered by the priority path.
+				knownAttempts = sweep.knownAttempts
 				sweep = nil
 			}
 		case <-ctx.Done():
@@ -884,8 +883,8 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 			tryReplace(true)
 		case <-poll.C:
 			if sweep == nil {
-				sweep = newReceiptSweep(pending)
-				seenAttempts = len(pending.attempts)
+				knownAttempts = len(pending.attempts)
+				sweep = newReceiptSweep(pending, knownAttempts)
 			}
 			if cancelling || pending.req.Obsolete == nil {
 				continue

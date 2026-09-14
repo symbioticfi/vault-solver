@@ -19,7 +19,7 @@ import (
 // confirmation and log-streak cases. Lifecycle timer scheduling is covered by
 // waitForPendingTransaction tests below.
 func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction) (Result, bool) {
-	sweep := newReceiptSweep(pending)
+	sweep := newReceiptSweep(pending, len(pending.attempts))
 	if sweep == nil {
 		return Result{}, false
 	}
@@ -318,7 +318,7 @@ func TestReceiptPriorityPreservesOldHashProgress(t *testing.T) {
 	for n := int64(1); n <= 3; n++ {
 		appendAttempt(n)
 	}
-	sweep := newReceiptSweep(pending)
+	sweep := newReceiptSweep(pending, len(pending.attempts))
 	take := func(want int64) {
 		t.Helper()
 		i := sweep.nextIndex(pending)
@@ -341,13 +341,12 @@ func TestReceiptPriorityPreservesOldHashProgress(t *testing.T) {
 	if i := sweep.nextIndex(pending); i != -1 {
 		t.Fatalf("finished ordinary sweep kept extending: next=%d", i)
 	}
-	seen := sweep.seen
-	sweep = newReceiptSweep(pending)
-	sweep.seen = seen
+	sweep = newReceiptSweep(pending, sweep.knownAttempts)
 	take(8) // An arrival at the sweep boundary also gets priority.
+	// The ordinary pass includes superseded hash 5.
 	for n := int64(1); n <= 8; n++ {
 		take(n)
-	} // Includes superseded hash 5.
+	}
 	if i := sweep.nextIndex(pending); i != -1 {
 		t.Fatalf("unexpected extra read: %d", i)
 	}

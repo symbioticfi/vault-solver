@@ -61,27 +61,27 @@ func (r *receiptReader) stop() {
 // receiptSweep belongs to the lifecycle owner. Its fixed size bounds the ordinary
 // round-robin pass; priority reads of newly appended attempts do not move that cursor.
 type receiptSweep struct {
-	size       int
-	start      int
-	checked    int
-	seen       int
-	preferOld  bool
-	firstError *receiptRead
+	size          int
+	start         int
+	checked       int
+	knownAttempts int
+	ordinaryDue   bool
+	firstError    *receiptRead
 }
 
-func newReceiptSweep(pending *pendingTransaction) *receiptSweep {
+func newReceiptSweep(pending *pendingTransaction, knownAttempts int) *receiptSweep {
 	n := len(pending.attempts)
 	if n == 0 {
 		return nil
 	}
-	return &receiptSweep{size: n, start: pending.receiptCursor % n, seen: n}
+	return &receiptSweep{size: n, start: pending.receiptCursor % n, knownAttempts: knownAttempts}
 }
 
 // nextIndex prioritizes the newest signed variant, alternating with ordinary
 // reads so repeated replacements cannot starve older hashes. Superseded new
 // variants remain in pending.attempts and enter the next ordinary sweep.
 func (s *receiptSweep) nextIndex(pending *pendingTransaction) int {
-	if len(pending.attempts) > s.seen && !s.preferOld {
+	if len(pending.attempts) > s.knownAttempts && !s.ordinaryDue {
 		return len(pending.attempts) - 1
 	}
 	if s.checked < s.size {
@@ -92,13 +92,13 @@ func (s *receiptSweep) nextIndex(pending *pendingTransaction) int {
 
 // dispatched advances only after the reader accepts the immutable attempt copy.
 func (s *receiptSweep) dispatched(pending *pendingTransaction, index int) {
-	if index >= s.seen {
-		s.seen = index + 1
-		s.preferOld = true
+	if index >= s.knownAttempts {
+		s.knownAttempts = index + 1
+		s.ordinaryDue = true
 		return
 	}
 	s.checked++
-	s.preferOld = false
+	s.ordinaryDue = false
 	pending.receiptCursor = (s.start + s.checked) % s.size
 }
 
