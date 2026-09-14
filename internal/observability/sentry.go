@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/getsentry/sentry-go"
+	"github.com/go-errors/errors"
 	"go.uber.org/zap/zapcore"
 )
 
@@ -56,9 +57,11 @@ func (c *sentryCore) Write(e zapcore.Entry, fields []zapcore.Field) error {
 	enc := zapcore.NewMapObjectEncoder()
 	for _, f := range c.fields {
 		f.AddTo(enc)
+		addErrorDiagnostics(enc.Fields, f)
 	}
 	for _, f := range fields {
 		f.AddTo(enc)
+		addErrorDiagnostics(enc.Fields, f)
 	}
 	// The global hub's scope stack is not goroutine-safe; each write gets its own clone.
 	hub := sentry.CurrentHub().Clone()
@@ -73,9 +76,8 @@ func (c *sentryCore) Write(e zapcore.Entry, fields []zapcore.Field) error {
 		for key, value := range tags {
 			scope.SetTag(key, value)
 		}
-		// Group by solver and static message, not the title: the title carries the error text so
-		// the issue stream shows the cause, while one log site in one solver still maps to one issue.
-		scope.SetFingerprint([]string{tags["solver"], e.Message})
+		// Only errors opting into reason_code split the existing solver/message grouping.
+		scope.SetFingerprint(eventFingerprint(tags["solver"], e.Message, enc.Fields))
 		hub.CaptureMessage(eventTitle(e.Message, enc.Fields))
 	})
 	return nil
@@ -120,4 +122,29 @@ func sentryLevel(l zapcore.Level) sentry.Level {
 		return sentry.LevelFatal
 	}
 	return sentry.LevelError
+}
+
+// Client errors can retain diagnostics through wrapping and reach this sink via zap.Error.
+// Existing errors without this small contract retain their current grouping.
+func addErrorDiagnostics(fields map[string]any, field zapcore.Field) {
+	err, ok := field.Interface.(error)
+	if !ok {
+		return
+	}
+	var diagnostic interface {
+		ReasonCode() string
+		RequestID() string
+	}
+	if errors.As(err, &diagnostic) {
+		fields["reason_code"] = diagnostic.ReasonCode()
+		fields["backendRequestId"] = diagnostic.RequestID()
+	}
+}
+
+func eventFingerprint(solver, message string, fields map[string]any) []string {
+	fingerprint := []string{solver, message}
+	if reason, ok := fields["reason_code"].(string); ok && reason != "" {
+		fingerprint = append(fingerprint, reason)
+	}
+	return fingerprint
 }

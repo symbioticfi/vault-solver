@@ -100,7 +100,7 @@ func (e *executionService) run(ctx context.Context, interval time.Duration) {
 // syncOnce polls open orders, then advances every active order's state machine.
 func (e *executionService) syncOnce(ctx context.Context) {
 	if err := e.pollOpenOrders(ctx); err != nil {
-		e.log.Error(err, "poll open orders")
+		backendErrorLogger(e.log, err).Error(err, "poll open orders")
 	}
 	for _, o := range e.store.activeOrders() {
 		e.handleOrder(ctx, o)
@@ -161,7 +161,7 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 
 	exec, err := e.resolveExecutable(ctx, local)
 	if err != nil {
-		e.log.Error(err, "resolve executable order", "orderId", orderID)
+		backendErrorLogger(e.log, err).Error(err, "resolve executable order", "orderId", orderID)
 		return // transient; retried next cycle
 	}
 	if exec == nil {
@@ -211,7 +211,7 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		// A discount resolve is a live backend call; treat its failure as transient (leave the order
 		// in submitting and retry next cycle) rather than terminal. Once the order is no longer open
 		// the executable lookup returns nil and reconciliation marks it expired/filled.
-		e.log.Error(err, "resolve discounts (will retry)", "orderId", orderID)
+		backendErrorLogger(e.log, err).Error(err, "resolve discounts (will retry)", "orderId", orderID)
 		return
 	}
 	calldata, err := encodeFill(order, exec.signature, swaps, discountSwaps, emptyExecutorData)
@@ -288,7 +288,7 @@ func (e *executionService) resolveExecutable(ctx context.Context, local *orderRe
 func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID string) {
 	bo, err := e.backend.getOrder(ctx, orderID)
 	if err != nil {
-		e.log.Error(err, "reconcile: get order", "orderId", orderID)
+		backendErrorLogger(e.log, err).Error(err, "reconcile: get order", "orderId", orderID)
 		return
 	}
 	if bo == nil {
@@ -431,7 +431,7 @@ func (e *executionService) discountInventories(
 ) []solverInventory {
 	resp, err := e.backend.listDiscounts(ctx)
 	if err != nil {
-		e.log.Error(err, "fill: list discounts")
+		backendErrorLogger(e.log, err).Error(err, "fill: list discounts")
 		return nil
 	}
 	seen := make(map[common.Address]bool, len(direct))

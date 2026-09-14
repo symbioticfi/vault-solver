@@ -184,7 +184,7 @@ distinct credentials.
 Only on-chain escrow orders are supported; gasless Compact, Permit2/3009, Dutch auctions, and future-order
 scheduling are out of scope. Dutch (`0x01`) and exclusive Dutch (`0xe1`) orders are ignored at order-feed
 admission and logged as unsupported. Fully valid feed orders routed to another origin or output chain are
-expected noise and logged at info; malformed payloads and target-chain contract mismatches remain errors.
+expected noise and logged at info; malformed identifiers and operational failures remain errors.
 `solverMode: external` serves direct filler-authorized adapters.
 `solverMode: internal` also enables signed private discounts through the shared backend. `tokensToQuote` uses the same `all`,
 `permissioned`, and `permissionless` scopes as RFQ; permissioned inputs must execute through one physical
@@ -367,6 +367,45 @@ The observability listener (default `:9090`) serves `/metrics`, `/healthz`, and 
 config is required for the collectors below. During graceful shutdown readiness drops first, while
 liveness and metrics remain available until the shared transaction manager finishes its bounded drain.
 
+### Error diagnostics
+
+LI.FI order rejection logs include available `orderId`, `onChainOrderId`, `orderType`,
+`inputSettler`, `originChainId`, a stable `reason_code`, and the failing `field`/`field_value`.
+Context is extracted independently of typed decoding. Allowlisted scalar values are capped at
+160 UTF-8 bytes; containers are summarized, and signatures, full payloads, callback data and
+auction context are excluded. Zero identifiers are reported without assuming their asset meaning.
+The envelope's type, chain and input settler are checked before interpreting token identifiers.
+Foreign chains use `unsupported_chain`; a different nonzero EVM input settler is an expected
+`unsupported_settler` debug skip, including clean foreign output settlers/oracles. Native input
+(token identifier zero) is rejected with `unsupported_native_input` at Info, without Sentry.
+Multiple inputs/outputs, nonempty callbacks, and unsupported pricing-context types are also expected
+skips at the existing Debug level. Dutch auctions and foreign chains retain their Info logs.
+These observations use the existing `unsupported`/`other_chain` workflow outcomes, never `invalid`.
+Zero still cannot execute through the solver's ERC-20 path.
+
+Malformed identifiers, missing inputs/outputs, invalid known-context lengths, RPC failures and
+operational invariant violations remain Error/Sentry. Permanent rejection alone does not silence an
+error: only explicitly classified unsupported formats skip Sentry. Dirty input identifier bits retain
+`invalid_token_identifier`.
+
+Receipt lookup errors retain streak suppression and include `rpcBudgetTotalMs`, `sweepElapsedMs`,
+`hashesChecked`, `hashesTotal`, `rpcChecks`, `lastRPCDurationMs` and `cancelCause`. Each RPC has its own
+`rpcTimeout`; the budget total sums effective budgets of completed calls, including priority reads,
+and is not a sweep deadline. Checked hashes are distinct; `rpcChecks` also counts repeated reads.
+`hash` and `cancelCause` describe the first failed read, while the last-RPC duration describes the
+last call. Shutdown still stops the reader without adding a partial-sweep error log.
+Existing RPC count/duration metrics measure the scale of RPC failures.
+
+RFQ backend calls propagate the existing `X-Request-Id` from request context, generating an ID
+with the same mechanism when polling has no inbound request. Public orders and private discount
+calls retain this outbound ID in typed client errors and the structured `backendRequestId` log/Sentry
+context, without adding it to the error text or Sentry title. HTTP request IDs are separate from business
+`requestId`/`quoteId` fields in JSON. End-to-end correlation requires the backend to accept and
+log the same header; solver-side propagation alone does not establish that guarantee.
+
+Sentry groups these diagnosed errors by `(solver, message, reason_code)`; other errors retain
+`(solver, message)`. Dynamic identifiers remain event context. No additional log sites are introduced.
+
 ### Metrics
 
 The [txmanager metric reference](docs/TXMANAGER-PLAN.md#metrics) covers transaction outcomes, admission,
@@ -379,6 +418,7 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 
 | Scope | Metric family | Labels | What it shows and why it is useful |
 |---|---|---|---|
+| LI.FI | `solver_bot_workflow_events_total{event="order_parse"}` | `solver`, `strategy`, `event`, `outcome` | Rejected feed observations: `invalid`, `unsupported` (including Dutch auctions), or `other_chain`. REST recovery replays count again; this is not a unique-order count. Uses the existing workflow event family and its last-event timestamp. |
 | Framework | `solver_bot_service_ready` | — | `1` exactly when the shared `/readyz` gate admits work, otherwise `0`. This is process/nonce-lane readiness, not a claim that every solver upstream is healthy; combine it with solver freshness and connectivity. |
 | Framework | `solver_bot_solver_info` | `solver` | Constant `1` for each solver configured in this process. Prometheus target labels such as `instance`/`lane` make process membership explicit without adding deployment-specific labels in application code. |
 | Framework | `solver_bot_external_operation_duration_seconds` | `solver`, `strategy`, `operation`, `outcome` | Count and latency of allowlisted recurring solver operations such as polls and authoritative refreshes. Outcomes are bounded to `success`, `degraded`, `skipped`, or `error`; errors and request-derived values never become labels. |

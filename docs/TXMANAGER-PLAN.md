@@ -229,3 +229,11 @@ validation is local; it does not establish deployment or production rollout stat
 Keep shared lifecycle design and metric contracts here. Update integration plans only when their own
 request construction, readiness, capacity or protocol behavior changes. Preserve operator-facing setup,
 EOA exclusivity and maintenance warnings in README, with links here for the detailed mechanism.
+
+### Receipt failure diagnostics
+
+Existing sweep-level error suppression also carries distinct checked/all tracked hashes, completed
+RPC count (including priority reads), elapsed sweep time and last RPC duration. `rpcBudgetTotalMs`
+sums the effective per-call budgets of completed reads; there is no shared sweep deadline. The first
+failed read supplies the logged hash, stable `reason_code` and `cancelCause`, even when later reads
+succeed. Lifecycle shutdown retains its existing exit without an extra partial-sweep error log.

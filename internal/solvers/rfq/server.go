@@ -106,7 +106,7 @@ func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput,
 		if bad != nil {
 			return nil, huma.Error400BadRequest(bad.Error())
 		}
-		s.log.Error(err, "quote failed", "quoteId", in.Body.QuoteID, "requestId", requestID(ctx))
+		backendErrorLogger(s.log, err).Error(err, "quote failed", "quoteId", in.Body.QuoteID, "requestId", requestID(ctx))
 		return nil, huma.Error502BadGateway("quote failed")
 	}
 	if decision.response == nil {
