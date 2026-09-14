@@ -55,7 +55,7 @@ func (t *offerTracker) reconcileAdapter(adapter common.Address, live map[int64]o
 		}
 	}
 	for auctionID, st := range live {
-		t.offers[offerKey{adapter, auctionID}] = offerState{expiry: st.expiry, principal: new(big.Int).Set(st.principal)}
+		t.offers[offerKey{adapter, auctionID}] = offerState{expiry: st.expiry, principal: cloneBig(st.principal)}
 	}
 }
 
@@ -71,11 +71,14 @@ func (t *offerTracker) retainAdapters(active map[common.Address]struct{}) {
 }
 
 // liveCoverage sums the principal of our unexpired offers on auctionID across every adapter — how much
-// of the auction's requested amount we already cover.
+// of the auction's requested amount we already cover. nil means a live commitment has an unknown amount.
 func (t *offerTracker) liveCoverage(auctionID int64, now time.Time) *big.Int {
 	total := new(big.Int)
 	for k, st := range t.offers {
 		if k.auction == auctionID && st.expiry.After(now) {
+			if st.principal == nil {
+				return nil
+			}
 			total.Add(total, st.principal)
 		}
 	}

@@ -282,3 +282,23 @@ func testFillQuote(
 		AmountIn: big.NewInt(amountIn), MaxAmountOut: big.NewInt(amountOut),
 	}
 }
+
+func TestSolveFillNeverAbsorbsInputIntoDiscount(t *testing.T) {
+	tokenIn, tokenOut := common.Address{1}, common.Address{2}
+	discountID := common.HexToHash("0x01")
+	for _, tc := range []struct {
+		name     string
+		discount *common.Hash
+		wantFill bool
+	}{
+		{"direct cap", nil, true}, {"discount has no cap", &discountID, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			q := testFillQuote("route", "capacity", tokenIn, tokenOut, 100, 100, 60, tc.discount)
+			got, err := SolveFill(FillTask{TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(100), Quotes: []liquidlane.FillQuote{q}, MaxRoutes: 1, InputPolicy: AbsorbUncoveredInput})
+			if err != nil || (got != nil) != tc.wantFill {
+				t.Fatalf("fill = %+v, err %v", got, err)
+			}
+		})
+	}
+}
