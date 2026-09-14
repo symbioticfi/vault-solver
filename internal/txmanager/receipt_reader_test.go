@@ -351,3 +351,57 @@ func TestReceiptPriorityPreservesOldHashProgress(t *testing.T) {
 		t.Fatalf("unexpected extra read: %d", i)
 	}
 }
+
+func TestObsolescenceWaitsForReceiptSweep(t *testing.T) {
+	for _, ownFill := range []bool{true, false} {
+		name := "another filler"
+		if ownFill {
+			name = "own fill"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				backend := &slowReceiptBackend{mockBackend: newMockBackend(), delay: 300 * time.Millisecond}
+				m := New(backend, mustSigner(t), big.NewInt(1), Config{
+					MaxFeeGwei: 100, PollInterval: 100 * time.Millisecond, ReplacementInterval: 30 * time.Second,
+				}, logr.Discard())
+				checks := 0
+				var checkedAt time.Time
+				started := time.Now()
+				pending, err := m.broadcast(t.Context(), Request{
+					To: common.HexToAddress("0xabc"), GasLimit: 21000,
+					Obsolete: func(context.Context) (bool, error) {
+						checks++
+						checkedAt = time.Now()
+						return checks > 1, nil // The protocol reports Claimed after submission.
+					},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				pending.attempts = append([]txAttempt{
+					{hash: common.HexToHash("0x1")}, {hash: common.HexToHash("0x2")},
+				}, pending.attempts...)
+				if !ownFill {
+					delete(backend.receipts, pending.originalHash)
+				}
+				m.trackUnminedTransaction(pending)
+				ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+				defer cancel()
+				got := m.waitForPendingTransaction(ctx, pending)
+				sent := backend.attemptedTransactions()
+				if ownFill {
+					if got.Outcome != OutcomeConfirmed || got.Hash != pending.originalHash || len(sent) != 1 || checks != 1 {
+						t.Fatalf("own receipt lost precedence: result=%+v sends=%d checks=%d", got, len(sent), checks)
+					}
+				} else {
+					if got.Outcome != OutcomeCancelled || len(sent) != 2 || got.Hash != sent[1].Hash() || checks != 2 {
+						t.Fatalf("missing obsolete cancellation: result=%+v sends=%d checks=%d", got, len(sent), checks)
+					}
+					if elapsed := checkedAt.Sub(started); elapsed != 900*time.Millisecond {
+						t.Fatalf("checked obsolescence after %s, want all three receipt reads first", elapsed)
+					}
+				}
+			})
+		})
+	}
+}

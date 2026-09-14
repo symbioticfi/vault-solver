@@ -87,7 +87,7 @@ func (s *Solver) submitFill(
 		To:     s.cfg.Executor, Data: calldata.Finalise, MaxFeePerGas: liquidlane.CloneBig(maxFeePerGas),
 		CancelAt: cancelAt,
 		Obsolete: func(checkCtx context.Context) (bool, error) {
-			return s.fillRequestObsolete(checkCtx, order, calldata.OrderID)
+			return s.fillRequestObsolete(checkCtx, calldata.OrderID)
 		},
 		Label: "lifi-fill",
 	})
@@ -128,7 +128,6 @@ func (s *Solver) submitFill(
 
 func (s *Solver) fillRequestObsolete(
 	ctx context.Context,
-	order *submittedOrder,
 	orderID common.Hash,
 ) (bool, error) {
 	status, err := s.reader.orderStatus(ctx, s.cfg.InputSettler, orderID)
@@ -139,12 +138,6 @@ func (s *Solver) fillRequestObsolete(
 	case lifiOrderStatusNone, lifiOrderStatusDeposited:
 		return false, nil
 	case lifiOrderStatusClaimed, lifiOrderStatusRefunded:
-		s.log.Info("order fill invalidated by on-chain status",
-			"orderId", order.OrderID,
-			"onChainOrderId", orderID.Hex(),
-			"quoteId", order.QuoteID,
-			"status", status,
-		)
 		return true, nil
 	default:
 		return false, errors.Errorf("unsupported order status %d for %s", status, orderID.Hex())

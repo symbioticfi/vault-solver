@@ -476,8 +476,8 @@ accepted fill tx is in flight, passes the aggregate reservation snapshot to ever
 and releases it only on a terminal txmanager result under the
 [shared outcome contract](TXMANAGER-PLAN.md#5-receipt-polling-and-confirmation).
 Each fill request supplies the generic tx-manager obsolescence check with a fresh on-chain `orderStatus` read.
-The manager evaluates it before signing and on pending poll ticks, independently of receipt RPC
-completion. `Deposited` keeps normal replacements alive. `None` also preserves the lifecycle because a lagging latest-state RPC can return the older
+The manager evaluates it before signing and after a receipt sweep finishes without a valid receipt.
+A receipt of our own fill takes precedence over interpreting `Claimed` as obsolescence. `Deposited` keeps normal replacements alive. `None` also preserves the lifecycle because a lagging latest-state RPC can return the older
 pre-deposit value for a fresh order. An observed `Claimed` or `Refunded` status drops an unsigned request or
 immediately switches a signed request to same-nonce cancellation without waiting for `pendingTimeoutMs`.
 Unknown statuses and read errors preserve the current lifecycle and are retried. Capacity is released

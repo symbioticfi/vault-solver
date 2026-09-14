@@ -138,8 +138,8 @@ available capacity even when several pairs share one vault; accepting a fill res
 and immediately refreshes every affected quote. The reservation remains until the shared tx manager returns a
 terminal result under the [shared confirmation policy](docs/TXMANAGER-PLAN.md#5-receipt-polling-and-confirmation).
 Pre-sign or definitive broadcast failures release the reservation without a receipt. Before
-signing and on pending poll ticks, the tx manager rechecks the LI.FI order status. An observed `Claimed` or
-`Refunded` status makes the fill obsolete and immediately switches its owned nonce to cancellation instead of
+signing and after a receipt sweep without a valid receipt, the tx manager rechecks the LI.FI order status.
+An observed `Claimed` or `Refunded` then switches the owned nonce to cancellation instead of
 retaining liquidity until `pendingTimeoutMs`. `None`, an unrecognized status, or an unavailable status read
 leaves the current lifecycle unchanged and is retried, so a lagging latest-state RPC cannot cancel a fresh fill.
 Orders

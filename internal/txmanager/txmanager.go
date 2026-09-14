@@ -871,6 +871,12 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 				// Include superseded variants considered by the priority path.
 				knownAttempts = sweep.knownAttempts
 				sweep = nil
+				// A terminal protocol status may reflect our own transaction.
+				// Give receipts precedence before checking obsolescence.
+				if !cancelling && m.pendingRequestObsolete(ctx, pending) {
+					startCancellation("obsolete")
+					tryReplace(true)
+				}
 			}
 		case <-ctx.Done():
 			return Result{
@@ -886,26 +892,6 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 				knownAttempts = len(pending.attempts)
 				sweep = newReceiptSweep(pending, knownAttempts)
 			}
-			if cancelling || pending.req.Obsolete == nil {
-				continue
-			}
-			obsolete, err := m.requestObsolete(ctx, pending.req)
-			if err != nil {
-				pending.obsolescenceReads.failed(pending.log, err,
-					"pending transaction obsolescence check unavailable; retaining lifecycle",
-					"label", pending.req.Label,
-					"hash", pending.originalHash.Hex(),
-					"nonce", pending.nonce,
-				)
-				continue
-			}
-			pending.obsolescenceReads.recovered(pending.log, "pending transaction obsolescence checks recovered",
-				"label", pending.req.Label, "nonce", pending.nonce)
-			if !obsolete {
-				continue
-			}
-			startCancellation("obsolete")
-			tryReplace(true)
 		case tick := <-replace.C:
 			// A cancellation deadline may coincide with this tick. Do not send a
 			// second replacement for a tick already covered by that broadcast.
@@ -925,6 +911,19 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 			tryReplace(true)
 		}
 	}
+}
+
+func (m *Manager) pendingRequestObsolete(ctx context.Context, pending *pendingTransaction) bool {
+	obsolete, err := m.requestObsolete(ctx, pending.req)
+	if err != nil {
+		pending.obsolescenceReads.failed(pending.log, err,
+			"pending transaction obsolescence check unavailable; retaining lifecycle",
+			"label", pending.req.Label, "hash", pending.originalHash.Hex(), "nonce", pending.nonce)
+		return false
+	}
+	pending.obsolescenceReads.recovered(pending.log, "pending transaction obsolescence checks recovered",
+		"label", pending.req.Label, "nonce", pending.nonce)
+	return obsolete
 }
 
 func (m *Manager) requestObsolete(ctx context.Context, req Request) (bool, error) {

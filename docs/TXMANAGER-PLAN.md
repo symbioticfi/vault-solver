@@ -34,7 +34,7 @@ Subscribers receive coalesced change notifications and must re-read state and un
 | `GasLimit` | Zero requests exact-call estimation after admission and before signing, with 5% headroom. A supplied limit is reused for normal replacements. |
 | `MaxFeePerGas` | Optional profitability ceiling for the normal call and its replacements; cancellation may exceed it within the global ceiling. |
 | `CancelAt` | Optional wall-clock cancellation deadline. Integrations derive it from the earliest applicable protocol deadline without extending validity during RPC/planning. |
-| `Obsolete` | Context-aware protocol status check before signing and on pending poll ticks. True drops an unsigned call or starts same-nonce cancellation; errors preserve ownership. It is not an authorization mechanism. |
+| `Obsolete` | Context-aware protocol status check before signing and after a receipt sweep finishes without a valid receipt. True drops an unsigned call or starts same-nonce cancellation; errors preserve ownership. It is not an authorization mechanism. |
 | `Confirmations` | Optional override of the manager confirmation depth; an explicit zero skips depth waiting. |
 | `Label`, `Solver` | Stable operation name and owning integration for logs/metrics/Sentry. |
 
@@ -102,6 +102,10 @@ reads alternate while both are available, preventing repeated replacements from 
 Intermediate new variants superseded before a priority read enter the next ordinary sweep. Poll ticks
 never queue overlapping sweeps; every attempt remains tracked. `NotFound` is a successful RPC
 without a receipt. RPC failure streaks are judged per sweep, not cleared by one hash while another fails.
+Only after such a sweep completes without a valid receipt does the owner evaluate `Obsolete`: a protocol
+terminal status may describe our own successful fill. The callback is not run on intervening poll ticks.
+Deadline and shutdown cancellation remain independent of receipt progress. This ordering reduces the
+receipt/status race but cannot make separate on-chain reads atomic; exact-hash reconciliation is retained.
 Invalid receipts are separately rejected: receipt/block number must exist, transaction hash must match,
 and block hash must be nonzero.
 
