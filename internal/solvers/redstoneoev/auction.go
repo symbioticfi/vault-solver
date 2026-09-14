@@ -173,6 +173,7 @@ func (s *Solver) parseAuctionFrame(raw []byte) (AuctionMessage, time.Time, bool)
 	}
 	if a.TimeoutMs <= 0 {
 		s.metrics.auctionDecision(auctionOutcomeTooLate, time.Since(start))
+		s.log.V(1).Info("auction with invalid timeout received; dropping", "auction", a.ID, "timeoutMs", a.TimeoutMs)
 		return AuctionMessage{}, time.Time{}, false
 	}
 	a.ID = normalizeAuctionID(a.ID)

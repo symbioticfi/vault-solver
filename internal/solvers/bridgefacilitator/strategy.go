@@ -100,7 +100,11 @@ func buildAuctionSnapshot(
 	if !common.IsHexAddress(depositAsset) {
 		return types.AuctionSnapshot{}, false
 	}
-	remaining := new(big.Int).Sub(amountRequested, offers.liveCoverage(auctionID, now))
+	coverage := offers.liveCoverage(auctionID, now)
+	if coverage == nil {
+		return types.AuctionSnapshot{}, false
+	}
+	remaining := new(big.Int).Sub(amountRequested, coverage)
 	if remaining.Sign() < 0 {
 		remaining = new(big.Int)
 	}

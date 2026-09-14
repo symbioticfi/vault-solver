@@ -2581,6 +2581,7 @@ func TestReceiptResultFailedReceiptWinsOverInterruptedConfirmation(t *testing.T)
 		{name: "cancellation transaction", cancellation: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			logs, logger := newLogCapture(1)
 			backend := newMockBackend()
 			to := common.HexToAddress("0xabc")
 			tx := types.NewTx(&types.DynamicFeeTx{
@@ -2602,10 +2603,11 @@ func TestReceiptResultFailedReceiptWinsOverInterruptedConfirmation(t *testing.T)
 				mustSigner(t),
 				big.NewInt(11155111),
 				Config{Confirmations: 1, PollInterval: time.Millisecond},
-				logr.Discard(),
+				logger,
 			)
 			pending := &pendingTransaction{
-				req:   Request{To: to, Label: "failed receipt"},
+				req:   Request{To: to, Data: []byte("request-authorization"), Label: "failed receipt"},
+				log:   logger,
 				nonce: 7,
 				attempts: []txAttempt{{
 					hash: tx.Hash(), tx: tx, cancellation: test.cancellation,
@@ -2627,6 +2629,13 @@ func TestReceiptResultFailedReceiptWinsOverInterruptedConfirmation(t *testing.T)
 			}
 			if result.Outcome.Included() {
 				t.Fatal("reverted receipt was classified as a successful inclusion")
+			}
+			joined := strings.Join(*logs, "\n")
+			if !strings.Contains(joined, "transaction reverted") || !strings.Contains(joined, tx.Hash().Hex()) {
+				t.Fatalf("missing revert diagnostics: %s", joined)
+			}
+			if strings.Contains(joined, "tenderly") || strings.Contains(joined, "request-authorization") {
+				t.Fatalf("revert log contains calldata: %s", joined)
 			}
 		})
 	}

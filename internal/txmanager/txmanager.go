@@ -22,7 +22,6 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/signer"
-	"github.com/symbioticfi/vault-solver/internal/tenderly"
 )
 
 // Backend is the subset of an EVM client the manager needs. *ethclient.Client satisfies it.
@@ -986,7 +985,6 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 				"label", pending.req.Label,
 				"hash", attempt.hash.Hex(),
 				"nonce", pending.nonce,
-				"tenderly", tenderly.SimulatorURL(m.chainID, m.signer.Address(), pending.req.To, pending.req.Data, pending.req.Value),
 			)
 			return Result{
 				Hash:    attempt.hash,

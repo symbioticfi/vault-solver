@@ -373,6 +373,12 @@ func TestDiscoverAndOfferMalformedOfferRetainsLastCompleteMetric(t *testing.T) {
 			if tc.name == "empty status" && len(s.offers.liveEntries(time.Now())) != 1 {
 				t.Fatal("empty-status offer was dropped from conservative live coverage")
 			}
+			if tc.name == "malformed amount" || tc.name == "negative amount" {
+				offer, exists := s.offers.offers[offerKey{adapter: adapterAddr, auction: 2}]
+				if !exists || offer.principal != nil {
+					t.Fatal("malformed live commitment must retain an unknown principal")
+				}
+			}
 		})
 	}
 }

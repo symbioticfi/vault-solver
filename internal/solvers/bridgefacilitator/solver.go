@@ -215,7 +215,7 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 				complete = false
 				s.log.Info("reconcile offers: malformed amount; retaining valid subset",
 					"adapter", t.Adapter.Hex(), "offerId", o.Id)
-				principal = new(big.Int)
+				principal = nil
 			}
 			if o.AuctionId <= 0 {
 				complete = false
