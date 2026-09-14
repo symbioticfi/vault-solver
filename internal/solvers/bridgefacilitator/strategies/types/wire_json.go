@@ -49,6 +49,7 @@ type auctionSnapshotJSON struct {
 }
 
 type liveOfferJSON struct {
+	Principal string `json:"principal"`
 	AdapterID string `json:"adapterId"`
 	AuctionID int64  `json:"auctionId"`
 }
@@ -91,7 +92,7 @@ func (in OfferInput) MarshalJSON() ([]byte, error) {
 	}
 	liveOffers := make([]liveOfferJSON, 0, len(in.LiveOffers))
 	for _, l := range in.LiveOffers {
-		liveOffers = append(liveOffers, liveOfferJSON(l))
+		liveOffers = append(liveOffers, liveOfferJSON{AdapterID: l.AdapterID, AuctionID: l.AuctionID, Principal: bigString(l.Principal)})
 	}
 	return json.Marshal(offerInputJSON{
 		Now: in.Now, Adapters: adapters, Auctions: auctions, LiveOffers: liveOffers,

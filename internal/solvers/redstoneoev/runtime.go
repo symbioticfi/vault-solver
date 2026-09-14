@@ -43,6 +43,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	err := s.ws.Run(runCtx)
 	cancel()
 	wg.Wait()
+	s.auctionWorkers.Wait()
 	return err
 }
 
