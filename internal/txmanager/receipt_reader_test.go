@@ -25,13 +25,14 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 	}
 	reader := m.startReceiptReader(ctx)
 	defer reader.stop()
-	for i, attempt := range sweep.attempts {
+	for index := sweep.nextIndex(pending); index >= 0; index = sweep.nextIndex(pending) {
+		attempt := pending.attempts[index]
 		select {
 		case reader.requests <- attempt:
 		case <-ctx.Done():
 			return Result{}, false
 		}
-		pending.receiptCursor = (sweep.start + i + 1) % len(sweep.attempts)
+		sweep.dispatched(pending, index)
 		var read receiptRead
 		select {
 		case read = <-reader.results:
@@ -186,6 +187,7 @@ func TestReceiptReaderStopsWithLifecycleContext(t *testing.T) {
 			t.Fatal(err)
 		}
 		backend.blocked = pending.originalHash
+		m.trackUnminedTransaction(pending)
 		ctx, cancel := context.WithCancel(t.Context())
 		result := make(chan Result, 1)
 		go func() { result <- m.waitForPendingTransaction(ctx, pending) }()
@@ -263,4 +265,90 @@ func TestReceiptReaderStopUnblocksUndeliveredResult(t *testing.T) {
 		synctest.Wait() // RPC is complete; the reader is blocked delivering its result.
 		reader.stop()
 	})
+}
+
+// Old variants time out, while a newly broadcast cancellation has a receipt.
+type slowMissingReceiptBackend struct{ *mockBackend }
+
+func (b *slowMissingReceiptBackend) TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
+	receipt, err := b.mockBackend.TransactionReceipt(ctx, hash)
+	if err == nil {
+		return receipt, nil
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestCancellationReceiptDoesNotWaitForOldHashes(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		backend := &slowMissingReceiptBackend{newMockBackend()}
+		m := New(backend, mustSigner(t), big.NewInt(1), Config{
+			MaxFeeGwei: 100, PollInterval: time.Second, ReplacementInterval: 30 * time.Second,
+		}, logr.Discard())
+		started := time.Now()
+		pending, err := m.broadcast(t.Context(), Request{
+			To: common.HexToAddress("0xabc"), GasLimit: 21000, CancelAt: started.Add(100 * time.Millisecond),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		delete(backend.receipts, pending.originalHash)
+		for i := range 51 {
+			pending.attempts = append(pending.attempts, txAttempt{hash: common.BigToHash(big.NewInt(int64(i + 100)))})
+		}
+		m.trackUnminedTransaction(pending)
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		defer cancel()
+		got := m.waitForPendingTransaction(ctx, pending)
+		sent := backend.attemptedTransactions()
+		if len(sent) != 2 || got.Outcome != OutcomeCancelled || got.Hash != sent[1].Hash() {
+			t.Fatalf("result=%+v, sends=%d; cancellation receipt was available behind slow old hashes", got, len(sent))
+		}
+		if elapsed := time.Since(started); elapsed != 2*time.Second {
+			t.Fatalf("discovered cancellation after %s, want only the current RPC's 2s timeout", elapsed)
+		}
+	})
+}
+
+func TestReceiptPriorityPreservesOldHashProgress(t *testing.T) {
+	pending := &pendingTransaction{}
+	appendAttempt := func(n int64) {
+		pending.attempts = append(pending.attempts, txAttempt{hash: common.BigToHash(big.NewInt(n))})
+	}
+	for n := int64(1); n <= 3; n++ {
+		appendAttempt(n)
+	}
+	sweep := newReceiptSweep(pending)
+	take := func(want int64) {
+		t.Helper()
+		i := sweep.nextIndex(pending)
+		if i < 0 || pending.attempts[i].hash != common.BigToHash(big.NewInt(want)) {
+			t.Fatalf("next index=%d, want hash %d", i, want)
+		}
+		sweep.dispatched(pending, i)
+	}
+	take(1)
+	appendAttempt(4)
+	take(4)
+	appendAttempt(5)
+	take(2) // A new arrival cannot displace the next old hash twice in a row.
+	appendAttempt(6)
+	take(6) // Latest wins priority; intermediate hash 5 remains tracked.
+	take(3)
+	appendAttempt(7)
+	take(7)
+	appendAttempt(8)
+	if i := sweep.nextIndex(pending); i != -1 {
+		t.Fatalf("finished ordinary sweep kept extending: next=%d", i)
+	}
+	seen := sweep.seen
+	sweep = newReceiptSweep(pending)
+	sweep.seen = seen
+	take(8) // An arrival at the sweep boundary also gets priority.
+	for n := int64(1); n <= 8; n++ {
+		take(n)
+	} // Includes superseded hash 5.
+	if i := sweep.nextIndex(pending); i != -1 {
+		t.Fatalf("unexpected extra read: %d", i)
+	}
 }

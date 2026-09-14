@@ -96,9 +96,11 @@ truncates later hashes. Sequential reads avoid a burst when replacements accumul
 delay discovery of a later receipt, but cannot hold up the owner's timer handling. Other owner I/O,
 including broadcast, obsolescence and confirmation checks, retains its existing bounds.
 
-A sweep is a finite rotated snapshot. Poll ticks do not queue overlapping sweeps. The cursor advances
-on dispatch; new signed variants trigger a fresh snapshot after the current sweep completes. Updating
-attempts never restarts the current sweep or discards older variants. `NotFound` is a successful RPC
+An ordinary sweep covers a fixed number of tracked variants in round-robin order. Between RPCs, the
+newest appended variant gets a priority read without resetting the ordinary cursor. Priority and ordinary
+reads alternate while both are available, preventing repeated replacements from starving older hashes.
+Intermediate new variants superseded before a priority read enter the next ordinary sweep. Poll ticks
+never queue overlapping sweeps; every attempt remains tracked. `NotFound` is a successful RPC
 without a receipt. RPC failure streaks are judged per sweep, not cleared by one hash while another fails.
 Invalid receipts are separately rejected: receipt/block number must exist, transaction hash must match,
 and block hash must be nonzero.

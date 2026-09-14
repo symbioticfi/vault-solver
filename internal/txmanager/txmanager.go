@@ -796,7 +796,7 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 	reader := m.startReceiptReader(ctx)
 	defer reader.stop()
 	sweep := newReceiptSweep(pending)
-	lastSweepSize := len(pending.attempts)
+	seenAttempts := len(pending.attempts)
 	var receiptResults <-chan receiptRead
 	poll := time.NewTicker(m.cfg.PollInterval)
 	defer poll.Stop()
@@ -838,23 +838,26 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 		)
 	}
 	for {
-		// A newly signed attempt should be checked without waiting for another poll
-		// once the current finite sweep has completed.
-		if sweep == nil && lastSweepSize != len(pending.attempts) {
+		// New variants arriving between sweeps also get an immediate priority read.
+		if sweep == nil && seenAttempts != len(pending.attempts) {
 			sweep = newReceiptSweep(pending)
-			lastSweepSize = len(pending.attempts)
+			sweep.seen = seenAttempts
+			seenAttempts = len(pending.attempts)
 		}
 		var reads chan<- txAttempt
 		var next txAttempt
+		var nextIndex int
 		if sweep != nil && receiptResults == nil {
-			reads = reader.requests
-			next = sweep.attempts[sweep.checked]
+			nextIndex = sweep.nextIndex(pending)
+			if nextIndex >= 0 {
+				reads = reader.requests
+				next = pending.attempts[nextIndex]
+			}
 		}
 		select {
 		case reads <- next:
 			receiptResults = reader.results
-			sweep.checked++
-			pending.receiptCursor = (sweep.start + sweep.checked) % len(sweep.attempts)
+			sweep.dispatched(pending, nextIndex)
 		case read := <-receiptResults:
 			receiptResults = nil
 			if m.observeReceiptRead(pending, sweep, read) {
@@ -864,8 +867,10 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 				}
 				// A reorg or an untrusted receipt keeps ownership and resumes polling.
 				sweep = nil
-			} else if sweep.checked == len(sweep.attempts) {
+			} else if sweep.nextIndex(pending) < 0 {
 				m.finishReceiptSweep(pending, sweep)
+				// Include variants already checked through the priority path.
+				seenAttempts = sweep.seen
 				sweep = nil
 			}
 		case <-ctx.Done():
@@ -880,7 +885,7 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 		case <-poll.C:
 			if sweep == nil {
 				sweep = newReceiptSweep(pending)
-				lastSweepSize = len(pending.attempts)
+				seenAttempts = len(pending.attempts)
 			}
 			if cancelling || pending.req.Obsolete == nil {
 				continue
