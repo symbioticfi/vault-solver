@@ -286,9 +286,10 @@ price curve per RWA→underlying pair from `adapter.getMaxRate` / `getMaxAssets`
 `fromChain` and `toChain` are transport fields only: `orderClient` initializes both once from the solver's
 configured runtime chain. Strategy outputs and quote-state keys contain only the local token pair, so a
 same-chain solver cannot accidentally publish a mixed-chain curve.
-The order server acknowledges the number of deduplicated ranges it accepted. Local reconciliation commits a
-publish or expiry only when `quotesAdded` equals the submitted range count; a missing or partial acknowledgement
-is treated as an uncertain submit so the same replacement or expiry is retried.
+The order server acknowledges the number of deduplicated ranges it accepted. Local reconciliation requires
+`status: success` and `quotesAdded` equal to the submitted range count. Withdrawals submit empty `ranges`,
+so their expected added-range count is zero. Failed or partial acknowledgements leave the operation pending
+for retry.
 
 Standing curves also follow the shared transaction lane. On any coalesced lane-state change, LI.FI first
 expires its known active curves; if the lane is ready again, it rebuilds and republishes from fresh state.
@@ -512,10 +513,10 @@ the renewal window, it submits the replacement curve directly; LI.FI overwrites 
 successful reconciliation publishes quote/range counts and per-pair maximum input ceilings (alternatives
 maxed, never summed) as one collector snapshot. Shared LiquidLane fill telemetry records successful
 fill count, last-fill freshness, and token-native input/output/planned-surplus amounts. When a pair
-stops quoting, it submits the last curve with an expiry in the past, which overwrites and immediately expires
-the old server-side quote. Local state advances only after the response acknowledges every submitted range, so a
-partial acknowledgement leaves the replacement or expiry pending for retry. An unchanged pair is not reposted on
-every calculation tick.
+stops quoting, it submits the pair with empty `ranges`, the order server's documented removal operation.
+Posting nonempty ranges with a past expiry yields zero accepted ranges and cannot acknowledge a publication.
+Local state advances only after a successful acknowledgement; otherwise replacement or withdrawal remains
+pending for retry. An unchanged pair is not reposted on every calculation tick.
 
 The solver then executes the result — publish the curve, or send one
 `finaliseWithCurrentTimestamp(order, routes, discountRoutes)` tx from the

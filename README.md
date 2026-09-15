@@ -127,7 +127,8 @@ resolved adapter loan asset and a readable initial oracle snapshot. Design, conf
 A same-chain LI.FI Intents solver for LiquidLane-backed RWA → underlying routes. It publishes standing quotes
 from current adapter liquidity with optional gas accounting and receives matched, already-opened escrow orders over the
 LI.FI WebSocket feed. On startup and reconnect it catches up active matches through `GET /orders` before
-publishing quotes; while disconnected it suspends renewal and retries expiry of known curves.
+publishing quotes; while disconnected it suspends renewal and retries withdrawal of known curves
+until the order server acknowledges removal.
 After REST recovery completes, WebSocket closes 1000/1001/1005/1006/1012/1013 are logged at Info.
 Earlier disconnects and other errors remain Error; reconnect backoff resets only after recovery. Before each fill it
 rechecks the canonical order status, adapter state, configured gas cost, and strategy decision, then atomically claims
