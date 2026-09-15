@@ -25,15 +25,16 @@ var (
 	errOrderForDifferentChain = errors.New("order is for a different chain")
 	// errOrderUnsupported marks order kinds the feed carries but this solver never fills (non-EVM
 	// submissions, non-fillable statuses). Expected traffic, not a malformed message.
-	errOrderUnsupported = errors.New("unsupported order")
+	errOrderUnsupported       = errors.New("unsupported order")
+	errNativeInputUnsupported = errors.Errorf("native input is not supported: %w", errOrderUnsupported)
 )
 
 type submittedOrderEvent struct {
-	OrderType    string                        `json:"orderType"`
-	Order        lifiorder.SubmitOrderDtoOrder `json:"order"`
-	QuoteID      *string                       `json:"quoteId,omitempty"`
-	InputSettler string                        `json:"inputSettler"`
-	Meta         submittedOrderEventMeta       `json:"meta"`
+	OrderType    string                  `json:"orderType"`
+	Order        json.RawMessage         `json:"order"`
+	QuoteID      *string                 `json:"quoteId,omitempty"`
+	InputSettler string                  `json:"inputSettler"`
+	Meta         submittedOrderEventMeta `json:"meta"`
 }
 
 type submittedOrderEventMeta struct {
@@ -87,34 +88,52 @@ type parsedOutput struct {
 func parseSubmittedOrder(data []byte, cfg *Config, chainID int64) (*submittedOrder, error) {
 	var event submittedOrderEvent
 	if err := json.Unmarshal(data, &event); err != nil {
-		return nil, errors.Errorf("decode submit order dto: %w", err)
+		return nil, decodeOrderError(orderRawObject(event.Order), err)
 	}
 
 	if !isFillableOrderStatus(event.Meta.OrderStatus) {
-		return nil, errors.Errorf("unsupported order status %q: %w", event.Meta.OrderStatus, errOrderUnsupported)
+		return nil, orderFieldError("lifi_unsupported_status", "meta.orderStatus", "unsupported order status", errOrderUnsupported)
 	}
 	if !isOnChainOrderEvent(event) {
 		if event.OrderType == "" {
-			return nil, errors.New("missing orderType requires onChainOrderId and inputSettler")
+			return nil, orderFieldError("lifi_missing_order_type", "orderType", "missing orderType requires onChainOrderId and inputSettler", nil)
 		}
-		return nil, errors.Errorf("unsupported non-onchain order type %q: %w", event.OrderType, errOrderUnsupported)
+		return nil, orderFieldError("lifi_unsupported_order_type", "orderType", "unsupported non-onchain order type", errOrderUnsupported)
 	}
 
 	// Classify by chain before reading any address: the feed carries every network LI.FI serves
 	// (a Solana settler is a base58 program id) and cross-chain orders, and this solver only fills
 	// same-chain orders on its configured chain.
-	if err := validateOrderChains(event.Order, chainID); err != nil {
+	rawOrder := orderRawObject(event.Order)
+	if err := validateOrderChain(rawOrder["originChainId"], "order.originChainId", chainID); err != nil {
 		return nil, err
+	}
+	// A foreign output chain is also outside our scope, even if its settler is non-EVM.
+	outputChainErr := validateOrderOutputChains(rawOrder["outputs"], chainID)
+	if errors.Is(outputChainErr, errOrderForDifferentChain) {
+		return nil, outputChainErr
 	}
 	inputSettler, err := parseAddress(event.InputSettler, "inputSettler")
 	if err != nil {
 		return nil, err
 	}
-	parsed, err := parseStandardOrder(event.Order)
+	// Unknown settlers can use a different token identifier format. Classify them before
+	// decoding the protocol payload so their inputs cannot trigger our ERC-20 format alerts.
+	if inputSettler != cfg.InputSettler {
+		return nil, orderFieldError("unsupported_settler", "inputSettler", "inputSettler does not match configured settler", errOrderUnsupported)
+	}
+	if outputChainErr != nil {
+		return nil, outputChainErr
+	}
+	var dto lifiorder.SubmitOrderDtoOrder
+	if err := json.Unmarshal(event.Order, &dto); err != nil {
+		return nil, decodeOrderError(rawOrder, err)
+	}
+	parsed, err := parseStandardOrder(dto)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateOrderTarget(inputSettler, parsed.order, cfg, chainID); err != nil {
+	if err := validateOrderTarget(parsed.order, cfg, chainID); err != nil {
 		return nil, err
 	}
 	dedupeKey, err := localOrderKey(parsed.order)
@@ -172,23 +191,34 @@ func isOnChainOrderType(orderType string) bool {
 	}
 }
 
-func validateOrderChains(dto lifiorder.SubmitOrderDtoOrder, chainID int64) error {
-	want := big.NewInt(chainID)
-	originChainID, err := parseUint(dto.OriginChainId, "order.originChainId")
+func validateOrderOutputChains(raw json.RawMessage, chainID int64) error {
+	var outputs []json.RawMessage
+	if len(raw) != 0 {
+		if err := json.Unmarshal(raw, &outputs); err != nil {
+			return orderFieldError("lifi_decode_error", "order.outputs", "decode submit order dto: invalid JSON shape", err)
+		}
+	}
+	for i, output := range outputs {
+		if err := validateOrderChain(orderRawObject(output)["chainId"], fmt.Sprintf("order.outputs[%d].chainId", i), chainID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateOrderChain(value json.RawMessage, field string, chainID int64) error {
+	var raw string
+	if len(value) != 0 {
+		if err := json.Unmarshal(value, &raw); err != nil {
+			return orderFieldError("lifi_decode_error", field, "decode submit order dto: invalid JSON shape", err)
+		}
+	}
+	id, err := parseUint(raw, field)
 	if err != nil {
 		return err
 	}
-	if originChainID.Cmp(want) != 0 {
-		return errors.Errorf("%w: originChainId %s, configuredChainId %d", errOrderForDifferentChain, originChainID, chainID)
-	}
-	for i, output := range dto.Outputs {
-		outputChainID, err := parseUint(output.ChainId, fmt.Sprintf("order.outputs[%d].chainId", i))
-		if err != nil {
-			return err
-		}
-		if outputChainID.Cmp(want) != 0 {
-			return errors.Errorf("%w: outputs[%d].chainId %s, configuredChainId %d", errOrderForDifferentChain, i, outputChainID, chainID)
-		}
+	if id.Cmp(big.NewInt(chainID)) != 0 {
+		return orderFieldError("unsupported_chain", field, fmt.Sprintf("%s: configuredChainId %d", errOrderForDifferentChain, chainID), errOrderForDifferentChain)
 	}
 	return nil
 }
@@ -211,11 +241,17 @@ func parseStandardOrder(
 	if err != nil {
 		return nil, err
 	}
+	if len(dto.Inputs) > 1 {
+		return nil, orderFieldError("unsupported_multiple_inputs", "order.inputs", "multiple inputs are not supported", errOrderUnsupported)
+	}
 	if len(dto.Inputs) != 1 {
-		return nil, errors.Errorf("order.inputs: expected 1 input, got %d", len(dto.Inputs))
+		return nil, orderFieldError("lifi_input_count", "order.inputs", "expected 1 input", nil)
+	}
+	if len(dto.Outputs) > 1 {
+		return nil, orderFieldError("unsupported_multiple_outputs", "order.outputs", "multiple outputs are not supported", errOrderUnsupported)
 	}
 	if len(dto.Outputs) != 1 {
-		return nil, errors.Errorf("order.outputs: expected 1 output, got %d", len(dto.Outputs))
+		return nil, orderFieldError("lifi_output_count", "order.outputs", "expected 1 output", nil)
 	}
 
 	nonce, err := parseUint(dto.Nonce, "order.nonce")
@@ -237,7 +273,7 @@ func parseStandardOrder(
 
 	inputPair := dto.Inputs[0]
 	if len(inputPair) != 2 {
-		return nil, errors.Errorf("order.inputs[0]: expected [tokenId, amount], got %d values", len(inputPair))
+		return nil, orderFieldError("lifi_input_tuple", "order.inputs[0]", "expected [tokenId, amount]", nil)
 	}
 	tokenID, err := parseTupleUint(inputPair[0], "order.inputs[0][0]")
 	if err != nil {
@@ -252,7 +288,7 @@ func parseStandardOrder(
 		return nil, err
 	}
 	if amountIn.Sign() <= 0 {
-		return nil, errors.New("order.inputs[0][1]: must be positive")
+		return nil, orderFieldError("lifi_nonpositive_amount", "order.inputs[0][1]", "must be positive", nil)
 	}
 
 	output, err := parseOutput(dto.Outputs[0])
@@ -295,8 +331,8 @@ func parseOutput(
 		return nil, err
 	}
 	if tokenID == ([32]byte{}) {
-		// The zero identifier is the chain's native asset; fills only deliver ERC-20 outputs.
-		return nil, errors.Errorf("order.outputs[0].token: native asset output: %w", errOrderUnsupported)
+		// This identifier is unsupported here; its asset meaning depends on the wire format.
+		return nil, orderFieldError("lifi_zero_output_identifier", "order.outputs[0].token", "zero output identifier", errOrderUnsupported)
 	}
 	tokenOut, err := identifierAddress(tokenID, "order.outputs[0].token")
 	if err != nil {
@@ -315,7 +351,7 @@ func parseOutput(
 		return nil, err
 	}
 	if amountOut.Sign() <= 0 {
-		return nil, errors.New("order.outputs[0].amount: must be positive")
+		return nil, orderFieldError("lifi_nonpositive_amount", "order.outputs[0].amount", "must be positive", nil)
 	}
 	outputChainID, err := parseUint(dto.ChainId, "order.outputs[0].chainId")
 	if err != nil {
@@ -331,7 +367,7 @@ func parseOutput(
 		return nil, err
 	}
 	if len(callbackData) != 0 {
-		return nil, errors.New("non-empty output callbackData is not supported")
+		return nil, orderFieldError("unsupported_callback_data", "order.outputs[0].callbackData", "non-empty output callbackData is not supported", errOrderUnsupported)
 	}
 
 	output := inputsettler.MandateOutput{
@@ -348,11 +384,12 @@ func parseOutput(
 }
 
 func validateOrderTarget(
-	inputSettler common.Address,
 	order inputsettler.StandardOrder,
 	cfg *Config,
 	chainID int64,
 ) error {
+	// Recheck the decoded IDs: generated JSON decoding accepts case-insensitive keys,
+	// while the raw routing lookups above use exact keys.
 	wantChainID := big.NewInt(chainID)
 	outputChainID := order.Outputs[0].ChainId
 	if order.OriginChainId.Cmp(wantChainID) != 0 || outputChainID.Cmp(wantChainID) != 0 {
@@ -364,22 +401,25 @@ func validateOrderTarget(
 			chainID,
 		)
 	}
-	if inputSettler != cfg.InputSettler {
-		return errors.Errorf("inputSettler %s does not match configured %s", inputSettler.Hex(), cfg.InputSettler.Hex())
-	}
 	if order.InputOracle != cfg.OutputSettler {
-		return errors.Errorf(
+		return orderFieldError("unsupported_settler", "order.inputOracle", fmt.Sprintf(
 			"order.inputOracle %s does not match outputSettler %s",
 			order.InputOracle.Hex(),
 			cfg.OutputSettler.Hex(),
-		)
+		), errOrderUnsupported)
 	}
 	wantSettler := addressIdentifier(cfg.OutputSettler)
 	if order.Outputs[0].Oracle != wantSettler {
-		return errors.New("order.outputs[0].oracle does not match outputSettler")
+		if _, err := identifierAddress(order.Outputs[0].Oracle, "order.outputs[0].oracle"); err != nil {
+			return err
+		}
+		return orderFieldError("unsupported_settler", "order.outputs[0].oracle", "order.outputs[0].oracle does not match outputSettler", errOrderUnsupported)
 	}
 	if order.Outputs[0].Settler != wantSettler {
-		return errors.New("order.outputs[0].settler does not match outputSettler")
+		if _, err := identifierAddress(order.Outputs[0].Settler, "order.outputs[0].settler"); err != nil {
+			return err
+		}
+		return orderFieldError("unsupported_settler", "order.outputs[0].settler", "order.outputs[0].settler does not match outputSettler", errOrderUnsupported)
 	}
 	return nil
 }
@@ -400,11 +440,11 @@ func eventQuoteID(event submittedOrderEvent) string {
 
 func parseAddress(raw, field string) (common.Address, error) {
 	if !common.IsHexAddress(raw) {
-		return common.Address{}, errors.Errorf("%s: invalid address %q", field, raw)
+		return common.Address{}, orderFieldError("lifi_invalid_address", field, "invalid address", nil)
 	}
 	addr := common.HexToAddress(raw)
 	if addr == (common.Address{}) {
-		return common.Address{}, errors.Errorf("%s: zero address", field)
+		return common.Address{}, orderFieldError("lifi_zero_address", field, "zero address", nil)
 	}
 	return addr, nil
 }
@@ -415,7 +455,7 @@ func parseUint32(raw, field string) (uint32, error) {
 		return 0, err
 	}
 	if !n.IsUint64() || n.Uint64() > math.MaxUint32 {
-		return 0, errors.Errorf("%s: overflows uint32", field)
+		return 0, orderFieldError("lifi_uint32_overflow", field, "overflows uint32", nil)
 	}
 	return uint32(n.Uint64()), nil
 }
@@ -423,7 +463,7 @@ func parseUint32(raw, field string) (uint32, error) {
 func parseTupleUint(raw any, field string) (*big.Int, error) {
 	value, ok := raw.(string)
 	if !ok {
-		return nil, errors.Errorf("%s: expected decimal string, got %T", field, raw)
+		return nil, orderFieldError("lifi_integer_type", field, "expected decimal string", nil)
 	}
 	return parseUint(value, field)
 }
@@ -431,11 +471,11 @@ func parseTupleUint(raw any, field string) (*big.Int, error) {
 func parseUint(raw, field string) (*big.Int, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil, errors.Errorf("%s: empty integer", field)
+		return nil, orderFieldError("lifi_empty_integer", field, "empty integer", nil)
 	}
 	n, ok := new(big.Int).SetString(raw, 10)
 	if !ok || n.Sign() < 0 {
-		return nil, errors.Errorf("%s: invalid uint %q", field, raw)
+		return nil, orderFieldError("lifi_invalid_integer", field, "invalid uint", nil)
 	}
 	return n, nil
 }
@@ -446,7 +486,7 @@ func parseBytes32(raw, field string) ([32]byte, error) {
 		return [32]byte{}, err
 	}
 	if len(b) != 32 {
-		return [32]byte{}, errors.Errorf("%s: expected 32 bytes, got %d", field, len(b))
+		return [32]byte{}, orderFieldError("lifi_identifier_length", field, "expected 32 bytes", nil)
 	}
 	var out [32]byte
 	copy(out[:], b)
@@ -456,14 +496,14 @@ func parseBytes32(raw, field string) ([32]byte, error) {
 func decodeHexBytes(raw, field string) ([]byte, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return nil, errors.Errorf("%s: empty hex", field)
+		return nil, orderFieldError("lifi_empty_hex", field, "empty hex", nil)
 	}
 	if !strings.HasPrefix(raw, "0x") && !strings.HasPrefix(raw, "0X") {
 		raw = "0x" + raw
 	}
 	out, err := hexutil.Decode(raw)
 	if err != nil {
-		return nil, errors.Errorf("%s: invalid hex: %w", field, err)
+		return nil, orderFieldError("lifi_invalid_hex", field, "invalid hex", err)
 	}
 	return out, nil
 }
@@ -476,12 +516,14 @@ func nullableHexBytes(value lifiorder.NullableString, field string) ([]byte, err
 }
 
 func tokenIDToAddress(n *big.Int, field string) (common.Address, error) {
-	addr := common.BytesToAddress(n.Bytes())
-	roundTrip := new(big.Int).SetBytes(addr.Bytes())
-	if addr == (common.Address{}) || roundTrip.Cmp(n) != 0 {
-		return common.Address{}, errors.Errorf("%s: not a clean address identifier", field)
+	if n.Sign() == 0 {
+		// LI.FI escrow uses token ID zero for native input. Our ERC-20 path never fills it.
+		return common.Address{}, orderFieldError("unsupported_native_input", field, "native input token is not supported by this ERC-20 execution path", errNativeInputUnsupported)
 	}
-	return addr, nil
+	if n.Sign() < 0 || n.BitLen() > common.AddressLength*8 {
+		return common.Address{}, orderFieldError("invalid_token_identifier", field, "not a clean address identifier", nil)
+	}
+	return common.BytesToAddress(n.Bytes()), nil
 }
 
 func addressIdentifier(addr common.Address) [32]byte {
@@ -493,10 +535,10 @@ func addressIdentifier(addr common.Address) [32]byte {
 func identifierAddress(id [32]byte, field string) (common.Address, error) {
 	addr := common.BytesToAddress(id[12:])
 	if addr == (common.Address{}) {
-		return common.Address{}, errors.Errorf("%s: zero address identifier", field)
+		return common.Address{}, orderFieldError("lifi_zero_identifier", field, "zero address identifier", nil)
 	}
 	if addressIdentifier(addr) != id {
-		return common.Address{}, errors.Errorf("%s: not a clean address identifier", field)
+		return common.Address{}, orderFieldError("lifi_unclean_identifier", field, "not a clean address identifier", nil)
 	}
 	return addr, nil
 }

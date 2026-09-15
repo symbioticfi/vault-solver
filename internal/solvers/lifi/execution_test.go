@@ -134,7 +134,7 @@ func TestParseOrderMessageLogsForeignChainAtInfo(t *testing.T) {
 	}
 }
 
-func TestParseOrderMessageKeepsTargetMismatchAtError(t *testing.T) {
+func TestParseOrderMessageSkipsForeignOutputSettler(t *testing.T) {
 	cfg := testLifiConfig()
 	raw := mutatedTestOrderJSON(t, cfg, func(body map[string]any) {
 		mapField(t, body, "order")["inputOracle"] =
@@ -145,15 +145,15 @@ func TestParseOrderMessageKeepsTargetMismatchAtError(t *testing.T) {
 	solver := &Solver{
 		cfg:     cfg,
 		chainID: 11155111,
-		log:     funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
+		log:     funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{Verbosity: 1}),
 	}
 	if order := solver.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: raw}); order != nil {
 		t.Fatalf("parseOrderMessage() = %+v, want ignored order", order)
 	}
 	logged := strings.Join(logs, "\n")
-	if !strings.Contains(logged, "order feed: ignored order") ||
+	if !strings.Contains(logged, "order feed: ignored unsupported order") ||
 		!strings.Contains(logged, "does not match outputSettler") ||
-		!strings.Contains(logged, `"error"`) ||
+		strings.Contains(logged, `"error"`) ||
 		strings.Contains(logged, "another chain") {
 		t.Fatalf("target mismatch log = %s", logged)
 	}

@@ -2,6 +2,9 @@ package types
 
 import "github.com/go-errors/errors"
 
+// ErrUnsupportedOutputContext marks an unsupported pricing format, not malformed known data.
+var ErrUnsupportedOutputContext = errors.New("unsupported output context")
+
 type permanentFillDecisionError struct {
 	cause error
 }

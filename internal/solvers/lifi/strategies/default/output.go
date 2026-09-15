@@ -8,6 +8,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+
+	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 )
 
 const (
@@ -37,8 +39,8 @@ func parseOutputContext(outputAmount *big.Int, outputContext []byte) (*outputPri
 			return nil, errors.Errorf("outputContext: limit order length must be 1, got %d", len(outputContext))
 		}
 		return out, nil
-	case dutchAuctionContextType:
-		return nil, errors.New("outputContext: Dutch auctions are not supported")
+	case dutchAuctionContextType, exclusiveDutchAuctionContextType:
+		return nil, errors.Errorf("outputContext: Dutch auctions are not supported: %w", types.ErrUnsupportedOutputContext)
 	case exclusiveLimitOrderContextType:
 		if len(outputContext) != 37 {
 			return nil, errors.Errorf("outputContext: exclusive limit length must be 37, got %d", len(outputContext))
@@ -47,10 +49,8 @@ func parseOutputContext(outputAmount *big.Int, outputContext []byte) (*outputPri
 		copy(out.exclusiveFor[:], outputContext[1:33])
 		out.startTime = binary.BigEndian.Uint32(outputContext[33:37])
 		return out, nil
-	case exclusiveDutchAuctionContextType:
-		return nil, errors.New("outputContext: Dutch auctions are not supported")
 	default:
-		return nil, errors.Errorf("outputContext: unsupported type 0x%02x", outputContext[0])
+		return nil, errors.Errorf("outputContext: unsupported type 0x%02x: %w", outputContext[0], types.ErrUnsupportedOutputContext)
 	}
 }
 

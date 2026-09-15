@@ -78,13 +78,18 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   handler context so quote logs carry it), an access log line (method/route/status/duration), the
   request histogram above, a 1 MiB inbound body cap, and panic→500 recovery (the recovered panic is logged at
   Error, so it reaches the Sentry sink). The `http.Server` also sets read/write/idle timeouts.
+- Backend orders and private discount requests reuse the middleware's context/header ID; background
+  calls generate one with the same helper. The transport injects it without changing timeouts or
+  retry behavior, and adapter errors retain it through wrapping. The shared discount client accepts
+  an HTTP client so RFQ can install its transport without coupling other solvers to RFQ middleware.
+  Sentry reads the error's reason/ID and adds the stable reason to the existing fingerprint.
+  Backend acceptance/logging of the header is a separate requirement, not proven by client tests.
 - **Optional Sentry sink** — when `SENTRY_DSN` (and optional `SENTRY_ENVIRONMENT`) is set, the
   framework tees Error+ log entries to Sentry (a zap core in `internal/observability`), flushed on
   shutdown. Strictly opt-in: unset DSN ⇒ no sink. This is richer than the prior filler, which only
   init'd Sentry for uncaught crashes.
-- **Fills go through the shared `txmanager`** (CLAUDE: solvers never send directly). The RFQ package
-  builds the `Executor.fill` calldata; txmanager owns admission, fees, nonce,
-  replacement/cancellation, and confirmed receipt. Each request uses the earliest signed-order or selected
+- **Fills use the [shared transaction manager](TXMANAGER-PLAN.md).** RFQ builds `Executor.fill` calldata
+  and consumes the manager result. Each request uses the earliest signed-order or selected
   discount/protocol deadline, translated from an observed chain timestamp to wall time after planning, so it
   expires while waiting for admission and switches to same-nonce cancellation before dead calldata can hold
   the shared nonce lane.

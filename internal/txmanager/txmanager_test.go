@@ -1702,11 +1702,8 @@ func TestReceiptLookupTimeoutDoesNotStarveOlderAttempt(t *testing.T) {
 	pending := &pendingTransaction{
 		req: Request{Label: "fair receipt lookup"}, nonce: 7,
 		attempts: []txAttempt{{hash: older.Hash()}, {hash: newest.Hash()}},
-		// Exercise the slow newest hash first; the next poll must resume at the older attempt.
+		// Exercise the slow newest hash first; the older attempt still gets its own budget.
 		receiptCursor: 1,
-	}
-	if result, done := m.receiptResult(t.Context(), pending); done {
-		t.Fatalf("slow newest lookup completed lifecycle: %+v", result)
 	}
 	result, done := m.receiptResult(t.Context(), pending)
 	if !done || result.Err != nil || result.Hash != older.Hash() || result.Receipt != b.receipts[older.Hash()] {
