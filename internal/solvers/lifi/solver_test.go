@@ -339,8 +339,13 @@ func TestQuoteLoopExpiresQuotesOnRootCancellation(t *testing.T) {
 			t.Errorf("decode quote submission: %v", err)
 			return
 		}
+		if len(request.Quotes) != 1 {
+			t.Errorf("submitted quotes = %d, want 1", len(request.Quotes))
+			http.Error(w, "expected one quote", http.StatusBadRequest)
+			return
+		}
 		signal := quoteSubmitted
-		if len(request.Quotes) > 0 && len(request.Quotes[0].Ranges) == 0 {
+		if len(request.Quotes[0].Ranges) == 0 {
 			signal = quoteExpired
 		}
 		select {
@@ -412,8 +417,13 @@ func TestQuoteLoopSuspendsWhileLaneBusyAndRepublishesOnCoalescedIdle(t *testing.
 			t.Errorf("decode quote submission: %v", err)
 			return
 		}
+		if len(request.Quotes) != 1 {
+			t.Errorf("submitted quotes = %d, want 1", len(request.Quotes))
+			http.Error(w, "expected one quote", http.StatusBadRequest)
+			return
+		}
 		signal := quoteSubmitted
-		if len(request.Quotes) > 0 && len(request.Quotes[0].Ranges) == 0 {
+		if len(request.Quotes[0].Ranges) == 0 {
 			signal = quoteExpired
 		}
 		select {
