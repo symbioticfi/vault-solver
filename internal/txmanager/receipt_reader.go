@@ -2,16 +2,22 @@ package txmanager
 
 import (
 	"context"
+	"time"
 
 	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 )
 
 type receiptRead struct {
-	attempt txAttempt
-	receipt *types.Receipt
-	err     error
+	attempt        txAttempt
+	receipt        *types.Receipt
+	err            error
+	duration       time.Duration
+	budget         time.Duration
+	cancelCause    string
+	parentCanceled bool
 }
 
 // receiptReader owns only RPC I/O. The lifecycle goroutine owns attempts, sweep
@@ -40,10 +46,20 @@ func (m *Manager) startReceiptReader(ctx context.Context) *receiptReader {
 				return
 			case attempt := <-r.requests:
 				readCtx, cancelRead := context.WithTimeout(ctx, m.receiptReadTimeout())
+				started := time.Now()
+				deadline, _ := readCtx.Deadline()
 				receipt, err := m.backend.TransactionReceipt(readCtx, attempt.hash)
+				read := receiptRead{
+					attempt: attempt, receipt: receipt, err: err,
+					duration: time.Since(started), budget: max(0, deadline.Sub(started)),
+					cancelCause: "none", parentCanceled: ctx.Err() != nil,
+				}
+				if cause := context.Cause(readCtx); cause != nil {
+					read.cancelCause = cause.Error()
+				}
 				cancelRead()
 				select {
-				case r.results <- (receiptRead{attempt: attempt, receipt: receipt, err: err}):
+				case r.results <- read:
 				case <-ctx.Done():
 					return
 				}
@@ -67,6 +83,7 @@ type receiptSweep struct {
 	knownAttempts int
 	ordinaryDue   bool
 	firstError    *receiptRead
+	diagnostics   receiptSweepDiagnostics
 }
 
 func newReceiptSweep(pending *pendingTransaction, knownAttempts int) *receiptSweep {
@@ -74,7 +91,10 @@ func newReceiptSweep(pending *pendingTransaction, knownAttempts int) *receiptSwe
 	if n == 0 {
 		return nil
 	}
-	return &receiptSweep{size: n, start: pending.receiptCursor % n, knownAttempts: knownAttempts}
+	return &receiptSweep{
+		size: n, start: pending.receiptCursor % n, knownAttempts: knownAttempts,
+		diagnostics: receiptSweepDiagnostics{started: time.Now(), hashes: make(map[common.Hash]struct{})},
+	}
 }
 
 // nextIndex prioritizes the newest signed variant, alternating with ordinary
@@ -105,6 +125,7 @@ func (s *receiptSweep) dispatched(pending *pendingTransaction, index int) {
 // observeReceiptRead reports a validated candidate. Only the lifecycle owner may
 // confirm it, change nonce ownership, or deliver a terminal result.
 func (m *Manager) observeReceiptRead(pending *pendingTransaction, sweep *receiptSweep, read receiptRead) bool {
+	sweep.diagnostics.observe(read)
 	if errors.Is(read.err, ethereum.NotFound) {
 		return false
 	}
@@ -126,7 +147,7 @@ func (m *Manager) finishReceiptSweep(pending *pendingTransaction, sweep *receipt
 	// A nonempty sweep without RPC errors clears the transport failure streak.
 	// Invalid receipts are logged separately and never complete the lifecycle.
 	if sweep.firstError != nil {
-		m.receiptReadFailed(pending, sweep.firstError.attempt, sweep.firstError.err)
+		m.receiptReadFailed(pending, sweep)
 	} else {
 		m.receiptReadsRecovered(pending)
 	}

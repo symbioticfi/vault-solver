@@ -316,8 +316,8 @@ readiness is captured before cancellation and cleanup. Quote suspension and REST
 `pong`). On every connection the socket reader starts first, then the solver repeatedly paginates
 `GET /orders` for `Signed` and `Delivered` rows scoped to this executor and configured origin/destination
 chain until a pass adds no new immutable-order fingerprints. The live socket may also carry valid orders for
-other chains; after full structural parsing, origin/output chain mismatches are ignored at info level, while
-malformed payloads and target-chain contract mismatches remain errors. REST rows and live events pass through
+other chains; routing checks classify foreign origin/output chains at info level before token parsing;
+malformed identifiers and operational failures remain errors. REST rows and live events pass through
 the same parser and bounded FIFO; a bounded per-connection seen set coalesces their overlap even after the first
 copy has left the queue. Recovery applies backpressure
 instead of dropping rows. Quote publication and renewal stay suspended until a worker-side FIFO barrier has
@@ -955,3 +955,36 @@ still requires the redeploy in phase 0.
 - **Private-discount deployment config** — internal mode needs the reachable RFQ/private-discounts
   backend URL and live signer/protocol policies for the configured adapters. The code path is complete;
   Sepolia E2E still needs a real advertised discount and newly deployed executor ABI.
+
+### Order rejection diagnostics
+
+Typed rejection errors carry a stable reason and
+field; independent raw-field extraction retains correlation metadata even if generated decoding
+fails. Only allowlisted scalar values (160 UTF-8 bytes) and container summaries reach logs; signatures,
+full payloads, callback data and auction context are excluded. Zero output identifiers retain their
+unsupported classification without claiming that the wire format means a native asset. Supported
+format violations remain errors. The existing workflow event family counts `order_parse` observations
+by `invalid`, `unsupported`, or `other_chain`, including recovery replays, independently of log verbosity.
+
+The submitted-order envelope keeps `order` as raw JSON until routing checks complete: order type,
+origin chain, configured input settler and output chains precede the generated StandardOrder decode.
+A different nonzero EVM input settler yields `unsupported_settler` (debug, workflow outcome
+`unsupported`); foreign chains yield `unsupported_chain` with the existing `other_chain` outcome.
+Zero/malformed settler identifiers remain diagnostic errors. Clean nonzero foreign output settlers
+and oracles are expected `unsupported_settler` skips as well.
+
+Native input (token identifier zero) yields `unsupported_native_input` at Info and the existing
+`unsupported` workflow outcome. Multiple inputs/outputs and nonempty output callbacks use the same
+unsupported path at Debug. Empty required input/output lists, bad decimal/type/hex data and dirty
+identifier bits remain Error/Sentry. Zero and all unsupported formats remain ineligible for execution.
+
+The default strategy marks unsupported output-context types with `ErrUnsupportedOutputContext` while
+retaining the existing permanent-decision wrapper. The worker logs only that explicit class at Debug;
+malformed known contexts, other permanent errors and transient failures still log at Error. Retry and
+terminal-outcome decisions are unchanged, including reservation probes. There is no message-text
+filter or blanket suppression of permanent errors in the generic Sentry sink.
+
+The native sentinel follows upstream `catalystsystem/lifi-intent` revision
+`7e32479a48ddcc9e01e5205334a9220f323bae53`, where `InputSettlerEscrow.sol` handles zero native
+inputs and `InputSettlerEscrowLIFINative.t.sol` exercises the LIFI escrow path. This classification is
+only an unsupported-asset skip; it does not enable native execution or prove any deployment's bytecode.

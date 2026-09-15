@@ -65,9 +65,14 @@ type Client struct {
 }
 
 func NewClient(baseURL string) *Client {
+	return NewClientWithHTTPClient(baseURL, &http.Client{Timeout: defaultTimeout})
+}
+
+// NewClientWithHTTPClient permits callers to attach their existing request correlation transport.
+func NewClientWithHTTPClient(baseURL string, client *http.Client) *Client {
 	cfg := rfqbackendinternal.NewConfiguration()
 	cfg.Servers = rfqbackendinternal.ServerConfigurations{{URL: strings.TrimRight(baseURL, "/")}}
-	cfg.HTTPClient = &http.Client{Timeout: defaultTimeout}
+	cfg.HTTPClient = client
 	return &Client{api: rfqbackendinternal.NewAPIClient(cfg)}
 }
 

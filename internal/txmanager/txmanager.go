@@ -938,14 +938,24 @@ func (m *Manager) requestObsolete(ctx context.Context, req Request) (bool, error
 	return obsolete, nil
 }
 
-func (m *Manager) receiptReadFailed(pending *pendingTransaction, attempt txAttempt, err error) {
-	pending.receiptReads.failed(pending.log, err, "pending transaction receipt unavailable",
+func (m *Manager) receiptReadFailed(pending *pendingTransaction, sweep *receiptSweep) {
+	read := sweep.firstError
+	diagnostic := sweep.diagnostics
+	pending.receiptReads.failed(pending.log, read.err, "pending transaction receipt unavailable",
 		"label", pending.req.Label,
-		"hash", attempt.hash.Hex(),
+		"hash", read.attempt.hash.Hex(),
 		"originalHash", pending.originalHash.Hex(),
 		"nonce", pending.nonce,
-		"cancellation", attempt.cancellation,
+		"cancellation", read.attempt.cancellation,
 		"rpcTimeout", m.receiptReadTimeout().String(),
+		"reason_code", read.reason(),
+		"rpcBudgetTotalMs", diagnostic.budget.Milliseconds(),
+		"sweepElapsedMs", time.Since(diagnostic.started).Milliseconds(),
+		"hashesChecked", len(diagnostic.hashes),
+		"hashesTotal", len(pending.attempts),
+		"rpcChecks", diagnostic.reads,
+		"lastRPCDurationMs", diagnostic.lastRPC.Milliseconds(),
+		"cancelCause", read.cancelCause,
 	)
 }
 
