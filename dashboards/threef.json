@@ -20,15 +20,15 @@
     }
   ],
   "cursorSync": "Crosshair",
-  "description": "One dashboard for fleet overview and individual-pod diagnosis. Workload=All and Pod=All show the combined selection; choose a workload or pod to narrow it. Include old pods adds retired replicas observed in the selected period. Compare workloads in the table; use Current pods to inspect a replica. Counters sum process observations after reset handling, percentiles use combined buckets, and shared balances are not added across replicas. Missing data remains unknown.",
+  "description": "Completed operations, outstanding commitments, reasons work does not execute, and transaction costs for the selected environment. Counts are observed operations during the selected period, including retries and separate service observations; stages are not a cohort conversion. Missing telemetry remains unknown. Fees are costs, not profit.",
   "editable": true,
   "elements": {
     "panel-10": {
       "kind": "Panel",
       "spec": {
         "id": 10,
-        "title": "Time since last API snapshot",
-        "description": "Age since the last observed timestamp. A zero timestamp is Not seen; missing series stay empty. Freshness uses the oldest reporting replica; event age uses the latest event. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
+        "title": "Oldest source observation age",
+        "description": "Oldest observed source state by view. Sources with no completed observation are counted separately, so they do not erase the age of existing observations.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -44,7 +44,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "clamp_min(time() - (min by (namespace, workload, solver, strategy, view) (label_replace(solver_bot_workflow_last_observation_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) > 0), 0) or ((min by (namespace, workload, solver, strategy, view) (label_replace(solver_bot_workflow_last_observation_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) == 0) - 1)",
+                      "expr": "clamp_min(time() - min by (view) (solver_bot_workflow_last_observation_timestamp{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\"} > 0), 0)",
                       "instant": true,
                       "legendFormat": "",
                       "range": false,
@@ -69,13 +69,18 @@
                 "group": "organize",
                 "spec": {
                   "options": {
-                    "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "namespace": true, "solver": true},
+                    "excludeByName": {
+                      "Time": true,
+                      "__name__": true,
+                      "job": true,
+                      "instance": true,
+                      "namespace": true,
+                      "solver": true,
+                      "strategy": true
+                    },
                     "renameByName": {
-                      "workload": "Workload",
-                      "pod": "Pod",
                       "address": "Signer",
                       "view": "View",
-                      "strategy": "Strategy",
                       "role": "Role",
                       "endpoint": "Endpoint",
                       "method": "Method",
@@ -87,7 +92,8 @@
                       "stage": "Stage",
                       "Value": "Age",
                       "Value #A": "Age"
-                    }
+                    },
+                    "indexByName": {}
                   }
                 }
               }
@@ -139,12 +145,6 @@
                   ]
                 },
                 {
-                  "matcher": {"id": "byName", "options": "Workload"},
-                  "properties": [
-                    {"id": "custom.width", "value": 220}
-                  ]
-                },
-                {
                   "matcher": {"id": "byName", "options": "Signer"},
                   "properties": [
                     {"id": "custom.width", "value": 370}
@@ -157,56 +157,56 @@
                       "id": "mappings",
                       "value": [
                         {
-                          "type": "value",
                           "options": {
+                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "active_request_refresh": {"text": "Refresh active requests"},
                             "active_requests": {"text": "Active requests"},
-                            "redeemable": {"text": "Ready to redeem"},
-                            "offers": {"text": "Offers"},
-                            "targets": {"text": "Targets"},
-                            "quoted": {"text": "Quote returned"},
-                            "no_candidates": {"text": "No eligible candidates"},
-                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
-                            "not_quotable": {"text": "Order not quotable"},
-                            "below_minimum": {"text": "Below minimum amount"},
-                            "strategy_declined": {"text": "Strategy declined"},
                             "bad_request": {"text": "Invalid request"},
-                            "error": {"text": "Error"},
-                            "success": {"text": "Success"},
-                            "failed": {"text": "Failed"},
-                            "failure": {"text": "Failed"},
-                            "ok": {"text": "Success"},
-                            "won": {"text": "Won"},
+                            "below_minimum": {"text": "Below minimum amount"},
                             "confirmed": {"text": "Confirmed"},
-                            "reverted": {"text": "Reverted"},
-                            "not_admitted": {"text": "Not admitted"},
-                            "submission_error": {"text": "Submission error"},
-                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
-                            "settled_success": {"text": "Settlement succeeded"},
-                            "settled_failed": {"text": "Settlement failed"},
-                            "enqueued": {"text": "Enqueued"},
-                            "would_bid": {"text": "Would bid (dry run)"},
-                            "unresolved": {"text": "Unresolved"},
-                            "settled_in_time": {"text": "Settled on time"},
-                            "missed": {"text": "Missed"},
                             "declined_blocked": {"text": "Blocked"},
+                            "declined_invalid_amount": {"text": "Invalid amount"},
                             "declined_invalid_request": {"text": "Invalid request"},
                             "declined_pair_out_of_scope": {"text": "Pair outside scope"},
-                            "declined_invalid_amount": {"text": "Invalid amount"},
                             "declined_quote_state_unavailable": {"text": "Quote state unavailable"},
-                            "declined_strategy": {"text": "Strategy declined"},
                             "declined_state_changed": {"text": "State changed"},
+                            "declined_strategy": {"text": "Strategy declined"},
                             "declined_unknown": {"text": "Declined: unknown reason"},
-                            "active_request_refresh": {"text": "Refresh active requests"},
-                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
-                            "offer_refresh": {"text": "Refresh offers"},
-                            "target_refresh": {"text": "Refresh targets"},
+                            "enqueued": {"text": "Enqueued"},
+                            "error": {"text": "Error"},
                             "expected_yield": {"text": "Expected yield"},
-                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "failed": {"text": "Failed"},
+                            "failure": {"text": "Failed"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
+                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
                             "lifi-samechain": {"text": "LI.FI"},
+                            "missed": {"text": "Missed"},
+                            "no_candidates": {"text": "No eligible candidates"},
+                            "not_admitted": {"text": "Not admitted"},
+                            "not_quotable": {"text": "Order not quotable"},
+                            "offer_refresh": {"text": "Refresh offers"},
+                            "offers": {"text": "Offers"},
+                            "ok": {"text": "Success"},
+                            "quoted": {"text": "Quote returned"},
+                            "redeemable": {"text": "Ready to redeem"},
+                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
+                            "redstone-oev": {"text": "RedStone OEV"},
+                            "reverted": {"text": "Reverted"},
                             "rfq-filler": {"text": "RFQ"},
+                            "settled_failed": {"text": "Settlement failed"},
+                            "settled_in_time": {"text": "Settled on time"},
+                            "settled_success": {"text": "Settlement succeeded"},
+                            "strategy_declined": {"text": "Strategy declined"},
+                            "submission_error": {"text": "Submission error"},
+                            "success": {"text": "Success"},
+                            "target_refresh": {"text": "Refresh targets"},
+                            "targets": {"text": "Targets"},
                             "uniswapx-filler": {"text": "UniswapX"},
-                            "redstone-oev": {"text": "RedStone OEV"}
-                          }
+                            "unresolved": {"text": "Unresolved"},
+                            "won": {"text": "Won"},
+                            "would_bid": {"text": "Would bid (dry run)"}
+                          },
+                          "type": "value"
                         }
                       ]
                     }
@@ -300,18 +300,18 @@
                             "failure": {"text": "Failed"},
                             "ok": {"text": "Success"},
                             "won": {"text": "Won"},
-                            "confirmed": {"text": "Confirmed"},
+                            "confirmed": {"text": "Confirmed transaction"},
                             "reverted": {"text": "Reverted"},
                             "not_admitted": {"text": "Not admitted"},
-                            "submission_error": {"text": "Submission error"},
-                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
+                            "submission_error": {"text": "Submission failed"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
                             "settled_success": {"text": "Settlement succeeded"},
                             "settled_failed": {"text": "Settlement failed"},
                             "enqueued": {"text": "Enqueued"},
                             "would_bid": {"text": "Would bid (dry run)"},
                             "unresolved": {"text": "Unresolved"},
-                            "settled_in_time": {"text": "Settled on time"},
-                            "missed": {"text": "Missed"},
+                            "settled_in_time": {"text": "Delivered on time"},
+                            "missed": {"text": "Deadline missed"},
                             "declined_blocked": {"text": "Blocked"},
                             "declined_invalid_request": {"text": "Invalid request"},
                             "declined_pair_out_of_scope": {"text": "Pair outside scope"},
@@ -329,7 +329,22 @@
                             "lifi-samechain": {"text": "LI.FI"},
                             "rfq-filler": {"text": "RFQ"},
                             "uniswapx-filler": {"text": "UniswapX"},
-                            "redstone-oev": {"text": "RedStone OEV"}
+                            "redstone-oev": {"text": "RedStone OEV"},
+                            "cancelled": {"text": "Cancelled"},
+                            "tracking_stopped": {"text": "Tracking stopped"},
+                            "not_actionable": {"text": "Order not currently fillable or outside scope"},
+                            "deposit_deferred": {"text": "Deposit not visible yet"},
+                            "capacity_deferred": {"text": "Waiting for execution capacity"},
+                            "capacity_dropped": {"text": "Dropped after waiting for capacity"},
+                            "submitted": {"text": "Submitted for execution"},
+                            "invalid_plan": {"text": "Invalid execution plan"},
+                            "retryable_error": {"text": "Temporary error; retry scheduled"},
+                            "other": {"text": "Other processing decision"},
+                            "invalid": {"text": "Invalid request"},
+                            "queue_drop:inbox": {"text": "Dropped: incoming queue full"},
+                            "queue_drop:deposit_retry": {"text": "Dropped: deposit retry queue full"},
+                            "queue_drop:capacity_retry": {"text": "Dropped: capacity retry queue full"},
+                            "queue_drop:recovery_retry": {"text": "Dropped: recovery retry queue full"}
                           }
                         }
                       ]
@@ -596,7 +611,7 @@
       "spec": {
         "id": 11,
         "title": "Activity and backlog ages",
-        "description": "Comparable process-local ages; zero means no continuous backlog or activity observed. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
+        "description": "Comparable process-local ages; zero means no continuous backlog or activity observed. Values aggregate all matching services.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -614,7 +629,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "clamp_min(time() - (max by (namespace, workload) (label_replace(max_over_time(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",event=\"redeem\",outcome=\"success\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) > 0), 0) or ((max by (namespace, workload) (label_replace(max_over_time(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",event=\"redeem\",outcome=\"success\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) == 0) - 1)",
+                      "expr": "clamp_min(time() - (max (max_over_time(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",event=\"redeem\",outcome=\"success\"}[$__range])) > 0), 0) or ((max (max_over_time(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",event=\"redeem\",outcome=\"success\"}[$__range])) == 0) - 1)",
                       "instant": true,
                       "range": false,
                       "format": "table",
@@ -635,7 +650,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "max by (namespace, workload) (label_replace(clamp_min(time() - (threef_backlog_nonempty_since_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",view=\"active_requests\"}), 0) * ((threef_backlog_nonempty_since_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",view=\"active_requests\"}) > bool 0), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
+                      "expr": "max (clamp_min(time() - (threef_backlog_nonempty_since_timestamp{namespace=\"${namespace}\",view=\"active_requests\"}), 0) * ((threef_backlog_nonempty_since_timestamp{namespace=\"${namespace}\",view=\"active_requests\"}) > bool 0))",
                       "instant": true,
                       "range": false,
                       "format": "table",
@@ -656,7 +671,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "max by (namespace, workload) (label_replace(clamp_min(time() - (threef_backlog_nonempty_since_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",view=\"redeemable\"}), 0) * ((threef_backlog_nonempty_since_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",view=\"redeemable\"}) > bool 0), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
+                      "expr": "max (clamp_min(time() - (threef_backlog_nonempty_since_timestamp{namespace=\"${namespace}\",view=\"redeemable\"}), 0) * ((threef_backlog_nonempty_since_timestamp{namespace=\"${namespace}\",view=\"redeemable\"}) > bool 0))",
                       "instant": true,
                       "range": false,
                       "format": "table",
@@ -679,14 +694,9 @@
                 "group": "organize",
                 "spec": {
                   "options": {
-                    "excludeByName": {"Time": true, "namespace": true, "__name__": true},
-                    "indexByName": {"workload": 0, "Value #A": 1, "Value #B": 2, "Value #C": 3},
-                    "renameByName": {
-                      "workload": "Workload",
-                      "Value #A": "Last redeem",
-                      "Value #B": "Active backlog",
-                      "Value #C": "Redeem backlog"
-                    }
+                    "excludeByName": {"Time": true, "namespace": true, "__name__": true, "instance": true, "job": true},
+                    "indexByName": {"Value #A": 1, "Value #B": 2, "Value #C": 3},
+                    "renameByName": {"Value #A": "Last redeem", "Value #B": "Active backlog", "Value #C": "Redeem backlog"}
                   }
                 }
               }
@@ -718,12 +728,6 @@
                 ]
               },
               "overrides": [
-                {
-                  "matcher": {"id": "byName", "options": "Workload"},
-                  "properties": [
-                    {"id": "custom.width", "value": 220}
-                  ]
-                },
                 {
                   "matcher": {"id": "byName", "options": "Last redeem"},
                   "properties": [
@@ -805,7 +809,7 @@
       "spec": {
         "id": 13,
         "title": "Offer submission counts",
-        "description": "Accepted and failed API submissions over time. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
+        "description": "Accepted and failed API submissions over time. Values aggregate all matching services.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -821,7 +825,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum by (namespace, workload, outcome) (label_replace(increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",event=\"offer\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
+                      "expr": "sum by (outcome) (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",event=\"offer\"}[$__range]))",
                       "instant": true,
                       "legendFormat": "",
                       "range": false,
@@ -848,8 +852,6 @@
                   "options": {
                     "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "namespace": true, "solver": true},
                     "renameByName": {
-                      "workload": "Workload",
-                      "pod": "Pod",
                       "address": "Signer",
                       "view": "View",
                       "strategy": "Strategy",
@@ -864,7 +866,8 @@
                       "stage": "Stage",
                       "Value": "Count",
                       "Value #A": "Count"
-                    }
+                    },
+                    "indexByName": {}
                   }
                 }
               }
@@ -898,7 +901,7 @@
                 {
                   "matcher": {"id": "byName", "options": "Count"},
                   "properties": [
-                    {"id": "unit", "value": "short"},
+                    {"id": "unit", "value": "none"},
                     {"id": "decimals", "value": 0},
                     {
                       "id": "thresholds",
@@ -909,12 +912,6 @@
                         ]
                       }
                     }
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Workload"},
-                  "properties": [
-                    {"id": "custom.width", "value": 220}
                   ]
                 },
                 {
@@ -930,56 +927,56 @@
                       "id": "mappings",
                       "value": [
                         {
-                          "type": "value",
                           "options": {
+                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "active_request_refresh": {"text": "Refresh active requests"},
                             "active_requests": {"text": "Active requests"},
-                            "redeemable": {"text": "Ready to redeem"},
-                            "offers": {"text": "Offers"},
-                            "targets": {"text": "Targets"},
-                            "quoted": {"text": "Quote returned"},
-                            "no_candidates": {"text": "No eligible candidates"},
-                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
-                            "not_quotable": {"text": "Order not quotable"},
-                            "below_minimum": {"text": "Below minimum amount"},
-                            "strategy_declined": {"text": "Strategy declined"},
                             "bad_request": {"text": "Invalid request"},
-                            "error": {"text": "Error"},
-                            "success": {"text": "Success"},
-                            "failed": {"text": "Failed"},
-                            "failure": {"text": "Failed"},
-                            "ok": {"text": "Success"},
-                            "won": {"text": "Won"},
+                            "below_minimum": {"text": "Below minimum amount"},
                             "confirmed": {"text": "Confirmed"},
-                            "reverted": {"text": "Reverted"},
-                            "not_admitted": {"text": "Not admitted"},
-                            "submission_error": {"text": "Submission error"},
-                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
-                            "settled_success": {"text": "Settlement succeeded"},
-                            "settled_failed": {"text": "Settlement failed"},
-                            "enqueued": {"text": "Enqueued"},
-                            "would_bid": {"text": "Would bid (dry run)"},
-                            "unresolved": {"text": "Unresolved"},
-                            "settled_in_time": {"text": "Settled on time"},
-                            "missed": {"text": "Missed"},
                             "declined_blocked": {"text": "Blocked"},
+                            "declined_invalid_amount": {"text": "Invalid amount"},
                             "declined_invalid_request": {"text": "Invalid request"},
                             "declined_pair_out_of_scope": {"text": "Pair outside scope"},
-                            "declined_invalid_amount": {"text": "Invalid amount"},
                             "declined_quote_state_unavailable": {"text": "Quote state unavailable"},
-                            "declined_strategy": {"text": "Strategy declined"},
                             "declined_state_changed": {"text": "State changed"},
+                            "declined_strategy": {"text": "Strategy declined"},
                             "declined_unknown": {"text": "Declined: unknown reason"},
-                            "active_request_refresh": {"text": "Refresh active requests"},
-                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
-                            "offer_refresh": {"text": "Refresh offers"},
-                            "target_refresh": {"text": "Refresh targets"},
+                            "enqueued": {"text": "Enqueued"},
+                            "error": {"text": "Error"},
                             "expected_yield": {"text": "Expected yield"},
-                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "failed": {"text": "Failed"},
+                            "failure": {"text": "Failed"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
+                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
                             "lifi-samechain": {"text": "LI.FI"},
+                            "missed": {"text": "Missed"},
+                            "no_candidates": {"text": "No eligible candidates"},
+                            "not_admitted": {"text": "Not admitted"},
+                            "not_quotable": {"text": "Order not quotable"},
+                            "offer_refresh": {"text": "Refresh offers"},
+                            "offers": {"text": "Offers"},
+                            "ok": {"text": "Success"},
+                            "quoted": {"text": "Quote returned"},
+                            "redeemable": {"text": "Ready to redeem"},
+                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
+                            "redstone-oev": {"text": "RedStone OEV"},
+                            "reverted": {"text": "Reverted"},
                             "rfq-filler": {"text": "RFQ"},
+                            "settled_failed": {"text": "Settlement failed"},
+                            "settled_in_time": {"text": "Settled on time"},
+                            "settled_success": {"text": "Settlement succeeded"},
+                            "strategy_declined": {"text": "Strategy declined"},
+                            "submission_error": {"text": "Submission error"},
+                            "success": {"text": "Success"},
+                            "target_refresh": {"text": "Refresh targets"},
+                            "targets": {"text": "Targets"},
                             "uniswapx-filler": {"text": "UniswapX"},
-                            "redstone-oev": {"text": "RedStone OEV"}
-                          }
+                            "unresolved": {"text": "Unresolved"},
+                            "won": {"text": "Won"},
+                            "would_bid": {"text": "Would bid (dry run)"}
+                          },
+                          "type": "value"
                         }
                       ]
                     }
@@ -1073,18 +1070,18 @@
                             "failure": {"text": "Failed"},
                             "ok": {"text": "Success"},
                             "won": {"text": "Won"},
-                            "confirmed": {"text": "Confirmed"},
+                            "confirmed": {"text": "Confirmed transaction"},
                             "reverted": {"text": "Reverted"},
                             "not_admitted": {"text": "Not admitted"},
-                            "submission_error": {"text": "Submission error"},
-                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
+                            "submission_error": {"text": "Submission failed"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
                             "settled_success": {"text": "Settlement succeeded"},
                             "settled_failed": {"text": "Settlement failed"},
                             "enqueued": {"text": "Enqueued"},
                             "would_bid": {"text": "Would bid (dry run)"},
                             "unresolved": {"text": "Unresolved"},
-                            "settled_in_time": {"text": "Settled on time"},
-                            "missed": {"text": "Missed"},
+                            "settled_in_time": {"text": "Delivered on time"},
+                            "missed": {"text": "Deadline missed"},
                             "declined_blocked": {"text": "Blocked"},
                             "declined_invalid_request": {"text": "Invalid request"},
                             "declined_pair_out_of_scope": {"text": "Pair outside scope"},
@@ -1102,7 +1099,22 @@
                             "lifi-samechain": {"text": "LI.FI"},
                             "rfq-filler": {"text": "RFQ"},
                             "uniswapx-filler": {"text": "UniswapX"},
-                            "redstone-oev": {"text": "RedStone OEV"}
+                            "redstone-oev": {"text": "RedStone OEV"},
+                            "cancelled": {"text": "Cancelled"},
+                            "tracking_stopped": {"text": "Tracking stopped"},
+                            "not_actionable": {"text": "Order not currently fillable or outside scope"},
+                            "deposit_deferred": {"text": "Deposit not visible yet"},
+                            "capacity_deferred": {"text": "Waiting for execution capacity"},
+                            "capacity_dropped": {"text": "Dropped after waiting for capacity"},
+                            "submitted": {"text": "Submitted for execution"},
+                            "invalid_plan": {"text": "Invalid execution plan"},
+                            "retryable_error": {"text": "Temporary error; retry scheduled"},
+                            "other": {"text": "Other processing decision"},
+                            "invalid": {"text": "Invalid request"},
+                            "queue_drop:inbox": {"text": "Dropped: incoming queue full"},
+                            "queue_drop:deposit_retry": {"text": "Dropped: deposit retry queue full"},
+                            "queue_drop:capacity_retry": {"text": "Dropped: capacity retry queue full"},
+                            "queue_drop:recovery_retry": {"text": "Dropped: recovery retry queue full"}
                           }
                         }
                       ]
@@ -1364,12 +1376,12 @@
         "transparent": true
       }
     },
-    "panel-14": {
+    "panel-15": {
       "kind": "Panel",
       "spec": {
-        "id": 14,
-        "title": "Accepted offer amounts",
-        "description": "Principal and expected-yield atomic units remain separated by token. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
+        "id": 15,
+        "title": "Source operation p95 · selected period",
+        "description": "Combined histogram observations during the selected period. An idle short window does not erase earlier samples in this period. No latency samples means no percentile is available. Initial unobserved counter values cannot be recovered.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1385,11 +1397,11 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "label_replace(((sum by (namespace, workload, asset, kind) (label_replace(increase(solver_bot_workflow_amount_atomic_units_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",event=\"offer\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))) > 0), \"token_display\", \"​$1\", \"asset\", \"(.*)\")",
-                      "format": "table",
+                      "expr": "histogram_quantile(0.95, sum by (le, operation) (increase(solver_bot_external_operation_duration_seconds_bucket{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\"}[$__range])))",
+                      "legendFormat": "{{operation}}",
+                      "range": false,
                       "instant": true,
-                      "legendFormat": "",
-                      "range": false
+                      "format": "table"
                     }
                   },
                   "refId": "A",
@@ -1400,14 +1412,14 @@
             "transformations": [
               {
                 "kind": "Transformation",
+                "group": "organize",
                 "spec": {
                   "options": {
-                    "excludeByName": {"Time": true, "asset": true, "job": true, "instance": true, "namespace": true},
-                    "indexByName": {"namespace": 0, "workload": 1},
-                    "renameByName": {"token_display": "token", "namespace": "Namespace", "workload": "Workload"}
+                    "excludeByName": {"Time": true, "__name__": true},
+                    "indexByName": {},
+                    "renameByName": {"label": "Operation", "phase": "Phase", "outcome": "Outcome", "operation": "Operation", "Value": "p95"}
                   }
-                },
-                "group": "organize"
+                }
               }
             ],
             "queryOptions": {}
@@ -1418,121 +1430,63 @@
           "group": "table",
           "version": "",
           "spec": {
-            "options": {"cellHeight": "sm", "showHeader": true, "enablePagination": false},
+            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": false},
             "fieldConfig": {
               "defaults": {
-                "thresholds": {
-                  "mode": "absolute",
-                  "steps": [
-                    {"value": 0, "color": "green"}
-                  ]
-                },
-                "color": {"mode": "palette-classic"},
-                "noValue": "—"
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
               },
               "overrides": [
                 {
-                  "matcher": {"id": "byName", "options": "Value"},
+                  "matcher": {"id": "byName", "options": "p95"},
                   "properties": [
-                    {"id": "unit", "value": "sci"},
-                    {"id": "decimals", "value": 3},
-                    {"id": "custom.width", "value": 140}
+                    {"id": "unit", "value": "s"},
+                    {"id": "decimals", "value": 3}
                   ]
                 },
                 {
-                  "matcher": {"id": "byName", "options": "token"},
+                  "matcher": {"id": "byName", "options": "Outcome"},
                   "properties": [
-                    {"id": "custom.width", "value": 220}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Workload"},
-                  "properties": [
-                    {"id": "custom.width", "value": 220}
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "confirmed": {"text": "Confirmed transaction"},
+                            "cancelled": {"text": "Cancelled"},
+                            "reverted": {"text": "Reverted"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
+                            "submission_error": {"text": "Submission failed"},
+                            "tracking_stopped": {"text": "Tracking stopped"},
+                            "settled_in_time": {"text": "Delivered on time"},
+                            "missed": {"text": "Deadline missed"},
+                            "not_actionable": {"text": "Order not currently fillable or outside scope"},
+                            "deposit_deferred": {"text": "Deposit not visible yet"},
+                            "capacity_deferred": {"text": "Waiting for execution capacity"},
+                            "capacity_dropped": {"text": "Dropped after waiting for capacity"},
+                            "submitted": {"text": "Submitted for execution"},
+                            "invalid_plan": {"text": "Invalid execution plan"},
+                            "retryable_error": {"text": "Temporary error; retry scheduled"},
+                            "other": {"text": "Other processing decision"},
+                            "invalid": {"text": "Invalid request"},
+                            "queue_drop:inbox": {"text": "Dropped: incoming queue full"},
+                            "queue_drop:deposit_retry": {"text": "Dropped: deposit retry queue full"},
+                            "queue_drop:capacity_retry": {"text": "Dropped: capacity retry queue full"},
+                            "queue_drop:recovery_retry": {"text": "Dropped: recovery retry queue full"}
+                          }
+                        }
+                      ]
+                    }
                   ]
                 }
               ]
-            }
-          }
-        },
-        "transparent": true
-      }
-    },
-    "panel-15": {
-      "kind": "Panel",
-      "spec": {
-        "id": 15,
-        "title": "API operation p95",
-        "description": "Latency trend for each fixed 3F API operation. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
-        "links": [],
-        "data": {
-          "kind": "QueryGroup",
-          "spec": {
-            "queries": [
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "histogram_quantile(0.95, sum by (namespace, workload, le, operation) (label_replace(rate(solver_bot_external_operation_duration_seconds_bucket{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\"}[$__rate_interval]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
-                      "legendFormat": "{{workload}} · {{operation}}",
-                      "range": true
-                    }
-                  },
-                  "refId": "A",
-                  "hidden": false
-                }
-              }
-            ],
-            "transformations": [],
-            "queryOptions": {}
-          }
-        },
-        "vizConfig": {
-          "kind": "VizConfig",
-          "group": "timeseries",
-          "version": "",
-          "spec": {
-            "options": {
-              "legend": {
-                "calcs": ["lastNotNull", "max"],
-                "displayMode": "table",
-                "placement": "bottom",
-                "showLegend": true
-              },
-              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
-            },
-            "fieldConfig": {
-              "defaults": {
-                "unit": "s",
-                "thresholds": {
-                  "mode": "absolute",
-                  "steps": [
-                    {"value": 0, "color": "green"}
-                  ]
-                },
-                "color": {"mode": "palette-classic"},
-                "custom": {
-                  "axisColorMode": "text",
-                  "axisLabel": "",
-                  "axisPlacement": "auto",
-                  "fillOpacity": 12,
-                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
-                  "lineInterpolation": "smooth",
-                  "lineWidth": 2,
-                  "pointSize": 5,
-                  "scaleDistribution": {"type": "linear"},
-                  "showPoints": "never",
-                  "spanNulls": false,
-                  "thresholdsStyle": {"mode": "off"}
-                }
-              },
-              "overrides": []
             }
           }
         },
@@ -1543,8 +1497,8 @@
       "kind": "Panel",
       "spec": {
         "id": 17,
-        "title": "Request backlog trend",
-        "description": "Only completed API observations contribute counts. Until an observation timestamp is present, zero-initialized gauges are treated as unknown. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
+        "title": "Reported backlog bound",
+        "description": "Maximum reported complete count across reporting sources, not the latest snapshot or a unique combined backlog. Source scopes can overlap or differ. Read with observation age.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1560,8 +1514,8 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "max by (namespace, workload, solver, strategy, view) (label_replace((solver_bot_workflow_observed_items{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",view=~\"active_requests|redeemable\"} and on (namespace, pod, solver, strategy, view) (solver_bot_workflow_last_observation_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",view=~\"active_requests|redeemable\"} > 0)), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "legendFormat": "{{workload}} · {{view}}",
+                      "expr": "max by (view) ((solver_bot_workflow_observed_items{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",view=~\"active_requests|redeemable\"} and on (namespace, job, instance, solver, strategy, view) (solver_bot_workflow_last_observation_timestamp{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",view=~\"active_requests|redeemable\"} > 0)))",
+                      "legendFormat": "{{view}}",
                       "range": true
                     }
                   },
@@ -1590,7 +1544,7 @@
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "short",
+                "unit": "none",
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
@@ -1611,7 +1565,8 @@
                   "showPoints": "never",
                   "spanNulls": false,
                   "thresholdsStyle": {"mode": "off"}
-                }
+                },
+                "displayName": ""
               },
               "overrides": []
             }
@@ -1625,7 +1580,7 @@
       "spec": {
         "id": 18,
         "title": "Redeem transaction outcomes",
-        "description": "Transaction outcomes only. Request-count workflow events are shown separately and are not added to transaction counts. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
+        "description": "Transaction outcomes only. Redeemed request counts are shown separately and are not added to transaction counts. Values aggregate all matching services.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1641,7 +1596,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum by (namespace, workload, outcome) (label_replace(increase(solver_bot_txmanager_requests_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",label=\"redeem\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
+                      "expr": "sum by (outcome) (increase(solver_bot_txmanager_requests_total{namespace=\"${namespace}\",label=\"redeem\"}[$__range]))",
                       "format": "table",
                       "instant": true,
                       "legendFormat": "",
@@ -1659,8 +1614,8 @@
                 "spec": {
                   "options": {
                     "excludeByName": {"Time": true, "job": true, "instance": true, "namespace": true},
-                    "indexByName": {"namespace": 0, "workload": 1},
-                    "renameByName": {"namespace": "Namespace", "workload": "Workload"}
+                    "indexByName": {"Value": 1, "outcome": 0},
+                    "renameByName": {"Value": "Count", "outcome": "Outcome"}
                   }
                 },
                 "group": "organize"
@@ -1688,17 +1643,47 @@
               },
               "overrides": [
                 {
-                  "matcher": {"id": "byName", "options": "Value"},
+                  "matcher": {"id": "byName", "options": "Count"},
                   "properties": [
-                    {"id": "unit", "value": "short"},
+                    {"id": "unit", "value": "none"},
                     {"id": "decimals", "value": 0},
                     {"id": "custom.width", "value": 140}
                   ]
                 },
                 {
-                  "matcher": {"id": "byName", "options": "Workload"},
+                  "matcher": {"id": "byName", "options": "Outcome"},
                   "properties": [
-                    {"id": "custom.width", "value": 220}
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "confirmed": {"text": "Confirmed transaction"},
+                            "cancelled": {"text": "Cancelled"},
+                            "reverted": {"text": "Reverted"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
+                            "submission_error": {"text": "Submission failed"},
+                            "tracking_stopped": {"text": "Tracking stopped"},
+                            "settled_in_time": {"text": "Delivered on time"},
+                            "missed": {"text": "Deadline missed"},
+                            "not_actionable": {"text": "Order not currently fillable or outside scope"},
+                            "deposit_deferred": {"text": "Deposit not visible yet"},
+                            "capacity_deferred": {"text": "Waiting for execution capacity"},
+                            "capacity_dropped": {"text": "Dropped after waiting for capacity"},
+                            "submitted": {"text": "Submitted for execution"},
+                            "invalid_plan": {"text": "Invalid execution plan"},
+                            "retryable_error": {"text": "Temporary error; retry scheduled"},
+                            "other": {"text": "Other processing decision"},
+                            "invalid": {"text": "Invalid request"},
+                            "queue_drop:inbox": {"text": "Dropped: incoming queue full"},
+                            "queue_drop:deposit_retry": {"text": "Dropped: deposit retry queue full"},
+                            "queue_drop:capacity_retry": {"text": "Dropped: capacity retry queue full"},
+                            "queue_drop:recovery_retry": {"text": "Dropped: recovery retry queue full"}
+                          }
+                        }
+                      ]
+                    }
                   ]
                 }
               ]
@@ -1712,8 +1697,8 @@
       "kind": "Panel",
       "spec": {
         "id": 19,
-        "title": "Execution cost",
-        "description": "Receipt-backed transaction count, gas, and native fee over the selected range. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
+        "title": "Transaction fee increases · selected period",
+        "description": "Observed increases in the selected period. The first exported nonzero value may be missed, so zero here does not prove that no fee was paid. Fees recorded from transaction receipts, grouped by terminal outcome. Reverted and cancelled transactions consumed fees without a successful execution. Included-unconfirmed means final confirmation was not established. Missing receipt prices can undercount costs.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1731,53 +1716,11 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum by (namespace, workload) (label_replace(increase(solver_bot_txmanager_requests_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",label=\"redeem\",outcome=~\"confirmed|included_unconfirmed\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
+                      "expr": "sum by(outcome)(increase(solver_bot_txmanager_fee_paid_wei_total{namespace=\"${namespace}\",label=\"redeem\"}[$__range])) / 1e18",
                       "instant": true,
                       "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "B",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "sum by (namespace, workload) (label_replace(increase(solver_bot_txmanager_gas_used_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",label=\"redeem\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "C",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "max by (namespace, workload) (label_replace(sum by (namespace, workload) (label_replace(increase(solver_bot_txmanager_fee_paid_wei_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",label=\"redeem\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) / 1e18, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
+                      "legendFormat": "",
+                      "format": "table"
                     }
                   }
                 }
@@ -1786,19 +1729,12 @@
             "transformations": [
               {
                 "kind": "Transformation",
-                "group": "merge",
-                "spec": {
-                  "options": {}
-                }
-              },
-              {
-                "kind": "Transformation",
                 "group": "organize",
                 "spec": {
                   "options": {
-                    "excludeByName": {"Time": true, "namespace": true, "__name__": true},
-                    "indexByName": {"workload": 0, "Value #A": 1, "Value #B": 2, "Value #C": 3},
-                    "renameByName": {"workload": "Workload", "Value #A": "Included tx", "Value #B": "Gas used", "Value #C": "Fee paid"}
+                    "excludeByName": {"Time": true, "__name__": true},
+                    "indexByName": {},
+                    "renameByName": {"outcome": "Transaction outcome", "Value": "Fees (ETH)"}
                   }
                 }
               }
@@ -1811,9 +1747,18 @@
           "group": "table",
           "version": "",
           "spec": {
-            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": false},
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": false,
+              "sortBy": [
+                {"displayName": "Fees (ETH)", "desc": true}
+              ]
+            },
             "fieldConfig": {
               "defaults": {
+                "unit": "none",
+                "decimals": 0,
                 "noValue": "—",
                 "custom": {
                   "align": "left",
@@ -1823,33 +1768,46 @@
               },
               "overrides": [
                 {
-                  "matcher": {"id": "byName", "options": "Workload"},
+                  "matcher": {"id": "byName", "options": "Fees (ETH)"},
                   "properties": [
-                    {"id": "custom.width", "value": 220}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Included tx"},
-                  "properties": [
-                    {"id": "custom.width", "value": 155},
-                    {"id": "unit", "value": "short"},
-                    {"id": "decimals", "value": 0}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Gas used"},
-                  "properties": [
-                    {"id": "custom.width", "value": 155},
-                    {"id": "unit", "value": "short"},
-                    {"id": "decimals", "value": 0}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Fee paid"},
-                  "properties": [
-                    {"id": "custom.width", "value": 155},
                     {"id": "unit", "value": "suffix: ETH"},
                     {"id": "decimals", "value": 9}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Transaction outcome"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "confirmed": {"text": "Confirmed transaction"},
+                            "cancelled": {"text": "Cancelled"},
+                            "reverted": {"text": "Reverted"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
+                            "submission_error": {"text": "Submission failed"},
+                            "tracking_stopped": {"text": "Tracking stopped"},
+                            "settled_in_time": {"text": "Delivered on time"},
+                            "missed": {"text": "Deadline missed"},
+                            "not_actionable": {"text": "Order not currently fillable or outside scope"},
+                            "deposit_deferred": {"text": "Deposit not visible yet"},
+                            "capacity_deferred": {"text": "Waiting for execution capacity"},
+                            "capacity_dropped": {"text": "Dropped after waiting for capacity"},
+                            "submitted": {"text": "Submitted for execution"},
+                            "invalid_plan": {"text": "Invalid execution plan"},
+                            "retryable_error": {"text": "Temporary error; retry scheduled"},
+                            "other": {"text": "Other processing decision"},
+                            "invalid": {"text": "Invalid request"},
+                            "queue_drop:inbox": {"text": "Dropped: incoming queue full"},
+                            "queue_drop:deposit_retry": {"text": "Dropped: deposit retry queue full"},
+                            "queue_drop:capacity_retry": {"text": "Dropped: capacity retry queue full"},
+                            "queue_drop:recovery_retry": {"text": "Dropped: recovery retry queue full"}
+                          }
+                        }
+                      ]
+                    }
                   ]
                 }
               ]
@@ -1863,7 +1821,7 @@
       "kind": "Panel",
       "spec": {
         "id": 2,
-        "title": "Ready",
+        "title": "Source observations available",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1879,10 +1837,11 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "min(min by (namespace, workload) (label_replace(solver_bot_service_ready{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
+                      "expr": "min(solver_bot_workflow_last_observation_timestamp{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\"}) > bool 0",
                       "instant": true,
-                      "legendFormat": "Ready",
-                      "range": false
+                      "legendFormat": "",
+                      "range": false,
+                      "format": "table"
                     }
                   },
                   "refId": "A",
@@ -1919,36 +1878,37 @@
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
-                    {"value": 0, "color": "dark-red"},
-                    {"value": 1, "color": "dark-green"}
+                    {"value": 0, "color": "red"},
+                    {"value": 1, "color": "green"}
                   ]
                 },
                 "color": {"mode": "thresholds"},
-                "displayName": "Ready",
+                "displayName": "Source observations available",
                 "mappings": [
                   {
                     "type": "value",
                     "options": {
-                      "0": {"text": "Not ready", "color": "red"},
-                      "1": {"text": "Ready", "color": "green"}
+                      "0": {"text": "Missing snapshots", "color": "red"},
+                      "1": {"text": "Available", "color": "green"}
                     }
                   }
                 ],
-                "noValue": "No sample"
+                "noValue": "No data",
+                "decimals": 0
               },
               "overrides": []
             }
           }
         },
         "transparent": true,
-        "description": "Current value at the end of the selected time range. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas."
+        "description": "Whether all reporting source views have produced an authoritative snapshot since startup. Process readiness alone does not prove this."
       }
     },
     "panel-3": {
       "kind": "Panel",
       "spec": {
         "id": 3,
-        "title": "Offers accepted",
+        "title": "Offers submitted · period",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1964,9 +1924,9 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum(sum by (namespace, workload) (label_replace(increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",event=\"offer\",outcome=\"success\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
+                      "expr": "sum(sum (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",event=\"offer\",outcome=\"success\"}[$__range])))",
                       "instant": true,
-                      "legendFormat": "Offers accepted",
+                      "legendFormat": "Offers submitted",
                       "range": false
                     }
                   },
@@ -2000,7 +1960,7 @@
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "short",
+                "unit": "none",
                 "decimals": 0,
                 "thresholds": {
                   "mode": "absolute",
@@ -2009,7 +1969,6 @@
                   ]
                 },
                 "color": {"mode": "fixed", "fixedColor": "blue"},
-                "displayName": "Offers accepted",
                 "noValue": "No data"
               },
               "overrides": []
@@ -2017,14 +1976,14 @@
           }
         },
         "transparent": true,
-        "description": "Total or ratio over the time range selected above. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas."
+        "description": "Offers accepted by the API during the selected period. An offer submission is not a loan execution or earned yield."
       }
     },
     "panel-4": {
       "kind": "Panel",
       "spec": {
         "id": 4,
-        "title": "Redeemed",
+        "title": "Requests redeemed · period",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2040,7 +1999,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum(sum by (namespace, workload) (label_replace(increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",event=\"redeem\",outcome=\"success\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
+                      "expr": "sum(sum (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",event=\"redeem\",outcome=\"success\"}[$__range])))",
                       "instant": true,
                       "legendFormat": "Requests redeemed",
                       "range": false
@@ -2076,7 +2035,7 @@
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "short",
+                "unit": "none",
                 "decimals": 0,
                 "thresholds": {
                   "mode": "absolute",
@@ -2085,7 +2044,6 @@
                   ]
                 },
                 "color": {"mode": "fixed", "fixedColor": "blue"},
-                "displayName": "Redeemed",
                 "noValue": "No data"
               },
               "overrides": []
@@ -2093,14 +2051,14 @@
           }
         },
         "transparent": true,
-        "description": "Total or ratio over the time range selected above. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas."
+        "description": "Request-count observations reported after successful redemption. One transaction may redeem several requests; not a transaction count."
       }
     },
     "panel-5": {
       "kind": "Panel",
       "spec": {
         "id": 5,
-        "title": "Active requests",
+        "title": "Outstanding requests · reported bound",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2116,7 +2074,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum(max by (namespace, workload, solver, strategy, view) (label_replace((solver_bot_workflow_observed_items{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",view=\"active_requests\"} and on (namespace, pod, solver, strategy, view) (solver_bot_workflow_last_observation_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",view=\"active_requests\"} > 0)), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
+                      "expr": "max ((solver_bot_workflow_observed_items{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",view=\"active_requests\"} and on (namespace, job, instance, solver, strategy, view) (solver_bot_workflow_last_observation_timestamp{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",view=\"active_requests\"} > 0)))",
                       "instant": true,
                       "legendFormat": "Active requests",
                       "range": false
@@ -2152,7 +2110,7 @@
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "short",
+                "unit": "none",
                 "decimals": 0,
                 "thresholds": {
                   "mode": "absolute",
@@ -2161,7 +2119,6 @@
                   ]
                 },
                 "color": {"mode": "fixed", "fixedColor": "blue"},
-                "displayName": "Active requests",
                 "noValue": "No data"
               },
               "overrides": []
@@ -2169,14 +2126,14 @@
           }
         },
         "transparent": true,
-        "description": "Only completed API observations contribute counts. Until an observation timestamp is present, zero-initialized gauges are treated as unknown. Current value at the end of the selected time range. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas."
+        "description": "Maximum reported complete count across reporting sources, not the latest snapshot or a unique combined backlog. Source scopes can overlap or differ. Read with observation age."
       }
     },
     "panel-6": {
       "kind": "Panel",
       "spec": {
         "id": 6,
-        "title": "Redeemable",
+        "title": "Ready to redeem · reported bound",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2192,7 +2149,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum(max by (namespace, workload, solver, strategy, view) (label_replace((solver_bot_workflow_observed_items{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",view=\"redeemable\"} and on (namespace, pod, solver, strategy, view) (solver_bot_workflow_last_observation_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",view=\"redeemable\"} > 0)), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
+                      "expr": "max ((solver_bot_workflow_observed_items{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",view=\"redeemable\"} and on (namespace, job, instance, solver, strategy, view) (solver_bot_workflow_last_observation_timestamp{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",view=\"redeemable\"} > 0)))",
                       "instant": true,
                       "legendFormat": "Redeemable",
                       "range": false
@@ -2228,7 +2185,7 @@
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "short",
+                "unit": "none",
                 "decimals": 0,
                 "thresholds": {
                   "mode": "absolute",
@@ -2237,7 +2194,6 @@
                   ]
                 },
                 "color": {"mode": "fixed", "fixedColor": "blue"},
-                "displayName": "Redeemable",
                 "noValue": "No data"
               },
               "overrides": []
@@ -2245,7 +2201,7 @@
           }
         },
         "transparent": true,
-        "description": "Only completed API observations contribute counts. Until an observation timestamp is present, zero-initialized gauges are treated as unknown. Current value at the end of the selected time range. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas."
+        "description": "Maximum reported complete count across reporting sources, not the latest snapshot or a unique combined backlog. Source scopes can overlap or differ. Read with observation age."
       }
     },
     "panel-7": {
@@ -2268,7 +2224,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "clamp_min(time() - (max(max by (namespace, workload) (label_replace(max_over_time(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",event=\"offer\",outcome=\"success\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))) > 0), 0) or ((max(max by (namespace, workload) (label_replace(max_over_time(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",event=\"offer\",outcome=\"success\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))) == 0) - 1)",
+                      "expr": "clamp_min(time() - (max(max (max_over_time(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",event=\"offer\",outcome=\"success\"}[$__range]))) > 0), 0) or ((max(max (max_over_time(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",event=\"offer\",outcome=\"success\"}[$__range]))) == 0) - 1)",
                       "instant": true,
                       "legendFormat": "Last offer age",
                       "range": false
@@ -2334,15 +2290,15 @@
           }
         },
         "transparent": true,
-        "description": "Current value at the end of the selected time range. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas."
+        "description": "Current value at the end of the selected time range."
       }
     },
     "panel-9": {
       "kind": "Panel",
       "spec": {
         "id": 9,
-        "title": "Items in the latest API snapshot",
-        "description": "Only completed API observations contribute counts. Until an observation timestamp is present, zero-initialized gauges are treated as unknown. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
+        "title": "Highest reported source item counts",
+        "description": "Maximum reported complete count across reporting sources, not the latest snapshot or a unique combined backlog. Source scopes can overlap or differ. Read with observation age.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2358,7 +2314,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "max by (namespace, workload, solver, strategy, view) (label_replace((solver_bot_workflow_observed_items{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\"} and on (namespace, pod, solver, strategy, view) (solver_bot_workflow_last_observation_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\"} > 0)), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
+                      "expr": "max by (view) ((solver_bot_workflow_observed_items{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\"} and on (namespace, job, instance, solver, strategy, view) (solver_bot_workflow_last_observation_timestamp{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\"} > 0)))",
                       "instant": true,
                       "legendFormat": "",
                       "range": false,
@@ -2383,13 +2339,18 @@
                 "group": "organize",
                 "spec": {
                   "options": {
-                    "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "namespace": true, "solver": true},
+                    "excludeByName": {
+                      "Time": true,
+                      "__name__": true,
+                      "job": true,
+                      "instance": true,
+                      "namespace": true,
+                      "solver": true,
+                      "strategy": true
+                    },
                     "renameByName": {
-                      "workload": "Workload",
-                      "pod": "Pod",
                       "address": "Signer",
                       "view": "View",
-                      "strategy": "Strategy",
                       "role": "Role",
                       "endpoint": "Endpoint",
                       "method": "Method",
@@ -2401,7 +2362,8 @@
                       "stage": "Stage",
                       "Value": "Count",
                       "Value #A": "Count"
-                    }
+                    },
+                    "indexByName": {}
                   }
                 }
               }
@@ -2429,13 +2391,14 @@
                   "align": "left",
                   "cellOptions": {"type": "auto"},
                   "inspect": false
-                }
+                },
+                "displayName": ""
               },
               "overrides": [
                 {
                   "matcher": {"id": "byName", "options": "Count"},
                   "properties": [
-                    {"id": "unit", "value": "short"},
+                    {"id": "unit", "value": "none"},
                     {"id": "decimals", "value": 0},
                     {
                       "id": "thresholds",
@@ -2446,12 +2409,6 @@
                         ]
                       }
                     }
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Workload"},
-                  "properties": [
-                    {"id": "custom.width", "value": 220}
                   ]
                 },
                 {
@@ -2467,56 +2424,56 @@
                       "id": "mappings",
                       "value": [
                         {
-                          "type": "value",
                           "options": {
+                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "active_request_refresh": {"text": "Refresh active requests"},
                             "active_requests": {"text": "Active requests"},
-                            "redeemable": {"text": "Ready to redeem"},
-                            "offers": {"text": "Offers"},
-                            "targets": {"text": "Targets"},
-                            "quoted": {"text": "Quote returned"},
-                            "no_candidates": {"text": "No eligible candidates"},
-                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
-                            "not_quotable": {"text": "Order not quotable"},
-                            "below_minimum": {"text": "Below minimum amount"},
-                            "strategy_declined": {"text": "Strategy declined"},
                             "bad_request": {"text": "Invalid request"},
-                            "error": {"text": "Error"},
-                            "success": {"text": "Success"},
-                            "failed": {"text": "Failed"},
-                            "failure": {"text": "Failed"},
-                            "ok": {"text": "Success"},
-                            "won": {"text": "Won"},
+                            "below_minimum": {"text": "Below minimum amount"},
                             "confirmed": {"text": "Confirmed"},
-                            "reverted": {"text": "Reverted"},
-                            "not_admitted": {"text": "Not admitted"},
-                            "submission_error": {"text": "Submission error"},
-                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
-                            "settled_success": {"text": "Settlement succeeded"},
-                            "settled_failed": {"text": "Settlement failed"},
-                            "enqueued": {"text": "Enqueued"},
-                            "would_bid": {"text": "Would bid (dry run)"},
-                            "unresolved": {"text": "Unresolved"},
-                            "settled_in_time": {"text": "Settled on time"},
-                            "missed": {"text": "Missed"},
                             "declined_blocked": {"text": "Blocked"},
+                            "declined_invalid_amount": {"text": "Invalid amount"},
                             "declined_invalid_request": {"text": "Invalid request"},
                             "declined_pair_out_of_scope": {"text": "Pair outside scope"},
-                            "declined_invalid_amount": {"text": "Invalid amount"},
                             "declined_quote_state_unavailable": {"text": "Quote state unavailable"},
-                            "declined_strategy": {"text": "Strategy declined"},
                             "declined_state_changed": {"text": "State changed"},
+                            "declined_strategy": {"text": "Strategy declined"},
                             "declined_unknown": {"text": "Declined: unknown reason"},
-                            "active_request_refresh": {"text": "Refresh active requests"},
-                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
-                            "offer_refresh": {"text": "Refresh offers"},
-                            "target_refresh": {"text": "Refresh targets"},
+                            "enqueued": {"text": "Enqueued"},
+                            "error": {"text": "Error"},
                             "expected_yield": {"text": "Expected yield"},
-                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "failed": {"text": "Failed"},
+                            "failure": {"text": "Failed"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
+                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
                             "lifi-samechain": {"text": "LI.FI"},
+                            "missed": {"text": "Missed"},
+                            "no_candidates": {"text": "No eligible candidates"},
+                            "not_admitted": {"text": "Not admitted"},
+                            "not_quotable": {"text": "Order not quotable"},
+                            "offer_refresh": {"text": "Refresh offers"},
+                            "offers": {"text": "Offers"},
+                            "ok": {"text": "Success"},
+                            "quoted": {"text": "Quote returned"},
+                            "redeemable": {"text": "Ready to redeem"},
+                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
+                            "redstone-oev": {"text": "RedStone OEV"},
+                            "reverted": {"text": "Reverted"},
                             "rfq-filler": {"text": "RFQ"},
+                            "settled_failed": {"text": "Settlement failed"},
+                            "settled_in_time": {"text": "Settled on time"},
+                            "settled_success": {"text": "Settlement succeeded"},
+                            "strategy_declined": {"text": "Strategy declined"},
+                            "submission_error": {"text": "Submission error"},
+                            "success": {"text": "Success"},
+                            "target_refresh": {"text": "Refresh targets"},
+                            "targets": {"text": "Targets"},
                             "uniswapx-filler": {"text": "UniswapX"},
-                            "redstone-oev": {"text": "RedStone OEV"}
-                          }
+                            "unresolved": {"text": "Unresolved"},
+                            "won": {"text": "Won"},
+                            "would_bid": {"text": "Would bid (dry run)"}
+                          },
+                          "type": "value"
                         }
                       ]
                     }
@@ -2610,18 +2567,18 @@
                             "failure": {"text": "Failed"},
                             "ok": {"text": "Success"},
                             "won": {"text": "Won"},
-                            "confirmed": {"text": "Confirmed"},
+                            "confirmed": {"text": "Confirmed transaction"},
                             "reverted": {"text": "Reverted"},
                             "not_admitted": {"text": "Not admitted"},
-                            "submission_error": {"text": "Submission error"},
-                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
+                            "submission_error": {"text": "Submission failed"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
                             "settled_success": {"text": "Settlement succeeded"},
                             "settled_failed": {"text": "Settlement failed"},
                             "enqueued": {"text": "Enqueued"},
                             "would_bid": {"text": "Would bid (dry run)"},
                             "unresolved": {"text": "Unresolved"},
-                            "settled_in_time": {"text": "Settled on time"},
-                            "missed": {"text": "Missed"},
+                            "settled_in_time": {"text": "Delivered on time"},
+                            "missed": {"text": "Deadline missed"},
                             "declined_blocked": {"text": "Blocked"},
                             "declined_invalid_request": {"text": "Invalid request"},
                             "declined_pair_out_of_scope": {"text": "Pair outside scope"},
@@ -2639,7 +2596,22 @@
                             "lifi-samechain": {"text": "LI.FI"},
                             "rfq-filler": {"text": "RFQ"},
                             "uniswapx-filler": {"text": "UniswapX"},
-                            "redstone-oev": {"text": "RedStone OEV"}
+                            "redstone-oev": {"text": "RedStone OEV"},
+                            "cancelled": {"text": "Cancelled"},
+                            "tracking_stopped": {"text": "Tracking stopped"},
+                            "not_actionable": {"text": "Order not currently fillable or outside scope"},
+                            "deposit_deferred": {"text": "Deposit not visible yet"},
+                            "capacity_deferred": {"text": "Waiting for execution capacity"},
+                            "capacity_dropped": {"text": "Dropped after waiting for capacity"},
+                            "submitted": {"text": "Submitted for execution"},
+                            "invalid_plan": {"text": "Invalid execution plan"},
+                            "retryable_error": {"text": "Temporary error; retry scheduled"},
+                            "other": {"text": "Other processing decision"},
+                            "invalid": {"text": "Invalid request"},
+                            "queue_drop:inbox": {"text": "Dropped: incoming queue full"},
+                            "queue_drop:deposit_retry": {"text": "Dropped: deposit retry queue full"},
+                            "queue_drop:capacity_retry": {"text": "Dropped: capacity retry queue full"},
+                            "queue_drop:recovery_retry": {"text": "Dropped: recovery retry queue full"}
                           }
                         }
                       ]
@@ -2901,13 +2873,9 @@
         "transparent": true
       }
     },
-    "panel-90": {
+    "panel-40": {
       "kind": "Panel",
       "spec": {
-        "id": 90,
-        "title": "Workload comparison",
-        "description": "Compare the selected workloads. Period counts cover the selected pods and time range; readiness, backlog and balances describe current samples. Click a workload to aggregate its listed pods.",
-        "links": [],
         "data": {
           "kind": "QueryGroup",
           "spec": {
@@ -2915,305 +2883,648 @@
               {
                 "kind": "PanelQuery",
                 "spec": {
-                  "refId": "A",
                   "hidden": false,
                   "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
                     "datasource": {"name": "${datasource}"},
+                    "group": "prometheus",
+                    "kind": "DataQuery",
                     "spec": {
                       "editorMode": "code",
-                      "expr": "min by (namespace, workload) (label_replace(solver_bot_service_ready{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "instant": true,
-                      "range": false,
+                      "expr": "sum by (operation, outcome) (increase(solver_bot_external_operation_duration_seconds_count{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\"}[$__range]))",
                       "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "B",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "sum by (namespace, workload) (label_replace(increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",event=\"offer\",outcome=\"success\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
                       "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "C",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "sum by (namespace, workload) (label_replace(increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",event=\"redeem\",outcome=\"success\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "D",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "max by (namespace, workload) (label_replace((solver_bot_workflow_observed_items{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",view=\"active_requests\"} and on (namespace, pod, solver, strategy, view) (solver_bot_workflow_last_observation_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",view=\"active_requests\"} > 0)), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "E",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "max by (namespace, workload) (label_replace((solver_bot_workflow_observed_items{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",view=\"redeemable\"} and on (namespace, pod, solver, strategy, view) (solver_bot_workflow_last_observation_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",view=\"redeemable\"} > 0)), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "F",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "clamp_min(time() - (max by (namespace, workload) (label_replace(max_over_time(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",event=\"offer\",outcome=\"success\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) > 0), 0) or ((max by (namespace, workload) (label_replace(max_over_time(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"3f-bridge-facilitator\",event=\"offer\",outcome=\"success\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) == 0) - 1)",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
+                      "legendFormat": "",
+                      "range": false
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
                 }
               }
             ],
+            "queryOptions": {},
             "transformations": [
               {
-                "kind": "Transformation",
                 "group": "merge",
+                "kind": "Transformation",
                 "spec": {
                   "options": {}
                 }
               },
               {
-                "kind": "Transformation",
                 "group": "organize",
+                "kind": "Transformation",
                 "spec": {
                   "options": {
-                    "excludeByName": {"Time": true, "namespace": true, "__name__": true},
-                    "indexByName": {"workload": 0, "Value #A": 1, "Value #B": 2, "Value #C": 3, "Value #D": 4, "Value #E": 5, "Value #F": 6},
+                    "excludeByName": {"Time": true, "__name__": true, "instance": true, "job": true, "namespace": true, "solver": true},
+                    "indexByName": {"Value": 2, "operation": 0, "outcome": 1},
                     "renameByName": {
-                      "workload": "Workload",
-                      "Value #A": "Ready",
-                      "Value #B": "Offers accepted",
-                      "Value #C": "Requests redeemed",
-                      "Value #D": "Active requests",
-                      "Value #E": "Redeemable",
-                      "Value #F": "Last offer age"
+                      "Value": "Attempts",
+                      "Value #A": "Attempts",
+                      "address": "Signer",
+                      "endpoint": "Endpoint",
+                      "kind": "Kind",
+                      "label": "Operation",
+                      "method": "Method",
+                      "operation": "Operation",
+                      "outcome": "Outcome",
+                      "reason": "Reason",
+                      "role": "Role",
+                      "signal": "Signal",
+                      "stage": "Stage",
+                      "strategy": "Strategy",
+                      "view": "View"
                     }
                   }
                 }
               }
-            ],
-            "queryOptions": {}
+            ]
           }
         },
+        "description": "Authoritative source refresh attempts by operation and outcome. Failed, degraded or skipped refreshes explain missing snapshots.",
+        "id": 40,
+        "links": [],
+        "title": "Source refresh outcomes",
+        "transparent": true,
         "vizConfig": {
-          "kind": "VizConfig",
           "group": "table",
-          "version": "",
+          "kind": "VizConfig",
           "spec": {
-            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": false},
             "fieldConfig": {
               "defaults": {
-                "noValue": "—",
                 "custom": {
                   "align": "left",
                   "cellOptions": {"type": "auto"},
                   "inspect": false
                 },
-                "mappings": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "-1": {"text": "Not seen", "color": "gray"}
-                    }
-                  }
-                ]
+                "noValue": "—"
               },
               "overrides": [
                 {
-                  "matcher": {"id": "byName", "options": "Workload"},
+                  "matcher": {"id": "byName", "options": "Attempts"},
                   "properties": [
-                    {"id": "custom.width", "value": 220}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Ready"},
-                  "properties": [
-                    {"id": "custom.width", "value": 155},
-                    {"id": "unit", "value": "bool"},
+                    {"id": "unit", "value": "none"},
                     {"id": "decimals", "value": 0},
                     {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"color": "green", "value": 0}
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Signer"},
+                  "properties": [
+                    {"id": "custom.width", "value": 370}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Kind"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "options": {
+                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "active_request_refresh": {"text": "Refresh active requests"},
+                            "active_requests": {"text": "Active requests"},
+                            "bad_request": {"text": "Invalid request"},
+                            "below_minimum": {"text": "Below minimum amount"},
+                            "confirmed": {"text": "Confirmed"},
+                            "declined_blocked": {"text": "Blocked"},
+                            "declined_invalid_amount": {"text": "Invalid amount"},
+                            "declined_invalid_request": {"text": "Invalid request"},
+                            "declined_pair_out_of_scope": {"text": "Pair outside scope"},
+                            "declined_quote_state_unavailable": {"text": "Quote state unavailable"},
+                            "declined_state_changed": {"text": "State changed"},
+                            "declined_strategy": {"text": "Strategy declined"},
+                            "declined_unknown": {"text": "Declined: unknown reason"},
+                            "enqueued": {"text": "Enqueued"},
+                            "error": {"text": "Error"},
+                            "expected_yield": {"text": "Expected yield"},
+                            "failed": {"text": "Failed"},
+                            "failure": {"text": "Failed"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
+                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
+                            "lifi-samechain": {"text": "LI.FI"},
+                            "missed": {"text": "Missed"},
+                            "no_candidates": {"text": "No eligible candidates"},
+                            "not_admitted": {"text": "Not admitted"},
+                            "not_quotable": {"text": "Order not quotable"},
+                            "offer_refresh": {"text": "Refresh offers"},
+                            "offers": {"text": "Offers"},
+                            "ok": {"text": "Success"},
+                            "quoted": {"text": "Quote returned"},
+                            "redeemable": {"text": "Ready to redeem"},
+                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
+                            "redstone-oev": {"text": "RedStone OEV"},
+                            "reverted": {"text": "Reverted"},
+                            "rfq-filler": {"text": "RFQ"},
+                            "settled_failed": {"text": "Settlement failed"},
+                            "settled_in_time": {"text": "Settled on time"},
+                            "settled_success": {"text": "Settlement succeeded"},
+                            "strategy_declined": {"text": "Strategy declined"},
+                            "submission_error": {"text": "Submission error"},
+                            "success": {"text": "Success"},
+                            "target_refresh": {"text": "Refresh targets"},
+                            "targets": {"text": "Targets"},
+                            "uniswapx-filler": {"text": "UniswapX"},
+                            "unresolved": {"text": "Unresolved"},
+                            "won": {"text": "Won"},
+                            "would_bid": {"text": "Would bid (dry run)"}
+                          },
+                          "type": "value"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Operation"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "options": {
+                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "active_request_refresh": {"text": "Refresh active requests"},
+                            "active_requests": {"text": "Active requests"},
+                            "bad_request": {"text": "Invalid request"},
+                            "below_minimum": {"text": "Below minimum amount"},
+                            "confirmed": {"text": "Confirmed"},
+                            "declined_blocked": {"text": "Blocked"},
+                            "declined_invalid_amount": {"text": "Invalid amount"},
+                            "declined_invalid_request": {"text": "Invalid request"},
+                            "declined_pair_out_of_scope": {"text": "Pair outside scope"},
+                            "declined_quote_state_unavailable": {"text": "Quote state unavailable"},
+                            "declined_state_changed": {"text": "State changed"},
+                            "declined_strategy": {"text": "Strategy declined"},
+                            "declined_unknown": {"text": "Declined: unknown reason"},
+                            "enqueued": {"text": "Enqueued"},
+                            "error": {"text": "Error"},
+                            "expected_yield": {"text": "Expected yield"},
+                            "failed": {"text": "Failed"},
+                            "failure": {"text": "Failed"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
+                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
+                            "lifi-samechain": {"text": "LI.FI"},
+                            "missed": {"text": "Missed"},
+                            "no_candidates": {"text": "No eligible candidates"},
+                            "not_admitted": {"text": "Not admitted"},
+                            "not_quotable": {"text": "Order not quotable"},
+                            "offer_refresh": {"text": "Refresh offers"},
+                            "offers": {"text": "Offers"},
+                            "ok": {"text": "Success"},
+                            "quoted": {"text": "Quote returned"},
+                            "redeemable": {"text": "Ready to redeem"},
+                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
+                            "redstone-oev": {"text": "RedStone OEV"},
+                            "reverted": {"text": "Reverted"},
+                            "rfq-filler": {"text": "RFQ"},
+                            "settled_failed": {"text": "Settlement failed"},
+                            "settled_in_time": {"text": "Settled on time"},
+                            "settled_success": {"text": "Settlement succeeded"},
+                            "strategy_declined": {"text": "Strategy declined"},
+                            "submission_error": {"text": "Submission error"},
+                            "success": {"text": "Success"},
+                            "target_refresh": {"text": "Refresh targets"},
+                            "targets": {"text": "Targets"},
+                            "uniswapx-filler": {"text": "UniswapX"},
+                            "unresolved": {"text": "Unresolved"},
+                            "won": {"text": "Won"},
+                            "would_bid": {"text": "Would bid (dry run)"}
+                          },
+                          "type": "value"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Outcome"},
+                  "properties": [
+                    {
                       "id": "mappings",
                       "value": [
                         {
                           "type": "value",
                           "options": {
-                            "0": {"text": "No", "color": "red"},
-                            "1": {"text": "Yes", "color": "green"}
-                          }
-                        },
-                        {
-                          "type": "special",
-                          "options": {
-                            "match": "null",
-                            "result": {"text": "No current sample", "color": "gray"}
+                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "active_request_refresh": {"text": "Refresh active requests"},
+                            "active_requests": {"text": "Active requests"},
+                            "bad_request": {"text": "Invalid request"},
+                            "below_minimum": {"text": "Below minimum amount"},
+                            "confirmed": {"text": "Confirmed transaction"},
+                            "declined_blocked": {"text": "Blocked"},
+                            "declined_invalid_amount": {"text": "Invalid amount"},
+                            "declined_invalid_request": {"text": "Invalid request"},
+                            "declined_pair_out_of_scope": {"text": "Pair outside scope"},
+                            "declined_quote_state_unavailable": {"text": "Quote state unavailable"},
+                            "declined_state_changed": {"text": "State changed"},
+                            "declined_strategy": {"text": "Strategy declined"},
+                            "declined_unknown": {"text": "Declined: unknown reason"},
+                            "enqueued": {"text": "Enqueued"},
+                            "error": {"text": "Error"},
+                            "expected_yield": {"text": "Expected yield"},
+                            "failed": {"text": "Failed"},
+                            "failure": {"text": "Failed"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
+                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
+                            "lifi-samechain": {"text": "LI.FI"},
+                            "missed": {"text": "Deadline missed"},
+                            "no_candidates": {"text": "No eligible candidates"},
+                            "not_admitted": {"text": "Not admitted"},
+                            "not_quotable": {"text": "Order not quotable"},
+                            "offer_refresh": {"text": "Refresh offers"},
+                            "offers": {"text": "Offers"},
+                            "ok": {"text": "Success"},
+                            "quoted": {"text": "Quote returned"},
+                            "redeemable": {"text": "Ready to redeem"},
+                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
+                            "redstone-oev": {"text": "RedStone OEV"},
+                            "reverted": {"text": "Reverted"},
+                            "rfq-filler": {"text": "RFQ"},
+                            "settled_failed": {"text": "Settlement failed"},
+                            "settled_in_time": {"text": "Delivered on time"},
+                            "settled_success": {"text": "Settlement succeeded"},
+                            "strategy_declined": {"text": "Strategy declined"},
+                            "submission_error": {"text": "Submission failed"},
+                            "success": {"text": "Success"},
+                            "target_refresh": {"text": "Refresh targets"},
+                            "targets": {"text": "Targets"},
+                            "uniswapx-filler": {"text": "UniswapX"},
+                            "unresolved": {"text": "Unresolved"},
+                            "won": {"text": "Won"},
+                            "would_bid": {"text": "Would bid (dry run)"},
+                            "cancelled": {"text": "Cancelled"},
+                            "tracking_stopped": {"text": "Tracking stopped"},
+                            "not_actionable": {"text": "Order not currently fillable or outside scope"},
+                            "deposit_deferred": {"text": "Deposit not visible yet"},
+                            "capacity_deferred": {"text": "Waiting for execution capacity"},
+                            "capacity_dropped": {"text": "Dropped after waiting for capacity"},
+                            "submitted": {"text": "Submitted for execution"},
+                            "invalid_plan": {"text": "Invalid execution plan"},
+                            "retryable_error": {"text": "Temporary error; retry scheduled"},
+                            "other": {"text": "Other processing decision"},
+                            "invalid": {"text": "Invalid request"},
+                            "queue_drop:inbox": {"text": "Dropped: incoming queue full"},
+                            "queue_drop:deposit_retry": {"text": "Dropped: deposit retry queue full"},
+                            "queue_drop:capacity_retry": {"text": "Dropped: capacity retry queue full"},
+                            "queue_drop:recovery_retry": {"text": "Dropped: recovery retry queue full"}
                           }
                         }
                       ]
-                    },
-                    {
-                      "id": "custom.cellOptions",
-                      "value": {"type": "color-text"}
                     }
                   ]
                 },
                 {
-                  "matcher": {"id": "byName", "options": "Offers accepted"},
+                  "matcher": {"id": "byName", "options": "Reason"},
                   "properties": [
-                    {"id": "custom.width", "value": 155},
-                    {"id": "unit", "value": "short"},
-                    {"id": "decimals", "value": 0}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Requests redeemed"},
-                  "properties": [
-                    {"id": "custom.width", "value": 155},
-                    {"id": "unit", "value": "short"},
-                    {"id": "decimals", "value": 0}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Active requests"},
-                  "properties": [
-                    {"id": "custom.width", "value": 155},
-                    {"id": "unit", "value": "short"},
-                    {"id": "decimals", "value": 0}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Redeemable"},
-                  "properties": [
-                    {"id": "custom.width", "value": 155},
-                    {"id": "unit", "value": "short"},
-                    {"id": "decimals", "value": 0}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Last offer age"},
-                  "properties": [
-                    {"id": "custom.width", "value": 155},
-                    {"id": "unit", "value": "s"},
-                    {"id": "decimals", "value": 1},
                     {
                       "id": "mappings",
                       "value": [
                         {
-                          "type": "value",
                           "options": {
-                            "0": {"text": "Not seen", "color": "gray", "index": 0}
-                          }
+                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "active_request_refresh": {"text": "Refresh active requests"},
+                            "active_requests": {"text": "Active requests"},
+                            "bad_request": {"text": "Invalid request"},
+                            "below_minimum": {"text": "Below minimum amount"},
+                            "confirmed": {"text": "Confirmed"},
+                            "declined_blocked": {"text": "Blocked"},
+                            "declined_invalid_amount": {"text": "Invalid amount"},
+                            "declined_invalid_request": {"text": "Invalid request"},
+                            "declined_pair_out_of_scope": {"text": "Pair outside scope"},
+                            "declined_quote_state_unavailable": {"text": "Quote state unavailable"},
+                            "declined_state_changed": {"text": "State changed"},
+                            "declined_strategy": {"text": "Strategy declined"},
+                            "declined_unknown": {"text": "Declined: unknown reason"},
+                            "enqueued": {"text": "Enqueued"},
+                            "error": {"text": "Error"},
+                            "expected_yield": {"text": "Expected yield"},
+                            "failed": {"text": "Failed"},
+                            "failure": {"text": "Failed"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
+                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
+                            "lifi-samechain": {"text": "LI.FI"},
+                            "missed": {"text": "Missed"},
+                            "no_candidates": {"text": "No eligible candidates"},
+                            "not_admitted": {"text": "Not admitted"},
+                            "not_quotable": {"text": "Order not quotable"},
+                            "offer_refresh": {"text": "Refresh offers"},
+                            "offers": {"text": "Offers"},
+                            "ok": {"text": "Success"},
+                            "quoted": {"text": "Quote returned"},
+                            "redeemable": {"text": "Ready to redeem"},
+                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
+                            "redstone-oev": {"text": "RedStone OEV"},
+                            "reverted": {"text": "Reverted"},
+                            "rfq-filler": {"text": "RFQ"},
+                            "settled_failed": {"text": "Settlement failed"},
+                            "settled_in_time": {"text": "Settled on time"},
+                            "settled_success": {"text": "Settlement succeeded"},
+                            "strategy_declined": {"text": "Strategy declined"},
+                            "submission_error": {"text": "Submission error"},
+                            "success": {"text": "Success"},
+                            "target_refresh": {"text": "Refresh targets"},
+                            "targets": {"text": "Targets"},
+                            "uniswapx-filler": {"text": "UniswapX"},
+                            "unresolved": {"text": "Unresolved"},
+                            "won": {"text": "Won"},
+                            "would_bid": {"text": "Would bid (dry run)"}
+                          },
+                          "type": "value"
                         }
                       ]
-                    },
-                    {
-                      "id": "custom.cellOptions",
-                      "value": {"type": "color-text"}
                     }
                   ]
                 },
                 {
-                  "matcher": {"id": "byName", "options": "Workload"},
+                  "matcher": {"id": "byName", "options": "Signal"},
                   "properties": [
                     {
-                      "id": "links",
+                      "id": "mappings",
                       "value": [
                         {
-                          "title": "View workload",
-                          "url": "/d/${__dashboard.uid}?${__url_time_range}&${datasource:queryparam}&${namespace:queryparam}&${history:queryparam}&var-workloads=${__value.raw}&var-instance=%24__all",
-                          "targetBlank": true
+                          "options": {
+                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "active_request_refresh": {"text": "Refresh active requests"},
+                            "active_requests": {"text": "Active requests"},
+                            "bad_request": {"text": "Invalid request"},
+                            "below_minimum": {"text": "Below minimum amount"},
+                            "confirmed": {"text": "Confirmed"},
+                            "declined_blocked": {"text": "Blocked"},
+                            "declined_invalid_amount": {"text": "Invalid amount"},
+                            "declined_invalid_request": {"text": "Invalid request"},
+                            "declined_pair_out_of_scope": {"text": "Pair outside scope"},
+                            "declined_quote_state_unavailable": {"text": "Quote state unavailable"},
+                            "declined_state_changed": {"text": "State changed"},
+                            "declined_strategy": {"text": "Strategy declined"},
+                            "declined_unknown": {"text": "Declined: unknown reason"},
+                            "enqueued": {"text": "Enqueued"},
+                            "error": {"text": "Error"},
+                            "expected_yield": {"text": "Expected yield"},
+                            "failed": {"text": "Failed"},
+                            "failure": {"text": "Failed"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
+                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
+                            "lifi-samechain": {"text": "LI.FI"},
+                            "missed": {"text": "Missed"},
+                            "no_candidates": {"text": "No eligible candidates"},
+                            "not_admitted": {"text": "Not admitted"},
+                            "not_quotable": {"text": "Order not quotable"},
+                            "offer_refresh": {"text": "Refresh offers"},
+                            "offers": {"text": "Offers"},
+                            "ok": {"text": "Success"},
+                            "quoted": {"text": "Quote returned"},
+                            "redeemable": {"text": "Ready to redeem"},
+                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
+                            "redstone-oev": {"text": "RedStone OEV"},
+                            "reverted": {"text": "Reverted"},
+                            "rfq-filler": {"text": "RFQ"},
+                            "settled_failed": {"text": "Settlement failed"},
+                            "settled_in_time": {"text": "Settled on time"},
+                            "settled_success": {"text": "Settlement succeeded"},
+                            "strategy_declined": {"text": "Strategy declined"},
+                            "submission_error": {"text": "Submission error"},
+                            "success": {"text": "Success"},
+                            "target_refresh": {"text": "Refresh targets"},
+                            "targets": {"text": "Targets"},
+                            "uniswapx-filler": {"text": "UniswapX"},
+                            "unresolved": {"text": "Unresolved"},
+                            "won": {"text": "Won"},
+                            "would_bid": {"text": "Would bid (dry run)"}
+                          },
+                          "type": "value"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Stage"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "options": {
+                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "active_request_refresh": {"text": "Refresh active requests"},
+                            "active_requests": {"text": "Active requests"},
+                            "bad_request": {"text": "Invalid request"},
+                            "below_minimum": {"text": "Below minimum amount"},
+                            "confirmed": {"text": "Confirmed"},
+                            "declined_blocked": {"text": "Blocked"},
+                            "declined_invalid_amount": {"text": "Invalid amount"},
+                            "declined_invalid_request": {"text": "Invalid request"},
+                            "declined_pair_out_of_scope": {"text": "Pair outside scope"},
+                            "declined_quote_state_unavailable": {"text": "Quote state unavailable"},
+                            "declined_state_changed": {"text": "State changed"},
+                            "declined_strategy": {"text": "Strategy declined"},
+                            "declined_unknown": {"text": "Declined: unknown reason"},
+                            "enqueued": {"text": "Enqueued"},
+                            "error": {"text": "Error"},
+                            "expected_yield": {"text": "Expected yield"},
+                            "failed": {"text": "Failed"},
+                            "failure": {"text": "Failed"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
+                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
+                            "lifi-samechain": {"text": "LI.FI"},
+                            "missed": {"text": "Missed"},
+                            "no_candidates": {"text": "No eligible candidates"},
+                            "not_admitted": {"text": "Not admitted"},
+                            "not_quotable": {"text": "Order not quotable"},
+                            "offer_refresh": {"text": "Refresh offers"},
+                            "offers": {"text": "Offers"},
+                            "ok": {"text": "Success"},
+                            "quoted": {"text": "Quote returned"},
+                            "redeemable": {"text": "Ready to redeem"},
+                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
+                            "redstone-oev": {"text": "RedStone OEV"},
+                            "reverted": {"text": "Reverted"},
+                            "rfq-filler": {"text": "RFQ"},
+                            "settled_failed": {"text": "Settlement failed"},
+                            "settled_in_time": {"text": "Settled on time"},
+                            "settled_success": {"text": "Settlement succeeded"},
+                            "strategy_declined": {"text": "Strategy declined"},
+                            "submission_error": {"text": "Submission error"},
+                            "success": {"text": "Success"},
+                            "target_refresh": {"text": "Refresh targets"},
+                            "targets": {"text": "Targets"},
+                            "uniswapx-filler": {"text": "UniswapX"},
+                            "unresolved": {"text": "Unresolved"},
+                            "won": {"text": "Won"},
+                            "would_bid": {"text": "Would bid (dry run)"}
+                          },
+                          "type": "value"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "View"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "options": {
+                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "active_request_refresh": {"text": "Refresh active requests"},
+                            "active_requests": {"text": "Active requests"},
+                            "bad_request": {"text": "Invalid request"},
+                            "below_minimum": {"text": "Below minimum amount"},
+                            "confirmed": {"text": "Confirmed"},
+                            "declined_blocked": {"text": "Blocked"},
+                            "declined_invalid_amount": {"text": "Invalid amount"},
+                            "declined_invalid_request": {"text": "Invalid request"},
+                            "declined_pair_out_of_scope": {"text": "Pair outside scope"},
+                            "declined_quote_state_unavailable": {"text": "Quote state unavailable"},
+                            "declined_state_changed": {"text": "State changed"},
+                            "declined_strategy": {"text": "Strategy declined"},
+                            "declined_unknown": {"text": "Declined: unknown reason"},
+                            "enqueued": {"text": "Enqueued"},
+                            "error": {"text": "Error"},
+                            "expected_yield": {"text": "Expected yield"},
+                            "failed": {"text": "Failed"},
+                            "failure": {"text": "Failed"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
+                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
+                            "lifi-samechain": {"text": "LI.FI"},
+                            "missed": {"text": "Missed"},
+                            "no_candidates": {"text": "No eligible candidates"},
+                            "not_admitted": {"text": "Not admitted"},
+                            "not_quotable": {"text": "Order not quotable"},
+                            "offer_refresh": {"text": "Refresh offers"},
+                            "offers": {"text": "Offers"},
+                            "ok": {"text": "Success"},
+                            "quoted": {"text": "Quote returned"},
+                            "redeemable": {"text": "Ready to redeem"},
+                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
+                            "redstone-oev": {"text": "RedStone OEV"},
+                            "reverted": {"text": "Reverted"},
+                            "rfq-filler": {"text": "RFQ"},
+                            "settled_failed": {"text": "Settlement failed"},
+                            "settled_in_time": {"text": "Settled on time"},
+                            "settled_success": {"text": "Settlement succeeded"},
+                            "strategy_declined": {"text": "Strategy declined"},
+                            "submission_error": {"text": "Submission error"},
+                            "success": {"text": "Success"},
+                            "target_refresh": {"text": "Refresh targets"},
+                            "targets": {"text": "Targets"},
+                            "uniswapx-filler": {"text": "UniswapX"},
+                            "unresolved": {"text": "Unresolved"},
+                            "won": {"text": "Won"},
+                            "would_bid": {"text": "Would bid (dry run)"}
+                          },
+                          "type": "value"
                         }
                       ]
                     }
                   ]
                 }
               ]
+            },
+            "options": {
+              "cellHeight": "sm",
+              "enablePagination": false,
+              "showHeader": true,
+              "sortBy": [
+                {"desc": true, "displayName": "Count"}
+              ]
             }
-          }
-        },
-        "transparent": true
+          },
+          "version": ""
+        }
       }
     },
-    "panel-91": {
+    "panel-84": {
       "kind": "Panel",
       "spec": {
-        "id": 91,
-        "title": "Current pods",
-        "description": "Pods reporting at the end of the selected range, across the selected workloads. This list stays independent of the Pod filter so you can switch replicas. Click a pod to inspect it.",
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {"name": "${datasource}"},
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (view) (solver_bot_workflow_last_observation_timestamp{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\"} == bool 0)",
+                      "format": "table",
+                      "instant": true,
+                      "legendFormat": "",
+                      "range": false
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": [
+              {
+                "group": "organize",
+                "kind": "Transformation",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true, "instance": true, "job": true, "namespace": true},
+                    "indexByName": {"Value": 1, "view": 0},
+                    "renameByName": {"Value": "Unobserved sources", "view": "View"}
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "description": "Number of reporting source views that have not completed an observation since startup. Zero means all reporting sources have an observation; no data means source telemetry is absent.",
+        "id": 84,
+        "links": [],
+        "title": "Views without a source observation",
+        "transparent": true,
+        "vizConfig": {
+          "group": "table",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                },
+                "decimals": 0,
+                "noValue": "No data",
+                "unit": "none"
+              },
+              "overrides": []
+            },
+            "options": {"cellHeight": "sm", "enablePagination": false, "showHeader": true}
+          },
+          "version": ""
+        }
+      }
+    },
+    "panel-86": {
+      "kind": "Panel",
+      "spec": {
+        "id": 86,
+        "title": "Transaction fees · since process starts",
+        "description": "Current reporting services only, since their process starts. Includes preperiod fees and the first nonzero sample; excludes vanished services. Fees recorded from transaction receipts, grouped by terminal outcome. Reverted and cancelled transactions consumed fees without a successful execution. Included-unconfirmed means final confirmation was not established. Missing receipt prices can undercount costs.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -3231,53 +3542,11 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "label_replace(max by (namespace, pod) (solver_bot_solver_info{solver=\"3f-bridge-facilitator\",namespace=\"${namespace}\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")",
+                      "expr": "sum by(outcome)(solver_bot_txmanager_fee_paid_wei_total{namespace=\"${namespace}\",label=\"redeem\"}) / 1e18",
                       "instant": true,
                       "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "B",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "(label_replace(min by (namespace, pod) (solver_bot_service_ready{namespace=\"${namespace}\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\",pod!=\"\"}), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) and on (namespace, pod) (label_replace(max by (namespace, pod) (solver_bot_solver_info{solver=\"3f-bridge-facilitator\",namespace=\"${namespace}\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "C",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "(label_replace(min by (namespace, pod) ((time() - process_start_time_seconds{namespace=\"${namespace}\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\",pod!=\"\"}) and on (namespace, pod) solver_bot_solver_info{solver=\"3f-bridge-facilitator\",namespace=\"${namespace}\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) and on (namespace, pod) (label_replace(max by (namespace, pod) (solver_bot_solver_info{solver=\"3f-bridge-facilitator\",namespace=\"${namespace}\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
+                      "legendFormat": "",
+                      "format": "table"
                     }
                   }
                 }
@@ -3286,19 +3555,12 @@
             "transformations": [
               {
                 "kind": "Transformation",
-                "group": "merge",
-                "spec": {
-                  "options": {}
-                }
-              },
-              {
-                "kind": "Transformation",
                 "group": "organize",
                 "spec": {
                   "options": {
-                    "excludeByName": {"Time": true, "namespace": true, "Value #A": true},
-                    "indexByName": {"workload": 0, "pod": 1, "Value #B": 2, "Value #C": 3},
-                    "renameByName": {"workload": "Workload", "pod": "Pod", "Value #B": "Ready", "Value #C": "Uptime"}
+                    "excludeByName": {"Time": true, "__name__": true},
+                    "indexByName": {},
+                    "renameByName": {"outcome": "Transaction outcome", "Value": "Fees (ETH)"}
                   }
                 }
               }
@@ -3316,11 +3578,13 @@
               "cellHeight": "sm",
               "enablePagination": false,
               "sortBy": [
-                {"displayName": "Workload", "desc": false}
+                {"displayName": "Fees (ETH)", "desc": true}
               ]
             },
             "fieldConfig": {
               "defaults": {
+                "unit": "none",
+                "decimals": 0,
                 "noValue": "—",
                 "custom": {
                   "align": "left",
@@ -3330,62 +3594,287 @@
               },
               "overrides": [
                 {
-                  "matcher": {"id": "byName", "options": "Workload"},
+                  "matcher": {"id": "byName", "options": "Fees (ETH)"},
                   "properties": [
-                    {"id": "custom.width", "value": 220}
+                    {"id": "unit", "value": "suffix: ETH"},
+                    {"id": "decimals", "value": 9}
                   ]
                 },
                 {
-                  "matcher": {"id": "byName", "options": "Pod"},
+                  "matcher": {"id": "byName", "options": "Transaction outcome"},
                   "properties": [
-                    {"id": "custom.width", "value": 420}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Ready"},
-                  "properties": [
-                    {"id": "custom.width", "value": 160},
                     {
                       "id": "mappings",
                       "value": [
                         {
                           "type": "value",
                           "options": {
-                            "0": {"text": "Not ready", "color": "red"},
-                            "1": {"text": "Ready", "color": "green"}
+                            "confirmed": {"text": "Confirmed transaction"},
+                            "cancelled": {"text": "Cancelled"},
+                            "reverted": {"text": "Reverted"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
+                            "submission_error": {"text": "Submission failed"},
+                            "tracking_stopped": {"text": "Tracking stopped"},
+                            "settled_in_time": {"text": "Delivered on time"},
+                            "missed": {"text": "Deadline missed"},
+                            "not_actionable": {"text": "Order not currently fillable or outside scope"},
+                            "deposit_deferred": {"text": "Deposit not visible yet"},
+                            "capacity_deferred": {"text": "Waiting for execution capacity"},
+                            "capacity_dropped": {"text": "Dropped after waiting for capacity"},
+                            "submitted": {"text": "Submitted for execution"},
+                            "invalid_plan": {"text": "Invalid execution plan"},
+                            "retryable_error": {"text": "Temporary error; retry scheduled"},
+                            "other": {"text": "Other processing decision"},
+                            "invalid": {"text": "Invalid request"},
+                            "queue_drop:inbox": {"text": "Dropped: incoming queue full"},
+                            "queue_drop:deposit_retry": {"text": "Dropped: deposit retry queue full"},
+                            "queue_drop:capacity_retry": {"text": "Dropped: capacity retry queue full"},
+                            "queue_drop:recovery_retry": {"text": "Dropped: recovery retry queue full"}
                           }
-                        }
-                      ]
-                    },
-                    {
-                      "id": "custom.cellOptions",
-                      "value": {"type": "color-text"}
-                    }
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Uptime"},
-                  "properties": [
-                    {"id": "custom.width", "value": 160},
-                    {"id": "unit", "value": "s"}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Pod"},
-                  "properties": [
-                    {
-                      "id": "links",
-                      "value": [
-                        {
-                          "title": "Inspect pod",
-                          "url": "/d/${__dashboard.uid}?${__url_time_range}&${datasource:queryparam}&${namespace:queryparam}&${history:queryparam}&var-workloads=${__data.fields.Workload}&var-instance=${__value.raw}",
-                          "targetBlank": true
                         }
                       ]
                     }
                   ]
                 }
               ]
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-100": {
+      "kind": "Panel",
+      "spec": {
+        "id": 100,
+        "title": "Metrics availability",
+        "description": "Current exporter membership for this integration and environment. Zero means no compatible metrics source is reporting here; it does not mean zero business activity. Check the selected environment and Runtime exporter coverage.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "count(solver_bot_solver_info{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\"}) or vector(0)",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "reduceOptions": {
+                "values": false,
+                "calcs": ["lastNotNull"],
+                "fields": ""
+              },
+              "orientation": "auto",
+              "textMode": "value",
+              "colorMode": "value",
+              "graphMode": "none",
+              "justifyMode": "auto"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "Source unavailable",
+                "mappings": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {"text": "No metrics source", "color": "red"}
+                    }
+                  },
+                  {
+                    "type": "range",
+                    "options": {
+                      "from": 1,
+                      "to": 1000000000.0,
+                      "result": {"text": "Metrics received", "color": "green"}
+                    }
+                  }
+                ],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "red"},
+                    {"value": 1, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "thresholds"}
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-101": {
+      "kind": "Panel",
+      "spec": {
+        "id": 101,
+        "title": "Adapters preventing a complete view · logs",
+        "description": "Adapter resolution problems recorded in existing ClickHouse logs. An unconfigured adapter can leave the target scan incomplete and prevent authoritative state publication. Expected skips for another authorized signer are excluded. Counts are retained log observations; the same adapter may appear on every refresh. Choose the Logs datasource when importing.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "grafana-clickhouse-datasource",
+                    "version": "v0",
+                    "datasource": {"name": "${logs}"},
+                    "spec": {
+                      "editorType": "sql",
+                      "format": 1,
+                      "queryType": "table",
+                      "rawSql": "SELECT concat('adapter: ', JSONExtractString(Body, 'adapter')) AS Adapter,\n  if(JSONExtractString(Body, 'msg') = 'skipping adapter: not configured on-chain', 'Adapter not configured', 'Adapter resolution failed') AS Problem,\n  count() AS Observations\nFROM logs.otel_logs_k8s\nWHERE Timestamp >= $__fromTime AND Timestamp <= $__toTime\n  AND Namespace = ${namespace:singlequote}\n  AND ServiceName = 'vault-solver-3f'\n  AND JSONExtractString(Body, 'solver') = '3f-bridge-facilitator'\n  AND JSONExtractString(Body, 'msg') IN ('skipping adapter: not configured on-chain', 'skipping adapter: resolution failed')\nGROUP BY Adapter, Problem ORDER BY Observations DESC LIMIT 50"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true},
+                    "indexByName": {},
+                    "renameByName": {}
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": false},
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-102": {
+      "kind": "Panel",
+      "spec": {
+        "id": 102,
+        "title": "Since last successful redemption",
+        "description": "Time since the latest successful operation whose timestamp is visible in the selected period. An initialized zero timestamp means no success has been observed; an absent series remains unavailable.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "clamp_min(time() - (max(max_over_time(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",event=\"redeem\",outcome=\"success\"}[$__range])) > 0), 0) or ((max(max_over_time(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",event=\"redeem\",outcome=\"success\"}[$__range])) == 0) - 1)",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "reduceOptions": {
+                "values": false,
+                "calcs": ["lastNotNull"],
+                "fields": ""
+              },
+              "orientation": "auto",
+              "textMode": "value",
+              "colorMode": "value",
+              "graphMode": "none",
+              "justifyMode": "auto"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "s",
+                "decimals": 1,
+                "noValue": "Unavailable",
+                "color": {"mode": "fixed", "fixedColor": "blue"},
+                "mappings": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "-1": {"text": "No success observed", "color": "gray"}
+                    }
+                  }
+                ]
+              },
+              "overrides": []
             }
           }
         },
@@ -3400,7 +3889,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Current health and selected-period results",
+            "title": "Redemption results",
             "collapse": false,
             "layout": {
               "kind": "GridLayout",
@@ -3411,47 +3900,7 @@
                     "spec": {
                       "x": 0,
                       "y": 0,
-                      "width": 4,
-                      "height": 4,
-                      "element": {"kind": "ElementReference", "name": "panel-2"}
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 4,
-                      "y": 0,
-                      "width": 4,
-                      "height": 4,
-                      "element": {"kind": "ElementReference", "name": "panel-5"}
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 8,
-                      "y": 0,
-                      "width": 4,
-                      "height": 4,
-                      "element": {"kind": "ElementReference", "name": "panel-6"}
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 12,
-                      "y": 0,
-                      "width": 4,
-                      "height": 4,
-                      "element": {"kind": "ElementReference", "name": "panel-3"}
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 16,
-                      "y": 0,
-                      "width": 4,
+                      "width": 8,
                       "height": 4,
                       "element": {"kind": "ElementReference", "name": "panel-4"}
                     }
@@ -3459,11 +3908,21 @@
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
-                      "x": 20,
+                      "x": 8,
                       "y": 0,
-                      "width": 4,
+                      "width": 8,
                       "height": 4,
-                      "element": {"kind": "ElementReference", "name": "panel-7"}
+                      "element": {"kind": "ElementReference", "name": "panel-102"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 16,
+                      "y": 0,
+                      "width": 8,
+                      "height": 4,
+                      "element": {"kind": "ElementReference", "name": "panel-3"}
                     }
                   }
                 ]
@@ -3474,7 +3933,51 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Compare workloads",
+            "title": "Outstanding work and source reliability",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 8,
+                      "height": 4,
+                      "element": {"kind": "ElementReference", "name": "panel-5"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 8,
+                      "y": 0,
+                      "width": 8,
+                      "height": 4,
+                      "element": {"kind": "ElementReference", "name": "panel-6"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 16,
+                      "y": 0,
+                      "width": 8,
+                      "height": 4,
+                      "element": {"kind": "ElementReference", "name": "panel-2"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "What prevents a complete view",
             "collapse": false,
             "layout": {
               "kind": "GridLayout",
@@ -3486,8 +3989,8 @@
                       "x": 0,
                       "y": 0,
                       "width": 24,
-                      "height": 8,
-                      "element": {"kind": "ElementReference", "name": "panel-90"}
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-101"}
                     }
                   }
                 ]
@@ -3498,7 +4001,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "API data and backlog",
+            "title": "Redemption costs",
             "collapse": false,
             "layout": {
               "kind": "GridLayout",
@@ -3509,19 +4012,9 @@
                     "spec": {
                       "x": 0,
                       "y": 0,
-                      "width": 12,
-                      "height": 8,
-                      "element": {"kind": "ElementReference", "name": "panel-9"}
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 12,
-                      "y": 0,
-                      "width": 12,
-                      "height": 8,
-                      "element": {"kind": "ElementReference", "name": "panel-10"}
+                      "width": 24,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-86"}
                     }
                   }
                 ]
@@ -3532,7 +4025,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Offer and redemption results",
+            "title": "Redemption transaction outcomes",
             "collapse": false,
             "layout": {
               "kind": "GridLayout",
@@ -3543,18 +4036,8 @@
                     "spec": {
                       "x": 0,
                       "y": 0,
-                      "width": 12,
-                      "height": 8,
-                      "element": {"kind": "ElementReference", "name": "panel-13"}
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 12,
-                      "y": 0,
-                      "width": 12,
-                      "height": 8,
+                      "width": 24,
+                      "height": 6,
                       "element": {"kind": "ElementReference", "name": "panel-18"}
                     }
                   }
@@ -3566,8 +4049,8 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Backlog history and activity",
-            "collapse": false,
+            "title": "Backlog and activity diagnostics",
+            "collapse": true,
             "layout": {
               "kind": "GridLayout",
               "spec": {
@@ -3577,7 +4060,17 @@
                     "spec": {
                       "x": 0,
                       "y": 0,
-                      "width": 12,
+                      "width": 8,
+                      "height": 7,
+                      "element": {"kind": "ElementReference", "name": "panel-11"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 8,
+                      "y": 0,
+                      "width": 8,
                       "height": 7,
                       "element": {"kind": "ElementReference", "name": "panel-17"}
                     }
@@ -3585,11 +4078,11 @@
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
-                      "x": 12,
+                      "x": 16,
                       "y": 0,
-                      "width": 12,
+                      "width": 8,
                       "height": 7,
-                      "element": {"kind": "ElementReference", "name": "panel-11"}
+                      "element": {"kind": "ElementReference", "name": "panel-7"}
                     }
                   }
                 ]
@@ -3600,7 +4093,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Amounts, cost and API timing",
+            "title": "Offer publication diagnostics",
             "collapse": true,
             "layout": {
               "kind": "GridLayout",
@@ -3612,8 +4105,52 @@
                       "x": 0,
                       "y": 0,
                       "width": 24,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-13"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Service and source diagnostics",
+            "collapse": true,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 8,
                       "height": 7,
-                      "element": {"kind": "ElementReference", "name": "panel-14"}
+                      "element": {"kind": "ElementReference", "name": "panel-100"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 8,
+                      "y": 0,
+                      "width": 8,
+                      "height": 7,
+                      "element": {"kind": "ElementReference", "name": "panel-40"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 16,
+                      "y": 0,
+                      "width": 8,
+                      "height": 7,
+                      "element": {"kind": "ElementReference", "name": "panel-10"}
                     }
                   },
                   {
@@ -3621,17 +4158,27 @@
                     "spec": {
                       "x": 0,
                       "y": 7,
-                      "width": 24,
+                      "width": 8,
                       "height": 7,
-                      "element": {"kind": "ElementReference", "name": "panel-19"}
+                      "element": {"kind": "ElementReference", "name": "panel-84"}
                     }
                   },
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
-                      "x": 0,
-                      "y": 14,
-                      "width": 24,
+                      "x": 8,
+                      "y": 7,
+                      "width": 8,
+                      "height": 7,
+                      "element": {"kind": "ElementReference", "name": "panel-9"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 16,
+                      "y": 7,
+                      "width": 8,
                       "height": 7,
                       "element": {"kind": "ElementReference", "name": "panel-15"}
                     }
@@ -3644,7 +4191,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Current pods",
+            "title": "Cost sampling diagnostics",
             "collapse": true,
             "layout": {
               "kind": "GridLayout",
@@ -3656,8 +4203,8 @@
                       "x": 0,
                       "y": 0,
                       "width": 24,
-                      "height": 10,
-                      "element": {"kind": "ElementReference", "name": "panel-91"}
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-19"}
                     }
                   }
                 ]
@@ -3721,6 +4268,23 @@
       }
     },
     {
+      "kind": "DatasourceVariable",
+      "spec": {
+        "name": "logs",
+        "pluginId": "grafana-clickhouse-datasource",
+        "refresh": "onDashboardLoad",
+        "regex": "",
+        "current": {"text": "", "value": ""},
+        "options": [],
+        "multi": false,
+        "includeAll": false,
+        "label": "Logs",
+        "hide": "dontHide",
+        "skipUrlSync": false,
+        "allowCustomValue": true
+      }
+    },
+    {
       "kind": "QueryVariable",
       "spec": {
         "name": "namespace",
@@ -3745,79 +4309,8 @@
         "multi": false,
         "includeAll": false,
         "allowCustomValue": true,
-        "current": {"text": "", "value": ""}
-      }
-    },
-    {
-      "kind": "SwitchVariable",
-      "spec": {
-        "name": "history",
-        "label": "Include old pods",
-        "description": "Off: pods reporting at the end of the selected time range. On: also include pods observed earlier in that range. This changes the chooser only; panel time ranges stay unchanged.",
-        "hide": "dontHide",
-        "skipUrlSync": false,
-        "current": "0",
-        "enabledValue": "1",
-        "disabledValue": "0"
-      }
-    },
-    {
-      "kind": "QueryVariable",
-      "spec": {
-        "name": "workloads",
-        "label": "Workload",
-        "hide": "dontHide",
-        "refresh": "onTimeRangeChanged",
-        "skipUrlSync": false,
-        "query": {
-          "kind": "DataQuery",
-          "group": "prometheus",
-          "version": "v0",
-          "datasource": {"name": "${datasource}"},
-          "spec": {
-            "query": "query_result(max by (workload) (label_replace((max by (pod) (solver_bot_solver_info{solver=\"3f-bridge-facilitator\",namespace=\"${namespace}\",pod!=\"\"}) or (max by (pod) (max_over_time(solver_bot_solver_info{solver=\"3f-bridge-facilitator\",namespace=\"${namespace}\",pod!=\"\"}[$__range])) and on () (vector(${history}) == 1))), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
-            "refId": "PrometheusVariableQueryEditor-workloads"
-          }
-        },
-        "regex": "/workload=\"([^\"]+)\"/",
-        "sort": "alphabeticalAsc",
-        "definition": "query_result(max by (workload) (label_replace((max by (pod) (solver_bot_solver_info{solver=\"3f-bridge-facilitator\",namespace=\"${namespace}\",pod!=\"\"}) or (max by (pod) (max_over_time(solver_bot_solver_info{solver=\"3f-bridge-facilitator\",namespace=\"${namespace}\",pod!=\"\"}[$__range])) and on () (vector(${history}) == 1))), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
-        "options": [],
-        "multi": false,
-        "includeAll": true,
-        "allowCustomValue": false,
-        "current": {"text": "All", "value": "$__all"},
-        "description": "Choose the deployment first. The Pod chooser contains only its replicas. All lists replicas across the available workloads; Overview links retain that selection.",
-        "allValue": ".*"
-      }
-    },
-    {
-      "kind": "QueryVariable",
-      "spec": {
-        "name": "instance",
-        "label": "Pod",
-        "hide": "dontHide",
-        "refresh": "onTimeRangeChanged",
-        "skipUrlSync": false,
-        "query": {
-          "kind": "DataQuery",
-          "group": "prometheus",
-          "version": "v0",
-          "datasource": {"name": "${datasource}"},
-          "spec": {
-            "query": "query_result(max by (pod) (solver_bot_solver_info{solver=\"3f-bridge-facilitator\",namespace=\"${namespace}\",pod!=\"\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}) or (max by (pod) (max_over_time(solver_bot_solver_info{solver=\"3f-bridge-facilitator\",namespace=\"${namespace}\",pod!=\"\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}[$__range])) and on () (vector(${history}) == 1)))",
-            "refId": "PrometheusVariableQueryEditor-instance"
-          }
-        },
-        "regex": "/pod=\"(?<value>.+?-(?<text>[a-z0-9]{8,10}-[a-z0-9]{5})|[^\"]+)\"/",
-        "sort": "alphabeticalAsc",
-        "definition": "query_result(max by (pod) (solver_bot_solver_info{solver=\"3f-bridge-facilitator\",namespace=\"${namespace}\",pod!=\"\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}) or (max by (pod) (max_over_time(solver_bot_solver_info{solver=\"3f-bridge-facilitator\",namespace=\"${namespace}\",pod!=\"\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}[$__range])) and on () (vector(${history}) == 1)))",
-        "options": [],
-        "multi": false,
-        "includeAll": true,
-        "allowCustomValue": false,
-        "current": {"text": "All", "value": "$__all"},
-        "description": "Choose one pod, or All to aggregate the pods listed for this workload. Include old pods adds retired replicas to the selected set. Short labels keep full pod names as values."
+        "current": {"text": "", "value": ""},
+        "description": "Environment for the integration totals. All matching services are included automatically."
       }
     }
   ]

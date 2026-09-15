@@ -20,120 +20,15 @@
     }
   ],
   "cursorSync": "Crosshair",
-  "description": "One dashboard for fleet overview and individual-pod diagnosis. Workload=All and Pod=All show the combined selection; choose a workload or pod to narrow it. Include old pods adds retired replicas observed in the selected period. Compare workloads in the table; use Current pods to inspect a replica. Counters sum process observations after reset handling, percentiles use combined buckets, and shared balances are not added across replicas. Missing data remains unknown.",
+  "description": "Completed operations, outstanding commitments, reasons work does not execute, and transaction costs for the selected environment. Counts are observed operations during the selected period, including retries and separate service observations; stages are not a cohort conversion. Missing telemetry remains unknown. Fees are costs, not profit.",
   "editable": true,
   "elements": {
-    "panel-10": {
-      "kind": "Panel",
-      "spec": {
-        "id": 10,
-        "title": "Advertised input ceiling by pair",
-        "description": "Maximum active input per pair; alternative curves are maxed, not summed. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
-        "links": [],
-        "data": {
-          "kind": "QueryGroup",
-          "spec": {
-            "queries": [
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "label_replace((label_replace(((max by (namespace, workload, token_in, token_out, token_in_decimals, token_out_decimals) (label_replace(lifi_active_quote_max_input_atomic_units{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))) > 0), \"token_in_display\", \"​$1\", \"token_in\", \"(.*)\")), \"token_out_display\", \"​$1\", \"token_out\", \"(.*)\")",
-                      "format": "table",
-                      "instant": true,
-                      "legendFormat": "",
-                      "range": false
-                    }
-                  },
-                  "refId": "A",
-                  "hidden": false
-                }
-              }
-            ],
-            "transformations": [
-              {
-                "kind": "Transformation",
-                "spec": {
-                  "options": {
-                    "excludeByName": {"Time": true, "token_in": true, "token_out": true, "job": true, "instance": true, "namespace": true},
-                    "indexByName": {"namespace": 0, "workload": 1},
-                    "renameByName": {
-                      "token_in_display": "token_in",
-                      "token_out_display": "token_out",
-                      "namespace": "Namespace",
-                      "workload": "Workload"
-                    }
-                  }
-                },
-                "group": "organize"
-              }
-            ],
-            "queryOptions": {}
-          }
-        },
-        "vizConfig": {
-          "kind": "VizConfig",
-          "group": "table",
-          "version": "",
-          "spec": {
-            "options": {"cellHeight": "sm", "showHeader": true, "enablePagination": false},
-            "fieldConfig": {
-              "defaults": {
-                "thresholds": {
-                  "mode": "absolute",
-                  "steps": [
-                    {"value": 0, "color": "green"}
-                  ]
-                },
-                "color": {"mode": "palette-classic"},
-                "noValue": "—"
-              },
-              "overrides": [
-                {
-                  "matcher": {"id": "byName", "options": "Value"},
-                  "properties": [
-                    {"id": "unit", "value": "sci"},
-                    {"id": "decimals", "value": 3},
-                    {"id": "custom.width", "value": 180}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "token_in"},
-                  "properties": [
-                    {"id": "custom.width", "value": 260}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "token_out"},
-                  "properties": [
-                    {"id": "custom.width", "value": 260}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Workload"},
-                  "properties": [
-                    {"id": "custom.width", "value": 220}
-                  ]
-                }
-              ]
-            }
-          }
-        },
-        "transparent": true
-      }
-    },
     "panel-11": {
       "kind": "Panel",
       "spec": {
         "id": 11,
         "title": "Published quote state",
-        "description": "Current standing quote and range population over time. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
+        "description": "Current standing quote and range population over time. Values aggregate all matching services.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -149,8 +44,8 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "max by (namespace, workload) (label_replace(lifi_active_quotes{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "legendFormat": "{{workload}} · quotes",
+                      "expr": "sum (lifi_active_quotes{namespace=\"${namespace}\"})",
+                      "legendFormat": "quotes",
                       "range": true
                     }
                   },
@@ -168,8 +63,8 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "max by (namespace, workload) (label_replace(lifi_active_quote_ranges{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "legendFormat": "{{workload}} · ranges",
+                      "expr": "sum (lifi_active_quote_ranges{namespace=\"${namespace}\"})",
+                      "legendFormat": "ranges",
                       "range": true
                     }
                   },
@@ -198,7 +93,7 @@
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "short",
+                "unit": "none",
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
@@ -232,8 +127,8 @@
       "kind": "Panel",
       "spec": {
         "id": 12,
-        "title": "Quote/recovery operation p95",
-        "description": "Publication, suspension, and recovery latency trends. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
+        "title": "Quote and recovery p95 · selected period",
+        "description": "Combined histogram observations during the selected period. An idle short window does not erase earlier samples in this period. No latency samples means no percentile is available. Initial unobserved counter values cannot be recovered.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -249,9 +144,11 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "histogram_quantile(0.95, sum by (namespace, workload, le, operation) (label_replace(rate(solver_bot_external_operation_duration_seconds_bucket{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"lifi-samechain\"}[$__rate_interval]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
-                      "legendFormat": "{{workload}} · {{operation}}",
-                      "range": true
+                      "expr": "histogram_quantile(0.95, sum by (le, operation) (increase(solver_bot_external_operation_duration_seconds_bucket{namespace=\"${namespace}\",solver=\"lifi-samechain\"}[$__range])))",
+                      "legendFormat": "{{operation}}",
+                      "range": false,
+                      "instant": true,
+                      "format": "table"
                     }
                   },
                   "refId": "A",
@@ -259,50 +156,84 @@
                 }
               }
             ],
-            "transformations": [],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true},
+                    "indexByName": {},
+                    "renameByName": {"label": "Operation", "phase": "Phase", "outcome": "Outcome", "operation": "Operation", "Value": "p95"}
+                  }
+                }
+              }
+            ],
             "queryOptions": {}
           }
         },
         "vizConfig": {
           "kind": "VizConfig",
-          "group": "timeseries",
+          "group": "table",
           "version": "",
           "spec": {
-            "options": {
-              "legend": {
-                "calcs": ["lastNotNull", "max"],
-                "displayMode": "table",
-                "placement": "bottom",
-                "showLegend": true
-              },
-              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
-            },
+            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": false},
             "fieldConfig": {
               "defaults": {
-                "unit": "s",
-                "thresholds": {
-                  "mode": "absolute",
-                  "steps": [
-                    {"value": 0, "color": "green"}
-                  ]
-                },
-                "color": {"mode": "palette-classic"},
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
                 "custom": {
-                  "axisColorMode": "text",
-                  "axisLabel": "",
-                  "axisPlacement": "auto",
-                  "fillOpacity": 12,
-                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
-                  "lineInterpolation": "smooth",
-                  "lineWidth": 2,
-                  "pointSize": 5,
-                  "scaleDistribution": {"type": "linear"},
-                  "showPoints": "never",
-                  "spanNulls": false,
-                  "thresholdsStyle": {"mode": "off"}
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
                 }
               },
-              "overrides": []
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "p95"},
+                  "properties": [
+                    {"id": "unit", "value": "s"},
+                    {"id": "decimals", "value": 3}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Outcome"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "confirmed": {"text": "Confirmed transaction"},
+                            "cancelled": {"text": "Cancelled"},
+                            "reverted": {"text": "Reverted"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
+                            "submission_error": {"text": "Submission failed"},
+                            "tracking_stopped": {"text": "Tracking stopped"},
+                            "settled_in_time": {"text": "Delivered on time"},
+                            "missed": {"text": "Deadline missed"},
+                            "not_actionable": {"text": "Order not currently fillable or outside scope"},
+                            "deposit_deferred": {"text": "Deposit not visible yet"},
+                            "capacity_deferred": {"text": "Waiting for execution capacity"},
+                            "capacity_dropped": {"text": "Dropped after waiting for capacity"},
+                            "submitted": {"text": "Submitted for execution"},
+                            "invalid_plan": {"text": "Invalid execution plan"},
+                            "retryable_error": {"text": "Temporary error; retry scheduled"},
+                            "other": {"text": "Other processing decision"},
+                            "invalid": {"text": "Invalid request"},
+                            "queue_drop:inbox": {"text": "Dropped: incoming queue full"},
+                            "queue_drop:deposit_retry": {"text": "Dropped: deposit retry queue full"},
+                            "queue_drop:capacity_retry": {"text": "Dropped: capacity retry queue full"},
+                            "queue_drop:recovery_retry": {"text": "Dropped: recovery retry queue full"}
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
             }
           }
         },
@@ -313,8 +244,8 @@
       "kind": "Panel",
       "spec": {
         "id": 14,
-        "title": "Processing and queue-drop totals",
-        "description": "Submitted/deferred/dropped decisions plus bounded queue-full drops. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
+        "title": "Why order processing was deferred or stopped",
+        "description": "Decisions across processing attempts, including retries. Queue drops are a separate event category and must not be added to unique-order totals.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -330,7 +261,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(sum by (namespace, workload, outcome) (label_replace(increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"lifi-samechain\",event=\"order_processing\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) or label_replace(sum by (namespace, workload, outcome) (label_replace(increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"lifi-samechain\",event=\"queue_drop\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")), \"outcome\", \"queue_drop:$1\", \"outcome\", \"(.*)\")) > 0",
+                      "expr": "(sum by (outcome) (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",solver=\"lifi-samechain\",event=\"order_processing\"}[$__range])) or label_replace(sum by (outcome) (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",solver=\"lifi-samechain\",event=\"queue_drop\"}[$__range])), \"outcome\", \"queue_drop:$1\", \"outcome\", \"(.*)\"))",
                       "instant": true,
                       "legendFormat": "",
                       "range": false,
@@ -357,8 +288,6 @@
                   "options": {
                     "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "namespace": true, "solver": true},
                     "renameByName": {
-                      "workload": "Workload",
-                      "pod": "Pod",
                       "address": "Signer",
                       "view": "View",
                       "strategy": "Strategy",
@@ -373,7 +302,8 @@
                       "stage": "Stage",
                       "Value": "Count",
                       "Value #A": "Count"
-                    }
+                    },
+                    "indexByName": {}
                   }
                 }
               }
@@ -407,7 +337,7 @@
                 {
                   "matcher": {"id": "byName", "options": "Count"},
                   "properties": [
-                    {"id": "unit", "value": "short"},
+                    {"id": "unit", "value": "none"},
                     {"id": "decimals", "value": 0},
                     {
                       "id": "thresholds",
@@ -418,12 +348,6 @@
                         ]
                       }
                     }
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Workload"},
-                  "properties": [
-                    {"id": "custom.width", "value": 220}
                   ]
                 },
                 {
@@ -439,56 +363,56 @@
                       "id": "mappings",
                       "value": [
                         {
-                          "type": "value",
                           "options": {
+                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "active_request_refresh": {"text": "Refresh active requests"},
                             "active_requests": {"text": "Active requests"},
-                            "redeemable": {"text": "Ready to redeem"},
-                            "offers": {"text": "Offers"},
-                            "targets": {"text": "Targets"},
-                            "quoted": {"text": "Quote returned"},
-                            "no_candidates": {"text": "No eligible candidates"},
-                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
-                            "not_quotable": {"text": "Order not quotable"},
-                            "below_minimum": {"text": "Below minimum amount"},
-                            "strategy_declined": {"text": "Strategy declined"},
                             "bad_request": {"text": "Invalid request"},
-                            "error": {"text": "Error"},
-                            "success": {"text": "Success"},
-                            "failed": {"text": "Failed"},
-                            "failure": {"text": "Failed"},
-                            "ok": {"text": "Success"},
-                            "won": {"text": "Won"},
+                            "below_minimum": {"text": "Below minimum amount"},
                             "confirmed": {"text": "Confirmed"},
-                            "reverted": {"text": "Reverted"},
-                            "not_admitted": {"text": "Not admitted"},
-                            "submission_error": {"text": "Submission error"},
-                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
-                            "settled_success": {"text": "Settlement succeeded"},
-                            "settled_failed": {"text": "Settlement failed"},
-                            "enqueued": {"text": "Enqueued"},
-                            "would_bid": {"text": "Would bid (dry run)"},
-                            "unresolved": {"text": "Unresolved"},
-                            "settled_in_time": {"text": "Settled on time"},
-                            "missed": {"text": "Missed"},
                             "declined_blocked": {"text": "Blocked"},
+                            "declined_invalid_amount": {"text": "Invalid amount"},
                             "declined_invalid_request": {"text": "Invalid request"},
                             "declined_pair_out_of_scope": {"text": "Pair outside scope"},
-                            "declined_invalid_amount": {"text": "Invalid amount"},
                             "declined_quote_state_unavailable": {"text": "Quote state unavailable"},
-                            "declined_strategy": {"text": "Strategy declined"},
                             "declined_state_changed": {"text": "State changed"},
+                            "declined_strategy": {"text": "Strategy declined"},
                             "declined_unknown": {"text": "Declined: unknown reason"},
-                            "active_request_refresh": {"text": "Refresh active requests"},
-                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
-                            "offer_refresh": {"text": "Refresh offers"},
-                            "target_refresh": {"text": "Refresh targets"},
+                            "enqueued": {"text": "Enqueued"},
+                            "error": {"text": "Error"},
                             "expected_yield": {"text": "Expected yield"},
-                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "failed": {"text": "Failed"},
+                            "failure": {"text": "Failed"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
+                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
                             "lifi-samechain": {"text": "LI.FI"},
+                            "missed": {"text": "Missed"},
+                            "no_candidates": {"text": "No eligible candidates"},
+                            "not_admitted": {"text": "Not admitted"},
+                            "not_quotable": {"text": "Order not quotable"},
+                            "offer_refresh": {"text": "Refresh offers"},
+                            "offers": {"text": "Offers"},
+                            "ok": {"text": "Success"},
+                            "quoted": {"text": "Quote returned"},
+                            "redeemable": {"text": "Ready to redeem"},
+                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
+                            "redstone-oev": {"text": "RedStone OEV"},
+                            "reverted": {"text": "Reverted"},
                             "rfq-filler": {"text": "RFQ"},
+                            "settled_failed": {"text": "Settlement failed"},
+                            "settled_in_time": {"text": "Settled on time"},
+                            "settled_success": {"text": "Settlement succeeded"},
+                            "strategy_declined": {"text": "Strategy declined"},
+                            "submission_error": {"text": "Submission error"},
+                            "success": {"text": "Success"},
+                            "target_refresh": {"text": "Refresh targets"},
+                            "targets": {"text": "Targets"},
                             "uniswapx-filler": {"text": "UniswapX"},
-                            "redstone-oev": {"text": "RedStone OEV"}
-                          }
+                            "unresolved": {"text": "Unresolved"},
+                            "won": {"text": "Won"},
+                            "would_bid": {"text": "Would bid (dry run)"}
+                          },
+                          "type": "value"
                         }
                       ]
                     }
@@ -582,18 +506,18 @@
                             "failure": {"text": "Failed"},
                             "ok": {"text": "Success"},
                             "won": {"text": "Won"},
-                            "confirmed": {"text": "Confirmed"},
+                            "confirmed": {"text": "Confirmed transaction"},
                             "reverted": {"text": "Reverted"},
                             "not_admitted": {"text": "Not admitted"},
-                            "submission_error": {"text": "Submission error"},
-                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
+                            "submission_error": {"text": "Submission failed"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
                             "settled_success": {"text": "Settlement succeeded"},
                             "settled_failed": {"text": "Settlement failed"},
                             "enqueued": {"text": "Enqueued"},
                             "would_bid": {"text": "Would bid (dry run)"},
                             "unresolved": {"text": "Unresolved"},
-                            "settled_in_time": {"text": "Settled on time"},
-                            "missed": {"text": "Missed"},
+                            "settled_in_time": {"text": "Delivered on time"},
+                            "missed": {"text": "Deadline missed"},
                             "declined_blocked": {"text": "Blocked"},
                             "declined_invalid_request": {"text": "Invalid request"},
                             "declined_pair_out_of_scope": {"text": "Pair outside scope"},
@@ -611,7 +535,22 @@
                             "lifi-samechain": {"text": "LI.FI"},
                             "rfq-filler": {"text": "RFQ"},
                             "uniswapx-filler": {"text": "UniswapX"},
-                            "redstone-oev": {"text": "RedStone OEV"}
+                            "redstone-oev": {"text": "RedStone OEV"},
+                            "cancelled": {"text": "Cancelled"},
+                            "tracking_stopped": {"text": "Tracking stopped"},
+                            "not_actionable": {"text": "Order not currently fillable or outside scope"},
+                            "deposit_deferred": {"text": "Deposit not visible yet"},
+                            "capacity_deferred": {"text": "Waiting for execution capacity"},
+                            "capacity_dropped": {"text": "Dropped after waiting for capacity"},
+                            "submitted": {"text": "Submitted for execution"},
+                            "invalid_plan": {"text": "Invalid execution plan"},
+                            "retryable_error": {"text": "Temporary error; retry scheduled"},
+                            "other": {"text": "Other processing decision"},
+                            "invalid": {"text": "Invalid request"},
+                            "queue_drop:inbox": {"text": "Dropped: incoming queue full"},
+                            "queue_drop:deposit_retry": {"text": "Dropped: deposit retry queue full"},
+                            "queue_drop:capacity_retry": {"text": "Dropped: capacity retry queue full"},
+                            "queue_drop:recovery_retry": {"text": "Dropped: recovery retry queue full"}
                           }
                         }
                       ]
@@ -877,8 +816,8 @@
       "kind": "Panel",
       "spec": {
         "id": 15,
-        "title": "Queued backlog",
-        "description": "Backlog growth and failure to drain by retry stage. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
+        "title": "Orders waiting for execution",
+        "description": "Backlog growth and failure to drain by retry stage. Values aggregate all matching services.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -894,8 +833,8 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "max by (namespace, workload, stage) (label_replace(lifi_order_backlog{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "legendFormat": "{{workload}} · {{stage}}",
+                      "expr": "sum by (stage) (lifi_order_backlog{namespace=\"${namespace}\"})",
+                      "legendFormat": "{{stage}}",
                       "range": true
                     }
                   },
@@ -924,7 +863,7 @@
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "short",
+                "unit": "none",
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
@@ -959,8 +898,8 @@
       "kind": "Panel",
       "spec": {
         "id": 16,
-        "title": "Nearest queued deadline",
-        "description": "Remaining protocol time for each non-empty queue stage. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
+        "title": "Time remaining to queued deadline",
+        "description": "Nearest existing deadline by execution stage. Zero remaining seconds retains overdue queues; no reported deadline stays absent.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -976,7 +915,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "min by (namespace, workload, stage) (label_replace((clamp_min((lifi_order_nearest_deadline_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}) - time(), 0) * ((lifi_order_nearest_deadline_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}) > bool time())) > 0, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
+                      "expr": "clamp_min(min by (stage) (lifi_order_nearest_deadline_timestamp{namespace=\"${namespace}\"} > 0) - time(), 0)",
                       "instant": true,
                       "legendFormat": "",
                       "range": false,
@@ -1003,8 +942,6 @@
                   "options": {
                     "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "namespace": true, "solver": true},
                     "renameByName": {
-                      "workload": "Workload",
-                      "pod": "Pod",
                       "address": "Signer",
                       "view": "View",
                       "strategy": "Strategy",
@@ -1019,7 +956,8 @@
                       "stage": "Stage",
                       "Value": "Age",
                       "Value #A": "Age"
-                    }
+                    },
+                    "indexByName": {}
                   }
                 }
               }
@@ -1060,12 +998,6 @@
                   ]
                 },
                 {
-                  "matcher": {"id": "byName", "options": "Workload"},
-                  "properties": [
-                    {"id": "custom.width", "value": 220}
-                  ]
-                },
-                {
                   "matcher": {"id": "byName", "options": "Signer"},
                   "properties": [
                     {"id": "custom.width", "value": 370}
@@ -1078,56 +1010,56 @@
                       "id": "mappings",
                       "value": [
                         {
-                          "type": "value",
                           "options": {
+                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "active_request_refresh": {"text": "Refresh active requests"},
                             "active_requests": {"text": "Active requests"},
-                            "redeemable": {"text": "Ready to redeem"},
-                            "offers": {"text": "Offers"},
-                            "targets": {"text": "Targets"},
-                            "quoted": {"text": "Quote returned"},
-                            "no_candidates": {"text": "No eligible candidates"},
-                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
-                            "not_quotable": {"text": "Order not quotable"},
-                            "below_minimum": {"text": "Below minimum amount"},
-                            "strategy_declined": {"text": "Strategy declined"},
                             "bad_request": {"text": "Invalid request"},
-                            "error": {"text": "Error"},
-                            "success": {"text": "Success"},
-                            "failed": {"text": "Failed"},
-                            "failure": {"text": "Failed"},
-                            "ok": {"text": "Success"},
-                            "won": {"text": "Won"},
+                            "below_minimum": {"text": "Below minimum amount"},
                             "confirmed": {"text": "Confirmed"},
-                            "reverted": {"text": "Reverted"},
-                            "not_admitted": {"text": "Not admitted"},
-                            "submission_error": {"text": "Submission error"},
-                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
-                            "settled_success": {"text": "Settlement succeeded"},
-                            "settled_failed": {"text": "Settlement failed"},
-                            "enqueued": {"text": "Enqueued"},
-                            "would_bid": {"text": "Would bid (dry run)"},
-                            "unresolved": {"text": "Unresolved"},
-                            "settled_in_time": {"text": "Settled on time"},
-                            "missed": {"text": "Missed"},
                             "declined_blocked": {"text": "Blocked"},
+                            "declined_invalid_amount": {"text": "Invalid amount"},
                             "declined_invalid_request": {"text": "Invalid request"},
                             "declined_pair_out_of_scope": {"text": "Pair outside scope"},
-                            "declined_invalid_amount": {"text": "Invalid amount"},
                             "declined_quote_state_unavailable": {"text": "Quote state unavailable"},
-                            "declined_strategy": {"text": "Strategy declined"},
                             "declined_state_changed": {"text": "State changed"},
+                            "declined_strategy": {"text": "Strategy declined"},
                             "declined_unknown": {"text": "Declined: unknown reason"},
-                            "active_request_refresh": {"text": "Refresh active requests"},
-                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
-                            "offer_refresh": {"text": "Refresh offers"},
-                            "target_refresh": {"text": "Refresh targets"},
+                            "enqueued": {"text": "Enqueued"},
+                            "error": {"text": "Error"},
                             "expected_yield": {"text": "Expected yield"},
-                            "3f-bridge-facilitator": {"text": "3F Facilitator"},
+                            "failed": {"text": "Failed"},
+                            "failure": {"text": "Failed"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
+                            "lane_unavailable": {"text": "Liquidity lane unavailable"},
                             "lifi-samechain": {"text": "LI.FI"},
+                            "missed": {"text": "Missed"},
+                            "no_candidates": {"text": "No eligible candidates"},
+                            "not_admitted": {"text": "Not admitted"},
+                            "not_quotable": {"text": "Order not quotable"},
+                            "offer_refresh": {"text": "Refresh offers"},
+                            "offers": {"text": "Offers"},
+                            "ok": {"text": "Success"},
+                            "quoted": {"text": "Quote returned"},
+                            "redeemable": {"text": "Ready to redeem"},
+                            "redeemable_refresh": {"text": "Refresh redeemable requests"},
+                            "redstone-oev": {"text": "RedStone OEV"},
+                            "reverted": {"text": "Reverted"},
                             "rfq-filler": {"text": "RFQ"},
+                            "settled_failed": {"text": "Settlement failed"},
+                            "settled_in_time": {"text": "Settled on time"},
+                            "settled_success": {"text": "Settlement succeeded"},
+                            "strategy_declined": {"text": "Strategy declined"},
+                            "submission_error": {"text": "Submission error"},
+                            "success": {"text": "Success"},
+                            "target_refresh": {"text": "Refresh targets"},
+                            "targets": {"text": "Targets"},
                             "uniswapx-filler": {"text": "UniswapX"},
-                            "redstone-oev": {"text": "RedStone OEV"}
-                          }
+                            "unresolved": {"text": "Unresolved"},
+                            "won": {"text": "Won"},
+                            "would_bid": {"text": "Would bid (dry run)"}
+                          },
+                          "type": "value"
                         }
                       ]
                     }
@@ -1221,18 +1153,18 @@
                             "failure": {"text": "Failed"},
                             "ok": {"text": "Success"},
                             "won": {"text": "Won"},
-                            "confirmed": {"text": "Confirmed"},
+                            "confirmed": {"text": "Confirmed transaction"},
                             "reverted": {"text": "Reverted"},
                             "not_admitted": {"text": "Not admitted"},
-                            "submission_error": {"text": "Submission error"},
-                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
+                            "submission_error": {"text": "Submission failed"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
                             "settled_success": {"text": "Settlement succeeded"},
                             "settled_failed": {"text": "Settlement failed"},
                             "enqueued": {"text": "Enqueued"},
                             "would_bid": {"text": "Would bid (dry run)"},
                             "unresolved": {"text": "Unresolved"},
-                            "settled_in_time": {"text": "Settled on time"},
-                            "missed": {"text": "Missed"},
+                            "settled_in_time": {"text": "Delivered on time"},
+                            "missed": {"text": "Deadline missed"},
                             "declined_blocked": {"text": "Blocked"},
                             "declined_invalid_request": {"text": "Invalid request"},
                             "declined_pair_out_of_scope": {"text": "Pair outside scope"},
@@ -1250,7 +1182,22 @@
                             "lifi-samechain": {"text": "LI.FI"},
                             "rfq-filler": {"text": "RFQ"},
                             "uniswapx-filler": {"text": "UniswapX"},
-                            "redstone-oev": {"text": "RedStone OEV"}
+                            "redstone-oev": {"text": "RedStone OEV"},
+                            "cancelled": {"text": "Cancelled"},
+                            "tracking_stopped": {"text": "Tracking stopped"},
+                            "not_actionable": {"text": "Order not currently fillable or outside scope"},
+                            "deposit_deferred": {"text": "Deposit not visible yet"},
+                            "capacity_deferred": {"text": "Waiting for execution capacity"},
+                            "capacity_dropped": {"text": "Dropped after waiting for capacity"},
+                            "submitted": {"text": "Submitted for execution"},
+                            "invalid_plan": {"text": "Invalid execution plan"},
+                            "retryable_error": {"text": "Temporary error; retry scheduled"},
+                            "other": {"text": "Other processing decision"},
+                            "invalid": {"text": "Invalid request"},
+                            "queue_drop:inbox": {"text": "Dropped: incoming queue full"},
+                            "queue_drop:deposit_retry": {"text": "Dropped: deposit retry queue full"},
+                            "queue_drop:capacity_retry": {"text": "Dropped: capacity retry queue full"},
+                            "queue_drop:recovery_retry": {"text": "Dropped: recovery retry queue full"}
                           }
                         }
                       ]
@@ -1517,7 +1464,7 @@
       "spec": {
         "id": 18,
         "title": "Fill transaction outcomes",
-        "description": "Exact terminal txmanager outcomes over the selected range. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
+        "description": "Exact terminal txmanager outcomes over the selected range. Values aggregate all matching services.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1533,7 +1480,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(sum by (namespace, workload, outcome) (label_replace(increase(solver_bot_txmanager_requests_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",label=\"lifi-fill\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))) > 0",
+                      "expr": "(sum by (outcome) (increase(solver_bot_txmanager_requests_total{namespace=\"${namespace}\",label=\"lifi-fill\"}[$__range])))",
                       "format": "table",
                       "instant": true,
                       "legendFormat": "",
@@ -1551,8 +1498,8 @@
                 "spec": {
                   "options": {
                     "excludeByName": {"Time": true, "job": true, "instance": true, "namespace": true},
-                    "indexByName": {"namespace": 0, "workload": 1},
-                    "renameByName": {"namespace": "Namespace", "workload": "Workload"}
+                    "indexByName": {"Value": 1, "outcome": 0},
+                    "renameByName": {"Value": "Count", "outcome": "Outcome"}
                   }
                 },
                 "group": "organize"
@@ -1580,111 +1527,47 @@
               },
               "overrides": [
                 {
-                  "matcher": {"id": "byName", "options": "Value"},
+                  "matcher": {"id": "byName", "options": "Count"},
                   "properties": [
-                    {"id": "unit", "value": "short"},
+                    {"id": "unit", "value": "none"},
                     {"id": "decimals", "value": 0},
                     {"id": "custom.width", "value": 140}
                   ]
                 },
                 {
-                  "matcher": {"id": "byName", "options": "Workload"},
+                  "matcher": {"id": "byName", "options": "Outcome"},
                   "properties": [
-                    {"id": "custom.width", "value": 220}
-                  ]
-                }
-              ]
-            }
-          }
-        },
-        "transparent": true
-      }
-    },
-    "panel-19": {
-      "kind": "Panel",
-      "spec": {
-        "id": 19,
-        "title": "Successful fill amounts",
-        "description": "Receipt-confirmed token amounts; planned surplus is not realized PnL. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
-        "links": [],
-        "data": {
-          "kind": "QueryGroup",
-          "spec": {
-            "queries": [
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "label_replace(((sum by (namespace, workload, asset, kind) (label_replace(increase(solver_bot_workflow_amount_atomic_units_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"lifi-samechain\",event=\"fill\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))) > 0), \"token_display\", \"​$1\", \"asset\", \"(.*)\")",
-                      "format": "table",
-                      "instant": true,
-                      "legendFormat": "",
-                      "range": false
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "confirmed": {"text": "Confirmed transaction"},
+                            "cancelled": {"text": "Cancelled"},
+                            "reverted": {"text": "Reverted"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
+                            "submission_error": {"text": "Submission failed"},
+                            "tracking_stopped": {"text": "Tracking stopped"},
+                            "settled_in_time": {"text": "Delivered on time"},
+                            "missed": {"text": "Deadline missed"},
+                            "not_actionable": {"text": "Order not currently fillable or outside scope"},
+                            "deposit_deferred": {"text": "Deposit not visible yet"},
+                            "capacity_deferred": {"text": "Waiting for execution capacity"},
+                            "capacity_dropped": {"text": "Dropped after waiting for capacity"},
+                            "submitted": {"text": "Submitted for execution"},
+                            "invalid_plan": {"text": "Invalid execution plan"},
+                            "retryable_error": {"text": "Temporary error; retry scheduled"},
+                            "other": {"text": "Other processing decision"},
+                            "invalid": {"text": "Invalid request"},
+                            "queue_drop:inbox": {"text": "Dropped: incoming queue full"},
+                            "queue_drop:deposit_retry": {"text": "Dropped: deposit retry queue full"},
+                            "queue_drop:capacity_retry": {"text": "Dropped: capacity retry queue full"},
+                            "queue_drop:recovery_retry": {"text": "Dropped: recovery retry queue full"}
+                          }
+                        }
+                      ]
                     }
-                  },
-                  "refId": "A",
-                  "hidden": false
-                }
-              }
-            ],
-            "transformations": [
-              {
-                "kind": "Transformation",
-                "spec": {
-                  "options": {
-                    "excludeByName": {"Time": true, "asset": true, "job": true, "instance": true, "namespace": true},
-                    "indexByName": {"namespace": 0, "workload": 1},
-                    "renameByName": {"token_display": "token", "namespace": "Namespace", "workload": "Workload"}
-                  }
-                },
-                "group": "organize"
-              }
-            ],
-            "queryOptions": {}
-          }
-        },
-        "vizConfig": {
-          "kind": "VizConfig",
-          "group": "table",
-          "version": "",
-          "spec": {
-            "options": {"cellHeight": "sm", "showHeader": true, "enablePagination": false},
-            "fieldConfig": {
-              "defaults": {
-                "thresholds": {
-                  "mode": "absolute",
-                  "steps": [
-                    {"value": 0, "color": "green"}
-                  ]
-                },
-                "color": {"mode": "palette-classic"},
-                "noValue": "—"
-              },
-              "overrides": [
-                {
-                  "matcher": {"id": "byName", "options": "Value"},
-                  "properties": [
-                    {"id": "unit", "value": "sci"},
-                    {"id": "decimals", "value": 3},
-                    {"id": "custom.width", "value": 140}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "token"},
-                  "properties": [
-                    {"id": "custom.width", "value": 220}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Workload"},
-                  "properties": [
-                    {"id": "custom.width", "value": 220}
                   ]
                 }
               ]
@@ -1714,7 +1597,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "min(min by (namespace, workload) (label_replace(lifi_order_feed_connected{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
+                      "expr": "min(min (lifi_order_feed_connected{namespace=\"${namespace}\"}))",
                       "instant": true,
                       "legendFormat": "Order feed",
                       "range": false
@@ -1776,15 +1659,15 @@
           }
         },
         "transparent": true,
-        "description": "Current value at the end of the selected time range. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas."
+        "description": "Current value at the end of the selected time range."
       }
     },
     "panel-20": {
       "kind": "Panel",
       "spec": {
         "id": 20,
-        "title": "Execution cost",
-        "description": "Receipt-backed transaction count, gas, and native fee over the selected range. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
+        "title": "Transaction fee increases · selected period",
+        "description": "Observed increases in the selected period. The first exported nonzero value may be missed, so zero here does not prove that no fee was paid. Fees recorded from transaction receipts, grouped by terminal outcome. Reverted and cancelled transactions consumed fees without a successful execution. Included-unconfirmed means final confirmation was not established. Missing receipt prices can undercount costs.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1802,53 +1685,11 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum by (namespace, workload) (label_replace(increase(solver_bot_txmanager_requests_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",label=\"lifi-fill\",outcome=~\"confirmed|included_unconfirmed\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
+                      "expr": "sum by(outcome)(increase(solver_bot_txmanager_fee_paid_wei_total{namespace=\"${namespace}\",label=\"lifi-fill\"}[$__range])) / 1e18",
                       "instant": true,
                       "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "B",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "sum by (namespace, workload) (label_replace(increase(solver_bot_txmanager_gas_used_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",label=\"lifi-fill\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "C",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "max by (namespace, workload) (label_replace(sum by (namespace, workload) (label_replace(increase(solver_bot_txmanager_fee_paid_wei_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",label=\"lifi-fill\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) / 1e18, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
+                      "legendFormat": "",
+                      "format": "table"
                     }
                   }
                 }
@@ -1857,19 +1698,12 @@
             "transformations": [
               {
                 "kind": "Transformation",
-                "group": "merge",
-                "spec": {
-                  "options": {}
-                }
-              },
-              {
-                "kind": "Transformation",
                 "group": "organize",
                 "spec": {
                   "options": {
-                    "excludeByName": {"Time": true, "namespace": true, "__name__": true},
-                    "indexByName": {"workload": 0, "Value #A": 1, "Value #B": 2, "Value #C": 3},
-                    "renameByName": {"workload": "Workload", "Value #A": "Included tx", "Value #B": "Gas used", "Value #C": "Fee paid"}
+                    "excludeByName": {"Time": true, "__name__": true},
+                    "indexByName": {},
+                    "renameByName": {"outcome": "Transaction outcome", "Value": "Fees (ETH)"}
                   }
                 }
               }
@@ -1882,9 +1716,18 @@
           "group": "table",
           "version": "",
           "spec": {
-            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": false},
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": false,
+              "sortBy": [
+                {"displayName": "Fees (ETH)", "desc": true}
+              ]
+            },
             "fieldConfig": {
               "defaults": {
+                "unit": "none",
+                "decimals": 0,
                 "noValue": "—",
                 "custom": {
                   "align": "left",
@@ -1894,33 +1737,46 @@
               },
               "overrides": [
                 {
-                  "matcher": {"id": "byName", "options": "Workload"},
+                  "matcher": {"id": "byName", "options": "Fees (ETH)"},
                   "properties": [
-                    {"id": "custom.width", "value": 220}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Included tx"},
-                  "properties": [
-                    {"id": "custom.width", "value": 155},
-                    {"id": "unit", "value": "short"},
-                    {"id": "decimals", "value": 0}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Gas used"},
-                  "properties": [
-                    {"id": "custom.width", "value": 155},
-                    {"id": "unit", "value": "short"},
-                    {"id": "decimals", "value": 0}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Fee paid"},
-                  "properties": [
-                    {"id": "custom.width", "value": 155},
                     {"id": "unit", "value": "suffix: ETH"},
                     {"id": "decimals", "value": 9}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Transaction outcome"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "confirmed": {"text": "Confirmed transaction"},
+                            "cancelled": {"text": "Cancelled"},
+                            "reverted": {"text": "Reverted"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
+                            "submission_error": {"text": "Submission failed"},
+                            "tracking_stopped": {"text": "Tracking stopped"},
+                            "settled_in_time": {"text": "Delivered on time"},
+                            "missed": {"text": "Deadline missed"},
+                            "not_actionable": {"text": "Order not currently fillable or outside scope"},
+                            "deposit_deferred": {"text": "Deposit not visible yet"},
+                            "capacity_deferred": {"text": "Waiting for execution capacity"},
+                            "capacity_dropped": {"text": "Dropped after waiting for capacity"},
+                            "submitted": {"text": "Submitted for execution"},
+                            "invalid_plan": {"text": "Invalid execution plan"},
+                            "retryable_error": {"text": "Temporary error; retry scheduled"},
+                            "other": {"text": "Other processing decision"},
+                            "invalid": {"text": "Invalid request"},
+                            "queue_drop:inbox": {"text": "Dropped: incoming queue full"},
+                            "queue_drop:deposit_retry": {"text": "Dropped: deposit retry queue full"},
+                            "queue_drop:capacity_retry": {"text": "Dropped: capacity retry queue full"},
+                            "queue_drop:recovery_retry": {"text": "Dropped: recovery retry queue full"}
+                          }
+                        }
+                      ]
+                    }
                   ]
                 }
               ]
@@ -1950,7 +1806,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "min(min by (namespace, workload) (label_replace(lifi_order_recovery_ready{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
+                      "expr": "min(min (lifi_order_recovery_ready{namespace=\"${namespace}\"}))",
                       "instant": true,
                       "legendFormat": "Recovery ready",
                       "range": false
@@ -2012,14 +1868,14 @@
           }
         },
         "transparent": true,
-        "description": "Current value at the end of the selected time range. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas."
+        "description": "Current value at the end of the selected time range."
       }
     },
     "panel-4": {
       "kind": "Panel",
       "spec": {
         "id": 4,
-        "title": "Active quotes",
+        "title": "Last reconciled quotes",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2035,7 +1891,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum(max by (namespace, workload) (label_replace(lifi_active_quotes{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
+                      "expr": "sum(sum (lifi_active_quotes{namespace=\"${namespace}\"}))",
                       "instant": true,
                       "legendFormat": "Active quotes",
                       "range": false
@@ -2071,7 +1927,7 @@
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "short",
+                "unit": "none",
                 "decimals": 0,
                 "thresholds": {
                   "mode": "absolute",
@@ -2080,7 +1936,7 @@
                   ]
                 },
                 "color": {"mode": "fixed", "fixedColor": "blue"},
-                "displayName": "Active quotes",
+                "displayName": "Last reconciled quotes",
                 "noValue": "No data"
               },
               "overrides": []
@@ -2088,14 +1944,14 @@
           }
         },
         "transparent": true,
-        "description": "Sum of the maximum current replica count for each selected workload. Shared observations are not multiplied by the replica count; this is not a deduplicated count of distinct orders. Current value at the end of the selected time range. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas."
+        "description": "Process-local quote entries retained after the last successful reconciliation. They may have expired remotely; check refresh age and outcomes."
       }
     },
     "panel-5": {
       "kind": "Panel",
       "spec": {
         "id": 5,
-        "title": "Active ranges",
+        "title": "Last reconciled ranges",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2111,7 +1967,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum(max by (namespace, workload) (label_replace(lifi_active_quote_ranges{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
+                      "expr": "sum(sum (lifi_active_quote_ranges{namespace=\"${namespace}\"}))",
                       "instant": true,
                       "legendFormat": "Active ranges",
                       "range": false
@@ -2147,7 +2003,7 @@
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "short",
+                "unit": "none",
                 "decimals": 0,
                 "thresholds": {
                   "mode": "absolute",
@@ -2164,7 +2020,7 @@
           }
         },
         "transparent": true,
-        "description": "Sum of the maximum current replica count for each selected workload. Shared observations are not multiplied by the replica count; this is not a deduplicated count of distinct orders. Current value at the end of the selected time range. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas."
+        "description": "Aggregate active ranges. Current state uses the latest samples; counters cover the selected time range."
       }
     },
     "panel-6": {
@@ -2187,7 +2043,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "clamp_min(time() - (min (lifi_last_successful_refresh_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}) > 0), 0) or ((min (lifi_last_successful_refresh_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}) == 0) - 1)",
+                      "expr": "clamp_min(time() - (min (lifi_last_successful_refresh_timestamp{namespace=\"${namespace}\"}) > 0), 0) or ((min (lifi_last_successful_refresh_timestamp{namespace=\"${namespace}\"}) == 0) - 1)",
                       "instant": true,
                       "legendFormat": "Quote refresh age",
                       "range": false
@@ -2253,14 +2109,14 @@
           }
         },
         "transparent": true,
-        "description": "Age since the last observed timestamp. A zero timestamp is Not seen; missing series stay empty. Freshness uses the oldest reporting replica; event age uses the latest event. Current value at the end of the selected time range. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas."
+        "description": "Aggregate quote refresh age. Current state uses the latest samples; counters cover the selected time range."
       }
     },
     "panel-7": {
       "kind": "Panel",
       "spec": {
         "id": 7,
-        "title": "Successful fills",
+        "title": "Successful fills · period",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2276,7 +2132,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum(sum by (namespace, workload) (label_replace(increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"lifi-samechain\",event=\"fill\",outcome=\"success\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
+                      "expr": "sum(sum (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",solver=\"lifi-samechain\",event=\"fill\",outcome=\"success\"}[$__range])))",
                       "instant": true,
                       "legendFormat": "Successful fills",
                       "range": false
@@ -2312,7 +2168,7 @@
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "short",
+                "unit": "none",
                 "decimals": 0,
                 "thresholds": {
                   "mode": "absolute",
@@ -2321,7 +2177,6 @@
                   ]
                 },
                 "color": {"mode": "fixed", "fixedColor": "blue"},
-                "displayName": "Successful fills",
                 "noValue": "No data"
               },
               "overrides": []
@@ -2329,7 +2184,7 @@
           }
         },
         "transparent": true,
-        "description": "Total or ratio over the time range selected above. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas."
+        "description": "Successful fill receipt observations during the selected period. Processing retries are not additional successful fills."
       }
     },
     "panel-9": {
@@ -2337,7 +2192,7 @@
       "spec": {
         "id": 9,
         "title": "Feed and recovery history",
-        "description": "Connection continuity and convergent-recovery readiness. Values are shown per namespace/workload across matching scrape targets. Pod All aggregates the listed replicas by workload. Period counters add process observations; they do not deduplicate business events. Shared state and account balances are not summed across replicas.",
+        "description": "Connection continuity and convergent-recovery readiness. Values aggregate all matching services.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2353,8 +2208,8 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "min by (namespace, workload) (label_replace(lifi_order_feed_connected{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "legendFormat": "{{workload}} · feed",
+                      "expr": "min (lifi_order_feed_connected{namespace=\"${namespace}\"})",
+                      "legendFormat": "feed",
                       "range": true
                     }
                   },
@@ -2372,8 +2227,8 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "min by (namespace, workload) (label_replace(lifi_order_recovery_ready{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "legendFormat": "{{workload}} · recovery",
+                      "expr": "min (lifi_order_recovery_ready{namespace=\"${namespace}\"})",
+                      "legendFormat": "recovery",
                       "range": true
                     }
                   },
@@ -2427,13 +2282,9 @@
         "transparent": true
       }
     },
-    "panel-90": {
+    "panel-40": {
       "kind": "Panel",
       "spec": {
-        "id": 90,
-        "title": "Workload comparison",
-        "description": "Compare the selected workloads. Period counts cover the selected pods and time range; readiness, backlog and balances describe current samples. Click a workload to aggregate its listed pods.",
-        "links": [],
         "data": {
           "kind": "QueryGroup",
           "spec": {
@@ -2441,346 +2292,276 @@
               {
                 "kind": "PanelQuery",
                 "spec": {
-                  "refId": "A",
                   "hidden": false,
                   "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
                     "datasource": {"name": "${datasource}"},
+                    "group": "prometheus",
+                    "kind": "DataQuery",
                     "spec": {
                       "editorMode": "code",
-                      "expr": "min by (namespace, workload) (label_replace(lifi_order_feed_connected{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "instant": true,
-                      "range": false,
+                      "expr": "sum(increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",solver=\"lifi-samechain\",event=\"order_processing\"}[$__range]))",
                       "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "B",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "min by (namespace, workload) (label_replace(lifi_order_recovery_ready{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
                       "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "C",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "max by (namespace, workload) (label_replace(lifi_active_quotes{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "D",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "max by (namespace, workload) (label_replace(lifi_active_quote_ranges{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "E",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "clamp_min(time() - (min by (namespace, workload) (label_replace(lifi_last_successful_refresh_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) > 0), 0) or ((min by (namespace, workload) (label_replace(lifi_last_successful_refresh_timestamp{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\"}, \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) == 0) - 1)",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "F",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "sum by (namespace, workload) (label_replace(increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",pod=~\"${instance}\",pod!=\"\",solver=\"lifi-samechain\",event=\"fill\",outcome=\"success\"}[$__range]), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
+                      "legendFormat": "",
+                      "range": false
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
                 }
               }
             ],
-            "transformations": [
-              {
-                "kind": "Transformation",
-                "group": "merge",
-                "spec": {
-                  "options": {}
-                }
-              },
-              {
-                "kind": "Transformation",
-                "group": "organize",
-                "spec": {
-                  "options": {
-                    "excludeByName": {"Time": true, "namespace": true, "__name__": true},
-                    "indexByName": {"workload": 0, "Value #A": 1, "Value #B": 2, "Value #C": 3, "Value #D": 4, "Value #E": 5, "Value #F": 6},
-                    "renameByName": {
-                      "workload": "Workload",
-                      "Value #A": "Order feed",
-                      "Value #B": "Recovery ready",
-                      "Value #C": "Active quotes",
-                      "Value #D": "Active ranges",
-                      "Value #E": "Quote refresh age",
-                      "Value #F": "Successful fills"
-                    }
-                  }
-                }
-              }
-            ],
-            "queryOptions": {}
+            "queryOptions": {},
+            "transformations": []
           }
         },
+        "description": "Processing decisions across all services. Retries count again; this is not a unique incoming order count.",
+        "id": 40,
+        "links": [],
+        "title": "Order processing attempts",
+        "transparent": true,
         "vizConfig": {
+          "group": "stat",
           "kind": "VizConfig",
-          "group": "table",
-          "version": "",
           "spec": {
-            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": false},
             "fieldConfig": {
               "defaults": {
-                "noValue": "—",
+                "color": {"fixedColor": "blue", "mode": "fixed"},
+                "decimals": 0,
+                "displayName": "Order processing attempts",
+                "mappings": [],
+                "noValue": "No data",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"color": "dark-red", "value": 0},
+                    {"color": "dark-green", "value": 1}
+                  ]
+                },
+                "unit": "none"
+              },
+              "overrides": []
+            },
+            "options": {
+              "colorMode": "value",
+              "graphMode": "none",
+              "justifyMode": "center",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": ["lastNotNull"],
+                "fields": "",
+                "values": false
+              },
+              "text": {"valueSize": 30},
+              "textMode": "value",
+              "wideLayout": true
+            }
+          },
+          "version": ""
+        }
+      }
+    },
+    "panel-41": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {"name": "${datasource}"},
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum(increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",solver=\"lifi-samechain\",event=\"order_processing\",outcome=\"submitted\"}[$__range]))",
+                      "format": "table",
+                      "instant": true,
+                      "legendFormat": "",
+                      "range": false
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": []
+          }
+        },
+        "description": "Processing attempts submitted to the execution path. Submission does not establish successful execution.",
+        "id": 41,
+        "links": [],
+        "title": "Submitted execution attempts · period",
+        "transparent": true,
+        "vizConfig": {
+          "group": "stat",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
+                "color": {"fixedColor": "blue", "mode": "fixed"},
+                "decimals": 0,
+                "mappings": [],
+                "noValue": "No data",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"color": "dark-red", "value": 0},
+                    {"color": "dark-green", "value": 1}
+                  ]
+                },
+                "unit": "none"
+              },
+              "overrides": []
+            },
+            "options": {
+              "colorMode": "value",
+              "graphMode": "none",
+              "justifyMode": "center",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": ["lastNotNull"],
+                "fields": "",
+                "values": false
+              },
+              "text": {"valueSize": 30},
+              "textMode": "value",
+              "wideLayout": true
+            }
+          },
+          "version": ""
+        }
+      }
+    },
+    "panel-80": {
+      "kind": "Panel",
+      "spec": {
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "hidden": false,
+                  "query": {
+                    "datasource": {"name": "${datasource}"},
+                    "group": "prometheus",
+                    "kind": "DataQuery",
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (operation, outcome) (increase(solver_bot_external_operation_duration_seconds_count{namespace=\"${namespace}\",solver=\"lifi-samechain\"}[$__range]))",
+                      "format": "table",
+                      "instant": true,
+                      "legendFormat": "",
+                      "range": false
+                    },
+                    "version": "v0"
+                  },
+                  "refId": "A"
+                }
+              }
+            ],
+            "queryOptions": {},
+            "transformations": [
+              {
+                "group": "organize",
+                "kind": "Transformation",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true, "instance": true, "job": true, "namespace": true},
+                    "indexByName": {"Value": 2, "operation": 0, "outcome": 1},
+                    "renameByName": {"Value": "Attempts", "operation": "Operation", "outcome": "Outcome"}
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "description": "Refresh attempts by source operation and outcome. Zero means an initialized series with no observed increase; No data means the metric is absent.",
+        "id": 80,
+        "links": [],
+        "title": "Source refresh outcomes",
+        "transparent": true,
+        "vizConfig": {
+          "group": "table",
+          "kind": "VizConfig",
+          "spec": {
+            "fieldConfig": {
+              "defaults": {
                 "custom": {
                   "align": "left",
                   "cellOptions": {"type": "auto"},
                   "inspect": false
                 },
-                "mappings": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "-1": {"text": "Not seen", "color": "gray"}
-                    }
-                  }
-                ]
+                "decimals": 0,
+                "noValue": "No data",
+                "unit": "none"
               },
               "overrides": [
                 {
-                  "matcher": {"id": "byName", "options": "Workload"},
+                  "matcher": {"id": "byName", "options": "Outcome"},
                   "properties": [
-                    {"id": "custom.width", "value": 220}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Order feed"},
-                  "properties": [
-                    {"id": "custom.width", "value": 155},
-                    {"id": "unit", "value": "bool"},
-                    {"id": "decimals", "value": 0},
                     {
                       "id": "mappings",
                       "value": [
                         {
                           "type": "value",
                           "options": {
-                            "0": {"text": "No", "color": "red"},
-                            "1": {"text": "Yes", "color": "green"}
+                            "confirmed": {"text": "Confirmed transaction"},
+                            "cancelled": {"text": "Cancelled"},
+                            "reverted": {"text": "Reverted"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
+                            "submission_error": {"text": "Submission failed"},
+                            "tracking_stopped": {"text": "Tracking stopped"},
+                            "settled_in_time": {"text": "Delivered on time"},
+                            "missed": {"text": "Deadline missed"},
+                            "not_actionable": {"text": "Order not currently fillable or outside scope"},
+                            "deposit_deferred": {"text": "Deposit not visible yet"},
+                            "capacity_deferred": {"text": "Waiting for execution capacity"},
+                            "capacity_dropped": {"text": "Dropped after waiting for capacity"},
+                            "submitted": {"text": "Submitted for execution"},
+                            "invalid_plan": {"text": "Invalid execution plan"},
+                            "retryable_error": {"text": "Temporary error; retry scheduled"},
+                            "other": {"text": "Other processing decision"},
+                            "invalid": {"text": "Invalid request"},
+                            "queue_drop:inbox": {"text": "Dropped: incoming queue full"},
+                            "queue_drop:deposit_retry": {"text": "Dropped: deposit retry queue full"},
+                            "queue_drop:capacity_retry": {"text": "Dropped: capacity retry queue full"},
+                            "queue_drop:recovery_retry": {"text": "Dropped: recovery retry queue full"}
                           }
-                        },
-                        {
-                          "type": "special",
-                          "options": {
-                            "match": "null",
-                            "result": {"text": "No current sample", "color": "gray"}
-                          }
-                        },
-                        {
-                          "type": "value",
-                          "options": {
-                            "-1": {"text": "Not seen", "color": "gray"}
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "id": "custom.cellOptions",
-                      "value": {"type": "color-text"}
-                    }
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Recovery ready"},
-                  "properties": [
-                    {"id": "custom.width", "value": 155},
-                    {"id": "unit", "value": "bool"},
-                    {"id": "decimals", "value": 0},
-                    {
-                      "id": "mappings",
-                      "value": [
-                        {
-                          "type": "value",
-                          "options": {
-                            "0": {"text": "No", "color": "red"},
-                            "1": {"text": "Yes", "color": "green"}
-                          }
-                        },
-                        {
-                          "type": "special",
-                          "options": {
-                            "match": "null",
-                            "result": {"text": "No current sample", "color": "gray"}
-                          }
-                        },
-                        {
-                          "type": "value",
-                          "options": {
-                            "-1": {"text": "Not seen", "color": "gray"}
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "id": "custom.cellOptions",
-                      "value": {"type": "color-text"}
-                    }
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Active quotes"},
-                  "properties": [
-                    {"id": "custom.width", "value": 155},
-                    {"id": "unit", "value": "short"},
-                    {"id": "decimals", "value": 0}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Active ranges"},
-                  "properties": [
-                    {"id": "custom.width", "value": 155},
-                    {"id": "unit", "value": "short"},
-                    {"id": "decimals", "value": 0}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Quote refresh age"},
-                  "properties": [
-                    {"id": "custom.width", "value": 155},
-                    {"id": "unit", "value": "s"},
-                    {"id": "decimals", "value": 1},
-                    {
-                      "id": "mappings",
-                      "value": [
-                        {
-                          "type": "value",
-                          "options": {
-                            "0": {"text": "Not seen", "color": "gray", "index": 0}
-                          }
-                        },
-                        {
-                          "type": "value",
-                          "options": {
-                            "-1": {"text": "Not seen", "color": "gray"}
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "id": "custom.cellOptions",
-                      "value": {"type": "color-text"}
-                    }
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Successful fills"},
-                  "properties": [
-                    {"id": "custom.width", "value": 155},
-                    {"id": "unit", "value": "short"},
-                    {"id": "decimals", "value": 0}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Workload"},
-                  "properties": [
-                    {
-                      "id": "links",
-                      "value": [
-                        {
-                          "title": "View workload",
-                          "url": "/d/${__dashboard.uid}?${__url_time_range}&${datasource:queryparam}&${namespace:queryparam}&${history:queryparam}&var-workloads=${__value.raw}&var-instance=%24__all",
-                          "targetBlank": true
                         }
                       ]
                     }
                   ]
                 }
               ]
+            },
+            "options": {
+              "cellHeight": "sm",
+              "enablePagination": false,
+              "showHeader": true,
+              "sortBy": [
+                {"desc": true, "displayName": "Attempts"}
+              ]
             }
-          }
-        },
-        "transparent": true
+          },
+          "version": ""
+        }
       }
     },
-    "panel-91": {
+    "panel-86": {
       "kind": "Panel",
       "spec": {
-        "id": 91,
-        "title": "Current pods",
-        "description": "Pods reporting at the end of the selected range, across the selected workloads. This list stays independent of the Pod filter so you can switch replicas. Click a pod to inspect it.",
+        "id": 86,
+        "title": "Transaction fees · since process starts",
+        "description": "Current reporting services only, since their process starts. Includes preperiod fees and the first nonzero sample; excludes vanished services. Fees recorded from transaction receipts, grouped by terminal outcome. Reverted and cancelled transactions consumed fees without a successful execution. Included-unconfirmed means final confirmation was not established. Missing receipt prices can undercount costs.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2798,53 +2579,11 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "label_replace(max by (namespace, pod) (solver_bot_solver_info{solver=\"lifi-samechain\",namespace=\"${namespace}\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")",
+                      "expr": "sum by(outcome)(solver_bot_txmanager_fee_paid_wei_total{namespace=\"${namespace}\",label=\"lifi-fill\"}) / 1e18",
                       "instant": true,
                       "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "B",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "(label_replace(min by (namespace, pod) (solver_bot_service_ready{namespace=\"${namespace}\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\",pod!=\"\"}), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) and on (namespace, pod) (label_replace(max by (namespace, pod) (solver_bot_solver_info{solver=\"lifi-samechain\",namespace=\"${namespace}\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "C",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "(label_replace(min by (namespace, pod) ((time() - process_start_time_seconds{namespace=\"${namespace}\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\",pod!=\"\"}) and on (namespace, pod) solver_bot_solver_info{solver=\"lifi-samechain\",namespace=\"${namespace}\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")) and on (namespace, pod) (label_replace(max by (namespace, pod) (solver_bot_solver_info{solver=\"lifi-samechain\",namespace=\"${namespace}\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"))",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
+                      "legendFormat": "",
+                      "format": "table"
                     }
                   }
                 }
@@ -2853,19 +2592,12 @@
             "transformations": [
               {
                 "kind": "Transformation",
-                "group": "merge",
-                "spec": {
-                  "options": {}
-                }
-              },
-              {
-                "kind": "Transformation",
                 "group": "organize",
                 "spec": {
                   "options": {
-                    "excludeByName": {"Time": true, "namespace": true, "Value #A": true},
-                    "indexByName": {"workload": 0, "pod": 1, "Value #B": 2, "Value #C": 3},
-                    "renameByName": {"workload": "Workload", "pod": "Pod", "Value #B": "Ready", "Value #C": "Uptime"}
+                    "excludeByName": {"Time": true, "__name__": true},
+                    "indexByName": {},
+                    "renameByName": {"outcome": "Transaction outcome", "Value": "Fees (ETH)"}
                   }
                 }
               }
@@ -2883,11 +2615,13 @@
               "cellHeight": "sm",
               "enablePagination": false,
               "sortBy": [
-                {"displayName": "Workload", "desc": false}
+                {"displayName": "Fees (ETH)", "desc": true}
               ]
             },
             "fieldConfig": {
               "defaults": {
+                "unit": "none",
+                "decimals": 0,
                 "noValue": "—",
                 "custom": {
                   "align": "left",
@@ -2897,62 +2631,216 @@
               },
               "overrides": [
                 {
-                  "matcher": {"id": "byName", "options": "Workload"},
+                  "matcher": {"id": "byName", "options": "Fees (ETH)"},
                   "properties": [
-                    {"id": "custom.width", "value": 220}
+                    {"id": "unit", "value": "suffix: ETH"},
+                    {"id": "decimals", "value": 9}
                   ]
                 },
                 {
-                  "matcher": {"id": "byName", "options": "Pod"},
+                  "matcher": {"id": "byName", "options": "Transaction outcome"},
                   "properties": [
-                    {"id": "custom.width", "value": 420}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Ready"},
-                  "properties": [
-                    {"id": "custom.width", "value": 160},
                     {
                       "id": "mappings",
                       "value": [
                         {
                           "type": "value",
                           "options": {
-                            "0": {"text": "Not ready", "color": "red"},
-                            "1": {"text": "Ready", "color": "green"}
+                            "confirmed": {"text": "Confirmed transaction"},
+                            "cancelled": {"text": "Cancelled"},
+                            "reverted": {"text": "Reverted"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
+                            "submission_error": {"text": "Submission failed"},
+                            "tracking_stopped": {"text": "Tracking stopped"},
+                            "settled_in_time": {"text": "Delivered on time"},
+                            "missed": {"text": "Deadline missed"},
+                            "not_actionable": {"text": "Order not currently fillable or outside scope"},
+                            "deposit_deferred": {"text": "Deposit not visible yet"},
+                            "capacity_deferred": {"text": "Waiting for execution capacity"},
+                            "capacity_dropped": {"text": "Dropped after waiting for capacity"},
+                            "submitted": {"text": "Submitted for execution"},
+                            "invalid_plan": {"text": "Invalid execution plan"},
+                            "retryable_error": {"text": "Temporary error; retry scheduled"},
+                            "other": {"text": "Other processing decision"},
+                            "invalid": {"text": "Invalid request"},
+                            "queue_drop:inbox": {"text": "Dropped: incoming queue full"},
+                            "queue_drop:deposit_retry": {"text": "Dropped: deposit retry queue full"},
+                            "queue_drop:capacity_retry": {"text": "Dropped: capacity retry queue full"},
+                            "queue_drop:recovery_retry": {"text": "Dropped: recovery retry queue full"}
                           }
-                        }
-                      ]
-                    },
-                    {
-                      "id": "custom.cellOptions",
-                      "value": {"type": "color-text"}
-                    }
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Uptime"},
-                  "properties": [
-                    {"id": "custom.width", "value": 160},
-                    {"id": "unit", "value": "s"}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Pod"},
-                  "properties": [
-                    {
-                      "id": "links",
-                      "value": [
-                        {
-                          "title": "Inspect pod",
-                          "url": "/d/${__dashboard.uid}?${__url_time_range}&${datasource:queryparam}&${namespace:queryparam}&${history:queryparam}&var-workloads=${__data.fields.Workload}&var-instance=${__value.raw}",
-                          "targetBlank": true
                         }
                       ]
                     }
                   ]
                 }
               ]
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-100": {
+      "kind": "Panel",
+      "spec": {
+        "id": 100,
+        "title": "Metrics availability",
+        "description": "Current exporter membership for this integration and environment. Zero means no compatible metrics source is reporting here; it does not mean zero business activity. Check the selected environment and Runtime exporter coverage.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "count(solver_bot_solver_info{namespace=\"${namespace}\",solver=\"lifi-samechain\"}) or vector(0)",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "reduceOptions": {
+                "values": false,
+                "calcs": ["lastNotNull"],
+                "fields": ""
+              },
+              "orientation": "auto",
+              "textMode": "value",
+              "colorMode": "value",
+              "graphMode": "none",
+              "justifyMode": "auto"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "Source unavailable",
+                "mappings": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {"text": "No metrics source", "color": "red"}
+                    }
+                  },
+                  {
+                    "type": "range",
+                    "options": {
+                      "from": 1,
+                      "to": 1000000000.0,
+                      "result": {"text": "Metrics received", "color": "green"}
+                    }
+                  }
+                ],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "red"},
+                    {"value": 1, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "thresholds"}
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-102": {
+      "kind": "Panel",
+      "spec": {
+        "id": 102,
+        "title": "Since last successful fill",
+        "description": "Time since the latest successful operation whose timestamp is visible in the selected period. An initialized zero timestamp means no success has been observed; an absent series remains unavailable.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "clamp_min(time() - (max(max_over_time(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",solver=\"lifi-samechain\",event=\"fill\",outcome=\"success\"}[$__range])) > 0), 0) or ((max(max_over_time(solver_bot_workflow_last_event_timestamp{namespace=\"${namespace}\",solver=\"lifi-samechain\",event=\"fill\",outcome=\"success\"}[$__range])) == 0) - 1)",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "reduceOptions": {
+                "values": false,
+                "calcs": ["lastNotNull"],
+                "fields": ""
+              },
+              "orientation": "auto",
+              "textMode": "value",
+              "colorMode": "value",
+              "graphMode": "none",
+              "justifyMode": "auto"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "s",
+                "decimals": 1,
+                "noValue": "Unavailable",
+                "color": {"mode": "fixed", "fixedColor": "blue"},
+                "mappings": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "-1": {"text": "No success observed", "color": "gray"}
+                    }
+                  }
+                ]
+              },
+              "overrides": []
             }
           }
         },
@@ -2967,7 +2855,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Current health and selected-period results",
+            "title": "Execution results",
             "collapse": false,
             "layout": {
               "kind": "GridLayout",
@@ -2978,19 +2866,9 @@
                     "spec": {
                       "x": 0,
                       "y": 0,
-                      "width": 4,
+                      "width": 8,
                       "height": 4,
-                      "element": {"kind": "ElementReference", "name": "panel-2"}
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 4,
-                      "y": 0,
-                      "width": 4,
-                      "height": 4,
-                      "element": {"kind": "ElementReference", "name": "panel-3"}
+                      "element": {"kind": "ElementReference", "name": "panel-7"}
                     }
                   },
                   {
@@ -2998,19 +2876,9 @@
                     "spec": {
                       "x": 8,
                       "y": 0,
-                      "width": 4,
+                      "width": 8,
                       "height": 4,
-                      "element": {"kind": "ElementReference", "name": "panel-6"}
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 12,
-                      "y": 0,
-                      "width": 4,
-                      "height": 4,
-                      "element": {"kind": "ElementReference", "name": "panel-4"}
+                      "element": {"kind": "ElementReference", "name": "panel-41"}
                     }
                   },
                   {
@@ -3018,19 +2886,9 @@
                     "spec": {
                       "x": 16,
                       "y": 0,
-                      "width": 4,
+                      "width": 8,
                       "height": 4,
-                      "element": {"kind": "ElementReference", "name": "panel-5"}
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 20,
-                      "y": 0,
-                      "width": 4,
-                      "height": 4,
-                      "element": {"kind": "ElementReference", "name": "panel-7"}
+                      "element": {"kind": "ElementReference", "name": "panel-102"}
                     }
                   }
                 ]
@@ -3041,65 +2899,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Compare workloads",
-            "collapse": false,
-            "layout": {
-              "kind": "GridLayout",
-              "spec": {
-                "items": [
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 0,
-                      "y": 0,
-                      "width": 24,
-                      "height": 8,
-                      "element": {"kind": "ElementReference", "name": "panel-90"}
-                    }
-                  }
-                ]
-              }
-            }
-          }
-        },
-        {
-          "kind": "RowsLayoutRow",
-          "spec": {
-            "title": "Quote publication and feed health",
-            "collapse": false,
-            "layout": {
-              "kind": "GridLayout",
-              "spec": {
-                "items": [
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 0,
-                      "y": 0,
-                      "width": 12,
-                      "height": 8,
-                      "element": {"kind": "ElementReference", "name": "panel-11"}
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 12,
-                      "y": 0,
-                      "width": 12,
-                      "height": 8,
-                      "element": {"kind": "ElementReference", "name": "panel-9"}
-                    }
-                  }
-                ]
-              }
-            }
-          }
-        },
-        {
-          "kind": "RowsLayoutRow",
-          "spec": {
-            "title": "Order backlog and dropped work",
+            "title": "Why orders are not executing",
             "collapse": false,
             "layout": {
               "kind": "GridLayout",
@@ -3114,26 +2914,6 @@
                       "height": 7,
                       "element": {"kind": "ElementReference", "name": "panel-14"}
                     }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 0,
-                      "y": 7,
-                      "width": 24,
-                      "height": 7,
-                      "element": {"kind": "ElementReference", "name": "panel-15"}
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 0,
-                      "y": 14,
-                      "width": 24,
-                      "height": 7,
-                      "element": {"kind": "ElementReference", "name": "panel-16"}
-                    }
                   }
                 ]
               }
@@ -3143,7 +2923,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Fill results and execution cost",
+            "title": "Orders at risk of missing execution",
             "collapse": false,
             "layout": {
               "kind": "GridLayout",
@@ -3156,7 +2936,7 @@
                       "y": 0,
                       "width": 12,
                       "height": 6,
-                      "element": {"kind": "ElementReference", "name": "panel-18"}
+                      "element": {"kind": "ElementReference", "name": "panel-15"}
                     }
                   },
                   {
@@ -3166,7 +2946,7 @@
                       "y": 0,
                       "width": 12,
                       "height": 6,
-                      "element": {"kind": "ElementReference", "name": "panel-20"}
+                      "element": {"kind": "ElementReference", "name": "panel-16"}
                     }
                   }
                 ]
@@ -3177,7 +2957,85 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Quote limits, token amounts and timing",
+            "title": "Execution costs",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 24,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-86"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Demand and ability to accept orders",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 6,
+                      "height": 4,
+                      "element": {"kind": "ElementReference", "name": "panel-40"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 6,
+                      "y": 0,
+                      "width": 6,
+                      "height": 4,
+                      "element": {"kind": "ElementReference", "name": "panel-2"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 6,
+                      "height": 4,
+                      "element": {"kind": "ElementReference", "name": "panel-3"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 18,
+                      "y": 0,
+                      "width": 6,
+                      "height": 4,
+                      "element": {"kind": "ElementReference", "name": "panel-6"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Transaction outcome details",
             "collapse": true,
             "layout": {
               "kind": "GridLayout",
@@ -3189,26 +3047,104 @@
                       "x": 0,
                       "y": 0,
                       "width": 24,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-18"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Quote publication diagnostics",
+            "collapse": true,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 6,
                       "height": 7,
-                      "element": {"kind": "ElementReference", "name": "panel-10"}
+                      "element": {"kind": "ElementReference", "name": "panel-4"}
                     }
                   },
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
-                      "x": 0,
-                      "y": 7,
-                      "width": 24,
+                      "x": 6,
+                      "y": 0,
+                      "width": 6,
                       "height": 7,
-                      "element": {"kind": "ElementReference", "name": "panel-19"}
+                      "element": {"kind": "ElementReference", "name": "panel-5"}
                     }
                   },
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 6,
+                      "height": 7,
+                      "element": {"kind": "ElementReference", "name": "panel-11"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 18,
+                      "y": 0,
+                      "width": 6,
+                      "height": 7,
+                      "element": {"kind": "ElementReference", "name": "panel-9"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Service and source diagnostics",
+            "collapse": true,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
                       "x": 0,
-                      "y": 14,
-                      "width": 24,
+                      "y": 0,
+                      "width": 8,
+                      "height": 7,
+                      "element": {"kind": "ElementReference", "name": "panel-100"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 8,
+                      "y": 0,
+                      "width": 8,
+                      "height": 7,
+                      "element": {"kind": "ElementReference", "name": "panel-80"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 16,
+                      "y": 0,
+                      "width": 8,
                       "height": 7,
                       "element": {"kind": "ElementReference", "name": "panel-12"}
                     }
@@ -3221,7 +3157,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Current pods",
+            "title": "Cost sampling diagnostics",
             "collapse": true,
             "layout": {
               "kind": "GridLayout",
@@ -3233,8 +3169,8 @@
                       "x": 0,
                       "y": 0,
                       "width": 24,
-                      "height": 10,
-                      "element": {"kind": "ElementReference", "name": "panel-91"}
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-20"}
                     }
                   }
                 ]
@@ -3322,79 +3258,8 @@
         "multi": false,
         "includeAll": false,
         "allowCustomValue": true,
-        "current": {"text": "", "value": ""}
-      }
-    },
-    {
-      "kind": "SwitchVariable",
-      "spec": {
-        "name": "history",
-        "label": "Include old pods",
-        "description": "Off: pods reporting at the end of the selected time range. On: also include pods observed earlier in that range. This changes the chooser only; panel time ranges stay unchanged.",
-        "hide": "dontHide",
-        "skipUrlSync": false,
-        "current": "0",
-        "enabledValue": "1",
-        "disabledValue": "0"
-      }
-    },
-    {
-      "kind": "QueryVariable",
-      "spec": {
-        "name": "workloads",
-        "label": "Workload",
-        "hide": "dontHide",
-        "refresh": "onTimeRangeChanged",
-        "skipUrlSync": false,
-        "query": {
-          "kind": "DataQuery",
-          "group": "prometheus",
-          "version": "v0",
-          "datasource": {"name": "${datasource}"},
-          "spec": {
-            "query": "query_result(max by (workload) (label_replace((max by (pod) (solver_bot_solver_info{solver=\"lifi-samechain\",namespace=\"${namespace}\",pod!=\"\"}) or (max by (pod) (max_over_time(solver_bot_solver_info{solver=\"lifi-samechain\",namespace=\"${namespace}\",pod!=\"\"}[$__range])) and on () (vector(${history}) == 1))), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
-            "refId": "PrometheusVariableQueryEditor-workloads"
-          }
-        },
-        "regex": "/workload=\"([^\"]+)\"/",
-        "sort": "alphabeticalAsc",
-        "definition": "query_result(max by (workload) (label_replace((max by (pod) (solver_bot_solver_info{solver=\"lifi-samechain\",namespace=\"${namespace}\",pod!=\"\"}) or (max by (pod) (max_over_time(solver_bot_solver_info{solver=\"lifi-samechain\",namespace=\"${namespace}\",pod!=\"\"}[$__range])) and on () (vector(${history}) == 1))), \"workload\", \"$1\", \"pod\", \"(.+?)(-[a-z0-9]{8,10}-[a-z0-9]{5})?\")))",
-        "options": [],
-        "multi": false,
-        "includeAll": true,
-        "allowCustomValue": false,
-        "current": {"text": "All", "value": "$__all"},
-        "description": "Choose the deployment first. The Pod chooser contains only its replicas. All lists replicas across the available workloads; Overview links retain that selection.",
-        "allValue": ".*"
-      }
-    },
-    {
-      "kind": "QueryVariable",
-      "spec": {
-        "name": "instance",
-        "label": "Pod",
-        "hide": "dontHide",
-        "refresh": "onTimeRangeChanged",
-        "skipUrlSync": false,
-        "query": {
-          "kind": "DataQuery",
-          "group": "prometheus",
-          "version": "v0",
-          "datasource": {"name": "${datasource}"},
-          "spec": {
-            "query": "query_result(max by (pod) (solver_bot_solver_info{solver=\"lifi-samechain\",namespace=\"${namespace}\",pod!=\"\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}) or (max by (pod) (max_over_time(solver_bot_solver_info{solver=\"lifi-samechain\",namespace=\"${namespace}\",pod!=\"\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}[$__range])) and on () (vector(${history}) == 1)))",
-            "refId": "PrometheusVariableQueryEditor-instance"
-          }
-        },
-        "regex": "/pod=\"(?<value>.+?-(?<text>[a-z0-9]{8,10}-[a-z0-9]{5})|[^\"]+)\"/",
-        "sort": "alphabeticalAsc",
-        "definition": "query_result(max by (pod) (solver_bot_solver_info{solver=\"lifi-samechain\",namespace=\"${namespace}\",pod!=\"\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}) or (max by (pod) (max_over_time(solver_bot_solver_info{solver=\"lifi-samechain\",namespace=\"${namespace}\",pod!=\"\",pod=~\"(${workloads})(-[a-z0-9]{8,10}-[a-z0-9]{5})?\"}[$__range])) and on () (vector(${history}) == 1)))",
-        "options": [],
-        "multi": false,
-        "includeAll": true,
-        "allowCustomValue": false,
-        "current": {"text": "All", "value": "$__all"},
-        "description": "Choose one pod, or All to aggregate the pods listed for this workload. Include old pods adds retired replicas to the selected set. Short labels keep full pod names as values."
+        "current": {"text": "", "value": ""},
+        "description": "Environment for the integration totals. All matching services are included automatically."
       }
     }
   ]
