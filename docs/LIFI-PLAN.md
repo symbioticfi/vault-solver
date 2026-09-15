@@ -58,9 +58,8 @@ shutdown-preparation duration used to bound process-wide transaction draining. R
 
 - **`Run(ctx)`** maintains the LI.FI order feed and recovery fence, refreshes standing quotes, and
   evaluates every admitted delivery for immediate execution; blocks until ctx cancels.
-- **Fills go through the shared `txmanager`** — the solver builds the executor finalise calldata;
-  txmanager owns admission, fees, nonce, replacement/cancellation, and confirmed receipt. Same
-  nonce-serialized EOA as every other transaction-sending solver.
+- **Fills use the [shared transaction manager](TXMANAGER-PLAN.md)** — LI.FI builds executor finalise
+  calldata and owns protocol status checks, deadlines and capacity until the terminal result.
 - **On-chain reads use `chain.Multicall`** — adapter `getAmountOut` / `minDiscount` / `getMaxAssets` /
   `getMaxRate`, executor immutables/caller authorization, and filler authorization are batched where appropriate.
 - **Signer/caller** — the framework EOA is the tx sender and must be authorized through
@@ -472,15 +471,16 @@ type Strategy interface {
 The order worker owns pending fills and their capacity reservations. It reserves each direct route's
 target output and each private route's upward-buffered output against its shared `CapacityID` while an
 accepted fill tx is in flight, passes the aggregate reservation snapshot to every later fill decision,
-and releases it only when the shared tx manager returns after the globally configured confirmation depth.
+and releases it only on a terminal txmanager result under the
+[shared outcome contract](TXMANAGER-PLAN.md#5-receipt-polling-and-confirmation).
 Each fill request supplies the generic tx-manager obsolescence check with a fresh on-chain `orderStatus` read.
-The manager evaluates it immediately before signing and on every receipt poll. `Deposited` keeps normal
-replacements alive. `None` also preserves the lifecycle because a lagging latest-state RPC can return the older
+The manager evaluates it before signing and after a receipt sweep finishes without a valid receipt.
+A receipt of our own fill takes precedence over interpreting `Claimed` as obsolescence. `Deposited` keeps normal replacements alive. `None` also preserves the lifecycle because a lagging latest-state RPC can return the older
 pre-deposit value for a fresh order. An observed `Claimed` or `Refunded` status drops an unsigned request or
 immediately switches a signed request to same-nonce cancellation without waiting for `pendingTimeoutMs`.
-Unknown statuses and read errors preserve the current lifecycle and are retried. Capacity remains reserved until
-the tracked fill, revert, or cancellation reaches the configured confirmation depth, so an inconsistent RPC
-view or reorg cannot make the same liquidity available while owned calldata can still execute.
+Unknown statuses and read errors preserve the current lifecycle and are retried. Capacity is released
+from the terminal result, not from an isolated status read or missing receipt. Confirmation errors and
+hard shutdown outcomes follow the shared result contract; they do not prove final settlement.
 The worker-owned retry FIFO is bounded to the same 4096 entries as the order inbox and coalesces immutable
 `StandardOrder` fingerprints rather than trusting order-server metadata IDs. It never blocks intake of later
 deliveries. Each reservation release advances a generation and
@@ -541,18 +541,14 @@ An admitted order first verifies `governanceFee() == 0`, then derives the canoni
 order tokens. For private candidates it resolves the
 signatures under one order-server timeout, then re-reads latest-state LiquidLane inventory and current block
 time before each strategy decision. With `gas:` configured, that decision-time max fee is a hard per-request
-cap; without it, the request cap is nil and txmanager prices dynamically under global `maxFeeGwei`. Before
-signing, txmanager recomputes current fees and rejects a capped fill if base fee plus the selected priority fee
-cannot fit while retaining replacement headroom. It verifies `Deposited` again immediately before `SendAsync`.
-Pending calls are bumped within the applicable request/global cap. `CancelAt` is the earliest non-zero order expiry, fill
+cap; without it, the request cap is nil. The shared manager applies
+[fee selection and headroom](TXMANAGER-PLAN.md#4-fees-replacements-and-cancellation). LI.FI verifies
+`Deposited` again immediately before `SendAsync`. `CancelAt` is the earliest non-zero order expiry, fill
 deadline, selected signer deadline, or protocol-signature deadline. It is translated from the final observed
 chain time to wall time immediately before admission, so RPC/planning latency and positive chain-clock skew
-cannot extend validity; it also bounds a wait behind another active lifecycle. With no deadline, the global
-pending timeout remains the bound. At either bound, txmanager replaces the call with a same-nonce self-transfer;
-cancellation may exceed the profitability cap but not the operator's global `txManager.maxFeeGwei`. LI.FI
-releases the reservation on the terminal txmanager result. A receipted fill,
-revert, or cancellation waits for the configured confirmation depth; a pre-sign or definitive broadcast
-failure does not.
+cannot extend validity; it also bounds a wait behind another active lifecycle. LI.FI releases capacity
+on the [terminal manager result](TXMANAGER-PLAN.md#5-receipt-polling-and-confirmation); it does not
+interpret a caller timeout as evidence that the signed fill cannot execute.
 Every later fill decision subtracts aggregate pending capacity before route allocation. At inclusion, the
 LiquidLane adapter and OutputSettler enforce the requested swap and resolved output; stale state therefore
 reverts atomically rather than being repriced by the executor.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math/big"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -133,40 +134,54 @@ func TestMetrics(t *testing.T) {
 	})
 
 	t.Run("replacement lifecycle", func(t *testing.T) {
-		sgnr := mustSigner(t)
-		backend := &replacementBackend{mockBackend: newMockBackend(), cancellationTo: sgnr.Address()}
-		metrics := newTestMetrics(t)
-		manager := NewWithMetrics(
-			backend, sgnr, big.NewInt(11155111),
-			Config{
-				MaxFeeGwei:          100,
-				PollInterval:        time.Millisecond,
-				ReplacementInterval: 2 * time.Millisecond,
-				PendingTimeout:      8 * time.Millisecond,
-			},
-			metrics,
-			logr.Discard(),
-		)
-		go manager.Start(t.Context())
+		synctest.Test(t, func(t *testing.T) {
+			sgnr := mustSigner(t)
+			backend := &replacementBackend{mockBackend: newMockBackend(), cancellationTo: sgnr.Address()}
+			metrics := newTestMetrics(t)
+			manager := NewWithMetrics(
+				backend, sgnr, big.NewInt(11155111),
+				Config{
+					MaxFeeGwei:          100,
+					PollInterval:        time.Millisecond,
+					ReplacementInterval: 2 * time.Millisecond,
+					PendingTimeout:      8 * time.Millisecond,
+				},
+				metrics,
+				logr.Discard(),
+			)
+			go manager.Start(t.Context())
 
-		result, accepted := manager.SendAsync(t.Context(), Request{
-			To: common.HexToAddress("0xabc"), Data: []byte{1}, GasLimit: 21_000,
-			MaxFeePerGas: big.NewInt(42_000_000_000), Label: "lifi-fill",
+			result, accepted := manager.SendAsync(t.Context(), Request{
+				To: common.HexToAddress("0xabc"), Data: []byte{1}, GasLimit: 21_000,
+				// Allow one fee bump; later normal ticks only rebroadcast at the cap.
+				MaxFeePerGas: big.NewInt(42_000_000_000), Label: "lifi-fill",
+			})
+			if !accepted {
+				t.Fatal("transaction was not accepted")
+			}
+			// Settle admission before advancing the lifecycle's fake clock.
+			synctest.Wait()
+			time.Sleep(2 * time.Millisecond)
+			synctest.Wait()
+			assertMetric(t, metrics.replacements.WithLabelValues(
+				"lifi-fill", replacementKindReplacement,
+			), 1)
+			assertMetric(t, metrics.replacements.WithLabelValues(
+				"lifi-fill", replacementKindCancellation,
+			), 0)
+
+			if completed := <-result; completed.Outcome != OutcomeCancelled {
+				t.Fatalf("outcome = %q, want %q", completed.Outcome, OutcomeCancelled)
+			}
+			assertMetric(t, metrics.replacements.WithLabelValues(
+				"lifi-fill",
+				replacementKindReplacement,
+			), 1)
+			assertMetric(t, metrics.replacements.WithLabelValues(
+				"lifi-fill",
+				replacementKindCancellation,
+			), 1)
 		})
-		if !accepted {
-			t.Fatal("transaction was not accepted")
-		}
-		if completed := <-result; completed.Outcome != OutcomeCancelled {
-			t.Fatalf("outcome = %q, want %q", completed.Outcome, OutcomeCancelled)
-		}
-		assertMetric(t, metrics.replacements.WithLabelValues(
-			"lifi-fill",
-			replacementKindReplacement,
-		), 1)
-		assertMetric(t, metrics.replacements.WithLabelValues(
-			"lifi-fill",
-			replacementKindCancellation,
-		), 1)
 	})
 
 	t.Run("tracking stopped", func(t *testing.T) {
