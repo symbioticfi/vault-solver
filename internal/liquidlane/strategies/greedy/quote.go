@@ -129,8 +129,17 @@ func solveExactInputQuote(
 			)
 			return nil
 		}
-		last := &allocation.Allocations[len(allocation.Allocations)-1]
-		last.AmountIn.Add(last.AmountIn, allocation.Remaining)
+		// Only direct swaps encode an output cap; discount swaps price the entire input.
+		direct := -1
+		for i := range allocation.Allocations {
+			if allocation.Allocations[i].Candidate.DiscountID == nil {
+				direct = i
+			}
+		}
+		if direct < 0 {
+			return nil
+		}
+		allocation.Allocations[direct].AmountIn.Add(allocation.Allocations[direct].AmountIn, allocation.Remaining)
 		allocation.Remaining.SetInt64(0)
 	}
 

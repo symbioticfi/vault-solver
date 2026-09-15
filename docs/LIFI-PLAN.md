@@ -58,9 +58,8 @@ shutdown-preparation duration used to bound process-wide transaction draining. R
 
 - **`Run(ctx)`** maintains the LI.FI order feed and recovery fence, refreshes standing quotes, and
   evaluates every admitted delivery for immediate execution; blocks until ctx cancels.
-- **Fills go through the shared `txmanager`** — the solver builds the executor finalise calldata;
-  txmanager owns admission, fees, nonce, replacement/cancellation, and confirmed receipt. Same
-  nonce-serialized EOA as every other transaction-sending solver.
+- **Fills use the [shared transaction manager](TXMANAGER-PLAN.md)** — LI.FI builds executor finalise
+  calldata and owns protocol status checks, deadlines and capacity until the terminal result.
 - **On-chain reads use `chain.Multicall`** — adapter `getAmountOut` / `minDiscount` / `getMaxAssets` /
   `getMaxRate`, executor immutables/caller authorization, and filler authorization are batched where appropriate.
 - **Signer/caller** — the framework EOA is the tx sender and must be authorized through
@@ -287,9 +286,10 @@ price curve per RWA→underlying pair from `adapter.getMaxRate` / `getMaxAssets`
 `fromChain` and `toChain` are transport fields only: `orderClient` initializes both once from the solver's
 configured runtime chain. Strategy outputs and quote-state keys contain only the local token pair, so a
 same-chain solver cannot accidentally publish a mixed-chain curve.
-The order server acknowledges the number of deduplicated ranges it accepted. Local reconciliation commits a
-publish or expiry only when `quotesAdded` equals the submitted range count; a missing or partial acknowledgement
-is treated as an uncertain submit so the same replacement or expiry is retried.
+The order server acknowledges the number of deduplicated ranges it accepted. Local reconciliation requires
+`status: success` and `quotesAdded` equal to the submitted range count. Withdrawals submit empty `ranges`,
+so their expected added-range count is zero. Failed or partial acknowledgements leave the operation pending
+for retry.
 
 Standing curves also follow the shared transaction lane. On any coalesced lane-state change, LI.FI first
 expires its known active curves; if the lane is ready again, it rebuilds and republishes from fresh state.
@@ -317,8 +317,8 @@ readiness is captured before cancellation and cleanup. Quote suspension and REST
 `pong`). On every connection the socket reader starts first, then the solver repeatedly paginates
 `GET /orders` for `Signed` and `Delivered` rows scoped to this executor and configured origin/destination
 chain until a pass adds no new immutable-order fingerprints. The live socket may also carry valid orders for
-other chains; after full structural parsing, origin/output chain mismatches are ignored at info level, while
-malformed payloads and target-chain contract mismatches remain errors. REST rows and live events pass through
+other chains; routing checks classify foreign origin/output chains at info level before token parsing;
+malformed identifiers and operational failures remain errors. REST rows and live events pass through
 the same parser and bounded FIFO; a bounded per-connection seen set coalesces their overlap even after the first
 copy has left the queue. Recovery applies backpressure
 instead of dropping rows. Quote publication and renewal stay suspended until a worker-side FIFO barrier has
@@ -429,12 +429,10 @@ type Strategy interface {
   when at most `max(quoteInterval, quoteTtl / 3)` remains, even when no new block is observed or the head poll
   fails. The strategy
   may only shorten that expiry to `discount deadline - executionDeadlineBuffer`.
-  Capacity allocation is scoped to one token pair before the range curve is built. Different pairs backed
-  by the same vault therefore each advertise the full currently unreserved `CapacityID` instead of receiving
-  static shares. This is deliberately optimistic: an accepted fill reserves the shared domain and wakes quote
-  refresh immediately, but two orders matched against the previous curves can still race. Fresh fill planning,
-  the shared reservation ledger, and inclusion-time adapter checks prevent double spending; they do not promise
-  that every concurrently matched order can be filled.
+  Capacity is allocated across all live routes before grouping them into pair curves. Routes sharing a
+  `CapacityID` receive shares of one unreserved vault budget; two different pairs no longer each advertise
+  that entire budget. Accepted fills reserve the domain and wake quote refresh. Multiple matches against
+  one unchanged curve can still contend; fresh fill planning and inclusion-time checks remain necessary.
 - **`FillInput`** = the matched signed `StandardOrder` output facts (`output.amount`, raw
   `output.context`) plus fresh `getAmountOut`, `minDiscount`, `getMaxAssets`, pending fill reservations
   by shared `CapacityID`, and the same optional LiquidLane gas facts. Direct candidates require current
@@ -474,15 +472,16 @@ type Strategy interface {
 The order worker owns pending fills and their capacity reservations. It reserves each direct route's
 target output and each private route's upward-buffered output against its shared `CapacityID` while an
 accepted fill tx is in flight, passes the aggregate reservation snapshot to every later fill decision,
-and releases it only when the shared tx manager returns after the globally configured confirmation depth.
+and releases it only on a terminal txmanager result under the
+[shared outcome contract](TXMANAGER-PLAN.md#5-receipt-polling-and-confirmation).
 Each fill request supplies the generic tx-manager obsolescence check with a fresh on-chain `orderStatus` read.
-The manager evaluates it immediately before signing and on every receipt poll. `Deposited` keeps normal
-replacements alive. `None` also preserves the lifecycle because a lagging latest-state RPC can return the older
+The manager evaluates it before signing and after a receipt sweep finishes without a valid receipt.
+A receipt of our own fill takes precedence over interpreting `Claimed` as obsolescence. `Deposited` keeps normal replacements alive. `None` also preserves the lifecycle because a lagging latest-state RPC can return the older
 pre-deposit value for a fresh order. An observed `Claimed` or `Refunded` status drops an unsigned request or
 immediately switches a signed request to same-nonce cancellation without waiting for `pendingTimeoutMs`.
-Unknown statuses and read errors preserve the current lifecycle and are retried. Capacity remains reserved until
-the tracked fill, revert, or cancellation reaches the configured confirmation depth, so an inconsistent RPC
-view or reorg cannot make the same liquidity available while owned calldata can still execute.
+Unknown statuses and read errors preserve the current lifecycle and are retried. Capacity is released
+from the terminal result, not from an isolated status read or missing receipt. Confirmation errors and
+hard shutdown outcomes follow the shared result contract; they do not prove final settlement.
 The worker-owned retry FIFO is bounded to the same 4096 entries as the order inbox and coalesces immutable
 `StandardOrder` fingerprints rather than trusting order-server metadata IDs. It never blocks intake of later
 deliveries. Each reservation release advances a generation and
@@ -514,10 +513,10 @@ the renewal window, it submits the replacement curve directly; LI.FI overwrites 
 successful reconciliation publishes quote/range counts and per-pair maximum input ceilings (alternatives
 maxed, never summed) as one collector snapshot. Shared LiquidLane fill telemetry records successful
 fill count, last-fill freshness, and token-native input/output/planned-surplus amounts. When a pair
-stops quoting, it submits the last curve with an expiry in the past, which overwrites and immediately expires
-the old server-side quote. Local state advances only after the response acknowledges every submitted range, so a
-partial acknowledgement leaves the replacement or expiry pending for retry. An unchanged pair is not reposted on
-every calculation tick.
+stops quoting, it submits the pair with empty `ranges`, the order server's documented removal operation.
+Posting nonempty ranges with a past expiry yields zero accepted ranges and cannot acknowledge a publication.
+Local state advances only after a successful acknowledgement; otherwise replacement or withdrawal remains
+pending for retry. An unchanged pair is not reposted on every calculation tick.
 
 The solver then executes the result — publish the curve, or send one
 `finaliseWithCurrentTimestamp(order, routes, discountRoutes)` tx from the
@@ -543,18 +542,14 @@ An admitted order first verifies `governanceFee() == 0`, then derives the canoni
 order tokens. For private candidates it resolves the
 signatures under one order-server timeout, then re-reads latest-state LiquidLane inventory and current block
 time before each strategy decision. With `gas:` configured, that decision-time max fee is a hard per-request
-cap; without it, the request cap is nil and txmanager prices dynamically under global `maxFeeGwei`. Before
-signing, txmanager recomputes current fees and rejects a capped fill if base fee plus the selected priority fee
-cannot fit while retaining replacement headroom. It verifies `Deposited` again immediately before `SendAsync`.
-Pending calls are bumped within the applicable request/global cap. `CancelAt` is the earliest non-zero order expiry, fill
+cap; without it, the request cap is nil. The shared manager applies
+[fee selection and headroom](TXMANAGER-PLAN.md#4-fees-replacements-and-cancellation). LI.FI verifies
+`Deposited` again immediately before `SendAsync`. `CancelAt` is the earliest non-zero order expiry, fill
 deadline, selected signer deadline, or protocol-signature deadline. It is translated from the final observed
 chain time to wall time immediately before admission, so RPC/planning latency and positive chain-clock skew
-cannot extend validity; it also bounds a wait behind another active lifecycle. With no deadline, the global
-pending timeout remains the bound. At either bound, txmanager replaces the call with a same-nonce self-transfer;
-cancellation may exceed the profitability cap but not the operator's global `txManager.maxFeeGwei`. LI.FI
-releases the reservation on the terminal txmanager result. A receipted fill,
-revert, or cancellation waits for the configured confirmation depth; a pre-sign or definitive broadcast
-failure does not.
+cannot extend validity; it also bounds a wait behind another active lifecycle. LI.FI releases capacity
+on the [terminal manager result](TXMANAGER-PLAN.md#5-receipt-polling-and-confirmation); it does not
+interpret a caller timeout as evidence that the signed fill cannot execute.
 Every later fill decision subtracts aggregate pending capacity before route allocation. At inclusion, the
 LiquidLane adapter and OutputSettler enforce the requested swap and resolved output; stale state therefore
 reverts atomically rather than being repriced by the executor.
@@ -961,3 +956,36 @@ still requires the redeploy in phase 0.
 - **Private-discount deployment config** — internal mode needs the reachable RFQ/private-discounts
   backend URL and live signer/protocol policies for the configured adapters. The code path is complete;
   Sepolia E2E still needs a real advertised discount and newly deployed executor ABI.
+
+### Order rejection diagnostics
+
+Typed rejection errors carry a stable reason and
+field; independent raw-field extraction retains correlation metadata even if generated decoding
+fails. Only allowlisted scalar values (160 UTF-8 bytes) and container summaries reach logs; signatures,
+full payloads, callback data and auction context are excluded. Zero output identifiers retain their
+unsupported classification without claiming that the wire format means a native asset. Supported
+format violations remain errors. The existing workflow event family counts `order_parse` observations
+by `invalid`, `unsupported`, or `other_chain`, including recovery replays, independently of log verbosity.
+
+The submitted-order envelope keeps `order` as raw JSON until routing checks complete: order type,
+origin chain, configured input settler and output chains precede the generated StandardOrder decode.
+A different nonzero EVM input settler yields `unsupported_settler` (debug, workflow outcome
+`unsupported`); foreign chains yield `unsupported_chain` with the existing `other_chain` outcome.
+Zero/malformed settler identifiers remain diagnostic errors. Clean nonzero foreign output settlers
+and oracles are expected `unsupported_settler` skips as well.
+
+Native input (token identifier zero) yields `unsupported_native_input` at Info and the existing
+`unsupported` workflow outcome. Multiple inputs/outputs and nonempty output callbacks use the same
+unsupported path at Debug. Empty required input/output lists, bad decimal/type/hex data and dirty
+identifier bits remain Error/Sentry. Zero and all unsupported formats remain ineligible for execution.
+
+The default strategy marks unsupported output-context types with `ErrUnsupportedOutputContext` while
+retaining the existing permanent-decision wrapper. The worker logs only that explicit class at Debug;
+malformed known contexts, other permanent errors and transient failures still log at Error. Retry and
+terminal-outcome decisions are unchanged, including reservation probes. There is no message-text
+filter or blanket suppression of permanent errors in the generic Sentry sink.
+
+The native sentinel follows upstream `catalystsystem/lifi-intent` revision
+`7e32479a48ddcc9e01e5205334a9220f323bae53`, where `InputSettlerEscrow.sol` handles zero native
+inputs and `InputSettlerEscrowLIFINative.t.sol` exercises the LIFI escrow path. This classification is
+only an unsupported-asset skip; it does not enable native execution or prove any deployment's bytecode.

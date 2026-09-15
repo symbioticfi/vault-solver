@@ -140,7 +140,7 @@ func (s *Solver) processOrderUsingReservations(
 	}
 	plan, err := s.strategy.DecideFill(ctx, prepared.input)
 	if err != nil {
-		s.log.Error(err, "order fill: strategy", "orderId", order.OrderID, "quoteId", order.QuoteID)
+		s.logFillDecisionError(err, "order fill: strategy", order)
 		if types.IsPermanentFillDecisionError(err) {
 			return orderProcessingResult{outcome: orderProcessingStrategyDeclined}
 		}
@@ -175,8 +175,7 @@ func (s *Solver) processOrderUsingReservations(
 		)
 		unreservedPlan, err := prober.DecideFillWithoutReservations(ctx, unreservedInput)
 		if err != nil {
-			s.log.Error(err, "order fill: strategy without pending reservations",
-				"orderId", order.OrderID, "quoteId", order.QuoteID)
+			s.logFillDecisionError(err, "order fill: strategy without pending reservations", order)
 			return orderProcessingResult{outcome: orderProcessingStrategyDeclined}
 		}
 		if unreservedPlan == nil {
@@ -517,4 +516,15 @@ func uint32Unix(t time.Time) uint32 {
 func orderExpired(order *submittedOrder, now time.Time) bool {
 	deadline := orderDeadline(order)
 	return !deadline.IsZero() && !now.Before(deadline)
+}
+
+// Unsupported strategy formats keep their permanent-decision semantics without paging.
+// Other permanent errors (such as malformed known contexts) must remain actionable.
+func (s *Solver) logFillDecisionError(err error, message string, order *submittedOrder) {
+	fields := []any{"orderId", order.OrderID, "onChainOrderId", order.OnChainOrderID, "quoteId", order.QuoteID}
+	if errors.Is(err, types.ErrUnsupportedOutputContext) {
+		s.log.V(1).Info(message, append(fields, "reason_code", "unsupported_output_context", "reason", err.Error())...)
+		return
+	}
+	s.log.Error(err, message, fields...)
 }

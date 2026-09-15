@@ -3,6 +3,7 @@ package rfq
 import (
 	"context"
 	"math/big"
+	"slices"
 	"strings"
 	"time"
 
@@ -29,11 +30,12 @@ type quoteService struct {
 	tokenPolicy tokenpolicy.Policy
 	// minAmountsIn holds per-input-token minimum request sizes in base units; a token absent from the
 	// map (or a nil map) has no minimum.
-	minAmountsIn map[common.Address]*big.Int
-	reader       quoteCandidateReader
-	strategy     types.Strategy
-	log          logr.Logger
-	now          func() time.Time
+	discountsEnabled bool
+	minAmountsIn     map[common.Address]*big.Int
+	reader           quoteCandidateReader
+	strategy         types.Strategy
+	log              logr.Logger
+	now              func() time.Time
 }
 
 type quoteCandidateReader interface {
@@ -115,6 +117,9 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (quoteDecisi
 		return quoteDecision{outcome: quoteDecisionBelowMinimum}, nil
 	}
 	req, inv := parsed.req, qs.whitelist.filter(parsed.inv)
+	if !qs.discountsEnabled {
+		inv = slices.DeleteFunc(slices.Clone(inv), func(item solverInventory) bool { return item.DiscountID != nil })
+	}
 	if len(inv) == 0 {
 		qs.log.V(1).Info("declining quote: no whitelisted adapters", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil

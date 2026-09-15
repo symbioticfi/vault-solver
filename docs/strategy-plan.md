@@ -193,22 +193,17 @@ unique gauges/histograms; the framework does not know them. RFQ, LI.FI, and Unis
 `fill/success` event and token-native amount kinds; RFQ and UniswapX additionally classify `failure` and
 `not_admitted`. Unknown event/outcome, amount-kind, or state-view observations increment one bounded
 contract-drift counter instead of disappearing silently. Detailed gas, fee, and transaction lifecycle
-accounting remains in txmanager.
+accounting remains in the [shared transaction manager](TXMANAGER-PLAN.md#8-observability).
 The generic HTTP chain transport records bounded logical requests and endpoint attempts by read/write/shared
-role, method, ordinal endpoint, and outcome; configured URLs and error strings never become labels. An active
-`txmanager` periodically installs one complete sender balance/latest-nonce/pending-nonce telemetry snapshot.
-Nonce reads stay pinned to the write endpoint; balance tries it first and falls back to the ordinary read client
-for submission-only relays. The previous complete snapshot is retained on failure. One locked collector emits the account
-identity, refresh counters, values, and freshness from a single scrape-consistent state; processes whose solvers
-do not start `txmanager` emit no txmanager account series. `solver_bot_solver_info{solver}` exposes bounded
-config-time membership for fleet joins.
+role, method, ordinal endpoint, and outcome; configured URLs and error strings never become labels.
+`solver_bot_solver_info{solver}` exposes bounded config-time membership for fleet joins.
 
 A process is one execution lane: one chain client (primary/fallback read set plus optional private write
 endpoint), one signer, and one nonce-serialized txmanager shared by its configured solvers. Different
 signer/RPC tuples run as separate processes with disjoint solver subsets and unique Prometheus `instance`
 (or deployment-supplied `lane`) target labels. Committed dashboards use the standard Kubernetes `pod` target
 label and query namespace/pod options from Prometheus rather than embedding deployment names. Application metrics do not carry URLs or deployment names.
-The same EOA must not appear in two lanes because independent txmanagers cannot coordinate its nonce.
+The [shared manager ownership contract](TXMANAGER-PLAN.md#1-ownership-and-admission) requires an exclusive EOA per process.
 
 The adjacent `internal/liquidlane/discounts` package owns the discount rules shared by RFQ, LI.FI, and
 UniswapX: parse and filter live offers, bind offers to physical routes, cap advertised rate/capacity,
