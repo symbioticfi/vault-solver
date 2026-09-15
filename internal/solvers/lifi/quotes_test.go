@@ -237,7 +237,7 @@ func TestQuoteStateRemovesPairWhenStrategyStopsQuoting(t *testing.T) {
 		t.Fatalf("remove: %v", err)
 	}
 	if removed != 1 || len(submitter.calls) != 1 || len(submitter.calls[0]) != 1 ||
-		len(submitter.calls[0][0].Ranges) == 0 || submitter.calls[0][0].Expiry >= now.Unix() {
+		len(submitter.calls[0][0].Ranges) != 0 {
 		t.Fatalf("remove: removed=%d calls=%#v", removed, submitter.calls)
 	}
 }
@@ -272,7 +272,7 @@ func TestQuoteStateExpiresPairAfterUnknownPublishOutcome(t *testing.T) {
 		t.Fatalf("expire uncertain pair: %v", err)
 	}
 	if removed != 1 || len(state.active) != 0 || len(submitter.calls) != 1 ||
-		len(submitter.calls[0]) != 1 || submitter.calls[0][0].Expiry >= now.Unix() {
+		len(submitter.calls[0]) != 1 || len(submitter.calls[0][0].Ranges) != 0 {
 		t.Fatalf(
 			"expire uncertain pair: removed=%d active=%d calls=%#v",
 			removed,
@@ -282,9 +282,9 @@ func TestQuoteStateExpiresPairAfterUnknownPublishOutcome(t *testing.T) {
 	}
 }
 
-func TestQuoteStateRetriesExpireAfterPartialSubmitAcknowledgement(t *testing.T) {
+func TestQuoteStateRetriesWithdrawalAfterServerFailure(t *testing.T) {
 	var calls int
-	var expiries []int32
+	var rangeCounts []int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var dto lifiorder.SubmitQuotesDto
 		if err := json.NewDecoder(r.Body).Decode(&dto); err != nil {
@@ -292,20 +292,24 @@ func TestQuoteStateRetriesExpireAfterPartialSubmitAcknowledgement(t *testing.T) 
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
-		if len(dto.Quotes) != 1 || len(dto.Quotes[0].Ranges) != 1 {
-			t.Errorf("submitted quotes = %#v, want one quote with one range", dto.Quotes)
+		if len(dto.Quotes) != 1 {
+			t.Errorf("submitted quotes = %#v, want one quote", dto.Quotes)
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
 
 		calls++
-		expiries = append(expiries, dto.Quotes[0].Expiry)
+		rangeCounts = append(rangeCounts, len(dto.Quotes[0].Ranges))
 		w.Header().Set("Content-Type", "application/json")
 		if calls == 2 {
-			_, _ = w.Write([]byte(`{"status":"success","quotesAdded":0}`))
+			http.Error(w, "temporary withdrawal failure", http.StatusServiceUnavailable)
 			return
 		}
-		_, _ = w.Write([]byte(`{"status":"success","quotesAdded":1}`))
+		if err := json.NewEncoder(w).Encode(map[string]any{
+			"status": "success", "quotesAdded": len(dto.Quotes[0].Ranges),
+		}); err != nil {
+			t.Errorf("encode response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -318,8 +322,8 @@ func TestQuoteStateRetriesExpireAfterPartialSubmitAcknowledgement(t *testing.T) 
 	}
 
 	removed, err := state.reconcile(context.Background(), client, nil, now)
-	if err == nil || !strings.Contains(err.Error(), "quotesAdded 0, want 1") {
-		t.Fatalf("first expire error = %v, want acknowledgement mismatch", err)
+	if err == nil || !strings.Contains(err.Error(), "503") {
+		t.Fatalf("first withdrawal error = %v, want server failure", err)
 	}
 	if removed != 1 || len(state.active) != 1 {
 		t.Fatalf("failed expire: removed=%d active=%d, want 1/1", removed, len(state.active))
@@ -332,8 +336,8 @@ func TestQuoteStateRetriesExpireAfterPartialSubmitAcknowledgement(t *testing.T) 
 	if removed != 1 || len(state.active) != 0 || calls != 3 {
 		t.Fatalf("retried expire: removed=%d active=%d calls=%d, want 1/0/3", removed, len(state.active), calls)
 	}
-	if len(expiries) != 3 || int64(expiries[1]) >= now.Unix() || int64(expiries[2]) >= now.Unix() {
-		t.Fatalf("submitted expiries = %v, want both retry attempts expired", expiries)
+	if len(rangeCounts) != 3 || rangeCounts[0] != 1 || rangeCounts[1] != 0 || rangeCounts[2] != 0 {
+		t.Fatalf("submitted ranges = %v, want publish followed by two empty-range withdrawals", rangeCounts)
 	}
 }
 

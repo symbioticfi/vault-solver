@@ -84,6 +84,11 @@ func TestOrderClientSubmitQuotesValidatesAcknowledgedRanges(t *testing.T) {
 			response: `null`,
 			wantErr:  "empty response",
 		},
+		{
+			name:     "missing status",
+			response: `{"quotesAdded":2}`,
+			wantErr:  "unexpected status",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -96,6 +101,36 @@ func TestOrderClientSubmitQuotesValidatesAcknowledgedRanges(t *testing.T) {
 			err := client.submitQuotes(context.Background(), []types.Quote{submitQuotesTestQuote()})
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("submitQuotes() error = %v, want containing %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestOrderClientWithdrawQuotes(t *testing.T) {
+	for _, status := range []string{"success", "error", ""} {
+		t.Run(status, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string][]map[string]json.RawMessage
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Errorf("decode withdrawal: %v", err)
+					return
+				}
+				quotes := body["quotes"]
+				if len(quotes) != 1 || string(quotes[0]["ranges"]) != "[]" {
+					t.Errorf("withdrawal body = %+v, want ranges: []", body)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if err := json.NewEncoder(w).Encode(map[string]any{"status": status, "quotesAdded": 0}); err != nil {
+					t.Errorf("encode response: %v", err)
+				}
+			}))
+			defer srv.Close()
+			quote := submitQuotesTestQuote()
+			quote.Ranges = nil
+			client := newOrderClient(srv.URL, "test-key", time.Second, 11155111)
+			err := client.submitQuotes(t.Context(), []types.Quote{quote})
+			if (err == nil) != (status == "success") {
+				t.Fatalf("withdrawal status=%q: %v", status, err)
 			}
 		})
 	}

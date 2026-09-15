@@ -400,7 +400,8 @@ func (s *quoteState) reconcile(
 	toPublish := make([]types.Quote, 0, len(quotes)+len(expire))
 	for _, key := range expire {
 		for _, quote := range s.active[key].quotes {
-			quote.Expiry = now.Add(-time.Second).Unix()
+			// Empty ranges are the order server's explicit withdrawal operation.
+			quote.Ranges = nil
 			toPublish = append(toPublish, quote)
 		}
 	}

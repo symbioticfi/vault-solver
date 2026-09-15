@@ -139,7 +139,7 @@ func alwaysReadyTransactionLane() transactionLaneState {
 }
 
 type quoteSubmission struct {
-	Expiry int64 `json:"expiry"`
+	Ranges []json.RawMessage `json:"ranges"`
 }
 
 type quoteSubmissionRequest struct {
@@ -218,7 +218,7 @@ func TestRunGatesQuotesOnRecoveryAndDisconnect(t *testing.T) {
 				t.Errorf("decode quote submission: %v", err)
 				return
 			}
-			if len(request.Quotes) > 0 && request.Quotes[0].Expiry < wallUnix.Load() {
+			if len(request.Quotes) > 0 && len(request.Quotes[0].Ranges) == 0 {
 				if expiryRequests.Add(1) == 1 {
 					http.Error(w, "temporary expiry failure", http.StatusServiceUnavailable)
 					return
@@ -227,7 +227,7 @@ func TestRunGatesQuotesOnRecoveryAndDisconnect(t *testing.T) {
 				case quoteExpired <- struct{}{}:
 				default:
 				}
-				_, _ = w.Write([]byte(`{"status":"success","quotesAdded":1}`))
+				_, _ = w.Write([]byte(`{"status":"success","quotesAdded":0}`))
 				return
 			}
 			if quoteRequests.Add(1) == 2 {
@@ -340,7 +340,7 @@ func TestQuoteLoopExpiresQuotesOnRootCancellation(t *testing.T) {
 			return
 		}
 		signal := quoteSubmitted
-		if len(request.Quotes) > 0 && request.Quotes[0].Expiry < now.Unix() {
+		if len(request.Quotes) > 0 && len(request.Quotes[0].Ranges) == 0 {
 			signal = quoteExpired
 		}
 		select {
@@ -348,7 +348,7 @@ func TestQuoteLoopExpiresQuotesOnRootCancellation(t *testing.T) {
 		default:
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","quotesAdded":1}`))
+		_, _ = fmt.Fprintf(w, `{"status":"success","quotesAdded":%d}`, len(request.Quotes[0].Ranges))
 	}))
 	defer orderServer.Close()
 
@@ -413,7 +413,7 @@ func TestQuoteLoopSuspendsWhileLaneBusyAndRepublishesOnCoalescedIdle(t *testing.
 			return
 		}
 		signal := quoteSubmitted
-		if len(request.Quotes) > 0 && request.Quotes[0].Expiry < now.Unix() {
+		if len(request.Quotes) > 0 && len(request.Quotes[0].Ranges) == 0 {
 			signal = quoteExpired
 		}
 		select {
@@ -421,7 +421,7 @@ func TestQuoteLoopSuspendsWhileLaneBusyAndRepublishesOnCoalescedIdle(t *testing.
 		default:
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","quotesAdded":1}`))
+		_, _ = fmt.Fprintf(w, `{"status":"success","quotesAdded":%d}`, len(request.Quotes[0].Ranges))
 	}))
 	defer orderServer.Close()
 
