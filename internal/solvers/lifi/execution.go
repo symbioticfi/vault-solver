@@ -2,6 +2,7 @@ package lifi
 
 import (
 	"context"
+	"encoding/json"
 	"math/big"
 	"strings"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability"
@@ -405,20 +407,8 @@ func (s *Solver) runOrderFeed(
 					}
 				},
 			},
-			func(_ context.Context, msg orderMessage) {
-				order := s.parseOrderMessage(msg)
-				if err := inbox.enqueue(order); err != nil {
-					s.metrics.observeOrderQueueDrop(orderQueueInbox, err)
-					fields := []any{"event", msg.Event}
-					if order != nil {
-						fields = append(fields,
-							"orderId", order.OrderID,
-							"onChainOrderId", order.OnChainOrderID,
-							"quoteId", order.QuoteID,
-						)
-					}
-					s.log.Error(err, "order feed: dropped order", fields...)
-				}
+			func(connectionCtx context.Context, msg orderMessage) {
+				s.acceptOrderMessage(connectionCtx, inbox, msg)
 			},
 		)
 	}()
@@ -447,6 +437,43 @@ func (s *Solver) runOrderFeed(
 		workerErr = <-workerDone
 	}
 	return preferLifecycleError(feedErr, preferLifecycleError(inboxErr, workerErr))
+}
+
+// acceptOrderMessage admits one live feed message to the inbox under its message span.
+func (s *Solver) acceptOrderMessage(ctx context.Context, inbox *orderInbox, msg orderMessage) {
+	_, _ = s.admitOrderMessage(ctx, msg, func(msgCtx context.Context, order *submittedOrder) error {
+		err := inbox.enqueue(order)
+		if err == nil {
+			return nil
+		}
+		s.metrics.observeOrderQueueDrop(orderQueueInbox, err)
+		observability.TraceLogger(msgCtx, s.log).Error(err, "order feed: dropped order",
+			"event", msg.Event,
+			"orderId", order.OrderID,
+			"onChainOrderId", order.OnChainOrderID,
+			"quoteId", order.QuoteID,
+		)
+		return err
+	})
+}
+
+// admitOrderMessage spans one feed message as lifi.order.<event> (spec §6.4): it parses the order
+// the message carries, stamps the span context on it so the worker continues this trace, and hands
+// it to admit. The span covers parsing and queue admission alike and always ends here.
+func (s *Solver) admitOrderMessage(
+	ctx context.Context,
+	msg orderMessage,
+	admit func(context.Context, *submittedOrder) error,
+) (order *submittedOrder, err error) {
+	ctx, end := tracer.Start(ctx, orderMessageSpanName(msg.Event))
+	defer func() { end(err) }()
+
+	order, err = s.parseOrderMessage(ctx, msg)
+	if order == nil {
+		return nil, err
+	}
+	order.span = trace.SpanContextFromContext(ctx)
+	return order, admit(ctx, order)
 }
 
 func (s *Solver) recoverOrdersUntilSuccess(
@@ -530,19 +557,11 @@ func (s *Solver) recoverOrders(
 		if ctx.Err() != nil {
 			return orderRecoveryResult{}, ctx.Err()
 		}
-		order := s.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: raw})
-		if order == nil {
-			continue
+		discovered, err := s.recoverOrder(ctx, inbox, raw, recovered)
+		if err != nil {
+			return orderRecoveryResult{}, err
 		}
-		key := orderInboxKey(order)
-		if key != "" && recovered[key] {
-			continue
-		}
-		if err := inbox.enqueueWait(ctx, order); err != nil {
-			return orderRecoveryResult{}, errors.Errorf("enqueue recovered order: %w", err)
-		}
-		if key != "" {
-			recovered[key] = true
+		if discovered {
 			result.discovered++
 		}
 	}
@@ -553,7 +572,41 @@ func (s *Solver) recoverOrders(
 	return result, nil
 }
 
-func (s *Solver) parseOrderMessage(msg orderMessage) *submittedOrder {
+// recoverOrder admits one listed order to the inbox under its own message span and reports whether
+// this sweep had not already seen it.
+func (s *Solver) recoverOrder(
+	ctx context.Context,
+	inbox *orderInbox,
+	raw json.RawMessage,
+	recovered map[string]bool,
+) (discovered bool, err error) {
+	_, err = s.admitOrderMessage(ctx, orderMessage{Event: orderSubmitEvent, Data: raw},
+		func(msgCtx context.Context, order *submittedOrder) error {
+			key := orderInboxKey(order)
+			if key != "" && recovered[key] {
+				observability.Decline(msgCtx, "order_skipped", "already recovered by this sweep")
+				return nil
+			}
+			if enqueueErr := inbox.enqueueWait(ctx, order); enqueueErr != nil {
+				return errors.Errorf("enqueue recovered order: %w", enqueueErr)
+			}
+			if key != "" {
+				recovered[key] = true
+				discovered = true
+			}
+			return nil
+		})
+	return discovered, err
+}
+
+// parseOrderMessage decodes one feed message under the message span already on ctx. A message this
+// solver ignores yields a nil order and a nil error, recorded as a decline; only a message we could
+// not understand is a failure.
+func (s *Solver) parseOrderMessage(
+	ctx context.Context,
+	msg orderMessage,
+) (*submittedOrder, error) {
+	log := observability.TraceLogger(ctx, s.log)
 	order, err := parseSubmittedOrder(msg.Data, s.cfg, s.chainID)
 	if err != nil {
 		fields := orderDiagnosticFields(msg.Data, err)
@@ -561,31 +614,42 @@ func (s *Solver) parseOrderMessage(msg orderMessage) *submittedOrder {
 		switch {
 		case errors.Is(err, errOrderForDifferentChain):
 			s.metrics.observeOrderParse("other_chain")
-			s.log.Info("order feed: ignored order for another chain", append(fields, "reason", err.Error())...)
+			observability.Decline(ctx, "order_ignored", "order is for another chain")
+			log.Info("order feed: ignored order for another chain", append(fields, "reason", err.Error())...)
 		case errors.Is(err, errNativeInputUnsupported):
 			s.metrics.observeOrderParse("unsupported")
-			s.log.Info("order feed: ignored unsupported order", append(fields, "reason", err.Error())...)
+			observability.Decline(ctx, "order_ignored", "native input is not supported")
+			log.Info("order feed: ignored unsupported order", append(fields, "reason", err.Error())...)
 		case errors.Is(err, errOrderUnsupported):
 			s.metrics.observeOrderParse("unsupported")
-			s.log.V(1).Info("order feed: ignored unsupported order", append(fields, "reason", err.Error())...)
+			observability.Decline(ctx, "order_ignored", "order is not fillable by this solver")
+			log.V(1).Info("order feed: ignored unsupported order", append(fields, "reason", err.Error())...)
 		default:
+			// A message we cannot understand is a real failure, not an expected skip.
 			s.metrics.observeOrderParse("invalid")
-			s.log.Error(err, "order feed: ignored order", fields...)
+			log.Error(err, "order feed: ignored order", fields...)
+			return nil, err
 		}
-		return nil
+		return nil, nil
 	}
+	observability.SetAttributes(ctx,
+		observability.AttrOrderID.String(order.OrderID),
+		observability.AttrOrderOnchainID.String(order.OnChainOrderID),
+		observability.AttrQuoteID.String(order.QuoteID),
+	)
 	if isDutchAuctionContext(order.Output.Context) {
 		s.metrics.observeOrderParse("unsupported")
-		s.log.Info("order feed: ignored unsupported Dutch auction",
+		observability.Decline(ctx, "order_ignored", "Dutch auction orders are not supported")
+		log.Info("order feed: ignored unsupported Dutch auction",
 			"event", msg.Event,
 			"orderId", order.OrderID,
 			"onChainOrderId", order.OnChainOrderID,
 			"quoteId", order.QuoteID,
 			"contextType", hexutil.Encode(order.Output.Context[:1]),
 		)
-		return nil
+		return nil, nil
 	}
-	s.log.Info("order received",
+	log.Info("order received",
 		"event", msg.Event,
 		"orderStatus", order.OrderStatus,
 		"orderId", order.OrderID,
@@ -599,7 +663,7 @@ func (s *Solver) parseOrderMessage(msg orderMessage) *submittedOrder {
 		"expires", order.Order.Expires,
 		"fillDeadline", order.Order.FillDeadline,
 	)
-	return order
+	return order, nil
 }
 
 func (s *Solver) runOrderWorker(
@@ -610,6 +674,7 @@ func (s *Solver) runOrderWorker(
 	inputDrained chan<- struct{},
 ) error {
 	pending := pendingFillState{byOrder: make(map[string]*pendingFill)}
+	traces := newOrderTraces()
 	completions := make(chan fillCompletion, fillCompletionCapacity)
 	retries := newReservationRetryQueue(orderRetryCapacity)
 	depositRetries := newOrderDepositRetryQueue(orderDepositRetryCapacity)
@@ -620,6 +685,8 @@ func (s *Solver) runOrderWorker(
 	var reservationReleaseGen uint64
 	ctxDone := ctx.Done()
 	var runErr error
+	// A shutdown that drops queued retries still has to close their processing spans.
+	defer func() { traces.finishAll(runErr) }()
 	var recoveryBarrier chan struct{}
 	retryNow := s.wallNow
 	if retryNow == nil {
@@ -635,43 +702,65 @@ func (s *Solver) runOrderWorker(
 		close(recoveryBarrier)
 		recoveryBarrier = nil
 	}
-	process := func(order *submittedOrder, reservations *liquidlane.CapacityReservations) {
+	process := func(order *submittedOrder, reservations *liquidlane.CapacityReservations, stage string) {
 		defer releaseRecoveryBarrier()
+
+		tracked := traces.begin(ctx, order)
+		orderCtx, endStage := tracked.attempt(tracked.context(ctx), stage)
+		var attemptErr error
+		// The processing span outlives this attempt whenever the order stays in flight (deposit
+		// propagation, a pending fill, a queued capacity retry); otherwise the order is terminal
+		// here and both spans close, innermost first.
+		inFlight := false
+		defer func() {
+			endStage(attemptErr)
+			if !inFlight {
+				traces.finish(order, attemptErr)
+			}
+		}()
+		log := observability.TraceLogger(orderCtx, s.log)
 
 		var result orderProcessingResult
 		if reservations == nil {
-			result = s.processOrderWithPending(ctx, routes, order, &pending)
+			result = s.processOrderWithPending(orderCtx, routes, order, &pending)
 		} else {
-			result = s.processOrderUsingReservations(ctx, routes, order, &pending, reservations)
+			result = s.processOrderUsingReservations(orderCtx, routes, order, &pending, reservations)
 		}
+		attemptErr = result.err
 		outcome := result.outcome
 		// Observe after retry admission: a deferred attempt can still become a
 		// bounded-queue drop before the worker retains it.
 		defer func() { s.metrics.observeOrderProcessing(outcome) }()
 		if result.depositNotVisible {
-			if err := depositRetries.schedule(order, retryNow()); err != nil {
-				outcome = orderProcessingNotActionable
-				s.metrics.observeOrderQueueDrop(orderQueueDepositRetry, err)
-				if errors.Is(err, errOrderDepositRetryFull) || errors.Is(err, errOrderDepositRetryKey) {
-					s.log.Error(err, "order deposit retry: dropped order",
-						"orderId", order.OrderID,
-						"onChainOrderId", order.OnChainOrderID,
-						"quoteId", order.QuoteID,
-						"capacity", orderDepositRetryCapacity,
-					)
-				} else {
-					s.log.Info("order skipped: deposit did not become visible within retry bounds",
-						"orderId", order.OrderID,
-						"onChainOrderId", order.OnChainOrderID,
-						"quoteId", order.QuoteID,
-						"reason", err.Error(),
-					)
-				}
+			err := depositRetries.schedule(order, retryNow())
+			if err == nil {
+				inFlight = true
+				return
 			}
+			outcome = orderProcessingNotActionable
+			s.metrics.observeOrderQueueDrop(orderQueueDepositRetry, err)
+			if errors.Is(err, errOrderDepositRetryFull) || errors.Is(err, errOrderDepositRetryKey) {
+				attemptErr = err
+				log.Error(err, "order deposit retry: dropped order",
+					"orderId", order.OrderID,
+					"onChainOrderId", order.OnChainOrderID,
+					"quoteId", order.QuoteID,
+					"capacity", orderDepositRetryCapacity,
+				)
+				return
+			}
+			observability.Decline(orderCtx, "order_skipped", "deposit did not become visible within retry bounds")
+			log.Info("order skipped: deposit did not become visible within retry bounds",
+				"orderId", order.OrderID,
+				"onChainOrderId", order.OnChainOrderID,
+				"quoteId", order.QuoteID,
+				"reason", err.Error(),
+			)
 			return
 		}
 		depositRetries.finish(order)
 		if result.fill != nil {
+			inFlight = true
 			pending.add(result.fill)
 			go awaitFill(result.fill, completions)
 			return
@@ -692,15 +781,19 @@ func (s *Solver) runOrderWorker(
 			if errors.Is(err, errOrderRetryFull) {
 				outcome = orderProcessingCapacityDropped
 			}
+			attemptErr = err
 			s.metrics.observeOrderQueueDrop(orderQueueCapacityRetry, err)
-			s.log.Error(err, "order retry queue: dropped newest order",
+			log.Error(err, "order retry queue: dropped newest order",
 				"orderId", order.OrderID,
 				"onChainOrderId", order.OnChainOrderID,
 				"quoteId", order.QuoteID,
 				"capacity", orderRetryCapacity,
 			)
-		} else if retries.len() > queuedBefore {
-			s.log.V(1).Info(
+			return
+		}
+		inFlight = true
+		if retries.len() > queuedBefore {
+			log.V(1).Info(
 				"order fill deferred by pending capacity",
 				"orderId", order.OrderID,
 				"onChainOrderId", order.OnChainOrderID,
@@ -712,14 +805,17 @@ func (s *Solver) runOrderWorker(
 		}
 	}
 	complete := func(completion fillCompletion) {
-		s.completeFill(&pending, completion)
+		filledCtx := traces.context(ctx, completion.fill.order)
+		log := observability.TraceLogger(filledCtx, s.log)
+		completionErr := s.completeFill(filledCtx, &pending, completion)
+		traces.finish(completion.fill.order, completionErr)
 		reservationReleaseGen++
 		for ctx.Err() == nil {
 			order := retries.popReady(reservationReleaseGen)
 			if order == nil {
 				break
 			}
-			s.log.V(1).Info(
+			observability.TraceLogger(traces.context(ctx, order), s.log).V(1).Info(
 				"order fill retry started",
 				"orderId", order.OrderID,
 				"onChainOrderId", order.OnChainOrderID,
@@ -728,13 +824,13 @@ func (s *Solver) runOrderWorker(
 				"retryQueue", retries.len(),
 			)
 			reservations := s.capacity.SnapshotExcluding(completion.fill.reservationKey)
-			process(order, &reservations)
+			process(order, &reservations, orderReserveStage)
 		}
 		if ctx.Err() != nil {
 			retries.clear()
 		}
 		if s.releaseReservationWithoutRefresh(completion.fill.reservationKey) {
-			s.log.V(1).Info(
+			log.V(1).Info(
 				"fill capacity released",
 				"orderId", completion.fill.order.OrderID,
 				"onChainOrderId", completion.fill.orderID.Hex(),
@@ -780,18 +876,24 @@ func (s *Solver) runOrderWorker(
 		case <-depositRetryC:
 			order, err := depositRetries.popReady(retryNow())
 			if err != nil {
+				orderCtx := traces.context(ctx, order)
 				s.metrics.observeOrderProcessing(orderProcessingNotActionable)
 				s.metrics.observeOrderQueueDrop(orderQueueDepositRetry, err)
-				s.log.Info("order skipped: deposit did not become visible within retry bounds",
+				observability.Decline(
+					orderCtx, "order_skipped", "deposit did not become visible within retry bounds",
+				)
+				observability.TraceLogger(orderCtx, s.log).Info(
+					"order skipped: deposit did not become visible within retry bounds",
 					"orderId", order.OrderID,
 					"onChainOrderId", order.OnChainOrderID,
 					"quoteId", order.QuoteID,
 					"reason", err.Error(),
 				)
+				traces.finish(order, nil)
 				continue
 			}
 			if order != nil {
-				process(order, nil)
+				process(order, nil, orderDepositStage)
 			}
 		case order, ok := <-orderInput:
 			if !ok {
@@ -818,14 +920,17 @@ func (s *Solver) runOrderWorker(
 				continue
 			}
 			if depositRetries.contains(order) {
-				s.log.V(1).Info("order feed replay coalesced while awaiting on-chain deposit",
+				orderCtx := traces.context(ctx, order)
+				observability.Decline(orderCtx, "order_skipped", "replay of an order awaiting its deposit")
+				observability.TraceLogger(orderCtx, s.log).V(1).Info(
+					"order feed replay coalesced while awaiting on-chain deposit",
 					"orderId", order.OrderID,
 					"onChainOrderId", order.OnChainOrderID,
 					"quoteId", order.QuoteID,
 				)
 				continue
 			}
-			process(order, nil)
+			process(order, nil, "")
 		}
 	}
 	return runErr

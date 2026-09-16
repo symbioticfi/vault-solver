@@ -7,9 +7,11 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
@@ -23,9 +25,10 @@ func (s *Solver) submitFill(
 	chainTime time.Time,
 	chainObservedAt time.Time,
 ) (*pendingFill, error) {
+	log := observability.TraceLogger(ctx, s.log)
 	reservations, ok := fillPlanReservations(plan)
 	if !ok {
-		s.log.Error(errors.New("strategy returned invalid capacity reservations"),
+		log.Error(errors.New("strategy returned invalid capacity reservations"),
 			"order fill: reject strategy plan", "orderId", order.OrderID, "quoteId", order.QuoteID)
 		return nil, nil
 	}
@@ -34,12 +37,14 @@ func (s *Solver) submitFill(
 		return nil, errors.Errorf("read order status for %s: %w", calldata.OrderID.Hex(), err)
 	}
 	if status == lifiOrderStatusNone {
-		s.log.Info("on-chain order deposit is not visible at submission", "orderId", order.OrderID,
+		observability.Decline(ctx, "order_deferred", "on-chain deposit is not visible at submission")
+		log.Info("on-chain order deposit is not visible at submission", "orderId", order.OrderID,
 			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID, "status", status)
 		return nil, errOrderDepositNotVisible
 	}
 	if status != lifiOrderStatusDeposited {
-		s.log.Info("order skipped: on-chain order is no longer fillable at submission", "orderId", order.OrderID,
+		observability.Decline(ctx, "order_skipped", "on-chain order is no longer fillable at submission")
+		log.Info("order skipped: on-chain order is no longer fillable at submission", "orderId", order.OrderID,
 			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID, "status", status)
 		return nil, errOrderNotFillable
 	}
@@ -53,7 +58,8 @@ func (s *Solver) submitFill(
 			s.wallNow(),
 		)
 		if !deadlineValid {
-			s.log.Info("order skipped: execution deadline elapsed before submission",
+			observability.Decline(ctx, "fill_skipped", "execution deadline elapsed before submission")
+			log.Info("order skipped: execution deadline elapsed before submission",
 				"orderId", order.OrderID, "onChainOrderId", calldata.OrderID.Hex(),
 				"quoteId", order.QuoteID, "deadline", calldata.Deadline.Unix())
 			return nil, nil
@@ -68,7 +74,7 @@ func (s *Solver) submitFill(
 		deadlineRemaining = calldata.Deadline.Sub(chainTime)
 		cancelAtUnix = cancelAt.Unix()
 	}
-	s.log.V(1).Info(
+	log.V(1).Info(
 		"order fill ready for submission",
 		"orderId", order.OrderID,
 		"onChainOrderId", calldata.OrderID.Hex(),
@@ -82,7 +88,7 @@ func (s *Solver) submitFill(
 		"deadlineRemaining", deadlineRemaining,
 		"cancelAt", cancelAtUnix,
 	)
-	result, accepted := s.txm.SendAsync(ctx, txmanager.Request{
+	result, accepted := s.sendFill(ctx, txmanager.Request{
 		Solver: Name,
 		To:     s.cfg.Executor, Data: calldata.Finalise, MaxFeePerGas: liquidlane.CloneBig(maxFeePerGas),
 		CancelAt: cancelAt,
@@ -92,12 +98,12 @@ func (s *Solver) submitFill(
 		Label: "lifi-fill",
 	})
 	if !accepted {
-		s.log.Info("order skipped: transaction submission canceled", "orderId", order.OrderID,
+		log.Info("order skipped: transaction submission canceled", "orderId", order.OrderID,
 			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID)
 		return nil, nil
 	}
 	if s.reserveWithoutRefresh(reservationKey, reservations) {
-		s.log.V(1).Info(
+		log.V(1).Info(
 			"fill capacity reserved",
 			"orderId", order.OrderID,
 			"onChainOrderId", calldata.OrderID.Hex(),
@@ -106,7 +112,7 @@ func (s *Solver) submitFill(
 			"pendingFills", s.capacity.Len(),
 		)
 	}
-	s.log.V(1).Info(
+	log.V(1).Info(
 		"order fill submitted",
 		"orderId", order.OrderID,
 		"onChainOrderId", calldata.OrderID.Hex(),
@@ -124,6 +130,22 @@ func (s *Solver) submitFill(
 		plannedSurplus: liquidstrategies.PlannedSurplus(plan.Routes, order.OutputAmount),
 		result:         result,
 	}, nil
+}
+
+// sendFill hands the fill to the shared txmanager as the lifi.order.submit stage. The transaction
+// result is asynchronous, so its attributes are recorded on completion, not here.
+func (s *Solver) sendFill(
+	ctx context.Context, request txmanager.Request,
+) (result <-chan txmanager.Result, accepted bool) {
+	ctx, end := tracer.Start(ctx, "lifi.order.submit")
+	defer func() { end(nil) }()
+
+	result, accepted = s.txm.SendAsync(ctx, request)
+	if !accepted {
+		// The lane refusing a fill is an expected shutdown outcome, not a failure of this fill.
+		observability.Decline(ctx, "fill_skipped", "transaction submission was not accepted")
+	}
+	return result, accepted
 }
 
 func (s *Solver) fillRequestObsolete(
@@ -144,37 +166,53 @@ func (s *Solver) fillRequestObsolete(
 	}
 }
 
-func (s *Solver) completeFill(pending *pendingFillState, completion fillCompletion) {
+// completeFill reports the transaction outcome as the lifi.order.complete stage, stamping the
+// outcome on the order's processing span too, and returns the failure the processing span ends with.
+func (s *Solver) completeFill(
+	ctx context.Context, pending *pendingFillState, completion fillCompletion,
+) (err error) {
 	fill := completion.fill
 	pending.remove(fill.reservationKey)
+	txAttrs := []attribute.KeyValue{
+		observability.AttrTxHash.String(completion.result.Hash.Hex()),
+		observability.AttrTxOutcome.String(string(completion.result.Outcome)),
+	}
+	observability.SetAttributes(ctx, txAttrs...) // the processing span this result belongs to
+	ctx, end := tracer.Start(ctx, "lifi.order.complete", txAttrs...)
+	defer func() { end(err) }()
+
+	log := observability.TraceLogger(ctx, s.log)
 	outcome := completion.result.Outcome
 	if outcome == txmanager.OutcomeConfirmed {
 		s.observeFillAmounts(completion.result, fill)
-		s.log.Info("order filled", "orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
+		log.Info("order filled", "orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
 			"quoteId", fill.order.QuoteID, "tx", completion.result.Hash.Hex())
-		return
+		return nil
 	}
 	if outcome == txmanager.OutcomeIncludedUnconfirmed {
+		// The fill stands; the confirmation wait is what failed, and it is the span's error.
 		s.observeFillAmounts(completion.result, fill)
-		s.log.Error(completion.result.Err, "order fill included but confirmation wait failed",
+		err = completion.result.Err
+		log.Error(err, "order fill included but confirmation wait failed",
 			"orderId", fill.order.OrderID,
 			"onChainOrderId", fill.orderID.Hex(),
 			"quoteId", fill.order.QuoteID,
 			"tx", completion.result.Hash.Hex(),
 		)
-		return
+		return err
 	}
-	err := completion.result.Err
+	err = completion.result.Err
 	if err == nil {
 		err = errors.Errorf("unknown transaction outcome %q", outcome)
 	}
-	s.log.Error(err, "order fill failed",
+	log.Error(err, "order fill failed",
 		"orderId", fill.order.OrderID,
 		"onChainOrderId", fill.orderID.Hex(),
 		"quoteId", fill.order.QuoteID,
 		"tx", completion.result.Hash.Hex(),
 		"notAdmitted", completion.result.NotAdmitted,
 	)
+	return err
 }
 
 func (s *Solver) observeFillAmounts(result txmanager.Result, fill *pendingFill) {

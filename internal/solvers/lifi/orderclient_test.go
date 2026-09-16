@@ -387,7 +387,7 @@ func TestOrderClientListRecoverableOrdersPaginatesAndFilters(t *testing.T) {
 	}
 
 	solver := &Solver{cfg: cfg, chainID: 11155111, log: logr.Discard()}
-	order := solver.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: orders[0]})
+	order, _ := solver.parseOrderMessage(t.Context(), orderMessage{Event: orderSubmitEvent, Data: orders[0]})
 	if order == nil {
 		t.Fatal("listed order did not pass the WebSocket admission parser")
 	}

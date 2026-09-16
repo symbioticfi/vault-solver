@@ -101,6 +101,24 @@ shutdown-preparation duration used to bound process-wide transaction draining. R
 | LI.FI order server | external | Standing quotes and matched-order discovery. |
 | OIF settlers | on-chain (LI.FI-owned) | Order lifecycle; **we do not deploy these**. |
 
+**Tracing:** each quote cycle roots its own trace as `lifi.quotes.refresh`, with `lifi.quotes.decide`
+for the strategy call and `lifi.quotes.reconcile` around the order-server publish, and
+`lifi.quotes.suspend` for retiring the curve; the generated order-server client carries the
+traceparent, so its HTTP calls nest under the stage that made them. Every websocket dial is a
+`lifi.feed.connect` span whose trace context goes into the handshake headers. Each order message is
+spanned as `lifi.order.<event>` with `order.id`, `order.onchain_id` and `quote.id`, and that span
+context rides on the queued `submittedOrder` through the inbox and both retry queues, so the worker's
+`lifi.order.process` span continues the message's trace even though it runs on the detached work
+context. One processing span covers an order until it is terminal, including retries: a pop off the
+deposit or capacity retry queue re-enters planning under a `lifi.order.deposit` or
+`lifi.order.reserve` stage span numbered with `tx.attempt`, and the fill itself adds
+`lifi.order.plan`, `lifi.order.submit` and, when the transaction resolves, `lifi.order.complete`
+carrying `tx.hash`/`tx.outcome` (also stamped on the processing span). **There is no quote-to-fill
+link here**, unlike RFQ and UniswapX: this solver publishes standing quotes per asset pair rather
+than per request, and the order server assigns the quote id we only learn from the order message, so
+there is no quote event of ours to link back to. The `quote.id` LI.FI reports is recorded as an
+attribute instead, and the whole order path is one trace rooted at its feed message.
+
 ---
 
 ## 3. On-chain contract — `LiquidLaneLifiExecutor`

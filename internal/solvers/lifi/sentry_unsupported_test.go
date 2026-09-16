@@ -49,7 +49,9 @@ func TestUnsupportedOrdersDoNotReachSentry(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			before := len(events)
 			raw := mutatedTestOrderJSON(t, cfg, tc.mutate)
-			if s.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: raw}) != nil {
+			if order, _ := s.parseOrderMessage(
+				t.Context(), orderMessage{Event: orderSubmitEvent, Data: raw},
+			); order != nil {
 				t.Fatal("rejected order was accepted")
 			}
 			if got := len(events) - before; got != tc.wantEvents {
@@ -68,7 +70,7 @@ func TestUnsupportedOrdersDoNotReachSentry(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			before := len(events)
-			s.logFillDecisionError(tc.err, "order fill: strategy", &submittedOrder{OrderID: "order-42"})
+			s.logFillDecisionError(s.log, tc.err, "order fill: strategy", &submittedOrder{OrderID: "order-42"})
 			if got := len(events) - before; got != tc.wantEvents {
 				t.Fatalf("Sentry events=%d, want %d", got, tc.wantEvents)
 			}

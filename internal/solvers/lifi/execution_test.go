@@ -92,7 +92,9 @@ func TestParseOrderMessageIgnoresDutchAuctions(t *testing.T) {
 				chainID: 11155111,
 				log:     funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
 			}
-			if order := solver.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: raw}); order != nil {
+			if order, _ := solver.parseOrderMessage(
+				t.Context(), orderMessage{Event: orderSubmitEvent, Data: raw},
+			); order != nil {
 				t.Fatalf("parseOrderMessage() = %+v, want ignored order", order)
 			}
 			logged := strings.Join(logs, "\n")
@@ -123,7 +125,9 @@ func TestParseOrderMessageLogsForeignChainAtInfo(t *testing.T) {
 		chainID: 11155111,
 		log:     funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
 	}
-	if order := solver.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: raw}); order != nil {
+	if order, _ := solver.parseOrderMessage(
+		t.Context(), orderMessage{Event: orderSubmitEvent, Data: raw},
+	); order != nil {
 		t.Fatalf("parseOrderMessage() = %+v, want ignored order", order)
 	}
 	logged := strings.Join(logs, "\n")
@@ -147,7 +151,9 @@ func TestParseOrderMessageSkipsForeignOutputSettler(t *testing.T) {
 		chainID: 11155111,
 		log:     funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{Verbosity: 1}),
 	}
-	if order := solver.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: raw}); order != nil {
+	if order, _ := solver.parseOrderMessage(
+		t.Context(), orderMessage{Event: orderSubmitEvent, Data: raw},
+	); order != nil {
 		t.Fatalf("parseOrderMessage() = %+v, want ignored order", order)
 	}
 	logged := strings.Join(logs, "\n")
@@ -1230,7 +1236,7 @@ func TestCompleteFillTreatsIncludedTransactionAsSuccess(t *testing.T) {
 	}
 	pending := &pendingFillState{byOrder: map[string]*pendingFill{"order-1": fill}}
 
-	solver.completeFill(pending, fillCompletion{fill: fill, result: txmanager.Result{
+	solver.completeFill(t.Context(), pending, fillCompletion{fill: fill, result: txmanager.Result{
 		Outcome: txmanager.OutcomeIncludedUnconfirmed,
 		Err:     errors.New("confirmation wait failed"),
 	}})

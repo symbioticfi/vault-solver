@@ -13,6 +13,8 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/gorilla/websocket"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 const (
@@ -85,19 +87,9 @@ func (f *orderFeed) watchOnce(
 	hooks orderFeedConnectionHooks,
 	handle func(context.Context, orderMessage),
 ) (ready bool, err error) {
-	headers := http.Header{}
-	if f.apiKey != "" {
-		headers.Set("x-api-key", f.apiKey)
-	}
-	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, f.url, headers)
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
-	}
+	conn, err := f.dial(ctx)
 	if err != nil {
-		if resp != nil {
-			return false, errors.Errorf("dial websocket: %w (status %s)", err, resp.Status)
-		}
-		return false, errors.Errorf("dial websocket: %w", err)
+		return false, err
 	}
 	// A newly established connection always starts unready. Quotes must remain gated until this
 	// connection's REST recovery has converged, even if the previous connection was ready.
@@ -160,6 +152,30 @@ func (f *orderFeed) watchOnce(
 		}
 		handle(connectionCtx, envelope)
 	}
+}
+
+// dial opens one connection under a lifi.feed.connect span and injects the trace context into the
+// handshake headers, so the connection itself is findable in the trace backend (spec §6.4).
+func (f *orderFeed) dial(ctx context.Context) (conn *websocket.Conn, err error) {
+	ctx, end := tracer.Start(ctx, "lifi.feed.connect")
+	defer func() { end(err) }()
+
+	headers := http.Header{}
+	if f.apiKey != "" {
+		headers.Set("x-api-key", f.apiKey)
+	}
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(headers))
+	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, f.url, headers)
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if err != nil {
+		if resp != nil {
+			return nil, errors.Errorf("dial websocket: %w (status %s)", err, resp.Status)
+		}
+		return nil, errors.Errorf("dial websocket: %w", err)
+	}
+	return conn, nil
 }
 
 // markRecoveryReady publishes readiness only for a still-current established connection. watchOnce
