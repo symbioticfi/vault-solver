@@ -84,9 +84,12 @@ defer func() { end(err) }()
 - `Start` stamps `solver=<name>` on every span it creates, the way `run.go` stamps the logger, so any
   span can be filtered by integration without joining on the resource. Shared components (txmanager,
   chain) pass `""` and carry no `solver` attribute.
-- The provider is resolved from the global on **every** span start (`Tracer.Raw()`), never cached. The
-  global provider delegates only once, so a cached tracer taken before `NewTracing` runs would stay
-  bound to the no-op provider forever.
+- `Tracer.Raw()` resolves the provider lazily and then caches it against a package-level generation
+  counter that `NewTracing` (and the test helper) bump after `otel.SetTracerProvider`. Resolving per
+  span start took the global delegate's mutex and the SDK's tracer map on every span; resolving once
+  in `NewTracer` would instead bind a package's tracer to the no-op provider forever, because the
+  global provider delegates only once. `observability.InvalidateTracers()` is the hook anything else
+  that installs a provider must call.
 - `end(err)` sets status `Error`, records the error with its go-errors stack, and adds `reason_code`
   when the error exposes one. A `context.Canceled` error ends the span with status unset and a
   `cancelled` event, the same rule the metrics use for skipped outcomes. `end` is idempotent.
@@ -207,6 +210,10 @@ need to know the solver's prefix. Log lines keep their existing camelCase keys (
 `observability.AttrOfferID` and `observability.AttrVault` are declared alongside these for solvers that
 grow an offer- or vault-scoped span; nothing sets them today.
 
+`tx.hash` is set only once a transaction exists. A submission the manager rejected before
+broadcasting carries the zero hash in its `Result`, and every site records `tx.outcome` alone rather
+than an attribute that looks like a transaction and matches nothing.
+
 Identifiers propagate downward by context: a stage span under a fill span does not repeat `order.id`,
 because the trace view shows it on the parent. Nothing secret is ever an attribute — no API keys, no
 signatures, no calldata, no RPC URLs (endpoints stay ordinals).
@@ -277,7 +284,7 @@ event, not an error.
 | `lifi.quotes.reconcile` | `reconcileQuotes` | one order-server HTTP child per pair |
 | `lifi.quotes.suspend` | `suspendQuotes` | retiring the curve |
 | `lifi.feed.connect` | `wsclient` dial | handshake carries `traceparent` |
-| `lifi.order.<event>` | `parseOrderMessage` | the feed's event name verbatim (`lifi.order.user:vm-order-submit`); anything the feed does not dispatch is `lifi.order.other`. `order.id`, `order.onchain_id`, `quote.id` |
+| `lifi.order.<event>` | `admitOrderMessage` | two names, bounded by `orderMessageSpanName`: `lifi.order.user:vm-order-submit` for the only event the feed dispatches, `lifi.order.other` for everything else. `order.id`, `order.onchain_id`, `quote.id` |
 | `lifi.order.process` | order worker | child of the message span; the span context rides on the queued `submittedOrder` |
 | `lifi.order.plan` / `.reserve` / `.deposit` / `.submit` / `.complete` | fill pipeline | `.reserve` and `.deposit` are re-entered per retry with `tx.attempt`; `.complete` carries `tx.hash` |
 
@@ -383,7 +390,9 @@ Tracing must never slow down or break a quote, a fill or a transaction.
   only residual work is the W3C header parse on inbound requests and `TraceLogger` adding two fields
   when a remote context is present.
 - **Enabled cost is bounded and off-path.** Span start and end cost a few microseconds — the
-  `internal/observability` benchmark measures both the no-op and the recording path — attributes are a
+  `internal/observability` benchmark measures the no-op and the recording path, sequentially and
+  under `RunParallel`, and the cached tracer keeps concurrent starts off the global provider's
+  mutexes — attributes are a
   handful of bounded strings, no per-request goroutines are created, and the RPC span reuses the body
   classification the metrics already do. Volume is controlled by `OTEL_TRACES_SAMPLER`.
 - **Linking cannot fail a fill.** The map is mutex-guarded and capped; `Lookup` never errors, and a
@@ -395,15 +404,21 @@ Tracing must never slow down or break a quote, a fill or a transaction.
 
 ## 8. Tests
 
-`internal/observability/tracetest` installs an in-memory `SpanRecorder` for a test and restores the
-previous provider afterwards; every tracing test uses it. Covered: the enablement table over
-`OTEL_EXPORTER_ENABLED` values, `TraceLogger` with and without a span, `TraceHandler` extracting a
-`traceparent` and filtering probe routes, `TraceTransport` injecting a matching `traceparent`, the
-tracer's error / cancellation / `reason_code` behaviour, `SpanLinks` remember, lookup, TTL expiry and
+`internal/observability/tracetest` installs an in-memory `SpanRecorder` for a test, invalidates the
+cached tracers, and restores the previous provider afterwards; every tracing test outside
+`internal/observability` uses it (that package's own tests install the same recorder locally, because
+`tracetest` imports them). Covered: the enablement table over
+`OTEL_EXPORTER_ENABLED` values, the exported resource (service identity plus `telemetry.sdk.*`),
+`TraceLogger` with and without a span, `TraceHandler` extracting a
+`traceparent` and filtering probe routes, `TraceTransport` injecting a matching `traceparent` and
+keeping the query string out of `url.full` while the wire request keeps it, the
+tracer's error / cancellation / `reason_code` behaviour and its re-resolution across providers,
+`SpanLinks` remember, lookup, TTL expiry and
 eviction, one RPC span per logical request with an event per attempt, the txmanager span tree and its
 `trace_id`-carrying lifecycle logs, and per solver the expected span tree by name with the identifier
 attributes and the error-versus-decline distinction. A benchmark in `internal/observability` records
-`Start`/`end` cost with and without a provider so a regression is visible in review. Existing suites
+`Start`/`end` cost with and without a provider, sequentially and under `RunParallel`, so a regression
+is visible in review. Existing suites
 run against the no-op provider and prove there is no behaviour change when tracing is off.
 
 ## 9. Where the code lives
@@ -411,7 +426,7 @@ run against the no-op provider and prove there is no behaviour change when traci
 | File | Responsibility |
 |---|---|
 | `internal/observability/tracing.go` | `NewTracing` startup/shutdown, the enablement switch, `TraceLogger` |
-| `internal/observability/tracer.go` | `Tracer`, `Start`/`StartLinked`/`EndFunc`, `Decline`, `SetAttributes`, the `Attr*` constants |
+| `internal/observability/tracer.go` | `Tracer`, `Start`/`StartLinked`/`EndFunc`, `Decline`, `SetAttributes`, `InvalidateTracers`, the `Attr*` constants |
 | `internal/observability/httptrace.go` | `TraceHandler`, `TraceTransport` |
 | `internal/observability/spanlinks.go` | `SpanLinks` |
 | `internal/observability/tracetest` | test provider installation |
@@ -429,3 +444,10 @@ run against the no-op provider and prove there is no behaviour change when traci
 - [ ] set `tx.outcome=not_admitted` on declined txmanager sends, and skip an empty `solver` attribute
 - [ ] stamp trace ids on the remaining untraced log lines (`estimateGas` failure, UniswapX fill-admission lines, LI.FI `logDiscountIssues`)
 - [ ] cap or aggregate the per-offer `declined` events on `3f.offers.reconcile`
+- [ ] the RPC span's success `attempt` event is timestamped at body close, not at the attempt
+- [ ] a no-op `txmanager.replace` tick emits an empty span, and replace spans carry no `tx.hash`
+- [ ] `quoteTraceId` is stamped only on the UniswapX `trackOrder` logger, not on the fill/complete ones
+- [ ] RedStone default-strategy skip lines carry no trace ids
+- [ ] LI.FI `shouldRefreshQuotes` lines carry no trace ids
+- [ ] 3F `refreshTargetsAndHydrate` emits a root `3f.offers.reconcile`, and the health-tick reconcile is untraced
+- [ ] no unit tests for `NewTracer("")`, `NewSpanLinks(0)`, `Raw()`, or `TraceTransport` with a non-nil base
