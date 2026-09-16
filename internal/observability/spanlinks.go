@@ -18,13 +18,20 @@ type SpanLinks struct {
 	mu      sync.Mutex
 	max     int
 	now     func() time.Time
+	nextSeq uint64
 	entries map[string]spanLinkEntry
-	order   []string // insertion order for eviction
+	order   []orderedKey // insertion order for eviction; may hold entries stale by seq
 }
 
 type spanLinkEntry struct {
 	sc      trace.SpanContext
 	expires time.Time
+	seq     uint64 // matched against order to detect a stale (re-remembered or expired) slot
+}
+
+type orderedKey struct {
+	key string
+	seq uint64
 }
 
 // NewSpanLinks creates a map holding at most maxEntries (1024 when <= 0).
@@ -45,14 +52,18 @@ func (l *SpanLinks) Remember(ctx context.Context, key string, ttl time.Duration)
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if _, exists := l.entries[key]; !exists {
-		l.order = append(l.order, key)
-	}
-	l.entries[key] = spanLinkEntry{sc: sc, expires: l.now().Add(ttl)}
+	l.nextSeq++
+	seq := l.nextSeq
+	l.entries[key] = spanLinkEntry{sc: sc, expires: l.now().Add(ttl), seq: seq}
+	l.order = append(l.order, orderedKey{key: key, seq: seq})
 	for len(l.order) > l.max {
 		oldest := l.order[0]
 		l.order = l.order[1:]
-		delete(l.entries, oldest)
+		// The popped slot is stale (the key was re-remembered or expired since) when its seq no
+		// longer matches the live entry; only a still-matching slot may evict the key it names.
+		if e, ok := l.entries[oldest.key]; ok && e.seq == oldest.seq {
+			delete(l.entries, oldest.key)
+		}
 	}
 }
 

@@ -54,3 +54,29 @@ func TestSpanLinksTTLAndEviction(t *testing.T) {
 		t.Fatalf("len = %d", l.Len())
 	}
 }
+
+// TestSpanLinksReRememberAfterExpiryDoesNotDesyncEviction guards against evicting a freshly
+// re-remembered key because its stale, already-expired order slot is still queued for eviction.
+func TestSpanLinksReRememberAfterExpiryDoesNotDesyncEviction(t *testing.T) {
+	tracetest.Install(t)
+	l := NewSpanLinks(2)
+	now := time.Unix(1000, 0)
+	l.now = func() time.Time { return now }
+	ctx, span := otel.Tracer("x").Start(t.Context(), "q")
+	span.End()
+
+	l.Remember(ctx, "a", 5*time.Second)
+	now = now.Add(6 * time.Second)
+	if _, ok := l.Lookup("a"); ok {
+		t.Fatal("a should have expired")
+	}
+	l.Remember(ctx, "b", time.Minute)
+	l.Remember(ctx, "a", time.Minute) // re-remember; must not be evicted by a's stale order slot
+
+	if _, ok := l.Lookup("a"); !ok {
+		t.Fatal("a should hit: it was just re-remembered")
+	}
+	if _, ok := l.Lookup("b"); !ok {
+		t.Fatal("b should hit: it fits within capacity")
+	}
+}
