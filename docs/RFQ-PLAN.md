@@ -126,6 +126,8 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   `observability.SpanLinks` (bounded, TTL'd) and `handleOrder` looks it up by the polled order's `quoteId`:
   a hit adds a span link plus a `quote.trace_id` attribute and a `quoteTraceId` log key, a miss adds a
   `link_miss` event. Linking is best effort — a restart or eviction costs the link and nothing else.
+  Spans, attributes, and quote-to-fill links for this solver are specified in
+  [TRACING-PLAN](TRACING-PLAN.md) §5–§6.
 
 ### Component port map (TS → Go)
 
@@ -474,10 +476,8 @@ A few **intentional, non-fund-moving divergences** remain, by design:
   slot and the discount input dropped `amountOut`. Selector `0x2b137442` (pinned by the golden test).
 - **Quote discount removed** — the quoted output is the adapter oracle `getAmountOut` directly;
   `quoteDiscountBps`/`applyQuoteDiscount` are gone (matches the current TS filler).
-- **OpenTelemetry — intentionally not ported.** The TS filler declares `@opentelemetry/*` packages in
-  `dependencies` but never initializes an SDK, tracer, or spans (no `opentelemetry.ts`, no `OTEL_*`
-  reads in `src/`) — they are unused/dead deps (the OTel envs belong to the rfq-*backend*). So there
-  is nothing to port; tracing is out of scope unless fleet-wide tracing is later required.
+- **OpenTelemetry.** Ported as fleet-wide tracing; see [TRACING-PLAN](TRACING-PLAN.md). The TS
+  filler's unused `@opentelemetry` deps were never the reference; the backend's devkit setup was.
 
 ### Backend OpenAPI spec (vendored)
 

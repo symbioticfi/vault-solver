@@ -296,6 +296,8 @@ offer id, a submitted offer's span is remembered under two process-local keys so
 back to it: `req:<request address>`, which the on-chain settlement path resolves, and
 `auction:<adapter>:<auction id>`, which the API's offer listing resolves to stamp `quoteTraceId` on
 its log lines. Both expire at the offer's expiration plus an hour; a miss is inert.
+Spans, attributes, and quote-to-fill links for this solver are specified in
+[TRACING-PLAN](TRACING-PLAN.md) §5–§6.
 
 ---
 

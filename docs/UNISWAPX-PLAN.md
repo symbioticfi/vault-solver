@@ -202,6 +202,8 @@ attribute and a `quoteTraceId` log key. A miss (restart, eviction, an order we n
 the orders channel, so `uniswapx.fill` continues that trace with `uniswapx.fill.plan`, `.build`,
 `.submit` and, when the transaction resolves, `.complete` carrying `tx.hash`/`tx.outcome`; the fill
 span stays open across the asynchronous submission and is ended by the completion.
+Spans, attributes, and quote-to-fill links for this solver are specified in
+[TRACING-PLAN](TRACING-PLAN.md) §5–§6.
 
 **On-chain:** the RFQ contracts repository owns `LiquidLaneUniswapXExecutor.sol`, its interfaces, and
 contract tests. `rfq-integration` consumes a pinned RFQ contracts revision, while this solver vendors only

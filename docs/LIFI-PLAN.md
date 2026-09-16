@@ -118,6 +118,8 @@ link here**, unlike RFQ and UniswapX: this solver publishes standing quotes per 
 than per request, and the order server assigns the quote id we only learn from the order message, so
 there is no quote event of ours to link back to. The `quote.id` LI.FI reports is recorded as an
 attribute instead, and the whole order path is one trace rooted at its feed message.
+Spans and attributes for this solver are specified in [TRACING-PLAN](TRACING-PLAN.md) §5; §6 records
+why this is the one solver without a quote-to-fill link.
 
 ---
 

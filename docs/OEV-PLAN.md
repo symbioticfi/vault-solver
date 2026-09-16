@@ -170,7 +170,8 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` �
   reservation lives for); `oev.auction.result`, `oev.liquidation.result` and `oev.blacklisted` link back
   to it and stamp `quoteTraceId` on their log lines. A miss is inert: the result span simply records a
   `link_miss` event and nothing about the solver's behaviour changes. The auction id is logged as
-  `auctionId` on both the bid and the result paths.
+  `auctionId` on both the bid and the result paths. Spans, attributes, and quote-to-fill links for this
+  solver are specified in [TRACING-PLAN](TRACING-PLAN.md) §5–§6.
 - **Bindings.** The RedStone `Executor`, `IMorpho` (subset), `IAdaptiveCurveIrm`, `IOracle`, and our
   `SymbioticOevSolver`, and `AggregatorV3` feeds are **abigen --v2** bindings under `api/bindings/oev/*`
   (vendored ABIs in `api/abi/`: the external contracts hand-vendored, the Executor ABI mirroring the

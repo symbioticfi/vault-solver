@@ -81,6 +81,12 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
   Each solver also uses `deps.Log.WithName(Name)`. The Sentry sink tags events with
   `solver`, `logger` and `label`, puts the logged error in the title, and groups on (solver, message),
   so `log.Error` lines only for conditions that should page; expected skips go to `V(1)`.
+- **Tracing:** spans are started at I/O boundaries, loop ticks, and pipeline stages through
+  `observability.NewTracer`, and whoever starts a span derives that scope's logger with
+  `observability.TraceLogger` — from the base logger, never from an already-derived one, since `logr`
+  appends keys and cannot dedupe. End every span from a `defer` over a named error return, and record
+  expected skips with `observability.Decline` plus `end(nil)` rather than an error status. Span names,
+  attribute keys, and the linking rules live in `docs/TRACING-PLAN.md`.
 - **Context:** thread `context.Context` through all I/O (RPC, HTTP, tx). Respect cancellation; never
   `context.Background()` deep in a call path.
 - **Concurrency:** shared on-chain sending goes through the single `txmanager` (nonce-serialized) —
@@ -224,7 +230,8 @@ Commit titles follow [Conventional Commits](https://www.conventionalcommits.org)
 
 Two audiences, two docs, kept current **in the same change** as the code:
 
-**Plans** (`docs/*-PLAN.md`, plus the cross-cutting `docs/strategy-plan.md`) are the source of truth
+**Plans** (`docs/*-PLAN.md`, plus the cross-cutting `docs/strategy-plan.md` and `docs/TRACING-PLAN.md`)
+are the source of truth
 for **internal architecture, design decisions, and the live TODO list** — write for a future
 maintainer.
 
