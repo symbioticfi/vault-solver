@@ -65,6 +65,13 @@ func TestEventTitleAppendsLoggedError(t *testing.T) {
 	}
 }
 
+func TestEventTagsPromotesTraceID(t *testing.T) {
+	tags := eventTags("rfq", map[string]any{"solver": "rfq", "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736"})
+	if tags["trace_id"] != "4bf92f3577b34da6a3ce929d0e0e4736" {
+		t.Fatalf("trace_id tag missing: %v", tags)
+	}
+}
+
 func TestEventTagsAttributeSolverAndLabel(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

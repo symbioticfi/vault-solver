@@ -51,13 +51,29 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	if debugFlagSet {
 		debug = debugFlag
 	}
-	log, syncLog := observability.NewLogger(debug)
-	defer syncLog()
-
 	solverNames := make([]string, len(cfg.Solvers))
 	for i, s := range cfg.Solvers {
 		solverNames[i] = s.Name
 	}
+
+	log, syncLog := observability.NewLogger(debug)
+	defer syncLog()
+
+	shutdownTracing, tracingEnabled := observability.NewTracing(ctx, observability.Tracing{
+		Name:    "vault-solver",
+		Version: version.Version,
+		Commit:  version.Commit,
+		Solvers: solverNames,
+		ChainID: cfg.Chain.ChainID,
+	}, log)
+	defer func() { //nolint:contextcheck // fresh context on purpose: ctx is cancelled during shutdown and the flush must still run
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(flushCtx); err != nil {
+			log.Info("tracing shutdown incomplete", "err", err.Error())
+		}
+	}()
+
 	// With one solver per process (the deployed shape), stamp every line, shared components such as
 	// txmanager included, with the integration it serves. With several, each solver's own logger is
 	// stamped below instead, and shared components attribute work through the request label.
@@ -70,6 +86,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		"goVersion", version.GoVersion(),
 		"solvers", solverNames,
 		"debug", debug,
+		"tracing", tracingEnabled,
 	)
 
 	// Observability first, so probes/metrics are live during the rest of startup.
