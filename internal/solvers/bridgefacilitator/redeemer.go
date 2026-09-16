@@ -117,9 +117,9 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 		Data:   data,
 		Label:  "redeem",
 	})
-	txAttrs := []attribute.KeyValue{
-		observability.AttrTxHash.String(res.Hash.Hex()),
-		observability.AttrTxOutcome.String(string(res.Outcome)),
+	txAttrs := []attribute.KeyValue{observability.AttrTxOutcome.String(string(res.Outcome))}
+	if res.Hash != (common.Hash{}) { // a request that never reached the wire has no hash
+		txAttrs = append(txAttrs, observability.AttrTxHash.String(res.Hash.Hex()))
 	}
 	observability.SetAttributes(submitCtx, txAttrs...) // the stage
 	observability.SetAttributes(ctx, txAttrs...)       // the redeem pass it belongs to

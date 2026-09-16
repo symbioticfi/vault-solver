@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr/funcr"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 const (
@@ -223,6 +225,36 @@ func TestExecution_OrderTraceLinksToQuote(t *testing.T) {
 	}
 	if got := attr(endedSpan(t, rec, "rfq.order.plan"), "strategy.name"); got != defaultStrategyName {
 		t.Fatalf("plan span strategy.name = %q, want %q", got, defaultStrategyName)
+	}
+}
+
+// A submission the manager rejected before broadcasting has no transaction: the outcome is recorded,
+// tx.hash is left off rather than stamped as the zero hash.
+func TestExecution_SubmissionErrorOmitsTxHash(t *testing.T) {
+	rec := tracetest.Install(t)
+	st, be := fillFixtures(t)
+	txm := &fakeTxm{result: txmanager.Result{
+		Outcome: txmanager.OutcomeSubmissionError,
+		Err:     errors.New("insufficient funds for gas * price + value"),
+	}}
+	e := newExec(t, st, be, txm)
+
+	e.syncOnce(t.Context())
+
+	if txm.calls != 1 {
+		t.Fatalf("txm sends = %d, want 1", txm.calls)
+	}
+	for _, name := range []string{"rfq.order", "rfq.order.submit"} {
+		span := endedSpan(t, rec, name)
+		if got := attr(span, "tx.hash"); got != "" {
+			t.Fatalf("%s tx.hash = %q, want no attribute for a transaction that never went out", name, got)
+		}
+		if got := attr(span, "tx.outcome"); got != string(txmanager.OutcomeSubmissionError) {
+			t.Fatalf("%s tx.outcome = %q, want %s", name, got, txmanager.OutcomeSubmissionError)
+		}
+	}
+	if got := endedSpan(t, rec, "rfq.order.submit").Status().Code; got != codes.Error {
+		t.Fatalf("submit span status = %v, want Error", got)
 	}
 }
 

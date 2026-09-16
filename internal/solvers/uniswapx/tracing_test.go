@@ -279,8 +279,14 @@ func newTracingFillFixture(t *testing.T) *tracingFillFixture {
 	return &tracingFillFixture{solver: solver, route: direct.route, txm: direct.txm, entry: entry}
 }
 
-// run polls the order, hands it to the fill loop, and completes its transaction.
+// run polls the order, hands it to the fill loop, and confirms its transaction.
 func (f *tracingFillFixture) run(t *testing.T) {
+	t.Helper()
+	f.runWithResult(t, txmanager.Result{Hash: tracingFillTxHash, Outcome: txmanager.OutcomeConfirmed})
+}
+
+// runWithResult is run with the transaction outcome the manager reports back.
+func (f *tracingFillFixture) runWithResult(t *testing.T, result txmanager.Result) {
 	t.Helper()
 	orders := make(chan *resolvedOrder, 1)
 	if _, err := f.solver.pollSource(
@@ -298,7 +304,7 @@ func (f *tracingFillFixture) run(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("fill was not submitted")
 	}
-	f.txm.complete(txmanager.Result{Hash: tracingFillTxHash, Outcome: txmanager.OutcomeConfirmed})
+	f.txm.complete(result)
 	select {
 	case err := <-done:
 		if err != nil {
@@ -433,6 +439,28 @@ func TestOrderTraceLinksQuoteToFill(t *testing.T) {
 	}
 	if got := attr(endedSpan(t, rec, "uniswapx.fill.plan"), "strategy.name"); got != tracingStrategy {
 		t.Fatalf("plan span strategy.name = %q, want %q", got, tracingStrategy)
+	}
+}
+
+// A fill the manager rejected before broadcasting has no transaction: the outcome is recorded,
+// tx.hash is left off rather than stamped as the zero hash.
+func TestFillCompletionOmitsTxHashWhenNotBroadcast(t *testing.T) {
+	rec := tracetest.Install(t)
+	fixture := newTracingFillFixture(t)
+
+	fixture.runWithResult(t, txmanager.Result{
+		Outcome: txmanager.OutcomeSubmissionError,
+		Err:     errors.New("insufficient funds for gas * price + value"),
+	})
+
+	for _, name := range []string{"uniswapx.fill", "uniswapx.fill.complete"} {
+		span := endedSpan(t, rec, name)
+		if got := attr(span, "tx.hash"); got != "" {
+			t.Fatalf("%s tx.hash = %q, want no attribute for a transaction that never went out", name, got)
+		}
+		if got := attr(span, "tx.outcome"); got != string(txmanager.OutcomeSubmissionError) {
+			t.Fatalf("%s tx.outcome = %q, want %s", name, got, txmanager.OutcomeSubmissionError)
+		}
 	}
 }
 

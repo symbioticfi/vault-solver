@@ -456,6 +456,31 @@ func TestRedeemAllSendsWithoutRememberedOfferSpan(t *testing.T) {
 	requireNoErrorSpans(t, rec)
 }
 
+// A redeem the manager rejected before broadcasting has no transaction: the outcome is recorded,
+// tx.hash is left off rather than stamped as the zero hash.
+func TestRedeemAllOmitsTxHashWhenNotBroadcast(t *testing.T) {
+	rec := tracetest.Install(t)
+	s, _, sent := newRedeemFixture(t, txmanager.OutcomeSubmissionError, common.Hash{})
+
+	s.redeemAll(t.Context())
+
+	if got := sent.Load(); got != 1 {
+		t.Fatalf("sent transactions = %d, want 1", got)
+	}
+	for _, name := range []string{"3f.redeem", "3f.redeem.submit"} {
+		span := endedSpan(t, rec, name)
+		if got := attr(span, "tx.hash"); got != "" {
+			t.Fatalf("%s tx.hash = %q, want no attribute for a transaction that never went out", name, got)
+		}
+		if got := attr(span, "tx.outcome"); got != string(txmanager.OutcomeSubmissionError) {
+			t.Fatalf("%s tx.outcome = %q, want %s", name, got, txmanager.OutcomeSubmissionError)
+		}
+	}
+	if got := endedSpan(t, rec, "3f.redeem.submit").Status().Code; got != codes.Error {
+		t.Fatalf("submit span status = %v, want Error", got)
+	}
+}
+
 // A listed offer whose submission is still remembered carries that trace on its log lines, so the
 // API's view of an offer joins back to the pass that created it without the trace backend (spec §12).
 func TestReconcileOffersStampsRememberedOfferTrace(t *testing.T) {

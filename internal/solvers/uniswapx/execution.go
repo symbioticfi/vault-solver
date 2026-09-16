@@ -504,9 +504,9 @@ func (s *Solver) logFillPlan(log logr.Logger, order *resolvedOrder, plan *strate
 // the fill span the submission opened.
 func (s *Solver) completePendingFill(ctx context.Context, completion uniswapFillCompletion) {
 	order := completion.fill.order
-	txAttrs := []attribute.KeyValue{
-		observability.AttrTxHash.String(completion.result.Hash.Hex()),
-		observability.AttrTxOutcome.String(string(completion.result.Outcome)),
+	txAttrs := []attribute.KeyValue{observability.AttrTxOutcome.String(string(completion.result.Outcome))}
+	if completion.result.Hash != (common.Hash{}) { // a request that never reached the wire has no hash
+		txAttrs = append(txAttrs, observability.AttrTxHash.String(completion.result.Hash.Hex()))
 	}
 	fillCtx := completion.fill.traceContext(ctx)
 	observability.SetAttributes(fillCtx, txAttrs...) // the fill span this result belongs to
