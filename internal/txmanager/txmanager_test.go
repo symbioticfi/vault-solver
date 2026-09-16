@@ -15,7 +15,12 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	sdkspantest "go.opentelemetry.io/otel/sdk/trace/tracetest"
 
+	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 )
 
@@ -3135,4 +3140,119 @@ func transactionHashes(transactions []*types.Transaction) []common.Hash {
 
 func ptr[T any](value T) *T {
 	return &value
+}
+
+func endedSpan(t *testing.T, rec *sdkspantest.SpanRecorder, name string) sdktrace.ReadOnlySpan {
+	t.Helper()
+	for _, s := range rec.Ended() {
+		if s.Name() == name {
+			return s
+		}
+	}
+	t.Fatalf("span %q not ended", name)
+	return nil
+}
+
+func attr(s sdktrace.ReadOnlySpan, key string) string {
+	for _, kv := range s.Attributes() {
+		if string(kv.Key) == key {
+			return kv.Value.String()
+		}
+	}
+	return ""
+}
+
+func TestSendSpansNestUnderCaller(t *testing.T) {
+	rec := tracetest.Install(t)
+	b := newMockBackend()
+	m := newTestManager(t, b)
+
+	ctx, parent := otel.Tracer("caller").Start(t.Context(), "rfq.order.submit")
+	res := m.Send(ctx, Request{
+		To: common.HexToAddress("0xabc"), Label: "test-fill", Solver: "rfq", GasLimit: 21_000,
+	})
+	parent.End()
+	if res.Outcome != OutcomeConfirmed {
+		t.Fatalf("outcome %v err %v", res.Outcome, res.Err)
+	}
+
+	send := endedSpan(t, rec, "txmanager.send test-fill")
+	broadcast := endedSpan(t, rec, "txmanager.broadcast")
+	if send.Parent().SpanID() != parent.SpanContext().SpanID() {
+		t.Fatal("send span is not a child of the caller span")
+	}
+	if broadcast.Parent().SpanID() != send.SpanContext().SpanID() {
+		t.Fatal("broadcast span is not a child of the send span")
+	}
+	if attr(send, "tx.outcome") != "confirmed" || attr(send, "solver") != "rfq" ||
+		attr(send, "tx.label") != "test-fill" || attr(send, "tx.hash") != res.Hash.Hex() ||
+		attr(send, "tx.nonce") != "7" {
+		t.Fatalf("send attributes: %v", send.Attributes())
+	}
+	if send.Status().Code != codes.Unset {
+		t.Fatalf("send status = %v, want unset for a confirmed transaction", send.Status())
+	}
+	if attr(broadcast, "tx.hash") != res.Hash.Hex() || attr(broadcast, "tx.nonce") != "7" {
+		t.Fatalf("broadcast attributes: %v", broadcast.Attributes())
+	}
+}
+
+func TestSendSpanRecordsBroadcastFailure(t *testing.T) {
+	rec := tracetest.Install(t)
+	b := newMockBackend()
+	b.sendErrs = []error{errors.New("insufficient funds for gas * price + value")}
+	m := newTestManager(t, b)
+
+	res := m.Send(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), Label: "rejected", Solver: "rfq", GasLimit: 21_000,
+	})
+	if res.Outcome != OutcomeSubmissionError || res.Err == nil {
+		t.Fatalf("outcome %v err %v, want a submission error", res.Outcome, res.Err)
+	}
+
+	send := endedSpan(t, rec, "txmanager.send rejected")
+	if attr(send, "tx.outcome") != string(OutcomeSubmissionError) {
+		t.Fatalf("send attributes: %v", send.Attributes())
+	}
+	if send.Status().Code != codes.Error {
+		t.Fatalf("send status = %v, want Error", send.Status())
+	}
+	if broadcast := endedSpan(t, rec, "txmanager.broadcast"); broadcast.Status().Code != codes.Error {
+		t.Fatalf("broadcast status = %v, want Error", broadcast.Status())
+	}
+}
+
+func TestTrySendBusyLaneDeclinesWithoutErrorStatus(t *testing.T) {
+	rec := tracetest.Install(t)
+	bb := &blockingBackend{mockBackend: newMockBackend(), entered: make(chan struct{}), release: make(chan struct{})}
+	m := New(bb, mustSigner(t), big.NewInt(11155111), Config{PollInterval: time.Millisecond}, logr.Discard())
+	startManagerForTest(t, m)
+
+	first := make(chan Result, 1)
+	go func() {
+		result, _ := m.TrySend(
+			context.Background(), Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "first"},
+		)
+		first <- result
+	}()
+
+	<-bb.entered
+	if _, accepted := m.TrySend(
+		context.Background(), Request{To: common.HexToAddress("0xdef"), GasLimit: 21_000, Label: "second"},
+	); accepted {
+		t.Fatal("busy lane accepted a TrySend")
+	}
+	close(bb.release)
+	if got := <-first; got.Err != nil {
+		t.Fatalf("first TrySend: %v", got.Err)
+	}
+
+	declined := endedSpan(t, rec, "txmanager.send second")
+	if declined.Status().Code != codes.Unset {
+		t.Fatalf("busy-lane status = %v, want unset", declined.Status())
+	}
+	events := declined.Events()
+	if len(events) != 1 || events[0].Name != "declined" {
+		t.Fatalf("busy-lane events = %v, want one declined event", events)
+	}
 }

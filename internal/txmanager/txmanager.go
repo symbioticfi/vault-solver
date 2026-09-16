@@ -20,7 +20,10 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/go-logr/logr"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 )
 
@@ -179,6 +182,7 @@ type job struct {
 	req              Request
 	res              chan Result
 	admissionStarted time.Time
+	span             trace.Span // the caller-derived send span, ended by whoever resolves the request
 }
 
 type nonceConflict struct {
@@ -358,28 +362,38 @@ func (m *Manager) supportsAccountBalance() bool {
 	return senderBalance || ordinaryBalance
 }
 
+// refreshAccount runs one account poll. It is periodic background work, and the manager's lifetime
+// context carries no span, so each poll is its own trace.
 func (m *Manager) refreshAccount(ctx context.Context) {
-	refreshCtx, cancel := context.WithTimeout(ctx, accountRefreshTimeout)
-	defer cancel()
-	balance, err := m.transactionSenderBalance(refreshCtx)
-	if err == nil && (balance == nil || balance.Sign() < 0) {
-		err = errors.New("txmanager: invalid account balance")
-	}
-	if err == nil {
-		var latestNonce, pendingNonce uint64
-		latestNonce, err = m.backend.NonceAt(refreshCtx, m.signer.Address(), nil)
-		if err == nil {
-			pendingNonce, err = m.backend.PendingNonceAt(refreshCtx, m.signer.Address())
-		}
-		if err == nil {
-			m.metrics.observeAccount(balance, latestNonce, pendingNonce)
-			return
-		}
-	}
-	if ctx.Err() == nil {
+	pollCtx, end := tracer.Start(ctx, "txmanager.account_poll")
+	err := m.readAccount(pollCtx)
+	end(err)
+	if err != nil && ctx.Err() == nil {
 		m.metrics.observeAccountRefreshError()
 		m.log.V(1).Info("account metrics refresh failed", "error", err)
 	}
+}
+
+func (m *Manager) readAccount(ctx context.Context) error {
+	refreshCtx, cancel := context.WithTimeout(ctx, accountRefreshTimeout)
+	defer cancel()
+	balance, err := m.transactionSenderBalance(refreshCtx)
+	if err != nil {
+		return err
+	}
+	if balance == nil || balance.Sign() < 0 {
+		return errors.New("txmanager: invalid account balance")
+	}
+	latestNonce, err := m.backend.NonceAt(refreshCtx, m.signer.Address(), nil)
+	if err != nil {
+		return err
+	}
+	pendingNonce, err := m.backend.PendingNonceAt(refreshCtx, m.signer.Address())
+	if err != nil {
+		return err
+	}
+	m.metrics.observeAccount(balance, latestNonce, pendingNonce)
+	return nil
 }
 
 func (m *Manager) transactionSenderBalance(ctx context.Context) (*big.Int, error) {
@@ -435,33 +449,35 @@ func (m *Manager) Start(ctx context.Context) {
 			stop(ctx.Err())
 			return
 		case j := <-m.queue:
+			// The send span, not the caller's context, carries the trace across the detached lifecycle.
+			spanCtx := trace.ContextWithSpan(ctx, j.span)
 			if err := ctx.Err(); err != nil {
 				m.metrics.finishAdmission(j.req.Label, j.admissionStarted, errManagerStopped)
-				j.res <- notAdmittedResult(err)
+				deliverJobResult(j, notAdmittedResult(err))
 				m.releaseLifecycleSlot()
 				stop(err)
 				return
 			}
 			if err := m.nonceConflictError(); err != nil {
 				m.metrics.finishAdmission(j.req.Label, j.admissionStarted, err)
-				j.res <- notAdmittedResult(err)
+				deliverJobResult(j, notAdmittedResult(err))
 				m.releaseLifecycleSlot()
 				continue
 			}
 			m.metrics.finishAdmission(j.req.Label, j.admissionStarted, nil)
 			lifecycle := m.metrics.beginLifecycle(j.req.Label)
-			pending, err := m.broadcast(ctx, j.req)
+			pending, err := m.broadcast(spanCtx, j.req)
 			if err != nil {
 				outcome := OutcomeSubmissionError
 				if ctx.Err() != nil {
 					outcome = OutcomeTrackingStopped
 				}
 				lifecycle.finish(outcome, nil)
-				j.res <- Result{
+				deliverJobResult(j, Result{
 					Outcome:     outcome,
 					Err:         err,
 					NotAdmitted: errors.Is(err, errNonceLanePaused) || ctx.Err() != nil,
-				}
+				})
 				m.releaseLifecycleSlot()
 				continue
 			}
@@ -469,9 +485,10 @@ func (m *Manager) Start(ctx context.Context) {
 			pending.lifecycle = lifecycle
 			pending.result = j.res
 			m.trackUnminedTransaction(pending)
+			lifecycleSpanCtx := trace.ContextWithSpan(lifecycleCtx, j.span)
 			m.lifecycleWG.Go(func() {
 				defer m.releaseLifecycleSlot()
-				m.complete(lifecycleCtx, pending)
+				m.complete(lifecycleSpanCtx, pending)
 			})
 		}
 	}
@@ -531,52 +548,66 @@ func (m *Manager) sendAsync(ctx context.Context, req Request, try bool) (<-chan 
 	if err := admissionCtx.Err(); err != nil {
 		return m.admissionFailure(ctx, req, admissionStarted, err)
 	}
+
+	// From here on the span owns the request: every return either ends it or hands it to the worker.
+	spanCtx, span := startSendSpan(ctx, req)
+	failAdmission := func(err error) (<-chan Result, bool) {
+		endSendSpan(span, Result{Outcome: OutcomeSubmissionError, Err: err})
+		return m.admissionFailure(ctx, req, admissionStarted, err)
+	}
+	// A busy lane is an expected probe result, not a failure, so the span carries no error status.
+	declineBusyLane := func() (<-chan Result, bool) {
+		observability.Decline(spanCtx, "not_admitted", "lane_busy")
+		span.End()
+		return nil, false
+	}
+
 	select {
 	case <-m.stopping:
-		return m.admissionFailure(ctx, req, admissionStarted, errManagerStopped)
+		return failAdmission(errManagerStopped)
 	default:
 	}
 	if try {
 		if m.nonceConflictError() != nil {
-			return nil, false
+			return declineBusyLane()
 		}
 		select {
 		case m.lifecycleSlot <- struct{}{}:
 		default:
-			return nil, false
+			return declineBusyLane()
 		}
 		if m.nonceConflictError() != nil {
 			<-m.lifecycleSlot
-			return nil, false
+			return declineBusyLane()
 		}
 	} else {
 		if err := m.waitForNonceLane(admissionCtx); err != nil {
-			return m.admissionFailure(ctx, req, admissionStarted, err)
+			return failAdmission(err)
 		}
 		select {
 		case m.lifecycleSlot <- struct{}{}:
 		case <-admissionCtx.Done():
-			return m.admissionFailure(ctx, req, admissionStarted, admissionCtx.Err())
+			return failAdmission(admissionCtx.Err())
 		case <-m.stopping:
-			return m.admissionFailure(ctx, req, admissionStarted, errManagerStopped)
+			return failAdmission(errManagerStopped)
 		}
 		if err := m.waitForNonceLane(admissionCtx); err != nil {
 			<-m.lifecycleSlot
-			return m.admissionFailure(ctx, req, admissionStarted, err)
+			return failAdmission(err)
 		}
 	}
 	res := make(chan Result, 1)
 	select {
-	case m.queue <- job{req: cloneRequest(req), res: res, admissionStarted: admissionStarted}:
+	case m.queue <- job{req: cloneRequest(req), res: res, admissionStarted: admissionStarted, span: span}:
 		releaseDemandOnReturn = false
 	case <-admissionCtx.Done():
 		m.releaseLifecycleSlot()
 		releaseDemandOnReturn = false
-		return m.admissionFailure(ctx, req, admissionStarted, admissionCtx.Err())
+		return failAdmission(admissionCtx.Err())
 	case <-m.stopping:
 		m.releaseLifecycleSlot()
 		releaseDemandOnReturn = false
-		return m.admissionFailure(ctx, req, admissionStarted, errManagerStopped)
+		return failAdmission(errManagerStopped)
 	}
 	return res, true
 }
@@ -625,6 +656,13 @@ func notAdmittedResult(err error) Result {
 	return Result{Outcome: OutcomeSubmissionError, Err: err, NotAdmitted: true}
 }
 
+// deliverJobResult ends the send span before the caller observes the result, so a caller resuming
+// its own trace never races the span it is nested under.
+func deliverJobResult(j job, result Result) {
+	endSendSpan(j.span, result)
+	j.res <- result
+}
+
 func (m *Manager) releaseLifecycleSlot() {
 	<-m.lifecycleSlot
 	m.releaseAdmissionDemand()
@@ -670,13 +708,20 @@ func (m *Manager) requestLog(req Request) logr.Logger {
 	return m.log.WithValues("solver", req.Solver)
 }
 
-func (m *Manager) broadcast(ctx context.Context, req Request) (*pendingTransaction, error) {
+func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingTransaction, err error) {
+	// Stamped from the send span, not the broadcast child, because the lifecycle keeps this logger
+	// long after the broadcast span has ended.
+	log := observability.TraceLogger(ctx, m.requestLog(req))
+	sendSpan := trace.SpanFromContext(ctx)
+
 	broadcastCtx := ctx
 	cancel := func() {}
 	if !req.CancelAt.IsZero() {
 		broadcastCtx, cancel = context.WithDeadline(ctx, req.CancelAt)
 	}
 	defer cancel()
+	broadcastCtx, end := tracer.Start(broadcastCtx, "txmanager.broadcast")
+	defer func() { end(err) }()
 	if err := broadcastCtx.Err(); err != nil {
 		return nil, errors.Errorf("send %q before broadcast: %w", req.Label, err)
 	}
@@ -701,7 +746,7 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (*pendingTransacti
 	if obsoleteErr != nil {
 		// Obsolescence is only a liveness optimization. The solver already validated the call,
 		// and execution-time contracts remain authoritative, so an unknown check keeps it alive.
-		m.requestLog(req).Error(obsoleteErr, "transaction obsolescence check unavailable; continuing",
+		log.Error(obsoleteErr, "transaction obsolescence check unavailable; continuing",
 			"label", req.Label)
 	} else if obsolete {
 		return nil, errors.Errorf("send %q: %w", req.Label, errRequestObsolete)
@@ -711,7 +756,7 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (*pendingTransacti
 	if value == nil {
 		value = new(big.Int)
 	}
-	m.requestLog(req).V(1).Info(
+	log.V(1).Info(
 		"transaction prepared",
 		"label", req.Label,
 		"to", req.To.Hex(),
@@ -735,19 +780,27 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (*pendingTransacti
 		return nil, errors.Errorf("send %q: %w", req.Label, sendErr)
 	}
 	hash := signed.Hash()
+	// Both spans: the broadcast span is short-lived, the send span keeps the identity for the whole
+	// lifecycle (endSendSpan later overwrites tx.hash with the attempt that actually landed).
+	txIdentity := []attribute.KeyValue{
+		observability.AttrTxHash.String(hash.Hex()),
+		observability.AttrTxNonce.Int64(int64(nonce)),
+	}
+	observability.SetAttributes(broadcastCtx, txIdentity...)
+	sendSpan.SetAttributes(txIdentity...)
 	broadcastUncertain := sendErr != nil && !isKnownTransactionError(sendErr)
 	if broadcastUncertain {
-		m.requestLog(req).Error(sendErr, "transaction broadcast uncertain; tracking signed hash",
+		log.Error(sendErr, "transaction broadcast uncertain; tracking signed hash",
 			"label", req.Label, "hash", hash.Hex(), "nonce", nonce)
 	} else if sendErr != nil {
-		m.requestLog(req).Info("transaction already known by write RPC",
+		log.Info("transaction already known by write RPC",
 			"label", req.Label, "hash", hash.Hex(), "nonce", nonce, "rpcResult", sendErr.Error())
 	} else {
-		m.requestLog(req).Info("sent", "label", req.Label, "hash", hash.Hex(), "nonce", nonce)
+		log.Info("sent", "label", req.Label, "hash", hash.Hex(), "nonce", nonce)
 	}
 	m.commitNonce(nonce)
 	return &pendingTransaction{
-		log:   m.requestLog(req),
+		log:   log,
 		req:   req,
 		nonce: nonce,
 		gas:   gas,
@@ -774,6 +827,9 @@ func (m *Manager) complete(ctx context.Context, pending *pendingTransaction) {
 	if outcome.Receipt != nil {
 		m.clearNonceConflict(pending.nonce)
 	}
+	// End before delivering, so the caller never resumes its trace while the span it nests under is
+	// still open. A pending built outside Start carries no span and gets the no-op one from ctx.
+	endSendSpan(trace.SpanFromContext(ctx), outcome)
 	pending.deliver(outcome)
 }
 
@@ -807,7 +863,13 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 	var replacementStarted time.Time
 	tryReplace := func(cancellation bool) bool {
 		replacementStarted = time.Now()
-		return m.tryReplace(ctx, pending, cancellation)
+		replaceCtx, end := tracer.Start(ctx, "txmanager.replace",
+			observability.AttrTxAttempt.Int(len(pending.attempts)+1),
+			attribute.Bool("tx.cancellation", cancellation),
+		)
+		cancelling, err := m.tryReplace(replaceCtx, pending, cancellation)
+		end(err)
+		return cancelling
 	}
 	cancelling := false
 	cancelRequested, timeoutC := pending.cancelRequested, timeout.C
@@ -1040,14 +1102,17 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 	return Result{Hash: attempt.hash, Receipt: receipt, Outcome: OutcomeConfirmed}, true
 }
 
-// tryReplace reports whether cancellation mode was entered, even if submission fails.
-func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, cancellation bool) bool {
+// tryReplace reports whether cancellation mode was entered, even if submission fails, plus the
+// replacement failure for the calling span. Both are already logged.
+func (m *Manager) tryReplace(
+	ctx context.Context, pending *pendingTransaction, cancellation bool,
+) (bool, error) {
 	if m.hasNonceConflict(pending.nonce) {
-		return cancellation
+		return cancellation, nil
 	}
 	cancellation = cancellation || pending.cancellationDue(time.Now())
 	if !cancellation && m.rebroadcastUncertainAttempt(ctx, pending) {
-		return false
+		return false, nil
 	}
 	limit := m.normalFeeLimit(pending.req)
 	if cancellation {
@@ -1060,14 +1125,14 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 	if err != nil {
 		if errors.Is(err, errReplacementLimitReached) &&
 			m.rebroadcastLatestAttempt(ctx, pending, cancellation) {
-			return cancellation
+			return cancellation, nil
 		}
 		pending.log.Error(err, "cannot replace pending transaction",
 			"label", pending.req.Label,
 			"nonce", pending.nonce,
 			"cancellation", cancellation,
 		)
-		return cancellation
+		return cancellation, err
 	}
 	to := pending.req.To
 	data := pending.req.Data
@@ -1091,7 +1156,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 			"nonce", pending.nonce,
 			"cancellation", cancellation,
 		)
-		return cancellation
+		return cancellation, sendErr
 	}
 	hash := signed.Hash()
 	broadcastUncertain := sendErr != nil && !isKnownTransactionError(sendErr)
@@ -1110,7 +1175,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 			"nonce", pending.nonce,
 			"cancellation", cancellation,
 		)
-		return cancellation
+		return cancellation, sendErr
 	}
 	if sendErr != nil {
 		pending.log.Info("replacement already known by write RPC",
@@ -1120,7 +1185,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 			"cancellation", cancellation,
 			"rpcResult", sendErr.Error(),
 		)
-		return cancellation
+		return cancellation, nil
 	}
 	kind := replacementKindReplacement
 	if cancellation {
@@ -1135,7 +1200,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, c
 		"maxFeePerGas", fees.maxFee.String(),
 		"maxPriorityFeePerGas", fees.tip.String(),
 	)
-	return cancellation
+	return cancellation, nil
 }
 
 // rebroadcastUncertainAttempt gives a transport-ambiguous normal submission one exact-byte retry
