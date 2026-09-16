@@ -395,6 +395,10 @@ the quote that produced it when the process still remembers that quote (best eff
 after a restart the fill simply starts a new trace. LI.FI fills are not linked, because its standing
 quotes have no per-request quote event to link from.
 
+No secret is ever recorded on a span: RPC endpoints appear as ordinals rather than URLs, and an
+outbound client span records the request URL **without its query string**, so a webhook URL that
+carries a token in the query does not put it in the trace.
+
 Tracing never blocks a quote or a fill: spans are exported in the background from a bounded queue,
 export failures are logged at Info, and a bad `OTEL_*` setting disables tracing at startup instead of
 failing it. The observability listener itself is never traced.

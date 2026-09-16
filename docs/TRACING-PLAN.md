@@ -109,7 +109,11 @@ Only the RFQ and UniswapX quote servers are traced. The observability listener i
 `*http.Client` the bot builds, so the span covers the existing wrappers and `traceparent` goes out on
 the wire. The span is `"<peer> <METHOD>"` with a `peer.service` attribute; `peer` is a short
 integration name, never a URL. Generated OpenAPI and GraphQL clients are untouched — they receive the
-client as configuration. Wired peers: `rfq-backend` (which also covers the internal discounts calls
+client as configuration. `otelhttp` records the request URL as `url.full` and has no option to omit
+it, so `TraceTransport` hands it a clone whose query string is cleared and restores the real URL on
+the request that goes on the wire: an operator-configured peer URL (the webhook strategy's) may carry
+a token in the query, and a span attribute is not the place for it. Wired peers: `rfq-backend`
+(which also covers the internal discounts calls
 made with the same client), `rfq-discounts`, `3f-api`, `lifi-order-server`, `uniswapx-api`,
 `morpho-graphql`, `webhook`. A webhook strategy call is therefore a child span of the quote or fill
 that triggered it, and the operator's receiver gets `traceparent`.

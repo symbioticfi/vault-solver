@@ -1,8 +1,10 @@
 package observability
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"go.opentelemetry.io/otel"
@@ -84,5 +86,50 @@ func TestTraceTransportInjectsTraceparent(t *testing.T) {
 	}
 	if !sawClientSpan {
 		t.Fatalf("client span not recorded: %v", rec.Ended())
+	}
+}
+
+// A webhook URL is operator-configured and may embed a token, so no query string may reach url.full
+// — while the request on the wire keeps it.
+func TestTraceTransportKeepsQueryOutOfSpanURL(t *testing.T) {
+	rec := installRecorder(t)
+	var gotTarget, gotBody, gotTraceparent string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTarget = r.URL.RequestURI()
+		gotTraceparent = r.Header.Get("traceparent")
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	client := &http.Client{Transport: TraceTransport(nil, "webhook")}
+	req, err := http.NewRequestWithContext(
+		t.Context(), http.MethodPost, srv.URL+"/hook?token=secret", strings.NewReader(`{"ping":1}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if gotTarget != "/hook?token=secret" {
+		t.Fatalf("server saw %q, want the query on the wire", gotTarget)
+	}
+	if gotBody != `{"ping":1}` {
+		t.Fatalf("server saw body %q, want the request body intact", gotBody)
+	}
+	span := endedSpan(t, rec, "webhook POST")
+	if !strings.Contains(gotTraceparent, span.SpanContext().TraceID().String()) {
+		t.Fatalf("traceparent %q does not carry the client span's trace", gotTraceparent)
+	}
+	full := attr(span, "url.full")
+	if strings.Contains(full, "secret") || strings.Contains(full, "?") {
+		t.Fatalf("url.full = %q, want it without the query string", full)
+	}
+	if full != srv.URL+"/hook" {
+		t.Fatalf("url.full = %q, want %q", full, srv.URL+"/hook")
 	}
 }
