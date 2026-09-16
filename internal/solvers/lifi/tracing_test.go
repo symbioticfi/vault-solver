@@ -496,6 +496,12 @@ func TestOrderReplayKeepsProcessSpanOpenUntilFill(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("worker did not process the replayed order")
 	}
+	// The replay has been through the worker and the fill is still pending: the span the live copy
+	// writes to must still be open.
+	if got := len(endedSpans(rec, "lifi.order.process")); got != 0 {
+		t.Fatalf("process spans ended while the fill was pending = %d, want none (spans %v)",
+			got, spanNames(rec))
+	}
 	result <- fixture.txm.fillResult()
 	select {
 	case err := <-done:
@@ -520,6 +526,73 @@ func TestOrderReplayKeepsProcessSpanOpenUntilFill(t *testing.T) {
 	}
 	if len(fixture.txm.reqs) != 1 {
 		t.Fatalf("fill submissions = %d, want 1", len(fixture.txm.reqs))
+	}
+}
+
+// A shutdown drops whatever sits in the deposit-retry queue, so the worker's finishAll is the only
+// thing left to close those orders' processing spans — once each, and as a cancellation rather than
+// a failure.
+func TestOrderWorkerShutdownEndsQueuedDepositRetrySpan(t *testing.T) {
+	rec := tracetest.Install(t)
+	fixture := newTracingOrderFixture(t)
+	// A frozen clock keeps the scheduled retry from ever becoming ready, so the order stays queued.
+	now := time.Now()
+	fixture.solver.wallNow = func() time.Time { return now }
+	read := make(chan struct{}, 1)
+	reader := fixture.solver.reader.(fakeLifiReader)
+	reader.statusFn = func() (uint8, error) {
+		select {
+		case read <- struct{}{}:
+		default:
+		}
+		return lifiOrderStatusNone, nil // the deposit never becomes visible
+	}
+	fixture.solver.reader = reader
+	order, err := fixture.solver.admitOrderMessage(
+		t.Context(), orderMessage{Event: orderSubmitEvent, Data: fixture.raw},
+		func(context.Context, *submittedOrder) error { return nil },
+	)
+	if order == nil || err != nil {
+		t.Fatalf("admitOrderMessage() = %+v, %v", order, err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	orders := make(chan *submittedOrder, 1)
+	orders <- order
+	done := make(chan error, 1)
+	go func() { done <- fixture.solver.runOrderWorker(ctx, fixture.routes, orders, nil, nil) }()
+
+	select {
+	case <-read:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not read the order's deposit status")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("runOrderWorker = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not stop after cancellation")
+	}
+
+	processes := endedSpans(rec, "lifi.order.process")
+	if len(processes) != 1 {
+		t.Fatalf("process spans = %d, want exactly one ended at shutdown (spans %v)",
+			len(processes), spanNames(rec))
+	}
+	if got := attr(processes[0], "order.id"); got != tracingOrderID {
+		t.Fatalf("process span order.id = %q, want %q", got, tracingOrderID)
+	}
+	if processes[0].Status().Code == codes.Error {
+		t.Fatalf("a cancelled order must not be an error span: %v", processes[0].Status())
+	}
+	if !hasSpanEvent(processes[0], "cancelled") {
+		t.Fatalf("process span has no cancelled event: %v", processes[0].Events())
+	}
+	if len(fixture.txm.reqs) != 0 {
+		t.Fatalf("fill submissions = %d, want none for an order whose deposit never landed",
+			len(fixture.txm.reqs))
 	}
 }
 
