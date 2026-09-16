@@ -15,6 +15,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -3254,5 +3255,54 @@ func TestTrySendBusyLaneDeclinesWithoutErrorStatus(t *testing.T) {
 	events := declined.Events()
 	if len(events) != 1 || events[0].Name != "declined" {
 		t.Fatalf("busy-lane events = %v, want one declined event", events)
+	}
+}
+
+// The lifecycle logs are what an operator joins to a trace, so each line must carry the caller's
+// trace id exactly once: the request logger is derived from the base logger at the send span, never
+// from a logger that already carries trace ids.
+func TestSendLifecycleLogsCarryTraceIDOnce(t *testing.T) {
+	tracetest.Install(t)
+	var mu sync.Mutex
+	var lines []string
+	log := funcr.NewJSON(func(entry string) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, entry)
+	}, funcr.Options{Verbosity: 1})
+	m := New(newMockBackend(), mustSigner(t), big.NewInt(11155111),
+		Config{Confirmations: 0, PollInterval: time.Millisecond}, log)
+	startManagerForTest(t, m)
+
+	ctx, parent := otel.Tracer("caller").Start(t.Context(), "rfq.order.submit")
+	res := m.Send(ctx, Request{
+		To: common.HexToAddress("0xabc"), Label: "test-fill", Solver: "rfq", GasLimit: 21_000,
+	})
+	parent.End()
+	if res.Outcome != OutcomeConfirmed {
+		t.Fatalf("outcome %v err %v", res.Outcome, res.Err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := `"trace_id":"` + parent.SpanContext().TraceID().String() + `"`
+	var sawSent bool
+	for _, line := range lines {
+		if n := strings.Count(line, `"trace_id"`); n > 1 {
+			t.Fatalf("trace_id appears %d times in %s", n, line)
+		}
+		if !strings.Contains(line, `"msg":"sent"`) {
+			continue
+		}
+		sawSent = true
+		if !strings.Contains(line, want) {
+			t.Fatalf("sent line does not carry the caller's trace id: %s", line)
+		}
+		if !strings.Contains(line, `"solver":"rfq"`) {
+			t.Fatalf("sent line lost the request's solver: %s", line)
+		}
+	}
+	if !sawSent {
+		t.Fatalf("no sent line captured: %v", lines)
 	}
 }
