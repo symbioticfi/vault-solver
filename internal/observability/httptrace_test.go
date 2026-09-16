@@ -7,14 +7,12 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
-
-	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 )
 
 const parentTraceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 
 func TestTraceHandlerContinuesInboundTrace(t *testing.T) {
-	rec := tracetest.Install(t)
+	rec := installRecorder(t)
 	var seen trace.SpanContext
 	h := TraceHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = trace.SpanContextFromContext(r.Context())
@@ -45,7 +43,7 @@ func TestTraceHandlerContinuesInboundTrace(t *testing.T) {
 }
 
 func TestTraceHandlerSkipsProbes(t *testing.T) {
-	rec := tracetest.Install(t)
+	rec := installRecorder(t)
 	h := TraceHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), func(*http.Request) string { return "x" })
 	for _, p := range []string{"/health", "/healthz", "/ready", "/readyz", "/metrics", "/openapi.json", "/docs"} {
 		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, p, nil))
@@ -56,7 +54,7 @@ func TestTraceHandlerSkipsProbes(t *testing.T) {
 }
 
 func TestTraceTransportInjectsTraceparent(t *testing.T) {
-	rec := tracetest.Install(t)
+	rec := installRecorder(t)
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r.Header.Get("traceparent")

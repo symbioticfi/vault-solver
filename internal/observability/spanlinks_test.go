@@ -6,12 +6,10 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel"
-
-	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 )
 
 func TestSpanLinksRememberLookup(t *testing.T) {
-	tracetest.Install(t)
+	installRecorder(t)
 	l := NewSpanLinks(2)
 	ctx, span := otel.Tracer("x").Start(t.Context(), "q")
 	span.End()
@@ -31,7 +29,7 @@ func TestSpanLinksRememberLookup(t *testing.T) {
 }
 
 func TestSpanLinksTTLAndEviction(t *testing.T) {
-	tracetest.Install(t)
+	installRecorder(t)
 	l := NewSpanLinks(2)
 	now := time.Unix(1000, 0)
 	l.now = func() time.Time { return now }
@@ -58,7 +56,7 @@ func TestSpanLinksTTLAndEviction(t *testing.T) {
 // TestSpanLinksReRememberAfterExpiryDoesNotDesyncEviction guards against evicting a freshly
 // re-remembered key because its stale, already-expired order slot is still queued for eviction.
 func TestSpanLinksReRememberAfterExpiryDoesNotDesyncEviction(t *testing.T) {
-	tracetest.Install(t)
+	installRecorder(t)
 	l := NewSpanLinks(2)
 	now := time.Unix(1000, 0)
 	l.now = func() time.Time { return now }

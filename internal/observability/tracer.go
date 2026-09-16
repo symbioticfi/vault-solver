@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/go-errors/errors"
 	"go.opentelemetry.io/otel"
@@ -38,10 +39,27 @@ const (
 // EndFunc ends a span, recording err when non-nil. Safe to call more than once; later calls are no-ops.
 type EndFunc func(err error)
 
+// tracerGeneration counts the TracerProviders installed in this process. Every Tracer caches the
+// tracer it resolved together with the generation it saw, so a span start costs no lock, and a new
+// provider invalidates every cache at once.
+var tracerGeneration atomic.Uint64
+
+// InvalidateTracers makes every Tracer re-resolve its tracer from the global provider. Call it
+// after otel.SetTracerProvider — NewTracing and the tracetest helper do — or spans started through
+// a Tracer keep going to the provider that was current before.
+func InvalidateTracers() { tracerGeneration.Add(1) }
+
+// resolvedTracer is one tracer plus the provider generation it was resolved from.
+type resolvedTracer struct {
+	generation uint64
+	tracer     trace.Tracer
+}
+
 // Tracer starts spans that carry the owning solver's name. Obtain one per package with NewTracer.
 type Tracer struct {
-	name   string               // instrumentation scope
-	solver []attribute.KeyValue // empty for shared components
+	name     string               // instrumentation scope
+	solver   []attribute.KeyValue // empty for shared components
+	resolved atomic.Pointer[resolvedTracer]
 }
 
 // NewTracer returns a Tracer for the instrumentation scope name (the package import path) that
@@ -56,10 +74,19 @@ func NewTracer(name, solver string) *Tracer {
 }
 
 // Raw exposes the underlying tracer for code that must hold a trace.Span across goroutines
-// (txmanager keeps one span from submission to receipt). The provider is resolved on every call,
-// never cached: the global provider delegates only once, so a tracer captured before NewTracing
-// installs the real one stays bound to whichever provider was set first.
-func (t *Tracer) Raw() trace.Tracer { return otel.Tracer(t.name) }
+// (txmanager keeps one span from submission to receipt). Resolving through the global provider
+// takes two process-wide mutexes, so the result is cached and re-resolved only once a new provider
+// bumps the generation: a Tracer built before NewTracing installs the real provider still reaches
+// it, without paying that cost per span.
+func (t *Tracer) Raw() trace.Tracer {
+	generation := tracerGeneration.Load()
+	if cached := t.resolved.Load(); cached != nil && cached.generation == generation {
+		return cached.tracer
+	}
+	resolved := &resolvedTracer{generation: generation, tracer: otel.Tracer(t.name)}
+	t.resolved.Store(resolved)
+	return resolved.tracer
+}
 
 // Start begins a child span of ctx.
 func (t *Tracer) Start(ctx context.Context, name string, attrs ...attribute.KeyValue) (context.Context, EndFunc) {

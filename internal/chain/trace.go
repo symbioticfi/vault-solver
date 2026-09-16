@@ -10,15 +10,15 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
-const rpcTracerName = "github.com/symbioticfi/vault-solver/internal/chain"
-
-// rpcTracer is the plain tracer rather than observability.NewTracer: RPC spans need a client span
-// kind, and the chain client is shared by every solver so they carry no solver attribute. It is
-// resolved per request, not cached, because a tracer taken from the global provider before
-// NewTracing installs the real one keeps delegating to whichever provider was set first.
-func rpcTracer() trace.Tracer { return otel.Tracer(rpcTracerName) }
+// rpcTracer carries no solver attribute: the chain client is shared by every solver. Spans start
+// from Raw rather than observability.Start because RPC spans set the client span kind and end from
+// rpcRequestTrace.finish, not from a deferred EndFunc. Raw re-resolves the provider whenever one is
+// installed, so a tracer built before NewTracing still reaches it.
+var rpcTracer = observability.NewTracer("github.com/symbioticfi/vault-solver/internal/chain", "")
 
 // rpcRequestTrace is the span for one logical JSON-RPC request across endpoint attempts. It ends
 // where the metrics observation finishes: on response-body close, or when every endpoint failed.
@@ -31,7 +31,7 @@ func (t *fallbackTransport) beginTrace(
 	ctx context.Context, request rpcRequestInfo,
 ) (context.Context, *rpcRequestTrace) {
 	//nolint:spancheck // the span is ended by rpcRequestTrace.finish, not inline
-	ctx, span := rpcTracer().Start(ctx, request.boundedMethod,
+	ctx, span := rpcTracer.Raw().Start(ctx, request.boundedMethod,
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(
 			attribute.String("rpc.system", "jsonrpc"),

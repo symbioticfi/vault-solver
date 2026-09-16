@@ -1,5 +1,4 @@
-// Package tracetest installs a recording OpenTelemetry provider for tests.
-package tracetest
+package observability
 
 import (
 	"testing"
@@ -7,28 +6,26 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/sdk/trace/tracetest"
-
-	"github.com/symbioticfi/vault-solver/internal/observability"
+	sdktracetest "go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
-// Install registers a synchronous recording TracerProvider and the W3C propagator for the test's
-// lifetime and returns the recorder. Spans are available from recorder.Ended() once ended.
-func Install(tb testing.TB) *tracetest.SpanRecorder {
+// installRecorder is what observability/tracetest.Install does, duplicated because that package
+// imports this one: these tests cannot import it back.
+func installRecorder(tb testing.TB) *sdktracetest.SpanRecorder {
 	tb.Helper()
-	recorder := tracetest.NewSpanRecorder()
+	recorder := sdktracetest.NewSpanRecorder()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
 	prevProvider := otel.GetTracerProvider()
 	prevPropagator := otel.GetTextMapPropagator()
 	otel.SetTracerProvider(provider)
-	observability.InvalidateTracers()
+	InvalidateTracers()
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{}, propagation.Baggage{},
 	))
 	tb.Cleanup(func() {
 		_ = provider.Shutdown(tb.Context())
 		otel.SetTracerProvider(prevProvider)
-		observability.InvalidateTracers()
+		InvalidateTracers()
 		otel.SetTextMapPropagator(prevPropagator)
 	})
 	return recorder

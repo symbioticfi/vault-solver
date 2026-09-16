@@ -8,8 +8,6 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
-
-	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 )
 
 type codedError struct{ msg string }
@@ -40,7 +38,7 @@ func attr(s sdktrace.ReadOnlySpan, key string) string {
 }
 
 func TestTracerStartStampsSolverAndRecordsError(t *testing.T) {
-	rec := tracetest.Install(t)
+	rec := installRecorder(t)
 	tr := NewTracer("test", "rfq")
 	_, end := tr.Start(t.Context(), "rfq.quote", AttrQuoteID.String("q1"))
 	end(errors.Errorf("boom: %w", codedError{"backend down"}))
@@ -61,7 +59,7 @@ func TestTracerStartStampsSolverAndRecordsError(t *testing.T) {
 }
 
 func TestTracerCancelledIsNotAnError(t *testing.T) {
-	rec := tracetest.Install(t)
+	rec := installRecorder(t)
 	_, end := NewTracer("test", "rfq").Start(t.Context(), "rfq.order")
 	end(errors.Errorf("wrapped: %w", context.Canceled))
 	s := endedSpan(t, rec, "rfq.order")
@@ -74,7 +72,7 @@ func TestTracerCancelledIsNotAnError(t *testing.T) {
 }
 
 func TestDeclineAndSetAttributes(t *testing.T) {
-	rec := tracetest.Install(t)
+	rec := installRecorder(t)
 	ctx, end := NewTracer("test", "uniswapx").Start(t.Context(), "uniswapx.quote")
 	Decline(ctx, "no_quote", "adapter_paused")
 	SetAttributes(ctx, AttrTxHash.String("0xabc"))
@@ -92,7 +90,7 @@ func TestDeclineAndSetAttributes(t *testing.T) {
 }
 
 func TestStartLinked(t *testing.T) {
-	rec := tracetest.Install(t)
+	rec := installRecorder(t)
 	tr := NewTracer("test", "rfq")
 	quoteCtx, endQuote := tr.Start(t.Context(), "rfq.quote")
 	endQuote(nil)
@@ -113,7 +111,7 @@ func TestTracerResolvesProviderPerSpan(t *testing.T) {
 	tr := NewTracer("test", "rfq")
 	for _, name := range []string{"rfq.first", "rfq.second"} {
 		t.Run(name, func(t *testing.T) {
-			rec := tracetest.Install(t)
+			rec := installRecorder(t)
 			_, end := tr.Start(t.Context(), name)
 			end(nil)
 			spans := rec.Ended()
@@ -144,10 +142,35 @@ func BenchmarkStartEndNoop(b *testing.B) {
 }
 
 func BenchmarkStartEndRecording(b *testing.B) {
-	tracetest.Install(b)
+	installRecorder(b)
 	tr := NewTracer("bench", "rfq")
 	for b.Loop() {
 		_, end := tr.Start(b.Context(), "s", AttrQuoteID.String("q"))
 		end(nil)
 	}
+}
+
+// The parallel variants are what the tracer cache is for: resolving the provider per span start
+// serializes every solver goroutine on the global delegate's mutex and the SDK's tracer map.
+func BenchmarkStartEndNoopParallel(b *testing.B) {
+	tr := NewTracer("bench", "rfq")
+	ctx := b.Context()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_, end := tr.Start(ctx, "s")
+			end(nil)
+		}
+	})
+}
+
+func BenchmarkStartEndRecordingParallel(b *testing.B) {
+	installRecorder(b)
+	tr := NewTracer("bench", "rfq")
+	ctx := b.Context()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			_, end := tr.Start(ctx, "s", AttrQuoteID.String("q"))
+			end(nil)
+		}
+	})
 }

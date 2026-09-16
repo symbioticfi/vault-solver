@@ -66,6 +66,7 @@ func NewTracing(ctx context.Context, info Tracing, log logr.Logger) (func(contex
 		sdktrace.WithResource(res),
 	)
 	otel.SetTracerProvider(provider)
+	InvalidateTracers()
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
 		log.Info("tracing export error", "err", err.Error())
 	}))

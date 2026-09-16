@@ -9,8 +9,6 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
 	"go.opentelemetry.io/otel"
-
-	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 )
 
 func TestTracingEnabled(t *testing.T) {
@@ -49,7 +47,7 @@ func TestNewTracingEnabledRegistersProvider(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_ENABLED", "true")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1") // never reached; batcher exports async
 	prev := otel.GetTracerProvider()
-	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+	t.Cleanup(func() { otel.SetTracerProvider(prev); InvalidateTracers() })
 	shutdown, enabled := NewTracing(t.Context(), Tracing{Name: "test", Version: "v", Commit: "c", Solvers: []string{"rfq"}, ChainID: 1}, logr.Discard())
 	if !enabled {
 		t.Fatal("expected tracing enabled")
@@ -75,7 +73,7 @@ func TestTraceLogger(t *testing.T) {
 	}
 	lines = nil
 
-	tracetest.Install(t)
+	installRecorder(t)
 	ctx, span := otel.Tracer("x").Start(t.Context(), "s")
 	defer span.End()
 	TraceLogger(ctx, log).Info("hello")
