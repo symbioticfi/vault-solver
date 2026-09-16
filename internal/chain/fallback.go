@@ -56,19 +56,17 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		body = b
 	}
 	request := inspectRPCRequest(body)
-	method := "unknown"
-	if t.metrics != nil {
-		method = request.boundedMethod
-	}
+	method := request.boundedMethod
+	ctx, requestTrace := t.beginTrace(req.Context(), request)
 	var (
-		nullFallbackID     json.RawMessage
+		nullFallbackID     string
 		nullFallbackMethod string
 		nullFallback       bool
 	)
-	if len(t.endpoints) > 1 {
-		nullFallbackID = request.id
+	if len(t.endpoints) > 1 && request.nullFallback {
+		nullFallbackID = request.requestID
 		nullFallbackMethod = request.rawMethod
-		nullFallback = request.nullFallback
+		nullFallback = true
 	}
 	pendingLookup := isPendingLookupMethod(request.rawMethod)
 	requestObservation := t.metrics.beginRequest(t.role, method)
@@ -79,19 +77,20 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	)
 	for i, ep := range t.endpoints {
 		endpoint := endpointLabel(i)
-		attemptTimeout := endpointAttemptTimeout(req.Context(), len(t.endpoints)-i)
+		attemptTimeout := endpointAttemptTimeout(ctx, len(t.endpoints)-i)
 		if attemptTimeout <= 0 {
-			lastErr = req.Context().Err()
+			lastErr = ctx.Err()
 			if lastErr == nil {
 				lastErr = context.DeadlineExceeded
 			}
-			lastOutcome = classifyRPCFailure(lastErr, req.Context().Err())
+			lastOutcome = classifyRPCFailure(lastErr, ctx.Err())
 			break
 		}
-		ctx, cancel := context.WithTimeout(req.Context(), attemptTimeout)
-		attempt := req.Clone(ctx)
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+		attempt := req.Clone(attemptCtx)
 		attempt.URL = ep
 		attempt.Host = ep.Host
+		injectTraceHeaders(attemptCtx, attempt.Header)
 		if pendingLookup {
 			attempt.Header.Set(erpcRetryEmptyHeader, "false")
 		}
@@ -110,37 +109,35 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 					cancel()
 					if inspectErr != nil {
 						lastErr = inspectErr
-						lastOutcome = classifyRPCFailure(inspectErr, req.Context().Err())
+						lastOutcome = classifyRPCFailure(inspectErr, ctx.Err())
 					} else {
 						lastErr = errors.Errorf("%s returned a null result", nullFallbackMethod)
 						lastOutcome = rpcOutcomeNullResult
 					}
 					t.metrics.observeAttempt(t.role, endpoint, method, lastOutcome)
+					requestTrace.attempt(endpoint, lastOutcome)
 					t.log.V(1).Info("rpc result unavailable; trying fallback",
 						"endpoint", ep.Redacted(), "method", nullFallbackMethod, "err", lastErr.Error())
 					continue
 				}
-				if t.metrics != nil {
-					outcome := classifyRPCResponse(method, resp.StatusCode, inspectedBody, false, nil)
-					inspectedOutcome = &outcome
-				}
+				outcome := classifyRPCResponse(method, resp.StatusCode, inspectedBody, false, nil)
+				inspectedOutcome = &outcome
 			}
 			// Keep the attempt context alive until the rpc layer finishes reading the body. Metrics
-			// classify JSON-RPC error envelopes only after that body has been consumed.
-			if t.metrics == nil {
-				resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: cancel}
-			} else if inspectedOutcome != nil {
+			// and the span classify JSON-RPC error envelopes only after that body has been consumed.
+			observe := func(outcome rpcOutcome) {
+				t.metrics.observeAttempt(t.role, endpoint, method, outcome)
+				requestTrace.attempt(endpoint, outcome)
+				requestObservation.finish(outcome)
+				requestTrace.finish(outcome)
+			}
+			if inspectedOutcome != nil {
 				outcome := *inspectedOutcome
-				resp.Body = newClassifiedRPCBody(resp.Body, cancel, func() {
-					t.metrics.observeAttempt(t.role, endpoint, method, outcome)
-					requestObservation.finish(outcome)
-				})
+				resp.Body = newClassifiedRPCBody(resp.Body, cancel, func() { observe(outcome) })
 			} else {
 				statusCode := resp.StatusCode
 				resp.Body = newObservedRPCBody(resp.Body, cancel, func(responseBody []byte, truncated bool, readErr error) {
-					outcome := classifyRPCResponse(method, statusCode, responseBody, truncated, readErr)
-					t.metrics.observeAttempt(t.role, endpoint, method, outcome)
-					requestObservation.finish(outcome)
+					observe(classifyRPCResponse(method, statusCode, responseBody, truncated, readErr))
 				})
 			}
 			return resp, nil
@@ -148,7 +145,7 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 
 		if err != nil {
 			lastErr = err
-			lastOutcome = classifyRPCFailure(err, req.Context().Err())
+			lastOutcome = classifyRPCFailure(err, ctx.Err())
 		} else {
 			lastErr = errors.Errorf("status %d", resp.StatusCode)
 			lastOutcome = classifyHTTPStatus(resp.StatusCode)
@@ -156,20 +153,23 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		}
 		cancel()
 		t.metrics.observeAttempt(t.role, endpoint, method, lastOutcome)
+		requestTrace.attempt(endpoint, lastOutcome)
 		if i < len(t.endpoints)-1 {
 			t.log.V(1).Info("rpc endpoint failed; trying fallback",
 				"endpoint", ep.Redacted(), "err", lastErr.Error())
 		}
 	}
 	requestObservation.finish(lastOutcome)
+	requestTrace.finish(lastOutcome)
 	return nil, errors.Errorf("rpc fallback: all %d endpoints failed: %w", len(t.endpoints), lastErr)
 }
 
 type rpcRequestInfo struct {
 	boundedMethod string
 	rawMethod     string
-	id            json.RawMessage
-	nullFallback  bool
+	// requestID is the trimmed raw JSON-RPC id, empty for batches and unparsable bodies.
+	requestID    string
+	nullFallback bool
 }
 
 func inspectRPCRequest(body []byte) rpcRequestInfo {
@@ -191,6 +191,7 @@ func inspectRPCRequest(body []byte) rpcRequestInfo {
 	info := rpcRequestInfo{
 		boundedMethod: boundedRPCMethodName(request.Method),
 		rawMethod:     request.Method,
+		requestID:     string(bytes.TrimSpace(request.ID)),
 	}
 	if request.JSONRPC != jsonRPCVersion || len(request.ID) == 0 ||
 		bytes.Equal(bytes.TrimSpace(request.ID), []byte("null")) {
@@ -198,7 +199,6 @@ func inspectRPCRequest(body []byte) rpcRequestInfo {
 	}
 	switch request.Method {
 	case rpcMethodGetTransactionReceipt, "eth_getBlockByHash", "eth_getBlockByNumber":
-		info.id = request.ID
 		info.nullFallback = true
 	}
 	return info
@@ -394,7 +394,7 @@ func decodeRPCResponse(body []byte) (rpcResponseEnvelope, bool) {
 // hasNullRPCResult buffers and restores resp.Body, then reports whether it is a matching successful
 // JSON-RPC response whose result is null. It returns the inspected bytes so metrics do not copy and
 // decode the same response again after the RPC client consumes the restored body.
-func hasNullRPCResult(resp *http.Response, requestID json.RawMessage) (bool, []byte, error) {
+func hasNullRPCResult(resp *http.Response, requestID string) (bool, []byte, error) {
 	body, err := io.ReadAll(resp.Body)
 	_ = resp.Body.Close()
 	resp.Body = io.NopCloser(bytes.NewReader(body))
@@ -407,7 +407,7 @@ func hasNullRPCResult(resp *http.Response, requestID json.RawMessage) (bool, []b
 	if !valid || response.JSONRPC != jsonRPCVersion {
 		return false, body, nil
 	}
-	if !bytes.Equal(bytes.TrimSpace(response.ID), bytes.TrimSpace(requestID)) {
+	if string(bytes.TrimSpace(response.ID)) != requestID {
 		return false, body, nil
 	}
 	if len(response.Error) > 0 && !bytes.Equal(bytes.TrimSpace(response.Error), []byte("null")) {
@@ -429,20 +429,6 @@ func endpointAttemptTimeout(ctx context.Context, endpointsLeft int) time.Duratio
 		return 0
 	}
 	return min(rpcAttemptTimeout, remaining/time.Duration(endpointsLeft))
-}
-
-// cancelOnClose cancels the per-attempt context when the response body is closed, so the timeout
-// covers the full request+body-read without aborting an in-flight read.
-type cancelOnClose struct {
-	io.ReadCloser
-
-	cancel context.CancelFunc
-}
-
-func (c *cancelOnClose) Close() error {
-	err := c.ReadCloser.Close()
-	c.cancel()
-	return err
 }
 
 // isHTTPURL reports whether raw is an http(s) URL — the schemes the fallback transport (and thus the

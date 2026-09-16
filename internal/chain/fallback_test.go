@@ -19,9 +19,23 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 )
+
+func attr(s sdktrace.ReadOnlySpan, key string) string {
+	for _, kv := range s.Attributes() {
+		if string(kv.Key) == key {
+			return kv.Value.String()
+		}
+	}
+	return ""
+}
 
 // mustEndpoints parses raw URLs into endpoints for a fallbackTransport, failing the test on error.
 func mustEndpoints(t *testing.T, raws ...string) []*url.URL {
@@ -340,6 +354,115 @@ func TestFallbackTransport_AllFail(t *testing.T) {
 		_ = resp.Body.Close()
 		t.Fatal("expected an error when all endpoints fail")
 	}
+}
+
+func TestFallbackTransport_SpansOneRequestAcrossAttempts(t *testing.T) {
+	rec := tracetest.Install(t)
+	var gotTraceparent string
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer bad.Close()
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTraceparent = r.Header.Get("traceparent")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":7,"result":"0x1"}`))
+	}))
+	defer good.Close()
+
+	rt := &fallbackTransport{
+		endpoints: mustEndpoints(t, bad.URL, good.URL),
+		base:      http.DefaultTransport,
+		role:      rpcRoleRead,
+		log:       logr.Discard(),
+	}
+	ctx, parent := otel.Tracer("test").Start(t.Context(), "caller")
+	payload := `{"jsonrpc":"2.0","id":7,"method":"eth_chainId","params":[]}`
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, good.URL, strings.NewReader(payload))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if _, err = io.ReadAll(resp.Body); err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if n := len(rec.Ended()); n != 0 {
+		t.Fatalf("ended spans before body close = %d, want 0", n)
+	}
+	_ = resp.Body.Close()
+	parent.End()
+
+	span := endedSpan(t, rec, rpcMethodChainID)
+	if span.Parent().SpanID() != parent.SpanContext().SpanID() {
+		t.Fatalf("rpc span parent = %s, want the caller span %s", span.Parent().SpanID(), parent.SpanContext().SpanID())
+	}
+	if span.SpanKind() != trace.SpanKindClient {
+		t.Fatalf("span kind = %v, want client", span.SpanKind())
+	}
+	if len(span.Events()) != 2 || span.Events()[0].Name != "attempt" || span.Events()[1].Name != "attempt" {
+		t.Fatalf("events = %v, want one attempt event per endpoint", span.Events())
+	}
+	if span.Status().Code == codes.Error {
+		t.Fatalf("status = %v, want unset on a successful request", span.Status())
+	}
+	if !strings.Contains(gotTraceparent, parent.SpanContext().TraceID().String()) {
+		t.Fatalf("traceparent = %q, want the caller trace id %s", gotTraceparent, parent.SpanContext().TraceID())
+	}
+	if attr(span, "rpc.system") != "jsonrpc" || attr(span, "rpc.method") != rpcMethodChainID ||
+		attr(span, "rpc.jsonrpc.request_id") != "7" || attr(span, "chain.rpc.role") != rpcRoleRead ||
+		attr(span, "chain.rpc.batch") != "false" {
+		t.Fatalf("attributes = %v", span.Attributes())
+	}
+}
+
+func TestFallbackTransport_SpanErrorWhenAllEndpointsFail(t *testing.T) {
+	rec := tracetest.Install(t)
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer bad.Close()
+
+	rt := &fallbackTransport{
+		endpoints: mustEndpoints(t, bad.URL),
+		base:      http.DefaultTransport,
+		role:      rpcRoleRead,
+		log:       logr.Discard(),
+	}
+	payload := `{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[]}`
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, bad.URL, strings.NewReader(payload))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := rt.RoundTrip(req)
+	if err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("expected an error when every endpoint fails")
+	}
+
+	spans := rec.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("ended spans = %d, want the single rpc span", len(spans))
+	}
+	if spans[0].Status().Code != codes.Error || spans[0].Status().Description != string(rpcOutcomeHTTP5xx) {
+		t.Fatalf("status = %v, want Error/%s", spans[0].Status(), rpcOutcomeHTTP5xx)
+	}
+}
+
+// endedSpan returns the ended span with the given name, failing the test when it is missing.
+func endedSpan(t *testing.T, rec interface {
+	Ended() []sdktrace.ReadOnlySpan
+}, name string,
+) sdktrace.ReadOnlySpan {
+	t.Helper()
+	for _, s := range rec.Ended() {
+		if s.Name() == name {
+			return s
+		}
+	}
+	t.Fatalf("span %q not ended, got %v", name, rec.Ended())
+	return nil
 }
 
 func TestFallbackTransport_ShortCallerDeadlineStillReachesFallback(t *testing.T) {
