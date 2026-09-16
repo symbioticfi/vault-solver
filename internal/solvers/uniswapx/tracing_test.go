@@ -11,9 +11,11 @@ import (
 	"testing"
 	"time"
 
+	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
 	"go.opentelemetry.io/otel/codes"
@@ -307,6 +309,25 @@ func (f *tracingFillFixture) run(t *testing.T) {
 	}
 }
 
+// runUnfilled polls the order and lets the fill loop drain it without a transaction, for the paths
+// that never reach submission.
+func (f *tracingFillFixture) runUnfilled(t *testing.T) {
+	t.Helper()
+	orders := make(chan *resolvedOrder, 1)
+	if _, err := f.solver.pollSource(
+		t.Context(), orderSourceExclusiveV2, &f.solver.cfg.Executor, orders,
+	); err != nil {
+		t.Fatalf("pollSource: %v", err)
+	}
+	close(orders)
+	if err := f.solver.fillLoop(t.Context(), []liquidlane.Route{f.route}, orders); err != nil {
+		t.Fatalf("fill loop: %v", err)
+	}
+	if len(f.txm.reqs) != 0 {
+		t.Fatalf("transactions sent = %d, want none", len(f.txm.reqs))
+	}
+}
+
 var tracingFillTxHash = common.HexToHash("0x2")
 
 // tracingOrderEntry builds an open exclusive V2 order for this filler that resolves to 100 in and
@@ -450,6 +471,60 @@ func TestOrderTraceRecordsLinkMiss(t *testing.T) {
 	if _, filled := fixture.solver.filled[common.HexToHash(fixture.entry.OrderHash)]; !filled {
 		t.Fatal("unlinked order did not fill")
 	}
+}
+
+// An order this solver will not fill is the ordinary outcome of a poll, not a failure: the fill loop
+// logs it at V(1) and retries later, so the span declines instead of erroring.
+func TestFillTraceDeclinesUnfillableOrder(t *testing.T) {
+	rec := tracetest.Install(t)
+	fixture := newTracingFillFixture(t)
+	fixture.solver.strategy = &executionTestStrategy{} // no plan: nothing worth filling
+
+	fixture.runUnfilled(t)
+
+	fill := endedSpan(t, rec, "uniswapx.fill")
+	if fill.Status().Code == codes.Error {
+		t.Fatalf("an unfillable order must not be an error span: %v", fill.Status())
+	}
+	if !hasSpanEvent(fill, "declined") {
+		t.Fatalf("fill span has no declined event: %v", fill.Events())
+	}
+	if hasSpanEvent(fill, "exception") {
+		t.Fatalf("an unfillable order recorded an exception: %v", fill.Events())
+	}
+}
+
+// The other half of the classification: a fill we tried and could not send is a real failure and has
+// to surface as an error span with the cause recorded.
+func TestFillTraceRecordsPreflightFailure(t *testing.T) {
+	rec := tracetest.Install(t)
+	fixture := newTracingFillFixture(t)
+	preflightErr := errors.New("execution reverted")
+	fixture.solver.chain = contractCallerFunc(
+		func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) { return nil, preflightErr },
+	)
+
+	fixture.runUnfilled(t)
+
+	fill := endedSpan(t, rec, "uniswapx.fill")
+	if fill.Status().Code != codes.Error {
+		t.Fatalf("fill span status = %v, want an error", fill.Status())
+	}
+	if !hasSpanEvent(fill, "exception") {
+		t.Fatalf("failed fill recorded no exception: %v", fill.Events())
+	}
+	if !strings.Contains(fill.Status().Description, preflightErr.Error()) {
+		t.Fatalf("fill span status %q does not name the preflight failure", fill.Status().Description)
+	}
+}
+
+func hasSpanEvent(s sdktrace.ReadOnlySpan, name string) bool {
+	for _, event := range s.Events() {
+		if event.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Trace loggers are derived from the base logger at each span-starting site, never from an

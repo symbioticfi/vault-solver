@@ -161,17 +161,23 @@ func (s *Solver) startFill(
 		observability.AttrQuoteID.String(order.QuoteID),
 	)
 	defer func() {
-		if fill == nil {
+		switch {
+		case fill != nil: // the span lives until the transaction result arrives
+		case errors.Is(err, errOrderNotFillable):
+			// An order we decline to fill is the poll's ordinary outcome, already recorded as a
+			// declined event: the loop retries it later rather than treating it as a failure.
+			end(nil)
+		default:
 			end(err)
 		}
 	}()
 	log := observability.TraceLogger(ctx, s.log)
 
 	if order.TokenOut == (common.Address{}) {
-		return nil, errOrderNotFillable
+		return nil, declineFill(ctx, "fill_skipped", "order has no output token")
 	}
 	if order.Deadline == 0 || int64(order.Deadline) <= now.Unix() {
-		return nil, errOrderNotFillable
+		return nil, declineFill(ctx, "fill_skipped", "order deadline has passed")
 	}
 	decisionRoutes, listed, discountErr := s.fillRoutesWithDiscounts(
 		ctx,
@@ -236,7 +242,6 @@ func (s *Solver) startFill(
 		return nil, err
 	}
 	if plan == nil || len(plan.Routes) == 0 {
-		observability.Decline(ctx, "fill_declined", "strategy returned no fill plan")
 		log.V(1).Info(
 			"order fill strategy declined",
 			"source", order.Source,
@@ -246,7 +251,7 @@ func (s *Solver) startFill(
 			"amountIn", order.AmountIn.String(),
 			"requiredAmountOut", order.AmountOut.String(),
 		)
-		return nil, errOrderNotFillable
+		return nil, declineFill(ctx, "fill_declined", "strategy returned no fill plan")
 	}
 	validatedRoutes, err := liquidstrategies.ValidateFillRoutes(liquidstrategies.FillValidation{
 		TokenIn: fillInput.TokenIn, TokenOut: fillInput.TokenOut, AmountIn: fillInput.AmountIn,
@@ -274,7 +279,7 @@ func (s *Solver) startFill(
 	deadline := fillDeadline(order, discountValidUntil)
 	cancelAt, ok := liquidlane.CancellationDeadline(deadline, now, chainObservedAt, time.Now())
 	if !ok {
-		return nil, errOrderNotFillable
+		return nil, declineFill(ctx, "fill_skipped", "fill execution deadline elapsed before submission")
 	}
 	log.V(1).Info(
 		"order fill preflight succeeded",
@@ -313,6 +318,14 @@ func (s *Solver) startFill(
 		order: order, plannedSurplus: liquidstrategies.PlannedSurplus(plan.Routes, order.AmountOut), result: result,
 		span: trace.SpanFromContext(ctx), end: end,
 	}, nil
+}
+
+// declineFill records an order this solver will not fill as an expected skip on the fill span and
+// returns the sentinel the fill loop already treats as "retry later, not a failure". Pairing the two
+// here keeps every unfillable path named on the trace and out of the error statistics.
+func declineFill(ctx context.Context, decision, reason string) error {
+	observability.Decline(ctx, decision, reason)
+	return errOrderNotFillable
 }
 
 // decideFill runs the strategy as the uniswapx.fill.plan stage.
