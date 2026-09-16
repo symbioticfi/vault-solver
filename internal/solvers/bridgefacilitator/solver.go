@@ -5,6 +5,7 @@
 package bridgefacilitator
 
 import (
+	"cmp"
 	"context"
 	"math/big"
 	"strings"
@@ -62,6 +63,9 @@ type Solver struct {
 	targetsAuthoritative bool
 	metrics              *threeFMetrics
 	operations           threeFOperationObservers
+	// links remembers each submitted offer's span so the later redeem and the API's offer listing can
+	// point back at it (spec §12). Process-local and best effort; a miss changes nothing.
+	links *observability.SpanLinks
 }
 
 func deduplicateAdapters(adapters []common.Address) []common.Address {
@@ -119,6 +123,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		offers:     newOfferTracker(),
 		metrics:    metrics,
 		operations: operations,
+		links:      observability.NewSpanLinks(0),
 	}
 	// Seed the offer nonce sequence from the wall clock so it stays monotonic across restarts.
 	s.nonceSeq.Store(uint64(time.Now().UnixNano()))
@@ -180,46 +185,59 @@ func (s *Solver) Run(ctx context.Context) error {
 // offer cache with them, so coverage reflects our own offers and any made out of band. The poll is
 // authoritative. Best-effort: one adapter's list failure can't block the pass (its cache is left as-is).
 func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
+	ctx, end := tracer.Start(ctx, "3f.offers.reconcile")
+	// The stage fails when a listing or a field the solver acts on does; the first such error is the
+	// one the span reports, the rest are logged per offer.
+	var stageErr error
+	defer func() { end(stageErr) }()
+	log := observability.TraceLogger(ctx, s.log)
+
 	now := time.Now()
 	complete := true
 	for _, t := range targets {
 		offers, err := s.api.listOffers(ctx, t.Adapter)
 		if err != nil {
 			complete = false
-			s.log.Error(err, "reconcile offers: list offers", "adapter", t.Adapter.Hex())
+			stageErr = cmp.Or[error](stageErr, err)
+			log.Error(err, "reconcile offers: list offers", "adapter", t.Adapter.Hex())
 			continue
 		}
 		live := make(map[int64]offerState)
 		for _, o := range offers {
+			offerLog := s.listedOfferLogger(log, t.Adapter, int64(o.AuctionId))
 			status := strings.ToUpper(strings.TrimSpace(o.Status))
 			if offerStatusIgnored[status] {
+				observability.Decline(ctx, "offer_not_live", "offer status "+status)
 				continue // failed/not-accepted/cancelled offers aren't live coverage
 			}
 			if status == "" {
 				complete = false
-				s.log.Info("reconcile offers: empty status; retaining valid subset",
+				offerLog.Info("reconcile offers: empty status; retaining valid subset",
 					"adapter", t.Adapter.Hex(), "offerId", o.Id)
 			}
 			exp, perr := parseUnixTime(o.Expiration)
 			if perr != nil {
 				complete = false
-				s.log.Error(perr, "reconcile offers: malformed expiration; retaining valid subset",
+				stageErr = cmp.Or[error](stageErr, perr)
+				offerLog.Error(perr, "reconcile offers: malformed expiration; retaining valid subset",
 					"adapter", t.Adapter.Hex(), "offerId", o.Id)
 				continue
 			}
 			if !exp.After(now) {
+				observability.Decline(ctx, "offer_not_live", "offer expired")
 				continue // valid, already-expired offer
 			}
 			principal, ok := new(big.Int).SetString(o.Amount, 10)
 			if !ok || principal.Sign() < 0 {
 				complete = false
-				s.log.Info("reconcile offers: malformed amount; retaining valid subset",
+				offerLog.Info("reconcile offers: malformed amount; retaining valid subset",
 					"adapter", t.Adapter.Hex(), "offerId", o.Id)
 				principal = nil
 			}
 			if o.AuctionId <= 0 {
 				complete = false
-				s.log.Error(errRequiredFieldMissing, "reconcile offers: missing auction id; retaining valid subset",
+				stageErr = cmp.Or[error](stageErr, errRequiredFieldMissing)
+				offerLog.Error(errRequiredFieldMissing, "reconcile offers: missing auction id; retaining valid subset",
 					"adapter", t.Adapter.Hex(), "offerId", o.Id)
 				continue
 			}
@@ -243,13 +261,21 @@ type adapterOffering struct {
 // discoverAndOffer lists open auctions, snapshots adapter liquidity/exposure once, delegates offer
 // selection to the configured strategy, then signs and submits the returned execution offers.
 func (s *Solver) discoverAndOffer(ctx context.Context) {
+	ctx, end := tracer.Start(ctx, "3f.sync")
+	// The pass fails only on the two calls that abort it outright; every stage records its own error
+	// and every expected skip below is a decline.
+	var passErr error
+	defer func() { end(passErr) }()
+	log := observability.TraceLogger(ctx, s.log)
+
 	timer := observability.StartOperation(s.operations.offerRefresh)
 	observeRefresh := func(outcome observability.ExternalOperationOutcome) {
 		timer.Finish(ctx, outcome)
 	}
 	if !s.canCreateOffer() {
 		observeRefresh(observability.ExternalOperationSkipped)
-		s.log.V(1).Info("skipping offer discovery: transaction lane not ready")
+		observability.Decline(ctx, "offer_skipped", "transaction lane not ready")
+		log.V(1).Info("skipping offer discovery: transaction lane not ready")
 		return
 	}
 	if len(s.targets) == 0 {
@@ -258,17 +284,19 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 			outcome = observability.ExternalOperationDegraded
 		}
 		observeRefresh(outcome)
+		observability.Decline(ctx, "offer_skipped", "no resolved adapters")
 		s.observeTargetDerivedState(threeFStateOffers, 0, true)
 		return
 	}
 	auctions, err := s.api.listAuctions(ctx)
 	if err != nil {
+		passErr = err
 		observeRefresh(observability.ExternalOperationError)
-		s.log.Error(err, "discover: list auctions")
+		log.Error(err, "discover: list auctions")
 		return
 	}
-	auctions = s.validAuctions(auctions)
-	s.log.V(1).Info("discovered auctions", "count", len(auctions))
+	auctions = s.validAuctions(log, auctions)
+	log.V(1).Info("discovered auctions", "count", len(auctions))
 
 	// Rebuild coverage from the live API before deciding, so out-of-band offers count and we don't double-offer.
 	offersComplete := s.reconcileOffers(ctx, s.targets)
@@ -279,10 +307,10 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		st, lerr := s.reader.liquidityAndExposure(ctx, t.Adapter)
 		if lerr != nil {
 			liquidityReadsFailed++
-			s.log.Error(lerr, "offer: liquidity/exposure", "adapter", t.Adapter.Hex())
+			log.Error(lerr, "offer: liquidity/exposure", "adapter", t.Adapter.Hex())
 			continue
 		}
-		s.log.V(1).Info("adapter liquidity",
+		log.V(1).Info("adapter liquidity",
 			"adapter", t.Adapter.Hex(), "fundable", st.fundable.String(), "openRequests", st.openCount,
 			"maxAssets", st.maxAssets.String(), "minAssets", st.minAssets.String(),
 			"minYieldPpm", st.minYieldPpm.String())
@@ -300,15 +328,18 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 	}
 	observeRefresh(refreshOutcome)
 	if len(offerings) == 0 || !offersComplete {
+		observability.Decline(ctx, "offer_skipped", "incomplete adapter or offer coverage")
 		return // incomplete live commitments cannot safely authorize another offer
 	}
-	input := buildStrategyInput(auctions, offerings, s.offers, now)
+	input := s.buildOfferInput(ctx, auctions, offerings, now)
 	if len(input.Auctions) == 0 {
+		observability.Decline(ctx, "offer_skipped", "no open offerable auctions")
 		return // no open, offerable auctions this pass
 	}
-	out, err := s.strategy.DecideOffers(ctx, input)
+	out, err := s.decideOffers(ctx, input)
 	if err != nil {
-		s.log.Error(err, "offer: strategy")
+		passErr = err
+		log.Error(err, "offer: strategy")
 		return
 	}
 	// minYieldByAdapter lets the submission loop validate EVERY strategy's offers (default and webhook),
@@ -320,50 +351,121 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 
 	auctionByID := auctionViewsByID(auctions)
 	for _, offer := range out.Offers {
-		av, ok := auctionByID[offer.AuctionID]
-		if !ok {
-			s.log.Error(errors.Errorf("auction %d not found", offer.AuctionID), "offer: build")
-			continue
-		}
-		floor, known := minYieldByAdapter[offer.Maker]
-		if !known {
-			s.log.Error(errors.Errorf("offer for adapter %s absent from this pass's snapshot", offer.Maker.Hex()),
-				"offer: unknown maker; skipping", "auctionId", offer.AuctionID)
-			continue
-		}
-		maxRate, rateOk := av.maxRateBps()
-		if !rateOk {
-			s.log.Error(errors.Errorf("auction %d has no resolved maxRate", offer.AuctionID),
-				"offer: unbiddable auction; skipping", "adapter", offer.Maker.Hex())
-			continue
-		}
-		// Backstop for all strategies: the offer must clear the on-chain floor and stay under the auction
-		// max rate, or it reverts (FAILED) / is rejected (NOT_ACCEPTED). Also guards nil/invalid amounts.
-		if err := types.ValidateYield(offer.ExpectedReturn, offer.Principal, floor, maxRate); err != nil {
-			s.log.Error(err, "offer: yield out of bounds; skipping",
-				"auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
-			continue
-		}
-		dto, buildErr := s.buildSignedOffer(av, offer)
-		if buildErr != nil {
-			s.log.Error(buildErr, "offer: build", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
-			continue
-		}
-		submitted, subErr := s.submitOfferIfLaneReady(ctx, dto)
-		if !submitted {
-			s.log.V(1).Info("stopping offer submission: transaction lane no longer ready")
+		if stop := s.offerOnAuction(ctx, offer, auctionByID, minYieldByAdapter); stop {
+			log.V(1).Info("stopping offer submission: transaction lane no longer ready")
 			return
 		}
-		if subErr != nil {
-			s.observeOfferSubmission("error")
-			s.log.Error(subErr, "offer: submit", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
-			continue
-		}
-		s.observeSubmittedOffer(common.HexToAddress(av.depositAsset()), offer.Principal, offer.ExpectedReturn)
-		// No local record: the next reconcile re-lists this offer from the API (the poll is authoritative).
-		s.log.Info("offer submitted", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex(),
-			"request", offer.Request.Hex(), "principal", offer.Principal.String(), "expectedReturn", dto.ExpectedReturn)
 	}
+}
+
+// buildOfferInput is the auction-view stage: it converts this pass's auctions and adapter snapshots
+// into the strategy request. 3F lists every auction in one response, so the views are built for the
+// whole batch under a single span rather than one per auction.
+func (s *Solver) buildOfferInput(
+	ctx context.Context, auctions []threef.AuctionDto, offerings []*adapterOffering, now time.Time,
+) types.OfferInput {
+	ctx, end := tracer.Start(ctx, "3f.auction.view")
+	defer end(nil) // a pure conversion; auctions it drops are declines, not failures
+
+	input := buildStrategyInput(auctions, offerings, s.offers, now)
+	if len(input.Auctions) < len(auctions) {
+		observability.Decline(ctx, "auction_skipped",
+			"auctions closed, already covered, or missing a field the offer needs")
+	}
+	return input
+}
+
+// decideOffers is the strategy stage. 3F decides for every auction in one call, so this span is a
+// sibling of the per-auction spans rather than a child of one.
+func (s *Solver) decideOffers(ctx context.Context, input types.OfferInput) (out types.OfferOutput, err error) {
+	ctx, end := tracer.Start(ctx, "3f.offer.decide", observability.AttrStrategy.String(s.strategyName()))
+	defer func() { end(err) }()
+
+	out, err = s.strategy.DecideOffers(ctx, input)
+	if err == nil && len(out.Offers) == 0 {
+		observability.Decline(ctx, "offer_declined", "strategy returned no offers")
+	}
+	return out, err
+}
+
+// offerOnAuction validates, signs and submits one strategy offer under its own auction span. A true
+// result means the transaction lane went busy mid-pass, so the rest of the plan is stale.
+func (s *Solver) offerOnAuction(
+	ctx context.Context,
+	offer types.OfferExecution,
+	auctionByID map[int64]auctionView,
+	minYieldByAdapter map[common.Address]*big.Int,
+) (stop bool) {
+	var err error
+	ctx, end := tracer.Start(ctx, "3f.auction",
+		observability.AttrAuctionID.Int64(offer.AuctionID),
+		observability.AttrAdapter.String(offer.Maker.Hex()),
+		observability.AttrRequestAddress.String(offer.Request.Hex()),
+	)
+	defer func() { end(err) }()
+	log := observability.TraceLogger(ctx, s.log)
+
+	av, ok := auctionByID[offer.AuctionID]
+	if !ok {
+		err = errors.Errorf("auction %d not found", offer.AuctionID)
+		log.Error(err, "offer: build")
+		return false
+	}
+	floor, known := minYieldByAdapter[offer.Maker]
+	if !known {
+		err = errors.Errorf("offer for adapter %s absent from this pass's snapshot", offer.Maker.Hex())
+		log.Error(err, "offer: unknown maker; skipping", "auctionId", offer.AuctionID)
+		return false
+	}
+	maxRate, rateOk := av.maxRateBps()
+	if !rateOk {
+		err = errors.Errorf("auction %d has no resolved maxRate", offer.AuctionID)
+		log.Error(err, "offer: unbiddable auction; skipping", "adapter", offer.Maker.Hex())
+		return false
+	}
+	// Backstop for all strategies: the offer must clear the on-chain floor and stay under the auction
+	// max rate, or it reverts (FAILED) / is rejected (NOT_ACCEPTED). Also guards nil/invalid amounts.
+	if err = types.ValidateYield(offer.ExpectedReturn, offer.Principal, floor, maxRate); err != nil {
+		log.Error(err, "offer: yield out of bounds; skipping",
+			"auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
+		return false
+	}
+	dto, err := s.buildSignedOffer(ctx, av, offer)
+	if err != nil {
+		log.Error(err, "offer: build", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
+		return false
+	}
+	submitted, err := s.submitOfferIfLaneReady(ctx, dto)
+	if !submitted {
+		err = nil // an expected skip, declined on the submit stage
+		return true
+	}
+	if err != nil {
+		s.observeOfferSubmission("error")
+		log.Error(err, "offer: submit", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
+		return false
+	}
+	s.rememberOffer(ctx, offer, dto)
+	s.observeSubmittedOffer(common.HexToAddress(av.depositAsset()), offer.Principal, offer.ExpectedReturn)
+	// No local record: the next reconcile re-lists this offer from the API (the poll is authoritative).
+	log.Info("offer submitted", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex(),
+		"request", offer.Request.Hex(), "principal", offer.Principal.String(), "expectedReturn", dto.ExpectedReturn)
+	return false
+}
+
+// rememberOffer keeps this auction's span reachable from the two places the offer resurfaces: the
+// on-chain settlement, which only knows Request addresses, and the API's offer listing, which only
+// knows (adapter, auction). Both keys expire with the offer plus slack (spec §12).
+func (s *Solver) rememberOffer(ctx context.Context, offer types.OfferExecution, dto threef.CreateOfferDto) {
+	if s.links == nil {
+		return
+	}
+	ttl := offerLinkTTLSlack
+	if expiration, err := parseUnixTime(dto.Expiration); err == nil {
+		ttl = time.Until(expiration) + offerLinkTTLSlack
+	}
+	s.links.Remember(ctx, requestLinkKey(offer.Request), ttl)
+	s.links.Remember(ctx, auctionLinkKey(offer.Maker, offer.AuctionID), ttl)
 }
 
 // canCreateOffer fails closed when construction omitted the shared lane dependency. The registered
@@ -376,8 +478,14 @@ func (s *Solver) canCreateOffer() bool {
 // submitOfferIfLaneReady performs the final lane-state check immediately before the external API
 // call. Discovery and strategy work can span RPC/HTTP calls, so the lane may become busy after the pass's
 // entry check. A false submitted result tells the caller to abandon the remaining stale plan.
-func (s *Solver) submitOfferIfLaneReady(ctx context.Context, dto threef.CreateOfferDto) (bool, error) {
+func (s *Solver) submitOfferIfLaneReady(
+	ctx context.Context, dto threef.CreateOfferDto,
+) (submitted bool, err error) {
+	ctx, end := tracer.Start(ctx, "3f.offer.submit")
+	defer func() { end(err) }()
+
 	if !s.canCreateOffer() {
+		observability.Decline(ctx, "offer_skipped", "transaction lane no longer ready")
 		return false, nil
 	}
 	return true, s.api.createOffer(ctx, dto)
@@ -525,7 +633,7 @@ func (s *Solver) installTargets(targets []Target) {
 
 // validAuctions drops auctions missing a field the solver acts on. The generated client tolerates a
 // dropped field by zero-valuing it, so this is where such a schema change becomes visible.
-func (s *Solver) validAuctions(auctions []threef.AuctionDto) []threef.AuctionDto {
+func (s *Solver) validAuctions(log logr.Logger, auctions []threef.AuctionDto) []threef.AuctionDto {
 	kept := make([]threef.AuctionDto, 0, len(auctions))
 	for _, a := range auctions {
 		var missing string
@@ -540,7 +648,7 @@ func (s *Solver) validAuctions(auctions []threef.AuctionDto) []threef.AuctionDto
 			kept = append(kept, a)
 			continue
 		}
-		s.log.Error(errRequiredFieldMissing, "discover: skipping auction",
+		log.Error(errRequiredFieldMissing, "discover: skipping auction",
 			"field", missing, "auctionId", a.Id, "requestId", a.RequestId, "status", a.Status)
 	}
 	return kept

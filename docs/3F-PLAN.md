@@ -284,6 +284,19 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
    signs the returned execution offer, submits `createOffer`, and records the live-offer cache only
    after a successful submit. Strategy output cannot set nonce or signature.
 
+**Tracing.** Each discovery pass roots a `3f.sync` span holding `3f.offers.reconcile` (the API offer
+listing), `3f.auction.view` (the strategy-input build) and `3f.offer.decide` (the strategy call,
+tagged `strategy.name`). Because 3F lists every auction in one response and decides for all of them in
+one call, those two stages are siblings of the per-auction spans rather than children of one. Every
+offer the strategy returns then gets its own `3f.auction` span — carrying `auction.id`,
+`adapter.address` and `request.address` — with `3f.offer.build` (signing) and `3f.offer.submit`
+(`createOffer`) beneath it. Redemption roots `3f.redeem` with `3f.redeem.read` per adapter scan and
+`3f.redeem.submit` around the batched finalize transaction. Because the 3F API discards the created
+offer id, a submitted offer's span is remembered under two process-local keys so later work can link
+back to it: `req:<request address>`, which the on-chain settlement path resolves, and
+`auction:<adapter>:<auction id>`, which the API's offer listing resolves to stamp `quoteTraceId` on
+its log lines. Both expire at the offer's expiration plus an hour; a miss is inert.
+
 ---
 
 ## 7. Make-driven codegen

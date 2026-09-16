@@ -1,6 +1,7 @@
 package bridgefacilitator
 
 import (
+	"context"
 	"math/big"
 	"time"
 
@@ -15,8 +16,11 @@ import (
 // buildSignedOffer signs a trusted strategy execution offer. Strategy owns pricing and sizing; solver
 // only supplies the auction EIP-712 domain and signature.
 func (s *Solver) buildSignedOffer(
-	av auctionView, offer types.OfferExecution,
-) (threef.CreateOfferDto, error) {
+	ctx context.Context, av auctionView, offer types.OfferExecution,
+) (dto threef.CreateOfferDto, err error) {
+	_, end := tracer.Start(ctx, "3f.offer.build")
+	defer func() { end(err) }()
+
 	auction := av.dto
 	if offer.Principal == nil || offer.ExpectedReturn == nil {
 		return threef.CreateOfferDto{}, errors.Errorf("auction %v: strategy offer is missing amounts", auction.Id)
@@ -54,12 +58,12 @@ func (s *Solver) buildSignedOffer(
 		UseCallback:    true,
 	}
 	digest := OfferDigest(signedOffer, *domainName, domainVersion, chainID, offer.Request)
-	sig, err := s.deps.Signer.SignHash(digest)
-	if err != nil {
-		return threef.CreateOfferDto{}, errors.Errorf("sign offer: %w", err)
+	sig, signErr := s.deps.Signer.SignHash(digest)
+	if signErr != nil {
+		return threef.CreateOfferDto{}, errors.Errorf("sign offer: %w", signErr)
 	}
 
-	dto := threef.NewCreateOfferDto(
+	created := threef.NewCreateOfferDto(
 		auction.Id,
 		lowerAddr(offer.Maker), // API rejects checksummed addresses (confirmed live)
 		offer.Principal.String(),
@@ -68,9 +72,9 @@ func (s *Solver) buildSignedOffer(
 		expiration.String(),
 		true, // useCallback
 	)
-	dto.SetChainId(float32(chainID.Int64()))
-	dto.SetSignature(hexutil.Encode(sig))
-	return *dto, nil
+	created.SetChainId(float32(chainID.Int64()))
+	created.SetSignature(hexutil.Encode(sig))
+	return *created, nil
 }
 
 // offerExpiration anchors a signed offer's expiration to the auction's solve_start_time plus buffer.
