@@ -17,6 +17,7 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
@@ -211,6 +212,7 @@ func NewClient(cfg Config) (*Client, error) {
 			// URL, and Go forwards custom (secret-bearing) headers on same-host redirects. A redirect to
 			// an internal address would defeat both. Surface the 3xx to the caller instead (SSRF guard).
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+			Transport:     observability.TraceTransport(nil, "webhook"),
 		},
 		maxRequestBytes:  cfg.MaxRequestBytes,
 		maxResponseBytes: cfg.MaxResponseBytes,

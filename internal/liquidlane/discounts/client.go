@@ -10,6 +10,7 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/rfqbackendinternal"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 const defaultTimeout = 10 * time.Second
@@ -65,7 +66,10 @@ type Client struct {
 }
 
 func NewClient(baseURL string) *Client {
-	return NewClientWithHTTPClient(baseURL, &http.Client{Timeout: defaultTimeout})
+	return NewClientWithHTTPClient(baseURL, &http.Client{
+		Timeout:   defaultTimeout,
+		Transport: observability.TraceTransport(nil, "rfq-discounts"),
+	})
 }
 
 // NewClientWithHTTPClient permits callers to attach their existing request correlation transport.

@@ -13,6 +13,7 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/lifiorder"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 )
 
@@ -32,7 +33,7 @@ type orderClient struct {
 func newOrderClient(baseURL, apiKey string, timeout time.Duration, chainID int64) *orderClient {
 	cfg := lifiorder.NewConfiguration()
 	cfg.Servers = lifiorder.ServerConfigurations{{URL: strings.TrimRight(baseURL, "/")}}
-	cfg.HTTPClient = &http.Client{Timeout: timeout}
+	cfg.HTTPClient = &http.Client{Timeout: timeout, Transport: observability.TraceTransport(nil, "lifi-order-server")}
 	return &orderClient{api: lifiorder.NewAPIClient(cfg), apiKey: apiKey, chain: strconv.FormatInt(chainID, 10)}
 }
 
