@@ -20,7 +20,7 @@
     }
   ],
   "cursorSync": "Crosshair",
-  "description": "Completed operations, outstanding commitments, reasons work does not execute, and transaction costs for the selected environment. Counts are observed operations during the selected period, including retries and separate service observations; stages are not a cohort conversion. Missing telemetry remains unknown. Fees are costs, not profit.",
+  "description": "Execution totals, token amounts, time trends, transaction costs and operational diagnostics for the selected environment. Counter observations include retries; they are not globally deduplicated order accounting. Period increases may miss the first exported nonzero sample. Missing data stays unknown.",
   "editable": true,
   "elements": {
     "panel-10": {
@@ -192,7 +192,7 @@
       "spec": {
         "id": 11,
         "title": "Quote latency · selected period",
-        "description": "Combined histogram observations during the selected period. An idle short window does not erase earlier samples in this period. No latency samples means no percentile is available. Initial unobserved counter values cannot be recovered.",
+        "description": "Combined histogram observations during the selected period. An idle short window does not erase earlier samples in this period. No latency samples means no percentile is available. Initial unobserved counter values cannot be recovered. Dashboard warning thresholds are operational defaults; adjust panel thresholds to the deployment SLA.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -365,6 +365,81 @@
                           }
                         }
                       ]
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "p50"},
+                  "properties": [
+                    {"id": "unit", "value": "s"},
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 0.5, "color": "yellow"},
+                          {"value": 1, "color": "red"}
+                        ]
+                      }
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "p95"},
+                  "properties": [
+                    {"id": "unit", "value": "s"},
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 0.5, "color": "yellow"},
+                          {"value": 1, "color": "red"}
+                        ]
+                      }
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "p99"},
+                  "properties": [
+                    {"id": "unit", "value": "s"},
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 0.5, "color": "yellow"},
+                          {"value": 1, "color": "red"}
+                        ]
+                      }
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
                     }
                   ]
                 }
@@ -1510,11 +1585,18 @@
           "spec": {
             "fieldConfig": {
               "defaults": {
-                "color": {"fixedColor": "blue", "mode": "fixed"},
+                "color": {"mode": "thresholds"},
                 "decimals": 0,
                 "mappings": [],
                 "noValue": "No data",
-                "unit": "none"
+                "unit": "none",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"},
+                    {"value": 1, "color": "red"}
+                  ]
+                }
               },
               "overrides": []
             },
@@ -1699,7 +1781,7 @@
             ]
           }
         },
-        "description": "Age of the oldest active order across the environment; zero means the reported queues are empty.",
+        "description": "Age of the oldest active order across the environment; zero means the reported queues are empty. Age warnings use 1 / 5 minutes for freshness and 1 / 24 hours for activity unless otherwise configured.",
         "id": 83,
         "links": [],
         "title": "Oldest active order · age",
@@ -1725,6 +1807,31 @@
                   "properties": [
                     {"id": "unit", "value": "s"},
                     {"id": "decimals", "value": 0}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Age"},
+                  "properties": [
+                    {"id": "unit", "value": "s"},
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 60, "color": "yellow"},
+                          {"value": 300, "color": "red"}
+                        ]
+                      }
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
+                    }
                   ]
                 }
               ]
@@ -1859,103 +1966,12 @@
         "transparent": true
       }
     },
-    "panel-100": {
-      "kind": "Panel",
-      "spec": {
-        "id": 100,
-        "title": "Metrics availability",
-        "description": "Current exporter membership for this integration and environment. Zero means no compatible metrics source is reporting here; it does not mean zero business activity. Check the selected environment and Runtime exporter coverage.",
-        "links": [],
-        "data": {
-          "kind": "QueryGroup",
-          "spec": {
-            "queries": [
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "A",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "count(solver_bot_solver_info{namespace=\"${namespace}\",solver=\"rfq-filler\"}) or vector(0)",
-                      "instant": true,
-                      "range": false,
-                      "legendFormat": "",
-                      "format": "table"
-                    }
-                  }
-                }
-              }
-            ],
-            "transformations": [],
-            "queryOptions": {}
-          }
-        },
-        "vizConfig": {
-          "kind": "VizConfig",
-          "group": "stat",
-          "version": "",
-          "spec": {
-            "options": {
-              "reduceOptions": {
-                "values": false,
-                "calcs": ["lastNotNull"],
-                "fields": ""
-              },
-              "orientation": "auto",
-              "textMode": "value",
-              "colorMode": "value",
-              "graphMode": "none",
-              "justifyMode": "auto"
-            },
-            "fieldConfig": {
-              "defaults": {
-                "unit": "none",
-                "decimals": 0,
-                "noValue": "Source unavailable",
-                "mappings": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "0": {"text": "No metrics source", "color": "red"}
-                    }
-                  },
-                  {
-                    "type": "range",
-                    "options": {
-                      "from": 1,
-                      "to": 1000000000.0,
-                      "result": {"text": "Metrics received", "color": "green"}
-                    }
-                  }
-                ],
-                "thresholds": {
-                  "mode": "absolute",
-                  "steps": [
-                    {"value": 0, "color": "red"},
-                    {"value": 1, "color": "green"}
-                  ]
-                },
-                "color": {"mode": "thresholds"}
-              },
-              "overrides": []
-            }
-          }
-        },
-        "transparent": true
-      }
-    },
     "panel-102": {
       "kind": "Panel",
       "spec": {
         "id": 102,
         "title": "Since last successful fill",
-        "description": "Time since the latest successful operation whose timestamp is visible in the selected period. An initialized zero timestamp means no success has been observed; an absent series remains unavailable.",
+        "description": "Time since the latest successful operation whose timestamp is visible in the selected period. An initialized zero timestamp means no success has been observed; an absent series remains unavailable. Yellow after 1 hour and red after 24 hours without success; this activity warning can also reflect lack of demand.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2009,7 +2025,7 @@
                 "unit": "s",
                 "decimals": 1,
                 "noValue": "Unavailable",
-                "color": {"mode": "fixed", "fixedColor": "blue"},
+                "color": {"mode": "thresholds"},
                 "mappings": [
                   {
                     "type": "value",
@@ -2017,13 +2033,633 @@
                       "-1": {"text": "No success observed", "color": "gray"}
                     }
                   }
-                ]
+                ],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"},
+                    {"value": 3600, "color": "yellow"},
+                    {"value": 86400, "color": "red"}
+                  ]
+                }
               },
               "overrides": []
             }
           }
         },
         "transparent": true
+      }
+    },
+    "panel-19": {
+      "kind": "Panel",
+      "spec": {
+        "id": 19,
+        "title": "Successful fill amounts · counter observations",
+        "description": "Observed counter increases during the selected period, separated by token and amount kind. Values are atomic token units; token decimals and prices are not exported with this metric. Do not sum different tokens or interpret planned surplus / expected yield as realized profit. First nonzero samples can be absent from increases. Retained counter peaks include the first observed nonzero value, but can include activity before the selected period and must not be treated as period volume.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "label_replace(sum by(asset,kind)(increase(solver_bot_workflow_amount_atomic_units_total{namespace=\"${namespace}\",solver=\"rfq-filler\",event=\"fill\"}[$__range])), \"token\", \"token: $1\", \"asset\", \"(.*)\")",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "label_replace(sum by(asset,kind)(max_over_time(solver_bot_workflow_amount_atomic_units_total{namespace=\"${namespace}\",solver=\"rfq-filler\",event=\"fill\"}[$__range])), \"token\", \"token: $1\", \"asset\", \"(.*)\")",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "merge",
+                "spec": {
+                  "options": {}
+                }
+              },
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true, "asset": true},
+                    "renameByName": {"token": "Token", "kind": "Amount kind", "Value #A": "Period increase", "Value #B": "Retained counter peaks"},
+                    "indexByName": {}
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": false},
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "Period increase"},
+                  "properties": [
+                    {"id": "unit", "value": "suffix: atomic units"},
+                    {"id": "decimals", "value": 0}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Retained counter peaks"},
+                  "properties": [
+                    {"id": "unit", "value": "suffix: atomic units"},
+                    {"id": "decimals", "value": 0}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Amount kind"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "input": {"text": "Input"},
+                            "output": {"text": "Output"},
+                            "planned_surplus": {"text": "Planned surplus (not PnL)"},
+                            "principal": {"text": "Offered principal"},
+                            "expected_yield": {"text": "Expected yield (not realized)"}
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-14": {
+      "kind": "Panel",
+      "spec": {
+        "id": 14,
+        "title": "Quoted amounts · selected period",
+        "description": "Observed counter increases during the selected period, separated by token and amount kind. Values are atomic token units; token decimals and prices are not exported with this metric. Do not sum different tokens or interpret planned surplus / expected yield as realized profit. First nonzero samples can be absent from increases. Repeated quotes can refer to the same liquidity; this is not executed volume. Retained counter peaks include the first observed nonzero value, but can include activity before the selected period and must not be treated as period volume.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "label_replace(sum by(asset,kind)(increase(solver_bot_workflow_amount_atomic_units_total{namespace=\"${namespace}\",solver=\"rfq-filler\",event=\"quote\"}[$__range])), \"token\", \"token: $1\", \"asset\", \"(.*)\")",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "label_replace(sum by(asset,kind)(max_over_time(solver_bot_workflow_amount_atomic_units_total{namespace=\"${namespace}\",solver=\"rfq-filler\",event=\"quote\"}[$__range])), \"token\", \"token: $1\", \"asset\", \"(.*)\")",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "merge",
+                "spec": {
+                  "options": {}
+                }
+              },
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true, "asset": true},
+                    "renameByName": {"token": "Token", "kind": "Amount kind", "Value #A": "Period increase", "Value #B": "Retained counter peaks"},
+                    "indexByName": {}
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": false},
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "Period increase"},
+                  "properties": [
+                    {"id": "unit", "value": "suffix: atomic units"},
+                    {"id": "decimals", "value": 0}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Retained counter peaks"},
+                  "properties": [
+                    {"id": "unit", "value": "suffix: atomic units"},
+                    {"id": "decimals", "value": 0}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Amount kind"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "input": {"text": "Input"},
+                            "output": {"text": "Output"},
+                            "planned_surplus": {"text": "Planned surplus (not PnL)"},
+                            "principal": {"text": "Offered principal"},
+                            "expected_yield": {"text": "Expected yield (not realized)"}
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-200": {
+      "kind": "Panel",
+      "spec": {
+        "id": 200,
+        "title": "Fill outcomes over time",
+        "description": "Observed successful / failed / rejected fill attempts per second. Retries count again. Rate preserves counter resets and idle windows.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(outcome)(rate(solver_bot_workflow_events_total{namespace=\"${namespace}\",solver=\"rfq-filler\",event=\"fill\"}[$__rate_interval]))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{outcome}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ops",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 3
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-201": {
+      "kind": "Panel",
+      "spec": {
+        "id": 201,
+        "title": "Quote decisions over time",
+        "description": "Decision observations per second, grouped by the recorded outcome. This shows when the decision mix changes.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(outcome)(rate(solver_bot_workflow_events_total{namespace=\"${namespace}\",solver=\"rfq-filler\",event=\"quote\",outcome!=\"breaker-notification\"}[$__rate_interval]))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{outcome}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ops",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 3
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-202": {
+      "kind": "Panel",
+      "spec": {
+        "id": 202,
+        "title": "Transaction outcomes over time",
+        "description": "Terminal logical transaction outcomes per second. Failed submissions without receipts do not contribute receipt fees.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(outcome)(rate(solver_bot_txmanager_requests_total{namespace=\"${namespace}\",label=\"rfq-fill\"}[$__rate_interval]))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{outcome}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ops",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 3
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-203": {
+      "kind": "Panel",
+      "spec": {
+        "id": 203,
+        "title": "Transaction fee rate",
+        "description": "Observed receipt fee increases in ETH per second, grouped by transaction outcome. Missing receipt prices or an absent initial scrape can undercount fees.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(outcome)(rate(solver_bot_txmanager_fee_paid_wei_total{namespace=\"${namespace}\",label=\"rfq-fill\"}[$__rate_interval])) / 1e18",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{outcome}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "suffix: ETH/s",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 12
+              },
+              "overrides": []
+            }
+          }
+        }
       }
     }
   },
@@ -2078,6 +2714,64 @@
                       "width": 6,
                       "height": 4,
                       "element": {"kind": "ElementReference", "name": "panel-102"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Executed token amounts",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 24,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-19"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Activity over time",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-200"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-201"}
                     }
                   }
                 ]
@@ -2159,7 +2853,7 @@
                       "y": 0,
                       "width": 24,
                       "height": 6,
-                      "element": {"kind": "ElementReference", "name": "panel-86"}
+                      "element": {"kind": "ElementReference", "name": "panel-20"}
                     }
                   }
                 ]
@@ -2249,17 +2943,7 @@
                     "spec": {
                       "x": 0,
                       "y": 0,
-                      "width": 8,
-                      "height": 7,
-                      "element": {"kind": "ElementReference", "name": "panel-100"}
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 8,
-                      "y": 0,
-                      "width": 8,
+                      "width": 12,
                       "height": 7,
                       "element": {"kind": "ElementReference", "name": "panel-2"}
                     }
@@ -2267,9 +2951,9 @@
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
-                      "x": 16,
+                      "x": 12,
                       "y": 0,
-                      "width": 8,
+                      "width": 12,
                       "height": 7,
                       "element": {"kind": "ElementReference", "name": "panel-80"}
                     }
@@ -2326,7 +3010,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Cost sampling diagnostics",
+            "title": "Cumulative counters and sampling limits",
             "collapse": true,
             "layout": {
               "kind": "GridLayout",
@@ -2339,7 +3023,65 @@
                       "y": 0,
                       "width": 24,
                       "height": 6,
-                      "element": {"kind": "ElementReference", "name": "panel-20"}
+                      "element": {"kind": "ElementReference", "name": "panel-86"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Quote amount diagnostics",
+            "collapse": true,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 24,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-14"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Transaction outcomes and fees over time",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-202"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-203"}
                     }
                   }
                 ]

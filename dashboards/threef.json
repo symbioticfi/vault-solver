@@ -20,7 +20,7 @@
     }
   ],
   "cursorSync": "Crosshair",
-  "description": "Completed operations, outstanding commitments, reasons work does not execute, and transaction costs for the selected environment. Counts are observed operations during the selected period, including retries and separate service observations; stages are not a cohort conversion. Missing telemetry remains unknown. Fees are costs, not profit.",
+  "description": "Execution totals, token amounts, time trends, transaction costs and operational diagnostics for the selected environment. Counter observations include retries; they are not globally deduplicated order accounting. Period increases may miss the first exported nonzero sample. Missing data stays unknown.",
   "editable": true,
   "elements": {
     "panel-10": {
@@ -28,7 +28,7 @@
       "spec": {
         "id": 10,
         "title": "Oldest source observation age",
-        "description": "Oldest observed source state by view. Sources with no completed observation are counted separately, so they do not erase the age of existing observations.",
+        "description": "Oldest observed source state by view. Sources with no completed observation are counted separately, so they do not erase the age of existing observations. Age warnings use 1 / 5 minutes for freshness and 1 / 24 hours for activity unless otherwise configured.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -598,6 +598,31 @@
                       ]
                     }
                   ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Age"},
+                  "properties": [
+                    {"id": "unit", "value": "s"},
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 60, "color": "yellow"},
+                          {"value": 300, "color": "red"}
+                        ]
+                      }
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
+                    }
+                  ]
                 }
               ]
             }
@@ -611,7 +636,7 @@
       "spec": {
         "id": 11,
         "title": "Activity and backlog ages",
-        "description": "Comparable process-local ages; zero means no continuous backlog or activity observed. Values aggregate all matching services.",
+        "description": "Comparable process-local ages; zero means no continuous backlog or activity observed. Values aggregate all matching services. Age warnings use 1 / 5 minutes for freshness and 1 / 24 hours for activity unless otherwise configured.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -790,6 +815,81 @@
                           "type": "value"
                         }
                       ]
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Redeem backlog"},
+                  "properties": [
+                    {"id": "unit", "value": "s"},
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 60, "color": "yellow"},
+                          {"value": 300, "color": "red"}
+                        ]
+                      }
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Active backlog"},
+                  "properties": [
+                    {"id": "unit", "value": "s"},
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 60, "color": "yellow"},
+                          {"value": 300, "color": "red"}
+                        ]
+                      }
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Last redeem"},
+                  "properties": [
+                    {"id": "unit", "value": "s"},
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 3600, "color": "yellow"},
+                          {"value": 86400, "color": "red"}
+                        ]
+                      }
                     },
                     {
                       "id": "custom.cellOptions",
@@ -1381,7 +1481,7 @@
       "spec": {
         "id": 15,
         "title": "Source operation p95 · selected period",
-        "description": "Combined histogram observations during the selected period. An idle short window does not erase earlier samples in this period. No latency samples means no percentile is available. Initial unobserved counter values cannot be recovered.",
+        "description": "Combined histogram observations during the selected period. An idle short window does not erase earlier samples in this period. No latency samples means no percentile is available. Initial unobserved counter values cannot be recovered. Dashboard warning thresholds are operational defaults; adjust panel thresholds to the deployment SLA.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1483,6 +1583,31 @@
                           }
                         }
                       ]
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "p95"},
+                  "properties": [
+                    {"id": "unit", "value": "s"},
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 120, "color": "yellow"},
+                          {"value": 600, "color": "red"}
+                        ]
+                      }
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
                     }
                   ]
                 }
@@ -2278,19 +2403,22 @@
                 "thresholds": {
                   "mode": "absolute",
                   "steps": [
-                    {"value": 0, "color": "blue"}
+                    {"value": 0, "color": "green"},
+                    {"value": 3600, "color": "yellow"},
+                    {"value": 86400, "color": "red"}
                   ]
                 },
                 "color": {"mode": "thresholds"},
                 "displayName": "Last offer age",
-                "noValue": "No data"
+                "noValue": "No data",
+                "decimals": 1
               },
               "overrides": []
             }
           }
         },
         "transparent": true,
-        "description": "Current value at the end of the selected time range."
+        "description": "Current value at the end of the selected time range. Yellow after 1 hour and red after 24 hours without success; this activity warning can also reflect lack of demand."
       }
     },
     "panel-9": {
@@ -3643,97 +3771,6 @@
         "transparent": true
       }
     },
-    "panel-100": {
-      "kind": "Panel",
-      "spec": {
-        "id": 100,
-        "title": "Metrics availability",
-        "description": "Current exporter membership for this integration and environment. Zero means no compatible metrics source is reporting here; it does not mean zero business activity. Check the selected environment and Runtime exporter coverage.",
-        "links": [],
-        "data": {
-          "kind": "QueryGroup",
-          "spec": {
-            "queries": [
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "A",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "count(solver_bot_solver_info{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\"}) or vector(0)",
-                      "instant": true,
-                      "range": false,
-                      "legendFormat": "",
-                      "format": "table"
-                    }
-                  }
-                }
-              }
-            ],
-            "transformations": [],
-            "queryOptions": {}
-          }
-        },
-        "vizConfig": {
-          "kind": "VizConfig",
-          "group": "stat",
-          "version": "",
-          "spec": {
-            "options": {
-              "reduceOptions": {
-                "values": false,
-                "calcs": ["lastNotNull"],
-                "fields": ""
-              },
-              "orientation": "auto",
-              "textMode": "value",
-              "colorMode": "value",
-              "graphMode": "none",
-              "justifyMode": "auto"
-            },
-            "fieldConfig": {
-              "defaults": {
-                "unit": "none",
-                "decimals": 0,
-                "noValue": "Source unavailable",
-                "mappings": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "0": {"text": "No metrics source", "color": "red"}
-                    }
-                  },
-                  {
-                    "type": "range",
-                    "options": {
-                      "from": 1,
-                      "to": 1000000000.0,
-                      "result": {"text": "Metrics received", "color": "green"}
-                    }
-                  }
-                ],
-                "thresholds": {
-                  "mode": "absolute",
-                  "steps": [
-                    {"value": 0, "color": "red"},
-                    {"value": 1, "color": "green"}
-                  ]
-                },
-                "color": {"mode": "thresholds"}
-              },
-              "overrides": []
-            }
-          }
-        },
-        "transparent": true
-      }
-    },
     "panel-101": {
       "kind": "Panel",
       "spec": {
@@ -3810,7 +3847,7 @@
       "spec": {
         "id": 102,
         "title": "Since last successful redemption",
-        "description": "Time since the latest successful operation whose timestamp is visible in the selected period. An initialized zero timestamp means no success has been observed; an absent series remains unavailable.",
+        "description": "Time since the latest successful operation whose timestamp is visible in the selected period. An initialized zero timestamp means no success has been observed; an absent series remains unavailable. Yellow after 1 hour and red after 24 hours without success; this activity warning can also reflect lack of demand.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -3864,7 +3901,7 @@
                 "unit": "s",
                 "decimals": 1,
                 "noValue": "Unavailable",
-                "color": {"mode": "fixed", "fixedColor": "blue"},
+                "color": {"mode": "thresholds"},
                 "mappings": [
                   {
                     "type": "value",
@@ -3872,13 +3909,497 @@
                       "-1": {"text": "No success observed", "color": "gray"}
                     }
                   }
-                ]
+                ],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"},
+                    {"value": 3600, "color": "yellow"},
+                    {"value": 86400, "color": "red"}
+                  ]
+                }
               },
               "overrides": []
             }
           }
         },
         "transparent": true
+      }
+    },
+    "panel-14": {
+      "kind": "Panel",
+      "spec": {
+        "id": 14,
+        "title": "Submitted offer amounts · selected period",
+        "description": "Observed counter increases during the selected period, separated by token and amount kind. Values are atomic token units; token decimals and prices are not exported with this metric. Do not sum different tokens or interpret planned surplus / expected yield as realized profit. First nonzero samples can be absent from increases. These are submitted offers, not confirmed loans. Retained counter peaks include the first observed nonzero value, but can include activity before the selected period and must not be treated as period volume.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "label_replace(sum by(asset,kind)(increase(solver_bot_workflow_amount_atomic_units_total{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",event=\"offer\"}[$__range])), \"token\", \"token: $1\", \"asset\", \"(.*)\")",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "label_replace(sum by(asset,kind)(max_over_time(solver_bot_workflow_amount_atomic_units_total{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",event=\"offer\"}[$__range])), \"token\", \"token: $1\", \"asset\", \"(.*)\")",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "merge",
+                "spec": {
+                  "options": {}
+                }
+              },
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true, "asset": true},
+                    "renameByName": {"token": "Token", "kind": "Amount kind", "Value #A": "Period increase", "Value #B": "Retained counter peaks"},
+                    "indexByName": {}
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": false},
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "Period increase"},
+                  "properties": [
+                    {"id": "unit", "value": "suffix: atomic units"},
+                    {"id": "decimals", "value": 0}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Retained counter peaks"},
+                  "properties": [
+                    {"id": "unit", "value": "suffix: atomic units"},
+                    {"id": "decimals", "value": 0}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Amount kind"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "input": {"text": "Input"},
+                            "output": {"text": "Output"},
+                            "planned_surplus": {"text": "Planned surplus (not PnL)"},
+                            "principal": {"text": "Offered principal"},
+                            "expected_yield": {"text": "Expected yield (not realized)"}
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-200": {
+      "kind": "Panel",
+      "spec": {
+        "id": 200,
+        "title": "Redemptions over time",
+        "description": "Redeemed request observations per second; one transaction can redeem several requests.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum(rate(solver_bot_workflow_events_total{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",event=\"redeem\",outcome=\"success\"}[$__rate_interval]))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "Redeemed requests"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ops",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 3
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-201": {
+      "kind": "Panel",
+      "spec": {
+        "id": 201,
+        "title": "Offer submission outcomes over time",
+        "description": "Offer API submissions per second; successful submission does not prove a loan was taken.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(outcome)(rate(solver_bot_workflow_events_total{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\",event=\"offer\"}[$__rate_interval]))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{outcome}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ops",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 3
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-202": {
+      "kind": "Panel",
+      "spec": {
+        "id": 202,
+        "title": "Transaction outcomes over time",
+        "description": "Terminal logical transaction outcomes per second. Failed submissions without receipts do not contribute receipt fees.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(outcome)(rate(solver_bot_txmanager_requests_total{namespace=\"${namespace}\",label=\"redeem\"}[$__rate_interval]))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{outcome}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ops",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 3
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-203": {
+      "kind": "Panel",
+      "spec": {
+        "id": 203,
+        "title": "Transaction fee rate",
+        "description": "Observed receipt fee increases in ETH per second, grouped by transaction outcome. Missing receipt prices or an absent initial scrape can undercount fees.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(outcome)(rate(solver_bot_txmanager_fee_paid_wei_total{namespace=\"${namespace}\",label=\"redeem\"}[$__rate_interval])) / 1e18",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{outcome}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "suffix: ETH/s",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 12
+              },
+              "overrides": []
+            }
+          }
+        }
       }
     }
   },
@@ -3923,6 +4444,64 @@
                       "width": 8,
                       "height": 4,
                       "element": {"kind": "ElementReference", "name": "panel-3"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Offer principal and expected yield",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 24,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-14"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Activity over time",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-200"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-201"}
                     }
                   }
                 ]
@@ -4014,7 +4593,7 @@
                       "y": 0,
                       "width": 24,
                       "height": 6,
-                      "element": {"kind": "ElementReference", "name": "panel-86"}
+                      "element": {"kind": "ElementReference", "name": "panel-19"}
                     }
                   }
                 ]
@@ -4130,23 +4709,13 @@
                       "y": 0,
                       "width": 8,
                       "height": 7,
-                      "element": {"kind": "ElementReference", "name": "panel-100"}
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 8,
-                      "y": 0,
-                      "width": 8,
-                      "height": 7,
                       "element": {"kind": "ElementReference", "name": "panel-40"}
                     }
                   },
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
-                      "x": 16,
+                      "x": 8,
                       "y": 0,
                       "width": 8,
                       "height": 7,
@@ -4156,8 +4725,8 @@
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
-                      "x": 0,
-                      "y": 7,
+                      "x": 16,
+                      "y": 0,
                       "width": 8,
                       "height": 7,
                       "element": {"kind": "ElementReference", "name": "panel-84"}
@@ -4166,9 +4735,9 @@
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
-                      "x": 8,
+                      "x": 0,
                       "y": 7,
-                      "width": 8,
+                      "width": 12,
                       "height": 7,
                       "element": {"kind": "ElementReference", "name": "panel-9"}
                     }
@@ -4176,9 +4745,9 @@
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
-                      "x": 16,
+                      "x": 12,
                       "y": 7,
-                      "width": 8,
+                      "width": 12,
                       "height": 7,
                       "element": {"kind": "ElementReference", "name": "panel-15"}
                     }
@@ -4191,7 +4760,7 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Cost sampling diagnostics",
+            "title": "Cumulative counters and sampling limits",
             "collapse": true,
             "layout": {
               "kind": "GridLayout",
@@ -4204,7 +4773,41 @@
                       "y": 0,
                       "width": 24,
                       "height": 6,
-                      "element": {"kind": "ElementReference", "name": "panel-19"}
+                      "element": {"kind": "ElementReference", "name": "panel-86"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Transaction outcomes and fees over time",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-202"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-203"}
                     }
                   }
                 ]

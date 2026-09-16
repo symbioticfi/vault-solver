@@ -20,7 +20,7 @@
     }
   ],
   "cursorSync": "Crosshair",
-  "description": "Completed operations, outstanding commitments, reasons work does not execute, and transaction costs for the selected environment. Counts are observed operations during the selected period, including retries and separate service observations; stages are not a cohort conversion. Missing telemetry remains unknown. Fees are costs, not profit.",
+  "description": "Execution totals, token amounts, time trends, transaction costs and operational diagnostics for the selected environment. Counter observations include retries; they are not globally deduplicated order accounting. Period increases may miss the first exported nonzero sample. Missing data stays unknown.",
   "editable": true,
   "elements": {
     "panel-10": {
@@ -184,7 +184,7 @@
       "spec": {
         "id": 11,
         "title": "Decision latency · selected period",
-        "description": "Combined histogram observations during the selected period. An idle short window does not erase earlier samples in this period. No latency samples means no percentile is available. Initial unobserved counter values cannot be recovered.",
+        "description": "Combined histogram observations during the selected period. An idle short window does not erase earlier samples in this period. No latency samples means no percentile is available. Initial unobserved counter values cannot be recovered. Dashboard warning thresholds are operational defaults; adjust panel thresholds to the deployment SLA.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -357,6 +357,81 @@
                           }
                         }
                       ]
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "p50"},
+                  "properties": [
+                    {"id": "unit", "value": "s"},
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 0.5, "color": "yellow"},
+                          {"value": 1, "color": "red"}
+                        ]
+                      }
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "p95"},
+                  "properties": [
+                    {"id": "unit", "value": "s"},
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 0.5, "color": "yellow"},
+                          {"value": 1, "color": "red"}
+                        ]
+                      }
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "p99"},
+                  "properties": [
+                    {"id": "unit", "value": "s"},
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 0.5, "color": "yellow"},
+                          {"value": 1, "color": "red"}
+                        ]
+                      }
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
                     }
                   ]
                 }
@@ -537,7 +612,7 @@
       "spec": {
         "id": 17,
         "title": "Activity ages",
-        "description": "Current state-refresh age and ages of the latest bid lifecycle timestamps observed in the interval. Zero timestamps mean Not observed; missing samples stay empty.",
+        "description": "Current state-refresh age and ages of the latest bid lifecycle timestamps observed in the interval. Zero timestamps mean Not observed; missing samples stay empty. Age warnings use 1 / 5 minutes for freshness and 1 / 24 hours for activity unless otherwise configured.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -761,6 +836,106 @@
                           }
                         }
                       ]
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Last settlement"},
+                  "properties": [
+                    {"id": "unit", "value": "s"},
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 3600, "color": "yellow"},
+                          {"value": 86400, "color": "red"}
+                        ]
+                      }
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Last bid"},
+                  "properties": [
+                    {"id": "unit", "value": "s"},
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 3600, "color": "yellow"},
+                          {"value": 86400, "color": "red"}
+                        ]
+                      }
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Last win"},
+                  "properties": [
+                    {"id": "unit", "value": "s"},
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 3600, "color": "yellow"},
+                          {"value": 86400, "color": "red"}
+                        ]
+                      }
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "State refresh"},
+                  "properties": [
+                    {"id": "unit", "value": "s"},
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 60, "color": "yellow"},
+                          {"value": 300, "color": "red"}
+                        ]
+                      }
                     },
                     {
                       "id": "custom.cellOptions",
@@ -1430,8 +1605,8 @@
       "kind": "Panel",
       "spec": {
         "id": 7,
-        "title": "Min deposit",
-        "description": "Aggregate min deposit. Current state uses the latest samples; counters cover the selected time range.",
+        "title": "Deposit and settlement floor",
+        "description": "Minimum reported Executor deposit in ETH, plus the exact exported on-chain floor flag. Red means at least one signer is below its settlement floor.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1449,47 +1624,122 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "min(max by (namespace, job, instance) (oev_deposit_wei{namespace=\"${namespace}\"}) / 1e18)",
+                      "expr": "min(max by(namespace,job,instance)(oev_deposit_wei{namespace=\"${namespace}\"})) / 1e18",
                       "instant": true,
                       "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max(oev_deposit_below_floor{namespace=\"${namespace}\"})",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
                       "legendFormat": ""
                     }
                   }
                 }
               }
             ],
-            "transformations": [],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "merge",
+                "spec": {
+                  "options": {}
+                }
+              },
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true},
+                    "renameByName": {"Value #A": "Deposit (ETH)", "Value #B": "Floor status"},
+                    "indexByName": {}
+                  }
+                }
+              }
+            ],
             "queryOptions": {}
           }
         },
         "vizConfig": {
           "kind": "VizConfig",
-          "group": "stat",
+          "group": "table",
           "version": "",
           "spec": {
-            "options": {
-              "colorMode": "value",
-              "graphMode": "none",
-              "justifyMode": "center",
-              "orientation": "auto",
-              "reduceOptions": {
-                "calcs": ["lastNotNull"],
-                "fields": "",
-                "values": false
-              },
-              "textMode": "value",
-              "wideLayout": true,
-              "text": {"valueSize": 30}
-            },
+            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": false},
             "fieldConfig": {
               "defaults": {
-                "unit": "suffix: ETH",
-                "decimals": 5,
-                "noValue": "No data",
-                "color": {"mode": "fixed", "fixedColor": "blue"},
-                "displayName": "Min deposit"
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
               },
-              "overrides": []
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "Deposit (ETH)"},
+                  "properties": [
+                    {"id": "unit", "value": "suffix: ETH"},
+                    {"id": "decimals", "value": 5}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Floor status"},
+                  "properties": [
+                    {"id": "unit", "value": "none"},
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "0": {"text": "Above settlement floor", "color": "green"},
+                            "1": {"text": "Below settlement floor", "color": "red"}
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 1, "color": "red"}
+                        ]
+                      }
+                    },
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-background"}
+                    }
+                  ]
+                }
+              ]
             }
           }
         },
@@ -1703,6 +1953,257 @@
         },
         "transparent": true
       }
+    },
+    "panel-13": {
+      "kind": "Panel",
+      "spec": {
+        "id": 13,
+        "title": "Bid amounts by lifecycle stage · selected period",
+        "description": "Observed bid amounts in ETH. Stages can refer to different bids or recovered obligations; this is not a cohort funnel or realized profit. Unknown initial values can be missed by increase.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(kind)(increase(solver_bot_workflow_amount_atomic_units_total{namespace=\"${namespace}\",solver=\"redstone-oev\",event=\"bid\",asset=\"native\"}[$__range])) / 1e18",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true},
+                    "renameByName": {"kind": "Stage", "Value": "Amount (ETH)"},
+                    "indexByName": {}
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": false},
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "Amount (ETH)"},
+                  "properties": [
+                    {"id": "unit", "value": "suffix: ETH"},
+                    {"id": "decimals", "value": 9}
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-200": {
+      "kind": "Panel",
+      "spec": {
+        "id": 200,
+        "title": "Bid and settlement outcomes over time",
+        "description": "Independent bid lifecycle observations per second; recovered wins and settlements can belong to earlier bids.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(outcome)(rate(solver_bot_workflow_events_total{namespace=\"${namespace}\",solver=\"redstone-oev\",event=\"bid\"}[$__rate_interval]))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{outcome}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ops",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 3
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-201": {
+      "kind": "Panel",
+      "spec": {
+        "id": 201,
+        "title": "Auction decisions over time",
+        "description": "Auction decisions per second, grouped by outcome.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(outcome)(rate(solver_bot_workflow_events_total{namespace=\"${namespace}\",solver=\"redstone-oev\",event=\"auction\"}[$__rate_interval]))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{outcome}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ops",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 3
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
     }
   },
   "layout": {
@@ -1737,7 +2238,7 @@
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Settlement results",
-            "collapse": true,
+            "collapse": false,
             "layout": {
               "kind": "GridLayout",
               "spec": {
@@ -1770,8 +2271,66 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
+            "title": "Activity over time",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-200"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-201"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Bid amounts",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 24,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-13"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
             "title": "Outstanding settlement obligations",
-            "collapse": true,
+            "collapse": false,
             "layout": {
               "kind": "GridLayout",
               "spec": {
@@ -1815,7 +2374,7 @@
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Auction demand and decisions",
-            "collapse": true,
+            "collapse": false,
             "layout": {
               "kind": "GridLayout",
               "spec": {
