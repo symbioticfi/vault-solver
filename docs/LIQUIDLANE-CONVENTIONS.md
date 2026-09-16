@@ -177,9 +177,12 @@ only when that deployment deliberately accepts different freshness and availabil
 Direct and signed-discount inventory for the same route are alternative ways to use the same capacity.
 Never sum them. `internal/liquidlane/strategies/greedy` encodes the one-candidate-per-route rule for quote and fill
 tasks across RFQ, LI.FI, and UniswapX; execution reservations use the shared `CapacityID`.
-Concrete RFQ and UniswapX requests allocate capacity after filtering to their pair. LI.FI does the same for
-each standing pair curve, so multiple curves may advertise the same unreserved vault capacity; accepted-fill
-reservations are then subtracted from every curve sharing that `CapacityID`.
+RFQ requests normalize the backend's pair inventory. LI.FI and UniswapX allocate their complete live
+inventory across routes before selecting a pair, so different token pairs share one unreserved vault budget.
+Accepted-fill reservations are subtracted once before dividing that budget. Returned quotes are not themselves
+reservations, so repeated matches within a pair still require fresh fill planning.
+Excess input may be absorbed only into a direct allocation: direct calldata caps output, whereas a signed
+discount prices the entire `amountIn` on-chain and cannot honor an off-chain output cap.
 
 For signed discounts:
 

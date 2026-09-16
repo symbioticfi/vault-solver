@@ -80,20 +80,13 @@ func TestParseSubmittedOrderClassifiesDifferentChain(t *testing.T) {
 	}
 }
 
-func TestParseSubmittedOrderKeepsInvalidOrdersActionable(t *testing.T) {
+func TestParseSubmittedOrderSkipsForeignOrderTargets(t *testing.T) {
 	foreignOracle := common.HexToAddress("0x008C3800F3Ad9b3B662d002E90Cc00000000eE17")
 	tests := []struct {
 		name       string
 		mutate     func(map[string]any)
 		wantReason string
 	}{
-		{
-			name: "target chain input settler mismatch",
-			mutate: func(body map[string]any) {
-				body["inputSettler"] = foreignOracle.Hex()
-			},
-			wantReason: "does not match configured",
-		},
 		{
 			name: "target chain oracle mismatch",
 			mutate: func(body map[string]any) {
@@ -123,8 +116,8 @@ func TestParseSubmittedOrderKeepsInvalidOrdersActionable(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := testLifiConfig()
 			_, err := parseSubmittedOrder(mutatedTestOrderJSON(t, cfg, tt.mutate), cfg, 11155111)
-			if err == nil || errors.Is(err, errOrderForDifferentChain) || !strings.Contains(err.Error(), tt.wantReason) {
-				t.Fatalf("error = %v, want actionable %q error", err, tt.wantReason)
+			if !errors.Is(err, errOrderUnsupported) || !strings.Contains(err.Error(), tt.wantReason) {
+				t.Fatalf("error = %v, want unsupported %q error", err, tt.wantReason)
 			}
 		})
 	}
@@ -597,9 +590,8 @@ func TestParseSubmittedOrderClassifiesForeignChainBeforeAddresses(t *testing.T) 
 	}
 }
 
-// A same-chain order paying out the native asset (zero token identifier) is a kind this solver never
-// fills, not a malformed message.
-func TestParseSubmittedOrderClassifiesNativeOutputAsUnsupported(t *testing.T) {
+// Zero output identifiers remain unsupported; their asset meaning is format-dependent.
+func TestParseSubmittedOrderClassifiesZeroOutputAsUnsupported(t *testing.T) {
 	cfg := testLifiConfig()
 	raw := mutatedTestOrderJSON(t, cfg, func(body map[string]any) {
 		output := sliceField(t, mapField(t, body, "order"), "outputs")[0].(map[string]any)

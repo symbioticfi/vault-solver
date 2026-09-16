@@ -2,6 +2,8 @@ package defaultstrategy
 
 import (
 	"math/big"
+	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -20,8 +22,8 @@ func scoredFor(borrowerByte byte, profit *big.Int) scoredLeg {
 	b[19] = borrowerByte
 	return scoredLeg{
 		bundleLeg: bundleLeg{
-			selectedLeg:     selectedLeg{Borrower: b, MarketId: common.Hash{}},
-			expectedLoanOut: profit,
+			selectedLeg:       selectedLeg{Borrower: b, MarketId: common.Hash{}},
+			settlementLoanOut: profit,
 		},
 		profit: profit,
 	}
@@ -153,14 +155,14 @@ func TestPriceBundleWithoutGasAccountingKeepsNativeSafetyAndOneUnitFloors(t *tes
 					MarketId: common.Hash{31: 1}, Borrower: common.Address{19: 1},
 					MaxSeizeAssets: big.NewInt(10), MinProfit: big.NewInt(999),
 				},
-				expectedLoanOut: big.NewInt(500_000),
+				settlementLoanOut: big.NewInt(500_000),
 			},
 			{
 				selectedLeg: selectedLeg{
 					MarketId: common.Hash{31: 2}, Borrower: common.Address{19: 2},
 					MaxSeizeAssets: big.NewInt(20), MinProfit: big.NewInt(999),
 				},
-				expectedLoanOut: big.NewInt(500_000),
+				settlementLoanOut: big.NewInt(500_000),
 			},
 		},
 	}
@@ -279,9 +281,9 @@ func TestSelectBundleReplaysSameMarketSources(t *testing.T) {
 		leg.MaxSeizeAssets = big.NewInt(1)
 		return scoredLeg{
 			bundleLeg: bundleLeg{
-				selectedLeg:     leg,
-				expectedLoanOut: big.NewInt(1),
-				collateral:      coll,
+				selectedLeg:       leg,
+				settlementLoanOut: big.NewInt(1),
+				collateral:        coll,
 			},
 			profit: mustBig("999999999999999999"),
 			source: evalItem{cand: cand, price: price, quote: quote, accrued: info.State.TotalBorrowAssets},
@@ -301,7 +303,7 @@ func TestSelectBundleReplaysSameMarketSources(t *testing.T) {
 	if len(b.legs) != 2 {
 		t.Fatalf("selected %d same-market replayed legs, want 2", len(b.legs))
 	}
-	if b.legs[0].MaxSeizeAssets.Cmp(big.NewInt(1)) == 0 || b.legs[0].expectedLoanOut.Cmp(big.NewInt(1)) == 0 {
+	if b.legs[0].MaxSeizeAssets.Cmp(big.NewInt(1)) == 0 || b.legs[0].settlementLoanOut.Cmp(big.NewInt(1)) == 0 {
 		t.Fatalf("selected stale precomputed leg instead of replaying source: %+v", b.legs[0])
 	}
 	if b.grossLoan.Cmp(mustBig("999999999999999999")) >= 0 {
@@ -345,9 +347,9 @@ func TestSelectNetBundleAvoidsGrossBestGasFalseSkip(t *testing.T) {
 		withAddr := func(addr common.Address, profit int64, c common.Address) scoredLeg {
 			return scoredLeg{
 				bundleLeg: bundleLeg{
-					selectedLeg:     selectedLeg{Borrower: addr},
-					expectedLoanOut: big.NewInt(profit),
-					collateral:      c,
+					selectedLeg:       selectedLeg{Borrower: addr},
+					settlementLoanOut: big.NewInt(profit),
+					collateral:        c,
 				},
 				profit: big.NewInt(profit),
 			}
@@ -501,5 +503,41 @@ func TestBundleBidNativeUsesProfitShareFloor(t *testing.T) {
 	engine = testBundleEngine(Config{BidWei: big.NewInt(100), TotalBundleProfitBps: 500})
 	if got := engine.bundleBidNative(b, morpho.Wad); got.Cmp(big.NewInt(100)) != 0 {
 		t.Fatalf("bid = %s, want minimal bid floor", got)
+	}
+}
+
+func TestRetainBundleTrialMatchesStableFullSort(t *testing.T) {
+	var all, beam []bundleSearchState
+	for i := range 1000 {
+		trial := bundleSearchState{score: big.NewInt(int64((i * 37) % 101)), used: map[int]bool{i: true}}
+		all = append(all, trial)
+		beam = retainBundleTrial(beam, trial)
+		if len(beam) > netBundleBeamWidth {
+			t.Fatalf("unbounded beam %d", len(beam))
+		}
+	}
+	slices.SortStableFunc(all, func(a, b bundleSearchState) int { return b.score.Cmp(a.score) })
+	if len(beam) != netBundleBeamWidth {
+		t.Fatalf("beam length %d", len(beam))
+	}
+	for i := range beam {
+		if !reflect.DeepEqual(beam[i], all[i]) {
+			t.Fatalf("rank %d differs from stable full sort", i)
+		}
+	}
+}
+
+func BenchmarkBundleSearchTrackedPositions(b *testing.B) {
+	scored := make([]scoredLeg, 10_000)
+	for i := range scored {
+		scored[i] = scoredFor(1, big.NewInt(int64(1_000_000+i)))
+		scored[i].Borrower = common.BigToAddress(big.NewInt(int64(i + 1)))
+	}
+	engine := testBundleEngine(Config{})
+	for b.Loop() {
+		_, ok := engine.searchBundle(scored, nil, maxSettlementGasUnits, defaultPriceUpdateFeeds, func(bundle chosenBundle) *big.Int { return bundle.grossLoan })
+		if !ok {
+			b.Fatal("no bundle")
+		}
 	}
 }

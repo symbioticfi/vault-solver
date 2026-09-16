@@ -22,9 +22,9 @@ type Candidate struct {
 const partialSeizeFractionBps = 9000
 
 type sizedLeg struct {
-	leg             selectedLeg
-	expectedLoanOut *big.Int
-	profit          *big.Int
+	leg               selectedLeg
+	settlementLoanOut *big.Int
+	profit            *big.Int
 }
 
 // expectedLoanOutFor estimates the loan-token output for selling `collIn` of seized collateral through
@@ -44,24 +44,20 @@ func expectedLoanOutFor(collIn *big.Int, q AdapterQuote, haircutBps int) *big.In
 	return out
 }
 
-// collForBudget is the inverse of expectedLoanOutFor: the most collateral whose expected loan output stays
-// within `budget` (loan-token / getMaxAssets units), so the selected leg does not rely on more redemption
-// liquidity than the cached adapter state says exists. The callback still reads the live cap at settlement.
-// Returns 0 when the quote can't price an exit. SwapHaircutBps is config-validated to [0, 10000), so
-// 10000−haircut > 0.
-func collForBudget(budget *big.Int, q AdapterQuote, haircutBps int) *big.Int {
-	h := int64(10_000 - haircutBps)
-	if h <= 0 || q.MaxRate == nil || q.MaxRate.Sign() <= 0 {
+// settlementLoanOutFor rounds up the cached rate so capacity/gas never use the profit haircut.
+// getMaxRate itself is rounded down; one rate unit covers that rounding before amount conversion.
+func settlementLoanOutFor(collIn *big.Int, q AdapterQuote) *big.Int {
+	rate := new(big.Int).Add(q.MaxRate, big.NewInt(1))
+	return morpho.MulDivUp(new(big.Int).Mul(collIn, rate), q.LoanScale, new(big.Int).Mul(morpho.Wad, q.CollScale))
+}
+
+// collForBudget bounds uncapped callback output, independently of the profit safety haircut.
+func collForBudget(budget *big.Int, q AdapterQuote) *big.Int {
+	if q.MaxRate == nil || q.MaxRate.Sign() <= 0 {
 		return new(big.Int)
 	}
-	num := new(big.Int).Mul(morpho.Wad, q.CollScale)
-	num.Mul(num, big.NewInt(10_000))
-	den := new(big.Int).Mul(q.MaxRate, q.LoanScale)
-	den.Mul(den, big.NewInt(h))
-	if den.Sign() == 0 {
-		return new(big.Int)
-	}
-	return morpho.MulDivDown(budget, num, den)
+	rate := new(big.Int).Add(q.MaxRate, big.NewInt(1))
+	return morpho.MulDivDown(budget, new(big.Int).Mul(morpho.Wad, q.CollScale), new(big.Int).Mul(rate, q.LoanScale))
 }
 
 // sizeLeg sizes ONE liquidation leg for candidate c, selling its WHOLE seizure through the single
@@ -106,7 +102,7 @@ func sizeLeg(c Candidate, price *big.Int, q AdapterQuote, accrued *big.Int, sp S
 	// Clamp the seize by cached adapter redemption liquidity. This is a bidding-time safety check; the
 	// callback reads the current getMaxAssets again before swapping. nil/0 ⇒ uncapped (unknown liquidity).
 	if q.MaxAssets != nil && q.MaxAssets.Sign() > 0 {
-		if fit := collForBudget(q.MaxAssets, q, sp.SwapHaircutBps); fit.Cmp(target) < 0 {
+		if fit := collForBudget(q.MaxAssets, q); fit.Cmp(target) < 0 {
 			target = fit
 		}
 	}
@@ -127,7 +123,7 @@ func sizeLeg(c Candidate, price *big.Int, q AdapterQuote, accrued *big.Int, sp S
 		Borrower:       c.Borrower,
 		MaxSeizeAssets: target,
 	}
-	return sizedLeg{leg: leg, expectedLoanOut: expectedLoanOut, profit: profit}, true
+	return sizedLeg{leg: leg, settlementLoanOut: settlementLoanOutFor(target, q), profit: profit}, true
 }
 
 func targetSeize(collateral *big.Int, allowFull bool) *big.Int {

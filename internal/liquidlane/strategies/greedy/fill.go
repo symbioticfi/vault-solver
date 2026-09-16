@@ -286,7 +286,17 @@ func greedyFillAllocation(
 		if inputPolicy == RejectUncoveredInput || len(allocation) == 0 {
 			return nil
 		}
-		allocation[len(allocation)-1].amountIn.Add(allocation[len(allocation)-1].amountIn, remaining)
+		// Discount calldata has no output cap, so it must never absorb excess input.
+		direct := -1
+		for i := range allocation {
+			if allocation[i].candidate.quote.DiscountID == nil {
+				direct = i
+			}
+		}
+		if direct < 0 {
+			return nil
+		}
+		allocation[direct].amountIn.Add(allocation[direct].amountIn, remaining)
 	}
 	return allocation
 }

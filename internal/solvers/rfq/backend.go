@@ -61,9 +61,10 @@ func newBackendClient(baseURL string) *backendClient {
 	cfg := rfqbackend.NewConfiguration()
 	cfg.Servers = rfqbackend.ServerConfigurations{{URL: strings.TrimRight(baseURL, "/")}}
 	cfg.HTTPClient = &http.Client{
-		Timeout: 10 * time.Second,
+		Timeout:   10 * time.Second,
+		Transport: backendRequestTransport{base: http.DefaultTransport},
 	}
-	return &backendClient{api: rfqbackend.NewAPIClient(cfg), discounts: discounts.NewClient(baseURL)}
+	return &backendClient{api: rfqbackend.NewAPIClient(cfg), discounts: discounts.NewClientWithHTTPClient(baseURL, cfg.HTTPClient)}
 }
 
 // closeResp drains and closes the HTTP response body. The generated client already reads the body
@@ -77,6 +78,7 @@ func closeResp(resp *http.Response) {
 
 // listOpenOrders lists open orders assigned to filler.
 func (c *backendClient) listOpenOrders(ctx context.Context, filler string, limit int) ([]backendOrder, error) {
+	ctx = backendRequestContext(ctx)
 	// limit is the operator-bounded poll size (orderLimit); the spec caps it at 100.
 	req := c.api.RFQAPI.ApiV1OrdersGet(ctx).
 		Filler(filler).
@@ -85,13 +87,14 @@ func (c *backendClient) listOpenOrders(ctx context.Context, filler string, limit
 	resp, httpResp, err := req.Execute()
 	closeResp(httpResp)
 	if err != nil {
-		return nil, errors.Errorf("backend: list open orders: %w", err)
+		return nil, backendError(ctx, errors.Errorf("backend: list open orders: %w", err))
 	}
 	return ordersFromResponse(resp), nil
 }
 
 // getExecutableOrder reads the canonical open executable view for one order, or nil if absent.
 func (c *backendClient) getExecutableOrder(ctx context.Context, orderID, filler string) (*backendOrder, error) {
+	ctx = backendRequestContext(ctx)
 	req := c.api.RFQAPI.ApiV1OrdersGet(ctx).
 		OrderId(orderID).
 		Filler(filler).
@@ -99,17 +102,18 @@ func (c *backendClient) getExecutableOrder(ctx context.Context, orderID, filler 
 	resp, httpResp, err := req.Execute()
 	closeResp(httpResp)
 	if err != nil {
-		return nil, errors.Errorf("backend: get executable order: %w", err)
+		return nil, backendError(ctx, errors.Errorf("backend: get executable order: %w", err))
 	}
 	return first(ordersFromResponse(resp)), nil
 }
 
 // getOrder reads the backend view of one order regardless of status, or nil if absent.
 func (c *backendClient) getOrder(ctx context.Context, orderID string) (*backendOrder, error) {
+	ctx = backendRequestContext(ctx)
 	resp, httpResp, err := c.api.RFQAPI.ApiV1OrdersGet(ctx).OrderId(orderID).Execute()
 	closeResp(httpResp)
 	if err != nil {
-		return nil, errors.Errorf("backend: get order: %w", err)
+		return nil, backendError(ctx, errors.Errorf("backend: get order: %w", err))
 	}
 	return first(ordersFromResponse(resp)), nil
 }
@@ -194,10 +198,14 @@ type discountsResponse = discounts.List
 // accepted (it carries the same signed fields); anything else (neither shape, or a batch with ≠1
 // entries) is rejected so we never fill on an ambiguous resolution.
 func (c *backendClient) resolveDiscount(ctx context.Context, discountID string) (*resolveDiscountResponse, error) {
-	return c.discounts.Resolve(ctx, discountID)
+	ctx = backendRequestContext(ctx)
+	result, err := c.discounts.Resolve(ctx, discountID)
+	return result, backendError(ctx, err)
 }
 
 // listDiscounts lists currently-offered discounts (GET /discounts).
 func (c *backendClient) listDiscounts(ctx context.Context) (*discountsResponse, error) {
-	return c.discounts.ListDiscounts(ctx)
+	ctx = backendRequestContext(ctx)
+	result, err := c.discounts.ListDiscounts(ctx)
+	return result, backendError(ctx, err)
 }

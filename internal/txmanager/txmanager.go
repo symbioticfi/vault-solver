@@ -22,7 +22,6 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/signer"
-	"github.com/symbioticfi/vault-solver/internal/tenderly"
 )
 
 // Backend is the subset of an EVM client the manager needs. *ethclient.Client satisfies it.
@@ -793,6 +792,11 @@ func (m *Manager) confirmations(req Request) uint64 {
 }
 
 func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendingTransaction) Result {
+	reader := m.startReceiptReader(ctx)
+	defer reader.stop()
+	knownAttempts := len(pending.attempts)
+	sweep := newReceiptSweep(pending, knownAttempts)
+	var receiptResults <-chan receiptRead
 	poll := time.NewTicker(m.cfg.PollInterval)
 	defer poll.Stop()
 	replace := time.NewTicker(m.cfg.ReplacementInterval)
@@ -800,6 +804,11 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 	timeout := time.NewTimer(max(time.Until(pending.cancelDeadline), 0))
 	defer timeout.Stop()
 
+	var replacementStarted time.Time
+	tryReplace := func(cancellation bool) bool {
+		replacementStarted = time.Now()
+		return m.tryReplace(ctx, pending, cancellation)
+	}
 	cancelling := false
 	cancelRequested, timeoutC := pending.cancelRequested, timeout.C
 	startCancellation := func(reason string) {
@@ -828,10 +837,46 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 		)
 	}
 	for {
-		if receiptResult, done := m.receiptResult(ctx, pending); done {
-			return receiptResult
+		// New variants arriving between sweeps also get an immediate priority read.
+		if sweep == nil && knownAttempts != len(pending.attempts) {
+			sweep = newReceiptSweep(pending, knownAttempts)
+			knownAttempts = len(pending.attempts)
+		}
+		var reads chan<- txAttempt
+		var next txAttempt
+		var nextIndex int
+		if sweep != nil && receiptResults == nil {
+			nextIndex = sweep.nextIndex(pending)
+			if nextIndex >= 0 {
+				reads = reader.requests
+				next = pending.attempts[nextIndex]
+			}
 		}
 		select {
+		case reads <- next:
+			receiptResults = reader.results
+			sweep.dispatched(pending, nextIndex)
+		case read := <-receiptResults:
+			receiptResults = nil
+			if m.observeReceiptRead(pending, sweep, read) {
+				result, done := m.confirmPendingReceipt(ctx, pending, read.attempt, read.receipt)
+				if done {
+					return result
+				}
+				// A reorg or an untrusted receipt keeps ownership and resumes polling.
+				sweep = nil
+			} else if sweep.nextIndex(pending) < 0 {
+				m.finishReceiptSweep(pending, sweep)
+				// Include superseded variants considered by the priority path.
+				knownAttempts = sweep.knownAttempts
+				sweep = nil
+				// A terminal protocol status may reflect our own transaction.
+				// Give receipts precedence before checking obsolescence.
+				if !cancelling && m.pendingRequestObsolete(ctx, pending) {
+					startCancellation("obsolete")
+					tryReplace(true)
+				}
+			}
 		case <-ctx.Done():
 			return Result{
 				Hash:    pending.attempts[0].hash,
@@ -840,42 +885,44 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 			}
 		case <-cancelRequested:
 			startCancellation("shutdown")
-			m.tryReplace(ctx, pending, true)
+			tryReplace(true)
 		case <-poll.C:
-			if cancelling || pending.req.Obsolete == nil {
+			if sweep == nil {
+				knownAttempts = len(pending.attempts)
+				sweep = newReceiptSweep(pending, knownAttempts)
+			}
+		case tick := <-replace.C:
+			// A cancellation deadline may coincide with this tick. Do not send a
+			// second replacement for a tick already covered by that broadcast.
+			if !tick.After(replacementStarted) {
 				continue
 			}
-			obsolete, err := m.requestObsolete(ctx, pending.req)
-			if err != nil {
-				pending.obsolescenceReads.failed(pending.log, err,
-					"pending transaction obsolescence check unavailable; retaining lifecycle",
-					"label", pending.req.Label,
-					"hash", pending.originalHash.Hex(),
-					"nonce", pending.nonce,
-				)
-				continue
-			}
-			pending.obsolescenceReads.recovered(pending.log, "pending transaction obsolescence checks recovered",
-				"label", pending.req.Label, "nonce", pending.nonce)
-			if !obsolete {
-				continue
-			}
-			startCancellation("obsolete")
-			m.tryReplace(ctx, pending, true)
-		case <-replace.C:
 			if !cancelling && pending.cancellationDue(time.Now()) {
 				startCancellation("")
 			}
-			if m.tryReplace(ctx, pending, cancelling) {
+			if tryReplace(cancelling) {
 				// A fee lookup can cross the deadline and promote this replacement to
 				// cancellation. Disarm the expired timer before the next select.
 				startCancellation("")
 			}
 		case <-timeoutC:
 			startCancellation("")
-			m.tryReplace(ctx, pending, true)
+			tryReplace(true)
 		}
 	}
+}
+
+func (m *Manager) pendingRequestObsolete(ctx context.Context, pending *pendingTransaction) bool {
+	obsolete, err := m.requestObsolete(ctx, pending.req)
+	if err != nil {
+		pending.obsolescenceReads.failed(pending.log, err,
+			"pending transaction obsolescence check unavailable; retaining lifecycle",
+			"label", pending.req.Label, "hash", pending.originalHash.Hex(), "nonce", pending.nonce)
+		return false
+	}
+	pending.obsolescenceReads.recovered(pending.log, "pending transaction obsolescence checks recovered",
+		"label", pending.req.Label, "nonce", pending.nonce)
+	return obsolete
 }
 
 func (m *Manager) requestObsolete(ctx context.Context, req Request) (bool, error) {
@@ -891,14 +938,24 @@ func (m *Manager) requestObsolete(ctx context.Context, req Request) (bool, error
 	return obsolete, nil
 }
 
-func (m *Manager) receiptReadFailed(pending *pendingTransaction, attempt txAttempt, err error) {
-	pending.receiptReads.failed(pending.log, err, "pending transaction receipt unavailable",
+func (m *Manager) receiptReadFailed(pending *pendingTransaction, sweep *receiptSweep) {
+	read := sweep.firstError
+	diagnostic := sweep.diagnostics
+	pending.receiptReads.failed(pending.log, read.err, "pending transaction receipt unavailable",
 		"label", pending.req.Label,
-		"hash", attempt.hash.Hex(),
+		"hash", read.attempt.hash.Hex(),
 		"originalHash", pending.originalHash.Hex(),
 		"nonce", pending.nonce,
-		"cancellation", attempt.cancellation,
+		"cancellation", read.attempt.cancellation,
 		"rpcTimeout", m.receiptReadTimeout().String(),
+		"reason_code", read.reason(),
+		"rpcBudgetTotalMs", diagnostic.budget.Milliseconds(),
+		"sweepElapsedMs", time.Since(diagnostic.started).Milliseconds(),
+		"hashesChecked", len(diagnostic.hashes),
+		"hashesTotal", len(pending.attempts),
+		"rpcChecks", diagnostic.reads,
+		"lastRPCDurationMs", diagnostic.lastRPC.Milliseconds(),
+		"cancelCause", read.cancelCause,
 	)
 }
 
@@ -907,131 +964,80 @@ func (m *Manager) receiptReadsRecovered(pending *pendingTransaction) {
 		"label", pending.req.Label, "nonce", pending.nonce)
 }
 
-func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction) (Result, bool) {
-	lookupCtx, cancelLookup := context.WithTimeout(ctx, m.receiptReadTimeout())
-	defer cancelLookup()
-	attempts := len(pending.attempts)
-	if attempts == 0 {
-		return Result{}, false
-	}
-	start := pending.receiptCursor % attempts
-	// Failures are judged per sweep, not per hash: with several tracked attempts one hash answering
-	// while another times out must not restart the streak every poll.
-	var (
-		readErr     error
-		readAttempt txAttempt
-		readOK      bool
-	)
-	for checked := range attempts {
-		if lookupCtx.Err() != nil {
-			break
-		}
-		i := (start + checked) % attempts
-		pending.receiptCursor = (i + 1) % attempts
-		attempt := pending.attempts[i]
-		receipt, err := m.backend.TransactionReceipt(lookupCtx, attempt.hash)
-		if errors.Is(err, ethereum.NotFound) {
-			readOK = true
-			continue
-		}
-		if err != nil {
-			if readErr == nil {
-				readErr, readAttempt = err, attempt
-			}
-			continue
-		}
-		readOK = true
-		m.receiptReadsRecovered(pending)
-		if err := validateReceipt(attempt.hash, receipt); err != nil {
-			pending.log.Error(err, "invalid pending transaction receipt",
-				"label", pending.req.Label,
-				"hash", attempt.hash.Hex(),
-				"nonce", pending.nonce,
-			)
-			continue
-		}
-		cancelLookup()
-		if pending.nonceConflictHash != (common.Hash{}) && m.hasNonceConflict(pending.nonce) {
-			if err := m.confirmCanonicalReceipt(ctx, receipt); err != nil {
-				pending.log.Error(err, "owned receipt cannot reconcile nonce conflict",
-					"label", pending.req.Label,
-					"hash", attempt.hash.Hex(),
-					"nonce", pending.nonce,
-				)
-				continue
-			}
-			m.clearNonceConflict(pending.nonce)
-		}
-		pending.lifecycle.transitionPhase(lifecyclePhaseConfirming)
-		confirmations := m.confirmations(pending.req)
-		receipt, err = m.waitForConfirmations(ctx, pending.log, attempt.hash, receipt, confirmations)
-		if errors.Is(err, errReceiptReorged) {
-			pending.lifecycle.transitionPhase(lifecyclePhasePending)
-			if pending.nonceConflictHash != (common.Hash{}) {
-				m.markNonceConflict(pending.nonce, pending.nonceConflictHash)
-			}
-			pending.log.Info("transaction inclusion reorged; resuming pending lifecycle",
+// confirmPendingReceipt runs only in the lifecycle owner, after receipt validation.
+func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTransaction, attempt txAttempt, receipt *types.Receipt) (Result, bool) {
+	if pending.nonceConflictHash != (common.Hash{}) && m.hasNonceConflict(pending.nonce) {
+		if err := m.confirmCanonicalReceipt(ctx, receipt); err != nil {
+			pending.log.Error(err, "owned receipt cannot reconcile nonce conflict",
 				"label", pending.req.Label,
 				"hash", attempt.hash.Hex(),
 				"nonce", pending.nonce,
 			)
 			return Result{}, false
 		}
-		if receipt.Status == types.ReceiptStatusFailed {
-			revertErr := errors.Errorf("tx %s reverted on-chain", attempt.hash.Hex())
-			if err != nil {
-				revertErr = errors.Errorf("tx %s reverted on-chain; confirmation wait: %w", attempt.hash.Hex(), err)
-			}
-			pending.log.Error(revertErr, "transaction reverted",
-				"label", pending.req.Label,
-				"hash", attempt.hash.Hex(),
-				"nonce", pending.nonce,
-				"tenderly", tenderly.SimulatorURL(m.chainID, m.signer.Address(), pending.req.To, pending.req.Data, pending.req.Value),
-			)
-			return Result{
-				Hash:    attempt.hash,
-				Receipt: receipt,
-				Outcome: OutcomeReverted,
-				Err:     revertErr,
-			}, true
+		m.clearNonceConflict(pending.nonce)
+	}
+	pending.lifecycle.transitionPhase(lifecyclePhaseConfirming)
+	confirmations := m.confirmations(pending.req)
+	receipt, err := m.waitForConfirmations(ctx, pending.log, attempt.hash, receipt, confirmations)
+	if errors.Is(err, errReceiptReorged) {
+		pending.lifecycle.transitionPhase(lifecyclePhasePending)
+		if pending.nonceConflictHash != (common.Hash{}) {
+			m.markNonceConflict(pending.nonce, pending.nonceConflictHash)
 		}
-		if err != nil {
-			outcome := OutcomeIncludedUnconfirmed
-			if attempt.cancellation {
-				outcome = OutcomeCancelled
-			}
-			return Result{Hash: attempt.hash, Receipt: receipt, Outcome: outcome, Err: err}, true
-		}
-		if attempt.cancellation {
-			return Result{
-				Hash:    attempt.hash,
-				Receipt: receipt,
-				Outcome: OutcomeCancelled,
-				Err: errors.Errorf(
-					"send %q: pending transaction cancelled at nonce %d",
-					pending.req.Label, pending.nonce,
-				),
-			}, true
-		}
-		pending.log.V(1).Info(
-			"transaction confirmed",
+		pending.log.Info("transaction inclusion reorged; resuming pending lifecycle",
 			"label", pending.req.Label,
 			"hash", attempt.hash.Hex(),
 			"nonce", pending.nonce,
-			"blockNumber", optionalBigString(receipt.BlockNumber),
-			"gasUsed", receipt.GasUsed,
-			"effectiveGasPrice", optionalBigString(receipt.EffectiveGasPrice),
-			"confirmations", confirmations,
 		)
-		return Result{Hash: attempt.hash, Receipt: receipt, Outcome: OutcomeConfirmed}, true
+		return Result{}, false
 	}
-	switch {
-	case readErr != nil:
-		m.receiptReadFailed(pending, readAttempt, readErr)
-	case readOK:
-		m.receiptReadsRecovered(pending)
+	if receipt.Status == types.ReceiptStatusFailed {
+		revertErr := errors.Errorf("tx %s reverted on-chain", attempt.hash.Hex())
+		if err != nil {
+			revertErr = errors.Errorf("tx %s reverted on-chain; confirmation wait: %w", attempt.hash.Hex(), err)
+		}
+		pending.log.Error(revertErr, "transaction reverted",
+			"label", pending.req.Label,
+			"hash", attempt.hash.Hex(),
+			"nonce", pending.nonce,
+		)
+		return Result{
+			Hash:    attempt.hash,
+			Receipt: receipt,
+			Outcome: OutcomeReverted,
+			Err:     revertErr,
+		}, true
 	}
-	return Result{}, false
+	if err != nil {
+		outcome := OutcomeIncludedUnconfirmed
+		if attempt.cancellation {
+			outcome = OutcomeCancelled
+		}
+		return Result{Hash: attempt.hash, Receipt: receipt, Outcome: outcome, Err: err}, true
+	}
+	if attempt.cancellation {
+		return Result{
+			Hash:    attempt.hash,
+			Receipt: receipt,
+			Outcome: OutcomeCancelled,
+			Err: errors.Errorf(
+				"send %q: pending transaction cancelled at nonce %d",
+				pending.req.Label, pending.nonce,
+			),
+		}, true
+	}
+	pending.log.V(1).Info(
+		"transaction confirmed",
+		"label", pending.req.Label,
+		"hash", attempt.hash.Hex(),
+		"nonce", pending.nonce,
+		"blockNumber", optionalBigString(receipt.BlockNumber),
+		"gasUsed", receipt.GasUsed,
+		"effectiveGasPrice", optionalBigString(receipt.EffectiveGasPrice),
+		"confirmations", confirmations,
+	)
+	return Result{Hash: attempt.hash, Receipt: receipt, Outcome: OutcomeConfirmed}, true
 }
 
 // tryReplace reports whether cancellation mode was entered, even if submission fails.
@@ -1428,16 +1434,15 @@ func feeHistoryTip(history *ethereum.FeeHistory) (*big.Int, bool) {
 	if history == nil || len(history.Reward) != feeHistoryBlocks {
 		return nil, false
 	}
-	var tip *big.Int
+	tips := make([]*big.Int, 0, len(history.Reward))
 	for _, blockRewards := range history.Reward {
 		if len(blockRewards) != 1 || blockRewards[0] == nil || blockRewards[0].Sign() < 0 {
 			return nil, false
 		}
-		if tip == nil || blockRewards[0].Cmp(tip) < 0 {
-			tip = new(big.Int).Set(blockRewards[0])
-		}
+		tips = append(tips, blockRewards[0])
 	}
-	return tip, true
+	slices.SortFunc(tips, func(a, b *big.Int) int { return a.Cmp(b) })
+	return new(big.Int).Set(tips[len(tips)/2]), true
 }
 
 func (m *Manager) estimateGas(ctx context.Context, req Request) (uint64, error) {
@@ -1448,11 +1453,9 @@ func (m *Manager) estimateGas(ctx context.Context, req Request) (uint64, error) 
 		Data:  req.Data,
 	})
 	if err != nil {
-		// A revert here surfaces from eth_estimateGas with almost no detail; the Tenderly link replays
-		// the exact call so the operator can see the trace (harmless for a non-revert RPC error).
+		// Calldata can contain unpublished authorizations. Keep it out of error logs and Sentry.
 		m.requestLog(req).Error(err, "gas estimation failed",
 			"label", req.Label,
-			"tenderly", tenderly.SimulatorURL(m.chainID, m.signer.Address(), req.To, req.Data, req.Value),
 		)
 		return 0, errors.Errorf("estimate gas %q: %w", req.Label, err)
 	}

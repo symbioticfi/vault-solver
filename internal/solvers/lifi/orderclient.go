@@ -266,6 +266,9 @@ func (c *orderClient) submitQuotes(ctx context.Context, quotes []types.Quote) er
 	if response == nil {
 		return errors.New("lifi order server: submit quotes: empty response")
 	}
+	if response.Status != "success" {
+		return errors.Errorf("lifi order server: submit quotes: unexpected status %q", response.Status)
+	}
 	if response.QuotesAdded != float32(expectedRanges) {
 		return errors.Errorf(
 			"lifi order server: submit quotes: quotesAdded %v, want %d",

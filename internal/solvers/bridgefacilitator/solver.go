@@ -215,7 +215,7 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 				complete = false
 				s.log.Info("reconcile offers: malformed amount; retaining valid subset",
 					"adapter", t.Adapter.Hex(), "offerId", o.Id)
-				principal = new(big.Int)
+				principal = nil
 			}
 			if o.AuctionId <= 0 {
 				complete = false
@@ -299,8 +299,8 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		refreshOutcome = observability.ExternalOperationDegraded
 	}
 	observeRefresh(refreshOutcome)
-	if len(offerings) == 0 {
-		return // every adapter's liquidity read failed this pass
+	if len(offerings) == 0 || !offersComplete {
+		return // incomplete live commitments cannot safely authorize another offer
 	}
 	input := buildStrategyInput(auctions, offerings, s.offers, now)
 	if len(input.Auctions) == 0 {

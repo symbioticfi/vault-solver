@@ -70,7 +70,7 @@ func TestStrategyRegistryUsesBuiltIns(t *testing.T) {
 	}
 }
 
-func TestBuildStrategyInputKeepsFullyCoveredAuctions(t *testing.T) {
+func TestBuildStrategyInputLiveCoverage(t *testing.T) {
 	now := time.Unix(100, 0)
 	adapter := common.HexToAddress("0x0000000000000000000000000000000000000001")
 	collateral := common.HexToAddress("0x0000000000000000000000000000000000000003")
@@ -102,8 +102,17 @@ func TestBuildStrategyInputKeepsFullyCoveredAuctions(t *testing.T) {
 		t.Fatalf("remaining = %s, want 0", input.Auctions[0].RemainingAmount)
 	}
 	if len(input.LiveOffers) != 1 ||
-		input.LiveOffers[0].AdapterID != adapterID(adapter) || input.LiveOffers[0].AuctionID != 10 {
+		input.LiveOffers[0].AdapterID != adapterID(adapter) || input.LiveOffers[0].AuctionID != 10 || input.LiveOffers[0].Principal.Int64() != 100 {
 		t.Fatalf("liveOffers = %+v, want the adapter's live offer on auction 10", input.LiveOffers)
+	}
+
+	offers.reconcileAdapter(adapter, map[int64]offerState{10: {expiry: now.Add(time.Minute)}})
+	input = buildStrategyInput([]threef.AuctionDto{testAuctionDto(10, collateral, "100")}, nil, offers, now)
+	if len(input.Auctions) != 0 {
+		t.Fatal("unknown live coverage must not authorize another offer on the auction")
+	}
+	if len(input.LiveOffers) != 1 || input.LiveOffers[0].Principal != nil {
+		t.Fatalf("unknown live principal was lost: %+v", input.LiveOffers)
 	}
 }
 

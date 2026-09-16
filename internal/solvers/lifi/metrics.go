@@ -250,6 +250,9 @@ func newLIFIMetrics(
 ) (*lifiMetrics, error) {
 	spec := liquidlane.FillWorkflowSpec()
 	spec.Strategy = strategyName
+	spec.Events = append(spec.Events, observability.WorkflowEventSpec{
+		Event: "order_parse", Outcomes: []string{"invalid", "unsupported", "other_chain"},
+	})
 	spec.Operations = []string{quoteRefreshOperation, quoteSuspendOperation, orderRecoveryOperation}
 	for _, outcome := range orderProcessingOutcomes {
 		spec.Events = append(spec.Events, observability.WorkflowEventSpec{
@@ -355,5 +358,12 @@ func orderQueueWasDropped(queue orderQueue, err error) bool {
 		return false
 	default:
 		return false
+	}
+}
+
+// Count feed observations, including REST recovery replays, rather than unique orders.
+func (m *lifiMetrics) observeOrderParse(outcome string) {
+	if m != nil {
+		m.workflow.ObserveEvent("order_parse", outcome)
 	}
 }

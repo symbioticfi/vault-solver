@@ -556,18 +556,26 @@ func (s *Solver) recoverOrders(
 func (s *Solver) parseOrderMessage(msg orderMessage) *submittedOrder {
 	order, err := parseSubmittedOrder(msg.Data, s.cfg, s.chainID)
 	if err != nil {
-		if errors.Is(err, errOrderForDifferentChain) {
-			s.log.Info("order feed: ignored order for another chain", "event", msg.Event, "reason", err.Error())
-			return nil
+		fields := orderDiagnosticFields(msg.Data, err)
+		fields = append(fields, "event", msg.Event)
+		switch {
+		case errors.Is(err, errOrderForDifferentChain):
+			s.metrics.observeOrderParse("other_chain")
+			s.log.Info("order feed: ignored order for another chain", append(fields, "reason", err.Error())...)
+		case errors.Is(err, errNativeInputUnsupported):
+			s.metrics.observeOrderParse("unsupported")
+			s.log.Info("order feed: ignored unsupported order", append(fields, "reason", err.Error())...)
+		case errors.Is(err, errOrderUnsupported):
+			s.metrics.observeOrderParse("unsupported")
+			s.log.V(1).Info("order feed: ignored unsupported order", append(fields, "reason", err.Error())...)
+		default:
+			s.metrics.observeOrderParse("invalid")
+			s.log.Error(err, "order feed: ignored order", fields...)
 		}
-		if errors.Is(err, errOrderUnsupported) {
-			s.log.V(1).Info("order feed: ignored unsupported order", "event", msg.Event, "reason", err.Error())
-			return nil
-		}
-		s.log.Error(err, "order feed: ignored order", "event", msg.Event)
 		return nil
 	}
 	if isDutchAuctionContext(order.Output.Context) {
+		s.metrics.observeOrderParse("unsupported")
 		s.log.Info("order feed: ignored unsupported Dutch auction",
 			"event", msg.Event,
 			"orderId", order.OrderID,

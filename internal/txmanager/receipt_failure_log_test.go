@@ -214,3 +214,21 @@ func TestConfirmationMissCountResetsOnReadError(t *testing.T) {
 		t.Fatalf("result = %+v done=%v, want confirmed", result, done)
 	}
 }
+
+func TestEstimateFailureDoesNotLogUnpublishedCalldata(t *testing.T) {
+	b := newMockBackend()
+	b.gasEstimate = 0
+	logs, log := newLogCapture(1)
+	m := newStreakManager(t, b, log)
+	_, err := m.estimateGas(t.Context(), Request{To: common.Address{1}, Data: []byte("unpublished-authorization"), Label: "rfq-fill"})
+	if err == nil {
+		t.Fatal("expected estimate failure")
+	}
+	joined := strings.Join(*logs, "\n")
+	if !strings.Contains(joined, "gas estimation failed") || !strings.Contains(joined, "rfq-fill") {
+		t.Fatalf("missing diagnostics: %s", joined)
+	}
+	if strings.Contains(joined, "tenderly") || strings.Contains(joined, "unpublished-authorization") {
+		t.Fatalf("authorization leaked: %s", joined)
+	}
+}

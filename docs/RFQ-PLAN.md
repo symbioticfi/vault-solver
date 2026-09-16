@@ -78,16 +78,26 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   handler context so quote logs carry it), an access log line (method/route/status/duration), the
   request histogram above, a 1 MiB inbound body cap, and panic→500 recovery (the recovered panic is logged at
   Error, so it reaches the Sentry sink). The `http.Server` also sets read/write/idle timeouts.
+- Backend orders and private discount requests reuse the middleware's context/header ID; background
+  calls generate one with the same helper. The transport injects it without changing timeouts or
+  retry behavior, and adapter errors retain it through wrapping. The shared discount client accepts
+  an HTTP client so RFQ can install its transport without coupling other solvers to RFQ middleware.
+  Sentry reads the error's reason/ID and adds the stable reason to the existing fingerprint.
+  Backend acceptance/logging of the header is a separate requirement, not proven by client tests.
 - **Optional Sentry sink** — when `SENTRY_DSN` (and optional `SENTRY_ENVIRONMENT`) is set, the
   framework tees Error+ log entries to Sentry (a zap core in `internal/observability`), flushed on
   shutdown. Strictly opt-in: unset DSN ⇒ no sink. This is richer than the prior filler, which only
   init'd Sentry for uncaught crashes.
-- **Fills go through the shared `txmanager`** (CLAUDE: solvers never send directly). The RFQ package
-  builds the `Executor.fill` calldata; txmanager owns admission, fees, nonce,
-  replacement/cancellation, and confirmed receipt. Each request uses the earliest signed-order or selected
+- **Fills use the [shared transaction manager](TXMANAGER-PLAN.md).** RFQ builds `Executor.fill` calldata
+  and consumes the manager result. Each request uses the earliest signed-order or selected
   discount/protocol deadline, translated from an observed chain timestamp to wall time after planning, so it
   expires while waiting for admission and switches to same-nonce cancellation before dead calldata can hold
   the shared nonce lane.
+- **Retries distinguish unsent work from transactions.** Failed pre-submission work with no recorded hash
+  may be retried while the order is open. A reverted or cancelled transaction retains its hash and is not
+  re-armed by open-order polling. If transaction tracking stops with inclusion unknown, the order stays
+  submitted and reconciles the backend without broadcasting another fill. These protections are in-memory;
+  persistence across process restarts remains outside this change.
 - **Shutdown joins accepted fills.** RFQ stops new polling and shuts down its quote listener, then waits for
   the execution loop to finish. A fill already admitted by txmanager keeps its lifecycle ownership and RFQ
   records the terminal result before `Run` returns; the framework's bounded txmanager drain remains the hard
@@ -149,8 +159,9 @@ There is no quote-plan cache or default/webhook-specific Executor mapping.
 `permissionedTokens` is both the membership set for `tokensToQuote` and, only when that scope is
 `permissioned`, a solver-owned hard constraint. The solver sets `RequireSingleRoute` on both quote
 and fill snapshots for admitted tokens in that scope. A strategy must choose one candidate that
-covers the entire `amountIn`; partial candidates, including direct and discount variants of the same
-adapter, cannot be combined. The default strategy chooses the best fully viable candidate and
+takes the entire `amountIn`; only direct swaps may absorb excess input with an explicit output cap.
+Discount legs must have capacity for their full input. Direct and discount variants of the same
+adapter cannot be combined. The default strategy chooses the best fully viable candidate and
 declines if none exists. The solver independently rejects any quoted or fill plan whose leg count is
 not exactly one, so webhook and fresh fill planning fail closed at the same boundary. The `all` and
 `permissionless` scopes retain greedy multi-candidate aggregation.
@@ -232,7 +243,7 @@ adapter whitelist (it replaces the earlier separate `adapterWhitelistEnabled` / 
 config still carrying either is rejected at startup so operators migrate):
 
 - **`external`** (default — the open-source filler external parties run): **never touches the discounts
-  API** — skips `GET /discounts` in fill planning, never calls `POST /discounts` at fill (a surfacing discount
+  API** — filters discount inventory before quoting, skips `GET /discounts` in fill planning, never calls `POST /discounts` at fill (a surfacing discount
   leg is failed closed). It uses **only its own adapters**, which scope quoting/filling and are
   **required** (no discounts fallback → an empty list is rejected at startup). Before starting HTTP or
   polling, every configured adapter must directly authorize the executor through `owner`, `marketMaker`,

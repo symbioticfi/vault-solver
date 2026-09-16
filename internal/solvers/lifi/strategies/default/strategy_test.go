@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
@@ -1390,7 +1391,7 @@ func TestDecideQuotesAppliesReserveBeforeInFlightReservations(t *testing.T) {
 	}
 }
 
-func TestDecideQuotesPublishesFullSharedCapacityForEachPair(t *testing.T) {
+func TestDecideQuotesSplitsSharedCapacityAcrossPairs(t *testing.T) {
 	strategy, err := New(testStrategyConfig(Config{MinAmount: "2"}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1419,11 +1420,11 @@ func TestDecideQuotesPublishesFullSharedCapacityForEachPair(t *testing.T) {
 		reservations liquidlane.CapacityReservations
 		want         string
 	}{
-		{name: "available", want: "1000"},
+		{name: "available", want: "500"},
 		{
 			name:         "reserved",
 			reservations: liquidlane.CapacityReservations{"capacity-1": big.NewInt(400)},
-			want:         "600",
+			want:         "300",
 		},
 	}
 	for _, tt := range tests {
@@ -1550,7 +1551,7 @@ func TestDecideFillRejectsDutchAuctionContext(t *testing.T) {
 	}
 }
 
-func TestDecideFillMarksMalformedOutputContextPermanent(t *testing.T) {
+func TestDecideFillDistinguishesUnsupportedAndMalformedContexts(t *testing.T) {
 	strategy, err := New(testStrategyConfig(Config{}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1567,6 +1568,9 @@ func TestDecideFillMarksMalformedOutputContextPermanent(t *testing.T) {
 		})
 		if decideErr == nil || !types.IsPermanentFillDecisionError(decideErr) {
 			t.Fatalf("DecideFill(context=%x) error = %v, want permanent", outputContext, decideErr)
+		}
+		if errors.Is(decideErr, types.ErrUnsupportedOutputContext) != (outputContext[0] == 0x02) {
+			t.Fatalf("unsupported classification for context=%x: %v", outputContext, decideErr)
 		}
 		if plan != nil {
 			t.Fatalf("DecideFill(context=%x) plan = %+v", outputContext, plan)
