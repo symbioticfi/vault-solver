@@ -48,6 +48,7 @@ func NewTracing(ctx context.Context, info Tracing, log logr.Logger) (func(contex
 		name = defaultServiceName
 	}
 	res, err := resource.New(ctx,
+		resource.WithTelemetrySDK(), // telemetry.sdk.*; the option sets around it are schemaless
 		resource.WithAttributes(
 			semconv.ServiceName(name),
 			semconv.ServiceVersion(info.Version),
