@@ -40,7 +40,7 @@ type EndFunc func(err error)
 
 // Tracer starts spans that carry the owning solver's name. Obtain one per package with NewTracer.
 type Tracer struct {
-	tracer trace.Tracer
+	name   string               // instrumentation scope
 	solver []attribute.KeyValue // empty for shared components
 }
 
@@ -48,7 +48,7 @@ type Tracer struct {
 // stamps solver on every span when solver is non-empty (shared components pass ""). Uses the global
 // provider, so it is a no-op until NewTracing enables it.
 func NewTracer(name, solver string) *Tracer {
-	t := &Tracer{tracer: otel.Tracer(name)}
+	t := &Tracer{name: name}
 	if solver != "" {
 		t.solver = []attribute.KeyValue{AttrSolver.String(solver)}
 	}
@@ -56,8 +56,10 @@ func NewTracer(name, solver string) *Tracer {
 }
 
 // Raw exposes the underlying tracer for code that must hold a trace.Span across goroutines
-// (txmanager keeps one span from submission to receipt).
-func (t *Tracer) Raw() trace.Tracer { return t.tracer }
+// (txmanager keeps one span from submission to receipt). The provider is resolved on every call,
+// never cached: the global provider delegates only once, so a tracer captured before NewTracing
+// installs the real one stays bound to whichever provider was set first.
+func (t *Tracer) Raw() trace.Tracer { return otel.Tracer(t.name) }
 
 // Start begins a child span of ctx.
 func (t *Tracer) Start(ctx context.Context, name string, attrs ...attribute.KeyValue) (context.Context, EndFunc) {
@@ -73,7 +75,7 @@ func (t *Tracer) StartLinked(
 		opts = append(opts, trace.WithLinks(links...))
 	}
 	//nolint:spancheck // span is ended by the returned EndFunc, not inline
-	ctx, span := t.tracer.Start(ctx, name, opts...)
+	ctx, span := t.Raw().Start(ctx, name, opts...)
 	var once sync.Once
 	return ctx, func(err error) { once.Do(func() { endSpan(span, err) }) } //nolint:spancheck // see above
 }

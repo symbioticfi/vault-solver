@@ -105,6 +105,28 @@ func TestStartLinked(t *testing.T) {
 	}
 }
 
+// TestTracerResolvesProviderPerSpan pins the lazy resolution: a Tracer built before any provider is
+// installed must still reach whichever provider is current when the span starts. Caching
+// otel.Tracer(name) in NewTracer binds it to the first provider ever set, so the second subtest
+// would record nothing.
+func TestTracerResolvesProviderPerSpan(t *testing.T) {
+	tr := NewTracer("test", "rfq")
+	for _, name := range []string{"rfq.first", "rfq.second"} {
+		t.Run(name, func(t *testing.T) {
+			rec := tracetest.Install(t)
+			_, end := tr.Start(t.Context(), name)
+			end(nil)
+			spans := rec.Ended()
+			if len(spans) != 1 || spans[0].Name() != name {
+				t.Fatalf("recorder saw %v, want exactly the %q span", spans, name)
+			}
+			if attr(spans[0], "solver") != "rfq" {
+				t.Fatalf("attributes = %v, want solver=rfq", spans[0].Attributes())
+			}
+		})
+	}
+}
+
 func TestNoopWithoutProvider(t *testing.T) {
 	// No tracetest.Install: global provider is the no-op one. Everything must be safe and cheap.
 	ctx, end := NewTracer("test", "rfq").Start(t.Context(), "rfq.quote")
