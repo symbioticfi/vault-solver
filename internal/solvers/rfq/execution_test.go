@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -129,9 +130,10 @@ func newExec(t *testing.T, st *store, be orderBackend, txm txSender) *executionS
 	return &executionService{
 		chainID: 1, executor: common.HexToAddress("0x0000000000000000000000000000000000000010"),
 		orderLimit: 20, backend: be, store: st, txm: txm, discountsEnabled: true,
-		strategy: fixedFillStrategy{plan: baseFillPlan()},
-		reader:   &fakeRecoveryReader{chainTime: time.Unix(0, 0)},
-		log:      logr.Discard(), now: func() time.Time { return time.Unix(0, 0) },
+		strategy: fixedFillStrategy{plan: baseFillPlan()}, strategyName: defaultStrategyName,
+		reader: &fakeRecoveryReader{chainTime: time.Unix(0, 0)},
+		links:  observability.NewSpanLinks(0),
+		log:    logr.Discard(), now: func() time.Time { return time.Unix(0, 0) },
 		inflight: make(map[string]bool),
 	}
 }
@@ -536,14 +538,14 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 
 	e := newExec(t, st, be, &fakeTxm{})
 	e.whitelist = buildAdapterWhitelist(true, []recoveryVault{{Adapter: vlt}})
-	out := e.discountInventories(context.Background(), tIn, nil)
+	out := e.discountInventories(context.Background(), logr.Discard(), tIn, nil)
 	if len(out) != 1 || out[0].Adapter != vlt {
 		t.Fatalf("whitelisted discountInventories = %+v, want only the listed adapter", out)
 	}
 
 	// Disabled via config (nil whitelist): both discounts survive.
 	e.whitelist = buildAdapterWhitelist(false, []recoveryVault{{Adapter: vlt}})
-	out = e.discountInventories(context.Background(), tIn, nil)
+	out = e.discountInventories(context.Background(), logr.Discard(), tIn, nil)
 	if len(out) != 2 {
 		t.Fatalf("unfiltered discountInventories = %d entries, want 2", len(out))
 	}
@@ -563,7 +565,7 @@ func TestExecution_DiscountInventoriesSkipsExpired(t *testing.T) {
 	e := newExec(t, st, be, &fakeTxm{})
 	e.now = func() time.Time { return time.Unix(2, 0) }
 	e.whitelist = buildAdapterWhitelist(true, []recoveryVault{{Adapter: vlt}})
-	if out := e.discountInventories(context.Background(), tIn, nil); len(out) != 0 {
+	if out := e.discountInventories(context.Background(), logr.Discard(), tIn, nil); len(out) != 0 {
 		t.Fatalf("expired discount inventories = %+v", out)
 	}
 }
@@ -593,7 +595,7 @@ func TestExecutionRecoveryMarksPermissionedScopeAsSingleRoute(t *testing.T) {
 	e.strategy = strategy
 
 	plan, err := e.buildFillPlan(
-		t.Context(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
+		t.Context(), logr.Discard(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
 	)
 	if err != nil {
 		t.Fatalf("buildFillPlan: %v", err)
@@ -623,7 +625,7 @@ func TestExecutionRejectsPermissionedScopeMultiLegFillPlan(t *testing.T) {
 	e.strategy = fixedFillStrategy{plan: plan}
 
 	got, err := e.buildFillPlan(
-		t.Context(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
+		t.Context(), logr.Discard(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
 	)
 	if err == nil || !strings.Contains(err.Error(), "single-route input requires exactly one leg") {
 		t.Fatalf("buildFillPlan error = %v, want single-route rejection", err)
@@ -644,7 +646,7 @@ func TestExecution_ReconcileUnknownStatusRetainsOrder(t *testing.T) {
 			be := &fakeBackend{order: &backendOrder{OrderID: "o1", OrderStatus: status}}
 			e := newExec(t, st, be, &fakeTxm{})
 
-			e.reconcileTerminalStatus(t.Context(), "o1")
+			e.reconcileTerminalStatus(t.Context(), logr.Discard(), "o1")
 
 			if got := st.order("o1").Status; got != statusSubmitted {
 				t.Fatalf("status = %q, want %q", got, statusSubmitted)

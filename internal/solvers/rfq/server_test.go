@@ -13,6 +13,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 const testSecret = "s3cr3t"
@@ -21,15 +23,19 @@ func testServer() *server {
 	execAddr := common.HexToAddress("0x0000000000000000000000000000000000000010")
 	clk := func() time.Time { return time.Unix(0, 0) }
 	q := &quoteService{
-		chainID:   1,
-		executor:  execAddr,
-		laneReady: func() bool { return true },
-		reader:    &fakeQuoteCandidateReader{out: map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}},
-		strategy:  newDefaultTestStrategy(),
-		log:       logr.Discard(),
-		now:       clk,
+		chainID:      1,
+		executor:     execAddr,
+		laneReady:    func() bool { return true },
+		reader:       &fakeQuoteCandidateReader{out: map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}},
+		strategy:     newDefaultTestStrategy(),
+		strategyName: defaultStrategyName,
+		log:          logr.Discard(),
+		now:          clk,
 	}
-	return &server{sharedSecret: testSecret, quotes: q, log: logr.Discard()}
+	return &server{
+		sharedSecret: testSecret, quotes: q,
+		links: observability.NewSpanLinks(0), log: logr.Discard(),
+	}
 }
 
 func validQuoteBody() quoteRequest {

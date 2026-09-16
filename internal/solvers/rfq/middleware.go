@@ -15,6 +15,11 @@ import (
 // quote payloads are small; this is a safety bound against an oversized/slow body.
 const maxRequestBytes = 1 << 20 // 1 MiB
 
+// quoteLinkTTL is how long a served quote's span context stays linkable from the fill that wins it
+// (spec §12). The quote response carries no expiry, so this fixed window stands in for the backend's
+// award latency; expiring it early only costs the link, never the fill.
+const quoteLinkTTL = 10 * time.Minute
+
 const requestIDHeader = "X-Request-Id"
 
 type ctxKey int

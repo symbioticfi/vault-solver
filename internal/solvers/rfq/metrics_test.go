@@ -226,10 +226,10 @@ func TestRFQMetricsTrackUniqueWinsAndActiveOrders(t *testing.T) {
 		now:               func() time.Time { return now },
 	}
 
-	if err := exec.pollOpenOrders(context.Background()); err != nil {
+	if err := exec.pollOpenOrders(context.Background(), logr.Discard()); err != nil {
 		t.Fatal(err)
 	}
-	if err := exec.pollOpenOrders(context.Background()); err != nil {
+	if err := exec.pollOpenOrders(context.Background(), logr.Discard()); err != nil {
 		t.Fatal(err)
 	}
 	now = now.Add(10 * time.Second)
@@ -258,13 +258,13 @@ func TestRFQMetricsFailedPollKeepsLastSuccess(t *testing.T) {
 		log:      logr.Discard(),
 		now:      func() time.Time { return now },
 	}
-	if err := exec.pollOpenOrders(t.Context()); err != nil {
+	if err := exec.pollOpenOrders(t.Context(), logr.Discard()); err != nil {
 		t.Fatalf("successful poll: %v", err)
 	}
 
 	now = now.Add(time.Minute)
 	backend.orderListErr = errors.New("backend unavailable")
-	if err := exec.pollOpenOrders(t.Context()); err == nil {
+	if err := exec.pollOpenOrders(t.Context(), logr.Discard()); err == nil {
 		t.Fatal("failed poll returned nil")
 	}
 	metricstest.RequireWorkflowEvent(t, reg, Name, "order_poll", "success", 1, 1_000)

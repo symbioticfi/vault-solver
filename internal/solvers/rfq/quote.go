@@ -11,6 +11,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
@@ -34,6 +35,7 @@ type quoteService struct {
 	minAmountsIn     map[common.Address]*big.Int
 	reader           quoteCandidateReader
 	strategy         types.Strategy
+	strategyName     string // registry key, reported as the strategy.name span attribute
 	log              logr.Logger
 	now              func() time.Time
 }
@@ -93,6 +95,27 @@ type quoteObservation struct {
 // configured minimum, no whitelisted adapter, no matching asset, or no viable strategy). An error is
 // returned only for malformed input or a failed dependency.
 func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (quoteDecision, error) {
+	ctx, end := tracer.Start(ctx, "rfq.quote")
+	decision, err := qs.evaluate(ctx, q)
+	var bad *badRequestError
+	switch {
+	case errors.As(err, &bad):
+		// A malformed payload is the caller's fault (400), not a solver failure.
+		observability.Decline(ctx, "bad_request", bad.Error())
+		end(nil)
+	case err != nil:
+		end(err)
+	default:
+		if decision.response == nil {
+			observability.Decline(ctx, "no_quote", string(decision.outcome))
+		}
+		end(nil)
+	}
+	return decision, err
+}
+
+// evaluate is the quote pipeline; quote wraps it in the rfq.quote span and classifies its outcome.
+func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDecision, error) {
 	parsed, err := q.toStrategy(qs.chainID)
 	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, &badRequestError{errors.Errorf("parse request: %w", err)}
@@ -126,7 +149,9 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (quoteDecisi
 	}
 
 	requireSingleRoute := qs.tokenPolicy.RequiresSingleRoute(req.TokenIn)
-	candidates, err := qs.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount)
+	snapshotCtx, endSnapshot := tracer.Start(ctx, "rfq.quote.snapshot")
+	candidates, err := qs.reader.readQuoteCandidates(snapshotCtx, inv, req.TokenIn, req.TokenOut, req.Amount)
+	endSnapshot(err)
 	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: read LiquidLane candidates: %w", err)
 	}
@@ -135,7 +160,9 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (quoteDecisi
 		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
 	}
 	input := newQuoteInput(qs.chainID, qs.executor, req, candidates, nil, requireSingleRoute, qs.now())
-	out, err := qs.strategy.DecideQuote(ctx, input)
+	decideCtx, endDecide := tracer.Start(ctx, "rfq.quote.decide", observability.AttrStrategy.String(qs.strategyName))
+	out, err := qs.strategy.DecideQuote(decideCtx, input)
+	endDecide(err)
 	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: strategy: %w", err)
 	}
@@ -143,9 +170,11 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (quoteDecisi
 		qs.log.V(1).Info("declining quote: no viable strategy", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionStrategyDeclined}, nil
 	}
-	if _, err := strategies.FillPlanFromQuote(input, out); err != nil {
+	plan, err := strategies.FillPlanFromQuote(input, out)
+	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: strategy: %w", err)
 	}
+	traceAdapter(ctx, plan.Legs)
 	if !qs.canQuote() {
 		qs.log.V(1).Info("declining quote: transaction lane no longer ready", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil

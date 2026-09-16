@@ -10,6 +10,9 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/observability"
@@ -59,11 +62,15 @@ type executionService struct {
 	store             *store
 	reader            fillReader
 	strategy          types.Strategy
+	strategyName      string // registry key, reported as the strategy.name span attribute
 	txm               txSender
 	metrics           *rfqMetrics
 	orderPollObserver *observability.OperationObserver
-	log               logr.Logger
-	now               func() time.Time
+	// links is shared with the server: it holds the span context of each quote this process served,
+	// so a fill can link back to it (spec §12). nil disables linking.
+	links *observability.SpanLinks
+	log   logr.Logger
+	now   func() time.Time
 
 	inflightMu sync.Mutex
 	inflight   map[string]bool
@@ -97,18 +104,25 @@ func (e *executionService) run(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// syncOnce polls open orders, then advances every active order's state machine.
+// syncOnce polls open orders, then advances every active order's state machine. It roots the fill
+// trace for this cycle: the quote that produced an order lives in the backend's trace, not here.
 func (e *executionService) syncOnce(ctx context.Context) {
-	if err := e.pollOpenOrders(ctx); err != nil {
-		backendErrorLogger(e.log, err).Error(err, "poll open orders")
+	ctx, end := tracer.Start(ctx, "rfq.execution.sync")
+	log := observability.TraceLogger(ctx, e.log)
+	err := e.pollOpenOrders(ctx, log)
+	if err != nil {
+		backendErrorLogger(log, err).Error(err, "poll open orders")
 	}
 	for _, o := range e.store.activeOrders() {
-		e.handleOrder(ctx, o)
+		e.handleOrder(ctx, log, o)
 	}
 	e.store.sweep() // evict stale terminal orders so the maps stay bounded
+	end(err)
 }
 
-func (e *executionService) pollOpenOrders(ctx context.Context) (err error) {
+func (e *executionService) pollOpenOrders(ctx context.Context, log logr.Logger) (err error) {
+	ctx, end := tracer.Start(ctx, "rfq.execution.poll")
+	defer func() { end(err) }()
 	timer := observability.StartOperation(e.orderPollObserver)
 	defer func() {
 		outcome := observability.ExternalOperationSuccess
@@ -128,7 +142,7 @@ func (e *executionService) pollOpenOrders(ctx context.Context) (err error) {
 		}
 	}
 	if len(orders) > 0 {
-		e.log.V(1).Info("polled open orders", "count", len(orders))
+		log.V(1).Info("polled open orders", "count", len(orders))
 	}
 	if e.metrics != nil {
 		e.metrics.observeOrderPoll(e.now())
@@ -136,23 +150,54 @@ func (e *executionService) pollOpenOrders(ctx context.Context) (err error) {
 	return nil
 }
 
-func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
+func (e *executionService) handleOrder(ctx context.Context, log logr.Logger, o *orderRecord) {
 	if !e.acquire(o.OrderID) {
 		return
 	}
 	defer e.release(o.OrderID)
 
+	attrs := []attribute.KeyValue{
+		observability.AttrOrderID.String(o.OrderID),
+		observability.AttrQuoteID.String(o.QuoteID),
+	}
+	var links []trace.Link
+	if link, ok := e.quoteLink(o.QuoteID); ok {
+		links = append(links, link)
+		attrs = append(attrs, observability.AttrQuoteTraceID.String(link.SpanContext.TraceID().String()))
+	}
+	ctx, end := tracer.StartLinked(ctx, "rfq.order", links, attrs...)
+	defer end(nil) // each stage records its own failure; terminal skips are declined events here
+
+	log = observability.TraceLogger(ctx, log).WithValues("orderId", o.OrderID, "quoteId", o.QuoteID)
+	if len(links) > 0 {
+		log = log.WithValues("quoteTraceId", links[0].SpanContext.TraceID().String())
+	} else {
+		// Best effort (spec §12): the quote span is gone — restart, eviction, or it was never ours.
+		// The fill proceeds identically; only the link is lost.
+		trace.SpanFromContext(ctx).AddEvent("link_miss",
+			trace.WithAttributes(attribute.String("key", o.QuoteID)))
+	}
+
 	switch o.Status {
 	case statusQueued, statusSubmitting:
-		e.submitOrder(ctx, o.OrderID)
+		e.submitOrder(ctx, log, o.OrderID)
 	case statusSubmitted:
-		e.reconcileTerminalStatus(ctx, o.OrderID)
+		e.reconcileTerminalStatus(ctx, log, o.OrderID)
 	case statusFilled, statusExpired, statusFailed:
 		// terminal — nothing to do
 	}
 }
 
-func (e *executionService) submitOrder(ctx context.Context, orderID string) {
+// quoteLink returns the span of the quote this order came from, when it is still remembered. A miss
+// is an ordinary result: linking is best effort and never changes what the fill does.
+func (e *executionService) quoteLink(quoteID string) (trace.Link, bool) {
+	if e.links == nil {
+		return trace.Link{}, false
+	}
+	return e.links.Lookup(quoteID)
+}
+
+func (e *executionService) submitOrder(ctx context.Context, log logr.Logger, orderID string) {
 	e.store.markStatus(orderID, statusSubmitting, common.Hash{}, "")
 	local := e.store.order(orderID)
 	if local == nil {
@@ -161,75 +206,67 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 
 	exec, err := e.resolveExecutable(ctx, local)
 	if err != nil {
-		backendErrorLogger(e.log, err).Error(err, "resolve executable order", "orderId", orderID)
+		backendErrorLogger(log, err).Error(err, "resolve executable order")
 		return // transient; retried next cycle
 	}
 	if exec == nil {
-		e.reconcileTerminalStatus(ctx, orderID)
+		observability.Decline(ctx, "fill_skipped", "order is no longer executable")
+		e.reconcileTerminalStatus(ctx, log, orderID)
 		return
 	}
 	order, err := decodeOrder(exec.encodedOrder)
 	if err != nil {
-		e.fail(orderID, "decode order: "+err.Error())
+		e.fail(ctx, log, orderID, "decode order: "+err.Error())
 		return
 	}
 	outputToken, required, err := executableOrderTerms(exec, order, e.executor)
 	if err != nil {
-		e.fail(orderID, "validate order: "+err.Error())
+		e.fail(ctx, log, orderID, "validate order: "+err.Error())
 		return
 	}
 	chainObservedAt := e.now()
 	chainTime, err := e.reader.latestBlockTime(ctx)
 	if err != nil {
-		e.log.Error(err, "read chain time", "orderId", orderID)
+		log.Error(err, "read chain time")
 		return
 	}
 	orderDeadline := time.Unix(order.Request.Deadline.Int64(), 0)
 	if !orderDeadline.After(chainTime) {
 		// Skip an already-expired order rather than spend gas on a fill the Reactor will revert.
-		e.fail(orderID, "order deadline has passed")
+		e.fail(ctx, log, orderID, "order deadline has passed")
 		return
 	}
 
-	selected, err := e.buildFillPlan(ctx, exec, order, outputToken, required)
+	selected, err := e.buildFillPlan(ctx, log, exec, order, outputToken, required)
 	if err != nil || selected == nil {
-		e.fail(orderID, "strategy fill plan: "+errString(err))
+		e.fail(ctx, log, orderID, "strategy fill plan: "+errString(err))
 		return
 	}
+	traceAdapter(ctx, selected.Legs)
 
-	swaps := directSwaps(selected, order.Request.TokenIn, e.executor)
-	discountSwaps, discountValidUntil, err := e.buildDiscountSwapInputs(ctx, selected, chainTime)
-	if err != nil {
-		// The backend swapping the adapter under a quoted leg must never be filled as-is: fail the
-		// order instead of submitting. While the backend still lists the order open, the next poll
-		// re-arms it and re-resolves the discount, so a transient mis-resolution self-heals without
-		// ever sending a tx through the wrong adapter (mirrors the TS filler's lifecycle).
-		if errors.Is(err, errDiscountAdapterMismatch) || errors.Is(err, errDiscountsDisabled) {
-			e.fail(orderID, err.Error())
-			return
-		}
-		// A discount resolve is a live backend call; treat its failure as transient (leave the order
-		// in submitting and retry next cycle) rather than terminal. Once the order is no longer open
-		// the executable lookup returns nil and reconciliation marks it expired/filled.
-		backendErrorLogger(e.log, err).Error(err, "resolve discounts (will retry)", "orderId", orderID)
-		return
-	}
-	calldata, err := encodeFill(order, exec.signature, swaps, discountSwaps, emptyExecutorData)
-	if err != nil {
-		e.fail(orderID, "encode fill: "+err.Error())
+	calldata, discountValidUntil, ok := e.buildFillCalldata(ctx, log, orderID, exec, order, selected, chainTime)
+	if !ok {
 		return
 	}
 	deadline := rfqFillDeadline(orderDeadline, discountValidUntil)
 	cancelAt, ok := liquidlane.CancellationDeadline(deadline, chainTime, chainObservedAt, e.now())
 	if !ok {
-		e.fail(orderID, "fill execution deadline elapsed before submission")
+		e.fail(ctx, log, orderID, "fill execution deadline elapsed before submission")
 		return
 	}
 
-	res := e.txm.Send(ctx, txmanager.Request{
+	submitCtx, endSubmit := tracer.Start(ctx, "rfq.order.submit")
+	res := e.txm.Send(submitCtx, txmanager.Request{
 		Solver: Name,
 		To:     e.executor, Data: calldata, CancelAt: cancelAt, Label: "rfq-fill",
 	})
+	// The transaction identifies the fill on both the stage span and the order span it belongs to.
+	txAttrs := []attribute.KeyValue{
+		observability.AttrTxHash.String(res.Hash.Hex()),
+		observability.AttrTxOutcome.String(string(res.Outcome)),
+	}
+	observability.SetAttributes(submitCtx, txAttrs...)
+	observability.SetAttributes(ctx, txAttrs...)
 	attempt := e.store.recordAttempt(orderID)
 	outcome := res.Outcome
 	if !outcome.Included() {
@@ -244,7 +281,8 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		if err == nil {
 			err = errors.Errorf("unknown transaction outcome %q", outcome)
 		}
-		e.log.Error(err, "fill failed", "orderId", orderID, "attempt", attempt, "tx", res.Hash.Hex())
+		endSubmit(err)
+		log.Error(err, "fill failed", "attempt", attempt, "tx", res.Hash.Hex())
 		status := statusFailed
 		if outcome == txmanager.OutcomeTrackingStopped {
 			// Inclusion is unknown; reconcile the backend without sending another transaction.
@@ -253,11 +291,12 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		e.store.markStatus(orderID, status, res.Hash, err.Error())
 		return
 	}
+	endSubmit(res.Err) // included but unconfirmed still carries the wait failure
 	if outcome == txmanager.OutcomeConfirmed {
-		e.log.Info("filled order", "orderId", orderID, "quoteId", exec.quoteID, "tx", res.Hash.Hex())
+		log.Info("filled order", "tx", res.Hash.Hex())
 	} else {
-		e.log.Error(res.Err, "fill included but confirmation wait failed",
-			"orderId", orderID, "attempt", attempt, "tx", res.Hash.Hex())
+		log.Error(res.Err, "fill included but confirmation wait failed",
+			"attempt", attempt, "tx", res.Hash.Hex())
 	}
 	if e.metrics != nil {
 		e.metrics.fillAmounts.Observe(
@@ -270,11 +309,57 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		)
 	}
 	e.store.markStatus(orderID, statusSubmitted, res.Hash, "")
-	e.reconcileTerminalStatus(ctx, orderID)
+	e.reconcileTerminalStatus(ctx, log, orderID)
+}
+
+// buildFillCalldata resolves the plan's discount legs and encodes the Executor fill. It reports
+// whether submission may proceed, having already recorded the order outcome when it may not.
+func (e *executionService) buildFillCalldata(
+	ctx context.Context,
+	log logr.Logger,
+	orderID string,
+	exec *executable,
+	order executor.IReactorOrder,
+	selected *fillPlan,
+	chainTime time.Time,
+) ([]byte, time.Time, bool) {
+	// The build span is the stage; ctx stays the order span, so a terminal skip is declined there
+	// rather than on a stage span this function has already ended.
+	buildCtx, end := tracer.Start(ctx, "rfq.order.build")
+	swaps := directSwaps(selected, order.Request.TokenIn, e.executor)
+	discountSwaps, discountValidUntil, err := e.buildDiscountSwapInputs(buildCtx, selected, chainTime)
+	if err != nil {
+		// The backend swapping the adapter under a quoted leg must never be filled as-is: fail the
+		// order instead of submitting. While the backend still lists the order open, the next poll
+		// re-arms it and re-resolves the discount, so a transient mis-resolution self-heals without
+		// ever sending a tx through the wrong adapter (mirrors the TS filler's lifecycle).
+		if errors.Is(err, errDiscountAdapterMismatch) || errors.Is(err, errDiscountsDisabled) {
+			end(nil) // failing closed on a backend-side swap is an expected skip, not a solver fault
+			e.fail(ctx, log, orderID, err.Error())
+			return nil, time.Time{}, false
+		}
+		// A discount resolve is a live backend call; treat its failure as transient (leave the order
+		// in submitting and retry next cycle) rather than terminal. Once the order is no longer open
+		// the executable lookup returns nil and reconciliation marks it expired/filled.
+		end(err)
+		backendErrorLogger(log, err).Error(err, "resolve discounts (will retry)")
+		return nil, time.Time{}, false
+	}
+	calldata, err := encodeFill(order, exec.signature, swaps, discountSwaps, emptyExecutorData)
+	if err != nil {
+		end(err)
+		e.fail(ctx, log, orderID, "encode fill: "+err.Error())
+		return nil, time.Time{}, false
+	}
+	end(nil)
+	return calldata, discountValidUntil, true
 }
 
 // resolveExecutable returns the executable payload for a polled order from the backend.
-func (e *executionService) resolveExecutable(ctx context.Context, local *orderRecord) (*executable, error) {
+func (e *executionService) resolveExecutable(ctx context.Context, local *orderRecord) (exec *executable, err error) {
+	ctx, end := tracer.Start(ctx, "rfq.order.resolve")
+	defer func() { end(err) }()
+
 	bo, err := e.backend.getExecutableOrder(ctx, local.OrderID, lowerAddr(e.executor))
 	if err != nil {
 		return nil, err
@@ -285,10 +370,15 @@ func (e *executionService) resolveExecutable(ctx context.Context, local *orderRe
 	return executableFromBackend(bo)
 }
 
-func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID string) {
-	bo, err := e.backend.getOrder(ctx, orderID)
+func (e *executionService) reconcileTerminalStatus(ctx context.Context, log logr.Logger, orderID string) {
+	ctx, end := tracer.Start(ctx, "rfq.order.report")
+	var err error
+	defer func() { end(err) }()
+
+	var bo *backendOrder
+	bo, err = e.backend.getOrder(ctx, orderID)
 	if err != nil {
-		backendErrorLogger(e.log, err).Error(err, "reconcile: get order", "orderId", orderID)
+		backendErrorLogger(log, err).Error(err, "reconcile: get order")
 		return
 	}
 	if bo == nil {
@@ -308,11 +398,13 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 	case backendOrderStatusOpen:
 		// still open; leave as-is for the next cycle
 	case "error", "cancelled", "unverified", "insufficient-funds":
+		observability.Decline(ctx, "fill_failed", "backend terminal status "+bo.OrderStatus)
 		e.store.markStatus(orderID, statusFailed, txHash, "backend terminal status "+bo.OrderStatus)
 	default:
 		// The client tolerates a dropped or renamed field, so "" or a new value reaches here. Marking
 		// it failed would re-arm the order and re-submit a fill the backend may still consider live.
-		e.log.Error(errUnknownOrderStatus, "reconcile: retaining order", "orderId", orderID, "status", bo.OrderStatus)
+		err = errUnknownOrderStatus
+		log.Error(err, "reconcile: retaining order", "status", bo.OrderStatus)
 	}
 }
 
@@ -323,11 +415,15 @@ var errUnknownOrderStatus = errors.New("unrecognized backend order status")
 // structural constraints on the returned plan.
 func (e *executionService) buildFillPlan(
 	ctx context.Context,
+	log logr.Logger,
 	exec *executable,
 	order executor.IReactorOrder,
 	outputToken common.Address,
 	required *big.Int,
-) (*fillPlan, error) {
+) (plan *fillPlan, err error) {
+	ctx, end := tracer.Start(ctx, "rfq.order.plan", observability.AttrStrategy.String(e.strategyName))
+	defer func() { end(err) }()
+
 	// Direct inventories are filtered to adapters this executor is authorized to fill through. Skipped
 	// when no candidate vaults are configured (a discount-only solver), leaving discount legs only.
 	inv := make([]solverInventory, 0, len(e.vaults)+1)
@@ -340,7 +436,7 @@ func (e *executionService) buildFillPlan(
 	}
 	// Discount inventories use the internal-only discounts API; external solvers skip it (adapters alone).
 	if e.discountsEnabled {
-		inv = append(inv, e.discountInventories(ctx, order.Request.TokenIn, inv)...)
+		inv = append(inv, e.discountInventories(ctx, log, order.Request.TokenIn, inv)...)
 	}
 	req := strategyRequest{
 		RequestID: exec.quoteID, QuoteID: exec.quoteID,
@@ -349,19 +445,18 @@ func (e *executionService) buildFillPlan(
 	requireSingleRoute := e.tokenPolicy.RequiresSingleRoute(req.TokenIn)
 	var candidates []liquidlane.QuoteCandidate
 	if len(inv) > 0 {
-		var err error
 		candidates, err = e.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount)
 		if err != nil {
 			return nil, errors.Errorf("fill: read LiquidLane candidates: %w", err)
 		}
 	}
 	input := newFillInput(e.chainID, e.executor, req, candidates, required, requireSingleRoute, e.now())
-	plan, err := e.strategy.BuildFillPlan(ctx, input)
+	plan, err = e.strategy.BuildFillPlan(ctx, input)
 	if err != nil || plan == nil {
 		return plan, err
 	}
-	if err := validateSingleRoute(input.RequireSingleRoute, len(plan.Legs)); err != nil {
-		return nil, errors.Errorf("fill: strategy: %w", err)
+	if verr := validateSingleRoute(input.RequireSingleRoute, len(plan.Legs)); verr != nil {
+		return nil, errors.Errorf("fill: strategy: %w", verr)
 	}
 	return plan, nil
 }
@@ -427,11 +522,11 @@ func rfqFillDeadline(orderDeadline, discountValidUntil time.Time) time.Time {
 // tokenToRedeem == tokenIn, and whose adapter is not already permissioned. Solver-side candidate
 // normalization later filters collateral to the order's tokenOut.
 func (e *executionService) discountInventories(
-	ctx context.Context, tokenIn common.Address, direct []solverInventory,
+	ctx context.Context, log logr.Logger, tokenIn common.Address, direct []solverInventory,
 ) []solverInventory {
 	resp, err := e.backend.listDiscounts(ctx)
 	if err != nil {
-		backendErrorLogger(e.log, err).Error(err, "fill: list discounts")
+		backendErrorLogger(log, err).Error(err, "fill: list discounts")
 		return nil
 	}
 	seen := make(map[common.Address]bool, len(direct))
@@ -442,7 +537,7 @@ func (e *executionService) discountInventories(
 	var out []solverInventory
 	offers, issues := discounts.LiveOffers(resp, now)
 	for _, issue := range issues {
-		e.log.V(1).Info(
+		log.V(1).Info(
 			"recover: skip invalid discount", "discountId", issue.DiscountID, "error", issue.Err.Error(),
 		)
 	}
@@ -506,8 +601,11 @@ func toDiscountSwapInput(
 	}, nil
 }
 
-func (e *executionService) fail(orderID, msg string) {
-	e.log.Info("order failed", "orderId", orderID, "reason", msg)
+// fail records a terminal skip: expected, so it declines the span rather than erroring it, the same
+// way it logs at Info rather than Error.
+func (e *executionService) fail(ctx context.Context, log logr.Logger, orderID, msg string) {
+	observability.Decline(ctx, "fill_failed", msg)
+	log.Info("order failed", "reason", msg)
 	e.store.markStatus(orderID, statusFailed, common.Hash{}, msg)
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"gopkg.in/yaml.v3"
 
@@ -73,6 +74,10 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if metrics != nil {
 		exec.orderPollObserver = metrics.orderPollObserver
 	}
+	// One process-local map shared by both services: the server remembers each served quote's span,
+	// the fill loop looks it up by quote id to link the two traces (spec §12).
+	links := observability.NewSpanLinks(0)
+	exec.links = links
 	return &Solver{
 		cfg:  cfg,
 		exec: exec,
@@ -80,6 +85,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 			sharedSecret: secret,
 			quotes:       quotes,
 			metrics:      metrics,
+			links:        links,
 			log:          log,
 		},
 		log:         log,
@@ -118,6 +124,7 @@ func buildServices(
 		minAmountsIn:     cfg.MinAmountsIn,
 		reader:           rdr,
 		strategy:         quoteStrategy,
+		strategyName:     cfg.Strategy.Name,
 		log:              log,
 		now:              time.Now,
 	}
@@ -133,6 +140,7 @@ func buildServices(
 		store:            st,
 		reader:           rdr,
 		strategy:         quoteStrategy,
+		strategyName:     cfg.Strategy.Name,
 		txm:              txm,
 		log:              log,
 		now:              time.Now,
