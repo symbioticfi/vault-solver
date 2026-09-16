@@ -94,24 +94,29 @@ type quoteObservation struct {
 // well-formed but this filler can't quote it (wrong type/chain, input token out of scope or below its
 // configured minimum, no whitelisted adapter, no matching asset, or no viable strategy). An error is
 // returned only for malformed input or a failed dependency.
-func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (quoteDecision, error) {
+func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (decision quoteDecision, err error) {
 	ctx, end := tracer.Start(ctx, "rfq.quote")
-	decision, err := qs.evaluate(ctx, q)
-	var bad *badRequestError
-	switch {
-	case errors.As(err, &bad):
-		// A malformed payload is the caller's fault (400), not a solver failure.
-		observability.Decline(ctx, "bad_request", bad.Error())
-		end(nil)
-	case err != nil:
-		end(err)
-	default:
-		if decision.response == nil {
-			observability.Decline(ctx, "no_quote", string(decision.outcome))
+	// Deferred so the span still ends when the pipeline panics; recoverPanics turns that into a 500
+	// without unwinding past here, and an unended span is never exported.
+	defer func() {
+		var bad *badRequestError
+		switch {
+		case errors.As(err, &bad):
+			// A malformed payload is the caller's fault (400), not a solver failure.
+			observability.Decline(ctx, "bad_request", bad.Error())
+			end(nil)
+		case err != nil:
+			end(err)
+		default:
+			// A zero outcome means the pipeline panicked: end the span without recording a decision
+			// it never reached.
+			if decision.response == nil && decision.outcome != "" {
+				observability.Decline(ctx, "no_quote", string(decision.outcome))
+			}
+			end(nil)
 		}
-		end(nil)
-	}
-	return decision, err
+	}()
+	return qs.evaluate(ctx, q)
 }
 
 // evaluate is the quote pipeline; quote wraps it in the rfq.quote span and classifies its outcome.
@@ -149,9 +154,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDec
 	}
 
 	requireSingleRoute := qs.tokenPolicy.RequiresSingleRoute(req.TokenIn)
-	snapshotCtx, endSnapshot := tracer.Start(ctx, "rfq.quote.snapshot")
-	candidates, err := qs.reader.readQuoteCandidates(snapshotCtx, inv, req.TokenIn, req.TokenOut, req.Amount)
-	endSnapshot(err)
+	candidates, err := qs.snapshotCandidates(ctx, inv, req)
 	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: read LiquidLane candidates: %w", err)
 	}
@@ -160,9 +163,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDec
 		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
 	}
 	input := newQuoteInput(qs.chainID, qs.executor, req, candidates, nil, requireSingleRoute, qs.now())
-	decideCtx, endDecide := tracer.Start(ctx, "rfq.quote.decide", observability.AttrStrategy.String(qs.strategyName))
-	out, err := qs.strategy.DecideQuote(decideCtx, input)
-	endDecide(err)
+	out, err := qs.decideQuote(ctx, input)
 	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: strategy: %w", err)
 	}
@@ -203,6 +204,24 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDec
 			amountIn: req.Amount, amountOut: out.QuotedAmountOut,
 		},
 	}, nil
+}
+
+// snapshotCandidates reads current on-chain pricing for the request as the rfq.quote.snapshot stage.
+func (qs *quoteService) snapshotCandidates(
+	ctx context.Context, inv []solverInventory, req strategyRequest,
+) (candidates []liquidlane.QuoteCandidate, err error) {
+	ctx, end := tracer.Start(ctx, "rfq.quote.snapshot")
+	defer func() { end(err) }()
+	return qs.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount)
+}
+
+// decideQuote runs the strategy as the rfq.quote.decide stage.
+func (qs *quoteService) decideQuote(
+	ctx context.Context, input types.QuoteInput,
+) (out types.QuoteOutput, err error) {
+	ctx, end := tracer.Start(ctx, "rfq.quote.decide", observability.AttrStrategy.String(qs.strategyName))
+	defer func() { end(err) }()
+	return qs.strategy.DecideQuote(ctx, input)
 }
 
 // canQuote fails closed when the lane-state dependency was not wired. Production construction

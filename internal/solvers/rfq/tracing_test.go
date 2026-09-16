@@ -2,18 +2,22 @@ package rfq
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-logr/logr/funcr"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 )
 
 const (
@@ -120,6 +124,32 @@ func TestServer_QuoteTracing(t *testing.T) {
 	if _, ok := srv.links.Lookup(body.QuoteID); !ok {
 		t.Fatal("quote span context not remembered for linking")
 	}
+}
+
+// panicStrategy stands in for a decider that blows up mid-request — the webhook strategy calls out
+// over HTTP, so this is reachable in production and is recovered by the innermost middleware.
+type panicStrategy struct{}
+
+func (panicStrategy) DecideQuote(context.Context, types.QuoteInput) (types.QuoteOutput, error) {
+	panic("strategy exploded")
+}
+
+func (panicStrategy) BuildFillPlan(context.Context, types.FillInput) (*types.FillPlan, error) {
+	return nil, nil
+}
+
+// A recovered panic must not leak spans: recoverPanics completes the request, so any span left open
+// by the unwound stack is never exported. Every quote span has to end on that path too.
+func TestServer_QuoteTracingEndsSpansOnPanic(t *testing.T) {
+	rec := tracetest.Install(t)
+	srv := testServer()
+	srv.quotes.strategy = panicStrategy{}
+
+	rr := postQuote(t, srv.handler(), validQuoteBody(), inboundTraceparent)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("panicking quote = %d, want 500 (body %s)", rr.Code, rr.Body.String())
+	}
+	requireSpans(t, rec, "POST /quote", "rfq.quote", "rfq.quote.decide")
 }
 
 // A well-formed request this filler cannot quote is not a failure: the span declines instead of
@@ -282,6 +312,37 @@ func hasEvent(s sdktrace.ReadOnlySpan, name string) bool {
 		}
 	}
 	return false
+}
+
+// Trace loggers are derived from the base logger at each span-starting site, never from an
+// already-derived one: re-deriving appends a second trace_id/span_id pair to every line.
+func TestExecution_OrderLogsCarryTraceIDOnce(t *testing.T) {
+	tracetest.Install(t)
+	st, be := fillFixtures(t)
+	var lines []string
+	e := newExec(t, st, be, &fakeTxm{result: confirmedTxResult()})
+	e.log = funcr.NewJSON(func(entry string) { lines = append(lines, entry) }, funcr.Options{Verbosity: 1})
+
+	e.syncOnce(t.Context())
+
+	if len(lines) == 0 {
+		t.Fatal("no log output captured")
+	}
+	var sawOrderLine bool
+	for _, line := range lines {
+		if n := strings.Count(line, `"trace_id"`); n > 1 {
+			t.Fatalf("trace_id appears %d times in %s", n, line)
+		}
+		if n := strings.Count(line, `"span_id"`); n > 1 {
+			t.Fatalf("span_id appears %d times in %s", n, line)
+		}
+		if strings.Contains(line, `"orderId"`) && strings.Contains(line, `"trace_id"`) {
+			sawOrderLine = true
+		}
+	}
+	if !sawOrderLine {
+		t.Fatalf("no order-path line carried trace_id: %v", lines)
+	}
 }
 
 // Tracing is off by default: no provider is installed here, so every span is a no-op and the fill
