@@ -523,7 +523,7 @@ func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 		Outcome: txmanager.OutcomeConfirmed,
 	}
 	result := <-pending.result
-	fixture.solver.completePendingFill(uniswapFillCompletion{fill: pending, result: result})
+	fixture.solver.completePendingFill(t.Context(), uniswapFillCompletion{fill: pending, result: result})
 	if fixture.solver.capacity.Len() != 0 {
 		t.Fatal("pending reservation was not released")
 	}
@@ -703,7 +703,7 @@ func TestCompletePendingFillClassifiesNotAdmittedWithoutFailure(t *testing.T) {
 	)
 	pending := &pendingUniswapFill{order: fixture.order}
 
-	fixture.solver.completePendingFill(uniswapFillCompletion{
+	fixture.solver.completePendingFill(t.Context(), uniswapFillCompletion{
 		fill: pending,
 		result: txmanager.Result{
 			Outcome:     txmanager.OutcomeSubmissionError,
@@ -737,7 +737,7 @@ func TestCompletePendingFillRecordsFailureOutcome(t *testing.T) {
 		liquidlane.CapacityReservations{fixture.route.CapacityID: big.NewInt(100)},
 	)
 
-	fixture.solver.completePendingFill(uniswapFillCompletion{
+	fixture.solver.completePendingFill(t.Context(), uniswapFillCompletion{
 		fill: &pendingUniswapFill{order: fixture.order},
 		result: txmanager.Result{
 			Outcome: txmanager.OutcomeReverted,
@@ -794,7 +794,7 @@ func TestIncludedUnconfirmedFillCompletesWithoutRetry(t *testing.T) {
 		attempts: make(map[common.Hash]int),
 	}
 
-	solver.completePendingFill(uniswapFillCompletion{
+	solver.completePendingFill(t.Context(), uniswapFillCompletion{
 		fill: &pendingUniswapFill{order: order},
 		result: txmanager.Result{
 			Outcome: txmanager.OutcomeIncludedUnconfirmed,

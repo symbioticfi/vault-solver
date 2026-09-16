@@ -20,6 +20,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -43,8 +44,11 @@ type Solver struct {
 	confirmations uint64
 	orders        orderPoller
 	discounts     liquiddiscounts.Provider
-	log           logr.Logger
-	reportFatal   func(error)
+	// links holds the span context of each quote this process served, so the fill that wins one can
+	// link back to it (spec §12). nil disables linking.
+	links       *observability.SpanLinks
+	log         logr.Logger
+	reportFatal func(error)
 
 	// refreshMu serializes chain snapshots. quoteState is immutable after publication and is
 	// replaced atomically. Quote requests are stateless because Uniswap intentionally hides
@@ -167,6 +171,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		confirmations:     deps.TxManager.Confirmations(),
 		orders:            newOrderClient(cfg.OrderServer, orderKey),
 		discounts:         discountClient,
+		links:             observability.NewSpanLinks(0),
 		log:               log,
 		reportFatal:       deps.ReportFatal,
 		refreshCh:         make(chan struct{}, 1),

@@ -6,6 +6,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
@@ -120,17 +122,24 @@ func (s *Solver) exclusiveRecoveryLookback() time.Duration {
 	return max(time.Hour, 2*s.cfg.Breaker.Window)
 }
 
+// pollSource roots one uniswapx.orders.poll trace per poll and spans each accepted order under it.
 func (s *Solver) pollSource(
 	ctx context.Context,
 	source orderSource,
 	filler *common.Address,
 	out chan<- *resolvedOrder,
-) (time.Time, error) {
+) (now time.Time, err error) {
+	ctx, end := tracer.Start(ctx, "uniswapx.orders.poll")
+	defer func() { end(err) }()
+
+	// Derived from the base logger, never from a caller's already-derived one: TraceLogger appends
+	// trace_id/span_id unconditionally, so re-deriving would stamp them twice per line.
+	log := observability.TraceLogger(ctx, s.log)
 	entries, err := s.orders.openOrders(ctx, s.chainID, filler)
 	if err != nil && len(entries) == 0 {
 		return time.Time{}, errors.Errorf("poll %s orders: %w", source, err)
 	}
-	s.log.V(1).Info(
+	log.V(1).Info(
 		"orders polled",
 		"source", source,
 		"orders", len(entries),
@@ -158,7 +167,7 @@ func (s *Solver) pollSource(
 					s.observeExclusiveWin()
 				}
 			}
-			s.log.V(1).Info("order rejected", "error", parseErr, "source", source,
+			log.V(1).Info("order rejected", "error", parseErr, "source", source,
 				"orderHash", entry.OrderHash, "quoteId", entry.QuoteID)
 			continue
 		}
@@ -166,7 +175,7 @@ func (s *Solver) pollSource(
 			s.observeExclusiveWin()
 		}
 		if !s.claim(order.Hash, now) {
-			s.log.V(1).Info(
+			log.V(1).Info(
 				"order skipped: already handled or awaiting retry",
 				"source", source,
 				"orderHash", order.Hash.Hex(),
@@ -174,29 +183,60 @@ func (s *Solver) pollSource(
 			)
 			continue
 		}
-		s.log.V(1).Info(
-			"order queued for fill",
-			"source", source,
-			"orderHash", order.Hash.Hex(),
-			"quoteId", order.QuoteID,
-			"tokenIn", order.TokenIn.Hex(),
-			"tokenOut", order.TokenOut.Hex(),
-			"amountIn", order.AmountIn.String(),
-			"amountOut", order.AmountOut.String(),
-			"deadline", order.Deadline,
-		)
-		select {
-		case out <- order:
-		case <-ctx.Done():
+		if trackErr := s.trackOrder(ctx, order, out); trackErr != nil {
 			s.endFillPlanning()
 			s.retry(order.Hash, now, false)
-			return time.Time{}, ctx.Err()
+			return time.Time{}, trackErr
 		}
 	}
 	if err != nil {
 		return now, errors.Errorf("poll %s orders: %w", source, err)
 	}
 	return now, nil
+}
+
+// trackOrder spans an accepted order from claim to enqueue, links it back to the quote that won it
+// (spec §12), and rides its span context on the order so the fill continues this trace.
+func (s *Solver) trackOrder(ctx context.Context, order *resolvedOrder, out chan<- *resolvedOrder) (err error) {
+	attrs := []attribute.KeyValue{
+		observability.AttrOrderHash.String(order.Hash.Hex()),
+		observability.AttrQuoteID.String(order.QuoteID),
+	}
+	var links []trace.Link
+	if link, ok := s.quoteLink(order.QuoteID); ok {
+		links = append(links, link)
+		attrs = append(attrs, observability.AttrQuoteTraceID.String(link.SpanContext.TraceID().String()))
+	}
+	ctx, end := tracer.StartLinked(ctx, "uniswapx.order.track", links, attrs...)
+	defer func() { end(err) }()
+
+	log := observability.TraceLogger(ctx, s.log)
+	if len(links) > 0 {
+		log = log.WithValues("quoteTraceId", links[0].SpanContext.TraceID().String())
+	} else {
+		// Best effort (spec §12): the quote span is gone — restart, eviction, or it was never ours.
+		// The fill proceeds identically; only the link is lost.
+		trace.SpanFromContext(ctx).AddEvent("link_miss",
+			trace.WithAttributes(attribute.String("key", order.QuoteID)))
+	}
+	order.span = trace.SpanContextFromContext(ctx)
+	log.V(1).Info(
+		"order queued for fill",
+		"source", order.Source,
+		"orderHash", order.Hash.Hex(),
+		"quoteId", order.QuoteID,
+		"tokenIn", order.TokenIn.Hex(),
+		"tokenOut", order.TokenOut.Hex(),
+		"amountIn", order.AmountIn.String(),
+		"amountOut", order.AmountOut.String(),
+		"deadline", order.Deadline,
+	)
+	select {
+	case out <- order:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *Solver) recordExclusivePollSuccess(now time.Time) {
