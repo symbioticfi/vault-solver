@@ -149,19 +149,18 @@ func (s *Solver) processOrderUsingReservations(
 	plan, err := s.decideFill(ctx, prepared.input)
 	if err != nil {
 		s.logFillDecisionError(log, err, "order fill: strategy", order)
-		if types.IsPermanentFillDecisionError(err) {
-			if errors.Is(err, types.ErrUnsupportedOutputContext) {
-				observability.Decline(ctx, "fill_declined", "strategy does not support this output context")
-				return orderProcessingResult{outcome: orderProcessingStrategyDeclined}
+		if !types.IsPermanentFillDecisionError(err) {
+			return orderProcessingResult{
+				retryable:            true,
+				recoveryAttemptLimit: maximumStrategyRecoveryAttempts,
+				outcome:              orderProcessingRetryableError,
+				err:                  err,
 			}
-			return orderProcessingResult{outcome: orderProcessingStrategyDeclined, err: err}
 		}
-		return orderProcessingResult{
-			retryable:            true,
-			recoveryAttemptLimit: maximumStrategyRecoveryAttempts,
-			outcome:              orderProcessingRetryableError,
-			err:                  err,
+		if expectedFillDecline(err) {
+			return orderProcessingResult{outcome: orderProcessingStrategyDeclined}
 		}
+		return orderProcessingResult{outcome: orderProcessingStrategyDeclined, err: err}
 	}
 	if plan == nil {
 		log.V(1).Info(
@@ -241,6 +240,11 @@ func (s *Solver) processOrderUsingReservations(
 		if errors.Is(err, errOrderNotFillable) {
 			return orderProcessingResult{outcome: orderProcessingNotActionable}
 		}
+		if errors.Is(err, errFillPlanRejected) {
+			// Already logged at Error where the plan was rejected; not retryable, and the metric
+			// outcome stays what a plan we will not submit has always been.
+			return orderProcessingResult{outcome: orderProcessingNotActionable, err: err}
+		}
 		log.Error(err, "order fill: submit transaction", "orderId", order.OrderID, "quoteId", order.QuoteID)
 		return orderProcessingResult{retryable: true, outcome: orderProcessingRetryableError, err: err}
 	}
@@ -250,13 +254,27 @@ func (s *Solver) processOrderUsingReservations(
 	return orderProcessingResult{fill: fill, outcome: orderProcessingSubmitted}
 }
 
-// decideFill runs the strategy as the lifi.order.plan stage.
+// decideFill runs the strategy as the lifi.order.plan stage. A strategy that does not handle this
+// order's output format is an expected skip, so the stage declines rather than erroring.
 func (s *Solver) decideFill(
 	ctx context.Context, input types.FillInput,
 ) (plan *types.FillPlan, err error) {
 	ctx, end := tracer.Start(ctx, "lifi.order.plan", observability.AttrStrategy.String(s.cfg.Strategy.Name))
-	defer func() { end(err) }()
+	defer func() {
+		if expectedFillDecline(err) {
+			observability.Decline(ctx, "fill_declined", "strategy does not support this output context")
+			end(nil)
+			return
+		}
+		end(err)
+	}()
 	return s.strategy.DecideFill(ctx, input)
+}
+
+// expectedFillDecline reports a strategy decision error that is an expected skip rather than a
+// failure worth paging on: the strategy does not handle this order's output format.
+func expectedFillDecline(err error) bool {
+	return errors.Is(err, types.ErrUnsupportedOutputContext)
 }
 
 func blockedPlanCapacityIDs(
@@ -558,7 +576,7 @@ func (s *Solver) logFillDecisionError(
 	log logr.Logger, err error, message string, order *submittedOrder,
 ) {
 	fields := []any{"orderId", order.OrderID, "onChainOrderId", order.OnChainOrderID, "quoteId", order.QuoteID}
-	if errors.Is(err, types.ErrUnsupportedOutputContext) {
+	if expectedFillDecline(err) {
 		log.V(1).Info(message, append(fields, "reason_code", "unsupported_output_context", "reason", err.Error())...)
 		return
 	}

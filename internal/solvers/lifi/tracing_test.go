@@ -456,6 +456,267 @@ func TestOrderCapacityRetrySpansReserveStage(t *testing.T) {
 	}
 }
 
+// A replayed feed message for an order whose fill is still pending must not close the processing
+// span the live copy is still writing to: the order key is shared, and the inbox stops deduping the
+// moment it delivers.
+func TestOrderReplayKeepsProcessSpanOpenUntilFill(t *testing.T) {
+	rec := tracetest.Install(t)
+	fixture := newTracingOrderFixture(t)
+	submitted := make(chan chan<- txmanager.Result, 1)
+	fixture.txm.hold = true
+	fixture.txm.onSend = func(_ int, result chan<- txmanager.Result) { submitted <- result }
+	// The replay declines after its own status read; the first pass reads twice (planning, submission).
+	replayed := make(chan struct{}, 1)
+	var reads atomic.Int32
+	reader := fixture.solver.reader.(fakeLifiReader)
+	reader.statusFn = func() (uint8, error) {
+		if reads.Add(1) == 3 {
+			replayed <- struct{}{}
+		}
+		return lifiOrderStatusDeposited, nil
+	}
+	fixture.solver.reader = reader
+	order, err := fixture.solver.admitOrderMessage(
+		t.Context(), orderMessage{Event: orderSubmitEvent, Data: fixture.raw},
+		func(context.Context, *submittedOrder) error { return nil },
+	)
+	if order == nil || err != nil {
+		t.Fatalf("admitOrderMessage() = %+v, %v", order, err)
+	}
+	orders := make(chan *submittedOrder, 2)
+	orders <- order
+	orders <- order // the same order delivered twice, as a feed replay or recovery sweep does
+	close(orders)
+	done := make(chan error, 1)
+	go func() { done <- fixture.solver.runOrderWorker(t.Context(), fixture.routes, orders, nil, nil) }()
+
+	result := receiveFillSubmission(t, submitted)
+	select {
+	case <-replayed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not process the replayed order")
+	}
+	result <- fixture.txm.fillResult()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runOrderWorker: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not finish after the fill completed")
+	}
+
+	if got := len(endedSpans(rec, "lifi.order.process")); got != 1 {
+		t.Fatalf("process spans = %d, want one shared by the replay (spans %v)", got, spanNames(rec))
+	}
+	process := endedSpan(t, rec, "lifi.order.process")
+	complete := endedSpan(t, rec, "lifi.order.complete")
+	if got, want := complete.Parent().SpanID(), process.SpanContext().SpanID(); got != want {
+		t.Fatalf("complete span parent = %s, want the processing span %s", got, want)
+	}
+	wantHash := fixture.txm.fillResult().Hash.Hex()
+	if got := attr(process, "tx.hash"); got != wantHash {
+		t.Fatalf("process span tx.hash = %q, want %s", got, wantHash)
+	}
+	if len(fixture.txm.reqs) != 1 {
+		t.Fatalf("fill submissions = %d, want 1", len(fixture.txm.reqs))
+	}
+}
+
+// replayFillStrategy answers for one deferred order: blocked by pending capacity, then a plain
+// decline when the feed replays it while it waits, then a fillable plan on the capacity retry.
+type replayFillStrategy struct {
+	plan     *types.FillPlan
+	deferred string
+	calls    map[string]int
+	declined chan struct{}
+}
+
+func (replayFillStrategy) DecideQuotes(context.Context, types.QuoteInput) (types.QuoteOutput, error) {
+	return types.QuoteOutput{}, nil
+}
+
+func (s replayFillStrategy) DecideFill(_ context.Context, input types.FillInput) (*types.FillPlan, error) {
+	if input.OrderID != s.deferred {
+		return s.plan, nil
+	}
+	s.calls[input.OrderID]++
+	if s.calls[input.OrderID] == 2 {
+		s.declined <- struct{}{}
+	}
+	if s.calls[input.OrderID] < 3 {
+		return nil, nil
+	}
+	return s.plan, nil
+}
+
+func (s replayFillStrategy) DecideFillWithoutReservations(
+	_ context.Context, input types.FillInput,
+) (*types.FillPlan, error) {
+	if s.calls[input.OrderID] == 1 {
+		return s.plan, nil
+	}
+	return nil, nil
+}
+
+// The same rule on the capacity-retry path: a replay that declines while the order still sits in the
+// retry queue must not close its processing span, or the retry would open a second one.
+func TestOrderReplayKeepsProcessSpanOpenWhileQueuedForCapacity(t *testing.T) {
+	rec := tracetest.Install(t)
+	fixture := immediateTestSetup(t)
+	plan := &types.FillPlan{Routes: []types.FillRoute{{
+		RouteID:           "route-1",
+		CapacityID:        "capacity-1",
+		Adapter:           fixture.adapter,
+		AmountIn:          big.NewInt(1_000_000),
+		ExpectedAmountOut: big.NewInt(1_000_000),
+		MinAmountOut:      big.NewInt(990_001),
+		ReservedAmountOut: big.NewInt(1_000_000),
+	}}}
+	submitted := make(chan chan<- txmanager.Result, 2)
+	txm := &fakeLifiTxSender{
+		hold:   true,
+		onSend: func(_ int, result chan<- txmanager.Result) { submitted <- result },
+	}
+	strategy := replayFillStrategy{
+		plan: plan, deferred: "order-2", calls: make(map[string]int), declined: make(chan struct{}, 1),
+	}
+	solver := newProcessTestSolver(
+		fixture.cfg, fixture.caller, txm, strategy,
+		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited,
+	)
+	solver.cfg.Strategy = StrategyConfig{Name: tracingStrategyName}
+	solver.reader = fakeLifiReader{
+		status: lifiOrderStatusDeposited,
+		orderIDFn: func(order inputsettler.StandardOrder) common.Hash {
+			return common.BigToHash(order.Nonce)
+		},
+		fillSnapshotsFn: func() []liquidlane.FillQuote {
+			return profitableFillSnapshots(fixture.tokenIn, fixture.tokenOut, fixture.adapter, 1_000_000)
+		},
+	}
+	first := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+	deferredValue := *first
+	deferredValue.OrderID = "order-2"
+	deferredValue.dedupeKey = "order-2-key"
+	deferredValue.Order.Nonce = new(big.Int).Add(first.Order.Nonce, big.NewInt(1))
+	deferred := &deferredValue
+	orders := make(chan *submittedOrder, 3)
+	orders <- first
+	orders <- deferred
+	orders <- deferred // replayed while it waits on the capacity of the first fill
+	close(orders)
+	done := make(chan error, 1)
+	go func() {
+		done <- solver.runOrderWorker(
+			t.Context(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+			orders, nil, nil,
+		)
+	}()
+
+	firstResult := receiveFillSubmission(t, submitted)
+	select {
+	case <-strategy.declined:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not process the replayed order")
+	}
+	firstResult <- txm.fillResult()
+	receiveFillSubmission(t, submitted) <- txm.fillResult()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runOrderWorker: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker did not finish after both fills completed")
+	}
+
+	var deferredSpans []sdktrace.ReadOnlySpan
+	for _, process := range endedSpans(rec, "lifi.order.process") {
+		if attr(process, "order.id") == deferred.OrderID {
+			deferredSpans = append(deferredSpans, process)
+		}
+	}
+	if len(deferredSpans) != 1 {
+		t.Fatalf("process spans for the deferred order = %d, want 1 (spans %v)",
+			len(deferredSpans), spanNames(rec))
+	}
+	if got := attr(deferredSpans[0], "tx.hash"); got != txm.fillResult().Hash.Hex() {
+		t.Fatalf("deferred process span tx.hash = %q, want %s", got, txm.fillResult().Hash.Hex())
+	}
+	if got := len(endedSpans(rec, "lifi.order.reserve")); got != 1 {
+		t.Fatalf("reserve stage spans = %d, want one retry", got)
+	}
+}
+
+// unsupportedContextStrategy stands in for a strategy that does not handle this order's output
+// format — a permanent decision this solver logs at V(1) and deliberately keeps out of Sentry.
+type unsupportedContextStrategy struct{}
+
+func (unsupportedContextStrategy) DecideQuotes(
+	context.Context, types.QuoteInput,
+) (types.QuoteOutput, error) {
+	return types.QuoteOutput{}, nil
+}
+
+func (unsupportedContextStrategy) DecideFill(
+	context.Context, types.FillInput,
+) (*types.FillPlan, error) {
+	return nil, types.MarkPermanentFillDecisionError(types.ErrUnsupportedOutputContext)
+}
+
+// An output format the strategy does not handle is an expected skip, so neither the planning stage
+// nor the processing span may report it as an error.
+func TestOrderPlanTraceDeclinesUnsupportedOutputContext(t *testing.T) {
+	rec := tracetest.Install(t)
+	fixture := newTracingOrderFixture(t)
+	fixture.solver.strategy = unsupportedContextStrategy{}
+
+	fixture.run(t)
+
+	plan := endedSpan(t, rec, "lifi.order.plan")
+	if plan.Status().Code == codes.Error {
+		t.Fatalf("an unsupported output context must not be an error span: %v", plan.Status())
+	}
+	if !hasSpanEvent(plan, "declined") {
+		t.Fatalf("plan span has no declined event: %v", plan.Events())
+	}
+	if hasSpanEvent(plan, "exception") {
+		t.Fatalf("an unsupported output context recorded an exception: %v", plan.Events())
+	}
+	process := endedSpan(t, rec, "lifi.order.process")
+	if process.Status().Code == codes.Error {
+		t.Fatalf("process span status = %v, want no error", process.Status())
+	}
+	if len(fixture.txm.reqs) != 0 {
+		t.Fatalf("fill submissions = %d, want none", len(fixture.txm.reqs))
+	}
+}
+
+// A plan whose capacity reservations are unusable is a failure we log at Error, so submission has to
+// report it rather than returning a bare nil that ends the order's span clean. validateFillPlan
+// normalizes every route before submission, so this is only reachable by calling submitFill directly.
+func TestSubmitFillReportsRejectedPlan(t *testing.T) {
+	fixture := newTracingOrderFixture(t)
+	order := testSubmittedOrder(t, fixture.solver.cfg, common.HexToAddress("0x6666666666666666666666666666666666666666"),
+		common.HexToAddress("0x7777777777777777777777777777777777777777"))
+
+	fill, err := fixture.solver.submitFill(
+		t.Context(), order, &types.FillPlan{}, &fillCalldata{OrderID: common.HexToHash("0x1")},
+		big.NewInt(1), time.Unix(1_700_000_000, 0), time.Unix(1_700_000_000, 0),
+	)
+
+	if fill != nil {
+		t.Fatalf("submitFill() fill = %+v, want none", fill)
+	}
+	if !errors.Is(err, errFillPlanRejected) {
+		t.Fatalf("submitFill() error = %v, want %v", err, errFillPlanRejected)
+	}
+	if len(fixture.txm.reqs) != 0 {
+		t.Fatalf("fill submissions = %d, want none", len(fixture.txm.reqs))
+	}
+}
+
 // Each quote cycle roots its own trace: the strategy decision and the order-server reconcile are
 // stages of it, and the order server sees the traceparent (spec §9.4).
 func TestQuoteRefreshTraceReachesOrderServer(t *testing.T) {

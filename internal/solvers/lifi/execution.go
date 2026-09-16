@@ -702,21 +702,25 @@ func (s *Solver) runOrderWorker(
 		close(recoveryBarrier)
 		recoveryBarrier = nil
 	}
+	// The processing span belongs to the order, not to one pass through process: a replayed feed
+	// message or a recovery sweep can re-enter while the first copy is still in flight, and that
+	// pass must not close the span the live copy is still writing to. Close it only once nothing in
+	// the worker still holds the order.
+	finishOrderTrace := func(order *submittedOrder, err error) {
+		if pending.containsOrder(order) || retries.contains(order) || depositRetries.contains(order) {
+			return
+		}
+		traces.finish(order, err)
+	}
 	process := func(order *submittedOrder, reservations *liquidlane.CapacityReservations, stage string) {
 		defer releaseRecoveryBarrier()
 
 		tracked := traces.begin(ctx, order)
 		orderCtx, endStage := tracked.attempt(tracked.context(ctx), stage)
 		var attemptErr error
-		// The processing span outlives this attempt whenever the order stays in flight (deposit
-		// propagation, a pending fill, a queued capacity retry); otherwise the order is terminal
-		// here and both spans close, innermost first.
-		inFlight := false
 		defer func() {
 			endStage(attemptErr)
-			if !inFlight {
-				traces.finish(order, attemptErr)
-			}
+			finishOrderTrace(order, attemptErr)
 		}()
 		log := observability.TraceLogger(orderCtx, s.log)
 
@@ -734,7 +738,6 @@ func (s *Solver) runOrderWorker(
 		if result.depositNotVisible {
 			err := depositRetries.schedule(order, retryNow())
 			if err == nil {
-				inFlight = true
 				return
 			}
 			outcome = orderProcessingNotActionable
@@ -760,7 +763,6 @@ func (s *Solver) runOrderWorker(
 		}
 		depositRetries.finish(order)
 		if result.fill != nil {
-			inFlight = true
 			pending.add(result.fill)
 			go awaitFill(result.fill, completions)
 			return
@@ -791,7 +793,6 @@ func (s *Solver) runOrderWorker(
 			)
 			return
 		}
-		inFlight = true
 		if retries.len() > queuedBefore {
 			log.V(1).Info(
 				"order fill deferred by pending capacity",
@@ -808,7 +809,7 @@ func (s *Solver) runOrderWorker(
 		filledCtx := traces.context(ctx, completion.fill.order)
 		log := observability.TraceLogger(filledCtx, s.log)
 		completionErr := s.completeFill(filledCtx, &pending, completion)
-		traces.finish(completion.fill.order, completionErr)
+		finishOrderTrace(completion.fill.order, completionErr)
 		reservationReleaseGen++
 		for ctx.Err() == nil {
 			order := retries.popReady(reservationReleaseGen)
@@ -889,7 +890,7 @@ func (s *Solver) runOrderWorker(
 					"quoteId", order.QuoteID,
 					"reason", err.Error(),
 				)
-				traces.finish(order, nil)
+				finishOrderTrace(order, nil)
 				continue
 			}
 			if order != nil {
@@ -957,6 +958,21 @@ func (s *pendingFillState) contains(key string) bool {
 	}
 	_, ok := s.byOrder[key]
 	return ok
+}
+
+// containsOrder reports whether a fill for this order is pending, matched by the order's stable
+// queue key: a replayed copy of an order is a different value with the same key.
+func (s *pendingFillState) containsOrder(order *submittedOrder) bool {
+	if s == nil {
+		return false
+	}
+	key := orderInboxKey(order)
+	for _, fill := range s.byOrder {
+		if orderInboxKey(fill.order) == key {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *pendingFillState) add(fill *pendingFill) {

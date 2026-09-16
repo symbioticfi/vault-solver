@@ -16,6 +16,10 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
+// errFillPlanRejected marks a plan this solver will not submit because its capacity reservations
+// are unusable. It is a failure, not an expected skip.
+var errFillPlanRejected = errors.New("strategy returned invalid capacity reservations")
+
 func (s *Solver) submitFill(
 	ctx context.Context,
 	order *submittedOrder,
@@ -28,9 +32,11 @@ func (s *Solver) submitFill(
 	log := observability.TraceLogger(ctx, s.log)
 	reservations, ok := fillPlanReservations(plan)
 	if !ok {
-		log.Error(errors.New("strategy returned invalid capacity reservations"),
-			"order fill: reject strategy plan", "orderId", order.OrderID, "quoteId", order.QuoteID)
-		return nil, nil
+		// Defensive: validateFillPlan normalizes every route before this point. Report it as the
+		// failure it is rather than ending the order's span clean.
+		log.Error(errFillPlanRejected, "order fill: reject strategy plan",
+			"orderId", order.OrderID, "quoteId", order.QuoteID)
+		return nil, errFillPlanRejected
 	}
 	status, err := s.reader.orderStatus(ctx, s.cfg.InputSettler, calldata.OrderID)
 	if err != nil {
