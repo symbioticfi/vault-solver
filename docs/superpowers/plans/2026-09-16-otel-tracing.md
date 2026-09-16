@@ -821,7 +821,7 @@ multigit commit -s -m "feat(observability): add traced http handler and transpor
   ```go
   type SpanLinks struct{ /* unexported */ }
   func NewSpanLinks(maxEntries int) *SpanLinks            // maxEntries <= 0 → 1024
-  func (l *SpanLinks) Remember(key string, ctx context.Context, ttl time.Duration) // no-op when ctx has no valid span context or key == ""
+  func (l *SpanLinks) Remember(ctx context.Context, key string, ttl time.Duration) // no-op when ctx has no valid span context or key == ""
   func (l *SpanLinks) Lookup(key string) (trace.Link, bool)
   func (l *SpanLinks) Len() int
   ```
@@ -847,7 +847,7 @@ func TestSpanLinksRememberLookup(t *testing.T) {
 	l := NewSpanLinks(2)
 	ctx, span := otel.Tracer("x").Start(context.Background(), "q")
 	span.End()
-	l.Remember(" Q1 ", ctx, time.Minute)
+	l.Remember(ctx, " Q1 ", time.Minute)
 	link, ok := l.Lookup("q1")
 	if !ok || link.SpanContext.TraceID() != span.SpanContext().TraceID() {
 		t.Fatalf("lookup = %v, %v", link, ok)
@@ -855,8 +855,8 @@ func TestSpanLinksRememberLookup(t *testing.T) {
 	if _, ok := l.Lookup("missing"); ok {
 		t.Fatal("unexpected hit")
 	}
-	l.Remember("", ctx, time.Minute)
-	l.Remember("noctx", context.Background(), time.Minute)
+	l.Remember(ctx, "", time.Minute)
+	l.Remember(context.Background(), "noctx", time.Minute)
 	if l.Len() != 1 {
 		t.Fatalf("len = %d, want 1 (empty key and no-span ctx ignored)", l.Len())
 	}
@@ -869,9 +869,9 @@ func TestSpanLinksTTLAndEviction(t *testing.T) {
 	l.now = func() time.Time { return now }
 	ctx, span := otel.Tracer("x").Start(context.Background(), "q")
 	span.End()
-	l.Remember("a", ctx, 10*time.Second)
-	l.Remember("b", ctx, 10*time.Second)
-	l.Remember("c", ctx, 10*time.Second) // evicts a
+	l.Remember(ctx, "a", 10*time.Second)
+	l.Remember(ctx, "b", 10*time.Second)
+	l.Remember(ctx, "c", 10*time.Second) // evicts a
 	if _, ok := l.Lookup("a"); ok {
 		t.Fatal("a should have been evicted")
 	}
@@ -934,7 +934,7 @@ func NewSpanLinks(maxEntries int) *SpanLinks {
 
 // Remember stores the span context of ctx under key for ttl. Empty keys and contexts without a
 // valid span context are ignored, so callers never need to check tracing state first.
-func (l *SpanLinks) Remember(key string, ctx context.Context, ttl time.Duration) {
+func (l *SpanLinks) Remember(ctx context.Context, key string, ttl time.Duration) {
 	sc := trace.SpanContextFromContext(ctx)
 	key = normalizeLinkKey(key)
 	if key == "" || !sc.IsValid() {
@@ -1457,7 +1457,7 @@ In `execution_test.go`, extend the test that polls an open order and submits it 
 - [ ] **Step 3: Implement**
 
 1. `server.handler()`: return `observability.TraceHandler(http.MaxBytesHandler(h, maxRequestBytes), func(r *http.Request) string { return routeLabel(r.URL.Path) })`.
-2. `handleQuote`: first line `observability.SetAttributes(ctx, observability.AttrRequestID.String(requestID(ctx)), observability.AttrQuoteID.String(in.Body.QuoteID))`; use `log := observability.TraceLogger(ctx, s.log)` for the two log lines in the function. After a successful non-nil `decision.response`: `s.links.Remember(in.Body.QuoteID, ctx, quoteLinkTTL)` where `quoteLinkTTL` = the quote's validity: compute from the response's deadline field if present (`time.Until(deadline) + time.Minute`), else `10 * time.Minute`. Put the constant next to `maxRequestBytes`.
+2. `handleQuote`: first line `observability.SetAttributes(ctx, observability.AttrRequestID.String(requestID(ctx)), observability.AttrQuoteID.String(in.Body.QuoteID))`; use `log := observability.TraceLogger(ctx, s.log)` for the two log lines in the function. After a successful non-nil `decision.response`: `s.links.Remember(ctx, in.Body.QuoteID, quoteLinkTTL)` where `quoteLinkTTL` = the quote's validity: compute from the response's deadline field if present (`time.Until(deadline) + time.Minute`), else `10 * time.Minute`. Put the constant next to `maxRequestBytes`.
 3. `quoteService.quote`: `ctx, end := tracer.Start(ctx, "rfq.quote", AttrAdapter.String(adapter.Hex()))` once the adapter is known (or at the top with the attribute set later via `SetAttributes`); `defer func() { end(err) }()` with a named error return. Wrap the helpers it calls: chain snapshot read → `rfq.quote.snapshot`; discount lookup → `rfq.quote.discounts`; strategy `DecideQuote` → `rfq.quote.decide` with `AttrStrategy.String(strategyName)`; signing → `rfq.quote.sign`. Where the function sets `quoteDecisionNoQuote` (or any non-error non-quote outcome), call `observability.Decline(ctx, "no_quote", string(outcome))`. `badRequestError` is a caller error, not a solver error: end that path with `Decline(ctx, "bad_request", ...)` and `end(nil)` so the span is not Error (the HTTP status still says 400).
 4. `executionService.syncOnce`: `ctx, end := tracer.Start(ctx, "rfq.execution.sync")`, `defer end(err)`; `pollOpenOrders` → child `rfq.execution.poll`.
 5. `handleOrder(ctx, ...)`: build links:
@@ -1520,7 +1520,7 @@ multigit commit -s -m "feat(rfq): trace quote and fill pipelines and link fills 
    	return "other"
    }
    ```
-2. `quoteHandler`: once the body is decoded, `observability.SetAttributes(r.Context(), AttrRequestID.String(request.RequestID), AttrQuoteID.String(request.QuoteID))`; `log := observability.TraceLogger(r.Context(), s.log)` for the handler's log lines. After a 200 response is written: `s.links.Remember(request.QuoteID, r.Context(), 10*time.Minute)` (UniswapX quotes have no explicit validity on our side; 10 min bounds the map).
+2. `quoteHandler`: once the body is decoded, `observability.SetAttributes(r.Context(), AttrRequestID.String(request.RequestID), AttrQuoteID.String(request.QuoteID))`; `log := observability.TraceLogger(r.Context(), s.log)` for the handler's log lines. After a 200 response is written: `s.links.Remember(r.Context(), request.QuoteID, 10*time.Minute)` (UniswapX quotes have no explicit validity on our side; 10 min bounds the map).
 3. `Solver.quote`: `ctx, end := tracer.Start(ctx, "uniswapx.quote", ...)`, strategy call under `uniswapx.quote.decide` with `strategy.name`; declines via `Decline`.
 4. `quote_refresh.go` refresh function: root span `uniswapx.quote_refresh`.
 5. `pollSource`: root span `uniswapx.orders.poll` per poll; per accepted order (around `trackExclusive` + `claim`): `uniswapx.order.track` with `order.hash`, `quote.id`, links from `s.links.Lookup(order.QuoteID)` (+ `quote.trace_id`, or `link_miss` event), then `order.span = trace.SpanContextFromContext(orderCtx)` before `out <- order`, and end the track span right after enqueue.
@@ -1592,7 +1592,7 @@ In the existing discover-and-offer test with the fake 3F API: install the record
 
 - [ ] **Step 3: Implement**
 
-1. `discoverAndOffer`: root `3f.sync`; `reconcileOffers` → `3f.offers.reconcile`; inside the per-auction loop: `3f.auction` with the three attributes; auction view build → `3f.auction.view`; strategy → `3f.offer.decide` (`strategy.name`); `buildSignedOffer` → `3f.offer.build`; `submitOfferIfLaneReady`/`createOffer` → `3f.offer.submit`; on success `s.links.Remember("req:"+req.Hex(), ctx, time.Until(expiration)+time.Hour)` and `s.links.Remember(fmt.Sprintf("auction:%s:%d", adapter.Hex(), auctionID), ctx, sameTTL)` (use `strconv`, not `fmt`, if forbidigo objects). Lane-not-ready and strategy declines → `Decline`.
+1. `discoverAndOffer`: root `3f.sync`; `reconcileOffers` → `3f.offers.reconcile`; inside the per-auction loop: `3f.auction` with the three attributes; auction view build → `3f.auction.view`; strategy → `3f.offer.decide` (`strategy.name`); `buildSignedOffer` → `3f.offer.build`; `submitOfferIfLaneReady`/`createOffer` → `3f.offer.submit`; on success `s.links.Remember(ctx, "req:"+req.Hex(), time.Until(expiration)+time.Hour)` and `s.links.Remember(ctx, fmt.Sprintf("auction:%s:%d", adapter.Hex(), auctionID), sameTTL)` (use `strconv`, not `fmt`, if forbidigo objects). Lane-not-ready and strategy declines → `Decline`.
 2. `reconcileOffers`: for each listed offer whose status changed, `Lookup("auction:...")` and stamp `quoteTraceId` on that log line (no span link needed there).
 3. `redeemAll` → root `3f.redeem`; `readyToRedeem` → `3f.redeem.read`; `redeemReady`: collect links for each request address via `Lookup("req:"+addr)`, start `3f.redeem.submit` with `StartLinked` and `offer.linked_count`, `link_miss` events for misses (one event per missing key), `Send` inside, then `tx.hash`/`tx.outcome` attributes.
 
@@ -1626,7 +1626,7 @@ In the auction handling test with a fake ws client: install the recorder; feed a
 - [ ] **Step 3: Implement**
 
 1. `wsclient.go` dial: `oev.feed.connect` span + header injection, as in Task 11.
-2. `handleAuction`: `ctx, end := tracer.Start(ctx, "oev.auction", AttrAuctionID.String(a.ID))`; `log := TraceLogger(ctx, s.log).WithValues("auctionId", a.ID)`; `buildBidWithContext` → `oev.auction.bid`; inside the default strategy, wrap candidates/sizing/economics/bundle in `oev.auction.candidates`, `oev.auction.size`, `oev.auction.economics`, `oev.auction.bundle`; `ws.Send` → `oev.auction.send`, `Decline(ctx, "dropped", "send_queue_full")` when it returns false; after a successful send `s.links.Remember(a.ID, ctx, reservationTTL)`; every `tooLate`/`bidExpired`/no-candidate path → `Decline`.
+2. `handleAuction`: `ctx, end := tracer.Start(ctx, "oev.auction", AttrAuctionID.String(a.ID))`; `log := TraceLogger(ctx, s.log).WithValues("auctionId", a.ID)`; `buildBidWithContext` → `oev.auction.bid`; inside the default strategy, wrap candidates/sizing/economics/bundle in `oev.auction.candidates`, `oev.auction.size`, `oev.auction.economics`, `oev.auction.bundle`; `ws.Send` → `oev.auction.send`, `Decline(ctx, "dropped", "send_queue_full")` when it returns false; after a successful send `s.links.Remember(ctx, a.ID, reservationTTL)`; every `tooLate`/`bidExpired`/no-candidate path → `Decline`.
 3. `handleAuctionResult`, `handleLiquidationResult`, `handleBlacklisted`: `StartLinked(ctx, "oev.auction.result"|"oev.liquidation.result"|"oev.blacklisted", links, AttrAuctionID...)` with `link_miss` on a miss; `tx.hash` on the liquidation result when present; logs use `auctionId`.
 4. `monitor.go` tick → root `oev.monitor`.
 5. Rename log keys `"auction"` → `"auctionId"` and `"id"` → `"auctionId"` on the touched lines only; update any test that greps those keys.
@@ -1707,5 +1707,5 @@ multigit commit -s -m "docs: describe opentelemetry tracing and sync plans"
 ## Self-review
 
 - **Spec coverage:** §3 → T1/T14; §4 → T1–T5; §5 → T1, T5, T7, T9–T13; §6.1 → T3, T9, T10; §6.2 → T8; §6.3 → T6; §6.4 → T11, T13; §7 → T7; §8/§9.4 → T9–T13 (+ `txmanager.account_poll` in T7); §9.1/§9.3 → T2; §10 → T14; §11 → per-task tests + benchmark in T2; §12 → T4, T9, T10, T12, T13 (LiFi deliberately none); §13 → T1 (never-fail startup, batcher), T2 (no-op benchmark), T4 (bounded map).
-- **Type consistency:** `NewTracer(name, solver string) *Tracer`; `Start`/`StartLinked` return `(context.Context, EndFunc)`; `Tracer.Raw()` added in T7 for txmanager's long-lived span; `SpanLinks.Remember(key, ctx, ttl)` / `Lookup(key) (trace.Link, bool)`; attribute constants `observability.Attr*` used by name everywhere; `tracetest.Install(t)` from `internal/observability/tracetest`.
+- **Type consistency:** `NewTracer(name, solver string) *Tracer`; `Start`/`StartLinked` return `(context.Context, EndFunc)`; `Tracer.Raw()` added in T7 for txmanager's long-lived span; `SpanLinks.Remember(ctx, key, ttl)` / `Lookup(key) (trace.Link, bool)`; attribute constants `observability.Attr*` used by name everywhere; `tracetest.Install(t)` from `internal/observability/tracetest`.
 - **Placeholders:** none; solver tasks name the functions, span names, attributes, and link keys, and the stage lists come from spec §9.4.
