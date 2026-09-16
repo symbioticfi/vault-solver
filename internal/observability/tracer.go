@@ -1,0 +1,113 @@
+package observability
+
+import (
+	"context"
+	"sync"
+
+	"github.com/go-errors/errors"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
+)
+
+// Span attribute keys shared by every solver (spec §9.3). Neutral names: the solver attribute
+// disambiguates, so an operator searches quote.id regardless of integration.
+const (
+	AttrSolver         = attribute.Key("solver")
+	AttrRequestID      = attribute.Key("request.id")
+	AttrQuoteID        = attribute.Key("quote.id")
+	AttrQuoteTraceID   = attribute.Key("quote.trace_id")
+	AttrOrderID        = attribute.Key("order.id")
+	AttrOrderHash      = attribute.Key("order.hash")
+	AttrOrderOnchainID = attribute.Key("order.onchain_id")
+	AttrOfferID        = attribute.Key("offer.id")
+	AttrAuctionID      = attribute.Key("auction.id")
+	AttrAdapter        = attribute.Key("adapter.address")
+	AttrVault          = attribute.Key("vault.address")
+	AttrRequestAddress = attribute.Key("request.address")
+	AttrStrategy       = attribute.Key("strategy.name")
+	AttrTxLabel        = attribute.Key("tx.label")
+	AttrTxHash         = attribute.Key("tx.hash")
+	AttrTxNonce        = attribute.Key("tx.nonce")
+	AttrTxOutcome      = attribute.Key("tx.outcome")
+	AttrTxAttempt      = attribute.Key("tx.attempt")
+	AttrReasonCode     = attribute.Key("reason_code")
+)
+
+// EndFunc ends a span, recording err when non-nil. Safe to call more than once; later calls are no-ops.
+type EndFunc func(err error)
+
+// Tracer starts spans that carry the owning solver's name. Obtain one per package with NewTracer.
+type Tracer struct {
+	tracer trace.Tracer
+	solver []attribute.KeyValue // empty for shared components
+}
+
+// NewTracer returns a Tracer for the instrumentation scope name (the package import path) that
+// stamps solver on every span when solver is non-empty (shared components pass ""). Uses the global
+// provider, so it is a no-op until NewTracing enables it.
+func NewTracer(name, solver string) *Tracer {
+	t := &Tracer{tracer: otel.Tracer(name)}
+	if solver != "" {
+		t.solver = []attribute.KeyValue{AttrSolver.String(solver)}
+	}
+	return t
+}
+
+// Raw exposes the underlying tracer for code that must hold a trace.Span across goroutines
+// (txmanager keeps one span from submission to receipt).
+func (t *Tracer) Raw() trace.Tracer { return t.tracer }
+
+// Start begins a child span of ctx.
+func (t *Tracer) Start(ctx context.Context, name string, attrs ...attribute.KeyValue) (context.Context, EndFunc) {
+	return t.StartLinked(ctx, name, nil, attrs...)
+}
+
+// StartLinked begins a child span of ctx with links to earlier spans (spec §12).
+func (t *Tracer) StartLinked(
+	ctx context.Context, name string, links []trace.Link, attrs ...attribute.KeyValue,
+) (context.Context, EndFunc) {
+	opts := []trace.SpanStartOption{trace.WithAttributes(t.solver...), trace.WithAttributes(attrs...)}
+	if len(links) > 0 {
+		opts = append(opts, trace.WithLinks(links...))
+	}
+	//nolint:spancheck // span is ended by the returned EndFunc, not inline
+	ctx, span := t.tracer.Start(ctx, name, opts...)
+	var once sync.Once
+	return ctx, func(err error) { once.Do(func() { endSpan(span, err) }) } //nolint:spancheck // see above
+}
+
+func endSpan(span trace.Span, err error) {
+	switch {
+	case err == nil:
+	case errors.Is(err, context.Canceled):
+		span.AddEvent("cancelled")
+	default:
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		var coded interface{ ReasonCode() string }
+		if errors.As(err, &coded) {
+			span.SetAttributes(AttrReasonCode.String(coded.ReasonCode()))
+		}
+	}
+	span.End()
+}
+
+// Decline records an expected non-error outcome (no quote, not profitable, paused adapter) on the
+// current span as a declined event. Status is left unset, mirroring the V(1) logging rule.
+func Decline(ctx context.Context, decision, reason string) {
+	trace.SpanFromContext(ctx).AddEvent("declined", trace.WithAttributes(
+		attribute.String("decision", decision), attribute.String("reason", reason),
+	))
+}
+
+// SetAttributes adds attributes to the current span (e.g. a tx hash learned after Send returns).
+func SetAttributes(ctx context.Context, attrs ...attribute.KeyValue) {
+	trace.SpanFromContext(ctx).SetAttributes(attrs...)
+}
+
+// LinkFromContext returns a link to the span in ctx; the zero Link when there is none.
+func LinkFromContext(ctx context.Context) trace.Link {
+	return trace.Link{SpanContext: trace.SpanContextFromContext(ctx)}
+}
