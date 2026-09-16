@@ -16,6 +16,7 @@ import (
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/morpho"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
@@ -108,6 +109,7 @@ func seededSolverWithGasAccounting(t *testing.T, gasAccounting bool) (*Solver, *
 		breaker: newBreaker(3, time.Hour),
 		seen:    newSeenAuctions(maxSeenAuctions),
 		log:     logr.Discard(),
+		links:   observability.NewSpanLinks(0),
 		deps:    solver.Deps{Signer: sgnr},
 		// Disconnected WS client: Send just buffers into its channel, which tests drain to capture solves.
 		ws: newWSClient(wsConfig{URL: "wss://test", APIKey: "k", Topics: []string{"t"}}, logr.Discard(), func(context.Context, []byte) {}, nil),
@@ -119,6 +121,7 @@ func seededSolverWithGasAccounting(t *testing.T, gasAccounting bool) (*Solver, *
 	})
 	s.strategy = defaultstrategy.NewWithSnapshotForTest(
 		strategyCfg,
+		Name,
 		seedAdapter,
 		seedCallback,
 		gasAccounting,

@@ -10,6 +10,7 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/morpho"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
@@ -39,6 +40,7 @@ type apiMonitor struct {
 
 	api         *morphoClient
 	monitorPoll time.Duration
+	tracer      *observability.Tracer
 
 	snap atomic.Pointer[snapshot]
 }
@@ -48,6 +50,7 @@ func newAPIMonitor(
 	cfg Config,
 	chainID int64,
 	loadAdapter func() (types.AdapterSnapshot, bool),
+	tracer *observability.Tracer,
 ) *apiMonitor {
 	m := &apiMonitor{
 		log:          log.WithName("monitor"),
@@ -57,6 +60,7 @@ func newAPIMonitor(
 		chainID:      chainID,
 		api:          newMorphoClient(cfg.MorphoAPIURL),
 		monitorPoll:  cfg.MonitorPoll,
+		tracer:       tracer,
 	}
 	m.snap.Store(&snapshot{
 		markets:   map[common.Hash]MarketInfo{},
@@ -89,26 +93,36 @@ func (m *apiMonitor) run(ctx context.Context) {
 	}
 }
 
+// refresh is one monitor tick: it roots its own trace, so the Morpho GraphQL calls it makes nest
+// under it (spec §9.4).
 func (m *apiMonitor) refresh(ctx context.Context) {
+	ctx, end := m.tracer.Start(ctx, "oev.monitor")
+	var err error
+	defer func() { end(err) }()
+	log := observability.TraceLogger(ctx, m.log)
+
 	adapter, ok := m.loadAdapter()
 	if !ok {
-		m.log.V(1).Info("API refresh skipped: adapter snapshot unavailable")
+		observability.Decline(ctx, "skipped", "adapter_snapshot_unavailable")
+		log.V(1).Info("API refresh skipped: adapter snapshot unavailable")
 		return
 	}
 	loan, redeemable, ok := adapterMarketScope(adapter)
 	if !ok {
-		m.log.V(1).Info("API refresh skipped: adapter snapshot incomplete")
+		observability.Decline(ctx, "skipped", "adapter_snapshot_incomplete")
+		log.V(1).Info("API refresh skipped: adapter snapshot incomplete")
 		return
 	}
 
 	apiMarkets, err := m.api.DiscoverMarketData(ctx, m.chainID, []common.Address{loan}, redeemable)
 	if err != nil {
-		m.log.Error(err, "morpho API market refresh failed; keeping cache")
+		log.Error(err, "morpho API market refresh failed; keeping cache")
 		return
 	}
 	apiSnap := m.apiMarketSnapshot(apiMarkets, loan, redeemable)
 	if len(apiSnap.markets) == 0 {
-		m.log.V(1).Info("morpho API market refresh returned no usable adapter markets")
+		observability.Decline(ctx, "skipped", "no_usable_markets")
+		log.V(1).Info("morpho API market refresh returned no usable adapter markets")
 		return
 	}
 
@@ -118,7 +132,7 @@ func (m *apiMonitor) refresh(ctx context.Context) {
 	}
 	apiPositions, err := m.api.PositionsByMarket(ctx, ids, m.maxPositions, &m.maxHF)
 	if err != nil {
-		m.log.Error(err, "morpho API position refresh failed; keeping cache")
+		log.Error(err, "morpho API position refresh failed; keeping cache")
 		return
 	}
 	positions := apiPositionsSnapshot(apiPositions, apiSnap.markets)

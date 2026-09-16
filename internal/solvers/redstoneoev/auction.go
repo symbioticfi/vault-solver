@@ -10,6 +10,9 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
+	"github.com/go-logr/logr"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
@@ -40,6 +43,9 @@ type bidDecision struct {
 	callback   common.Address
 	skip       string
 	skipDetail string
+	// err is the real failure behind skip, if any. skip still drives metrics and logging; err only
+	// tells the bid span apart from an expected skip (spec §9.1).
+	err error
 }
 
 func (s *Solver) handleMessage(ctx context.Context, raw []byte) {
@@ -69,25 +75,29 @@ func (s *Solver) handleMessage(ctx context.Context, raw []byte) {
 			s.handleAuction(ctx, a, start)
 		})
 	case "auction-result":
-		s.handleAuctionResult(raw)
+		s.handleAuctionResult(ctx, raw)
 	case "liquidation-result":
-		s.handleLiquidationResult(raw)
+		s.handleLiquidationResult(ctx, raw)
 	case "blacklisted":
-		s.handleBlacklisted(raw)
+		s.handleBlacklisted(ctx, raw)
 	default:
 		s.log.V(1).Info("ignoring frame", "op", op)
 	}
 }
 
-func (s *Solver) handleAuctionResult(raw []byte) {
+func (s *Solver) handleAuctionResult(ctx context.Context, raw []byte) {
 	var r AuctionResult
 	if err := json.Unmarshal(raw, &r); err != nil {
 		s.log.V(1).Error(err, "drop malformed frame", "op", "auction-result")
 		return
 	}
 	r.ID = normalizeAuctionID(r.ID)
+	ctx, end, log := s.startResultSpan(ctx, "oev.auction.result", r.ID)
+	defer func() { end(nil) }()
+
 	liquidator := common.HexToAddress(r.Data.Liquidator)
 	won := liquidator == s.cfg.Callback
+	observability.SetAttributes(ctx, attrWon.Bool(won))
 	if won {
 		if bidWei, transitioned := s.markReservationWon(r.ID, time.Now()); transitioned {
 			s.metrics.won(bidWei)
@@ -95,19 +105,25 @@ func (s *Solver) handleAuctionResult(raw []byte) {
 	} else {
 		s.releaseReservationByAuction(r.ID)
 	}
-	s.log.Info("auction-result", "id", r.ID, "winner", r.Data.Liquidator, "bid", r.Data.Bid, "won", won)
+	log.Info("auction-result", "winner", r.Data.Liquidator, "bid", r.Data.Bid, "won", won)
 }
 
-func (s *Solver) handleLiquidationResult(raw []byte) {
+func (s *Solver) handleLiquidationResult(ctx context.Context, raw []byte) {
 	var r LiquidationResult
 	if err := json.Unmarshal(raw, &r); err != nil {
 		s.log.V(1).Error(err, "drop malformed frame", "op", "liquidation-result")
 		return
 	}
 	r.ID = normalizeAuctionID(r.ID)
+	ctx, end, log := s.startResultSpan(ctx, "oev.liquidation.result", r.ID)
+	defer func() { end(nil) }()
+	if txHash := strings.TrimSpace(r.Data.TxHash); txHash != "" {
+		observability.SetAttributes(ctx, observability.AttrTxHash.String(txHash))
+	}
+
 	liquidator := common.HexToAddress(r.Data.Liquidator)
 	ours := liquidator == s.cfg.Callback
-	s.log.Info("liquidation-result", "id", r.ID, "success", r.Data.Success,
+	log.Info("liquidation-result", "success", r.Data.Success,
 		"txHash", r.Data.TxHash, "error", r.Data.Error, "ours", ours)
 	if !ours {
 		return
@@ -149,11 +165,17 @@ func liquidationResultIdentity(result LiquidationResult) string {
 	return ""
 }
 
-func (s *Solver) handleBlacklisted(raw []byte) {
+func (s *Solver) handleBlacklisted(ctx context.Context, raw []byte) {
 	var b Blacklisted
 	_ = json.Unmarshal(raw, &b)
+	b.ID = normalizeAuctionID(b.ID)
+	ctx, end, log := s.startResultSpan(ctx, "oev.blacklisted", b.ID)
+	defer func() { end(nil) }()
+
+	// Halting on a revoked key is an expected outcome of the feed, not a failure of this span.
+	observability.Decline(ctx, "halted", "blacklisted")
 	s.breaker.blacklist()
-	s.log.Error(errors.New("api key blacklisted"), "halting bidding", "msg", b.Data.Msg)
+	log.Error(errors.New("api key blacklisted"), "halting bidding", "msg", b.Data.Msg)
 }
 
 func (s *Solver) handleAuctionWithContext(ctx context.Context, raw []byte) {
@@ -173,7 +195,7 @@ func (s *Solver) parseAuctionFrame(raw []byte) (AuctionMessage, time.Time, bool)
 	}
 	if a.TimeoutMs <= 0 {
 		s.metrics.auctionDecision(auctionOutcomeTooLate, time.Since(start))
-		s.log.V(1).Info("auction with invalid timeout received; dropping", "auction", a.ID, "timeoutMs", a.TimeoutMs)
+		s.log.V(1).Info("auction with invalid timeout received; dropping", "auctionId", a.ID, "timeoutMs", a.TimeoutMs)
 		return AuctionMessage{}, time.Time{}, false
 	}
 	a.ID = normalizeAuctionID(a.ID)
@@ -185,13 +207,20 @@ func (s *Solver) parseAuctionFrame(raw []byte) (AuctionMessage, time.Time, bool)
 	}
 	if s.seen.seen(key) {
 		s.metrics.auctionDecision(auctionOutcomeDuplicate, time.Since(start))
-		s.log.V(1).Info("duplicate auction; already processed", "auction", a.ID)
+		s.log.V(1).Info("duplicate auction; already processed", "auctionId", a.ID)
 		return AuctionMessage{}, time.Time{}, false
 	}
 	return a, start, true
 }
 
+// handleAuction roots one auction's trace: the bid decision, its strategy stages and the outbound
+// solve are all spans beneath it (spec §9.4).
 func (s *Solver) handleAuction(ctx context.Context, a AuctionMessage, start time.Time) {
+	ctx, end := tracer.Start(ctx, "oev.auction", observability.AttrAuctionID.String(a.ID))
+	var err error
+	defer func() { end(err) }()
+	log := observability.TraceLogger(ctx, s.log).WithValues("auctionId", a.ID)
+
 	outcome := auctionOutcomeContextCanceled
 	defer func() {
 		s.metrics.auctionDecision(outcome, time.Since(start))
@@ -200,10 +229,12 @@ func (s *Solver) handleAuction(ctx context.Context, a AuctionMessage, start time
 	s.bidMu.Lock()
 	defer s.bidMu.Unlock()
 	if ctx.Err() != nil {
+		err = ctx.Err()
 		return
 	}
-	if s.bidExpired(a, start) {
+	if s.bidExpired(log, a, start) {
 		outcome = auctionOutcomeTooLate
+		observability.Decline(ctx, "skipped", auctionOutcomeTooLate)
 		return
 	}
 	bidCtx, cancel := auctionBidContext(ctx, a, start)
@@ -212,31 +243,48 @@ func (s *Solver) handleAuction(ctx context.Context, a AuctionMessage, start time
 
 	if d.skip != "" {
 		outcome = d.skip
-		s.logSkip(a.ID, d)
+		err = d.err
+		s.logSkip(log, d)
 		return
 	}
 	if s.dryRun {
 		outcome = auctionOutcomeWouldBid
+		observability.Decline(ctx, "suppressed", "dry_run")
 		s.metrics.wouldBid(d.bidWei)
-		s.log.Info("DRY-RUN would bid", "auction", a.ID, "callback", d.callback.Hex(), "nonce", d.solve.Data.Nonce,
+		log.Info("DRY-RUN would bid", "callback", d.callback.Hex(), "nonce", d.solve.Data.Nonce,
 			"bidEth", d.solve.Data.Bid)
 		return
 	}
-	if s.bidExpired(a, start) {
+	if s.bidExpired(log, a, start) {
 		outcome = auctionOutcomeTooLate
+		observability.Decline(ctx, "skipped", auctionOutcomeTooLate)
 		return
 	}
 	s.reserve(d.nonce, time.Now(), a.ID, d.bidWei)
-	if !s.ws.Send(marshal(d.solve)) {
+	if !s.sendSolve(ctx, d.solve) {
 		outcome = auctionOutcomeSendDropped
 		s.releaseReservationByAuction(a.ID)
-		s.log.Info("bid NOT enqueued (ws buffer full)", "auction", a.ID, "nonce", d.solve.Data.Nonce)
+		log.Info("bid NOT enqueued (ws buffer full)", "nonce", d.solve.Data.Nonce)
 		return
 	}
+	// The result frames arrive later in their own trace; remember this span so they can link back.
+	s.rememberAuction(ctx, a.ID)
 	outcome = auctionOutcomeEnqueued
 	s.metrics.enqueuedBid(d.bidWei)
-	s.log.Info("bid enqueued", "auction", a.ID, "callback", d.callback.Hex(), "nonce", d.solve.Data.Nonce,
+	log.Info("bid enqueued", "callback", d.callback.Hex(), "nonce", d.solve.Data.Nonce,
 		"bidEth", d.solve.Data.Bid)
+}
+
+// sendSolve enqueues the solve under oev.auction.send and reports whether the bounded outbound queue
+// accepted it. A dropped frame is an expected outcome of that bound, not a failure.
+func (s *Solver) sendSolve(ctx context.Context, solve SolveMessage) bool {
+	ctx, end := tracer.Start(ctx, "oev.auction.send")
+	defer func() { end(nil) }()
+	if s.ws.Send(marshal(solve)) {
+		return true
+	}
+	observability.Decline(ctx, "dropped", "send_queue_full")
+	return false
 }
 
 func auctionBidContext(ctx context.Context, a AuctionMessage, start time.Time) (context.Context, context.CancelFunc) {
@@ -250,27 +298,27 @@ func auctionBidContext(ctx context.Context, a AuctionMessage, start time.Time) (
 	return context.WithDeadline(ctx, deadline)
 }
 
-func (s *Solver) logSkip(auctionID string, d bidDecision) {
+func (s *Solver) logSkip(log logr.Logger, d bidDecision) {
 	if d.skipDetail != "" {
-		s.log.V(1).Info("no bid", "auction", auctionID, "reason", d.skip, "strategyReason", d.skipDetail)
+		log.V(1).Info("no bid", "reason", d.skip, "strategyReason", d.skipDetail)
 		return
 	}
-	s.log.V(1).Info("no bid", "auction", auctionID, "reason", d.skip)
+	log.V(1).Info("no bid", "reason", d.skip)
 }
 
-func (s *Solver) bidExpired(a AuctionMessage, start time.Time) bool {
+func (s *Solver) bidExpired(log logr.Logger, a AuctionMessage, start time.Time) bool {
 	now := time.Now()
 	if a.TimeoutMs <= 0 || !tooLate(a.Timestamp, a.TimeoutMs, start, now) {
 		return false
 	}
-	s.log.Info("bid not enqueued: auction deadline (since emit) exceeded",
-		"auction", a.ID, "timeoutMs", a.TimeoutMs, "sinceEmitMs", sinceEmitMs(a.Timestamp, now),
+	log.Info("bid not enqueued: auction deadline (since emit) exceeded",
+		"timeoutMs", a.TimeoutMs, "sinceEmitMs", sinceEmitMs(a.Timestamp, now),
 		"localElapsedMs", time.Since(start).Milliseconds())
 	return true
 }
 
 // staleStateGate fails closed when the solver-owned Executor accounting is older than cfg.ExecutorStateMaxAge.
-func (s *Solver) staleStateGate(auctionID string, now time.Time) string {
+func (s *Solver) staleStateGate(log logr.Logger, now time.Time) string {
 	kv := make([]any, 0, 4)
 	if st, ok := s.state.load(); !ok || now.Sub(st.UpdatedAt) > s.cfg.ExecutorStateMaxAge {
 		var at time.Time
@@ -282,8 +330,8 @@ func (s *Solver) staleStateGate(auctionID string, now time.Time) string {
 	if len(kv) == 0 {
 		return ""
 	}
-	s.log.Error(errors.New("executor state stale"), "bid skipped: cache exceeds intervals.executorStateMaxAgeMs",
-		append(kv, "maxAge", s.cfg.ExecutorStateMaxAge, "auction", auctionID)...)
+	log.Error(errors.New("executor state stale"), "bid skipped: cache exceeds intervals.executorStateMaxAgeMs",
+		append(kv, "maxAge", s.cfg.ExecutorStateMaxAge)...)
 	return skipExecutorStateStale
 }
 
@@ -298,12 +346,24 @@ func (s *Solver) buildBid(ctx context.Context, a AuctionMessage, nowFn func() ti
 	return s.buildBidWithContext(ctx, a, nowFn)
 }
 
-func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowFn func() time.Time) bidDecision {
+// buildBidWithContext evaluates one auction under oev.auction.bid. An expected skip is declined on the
+// span; a real failure (misconfigured or failing strategy, bad envelope, signing) is recorded as an error.
+func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowFn func() time.Time) (d bidDecision) {
+	ctx, end := tracer.Start(ctx, "oev.auction.bid",
+		observability.AttrAuctionID.String(a.ID), observability.AttrStrategy.String(s.strategyLabel()))
+	defer func() {
+		if d.err == nil && d.skip != "" {
+			observability.Decline(ctx, "skipped", d.skip)
+		}
+		end(d.err)
+	}()
+	log := observability.TraceLogger(ctx, s.log).WithValues("auctionId", a.ID)
+
 	now := nowFn()
 	if tripped, _ := s.breaker.tripped(now); tripped {
 		return bidDecision{skip: "breaker"}
 	}
-	if skip := s.staleStateGate(a.ID, now); skip != "" {
+	if skip := s.staleStateGate(log, now); skip != "" {
 		return bidDecision{skip: skip}
 	}
 	st, ok := s.state.load()
@@ -313,14 +373,15 @@ func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowF
 	if st.Exec.Locked {
 		return bidDecision{skip: "signer_locked"}
 	}
-	if depositSkip := s.depositSkip(a, st); depositSkip != "" {
+	if depositSkip := s.depositSkip(log, st); depositSkip != "" {
 		return bidDecision{skip: depositSkip}
 	}
 	inFlight := s.inFlightSnapshot()
 	gasPrice := new(big.Int).Set(s.cfg.MaxTxGasPrice)
 	if s.strategy == nil {
-		s.log.Error(errors.New("strategy is not configured"), "bid skipped", "auction", a.ID)
-		return bidDecision{skip: "strategy_error"}
+		unconfigured := errors.New("strategy is not configured")
+		log.Error(unconfigured, "bid skipped")
+		return bidDecision{skip: "strategy_error", err: unconfigured}
 	}
 	out, err := s.strategy.DecideBid(ctx, s.bidInput(a, now, st, inFlight, gasPrice))
 	if err != nil {
@@ -329,29 +390,29 @@ func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowF
 			if errors.Is(ctxErr, context.DeadlineExceeded) {
 				outcome = auctionOutcomeTooLate
 			}
-			s.log.V(1).Info("strategy stopped with auction context", "auction", a.ID, "reason", outcome)
+			log.V(1).Info("strategy stopped with auction context", "reason", outcome)
 			return bidDecision{skip: outcome}
 		}
-		s.log.Error(err, "strategy failed", "auction", a.ID)
-		return bidDecision{skip: "strategy_error"}
+		log.Error(err, "strategy failed")
+		return bidDecision{skip: "strategy_error", err: err}
 	}
 	if err := checkExecutionEnvelope(out); err != nil {
-		s.log.Error(err, "execution envelope rejected", "auction", a.ID)
-		return bidDecision{skip: "strategy_invalid"}
+		log.Error(err, "execution envelope rejected")
+		return bidDecision{skip: "strategy_invalid", err: err}
 	}
 	if out.Decision == types.DecisionSkip {
 		return bidDecision{skip: types.BoundedSkipReason(out.Reason), skipDetail: out.Reason}
 	}
 	bidNative := cloneBig(out.BidAmount)
-	if s.bidCapExceeded(a, bidNative) {
+	if s.bidCapExceeded(log, bidNative) {
 		return bidDecision{skip: skipBidCap}
 	}
 	nonce := s.nonces.next(st.Exec.Nonce.Uint64())
 	callback := s.cfg.Callback
 	sig, err := SignBid(s.deps.Signer, s.chainID, callback, out.OperationData, bidNative, big.NewInt(int64(nonce)), gasPrice)
 	if err != nil {
-		s.log.Error(err, "sign bid failed", "auction", a.ID)
-		return bidDecision{skip: "sign_error"}
+		log.Error(err, "sign bid failed")
+		return bidDecision{skip: "sign_error", err: err}
 	}
 
 	return bidDecision{
@@ -372,19 +433,19 @@ func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowF
 	}
 }
 
-func (s *Solver) bidCapExceeded(a AuctionMessage, bidNative *big.Int) bool {
+func (s *Solver) bidCapExceeded(log logr.Logger, bidNative *big.Int) bool {
 	if s.cfg.MaxBidWei == nil || bidNative.Cmp(s.cfg.MaxBidWei) <= 0 {
 		return false
 	}
-	s.log.Info("bid skipped: strategy bid exceeds configured cap",
-		"auction", a.ID, "bidWei", bidNative, "maxBidWei", s.cfg.MaxBidWei)
+	log.Info("bid skipped: strategy bid exceeds configured cap",
+		"bidWei", bidNative, "maxBidWei", s.cfg.MaxBidWei)
 	return true
 }
 
-func (s *Solver) depositSkip(a AuctionMessage, st cachedState) string {
+func (s *Solver) depositSkip(log logr.Logger, st cachedState) string {
 	if orZero(st.Exec.Deposit).Cmp(minDeposit) < 0 {
-		s.log.Info("bid skipped: executor deposit below minimum",
-			"auction", a.ID, "depositWei", st.Exec.Deposit, "minDepositWei", minDeposit)
+		log.Info("bid skipped: executor deposit below minimum",
+			"depositWei", st.Exec.Deposit, "minDepositWei", minDeposit)
 		return skipDepositLow
 	}
 	return ""

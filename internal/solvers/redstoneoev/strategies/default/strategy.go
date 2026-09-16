@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 	"gopkg.in/yaml.v3"
@@ -38,6 +39,7 @@ type Strategy struct {
 	reservations  decisionReservations
 	maxAge        time.Duration
 	log           logr.Logger
+	tracer        *observability.Tracer
 }
 
 type decisionState struct {
@@ -79,6 +81,7 @@ func NewFromConfig(raw yaml.Node, deps strategies.Deps) (types.Strategy, error) 
 		return nil, err
 	}
 	return New(cfg, Deps{
+		Solver:              deps.Solver,
 		Reader:              newChainReader(deps.Chain, deps.Log),
 		Signer:              deps.Signer,
 		Log:                 deps.Log,
@@ -107,6 +110,7 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 	if !deps.GasAccounting && cfg.MinBundleProfitBidBps != 0 {
 		return nil, errors.New("strategy.config.bid.minBundleProfitBidBps requires gas accounting")
 	}
+	tracer := newStrategyTracer(deps.Solver)
 	var (
 		mon monitorSource
 		err error
@@ -120,7 +124,7 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 		if cfg.MorphoAPIURL == "" {
 			return nil, errors.New("morphoApiUrl is required unless test monitor is enabled")
 		}
-		mon = newAPIMonitor(deps.Log, cfg, deps.ChainID, deps.LoadAdapterSnapshot)
+		mon = newAPIMonitor(deps.Log, cfg, deps.ChainID, deps.LoadAdapterSnapshot, tracer)
 	}
 	return &Strategy{
 		cfg:           cfg,
@@ -134,6 +138,7 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 		engine:        newBundleEngine(cfg, deps.Log),
 		maxAge:        cfg.MaxStateAge,
 		log:           deps.Log,
+		tracer:        tracer,
 	}, nil
 }
 
@@ -181,7 +186,7 @@ func (s *Strategy) refreshState(ctx context.Context) {
 	})
 }
 
-func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.BidOutput, error) {
+func (s *Strategy) DecideBid(ctx context.Context, input types.BidInput) (types.BidOutput, error) {
 	if input.Adapter.Address != (common.Address{}) && input.Adapter.Address != s.adapter {
 		return skipBid(skipNoLegs), nil
 	}
@@ -211,59 +216,17 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 	if len(input.PendingAuctions) > 0 || hasReservation {
 		return skipBid(types.SkipReasonInFlight), nil
 	}
-	scored := s.scoredLegs(input.Auction, input.Now, input.Adapter)
+	scored := s.scoredLegs(ctx, input.Auction, input.Now, input.Adapter)
 	if len(scored) == 0 {
 		return skipBid(skipNoLegs), nil
 	}
-	laneState := liquidLaneStateFromAdapter(input.Adapter)
 	gasPrice := cloneBig(input.Context.MaxTxGasPrice)
-	feedCount := auctionFeedCount(input.Auction)
-	var (
-		b      chosenBundle
-		priced pricedBundle
-		skip   string
-	)
-	if s.gasAccounting {
-		rate := validRate(input.Context.GasPrices.TokenOutPerNative(input.Adapter.Loan))
-		if rate == nil {
-			s.log.Info("bid skipped: loan/native gas rate unavailable",
-				"auction", input.Auction.ID, "scoredLegs", len(scored), "feedCount", feedCount)
-			return skipBid(skipGasUnprofitable), nil
-		}
-		b, skip = s.engine.selectNetBundle(scored, rate, laneState, gasPrice, input.Context.GasLimit, feedCount)
-		if skip == "" {
-			priced = s.engine.priceBundle(b, rate, laneState, gasPrice, feedCount)
-		} else if skip == skipGasUnprofitable && len(b.legs) > 0 {
-			s.engine.logBundleEconomics(input.Auction.ID, "bid skipped: bundle is not profitable after gas and bid",
-				b, rate, laneState, gasPrice, input.Context.GasLimit, feedCount, len(scored))
-		}
-	} else {
-		b, skip = s.engine.selectBundleWithGas(scored, laneState, input.Context.GasLimit, feedCount)
-		if skip == "" {
-			priced = s.engine.priceBundleWithoutGasAccounting(b, laneState, gasPrice, feedCount)
-		}
-	}
+	priced, skip := s.pricedBundleFor(ctx, input, scored, gasPrice)
 	if skip != "" {
 		return types.BidOutput{Decision: types.DecisionSkip, Reason: skip}, nil
 	}
-	if !depositCoversSettlementGas(input.Context.ExecutorDeposit, input.Context.ExecutorMinDeposit, priced.gasNative) {
-		s.log.Info("bid skipped: executor deposit cannot cover predicted settlement gas",
-			"auction", input.Auction.ID,
-			"depositWei", input.Context.ExecutorDeposit,
-			"requiredWei", executorDepositRequired(input.Context.ExecutorMinDeposit, priced.gasNative),
-			"minDepositWei", input.Context.ExecutorMinDeposit,
-			"gasUnits", priced.gas.Units,
-			"gasNative", priced.gasNative,
-			"gasPriceWei", gasPrice)
-		return skipBid(types.SkipReasonDepositLow), nil
-	}
-	availableCallback := orZero(st.CallbackNative)
-	if availableCallback.Cmp(priced.bidNative) < 0 {
-		s.log.Info("bid skipped: callback balance cannot cover bid",
-			"auction", input.Auction.ID, "callback", s.callback.Hex(),
-			"callbackWei", st.CallbackNative,
-			"availableWei", availableCallback, "requiredWei", priced.bidNative)
-		return skipBid(types.SkipReasonCallbackBalance), nil
+	if unaffordable := s.affordableBundle(ctx, input, priced, st, gasPrice); unaffordable != "" {
+		return skipBid(unaffordable), nil
 	}
 	out, err := s.bidOutputFromBundle(input, priced)
 	if err != nil {
@@ -273,9 +236,27 @@ func (s *Strategy) DecideBid(_ context.Context, input types.BidInput) (types.Bid
 	return out, nil
 }
 
-func (s *Strategy) scoredLegs(a types.AuctionSnapshot, now time.Time, adapter types.AdapterSnapshot) []scoredLeg {
+// scoredLegs finds the liquidatable positions at the auction's prices and sizes each into a leg, one
+// stage span apiece (spec §9.4).
+func (s *Strategy) scoredLegs(
+	ctx context.Context, a types.AuctionSnapshot, now time.Time, adapter types.AdapterSnapshot,
+) []scoredLeg {
 	nowTs := clampTsAt(a.Timestamp, now)
-	cands := s.mon.candidates(a, nowTs, adapter)
+	cands := s.candidates(ctx, a, nowTs, adapter)
+	return s.sizedLegs(ctx, cands)
+}
+
+func (s *Strategy) candidates(
+	ctx context.Context, a types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot,
+) []evalItem {
+	_, end := s.tracer.Start(ctx, "oev.auction.candidates")
+	defer func() { end(nil) }()
+	return s.mon.candidates(a, nowTs, adapter)
+}
+
+func (s *Strategy) sizedLegs(ctx context.Context, cands []evalItem) []scoredLeg {
+	_, end := s.tracer.Start(ctx, "oev.auction.size")
+	defer func() { end(nil) }()
 	out := make([]scoredLeg, 0, len(cands))
 	for _, it := range cands {
 		if sized, ok := sizeLeg(it.cand, it.price, it.quote, it.accrued, s.cfg.Sizing); ok {
@@ -291,6 +272,74 @@ func (s *Strategy) scoredLegs(a types.AuctionSnapshot, now time.Time, adapter ty
 		}
 	}
 	return out
+}
+
+// pricedBundleFor chooses the bundle of legs to settle together and prices it, under oev.auction.bundle.
+func (s *Strategy) pricedBundleFor(
+	ctx context.Context, input types.BidInput, scored []scoredLeg, gasPrice *big.Int,
+) (pricedBundle, string) {
+	_, end := s.tracer.Start(ctx, "oev.auction.bundle")
+	defer func() { end(nil) }()
+
+	laneState := liquidLaneStateFromAdapter(input.Adapter)
+	feedCount := auctionFeedCount(input.Auction)
+	var (
+		b      chosenBundle
+		priced pricedBundle
+		skip   string
+	)
+	if s.gasAccounting {
+		rate := validRate(input.Context.GasPrices.TokenOutPerNative(input.Adapter.Loan))
+		if rate == nil {
+			s.log.Info("bid skipped: loan/native gas rate unavailable",
+				"auctionId", input.Auction.ID, "scoredLegs", len(scored), "feedCount", feedCount)
+			return pricedBundle{}, skipGasUnprofitable
+		}
+		b, skip = s.engine.selectNetBundle(scored, rate, laneState, gasPrice, input.Context.GasLimit, feedCount)
+		if skip == "" {
+			priced = s.engine.priceBundle(b, rate, laneState, gasPrice, feedCount)
+		} else if skip == skipGasUnprofitable && len(b.legs) > 0 {
+			s.engine.logBundleEconomics(input.Auction.ID, "bid skipped: bundle is not profitable after gas and bid",
+				b, rate, laneState, gasPrice, input.Context.GasLimit, feedCount, len(scored))
+		}
+	} else {
+		b, skip = s.engine.selectBundleWithGas(scored, laneState, input.Context.GasLimit, feedCount)
+		if skip == "" {
+			priced = s.engine.priceBundleWithoutGasAccounting(b, laneState, gasPrice, feedCount)
+		}
+	}
+	return priced, skip
+}
+
+// affordableBundle is the economic gate on a priced bundle, under oev.auction.economics: the executor
+// deposit must cover the predicted settlement gas and the callback must be able to pay the bid. It
+// returns the skip reason, or "" when the bundle is affordable.
+func (s *Strategy) affordableBundle(
+	ctx context.Context, input types.BidInput, priced pricedBundle, st decisionState, gasPrice *big.Int,
+) string {
+	_, end := s.tracer.Start(ctx, "oev.auction.economics")
+	defer func() { end(nil) }()
+
+	if !depositCoversSettlementGas(input.Context.ExecutorDeposit, input.Context.ExecutorMinDeposit, priced.gasNative) {
+		s.log.Info("bid skipped: executor deposit cannot cover predicted settlement gas",
+			"auctionId", input.Auction.ID,
+			"depositWei", input.Context.ExecutorDeposit,
+			"requiredWei", executorDepositRequired(input.Context.ExecutorMinDeposit, priced.gasNative),
+			"minDepositWei", input.Context.ExecutorMinDeposit,
+			"gasUnits", priced.gas.Units,
+			"gasNative", priced.gasNative,
+			"gasPriceWei", gasPrice)
+		return types.SkipReasonDepositLow
+	}
+	availableCallback := orZero(st.CallbackNative)
+	if availableCallback.Cmp(priced.bidNative) < 0 {
+		s.log.Info("bid skipped: callback balance cannot cover bid",
+			"auctionId", input.Auction.ID, "callback", s.callback.Hex(),
+			"callbackWei", st.CallbackNative,
+			"availableWei", availableCallback, "requiredWei", priced.bidNative)
+		return types.SkipReasonCallbackBalance
+	}
+	return ""
 }
 
 func auctionFeedCount(a types.AuctionSnapshot) int {

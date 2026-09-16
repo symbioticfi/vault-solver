@@ -8,6 +8,7 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
 )
@@ -53,6 +54,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		seen:           newSeenAuctions(maxSeenAuctions),
 		stateRefreshCh: make(chan struct{}, 1),
 		log:            log,
+		links:          observability.NewSpanLinks(0),
 	}
 	if deps.Metrics != nil {
 		s.metrics, err = newMetrics(deps.Metrics.Registerer(), cfg.Strategy.Name, s.wonReservationMetrics)
@@ -62,6 +64,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		s.stateRefreshObserver = s.metrics.workflow.Operation(stateRefreshOperation)
 	}
 	strategy, err := newStrategy(cfg, strategies.Deps{
+		Solver:              Name,
 		Chain:               deps.Chain,
 		Signer:              deps.Signer,
 		Log:                 log,
