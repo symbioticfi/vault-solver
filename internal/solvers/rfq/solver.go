@@ -159,10 +159,6 @@ func (s *Solver) ShutdownPreparationTimeout() time.Duration {
 // Run serves the quote HTTP API until ctx is cancelled, then shuts it down gracefully, alongside the
 // backend order-poll + fill loop. The filler is poll-only (no push/notify endpoint).
 func (s *Solver) Run(ctx context.Context) error {
-	// The solver logger is narrower than the one solver.Run stored; carry it so every line below,
-	// including the quote server's handlers, logs through it.
-	ctx = observability.WithLogger(ctx, s.log)
-
 	// Resolve each recovery adapter's vault + collateral once at startup (config carries only adapter
 	// addresses; both are fixed for the adapter's lifetime) and hand the resolved set to recovery. Runs
 	// before the poll loop and the quote server, so there's no concurrent reader of exec.vaults. A

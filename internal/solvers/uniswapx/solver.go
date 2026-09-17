@@ -195,10 +195,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 func (s *Solver) Name() string { return Name }
 
 func (s *Solver) Run(ctx context.Context) error {
-	// The solver logger is narrower than the one solver.Run stored; carry it so every line below,
-	// including the loops and the quote server's handlers, logs through it.
-	ctx = observability.WithLogger(ctx, s.log)
-
 	routes, err := s.reader.resolveRoutes(ctx, s.cfg.Adapters)
 	if err != nil {
 		startupErr := errors.Errorf("resolve routes: %w", err)

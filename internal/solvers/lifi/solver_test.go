@@ -49,7 +49,7 @@ func TestRunLogsExternalAdapterAuthorizationFailure(t *testing.T) {
 		log: funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
 	}
 
-	err := s.Run(t.Context())
+	err := s.Run(observability.WithLogger(t.Context(), s.log))
 	if err == nil || !strings.Contains(err.Error(), "validate direct authorization") {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -73,7 +73,7 @@ func TestRunRejectsNonZeroGovernanceFee(t *testing.T) {
 		log: logr.Discard(),
 	}
 
-	err := s.Run(t.Context())
+	err := s.Run(observability.WithLogger(t.Context(), s.log))
 	if err == nil || !strings.Contains(err.Error(), "validate governance fee") {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -94,7 +94,7 @@ func TestRunLogsExecutorValidationFailure(t *testing.T) {
 		log: funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
 	}
 
-	err := s.Run(t.Context())
+	err := s.Run(observability.WithLogger(t.Context(), s.log))
 	if err == nil || !strings.Contains(err.Error(), "lifi: validate executor: caller is not authorized") {
 		t.Fatalf("Run() error = %v", err)
 	}

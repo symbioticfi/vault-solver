@@ -98,8 +98,8 @@ func TestRunTreatsCancellationAsClean(t *testing.T) {
 	}
 }
 
-// With several solvers configured each gets its own stamped logger, and Run is where that logger
-// joins the context every line below it is logged through.
+// With several solvers configured each gets its own stamped logger, and Run is where that logger,
+// named after the solver, joins the context every line below it is logged through.
 func TestRunCarriesTheSolverLoggerInContext(t *testing.T) {
 	var lines []string
 	log := funcr.NewJSON(func(entry string) { lines = append(lines, entry) }, funcr.Options{})
@@ -116,6 +116,9 @@ func TestRunCarriesTheSolverLoggerInContext(t *testing.T) {
 		seen = true
 		if !strings.Contains(line, `"solver":"rfq"`) {
 			t.Fatalf("solver line did not reach the per-solver logger: %s", line)
+		}
+		if !strings.Contains(line, `"logger":"rfq"`) {
+			t.Fatalf("solver line is not named after the solver: %s", line)
 		}
 	}
 	if !seen {

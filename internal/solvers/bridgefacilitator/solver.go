@@ -136,10 +136,6 @@ func (s *Solver) Name() string { return Name }
 // Run drives discovery/offer, redemption, and reconciliation on their configured cadences until
 // ctx is cancelled.
 func (s *Solver) Run(ctx context.Context) error {
-	// The solver logger is narrower than the one solver.Run stored; carry it so every line below,
-	// including the discovery, redeem and reconcile ticks, logs through it.
-	ctx = observability.WithLogger(ctx, s.log)
-
 	// Build the initial explicit-or-factory snapshot. A successfully empty factory is valid: the
 	// daemon stays alive and picks up future entities on a discovery tick.
 	if err := s.refreshTargetsAndHydrate(ctx); err != nil {

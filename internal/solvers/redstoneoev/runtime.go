@@ -24,10 +24,6 @@ var (
 
 // Run warms the caches, starts the strategy + ops loops, and serves the WS stream until ctx cancels.
 func (s *Solver) Run(ctx context.Context) error {
-	// The solver logger is narrower than the one solver.Run stored; carry it so the feed, ops and
-	// strategy loops below all log through it.
-	ctx = observability.WithLogger(ctx, s.log)
-
 	observability.Log(ctx).Info("starting",
 		"callback", s.cfg.Callback.Hex(), "executor", s.cfg.Executor.Hex(), "adapter", s.cfg.Adapter.Hex(),
 		"strategy", s.strategyName,

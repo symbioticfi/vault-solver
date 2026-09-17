@@ -146,7 +146,7 @@ func TestRunLogsStartupValidationFailures(t *testing.T) {
 				log:           funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
 			}
 
-			err := s.Run(t.Context())
+			err := s.Run(observability.WithLogger(t.Context(), s.log))
 			if err == nil || !strings.Contains(err.Error(), tc.wantError) {
 				t.Fatalf("Run() error = %v, want %q", err, tc.wantError)
 			}
@@ -188,7 +188,7 @@ func TestRunInternalModeAllowsNoAdaptersAndSkipsDirectAuthorizationGate(t *testi
 		log: logr.Discard(),
 	}
 
-	err := solver.Run(t.Context())
+	err := solver.Run(observability.WithLogger(t.Context(), solver.log))
 	if err == nil || !strings.Contains(err.Error(), stop.Error()) {
 		t.Fatalf("Run() error = %v, want later order-service failure", err)
 	}

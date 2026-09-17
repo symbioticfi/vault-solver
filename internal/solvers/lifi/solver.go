@@ -141,10 +141,6 @@ func (s *Solver) ShutdownPreparationTimeout() time.Duration {
 }
 
 func (s *Solver) Run(ctx context.Context) error {
-	// The solver logger is narrower than the one solver.Run stored; carry it so every line below,
-	// including the quote and feed loops, logs through it.
-	ctx = observability.WithLogger(ctx, s.log)
-
 	routes, err := s.reader.resolveRoutes(ctx, s.cfg.Adapters)
 	if err != nil {
 		startupErr := errors.Errorf("lifi: resolve routes: %w", err)
