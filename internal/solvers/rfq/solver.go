@@ -5,6 +5,7 @@ package rfq
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -159,6 +160,10 @@ func (s *Solver) ShutdownPreparationTimeout() time.Duration {
 // Run serves the quote HTTP API until ctx is cancelled, then shuts it down gracefully, alongside the
 // backend order-poll + fill loop. The filler is poll-only (no push/notify endpoint).
 func (s *Solver) Run(ctx context.Context) error {
+	// The solver logger is narrower than the one solver.Run stored; carry it so every line below,
+	// including the quote server's handlers, logs through it.
+	ctx = observability.WithLogger(ctx, s.log)
+
 	// Resolve each recovery adapter's vault + collateral once at startup (config carries only adapter
 	// addresses; both are fixed for the adapter's lifetime) and hand the resolved set to recovery. Runs
 	// before the poll loop and the quote server, so there's no concurrent reader of exec.vaults. A
@@ -167,7 +172,7 @@ func (s *Solver) Run(ctx context.Context) error {
 		resolved, err := s.exec.reader.resolveVaults(ctx, s.cfg.Adapters)
 		if err != nil {
 			startupErr := errors.Errorf("rfq: resolve recovery vaults: %w", err)
-			s.log.Error(startupErr, "adapter resolution failed",
+			observability.Log(ctx).Error(startupErr, "adapter resolution failed",
 				"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
 			return startupErr
 		}
@@ -176,14 +181,14 @@ func (s *Solver) Run(ctx context.Context) error {
 		if s.cfg.restrictsToAdapters() {
 			if err := s.exec.reader.validateDirectAuthorization(ctx, s.cfg.Executor, resolved); err != nil {
 				startupErr := errors.Errorf("rfq: validate direct authorization: %w", err)
-				s.log.Error(startupErr, "external adapter authorization failed",
+				observability.Log(ctx).Error(startupErr, "external adapter authorization failed",
 					"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
 				return startupErr
 			}
 		}
 	}
 
-	s.log.Info("starting",
+	observability.Log(ctx).Info("starting",
 		"listenAddr", s.cfg.ListenAddr,
 		"executor", s.cfg.Executor.Hex(),
 		"solverMode", s.cfg.SolverMode,
@@ -191,9 +196,13 @@ func (s *Solver) Run(ctx context.Context) error {
 		"backendUrl", s.cfg.BackendURL,
 	)
 
+	// Handler contexts inherit the solver logger from here. Cancellation is deliberately dropped so
+	// shutdown keeps draining in-flight quotes through Shutdown instead of cutting them off.
+	handlerCtx := context.WithoutCancel(ctx)
 	httpSrv := &http.Server{
 		Addr:              s.cfg.ListenAddr,
 		Handler:           s.server.handler(),
+		BaseContext:       func(net.Listener) context.Context { return handlerCtx },
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      15 * time.Second,
@@ -205,7 +214,7 @@ func (s *Solver) Run(ctx context.Context) error {
 			errCh <- err
 		}
 	}()
-	s.log.Info("quote server listening", "addr", s.cfg.ListenAddr)
+	observability.Log(ctx).Info("quote server listening", "addr", s.cfg.ListenAddr)
 
 	// Stop new polling on shutdown, but join the execution loop before returning. A txmanager Send
 	// that reached admission still waits for the manager's terminal or bounded-shutdown result after
@@ -233,9 +242,9 @@ func (s *Solver) Run(ctx context.Context) error {
 	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), quoteServerShutdownTimeout)
 	defer cancel()
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
-		s.log.Error(err, "quote server graceful shutdown failed")
+		observability.Log(ctx).Error(err, "quote server graceful shutdown failed")
 		if closeErr := httpSrv.Close(); closeErr != nil {
-			s.log.Error(closeErr, "quote server forced shutdown failed")
+			observability.Log(ctx).Error(closeErr, "quote server forced shutdown failed")
 		}
 	}
 	<-execDone

@@ -538,14 +538,14 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 
 	e := newExec(t, st, be, &fakeTxm{})
 	e.whitelist = buildAdapterWhitelist(true, []recoveryVault{{Adapter: vlt}})
-	out := e.discountInventories(context.Background(), logr.Discard(), tIn, nil)
+	out := e.discountInventories(context.Background(), tIn, nil)
 	if len(out) != 1 || out[0].Adapter != vlt {
 		t.Fatalf("whitelisted discountInventories = %+v, want only the listed adapter", out)
 	}
 
 	// Disabled via config (nil whitelist): both discounts survive.
 	e.whitelist = buildAdapterWhitelist(false, []recoveryVault{{Adapter: vlt}})
-	out = e.discountInventories(context.Background(), logr.Discard(), tIn, nil)
+	out = e.discountInventories(context.Background(), tIn, nil)
 	if len(out) != 2 {
 		t.Fatalf("unfiltered discountInventories = %d entries, want 2", len(out))
 	}
@@ -565,7 +565,7 @@ func TestExecution_DiscountInventoriesSkipsExpired(t *testing.T) {
 	e := newExec(t, st, be, &fakeTxm{})
 	e.now = func() time.Time { return time.Unix(2, 0) }
 	e.whitelist = buildAdapterWhitelist(true, []recoveryVault{{Adapter: vlt}})
-	if out := e.discountInventories(context.Background(), logr.Discard(), tIn, nil); len(out) != 0 {
+	if out := e.discountInventories(context.Background(), tIn, nil); len(out) != 0 {
 		t.Fatalf("expired discount inventories = %+v", out)
 	}
 }
@@ -595,7 +595,7 @@ func TestExecutionRecoveryMarksPermissionedScopeAsSingleRoute(t *testing.T) {
 	e.strategy = strategy
 
 	plan, err := e.buildFillPlan(
-		t.Context(), logr.Discard(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
+		t.Context(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
 	)
 	if err != nil {
 		t.Fatalf("buildFillPlan: %v", err)
@@ -625,7 +625,7 @@ func TestExecutionRejectsPermissionedScopeMultiLegFillPlan(t *testing.T) {
 	e.strategy = fixedFillStrategy{plan: plan}
 
 	got, err := e.buildFillPlan(
-		t.Context(), logr.Discard(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
+		t.Context(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
 	)
 	if err == nil || !strings.Contains(err.Error(), "single-route input requires exactly one leg") {
 		t.Fatalf("buildFillPlan error = %v, want single-route rejection", err)
@@ -646,7 +646,7 @@ func TestExecution_ReconcileUnknownStatusRetainsOrder(t *testing.T) {
 			be := &fakeBackend{order: &backendOrder{OrderID: "o1", OrderStatus: status}}
 			e := newExec(t, st, be, &fakeTxm{})
 
-			e.reconcileTerminalStatus(t.Context(), logr.Discard(), "o1")
+			e.reconcileTerminalStatus(t.Context(), "o1")
 
 			if got := st.order("o1").Status; got != statusSubmitted {
 				t.Fatalf("status = %q, want %q", got, statusSubmitted)

@@ -17,6 +17,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -317,7 +318,8 @@ func TestExecution_OrderLogsCarryTraceIDOnce(t *testing.T) {
 	e := newExec(t, st, be, &fakeTxm{result: confirmedTxResult()})
 	e.log = funcr.NewJSON(func(entry string) { lines = append(lines, entry) }, funcr.Options{Verbosity: 1})
 
-	e.syncOnce(t.Context())
+	// solver.Run stores the solver logger on the context it hands the poll loop; stand in for it.
+	e.syncOnce(observability.WithLogger(t.Context(), e.log))
 
 	if len(lines) == 0 {
 		t.Fatal("no log output captured")
@@ -336,6 +338,36 @@ func TestExecution_OrderLogsCarryTraceIDOnce(t *testing.T) {
 	}
 	if !sawOrderLine {
 		t.Fatalf("no order-path line carried trace_id: %v", lines)
+	}
+}
+
+// The quote pipeline logs through the context logger now, so its decline lines carry the rfq.quote
+// span's ids — and carry them exactly once.
+func TestQuote_DeclineLogsCarryTraceIDOnce(t *testing.T) {
+	tracetest.Install(t)
+	srv := testServer()
+	var lines []string
+	srv.quotes.log = funcr.NewJSON(
+		func(entry string) { lines = append(lines, entry) }, funcr.Options{Verbosity: 1},
+	)
+	body := validQuoteBody()
+	body.TokenInChainID = 2 // not our chain
+
+	if _, err := srv.quotes.quote(t.Context(), &body); err != nil {
+		t.Fatalf("quote: %v", err)
+	}
+
+	var sawDecline bool
+	for _, line := range lines {
+		if n := strings.Count(line, `"trace_id"`); n > 1 {
+			t.Fatalf("trace_id appears %d times in %s", n, line)
+		}
+		if strings.Contains(line, "declining quote: not quotable") && strings.Contains(line, `"trace_id"`) {
+			sawDecline = true
+		}
+	}
+	if !sawDecline {
+		t.Fatalf("the quote decline line carried no trace_id: %v", lines)
 	}
 }
 

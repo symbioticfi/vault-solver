@@ -101,10 +101,9 @@ func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput,
 		observability.AttrRequestID.String(requestID(ctx)),
 		observability.AttrQuoteID.String(in.Body.QuoteID),
 	)
-	log := observability.TraceLogger(ctx, s.log)
 	if !s.authorized(in.Secret) {
 		// Log the denial (never the attempted secret) so credential scanning is observable.
-		log.V(1).Info("rejected /quote: bad shared secret", "requestId", requestID(ctx))
+		observability.Log(ctx).V(1).Info("rejected /quote: bad shared secret", "requestId", requestID(ctx))
 		return nil, huma.Error403Forbidden("forbidden")
 	}
 	decision, err := s.quotes.quote(ctx, &in.Body)
@@ -118,7 +117,8 @@ func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput,
 		if bad != nil {
 			return nil, huma.Error400BadRequest(bad.Error())
 		}
-		backendErrorLogger(log, err).Error(err, "quote failed", "quoteId", in.Body.QuoteID, "requestId", requestID(ctx))
+		backendErrorLogger(observability.Log(ctx), err).
+			Error(err, "quote failed", "quoteId", in.Body.QuoteID, "requestId", requestID(ctx))
 		return nil, huma.Error502BadGateway("quote failed")
 	}
 	if decision.response == nil {

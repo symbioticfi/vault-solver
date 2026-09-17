@@ -95,6 +95,8 @@ type quoteObservation struct {
 // configured minimum, no whitelisted adapter, no matching asset, or no viable strategy). An error is
 // returned only for malformed input or a failed dependency.
 func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (decision quoteDecision, err error) {
+	// The service's own logger, so the pipeline logs through it whatever context the caller brought.
+	ctx = observability.WithLogger(ctx, qs.log)
 	ctx, end := tracer.Start(ctx, "rfq.quote")
 	// Deferred so the span still ends when the pipeline panics; recoverPanics turns that into a 500
 	// without unwinding past here, and an unended span is never exported.
@@ -126,20 +128,20 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDec
 		return quoteDecision{outcome: quoteDecisionError}, &badRequestError{errors.Errorf("parse request: %w", err)}
 	}
 	if !qs.canQuote() {
-		qs.log.V(1).Info("declining quote: transaction lane not ready", "quoteId", q.QuoteID)
+		observability.Log(ctx).V(1).Info("declining quote: transaction lane not ready", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil
 	}
 	if parsed == nil {
-		qs.log.V(1).Info("declining quote: not quotable", "quoteId", q.QuoteID, "type", q.Type)
+		observability.Log(ctx).V(1).Info("declining quote: not quotable", "quoteId", q.QuoteID, "type", q.Type)
 		return quoteDecision{outcome: quoteDecisionNotQuotable}, nil
 	}
 	if !qs.tokenPolicy.Allows(parsed.req.TokenIn) {
-		qs.log.V(1).Info("declining quote: input token out of scope",
+		observability.Log(ctx).V(1).Info("declining quote: input token out of scope",
 			"quoteId", q.QuoteID, "tokenIn", lowerAddr(parsed.req.TokenIn), "scope", qs.tokenPolicy.Scope())
 		return quoteDecision{outcome: quoteDecisionNotQuotable}, nil
 	}
 	if minIn, ok := qs.minAmountsIn[parsed.req.TokenIn]; ok && parsed.req.Amount.Cmp(minIn) < 0 {
-		qs.log.V(1).Info("declining quote: input amount below configured minimum",
+		observability.Log(ctx).V(1).Info("declining quote: input amount below configured minimum",
 			"quoteId", q.QuoteID, "tokenIn", lowerAddr(parsed.req.TokenIn),
 			"amount", parsed.req.Amount.String(), "min", minIn.String())
 		return quoteDecision{outcome: quoteDecisionBelowMinimum}, nil
@@ -149,7 +151,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDec
 		inv = slices.DeleteFunc(slices.Clone(inv), func(item solverInventory) bool { return item.DiscountID != nil })
 	}
 	if len(inv) == 0 {
-		qs.log.V(1).Info("declining quote: no whitelisted adapters", "quoteId", q.QuoteID)
+		observability.Log(ctx).V(1).Info("declining quote: no whitelisted adapters", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
 	}
 
@@ -159,7 +161,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDec
 		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: read LiquidLane candidates: %w", err)
 	}
 	if len(candidates) == 0 {
-		qs.log.V(1).Info("declining quote: no viable LiquidLane candidates", "quoteId", q.QuoteID)
+		observability.Log(ctx).V(1).Info("declining quote: no viable LiquidLane candidates", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
 	}
 	input := newQuoteInput(qs.chainID, qs.executor, req, candidates, nil, requireSingleRoute, qs.now())
@@ -168,7 +170,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDec
 		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: strategy: %w", err)
 	}
 	if out.Decision != types.DecisionQuote {
-		qs.log.V(1).Info("declining quote: no viable strategy", "quoteId", q.QuoteID)
+		observability.Log(ctx).V(1).Info("declining quote: no viable strategy", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionStrategyDeclined}, nil
 	}
 	plan, err := strategies.FillPlanFromQuote(input, out)
@@ -177,11 +179,11 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDec
 	}
 	traceAdapter(ctx, plan.Legs)
 	if !qs.canQuote() {
-		qs.log.V(1).Info("declining quote: transaction lane no longer ready", "quoteId", q.QuoteID)
+		observability.Log(ctx).V(1).Info("declining quote: transaction lane no longer ready", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil
 	}
 
-	qs.log.V(1).Info("quoted",
+	observability.Log(ctx).V(1).Info("quoted",
 		"quoteId", q.QuoteID, "amountIn", req.Amount.String(),
 		"amountOut", out.QuotedAmountOut.String(), "legs", len(out.Legs))
 
