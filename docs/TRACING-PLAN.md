@@ -76,6 +76,12 @@ off and must pay nothing for it: instrumenting the disabled path cost 38 allocat
 `/quote` request and 26 per outbound client call (§7). A deployment that wants context propagated
 turns tracing on.
 
+**Ordering constraint.** `TraceHandler` and `TraceTransport` read the flag when they are *called*, so
+an instrumented server or client must be constructed after `NewTracing` (in tests, after
+`tracetest.Install`). One built earlier is not wrapped and stays untraced for the life of the process,
+silently. `runBot` satisfies this today: `NewTracing` runs before any solver is built, and all eight
+construction sites are inside solver factories. A new call site belongs there too.
+
 ### 3.2 The tracer wrapper
 
 Every package takes its own tracer with `observability.NewTracer(importPath, solverName)` and starts
@@ -528,3 +534,4 @@ run against the no-op provider and prove there is no behaviour change when traci
 - [ ] `orderTrace.context` (LI.FI) re-attaches the processing span without a stamp slot, so lines under it rebuild the stamped logger each time
 - [ ] `Log(ctx)` walks the context three times; with tracing off the stamp-slot lookup always walks to the root
 - [ ] `recoverOrders` re-enqueues a recovery retry that the inbox can still coalesce away as a queued replay, if the worker marks it before the inbox releases the delivered key
+- [ ] a ws/ipc RPC failure records its `exception.type` as the chain package's wrapper type rather than the underlying error's

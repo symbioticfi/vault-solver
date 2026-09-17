@@ -16,7 +16,9 @@ import (
 // named "<METHOD> <route>". route must return a bounded label, never the raw path. Probe and docs
 // paths produce no span.
 // With tracing disabled the handler is not wrapped at all: otelhttp costs a span's worth of work on
-// every request even against a no-op provider, and the default deployment must not pay it.
+// every request even against a no-op provider, and the default deployment must not pay it. That
+// decision is made here, once, so a server must be built after NewTracing (or tracetest.Install) has
+// run, or it is silently untraced for the life of the process.
 func TraceHandler(next http.Handler, route func(*http.Request) string) http.Handler {
 	if !enabled.Load() {
 		return next
@@ -40,7 +42,9 @@ func isProbePath(p string) bool {
 // TraceTransport wraps base (nil means http.DefaultTransport) so every request runs in a client span
 // named "<peer> <METHOD>" and carries traceparent. peer is a short integration name, never a URL.
 // The recorded url.full never carries the query string (see redactURL).
-// With tracing disabled base is returned unwrapped, for the same reason TraceHandler does not wrap.
+// With tracing disabled base is returned unwrapped, for the same reason TraceHandler does not wrap,
+// and with the same ordering constraint: a client built before NewTracing (or tracetest.Install) has
+// run stays untraced for the life of the process.
 func TraceTransport(base http.RoundTripper, peer string) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport

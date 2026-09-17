@@ -75,14 +75,14 @@ func (s *Solver) setPendingReservations(
 	s.requestQuoteRefresh()
 }
 
-func (s *Solver) clearPendingReservations(hash common.Hash) {
+func (s *Solver) clearPendingReservations(ctx context.Context, hash common.Hash) {
 	// Stop quotes before releasing capacity. The next snapshot must observe the fill outcome
 	// before the released capacity can be advertised again.
 	s.invalidateQuotes()
 	if !s.capacity.Delete(hash.Hex()) {
 		return
 	}
-	s.log.V(1).Info(
+	observability.Log(ctx).V(1).Info(
 		"fill capacity released",
 		"orderHash", hash.Hex(),
 		"pendingFills", s.capacity.Len(),

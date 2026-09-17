@@ -367,7 +367,7 @@ func TestClearPendingReservationsInvalidatesQuoteState(t *testing.T) {
 	}
 	solver.quoteState.Store(&quoteState{expiresAt: time.Now().Add(time.Minute)})
 
-	solver.clearPendingReservations(hash)
+	solver.clearPendingReservations(t.Context(), hash)
 
 	if solver.quoteState.Load() != nil {
 		t.Fatal("released capacity remained quotable through the old snapshot")

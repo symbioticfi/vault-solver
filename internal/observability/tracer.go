@@ -185,8 +185,9 @@ func LinkMiss(ctx context.Context, key string) {
 }
 
 // EndSpan ends span under the shared policy, for the few callers that hold a trace.Span rather than
-// an EndFunc (txmanager carries one from admission to receipt). Not idempotent on its own: the SDK
-// ignores a second End, but a second call would record the error twice.
+// an EndFunc (txmanager carries one from admission to receipt). Safe to call more than once, for the
+// same reason EndFunc is: the SDK ignores an End on an ended span, and gates the error and status it
+// would record first on the span still recording. The txmanager shutdown drain relies on that.
 func EndSpan(span trace.Span, err error) { endSpan(span, err) }
 
 // spanStatusDescriber lets an error bound the text of the error status it produces. A span status

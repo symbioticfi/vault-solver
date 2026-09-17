@@ -512,7 +512,7 @@ func (s *Solver) completePendingFill(ctx context.Context, completion uniswapFill
 	}()
 
 	now := time.Now()
-	s.clearPendingReservations(order.Hash)
+	s.clearPendingReservations(ctx, order.Hash)
 	if completion.result.NotAdmitted {
 		// The lane refusing a fill is an expected outcome, not a failure of this fill.
 		observability.Decline(ctx, "fill_not_admitted", errorReason(completion.result.Err))
