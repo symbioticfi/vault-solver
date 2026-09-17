@@ -10,8 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
@@ -157,29 +155,13 @@ func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
 	}
 	defer e.release(o.OrderID)
 
-	attrs := []attribute.KeyValue{
+	// The narrowed base logger, never a trace-stamped one: Log stamps each stage's own span.
+	ctx = observability.WithLogger(ctx, e.log.WithValues("orderId", o.OrderID, "quoteId", o.QuoteID))
+	ctx, end, _ := tracer.StartLinkedKey(ctx, e.links, o.QuoteID, "rfq.order",
 		observability.AttrOrderID.String(o.OrderID),
 		observability.AttrQuoteID.String(o.QuoteID),
-	}
-	var links []trace.Link
-	if link, ok := e.quoteLink(o.QuoteID); ok {
-		links = append(links, link)
-		attrs = append(attrs, observability.AttrQuoteTraceID.String(link.SpanContext.TraceID().String()))
-	}
-	ctx, end := tracer.StartLinked(ctx, "rfq.order", links, attrs...)
+	)
 	defer end(nil) // each stage records its own failure; terminal skips are declined events here
-
-	log := e.log.WithValues("orderId", o.OrderID, "quoteId", o.QuoteID)
-	if len(links) > 0 {
-		log = log.WithValues("quoteTraceId", links[0].SpanContext.TraceID().String())
-	} else {
-		// Best effort (spec §12): the quote span is gone — restart, eviction, or it was never ours.
-		// The fill proceeds identically; only the link is lost.
-		trace.SpanFromContext(ctx).AddEvent("link_miss",
-			trace.WithAttributes(attribute.String("key", o.QuoteID)))
-	}
-	// The narrowed base logger, never a trace-stamped one: Log stamps each stage's own span.
-	ctx = observability.WithLogger(ctx, log)
 
 	switch o.Status {
 	case statusQueued, statusSubmitting:
@@ -189,15 +171,6 @@ func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
 	case statusFilled, statusExpired, statusFailed:
 		// terminal — nothing to do
 	}
-}
-
-// quoteLink returns the span of the quote this order came from, when it is still remembered. A miss
-// is an ordinary result: linking is best effort and never changes what the fill does.
-func (e *executionService) quoteLink(quoteID string) (trace.Link, bool) {
-	if e.links == nil {
-		return trace.Link{}, false
-	}
-	return e.links.Lookup(quoteID)
 }
 
 func (e *executionService) submitOrder(ctx context.Context, orderID string) {
@@ -353,13 +326,9 @@ func (e *executionService) sendFill(
 	defer func() { end(err) }()
 
 	res = e.txm.Send(submitCtx, req)
-	txAttrs := []attribute.KeyValue{observability.AttrTxOutcome.String(string(res.Outcome))}
-	if res.Hash != (common.Hash{}) { // a request that never reached the wire has no hash
-		txAttrs = append(txAttrs, observability.AttrTxHash.String(res.Hash.Hex()))
-	}
-	observability.SetAttributes(submitCtx, txAttrs...) // the stage
-	observability.SetAttributes(ctx, txAttrs...)       // the order span it belongs to
-	err = res.Err                                      // included-but-unconfirmed still carries the wait failure
+	txmanager.RecordResult(submitCtx, res) // the stage
+	txmanager.RecordResult(ctx, res)       // the order span it belongs to
+	err = res.Err                          // included-but-unconfirmed still carries the wait failure
 	if err == nil && !res.Outcome.Included() {
 		err = errors.Errorf("unknown transaction outcome %q", res.Outcome)
 	}

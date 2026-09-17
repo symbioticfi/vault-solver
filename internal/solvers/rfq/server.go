@@ -123,9 +123,7 @@ func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput,
 		return &quoteOutput{Status: http.StatusNoContent}, nil // well-formed, nothing to quote
 	}
 	// Remember the served quote so the fill that wins it can link back to this trace (spec §12).
-	if s.links != nil {
-		s.links.Remember(ctx, in.Body.QuoteID, quoteLinkTTL)
-	}
+	s.links.Remember(ctx, in.Body.QuoteID, quoteLinkTTL)
 	return &quoteOutput{Status: http.StatusOK, Body: decision.response}, nil
 }
 

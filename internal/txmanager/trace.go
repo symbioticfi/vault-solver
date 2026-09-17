@@ -36,13 +36,10 @@ func resultAttrs(res Result) []attribute.KeyValue {
 	return attrs
 }
 
-// RecordResult stamps a send's outcome (and its hash, when it has one) on the span of every given
-// context — typically the submission stage and the pass it belongs to.
-func RecordResult(res Result, ctxs ...context.Context) {
-	attrs := resultAttrs(res)
-	for _, ctx := range ctxs {
-		observability.SetAttributes(ctx, attrs...)
-	}
+// RecordResult stamps a send's outcome (and its hash, when it has one) on ctx's span. Call it once
+// per span that should carry the result: the submission stage, and the pass it belongs to.
+func RecordResult(ctx context.Context, res Result) {
+	observability.SetAttributes(ctx, resultAttrs(res)...)
 }
 
 // endSendSpan closes a send span with the request's terminal result. Outcomes that mean the call did
