@@ -82,7 +82,7 @@ func NewFromConfig(raw yaml.Node, deps strategies.Deps) (types.Strategy, error) 
 	}
 	return New(cfg, Deps{
 		Solver:              deps.Solver,
-		Reader:              newChainReader(deps.Chain, deps.Log),
+		Reader:              newChainReader(deps.Chain),
 		Signer:              deps.Signer,
 		Log:                 deps.Log,
 		ChainID:             deps.ChainID,
@@ -135,7 +135,7 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 		signer:        deps.Signer,
 		chainID:       big.NewInt(deps.ChainID),
 		mon:           mon,
-		engine:        newBundleEngine(cfg, deps.Log),
+		engine:        newBundleEngine(cfg),
 		maxAge:        cfg.MaxStateAge,
 		log:           deps.Log,
 		tracer:        tracer,
@@ -143,6 +143,10 @@ func New(cfg Config, deps Deps) (*Strategy, error) {
 }
 
 func (s *Strategy) Run(ctx context.Context) {
+	// The strategy logger is the solver's; carry it so the state and monitor loops below log through
+	// observability.Log(ctx) and pick up each stage's trace ids.
+	ctx = observability.WithLogger(ctx, s.log)
+
 	s.refreshState(ctx)
 	s.mon.refresh(ctx)
 	var wg sync.WaitGroup
@@ -176,7 +180,8 @@ func (s *Strategy) refreshState(ctx context.Context) {
 	callbackNative, err := s.reader.ReadNativeBalance(ctx, s.callback)
 	callbackUpdatedAt := time.Now()
 	if err != nil {
-		s.log.Error(err, "read callback balance failed; keeping last cached balance", "callback", s.callback.Hex())
+		observability.Log(ctx).Error(
+			err, "read callback balance failed; keeping last cached balance", "callback", s.callback.Hex())
 		callbackNative = prev.CallbackNative
 		callbackUpdatedAt = prev.CallbackUpdatedAt
 	}
@@ -187,6 +192,9 @@ func (s *Strategy) refreshState(ctx context.Context) {
 }
 
 func (s *Strategy) DecideBid(ctx context.Context, input types.BidInput) (types.BidOutput, error) {
+	// The bid entry point: carry the strategy logger so every stage below logs through the context.
+	ctx = observability.WithLogger(ctx, s.log)
+
 	if input.Adapter.Address != (common.Address{}) && input.Adapter.Address != s.adapter {
 		return skipBid(skipNoLegs), nil
 	}
@@ -278,7 +286,7 @@ func (s *Strategy) sizedLegs(ctx context.Context, cands []evalItem) []scoredLeg 
 func (s *Strategy) pricedBundleFor(
 	ctx context.Context, input types.BidInput, scored []scoredLeg, gasPrice *big.Int,
 ) (pricedBundle, string) {
-	_, end := s.tracer.Start(ctx, "oev.auction.bundle")
+	ctx, end := s.tracer.Start(ctx, "oev.auction.bundle")
 	defer func() { end(nil) }()
 
 	laneState := liquidLaneStateFromAdapter(input.Adapter)
@@ -291,7 +299,7 @@ func (s *Strategy) pricedBundleFor(
 	if s.gasAccounting {
 		rate := validRate(input.Context.GasPrices.TokenOutPerNative(input.Adapter.Loan))
 		if rate == nil {
-			s.log.Info("bid skipped: loan/native gas rate unavailable",
+			observability.Log(ctx).Info("bid skipped: loan/native gas rate unavailable",
 				"auctionId", input.Auction.ID, "scoredLegs", len(scored), "feedCount", feedCount)
 			return pricedBundle{}, skipGasUnprofitable
 		}
@@ -299,7 +307,8 @@ func (s *Strategy) pricedBundleFor(
 		if skip == "" {
 			priced = s.engine.priceBundle(b, rate, laneState, gasPrice, feedCount)
 		} else if skip == skipGasUnprofitable && len(b.legs) > 0 {
-			s.engine.logBundleEconomics(input.Auction.ID, "bid skipped: bundle is not profitable after gas and bid",
+			s.engine.logBundleEconomics(ctx, input.Auction.ID,
+				"bid skipped: bundle is not profitable after gas and bid",
 				b, rate, laneState, gasPrice, input.Context.GasLimit, feedCount, len(scored))
 		}
 	} else {
@@ -317,11 +326,11 @@ func (s *Strategy) pricedBundleFor(
 func (s *Strategy) affordableBundle(
 	ctx context.Context, input types.BidInput, priced pricedBundle, st decisionState, gasPrice *big.Int,
 ) string {
-	_, end := s.tracer.Start(ctx, "oev.auction.economics")
+	ctx, end := s.tracer.Start(ctx, "oev.auction.economics")
 	defer func() { end(nil) }()
 
 	if !depositCoversSettlementGas(input.Context.ExecutorDeposit, input.Context.ExecutorMinDeposit, priced.gasNative) {
-		s.log.Info("bid skipped: executor deposit cannot cover predicted settlement gas",
+		observability.Log(ctx).Info("bid skipped: executor deposit cannot cover predicted settlement gas",
 			"auctionId", input.Auction.ID,
 			"depositWei", input.Context.ExecutorDeposit,
 			"requiredWei", executorDepositRequired(input.Context.ExecutorMinDeposit, priced.gasNative),
@@ -333,7 +342,7 @@ func (s *Strategy) affordableBundle(
 	}
 	availableCallback := orZero(st.CallbackNative)
 	if availableCallback.Cmp(priced.bidNative) < 0 {
-		s.log.Info("bid skipped: callback balance cannot cover bid",
+		observability.Log(ctx).Info("bid skipped: callback balance cannot cover bid",
 			"auctionId", input.Auction.ID, "callback", s.callback.Hex(),
 			"callbackWei", st.CallbackNative,
 			"availableWei", availableCallback, "requiredWei", priced.bidNative)

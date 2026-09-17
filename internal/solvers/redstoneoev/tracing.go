@@ -3,7 +3,6 @@ package redstoneoev
 import (
 	"context"
 
-	"github.com/go-logr/logr"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
@@ -45,11 +44,11 @@ func (s *Solver) rememberAuction(ctx context.Context, auctionID string) {
 }
 
 // startResultSpan begins the short span one result frame gets, linked to the auction span that bid on
-// it, and returns a logger carrying both the trace ids and the auction id. A link miss is recorded as
-// an event naming the key and is otherwise inert.
+// it, and stores the auction id (and the linked trace) on the returned context's logger. A link miss is
+// recorded as an event naming the key and is otherwise inert.
 func (s *Solver) startResultSpan(
 	ctx context.Context, name, auctionID string, attrs ...attribute.KeyValue,
-) (context.Context, observability.EndFunc, logr.Logger) {
+) (context.Context, observability.EndFunc) {
 	spanAttrs := append([]attribute.KeyValue{observability.AttrAuctionID.String(auctionID)}, attrs...)
 	link, linked := s.auctionLink(auctionID)
 	var links []trace.Link
@@ -63,9 +62,9 @@ func (s *Solver) startResultSpan(
 			attribute.String("key", auctionID),
 		))
 	}
-	log := observability.TraceLogger(ctx, s.log).WithValues("auctionId", auctionID)
+	log := s.log.WithValues("auctionId", auctionID)
 	if linked {
 		log = log.WithValues("quoteTraceId", link.SpanContext.TraceID().String())
 	}
-	return ctx, end, log
+	return observability.WithLogger(ctx, log), end
 }

@@ -12,6 +12,8 @@ import (
 	"github.com/gorilla/websocket"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 // wsConfig tunes the resilient WS client. Timings default to the RedStone example client's values
@@ -95,6 +97,10 @@ func (w *wsClient) Send(frame []byte) bool {
 
 // Run connects and serves until ctx is cancelled, reconnecting with jittered exponential backoff.
 func (w *wsClient) Run(ctx context.Context) error {
+	// The client's logger is narrower than the solver's; carry it so the connection lines below log
+	// through it and pick up the trace ids of whatever span they run in.
+	ctx = observability.WithLogger(ctx, w.log)
+
 	backoff := w.cfg.BackoffInitial
 	for {
 		start := time.Now()
@@ -103,7 +109,7 @@ func (w *wsClient) Run(ctx context.Context) error {
 			return ctx.Err()
 		}
 		if err != nil {
-			w.log.Error(err, "ws connection ended; reconnecting")
+			observability.Log(ctx).Error(err, "ws connection ended; reconnecting")
 		}
 		// Reset backoff if the last connection was healthy for a while.
 		if time.Since(start) > w.cfg.BackoffMax {
@@ -129,7 +135,7 @@ func (w *wsClient) serveOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	w.log.Info("connected", "url", w.cfg.URL)
+	observability.Log(ctx).Info("connected", "url", w.cfg.URL)
 
 	// Drop any solves buffered during the downtime: a solve targets one auction (~400ms life), so
 	// anything still queued after a reconnect is stale. Start each connection with a clean send queue.
@@ -146,7 +152,7 @@ func (w *wsClient) serveOnce(ctx context.Context) error {
 		}
 	}
 	w.onConnectionState(true)
-	w.log.Info("subscribed", "topics", w.cfg.Topics)
+	observability.Log(ctx).Info("subscribed", "topics", w.cfg.Topics)
 
 	errCh := make(chan error, 2)
 	var wg sync.WaitGroup
@@ -244,7 +250,7 @@ func (w *wsClient) writePump(ctx context.Context, conn *websocket.Conn, errCh ch
 				return
 			}
 		case <-rotate.C:
-			w.log.Info("rotating connection before server cutoff")
+			observability.Log(ctx).Info("rotating connection before server cutoff")
 			w.nonblockErr(errCh, errors.New("rotate"))
 			return
 		}

@@ -99,30 +99,31 @@ func (m *apiMonitor) refresh(ctx context.Context) {
 	ctx, end := m.tracer.Start(ctx, "oev.monitor")
 	var err error
 	defer func() { end(err) }()
-	log := observability.TraceLogger(ctx, m.log)
+	// The monitor logger is narrower than the strategy's; carry it for every line below.
+	ctx = observability.WithLogger(ctx, m.log)
 
 	adapter, ok := m.loadAdapter()
 	if !ok {
 		observability.Decline(ctx, "skipped", "adapter_snapshot_unavailable")
-		log.V(1).Info("API refresh skipped: adapter snapshot unavailable")
+		observability.Log(ctx).V(1).Info("API refresh skipped: adapter snapshot unavailable")
 		return
 	}
 	loan, redeemable, ok := adapterMarketScope(adapter)
 	if !ok {
 		observability.Decline(ctx, "skipped", "adapter_snapshot_incomplete")
-		log.V(1).Info("API refresh skipped: adapter snapshot incomplete")
+		observability.Log(ctx).V(1).Info("API refresh skipped: adapter snapshot incomplete")
 		return
 	}
 
 	apiMarkets, err := m.api.DiscoverMarketData(ctx, m.chainID, []common.Address{loan}, redeemable)
 	if err != nil {
-		log.Error(err, "morpho API market refresh failed; keeping cache")
+		observability.Log(ctx).Error(err, "morpho API market refresh failed; keeping cache")
 		return
 	}
 	apiSnap := m.apiMarketSnapshot(apiMarkets, loan, redeemable)
 	if len(apiSnap.markets) == 0 {
 		observability.Decline(ctx, "skipped", "no_usable_markets")
-		log.V(1).Info("morpho API market refresh returned no usable adapter markets")
+		observability.Log(ctx).V(1).Info("morpho API market refresh returned no usable adapter markets")
 		return
 	}
 
@@ -132,7 +133,7 @@ func (m *apiMonitor) refresh(ctx context.Context) {
 	}
 	apiPositions, err := m.api.PositionsByMarket(ctx, ids, m.maxPositions, &m.maxHF)
 	if err != nil {
-		log.Error(err, "morpho API position refresh failed; keeping cache")
+		observability.Log(ctx).Error(err, "morpho API position refresh failed; keeping cache")
 		return
 	}
 	positions := apiPositionsSnapshot(apiPositions, apiSnap.markets)

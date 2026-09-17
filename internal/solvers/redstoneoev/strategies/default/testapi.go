@@ -40,7 +40,7 @@ func NewWithSnapshotForTest(
 		gasAccounting: gasAccounting,
 		signer:        signer,
 		mon:           mon,
-		engine:        newBundleEngine(cfg, log),
+		engine:        newBundleEngine(cfg),
 		maxAge:        cfg.MaxStateAge,
 		log:           log,
 		tracer:        tracer,
