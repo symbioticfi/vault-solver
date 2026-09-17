@@ -4621,128 +4621,6 @@
         }
       }
     },
-    "panel-100": {
-      "kind": "Panel",
-      "spec": {
-        "id": 100,
-        "title": "Exporter coverage",
-        "description": "Current scrape identities with build metadata and with solver membership. Exporters without solver metadata may run an older schema; their business panels cannot be inferred from build_info. These counts describe telemetry coverage, not service health.",
-        "links": [],
-        "data": {
-          "kind": "QueryGroup",
-          "spec": {
-            "queries": [
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "A",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "(count(max by(job,instance)(solver_bot_build_info{namespace=\"${namespace}\"})) or vector(0))",
-                      "instant": true,
-                      "range": false,
-                      "legendFormat": "",
-                      "format": "table"
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "B",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "(count(max by(job,instance)(solver_bot_solver_info{namespace=\"${namespace}\"})) or vector(0))",
-                      "instant": true,
-                      "range": false,
-                      "legendFormat": "",
-                      "format": "table"
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "C",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "clamp_min((count(max by(job,instance)(solver_bot_build_info{namespace=\"${namespace}\"})) or vector(0)) - (count(max by(job,instance)(solver_bot_solver_info{namespace=\"${namespace}\"})) or vector(0)), 0)",
-                      "instant": true,
-                      "range": false,
-                      "legendFormat": "",
-                      "format": "table"
-                    }
-                  }
-                }
-              }
-            ],
-            "transformations": [
-              {
-                "kind": "Transformation",
-                "group": "merge",
-                "spec": {
-                  "options": {}
-                }
-              },
-              {
-                "kind": "Transformation",
-                "group": "organize",
-                "spec": {
-                  "options": {
-                    "excludeByName": {"Time": true, "__name__": true},
-                    "indexByName": {},
-                    "renameByName": {"Value #A": "Reporting exporters", "Value #B": "With solver metadata", "Value #C": "Missing solver metadata"}
-                  }
-                }
-              }
-            ],
-            "queryOptions": {}
-          }
-        },
-        "vizConfig": {
-          "kind": "VizConfig",
-          "group": "table",
-          "version": "",
-          "spec": {
-            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": false},
-            "fieldConfig": {
-              "defaults": {
-                "unit": "none",
-                "decimals": 0,
-                "noValue": "—",
-                "custom": {
-                  "align": "left",
-                  "cellOptions": {"type": "auto"},
-                  "inspect": false
-                }
-              },
-              "overrides": []
-            }
-          }
-        },
-        "transparent": true
-      }
-    },
     "panel-101": {
       "kind": "Panel",
       "spec": {
@@ -5834,17 +5712,7 @@
                     "spec": {
                       "x": 0,
                       "y": 0,
-                      "width": 8,
-                      "height": 7,
-                      "element": {"kind": "ElementReference", "name": "panel-100"}
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 8,
-                      "y": 0,
-                      "width": 8,
+                      "width": 12,
                       "height": 7,
                       "element": {"kind": "ElementReference", "name": "panel-101"}
                     }
@@ -5852,9 +5720,9 @@
                   {
                     "kind": "GridLayoutItem",
                     "spec": {
-                      "x": 16,
+                      "x": 12,
                       "y": 0,
-                      "width": 8,
+                      "width": 12,
                       "height": 7,
                       "element": {"kind": "ElementReference", "name": "panel-80"}
                     }

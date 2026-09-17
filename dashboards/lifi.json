@@ -2644,8 +2644,8 @@
       "kind": "Panel",
       "spec": {
         "id": 19,
-        "title": "Successful fill amounts · counter observations",
-        "description": "Observed counter increases during the selected period, separated by token and amount kind. Values are atomic token units; token decimals and prices are not exported with this metric. Do not sum different tokens or interpret planned surplus / expected yield as realized profit. First nonzero samples can be absent from increases. Retained counter peaks include the first observed nonzero value, but can include activity before the selected period and must not be treated as period volume.",
+        "title": "Successful fill amounts · selected period",
+        "description": "Observed counter increases during the selected period, separated by token and amount kind. Values are atomic token units; token decimals and prices are not exported with this metric. Do not sum different tokens or interpret planned surplus / expected yield as realized profit. First nonzero samples can be absent from increases. Retained counter peaks are available in the collapsed cumulative diagnostics section.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2671,44 +2671,16 @@
                     }
                   }
                 }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "B",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {"name": "${datasource}"},
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "label_replace(sum by(asset,kind)(max_over_time(solver_bot_workflow_amount_atomic_units_total{namespace=\"${namespace}\",solver=\"lifi-samechain\",event=\"fill\"}[$__range])), \"token\", \"token: $1\", \"asset\", \"(.*)\")",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
               }
             ],
             "transformations": [
-              {
-                "kind": "Transformation",
-                "group": "merge",
-                "spec": {
-                  "options": {}
-                }
-              },
               {
                 "kind": "Transformation",
                 "group": "organize",
                 "spec": {
                   "options": {
                     "excludeByName": {"Time": true, "__name__": true, "asset": true},
-                    "renameByName": {"token": "Token", "kind": "Amount kind", "Value #A": "Period increase", "Value #B": "Retained counter peaks"},
+                    "renameByName": {"token": "Token", "kind": "Amount kind", "Value": "Period increase"},
                     "indexByName": {}
                   }
                 }
@@ -2737,13 +2709,6 @@
               "overrides": [
                 {
                   "matcher": {"id": "byName", "options": "Period increase"},
-                  "properties": [
-                    {"id": "unit", "value": "suffix: atomic units"},
-                    {"id": "decimals", "value": 0}
-                  ]
-                },
-                {
-                  "matcher": {"id": "byName", "options": "Retained counter peaks"},
                   "properties": [
                     {"id": "unit", "value": "suffix: atomic units"},
                     {"id": "decimals", "value": 0}
@@ -3202,6 +3167,107 @@
           }
         }
       }
+    },
+    "panel-210": {
+      "kind": "Panel",
+      "spec": {
+        "id": 210,
+        "title": "Successful fill amounts · retained counter peaks",
+        "description": "Retained counter peaks include the first observed nonzero value, but can include activity before the selected period and must not be treated as period volume. Summed across retained scrape identities, separated by token and amount kind. Values are atomic token units; do not sum different tokens or interpret planned surplus / expected yield as realized profit.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "label_replace(sum by(asset,kind)(max_over_time(solver_bot_workflow_amount_atomic_units_total{namespace=\"${namespace}\",solver=\"lifi-samechain\",event=\"fill\"}[$__range])), \"token\", \"token: $1\", \"asset\", \"(.*)\")",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true, "asset": true},
+                    "renameByName": {"token": "Token", "kind": "Amount kind", "Value": "Retained counter peaks"},
+                    "indexByName": {}
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": false},
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "Retained counter peaks"},
+                  "properties": [
+                    {"id": "unit", "value": "suffix: atomic units"},
+                    {"id": "decimals", "value": 0}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Amount kind"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "input": {"text": "Input"},
+                            "output": {"text": "Output"},
+                            "planned_surplus": {"text": "Planned surplus (not PnL)"},
+                            "principal": {"text": "Offered principal"},
+                            "expected_yield": {"text": "Expected yield (not realized)"}
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "transparent": true
+      }
     }
   },
   "layout": {
@@ -3579,6 +3645,16 @@
                       "width": 24,
                       "height": 6,
                       "element": {"kind": "ElementReference", "name": "panel-86"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 6,
+                      "width": 24,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-210"}
                     }
                   }
                 ]

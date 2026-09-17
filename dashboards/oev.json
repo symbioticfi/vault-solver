@@ -1868,7 +1868,7 @@
       "spec": {
         "id": 100,
         "title": "Metrics availability",
-        "description": "Current exporter membership for this integration and environment. Zero means no compatible metrics source is reporting here; it does not mean zero business activity. Check the selected environment and Runtime exporter coverage.",
+        "description": "Current exporter membership for this integration and environment. Zero means no compatible metrics source is reporting here; it does not mean zero business activity. Check the selected environment and Runtime build and solver metadata.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2213,30 +2213,6 @@
         {
           "kind": "RowsLayoutRow",
           "spec": {
-            "title": "Data availability",
-            "collapse": false,
-            "layout": {
-              "kind": "GridLayout",
-              "spec": {
-                "items": [
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 0,
-                      "y": 0,
-                      "width": 24,
-                      "height": 3,
-                      "element": {"kind": "ElementReference", "name": "panel-100"}
-                    }
-                  }
-                ]
-              }
-            }
-          }
-        },
-        {
-          "kind": "RowsLayoutRow",
-          "spec": {
             "title": "Settlement results",
             "collapse": false,
             "layout": {
@@ -2481,6 +2457,30 @@
                       "width": 12,
                       "height": 7,
                       "element": {"kind": "ElementReference", "name": "panel-11"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Data availability",
+            "collapse": true,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 24,
+                      "height": 3,
+                      "element": {"kind": "ElementReference", "name": "panel-100"}
                     }
                   }
                 ]
