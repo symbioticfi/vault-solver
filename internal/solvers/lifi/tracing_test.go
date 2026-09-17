@@ -995,3 +995,77 @@ func TestOrderFillsWithTracingDisabled(t *testing.T) {
 		t.Fatal("pending reservation was not released")
 	}
 }
+
+// A retryable failure re-queues the order through the inbox for the next recovery sweep. The order
+// is still referenced while it waits there, so its processing span stays open and the redelivery
+// continues the same trace instead of opening a second one.
+func TestOrderProcessSpanSurvivesInboxRetry(t *testing.T) {
+	rec := tracetest.Install(t)
+	fixture := newTracingOrderFixture(t)
+	filled := fixture.routes[0]
+	var statusReads atomic.Int32
+	fixture.solver.reader = fakeLifiReader{
+		orderID: common.HexToHash(tracingOnChainOrderID),
+		statusFn: func() (uint8, error) {
+			if statusReads.Add(1) == 1 {
+				return 0, errors.New("temporary status failure")
+			}
+			return lifiOrderStatusDeposited, nil
+		},
+		fill: profitableFillSnapshots(filled.TokenIn, filled.TokenOut, filled.Adapter, 1_000_000),
+	}
+	inbox := newOrderInbox(4)
+	inbox.beginRecovery()
+	defer inbox.endRecovery()
+	if err := fixture.admit(t, inbox); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	marked := make(chan struct{}, 1)
+	onRetryable := func(order *submittedOrder, attemptLimit int) bool {
+		requeued := inbox.markRecoveryRetry(order, attemptLimit)
+		marked <- struct{}{}
+		return requeued
+	}
+	ctx, cancel := context.WithTimeout(fixture.context(t), 10*time.Second)
+	defer cancel()
+	orders := make(chan *submittedOrder)
+	inboxDone := make(chan error, 1)
+	workerDone := make(chan error, 1)
+	go func() { inboxDone <- inbox.run(ctx, orders) }()
+	go func() { workerDone <- fixture.solver.runOrderWorker(ctx, fixture.routes, orders, onRetryable, nil) }()
+
+	select {
+	case <-marked:
+	case <-ctx.Done():
+		t.Fatalf("the retryable failure was never re-queued: %v", ctx.Err())
+	}
+	retries := inbox.takeRecoveryRetries()
+	if len(retries) != 1 {
+		t.Fatalf("recovery retries = %d, want the failed order", len(retries))
+	}
+	if err := inbox.enqueueWait(ctx, retries[0]); err != nil {
+		t.Fatalf("re-enqueue recovery retry: %v", err)
+	}
+	inbox.closeInput()
+	if err := <-workerDone; err != nil {
+		t.Fatalf("runOrderWorker: %v", err)
+	}
+	if err := <-inboxDone; err != nil {
+		t.Fatalf("order inbox: %v", err)
+	}
+
+	processes := tracetest.AllEnded(rec, "lifi.order.process")
+	if len(processes) != 1 {
+		t.Fatalf("process spans = %d, want one across the retry (spans %v)", len(processes), tracetest.Names(rec))
+	}
+	process := processes[0]
+	if process.Status().Code == codes.Error {
+		t.Fatalf("a retried order that then filled must not be an error span: %v", process.Status())
+	}
+	for _, stage := range []string{"lifi.order.plan", "lifi.order.submit"} {
+		span := tracetest.Ended(t, rec, stage)
+		if got, want := span.Parent().SpanID(), process.SpanContext().SpanID(); got != want {
+			t.Fatalf("%s span parent = %s, want the process span %s", stage, got, want)
+		}
+	}
+}

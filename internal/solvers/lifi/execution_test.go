@@ -553,8 +553,9 @@ func TestOrderWorkerMarksTransientFailureForRecovery(t *testing.T) {
 	}
 	marked := make(chan markedRecovery, 1)
 
-	if err := solver.runOrderWorker(t.Context(), nil, orders, func(got *submittedOrder, attemptLimit int) {
+	if err := solver.runOrderWorker(t.Context(), nil, orders, func(got *submittedOrder, attemptLimit int) bool {
 		marked <- markedRecovery{order: got, attemptLimit: attemptLimit}
+		return true
 	}, nil); err != nil {
 		t.Fatalf("runOrderWorker: %v", err)
 	}
@@ -1246,4 +1247,73 @@ func TestCompleteFillTreatsIncludedTransactionAsSuccess(t *testing.T) {
 		!strings.Contains(logged, "order fill included but confirmation wait failed") {
 		t.Fatalf("included completion: pending=%d logs=%s", pending.len(), logged)
 	}
+}
+
+// One undecodable listing must not abort the sweep: it is logged, metered and skipped, the healthy
+// orders around it are still recovered, and recovery reaches its end so quoting is ungated.
+func TestOrderRecoverySkipsUndecodableOrder(t *testing.T) {
+	cfg := testLifiConfig()
+	tokenIn := common.HexToAddress("0x6666666666666666666666666666666666666666")
+	tokenOut := common.HexToAddress("0x7777777777777777777777777777777777777777")
+	healthy := testListedOrderJSON(t, cfg, tokenIn, tokenOut, orderStatusSigned)
+	var malformedBody map[string]any
+	if err := json.Unmarshal(healthy, &malformedBody); err != nil {
+		t.Fatalf("unmarshal listed order: %v", err)
+	}
+	malformedBody["inputSettler"] = "not-an-address"
+	mapField(t, malformedBody, "meta")["orderIdentifier"] = "malformed-order"
+	malformed, err := json.Marshal(malformedBody)
+	if err != nil {
+		t.Fatalf("marshal malformed order: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var orders []json.RawMessage
+		if r.URL.Query().Get("status") == orderStatusSigned {
+			orders = []json.RawMessage{malformed, healthy}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(testListedOrdersPageJSON(t, orders, len(orders), 0))
+	}))
+	defer server.Close()
+
+	registry := prometheus.NewRegistry()
+	metrics, err := newLIFIMetrics(registry, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	solver := &Solver{
+		cfg:     cfg,
+		chainID: 11155111,
+		orders:  newOrderClient(server.URL, "test-key", time.Second, 11155111),
+		log:     logr.Discard(),
+		metrics: metrics,
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	inbox := newOrderInbox(4)
+	inbox.beginRecovery()
+	defer inbox.endRecovery()
+	orders := make(chan *submittedOrder)
+	go func() { _ = inbox.run(ctx, orders) }()
+	var delivered atomic.Int32
+	go func() {
+		for order := range orders {
+			if order.processed != nil {
+				close(order.processed)
+				continue
+			}
+			delivered.Add(1)
+		}
+	}()
+
+	if !solver.recoverOrdersUntilSuccess(ctx, inbox) {
+		t.Fatalf("an undecodable listing aborted the recovery sweep: %v", ctx.Err())
+	}
+	if got := delivered.Load(); got != 1 {
+		t.Fatalf("recovered orders = %d, want the one healthy order", got)
+	}
+	// Parse outcomes count feed observations: the malformed listing is re-read by the second,
+	// converging sweep.
+	metricstest.RequireWorkflowEventCount(t, registry, Name, "order_parse", "invalid", 2)
+	metricstest.RequireExternalOperationCount(t, registry, Name, orderRecoveryOperation, "success", 1)
 }

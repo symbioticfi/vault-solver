@@ -57,6 +57,10 @@ func (t *orderTrace) attempt(ctx context.Context, stage string) (context.Context
 // reaches a terminal state. Owned by the single order-worker goroutine.
 type orderTraces struct {
 	byKey map[string]*orderTrace
+	// held names orders re-queued through the inbox for a recovery retry. They are still
+	// referenced even though no worker queue holds them, so their span stays open until the
+	// redelivery that begins the next attempt.
+	held map[string]bool
 }
 
 // orderAttrs identifies one order on a span: the same three keys wherever an order is described.
@@ -69,13 +73,27 @@ func orderAttrs(order *submittedOrder) []attribute.KeyValue {
 }
 
 func newOrderTraces() *orderTraces {
-	return &orderTraces{byKey: make(map[string]*orderTrace)}
+	return &orderTraces{byKey: make(map[string]*orderTrace), held: make(map[string]bool)}
+}
+
+// hold keeps the order's processing span open across an inbox re-queue, so the retry that comes
+// back on the next recovery sweep continues this trace instead of opening a second one.
+func (t *orderTraces) hold(order *submittedOrder) {
+	if key := orderInboxKey(order); key != "" && t.byKey[key] != nil {
+		t.held[key] = true
+	}
+}
+
+// isHeld reports whether an inbox re-queue still references the order.
+func (t *orderTraces) isHeld(order *submittedOrder) bool {
+	return t.held[orderInboxKey(order)]
 }
 
 // begin returns the order's processing span, starting it as a child of the feed message span the
 // order carries when this is the order's first pass through the worker.
 func (t *orderTraces) begin(ctx context.Context, order *submittedOrder) *orderTrace {
 	key := orderInboxKey(order)
+	delete(t.held, key)
 	if existing := t.byKey[key]; existing != nil {
 		return existing
 	}
@@ -104,6 +122,7 @@ func (t *orderTraces) finish(order *submittedOrder, err error) {
 		return
 	}
 	delete(t.byKey, key)
+	delete(t.held, key)
 	tracked.end(err)
 }
 
@@ -112,6 +131,7 @@ func (t *orderTraces) finish(order *submittedOrder, err error) {
 func (t *orderTraces) finishAll(err error) {
 	for key, tracked := range t.byKey {
 		delete(t.byKey, key)
+		delete(t.held, key)
 		tracked.end(err)
 	}
 }

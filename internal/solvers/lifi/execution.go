@@ -211,15 +211,17 @@ func (q *orderInbox) endRecovery() {
 	q.recoveryGen = 0
 }
 
-func (q *orderInbox) markRecoveryRetry(order *submittedOrder, attemptLimit int) {
+// markRecoveryRetry re-queues an order for the next recovery sweep and reports whether it did, so
+// the worker knows the order is still referenced and keeps its processing span open.
+func (q *orderInbox) markRecoveryRetry(order *submittedOrder, attemptLimit int) bool {
 	key := orderInboxKey(order)
 	if key == "" {
-		return
+		return false
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.recoverySeen == nil {
-		return
+		return false
 	}
 	// A zero limit deliberately preserves unbounded recovery for chain, RPC, and
 	// pre-admission failures. Positive limits count failures by stable order key, so
@@ -227,11 +229,12 @@ func (q *orderInbox) markRecoveryRetry(order *submittedOrder, attemptLimit int) 
 	if attemptLimit > 0 {
 		q.recoveryAttempts[key]++
 		if q.recoveryAttempts[key] >= attemptLimit {
-			return
+			return false
 		}
 	}
 	q.recoveryRetry[key] = order
 	q.recoveryGen++
+	return true
 }
 
 func (q *orderInbox) takeRecoveryRetries() []*submittedOrder {
@@ -582,7 +585,7 @@ func (s *Solver) recoverOrder(
 	raw json.RawMessage,
 	recovered map[string]bool,
 ) (discovered bool, err error) {
-	_, err = s.admitOrderMessage(ctx, orderMessage{Event: orderSubmitEvent, Data: raw},
+	order, err := s.admitOrderMessage(ctx, orderMessage{Event: orderSubmitEvent, Data: raw},
 		func(msgCtx context.Context, order *submittedOrder) error {
 			key := orderInboxKey(order)
 			if key != "" && recovered[key] {
@@ -598,6 +601,11 @@ func (s *Solver) recoverOrder(
 			}
 			return nil
 		})
+	if order == nil {
+		// An undecodable or ignored listing is logged and metered by parseOrderMessage and
+		// recorded on its message span. Skip it: one bad order must not abort the sweep.
+		return false, nil
+	}
 	return discovered, err
 }
 
@@ -667,7 +675,7 @@ func (s *Solver) runOrderWorker(
 	ctx context.Context,
 	routes []route,
 	orders <-chan *submittedOrder,
-	onRetryable func(*submittedOrder, int),
+	onRetryable func(*submittedOrder, int) bool,
 	inputDrained chan<- struct{},
 ) error {
 	pending := pendingFillState{byOrder: make(map[string]*pendingFill)}
@@ -702,9 +710,12 @@ func (s *Solver) runOrderWorker(
 	// The processing span belongs to the order, not to one pass through process: a replayed feed
 	// message or a recovery sweep can re-enter while the first copy is still in flight, and that
 	// pass must not close the span the live copy is still writing to. Close it only once nothing in
-	// the worker still holds the order.
+	// the worker still holds the order, and nothing has re-queued it through the inbox.
 	finishOrderTrace := func(order *submittedOrder, err error) {
 		if pending.containsOrder(order) || retries.contains(order) || depositRetries.contains(order) {
+			return
+		}
+		if traces.isHeld(order) {
 			return
 		}
 		traces.finish(order, err)
@@ -763,8 +774,8 @@ func (s *Solver) runOrderWorker(
 			go awaitFill(result.fill, completions)
 			return
 		}
-		if result.retryable && onRetryable != nil {
-			onRetryable(order, result.recoveryAttemptLimit)
+		if result.retryable && onRetryable != nil && onRetryable(order, result.recoveryAttemptLimit) {
+			traces.hold(order)
 		}
 		// Invariant: a queued reservation retry implies a pending fill. Completions are
 		// the only events that advance the retry generation and wake the worker.
