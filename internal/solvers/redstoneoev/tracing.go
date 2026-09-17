@@ -3,8 +3,8 @@ package redstoneoev
 import (
 	"context"
 
+	"github.com/go-logr/logr"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
@@ -25,22 +25,10 @@ func (s *Solver) strategyLabel() string {
 	return s.strategyName
 }
 
-// auctionLink returns the span of the bid we sent for this auction. A miss is an ordinary result:
-// linking is best effort and never changes what the solver does (spec §12).
-func (s *Solver) auctionLink(auctionID string) (trace.Link, bool) {
-	if s.links == nil {
-		return trace.Link{}, false
-	}
-	return s.links.Lookup(auctionID)
-}
-
-// rememberAuction keeps the auction span linkable for as long as the reservation it created lives, so
-// the result frames that arrive minutes later in their own trace can point back at the bid (spec §12.2).
-func (s *Solver) rememberAuction(ctx context.Context, auctionID string) {
-	if s.links == nil {
-		return
-	}
-	s.links.Remember(ctx, auctionID, reservationTTL)
+// auctionLogger narrows the solver logger to one auction, the key every line on an auction's path
+// carries.
+func (s *Solver) auctionLogger(auctionID string) logr.Logger {
+	return s.log.WithValues("auctionId", auctionID)
 }
 
 // startResultSpan begins the short span one result frame gets, linked to the auction span that bid on
@@ -49,22 +37,8 @@ func (s *Solver) rememberAuction(ctx context.Context, auctionID string) {
 func (s *Solver) startResultSpan(
 	ctx context.Context, name, auctionID string, attrs ...attribute.KeyValue,
 ) (context.Context, observability.EndFunc) {
-	spanAttrs := append([]attribute.KeyValue{observability.AttrAuctionID.String(auctionID)}, attrs...)
-	link, linked := s.auctionLink(auctionID)
-	var links []trace.Link
-	if linked {
-		links = []trace.Link{link}
-		spanAttrs = append(spanAttrs, observability.AttrQuoteTraceID.String(link.SpanContext.TraceID().String()))
-	}
-	ctx, end := tracer.StartLinked(ctx, name, links, spanAttrs...)
-	if !linked {
-		trace.SpanFromContext(ctx).AddEvent("link_miss", trace.WithAttributes(
-			attribute.String("key", auctionID),
-		))
-	}
-	log := s.log.WithValues("auctionId", auctionID)
-	if linked {
-		log = log.WithValues("quoteTraceId", link.SpanContext.TraceID().String())
-	}
-	return observability.WithLogger(ctx, log), end
+	ctx = observability.WithLogger(ctx, s.auctionLogger(auctionID))
+	ctx, end, _ := tracer.StartLinkedKey(ctx, s.links, auctionID, name,
+		append([]attribute.KeyValue{observability.AttrAuctionID.String(auctionID)}, attrs...)...)
+	return ctx, end
 }

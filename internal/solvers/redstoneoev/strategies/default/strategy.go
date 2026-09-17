@@ -224,7 +224,8 @@ func (s *Strategy) DecideBid(ctx context.Context, input types.BidInput) (types.B
 	if len(input.PendingAuctions) > 0 || hasReservation {
 		return skipBid(types.SkipReasonInFlight), nil
 	}
-	scored := s.scoredLegs(ctx, input.Auction, input.Now, input.Adapter)
+	nowTs := clampTsAt(input.Auction.Timestamp, input.Now)
+	scored := s.sizedLegs(ctx, s.candidates(ctx, input.Auction, nowTs, input.Adapter))
 	if len(scored) == 0 {
 		return skipBid(skipNoLegs), nil
 	}
@@ -244,27 +245,17 @@ func (s *Strategy) DecideBid(ctx context.Context, input types.BidInput) (types.B
 	return out, nil
 }
 
-// scoredLegs finds the liquidatable positions at the auction's prices and sizes each into a leg, one
-// stage span apiece (spec §9.4).
-func (s *Strategy) scoredLegs(
-	ctx context.Context, a types.AuctionSnapshot, now time.Time, adapter types.AdapterSnapshot,
-) []scoredLeg {
-	nowTs := clampTsAt(a.Timestamp, now)
-	cands := s.candidates(ctx, a, nowTs, adapter)
-	return s.sizedLegs(ctx, cands)
-}
-
 func (s *Strategy) candidates(
 	ctx context.Context, a types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot,
 ) []evalItem {
 	_, end := s.tracer.Start(ctx, "oev.auction.candidates")
-	defer func() { end(nil) }()
+	defer end(nil)
 	return s.mon.candidates(a, nowTs, adapter)
 }
 
 func (s *Strategy) sizedLegs(ctx context.Context, cands []evalItem) []scoredLeg {
 	_, end := s.tracer.Start(ctx, "oev.auction.size")
-	defer func() { end(nil) }()
+	defer end(nil)
 	out := make([]scoredLeg, 0, len(cands))
 	for _, it := range cands {
 		if sized, ok := sizeLeg(it.cand, it.price, it.quote, it.accrued, s.cfg.Sizing); ok {
@@ -287,7 +278,7 @@ func (s *Strategy) pricedBundleFor(
 	ctx context.Context, input types.BidInput, scored []scoredLeg, gasPrice *big.Int,
 ) (pricedBundle, string) {
 	ctx, end := s.tracer.Start(ctx, "oev.auction.bundle")
-	defer func() { end(nil) }()
+	defer end(nil)
 
 	laneState := liquidLaneStateFromAdapter(input.Adapter)
 	feedCount := auctionFeedCount(input.Auction)
@@ -327,7 +318,7 @@ func (s *Strategy) affordableBundle(
 	ctx context.Context, input types.BidInput, priced pricedBundle, st decisionState, gasPrice *big.Int,
 ) string {
 	ctx, end := s.tracer.Start(ctx, "oev.auction.economics")
-	defer func() { end(nil) }()
+	defer end(nil)
 
 	if !depositCoversSettlementGas(input.Context.ExecutorDeposit, input.Context.ExecutorMinDeposit, priced.gasNative) {
 		observability.Log(ctx).Info("bid skipped: executor deposit cannot cover predicted settlement gas",

@@ -10,8 +10,6 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/gorilla/websocket"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
@@ -185,7 +183,7 @@ func (w *wsClient) dial(ctx context.Context) (conn *websocket.Conn, err error) {
 	defer func() { end(err) }()
 
 	header := w.header.Clone()
-	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(header))
+	observability.InjectTraceHeaders(ctx, header)
 	conn, resp, err := w.dialer.DialContext(ctx, w.cfg.URL, header)
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close() // handshake response body; not used
