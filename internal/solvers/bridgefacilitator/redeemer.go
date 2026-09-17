@@ -17,27 +17,30 @@ type transactionSender interface {
 
 // redeemAll consumes each adapter scan before moving on; aggregate freshness advances only after full coverage.
 func (s *Solver) redeemAll(ctx context.Context) {
+	ctx, end := tracer.Start(ctx, "3f.redeem")
+	defer end(nil) // each stage records its own failure; a scan with nothing ready is a decline
+
 	var scanDuration time.Duration
 	totalReady := 0
 	complete := true
 	successfulReads := 0
 	for _, target := range s.targets {
 		scanStarted := time.Now()
-		ready, scanComplete, err := s.reader.readyToRedeem(ctx, target.Adapter)
+		ready, scanComplete, err := s.scanReadyToRedeem(ctx, target)
 		scanDuration += time.Since(scanStarted)
 		if err != nil {
 			complete = false
-			s.log.Error(err, "redeem: scan ready requests", "adapter", target.Adapter.Hex())
+			observability.Log(ctx).Error(err, "redeem: scan ready requests", "adapter", target.Adapter.Hex())
 			continue
 		}
 		successfulReads++
 		if !scanComplete {
 			complete = false
-			s.log.Info("redeem: incomplete scan; retaining last-known-good metric",
+			observability.Log(ctx).Info("redeem: incomplete scan; retaining last-known-good metric",
 				"adapter", target.Adapter.Hex(), "validReady", len(ready))
 		}
 		totalReady += len(ready)
-		s.log.V(1).Info("redeem scan", "adapter", target.Adapter.Hex(), "ready", len(ready))
+		observability.Log(ctx).V(1).Info("redeem scan", "adapter", target.Adapter.Hex(), "ready", len(ready))
 		s.redeemReady(ctx, target, ready)
 	}
 	s.observeTargetDerivedState(threeFStateRedeemable, totalReady, complete)
@@ -51,6 +54,24 @@ func (s *Solver) redeemAll(ctx context.Context) {
 	observability.ObserveOperation(ctx, s.operations.redeemableRefresh, outcome, scanDuration)
 }
 
+// scanReadyToRedeem is the on-chain read stage of one adapter's redeem pass.
+func (s *Solver) scanReadyToRedeem(
+	ctx context.Context, target Target,
+) (ready []common.Address, complete bool, err error) {
+	ctx, end := tracer.Start(ctx, "3f.redeem.read", observability.AttrAdapter.String(target.Adapter.Hex()))
+	defer func() { end(err) }()
+
+	ready, complete, err = s.reader.readyToRedeem(ctx, target.Adapter)
+	switch {
+	case err != nil:
+	case !complete:
+		observability.Decline(ctx, "redeem_partial", "incomplete ready-request scan")
+	case len(ready) == 0:
+		observability.Decline(ctx, "redeem_skipped", "no requests ready to finalize")
+	}
+	return ready, complete, err
+}
+
 // redeemReady finalizes one scan's ready Requests in a single bounded
 // adapter.multicall(finalizeRequest...) through the shared txmanager.
 func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.Address) {
@@ -60,7 +81,8 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 	// Bound the batch so the multicall calldata + gas stay predictable; the remainder is picked up on
 	// the next redeem-poll cycle (Requests stay active until finalized).
 	if len(ready) > s.cfg.RedeemBatchSize {
-		s.log.Info("capping redeem batch", "ready", len(ready), "limit", s.cfg.RedeemBatchSize)
+		observability.Log(ctx).
+			Info("capping redeem batch", "ready", len(ready), "limit", s.cfg.RedeemBatchSize)
 		ready = ready[:s.cfg.RedeemBatchSize]
 	}
 
@@ -72,29 +94,45 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 	}
 	data := bfAdapter.PackMulticall(finalize)
 
-	res := s.txManager.Send(ctx, txmanager.Request{
+	// Link the settlement back to the offer span of every request it finalizes (spec §12). A miss is
+	// inert: the redeem sends exactly as it would without linking.
+	links, missed := s.offerLinks(target.Adapter, ready)
+	var err error
+	submitCtx, end := tracer.StartLinked(ctx, "3f.redeem.submit", links,
+		observability.AttrAdapter.String(target.Adapter.Hex()),
+		attrLinkedOffers.Int(len(links)),
+	)
+	defer func() { end(err) }()
+	for _, key := range missed {
+		observability.LinkMiss(submitCtx, key)
+	}
+
+	res := s.txManager.Send(submitCtx, txmanager.Request{
 		Solver: Name,
 		To:     target.Adapter,
 		Data:   data,
 		Label:  "redeem",
 	})
+	txmanager.RecordResult(submitCtx, res) // the stage
+	txmanager.RecordResult(ctx, res)       // the redeem pass it belongs to
 	if !res.Outcome.Included() {
-		err := res.Err
+		err = res.Err
 		if err == nil {
 			err = errors.Errorf("unexpected tx outcome %q", res.Outcome)
 		}
-		s.log.Error(err, "redeem: tx not included", "requests", len(ready), "outcome", res.Outcome)
+		observability.Log(submitCtx).Error(err, "redeem: tx not included", "requests", len(ready), "outcome", res.Outcome)
 		return
 	}
 	s.observeRedeemedRequests(len(ready))
 	if res.Outcome == txmanager.OutcomeIncludedUnconfirmed {
 		if res.Err != nil {
-			s.log.Error(res.Err, "redeem included; confirmation tracking stopped",
+			err = res.Err
+			observability.Log(submitCtx).Error(res.Err, "redeem included; confirmation tracking stopped",
 				"requests", len(ready), "tx", res.Hash.Hex())
 		} else {
-			s.log.Info("redeem included without final confirmation", "requests", len(ready), "tx", res.Hash.Hex())
+			observability.Log(submitCtx).Info("redeem included without final confirmation", "requests", len(ready), "tx", res.Hash.Hex())
 		}
 		return
 	}
-	s.log.Info("finalized ready requests", "count", len(ready), "tx", res.Hash.Hex())
+	observability.Log(submitCtx).Info("finalized ready requests", "count", len(ready), "tx", res.Hash.Hex())
 }

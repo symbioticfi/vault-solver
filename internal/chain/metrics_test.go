@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
@@ -45,7 +44,7 @@ func TestRPCMetricsClassifyFallbackAndRPCError(t *testing.T) {
 	endpoints := mustEndpoints(t, primary.URL, fallback.URL)
 	metrics.bindTransport(rpcRoleRead, len(endpoints))
 	transport := &fallbackTransport{
-		endpoints: endpoints, base: http.DefaultTransport, metrics: metrics, role: rpcRoleRead, log: logr.Discard(),
+		endpoints: endpoints, base: http.DefaultTransport, metrics: metrics, role: rpcRoleRead,
 	}
 	for _, payload := range []string{
 		`{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[]}`,

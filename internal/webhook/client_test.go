@@ -9,7 +9,10 @@ import (
 	"time"
 
 	"github.com/go-errors/errors"
+	"go.opentelemetry.io/otel"
 	"gopkg.in/yaml.v3"
+
+	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 )
 
 func testYAMLNode(t *testing.T, raw string) yaml.Node {
@@ -218,6 +221,30 @@ func TestWebhookClientDoJSONPostRoute(t *testing.T) {
 	}
 	if resp.Decision != "quote" {
 		t.Fatalf("decision = %q, want quote", resp.Decision)
+	}
+}
+
+func TestWebhookClientPostJSONCarriesTraceparent(t *testing.T) {
+	tracetest.Install(t)
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("traceparent")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(Config{URL: srv.URL, Timeout: time.Second})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	ctx, span := otel.Tracer("x").Start(t.Context(), "parent")
+	var out struct{}
+	if err := client.PostJSON(ctx, map[string]string{"a": "b"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	span.End()
+	if !strings.Contains(got, span.SpanContext().TraceID().String()) {
+		t.Fatalf("traceparent %q", got)
 	}
 }
 

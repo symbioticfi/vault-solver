@@ -51,25 +51,45 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	if debugFlagSet {
 		debug = debugFlag
 	}
-	log, syncLog := observability.NewLogger(debug)
-	defer syncLog()
-
 	solverNames := make([]string, len(cfg.Solvers))
 	for i, s := range cfg.Solvers {
 		solverNames[i] = s.Name
 	}
+
+	log, syncLog := observability.NewLogger(debug)
+	defer syncLog()
+
+	shutdownTracing, tracingEnabled := observability.NewTracing(ctx, observability.Tracing{
+		Version: version.Version,
+		Commit:  version.Commit,
+		Solvers: solverNames,
+		ChainID: cfg.Chain.ChainID,
+	}, log)
+	defer func() { //nolint:contextcheck // fresh context on purpose: ctx is cancelled during shutdown and the flush must still run
+		flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(flushCtx); err != nil {
+			log.Info("tracing shutdown incomplete", "err", err.Error())
+		}
+	}()
+
 	// With one solver per process (the deployed shape), stamp every line, shared components such as
 	// txmanager included, with the integration it serves. With several, each solver's own logger is
 	// stamped below instead, and shared components attribute work through the request label.
 	if len(solverNames) == 1 {
 		log = log.WithValues("solver", solverNames[0])
 	}
+	// Everything downstream logs through observability.Log(ctx), which stamps the trace ids on this
+	// logger. The default covers the few paths that hold no context of ours.
+	observability.SetDefaultLogger(log)
+	ctx = observability.WithLogger(ctx, log)
 	log.Info("vault-solver starting",
 		"version", version.Version,
 		"commit", version.Commit,
 		"goVersion", version.GoVersion(),
 		"solvers", solverNames,
 		"debug", debug,
+		"tracing", tracingEnabled,
 	)
 
 	// Observability first, so probes/metrics are live during the rest of startup.
@@ -97,7 +117,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	}
 	rpcURLs := append([]string{cfg.Chain.RPCURL}, cfg.Chain.RPCFallbackURLs...)
 	chainClient, err := chain.DialWithMetrics(
-		ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.MulticallAddress, rpcMetrics, log,
+		ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.MulticallAddress, rpcMetrics,
 	)
 	if err != nil {
 		return err

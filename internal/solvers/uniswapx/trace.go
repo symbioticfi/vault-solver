@@ -1,11 +1,16 @@
 package uniswapx
 
 import (
+	"context"
+
 	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
-func (s *Solver) decisionTrace(baseFields ...any) liquidstrategies.DecisionTrace {
-	log := s.log.V(1)
+// decisionTrace returns the sink the strategy writes its planning rationale to. The lines carry the
+// stage's trace ids, which is what joins a decision to the span that made it.
+func (s *Solver) decisionTrace(ctx context.Context, baseFields ...any) liquidstrategies.DecisionTrace {
+	log := observability.Log(ctx).V(1)
 	if !log.Enabled() {
 		return nil
 	}

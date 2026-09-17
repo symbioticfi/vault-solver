@@ -15,7 +15,11 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
 
+	"github.com/symbioticfi/vault-solver/internal/observability"
+	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 )
 
@@ -201,6 +205,13 @@ func (b *mockBackend) lastSent() *types.Transaction {
 		return nil
 	}
 	return b.sent[len(b.sent)-1]
+}
+
+// managerCtx carries the manager's logger the way Start does for its worker. Tests that drive a
+// lifecycle function directly need it, or the lines those functions log through
+// observability.Log(ctx) reach the process default instead of the test's capture logger.
+func managerCtx(ctx context.Context, m *Manager) context.Context {
+	return observability.WithLogger(ctx, m.log)
 }
 
 func startManagerForTest(t *testing.T, m *Manager) {
@@ -1624,7 +1635,7 @@ func TestConfirmationsRequireStableHead(t *testing.T) {
 		Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard(),
 	)
 
-	got, err := m.waitForConfirmations(t.Context(), m.log, tx.Hash(), receipt, 2)
+	got, err := m.waitForConfirmations(t.Context(), tx.Hash(), receipt, 2)
 	if err != nil || got != receipt {
 		t.Fatalf("waitForConfirmations = (%+v, %v), want stable confirmed receipt", got, err)
 	}
@@ -1652,7 +1663,7 @@ func TestConfirmationsRejectReceiptFromDifferentFork(t *testing.T) {
 		Config{Confirmations: 2, PollInterval: time.Millisecond}, logr.Discard(),
 	)
 
-	got, err := m.waitForConfirmations(t.Context(), m.log, tx.Hash(), receipt, 2)
+	got, err := m.waitForConfirmations(t.Context(), tx.Hash(), receipt, 2)
 	if got != receipt || !errors.Is(err, errReceiptReorged) {
 		t.Fatalf("waitForConfirmations = (%+v, %v), want reorg error", got, err)
 	}
@@ -2604,14 +2615,13 @@ func TestReceiptResultFailedReceiptWinsOverInterruptedConfirmation(t *testing.T)
 			)
 			pending := &pendingTransaction{
 				req:   Request{To: to, Data: []byte("request-authorization"), Label: "failed receipt"},
-				log:   logger,
 				nonce: 7,
 				attempts: []txAttempt{{
 					hash: tx.Hash(), tx: tx, cancellation: test.cancellation,
 				}},
 			}
 
-			result, done := manager.receiptResult(confirmationCtx, pending)
+			result, done := manager.receiptResult(managerCtx(confirmationCtx, manager), pending)
 			if !done {
 				t.Fatal("failed receipt did not complete the lifecycle")
 			}
@@ -3135,4 +3145,224 @@ func transactionHashes(transactions []*types.Transaction) []common.Hash {
 
 func ptr[T any](value T) *T {
 	return &value
+}
+
+func TestSendSpansNestUnderCaller(t *testing.T) {
+	rec := tracetest.Install(t)
+	b := newMockBackend()
+	m := newTestManager(t, b)
+
+	ctx, parent := otel.Tracer("caller").Start(t.Context(), "rfq.order.submit")
+	res := m.Send(ctx, Request{
+		To: common.HexToAddress("0xabc"), Label: "test-fill", Solver: "rfq", GasLimit: 21_000,
+	})
+	parent.End()
+	if res.Outcome != OutcomeConfirmed {
+		t.Fatalf("outcome %v err %v", res.Outcome, res.Err)
+	}
+
+	send := tracetest.Ended(t, rec, "txmanager.send test-fill")
+	broadcast := tracetest.Ended(t, rec, "txmanager.broadcast")
+	if send.Parent().SpanID() != parent.SpanContext().SpanID() {
+		t.Fatal("send span is not a child of the caller span")
+	}
+	if broadcast.Parent().SpanID() != send.SpanContext().SpanID() {
+		t.Fatal("broadcast span is not a child of the send span")
+	}
+	if tracetest.Attr(send, "tx.outcome") != "confirmed" || tracetest.Attr(send, "solver") != "rfq" ||
+		tracetest.Attr(send, "tx.label") != "test-fill" || tracetest.Attr(send, "tx.hash") != res.Hash.Hex() ||
+		tracetest.Attr(send, "tx.nonce") != "7" {
+		t.Fatalf("send attributes: %v", send.Attributes())
+	}
+	if send.Status().Code != codes.Unset {
+		t.Fatalf("send status = %v, want unset for a confirmed transaction", send.Status())
+	}
+	if tracetest.Attr(broadcast, "tx.hash") != res.Hash.Hex() || tracetest.Attr(broadcast, "tx.nonce") != "7" {
+		t.Fatalf("broadcast attributes: %v", broadcast.Attributes())
+	}
+}
+
+func TestSendSpanRecordsBroadcastFailure(t *testing.T) {
+	rec := tracetest.Install(t)
+	b := newMockBackend()
+	b.sendErrs = []error{errors.New("insufficient funds for gas * price + value")}
+	m := newTestManager(t, b)
+
+	res := m.Send(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), Label: "rejected", Solver: "rfq", GasLimit: 21_000,
+	})
+	if res.Outcome != OutcomeSubmissionError || res.Err == nil {
+		t.Fatalf("outcome %v err %v, want a submission error", res.Outcome, res.Err)
+	}
+
+	send := tracetest.Ended(t, rec, "txmanager.send rejected")
+	if tracetest.Attr(send, "tx.outcome") != string(OutcomeSubmissionError) {
+		t.Fatalf("send attributes: %v", send.Attributes())
+	}
+	if send.Status().Code != codes.Error {
+		t.Fatalf("send status = %v, want Error", send.Status())
+	}
+	if broadcast := tracetest.Ended(t, rec, "txmanager.broadcast"); broadcast.Status().Code != codes.Error {
+		t.Fatalf("broadcast status = %v, want Error", broadcast.Status())
+	}
+}
+
+func TestTrySendBusyLaneDeclinesWithoutErrorStatus(t *testing.T) {
+	rec := tracetest.Install(t)
+	bb := &blockingBackend{mockBackend: newMockBackend(), entered: make(chan struct{}), release: make(chan struct{})}
+	m := New(bb, mustSigner(t), big.NewInt(11155111), Config{PollInterval: time.Millisecond}, logr.Discard())
+	startManagerForTest(t, m)
+
+	first := make(chan Result, 1)
+	go func() {
+		result, _ := m.TrySend(
+			context.Background(), Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "first"},
+		)
+		first <- result
+	}()
+
+	<-bb.entered
+	if _, accepted := m.TrySend(
+		context.Background(), Request{To: common.HexToAddress("0xdef"), GasLimit: 21_000, Label: "second"},
+	); accepted {
+		t.Fatal("busy lane accepted a TrySend")
+	}
+	close(bb.release)
+	if got := <-first; got.Err != nil {
+		t.Fatalf("first TrySend: %v", got.Err)
+	}
+
+	declined := tracetest.Ended(t, rec, "txmanager.send second")
+	if declined.Status().Code != codes.Unset {
+		t.Fatalf("busy-lane status = %v, want unset", declined.Status())
+	}
+	events := declined.Events()
+	if len(events) != 1 || events[0].Name != "declined" {
+		t.Fatalf("busy-lane events = %v, want one declined event", events)
+	}
+}
+
+// The lifecycle logs are what an operator joins to a trace, so each line must carry the caller's
+// trace id exactly once: the request logger is derived from the base logger at the send span, never
+// from a logger that already carries trace ids.
+func TestSendLifecycleLogsCarryTraceIDOnce(t *testing.T) {
+	tracetest.Install(t)
+	log, capture := tracetest.CaptureLogs(t, 1)
+	m := New(newMockBackend(), mustSigner(t), big.NewInt(11155111),
+		Config{Confirmations: 0, PollInterval: time.Millisecond}, log)
+	startManagerForTest(t, m)
+
+	ctx, parent := otel.Tracer("caller").Start(t.Context(), "rfq.order.submit")
+	res := m.Send(ctx, Request{
+		To: common.HexToAddress("0xabc"), Label: "test-fill", Solver: "rfq", GasLimit: 21_000,
+	})
+	parent.End()
+	if res.Outcome != OutcomeConfirmed {
+		t.Fatalf("outcome %v err %v", res.Outcome, res.Err)
+	}
+
+	lines := capture()
+	tracetest.RequireTraceIDsOnce(t, lines)
+	want := `"trace_id":"` + parent.SpanContext().TraceID().String() + `"`
+	// "sent" comes from the worker's broadcast, "transaction confirmed" from the detached lifecycle
+	// goroutine: both must reach the request's logger and carry the caller's trace.
+	seen := map[string]bool{"sent": false, "transaction confirmed": false}
+	for _, line := range lines {
+		for msg := range seen {
+			if !strings.Contains(line, `"msg":"`+msg+`"`) {
+				continue
+			}
+			seen[msg] = true
+			if !strings.Contains(line, want) {
+				t.Fatalf("%q line does not carry the caller's trace id: %s", msg, line)
+			}
+			if !strings.Contains(line, `"solver":"rfq"`) {
+				t.Fatalf("%q line lost the request's solver: %s", msg, line)
+			}
+		}
+	}
+	for msg, ok := range seen {
+		if !ok {
+			t.Fatalf("no %q line captured: %v", msg, lines)
+		}
+	}
+}
+
+// A manager that has stopped withdraws the request rather than rejecting it. Every other span
+// records that as a cancelled event, so the send span must not colour the caller's trace red.
+func TestSendSpanRecordsManagerStopAsCancellation(t *testing.T) {
+	rec := tracetest.Install(t)
+	s, err := signer.NewFromHexKey(testKey)
+	if err != nil {
+		t.Fatalf("signer: %v", err)
+	}
+	m := New(newMockBackend(), s, big.NewInt(11155111),
+		Config{Confirmations: 0, PollInterval: time.Millisecond, ShutdownTimeout: time.Second}, logr.Discard())
+	managerCtx, cancelManager := context.WithCancel(t.Context())
+	stopped := make(chan struct{})
+	go func() {
+		m.Start(managerCtx)
+		close(stopped)
+	}()
+	cancelManager()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("transaction manager did not stop")
+	}
+
+	res := m.Send(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), Label: "after stop", Solver: "rfq", GasLimit: 21_000,
+	})
+	if !errors.Is(res.Err, errManagerStopped) {
+		t.Fatalf("send after stop = %+v, want the manager stop", res)
+	}
+
+	send := tracetest.Ended(t, rec, "txmanager.send after stop")
+	if send.Status().Code != codes.Unset {
+		t.Fatalf("send status = %v, want unset for a withdrawn request", send.Status())
+	}
+	if !tracetest.HasEvent(send, "cancelled") {
+		t.Fatalf("send span has no cancelled event: %v", send.Events())
+	}
+	if got := tracetest.Attr(send, "tx.outcome"); got != string(OutcomeSubmissionError) {
+		t.Fatalf("send tx.outcome = %q, want %q", got, OutcomeSubmissionError)
+	}
+}
+
+// A CancelAt deadline reached while the request waits for the nonce lane is the caller withdrawing
+// it, not the manager failing it.
+func TestSendSpanRecordsCancelAtDeadlineAsCancellation(t *testing.T) {
+	rec := tracetest.Install(t)
+	bb := &blockingBackend{mockBackend: newMockBackend(), entered: make(chan struct{}), release: make(chan struct{})}
+	m := New(bb, mustSigner(t), big.NewInt(11155111), Config{PollInterval: time.Millisecond}, logr.Discard())
+	startManagerForTest(t, m)
+
+	first := make(chan Result, 1)
+	go func() {
+		first <- m.Send(
+			context.Background(), Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "holder"},
+		)
+	}()
+	<-bb.entered
+
+	res := m.Send(t.Context(), Request{
+		To: common.HexToAddress("0xdef"), GasLimit: 21_000, Label: "expiring",
+		CancelAt: time.Now().Add(50 * time.Millisecond),
+	})
+	if !errors.Is(res.Err, context.DeadlineExceeded) {
+		t.Fatalf("expiring send = %+v, want its CancelAt deadline", res)
+	}
+	close(bb.release)
+	if got := <-first; got.Err != nil {
+		t.Fatalf("holder send: %v", got.Err)
+	}
+
+	send := tracetest.Ended(t, rec, "txmanager.send expiring")
+	if send.Status().Code != codes.Unset {
+		t.Fatalf("send status = %v, want unset for a withdrawn request", send.Status())
+	}
+	if !tracetest.HasEvent(send, "cancelled") {
+		t.Fatalf("send span has no cancelled event: %v", send.Events())
+	}
 }

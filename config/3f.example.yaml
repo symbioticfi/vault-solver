@@ -37,6 +37,7 @@ observability:
   addr: ":9090"                    # bind address for /metrics, /healthz, /readyz
   debug: false                     # debug-level logging; the --debug CLI flag overrides this
   # Optional error reporting: set env SENTRY_DSN (and SENTRY_ENVIRONMENT) to tee Error+ logs to Sentry.
+  # Tracing: set env OTEL_EXPORTER_ENABLED=true and OTEL_EXPORTER_OTLP_ENDPOINT (see README).
 
 solvers:
   - name: 3f-bridge-facilitator    # registry key selecting the implementation

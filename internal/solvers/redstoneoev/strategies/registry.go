@@ -15,6 +15,9 @@ import (
 )
 
 type Deps struct {
+	// Solver is the owning solver's registry name, stamped on every span the strategy starts. It is
+	// passed in because the strategy packages live below the solver and cannot import it.
+	Solver              string
 	Chain               *chain.Client
 	Signer              signer.Signer
 	Log                 logr.Logger

@@ -10,6 +10,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 const backendOrderStatusOpen = "open"
@@ -62,7 +63,7 @@ func newBackendClient(baseURL string) *backendClient {
 	cfg.Servers = rfqbackend.ServerConfigurations{{URL: strings.TrimRight(baseURL, "/")}}
 	cfg.HTTPClient = &http.Client{
 		Timeout:   10 * time.Second,
-		Transport: backendRequestTransport{base: http.DefaultTransport},
+		Transport: observability.TraceTransport(backendRequestTransport{base: http.DefaultTransport}, "rfq-backend"),
 	}
 	return &backendClient{api: rfqbackend.NewAPIClient(cfg), discounts: discounts.NewClientWithHTTPClient(baseURL, cfg.HTTPClient)}
 }

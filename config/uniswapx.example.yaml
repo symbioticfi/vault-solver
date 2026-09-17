@@ -25,6 +25,7 @@ txManager:
 observability:
   addr: ":9090"                  # framework metrics and health endpoints
   debug: false                   # enable debug-level logs
+  # Tracing: set env OTEL_EXPORTER_ENABLED=true and OTEL_EXPORTER_OTLP_ENDPOINT (see README).
 
 solvers:
   - name: uniswapx-filler

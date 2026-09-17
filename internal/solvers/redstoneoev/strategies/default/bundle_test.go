@@ -7,14 +7,13 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/go-logr/logr"
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/morpho"
 )
 
 func testBundleEngine(cfg Config) bundleEngine {
-	return newBundleEngine(cfg, logr.Discard())
+	return newBundleEngine(cfg)
 }
 
 func scoredFor(borrowerByte byte, profit *big.Int) scoredLeg {

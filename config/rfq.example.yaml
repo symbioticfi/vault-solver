@@ -35,6 +35,7 @@ observability:
   addr: ":9090"                    # /metrics, /healthz, /readyz (separate from the quote server below)
   debug: false                     # debug-level logging; the --debug CLI flag overrides this
   # Optional: set env SENTRY_DSN (and SENTRY_ENVIRONMENT) to tee Error+ logs to Sentry.
+  # Tracing: set env OTEL_EXPORTER_ENABLED=true and OTEL_EXPORTER_OTLP_ENDPOINT (see README).
 
 solvers:
   - name: rfq-filler

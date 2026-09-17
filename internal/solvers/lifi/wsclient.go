@@ -11,8 +11,9 @@ import (
 	"time"
 
 	"github.com/go-errors/errors"
-	"github.com/go-logr/logr"
 	"github.com/gorilla/websocket"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 const (
@@ -29,7 +30,6 @@ type orderMessage struct {
 type orderFeed struct {
 	url           string
 	apiKey        string
-	log           logr.Logger
 	connected     atomic.Bool // watchOnce writes; Prometheus scrapes read concurrently.
 	recoveryReady atomic.Bool // connection recovery writes; Prometheus scrapes read concurrently.
 }
@@ -39,8 +39,8 @@ type orderFeedConnectionHooks struct {
 	whileConnected func(context.Context) // Concurrent with reads and joined on disconnect.
 }
 
-func newOrderFeed(url, apiKey string, log logr.Logger) *orderFeed {
-	return &orderFeed{url: url, apiKey: apiKey, log: log}
+func newOrderFeed(url, apiKey string) *orderFeed {
+	return &orderFeed{url: url, apiKey: apiKey}
 }
 
 func (f *orderFeed) run(
@@ -62,9 +62,10 @@ func (f *orderFeed) run(
 			closeErr.Code == websocket.CloseGoingAway || closeErr.Code == websocket.CloseNoStatusReceived ||
 			closeErr.Code == websocket.CloseAbnormalClosure || closeErr.Code == websocket.CloseServiceRestart ||
 			closeErr.Code == websocket.CloseTryAgainLater) {
-			f.log.Info("order feed disconnected; reconnecting", "error", err.Error(), "backoff", backoff.String())
+			observability.Log(ctx).Info(
+				"order feed disconnected; reconnecting", "error", err.Error(), "backoff", backoff.String())
 		} else {
-			f.log.Error(err, "order feed disconnected; reconnecting", "backoff", backoff.String())
+			observability.Log(ctx).Error(err, "order feed disconnected; reconnecting", "backoff", backoff.String())
 		}
 		timer := time.NewTimer(backoff)
 		select {
@@ -85,19 +86,9 @@ func (f *orderFeed) watchOnce(
 	hooks orderFeedConnectionHooks,
 	handle func(context.Context, orderMessage),
 ) (ready bool, err error) {
-	headers := http.Header{}
-	if f.apiKey != "" {
-		headers.Set("x-api-key", f.apiKey)
-	}
-	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, f.url, headers)
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close()
-	}
+	conn, err := f.dial(ctx)
 	if err != nil {
-		if resp != nil {
-			return false, errors.Errorf("dial websocket: %w (status %s)", err, resp.Status)
-		}
-		return false, errors.Errorf("dial websocket: %w", err)
+		return false, err
 	}
 	// A newly established connection always starts unready. Quotes must remain gated until this
 	// connection's REST recovery has converged, even if the previous connection was ready.
@@ -133,7 +124,7 @@ func (f *orderFeed) watchOnce(
 		work.Go(func() { hooks.whileConnected(connectionCtx) })
 	}
 
-	f.log.Info("order feed connected", "url", f.url)
+	observability.Log(ctx).Info("order feed connected", "url", f.url)
 	for {
 		messageType, msg, err := conn.ReadMessage()
 		if err != nil {
@@ -151,15 +142,39 @@ func (f *orderFeed) watchOnce(
 
 		var envelope orderMessage
 		if err := json.Unmarshal(msg, &envelope); err != nil {
-			f.log.V(1).Info("order feed: non-json message ignored")
+			observability.Log(ctx).V(1).Info("order feed: non-json message ignored")
 			continue
 		}
 		if envelope.Event != orderSubmitEvent {
-			f.log.V(1).Info("order feed event ignored", "event", envelope.Event)
+			observability.Log(ctx).V(1).Info("order feed event ignored", "event", envelope.Event)
 			continue
 		}
 		handle(connectionCtx, envelope)
 	}
+}
+
+// dial opens one connection under a lifi.feed.connect span and injects the trace context into the
+// handshake headers, so the connection itself is findable in the trace backend (spec §6.4).
+func (f *orderFeed) dial(ctx context.Context) (conn *websocket.Conn, err error) {
+	ctx, end := tracer.Start(ctx, "lifi.feed.connect")
+	defer func() { end(err) }()
+
+	headers := http.Header{}
+	if f.apiKey != "" {
+		headers.Set("x-api-key", f.apiKey)
+	}
+	observability.InjectTraceHeaders(ctx, headers)
+	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, f.url, headers)
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close()
+	}
+	if err != nil {
+		if resp != nil {
+			return nil, errors.Errorf("dial websocket: %w (status %s)", err, resp.Status)
+		}
+		return nil, errors.Errorf("dial websocket: %w", err)
+	}
+	return conn, nil
 }
 
 // markRecoveryReady publishes readiness only for a still-current established connection. watchOnce

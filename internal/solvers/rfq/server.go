@@ -9,7 +9,8 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/go-errors/errors"
-	"github.com/go-logr/logr"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 // sharedSecretHeader authenticates the backend peer on /quote.
@@ -29,8 +30,8 @@ func (e *badRequestError) Unwrap() error { return e.err }
 type server struct {
 	sharedSecret string
 	quotes       *quoteService
-	metrics      *rfqMetrics // nil disables instrumentation (e.g. in tests)
-	log          logr.Logger
+	metrics      *rfqMetrics              // nil disables instrumentation (e.g. in tests)
+	links        *observability.SpanLinks // shared with executionService; nil disables quote→fill links
 }
 
 /* ───────── Huma I/O types (drive both validation and the generated spec) ───────── */
@@ -71,13 +72,17 @@ func (s *server) handler() http.Handler {
 		Description: "Returns a solver quote, or 204 when the filler cannot quote the request.",
 	}, s.handleQuote)
 
-	// Middleware chain (outer → inner): body cap, access log + request-id, metrics, panic recovery.
-	var h = recoverPanics(mux, s.log)
+	// Middleware chain (outer → inner): server span, body cap, access log + request-id, metrics,
+	// panic recovery. The span is outermost so every inner layer runs under the backend's trace.
+	var h = recoverPanics(mux)
 	if s.metrics != nil {
 		h = s.metrics.instrument(h)
 	}
-	h = logRequests(h, s.log)
-	return http.MaxBytesHandler(h, maxRequestBytes)
+	h = logRequests(h)
+	return observability.TraceHandler(
+		http.MaxBytesHandler(h, maxRequestBytes),
+		func(r *http.Request) string { return routeLabel(r.URL.Path) },
+	)
 }
 
 const version1 = "1.0.0"
@@ -90,9 +95,13 @@ func (s *server) handleHealth(_ context.Context, _ *struct{}) (*healthOutput, er
 }
 
 func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput, error) {
+	observability.SetAttributes(ctx,
+		observability.AttrRequestID.String(requestID(ctx)),
+		observability.AttrQuoteID.String(in.Body.QuoteID),
+	)
 	if !s.authorized(in.Secret) {
 		// Log the denial (never the attempted secret) so credential scanning is observable.
-		s.log.V(1).Info("rejected /quote: bad shared secret", "requestId", requestID(ctx))
+		observability.Log(ctx).V(1).Info("rejected /quote: bad shared secret", "requestId", requestID(ctx))
 		return nil, huma.Error403Forbidden("forbidden")
 	}
 	decision, err := s.quotes.quote(ctx, &in.Body)
@@ -106,12 +115,15 @@ func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput,
 		if bad != nil {
 			return nil, huma.Error400BadRequest(bad.Error())
 		}
-		backendErrorLogger(s.log, err).Error(err, "quote failed", "quoteId", in.Body.QuoteID, "requestId", requestID(ctx))
+		backendErrorLogger(observability.Log(ctx), err).
+			Error(err, "quote failed", "quoteId", in.Body.QuoteID, "requestId", requestID(ctx))
 		return nil, huma.Error502BadGateway("quote failed")
 	}
 	if decision.response == nil {
 		return &quoteOutput{Status: http.StatusNoContent}, nil // well-formed, nothing to quote
 	}
+	// Remember the served quote so the fill that wins it can link back to this trace (spec §12).
+	s.links.Remember(ctx, in.Body.QuoteID, quoteLinkTTL)
 	return &quoteOutput{Status: http.StatusOK, Body: decision.response}, nil
 }
 

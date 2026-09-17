@@ -63,7 +63,7 @@ func (s *Solver) quoteLoop(
 		defer cancel()
 		s.suspendQuotes(shutdownCtx, state)
 		if err := shutdownCtx.Err(); err != nil && len(state.active) > 0 {
-			s.log.Error(err, "quote shutdown incomplete", "activePairs", len(state.active))
+			observability.Log(shutdownCtx).Error(err, "quote shutdown incomplete", "activePairs", len(state.active))
 		}
 	}()
 	var lastBlock uint64
@@ -141,30 +141,54 @@ func (s *Solver) subscribeTransactionLaneState() (<-chan struct{}, func()) {
 }
 
 func (s *Solver) suspendQuotes(ctx context.Context, state *quoteState) {
+	ctx, end := tracer.Start(ctx, "lifi.quotes.suspend")
+	var err error
+	defer func() { end(err) }()
+
 	timer := observability.StartOperation(s.operationObservers().quoteSuspend)
 	outcome := observability.ExternalOperationError
 	defer func() { timer.Finish(ctx, outcome) }()
 
 	backoff := initialQuoteSuspensionBackoff
 	for {
-		removed, err := state.reconcile(ctx, s.orders, nil, s.wallNow())
+		var removed int
+		removed, err = s.reconcileQuotes(ctx, state, nil, s.wallNow())
 		if err == nil {
 			outcome = observability.ExternalOperationSuccess
 			s.observeQuoteRefresh(state)
 			if removed > 0 {
-				s.log.Info("quotes suspended", "removedPairs", removed)
+				observability.Log(ctx).Info("quotes suspended", "removedPairs", removed)
 			}
 			return
 		}
 		if ctx.Err() != nil {
 			return
 		}
-		s.log.Error(err, "quote suspension: expire active quotes; retrying", "backoff", backoff.String())
+		observability.Log(ctx).Error(err, "quote suspension: expire active quotes; retrying", "backoff", backoff.String())
 		if !waitForRetry(ctx, backoff) {
 			return
 		}
 		backoff = min(2*backoff, maximumQuoteSuspensionBackoff)
 	}
+}
+
+// reconcileQuotes publishes the curve change as the lifi.quotes.reconcile stage; the order-server
+// calls it makes nest under it as client spans.
+func (s *Solver) reconcileQuotes(
+	ctx context.Context, state *quoteState, quotes []types.Quote, now time.Time,
+) (removed int, err error) {
+	ctx, end := tracer.Start(ctx, "lifi.quotes.reconcile")
+	defer func() { end(err) }()
+	return state.reconcile(ctx, s.orders, quotes, now)
+}
+
+// decideQuotes runs the strategy as the lifi.quotes.decide stage.
+func (s *Solver) decideQuotes(
+	ctx context.Context, input types.QuoteInput,
+) (out types.QuoteOutput, err error) {
+	ctx, end := tracer.Start(ctx, "lifi.quotes.decide", observability.AttrStrategy.String(s.cfg.Strategy.Name))
+	defer func() { end(err) }()
+	return s.strategy.DecideQuotes(ctx, input)
 }
 
 func (s *Solver) shouldRefreshQuotes(ctx context.Context, state *quoteState, lastBlock *uint64) bool {
@@ -174,7 +198,7 @@ func (s *Solver) shouldRefreshQuotes(ctx context.Context, state *quoteState, las
 	needsRenewal := state.needsRenewal(s.wallNow())
 	block, err := s.reader.latestBlockNumber(ctx)
 	if err != nil {
-		s.log.Error(err, "quote refresh: read latest block")
+		observability.Log(ctx).Error(err, "quote refresh: read latest block")
 		return needsRenewal
 	}
 	if block == *lastBlock && !needsRenewal {
@@ -185,13 +209,18 @@ func (s *Solver) shouldRefreshQuotes(ctx context.Context, state *quoteState, las
 }
 
 func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quoteState) {
+	ctx, end := tracer.Start(ctx, "lifi.quotes.refresh")
+	var err error
+	defer func() { end(err) }()
+
 	timer := observability.StartOperation(s.operationObservers().quoteRefresh)
 	outcome := observability.ExternalOperationError
 	defer func() { timer.Finish(ctx, outcome) }()
 
 	if !s.transactionLaneReady() {
 		outcome = observability.ExternalOperationSkipped
-		s.log.V(1).Info(
+		observability.Decline(ctx, "quotes_skipped", "transaction lane is unavailable")
+		observability.Log(ctx).V(1).Info(
 			"quote refresh skipped: transaction lane unavailable",
 			"activePairs", len(state.active),
 			"pendingFills", s.capacity.Len(),
@@ -202,19 +231,19 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	}
 	chainTime, err := s.now(ctx)
 	if err != nil {
-		s.log.Error(err, "quote refresh: read latest block time")
+		observability.Log(ctx).Error(err, "quote refresh: read latest block time")
 		return
 	}
 	snapshotSet, err := s.reader.quoteSnapshots(ctx, routes, s.cfg.Executor)
 	if err != nil {
-		s.log.Error(err, "quote refresh: read routes")
+		observability.Log(ctx).Error(err, "quote refresh: read routes")
 		return
 	}
 	maxFeePerGas := new(big.Int)
 	if s.cfg.Gas != nil {
 		maxFeePerGas, err = s.readMaxFeePerGas(ctx)
 		if err != nil {
-			s.log.Error(err, "quote refresh: read max fee per gas")
+			observability.Log(ctx).Error(err, "quote refresh: read max fee per gas")
 			return
 		}
 	}
@@ -225,7 +254,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	inventory = append(inventory, discountInventory...)
 	reservations := s.capacity.Snapshot()
 	serverTime := s.wallNow()
-	out, err := s.strategy.DecideQuotes(ctx, types.QuoteInput{
+	out, err := s.decideQuotes(ctx, types.QuoteInput{
 		Solver:            s.cfg.Executor,
 		Inventory:         inventory,
 		Reservations:      reservations,
@@ -238,12 +267,12 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		QuoteExpiresAt:    serverTime.Add(s.cfg.QuoteTTL),
 	})
 	if err != nil {
-		s.log.Error(err, "quote refresh: strategy")
+		observability.Log(ctx).Error(err, "quote refresh: strategy")
 		return
 	}
 	earliestExpiry, latestExpiry := quoteExpiryBounds(out.Quotes)
 	if len(out.Quotes) == 0 {
-		s.log.V(1).Info(
+		observability.Log(ctx).V(1).Info(
 			"quote refresh: strategy produced no quotes",
 			"inventory", len(inventory),
 			"directInventory", len(direct),
@@ -254,7 +283,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 			"pricingMaxFeePerGas", maxFeePerGas.String(),
 		)
 	} else {
-		s.log.V(1).Info(
+		observability.Log(ctx).V(1).Info(
 			"quote plan selected",
 			"quotePairs", len(out.Quotes),
 			"quoteRanges", quoteRangeCount(out.Quotes),
@@ -264,7 +293,8 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	}
 	if !s.transactionLaneReady() {
 		outcome = observability.ExternalOperationSkipped
-		s.log.V(1).Info(
+		observability.Decline(ctx, "quotes_skipped", "transaction lane is unavailable")
+		observability.Log(ctx).V(1).Info(
 			"quote plan discarded: transaction lane unavailable",
 			"quotePairs", len(out.Quotes),
 			"quoteRanges", quoteRangeCount(out.Quotes),
@@ -273,9 +303,9 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		s.suspendQuotes(ctx, state)
 		return
 	}
-	removed, err := state.reconcile(ctx, s.orders, out.Quotes, serverTime)
+	removed, err := s.reconcileQuotes(ctx, state, out.Quotes, serverTime)
 	if err != nil {
-		s.log.Error(err, "quote refresh: submit quotes", "quotes", len(out.Quotes))
+		observability.Log(ctx).Error(err, "quote refresh: submit quotes", "quotes", len(out.Quotes))
 		return
 	}
 	s.observeQuoteRefresh(state)
@@ -283,7 +313,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	if discountDegraded {
 		outcome = observability.ExternalOperationDegraded
 	}
-	s.log.Info(
+	observability.Log(ctx).Info(
 		"quotes reconciled",
 		"quotes", len(out.Quotes),
 		"quoteRanges", quoteRangeCount(out.Quotes),

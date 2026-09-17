@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 )
 
@@ -22,15 +24,21 @@ const (
 	quoteTypeExactOutput = "EXACT_OUTPUT"
 )
 
-func (s *Solver) newQuoteHTTPServer() *http.Server {
+func (s *Solver) newQuoteHTTPServer(ctx context.Context) *http.Server {
+	// Handler contexts inherit the solver logger from here. Cancellation is deliberately dropped so
+	// shutdown keeps draining in-flight quotes through Shutdown instead of cutting them off.
+	handlerCtx := context.WithoutCancel(ctx)
 	mux := http.NewServeMux()
 	healthHandler := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
 	mux.HandleFunc("POST /quote", s.quoteHandler)
 	mux.HandleFunc("GET /health", healthHandler)
 	mux.HandleFunc("GET /healthz", healthHandler)
 	mux.HandleFunc("GET /ready", s.readyHandler)
+	// The server span is outermost so panic recovery and the handler both run under Uniswap's trace.
+	handler := observability.TraceHandler(recoverQuoteServer(mux), uniswapxRoute)
 	return &http.Server{
-		Addr: s.cfg.QuoteServer.ListenAddress, Handler: recoverQuoteServer(mux, s.log),
+		Addr: s.cfg.QuoteServer.ListenAddress, Handler: handler,
+		BaseContext:       func(net.Listener) context.Context { return handlerCtx },
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: s.cfg.QuoteServer.HTTPTimeout,
 		WriteTimeout: s.cfg.QuoteServer.HTTPTimeout, IdleTimeout: 30 * time.Second,
 	}
@@ -45,45 +53,31 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 	}()
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxQuoteRequestBytes+1))
 	if err != nil {
-		s.log.V(1).Info("quote request rejected", "reason", "read-body", "error", err.Error())
-		s.observeQuote(quoteOutcomeInvalid)
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		s.declineQuoteRequest(w, r, "read-body", "invalid request body", "error", err.Error())
 		return
 	}
 	if len(body) > maxQuoteRequestBytes {
-		s.log.V(1).Info("quote request rejected", "reason", "body-too-large", "bytes", len(body))
-		s.observeQuote(quoteOutcomeInvalid)
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		s.declineQuoteRequest(w, r, "body-too-large", "invalid request body", "bytes", len(body))
 		return
 	}
 	var request quoteRequest
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
-		s.log.V(1).Info("quote request rejected", "reason", "invalid-json", "error", err.Error())
-		s.observeQuote(quoteOutcomeInvalid)
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		s.declineQuoteRequest(w, r, "invalid-json", "invalid request body", "error", err.Error())
 		return
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
-		s.log.V(1).Info(
-			"quote request rejected",
-			"reason", "trailing-json",
-			"requestId", request.RequestID,
-			"quoteId", request.QuoteID,
-		)
-		s.observeQuote(quoteOutcomeInvalid)
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		s.declineQuoteRequest(w, r, "trailing-json", "invalid request body",
+			"requestId", request.RequestID, "quoteId", request.QuoteID)
 		return
 	}
 	if request.RequestID == "" {
 		if request.BlockUntilTimestamp == nil || *request.BlockUntilTimestamp < 0 {
-			s.log.V(1).Info("quote request rejected", "reason", "invalid-breaker-notification")
-			s.observeQuote(quoteOutcomeInvalid)
-			http.Error(w, "invalid blockUntilTimestamp", http.StatusBadRequest)
+			s.declineQuoteRequest(w, r, "invalid-breaker-notification", "invalid blockUntilTimestamp")
 			return
 		}
-		s.log.V(1).Info(
+		observability.Log(r.Context()).V(1).Info(
 			"quote breaker notification received",
 			"blockUntilTimestamp", *request.BlockUntilTimestamp,
 		)
@@ -92,7 +86,11 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	s.log.V(1).Info(
+	observability.SetAttributes(r.Context(),
+		observability.AttrRequestID.String(request.RequestID),
+		observability.AttrQuoteID.String(request.QuoteID),
+	)
+	observability.Log(r.Context()).V(1).Info(
 		"quote request received",
 		"requestId", request.RequestID,
 		"quoteId", request.QuoteID,
@@ -105,13 +103,14 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 	response, err := s.quote(r.Context(), request)
 	if err != nil {
 		s.observeQuote(quoteOutcomeError)
-		s.log.Error(err, "quote failed", "requestId", request.RequestID, "quoteId", request.QuoteID)
+		observability.Log(r.Context()).
+			Error(err, "quote failed", "requestId", request.RequestID, "quoteId", request.QuoteID)
 		http.Error(w, "quote unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if response.AmountOut == "0" {
 		s.observeQuoteDecline(response.declineReason)
-		s.log.V(1).Info(
+		observability.Log(r.Context()).V(1).Info(
 			"quote declined",
 			"requestId", request.RequestID,
 			"quoteId", request.QuoteID,
@@ -128,7 +127,7 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	s.observeQuote(quoteOutcomeQuoted)
 	s.observeQuotedAmounts(response)
-	s.log.V(1).Info(
+	observability.Log(r.Context()).V(1).Info(
 		"quote returned",
 		"requestId", request.RequestID,
 		"quoteId", request.QuoteID,
@@ -138,11 +137,57 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 	)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		s.log.Error(err, "write quote response", "requestId", request.RequestID, "quoteId", request.QuoteID)
+		observability.Log(r.Context()).
+			Error(err, "write quote response", "requestId", request.RequestID, "quoteId", request.QuoteID)
+		return
 	}
+	// Remember the served quote so the fill that wins it can link back to this trace (spec §12).
+	// Indicative and hard quotes share a request shape, so both are remembered; the later wins.
+	s.links.Remember(r.Context(), request.QuoteID, quoteLinkTTL)
 }
 
-func (s *Solver) quote(ctx context.Context, request quoteRequest) (quoteResponse, error) {
+// declineQuoteRequest answers a malformed body. The caller is at fault, so the server span records a
+// declined event rather than an error, matching the V(1) logging rule.
+func (s *Solver) declineQuoteRequest(
+	w http.ResponseWriter, r *http.Request, reason, message string, keysAndValues ...any,
+) {
+	observability.Decline(r.Context(), "bad_request", reason)
+	fields := append([]any{"reason", reason}, keysAndValues...)
+	observability.Log(r.Context()).V(1).Info("quote request rejected", fields...)
+	s.observeQuote(quoteOutcomeInvalid)
+	http.Error(w, message, http.StatusBadRequest)
+}
+
+// quote answers one quote request as the uniswapx.quote stage. A decline is an expected outcome, so
+// it is recorded as a declined event; only a real failure ends the span with an error.
+func (s *Solver) quote(ctx context.Context, request quoteRequest) (response quoteResponse, err error) {
+	ctx, end := tracer.Start(ctx, "uniswapx.quote")
+	// Deferred so the span still ends when the pipeline panics; the quote server recovers that into
+	// a 500 without unwinding past here, and an unended span is never exported.
+	defer func() {
+		if err == nil && response.declineReason != "" {
+			observability.Decline(ctx, quoteDeclineDecision(response.declineReason), string(response.declineReason))
+		}
+		end(err)
+	}()
+	return s.evaluateQuote(ctx, request)
+}
+
+// quoteDeclineDecision classifies a decline: a request we could not parse or price is the caller's
+// fault, everything else is this filler choosing not to quote.
+func quoteDeclineDecision(reason quoteDeclineReason) string {
+	switch reason {
+	case quoteDeclineInvalidRequest, quoteDeclineInvalidAmount:
+		return "bad_request"
+	case quoteDeclineBlocked, quoteDeclinePairOutOfScope, quoteDeclineQuoteStateUnavailable,
+		quoteDeclineStrategy, quoteDeclineStateChanged:
+		return "no_quote"
+	}
+	return "no_quote"
+}
+
+// evaluateQuote is the quote pipeline; quote wraps it in the uniswapx.quote span.
+func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quoteResponse, error) {
 	response := quoteResponse{
 		ChainID: s.chainID, RequestID: request.RequestID, Swapper: request.Swapper, TokenIn: request.TokenIn,
 		AmountIn: "0", TokenOut: request.TokenOut, AmountOut: "0",
@@ -183,7 +228,7 @@ func (s *Solver) quote(ctx context.Context, request quoteRequest) (quoteResponse
 		Reservations:       s.capacity.Snapshot(),
 		GasSnapshot:        state.gasSnapshot, GasPrices: state.gasPrices,
 		MaxFeePerGas: state.maxFeePerGas, ChainTime: state.chainTime, QuoteExpiresAt: state.expiresAt,
-		Trace: s.decisionTrace(
+		Trace: s.decisionTrace(ctx,
 			"requestId", request.RequestID,
 			"quoteId", request.QuoteID,
 			"quoteType", request.Type,
@@ -194,7 +239,7 @@ func (s *Solver) quote(ctx context.Context, request quoteRequest) (quoteResponse
 	} else {
 		input.AmountOut = requestAmount
 	}
-	quote, err := s.strategy.DecideQuote(ctx, input)
+	quote, err := s.decideQuote(ctx, input)
 	if err != nil {
 		return response, err
 	}
@@ -211,6 +256,16 @@ func (s *Solver) quote(ctx context.Context, request quoteRequest) (quoteResponse
 	response.AmountOut = quote.AmountOut.String()
 	response.quotedPairBounded = quotePairIsBounded(state, tokenIn, tokenOut)
 	return response, nil
+}
+
+// decideQuote runs the strategy as the uniswapx.quote.decide stage, so a webhook strategy's HTTP
+// call nests under a named decision span.
+func (s *Solver) decideQuote(
+	ctx context.Context, input strategytypes.QuoteInput,
+) (quote *strategytypes.Quote, err error) {
+	ctx, end := tracer.Start(ctx, "uniswapx.quote.decide", observability.AttrStrategy.String(s.cfg.Strategy.Name))
+	defer func() { end(err) }()
+	return s.strategy.DecideQuote(ctx, input)
 }
 
 func declinedQuote(response quoteResponse, reason quoteDeclineReason) quoteResponse {

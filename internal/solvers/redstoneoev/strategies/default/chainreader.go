@@ -7,13 +7,13 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
-	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/oev/callback"
 	morphobinding "github.com/symbioticfi/vault-solver/api/bindings/oev/morpho"
 	"github.com/symbioticfi/vault-solver/api/bindings/oev/oracle"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/morpho"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 var (
@@ -24,14 +24,10 @@ var (
 
 type chainReader struct {
 	chain *chain.Client
-	log   logr.Logger
 }
 
-func newChainReader(c *chain.Client, log logr.Logger) *chainReader {
-	return &chainReader{
-		chain: c,
-		log:   log,
-	}
+func newChainReader(c *chain.Client) *chainReader {
+	return &chainReader{chain: c}
 }
 
 func (r *chainReader) ReadNativeBalance(ctx context.Context, account common.Address) (*big.Int, error) {
@@ -63,7 +59,7 @@ func (r *chainReader) ResolveParams(ctx context.Context, morphoAddr common.Addre
 			continue
 		}
 		if derived, verr := deriveMarketID(mp); verr != nil || derived != id {
-			r.log.V(1).Info("market id mismatch; dropping", "id", id.Hex())
+			observability.Log(ctx).V(1).Info("market id mismatch; dropping", "id", id.Hex())
 			continue
 		}
 		out[id] = mp

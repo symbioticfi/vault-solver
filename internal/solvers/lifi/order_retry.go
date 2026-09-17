@@ -58,6 +58,14 @@ func (q *reservationRetryQueue) popReady(generation uint64) *submittedOrder {
 	return item.order
 }
 
+func (q *reservationRetryQueue) contains(order *submittedOrder) bool {
+	q.mu.RLock()
+	defer q.mu.RUnlock()
+
+	key := orderInboxKey(order)
+	return key != "" && q.queued[key]
+}
+
 func (q *reservationRetryQueue) len() int {
 	q.mu.RLock()
 	defer q.mu.RUnlock()

@@ -31,6 +31,7 @@ txManager:
 observability:
   addr: ":9090"
   debug: false
+  # Tracing: set env OTEL_EXPORTER_ENABLED=true and OTEL_EXPORTER_OTLP_ENDPOINT (see README).
 
 solvers:
   - name: lifi-samechain

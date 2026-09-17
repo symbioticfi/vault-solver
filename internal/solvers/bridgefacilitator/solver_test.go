@@ -14,6 +14,8 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 func TestDeduplicateAdapters_PreservesSourceOrder(t *testing.T) {
@@ -255,7 +257,7 @@ func TestRun_ExplicitEmptyAdaptersSkipFactoryDiscoveryAndFailStartup(t *testing.
 		offers:     newOfferTracker(),
 	}
 	want := "no configured adapter passed startup validation (must resolve and accept this solver " + signer.Hex() + " as an authorized offer signer via ERC-1271); see per-adapter warnings above"
-	if err := s.Run(t.Context()); err == nil || err.Error() != want {
+	if err := s.Run(observability.WithLogger(t.Context(), s.log)); err == nil || err.Error() != want {
 		t.Fatalf("Run error = %v, want %q", err, want)
 	}
 }
@@ -281,7 +283,7 @@ func TestRun_StaticOnlyStillFailsStartupWhenNoAdapterPassesValidation(t *testing
 		offers:     newOfferTracker(),
 	}
 	want := "no configured adapter passed startup validation (must resolve and accept this solver " + signer.Hex() + " as an authorized offer signer via ERC-1271); see per-adapter warnings above"
-	if err := s.Run(t.Context()); err == nil || err.Error() != want {
+	if err := s.Run(observability.WithLogger(t.Context(), s.log)); err == nil || err.Error() != want {
 		t.Fatalf("Run error = %v, want %q", err, want)
 	}
 }

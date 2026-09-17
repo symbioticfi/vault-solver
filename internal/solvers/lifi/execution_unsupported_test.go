@@ -31,7 +31,9 @@ func TestParseOrderMessageIgnoresUnsupportedOrdersAtDebug(t *testing.T) {
 				log: funcr.NewJSON(func(entry string) { logs = append(logs, entry) },
 					funcr.Options{Verbosity: tc.verbosity}),
 			}
-			if order := solver.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: raw}); order != nil {
+			if order, _ := solver.parseOrderMessage(
+				solverContext(t, solver), orderMessage{Event: orderSubmitEvent, Data: raw},
+			); order != nil {
 				t.Fatalf("parseOrderMessage() = %+v, want ignored order", order)
 			}
 			logged := strings.Join(logs, "\n")

@@ -190,6 +190,16 @@ assertion because the PR19 ABI has no getter.
 | `orderclient.go` | generated-client adapter, authenticated polling, one ≤6 RPS limiter, pagination/body bounds | net-new |
 | `state.go` / `health.go` / `metrics.go` | reservations, quote epochs, exclusive obligations, dedup/backoff/breakers, readiness and metrics | net-new |
 
+**Tracing:** the quote webhook continues Uniswap's trace when the request carries one; the solver's own
+loops root theirs. Quote and fill are separate context trees, because the order comes back minutes later
+from a poll, so a served quote is remembered by `quoteId` for 10 minutes and the order's track span
+links back to it. The track span's context then rides on `resolvedOrder` through the orders channel, so
+the fill continues the track trace rather than the poll's; the order also carries the linked quote's
+trace id, which the span alone cannot yield once the fill rebuilds its context. The fill span stays
+open across the asynchronous submission and is ended by the completion.
+Spans, attributes, and quote-to-fill links for this solver are specified in
+[TRACING-PLAN](TRACING-PLAN.md) §5–§6.
+
 **On-chain:** the RFQ contracts repository owns `LiquidLaneUniswapXExecutor.sol`, its interfaces, and
 contract tests. `rfq-integration` consumes a pinned RFQ contracts revision, while this solver vendors only
 the executor ABI and generated binding under `api/bindings/uniswapx/` — see §7/P3.

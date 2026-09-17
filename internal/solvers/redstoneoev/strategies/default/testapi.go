@@ -22,6 +22,7 @@ type SnapshotSeed struct {
 
 func NewWithSnapshotForTest(
 	cfg Config,
+	solver string,
 	adapter common.Address,
 	callback common.Address,
 	gasAccounting bool,
@@ -29,7 +30,8 @@ func NewWithSnapshotForTest(
 	log logr.Logger,
 	signer signer,
 ) *Strategy {
-	mon := &apiMonitor{log: log}
+	tracer := newStrategyTracer(solver)
+	mon := &apiMonitor{log: log, tracer: tracer}
 	mon.snap.Store(snapshotFromSeed(seed))
 	return &Strategy{
 		cfg:           cfg,
@@ -38,9 +40,10 @@ func NewWithSnapshotForTest(
 		gasAccounting: gasAccounting,
 		signer:        signer,
 		mon:           mon,
-		engine:        newBundleEngine(cfg, log),
+		engine:        newBundleEngine(cfg),
 		maxAge:        cfg.MaxStateAge,
 		log:           log,
+		tracer:        tracer,
 	}
 }
 

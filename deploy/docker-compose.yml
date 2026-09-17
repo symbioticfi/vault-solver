@@ -23,6 +23,10 @@ services:
     # Secrets (SOLVER_PRIVATE_KEY, API keys) — supplied via the gitignored .env file.
     env_file:
       - ../.env
+    # OpenTelemetry tracing is off unless the switch below is truthy; see the README.
+    # environment:
+    #   OTEL_EXPORTER_ENABLED: "true"
+    #   OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
     # Operator config. Defaults to the committed Sepolia template; point CONFIG_FILE at your own.
     volumes:
       - ${CONFIG_FILE:-../config/3f.example.yaml}:/etc/vault-solver/config.yaml:ro

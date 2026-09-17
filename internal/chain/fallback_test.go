@@ -17,10 +17,13 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
-	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 )
 
 // mustEndpoints parses raw URLs into endpoints for a fallbackTransport, failing the test on error.
@@ -35,7 +38,7 @@ func mustEndpoints(t *testing.T, raws ...string) []*url.URL {
 
 func roundTrip(t *testing.T, eps []*url.URL, payload string) (*http.Response, error) {
 	t.Helper()
-	rt := &fallbackTransport{endpoints: eps, base: http.DefaultTransport, log: logr.Discard()}
+	rt := &fallbackTransport{endpoints: eps, base: http.DefaultTransport}
 	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, eps[0].String(), strings.NewReader(payload))
 	if err != nil {
 		t.Fatalf("new request: %v", err)
@@ -304,7 +307,7 @@ func TestFallbackTransport_EachReadCanSelectAHealthyEndpoint(t *testing.T) {
 	defer fallback.Close()
 
 	eps := mustEndpoints(t, primary.URL, fallback.URL)
-	rt := &fallbackTransport{endpoints: eps, base: http.DefaultTransport, log: logr.Discard()}
+	rt := &fallbackTransport{endpoints: eps, base: http.DefaultTransport}
 	request := func(payload string) {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, primary.URL, strings.NewReader(payload))
 		if err != nil {
@@ -342,6 +345,98 @@ func TestFallbackTransport_AllFail(t *testing.T) {
 	}
 }
 
+func TestFallbackTransport_SpansOneRequestAcrossAttempts(t *testing.T) {
+	rec := tracetest.Install(t)
+	var gotTraceparent string
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer bad.Close()
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTraceparent = r.Header.Get("traceparent")
+		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":7,"result":"0x1"}`))
+	}))
+	defer good.Close()
+
+	rt := &fallbackTransport{
+		endpoints: mustEndpoints(t, bad.URL, good.URL),
+		base:      http.DefaultTransport,
+		role:      rpcRoleRead,
+	}
+	ctx, parent := otel.Tracer("test").Start(t.Context(), "caller")
+	payload := `{"jsonrpc":"2.0","id":7,"method":"eth_chainId","params":[]}`
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, good.URL, strings.NewReader(payload))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip: %v", err)
+	}
+	if _, err = io.ReadAll(resp.Body); err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if n := len(rec.Ended()); n != 0 {
+		t.Fatalf("ended spans before body close = %d, want 0", n)
+	}
+	_ = resp.Body.Close()
+	parent.End()
+
+	span := tracetest.Ended(t, rec, rpcMethodChainID)
+	if span.Parent().SpanID() != parent.SpanContext().SpanID() {
+		t.Fatalf("rpc span parent = %s, want the caller span %s", span.Parent().SpanID(), parent.SpanContext().SpanID())
+	}
+	if span.SpanKind() != trace.SpanKindClient {
+		t.Fatalf("span kind = %v, want client", span.SpanKind())
+	}
+	if len(span.Events()) != 2 || span.Events()[0].Name != "attempt" || span.Events()[1].Name != "attempt" {
+		t.Fatalf("events = %v, want one attempt event per endpoint", span.Events())
+	}
+	if span.Status().Code == codes.Error {
+		t.Fatalf("status = %v, want unset on a successful request", span.Status())
+	}
+	if !strings.Contains(gotTraceparent, parent.SpanContext().TraceID().String()) {
+		t.Fatalf("traceparent = %q, want the caller trace id %s", gotTraceparent, parent.SpanContext().TraceID())
+	}
+	if tracetest.Attr(span, "rpc.system") != "jsonrpc" || tracetest.Attr(span, "rpc.method") != rpcMethodChainID ||
+		tracetest.Attr(span, "rpc.jsonrpc.request_id") != "7" || tracetest.Attr(span, "chain.rpc.role") != rpcRoleRead ||
+		tracetest.Attr(span, "chain.rpc.batch") != "false" {
+		t.Fatalf("attributes = %v", span.Attributes())
+	}
+}
+
+func TestFallbackTransport_SpanErrorWhenAllEndpointsFail(t *testing.T) {
+	rec := tracetest.Install(t)
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer bad.Close()
+
+	rt := &fallbackTransport{
+		endpoints: mustEndpoints(t, bad.URL),
+		base:      http.DefaultTransport,
+		role:      rpcRoleRead,
+	}
+	payload := `{"jsonrpc":"2.0","id":1,"method":"eth_call","params":[]}`
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, bad.URL, strings.NewReader(payload))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	resp, err := rt.RoundTrip(req)
+	if err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("expected an error when every endpoint fails")
+	}
+
+	spans := rec.Ended()
+	if len(spans) != 1 {
+		t.Fatalf("ended spans = %d, want the single rpc span", len(spans))
+	}
+	if spans[0].Status().Code != codes.Error || spans[0].Status().Description != string(rpcOutcomeHTTP5xx) {
+		t.Fatalf("status = %v, want Error/%s", spans[0].Status(), rpcOutcomeHTTP5xx)
+	}
+}
+
 func TestFallbackTransport_ShortCallerDeadlineStillReachesFallback(t *testing.T) {
 	releasePrimary := make(chan struct{})
 	primary := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -362,7 +457,7 @@ func TestFallbackTransport_ShortCallerDeadlineStillReachesFallback(t *testing.T)
 	defer fallback.Close()
 
 	eps := mustEndpoints(t, primary.URL, fallback.URL)
-	rt := &fallbackTransport{endpoints: eps, base: http.DefaultTransport, log: logr.Discard()}
+	rt := &fallbackTransport{endpoints: eps, base: http.DefaultTransport}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, primary.URL, strings.NewReader(`{}`))
@@ -434,7 +529,7 @@ func TestDial_SingleHTTPEndpointServesChainID(t *testing.T) {
 	defer srv.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{srv.URL}, "", multicall, logr.Discard())
+	c, err := Dial(t.Context(), []string{srv.URL}, "", multicall)
 	if err != nil {
 		t.Fatalf("Dial single http endpoint: %v", err)
 	}
@@ -463,7 +558,7 @@ func TestDial_FallbackServesChainID(t *testing.T) {
 	defer fallback.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall, logr.Discard())
+	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall)
 	if err != nil {
 		t.Fatalf("Dial via fallback: %v", err)
 	}
@@ -523,7 +618,7 @@ func TestDial_FallbackServesReceiptAndHeadersAfterPrimaryNull(t *testing.T) {
 	defer fallback.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall, logr.Discard())
+	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -579,7 +674,7 @@ func TestDial_FinalNullReceiptReturnsNotFound(t *testing.T) {
 	defer fallback.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall, logr.Discard())
+	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -656,7 +751,7 @@ func TestDial_WriteRPCRoutesBroadcastsAndNonces(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err := DialWithMetrics(
-		t.Context(), []string{read.URL}, write.URL, multicall, rpcMetrics, logr.Discard(),
+		t.Context(), []string{read.URL}, write.URL, multicall, rpcMetrics,
 	)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
@@ -747,7 +842,7 @@ func TestDialDoesNotFollowRPCRedirects(t *testing.T) {
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
 	client, err := DialWithMetrics(
-		t.Context(), []string{redirect.URL}, "", multicall, metrics, logr.Discard(),
+		t.Context(), []string{redirect.URL}, "", multicall, metrics,
 	)
 	if client != nil || err == nil {
 		t.Fatalf("redirecting Dial = (%v, %v), want nil/error", client, err)
@@ -792,7 +887,7 @@ func TestTransactionSenderBalanceFallsBackWhenWriteRPCRejectsRead(t *testing.T) 
 	defer write.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	client, err := Dial(t.Context(), []string{read.URL}, write.URL, multicall, logr.Discard())
+	client, err := Dial(t.Context(), []string{read.URL}, write.URL, multicall)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -818,7 +913,7 @@ func TestDial_RejectsMismatchedWriteRPCChainID(t *testing.T) {
 	defer write.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{read.URL}, write.URL, multicall, logr.Discard())
+	c, err := Dial(t.Context(), []string{read.URL}, write.URL, multicall)
 	if c != nil || err == nil || !strings.Contains(err.Error(), "write rpc chain id mismatch") {
 		t.Fatalf("Dial mismatch result = (%v, %v)", c, err)
 	}
@@ -869,7 +964,7 @@ func TestDial_BroadcastDoesNotFallBackAcrossReadEndpoints(t *testing.T) {
 	defer fallback.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall, logr.Discard())
+	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -921,7 +1016,7 @@ func TestMulticallUsesLatestBlockTag(t *testing.T) {
 	defer server.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{server.URL}, "", multicall, logr.Discard())
+	c, err := Dial(t.Context(), []string{server.URL}, "", multicall)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -951,7 +1046,7 @@ func TestDial_NoWriteRPCReusesPrimary(t *testing.T) {
 	defer srv.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{srv.URL}, "", multicall, logr.Discard())
+	c, err := Dial(t.Context(), []string{srv.URL}, "", multicall)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}

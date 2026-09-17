@@ -8,11 +8,13 @@ import (
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+	"go.opentelemetry.io/otel/trace"
 
 	uxexecutor "github.com/symbioticfi/vault-solver/api/bindings/uniswapx/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
@@ -26,7 +28,19 @@ type pendingUniswapFill struct {
 	order          *resolvedOrder
 	plannedSurplus *big.Int
 	result         <-chan txmanager.Result
+	// span and end keep the uniswapx.fill span open from submission until the transaction result
+	// arrives: span carries the outcome attributes, end closes it. startFill sets both, and end is
+	// idempotent, so the span is never ended twice.
+	span trace.Span
+	end  observability.EndFunc
 }
+
+// traceContext returns ctx carrying the fill span.
+func (f *pendingUniswapFill) traceContext(ctx context.Context) context.Context {
+	return trace.ContextWithSpan(ctx, f.span)
+}
+
+func (f *pendingUniswapFill) endFill(err error) { f.end(err) }
 
 type uniswapFillCompletion struct {
 	fill   *pendingUniswapFill
@@ -49,12 +63,13 @@ func (s *Solver) fillLoop(
 			ctxDone = nil
 		case completion := <-completions:
 			delete(pending, completion.fill.order.Hash)
-			s.completePendingFill(completion)
+			s.completePendingFill(ctx, completion)
 		case order, ok := <-orders:
 			if !ok {
 				orders = nil
 				continue
 			}
+			orderCtx := s.orderContext(ctx, order)
 			if shutdownErr != nil || ctx.Err() != nil {
 				if shutdownErr == nil {
 					shutdownErr = ctx.Err()
@@ -67,7 +82,7 @@ func (s *Solver) fillLoop(
 			if !s.txm.Available() {
 				s.endFillPlanning()
 				s.retry(order.Hash, time.Now(), false)
-				s.log.V(1).Info(
+				observability.Log(orderCtx).V(1).Info(
 					"order fill deferred while transaction nonce lane is paused",
 					"source", order.Source,
 					"orderHash", order.Hash.Hex(),
@@ -75,7 +90,7 @@ func (s *Solver) fillLoop(
 				)
 				continue
 			}
-			s.log.V(1).Info(
+			observability.Log(orderCtx).V(1).Info(
 				"order fill planning started",
 				"source", order.Source,
 				"orderHash", order.Hash.Hex(),
@@ -86,22 +101,26 @@ func (s *Solver) fillLoop(
 			if err != nil {
 				s.endFillPlanning()
 				s.retry(order.Hash, time.Now(), false)
-				s.log.Error(err, "order fill: read current chain time", "orderHash", order.Hash.Hex())
+				observability.Log(orderCtx).Error(
+					err, "order fill: read current chain time", "orderHash", order.Hash.Hex(),
+				)
 				continue
 			}
-			fill, err := s.startFill(ctx, routes, order, now, chainObservedAt)
+			fill, err := s.startFill(orderCtx, routes, order, now, chainObservedAt)
 			s.endFillPlanning()
 			if err != nil {
 				s.retry(order.Hash, now, errors.Is(err, errFillPreflight))
 				if errors.Is(err, errFillPreflight) {
-					s.recordOrderFillFailure(order, now)
+					s.recordOrderFillFailure(orderCtx, order, now)
 				}
 				if errors.Is(err, errOrderNotFillable) {
-					s.log.V(1).Info("order not fillable yet", "source", order.Source,
+					observability.Log(orderCtx).V(1).Info("order not fillable yet", "source", order.Source,
 						"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
 					continue
 				}
-				s.log.Error(err, "order fill preparation failed", "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
+				observability.Log(orderCtx).Error(
+					err, "order fill preparation failed", "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
+				)
 				continue
 			}
 			pending[order.Hash] = fill
@@ -123,18 +142,37 @@ func awaitUniswapFill(
 	out <- uniswapFillCompletion{fill: fill, result: result}
 }
 
+// startFill plans and submits the fill for one accepted order. The uniswapx.fill span continues the
+// order's track trace and outlives this call: it is handed to the returned pending fill and ended
+// when the transaction result arrives. Only a fill that never reaches submission ends it here.
 func (s *Solver) startFill(
 	ctx context.Context,
 	routes []liquidlane.Route,
 	order *resolvedOrder,
 	now time.Time,
 	chainObservedAt time.Time,
-) (*pendingUniswapFill, error) {
+) (fill *pendingUniswapFill, err error) {
+	ctx, end := tracer.Start(ctx, "uniswapx.fill",
+		observability.AttrOrderHash.String(order.Hash.Hex()),
+		observability.AttrQuoteID.String(order.QuoteID),
+	)
+	defer func() {
+		switch {
+		case fill != nil: // the span lives until the transaction result arrives
+		case errors.Is(err, errOrderNotFillable):
+			// An order we decline to fill is the poll's ordinary outcome, already recorded as a
+			// declined event: the loop retries it later rather than treating it as a failure.
+			end(nil)
+		default:
+			end(err)
+		}
+	}()
+
 	if order.TokenOut == (common.Address{}) {
-		return nil, errOrderNotFillable
+		return nil, declineFill(ctx, "fill_skipped", "order has no output token")
 	}
 	if order.Deadline == 0 || int64(order.Deadline) <= now.Unix() {
-		return nil, errOrderNotFillable
+		return nil, declineFill(ctx, "fill_skipped", "order deadline has passed")
 	}
 	decisionRoutes, listed, discountErr := s.fillRoutesWithDiscounts(
 		ctx,
@@ -144,7 +182,7 @@ func (s *Solver) startFill(
 		now,
 	)
 	if discountErr != nil {
-		s.log.Error(discountErr, "refresh fill discount routes", "orderHash", order.Hash.Hex())
+		observability.Log(ctx).Error(discountErr, "refresh fill discount routes", "orderHash", order.Hash.Hex())
 	}
 	snapshot, err := s.reader.fillSnapshot(
 		ctx,
@@ -162,7 +200,7 @@ func (s *Solver) startFill(
 			snapshot.Direct = append(snapshot.Direct, s.discountFillQuotes(listed, snapshot.Physical, now)...)
 		}
 	}
-	s.log.V(1).Info(
+	observability.Log(ctx).V(1).Info(
 		"order fill snapshot loaded",
 		"source", order.Source,
 		"orderHash", order.Hash.Hex(),
@@ -188,18 +226,18 @@ func (s *Solver) startFill(
 		RequireSingleRoute: s.cfg.TokenPolicy.RequiresSingleRoute(order.TokenIn), Quotes: snapshot.Direct,
 		Reservations: s.capacity.Snapshot(),
 		GasSnapshot:  snapshot.GasSnapshot, GasPrices: snapshot.GasPrices, MaxFeePerGas: pricingMaxFee, ChainTime: now,
-		Trace: s.decisionTrace(
+		Trace: s.decisionTrace(ctx,
 			"source", order.Source,
 			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
 		),
 	}
-	plan, err := s.strategy.DecideFill(ctx, fillInput)
+	plan, err := s.decideFill(ctx, fillInput)
 	if err != nil {
 		return nil, err
 	}
 	if plan == nil || len(plan.Routes) == 0 {
-		s.log.V(1).Info(
+		observability.Log(ctx).V(1).Info(
 			"order fill strategy declined",
 			"source", order.Source,
 			"orderHash", order.Hash.Hex(),
@@ -208,7 +246,7 @@ func (s *Solver) startFill(
 			"amountIn", order.AmountIn.String(),
 			"requiredAmountOut", order.AmountOut.String(),
 		)
-		return nil, errOrderNotFillable
+		return nil, declineFill(ctx, "fill_declined", "strategy returned no fill plan")
 	}
 	validatedRoutes, err := liquidstrategies.ValidateFillRoutes(liquidstrategies.FillValidation{
 		TokenIn: fillInput.TokenIn, TokenOut: fillInput.TokenOut, AmountIn: fillInput.AmountIn,
@@ -221,7 +259,7 @@ func (s *Solver) startFill(
 		return nil, errors.Errorf("strategy returned invalid fill plan: %w", err)
 	}
 	plan.Routes = validatedRoutes
-	s.logFillPlan(order, plan)
+	s.logFillPlan(ctx, order, plan)
 	reservations, ok := liquidstrategies.FillRouteReservations(plan.Routes)
 	if !ok {
 		return nil, errors.New("strategy returned invalid capacity reservations")
@@ -236,9 +274,9 @@ func (s *Solver) startFill(
 	deadline := fillDeadline(order, discountValidUntil)
 	cancelAt, ok := liquidlane.CancellationDeadline(deadline, now, chainObservedAt, time.Now())
 	if !ok {
-		return nil, errOrderNotFillable
+		return nil, declineFill(ctx, "fill_skipped", "fill execution deadline elapsed before submission")
 	}
-	s.log.V(1).Info(
+	observability.Log(ctx).V(1).Info(
 		"order fill preflight succeeded",
 		"source", order.Source,
 		"orderHash", order.Hash.Hex(),
@@ -252,19 +290,16 @@ func (s *Solver) startFill(
 		"deadlineRemaining", deadline.Sub(now),
 		"cancelAt", cancelAt.Unix(),
 	)
-	result, accepted := s.txm.SendAsync(ctx, txmanager.Request{
+	result, err := s.submitFill(ctx, txmanager.Request{
 		Solver: Name,
 		To:     order.Executor, Data: data, MaxFeePerGas: transactionMaxFee, CancelAt: cancelAt,
 		Label: "uniswapx-fill",
 	})
-	if !accepted {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return nil, errors.New("transaction submission was not accepted")
+	if err != nil {
+		return nil, err
 	}
-	s.setPendingReservations(order.Hash, reservations)
-	s.log.V(1).Info(
+	s.setPendingReservations(ctx, order.Hash, reservations)
+	observability.Log(ctx).V(1).Info(
 		"order fill submitted",
 		"source", order.Source,
 		"orderHash", order.Hash.Hex(),
@@ -276,19 +311,59 @@ func (s *Solver) startFill(
 	)
 	return &pendingUniswapFill{
 		order: order, plannedSurplus: liquidstrategies.PlannedSurplus(plan.Routes, order.AmountOut), result: result,
+		span: trace.SpanFromContext(ctx), end: end,
 	}, nil
 }
 
+// declineFill records an order this solver will not fill as an expected skip on the fill span and
+// returns the sentinel the fill loop already treats as "retry later, not a failure". Pairing the two
+// here keeps every unfillable path named on the trace and out of the error statistics.
+func declineFill(ctx context.Context, decision, reason string) error {
+	observability.Decline(ctx, decision, reason)
+	return errOrderNotFillable
+}
+
+// decideFill runs the strategy as the uniswapx.fill.plan stage.
+func (s *Solver) decideFill(
+	ctx context.Context, input strategytypes.FillInput,
+) (plan *strategytypes.FillPlan, err error) {
+	ctx, end := tracer.Start(ctx, "uniswapx.fill.plan", observability.AttrStrategy.String(s.cfg.Strategy.Name))
+	defer func() { end(err) }()
+	return s.strategy.DecideFill(ctx, input)
+}
+
+// submitFill hands the fill to the shared txmanager as the uniswapx.fill.submit stage. The result is
+// asynchronous, so the transaction attributes are recorded on completion, not here.
+func (s *Solver) submitFill(
+	ctx context.Context, request txmanager.Request,
+) (result <-chan txmanager.Result, err error) {
+	ctx, end := tracer.Start(ctx, "uniswapx.fill.submit")
+	defer func() { end(err) }()
+
+	result, accepted := s.txm.SendAsync(ctx, request)
+	if !accepted {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return nil, errors.New("transaction submission was not accepted")
+	}
+	return result, nil
+}
+
+// buildExecutorCalldata encodes the executor call as the uniswapx.fill.build stage, resolving a
+// fresh signed discount for every discount leg the plan selected.
 func (s *Solver) buildExecutorCalldata(
 	ctx context.Context,
 	order *resolvedOrder,
 	plan *strategytypes.FillPlan,
 	routes []liquidlane.Route,
 	now time.Time,
-) ([]byte, time.Time, error) {
+) (data []byte, discountValidUntil time.Time, err error) {
+	ctx, end := tracer.Start(ctx, "uniswapx.fill.build")
+	defer func() { end(err) }()
+
 	fillRoutes := make([]uxexecutor.ILiquidLaneUniswapXExecutorFillRoute, 0, len(plan.Routes))
 	discountRoutes := make([]uxexecutor.ILiquidLaneUniswapXExecutorDiscountRoute, 0, len(plan.Routes))
-	var discountValidUntil time.Time
 	for _, route := range plan.Routes {
 		if route.DiscountID == nil {
 			fillRoutes = append(fillRoutes, uxexecutor.ILiquidLaneUniswapXExecutorFillRoute{
@@ -300,7 +375,7 @@ func (s *Solver) buildExecutorCalldata(
 		if !ok {
 			return nil, time.Time{}, errors.Errorf("selected discount route %s is unavailable", route.RouteID)
 		}
-		s.log.V(1).Info(
+		observability.Log(ctx).V(1).Info(
 			"selected discount route repricing",
 			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
@@ -330,7 +405,7 @@ func (s *Solver) buildExecutorCalldata(
 			return nil, time.Time{}, errors.Errorf("resolve selected discount %s: %w", route.DiscountID.Hex(), err)
 		}
 		discountValidUntil = earlierTime(discountValidUntil, liquiddiscounts.ValidUntil(signed))
-		s.log.V(1).Info(
+		observability.Log(ctx).V(1).Info(
 			"selected discount resolved",
 			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
@@ -357,7 +432,7 @@ func (s *Solver) buildExecutorCalldata(
 			ProtocolSignature: signed.ProtocolSignature,
 		})
 	}
-	data, err := uniswapXExecutor.TryPackExecute(
+	data, err = uniswapXExecutor.TryPackExecute(
 		uxexecutor.UniswapXSignedOrder{Order: order.Encoded, Sig: order.Signature},
 		uxexecutor.ILiquidLaneUniswapXExecutorFillCall{Routes: fillRoutes, DiscountRoutes: discountRoutes},
 	)
@@ -384,7 +459,8 @@ func findRoute(routes []liquidlane.Route, id liquidlane.RouteID) (liquidlane.Rou
 	return liquidlane.Route{}, false
 }
 
-func (s *Solver) logFillPlan(order *resolvedOrder, plan *strategytypes.FillPlan) {
+func (s *Solver) logFillPlan(ctx context.Context, order *resolvedOrder, plan *strategytypes.FillPlan) {
+	log := observability.Log(ctx)
 	discountRoutes := 0
 	for index, route := range plan.Routes {
 		if route.DiscountID != nil {
@@ -407,9 +483,9 @@ func (s *Solver) logFillPlan(order *resolvedOrder, plan *strategytypes.FillPlan)
 		if route.DiscountID != nil {
 			fields = append(fields, "discountId", route.DiscountID.Hex())
 		}
-		s.log.V(1).Info("order fill route selected", fields...)
+		log.V(1).Info("order fill route selected", fields...)
 	}
-	s.log.V(1).Info(
+	log.V(1).Info(
 		"order fill plan selected",
 		"source", order.Source,
 		"orderHash", order.Hash.Hex(),
@@ -419,14 +495,30 @@ func (s *Solver) logFillPlan(order *resolvedOrder, plan *strategytypes.FillPlan)
 	)
 }
 
-func (s *Solver) completePendingFill(completion uniswapFillCompletion) {
+// completePendingFill reports the transaction outcome as the uniswapx.fill.complete stage and closes
+// the fill span the submission opened.
+func (s *Solver) completePendingFill(ctx context.Context, completion uniswapFillCompletion) {
 	order := completion.fill.order
+	// The fill span this result belongs to, plus the order's quote-linked logger.
+	fillCtx := observability.WithLogger(completion.fill.traceContext(ctx), s.orderLogger(order))
+	txmanager.RecordResult(fillCtx, completion.result)
+	ctx, end := tracer.Start(fillCtx, "uniswapx.fill.complete")
+	txmanager.RecordResult(ctx, completion.result)
+	var err error
+	// Deferred so both spans end on every path, including a panic; ending twice is a no-op.
+	defer func() {
+		end(err)
+		completion.fill.endFill(err)
+	}()
+
 	now := time.Now()
-	s.clearPendingReservations(order.Hash)
+	s.clearPendingReservations(ctx, order.Hash)
 	if completion.result.NotAdmitted {
+		// The lane refusing a fill is an expected outcome, not a failure of this fill.
+		observability.Decline(ctx, "fill_not_admitted", errorReason(completion.result.Err))
 		s.observeFillOutcome(liquidlane.FillOutcomeNotAdmitted)
 		s.retry(order.Hash, now, false)
-		s.log.V(1).Info(
+		observability.Log(ctx).V(1).Info(
 			"order fill was not admitted",
 			"source", order.Source,
 			"orderHash", order.Hash.Hex(),
@@ -437,14 +529,14 @@ func (s *Solver) completePendingFill(completion uniswapFillCompletion) {
 	}
 	outcome := completion.result.Outcome
 	if !outcome.Included() {
-		err := completion.result.Err
+		err = completion.result.Err
 		if err == nil {
 			err = errors.Errorf("unknown transaction outcome %q", outcome)
 		}
 		s.observeFillOutcome(liquidlane.FillOutcomeFailure)
 		s.retry(order.Hash, now, true)
-		s.recordOrderFillFailure(order, now)
-		s.log.Error(
+		s.recordOrderFillFailure(ctx, order, now)
+		observability.Log(ctx).Error(
 			err,
 			"order fill failed",
 			"source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
@@ -453,10 +545,12 @@ func (s *Solver) completePendingFill(completion uniswapFillCompletion) {
 		return
 	}
 	if outcome == txmanager.OutcomeConfirmed {
-		s.log.Info("order filled", "source", order.Source, "executor", order.Executor.Hex(),
+		observability.Log(ctx).Info("order filled", "source", order.Source, "executor", order.Executor.Hex(),
 			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", completion.result.Hash.Hex())
 	} else {
-		s.log.Error(completion.result.Err, "order fill included but confirmation wait failed",
+		// Included, but the confirmation wait failed: the fill stands, the wait error is the span's.
+		err = completion.result.Err
+		observability.Log(ctx).Error(err, "order fill included but confirmation wait failed",
 			"source", order.Source, "executor", order.Executor.Hex(),
 			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", completion.result.Hash.Hex())
 	}
@@ -474,10 +568,18 @@ func (s *Solver) completePendingFill(completion uniswapFillCompletion) {
 	}
 }
 
-func (s *Solver) recordOrderFillFailure(order *resolvedOrder, now time.Time) {
+// errorReason renders an error for a span event attribute, naming its absence rather than "".
+func errorReason(err error) string {
+	if err == nil {
+		return "not reported"
+	}
+	return err.Error()
+}
+
+func (s *Solver) recordOrderFillFailure(ctx context.Context, order *resolvedOrder, now time.Time) {
 	// An exclusive attempt can legitimately lose to a timely soft override. Its tracked
 	// obligation is classified from terminal API and canonical receipt state after the deadline.
 	if order.Source != orderSourceExclusiveV2 {
-		s.recordFillFailure(now)
+		s.recordFillFailure(ctx, now)
 	}
 }
