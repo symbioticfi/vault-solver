@@ -9,7 +9,6 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/go-errors/errors"
-	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
@@ -33,7 +32,6 @@ type server struct {
 	quotes       *quoteService
 	metrics      *rfqMetrics              // nil disables instrumentation (e.g. in tests)
 	links        *observability.SpanLinks // shared with executionService; nil disables quote→fill links
-	log          logr.Logger
 }
 
 /* ───────── Huma I/O types (drive both validation and the generated spec) ───────── */
@@ -76,11 +74,11 @@ func (s *server) handler() http.Handler {
 
 	// Middleware chain (outer → inner): server span, body cap, access log + request-id, metrics,
 	// panic recovery. The span is outermost so every inner layer runs under the backend's trace.
-	var h = recoverPanics(mux, s.log)
+	var h = recoverPanics(mux)
 	if s.metrics != nil {
 		h = s.metrics.instrument(h)
 	}
-	h = logRequests(h, s.log)
+	h = logRequests(h)
 	return observability.TraceHandler(
 		http.MaxBytesHandler(h, maxRequestBytes),
 		func(r *http.Request) string { return routeLabel(r.URL.Path) },

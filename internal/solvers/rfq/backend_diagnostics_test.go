@@ -18,7 +18,6 @@ import (
 	"go.uber.org/zap/zapcore"
 
 	"github.com/go-errors/errors"
-	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 )
@@ -64,7 +63,9 @@ func TestBackendRequestIDPropagationAndFailures(t *testing.T) {
 				if supplied != "" {
 					req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/quote", nil)
 					req.Header.Set(requestIDHeader, supplied)
-					logRequests(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { err = invoke(r.Context()) }), logr.Discard()).ServeHTTP(httptest.NewRecorder(), req)
+					logRequests(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+						err = invoke(r.Context())
+					})).ServeHTTP(httptest.NewRecorder(), req)
 				} else {
 					err = invoke(t.Context())
 				}

@@ -4,14 +4,17 @@ import (
 	"net/http"
 
 	"github.com/go-errors/errors"
-	"github.com/go-logr/logr"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
-func recoverQuoteServer(next http.Handler, log logr.Logger) http.Handler {
+func recoverQuoteServer(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		//nolint:contextcheck // recovery closure: it reads the request context to log, never passes one on.
 		defer func() {
 			if recovered := recover(); recovered != nil {
-				log.Error(errors.Errorf("panic: %v", recovered), "quote server panic", "path", request.URL.Path)
+				observability.Log(request.Context()).Error(errors.Errorf("panic: %v", recovered),
+					"quote server panic", "path", request.URL.Path)
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 			}
 		}()

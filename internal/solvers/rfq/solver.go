@@ -87,7 +87,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 			quotes:       quotes,
 			metrics:      metrics,
 			links:        links,
-			log:          log,
 		},
 		log:         log,
 		reportFatal: deps.ReportFatal,

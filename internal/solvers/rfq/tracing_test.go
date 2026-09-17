@@ -100,6 +100,43 @@ func TestServer_QuoteTracing(t *testing.T) {
 	}
 }
 
+// The access log is the natural join key for an inbound request, so it has to carry the server
+// span's ids. Run puts the solver logger on the quote server's BaseContext; stand in for that here.
+func TestServer_AccessLogCarriesTraceIDOnce(t *testing.T) {
+	tracetest.Install(t)
+	srv := testServer()
+	var lines []string
+	log := funcr.NewJSON(func(entry string) { lines = append(lines, entry) }, funcr.Options{})
+
+	encoded, err := json.Marshal(validQuoteBody())
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	req := httptest.NewRequestWithContext(
+		observability.WithLogger(t.Context(), log), http.MethodPost, "/quote", bytes.NewReader(encoded),
+	)
+	req.Header.Set(sharedSecretHeader, testSecret)
+	req.Header.Set("traceparent", inboundTraceparent)
+	srv.handler().ServeHTTP(httptest.NewRecorder(), req)
+
+	var sawRequestLine bool
+	for _, line := range lines {
+		if n := strings.Count(line, `"trace_id"`); n > 1 {
+			t.Fatalf("trace_id appears %d times in %s", n, line)
+		}
+		if !strings.Contains(line, `"msg":"request"`) {
+			continue
+		}
+		sawRequestLine = true
+		if !strings.Contains(line, `"trace_id":"`+inboundTraceID+`"`) {
+			t.Fatalf("access log line carries no inbound trace_id: %s", line)
+		}
+	}
+	if !sawRequestLine {
+		t.Fatalf("no access log line was written: %v", lines)
+	}
+}
+
 // panicStrategy stands in for a decider that blows up mid-request — the webhook strategy calls out
 // over HTTP, so this is reachable in production and is recovered by the innermost middleware.
 type panicStrategy struct{}

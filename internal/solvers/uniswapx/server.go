@@ -35,7 +35,7 @@ func (s *Solver) newQuoteHTTPServer(ctx context.Context) *http.Server {
 	mux.HandleFunc("GET /healthz", healthHandler)
 	mux.HandleFunc("GET /ready", s.readyHandler)
 	// The server span is outermost so panic recovery and the handler both run under Uniswap's trace.
-	handler := observability.TraceHandler(recoverQuoteServer(mux, s.log), uniswapxRoute)
+	handler := observability.TraceHandler(recoverQuoteServer(mux), uniswapxRoute)
 	return &http.Server{
 		Addr: s.cfg.QuoteServer.ListenAddress, Handler: handler,
 		BaseContext:       func(net.Listener) context.Context { return handlerCtx },
