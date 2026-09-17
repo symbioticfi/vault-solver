@@ -3,9 +3,11 @@ package observability
 import (
 	"context"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -53,6 +55,12 @@ func NewTracing(ctx context.Context, info Tracing, log logr.Logger) (func(contex
 	if !tracingEnabled(os.Getenv("OTEL_EXPORTER_ENABLED")) {
 		return noop, false
 	}
+	for _, key := range batchProcessorSizeKeys {
+		if err := validateBatchProcessorSize(key); err != nil {
+			log.Error(err, "tracing disabled: invalid "+key)
+			return noop, false
+		}
+	}
 	exporter, err := otlptracehttp.New(ctx)
 	if err != nil {
 		log.Error(err, "tracing disabled: cannot build OTLP exporter")
@@ -84,6 +92,19 @@ func NewTracing(ctx context.Context, info Tracing, log logr.Logger) (func(contex
 		log.Info("tracing export error", "err", err.Error())
 	}))
 	return provider.Shutdown, true
+}
+
+// batchProcessorSizeKeys are the OTEL_BSP_* variables the SDK's batch span processor sizes its buffers
+// from. It checks neither for a negative value, which panics while building the provider.
+var batchProcessorSizeKeys = []string{"OTEL_BSP_MAX_QUEUE_SIZE", "OTEL_BSP_MAX_EXPORT_BATCH_SIZE"}
+
+// validateBatchProcessorSize rejects a negative size in key. A value that is not an integer is left to
+// the SDK, which ignores it and uses its default.
+func validateBatchProcessorSize(key string) error {
+	if size, err := strconv.Atoi(os.Getenv(key)); err == nil && size < 0 {
+		return errors.Errorf("%s=%d: size must not be negative", key, size)
+	}
+	return nil
 }
 
 // tracingEnabled mirrors @symbiotic/backend-devkit: only these values switch tracing on.

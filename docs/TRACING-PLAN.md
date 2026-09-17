@@ -62,7 +62,10 @@ not a trace id, which is why §6 links quotes to fills solver-side.
 after the logger is built, and **never fails startup**. It always installs the composite W3C
 `TraceContext` + `Baggage` propagator. When the switch is truthy it builds an OTLP/HTTP exporter and a batching
 `TracerProvider` from the environment and registers it globally; an exporter or resource failure is
-logged at Error and tracing simply stays disabled. `otel.SetErrorHandler` logs export failures at
+logged at Error and tracing simply stays disabled. So is a negative `OTEL_BSP_MAX_QUEUE_SIZE` or
+`OTEL_BSP_MAX_EXPORT_BATCH_SIZE`, checked before the provider is built because the SDK passes both
+straight to `make` and panics on a negative size; a value that is not an integer is left to the SDK,
+which falls back to its default. `otel.SetErrorHandler` logs export failures at
 Info, so a dead collector is visible without paging. The startup line carries `tracing: true|false`.
 Shutdown flushes on a fresh 5 s context after the solvers and txmanager have drained.
 
