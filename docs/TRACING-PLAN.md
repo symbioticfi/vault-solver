@@ -24,7 +24,7 @@ inbound request, per outbound HTTP call, per RPC call and per transaction, and t
 line. Go has no auto-instrumentation, so the equivalent is wired by hand at the repo's existing seams.
 
 Out of scope, deliberately: exporting metrics or logs over OTLP (Prometheus and zap JSON logs stay as
-they are) and tracing the observability listener (probes are noise). See §10.
+they are) and tracing the observability listener, whose traffic is probes and therefore noise. See §10.
 
 ## 2. Enablement and configuration
 
@@ -97,8 +97,13 @@ defer func() { end(err) }()
   profitable, adapter paused, order already filled) as a `declined` event and leaves the status unset.
 - `observability.SetAttributes(ctx, ...)` adds an id that becomes known mid-stage, such as a
   transaction hash after `Send` returns.
-- `StartLinked` adds links to earlier spans (§6); `Tracer.Raw()` is for the rare span that must be
-  held across goroutines rather than scoped to a function (txmanager's send span).
+- `StartLinked` adds links to earlier spans (§6). `StartLinkedKey(ctx, links, key, name, attrs...)`
+  is the form every linking caller uses: it looks the key up, adds the link and `quote.trace_id`,
+  stamps `quoteTraceId` on the context's base logger and returns the linked trace id, or records a
+  `link_miss` event naming the key and returns `""`. `observability.LinkMiss(ctx, key)` emits that
+  event on its own, for the one caller (3F redeem) resolving several keys at once.
+- `Tracer.Raw()` is for the rare span that must be held across goroutines rather than scoped to a
+  function (txmanager's send span).
 
 ### 3.3 Boundaries
 
@@ -113,9 +118,12 @@ Only the RFQ and UniswapX quote servers are traced. The observability listener i
 the wire. The span is `"<peer> <METHOD>"` with a `peer.service` attribute; `peer` is a short
 integration name, never a URL. Generated OpenAPI and GraphQL clients are untouched — they receive the
 client as configuration. `otelhttp` records the request URL as `url.full` and has no option to omit
-it, so `TraceTransport` hands it a clone whose query string is cleared and restores the real URL on
-the request that goes on the wire: an operator-configured peer URL (the webhook strategy's) may carry
-a token in the query, and a span attribute is not the place for it. Wired peers: `rfq-backend`
+it, so `TraceTransport` puts a wrapper *below* it that overwrites that attribute on the client span
+with a query-free URL. `otelhttp` has already set it by the time it calls down, and the request that
+goes on the wire is never touched: an operator-configured peer URL (the webhook strategy's) may carry
+a token in the query, and a span attribute is not the place for it.
+`observability.InjectTraceHeaders(ctx, header)` writes the same W3C headers into a handshake that is
+not an `http.Client` request — the RPC fallback attempts and the LI.FI and RedStone websocket dials. Wired peers: `rfq-backend`
 (which also covers the internal discounts calls
 made with the same client), `rfq-discounts`, `3f-api`, `lifi-order-server`, `uniswapx-api`,
 `morpho-graphql`, `webhook`. A webhook strategy call is therefore a child span of the quote or fill
@@ -202,7 +210,11 @@ and passes that context down.
 
 What is stored must always be the **base, non-trace logger**: `Log` stamps at retrieval, so storing a
 stamped one would emit two `trace_id` pairs (`logr` appends key/values and cannot dedupe) and would
-pin the outer span's `span_id` on everything below. `observability.TraceLogger(ctx, log)` remains for
+pin the outer span's `span_id` on everything below. The stamp itself is **memoised per span**: a span
+start puts an empty slot on the context that the first `Log` call under that span fills, so a hot
+span's later lines reuse one logger instead of rebuilding `WithValues` each time, and a span whose
+lines are all suppressed never builds one at all. `WithLogger` installs a fresh slot, so a logger
+narrowed after the span started wins. `observability.TraceLogger(ctx, log)` remains for
 the few places that hold a logger no context can carry, such as the RPC fallback transport. The
 Sentry sink promotes `trace_id` to an event tag next to `solver`, `logger` and `label`.
 
@@ -236,12 +248,11 @@ need to know the solver's prefix. Log lines keep their existing camelCase keys (
 | `peer.service` | outbound HTTP client spans | the wiring's peer name |
 | `reason_code` | any span ended with a classified error | the error's `ReasonCode()` |
 
-`observability.AttrOfferID` and `observability.AttrVault` are declared alongside these for solvers that
-grow an offer- or vault-scoped span; nothing sets them today.
-
 `tx.hash` is set only once a transaction exists. A submission the manager rejected before
 broadcasting carries the zero hash in its `Result`, and every site records `tx.outcome` alone rather
-than an attribute that looks like a transaction and matches nothing.
+than an attribute that looks like a transaction and matches nothing. That rule lives in one place:
+`txmanager.RecordResult(ctx, res)` stamps both attributes on the span in `ctx`, and the manager's own
+send span ends through the same builder, so the solvers cannot drift from it.
 
 Identifiers propagate downward by context: a stage span under a fill span does not repeat `order.id`,
 because the trace view shows it on the parent. Nothing secret is ever an attribute — no API keys, no
@@ -371,10 +382,11 @@ under its loop span with a fresh trace id exactly as if linking did not exist. T
 process-local and in-memory by design: never persisted, never consulted on a path that can fail, and
 `Lookup` cannot return an error. Nothing about a fill's behaviour depends on it.
 
-`observability.NewSpanLinks(maxEntries)` is the shared mechanism — bounded, TTL per entry,
-mutex-guarded, 1024 entries by default (a span context is 40 bytes). `Remember(ctx, key, ttl)` stores
-the current span context; empty keys and contexts without a valid span context are ignored, so callers
-never check tracing state first. `Lookup(key)` returns `(trace.Link, bool)` and never deletes a live
+`observability.NewSpanLinks()` is the shared mechanism — bounded, TTL per entry, mutex-guarded, 1024
+entries (a span context is 40 bytes). `Remember(ctx, key, ttl)` stores the current span context;
+empty keys and contexts without a valid span context are ignored, so callers never check tracing
+state first. A **nil** `*SpanLinks` is a working map that remembers nothing and misses every lookup,
+so a solver built without one needs no guard at any call site. `Lookup(key)` returns `(trace.Link, bool)` and never deletes a live
 entry, so the same quote can be linked from a retry or a later status update. Keys are lowercased and
 trimmed; the oldest entry is evicted past the cap.
 
@@ -417,7 +429,16 @@ Tracing must never slow down or break a quote, a fill or a transaction.
 - **Disabled means near-zero cost.** The global provider stays the no-op one: `Start` returns a
   non-recording span, `end` is a no-op, the `otelhttp` wrappers create non-recording spans, and the
   only residual work is the W3C header parse on inbound requests and `Log(ctx)` reading the context's
-  logger, which adds two fields only when a remote context is present.
+  logger, which adds two fields only when a remote context is present. Measured on the
+  `internal/observability` benchmarks (`-benchtime 2000x`, amd64):
+
+  | | before | after |
+  |---|---|---|
+  | `Start`+`end`, tracing disabled | 140 ns, 152 B, 5 allocs | 108 ns, 96 B, 3 allocs |
+  | `Log(ctx)` under a span | 170 ns, 144 B, 5 allocs | 22 ns, 0 B, 0 allocs |
+
+  The span-start options are precomputed per `Tracer` and appended only when there are attributes or
+  links; `Log(ctx)` is free after the first line under a span because the stamp is memoised.
 - **Enabled cost is bounded and off-path.** Span start and end cost a few microseconds — the
   `internal/observability` benchmark measures the no-op and the recording path, sequentially and
   under `RunParallel`, and the cached tracer keeps concurrent starts off the global provider's
@@ -434,8 +455,10 @@ Tracing must never slow down or break a quote, a fill or a transaction.
 ## 8. Tests
 
 `internal/observability/tracetest` installs an in-memory `SpanRecorder` for a test, invalidates the
-cached tracers, restores the previous provider afterwards, and exports the span assertions every
-suite shares (`Ended`, `Names`, `Attr`, `RequireChildOf`, `HasEvent`, `RequireNoErrorSpans`). Because
+cached tracers, restores the previous provider afterwards, and exports the span and log assertions every
+suite shares (`Ended`, `AllEnded`, `Names`, `RequireSpans`, `Attr`, `RequireAttr`, `RequireNoAttr`,
+`RequireChildOf`, `HasEvent`, `EventAttr`, `RequireNoErrorSpans`, `CaptureLogs`,
+`RequireTraceIDsOnce`). Because
 it imports `observability`, that package's own recorder-driven tests live in `package
 observability_test`. Covered: the enablement table over
 `OTEL_EXPORTER_ENABLED` values, the exported resource (service identity plus `telemetry.sdk.*`),
@@ -447,9 +470,9 @@ tracer's error / cancellation / `reason_code` behaviour and its re-resolution ac
 `SpanLinks` remember, lookup, TTL expiry and
 eviction, one RPC span per logical request with an event per attempt, the txmanager span tree and its
 `trace_id`-carrying lifecycle logs, and per solver the expected span tree by name with the identifier
-attributes and the error-versus-decline distinction. A benchmark in `internal/observability` records
-`Start`/`end` cost with and without a provider, sequentially and under `RunParallel`, so a regression
-is visible in review. Existing suites
+attributes and the error-versus-decline distinction. Benchmarks in `internal/observability` record `Start`/`end` cost with and without a provider,
+sequentially and under `RunParallel`, plus the disabled-path allocation count and `Log(ctx)` under a
+span, so a regression is visible in review. Existing suites
 run against the no-op provider and prove there is no behaviour change when tracing is off.
 
 ## 9. Where the code lives
@@ -457,20 +480,19 @@ run against the no-op provider and prove there is no behaviour change when traci
 | File | Responsibility |
 |---|---|
 | `internal/observability/tracing.go` | `NewTracing` startup/shutdown, the enablement switch, `TraceLogger` |
-| `internal/observability/ctxlog.go` | `WithLogger`, `Log`, `SetDefaultLogger` — the logger carried in the context |
-| `internal/observability/tracer.go` | `Tracer`, `Start`/`StartLinked`/`EndFunc`, `Decline`, `SetAttributes`, `InvalidateTracers`, the `Attr*` constants |
-| `internal/observability/httptrace.go` | `TraceHandler`, `TraceTransport` |
+| `internal/observability/ctxlog.go` | `WithLogger`, `Log`, `SetDefaultLogger` — the logger carried in the context and its memoised per-span stamp |
+| `internal/observability/tracer.go` | `Tracer`, `Start`/`StartLinked`/`StartLinkedKey`/`EndFunc`, `Decline`, `LinkMiss`, `SetAttributes`, `InvalidateTracers`, the `Attr*` constants |
+| `internal/observability/httptrace.go` | `TraceHandler`, `TraceTransport`, `InjectTraceHeaders` |
 | `internal/observability/spanlinks.go` | `SpanLinks` |
 | `internal/observability/tracetest` | test provider installation and the shared span assertions |
-| `internal/chain/trace.go` | JSON-RPC spans, attempt events, header injection, the connect span |
+| `internal/chain/trace.go` | JSON-RPC spans, attempt events, the connect span |
 | `internal/chain/calls.go` | per-call spans for websocket/IPC endpoints |
-| `internal/txmanager/trace.go` | the send span's start and terminal end |
+| `internal/txmanager/trace.go` | the send span's start and terminal end, and `RecordResult` |
 | `internal/solvers/<name>/tracing.go` | each solver's tracer, link keys, TTLs and span helpers |
 
 ## 10. TODO
 
 - [ ] backend returns quote trace id on order list (would replace the RFQ in-memory link)
-- [ ] observability listener untraced by design
 - [ ] omit `rpc.jsonrpc.request_id` when empty (batches) instead of setting an empty attribute
 - [ ] set `tx.outcome=not_admitted` on declined txmanager sends, and skip an empty `solver` attribute
 - [ ] cap or aggregate the per-offer `declined` events on `3f.offers.reconcile`
@@ -478,4 +500,4 @@ run against the no-op provider and prove there is no behaviour change when traci
 - [ ] a no-op `txmanager.replace` tick emits an empty span, and replace spans carry no `tx.hash`
 - [ ] the LI.FI quote-loop tick (`runConnectedQuoteLoop`) is unspanned, so `shouldRefreshQuotes` lines carry no trace ids
 - [ ] 3F `refreshTargetsAndHydrate` emits a root `3f.offers.reconcile`, and the health-tick reconcile is untraced
-- [ ] no unit tests for `NewTracer("")`, `NewSpanLinks(0)`, `Raw()`, or `TraceTransport` with a non-nil base
+- [ ] no unit tests for `NewTracer("")`, `NewSpanLinks()`, `Raw()`, or `TraceTransport` with a non-nil base

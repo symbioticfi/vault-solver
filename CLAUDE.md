@@ -81,11 +81,12 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
   Each solver also uses `deps.Log.WithName(Name)`. The Sentry sink tags events with
   `solver`, `logger` and `label`, puts the logged error in the title, and groups on (solver, message),
   so `log.Error` lines only for conditions that should page; expected skips go to `V(1)`.
-  **Log through `observability.Log(ctx)` wherever a context is in hand** — it returns the context's
-  logger stamped with the current span's `trace_id`/`span_id`. To narrow the logger for a scope,
-  store it with `observability.WithLogger(ctx, log.WithValues(...))` and pass that context down.
-  Never store an already trace-stamped logger: `Log` stamps at retrieval, so storing a stamped one
-  duplicates the keys and pins the wrong `span_id`.
+  **Log through `observability.Log(ctx)` wherever a context is in hand** — the context stores the
+  *base* logger and `Log` returns it stamped with the current span's `trace_id`/`span_id`, memoised
+  per span. To narrow the logger for a scope, store it with
+  `observability.WithLogger(ctx, log.WithValues(...))` and pass that context down. Never store an
+  already trace-stamped logger: `Log` stamps at retrieval, so storing a stamped one duplicates the
+  keys and pins the wrong `span_id`.
 - **Tracing:** spans are started at I/O boundaries, loop ticks, and pipeline stages through
   `observability.NewTracer`. End every span from a `defer` over a named error return, and record
   expected skips with `observability.Decline` plus `end(nil)` rather than an error status. Span names,

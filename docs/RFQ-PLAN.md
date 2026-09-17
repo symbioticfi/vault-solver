@@ -117,16 +117,12 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   via the generated bindings, never hand-rolled.
 - **Signer** — the framework's single EOA is the RFQ **caller** (must be in the Executor's `callers`
   allowlist, added by the owner via `setCallers`).
-- **Tracing follows the two pipelines.** An inbound quote continues the backend's trace as a `POST /quote`
-  server span over `rfq.quote` and its stages `rfq.quote.snapshot` (chain read) and `rfq.quote.decide`
-  (strategy). Each poll cycle roots its own trace at `rfq.execution.sync` over `rfq.execution.poll` and one
-  `rfq.order` per order, whose stages are `rfq.order.resolve`, `rfq.order.plan` (strategy), `rfq.order.build`,
-  `rfq.order.submit` and `rfq.order.report`. Because the two pipelines are minutes apart and in separate
-  traces, the server remembers each served quote's span context by `quoteId` in a shared, in-memory
-  `observability.SpanLinks` (bounded, TTL'd) and `handleOrder` looks it up by the polled order's `quoteId`:
-  a hit adds a span link plus a `quote.trace_id` attribute and a `quoteTraceId` log key, a miss adds a
-  `link_miss` event. Linking is best effort — a restart or eviction costs the link and nothing else.
-  Spans, attributes, and quote-to-fill links for this solver are specified in
+- **Tracing follows the two pipelines.** An inbound quote continues the backend's trace; each poll cycle
+  roots its own. The two are minutes apart and in separate traces, so the quote server remembers each
+  served quote's span context by `quoteId` and `handleOrder` links the order span back to it. The
+  backend's order list returns a fresh per-response `requestId` and no trace id, so an in-memory map is
+  the only join available; if it ever returns the quote's trace id, that replaces the lookup and nothing
+  else changes. Spans, attributes, and quote-to-fill links for this solver are specified in
   [TRACING-PLAN](TRACING-PLAN.md) §5–§6.
 
 ### Component port map (TS → Go)

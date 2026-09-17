@@ -157,20 +157,14 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` �
   halts bidding after N failed liquidations in a rolling window, and immediately on a `blacklisted`
   frame. Exact names and labels are in the
   [README metrics table](../README.md#metrics).
-- **Tracing.** Every dial of the feed happens under an `oev.feed.connect` span whose `traceparent` rides
-  on that dial's handshake headers. Each auction then roots its own trace: `oev.auction` (carrying
-  `auction.id`) holds `oev.auction.bid` around the bid decision — tagged `strategy.name` — which in turn
-  holds the default strategy's stages `oev.auction.candidates`, `oev.auction.size`, `oev.auction.bundle`
-  and `oev.auction.economics`, plus `oev.auction.send` around the outbound solve. Expected outcomes (too
-  late, any strategy skip, a solve dropped by the full send queue, a blacklist halt) are `declined`
-  events rather than span errors; only a misconfigured or failing strategy, a rejected execution envelope
-  and a signing failure are errors. Each monitor tick roots `oev.monitor`, so the Morpho GraphQL calls
-  nest under the refresh that made them. Because a result arrives minutes later as its own frame, a sent
-  bid's auction span is remembered under the auction id for `reservationTTL` (5 min, the same window the
-  reservation lives for); `oev.auction.result`, `oev.liquidation.result` and `oev.blacklisted` link back
-  to it and stamp `quoteTraceId` on their log lines. A miss is inert: the result span simply records a
-  `link_miss` event and nothing about the solver's behaviour changes. The auction id is logged as
-  `auctionId` on both the bid and the result paths. Spans, attributes, and quote-to-fill links for this
+- **Tracing.** Each auction roots its own trace, with the bid decision and the default strategy's stages
+  beneath it. Expected outcomes (too late, any strategy skip, a solve dropped by the full send queue, a
+  blacklist halt) are `declined` events rather than span errors; only a misconfigured or failing
+  strategy, a rejected execution envelope and a signing failure are errors. Because a result arrives
+  minutes later as its own frame, a sent bid's auction span is remembered under the auction id for
+  `reservationTTL` — the same window the reservation lives for, so a result can never outlive the link
+  it needs — and the three result spans link back to it. The auction id is logged as `auctionId` on both
+  the bid and the result paths. Spans, attributes, and quote-to-fill links for this
   solver are specified in [TRACING-PLAN](TRACING-PLAN.md) §5–§6.
 - **Bindings.** The RedStone `Executor`, `IMorpho` (subset), `IAdaptiveCurveIrm`, `IOracle`, and our
   `SymbioticOevSolver`, and `AggregatorV3` feeds are **abigen --v2** bindings under `api/bindings/oev/*`
