@@ -393,7 +393,7 @@ and `3f.offer.decide` are **siblings** of the per-auction spans rather than chil
 | `oev.auction.bid` | `buildBidWithContext` | strategy stage |
 | `oev.auction.candidates` / `.size` / `.bundle` / `.economics` | `strategies/default` | in that order: economics prices the bundle the previous stage built |
 | `oev.auction.send` | `ws.Send` | a solve dropped by the full send queue is a `declined` event |
-| `oev.auction.result`, `oev.liquidation.result`, `oev.blacklisted` | result handlers | `auction.id`, link back to the auction span (§6); the result span carries `oev.won` |
+| `oev.auction.result`, `oev.liquidation.result`, `oev.blacklisted` | result handlers | `auction.id`, link back to the auction span (§6); the result span carries `oev.won`, the liquidation result span `oev.liquidation.success`, and a failed liquidation of ours ends that span with an error |
 | `oev.monitor` | monitor tick | root; Morpho GraphQL and chain reads inside |
 
 Ingress outcomes decided before `handleAuction` runs (a frame that never reaches the handler) have no

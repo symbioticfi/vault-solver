@@ -114,8 +114,9 @@ func (s *Solver) handleLiquidationResult(ctx context.Context, raw []byte) {
 		return
 	}
 	r.ID = normalizeAuctionID(r.ID)
-	ctx, end := s.startResultSpan(ctx, "oev.liquidation.result", r.ID)
-	defer end(nil)
+	ctx, end := s.startResultSpan(ctx, "oev.liquidation.result", r.ID, attrLiquidationSuccess.Bool(r.Data.Success))
+	var failure error
+	defer func() { end(failure) }()
 	if txHash := strings.TrimSpace(r.Data.TxHash); txHash != "" {
 		observability.SetAttributes(ctx, observability.AttrTxHash.String(txHash))
 	}
@@ -140,6 +141,7 @@ func (s *Solver) handleLiquidationResult(ctx context.Context, raw []byte) {
 		s.metrics.settlement(r.Data.Success, transition.bidWei)
 	}
 	if !r.Data.Success {
+		failure = liquidationFailure(r.Data.Error)
 		now := time.Now()
 		identity := liquidationResultIdentity(r)
 		recorded := true
@@ -152,6 +154,14 @@ func (s *Solver) handleLiquidationResult(ctx context.Context, raw []byte) {
 			s.metrics.breakerFailure()
 		}
 	}
+}
+
+// liquidationFailure is the span error for a failed liquidation of ours.
+func liquidationFailure(reason string) error {
+	if reason == "" {
+		return errors.New("liquidation failed")
+	}
+	return errors.Errorf("liquidation failed: %s", reason)
 }
 
 func liquidationResultIdentity(result LiquidationResult) string {

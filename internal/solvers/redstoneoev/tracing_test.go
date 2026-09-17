@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -391,5 +392,43 @@ func TestAuctionPathUnchangedWithTracingDisabled(t *testing.T) {
 	}))
 	if pending := s.inFlightSnapshot().pending; len(pending) != 1 || !pending[0].Won {
 		t.Fatalf("won reservation = %v, want the auction marked won", pending)
+	}
+}
+
+// A liquidation of ours that failed is a failure the metrics and breaker count, so its result span
+// records it; another liquidator's failure is not ours to report.
+func TestLiquidationResultSpanReportsOurFailure(t *testing.T) {
+	const other = "0x0000000000000000000000000000000000000001"
+	cases := []struct {
+		name, liquidator, errText string
+		success, wantError        bool
+	}{
+		{name: "ours failed", liquidator: seedCallback.Hex(), errText: "execution reverted", wantError: true},
+		{name: "ours failed without a message", liquidator: seedCallback.Hex(), wantError: true},
+		{name: "ours succeeded", liquidator: seedCallback.Hex(), success: true},
+		{name: "not ours failed", liquidator: other, errText: "execution reverted"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := tracetest.Install(t)
+			s, _ := seededSolver(t)
+
+			s.handleMessage(t.Context(), marshal(LiquidationResult{
+				Op: "liquidation-result", ID: "auction",
+				Data: LiquidationResultData{Success: tc.success, Liquidator: tc.liquidator, Error: tc.errText},
+			}))
+
+			span := tracetest.Ended(t, rec, "oev.liquidation.result")
+			tracetest.RequireAttr(t, span, "oev.liquidation.success", strconv.FormatBool(tc.success))
+			if got := span.Status().Code == codes.Error; got != tc.wantError {
+				t.Fatalf("error status = %v, want %v (%v)", got, tc.wantError, span.Status())
+			}
+			if got := tracetest.HasEvent(span, "exception"); got != tc.wantError {
+				t.Fatalf("exception recorded = %v, want %v", got, tc.wantError)
+			}
+			if tc.errText != "" && tc.wantError && !strings.Contains(span.Status().Description, tc.errText) {
+				t.Fatalf("status %q does not name the failure %q", span.Status().Description, tc.errText)
+			}
+		})
 	}
 }

@@ -14,8 +14,12 @@ var tracer = observability.NewTracer(
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev", Name,
 )
 
-// attrWon records whether the auction's winning liquidator was our callback.
-const attrWon = attribute.Key("oev.won")
+// Result span attributes: whether the auction's winning liquidator was our callback, and whether a
+// liquidation succeeded.
+const (
+	attrWon                = attribute.Key("oev.won")
+	attrLiquidationSuccess = attribute.Key("oev.liquidation.success")
+)
 
 // strategyLabel is the configured strategy's registry key, for the bid span's strategy.name.
 func (s *Solver) strategyLabel() string {
