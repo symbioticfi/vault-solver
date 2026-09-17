@@ -100,7 +100,15 @@ defer func() { end(err) }()
   anything else that installs a provider must call.
 - `end(err)` sets status `Error`, records the error with its go-errors stack, and adds `reason_code`
   when the error exposes one. A `context.Canceled` error ends the span with status unset and a
-  `cancelled` event, the same rule the metrics use for skipped outcomes. `end` is idempotent.
+  `cancelled` event, the same rule the metrics use for skipped outcomes. `end` is idempotent, because
+  the SDK ignores a second `End` and gates every record on the span still recording. An error may
+  bound the status text by exposing `SpanStatus() string`, which is how a chain RPC failure reports
+  `rpc_error` rather than a node's own message.
+- `StartKind(ctx, name, kind, attrs...)` is `Start` with an explicit span kind, for the client spans
+  the chain client reports; it goes through the same end policy. `observability.EndSpan(span, err)`
+  applies that policy to a raw `trace.Span`, for the one component that holds one across goroutines.
+- `observability.WithQuoteTrace(log, traceID)` stamps the `quoteTraceId` log key (§6); it has one
+  definition so a rename cannot leave a solver behind.
 - `observability.Decline(ctx, decision, reason)` records an expected non-error outcome (no quote, not
   profitable, adapter paused, order already filled) as a `declined` event and leaves the status unset.
 - `observability.SetAttributes(ctx, ...)` adds an id that becomes known mid-stage, such as a
@@ -222,8 +230,9 @@ pin the outer span's `span_id` on everything below. The stamp itself is **memois
 start puts an empty slot on the context that the first `Log` call under that span fills, so a hot
 span's later lines reuse one logger instead of rebuilding `WithValues` each time, and a span whose
 lines are all suppressed never builds one at all. `WithLogger` installs a fresh slot, so a logger
-narrowed after the span started wins. `observability.TraceLogger(ctx, log)` remains for
-the few places that hold a logger no context can carry, such as the RPC fallback transport. The
+narrowed after the span started wins. `Log(ctx)` is the only way to get a stamped logger; a component
+that used to stamp a stored logger of its own (the RPC fallback transport) logs through the request
+context instead, so its lines also carry the caller's solver. The
 Sentry sink promotes `trace_id` to an event tag next to `solver`, `logger` and `label`.
 
 ## 4. Span naming and attribute conventions
@@ -400,7 +409,7 @@ trimmed; the oldest entry is evicted past the cap.
 
 | Solver | Remembered (key → TTL) | Looked up by |
 |---|---|---|
-| **rfq** | `handleQuote` after a quote is returned: key `quoteId`, flat 10 minutes. The quote response carries no expiry, so the fixed window stands in for the backend's award latency. | `handleOrder`, by the polled order's `quoteId`. The link and `quote.trace_id` go on `rfq.order`; `quoteTraceId` on the order logger. |
+| **rfq** | `handleQuote` after a quote is returned: key `quoteId`, flat 10 minutes. The quote response carries no expiry, so the fixed window stands in for the backend's award latency. The link target is deliberately the **inbound server span** (`POST /quote`), not the `rfq.quote` stage that has already ended by then: the server span is the node an operator jumps to from the fill, and it is the one the backend's own trace continues into. | `handleOrder`, by the polled order's `quoteId`. The link and `quote.trace_id` go on `rfq.order`; `quoteTraceId` on the order logger. |
 | **uniswapx** | `quoteHandler` after a quote is returned: key `quoteId`, 10 minutes. Indicative and hard quotes share a request shape, so both are remembered and the later wins. | `trackOrder`, by the resolved order's `quoteId`. The link goes on `uniswapx.order.track`; because `uniswapx.fill` continues that trace, the link is visible from the fill. |
 | **lifi** | Not linked. | — |
 | **3f** | `3f.offer.submit` after `createOffer` succeeds, under **two** keys: `req:<request address>` and `auction:<adapter>:<auction id>`. Both expire at the offer's expiration plus an hour. | `redeemReady` resolves `req:` keys for the requests being finalized — `3f.redeem.submit` gets one link per match plus `offer.linked_count`. `reconcileOffers` resolves the `auction:` key to stamp `quoteTraceId` on its status-change log lines. |
@@ -475,7 +484,7 @@ suite shares (`Ended`, `AllEnded`, `Names`, `RequireSpans`, `Attr`, `RequireAttr
 it imports `observability`, that package's own recorder-driven tests live in `package
 observability_test`. Covered: the enablement table over
 `OTEL_EXPORTER_ENABLED` values, the exported resource (service identity plus `telemetry.sdk.*`),
-`TraceLogger` and `Log(ctx)` with and without a span, the context logger's nested-span stamping and
+`Log(ctx)` with and without a span, the context logger's nested-span stamping and
 its fallback to the default logger, `TraceHandler` extracting a
 `traceparent` and filtering probe routes, `TraceTransport` injecting a matching `traceparent` and
 keeping the query string out of `url.full` while the wire request keeps it, the
@@ -492,7 +501,7 @@ run against the no-op provider and prove there is no behaviour change when traci
 
 | File | Responsibility |
 |---|---|
-| `internal/observability/tracing.go` | `NewTracing` startup/shutdown, the enablement switch, `TraceLogger` |
+| `internal/observability/tracing.go` | `NewTracing` startup/shutdown, the enablement switch and the flag every entry point reads |
 | `internal/observability/ctxlog.go` | `WithLogger`, `Log`, `SetDefaultLogger` — the logger carried in the context and its memoised per-span stamp |
 | `internal/observability/tracer.go` | `Tracer`, `Start`/`StartLinked`/`StartLinkedKey`/`EndFunc`, `Decline`, `LinkMiss`, `SetAttributes`, `InvalidateTracers`, the `Attr*` constants |
 | `internal/observability/httptrace.go` | `TraceHandler`, `TraceTransport`, `InjectTraceHeaders` |
@@ -514,3 +523,8 @@ run against the no-op provider and prove there is no behaviour change when traci
 - [ ] the LI.FI quote-loop tick (`runConnectedQuoteLoop`) is unspanned, so `shouldRefreshQuotes` lines carry no trace ids
 - [ ] 3F `refreshTargetsAndHydrate` emits a root `3f.offers.reconcile`, and the health-tick reconcile is untraced
 - [ ] no unit tests for `NewTracer("")`, `NewSpanLinks()`, `Raw()`, or `TraceTransport` with a non-nil base
+- [ ] ws/ipc calls do not feed `rpcMetrics.observeAttempt`; only their spans exist, so the two transports classify the same answers in one vocabulary but count only one of them
+- [ ] a receipt read of a still-pending transaction opens a full RPC span per poll, so one long-pending send exports hundreds of near-identical spans
+- [ ] `orderTrace.context` (LI.FI) re-attaches the processing span without a stamp slot, so lines under it rebuild the stamped logger each time
+- [ ] `Log(ctx)` walks the context three times; with tracing off the stamp-slot lookup always walks to the root
+- [ ] `recoverOrders` re-enqueues a recovery retry that the inbox can still coalesce away as a queued replay, if the worker marks it before the inbox releases the delivered key
