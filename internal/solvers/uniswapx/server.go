@@ -228,7 +228,7 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 		Reservations:       s.capacity.Snapshot(),
 		GasSnapshot:        state.gasSnapshot, GasPrices: state.gasPrices,
 		MaxFeePerGas: state.maxFeePerGas, ChainTime: state.chainTime, QuoteExpiresAt: state.expiresAt,
-		Trace: s.decisionTrace(
+		Trace: s.decisionTrace(ctx,
 			"requestId", request.RequestID,
 			"quoteId", request.QuoteID,
 			"quoteType", request.Type,

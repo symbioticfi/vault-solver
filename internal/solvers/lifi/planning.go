@@ -179,7 +179,7 @@ func (s *Solver) processOrderUsingReservations(
 		}
 		unreservedInput := prepared.input
 		unreservedInput.Reservations = nil
-		unreservedInput.Trace = s.decisionTrace(
+		unreservedInput.Trace = s.decisionTrace(ctx,
 			"orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(),
 			"quoteId", order.QuoteID,
@@ -444,7 +444,7 @@ func (s *Solver) prepareFill(
 			GasPrices:          state.snapshots.GasPrices,
 			MaxFeePerGas:       pricingMaxFeePerGas,
 			ChainTime:          state.chainTime,
-			Trace: s.decisionTrace(
+			Trace: s.decisionTrace(ctx,
 				"orderId", order.OrderID,
 				"onChainOrderId", orderID.Hex(),
 				"quoteId", order.QuoteID,

@@ -161,7 +161,7 @@ func TestQuoteDeclinesWhenStateChangesDuringStrategy(t *testing.T) {
 		{
 			name: "reservation",
 			invalidate: func(s *Solver) {
-				s.setPendingReservations(common.HexToHash("0x1"), liquidlane.CapacityReservations{
+				s.setPendingReservations(t.Context(), common.HexToHash("0x1"), liquidlane.CapacityReservations{
 					"capacity-1": big.NewInt(1),
 				})
 			},

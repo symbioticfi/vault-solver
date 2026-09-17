@@ -61,7 +61,7 @@ func (s *Solver) listedOfferLogger(log logr.Logger, adapter common.Address, auct
 	if !ok {
 		return log
 	}
-	return log.WithValues("quoteTraceId", link.SpanContext.TraceID().String())
+	return observability.WithQuoteTrace(log, link.SpanContext.TraceID().String())
 }
 
 // strategyName is the configured strategy's registry key, for the decide stage's strategy.name.

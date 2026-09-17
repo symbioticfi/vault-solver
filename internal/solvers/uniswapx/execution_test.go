@@ -21,6 +21,8 @@ import (
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
+
+	"go.opentelemetry.io/otel/trace/noop"
 )
 
 type executionTestReader struct {
@@ -698,10 +700,11 @@ func TestCompletePendingFillClassifiesNotAdmittedWithoutFailure(t *testing.T) {
 	fixture.solver.cfg.Breaker = BreakerConfig{MaxFailures: 1, Window: time.Minute}
 	fixture.solver.inFlight[fixture.order.Hash] = true
 	fixture.solver.setPendingReservations(
+		t.Context(),
 		fixture.order.Hash,
 		liquidlane.CapacityReservations{fixture.route.CapacityID: big.NewInt(100)},
 	)
-	pending := &pendingUniswapFill{order: fixture.order}
+	pending := testPendingFill(t, fixture.order)
 
 	fixture.solver.completePendingFill(t.Context(), uniswapFillCompletion{
 		fill: pending,
@@ -733,12 +736,13 @@ func TestCompletePendingFillRecordsFailureOutcome(t *testing.T) {
 	fixture.solver.metrics = metrics
 	fixture.solver.inFlight[fixture.order.Hash] = true
 	fixture.solver.setPendingReservations(
+		t.Context(),
 		fixture.order.Hash,
 		liquidlane.CapacityReservations{fixture.route.CapacityID: big.NewInt(100)},
 	)
 
 	fixture.solver.completePendingFill(t.Context(), uniswapFillCompletion{
-		fill: &pendingUniswapFill{order: fixture.order},
+		fill: testPendingFill(t, fixture.order),
 		result: txmanager.Result{
 			Outcome: txmanager.OutcomeReverted,
 			Err:     errors.New("fill reverted"),
@@ -770,13 +774,13 @@ func TestExclusiveExecutionFailureWaitsForTerminalReconciliation(t *testing.T) {
 		log: logr.Discard(),
 	}
 
-	solver.recordOrderFillFailure(&resolvedOrder{Source: orderSourceExclusiveV2}, now)
+	solver.recordOrderFillFailure(t.Context(), &resolvedOrder{Source: orderSourceExclusiveV2}, now)
 
 	if len(solver.failureTimes) != 0 || solver.localBlockUntil.Load() != 0 {
 		t.Fatal("exclusive execution failure opened the ordinary local breaker")
 	}
 
-	solver.recordOrderFillFailure(&resolvedOrder{Source: orderSourcePublicV2}, now)
+	solver.recordOrderFillFailure(t.Context(), &resolvedOrder{Source: orderSourcePublicV2}, now)
 
 	if solver.localBlockUntil.Load() == 0 {
 		t.Fatal("public execution failure did not open the ordinary local breaker")
@@ -795,7 +799,7 @@ func TestIncludedUnconfirmedFillCompletesWithoutRetry(t *testing.T) {
 	}
 
 	solver.completePendingFill(t.Context(), uniswapFillCompletion{
-		fill: &pendingUniswapFill{order: order},
+		fill: testPendingFill(t, order),
 		result: txmanager.Result{
 			Outcome: txmanager.OutcomeIncludedUnconfirmed,
 			Err:     errors.New("confirmation wait failed"),
@@ -811,4 +815,12 @@ func TestIncludedUnconfirmedFillCompletesWithoutRetry(t *testing.T) {
 	if solver.localBlockUntil.Load() != 0 {
 		t.Fatal("included fill opened the local breaker")
 	}
+}
+
+// testPendingFill builds the fill value startFill would hand the completion path, with the
+// non-recording span and end a fill always carries.
+func testPendingFill(t *testing.T, order *resolvedOrder) *pendingUniswapFill {
+	t.Helper()
+	_, span := noop.NewTracerProvider().Tracer("test").Start(t.Context(), "uniswapx.fill")
+	return &pendingUniswapFill{order: order, span: span, end: func(error) { span.End() }}
 }

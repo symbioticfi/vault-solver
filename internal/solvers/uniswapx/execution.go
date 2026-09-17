@@ -29,25 +29,18 @@ type pendingUniswapFill struct {
 	plannedSurplus *big.Int
 	result         <-chan txmanager.Result
 	// span and end keep the uniswapx.fill span open from submission until the transaction result
-	// arrives: span carries the outcome attributes, end closes it. Both are nil when the fill was
-	// built outside startFill; end is idempotent, so the span is never ended twice.
+	// arrives: span carries the outcome attributes, end closes it. startFill sets both, and end is
+	// idempotent, so the span is never ended twice.
 	span trace.Span
 	end  observability.EndFunc
 }
 
-// traceContext returns ctx carrying the fill span, or ctx unchanged when there is none.
+// traceContext returns ctx carrying the fill span.
 func (f *pendingUniswapFill) traceContext(ctx context.Context) context.Context {
-	if f.span == nil {
-		return ctx
-	}
 	return trace.ContextWithSpan(ctx, f.span)
 }
 
-func (f *pendingUniswapFill) endFill(err error) {
-	if f.end != nil {
-		f.end(err)
-	}
-}
+func (f *pendingUniswapFill) endFill(err error) { f.end(err) }
 
 type uniswapFillCompletion struct {
 	fill   *pendingUniswapFill
@@ -118,7 +111,7 @@ func (s *Solver) fillLoop(
 			if err != nil {
 				s.retry(order.Hash, now, errors.Is(err, errFillPreflight))
 				if errors.Is(err, errFillPreflight) {
-					s.recordOrderFillFailure(order, now)
+					s.recordOrderFillFailure(orderCtx, order, now)
 				}
 				if errors.Is(err, errOrderNotFillable) {
 					observability.Log(orderCtx).V(1).Info("order not fillable yet", "source", order.Source,
@@ -233,7 +226,7 @@ func (s *Solver) startFill(
 		RequireSingleRoute: s.cfg.TokenPolicy.RequiresSingleRoute(order.TokenIn), Quotes: snapshot.Direct,
 		Reservations: s.capacity.Snapshot(),
 		GasSnapshot:  snapshot.GasSnapshot, GasPrices: snapshot.GasPrices, MaxFeePerGas: pricingMaxFee, ChainTime: now,
-		Trace: s.decisionTrace(
+		Trace: s.decisionTrace(ctx,
 			"source", order.Source,
 			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
@@ -305,7 +298,7 @@ func (s *Solver) startFill(
 	if err != nil {
 		return nil, err
 	}
-	s.setPendingReservations(order.Hash, reservations)
+	s.setPendingReservations(ctx, order.Hash, reservations)
 	observability.Log(ctx).V(1).Info(
 		"order fill submitted",
 		"source", order.Source,
@@ -542,7 +535,7 @@ func (s *Solver) completePendingFill(ctx context.Context, completion uniswapFill
 		}
 		s.observeFillOutcome(liquidlane.FillOutcomeFailure)
 		s.retry(order.Hash, now, true)
-		s.recordOrderFillFailure(order, now)
+		s.recordOrderFillFailure(ctx, order, now)
 		observability.Log(ctx).Error(
 			err,
 			"order fill failed",
@@ -583,10 +576,10 @@ func errorReason(err error) string {
 	return err.Error()
 }
 
-func (s *Solver) recordOrderFillFailure(order *resolvedOrder, now time.Time) {
+func (s *Solver) recordOrderFillFailure(ctx context.Context, order *resolvedOrder, now time.Time) {
 	// An exclusive attempt can legitimately lose to a timely soft override. Its tracked
 	// obligation is classified from terminal API and canonical receipt state after the deadline.
 	if order.Source != orderSourceExclusiveV2 {
-		s.recordFillFailure(now)
+		s.recordFillFailure(ctx, now)
 	}
 }

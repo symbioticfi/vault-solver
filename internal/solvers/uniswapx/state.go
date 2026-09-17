@@ -59,11 +59,13 @@ func (s *Solver) requestQuoteRefresh() {
 	}
 }
 
-func (s *Solver) setPendingReservations(hash common.Hash, reservations liquidlane.CapacityReservations) {
+func (s *Solver) setPendingReservations(
+	ctx context.Context, hash common.Hash, reservations liquidlane.CapacityReservations,
+) {
 	if !s.capacity.Set(hash.Hex(), reservations) {
 		return
 	}
-	s.log.V(1).Info(
+	observability.Log(ctx).V(1).Info(
 		"fill capacity reserved",
 		"orderHash", hash.Hex(),
 		"capacityGroups", len(reservations),
@@ -88,7 +90,7 @@ func (s *Solver) clearPendingReservations(hash common.Hash) {
 	s.requestQuoteRefresh()
 }
 
-func (s *Solver) recordFillFailure(now time.Time) {
+func (s *Solver) recordFillFailure(ctx context.Context, now time.Time) {
 	s.stateMu.Lock()
 	cutoff := now.Add(-s.cfg.Breaker.Window)
 	kept := s.failureTimes[:0]
@@ -106,7 +108,7 @@ func (s *Solver) recordFillFailure(now time.Time) {
 	s.stateMu.Unlock()
 	if tripped {
 		s.invalidateQuotes()
-		s.log.Info("local fade breaker opened", "until", s.localBlockUntil.Load())
+		observability.Log(ctx).Info("local fade breaker opened", "until", s.localBlockUntil.Load())
 	}
 }
 
@@ -310,11 +312,11 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 		}
 		observability.Log(ctx).Info("historical exclusive obligation missed", fields...)
 	}
-	s.openExclusiveBreaker(missed, now)
+	s.openExclusiveBreaker(ctx, missed, now)
 	return nil
 }
 
-func (s *Solver) openExclusiveBreaker(missed []exclusiveDecision, now time.Time) {
+func (s *Solver) openExclusiveBreaker(ctx context.Context, missed []exclusiveDecision, now time.Time) {
 	if len(missed) == 0 {
 		return
 	}
@@ -336,7 +338,8 @@ func (s *Solver) openExclusiveBreaker(missed []exclusiveDecision, now time.Time)
 		if decision.txHash != (common.Hash{}) {
 			fields = append(fields, "tx", decision.txHash.Hex(), "filledAt", decision.filledAt.Unix())
 		}
-		s.log.Error(errors.New("exclusive fill missed decay start"), "exclusive obligation missed", fields...)
+		observability.Log(ctx).Error(
+			errors.New("exclusive fill missed decay start"), "exclusive obligation missed", fields...)
 	}
 }
 

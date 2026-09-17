@@ -228,10 +228,7 @@ func (s *Solver) trackOrder(ctx context.Context, order *resolvedOrder, out chan<
 // order was awarded from when the poll linked one (spec §12). The order's span context rides on the
 // order itself, but the quote's trace cannot be derived from it, so the poll records it there too.
 func (s *Solver) orderLogger(order *resolvedOrder) logr.Logger {
-	if order.quoteTraceID == "" {
-		return s.log
-	}
-	return s.log.WithValues("quoteTraceId", order.quoteTraceID)
+	return observability.WithQuoteTrace(s.log, order.quoteTraceID)
 }
 
 // orderContext rebuilds the context one accepted order's fill runs on: its track span, so the fill

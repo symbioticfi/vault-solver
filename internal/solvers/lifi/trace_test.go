@@ -12,7 +12,7 @@ func TestDecisionTraceRequiresDebugVerbosityAndKeepsOrderCorrelation(t *testing.
 	solver := &Solver{
 		log: funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
 	}
-	if trace := solver.decisionTrace("orderId", "order-1"); trace != nil {
+	if trace := solver.decisionTrace(solverContext(t, solver), "orderId", "order-1"); trace != nil {
 		t.Fatal("decision trace enabled without debug verbosity")
 	}
 
@@ -21,6 +21,7 @@ func TestDecisionTraceRequiresDebugVerbosityAndKeepsOrderCorrelation(t *testing.
 		funcr.Options{Verbosity: 1},
 	)
 	trace := solver.decisionTrace(
+		solverContext(t, solver),
 		"orderId", "order-1",
 		"onChainOrderId", "0x1234",
 		"quoteId", "quote-1",

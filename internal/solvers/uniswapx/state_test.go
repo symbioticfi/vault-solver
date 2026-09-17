@@ -90,11 +90,11 @@ func TestLocalBreakerInvalidatesQuotes(t *testing.T) {
 		log: logr.Discard(),
 	}
 	solver.quoteState.Store(&quoteState{expiresAt: now.Add(time.Minute)})
-	solver.recordFillFailure(now)
+	solver.recordFillFailure(t.Context(), now)
 	if solver.localBlockUntil.Load() != 0 || solver.quoteState.Load() == nil {
 		t.Fatal("breaker opened before threshold")
 	}
-	solver.recordFillFailure(now.Add(time.Second))
+	solver.recordFillFailure(t.Context(), now.Add(time.Second))
 	if solver.localBlockUntil.Load() <= now.Unix() || solver.quoteState.Load() != nil {
 		t.Fatal("breaker did not open and invalidate quotes")
 	}

@@ -61,7 +61,7 @@ func (s *Solver) handleMessage(ctx context.Context, raw []byte) {
 			observability.Log(ctx).V(1).Info("ignoring feed auction")
 			return
 		}
-		a, start, ok := s.parseAuctionFrame(raw)
+		a, start, ok := s.parseAuctionFrame(ctx, raw)
 		if !ok {
 			return
 		}
@@ -178,35 +178,37 @@ func (s *Solver) handleBlacklisted(ctx context.Context, raw []byte) {
 }
 
 func (s *Solver) handleAuctionWithContext(ctx context.Context, raw []byte) {
-	a, start, ok := s.parseAuctionFrame(raw)
+	a, start, ok := s.parseAuctionFrame(ctx, raw)
 	if !ok {
 		return
 	}
 	s.handleAuction(ctx, a, start)
 }
 
-func (s *Solver) parseAuctionFrame(raw []byte) (AuctionMessage, time.Time, bool) {
+func (s *Solver) parseAuctionFrame(ctx context.Context, raw []byte) (AuctionMessage, time.Time, bool) {
 	start := time.Now()
 	var a AuctionMessage
 	if err := json.Unmarshal(raw, &a); err != nil {
-		s.log.V(1).Error(err, "drop malformed auction")
+		observability.Log(ctx).V(1).Error(err, "drop malformed auction")
 		return AuctionMessage{}, time.Time{}, false
 	}
 	if a.TimeoutMs <= 0 {
 		s.metrics.auctionDecision(auctionOutcomeTooLate, time.Since(start))
-		s.log.V(1).Info("auction with invalid timeout received; dropping", "auctionId", a.ID, "timeoutMs", a.TimeoutMs)
+		observability.Log(ctx).V(1).Info(
+			"auction with invalid timeout received; dropping", "auctionId", a.ID, "timeoutMs", a.TimeoutMs)
 		return AuctionMessage{}, time.Time{}, false
 	}
 	a.ID = normalizeAuctionID(a.ID)
 	key := a.dedupKey()
 	if key == "" {
 		s.metrics.auctionDecision(skipEmptyAuctionID, time.Since(start))
-		s.log.Info("auction with empty id received; dropping", "timestamp", a.Timestamp, "timeoutMs", a.TimeoutMs)
+		observability.Log(ctx).Info(
+			"auction with empty id received; dropping", "timestamp", a.Timestamp, "timeoutMs", a.TimeoutMs)
 		return AuctionMessage{}, time.Time{}, false
 	}
 	if s.seen.seen(key) {
 		s.metrics.auctionDecision(auctionOutcomeDuplicate, time.Since(start))
-		s.log.V(1).Info("duplicate auction; already processed", "auctionId", a.ID)
+		observability.Log(ctx).V(1).Info("duplicate auction; already processed", "auctionId", a.ID)
 		return AuctionMessage{}, time.Time{}, false
 	}
 	return a, start, true
