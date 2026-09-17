@@ -179,9 +179,9 @@ func (s *Solver) completeFill(
 ) (err error) {
 	fill := completion.fill
 	pending.remove(fill.reservationKey)
-	txAttrs := []attribute.KeyValue{
-		observability.AttrTxHash.String(completion.result.Hash.Hex()),
-		observability.AttrTxOutcome.String(string(completion.result.Outcome)),
+	txAttrs := []attribute.KeyValue{observability.AttrTxOutcome.String(string(completion.result.Outcome))}
+	if completion.result.Hash != (common.Hash{}) { // a request that never reached the wire has no hash
+		txAttrs = append(txAttrs, observability.AttrTxHash.String(completion.result.Hash.Hex()))
 	}
 	observability.SetAttributes(ctx, txAttrs...) // the processing span this result belongs to
 	ctx, end := tracer.Start(ctx, "lifi.order.complete", txAttrs...)

@@ -958,6 +958,39 @@ func TestOrderLogsCarryTraceIDOnce(t *testing.T) {
 	}
 }
 
+// A fill the manager rejected before broadcasting has no transaction: the outcome is recorded and
+// tx.hash is left off rather than stamped as the zero hash.
+func TestFillCompletionOmitsTxHashWhenNotBroadcast(t *testing.T) {
+	rec := tracetest.Install(t)
+	solver := &Solver{log: logr.Discard()}
+	fill := &pendingFill{
+		order:          &submittedOrder{OrderID: tracingOrderID, QuoteID: tracingQuoteID},
+		orderID:        common.HexToHash("0x1"),
+		reservationKey: "order-1",
+	}
+	pending := &pendingFillState{byOrder: map[string]*pendingFill{"order-1": fill}}
+
+	ctx, end := tracer.Start(t.Context(), "lifi.order.process")
+	err := solver.completeFill(ctx, pending, fillCompletion{fill: fill, result: txmanager.Result{
+		Outcome: txmanager.OutcomeSubmissionError,
+		Err:     errors.New("insufficient funds for gas * price + value"),
+	}})
+	end(err)
+
+	if err == nil {
+		t.Fatal("submission error was not reported as the completion failure")
+	}
+	for _, name := range []string{"lifi.order.process", "lifi.order.complete"} {
+		span := tracetest.Ended(t, rec, name)
+		if got := tracetest.Attr(span, "tx.hash"); got != "" {
+			t.Fatalf("%s tx.hash = %q, want no attribute for a transaction that never went out", name, got)
+		}
+		if got := tracetest.Attr(span, "tx.outcome"); got != string(txmanager.OutcomeSubmissionError) {
+			t.Fatalf("%s tx.outcome = %q, want %s", name, got, txmanager.OutcomeSubmissionError)
+		}
+	}
+}
+
 // The advertised-discount skip line runs inside the quote refresh stage, so it now carries that
 // stage's trace ids — once, because the context holds the base logger and Log stamps at retrieval.
 func TestDiscountSkipLogsCarryTraceIDOnce(t *testing.T) {
