@@ -28,17 +28,13 @@ func (t callTracing) start(ctx context.Context, method string) (context.Context,
 	if t.transport == "" {
 		return ctx, func(error) {}
 	}
-	//nolint:spancheck // the span is ended by the returned func, not inline
-	ctx, span := rpcTracer.Raw().Start(ctx, method,
-		trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(
-			attribute.String("rpc.system", "jsonrpc"),
-			attribute.String("rpc.method", method),
-			attribute.String("chain.rpc.role", t.role),
-			attribute.String("chain.rpc.transport", t.transport),
-		),
+	ctx, end := rpcTracer.StartKind(ctx, method, trace.SpanKindClient,
+		attribute.String("rpc.system", "jsonrpc"),
+		attribute.String("rpc.method", method),
+		attribute.String("chain.rpc.role", t.role),
+		attribute.String("chain.rpc.transport", t.transport),
 	)
-	return ctx, func(err error) { endClientSpan(span, err) } //nolint:spancheck // see above
+	return ctx, func(err error) { end(classifyRPCSpanError(ctx, err)) }
 }
 
 // The methods below shadow the promoted ethclient ones so a websocket or IPC endpoint still produces

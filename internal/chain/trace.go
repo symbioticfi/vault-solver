@@ -2,9 +2,9 @@ package chain
 
 import (
 	"context"
-	"sync"
 
 	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -20,81 +20,101 @@ const (
 	rpcTransportIPC = "ipc"
 )
 
-// rpcTracer carries no solver attribute: the chain client is shared by every solver. Spans start
-// from Raw rather than observability.Start because RPC spans set the client span kind and end from
-// rpcRequestTrace.finish, not from a deferred EndFunc. Raw re-resolves the provider whenever one is
-// installed, so a tracer built before NewTracing still reaches it.
+// rpcTracer carries no solver attribute: the chain client is shared by every solver. RPC spans
+// start through StartKind for the client span kind and end through the shared policy, with the
+// pre-filter below classifying what a node's answer means.
 var rpcTracer = observability.NewTracer("github.com/symbioticfi/vault-solver/internal/chain", "")
 
 // rpcRequestTrace is the span for one logical JSON-RPC request across endpoint attempts. It ends
 // where the metrics observation finishes: on response-body close, or when every endpoint failed.
 type rpcRequestTrace struct {
 	span trace.Span
-	once sync.Once
+	end  observability.EndFunc
 }
 
 func (t *fallbackTransport) beginTrace(
 	ctx context.Context, request rpcRequestInfo,
 ) (context.Context, *rpcRequestTrace) {
-	//nolint:spancheck // the span is ended by rpcRequestTrace.finish, not inline
-	ctx, span := rpcTracer.Raw().Start(ctx, request.boundedMethod,
-		trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(
-			attribute.String("rpc.system", "jsonrpc"),
-			attribute.String("rpc.method", request.boundedMethod),
-			attribute.String("rpc.jsonrpc.request_id", request.requestID),
-			attribute.String("chain.rpc.role", t.role),
-			attribute.Bool("chain.rpc.batch", request.boundedMethod == "batch"),
-		),
+	ctx, end := rpcTracer.StartKind(ctx, request.boundedMethod, trace.SpanKindClient,
+		attribute.String("rpc.system", "jsonrpc"),
+		attribute.String("rpc.method", request.boundedMethod),
+		attribute.String("rpc.jsonrpc.request_id", request.requestID),
+		attribute.String("chain.rpc.role", t.role),
+		attribute.Bool("chain.rpc.batch", request.boundedMethod == "batch"),
 	)
-	return ctx, &rpcRequestTrace{span: span} //nolint:spancheck // see above
+	return ctx, &rpcRequestTrace{span: trace.SpanFromContext(ctx), end: end}
 }
 
 // attempt records one endpoint attempt. endpoint is the role-local ordinal, never a URL.
 func (tr *rpcRequestTrace) attempt(endpoint string, outcome rpcOutcome) {
+	if !tr.span.IsRecording() {
+		return
+	}
 	tr.span.AddEvent("attempt", trace.WithAttributes(
 		attribute.String("endpoint", endpoint),
 		attribute.String("outcome", string(outcome)),
 	))
 }
 
+// finish ends the request span with the outcome the metrics recorded. The outcome is already a
+// bounded label and the per-endpoint errors are on the attempt events, so the status is set from it
+// directly and the shared end policy only closes the span. Repeat calls are no-ops.
 func (tr *rpcRequestTrace) finish(outcome rpcOutcome) {
-	tr.once.Do(func() {
-		if outcome != rpcOutcomeSuccess {
-			tr.span.SetStatus(codes.Error, string(outcome))
-		}
-		tr.span.End()
-	})
+	if outcome != rpcOutcomeSuccess {
+		tr.span.SetStatus(codes.Error, string(outcome))
+	}
+	tr.end(nil)
 }
 
 // traceConnect spans the dial of a non-HTTP endpoint. For a websocket the returned context is what
 // the handshake headers are injected from; IPC has no handshake to carry them.
-func traceConnect(ctx context.Context, role, transport string) (context.Context, func(error)) {
-	//nolint:spancheck // the span is ended by the returned func, not inline
-	ctx, span := rpcTracer.Raw().Start(ctx, "chain.rpc.connect",
-		trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(
-			attribute.String("chain.rpc.role", role),
-			attribute.String("chain.rpc.transport", transport),
-		),
+func traceConnect(ctx context.Context, role, transport string) (context.Context, observability.EndFunc) {
+	ctx, end := rpcTracer.StartKind(ctx, "chain.rpc.connect", trace.SpanKindClient,
+		attribute.String("chain.rpc.role", role),
+		attribute.String("chain.rpc.transport", transport),
 	)
-	return ctx, func(err error) { endClientSpan(span, err) } //nolint:spancheck // see above
+	return ctx, func(err error) { end(classifyRPCSpanError(ctx, err)) }
 }
 
-// endClientSpan ends an RPC client span, recording err unless the caller simply cancelled or the
-// node had nothing to return. ethclient turns a null result into ethereum.NotFound, which is the
-// routine answer while a transaction is unmined or a block is unknown; over HTTP the same response
-// classifies as a success, so treat it as one here too rather than colouring the span red.
-func endClientSpan(span trace.Span, err error) {
+// classifyRPCSpanError maps an RPC failure to what the shared span-end policy should record, so a
+// ws or IPC call classifies the way the same answer does over HTTP. Two answers are routine rather
+// than failures: a caller that cancelled or ran out of time, and a node with nothing to return
+// (ethclient reports a null result as ethereum.NotFound, which is the ordinary answer while a
+// transaction is unmined or a block is unknown, and the HTTP path counts it a success). Anything
+// else is a real failure, reported under a bounded outcome instead of the node's own message.
+func classifyRPCSpanError(ctx context.Context, err error) error {
 	switch {
 	case err == nil:
-	case errors.Is(err, context.Canceled):
-		span.AddEvent("cancelled")
+		return nil
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		trace.SpanFromContext(ctx).AddEvent("cancelled")
+		return nil
 	case errors.Is(err, ethereum.NotFound):
-		span.AddEvent("not_found")
+		trace.SpanFromContext(ctx).AddEvent("not_found")
+		return nil
 	default:
-		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		return rpcSpanError{outcome: rpcSpanOutcome(err), cause: err}
 	}
-	span.End()
 }
+
+// rpcSpanOutcome names a failure with the same vocabulary the HTTP transport's metrics use: a
+// JSON-RPC error envelope the node answered with, or a failure to reach it at all.
+func rpcSpanOutcome(err error) rpcOutcome {
+	var rpcErr rpc.Error
+	if errors.As(err, &rpcErr) {
+		return rpcOutcomeRPCError
+	}
+	return rpcOutcomeTransportError
+}
+
+// rpcSpanError bounds the span status text of an RPC failure. The cause stays wrapped, so the
+// exception event the shared policy records still carries the node's message and errors.Is at the
+// call site is unaffected.
+type rpcSpanError struct {
+	outcome rpcOutcome
+	cause   error
+}
+
+func (e rpcSpanError) Error() string      { return e.cause.Error() }
+func (e rpcSpanError) Unwrap() error      { return e.cause }
+func (e rpcSpanError) SpanStatus() string { return string(e.outcome) }

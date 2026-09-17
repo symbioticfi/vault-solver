@@ -93,11 +93,33 @@ func (t *Tracer) Start(ctx context.Context, name string, attrs ...attribute.KeyV
 	return t.StartLinked(ctx, name, nil, attrs...)
 }
 
+// StartKind begins a child span of ctx with an explicit span kind, for the client spans an RPC or
+// HTTP boundary reports. The end policy is the one every other span goes through.
+func (t *Tracer) StartKind(
+	ctx context.Context, name string, kind trace.SpanKind, attrs ...attribute.KeyValue,
+) (context.Context, EndFunc) {
+	return t.start(ctx, name, nil, []trace.SpanStartOption{trace.WithSpanKind(kind)}, attrs)
+}
+
 // StartLinked begins a child span of ctx with links to earlier spans (spec §12).
 func (t *Tracer) StartLinked(
 	ctx context.Context, name string, links []trace.Link, attrs ...attribute.KeyValue,
 ) (context.Context, EndFunc) {
-	opts := t.opts
+	return t.start(ctx, name, links, nil, attrs)
+}
+
+func (t *Tracer) start(
+	ctx context.Context,
+	name string,
+	links []trace.Link,
+	extra []trace.SpanStartOption,
+	attrs []attribute.KeyValue,
+) (context.Context, EndFunc) {
+	// Clip so an append never writes into the precomputed slice two goroutines share.
+	opts := slices.Clip(t.opts)
+	if len(extra) > 0 {
+		opts = append(opts, extra...)
+	}
 	if len(attrs) > 0 {
 		opts = append(opts, trace.WithAttributes(attrs...))
 	}
@@ -145,6 +167,17 @@ func LinkMiss(ctx context.Context, key string) {
 	trace.SpanFromContext(ctx).AddEvent("link_miss", trace.WithAttributes(attribute.String("key", key)))
 }
 
+// EndSpan ends span under the shared policy, for the few callers that hold a trace.Span rather than
+// an EndFunc (txmanager carries one from admission to receipt). Not idempotent on its own: the SDK
+// ignores a second End, but a second call would record the error twice.
+func EndSpan(span trace.Span, err error) { endSpan(span, err) }
+
+// spanStatusDescriber lets an error bound the text of the error status it produces. A span status
+// carrying a remote system's message is unbounded and differs per provider, so the chain client
+// wraps RPC failures to report the same short outcome on every transport. The error itself is still
+// what RecordError puts on the span.
+type spanStatusDescriber interface{ SpanStatus() string }
+
 func endSpan(span trace.Span, err error) {
 	switch {
 	case err == nil:
@@ -152,13 +185,21 @@ func endSpan(span trace.Span, err error) {
 		span.AddEvent("cancelled")
 	default:
 		span.RecordError(err)
-		span.SetStatus(codes.Error, err.Error())
+		span.SetStatus(codes.Error, spanStatusMessage(err))
 		var coded interface{ ReasonCode() string }
 		if errors.As(err, &coded) {
 			span.SetAttributes(AttrReasonCode.String(coded.ReasonCode()))
 		}
 	}
 	span.End()
+}
+
+func spanStatusMessage(err error) string {
+	var described spanStatusDescriber
+	if errors.As(err, &described) {
+		return described.SpanStatus()
+	}
+	return err.Error()
 }
 
 // Decline records an expected non-error outcome (no quote, not profitable, paused adapter) on the
