@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 )
@@ -205,6 +206,13 @@ func (b *mockBackend) lastSent() *types.Transaction {
 		return nil
 	}
 	return b.sent[len(b.sent)-1]
+}
+
+// managerCtx carries the manager's logger the way Start does for its worker. Tests that drive a
+// lifecycle function directly need it, or the lines those functions log through
+// observability.Log(ctx) reach the process default instead of the test's capture logger.
+func managerCtx(ctx context.Context, m *Manager) context.Context {
+	return observability.WithLogger(ctx, m.log)
 }
 
 func startManagerForTest(t *testing.T, m *Manager) {
@@ -2615,7 +2623,7 @@ func TestReceiptResultFailedReceiptWinsOverInterruptedConfirmation(t *testing.T)
 				}},
 			}
 
-			result, done := manager.receiptResult(confirmationCtx, pending)
+			result, done := manager.receiptResult(managerCtx(confirmationCtx, manager), pending)
 			if !done {
 				t.Fatal("failed receipt did not complete the lifecycle")
 			}
@@ -3264,23 +3272,29 @@ func TestSendLifecycleLogsCarryTraceIDOnce(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	want := `"trace_id":"` + parent.SpanContext().TraceID().String() + `"`
-	var sawSent bool
+	// "sent" comes from the worker's broadcast, "transaction confirmed" from the detached lifecycle
+	// goroutine: both must reach the request's logger and carry the caller's trace.
+	seen := map[string]bool{"sent": false, "transaction confirmed": false}
 	for _, line := range lines {
 		if n := strings.Count(line, `"trace_id"`); n > 1 {
 			t.Fatalf("trace_id appears %d times in %s", n, line)
 		}
-		if !strings.Contains(line, `"msg":"sent"`) {
-			continue
-		}
-		sawSent = true
-		if !strings.Contains(line, want) {
-			t.Fatalf("sent line does not carry the caller's trace id: %s", line)
-		}
-		if !strings.Contains(line, `"solver":"rfq"`) {
-			t.Fatalf("sent line lost the request's solver: %s", line)
+		for msg := range seen {
+			if !strings.Contains(line, `"msg":"`+msg+`"`) {
+				continue
+			}
+			seen[msg] = true
+			if !strings.Contains(line, want) {
+				t.Fatalf("%q line does not carry the caller's trace id: %s", msg, line)
+			}
+			if !strings.Contains(line, `"solver":"rfq"`) {
+				t.Fatalf("%q line lost the request's solver: %s", msg, line)
+			}
 		}
 	}
-	if !sawSent {
-		t.Fatalf("no sent line captured: %v", lines)
+	for msg, ok := range seen {
+		if !ok {
+			t.Fatalf("no %q line captured: %v", msg, lines)
+		}
 	}
 }

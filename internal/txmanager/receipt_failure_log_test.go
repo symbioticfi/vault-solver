@@ -220,7 +220,7 @@ func TestEstimateFailureDoesNotLogUnpublishedCalldata(t *testing.T) {
 	b.gasEstimate = 0
 	logs, log := newLogCapture(1)
 	m := newStreakManager(t, b, log)
-	_, err := m.estimateGas(t.Context(), Request{To: common.Address{1}, Data: []byte("unpublished-authorization"), Label: "rfq-fill"})
+	_, err := m.estimateGas(managerCtx(t.Context(), m), Request{To: common.Address{1}, Data: []byte("unpublished-authorization"), Label: "rfq-fill"})
 	if err == nil {
 		t.Fatal("expected estimate failure")
 	}

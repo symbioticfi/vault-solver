@@ -7,7 +7,10 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	"gopkg.in/yaml.v3"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 type fakeSolver struct{ name string }
@@ -93,6 +96,40 @@ func TestRunTreatsCancellationAsClean(t *testing.T) {
 	if err := Run(ctx, fakeSolver{name: "x"}, logr.Discard()); err != nil {
 		t.Fatalf("expected nil on cancellation, got %v", err)
 	}
+}
+
+// With several solvers configured each gets its own stamped logger, and Run is where that logger
+// joins the context every line below it is logged through.
+func TestRunCarriesTheSolverLoggerInContext(t *testing.T) {
+	var lines []string
+	log := funcr.NewJSON(func(entry string) { lines = append(lines, entry) }, funcr.Options{})
+
+	err := Run(t.Context(), loggingSolver{name: "rfq"}, log.WithValues("solver", "rfq"))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	var seen bool
+	for _, line := range lines {
+		if !strings.Contains(line, `"msg":"from the solver"`) {
+			continue
+		}
+		seen = true
+		if !strings.Contains(line, `"solver":"rfq"`) {
+			t.Fatalf("solver line did not reach the per-solver logger: %s", line)
+		}
+	}
+	if !seen {
+		t.Fatalf("solver line not captured: %v", lines)
+	}
+}
+
+type loggingSolver struct{ name string }
+
+func (l loggingSolver) Name() string { return l.name }
+
+func (l loggingSolver) Run(ctx context.Context) error {
+	observability.Log(ctx).Info("from the solver")
+	return nil
 }
 
 type failingSolver struct {

@@ -220,7 +220,8 @@ func TestReceiptReaderResumesAfterReorg(t *testing.T) {
 		backend.reorgedHeader = true
 		m.trackUnminedTransaction(pending)
 		result := make(chan Result, 1)
-		go func() { result <- m.waitForPendingTransaction(t.Context(), pending) }()
+		reorgCtx := managerCtx(t.Context(), m)
+		go func() { result <- m.waitForPendingTransaction(reorgCtx, pending) }()
 		synctest.Wait()
 		if _, info := countLogs(*logs, "transaction inclusion reorged; resuming pending lifecycle"); info != 1 {
 			t.Fatalf("reorg logs: %v", *logs)

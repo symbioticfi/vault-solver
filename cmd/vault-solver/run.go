@@ -80,6 +80,10 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	if len(solverNames) == 1 {
 		log = log.WithValues("solver", solverNames[0])
 	}
+	// Everything downstream logs through observability.Log(ctx), which stamps the trace ids on this
+	// logger. The default covers the few paths that hold no context of ours.
+	observability.SetDefaultLogger(log)
+	ctx = observability.WithLogger(ctx, log)
 	log.Info("vault-solver starting",
 		"version", version.Version,
 		"commit", version.Commit,

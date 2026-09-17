@@ -115,7 +115,9 @@ func Registered() []string {
 // as a clean shutdown, not an error.
 func Run(ctx context.Context, s Solver, log logr.Logger) error {
 	log.Info("solver running")
-	err := s.Run(ctx)
+	// With several solvers configured each gets its own stamped logger; carry it so every line the
+	// solver logs through observability.Log names the integration it serves.
+	err := s.Run(observability.WithLogger(ctx, log))
 	if err != nil && !errors.Is(err, context.Canceled) {
 		wrapped := errors.Errorf("solver %q: %w", s.Name(), err)
 		// Attribute the failure to this solver in the structured logs; the returned error still drives exit.

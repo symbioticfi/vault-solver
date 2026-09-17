@@ -12,6 +12,8 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 // rpcAttemptTimeout bounds a single endpoint attempt so a hung endpoint fails over instead of
@@ -116,7 +118,7 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 					}
 					t.metrics.observeAttempt(t.role, endpoint, method, lastOutcome)
 					requestTrace.attempt(endpoint, lastOutcome)
-					t.log.V(1).Info("rpc result unavailable; trying fallback",
+					observability.TraceLogger(ctx, t.log).V(1).Info("rpc result unavailable; trying fallback",
 						"endpoint", ep.Redacted(), "method", nullFallbackMethod, "err", lastErr.Error())
 					continue
 				}
@@ -155,7 +157,7 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		t.metrics.observeAttempt(t.role, endpoint, method, lastOutcome)
 		requestTrace.attempt(endpoint, lastOutcome)
 		if i < len(t.endpoints)-1 {
-			t.log.V(1).Info("rpc endpoint failed; trying fallback",
+			observability.TraceLogger(ctx, t.log).V(1).Info("rpc endpoint failed; trying fallback",
 				"endpoint", ep.Redacted(), "err", lastErr.Error())
 		}
 	}
