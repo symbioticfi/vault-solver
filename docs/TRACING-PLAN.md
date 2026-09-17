@@ -473,11 +473,10 @@ run against the no-op provider and prove there is no behaviour change when traci
 - [ ] observability listener untraced by design
 - [ ] omit `rpc.jsonrpc.request_id` when empty (batches) instead of setting an empty attribute
 - [ ] set `tx.outcome=not_admitted` on declined txmanager sends, and skip an empty `solver` attribute
-- [ ] stamp trace ids on the remaining untraced log lines (UniswapX fill-admission lines, LI.FI `logDiscountIssues`)
+- [ ] stamp trace ids on the remaining untraced log lines (LI.FI `logDiscountIssues`)
 - [ ] cap or aggregate the per-offer `declined` events on `3f.offers.reconcile`
 - [ ] the RPC span's success `attempt` event is timestamped at body close, not at the attempt
 - [ ] a no-op `txmanager.replace` tick emits an empty span, and replace spans carry no `tx.hash`
-- [ ] `quoteTraceId` is stamped only on the UniswapX `trackOrder` logger, not on the fill/complete ones
 - [ ] RedStone default-strategy skip lines carry no trace ids
 - [ ] LI.FI `shouldRefreshQuotes` lines carry no trace ids
 - [ ] 3F `refreshTargetsAndHydrate` emits a root `3f.offers.reconcile`, and the health-tick reconcile is untraced

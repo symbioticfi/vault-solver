@@ -6,6 +6,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+	"github.com/go-logr/logr"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
@@ -18,7 +19,7 @@ func (s *Solver) orderLoop(ctx context.Context, out chan<- *resolvedOrder) error
 	defer ticker.Stop()
 	for {
 		if err := s.pollOrders(ctx, out); err != nil && !errors.Is(err, context.Canceled) {
-			s.log.Error(err, "order poll failed")
+			observability.Log(ctx).Error(err, "order poll failed")
 		}
 		select {
 		case <-ctx.Done():
@@ -106,7 +107,7 @@ func (s *Solver) recoverRecentExclusive(ctx context.Context, now time.Time) erro
 		obligation.recoveredAtStart = startup
 		s.trackExclusiveObligation(obligation, entry.QuoteID, now)
 	}
-	s.log.V(1).Info(
+	observability.Log(ctx).V(1).Info(
 		"recent exclusive history reconciled",
 		"orders", len(entries),
 		"createdAfter", createdAfter.Unix(),
@@ -132,14 +133,11 @@ func (s *Solver) pollSource(
 	ctx, end := tracer.Start(ctx, "uniswapx.orders.poll")
 	defer func() { end(err) }()
 
-	// Derived from the base logger, never from a caller's already-derived one: TraceLogger appends
-	// trace_id/span_id unconditionally, so re-deriving would stamp them twice per line.
-	log := observability.TraceLogger(ctx, s.log)
 	entries, err := s.orders.openOrders(ctx, s.chainID, filler)
 	if err != nil && len(entries) == 0 {
 		return time.Time{}, errors.Errorf("poll %s orders: %w", source, err)
 	}
-	log.V(1).Info(
+	observability.Log(ctx).V(1).Info(
 		"orders polled",
 		"source", source,
 		"orders", len(entries),
@@ -167,7 +165,7 @@ func (s *Solver) pollSource(
 					s.observeExclusiveWin()
 				}
 			}
-			log.V(1).Info("order rejected", "error", parseErr, "source", source,
+			observability.Log(ctx).V(1).Info("order rejected", "error", parseErr, "source", source,
 				"orderHash", entry.OrderHash, "quoteId", entry.QuoteID)
 			continue
 		}
@@ -175,7 +173,7 @@ func (s *Solver) pollSource(
 			s.observeExclusiveWin()
 		}
 		if !s.claim(order.Hash, now) {
-			log.V(1).Info(
+			observability.Log(ctx).V(1).Info(
 				"order skipped: already handled or awaiting retry",
 				"source", source,
 				"orderHash", order.Hash.Hex(),
@@ -210,9 +208,8 @@ func (s *Solver) trackOrder(ctx context.Context, order *resolvedOrder, out chan<
 	ctx, end := tracer.StartLinked(ctx, "uniswapx.order.track", links, attrs...)
 	defer func() { end(err) }()
 
-	log := observability.TraceLogger(ctx, s.log)
 	if len(links) > 0 {
-		log = log.WithValues("quoteTraceId", links[0].SpanContext.TraceID().String())
+		order.quoteTraceID = links[0].SpanContext.TraceID().String()
 	} else {
 		// Best effort (spec §12): the quote span is gone — restart, eviction, or it was never ours.
 		// The fill proceeds identically; only the link is lost.
@@ -220,7 +217,9 @@ func (s *Solver) trackOrder(ctx context.Context, order *resolvedOrder, out chan<
 			trace.WithAttributes(attribute.String("key", order.QuoteID)))
 	}
 	order.span = trace.SpanContextFromContext(ctx)
-	log.V(1).Info(
+	// The narrowed base logger, never a trace-stamped one: Log stamps each stage's own span.
+	ctx = observability.WithLogger(ctx, s.orderLogger(order))
+	observability.Log(ctx).V(1).Info(
 		"order queued for fill",
 		"source", order.Source,
 		"orderHash", order.Hash.Hex(),
@@ -237,6 +236,16 @@ func (s *Solver) trackOrder(ctx context.Context, order *resolvedOrder, out chan<
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// orderLogger is the solver logger for one accepted order, carrying the trace id of the quote the
+// order was awarded from when the poll linked one (spec §12). The order's span context rides on the
+// order itself, but the quote's trace cannot be derived from it, so the poll records it there too.
+func (s *Solver) orderLogger(order *resolvedOrder) logr.Logger {
+	if order.quoteTraceID == "" {
+		return s.log
+	}
+	return s.log.WithValues("quoteTraceId", order.quoteTraceID)
 }
 
 func (s *Solver) recordExclusivePollSuccess(now time.Time) {

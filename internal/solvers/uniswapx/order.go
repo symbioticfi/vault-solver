@@ -84,6 +84,9 @@ type resolvedOrder struct {
 	// span is the uniswapx.order.track span the poll accepted this order under. It rides through the
 	// orders channel so the fill this order produces continues that trace (spec §9.4).
 	span trace.SpanContext
+	// quoteTraceID is the trace of the quote this order was awarded from, when the poll linked one.
+	// It rides along because it cannot be derived from span: the quote lives in its own trace.
+	quoteTraceID string
 }
 
 var (

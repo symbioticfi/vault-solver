@@ -78,6 +78,11 @@ func (s *Solver) fillLoop(
 				orders = nil
 				continue
 			}
+			// The order's track span and quote-linked logger, so every admission line below and
+			// every line the fill logs carries this order's trace ids.
+			orderCtx := observability.WithLogger(
+				trace.ContextWithSpanContext(ctx, order.span), s.orderLogger(order),
+			)
 			if shutdownErr != nil || ctx.Err() != nil {
 				if shutdownErr == nil {
 					shutdownErr = ctx.Err()
@@ -90,7 +95,7 @@ func (s *Solver) fillLoop(
 			if !s.txm.Available() {
 				s.endFillPlanning()
 				s.retry(order.Hash, time.Now(), false)
-				s.log.V(1).Info(
+				observability.Log(orderCtx).V(1).Info(
 					"order fill deferred while transaction nonce lane is paused",
 					"source", order.Source,
 					"orderHash", order.Hash.Hex(),
@@ -98,7 +103,7 @@ func (s *Solver) fillLoop(
 				)
 				continue
 			}
-			s.log.V(1).Info(
+			observability.Log(orderCtx).V(1).Info(
 				"order fill planning started",
 				"source", order.Source,
 				"orderHash", order.Hash.Hex(),
@@ -109,10 +114,12 @@ func (s *Solver) fillLoop(
 			if err != nil {
 				s.endFillPlanning()
 				s.retry(order.Hash, time.Now(), false)
-				s.log.Error(err, "order fill: read current chain time", "orderHash", order.Hash.Hex())
+				observability.Log(orderCtx).Error(
+					err, "order fill: read current chain time", "orderHash", order.Hash.Hex(),
+				)
 				continue
 			}
-			fill, err := s.startFill(ctx, routes, order, now, chainObservedAt)
+			fill, err := s.startFill(orderCtx, routes, order, now, chainObservedAt)
 			s.endFillPlanning()
 			if err != nil {
 				s.retry(order.Hash, now, errors.Is(err, errFillPreflight))
@@ -120,11 +127,13 @@ func (s *Solver) fillLoop(
 					s.recordOrderFillFailure(order, now)
 				}
 				if errors.Is(err, errOrderNotFillable) {
-					s.log.V(1).Info("order not fillable yet", "source", order.Source,
+					observability.Log(orderCtx).V(1).Info("order not fillable yet", "source", order.Source,
 						"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
 					continue
 				}
-				s.log.Error(err, "order fill preparation failed", "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
+				observability.Log(orderCtx).Error(
+					err, "order fill preparation failed", "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
+				)
 				continue
 			}
 			pending[order.Hash] = fill
@@ -171,7 +180,6 @@ func (s *Solver) startFill(
 			end(err)
 		}
 	}()
-	log := observability.TraceLogger(ctx, s.log)
 
 	if order.TokenOut == (common.Address{}) {
 		return nil, declineFill(ctx, "fill_skipped", "order has no output token")
@@ -187,7 +195,7 @@ func (s *Solver) startFill(
 		now,
 	)
 	if discountErr != nil {
-		log.Error(discountErr, "refresh fill discount routes", "orderHash", order.Hash.Hex())
+		observability.Log(ctx).Error(discountErr, "refresh fill discount routes", "orderHash", order.Hash.Hex())
 	}
 	snapshot, err := s.reader.fillSnapshot(
 		ctx,
@@ -205,7 +213,7 @@ func (s *Solver) startFill(
 			snapshot.Direct = append(snapshot.Direct, s.discountFillQuotes(listed, snapshot.Physical, now)...)
 		}
 	}
-	log.V(1).Info(
+	observability.Log(ctx).V(1).Info(
 		"order fill snapshot loaded",
 		"source", order.Source,
 		"orderHash", order.Hash.Hex(),
@@ -242,7 +250,7 @@ func (s *Solver) startFill(
 		return nil, err
 	}
 	if plan == nil || len(plan.Routes) == 0 {
-		log.V(1).Info(
+		observability.Log(ctx).V(1).Info(
 			"order fill strategy declined",
 			"source", order.Source,
 			"orderHash", order.Hash.Hex(),
@@ -264,7 +272,7 @@ func (s *Solver) startFill(
 		return nil, errors.Errorf("strategy returned invalid fill plan: %w", err)
 	}
 	plan.Routes = validatedRoutes
-	s.logFillPlan(log, order, plan)
+	s.logFillPlan(observability.Log(ctx), order, plan)
 	reservations, ok := liquidstrategies.FillRouteReservations(plan.Routes)
 	if !ok {
 		return nil, errors.New("strategy returned invalid capacity reservations")
@@ -281,7 +289,7 @@ func (s *Solver) startFill(
 	if !ok {
 		return nil, declineFill(ctx, "fill_skipped", "fill execution deadline elapsed before submission")
 	}
-	log.V(1).Info(
+	observability.Log(ctx).V(1).Info(
 		"order fill preflight succeeded",
 		"source", order.Source,
 		"orderHash", order.Hash.Hex(),
@@ -304,7 +312,7 @@ func (s *Solver) startFill(
 		return nil, err
 	}
 	s.setPendingReservations(order.Hash, reservations)
-	log.V(1).Info(
+	observability.Log(ctx).V(1).Info(
 		"order fill submitted",
 		"source", order.Source,
 		"orderHash", order.Hash.Hex(),
@@ -367,7 +375,6 @@ func (s *Solver) buildExecutorCalldata(
 	ctx, end := tracer.Start(ctx, "uniswapx.fill.build")
 	defer func() { end(err) }()
 
-	log := observability.TraceLogger(ctx, s.log)
 	fillRoutes := make([]uxexecutor.ILiquidLaneUniswapXExecutorFillRoute, 0, len(plan.Routes))
 	discountRoutes := make([]uxexecutor.ILiquidLaneUniswapXExecutorDiscountRoute, 0, len(plan.Routes))
 	for _, route := range plan.Routes {
@@ -381,7 +388,7 @@ func (s *Solver) buildExecutorCalldata(
 		if !ok {
 			return nil, time.Time{}, errors.Errorf("selected discount route %s is unavailable", route.RouteID)
 		}
-		log.V(1).Info(
+		observability.Log(ctx).V(1).Info(
 			"selected discount route repricing",
 			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
@@ -411,7 +418,7 @@ func (s *Solver) buildExecutorCalldata(
 			return nil, time.Time{}, errors.Errorf("resolve selected discount %s: %w", route.DiscountID.Hex(), err)
 		}
 		discountValidUntil = earlierTime(discountValidUntil, liquiddiscounts.ValidUntil(signed))
-		log.V(1).Info(
+		observability.Log(ctx).V(1).Info(
 			"selected discount resolved",
 			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
@@ -508,7 +515,8 @@ func (s *Solver) completePendingFill(ctx context.Context, completion uniswapFill
 	if completion.result.Hash != (common.Hash{}) { // a request that never reached the wire has no hash
 		txAttrs = append(txAttrs, observability.AttrTxHash.String(completion.result.Hash.Hex()))
 	}
-	fillCtx := completion.fill.traceContext(ctx)
+	// The fill span this result belongs to, plus the order's quote-linked logger.
+	fillCtx := observability.WithLogger(completion.fill.traceContext(ctx), s.orderLogger(order))
 	observability.SetAttributes(fillCtx, txAttrs...) // the fill span this result belongs to
 	ctx, end := tracer.Start(fillCtx, "uniswapx.fill.complete", txAttrs...)
 	var err error
@@ -518,7 +526,6 @@ func (s *Solver) completePendingFill(ctx context.Context, completion uniswapFill
 		completion.fill.endFill(err)
 	}()
 
-	log := observability.TraceLogger(ctx, s.log)
 	now := time.Now()
 	s.clearPendingReservations(order.Hash)
 	if completion.result.NotAdmitted {
@@ -526,7 +533,7 @@ func (s *Solver) completePendingFill(ctx context.Context, completion uniswapFill
 		observability.Decline(ctx, "fill_not_admitted", errorReason(completion.result.Err))
 		s.observeFillOutcome(liquidlane.FillOutcomeNotAdmitted)
 		s.retry(order.Hash, now, false)
-		log.V(1).Info(
+		observability.Log(ctx).V(1).Info(
 			"order fill was not admitted",
 			"source", order.Source,
 			"orderHash", order.Hash.Hex(),
@@ -544,7 +551,7 @@ func (s *Solver) completePendingFill(ctx context.Context, completion uniswapFill
 		s.observeFillOutcome(liquidlane.FillOutcomeFailure)
 		s.retry(order.Hash, now, true)
 		s.recordOrderFillFailure(order, now)
-		log.Error(
+		observability.Log(ctx).Error(
 			err,
 			"order fill failed",
 			"source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
@@ -553,12 +560,12 @@ func (s *Solver) completePendingFill(ctx context.Context, completion uniswapFill
 		return
 	}
 	if outcome == txmanager.OutcomeConfirmed {
-		log.Info("order filled", "source", order.Source, "executor", order.Executor.Hex(),
+		observability.Log(ctx).Info("order filled", "source", order.Source, "executor", order.Executor.Hex(),
 			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", completion.result.Hash.Hex())
 	} else {
 		// Included, but the confirmation wait failed: the fill stands, the wait error is the span's.
 		err = completion.result.Err
-		log.Error(err, "order fill included but confirmation wait failed",
+		observability.Log(ctx).Error(err, "order fill included but confirmation wait failed",
 			"source", order.Source, "executor", order.Executor.Hex(),
 			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", completion.result.Hash.Hex())
 	}

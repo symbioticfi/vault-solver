@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"time"
 
@@ -23,7 +24,10 @@ const (
 	quoteTypeExactOutput = "EXACT_OUTPUT"
 )
 
-func (s *Solver) newQuoteHTTPServer() *http.Server {
+func (s *Solver) newQuoteHTTPServer(ctx context.Context) *http.Server {
+	// Handler contexts inherit the solver logger from here. Cancellation is deliberately dropped so
+	// shutdown keeps draining in-flight quotes through Shutdown instead of cutting them off.
+	handlerCtx := context.WithoutCancel(ctx)
 	mux := http.NewServeMux()
 	healthHandler := func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }
 	mux.HandleFunc("POST /quote", s.quoteHandler)
@@ -34,6 +38,7 @@ func (s *Solver) newQuoteHTTPServer() *http.Server {
 	handler := observability.TraceHandler(recoverQuoteServer(mux, s.log), uniswapxRoute)
 	return &http.Server{
 		Addr: s.cfg.QuoteServer.ListenAddress, Handler: handler,
+		BaseContext:       func(net.Listener) context.Context { return handlerCtx },
 		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: s.cfg.QuoteServer.HTTPTimeout,
 		WriteTimeout: s.cfg.QuoteServer.HTTPTimeout, IdleTimeout: 30 * time.Second,
 	}
@@ -46,7 +51,6 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 			s.metrics.observeQuoteLatency(time.Since(started))
 		}
 	}()
-	log := observability.TraceLogger(r.Context(), s.log)
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxQuoteRequestBytes+1))
 	if err != nil {
 		s.declineQuoteRequest(w, r, "read-body", "invalid request body", "error", err.Error())
@@ -73,7 +77,7 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 			s.declineQuoteRequest(w, r, "invalid-breaker-notification", "invalid blockUntilTimestamp")
 			return
 		}
-		log.V(1).Info(
+		observability.Log(r.Context()).V(1).Info(
 			"quote breaker notification received",
 			"blockUntilTimestamp", *request.BlockUntilTimestamp,
 		)
@@ -86,7 +90,7 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 		observability.AttrRequestID.String(request.RequestID),
 		observability.AttrQuoteID.String(request.QuoteID),
 	)
-	log.V(1).Info(
+	observability.Log(r.Context()).V(1).Info(
 		"quote request received",
 		"requestId", request.RequestID,
 		"quoteId", request.QuoteID,
@@ -99,13 +103,14 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 	response, err := s.quote(r.Context(), request)
 	if err != nil {
 		s.observeQuote(quoteOutcomeError)
-		log.Error(err, "quote failed", "requestId", request.RequestID, "quoteId", request.QuoteID)
+		observability.Log(r.Context()).
+			Error(err, "quote failed", "requestId", request.RequestID, "quoteId", request.QuoteID)
 		http.Error(w, "quote unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if response.AmountOut == "0" {
 		s.observeQuoteDecline(response.declineReason)
-		log.V(1).Info(
+		observability.Log(r.Context()).V(1).Info(
 			"quote declined",
 			"requestId", request.RequestID,
 			"quoteId", request.QuoteID,
@@ -122,7 +127,7 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	s.observeQuote(quoteOutcomeQuoted)
 	s.observeQuotedAmounts(response)
-	log.V(1).Info(
+	observability.Log(r.Context()).V(1).Info(
 		"quote returned",
 		"requestId", request.RequestID,
 		"quoteId", request.QuoteID,
@@ -132,7 +137,8 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 	)
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Error(err, "write quote response", "requestId", request.RequestID, "quoteId", request.QuoteID)
+		observability.Log(r.Context()).
+			Error(err, "write quote response", "requestId", request.RequestID, "quoteId", request.QuoteID)
 		return
 	}
 	// Remember the served quote so the fill that wins it can link back to this trace (spec §12).
@@ -149,7 +155,7 @@ func (s *Solver) declineQuoteRequest(
 ) {
 	observability.Decline(r.Context(), "bad_request", reason)
 	fields := append([]any{"reason", reason}, keysAndValues...)
-	observability.TraceLogger(r.Context(), s.log).V(1).Info("quote request rejected", fields...)
+	observability.Log(r.Context()).V(1).Info("quote request rejected", fields...)
 	s.observeQuote(quoteOutcomeInvalid)
 	http.Error(w, message, http.StatusBadRequest)
 }

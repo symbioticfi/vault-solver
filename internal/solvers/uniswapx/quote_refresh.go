@@ -32,11 +32,11 @@ func (s *Solver) refreshLoop(ctx context.Context, routes []liquidlane.Route) err
 			return ctx.Err()
 		case <-s.refreshCh:
 			if err := s.refreshQuoteState(ctx, routes); err != nil {
-				s.log.Error(err, "requested quote state refresh failed")
+				observability.Log(ctx).Error(err, "requested quote state refresh failed")
 			}
 		case <-ticker.C:
 			if err := s.refreshQuoteState(ctx, routes); err != nil {
-				s.log.Error(err, "quote state refresh failed")
+				observability.Log(ctx).Error(err, "quote state refresh failed")
 			}
 		}
 	}
@@ -55,9 +55,6 @@ func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Rout
 	s.refreshMu.Lock()
 	defer s.refreshMu.Unlock()
 
-	// Derived from the base logger, never from a caller's already-derived one: TraceLogger appends
-	// trace_id/span_id unconditionally, so re-deriving would stamp them twice per line.
-	log := observability.TraceLogger(ctx, s.log)
 	epoch := s.quoteEpoch.Load()
 	now, err := s.reader.latestBlockTime(ctx)
 	if err != nil {
@@ -66,7 +63,7 @@ func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Rout
 	s.chainTime.Store(now.Unix())
 	discountRoutes, discountErr := s.quoteRoutesWithDiscounts(ctx, routes, now)
 	if discountErr != nil {
-		log.Error(discountErr, "refresh advertised discount routes")
+		observability.Log(ctx).Error(discountErr, "refresh advertised discount routes")
 	}
 	decisionRoutes := discountRoutes.routes
 	listed := discountRoutes.listed
@@ -101,7 +98,7 @@ func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Rout
 		if s.metrics != nil {
 			s.metrics.quoteRefresh.Set(float64(time.Now().Unix()))
 		}
-		log.V(1).Info(
+		observability.Log(ctx).V(1).Info(
 			"quote state refreshed",
 			"epoch", epoch,
 			"routes", len(decisionRoutes),
@@ -113,7 +110,7 @@ func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Rout
 		)
 	} else {
 		outcome = observability.ExternalOperationSkipped
-		log.V(1).Info("quote state refresh discarded", "epoch", epoch)
+		observability.Log(ctx).V(1).Info("quote state refresh discarded", "epoch", epoch)
 	}
 	return nil
 }

@@ -195,27 +195,31 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 func (s *Solver) Name() string { return Name }
 
 func (s *Solver) Run(ctx context.Context) error {
+	// The solver logger is narrower than the one solver.Run stored; carry it so every line below,
+	// including the loops and the quote server's handlers, logs through it.
+	ctx = observability.WithLogger(ctx, s.log)
+
 	routes, err := s.reader.resolveRoutes(ctx, s.cfg.Adapters)
 	if err != nil {
 		startupErr := errors.Errorf("resolve routes: %w", err)
-		s.log.Error(startupErr, "adapter resolution failed",
+		observability.Log(ctx).Error(startupErr, "adapter resolution failed",
 			"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
 		return startupErr
 	}
 	if len(routes) == 0 && s.cfg.restrictsToAdapters() {
 		startupErr := errors.New("no LiquidLane routes resolved")
-		s.log.Error(startupErr, "adapter resolution failed",
+		observability.Log(ctx).Error(startupErr, "adapter resolution failed",
 			"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
 		return startupErr
 	}
 	if err := s.reader.validateExecutorCode(ctx, s.cfg.Executor); err != nil {
 		startupErr := errors.Errorf("validate executor: %w", err)
-		s.log.Error(startupErr, "executor validation failed", "executor", s.cfg.Executor.Hex())
+		observability.Log(ctx).Error(startupErr, "executor validation failed", "executor", s.cfg.Executor.Hex())
 		return startupErr
 	}
 	if err := s.reader.validateExecutorCaller(ctx, s.cfg.Executor, s.solverAddress); err != nil {
 		startupErr := errors.Errorf("validate executor caller: %w", err)
-		s.log.Error(
+		observability.Log(ctx).Error(
 			startupErr,
 			"executor caller validation failed",
 			"executor", s.cfg.Executor.Hex(),
@@ -227,7 +231,7 @@ func (s *Solver) Run(ctx context.Context) error {
 		unauthorized, err := s.reader.unauthorizedAdapters(ctx, s.cfg.Executor, routes)
 		if err != nil {
 			startupErr := errors.Errorf("validate adapters: %w", err)
-			s.log.Error(startupErr, "adapter validation failed",
+			observability.Log(ctx).Error(startupErr, "adapter validation failed",
 				"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
 			return startupErr
 		}
@@ -236,19 +240,19 @@ func (s *Solver) Run(ctx context.Context) error {
 				"validate adapters: executor %s is not authorized as direct filler for configured adapters: %v",
 				s.cfg.Executor.Hex(), unauthorized,
 			)
-			s.log.Error(startupErr, "adapter validation failed",
+			observability.Log(ctx).Error(startupErr, "adapter validation failed",
 				"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
 			return startupErr
 		}
 	}
 	if err := s.reader.validateGasOracles(ctx, routes); err != nil {
 		startupErr := errors.Errorf("validate adapter gas tokens: %w", err)
-		s.log.Error(startupErr, "adapter validation failed", "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
+		observability.Log(ctx).Error(startupErr, "adapter validation failed", "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
 		return startupErr
 	}
 	if _, err := s.orders.openOrders(ctx, s.chainID, &s.cfg.Executor); err != nil {
 		startupErr := errors.Errorf("validate exclusive order delivery: %w", err)
-		s.log.Error(startupErr, "exclusive order delivery validation failed",
+		observability.Log(ctx).Error(startupErr, "exclusive order delivery validation failed",
 			"executor", s.cfg.Executor.Hex(), "orderApi", s.cfg.OrderServer.BaseURL)
 		return startupErr
 	}
@@ -257,15 +261,15 @@ func (s *Solver) Run(ctx context.Context) error {
 	s.warmupUntil.Store(time.Now().Add(s.cfg.QuoteServer.QuoteTTL).Unix())
 	if err := s.refreshQuoteState(ctx, routes); err != nil {
 		startupErr := errors.Errorf("initial quote refresh: %w", err)
-		s.log.Error(startupErr, "initial quote refresh failed", "routes", len(routes))
+		observability.Log(ctx).Error(startupErr, "initial quote refresh failed", "routes", len(routes))
 		return startupErr
 	}
-	s.log.Info("starting", "chainId", s.chainID, "solverMode", s.cfg.SolverMode,
+	observability.Log(ctx).Info("starting", "chainId", s.chainID, "solverMode", s.cfg.SolverMode,
 		"reactor", s.cfg.Reactor.Hex(), "executor", s.cfg.Executor.Hex(),
 		"routes", len(routes), "gasAccounting", s.cfg.Gas != nil,
 		"listen", s.cfg.QuoteServer.ListenAddress, "orderApi", s.cfg.OrderServer.BaseURL)
 
-	server := s.newQuoteHTTPServer()
+	server := s.newQuoteHTTPServer(ctx)
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", server.Addr)
 	if err != nil {
 		return errors.Errorf("listen for quotes: %w", err)

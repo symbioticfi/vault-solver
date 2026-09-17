@@ -8,6 +8,7 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 const (
@@ -194,7 +195,7 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 	if len(expired) == 0 {
 		return nil
 	}
-	s.log.V(1).Info(
+	observability.Log(ctx).V(1).Info(
 		"exclusive obligations reconciliation started",
 		"obligations", len(expired),
 		"chainTime", now.Unix(),
@@ -289,7 +290,7 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 		if !decision.recoveredAtStart {
 			s.observeExclusiveOutcome(exclusiveOutcomeSettledInTime)
 		}
-		s.log.Info(
+		observability.Log(ctx).Info(
 			"exclusive order settled before exclusivity ended",
 			"orderHash", decision.hash.Hex(),
 			"tx", decision.txHash.Hex(),
@@ -307,7 +308,7 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 		if decision.txHash != (common.Hash{}) {
 			fields = append(fields, "tx", decision.txHash.Hex(), "filledAt", decision.filledAt.Unix())
 		}
-		s.log.Info("historical exclusive obligation missed", fields...)
+		observability.Log(ctx).Info("historical exclusive obligation missed", fields...)
 	}
 	s.openExclusiveBreaker(missed, now)
 	return nil

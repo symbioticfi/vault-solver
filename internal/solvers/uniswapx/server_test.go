@@ -22,7 +22,7 @@ func TestQuoteHTTPServerRoutesHealth(t *testing.T) {
 		cfg: &Config{QuoteServer: QuoteServerConfig{HTTPTimeout: time.Second}},
 		log: logr.Discard(),
 	}
-	server := solver.newQuoteHTTPServer()
+	server := solver.newQuoteHTTPServer(t.Context())
 
 	for _, path := range []string{"/health", "/healthz"} {
 		t.Run(path, func(t *testing.T) {

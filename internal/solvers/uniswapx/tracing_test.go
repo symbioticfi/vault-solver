@@ -91,7 +91,7 @@ func TestQuoteServerTracing(t *testing.T) {
 	solver := newTracingQuoteSolver(t, tokenIn, strategy)
 	request := validQuoteRequest(tokenIn, tokenOut)
 
-	response := postQuote(t, solver.newQuoteHTTPServer().Handler, request)
+	response := postQuote(t, solver.newQuoteHTTPServer(t.Context()).Handler, request)
 
 	if response.Code != http.StatusOK {
 		t.Fatalf("quote = %d, want 200 (body %s)", response.Code, response.Body.String())
@@ -128,7 +128,7 @@ func TestQuoteServerTracingDeclines(t *testing.T) {
 	solver := newTracingQuoteSolver(t, tokenIn, strategy)
 	request := validQuoteRequest(tokenIn, tokenOut)
 
-	if response := postQuote(t, solver.newQuoteHTTPServer().Handler, request); response.Code != http.StatusNoContent {
+	if response := postQuote(t, solver.newQuoteHTTPServer(t.Context()).Handler, request); response.Code != http.StatusNoContent {
 		t.Fatalf("declined quote = %d, want 204", response.Code)
 	}
 
@@ -165,7 +165,7 @@ func TestQuoteServerTracingEndsSpansOnPanic(t *testing.T) {
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	solver := newTracingQuoteSolver(t, tokenIn, panicQuoteStrategy{})
 
-	response := postQuote(t, solver.newQuoteHTTPServer().Handler, validQuoteRequest(tokenIn, tokenOut))
+	response := postQuote(t, solver.newQuoteHTTPServer(t.Context()).Handler, validQuoteRequest(tokenIn, tokenOut))
 
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("panicking quote = %d, want 500 (body %s)", response.Code, response.Body.String())
@@ -185,7 +185,7 @@ func TestQuoteServerTracingDeclinesMalformedBody(t *testing.T) {
 	request.Header.Set("traceparent", inboundTraceparent)
 	response := httptest.NewRecorder()
 
-	solver.newQuoteHTTPServer().Handler.ServeHTTP(response, request)
+	solver.newQuoteHTTPServer(t.Context()).Handler.ServeHTTP(response, request)
 
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("malformed quote = %d, want 400", response.Code)
@@ -259,9 +259,10 @@ func (f *tracingFillFixture) run(t *testing.T) {
 // runWithResult is run with the transaction outcome the manager reports back.
 func (f *tracingFillFixture) runWithResult(t *testing.T, result txmanager.Result) {
 	t.Helper()
+	ctx := f.loopContext(t)
 	orders := make(chan *resolvedOrder, 1)
 	if _, err := f.solver.pollSource(
-		t.Context(), orderSourceExclusiveV2, &f.solver.cfg.Executor, orders,
+		ctx, orderSourceExclusiveV2, &f.solver.cfg.Executor, orders,
 	); err != nil {
 		t.Fatalf("pollSource: %v", err)
 	}
@@ -269,7 +270,7 @@ func (f *tracingFillFixture) runWithResult(t *testing.T, result txmanager.Result
 	accepted := make(chan struct{}, 1)
 	f.txm.accepted = accepted
 	done := make(chan error, 1)
-	go func() { done <- f.solver.fillLoop(t.Context(), []liquidlane.Route{f.route}, orders) }()
+	go func() { done <- f.solver.fillLoop(ctx, []liquidlane.Route{f.route}, orders) }()
 	select {
 	case <-accepted:
 	case <-time.After(time.Second):
@@ -290,19 +291,26 @@ func (f *tracingFillFixture) runWithResult(t *testing.T, result txmanager.Result
 // that never reach submission.
 func (f *tracingFillFixture) runUnfilled(t *testing.T) {
 	t.Helper()
+	ctx := f.loopContext(t)
 	orders := make(chan *resolvedOrder, 1)
 	if _, err := f.solver.pollSource(
-		t.Context(), orderSourceExclusiveV2, &f.solver.cfg.Executor, orders,
+		ctx, orderSourceExclusiveV2, &f.solver.cfg.Executor, orders,
 	); err != nil {
 		t.Fatalf("pollSource: %v", err)
 	}
 	close(orders)
-	if err := f.solver.fillLoop(t.Context(), []liquidlane.Route{f.route}, orders); err != nil {
+	if err := f.solver.fillLoop(ctx, []liquidlane.Route{f.route}, orders); err != nil {
 		t.Fatalf("fill loop: %v", err)
 	}
 	if len(f.txm.reqs) != 0 {
 		t.Fatalf("transactions sent = %d, want none", len(f.txm.reqs))
 	}
+}
+
+// loopContext stands in for Run, which stores the solver logger on the context it hands the loops.
+func (f *tracingFillFixture) loopContext(t *testing.T) context.Context {
+	t.Helper()
+	return observability.WithLogger(t.Context(), f.solver.log)
 }
 
 var tracingFillTxHash = common.HexToHash("0x2")
@@ -369,6 +377,10 @@ func tracingOrderEntry(
 func TestOrderTraceLinksQuoteToFill(t *testing.T) {
 	rec := tracetest.Install(t)
 	fixture := newTracingFillFixture(t)
+	var lines []string
+	fixture.solver.log = funcr.NewJSON(
+		func(entry string) { lines = append(lines, entry) }, funcr.Options{Verbosity: 1},
+	)
 	// Stand in for quoteHandler having served quote-1 earlier, in its own trace.
 	quoteCtx, endQuote := tracer.Start(t.Context(), "uniswapx.quote")
 	fixture.solver.links.Remember(quoteCtx, fixture.entry.QuoteID, time.Minute)
@@ -410,6 +422,28 @@ func TestOrderTraceLinksQuoteToFill(t *testing.T) {
 	}
 	if got := tracetest.Attr(tracetest.Ended(t, rec, "uniswapx.fill.plan"), "strategy.name"); got != tracingStrategy {
 		t.Fatalf("plan span strategy.name = %q, want %q", got, tracingStrategy)
+	}
+	// The link's trace id rides on the order, so the fill and its completion log it too — not just
+	// the trackOrder logger that resolved it.
+	requireLoggedQuoteTrace(t, lines, quoteTraceID, "order fill submitted", "order filled")
+}
+
+// requireLoggedQuoteTrace asserts that each named log message carried the quote's trace id.
+func requireLoggedQuoteTrace(t *testing.T, lines []string, quoteTraceID string, messages ...string) {
+	t.Helper()
+	for _, message := range messages {
+		var found bool
+		for _, line := range lines {
+			if strings.Contains(line, message) {
+				found = true
+				if !strings.Contains(line, `"quoteTraceId":"`+quoteTraceID+`"`) {
+					t.Fatalf("%q line carries no quoteTraceId %s: %s", message, quoteTraceID, line)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("no %q line was logged: %v", message, lines)
+		}
 	}
 }
 
@@ -541,7 +575,7 @@ func TestOrderLogsCarryTraceIDOnce(t *testing.T) {
 	if len(lines) == 0 {
 		t.Fatal("no log output captured")
 	}
-	var sawOrderLine bool
+	var sawOrderLine, sawAdmissionLine bool
 	for _, line := range lines {
 		if n := strings.Count(line, `"trace_id"`); n > 1 {
 			t.Fatalf("trace_id appears %d times in %s", n, line)
@@ -552,9 +586,17 @@ func TestOrderLogsCarryTraceIDOnce(t *testing.T) {
 		if strings.Contains(line, `"orderHash"`) && strings.Contains(line, `"trace_id"`) {
 			sawOrderLine = true
 		}
+		// The fill loop's admission lines log from the order's track span, so they carry trace ids
+		// even though the loop itself runs under no span of its own.
+		if strings.Contains(line, "order fill planning started") && strings.Contains(line, `"trace_id"`) {
+			sawAdmissionLine = true
+		}
 	}
 	if !sawOrderLine {
 		t.Fatalf("no order-path line carried trace_id: %v", lines)
+	}
+	if !sawAdmissionLine {
+		t.Fatalf("the fill-admission line carried no trace_id: %v", lines)
 	}
 }
 
