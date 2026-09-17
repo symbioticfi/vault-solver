@@ -476,5 +476,6 @@ run against the no-op provider and prove there is no behaviour change when traci
 - [ ] cap or aggregate the per-offer `declined` events on `3f.offers.reconcile`
 - [ ] the RPC span's success `attempt` event is timestamped at body close, not at the attempt
 - [ ] a no-op `txmanager.replace` tick emits an empty span, and replace spans carry no `tx.hash`
+- [ ] the LI.FI quote-loop tick (`runConnectedQuoteLoop`) is unspanned, so `shouldRefreshQuotes` lines carry no trace ids
 - [ ] 3F `refreshTargetsAndHydrate` emits a root `3f.offers.reconcile`, and the health-tick reconcile is untraced
 - [ ] no unit tests for `NewTracer("")`, `NewSpanLinks(0)`, `Raw()`, or `TraceTransport` with a non-nil base
