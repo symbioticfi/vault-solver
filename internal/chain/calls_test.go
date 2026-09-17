@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -96,11 +95,6 @@ func chainRPCResult(method string) string {
 	}
 }
 
-// hasEvent reports whether the span recorded an event with the given name.
-func hasEvent(s sdktrace.ReadOnlySpan, name string) bool {
-	return slices.ContainsFunc(s.Events(), func(e sdktrace.Event) bool { return e.Name == name })
-}
-
 // countSpans returns how many ended spans carry the given name.
 func countSpans(rec interface {
 	Ended() []sdktrace.ReadOnlySpan
@@ -136,12 +130,12 @@ func TestDialWebsocket_PropagatesOnHandshakeAndSpansCalls(t *testing.T) {
 			traceparent, parent.SpanContext().TraceID())
 	}
 
-	connect := endedSpan(t, rec, "chain.rpc.connect")
+	connect := tracetest.Ended(t, rec, "chain.rpc.connect")
 	if connect.SpanKind() != trace.SpanKindClient {
 		t.Fatalf("connect span kind = %v, want client", connect.SpanKind())
 	}
-	if attr(connect, "chain.rpc.transport") != rpcTransportWS ||
-		attr(connect, "chain.rpc.role") != rpcRoleShared {
+	if tracetest.Attr(connect, "chain.rpc.transport") != rpcTransportWS ||
+		tracetest.Attr(connect, "chain.rpc.role") != rpcRoleShared {
 		t.Fatalf("connect attributes = %v", connect.Attributes())
 	}
 	if connect.Status().Code == codes.Error {
@@ -153,7 +147,7 @@ func TestDialWebsocket_PropagatesOnHandshakeAndSpansCalls(t *testing.T) {
 	}
 	parent.End()
 
-	span := endedSpan(t, rec, "eth_blockNumber")
+	span := tracetest.Ended(t, rec, "eth_blockNumber")
 	if span.Parent().SpanID() != parent.SpanContext().SpanID() {
 		t.Fatalf("call span parent = %s, want the caller span %s",
 			span.Parent().SpanID(), parent.SpanContext().SpanID())
@@ -161,8 +155,8 @@ func TestDialWebsocket_PropagatesOnHandshakeAndSpansCalls(t *testing.T) {
 	if span.SpanKind() != trace.SpanKindClient {
 		t.Fatalf("call span kind = %v, want client", span.SpanKind())
 	}
-	if attr(span, "rpc.system") != "jsonrpc" || attr(span, "rpc.method") != "eth_blockNumber" ||
-		attr(span, "chain.rpc.role") != rpcRoleShared || attr(span, "chain.rpc.transport") != rpcTransportWS {
+	if tracetest.Attr(span, "rpc.system") != "jsonrpc" || tracetest.Attr(span, "rpc.method") != "eth_blockNumber" ||
+		tracetest.Attr(span, "chain.rpc.role") != rpcRoleShared || tracetest.Attr(span, "chain.rpc.transport") != rpcTransportWS {
 		t.Fatalf("call attributes = %v", span.Attributes())
 	}
 }
@@ -177,11 +171,11 @@ func TestDialWebsocket_ConnectSpanErrorOnDialFailure(t *testing.T) {
 		t.Fatal("expected a dial error against a closed endpoint")
 	}
 
-	connect := endedSpan(t, rec, "chain.rpc.connect")
+	connect := tracetest.Ended(t, rec, "chain.rpc.connect")
 	if connect.Status().Code != codes.Error {
 		t.Fatalf("connect status = %v, want Error", connect.Status())
 	}
-	if attr(connect, "chain.rpc.transport") != rpcTransportWS {
+	if tracetest.Attr(connect, "chain.rpc.transport") != rpcTransportWS {
 		t.Fatalf("connect attributes = %v", connect.Attributes())
 	}
 }
@@ -205,11 +199,11 @@ func TestTransactionReceiptOverWebsocket_NotFoundIsNotAnError(t *testing.T) {
 		t.Fatalf("TransactionReceipt error = %v, want ethereum.NotFound", err)
 	}
 
-	span := endedSpan(t, rec, rpcMethodGetTransactionReceipt)
+	span := tracetest.Ended(t, rec, rpcMethodGetTransactionReceipt)
 	if span.Status().Code == codes.Error {
 		t.Fatalf("status = %v, want unset for a not-found receipt", span.Status())
 	}
-	if !hasEvent(span, "not_found") {
+	if !tracetest.HasEvent(span, "not_found") {
 		t.Fatalf("events = %v, want a not_found event", span.Events())
 	}
 }
@@ -281,9 +275,9 @@ func TestDialHTTP_NoMethodLevelSpans(t *testing.T) {
 		}
 	}
 	for _, s := range rec.Ended() {
-		if attr(s, "chain.rpc.transport") != "" {
+		if tracetest.Attr(s, "chain.rpc.transport") != "" {
 			t.Fatalf("span %q carries chain.rpc.transport = %q on the HTTP path",
-				s.Name(), attr(s, "chain.rpc.transport"))
+				s.Name(), tracetest.Attr(s, "chain.rpc.transport"))
 		}
 	}
 }

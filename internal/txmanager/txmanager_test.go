@@ -18,8 +18,6 @@ import (
 	"github.com/go-logr/logr/funcr"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	sdkspantest "go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 	"github.com/symbioticfi/vault-solver/internal/signer"
@@ -3143,26 +3141,6 @@ func ptr[T any](value T) *T {
 	return &value
 }
 
-func endedSpan(t *testing.T, rec *sdkspantest.SpanRecorder, name string) sdktrace.ReadOnlySpan {
-	t.Helper()
-	for _, s := range rec.Ended() {
-		if s.Name() == name {
-			return s
-		}
-	}
-	t.Fatalf("span %q not ended", name)
-	return nil
-}
-
-func attr(s sdktrace.ReadOnlySpan, key string) string {
-	for _, kv := range s.Attributes() {
-		if string(kv.Key) == key {
-			return kv.Value.String()
-		}
-	}
-	return ""
-}
-
 func TestSendSpansNestUnderCaller(t *testing.T) {
 	rec := tracetest.Install(t)
 	b := newMockBackend()
@@ -3177,23 +3155,23 @@ func TestSendSpansNestUnderCaller(t *testing.T) {
 		t.Fatalf("outcome %v err %v", res.Outcome, res.Err)
 	}
 
-	send := endedSpan(t, rec, "txmanager.send test-fill")
-	broadcast := endedSpan(t, rec, "txmanager.broadcast")
+	send := tracetest.Ended(t, rec, "txmanager.send test-fill")
+	broadcast := tracetest.Ended(t, rec, "txmanager.broadcast")
 	if send.Parent().SpanID() != parent.SpanContext().SpanID() {
 		t.Fatal("send span is not a child of the caller span")
 	}
 	if broadcast.Parent().SpanID() != send.SpanContext().SpanID() {
 		t.Fatal("broadcast span is not a child of the send span")
 	}
-	if attr(send, "tx.outcome") != "confirmed" || attr(send, "solver") != "rfq" ||
-		attr(send, "tx.label") != "test-fill" || attr(send, "tx.hash") != res.Hash.Hex() ||
-		attr(send, "tx.nonce") != "7" {
+	if tracetest.Attr(send, "tx.outcome") != "confirmed" || tracetest.Attr(send, "solver") != "rfq" ||
+		tracetest.Attr(send, "tx.label") != "test-fill" || tracetest.Attr(send, "tx.hash") != res.Hash.Hex() ||
+		tracetest.Attr(send, "tx.nonce") != "7" {
 		t.Fatalf("send attributes: %v", send.Attributes())
 	}
 	if send.Status().Code != codes.Unset {
 		t.Fatalf("send status = %v, want unset for a confirmed transaction", send.Status())
 	}
-	if attr(broadcast, "tx.hash") != res.Hash.Hex() || attr(broadcast, "tx.nonce") != "7" {
+	if tracetest.Attr(broadcast, "tx.hash") != res.Hash.Hex() || tracetest.Attr(broadcast, "tx.nonce") != "7" {
 		t.Fatalf("broadcast attributes: %v", broadcast.Attributes())
 	}
 }
@@ -3211,14 +3189,14 @@ func TestSendSpanRecordsBroadcastFailure(t *testing.T) {
 		t.Fatalf("outcome %v err %v, want a submission error", res.Outcome, res.Err)
 	}
 
-	send := endedSpan(t, rec, "txmanager.send rejected")
-	if attr(send, "tx.outcome") != string(OutcomeSubmissionError) {
+	send := tracetest.Ended(t, rec, "txmanager.send rejected")
+	if tracetest.Attr(send, "tx.outcome") != string(OutcomeSubmissionError) {
 		t.Fatalf("send attributes: %v", send.Attributes())
 	}
 	if send.Status().Code != codes.Error {
 		t.Fatalf("send status = %v, want Error", send.Status())
 	}
-	if broadcast := endedSpan(t, rec, "txmanager.broadcast"); broadcast.Status().Code != codes.Error {
+	if broadcast := tracetest.Ended(t, rec, "txmanager.broadcast"); broadcast.Status().Code != codes.Error {
 		t.Fatalf("broadcast status = %v, want Error", broadcast.Status())
 	}
 }
@@ -3248,7 +3226,7 @@ func TestTrySendBusyLaneDeclinesWithoutErrorStatus(t *testing.T) {
 		t.Fatalf("first TrySend: %v", got.Err)
 	}
 
-	declined := endedSpan(t, rec, "txmanager.send second")
+	declined := tracetest.Ended(t, rec, "txmanager.send second")
 	if declined.Status().Code != codes.Unset {
 		t.Fatalf("busy-lane status = %v, want unset", declined.Status())
 	}

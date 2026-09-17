@@ -26,65 +26,6 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
-// spanRecorder is the slice of tracetest.SpanRecorder these assertions need.
-type spanRecorder interface {
-	Ended() []sdktrace.ReadOnlySpan
-}
-
-func endedSpan(t *testing.T, rec spanRecorder, name string) sdktrace.ReadOnlySpan {
-	t.Helper()
-	for _, s := range rec.Ended() {
-		if s.Name() == name {
-			return s
-		}
-	}
-	t.Fatalf("span %q not ended; ended spans: %v", name, spanNames(rec))
-	return nil
-}
-
-func spanNames(rec spanRecorder) []string {
-	ended := rec.Ended()
-	out := make([]string, 0, len(ended))
-	for _, s := range ended {
-		out = append(out, s.Name())
-	}
-	return out
-}
-
-func attr(s sdktrace.ReadOnlySpan, key string) string {
-	for _, kv := range s.Attributes() {
-		if string(kv.Key) == key {
-			return kv.Value.String()
-		}
-	}
-	return ""
-}
-
-func requireChildOf(t *testing.T, child, parent sdktrace.ReadOnlySpan) {
-	t.Helper()
-	if got, want := child.Parent().SpanID(), parent.SpanContext().SpanID(); got != want {
-		t.Fatalf("span %q parent = %s, want %q (%s)", child.Name(), got, parent.Name(), want)
-	}
-}
-
-func hasEvent(s sdktrace.ReadOnlySpan, name string) bool {
-	for _, e := range s.Events() {
-		if e.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
-func requireNoErrorSpans(t *testing.T, rec spanRecorder) {
-	t.Helper()
-	for _, s := range rec.Ended() {
-		if s.Status().Code == codes.Error {
-			t.Fatalf("span %q ended with error status %q", s.Name(), s.Status().Description)
-		}
-	}
-}
-
 // stubOfferStrategy stands in for the configured 3F strategy: it returns a fixed plan, an error, or
 // blows up mid-decision the way a webhook decoder can.
 type stubOfferStrategy struct {
@@ -218,36 +159,36 @@ func TestDiscoverAndOfferTracesOfferPipeline(t *testing.T) {
 	if got := fixture.createCalls.Load(); got != 1 {
 		t.Fatalf("createOffer calls = %d, want 1", got)
 	}
-	sync := endedSpan(t, rec, "3f.sync")
+	sync := tracetest.Ended(t, rec, "3f.sync")
 	if sync.Parent().IsValid() {
 		t.Fatalf("3f.sync has parent %v, want a root", sync.Parent())
 	}
-	reconcile := endedSpan(t, rec, "3f.offers.reconcile")
-	view := endedSpan(t, rec, "3f.auction.view")
-	decide := endedSpan(t, rec, "3f.offer.decide")
-	auction := endedSpan(t, rec, "3f.auction")
-	build := endedSpan(t, rec, "3f.offer.build")
-	submit := endedSpan(t, rec, "3f.offer.submit")
+	reconcile := tracetest.Ended(t, rec, "3f.offers.reconcile")
+	view := tracetest.Ended(t, rec, "3f.auction.view")
+	decide := tracetest.Ended(t, rec, "3f.offer.decide")
+	auction := tracetest.Ended(t, rec, "3f.auction")
+	build := tracetest.Ended(t, rec, "3f.offer.build")
+	submit := tracetest.Ended(t, rec, "3f.offer.submit")
 	for _, child := range []sdktrace.ReadOnlySpan{reconcile, view, decide, auction} {
-		requireChildOf(t, child, sync)
+		tracetest.RequireChildOf(t, child, sync)
 	}
-	requireChildOf(t, build, auction)
-	requireChildOf(t, submit, auction)
-	requireNoErrorSpans(t, rec)
+	tracetest.RequireChildOf(t, build, auction)
+	tracetest.RequireChildOf(t, submit, auction)
+	tracetest.RequireNoErrorSpans(t, rec)
 
-	if got := attr(decide, "strategy.name"); got != tracingStrategyName {
+	if got := tracetest.Attr(decide, "strategy.name"); got != tracingStrategyName {
 		t.Fatalf("decide strategy.name = %q, want %q", got, tracingStrategyName)
 	}
-	if got := attr(auction, "auction.id"); got != strconv.FormatInt(fixture.auctionID, 10) {
+	if got := tracetest.Attr(auction, "auction.id"); got != strconv.FormatInt(fixture.auctionID, 10) {
 		t.Fatalf("auction.id = %q, want %d", got, fixture.auctionID)
 	}
-	if got := attr(auction, "adapter.address"); got != fixture.adapter.Hex() {
+	if got := tracetest.Attr(auction, "adapter.address"); got != fixture.adapter.Hex() {
 		t.Fatalf("adapter.address = %q, want %s", got, fixture.adapter.Hex())
 	}
-	if got := attr(auction, "request.address"); got != fixture.request.Hex() {
+	if got := tracetest.Attr(auction, "request.address"); got != fixture.request.Hex() {
 		t.Fatalf("request.address = %q, want %s", got, fixture.request.Hex())
 	}
-	if got := attr(sync, "solver"); got != Name {
+	if got := tracetest.Attr(sync, "solver"); got != Name {
 		t.Fatalf("sync solver = %q, want %q", got, Name)
 	}
 
@@ -274,11 +215,11 @@ func TestDiscoverAndOfferDeclinesEmptyStrategyPlan(t *testing.T) {
 	if got := fixture.createCalls.Load(); got != 0 {
 		t.Fatalf("createOffer calls = %d, want none", got)
 	}
-	decide := endedSpan(t, rec, "3f.offer.decide")
-	if !hasEvent(decide, "declined") {
+	decide := tracetest.Ended(t, rec, "3f.offer.decide")
+	if !tracetest.HasEvent(decide, "declined") {
 		t.Fatalf("decide span events = %v, want a declined event", decide.Events())
 	}
-	requireNoErrorSpans(t, rec)
+	tracetest.RequireNoErrorSpans(t, rec)
 }
 
 // A failing createOffer is a real failure: the submit stage and the auction span it belongs to both
@@ -289,14 +230,14 @@ func TestDiscoverAndOfferRecordsSubmitFailure(t *testing.T) {
 
 	fixture.solver.discoverAndOffer(t.Context())
 
-	submit := endedSpan(t, rec, "3f.offer.submit")
+	submit := tracetest.Ended(t, rec, "3f.offer.submit")
 	if submit.Status().Code != codes.Error {
 		t.Fatalf("submit status = %v, want error", submit.Status())
 	}
-	if !hasEvent(submit, "exception") {
+	if !tracetest.HasEvent(submit, "exception") {
 		t.Fatalf("submit events = %v, want a recorded exception", submit.Events())
 	}
-	auction := endedSpan(t, rec, "3f.auction")
+	auction := tracetest.Ended(t, rec, "3f.auction")
 	if auction.Status().Code != codes.Error {
 		t.Fatalf("auction status = %v, want error", auction.Status())
 	}
@@ -313,11 +254,11 @@ func TestDiscoverAndOfferDeclinesWhenLaneNotReady(t *testing.T) {
 
 	fixture.solver.discoverAndOffer(t.Context())
 
-	sync := endedSpan(t, rec, "3f.sync")
-	if !hasEvent(sync, "declined") {
+	sync := tracetest.Ended(t, rec, "3f.sync")
+	if !tracetest.HasEvent(sync, "declined") {
 		t.Fatalf("sync events = %v, want a declined event", sync.Events())
 	}
-	requireNoErrorSpans(t, rec)
+	tracetest.RequireNoErrorSpans(t, rec)
 }
 
 // Every span end is deferred, so a strategy that panics mid-decision still exports its stages
@@ -335,8 +276,8 @@ func TestDiscoverAndOfferEndsSpansOnStrategyPanic(t *testing.T) {
 		fixture.solver.discoverAndOffer(t.Context())
 	}()
 
-	endedSpan(t, rec, "3f.offer.decide")
-	endedSpan(t, rec, "3f.sync")
+	tracetest.Ended(t, rec, "3f.offer.decide")
+	tracetest.Ended(t, rec, "3f.sync")
 }
 
 // newRedeemFixture wires a solver whose single adapter holds two requests, only one of which can
@@ -387,11 +328,11 @@ func TestRedeemAllLinksToRememberedOfferSpans(t *testing.T) {
 	if got := sent.Load(); got != 1 {
 		t.Fatalf("sent transactions = %d, want 1", got)
 	}
-	redeem := endedSpan(t, rec, "3f.redeem")
-	read := endedSpan(t, rec, "3f.redeem.read")
-	submit := endedSpan(t, rec, "3f.redeem.submit")
-	requireChildOf(t, read, redeem)
-	requireChildOf(t, submit, redeem)
+	redeem := tracetest.Ended(t, rec, "3f.redeem")
+	read := tracetest.Ended(t, rec, "3f.redeem.read")
+	submit := tracetest.Ended(t, rec, "3f.redeem.submit")
+	tracetest.RequireChildOf(t, read, redeem)
+	tracetest.RequireChildOf(t, submit, redeem)
 
 	if got := len(submit.Links()); got != 1 {
 		t.Fatalf("redeem submit links = %d, want 1", got)
@@ -399,22 +340,22 @@ func TestRedeemAllLinksToRememberedOfferSpans(t *testing.T) {
 	if got, want := submit.Links()[0].SpanContext.SpanID(), offerSpan.SpanID(); got != want {
 		t.Fatalf("link target = %s, want the offer span %s", got, want)
 	}
-	if got := attr(submit, "offer.linked_count"); got != "1" {
+	if got := tracetest.Attr(submit, "offer.linked_count"); got != "1" {
 		t.Fatalf("offer.linked_count = %q, want 1", got)
 	}
-	if got := attr(submit, "tx.hash"); got != hash.Hex() {
+	if got := tracetest.Attr(submit, "tx.hash"); got != hash.Hex() {
 		t.Fatalf("submit tx.hash = %q, want %s", got, hash.Hex())
 	}
-	if got := attr(redeem, "tx.hash"); got != hash.Hex() {
+	if got := tracetest.Attr(redeem, "tx.hash"); got != hash.Hex() {
 		t.Fatalf("redeem tx.hash = %q, want %s", got, hash.Hex())
 	}
-	if got := attr(submit, "tx.outcome"); got != string(txmanager.OutcomeConfirmed) {
+	if got := tracetest.Attr(submit, "tx.outcome"); got != string(txmanager.OutcomeConfirmed) {
 		t.Fatalf("submit tx.outcome = %q, want %s", got, txmanager.OutcomeConfirmed)
 	}
-	if hasEvent(submit, "link_miss") {
+	if tracetest.HasEvent(submit, "link_miss") {
 		t.Fatal("redeem submit recorded a link miss despite a remembered offer")
 	}
-	requireNoErrorSpans(t, rec)
+	tracetest.RequireNoErrorSpans(t, rec)
 }
 
 // A miss is inert (spec §12): the redeem still sends, with no link and one link_miss naming the key.
@@ -427,11 +368,11 @@ func TestRedeemAllSendsWithoutRememberedOfferSpan(t *testing.T) {
 	if got := sent.Load(); got != 1 {
 		t.Fatalf("sent transactions = %d, want 1", got)
 	}
-	submit := endedSpan(t, rec, "3f.redeem.submit")
+	submit := tracetest.Ended(t, rec, "3f.redeem.submit")
 	if got := len(submit.Links()); got != 0 {
 		t.Fatalf("redeem submit links = %d, want none", got)
 	}
-	if got := attr(submit, "offer.linked_count"); got != "0" {
+	if got := tracetest.Attr(submit, "offer.linked_count"); got != "0" {
 		t.Fatalf("offer.linked_count = %q, want 0", got)
 	}
 	misses := 0
@@ -453,7 +394,7 @@ func TestRedeemAllSendsWithoutRememberedOfferSpan(t *testing.T) {
 	if misses != 1 {
 		t.Fatalf("link_miss events = %d, want 1 (events %v)", misses, submit.Events())
 	}
-	requireNoErrorSpans(t, rec)
+	tracetest.RequireNoErrorSpans(t, rec)
 }
 
 // A redeem the manager rejected before broadcasting has no transaction: the outcome is recorded,
@@ -468,15 +409,15 @@ func TestRedeemAllOmitsTxHashWhenNotBroadcast(t *testing.T) {
 		t.Fatalf("sent transactions = %d, want 1", got)
 	}
 	for _, name := range []string{"3f.redeem", "3f.redeem.submit"} {
-		span := endedSpan(t, rec, name)
-		if got := attr(span, "tx.hash"); got != "" {
+		span := tracetest.Ended(t, rec, name)
+		if got := tracetest.Attr(span, "tx.hash"); got != "" {
 			t.Fatalf("%s tx.hash = %q, want no attribute for a transaction that never went out", name, got)
 		}
-		if got := attr(span, "tx.outcome"); got != string(txmanager.OutcomeSubmissionError) {
+		if got := tracetest.Attr(span, "tx.outcome"); got != string(txmanager.OutcomeSubmissionError) {
 			t.Fatalf("%s tx.outcome = %q, want %s", name, got, txmanager.OutcomeSubmissionError)
 		}
 	}
-	if got := endedSpan(t, rec, "3f.redeem.submit").Status().Code; got != codes.Error {
+	if got := tracetest.Ended(t, rec, "3f.redeem.submit").Status().Code; got != codes.Error {
 		t.Fatalf("submit span status = %v, want Error", got)
 	}
 }

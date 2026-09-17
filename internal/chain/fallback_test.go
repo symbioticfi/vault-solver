@@ -21,21 +21,11 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 )
-
-func attr(s sdktrace.ReadOnlySpan, key string) string {
-	for _, kv := range s.Attributes() {
-		if string(kv.Key) == key {
-			return kv.Value.String()
-		}
-	}
-	return ""
-}
 
 // mustEndpoints parses raw URLs into endpoints for a fallbackTransport, failing the test on error.
 func mustEndpoints(t *testing.T, raws ...string) []*url.URL {
@@ -394,7 +384,7 @@ func TestFallbackTransport_SpansOneRequestAcrossAttempts(t *testing.T) {
 	_ = resp.Body.Close()
 	parent.End()
 
-	span := endedSpan(t, rec, rpcMethodChainID)
+	span := tracetest.Ended(t, rec, rpcMethodChainID)
 	if span.Parent().SpanID() != parent.SpanContext().SpanID() {
 		t.Fatalf("rpc span parent = %s, want the caller span %s", span.Parent().SpanID(), parent.SpanContext().SpanID())
 	}
@@ -410,9 +400,9 @@ func TestFallbackTransport_SpansOneRequestAcrossAttempts(t *testing.T) {
 	if !strings.Contains(gotTraceparent, parent.SpanContext().TraceID().String()) {
 		t.Fatalf("traceparent = %q, want the caller trace id %s", gotTraceparent, parent.SpanContext().TraceID())
 	}
-	if attr(span, "rpc.system") != "jsonrpc" || attr(span, "rpc.method") != rpcMethodChainID ||
-		attr(span, "rpc.jsonrpc.request_id") != "7" || attr(span, "chain.rpc.role") != rpcRoleRead ||
-		attr(span, "chain.rpc.batch") != "false" {
+	if tracetest.Attr(span, "rpc.system") != "jsonrpc" || tracetest.Attr(span, "rpc.method") != rpcMethodChainID ||
+		tracetest.Attr(span, "rpc.jsonrpc.request_id") != "7" || tracetest.Attr(span, "chain.rpc.role") != rpcRoleRead ||
+		tracetest.Attr(span, "chain.rpc.batch") != "false" {
 		t.Fatalf("attributes = %v", span.Attributes())
 	}
 }
@@ -448,21 +438,6 @@ func TestFallbackTransport_SpanErrorWhenAllEndpointsFail(t *testing.T) {
 	if spans[0].Status().Code != codes.Error || spans[0].Status().Description != string(rpcOutcomeHTTP5xx) {
 		t.Fatalf("status = %v, want Error/%s", spans[0].Status(), rpcOutcomeHTTP5xx)
 	}
-}
-
-// endedSpan returns the ended span with the given name, failing the test when it is missing.
-func endedSpan(t *testing.T, rec interface {
-	Ended() []sdktrace.ReadOnlySpan
-}, name string,
-) sdktrace.ReadOnlySpan {
-	t.Helper()
-	for _, s := range rec.Ended() {
-		if s.Name() == name {
-			return s
-		}
-	}
-	t.Fatalf("span %q not ended, got %v", name, rec.Ended())
-	return nil
 }
 
 func TestFallbackTransport_ShortCallerDeadlineStillReachesFallback(t *testing.T) {

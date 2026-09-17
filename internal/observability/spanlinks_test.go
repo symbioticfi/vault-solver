@@ -5,17 +5,27 @@ import (
 	"testing"
 	"time"
 
-	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 )
 
+// tracedContext returns a context carrying a valid span context. SpanLinks only reads the span
+// context, so these tests need no recording provider.
+func tracedContext(t *testing.T) (context.Context, trace.SpanContext) {
+	t.Helper()
+	sc := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    trace.TraceID{0x0b, 0xad, 0xca, 0xfe, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12},
+		SpanID:     trace.SpanID{1, 2, 3, 4, 5, 6, 7, 8},
+		TraceFlags: trace.FlagsSampled,
+	})
+	return trace.ContextWithSpanContext(t.Context(), sc), sc
+}
+
 func TestSpanLinksRememberLookup(t *testing.T) {
-	installRecorder(t)
+	ctx, sc := tracedContext(t)
 	l := NewSpanLinks(2)
-	ctx, span := otel.Tracer("x").Start(t.Context(), "q")
-	span.End()
 	l.Remember(ctx, " Q1 ", time.Minute)
 	link, ok := l.Lookup("q1")
-	if !ok || link.SpanContext.TraceID() != span.SpanContext().TraceID() {
+	if !ok || link.SpanContext.TraceID() != sc.TraceID() {
 		t.Fatalf("lookup = %v, %v", link, ok)
 	}
 	if _, hit := l.Lookup("missing"); hit {
@@ -29,12 +39,10 @@ func TestSpanLinksRememberLookup(t *testing.T) {
 }
 
 func TestSpanLinksTTLAndEviction(t *testing.T) {
-	installRecorder(t)
+	ctx, _ := tracedContext(t)
 	l := NewSpanLinks(2)
 	now := time.Unix(1000, 0)
 	l.now = func() time.Time { return now }
-	ctx, span := otel.Tracer("x").Start(t.Context(), "q")
-	span.End()
 	l.Remember(ctx, "a", 10*time.Second)
 	l.Remember(ctx, "b", 10*time.Second)
 	l.Remember(ctx, "c", 10*time.Second) // evicts a
@@ -56,12 +64,10 @@ func TestSpanLinksTTLAndEviction(t *testing.T) {
 // TestSpanLinksReRememberAfterExpiryDoesNotDesyncEviction guards against evicting a freshly
 // re-remembered key because its stale, already-expired order slot is still queued for eviction.
 func TestSpanLinksReRememberAfterExpiryDoesNotDesyncEviction(t *testing.T) {
-	installRecorder(t)
+	ctx, _ := tracedContext(t)
 	l := NewSpanLinks(2)
 	now := time.Unix(1000, 0)
 	l.now = func() time.Time { return now }
-	ctx, span := otel.Tracer("x").Start(t.Context(), "q")
-	span.End()
 
 	l.Remember(ctx, "a", 5*time.Second)
 	now = now.Add(6 * time.Second)

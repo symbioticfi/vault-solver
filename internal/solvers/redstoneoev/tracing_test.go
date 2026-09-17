@@ -25,58 +25,13 @@ type spanRecorder interface {
 	Ended() []sdktrace.ReadOnlySpan
 }
 
-func endedSpan(t *testing.T, rec spanRecorder, name string) sdktrace.ReadOnlySpan {
-	t.Helper()
-	for _, s := range rec.Ended() {
-		if s.Name() == name {
-			return s
-		}
-	}
-	t.Fatalf("span %q not ended; ended spans: %v", name, spanNames(rec))
-	return nil
-}
-
-func spanNames(rec spanRecorder) []string {
-	ended := rec.Ended()
-	out := make([]string, 0, len(ended))
-	for _, s := range ended {
-		out = append(out, s.Name())
-	}
-	return out
-}
-
 func noSpan(t *testing.T, rec spanRecorder, name string) {
 	t.Helper()
 	for _, s := range rec.Ended() {
 		if s.Name() == name {
-			t.Fatalf("span %q was started, want none; ended spans: %v", name, spanNames(rec))
+			t.Fatalf("span %q was started, want none; ended spans: %v", name, tracetest.Names(rec))
 		}
 	}
-}
-
-func attr(s sdktrace.ReadOnlySpan, key string) string {
-	for _, kv := range s.Attributes() {
-		if string(kv.Key) == key {
-			return kv.Value.String()
-		}
-	}
-	return ""
-}
-
-func requireChildOf(t *testing.T, child, parent sdktrace.ReadOnlySpan) {
-	t.Helper()
-	if got, want := child.Parent().SpanID(), parent.SpanContext().SpanID(); got != want {
-		t.Fatalf("span %q parent = %s, want %q (%s)", child.Name(), got, parent.Name(), want)
-	}
-}
-
-func hasEvent(s sdktrace.ReadOnlySpan, name string) bool {
-	for _, e := range s.Events() {
-		if e.Name == name {
-			return true
-		}
-	}
-	return false
 }
 
 func eventCount(s sdktrace.ReadOnlySpan, name string) int {
@@ -87,15 +42,6 @@ func eventCount(s sdktrace.ReadOnlySpan, name string) int {
 		}
 	}
 	return n
-}
-
-func requireNoErrorSpans(t *testing.T, rec spanRecorder) {
-	t.Helper()
-	for _, s := range rec.Ended() {
-		if s.Status().Code == codes.Error {
-			t.Fatalf("span %q ended with error status %q", s.Name(), s.Status().Description)
-		}
-	}
 }
 
 // tracedAuction returns a seeded solver plus a freshly emitted, liquidatable auction frame — the
@@ -139,38 +85,38 @@ func TestAuctionTraceSpanTree(t *testing.T) {
 	if frame := drainSend(s); frame == nil {
 		t.Fatal("expected a solve to be enqueued for a liquidatable auction")
 	}
-	auction := endedSpan(t, rec, "oev.auction")
+	auction := tracetest.Ended(t, rec, "oev.auction")
 	if auction.Parent().IsValid() {
 		t.Fatalf("oev.auction parent = %s, want a root span", auction.Parent().SpanID())
 	}
-	if got := attr(auction, "auction.id"); got != a.ID {
+	if got := tracetest.Attr(auction, "auction.id"); got != a.ID {
 		t.Fatalf("auction.id = %q, want %q", got, a.ID)
 	}
-	if got := attr(auction, "solver"); got != Name {
+	if got := tracetest.Attr(auction, "solver"); got != Name {
 		t.Fatalf("solver = %q, want %q", got, Name)
 	}
 
-	bid := endedSpan(t, rec, "oev.auction.bid")
-	requireChildOf(t, bid, auction)
-	if got := attr(bid, "strategy.name"); got != defaultStrategyName {
+	bid := tracetest.Ended(t, rec, "oev.auction.bid")
+	tracetest.RequireChildOf(t, bid, auction)
+	if got := tracetest.Attr(bid, "strategy.name"); got != defaultStrategyName {
 		t.Fatalf("strategy.name = %q, want %q", got, defaultStrategyName)
 	}
 	for _, stage := range []string{
 		"oev.auction.candidates", "oev.auction.size", "oev.auction.bundle", "oev.auction.economics",
 	} {
-		span := endedSpan(t, rec, stage)
-		requireChildOf(t, span, bid)
-		if got := attr(span, "solver"); got != Name {
+		span := tracetest.Ended(t, rec, stage)
+		tracetest.RequireChildOf(t, span, bid)
+		if got := tracetest.Attr(span, "solver"); got != Name {
 			t.Fatalf("%s solver = %q, want %q", stage, got, Name)
 		}
 	}
 
-	send := endedSpan(t, rec, "oev.auction.send")
-	requireChildOf(t, send, auction)
-	if hasEvent(send, "declined") {
+	send := tracetest.Ended(t, rec, "oev.auction.send")
+	tracetest.RequireChildOf(t, send, auction)
+	if tracetest.HasEvent(send, "declined") {
 		t.Fatal("an accepted solve must not be declined")
 	}
-	requireNoErrorSpans(t, rec)
+	tracetest.RequireNoErrorSpans(t, rec)
 
 	if _, ok := s.links.Lookup(a.ID); !ok {
 		t.Fatalf("auction %q was not remembered for result linking", a.ID)
@@ -187,33 +133,33 @@ func TestAuctionResultLinksToAuctionSpan(t *testing.T) {
 	if frame := drainSend(s); frame == nil {
 		t.Fatal("expected a solve to be enqueued")
 	}
-	auction := endedSpan(t, rec, "oev.auction")
+	auction := tracetest.Ended(t, rec, "oev.auction")
 
 	s.handleMessage(t.Context(), marshal(AuctionResult{
 		Op: "auction-result", ID: a.ID,
 		Data: AuctionResultData{Bid: "0.0005", Liquidator: seedCallback.Hex()},
 	}))
 
-	result := endedSpan(t, rec, "oev.auction.result")
+	result := tracetest.Ended(t, rec, "oev.auction.result")
 	if got := len(result.Links()); got != 1 {
 		t.Fatalf("result links = %d, want 1", got)
 	}
 	if got, want := result.Links()[0].SpanContext.SpanID(), auction.SpanContext().SpanID(); got != want {
 		t.Fatalf("result link = %s, want the auction span %s", got, want)
 	}
-	if got := attr(result, "auction.id"); got != a.ID {
+	if got := tracetest.Attr(result, "auction.id"); got != a.ID {
 		t.Fatalf("auction.id = %q, want %q", got, a.ID)
 	}
-	if got := attr(result, "oev.won"); got != "true" {
+	if got := tracetest.Attr(result, "oev.won"); got != "true" {
 		t.Fatalf("oev.won = %q, want true", got)
 	}
-	if got, want := attr(result, "quote.trace_id"), auction.SpanContext().TraceID().String(); got != want {
+	if got, want := tracetest.Attr(result, "quote.trace_id"), auction.SpanContext().TraceID().String(); got != want {
 		t.Fatalf("quote.trace_id = %q, want %q", got, want)
 	}
-	if hasEvent(result, "link_miss") {
+	if tracetest.HasEvent(result, "link_miss") {
 		t.Fatal("a resolved link must not record link_miss")
 	}
-	requireNoErrorSpans(t, rec)
+	tracetest.RequireNoErrorSpans(t, rec)
 }
 
 // Linking is best effort: a result for an auction this process never bid on is traced without a link
@@ -228,20 +174,20 @@ func TestAuctionResultLinkMissStaysInert(t *testing.T) {
 		Data: AuctionResultData{Bid: "0.0005", Liquidator: "0x0000000000000000000000000000000000000001"},
 	}))
 
-	result := endedSpan(t, rec, "oev.auction.result")
+	result := tracetest.Ended(t, rec, "oev.auction.result")
 	if got := len(result.Links()); got != 0 {
 		t.Fatalf("result links = %d, want 0", got)
 	}
 	if got := eventCount(result, "link_miss"); got != 1 {
 		t.Fatalf("link_miss events = %d, want 1", got)
 	}
-	if got := attr(result, "quote.trace_id"); got != "" {
+	if got := tracetest.Attr(result, "quote.trace_id"); got != "" {
 		t.Fatalf("quote.trace_id = %q, want unset on a miss", got)
 	}
 	if pending := s.inFlightSnapshot().pending; len(pending) != 0 {
 		t.Fatalf("a lost auction result must release the reservation, pending = %v", pending)
 	}
-	requireNoErrorSpans(t, rec)
+	tracetest.RequireNoErrorSpans(t, rec)
 }
 
 // Our own liquidation result carries the settlement transaction, and blacklisting is an expected halt
@@ -254,35 +200,35 @@ func TestLiquidationAndBlacklistSpans(t *testing.T) {
 	if frame := drainSend(s); frame == nil {
 		t.Fatal("expected a solve to be enqueued")
 	}
-	auction := endedSpan(t, rec, "oev.auction")
+	auction := tracetest.Ended(t, rec, "oev.auction")
 
 	const txHash = "0x00000000000000000000000000000000000000000000000000000000000000ab"
 	s.handleMessage(t.Context(), marshal(LiquidationResult{
 		Op: "liquidation-result", ID: a.ID,
 		Data: LiquidationResultData{Success: true, TxHash: txHash, Liquidator: seedCallback.Hex()},
 	}))
-	liquidation := endedSpan(t, rec, "oev.liquidation.result")
+	liquidation := tracetest.Ended(t, rec, "oev.liquidation.result")
 	if got := len(liquidation.Links()); got != 1 {
 		t.Fatalf("liquidation links = %d, want 1", got)
 	}
 	if got, want := liquidation.Links()[0].SpanContext.SpanID(), auction.SpanContext().SpanID(); got != want {
 		t.Fatalf("liquidation link = %s, want the auction span %s", got, want)
 	}
-	if got := attr(liquidation, "tx.hash"); got != txHash {
+	if got := tracetest.Attr(liquidation, "tx.hash"); got != txHash {
 		t.Fatalf("tx.hash = %q, want %q", got, txHash)
 	}
 
 	s.handleMessage(t.Context(), marshal(Blacklisted{
 		Op: "blacklisted", ID: a.ID, Data: BlacklistedData{Msg: "key revoked"},
 	}))
-	blacklisted := endedSpan(t, rec, "oev.blacklisted")
-	if got := attr(blacklisted, "auction.id"); got != a.ID {
+	blacklisted := tracetest.Ended(t, rec, "oev.blacklisted")
+	if got := tracetest.Attr(blacklisted, "auction.id"); got != a.ID {
 		t.Fatalf("auction.id = %q, want %q", got, a.ID)
 	}
-	if !hasEvent(blacklisted, "declined") {
+	if !tracetest.HasEvent(blacklisted, "declined") {
 		t.Fatal("a blacklist halt is an expected outcome, want a declined event")
 	}
-	requireNoErrorSpans(t, rec)
+	tracetest.RequireNoErrorSpans(t, rec)
 }
 
 // A full outbound queue is an expected outcome of a bounded hot path, not a failure.
@@ -297,11 +243,11 @@ func TestDroppedSolveDeclinesSendSpan(t *testing.T) {
 
 	s.handleAuctionWithContext(t.Context(), marshal(a))
 
-	send := endedSpan(t, rec, "oev.auction.send")
-	if !hasEvent(send, "declined") {
+	send := tracetest.Ended(t, rec, "oev.auction.send")
+	if !tracetest.HasEvent(send, "declined") {
 		t.Fatal("a dropped solve must record a declined event")
 	}
-	requireNoErrorSpans(t, rec)
+	tracetest.RequireNoErrorSpans(t, rec)
 	if _, ok := s.links.Lookup(a.ID); ok {
 		t.Fatal("a dropped solve must not be remembered for result linking")
 	}
@@ -314,12 +260,12 @@ func TestTooLateAuctionDeclinesAuctionSpan(t *testing.T) {
 
 	s.handleAuctionWithContext(t.Context(), marshal(decodeAuction(t)))
 
-	auction := endedSpan(t, rec, "oev.auction")
-	if !hasEvent(auction, "declined") {
+	auction := tracetest.Ended(t, rec, "oev.auction")
+	if !tracetest.HasEvent(auction, "declined") {
 		t.Fatal("a too-late auction must record a declined event")
 	}
 	noSpan(t, rec, "oev.auction.bid")
-	requireNoErrorSpans(t, rec)
+	tracetest.RequireNoErrorSpans(t, rec)
 }
 
 // A strategy that fails is a real error: the bid span records it so it surfaces in the trace backend.
@@ -330,14 +276,14 @@ func TestStrategyFailureRecordsSpanError(t *testing.T) {
 
 	s.handleAuctionWithContext(t.Context(), marshal(a))
 
-	bid := endedSpan(t, rec, "oev.auction.bid")
+	bid := tracetest.Ended(t, rec, "oev.auction.bid")
 	if bid.Status().Code != codes.Error {
 		t.Fatalf("bid span status = %v, want error", bid.Status().Code)
 	}
-	if !hasEvent(bid, "exception") {
+	if !tracetest.HasEvent(bid, "exception") {
 		t.Fatal("a strategy failure must record an exception event")
 	}
-	if got := endedSpan(t, rec, "oev.auction").Status().Code; got != codes.Error {
+	if got := tracetest.Ended(t, rec, "oev.auction").Status().Code; got != codes.Error {
 		t.Fatalf("auction span status = %v, want error", got)
 	}
 }
@@ -358,8 +304,8 @@ func TestStrategyPanicStillEndsAuctionSpans(t *testing.T) {
 		s.handleAuctionWithContext(t.Context(), marshal(a))
 	}()
 
-	endedSpan(t, rec, "oev.auction")
-	endedSpan(t, rec, "oev.auction.bid")
+	tracetest.Ended(t, rec, "oev.auction")
+	tracetest.Ended(t, rec, "oev.auction.bid")
 }
 
 // The handshake carries traceparent so a connection is findable in the trace backend, and the shared
@@ -388,8 +334,8 @@ func TestFeedDialInjectsTraceparent(t *testing.T) {
 	}
 	defer conn.Close() //nolint:errcheck // test teardown
 
-	connect := endedSpan(t, rec, "oev.feed.connect")
-	if got := attr(connect, "solver"); got != Name {
+	connect := tracetest.Ended(t, rec, "oev.feed.connect")
+	if got := tracetest.Attr(connect, "solver"); got != Name {
 		t.Fatalf("solver = %q, want %q", got, Name)
 	}
 	got := <-headers
@@ -402,7 +348,7 @@ func TestFeedDialInjectsTraceparent(t *testing.T) {
 	if client.header.Get("traceparent") != "" {
 		t.Fatal("the shared handshake header must not be mutated by a dial")
 	}
-	requireNoErrorSpans(t, rec)
+	tracetest.RequireNoErrorSpans(t, rec)
 }
 
 // Bid-path log lines join the trace exactly once and name the auction with one key everywhere.

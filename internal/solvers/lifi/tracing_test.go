@@ -41,17 +41,6 @@ type spanRecorder interface {
 	Ended() []sdktrace.ReadOnlySpan
 }
 
-func endedSpan(t *testing.T, rec spanRecorder, name string) sdktrace.ReadOnlySpan {
-	t.Helper()
-	for _, s := range rec.Ended() {
-		if s.Name() == name {
-			return s
-		}
-	}
-	t.Fatalf("span %q not ended; ended spans: %v", name, spanNames(rec))
-	return nil
-}
-
 func endedSpans(rec spanRecorder, name string) []sdktrace.ReadOnlySpan {
 	out := make([]sdktrace.ReadOnlySpan, 0, 2)
 	for _, s := range rec.Ended() {
@@ -62,33 +51,15 @@ func endedSpans(rec spanRecorder, name string) []sdktrace.ReadOnlySpan {
 	return out
 }
 
-func spanNames(rec spanRecorder) []string {
-	ended := rec.Ended()
-	out := make([]string, 0, len(ended))
-	for _, s := range ended {
-		out = append(out, s.Name())
-	}
-	return out
-}
-
-func attr(s sdktrace.ReadOnlySpan, key string) string {
-	for _, kv := range s.Attributes() {
-		if string(kv.Key) == key {
-			return kv.Value.String()
-		}
-	}
-	return ""
-}
-
 func requireSpans(t *testing.T, rec spanRecorder, want ...string) {
 	t.Helper()
 	got := make(map[string]bool, len(rec.Ended()))
-	for _, name := range spanNames(rec) {
+	for _, name := range tracetest.Names(rec) {
 		got[name] = true
 	}
 	for _, name := range want {
 		if !got[name] {
-			t.Fatalf("missing span %q; ended spans: %v", name, spanNames(rec))
+			t.Fatalf("missing span %q; ended spans: %v", name, tracetest.Names(rec))
 		}
 	}
 }
@@ -187,47 +158,47 @@ func TestOrderTraceSpansMessageThroughFill(t *testing.T) {
 		orderMessageSpan(), "lifi.order.process", "lifi.order.plan",
 		"lifi.order.submit", "lifi.order.complete",
 	)
-	message := endedSpan(t, rec, orderMessageSpan())
-	if got := attr(message, "solver"); got != Name {
+	message := tracetest.Ended(t, rec, orderMessageSpan())
+	if got := tracetest.Attr(message, "solver"); got != Name {
 		t.Fatalf("message span solver = %q, want %q", got, Name)
 	}
-	if got := attr(message, "order.id"); got != tracingOrderID {
+	if got := tracetest.Attr(message, "order.id"); got != tracingOrderID {
 		t.Fatalf("message span order.id = %q, want %q", got, tracingOrderID)
 	}
-	if got := attr(message, "order.onchain_id"); got != tracingOnChainOrderID {
+	if got := tracetest.Attr(message, "order.onchain_id"); got != tracingOnChainOrderID {
 		t.Fatalf("message span order.onchain_id = %q, want %q", got, tracingOnChainOrderID)
 	}
-	if got := attr(message, "quote.id"); got != tracingQuoteID {
+	if got := tracetest.Attr(message, "quote.id"); got != tracingQuoteID {
 		t.Fatalf("message span quote.id = %q, want %q", got, tracingQuoteID)
 	}
-	process := endedSpan(t, rec, "lifi.order.process")
+	process := tracetest.Ended(t, rec, "lifi.order.process")
 	if got, want := process.SpanContext().TraceID(), message.SpanContext().TraceID(); got != want {
 		t.Fatalf("process span trace = %s, want the message trace %s", got, want)
 	}
 	if got, want := process.Parent().SpanID(), message.SpanContext().SpanID(); got != want {
 		t.Fatalf("process span parent = %s, want the message span %s", got, want)
 	}
-	if got := attr(process, "order.id"); got != tracingOrderID {
+	if got := tracetest.Attr(process, "order.id"); got != tracingOrderID {
 		t.Fatalf("process span order.id = %q, want %q", got, tracingOrderID)
 	}
-	if got := attr(process, "quote.id"); got != tracingQuoteID {
+	if got := tracetest.Attr(process, "quote.id"); got != tracingQuoteID {
 		t.Fatalf("process span quote.id = %q, want %q", got, tracingQuoteID)
 	}
 	wantHash := fixture.txm.fillResult().Hash.Hex()
-	if got := attr(process, "tx.hash"); got != wantHash {
+	if got := tracetest.Attr(process, "tx.hash"); got != wantHash {
 		t.Fatalf("process span tx.hash = %q, want %s", got, wantHash)
 	}
-	complete := endedSpan(t, rec, "lifi.order.complete")
-	if got := attr(complete, "tx.hash"); got != wantHash {
+	complete := tracetest.Ended(t, rec, "lifi.order.complete")
+	if got := tracetest.Attr(complete, "tx.hash"); got != wantHash {
 		t.Fatalf("complete span tx.hash = %q, want %s", got, wantHash)
 	}
-	if got := attr(complete, "tx.outcome"); got != string(txmanager.OutcomeConfirmed) {
+	if got := tracetest.Attr(complete, "tx.outcome"); got != string(txmanager.OutcomeConfirmed) {
 		t.Fatalf("complete span tx.outcome = %q, want confirmed", got)
 	}
-	if got := attr(endedSpan(t, rec, "lifi.order.plan"), "strategy.name"); got != tracingStrategyName {
+	if got := tracetest.Attr(tracetest.Ended(t, rec, "lifi.order.plan"), "strategy.name"); got != tracingStrategyName {
 		t.Fatalf("plan span strategy.name = %q, want %q", got, tracingStrategyName)
 	}
-	submit := endedSpan(t, rec, "lifi.order.submit")
+	submit := tracetest.Ended(t, rec, "lifi.order.submit")
 	if got, want := submit.Parent().SpanID(), process.SpanContext().SpanID(); got != want {
 		t.Fatalf("submit span parent = %s, want the process span %s", got, want)
 	}
@@ -250,7 +221,7 @@ func TestOrderTraceDeclinesUnsupportedOrder(t *testing.T) {
 	if order != nil || err != nil {
 		t.Fatalf("admitOrderMessage() = %+v, %v, want an ignored order", order, err)
 	}
-	span := endedSpan(t, rec, orderMessageSpan())
+	span := tracetest.Ended(t, rec, orderMessageSpan())
 	if span.Status().Code == codes.Error {
 		t.Fatalf("an unsupported order must not be an error span: %v", span.Status())
 	}
@@ -275,7 +246,7 @@ func TestOrderTraceRecordsMalformedMessage(t *testing.T) {
 	if order != nil || err == nil {
 		t.Fatalf("admitOrderMessage() = %+v, %v, want a rejected message", order, err)
 	}
-	span := endedSpan(t, rec, orderMessageSpan())
+	span := tracetest.Ended(t, rec, orderMessageSpan())
 	if span.Status().Code != codes.Error {
 		t.Fatalf("message span status = %v, want an error", span.Status())
 	}
@@ -294,7 +265,7 @@ func TestOrderProcessTraceRecordsChainFailure(t *testing.T) {
 
 	fixture.run(t)
 
-	process := endedSpan(t, rec, "lifi.order.process")
+	process := tracetest.Ended(t, rec, "lifi.order.process")
 	if process.Status().Code != codes.Error {
 		t.Fatalf("process span status = %v, want an error", process.Status())
 	}
@@ -348,17 +319,17 @@ func TestOrderDepositRetriesShareOneProcessSpan(t *testing.T) {
 	if got := len(endedSpans(rec, "lifi.order.process")); got != 1 {
 		t.Fatalf("process spans = %d, want one shared by every retry", got)
 	}
-	process := endedSpan(t, rec, "lifi.order.process")
+	process := tracetest.Ended(t, rec, "lifi.order.process")
 	deposits := endedSpans(rec, "lifi.order.deposit")
 	if len(deposits) != 2 {
-		t.Fatalf("deposit stage spans = %d, want one per retry (spans %v)", len(deposits), spanNames(rec))
+		t.Fatalf("deposit stage spans = %d, want one per retry (spans %v)", len(deposits), tracetest.Names(rec))
 	}
 	wantAttempt := []string{"1", "2"}
 	for index, deposit := range deposits {
 		if got, want := deposit.Parent().SpanID(), process.SpanContext().SpanID(); got != want {
 			t.Fatalf("deposit span %d parent = %s, want the process span %s", index, got, want)
 		}
-		if got := attr(deposit, "tx.attempt"); got != wantAttempt[index] {
+		if got := tracetest.Attr(deposit, "tx.attempt"); got != wantAttempt[index] {
 			t.Fatalf("deposit span %d tx.attempt = %q, want %s", index, got, wantAttempt[index])
 		}
 	}
@@ -434,9 +405,9 @@ func TestOrderCapacityRetrySpansReserveStage(t *testing.T) {
 
 	reserves := endedSpans(rec, "lifi.order.reserve")
 	if len(reserves) != 1 {
-		t.Fatalf("reserve stage spans = %d, want one retry (spans %v)", len(reserves), spanNames(rec))
+		t.Fatalf("reserve stage spans = %d, want one retry (spans %v)", len(reserves), tracetest.Names(rec))
 	}
-	if got := attr(reserves[0], "tx.attempt"); got != "1" {
+	if got := tracetest.Attr(reserves[0], "tx.attempt"); got != "1" {
 		t.Fatalf("reserve span tx.attempt = %q, want 1", got)
 	}
 	if got := len(endedSpans(rec, "lifi.order.process")); got != 2 {
@@ -451,7 +422,7 @@ func TestOrderCapacityRetrySpansReserveStage(t *testing.T) {
 	if deferredProcess == nil {
 		t.Fatal("reserve stage span is not a child of a processing span")
 	}
-	if got := attr(deferredProcess, "order.id"); got != secondValue.OrderID {
+	if got := tracetest.Attr(deferredProcess, "order.id"); got != secondValue.OrderID {
 		t.Fatalf("retried process span order.id = %q, want %q", got, secondValue.OrderID)
 	}
 }
@@ -500,7 +471,7 @@ func TestOrderReplayKeepsProcessSpanOpenUntilFill(t *testing.T) {
 	// writes to must still be open.
 	if got := len(endedSpans(rec, "lifi.order.process")); got != 0 {
 		t.Fatalf("process spans ended while the fill was pending = %d, want none (spans %v)",
-			got, spanNames(rec))
+			got, tracetest.Names(rec))
 	}
 	result <- fixture.txm.fillResult()
 	select {
@@ -513,15 +484,15 @@ func TestOrderReplayKeepsProcessSpanOpenUntilFill(t *testing.T) {
 	}
 
 	if got := len(endedSpans(rec, "lifi.order.process")); got != 1 {
-		t.Fatalf("process spans = %d, want one shared by the replay (spans %v)", got, spanNames(rec))
+		t.Fatalf("process spans = %d, want one shared by the replay (spans %v)", got, tracetest.Names(rec))
 	}
-	process := endedSpan(t, rec, "lifi.order.process")
-	complete := endedSpan(t, rec, "lifi.order.complete")
+	process := tracetest.Ended(t, rec, "lifi.order.process")
+	complete := tracetest.Ended(t, rec, "lifi.order.complete")
 	if got, want := complete.Parent().SpanID(), process.SpanContext().SpanID(); got != want {
 		t.Fatalf("complete span parent = %s, want the processing span %s", got, want)
 	}
 	wantHash := fixture.txm.fillResult().Hash.Hex()
-	if got := attr(process, "tx.hash"); got != wantHash {
+	if got := tracetest.Attr(process, "tx.hash"); got != wantHash {
 		t.Fatalf("process span tx.hash = %q, want %s", got, wantHash)
 	}
 	if len(fixture.txm.reqs) != 1 {
@@ -579,9 +550,9 @@ func TestOrderWorkerShutdownEndsQueuedDepositRetrySpan(t *testing.T) {
 	processes := endedSpans(rec, "lifi.order.process")
 	if len(processes) != 1 {
 		t.Fatalf("process spans = %d, want exactly one ended at shutdown (spans %v)",
-			len(processes), spanNames(rec))
+			len(processes), tracetest.Names(rec))
 	}
-	if got := attr(processes[0], "order.id"); got != tracingOrderID {
+	if got := tracetest.Attr(processes[0], "order.id"); got != tracingOrderID {
 		t.Fatalf("process span order.id = %q, want %q", got, tracingOrderID)
 	}
 	if processes[0].Status().Code == codes.Error {
@@ -706,15 +677,15 @@ func TestOrderReplayKeepsProcessSpanOpenWhileQueuedForCapacity(t *testing.T) {
 
 	var deferredSpans []sdktrace.ReadOnlySpan
 	for _, process := range endedSpans(rec, "lifi.order.process") {
-		if attr(process, "order.id") == deferred.OrderID {
+		if tracetest.Attr(process, "order.id") == deferred.OrderID {
 			deferredSpans = append(deferredSpans, process)
 		}
 	}
 	if len(deferredSpans) != 1 {
 		t.Fatalf("process spans for the deferred order = %d, want 1 (spans %v)",
-			len(deferredSpans), spanNames(rec))
+			len(deferredSpans), tracetest.Names(rec))
 	}
-	if got := attr(deferredSpans[0], "tx.hash"); got != txm.fillResult().Hash.Hex() {
+	if got := tracetest.Attr(deferredSpans[0], "tx.hash"); got != txm.fillResult().Hash.Hex() {
 		t.Fatalf("deferred process span tx.hash = %q, want %s", got, txm.fillResult().Hash.Hex())
 	}
 	if got := len(endedSpans(rec, "lifi.order.reserve")); got != 1 {
@@ -747,7 +718,7 @@ func TestOrderPlanTraceDeclinesUnsupportedOutputContext(t *testing.T) {
 
 	fixture.run(t)
 
-	plan := endedSpan(t, rec, "lifi.order.plan")
+	plan := tracetest.Ended(t, rec, "lifi.order.plan")
 	if plan.Status().Code == codes.Error {
 		t.Fatalf("an unsupported output context must not be an error span: %v", plan.Status())
 	}
@@ -757,7 +728,7 @@ func TestOrderPlanTraceDeclinesUnsupportedOutputContext(t *testing.T) {
 	if hasSpanEvent(plan, "exception") {
 		t.Fatalf("an unsupported output context recorded an exception: %v", plan.Events())
 	}
-	process := endedSpan(t, rec, "lifi.order.process")
+	process := tracetest.Ended(t, rec, "lifi.order.process")
 	if process.Status().Code == codes.Error {
 		t.Fatalf("process span status = %v, want no error", process.Status())
 	}
@@ -822,21 +793,21 @@ func TestQuoteRefreshTraceReachesOrderServer(t *testing.T) {
 	solver.refreshQuotes(t.Context(), nil, newQuoteState(time.Second))
 
 	requireSpans(t, rec, "lifi.quotes.refresh", "lifi.quotes.decide", "lifi.quotes.reconcile")
-	refresh := endedSpan(t, rec, "lifi.quotes.refresh")
+	refresh := tracetest.Ended(t, rec, "lifi.quotes.refresh")
 	if refresh.Parent().IsValid() {
 		t.Fatalf("quote refresh span has parent %v, want a root", refresh.Parent())
 	}
-	if got := attr(refresh, "solver"); got != Name {
+	if got := tracetest.Attr(refresh, "solver"); got != Name {
 		t.Fatalf("quote refresh span solver = %q, want %q", got, Name)
 	}
-	decide := endedSpan(t, rec, "lifi.quotes.decide")
+	decide := tracetest.Ended(t, rec, "lifi.quotes.decide")
 	if got, want := decide.Parent().SpanID(), refresh.SpanContext().SpanID(); got != want {
 		t.Fatalf("decide span parent = %s, want the refresh span %s", got, want)
 	}
-	if got := attr(decide, "strategy.name"); got != tracingStrategyName {
+	if got := tracetest.Attr(decide, "strategy.name"); got != tracingStrategyName {
 		t.Fatalf("decide span strategy.name = %q, want %q", got, tracingStrategyName)
 	}
-	reconcile := endedSpan(t, rec, "lifi.quotes.reconcile")
+	reconcile := tracetest.Ended(t, rec, "lifi.quotes.reconcile")
 	if got, want := reconcile.Parent().SpanID(), refresh.SpanContext().SpanID(); got != want {
 		t.Fatalf("reconcile span parent = %s, want the refresh span %s", got, want)
 	}
@@ -868,8 +839,8 @@ func TestQuoteSuspendTraceWrapsReconcile(t *testing.T) {
 
 	solver.suspendQuotes(t.Context(), state)
 
-	suspend := endedSpan(t, rec, "lifi.quotes.suspend")
-	reconcile := endedSpan(t, rec, "lifi.quotes.reconcile")
+	suspend := tracetest.Ended(t, rec, "lifi.quotes.suspend")
+	reconcile := tracetest.Ended(t, rec, "lifi.quotes.reconcile")
 	if got, want := reconcile.Parent().SpanID(), suspend.SpanContext().SpanID(); got != want {
 		t.Fatalf("reconcile span parent = %s, want the suspend span %s", got, want)
 	}
@@ -931,8 +902,8 @@ func TestOrderFeedDialCarriesTraceparent(t *testing.T) {
 		t.Fatal("watchOnce returned without a disconnect error")
 	}
 
-	connect := endedSpan(t, rec, "lifi.feed.connect")
-	if got := attr(connect, "solver"); got != Name {
+	connect := tracetest.Ended(t, rec, "lifi.feed.connect")
+	if got := tracetest.Attr(connect, "solver"); got != Name {
 		t.Fatalf("connect span solver = %q, want %q", got, Name)
 	}
 	headers := <-handshake

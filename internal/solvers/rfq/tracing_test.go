@@ -32,44 +32,15 @@ type spanRecorder interface {
 	Ended() []sdktrace.ReadOnlySpan
 }
 
-func endedSpan(t *testing.T, rec spanRecorder, name string) sdktrace.ReadOnlySpan {
-	t.Helper()
-	for _, s := range rec.Ended() {
-		if s.Name() == name {
-			return s
-		}
-	}
-	t.Fatalf("span %q not ended; ended spans: %v", name, spanNames(rec))
-	return nil
-}
-
-func spanNames(rec spanRecorder) []string {
-	ended := rec.Ended()
-	out := make([]string, 0, len(ended))
-	for _, s := range ended {
-		out = append(out, s.Name())
-	}
-	return out
-}
-
-func attr(s sdktrace.ReadOnlySpan, key string) string {
-	for _, kv := range s.Attributes() {
-		if string(kv.Key) == key {
-			return kv.Value.String()
-		}
-	}
-	return ""
-}
-
 func requireSpans(t *testing.T, rec spanRecorder, want ...string) {
 	t.Helper()
 	got := make(map[string]bool, len(rec.Ended()))
-	for _, name := range spanNames(rec) {
+	for _, name := range tracetest.Names(rec) {
 		got[name] = true
 	}
 	for _, name := range want {
 		if !got[name] {
-			t.Fatalf("missing span %q; ended spans: %v", name, spanNames(rec))
+			t.Fatalf("missing span %q; ended spans: %v", name, tracetest.Names(rec))
 		}
 	}
 }
@@ -110,17 +81,17 @@ func TestServer_QuoteTracing(t *testing.T) {
 	}
 	requireSpans(t, rec, "POST /quote", "rfq.quote", "rfq.quote.snapshot", "rfq.quote.decide")
 
-	server := endedSpan(t, rec, "POST /quote")
-	if got := attr(server, "quote.id"); got != body.QuoteID {
+	server := tracetest.Ended(t, rec, "POST /quote")
+	if got := tracetest.Attr(server, "quote.id"); got != body.QuoteID {
 		t.Fatalf("server span quote.id = %q, want %q", got, body.QuoteID)
 	}
-	if attr(server, "request.id") == "" {
+	if tracetest.Attr(server, "request.id") == "" {
 		t.Fatalf("server span is missing request.id: %v", server.Attributes())
 	}
-	if got := attr(endedSpan(t, rec, "rfq.quote.decide"), "strategy.name"); got != defaultStrategyName {
+	if got := tracetest.Attr(tracetest.Ended(t, rec, "rfq.quote.decide"), "strategy.name"); got != defaultStrategyName {
 		t.Fatalf("decide span strategy.name = %q, want %q", got, defaultStrategyName)
 	}
-	if got := attr(endedSpan(t, rec, "rfq.quote"), "adapter.address"); got != vlt.Hex() {
+	if got := tracetest.Attr(tracetest.Ended(t, rec, "rfq.quote"), "adapter.address"); got != vlt.Hex() {
 		t.Fatalf("quote span adapter.address = %q, want %q", got, vlt.Hex())
 	}
 	if _, ok := srv.links.Lookup(body.QuoteID); !ok {
@@ -166,7 +137,7 @@ func TestServer_QuoteTracingDeclines(t *testing.T) {
 		t.Fatalf("wrong-chain quote = %d, want 204", rr.Code)
 	}
 
-	span := endedSpan(t, rec, "rfq.quote")
+	span := tracetest.Ended(t, rec, "rfq.quote")
 	if span.Status().Code == codes.Error {
 		t.Fatalf("declined quote must not be an error span: %v", span.Status())
 	}
@@ -199,31 +170,31 @@ func TestExecution_OrderTraceLinksToQuote(t *testing.T) {
 		"rfq.execution.sync", "rfq.execution.poll", "rfq.order",
 		"rfq.order.resolve", "rfq.order.plan", "rfq.order.build", "rfq.order.submit", "rfq.order.report",
 	)
-	order := endedSpan(t, rec, "rfq.order")
+	order := tracetest.Ended(t, rec, "rfq.order")
 	if len(order.Links()) != 1 || order.Links()[0].SpanContext.TraceID().String() != quoteTraceID {
 		t.Fatalf("order span links = %v, want one link to trace %s", order.Links(), quoteTraceID)
 	}
-	if got := attr(order, "order.id"); got != "o1" {
+	if got := tracetest.Attr(order, "order.id"); got != "o1" {
 		t.Fatalf("order span order.id = %q, want o1", got)
 	}
-	if got := attr(order, "quote.id"); got != "q1" {
+	if got := tracetest.Attr(order, "quote.id"); got != "q1" {
 		t.Fatalf("order span quote.id = %q, want q1", got)
 	}
-	if got := attr(order, "quote.trace_id"); got != quoteTraceID {
+	if got := tracetest.Attr(order, "quote.trace_id"); got != quoteTraceID {
 		t.Fatalf("order span quote.trace_id = %q, want %s", got, quoteTraceID)
 	}
 	wantHash := confirmedTxResult().Hash.Hex()
-	if got := attr(order, "tx.hash"); got != wantHash {
+	if got := tracetest.Attr(order, "tx.hash"); got != wantHash {
 		t.Fatalf("order span tx.hash = %q, want %s", got, wantHash)
 	}
-	submit := endedSpan(t, rec, "rfq.order.submit")
-	if got := attr(submit, "tx.hash"); got != wantHash {
+	submit := tracetest.Ended(t, rec, "rfq.order.submit")
+	if got := tracetest.Attr(submit, "tx.hash"); got != wantHash {
 		t.Fatalf("submit span tx.hash = %q, want %s", got, wantHash)
 	}
-	if got := attr(submit, "tx.outcome"); got != "confirmed" {
+	if got := tracetest.Attr(submit, "tx.outcome"); got != "confirmed" {
 		t.Fatalf("submit span tx.outcome = %q, want confirmed", got)
 	}
-	if got := attr(endedSpan(t, rec, "rfq.order.plan"), "strategy.name"); got != defaultStrategyName {
+	if got := tracetest.Attr(tracetest.Ended(t, rec, "rfq.order.plan"), "strategy.name"); got != defaultStrategyName {
 		t.Fatalf("plan span strategy.name = %q, want %q", got, defaultStrategyName)
 	}
 }
@@ -245,15 +216,15 @@ func TestExecution_SubmissionErrorOmitsTxHash(t *testing.T) {
 		t.Fatalf("txm sends = %d, want 1", txm.calls)
 	}
 	for _, name := range []string{"rfq.order", "rfq.order.submit"} {
-		span := endedSpan(t, rec, name)
-		if got := attr(span, "tx.hash"); got != "" {
+		span := tracetest.Ended(t, rec, name)
+		if got := tracetest.Attr(span, "tx.hash"); got != "" {
 			t.Fatalf("%s tx.hash = %q, want no attribute for a transaction that never went out", name, got)
 		}
-		if got := attr(span, "tx.outcome"); got != string(txmanager.OutcomeSubmissionError) {
+		if got := tracetest.Attr(span, "tx.outcome"); got != string(txmanager.OutcomeSubmissionError) {
 			t.Fatalf("%s tx.outcome = %q, want %s", name, got, txmanager.OutcomeSubmissionError)
 		}
 	}
-	if got := endedSpan(t, rec, "rfq.order.submit").Status().Code; got != codes.Error {
+	if got := tracetest.Ended(t, rec, "rfq.order.submit").Status().Code; got != codes.Error {
 		t.Fatalf("submit span status = %v, want Error", got)
 	}
 }
@@ -268,7 +239,7 @@ func TestExecution_OrderTraceRecordsLinkMiss(t *testing.T) {
 
 	e.syncOnce(t.Context())
 
-	order := endedSpan(t, rec, "rfq.order")
+	order := tracetest.Ended(t, rec, "rfq.order")
 	if len(order.Links()) != 0 {
 		t.Fatalf("order span links = %v, want none", order.Links())
 	}
@@ -325,25 +296,16 @@ func TestExecution_OrderTraceDeclinesRefusedFill(t *testing.T) {
 	if txm.calls != 0 {
 		t.Fatalf("txm sends = %d, want none for a refused fill", txm.calls)
 	}
-	order := endedSpan(t, rec, "rfq.order")
+	order := tracetest.Ended(t, rec, "rfq.order")
 	if order.Status().Code == codes.Error {
 		t.Fatalf("a refused fill must not be an error span: %v", order.Status())
 	}
-	if !hasEvent(order, "declined") {
+	if !tracetest.HasEvent(order, "declined") {
 		t.Fatalf("order span has no declined event: %v", order.Events())
 	}
-	if build := endedSpan(t, rec, "rfq.order.build"); build.Status().Code == codes.Error {
+	if build := tracetest.Ended(t, rec, "rfq.order.build"); build.Status().Code == codes.Error {
 		t.Fatalf("build span must not be an error: %v", build.Status())
 	}
-}
-
-func hasEvent(s sdktrace.ReadOnlySpan, name string) bool {
-	for _, event := range s.Events() {
-		if event.Name == name {
-			return true
-		}
-	}
-	return false
 }
 
 // Trace loggers are derived from the base logger at each span-starting site, never from an

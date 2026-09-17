@@ -1,4 +1,4 @@
-package observability
+package observability_test
 
 import (
 	"io"
@@ -9,14 +9,17 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/trace"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
+	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 )
 
 const parentTraceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 
 func TestTraceHandlerContinuesInboundTrace(t *testing.T) {
-	rec := installRecorder(t)
+	rec := tracetest.Install(t)
 	var seen trace.SpanContext
-	h := TraceHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := observability.TraceHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = trace.SpanContextFromContext(r.Context())
 		w.WriteHeader(http.StatusNoContent)
 	}), func(r *http.Request) string {
@@ -45,8 +48,8 @@ func TestTraceHandlerContinuesInboundTrace(t *testing.T) {
 }
 
 func TestTraceHandlerSkipsProbes(t *testing.T) {
-	rec := installRecorder(t)
-	h := TraceHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), func(*http.Request) string { return "x" })
+	rec := tracetest.Install(t)
+	h := observability.TraceHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), func(*http.Request) string { return "x" })
 	for _, p := range []string{"/health", "/healthz", "/ready", "/readyz", "/metrics", "/openapi.json", "/docs"} {
 		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(t.Context(), http.MethodGet, p, nil))
 	}
@@ -56,14 +59,14 @@ func TestTraceHandlerSkipsProbes(t *testing.T) {
 }
 
 func TestTraceTransportInjectsTraceparent(t *testing.T) {
-	rec := installRecorder(t)
+	rec := tracetest.Install(t)
 	var got string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = r.Header.Get("traceparent")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
-	client := &http.Client{Transport: TraceTransport(nil, "rfq-backend")}
+	client := &http.Client{Transport: observability.TraceTransport(nil, "rfq-backend")}
 	ctx, span := otel.Tracer("x").Start(t.Context(), "parent")
 	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/api/v1/orders", nil)
 	resp, err := client.Do(req)
@@ -79,7 +82,7 @@ func TestTraceTransportInjectsTraceparent(t *testing.T) {
 	for _, s := range rec.Ended() {
 		if s.Name() == "rfq-backend POST" && s.SpanKind() == trace.SpanKindClient {
 			sawClientSpan = true
-			if attr(s, "peer.service") != "rfq-backend" {
+			if tracetest.Attr(s, "peer.service") != "rfq-backend" {
 				t.Fatalf("peer.service missing: %v", s.Attributes())
 			}
 		}
@@ -92,7 +95,7 @@ func TestTraceTransportInjectsTraceparent(t *testing.T) {
 // A webhook URL is operator-configured and may embed a token, so no query string may reach url.full
 // — while the request on the wire keeps it.
 func TestTraceTransportKeepsQueryOutOfSpanURL(t *testing.T) {
-	rec := installRecorder(t)
+	rec := tracetest.Install(t)
 	var gotTarget, gotBody, gotTraceparent string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotTarget = r.URL.RequestURI()
@@ -102,7 +105,7 @@ func TestTraceTransportKeepsQueryOutOfSpanURL(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
-	client := &http.Client{Transport: TraceTransport(nil, "webhook")}
+	client := &http.Client{Transport: observability.TraceTransport(nil, "webhook")}
 	req, err := http.NewRequestWithContext(
 		t.Context(), http.MethodPost, srv.URL+"/hook?token=secret", strings.NewReader(`{"ping":1}`),
 	)
@@ -121,11 +124,11 @@ func TestTraceTransportKeepsQueryOutOfSpanURL(t *testing.T) {
 	if gotBody != `{"ping":1}` {
 		t.Fatalf("server saw body %q, want the request body intact", gotBody)
 	}
-	span := endedSpan(t, rec, "webhook POST")
+	span := tracetest.Ended(t, rec, "webhook POST")
 	if !strings.Contains(gotTraceparent, span.SpanContext().TraceID().String()) {
 		t.Fatalf("traceparent %q does not carry the client span's trace", gotTraceparent)
 	}
-	full := attr(span, "url.full")
+	full := tracetest.Attr(span, "url.full")
 	if strings.Contains(full, "secret") || strings.Contains(full, "?") {
 		t.Fatalf("url.full = %q, want it without the query string", full)
 	}

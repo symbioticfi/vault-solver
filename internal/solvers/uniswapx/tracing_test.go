@@ -42,44 +42,15 @@ type spanRecorder interface {
 	Ended() []sdktrace.ReadOnlySpan
 }
 
-func endedSpan(t *testing.T, rec spanRecorder, name string) sdktrace.ReadOnlySpan {
-	t.Helper()
-	for _, s := range rec.Ended() {
-		if s.Name() == name {
-			return s
-		}
-	}
-	t.Fatalf("span %q not ended; ended spans: %v", name, spanNames(rec))
-	return nil
-}
-
-func spanNames(rec spanRecorder) []string {
-	ended := rec.Ended()
-	out := make([]string, 0, len(ended))
-	for _, s := range ended {
-		out = append(out, s.Name())
-	}
-	return out
-}
-
-func attr(s sdktrace.ReadOnlySpan, key string) string {
-	for _, kv := range s.Attributes() {
-		if string(kv.Key) == key {
-			return kv.Value.String()
-		}
-	}
-	return ""
-}
-
 func requireSpans(t *testing.T, rec spanRecorder, want ...string) {
 	t.Helper()
 	got := make(map[string]bool, len(rec.Ended()))
-	for _, name := range spanNames(rec) {
+	for _, name := range tracetest.Names(rec) {
 		got[name] = true
 	}
 	for _, name := range want {
 		if !got[name] {
-			t.Fatalf("missing span %q; ended spans: %v", name, spanNames(rec))
+			t.Fatalf("missing span %q; ended spans: %v", name, tracetest.Names(rec))
 		}
 	}
 }
@@ -132,14 +103,14 @@ func TestQuoteServerTracing(t *testing.T) {
 	}
 	requireSpans(t, rec, "POST /quote", "uniswapx.quote", "uniswapx.quote.decide")
 
-	server := endedSpan(t, rec, "POST /quote")
-	if got := attr(server, "quote.id"); got != request.QuoteID {
+	server := tracetest.Ended(t, rec, "POST /quote")
+	if got := tracetest.Attr(server, "quote.id"); got != request.QuoteID {
 		t.Fatalf("server span quote.id = %q, want %q", got, request.QuoteID)
 	}
-	if got := attr(server, "request.id"); got != request.RequestID {
+	if got := tracetest.Attr(server, "request.id"); got != request.RequestID {
 		t.Fatalf("server span request.id = %q, want %q", got, request.RequestID)
 	}
-	if got := attr(endedSpan(t, rec, "uniswapx.quote.decide"), "strategy.name"); got != tracingStrategy {
+	if got := tracetest.Attr(tracetest.Ended(t, rec, "uniswapx.quote.decide"), "strategy.name"); got != tracingStrategy {
 		t.Fatalf("decide span strategy.name = %q, want %q", got, tracingStrategy)
 	}
 	if _, ok := solver.links.Lookup(request.QuoteID); !ok {
@@ -161,7 +132,7 @@ func TestQuoteServerTracingDeclines(t *testing.T) {
 		t.Fatalf("declined quote = %d, want 204", response.Code)
 	}
 
-	span := endedSpan(t, rec, "uniswapx.quote")
+	span := tracetest.Ended(t, rec, "uniswapx.quote")
 	if span.Status().Code == codes.Error {
 		t.Fatalf("a declined quote must not be an error span: %v", span.Status())
 	}
@@ -219,7 +190,7 @@ func TestQuoteServerTracingDeclinesMalformedBody(t *testing.T) {
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("malformed quote = %d, want 400", response.Code)
 	}
-	server := endedSpan(t, rec, "POST /quote")
+	server := tracetest.Ended(t, rec, "POST /quote")
 	if server.Status().Code == codes.Error {
 		t.Fatalf("a malformed request must not be an error span: %v", server.Status())
 	}
@@ -240,11 +211,11 @@ func TestQuoteRefreshRootsItsOwnTrace(t *testing.T) {
 		t.Fatalf("refreshQuoteState: %v", err)
 	}
 
-	refresh := endedSpan(t, rec, "uniswapx.quote_refresh")
+	refresh := tracetest.Ended(t, rec, "uniswapx.quote_refresh")
 	if refresh.Parent().IsValid() {
 		t.Fatalf("quote refresh span has parent %v, want a root", refresh.Parent())
 	}
-	if got := attr(refresh, "solver"); got != Name {
+	if got := tracetest.Attr(refresh, "solver"); got != Name {
 		t.Fatalf("quote refresh span solver = %q, want %q", got, Name)
 	}
 }
@@ -410,34 +381,34 @@ func TestOrderTraceLinksQuoteToFill(t *testing.T) {
 		"uniswapx.orders.poll", "uniswapx.order.track", "uniswapx.fill",
 		"uniswapx.fill.plan", "uniswapx.fill.build", "uniswapx.fill.submit", "uniswapx.fill.complete",
 	)
-	track := endedSpan(t, rec, "uniswapx.order.track")
+	track := tracetest.Ended(t, rec, "uniswapx.order.track")
 	if len(track.Links()) != 1 || track.Links()[0].SpanContext.TraceID().String() != quoteTraceID {
 		t.Fatalf("track span links = %v, want one link to trace %s", track.Links(), quoteTraceID)
 	}
-	if got := attr(track, "order.hash"); got != fixture.entry.OrderHash {
+	if got := tracetest.Attr(track, "order.hash"); got != fixture.entry.OrderHash {
 		t.Fatalf("track span order.hash = %q, want %s", got, fixture.entry.OrderHash)
 	}
-	if got := attr(track, "quote.id"); got != fixture.entry.QuoteID {
+	if got := tracetest.Attr(track, "quote.id"); got != fixture.entry.QuoteID {
 		t.Fatalf("track span quote.id = %q, want %s", got, fixture.entry.QuoteID)
 	}
-	if got := attr(track, "quote.trace_id"); got != quoteTraceID {
+	if got := tracetest.Attr(track, "quote.trace_id"); got != quoteTraceID {
 		t.Fatalf("track span quote.trace_id = %q, want %s", got, quoteTraceID)
 	}
-	fill := endedSpan(t, rec, "uniswapx.fill")
+	fill := tracetest.Ended(t, rec, "uniswapx.fill")
 	if got, want := fill.SpanContext().TraceID(), track.SpanContext().TraceID(); got != want {
 		t.Fatalf("fill trace = %s, want the track span's trace %s", got, want)
 	}
-	if got := attr(fill, "tx.hash"); got != tracingFillTxHash.Hex() {
+	if got := tracetest.Attr(fill, "tx.hash"); got != tracingFillTxHash.Hex() {
 		t.Fatalf("fill span tx.hash = %q, want %s", got, tracingFillTxHash.Hex())
 	}
-	complete := endedSpan(t, rec, "uniswapx.fill.complete")
-	if got := attr(complete, "tx.hash"); got != tracingFillTxHash.Hex() {
+	complete := tracetest.Ended(t, rec, "uniswapx.fill.complete")
+	if got := tracetest.Attr(complete, "tx.hash"); got != tracingFillTxHash.Hex() {
 		t.Fatalf("complete span tx.hash = %q, want %s", got, tracingFillTxHash.Hex())
 	}
-	if got := attr(complete, "tx.outcome"); got != string(txmanager.OutcomeConfirmed) {
+	if got := tracetest.Attr(complete, "tx.outcome"); got != string(txmanager.OutcomeConfirmed) {
 		t.Fatalf("complete span tx.outcome = %q, want confirmed", got)
 	}
-	if got := attr(endedSpan(t, rec, "uniswapx.fill.plan"), "strategy.name"); got != tracingStrategy {
+	if got := tracetest.Attr(tracetest.Ended(t, rec, "uniswapx.fill.plan"), "strategy.name"); got != tracingStrategy {
 		t.Fatalf("plan span strategy.name = %q, want %q", got, tracingStrategy)
 	}
 }
@@ -454,11 +425,11 @@ func TestFillCompletionOmitsTxHashWhenNotBroadcast(t *testing.T) {
 	})
 
 	for _, name := range []string{"uniswapx.fill", "uniswapx.fill.complete"} {
-		span := endedSpan(t, rec, name)
-		if got := attr(span, "tx.hash"); got != "" {
+		span := tracetest.Ended(t, rec, name)
+		if got := tracetest.Attr(span, "tx.hash"); got != "" {
 			t.Fatalf("%s tx.hash = %q, want no attribute for a transaction that never went out", name, got)
 		}
-		if got := attr(span, "tx.outcome"); got != string(txmanager.OutcomeSubmissionError) {
+		if got := tracetest.Attr(span, "tx.outcome"); got != string(txmanager.OutcomeSubmissionError) {
 			t.Fatalf("%s tx.outcome = %q, want %s", name, got, txmanager.OutcomeSubmissionError)
 		}
 	}
@@ -472,7 +443,7 @@ func TestOrderTraceRecordsLinkMiss(t *testing.T) {
 
 	fixture.run(t)
 
-	track := endedSpan(t, rec, "uniswapx.order.track")
+	track := tracetest.Ended(t, rec, "uniswapx.order.track")
 	if len(track.Links()) != 0 {
 		t.Fatalf("track span links = %v, want none", track.Links())
 	}
@@ -510,7 +481,7 @@ func TestFillTraceDeclinesUnfillableOrder(t *testing.T) {
 
 	fixture.runUnfilled(t)
 
-	fill := endedSpan(t, rec, "uniswapx.fill")
+	fill := tracetest.Ended(t, rec, "uniswapx.fill")
 	if fill.Status().Code == codes.Error {
 		t.Fatalf("an unfillable order must not be an error span: %v", fill.Status())
 	}
@@ -534,7 +505,7 @@ func TestFillTraceRecordsPreflightFailure(t *testing.T) {
 
 	fixture.runUnfilled(t)
 
-	fill := endedSpan(t, rec, "uniswapx.fill")
+	fill := tracetest.Ended(t, rec, "uniswapx.fill")
 	if fill.Status().Code != codes.Error {
 		t.Fatalf("fill span status = %v, want an error", fill.Status())
 	}

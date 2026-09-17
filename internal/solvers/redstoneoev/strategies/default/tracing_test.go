@@ -16,23 +16,6 @@ import (
 
 const tracingSolverName = "redstone-oev"
 
-func spanNames(ended []sdktrace.ReadOnlySpan) []string {
-	out := make([]string, 0, len(ended))
-	for _, s := range ended {
-		out = append(out, s.Name())
-	}
-	return out
-}
-
-func spanAttr(s sdktrace.ReadOnlySpan, key string) string {
-	for _, kv := range s.Attributes() {
-		if string(kv.Key) == key {
-			return kv.Value.String()
-		}
-	}
-	return ""
-}
-
 // Each monitor tick roots its own trace, so the Morpho GraphQL calls it makes nest under it (spec §9.4).
 func TestMonitorTickRootsTraceWithAPICalls(t *testing.T) {
 	rec := tracetest.Install(t)
@@ -61,12 +44,12 @@ func TestMonitorTickRootsTraceWithAPICalls(t *testing.T) {
 		}
 	}
 	if tick == nil {
-		t.Fatalf("oev.monitor span not ended; ended spans: %v", spanNames(ended))
+		t.Fatalf("oev.monitor span not ended; ended spans: %v", tracetest.Names(rec))
 	}
 	if tick.Parent().IsValid() {
 		t.Fatalf("oev.monitor parent = %s, want a root span", tick.Parent().SpanID())
 	}
-	if got := spanAttr(tick, "solver"); got != tracingSolverName {
+	if got := tracetest.Attr(tick, "solver"); got != tracingSolverName {
 		t.Fatalf("solver = %q, want %q", got, tracingSolverName)
 	}
 
@@ -78,6 +61,6 @@ func TestMonitorTickRootsTraceWithAPICalls(t *testing.T) {
 		}
 	}
 	if !nested {
-		t.Fatalf("no Morpho GraphQL span nested under the tick; ended spans: %v", spanNames(ended))
+		t.Fatalf("no Morpho GraphQL span nested under the tick; ended spans: %v", tracetest.Names(rec))
 	}
 }

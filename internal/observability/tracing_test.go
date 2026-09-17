@@ -73,11 +73,9 @@ func TestTraceLogger(t *testing.T) {
 	}
 	lines = nil
 
-	installRecorder(t)
-	ctx, span := otel.Tracer("x").Start(t.Context(), "s")
-	defer span.End()
+	ctx, sc := tracedContext(t)
 	TraceLogger(ctx, log).Info("hello")
-	want := "\"trace_id\"=\"" + span.SpanContext().TraceID().String() + "\""
+	want := "\"trace_id\"=\"" + sc.TraceID().String() + "\""
 	if len(lines) != 1 || !strings.Contains(lines[0], want) || !strings.Contains(lines[0], "\"span_id\"") {
 		t.Fatalf("log line missing trace fields: %q", lines)
 	}
