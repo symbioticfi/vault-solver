@@ -151,9 +151,9 @@ func (s *Solver) suspendQuotes(ctx context.Context, state *quoteState) {
 
 	backoff := initialQuoteSuspensionBackoff
 	for {
-		removed, reconcileErr := s.reconcileQuotes(ctx, state, nil, s.wallNow())
-		if reconcileErr == nil {
-			err = nil
+		var removed int
+		removed, err = s.reconcileQuotes(ctx, state, nil, s.wallNow())
+		if err == nil {
 			outcome = observability.ExternalOperationSuccess
 			s.observeQuoteRefresh(state)
 			if removed > 0 {
@@ -161,7 +161,6 @@ func (s *Solver) suspendQuotes(ctx context.Context, state *quoteState) {
 			}
 			return
 		}
-		err = reconcileErr
 		if ctx.Err() != nil {
 			return
 		}
@@ -230,14 +229,12 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		s.suspendQuotes(ctx, state)
 		return
 	}
-	var chainTime time.Time
-	chainTime, err = s.now(ctx)
+	chainTime, err := s.now(ctx)
 	if err != nil {
 		observability.Log(ctx).Error(err, "quote refresh: read latest block time")
 		return
 	}
-	var snapshotSet quoteSnapshotSet
-	snapshotSet, err = s.reader.quoteSnapshots(ctx, routes, s.cfg.Executor)
+	snapshotSet, err := s.reader.quoteSnapshots(ctx, routes, s.cfg.Executor)
 	if err != nil {
 		observability.Log(ctx).Error(err, "quote refresh: read routes")
 		return
@@ -257,8 +254,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	inventory = append(inventory, discountInventory...)
 	reservations := s.capacity.Snapshot()
 	serverTime := s.wallNow()
-	var out types.QuoteOutput
-	out, err = s.decideQuotes(ctx, types.QuoteInput{
+	out, err := s.decideQuotes(ctx, types.QuoteInput{
 		Solver:            s.cfg.Executor,
 		Inventory:         inventory,
 		Reservations:      reservations,
@@ -307,8 +303,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		s.suspendQuotes(ctx, state)
 		return
 	}
-	var removed int
-	removed, err = s.reconcileQuotes(ctx, state, out.Quotes, serverTime)
+	removed, err := s.reconcileQuotes(ctx, state, out.Quotes, serverTime)
 	if err != nil {
 		observability.Log(ctx).Error(err, "quote refresh: submit quotes", "quotes", len(out.Quotes))
 		return

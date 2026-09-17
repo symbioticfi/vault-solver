@@ -12,8 +12,6 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/gorilla/websocket"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
@@ -165,7 +163,7 @@ func (f *orderFeed) dial(ctx context.Context) (conn *websocket.Conn, err error) 
 	if f.apiKey != "" {
 		headers.Set("x-api-key", f.apiKey)
 	}
-	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(headers))
+	observability.InjectTraceHeaders(ctx, headers)
 	conn, resp, err := websocket.DefaultDialer.DialContext(ctx, f.url, headers)
 	if resp != nil && resp.Body != nil {
 		_ = resp.Body.Close()

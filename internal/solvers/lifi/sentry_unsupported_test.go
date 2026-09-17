@@ -70,7 +70,7 @@ func TestUnsupportedOrdersDoNotReachSentry(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			before := len(events)
-			s.logFillDecisionError(s.log, tc.err, "order fill: strategy", &submittedOrder{OrderID: "order-42"})
+			s.logFillDecisionError(observability.WithLogger(t.Context(), s.log), tc.err, "order fill: strategy", &submittedOrder{OrderID: "order-42"})
 			if got := len(events) - before; got != tc.wantEvents {
 				t.Fatalf("Sentry events=%d, want %d", got, tc.wantEvents)
 			}

@@ -7,7 +7,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
-	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
@@ -144,7 +143,7 @@ func (s *Solver) sendFill(
 	ctx context.Context, request txmanager.Request,
 ) (result <-chan txmanager.Result, accepted bool) {
 	ctx, end := tracer.Start(ctx, "lifi.order.submit")
-	defer func() { end(nil) }()
+	defer end(nil)
 
 	result, accepted = s.txm.SendAsync(ctx, request)
 	if !accepted {
@@ -179,12 +178,9 @@ func (s *Solver) completeFill(
 ) (err error) {
 	fill := completion.fill
 	pending.remove(fill.reservationKey)
-	txAttrs := []attribute.KeyValue{observability.AttrTxOutcome.String(string(completion.result.Outcome))}
-	if completion.result.Hash != (common.Hash{}) { // a request that never reached the wire has no hash
-		txAttrs = append(txAttrs, observability.AttrTxHash.String(completion.result.Hash.Hex()))
-	}
-	observability.SetAttributes(ctx, txAttrs...) // the processing span this result belongs to
-	ctx, end := tracer.Start(ctx, "lifi.order.complete", txAttrs...)
+	txmanager.RecordResult(ctx, completion.result) // the processing span this result belongs to
+	ctx, end := tracer.Start(ctx, "lifi.order.complete")
+	txmanager.RecordResult(ctx, completion.result)
 	defer func() { end(err) }()
 
 	outcome := completion.result.Outcome

@@ -7,7 +7,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
-	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
@@ -148,7 +147,7 @@ func (s *Solver) processOrderUsingReservations(
 	}
 	plan, err := s.decideFill(ctx, prepared.input)
 	if err != nil {
-		s.logFillDecisionError(observability.Log(ctx), err, "order fill: strategy", order)
+		s.logFillDecisionError(ctx, err, "order fill: strategy", order)
 		if !types.IsPermanentFillDecisionError(err) {
 			return orderProcessingResult{
 				retryable:            true,
@@ -188,7 +187,7 @@ func (s *Solver) processOrderUsingReservations(
 		)
 		unreservedPlan, err := prober.DecideFillWithoutReservations(ctx, unreservedInput)
 		if err != nil {
-			s.logFillDecisionError(observability.Log(ctx), err, "order fill: strategy without pending reservations", order)
+			s.logFillDecisionError(ctx, err, "order fill: strategy without pending reservations", order)
 			return orderProcessingResult{outcome: orderProcessingStrategyDeclined, err: err}
 		}
 		if unreservedPlan == nil {
@@ -215,7 +214,7 @@ func (s *Solver) processOrderUsingReservations(
 			"quoteId", order.QuoteID)
 		return orderProcessingResult{outcome: orderProcessingInvalidPlan, err: err}
 	}
-	s.logFillPlan(observability.Log(ctx), order, orderID, plan)
+	s.logFillPlan(ctx, order, orderID, plan)
 	calldata, err := buildFillCalldata(*order, orderID, plan, prepared.signedDiscounts)
 	if err != nil {
 		observability.Log(ctx).Error(err, "order fill: build calldata", "orderId", order.OrderID, "quoteId", order.QuoteID)
@@ -310,8 +309,9 @@ func validateFillPlan(input types.FillInput, plan *types.FillPlan) error {
 }
 
 func (s *Solver) logFillPlan(
-	log logr.Logger, order *submittedOrder, orderID common.Hash, plan *types.FillPlan,
+	ctx context.Context, order *submittedOrder, orderID common.Hash, plan *types.FillPlan,
 ) {
+	log := observability.Log(ctx)
 	discountRoutes := 0
 	for index, route := range plan.Routes {
 		if route.DiscountID != nil {
@@ -572,8 +572,9 @@ func orderExpired(order *submittedOrder, now time.Time) bool {
 // Unsupported strategy formats keep their permanent-decision semantics without paging.
 // Other permanent errors (such as malformed known contexts) must remain actionable.
 func (s *Solver) logFillDecisionError(
-	log logr.Logger, err error, message string, order *submittedOrder,
+	ctx context.Context, err error, message string, order *submittedOrder,
 ) {
+	log := observability.Log(ctx)
 	fields := []any{"orderId", order.OrderID, "onChainOrderId", order.OnChainOrderID, "quoteId", order.QuoteID}
 	if expectedFillDecline(err) {
 		log.V(1).Info(message, append(fields, "reason_code", "unsupported_output_context", "reason", err.Error())...)

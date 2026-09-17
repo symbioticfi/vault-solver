@@ -633,11 +633,7 @@ func (s *Solver) parseOrderMessage(
 		}
 		return nil, nil
 	}
-	observability.SetAttributes(ctx,
-		observability.AttrOrderID.String(order.OrderID),
-		observability.AttrOrderOnchainID.String(order.OnChainOrderID),
-		observability.AttrQuoteID.String(order.QuoteID),
-	)
+	observability.SetAttributes(ctx, orderAttrs(order)...)
 	if isDutchAuctionContext(order.Output.Context) {
 		s.metrics.observeOrderParse("unsupported")
 		observability.Decline(ctx, "order_ignored", "Dutch auction orders are not supported")

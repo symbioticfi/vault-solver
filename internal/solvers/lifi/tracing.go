@@ -3,6 +3,7 @@ package lifi
 import (
 	"context"
 
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
@@ -58,6 +59,15 @@ type orderTraces struct {
 	byKey map[string]*orderTrace
 }
 
+// orderAttrs identifies one order on a span: the same three keys wherever an order is described.
+func orderAttrs(order *submittedOrder) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		observability.AttrOrderID.String(order.OrderID),
+		observability.AttrOrderOnchainID.String(order.OnChainOrderID),
+		observability.AttrQuoteID.String(order.QuoteID),
+	}
+}
+
 func newOrderTraces() *orderTraces {
 	return &orderTraces{byKey: make(map[string]*orderTrace)}
 }
@@ -70,11 +80,7 @@ func (t *orderTraces) begin(ctx context.Context, order *submittedOrder) *orderTr
 		return existing
 	}
 	spanCtx, end := tracer.Start(
-		trace.ContextWithSpanContext(ctx, order.span),
-		"lifi.order.process",
-		observability.AttrOrderID.String(order.OrderID),
-		observability.AttrOrderOnchainID.String(order.OnChainOrderID),
-		observability.AttrQuoteID.String(order.QuoteID),
+		trace.ContextWithSpanContext(ctx, order.span), "lifi.order.process", orderAttrs(order)...,
 	)
 	tracked := &orderTrace{span: trace.SpanFromContext(spanCtx), end: end, attempts: make(map[string]int)}
 	t.byKey[key] = tracked
