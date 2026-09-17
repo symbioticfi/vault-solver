@@ -3,7 +3,6 @@ package observability
 import (
 	"context"
 	"slices"
-	"sync"
 	"sync/atomic"
 
 	"github.com/go-errors/errors"
@@ -36,7 +35,8 @@ const (
 	AttrReasonCode     = attribute.Key("reason_code")
 )
 
-// EndFunc ends a span, recording err when non-nil. Safe to call more than once; later calls are no-ops.
+// EndFunc ends a span, recording err when non-nil. Safe to call more than once: the SDK ignores a
+// second End, and every record it would make first is gated on the span still recording.
 type EndFunc func(err error)
 
 // noopEnd is what every Start returns while tracing is disabled, so that path allocates nothing.
@@ -135,8 +135,7 @@ func (t *Tracer) start(
 	//nolint:spancheck // span is ended by the returned EndFunc, not inline
 	ctx, span := t.Raw().Start(ctx, name, opts...)
 	ctx = withStamped(ctx, span.SpanContext())
-	var once sync.Once
-	return ctx, func(err error) { once.Do(func() { endSpan(span, err) }) } //nolint:spancheck // see above
+	return ctx, func(err error) { endSpan(span, err) } //nolint:spancheck // see above
 }
 
 // StartLinkedKey starts name linked to the span remembered under key (spec §12). On a hit it adds
@@ -164,9 +163,18 @@ func (t *Tracer) StartLinkedKey(
 		return ctx, end, ""
 	}
 	if base, err := logr.FromContext(ctx); err == nil {
-		ctx = WithLogger(ctx, base.WithValues("quoteTraceId", traceID))
+		ctx = WithLogger(ctx, WithQuoteTrace(base, traceID))
 	}
 	return ctx, end, traceID
+}
+
+// WithQuoteTrace stamps the linked quote's trace id on log, the key that joins a fill's log lines to
+// the quote that priced it. One definition: a rename here must not leave a solver behind.
+func WithQuoteTrace(log logr.Logger, traceID string) logr.Logger {
+	if traceID == "" {
+		return log
+	}
+	return log.WithValues("quoteTraceId", traceID)
 }
 
 // LinkMiss records that the span remembered under key was gone — restart, eviction, or it was never

@@ -14,18 +14,17 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
-	"go.opentelemetry.io/otel/trace"
 )
 
 // Tracing describes the process for the OpenTelemetry resource.
 type Tracing struct {
-	Name    string // service.name default; OTEL_SERVICE_NAME overrides
 	Version string
 	Commit  string
 	Solvers []string
 	ChainID uint64
 }
 
+// defaultServiceName names the process unless OTEL_SERVICE_NAME overrides it below.
 const defaultServiceName = "vault-solver"
 
 // enabled reports whether a real TracerProvider is installed. The default deployment runs with
@@ -59,14 +58,10 @@ func NewTracing(ctx context.Context, info Tracing, log logr.Logger) (func(contex
 		log.Error(err, "tracing disabled: cannot build OTLP exporter")
 		return noop, false
 	}
-	name := info.Name
-	if name == "" {
-		name = defaultServiceName
-	}
 	res, err := resource.New(ctx,
 		resource.WithTelemetrySDK(), // telemetry.sdk.*; the option sets around it are schemaless
 		resource.WithAttributes(
-			semconv.ServiceName(name),
+			semconv.ServiceName(defaultServiceName),
 			semconv.ServiceVersion(info.Version),
 			attribute.String("vault_solver.commit", info.Commit),
 			attribute.String("vault_solver.solvers", strings.Join(info.Solvers, ",")),
@@ -99,13 +94,4 @@ func tracingEnabled(v string) bool {
 	default:
 		return false
 	}
-}
-
-// TraceLogger stamps trace_id and span_id on log when ctx carries a valid span context.
-func TraceLogger(ctx context.Context, log logr.Logger) logr.Logger {
-	sc := trace.SpanContextFromContext(ctx)
-	if !sc.IsValid() {
-		return log
-	}
-	return stampLogger(log, sc)
 }

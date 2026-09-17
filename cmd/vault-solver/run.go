@@ -60,7 +60,6 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	defer syncLog()
 
 	shutdownTracing, tracingEnabled := observability.NewTracing(ctx, observability.Tracing{
-		Name:    "vault-solver",
 		Version: version.Version,
 		Commit:  version.Commit,
 		Solvers: solverNames,
@@ -118,7 +117,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	}
 	rpcURLs := append([]string{cfg.Chain.RPCURL}, cfg.Chain.RPCFallbackURLs...)
 	chainClient, err := chain.DialWithMetrics(
-		ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.MulticallAddress, rpcMetrics, log,
+		ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.MulticallAddress, rpcMetrics,
 	)
 	if err != nil {
 		return err

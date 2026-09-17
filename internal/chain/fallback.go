@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/go-errors/errors"
-	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
@@ -43,7 +42,6 @@ type fallbackTransport struct {
 	base      http.RoundTripper
 	metrics   *RPCMetrics
 	role      string
-	log       logr.Logger
 }
 
 func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -109,8 +107,9 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 					}
 					t.metrics.observeAttempt(t.role, endpoint, method, lastOutcome)
 					requestTrace.attempt(endpoint, lastOutcome)
-					observability.TraceLogger(ctx, t.log).V(1).Info("rpc result unavailable; trying fallback",
-						"endpoint", ep.Redacted(), "method", request.rawMethod, "err", lastErr.Error())
+					observability.Log(ctx).V(1).Info("rpc result unavailable; trying fallback",
+						"role", t.role, "endpoint", ep.Redacted(),
+						"method", request.rawMethod, "err", lastErr.Error())
 					continue
 				}
 				outcome := classifyRPCResponse(method, resp.StatusCode, inspectedBody, false, nil)
@@ -148,8 +147,8 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		t.metrics.observeAttempt(t.role, endpoint, method, lastOutcome)
 		requestTrace.attempt(endpoint, lastOutcome)
 		if i < len(t.endpoints)-1 {
-			observability.TraceLogger(ctx, t.log).V(1).Info("rpc endpoint failed; trying fallback",
-				"endpoint", ep.Redacted(), "err", lastErr.Error())
+			observability.Log(ctx).V(1).Info("rpc endpoint failed; trying fallback",
+				"role", t.role, "endpoint", ep.Redacted(), "err", lastErr.Error())
 		}
 	}
 	requestObservation.finish(lastOutcome)

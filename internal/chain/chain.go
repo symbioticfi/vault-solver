@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/go-errors/errors"
-	"github.com/go-logr/logr"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -53,8 +52,8 @@ type Client struct {
 // writeRPCURL, when non-empty, is dialed as a SEPARATE client used to broadcast transactions and
 // read account nonces (see SendTransaction, NonceAt, and PendingNonceAt). Every other read stays on
 // the primary. When it is empty, broadcasts and nonce reads use rpcURLs[0] without falling over.
-func Dial(ctx context.Context, rpcURLs []string, writeRPCURL, multicallAddr string, log logr.Logger) (*Client, error) {
-	return dial(ctx, rpcURLs, writeRPCURL, multicallAddr, nil, log)
+func Dial(ctx context.Context, rpcURLs []string, writeRPCURL, multicallAddr string) (*Client, error) {
+	return dial(ctx, rpcURLs, writeRPCURL, multicallAddr, nil)
 }
 
 // DialWithMetrics is Dial with generic HTTP JSON-RPC instrumentation on the supplied registry.
@@ -64,9 +63,8 @@ func DialWithMetrics(
 	writeRPCURL string,
 	multicallAddr string,
 	rpcMetrics *RPCMetrics,
-	log logr.Logger,
 ) (*Client, error) {
-	return dial(ctx, rpcURLs, writeRPCURL, multicallAddr, rpcMetrics, log)
+	return dial(ctx, rpcURLs, writeRPCURL, multicallAddr, rpcMetrics)
 }
 
 func dial(
@@ -75,7 +73,6 @@ func dial(
 	writeRPCURL string,
 	multicallAddr string,
 	rpcMetrics *RPCMetrics,
-	log logr.Logger,
 ) (*Client, error) {
 	if len(rpcURLs) == 0 {
 		return nil, errors.New("chain: no rpc url configured")
@@ -92,7 +89,7 @@ func dial(
 	if writeEndpoint == "" {
 		readRole = rpcRoleShared
 	}
-	ec, readTransport, err := dialClient(ctx, rpcURLs, readRole, rpcMetrics, log)
+	ec, readTransport, err := dialClient(ctx, rpcURLs, readRole, rpcMetrics)
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +107,7 @@ func dial(
 	writeClient := ec
 	writeCalls := readCalls
 	if writeEndpoint != "" {
-		wc, writeTransport, wcErr := dialClient(ctx, []string{writeEndpoint}, rpcRoleWrite, rpcMetrics, log)
+		wc, writeTransport, wcErr := dialClient(ctx, []string{writeEndpoint}, rpcRoleWrite, rpcMetrics)
 		if wcErr != nil {
 			ec.Close()
 			return nil, errors.Errorf("chain: dial write rpc: %w", wcErr)
@@ -165,7 +162,6 @@ func dialClient(
 	rpcURLs []string,
 	role string,
 	rpcMetrics *RPCMetrics,
-	log logr.Logger,
 ) (*ethclient.Client, string, error) {
 	if len(rpcURLs) == 1 && !isHTTPURL(rpcURLs[0]) {
 		return dialNonHTTP(ctx, rpcURLs[0], role)
@@ -181,7 +177,6 @@ func dialClient(
 			base:      http.DefaultTransport,
 			metrics:   rpcMetrics,
 			role:      role,
-			log:       log,
 		},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}

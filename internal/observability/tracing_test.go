@@ -2,12 +2,10 @@ package observability
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
-	"github.com/go-logr/logr/funcr"
 	"go.opentelemetry.io/otel"
 )
 
@@ -28,7 +26,7 @@ func TestTracingEnabled(t *testing.T) {
 
 func TestNewTracingDisabledInstallsPropagatorOnly(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_ENABLED", "")
-	shutdown, enabled := NewTracing(t.Context(), Tracing{Name: "test"}, logr.Discard())
+	shutdown, enabled := NewTracing(t.Context(), Tracing{}, logr.Discard())
 	if enabled {
 		t.Fatal("expected tracing disabled")
 	}
@@ -52,7 +50,7 @@ func TestNewTracingEnabledRegistersProvider(t *testing.T) {
 	prev := otel.GetTracerProvider()
 	wasEnabled := TracingEnabled()
 	t.Cleanup(func() { otel.SetTracerProvider(prev); InvalidateTracers(); SetEnabled(wasEnabled) })
-	shutdown, enabled := NewTracing(t.Context(), Tracing{Name: "test", Version: "v", Commit: "c", Solvers: []string{"rfq"}, ChainID: 1}, logr.Discard())
+	shutdown, enabled := NewTracing(t.Context(), Tracing{Version: "v", Commit: "c", Solvers: []string{"rfq"}, ChainID: 1}, logr.Discard())
 	if !enabled {
 		t.Fatal("expected tracing enabled")
 	}
@@ -67,23 +65,4 @@ func TestNewTracingEnabledRegistersProvider(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 	_ = shutdown(ctx) // export to a closed port fails; must not error the caller path or hang
-}
-
-func TestTraceLogger(t *testing.T) {
-	var lines []string
-	log := funcr.New(func(_, args string) { lines = append(lines, args) }, funcr.Options{})
-
-	// No span in context: TraceLogger must return a logger that stamps no trace fields.
-	TraceLogger(t.Context(), log).Info("bare")
-	if len(lines) != 1 || strings.Contains(lines[0], "trace_id") {
-		t.Fatalf("expected no trace_id without a span, got %q", lines)
-	}
-	lines = nil
-
-	ctx, sc := tracedContext(t)
-	TraceLogger(ctx, log).Info("hello")
-	want := "\"trace_id\"=\"" + sc.TraceID().String() + "\""
-	if len(lines) != 1 || !strings.Contains(lines[0], want) || !strings.Contains(lines[0], "\"span_id\"") {
-		t.Fatalf("log line missing trace fields: %q", lines)
-	}
 }

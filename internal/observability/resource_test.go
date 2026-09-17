@@ -20,7 +20,7 @@ func TestNewTracingResourceDescribesProcessAndSDK(t *testing.T) {
 	wasEnabled := TracingEnabled()
 	t.Cleanup(func() { otel.SetTracerProvider(prev); InvalidateTracers(); SetEnabled(wasEnabled) })
 	shutdown, enabled := NewTracing(t.Context(), Tracing{
-		Name: "test", Version: "v1.2.3", Commit: "abc123", Solvers: []string{"rfq", "lifi"}, ChainID: 1,
+		Version: "v1.2.3", Commit: "abc123", Solvers: []string{"rfq", "lifi"}, ChainID: 1,
 	}, logr.Discard())
 	if !enabled {
 		t.Fatal("expected tracing enabled")
@@ -40,7 +40,7 @@ func TestNewTracingResourceDescribesProcessAndSDK(t *testing.T) {
 		got[string(kv.Key)] = kv.Value.String()
 	}
 	want := map[string]string{
-		"service.name":           "test",
+		"service.name":           "vault-solver",
 		"service.version":        "v1.2.3",
 		"vault_solver.commit":    "abc123",
 		"vault_solver.solvers":   "rfq,lifi",
