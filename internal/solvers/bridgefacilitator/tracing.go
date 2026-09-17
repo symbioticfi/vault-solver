@@ -25,11 +25,12 @@ const attrLinkedOffers = attribute.Key("offer.linked_count")
 // settlement that follows the last solve still finds it.
 const offerLinkTTLSlack = time.Hour
 
-// requestLinkKey keys a submitted offer by the auction's Request contract address — the only
-// identifier present both at offer time and on the settlement path, which reads Requests on-chain
-// (the 3F API discards the created offer id). Used by redeemReady.
-func requestLinkKey(request common.Address) string {
-	return "req:" + strings.ToLower(request.Hex())
+// requestLinkKey keys a submitted offer by the adapter it was made through and the auction's Request
+// contract address, the only identifiers present both at offer time and on the settlement path, which
+// reads an adapter's Requests on-chain (the 3F API discards the created offer id). The adapter is part
+// of the key because one Request can take offers through several adapters. Used by redeemReady.
+func requestLinkKey(adapter, request common.Address) string {
+	return "req:" + strings.ToLower(adapter.Hex()) + ":" + strings.ToLower(request.Hex())
 }
 
 // auctionLinkKey keys the same offer by (adapter, auction), which is what the API's offer listing
@@ -38,10 +39,10 @@ func auctionLinkKey(adapter common.Address, auctionID int64) string {
 	return "auction:" + strings.ToLower(adapter.Hex()) + ":" + strconv.FormatInt(auctionID, 10)
 }
 
-// offerLinks resolves one link per ready Request and reports the keys that missed.
-func (s *Solver) offerLinks(ready []common.Address) (links []trace.Link, missed []string) {
+// offerLinks resolves one link per Request ready on adapter and reports the keys that missed.
+func (s *Solver) offerLinks(adapter common.Address, ready []common.Address) (links []trace.Link, missed []string) {
 	for _, request := range ready {
-		key := requestLinkKey(request)
+		key := requestLinkKey(adapter, request)
 		if link, ok := s.links.Lookup(key); ok {
 			links = append(links, link)
 			continue

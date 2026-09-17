@@ -19,6 +19,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/symbioticfi/vault-solver/api/threef"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 	"github.com/symbioticfi/vault-solver/internal/solver"
@@ -192,7 +193,7 @@ func TestDiscoverAndOfferTracesOfferPipeline(t *testing.T) {
 		t.Fatalf("sync solver = %q, want %q", got, Name)
 	}
 
-	link, ok := fixture.solver.links.Lookup(requestLinkKey(fixture.request))
+	link, ok := fixture.solver.links.Lookup(requestLinkKey(fixture.adapter, fixture.request))
 	if !ok {
 		t.Fatal("submitted offer was not remembered under its request key")
 	}
@@ -241,7 +242,7 @@ func TestDiscoverAndOfferRecordsSubmitFailure(t *testing.T) {
 	if auction.Status().Code != codes.Error {
 		t.Fatalf("auction status = %v, want error", auction.Status())
 	}
-	if _, ok := fixture.solver.links.Lookup(requestLinkKey(fixture.request)); ok {
+	if _, ok := fixture.solver.links.Lookup(requestLinkKey(fixture.adapter, fixture.request)); ok {
 		t.Fatal("a failed submission must not be remembered as a linkable offer")
 	}
 }
@@ -319,7 +320,7 @@ func TestRedeemAllLinksToRememberedOfferSpans(t *testing.T) {
 	s, request, sent := newRedeemFixture(t, txmanager.OutcomeConfirmed, hash)
 
 	offerCtx, endOffer := tracer.Start(t.Context(), "3f.auction")
-	s.links.Remember(offerCtx, requestLinkKey(request), time.Hour)
+	s.links.Remember(offerCtx, requestLinkKey(common.HexToAddress(tracingAdapterHex), request), time.Hour)
 	offerSpan := trace.SpanContextFromContext(offerCtx)
 	endOffer(nil)
 
@@ -375,8 +376,9 @@ func TestRedeemAllSendsWithoutRememberedOfferSpan(t *testing.T) {
 	if got := tracetest.Attr(submit, "offer.linked_count"); got != "0" {
 		t.Fatalf("offer.linked_count = %q, want 0", got)
 	}
-	if key, misses := tracetest.EventAttr(submit, "link_miss", "key"); misses != 1 || key != requestLinkKey(request) {
-		t.Fatalf("link_miss events = %d with key %q, want 1 with %s", misses, key, requestLinkKey(request))
+	wantKey := requestLinkKey(common.HexToAddress(tracingAdapterHex), request)
+	if key, misses := tracetest.EventAttr(submit, "link_miss", "key"); misses != 1 || key != wantKey {
+		t.Fatalf("link_miss events = %d with key %q, want 1 with %s", misses, key, wantKey)
 	}
 	tracetest.RequireNoErrorSpans(t, rec)
 }
@@ -485,7 +487,40 @@ func TestDiscoverAndOfferWithTracingDisabled(t *testing.T) {
 	if got := fixture.createCalls.Load(); got != 1 {
 		t.Fatalf("createOffer calls = %d, want 1", got)
 	}
-	if _, ok := fixture.solver.links.Lookup(requestLinkKey(fixture.request)); ok {
+	if _, ok := fixture.solver.links.Lookup(requestLinkKey(fixture.adapter, fixture.request)); ok {
 		t.Fatal("a no-op span context must not be remembered")
+	}
+}
+
+// The default strategy can offer on one Request through several adapters, so each redeem links the
+// offer made through its own adapter rather than whichever offer was remembered last.
+func TestRedeemLinksTheOfferOfItsOwnAdapter(t *testing.T) {
+	rec := tracetest.Install(t)
+	request := common.HexToAddress(tracingRequestHex)
+	adapterA := common.HexToAddress("0x00000000000000000000000000000000000000aa")
+	adapterB := common.HexToAddress("0x00000000000000000000000000000000000000bb")
+	s := &Solver{cfg: &Config{RedeemBatchSize: 10}, log: logr.Discard(), links: observability.NewSpanLinks()}
+	s.txManager = transactionSenderFunc(func(context.Context, txmanager.Request) txmanager.Result {
+		return txmanager.Result{Outcome: txmanager.OutcomeConfirmed, Hash: common.HexToHash("0xfeed")}
+	})
+	offerSpans := make(map[common.Address]trace.SpanContext)
+	for _, adapter := range []common.Address{adapterA, adapterB} {
+		offerCtx, endOffer := tracer.Start(t.Context(), "3f.auction")
+		s.rememberOffer(offerCtx, types.OfferExecution{AuctionID: tracingAuctionID, Request: request, Maker: adapter},
+			threef.CreateOfferDto{})
+		offerSpans[adapter] = trace.SpanContextFromContext(offerCtx)
+		endOffer(nil)
+	}
+
+	for _, adapter := range []common.Address{adapterA, adapterB} {
+		s.redeemReady(t.Context(), Target{Adapter: adapter}, []common.Address{request})
+		submits := tracetest.AllEnded(rec, "3f.redeem.submit")
+		submit := submits[len(submits)-1]
+		if got := len(submit.Links()); got != 1 {
+			t.Fatalf("redeem through %s links = %d, want 1", adapter.Hex(), got)
+		}
+		if got, want := submit.Links()[0].SpanContext.SpanID(), offerSpans[adapter].SpanID(); got != want {
+			t.Fatalf("redeem through %s linked span %s, want its own offer span %s", adapter.Hex(), got, want)
+		}
 	}
 }

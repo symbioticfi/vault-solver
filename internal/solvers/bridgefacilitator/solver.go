@@ -455,14 +455,14 @@ func (s *Solver) offerOnAuction(
 }
 
 // rememberOffer keeps this auction's span reachable from the two places the offer resurfaces: the
-// on-chain settlement, which only knows Request addresses, and the API's offer listing, which only
-// knows (adapter, auction). Both keys expire with the offer plus slack (spec §12).
+// on-chain settlement, which only knows (adapter, Request), and the API's offer listing, which only
+// knows (adapter, auction). The offer's maker is the adapter. Both keys expire with the offer plus slack (spec §12).
 func (s *Solver) rememberOffer(ctx context.Context, offer types.OfferExecution, dto threef.CreateOfferDto) {
 	ttl := offerLinkTTLSlack
 	if expiration, err := parseUnixTime(dto.Expiration); err == nil {
 		ttl = time.Until(expiration) + offerLinkTTLSlack
 	}
-	s.links.Remember(ctx, requestLinkKey(offer.Request), ttl)
+	s.links.Remember(ctx, requestLinkKey(offer.Maker, offer.Request), ttl)
 	s.links.Remember(ctx, auctionLinkKey(offer.Maker, offer.AuctionID), ttl)
 }
 

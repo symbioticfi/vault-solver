@@ -96,7 +96,7 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 
 	// Link the settlement back to the offer span of every request it finalizes (spec §12). A miss is
 	// inert: the redeem sends exactly as it would without linking.
-	links, missed := s.offerLinks(ready)
+	links, missed := s.offerLinks(target.Adapter, ready)
 	var err error
 	submitCtx, end := tracer.StartLinked(ctx, "3f.redeem.submit", links,
 		observability.AttrAdapter.String(target.Adapter.Hex()),
