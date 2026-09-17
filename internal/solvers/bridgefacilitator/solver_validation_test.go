@@ -3,8 +3,6 @@ package bridgefacilitator
 import (
 	"testing"
 
-	"github.com/go-logr/logr"
-
 	"github.com/symbioticfi/vault-solver/api/threef"
 )
 
@@ -19,7 +17,7 @@ func TestValidAuctionsDropsIncompleteEntries(t *testing.T) {
 		{Id: 8, Status: "", RequestId: good.RequestId},
 		{Id: 9, Status: "open", RequestId: "not-an-address"},
 	}
-	kept := s.validAuctions(logr.Discard(), in)
+	kept := s.validAuctions(t.Context(), in)
 	if len(kept) != 1 || kept[0].Id != good.Id {
 		t.Fatalf("kept %+v, want only auction %v", kept, good.Id)
 	}

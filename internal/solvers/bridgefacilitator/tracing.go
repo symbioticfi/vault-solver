@@ -38,20 +38,11 @@ func auctionLinkKey(adapter common.Address, auctionID int64) string {
 	return "auction:" + strings.ToLower(adapter.Hex()) + ":" + strconv.FormatInt(auctionID, 10)
 }
 
-// offerLink returns the span of the offer submission remembered under key. A miss is an ordinary
-// result: linking is best effort and never changes what the solver does (spec §12).
-func (s *Solver) offerLink(key string) (trace.Link, bool) {
-	if s.links == nil {
-		return trace.Link{}, false
-	}
-	return s.links.Lookup(key)
-}
-
 // offerLinks resolves one link per ready Request and reports the keys that missed.
 func (s *Solver) offerLinks(ready []common.Address) (links []trace.Link, missed []string) {
 	for _, request := range ready {
 		key := requestLinkKey(request)
-		if link, ok := s.offerLink(key); ok {
+		if link, ok := s.links.Lookup(key); ok {
 			links = append(links, link)
 			continue
 		}
@@ -66,7 +57,7 @@ func (s *Solver) listedOfferLogger(log logr.Logger, adapter common.Address, auct
 	if auctionID <= 0 {
 		return log
 	}
-	link, ok := s.offerLink(auctionLinkKey(adapter, auctionID))
+	link, ok := s.links.Lookup(auctionLinkKey(adapter, auctionID))
 	if !ok {
 		return log
 	}

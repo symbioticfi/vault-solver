@@ -5,7 +5,6 @@
 package bridgefacilitator
 
 import (
-	"cmp"
 	"context"
 	"math/big"
 	"strings"
@@ -197,7 +196,9 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 		offers, err := s.api.listOffers(ctx, t.Adapter)
 		if err != nil {
 			complete = false
-			stageErr = cmp.Or[error](stageErr, err)
+			if stageErr == nil {
+				stageErr = err
+			}
 			observability.Log(ctx).Error(err, "reconcile offers: list offers", "adapter", t.Adapter.Hex())
 			continue
 		}
@@ -217,7 +218,9 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 			exp, perr := parseUnixTime(o.Expiration)
 			if perr != nil {
 				complete = false
-				stageErr = cmp.Or[error](stageErr, perr)
+				if stageErr == nil {
+					stageErr = perr
+				}
 				offerLog.Error(perr, "reconcile offers: malformed expiration; retaining valid subset",
 					"adapter", t.Adapter.Hex(), "offerId", o.Id)
 				continue
@@ -235,7 +238,9 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 			}
 			if o.AuctionId <= 0 {
 				complete = false
-				stageErr = cmp.Or[error](stageErr, errRequiredFieldMissing)
+				if stageErr == nil {
+					stageErr = errRequiredFieldMissing
+				}
 				offerLog.Error(errRequiredFieldMissing, "reconcile offers: missing auction id; retaining valid subset",
 					"adapter", t.Adapter.Hex(), "offerId", o.Id)
 				continue
@@ -293,7 +298,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		observability.Log(ctx).Error(err, "discover: list auctions")
 		return
 	}
-	auctions = s.validAuctions(observability.Log(ctx), auctions)
+	auctions = s.validAuctions(ctx, auctions)
 	observability.Log(ctx).V(1).Info("discovered auctions", "count", len(auctions))
 
 	// Rebuild coverage from the live API before deciding, so out-of-band offers count and we don't double-offer.
@@ -434,8 +439,7 @@ func (s *Solver) offerOnAuction(
 	}
 	submitted, err := s.submitOfferIfLaneReady(ctx, dto)
 	if !submitted {
-		err = nil // an expected skip, declined on the submit stage
-		return true
+		return true // an expected skip, declined on the submit stage; err is nil here
 	}
 	if err != nil {
 		s.observeOfferSubmission("error")
@@ -454,9 +458,6 @@ func (s *Solver) offerOnAuction(
 // on-chain settlement, which only knows Request addresses, and the API's offer listing, which only
 // knows (adapter, auction). Both keys expire with the offer plus slack (spec §12).
 func (s *Solver) rememberOffer(ctx context.Context, offer types.OfferExecution, dto threef.CreateOfferDto) {
-	if s.links == nil {
-		return
-	}
 	ttl := offerLinkTTLSlack
 	if expiration, err := parseUnixTime(dto.Expiration); err == nil {
 		ttl = time.Until(expiration) + offerLinkTTLSlack
@@ -630,7 +631,8 @@ func (s *Solver) installTargets(targets []Target) {
 
 // validAuctions drops auctions missing a field the solver acts on. The generated client tolerates a
 // dropped field by zero-valuing it, so this is where such a schema change becomes visible.
-func (s *Solver) validAuctions(log logr.Logger, auctions []threef.AuctionDto) []threef.AuctionDto {
+func (s *Solver) validAuctions(ctx context.Context, auctions []threef.AuctionDto) []threef.AuctionDto {
+	log := observability.Log(ctx)
 	kept := make([]threef.AuctionDto, 0, len(auctions))
 	for _, a := range auctions {
 		var missing string

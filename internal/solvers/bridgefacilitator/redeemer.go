@@ -6,8 +6,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -106,7 +104,7 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 	)
 	defer func() { end(err) }()
 	for _, key := range missed {
-		trace.SpanFromContext(submitCtx).AddEvent("link_miss", trace.WithAttributes(attribute.String("key", key)))
+		observability.LinkMiss(submitCtx, key)
 	}
 
 	res := s.txManager.Send(submitCtx, txmanager.Request{
@@ -115,12 +113,8 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 		Data:   data,
 		Label:  "redeem",
 	})
-	txAttrs := []attribute.KeyValue{observability.AttrTxOutcome.String(string(res.Outcome))}
-	if res.Hash != (common.Hash{}) { // a request that never reached the wire has no hash
-		txAttrs = append(txAttrs, observability.AttrTxHash.String(res.Hash.Hex()))
-	}
-	observability.SetAttributes(submitCtx, txAttrs...) // the stage
-	observability.SetAttributes(ctx, txAttrs...)       // the redeem pass it belongs to
+	txmanager.RecordResult(submitCtx, res) // the stage
+	txmanager.RecordResult(ctx, res)       // the redeem pass it belongs to
 	if !res.Outcome.Included() {
 		err = res.Err
 		if err == nil {
