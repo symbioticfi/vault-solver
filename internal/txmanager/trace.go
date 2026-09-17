@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -43,18 +44,43 @@ func RecordResult(ctx context.Context, res Result) {
 }
 
 // endSendSpan closes a send span with the request's terminal result. Outcomes that mean the call did
-// not execute as asked are errors; an inclusion the manager could not fully confirm is not.
+// not execute as asked are errors; an inclusion the manager could not fully confirm is not, and
+// neither is a request withdrawn before it could land.
 func endSendSpan(span trace.Span, res Result) {
 	span.SetAttributes(resultAttrs(res)...)
-	switch res.Outcome {
-	case OutcomeReverted, OutcomeCancelled, OutcomeSubmissionError, OutcomeTrackingStopped:
-		message := string(res.Outcome)
-		if res.Err != nil {
-			span.RecordError(res.Err)
-			message = res.Err.Error()
-		}
-		span.SetStatus(codes.Error, message)
-	case OutcomeConfirmed, OutcomeIncludedUnconfirmed:
+	switch {
+	case withdrawnBeforeResult(res):
+		span.AddEvent("cancelled")
+	case !isSendFailure(res.Outcome):
+	case res.Err != nil:
+		observability.EndSpan(span, res.Err)
+		return
+	default:
+		span.SetStatus(codes.Error, string(res.Outcome))
 	}
 	span.End()
+}
+
+func isSendFailure(outcome Outcome) bool {
+	switch outcome {
+	case OutcomeReverted, OutcomeCancelled, OutcomeSubmissionError, OutcomeTrackingStopped:
+		return true
+	case OutcomeConfirmed, OutcomeIncludedUnconfirmed:
+		return false
+	}
+	return false
+}
+
+// withdrawnBeforeResult reports whether the request never got its answer because it was withdrawn
+// rather than rejected: the caller cancelled or reached its CancelAt deadline, the nonce lane was
+// paused, or the manager stopped or ran out of drain time (errShutdownTimeout wraps the deadline).
+// Every other span records these as a cancelled event, so a send span does too.
+func withdrawnBeforeResult(res Result) bool {
+	if res.Outcome != OutcomeSubmissionError && res.Outcome != OutcomeTrackingStopped {
+		return false
+	}
+	return errors.Is(res.Err, context.Canceled) ||
+		errors.Is(res.Err, context.DeadlineExceeded) ||
+		errors.Is(res.Err, errManagerStopped) ||
+		errors.Is(res.Err, errNonceLanePaused)
 }

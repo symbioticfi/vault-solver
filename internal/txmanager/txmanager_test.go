@@ -3287,3 +3287,82 @@ func TestSendLifecycleLogsCarryTraceIDOnce(t *testing.T) {
 		}
 	}
 }
+
+// A manager that has stopped withdraws the request rather than rejecting it. Every other span
+// records that as a cancelled event, so the send span must not colour the caller's trace red.
+func TestSendSpanRecordsManagerStopAsCancellation(t *testing.T) {
+	rec := tracetest.Install(t)
+	s, err := signer.NewFromHexKey(testKey)
+	if err != nil {
+		t.Fatalf("signer: %v", err)
+	}
+	m := New(newMockBackend(), s, big.NewInt(11155111),
+		Config{Confirmations: 0, PollInterval: time.Millisecond, ShutdownTimeout: time.Second}, logr.Discard())
+	managerCtx, cancelManager := context.WithCancel(t.Context())
+	stopped := make(chan struct{})
+	go func() {
+		m.Start(managerCtx)
+		close(stopped)
+	}()
+	cancelManager()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("transaction manager did not stop")
+	}
+
+	res := m.Send(t.Context(), Request{
+		To: common.HexToAddress("0xabc"), Label: "after stop", Solver: "rfq", GasLimit: 21_000,
+	})
+	if !errors.Is(res.Err, errManagerStopped) {
+		t.Fatalf("send after stop = %+v, want the manager stop", res)
+	}
+
+	send := tracetest.Ended(t, rec, "txmanager.send after stop")
+	if send.Status().Code != codes.Unset {
+		t.Fatalf("send status = %v, want unset for a withdrawn request", send.Status())
+	}
+	if !tracetest.HasEvent(send, "cancelled") {
+		t.Fatalf("send span has no cancelled event: %v", send.Events())
+	}
+	if got := tracetest.Attr(send, "tx.outcome"); got != string(OutcomeSubmissionError) {
+		t.Fatalf("send tx.outcome = %q, want %q", got, OutcomeSubmissionError)
+	}
+}
+
+// A CancelAt deadline reached while the request waits for the nonce lane is the caller withdrawing
+// it, not the manager failing it.
+func TestSendSpanRecordsCancelAtDeadlineAsCancellation(t *testing.T) {
+	rec := tracetest.Install(t)
+	bb := &blockingBackend{mockBackend: newMockBackend(), entered: make(chan struct{}), release: make(chan struct{})}
+	m := New(bb, mustSigner(t), big.NewInt(11155111), Config{PollInterval: time.Millisecond}, logr.Discard())
+	startManagerForTest(t, m)
+
+	first := make(chan Result, 1)
+	go func() {
+		first <- m.Send(
+			context.Background(), Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "holder"},
+		)
+	}()
+	<-bb.entered
+
+	res := m.Send(t.Context(), Request{
+		To: common.HexToAddress("0xdef"), GasLimit: 21_000, Label: "expiring",
+		CancelAt: time.Now().Add(50 * time.Millisecond),
+	})
+	if !errors.Is(res.Err, context.DeadlineExceeded) {
+		t.Fatalf("expiring send = %+v, want its CancelAt deadline", res)
+	}
+	close(bb.release)
+	if got := <-first; got.Err != nil {
+		t.Fatalf("holder send: %v", got.Err)
+	}
+
+	send := tracetest.Ended(t, rec, "txmanager.send expiring")
+	if send.Status().Code != codes.Unset {
+		t.Fatalf("send status = %v, want unset for a withdrawn request", send.Status())
+	}
+	if !tracetest.HasEvent(send, "cancelled") {
+		t.Fatalf("send span has no cancelled event: %v", send.Events())
+	}
+}
