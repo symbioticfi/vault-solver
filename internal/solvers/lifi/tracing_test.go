@@ -399,6 +399,12 @@ func TestOrderCapacityRetrySpansReserveStage(t *testing.T) {
 	}()
 
 	firstResult := receiveFillSubmission(t, submitted)
+	// Hold the first completion until the second order has been deferred: releasing the reservation
+	// any earlier lets the second order plan unblocked, and no reserve stage is ever run. The three
+	// decisions are the first order's plan, the second order's blocked plan, and its unreserved probe.
+	for range 3 {
+		receiveFillInput(t, inputs)
+	}
 	firstResult <- txm.fillResult()
 	secondResult := receiveFillSubmission(t, submitted)
 	secondResult <- txm.fillResult()
