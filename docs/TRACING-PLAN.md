@@ -85,10 +85,11 @@ defer func() { end(err) }()
   chain) pass `""` and carry no `solver` attribute.
 - `Tracer.Raw()` resolves the provider lazily and then caches it against a package-level generation
   counter that `NewTracing` (and the test helper) bump after `otel.SetTracerProvider`. Resolving per
-  span start took the global delegate's mutex and the SDK's tracer map on every span; resolving once
-  in `NewTracer` would instead bind a package's tracer to the no-op provider forever, because the
-  global provider delegates only once. `observability.InvalidateTracers()` is the hook anything else
-  that installs a provider must call.
+  span start takes the global delegate's mutex while tracing is disabled, and the SDK's tracer-map
+  lock once a real provider is installed; the generation cache keeps both off the per-span path.
+  Resolving once in `NewTracer` would instead bind a package's tracer to the no-op provider forever,
+  because the global provider delegates only once. `observability.InvalidateTracers()` is the hook
+  anything else that installs a provider must call.
 - `end(err)` sets status `Error`, records the error with its go-errors stack, and adds `reason_code`
   when the error exposes one. A `context.Canceled` error ends the span with status unset and a
   `cancelled` event, the same rule the metrics use for skipped outcomes. `end` is idempotent.
@@ -176,26 +177,34 @@ caller, so a caller resuming its own trace never races the span it nests under. 
 the lane is busy gets a `declined` event with `decision=not_admitted`, `reason=lane_busy`, and ends
 without a `tx.outcome` (§10). `txmanager.account_poll` roots each account-poll tick.
 
-The per-request logger is derived with `TraceLogger` from the send span, so `solver`, `label`,
-`trace_id` and `span_id` appear on every lifecycle line — including the lines written long after the
-broadcast span has ended.
+The worker stores the request's `solver`-stamped logger on every context of the lifecycle, the send
+span included, so `observability.Log(ctx)` puts `solver`, `label`, `trace_id` and `span_id` on every
+lifecycle line — including the lines written long after the broadcast span has ended, from the
+detached lifecycle goroutine.
 
 ### 3.5 Root spans for loops
 
 Work that is not triggered by an inbound request needs a root span, or each of its outbound calls
 becomes its own one-span trace. The rule: **every periodic tick or event handler that performs I/O
-starts a span named `<solver>.<loop>`** and derives its logger from it. In-process hops that cross a
-channel carry a `trace.SpanContext` on the queued struct (`resolvedOrder`, `submittedOrder`) so the
-consumer's span continues the producer's trace; nothing else is stored in those structs.
+starts a span named `<solver>.<loop>`**, and its logs go through `observability.Log(ctx)` so they
+carry that span. In-process hops that cross a channel carry a `trace.SpanContext` on the queued
+struct (`resolvedOrder`, `submittedOrder`) so the consumer's span continues the producer's trace;
+nothing else is stored in those structs.
 
 ### 3.6 Logs and Sentry
 
-Loggers are passed by value here and never live in contexts. The rule: **whoever starts a span derives
-the logger for that scope with `observability.TraceLogger(ctx, log)`** and passes it down as today.
-The derived logger must come from the **base, non-trace logger** each time, never from an
-already-derived one: `logr` appends key/values and cannot dedupe, so re-deriving would emit two
-`trace_id` pairs. The Sentry sink promotes `trace_id` to an event tag next to `solver`, `logger` and
-`label`.
+The base logger travels in the context. The rule: **log through `observability.Log(ctx)` wherever a
+context is in hand** — it reads the context's logger and stamps the current span's `trace_id` and
+`span_id` on it, falling back to the process logger `SetDefaultLogger` installed so no line is ever
+dropped. `main` seeds the root context and `solver.Run` replaces it with the per-solver logger; any
+scope that wants a narrower one stores it with `observability.WithLogger(ctx, log.WithValues(...))`
+and passes that context down.
+
+What is stored must always be the **base, non-trace logger**: `Log` stamps at retrieval, so storing a
+stamped one would emit two `trace_id` pairs (`logr` appends key/values and cannot dedupe) and would
+pin the outer span's `span_id` on everything below. `observability.TraceLogger(ctx, log)` remains for
+the few places that hold a logger no context can carry, such as the RPC fallback transport. The
+Sentry sink promotes `trace_id` to an event tag next to `solver`, `logger` and `label`.
 
 ## 4. Span naming and attribute conventions
 
@@ -247,8 +256,8 @@ Three rules, established in review and mandatory for any new span site:
 
 1. **Every span end is deferred**, through a named error return: `defer func() { end(err) }()`. The
    span then still ends when the pipeline panics, and an unended span is never exported.
-2. **Derive the trace logger from the base logger**, once per span-starting site, never from a logger
-   that already carries trace ids.
+2. **Log through `observability.Log(ctx)`**, never from a logger that already carries trace ids, and
+   store only base loggers in a context (§3.6).
 3. **Sentinel "expected skip" outcomes are declines, not errors**: record them with
    `observability.Decline` and end the span with `nil`. Only a real failure ends with `end(err)`. This
    mirrors the logging rule — `log.Error` only for conditions that should page.
@@ -407,8 +416,8 @@ Tracing must never slow down or break a quote, a fill or a transaction.
   disabled; the bot starts and runs exactly as without it.
 - **Disabled means near-zero cost.** The global provider stays the no-op one: `Start` returns a
   non-recording span, `end` is a no-op, the `otelhttp` wrappers create non-recording spans, and the
-  only residual work is the W3C header parse on inbound requests and `TraceLogger` adding two fields
-  when a remote context is present.
+  only residual work is the W3C header parse on inbound requests and `Log(ctx)` reading the context's
+  logger, which adds two fields only when a remote context is present.
 - **Enabled cost is bounded and off-path.** Span start and end cost a few microseconds — the
   `internal/observability` benchmark measures the no-op and the recording path, sequentially and
   under `RunParallel`, and the cached tracer keeps concurrent starts off the global provider's
@@ -425,11 +434,13 @@ Tracing must never slow down or break a quote, a fill or a transaction.
 ## 8. Tests
 
 `internal/observability/tracetest` installs an in-memory `SpanRecorder` for a test, invalidates the
-cached tracers, and restores the previous provider afterwards; every tracing test outside
-`internal/observability` uses it (that package's own tests install the same recorder locally, because
-`tracetest` imports them). Covered: the enablement table over
+cached tracers, restores the previous provider afterwards, and exports the span assertions every
+suite shares (`Ended`, `Names`, `Attr`, `RequireChildOf`, `HasEvent`, `RequireNoErrorSpans`). Because
+it imports `observability`, that package's own recorder-driven tests live in `package
+observability_test`. Covered: the enablement table over
 `OTEL_EXPORTER_ENABLED` values, the exported resource (service identity plus `telemetry.sdk.*`),
-`TraceLogger` with and without a span, `TraceHandler` extracting a
+`TraceLogger` and `Log(ctx)` with and without a span, the context logger's nested-span stamping and
+its fallback to the default logger, `TraceHandler` extracting a
 `traceparent` and filtering probe routes, `TraceTransport` injecting a matching `traceparent` and
 keeping the query string out of `url.full` while the wire request keeps it, the
 tracer's error / cancellation / `reason_code` behaviour and its re-resolution across providers,
@@ -446,10 +457,11 @@ run against the no-op provider and prove there is no behaviour change when traci
 | File | Responsibility |
 |---|---|
 | `internal/observability/tracing.go` | `NewTracing` startup/shutdown, the enablement switch, `TraceLogger` |
+| `internal/observability/ctxlog.go` | `WithLogger`, `Log`, `SetDefaultLogger` — the logger carried in the context |
 | `internal/observability/tracer.go` | `Tracer`, `Start`/`StartLinked`/`EndFunc`, `Decline`, `SetAttributes`, `InvalidateTracers`, the `Attr*` constants |
 | `internal/observability/httptrace.go` | `TraceHandler`, `TraceTransport` |
 | `internal/observability/spanlinks.go` | `SpanLinks` |
-| `internal/observability/tracetest` | test provider installation |
+| `internal/observability/tracetest` | test provider installation and the shared span assertions |
 | `internal/chain/trace.go` | JSON-RPC spans, attempt events, header injection, the connect span |
 | `internal/chain/calls.go` | per-call spans for websocket/IPC endpoints |
 | `internal/txmanager/trace.go` | the send span's start and terminal end |
@@ -459,10 +471,9 @@ run against the no-op provider and prove there is no behaviour change when traci
 
 - [ ] backend returns quote trace id on order list (would replace the RFQ in-memory link)
 - [ ] observability listener untraced by design
-- [ ] promote the duplicated tracing test helpers (`attr`, `endedSpan`, `requireChildOf`, `hasEvent`) into `internal/observability/tracetest`
 - [ ] omit `rpc.jsonrpc.request_id` when empty (batches) instead of setting an empty attribute
 - [ ] set `tx.outcome=not_admitted` on declined txmanager sends, and skip an empty `solver` attribute
-- [ ] stamp trace ids on the remaining untraced log lines (`estimateGas` failure, UniswapX fill-admission lines, LI.FI `logDiscountIssues`)
+- [ ] stamp trace ids on the remaining untraced log lines (UniswapX fill-admission lines, LI.FI `logDiscountIssues`)
 - [ ] cap or aggregate the per-offer `declined` events on `3f.offers.reconcile`
 - [ ] the RPC span's success `attempt` event is timestamped at body close, not at the attempt
 - [ ] a no-op `txmanager.replace` tick emits an empty span, and replace spans carry no `tx.hash`
