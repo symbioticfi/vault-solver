@@ -2,6 +2,9 @@ package observability
 
 import (
 	"context"
+	"fmt"
+	"reflect"
+	"regexp"
 	"slices"
 	"sync/atomic"
 
@@ -10,6 +13,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -193,7 +197,7 @@ func EndSpan(span trace.Span, err error) { endSpan(span, err) }
 // spanStatusDescriber lets an error bound the text of the error status it produces. A span status
 // carrying a remote system's message is unbounded and differs per provider, so the chain client
 // wraps RPC failures to report the same short outcome on every transport. The error itself is still
-// what RecordError puts on the span.
+// what the exception event carries.
 type spanStatusDescriber interface{ SpanStatus() string }
 
 func endSpan(span trace.Span, err error) {
@@ -202,14 +206,38 @@ func endSpan(span trace.Span, err error) {
 	case errors.Is(err, context.Canceled):
 		span.AddEvent("cancelled")
 	default:
-		span.RecordError(err)
-		span.SetStatus(codes.Error, spanStatusMessage(err))
+		// Recorded by hand rather than with RecordError so the message can be redacted; the event
+		// matches what RecordError emits.
+		span.AddEvent(semconv.ExceptionEventName, trace.WithAttributes(
+			semconv.ExceptionType(exceptionType(err)),
+			semconv.ExceptionMessage(redactURLs(err.Error())),
+		))
+		span.SetStatus(codes.Error, redactURLs(spanStatusMessage(err)))
 		var coded interface{ ReasonCode() string }
 		if errors.As(err, &coded) {
 			span.SetAttributes(AttrReasonCode.String(coded.ReasonCode()))
 		}
 	}
 	span.End()
+}
+
+// urlPattern matches a URL as scheme, optional userinfo, host[:port], and an optional path, query or
+// fragment that does not end in trailing punctuation.
+var urlPattern = regexp.MustCompile(
+	`([a-zA-Z][a-zA-Z0-9+.-]*)://(?:[^\s/?#@"'<>]*@)?([^\s/?#"'<>]*)(?:[/?#][^\s"'<>]*[^\s"'<>:,.;)])?`,
+)
+
+// redactURLs cuts every URL in s down to scheme://host[:port]. RPC providers put API keys in the path
+// or query, and net/http and websocket dial errors quote the full URL.
+func redactURLs(s string) string { return urlPattern.ReplaceAllString(s, "$1://$2") }
+
+// exceptionType names err's type the way the SDK's RecordError does.
+func exceptionType(err error) string {
+	t := reflect.TypeOf(err)
+	if t.PkgPath() == "" && t.Name() == "" {
+		return t.String()
+	}
+	return fmt.Sprintf("%s.%s", t.PkgPath(), t.Name())
 }
 
 func spanStatusMessage(err error) string {

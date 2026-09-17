@@ -109,7 +109,10 @@ defer func() { end(err) }()
   `cancelled` event, the same rule the metrics use for skipped outcomes. `end` is idempotent, because
   the SDK ignores a second `End` and gates every record on the span still recording. An error may
   bound the status text by exposing `SpanStatus() string`, which is how a chain RPC failure reports
-  `rpc_error` rather than a node's own message.
+  `rpc_error` rather than a node's own message. Every URL in the exception message and the status
+  text is cut to `scheme://host[:port]` first, because `net/http` and websocket dial errors quote the
+  full endpoint URL and RPC providers carry API keys in its path or query. The exception event is
+  written by hand for that reason, with the same `exception.type` `RecordError` would report.
 - `StartKind(ctx, name, kind, attrs...)` is `Start` with an explicit span kind, for the client spans
   the chain client reports; it goes through the same end policy. `observability.EndSpan(span, err)`
   applies that policy to a raw `trace.Span`, for the one component that holds one across goroutines.

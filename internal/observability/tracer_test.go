@@ -2,6 +2,8 @@ package observability_test
 
 import (
 	"context"
+	stderrors "errors"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -217,5 +219,75 @@ func TestStartLinkedKeyRecordsAMissAndCarriesOn(t *testing.T) {
 		if misses != 1 || key != "q1" {
 			t.Fatalf("%s: link_miss events = %d with key %q, want 1 with q1", name, misses, key)
 		}
+	}
+}
+
+func TestEndRedactsURLsFromRecordedErrors(t *testing.T) {
+	cases := []struct {
+		name     string
+		err      error
+		wantType string
+		want     []string
+		forbid   []string
+	}{
+		{
+			name: "http url error",
+			err: &url.Error{
+				Op:  "Post",
+				URL: "https://eth.example/v2/SECRETKEY?apikey=abc",
+				Err: stderrors.New("dial tcp 1.2.3.4:443: connect: connection refused"),
+			},
+			wantType: "*url.Error",
+			want:     []string{`Post "https://eth.example": dial tcp 1.2.3.4:443: connect: connection refused`},
+			forbid:   []string{"SECRETKEY", "abc"},
+		},
+		{
+			name:     "websocket url",
+			err:      stderrors.New("dial wss://user:pw@ws.example:8443/ws/WSKEY?x=1: bad handshake"),
+			wantType: "*errors.errorString",
+			want:     []string{"dial wss://ws.example:8443: bad handshake"},
+			forbid:   []string{"WSKEY", "user", "pw@"},
+		},
+		{
+			name:     "no url",
+			err:      stderrors.New("execution reverted: insufficient balance"),
+			wantType: "*errors.errorString",
+			want:     []string{"execution reverted: insufficient balance"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := tracetest.Install(t)
+			_, end := observability.NewTracer("test", "rfq").Start(t.Context(), "rfq.quote")
+			end(tc.err)
+			s := tracetest.Ended(t, rec, "rfq.quote")
+			if len(s.Events()) != 1 || s.Events()[0].Name != "exception" {
+				t.Fatalf("expected one exception event, got %v", s.Events())
+			}
+			var message, typ string
+			for _, kv := range s.Events()[0].Attributes {
+				switch kv.Key {
+				case "exception.message":
+					message = kv.Value.AsString()
+				case "exception.type":
+					typ = kv.Value.AsString()
+				}
+			}
+			if typ != tc.wantType {
+				t.Fatalf("exception.type = %q, want %q", typ, tc.wantType)
+			}
+			for _, text := range []string{message, s.Status().Description} {
+				for _, want := range tc.want {
+					if !strings.Contains(text, want) {
+						t.Fatalf("%q does not contain %q", text, want)
+					}
+				}
+				for _, secret := range tc.forbid {
+					if strings.Contains(text, secret) {
+						t.Fatalf("%q leaks %q", text, secret)
+					}
+				}
+			}
+		})
 	}
 }
