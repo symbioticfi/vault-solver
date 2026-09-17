@@ -610,22 +610,37 @@ func TestReaderFilterAuthorizedRoutesDropsUnauthorizedAdapters(t *testing.T) {
 	}
 }
 
-func TestReaderFilterAuthorizedRoutesAcceptsAdapterOnlyEntries(t *testing.T) {
+func TestReaderFilterAuthorizedRoutesAcceptsAdapterOnlyInputs(t *testing.T) {
 	filler := common.HexToAddress("0x0000000000000000000000000000000000000f11")
 	owner := common.HexToAddress("0x0000000000000000000000000000000000000b11")
-	adapterAddress := common.HexToAddress("0x0000000000000000000000000000000000000011")
-	route := Route{Adapter: adapterAddress}
+	adapterA := common.HexToAddress("0x0000000000000000000000000000000000000011")
+	adapterB := common.HexToAddress("0x0000000000000000000000000000000000000022")
+	routes := []Route{{Adapter: adapterA}, {Adapter: adapterB}}
 	backend := &scriptedLiquidLaneBackend{latest: [][]chain.CallResult{{
+		successOutput(t, "marketMaker", filler), successOutput(t, "owner", owner),
 		successOutput(t, "marketMaker", filler), successOutput(t, "owner", owner),
 	}}}
 	r := &Reader{chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111}
 
-	got, err := r.FilterAuthorizedRoutes(t.Context(), []Route{route}, filler)
+	got, err := r.FilterAuthorizedRoutes(t.Context(), routes, filler)
 	if err != nil {
 		t.Fatalf("FilterAuthorizedRoutes: %v", err)
 	}
-	if len(got) != 1 || got[0].Adapter != adapterAddress {
-		t.Fatalf("authorized routes = %+v", got)
+	if len(got) != 2 || got[0].Adapter != adapterA || got[1].Adapter != adapterB {
+		t.Fatalf("authorized adapter-only routes = %+v", got)
+	}
+}
+
+func TestCompactAuthorizationRoutesRejectsAdapterReferenceWithRouteID(t *testing.T) {
+	complete := testReaderRoute(2)
+	malformed := Route{
+		ID:      complete.ID,
+		Adapter: common.HexToAddress("0x0000000000000000000000000000000000000011"),
+	}
+
+	got := compactAuthorizationRoutes([]Route{malformed, complete})
+	if len(got) != 1 || got[0] != complete {
+		t.Fatalf("authorization routes = %+v, want only complete route %+v", got, complete)
 	}
 }
 
