@@ -547,20 +547,13 @@ func TestOrderWorkerMarksTransientFailureForRecovery(t *testing.T) {
 	orders := make(chan *submittedOrder, 1)
 	orders <- order
 	close(orders)
-	type markedRecovery struct {
-		order        *submittedOrder
-		attemptLimit int
-	}
-	marked := make(chan markedRecovery, 1)
+	recovery := &acceptingRecovery{marked: make(chan markedRecovery, 1)}
 
-	if err := solver.runOrderWorker(t.Context(), nil, orders, func(got *submittedOrder, attemptLimit int) bool {
-		marked <- markedRecovery{order: got, attemptLimit: attemptLimit}
-		return true
-	}, nil); err != nil {
+	if err := solver.runOrderWorker(t.Context(), nil, orders, recovery, nil); err != nil {
 		t.Fatalf("runOrderWorker: %v", err)
 	}
 	select {
-	case got := <-marked:
+	case got := <-recovery.marked:
 		if got.order != order {
 			t.Fatalf("marked order = %p, want %p", got.order, order)
 		}
@@ -571,6 +564,25 @@ func TestOrderWorkerMarksTransientFailureForRecovery(t *testing.T) {
 		t.Fatal("transient worker failure was not returned to recovery")
 	}
 }
+
+type markedRecovery struct {
+	order        *submittedOrder
+	attemptLimit int
+}
+
+// acceptingRecovery stands in for the inbox: it accepts every re-queue and reports it.
+type acceptingRecovery struct {
+	marked chan markedRecovery
+}
+
+func (r *acceptingRecovery) markRecoveryRetry(order *submittedOrder, attemptLimit int) (uint64, bool) {
+	r.marked <- markedRecovery{order: order, attemptLimit: attemptLimit}
+	return 0, true
+}
+
+func (*acceptingRecovery) requeueDropped(string, uint64) bool { return false }
+
+func (*acceptingRecovery) recoveryResets() <-chan struct{} { return nil }
 
 func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
 	for _, test := range []struct {
@@ -1074,7 +1086,7 @@ func TestOrderRecoveryBoundsPersistentWebhookDecodeFailure(t *testing.T) {
 			ctx,
 			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 			orders,
-			inbox.markRecoveryRetry,
+			inbox,
 			nil,
 		)
 	}()

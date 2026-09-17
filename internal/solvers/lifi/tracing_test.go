@@ -1020,22 +1020,17 @@ func TestOrderProcessSpanSurvivesInboxRetry(t *testing.T) {
 	if err := fixture.admit(t, inbox); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
-	marked := make(chan struct{}, 1)
-	onRetryable := func(order *submittedOrder, attemptLimit int) bool {
-		requeued := inbox.markRecoveryRetry(order, attemptLimit)
-		marked <- struct{}{}
-		return requeued
-	}
+	recovery := &signallingRecovery{orderInbox: inbox, marked: make(chan struct{}, 1)}
 	ctx, cancel := context.WithTimeout(fixture.context(t), 10*time.Second)
 	defer cancel()
 	orders := make(chan *submittedOrder)
 	inboxDone := make(chan error, 1)
 	workerDone := make(chan error, 1)
 	go func() { inboxDone <- inbox.run(ctx, orders) }()
-	go func() { workerDone <- fixture.solver.runOrderWorker(ctx, fixture.routes, orders, onRetryable, nil) }()
+	go func() { workerDone <- fixture.solver.runOrderWorker(ctx, fixture.routes, orders, recovery, nil) }()
 
 	select {
-	case <-marked:
+	case <-recovery.marked:
 	case <-ctx.Done():
 		t.Fatalf("the retryable failure was never re-queued: %v", ctx.Err())
 	}
@@ -1086,4 +1081,213 @@ func waitForInboxDelivery(t *testing.T, inbox *orderInbox) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("inbox did not finish delivering the order")
+}
+
+// waitForProcessSpans blocks until n lifi.order.process spans have ended.
+func waitForProcessSpans(t *testing.T, rec tracetest.Recorder, n int) []sdktrace.ReadOnlySpan {
+	t.Helper()
+	for range 5000 {
+		if spans := tracetest.AllEnded(rec, "lifi.order.process"); len(spans) >= n {
+			return spans
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("process spans did not reach %d; ended spans: %v", n, tracetest.Names(rec))
+	return nil
+}
+
+// signallingRecovery is the inbox as the worker's recovery queue, reporting each re-queue attempt.
+type signallingRecovery struct {
+	*orderInbox
+
+	marked chan struct{}
+}
+
+func (r *signallingRecovery) markRecoveryRetry(order *submittedOrder, attemptLimit int) (uint64, bool) {
+	epoch, requeued := r.orderInbox.markRecoveryRetry(order, attemptLimit)
+	r.marked <- struct{}{}
+	return epoch, requeued
+}
+
+// A reconnect drops the inbox's recovery re-queue, so an order waiting there is never redelivered and
+// the worker has to release its processing span itself. An order whose fill is pending across the same
+// reset is still the worker's and keeps its span until the fill completes.
+func TestOrderTraceReleasedWhenRecoveryResetDropsRequeue(t *testing.T) {
+	rec := tracetest.Install(t)
+	fixture := newTracingOrderFixture(t)
+	submitted := make(chan chan<- txmanager.Result, 1)
+	fixture.txm.hold = true
+	fixture.txm.onSend = func(_ int, result chan<- txmanager.Result) { submitted <- result }
+	filledRoute := fixture.routes[0]
+	filling := testSubmittedOrder(t, fixture.solver.cfg, filledRoute.TokenIn, filledRoute.TokenOut)
+	requeuedValue := *filling
+	requeuedValue.OrderID = "order-2"
+	requeuedValue.dedupeKey = "order-2-key"
+	requeuedValue.Order.Nonce = new(big.Int).Add(filling.Order.Nonce, big.NewInt(1))
+	requeued := &requeuedValue
+	requeuedID := common.BigToHash(requeued.Order.Nonce)
+	fixture.solver.reader = fakeLifiReader{
+		orderIDFn: func(order inputsettler.StandardOrder) common.Hash { return common.BigToHash(order.Nonce) },
+		statusForOrderFn: func(id common.Hash) (uint8, error) {
+			if id == requeuedID {
+				return 0, errors.New("temporary status failure")
+			}
+			return lifiOrderStatusDeposited, nil
+		},
+		fill: profitableFillSnapshots(filledRoute.TokenIn, filledRoute.TokenOut, filledRoute.Adapter, 1_000_000),
+	}
+	inbox := newOrderInbox(4)
+	inbox.beginRecovery()
+	for _, order := range []*submittedOrder{filling, requeued} {
+		if err := inbox.enqueue(order); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+	}
+	recovery := &signallingRecovery{orderInbox: inbox, marked: make(chan struct{}, 1)}
+	ctx, cancel := context.WithTimeout(fixture.context(t), 10*time.Second)
+	defer cancel()
+	orders := make(chan *submittedOrder)
+	inboxDone := make(chan error, 1)
+	workerDone := make(chan error, 1)
+	go func() { inboxDone <- inbox.run(ctx, orders) }()
+	go func() { workerDone <- fixture.solver.runOrderWorker(ctx, fixture.routes, orders, recovery, nil) }()
+
+	fillResult := receiveFillSubmission(t, submitted)
+	select {
+	case <-recovery.marked:
+	case <-ctx.Done():
+		t.Fatalf("the retryable failure was never re-queued: %v", ctx.Err())
+	}
+	inbox.endRecovery()
+
+	released := waitForProcessSpans(t, rec, 1)
+	if len(released) != 1 || tracetest.Attr(released[0], "order.id") != requeued.OrderID {
+		t.Fatalf("released process spans = %v, want only %q", tracetest.Names(rec), requeued.OrderID)
+	}
+	if released[0].Status().Code == codes.Error {
+		t.Fatalf("an abandoned order must not be an error span: %v", released[0].Status())
+	}
+	requireDeclined(t, released[0], "abandoned", "recovery_reset")
+
+	fillResult <- fixture.txm.fillResult()
+	inbox.closeInput()
+	if err := <-workerDone; err != nil {
+		t.Fatalf("runOrderWorker: %v", err)
+	}
+	if err := <-inboxDone; err != nil {
+		t.Fatalf("order inbox: %v", err)
+	}
+	var filled []sdktrace.ReadOnlySpan
+	for _, process := range tracetest.AllEnded(rec, "lifi.order.process") {
+		if tracetest.Attr(process, "order.id") == filling.OrderID {
+			filled = append(filled, process)
+		}
+	}
+	if len(filled) != 1 {
+		t.Fatalf("process spans for the filled order = %d, want 1 (spans %v)", len(filled), tracetest.Names(rec))
+	}
+	if got := tracetest.Attr(filled[0], "tx.hash"); got != fixture.txm.fillResult().Hash.Hex() {
+		t.Fatalf("filled process span tx.hash = %q, want %s", got, fixture.txm.fillResult().Hash.Hex())
+	}
+}
+
+// requireDeclined fails the test unless span carries a declined event with decision and reason.
+func requireDeclined(t *testing.T, span sdktrace.ReadOnlySpan, decision, reason string) {
+	t.Helper()
+	for _, event := range span.Events() {
+		if event.Name != "declined" {
+			continue
+		}
+		var gotDecision, gotReason string
+		for _, kv := range event.Attributes {
+			switch kv.Key {
+			case "decision":
+				gotDecision = kv.Value.AsString()
+			case "reason":
+				gotReason = kv.Value.AsString()
+			}
+		}
+		if gotDecision == decision && gotReason == reason {
+			return
+		}
+	}
+	t.Fatalf("span %q has no declined event %s/%s: %v", span.Name(), decision, reason, span.Events())
+}
+
+// Without tracing the processing span is a no-op, so the worker keeps no per-order entry for it.
+func TestOrderTracesStoreNothingWithTracingDisabled(t *testing.T) {
+	traces := newOrderTraces()
+	order := &submittedOrder{OrderID: tracingOrderID}
+
+	traces.begin(t.Context(), order)
+
+	if len(traces.byKey) != 0 {
+		t.Fatalf("tracked orders = %d, want none while tracing is disabled", len(traces.byKey))
+	}
+}
+
+// Dropping a hold releases only that order: its entry leaves both maps and its span ends declined,
+// while an order whose re-queue is still live keeps both.
+func TestOrderTracesAbandonDroppedHold(t *testing.T) {
+	rec := tracetest.Install(t)
+	traces := newOrderTraces()
+	dropped := &submittedOrder{OrderID: "dropped"}
+	live := &submittedOrder{OrderID: "live"}
+	for _, order := range []*submittedOrder{dropped, live} {
+		traces.begin(t.Context(), order)
+		traces.hold(order, 1)
+	}
+
+	traces.dropHolds(func(key string, _ uint64) bool { return key == orderInboxKey(dropped) })
+	traces.abandon(t.Context(), traces.isHeld, "recovery_reset", nil)
+
+	if _, ok := traces.byKey[orderInboxKey(dropped)]; ok || traces.isHeld(dropped) {
+		t.Fatalf("dropped order still tracked: byKey=%v held=%v", traces.byKey, traces.held)
+	}
+	if _, ok := traces.byKey[orderInboxKey(live)]; !ok || !traces.isHeld(live) {
+		t.Fatalf("live order released: byKey=%v held=%v", traces.byKey, traces.held)
+	}
+	released := waitForProcessSpans(t, rec, 1)
+	if len(released) != 1 || tracetest.Attr(released[0], "order.id") != dropped.OrderID {
+		t.Fatalf("released process spans = %v, want only %q", tracetest.Names(rec), dropped.OrderID)
+	}
+	requireDeclined(t, released[0], "abandoned", "recovery_reset")
+}
+
+// A re-queue counts as dropped only once its recovery has ended and no copy waits in the inbox: while
+// the recovery runs a sweep may be moving the order from the retry set into the inbox.
+func TestOrderInboxRequeueDropped(t *testing.T) {
+	inbox := newOrderInbox(4)
+	inbox.beginRecovery()
+	redelivered := &submittedOrder{OrderID: "redelivered"}
+	abandoned := &submittedOrder{OrderID: "abandoned"}
+	redeliveredEpoch, ok := inbox.markRecoveryRetry(redelivered, 0)
+	if !ok {
+		t.Fatal("re-queue refused during recovery")
+	}
+	abandonedEpoch, _ := inbox.markRecoveryRetry(abandoned, 0)
+	if inbox.requeueDropped(orderInboxKey(abandoned), abandonedEpoch) {
+		t.Fatal("re-queue reported dropped while its recovery is still running")
+	}
+	for _, order := range inbox.takeRecoveryRetries() {
+		if order == redelivered {
+			if err := inbox.enqueue(order); err != nil {
+				t.Fatalf("enqueue: %v", err)
+			}
+		}
+	}
+
+	inbox.endRecovery()
+
+	select {
+	case <-inbox.recoveryResets():
+	default:
+		t.Fatal("ending the recovery did not signal a reset")
+	}
+	if inbox.requeueDropped(orderInboxKey(redelivered), redeliveredEpoch) {
+		t.Fatal("order waiting in the inbox reported dropped")
+	}
+	if !inbox.requeueDropped(orderInboxKey(abandoned), abandonedEpoch) {
+		t.Fatal("order dropped by the reset not reported")
+	}
 }

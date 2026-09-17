@@ -75,10 +75,14 @@ type orderInbox struct {
 	recoveryRetry     map[string]*submittedOrder
 	recoveryAttempts  map[string]int
 	recoveryGen       uint64
-	closed            bool
-	capacity          int
-	ready             chan struct{}
-	space             chan struct{}
+	// recoveryEpoch counts the recoveries that have ended, each dropping its retry set; reset
+	// signals the worker that one has.
+	recoveryEpoch uint64
+	reset         chan struct{}
+	closed        bool
+	capacity      int
+	ready         chan struct{}
+	space         chan struct{}
 }
 
 func newOrderInbox(capacity int) *orderInbox {
@@ -87,7 +91,7 @@ func newOrderInbox(capacity int) *orderInbox {
 	}
 	return &orderInbox{
 		queued: make(map[string]bool), capacity: capacity,
-		ready: make(chan struct{}, 1), space: make(chan struct{}, 1),
+		ready: make(chan struct{}, 1), space: make(chan struct{}, 1), reset: make(chan struct{}, 1),
 	}
 }
 
@@ -201,7 +205,6 @@ func (q *orderInbox) beginRecovery() {
 
 func (q *orderInbox) endRecovery() {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	q.recoverySeen = nil
 	q.recoverySeenOrder = nil
 	q.recoverySeenNext = 0
@@ -209,19 +212,26 @@ func (q *orderInbox) endRecovery() {
 	q.recoveryRetry = nil
 	q.recoveryAttempts = nil
 	q.recoveryGen = 0
+	q.recoveryEpoch++
+	q.mu.Unlock()
+	select {
+	case q.reset <- struct{}{}:
+	default:
+	}
 }
 
-// markRecoveryRetry re-queues an order for the next recovery sweep and reports whether it did, so
-// the worker knows the order is still referenced and keeps its processing span open.
-func (q *orderInbox) markRecoveryRetry(order *submittedOrder, attemptLimit int) bool {
+// markRecoveryRetry re-queues an order for the next recovery sweep and reports whether it did, with
+// the recovery epoch it joined, so the worker keeps the order's processing span open until the
+// redelivery or until that recovery ends without one.
+func (q *orderInbox) markRecoveryRetry(order *submittedOrder, attemptLimit int) (uint64, bool) {
 	key := orderInboxKey(order)
 	if key == "" {
-		return false
+		return 0, false
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.recoverySeen == nil {
-		return false
+		return 0, false
 	}
 	// A zero limit deliberately preserves unbounded recovery for chain, RPC, and
 	// pre-admission failures. Positive limits count failures by stable order key, so
@@ -229,13 +239,25 @@ func (q *orderInbox) markRecoveryRetry(order *submittedOrder, attemptLimit int) 
 	if attemptLimit > 0 {
 		q.recoveryAttempts[key]++
 		if q.recoveryAttempts[key] >= attemptLimit {
-			return false
+			return 0, false
 		}
 	}
 	q.recoveryRetry[key] = order
 	q.recoveryGen++
-	return true
+	return q.recoveryEpoch, true
 }
+
+// requeueDropped reports whether an order re-queued during epoch was dropped without redelivery: that
+// recovery has ended, which takes every retry it still held, and no copy of the order is waiting in
+// the inbox. Once the recovery has ended no sweep can still be moving the order between the two.
+func (q *orderInbox) requeueDropped(key string, epoch uint64) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return epoch < q.recoveryEpoch && !q.queued[key]
+}
+
+// recoveryResets signals, coalesced, each time a recovery ends.
+func (q *orderInbox) recoveryResets() <-chan struct{} { return q.reset }
 
 func (q *orderInbox) takeRecoveryRetries() []*submittedOrder {
 	q.mu.Lock()
@@ -418,7 +440,7 @@ func (s *Solver) runOrderFeed(
 	}()
 	go func() { inboxDone <- inbox.run(workCtx, orders) }()
 	go func() {
-		workerDone <- s.runOrderWorker(workCtx, routes, orders, inbox.markRecoveryRetry, workerInputDrained)
+		workerDone <- s.runOrderWorker(workCtx, routes, orders, inbox, workerInputDrained)
 	}()
 
 	feedErr := <-feedDone
@@ -671,11 +693,19 @@ func (s *Solver) parseOrderMessage(
 	return order, nil
 }
 
+// recoveryRequeue is the inbox's recovery-retry set as the order worker uses it. The inbox is the
+// only implementation; tests wrap it.
+type recoveryRequeue interface {
+	markRecoveryRetry(order *submittedOrder, attemptLimit int) (uint64, bool)
+	requeueDropped(key string, epoch uint64) bool
+	recoveryResets() <-chan struct{}
+}
+
 func (s *Solver) runOrderWorker(
 	ctx context.Context,
 	routes []route,
 	orders <-chan *submittedOrder,
-	onRetryable func(*submittedOrder, int) bool,
+	recovery recoveryRequeue,
 	inputDrained chan<- struct{},
 ) error {
 	pending := pendingFillState{byOrder: make(map[string]*pendingFill)}
@@ -693,6 +723,10 @@ func (s *Solver) runOrderWorker(
 	// A shutdown that drops queued retries still has to close their processing spans.
 	defer func() { traces.finishAll(runErr) }()
 	var recoveryBarrier chan struct{}
+	var recoveryResets <-chan struct{}
+	if recovery != nil {
+		recoveryResets = recovery.recoveryResets()
+	}
 	retryNow := s.wallNow
 	if retryNow == nil {
 		retryNow = time.Now
@@ -711,14 +745,14 @@ func (s *Solver) runOrderWorker(
 	// message or a recovery sweep can re-enter while the first copy is still in flight, and that
 	// pass must not close the span the live copy is still writing to. Close it only once nothing in
 	// the worker still holds the order, and nothing has re-queued it through the inbox.
+	referenced := func(order *submittedOrder) bool {
+		return pending.containsOrder(order) || retries.contains(order) || depositRetries.contains(order) ||
+			traces.isHeld(order)
+	}
 	finishOrderTrace := func(order *submittedOrder, err error) {
-		if pending.containsOrder(order) || retries.contains(order) || depositRetries.contains(order) {
-			return
+		if !referenced(order) {
+			traces.finish(order, err)
 		}
-		if traces.isHeld(order) {
-			return
-		}
-		traces.finish(order, err)
 	}
 	process := func(order *submittedOrder, reservations *liquidlane.CapacityReservations, stage string) {
 		defer releaseRecoveryBarrier()
@@ -774,8 +808,10 @@ func (s *Solver) runOrderWorker(
 			go awaitFill(result.fill, completions)
 			return
 		}
-		if result.retryable && onRetryable != nil && onRetryable(order, result.recoveryAttemptLimit) {
-			traces.hold(order)
+		if result.retryable && recovery != nil {
+			if epoch, ok := recovery.markRecoveryRetry(order, result.recoveryAttemptLimit); ok {
+				traces.hold(order, epoch)
+			}
 		}
 		// Invariant: a queued reservation retry implies a pending fill. Completions are
 		// the only events that advance the retry generation and wake the worker.
@@ -838,6 +874,7 @@ func (s *Solver) runOrderWorker(
 		}
 		if ctx.Err() != nil {
 			retries.clear()
+			traces.abandon(ctx, referenced, "queue_cleared", ctx.Err())
 		}
 		if s.releaseReservationWithoutRefresh(completion.fill.reservationKey) {
 			filledLog.V(1).Info(
@@ -858,6 +895,7 @@ func (s *Solver) runOrderWorker(
 			orders = nil
 			retries.clear()
 			depositRetries.clear()
+			traces.abandon(ctx, referenced, "queue_cleared", runErr)
 		}
 		if runErr != nil && pending.len() == 0 {
 			return runErr
@@ -881,6 +919,10 @@ func (s *Solver) runOrderWorker(
 			orders = nil
 			retries.clear()
 			depositRetries.clear()
+			traces.abandon(ctx, referenced, "queue_cleared", runErr)
+		case <-recoveryResets:
+			traces.dropHolds(recovery.requeueDropped)
+			traces.abandon(ctx, referenced, "recovery_reset", nil)
 		case completion := <-completions:
 			complete(completion)
 		case <-depositRetryC:
@@ -909,6 +951,7 @@ func (s *Solver) runOrderWorker(
 			if !ok {
 				orders = nil
 				depositRetries.clear()
+				traces.abandon(ctx, referenced, "queue_cleared", nil)
 				releaseRecoveryBarrier()
 				if inputDrained != nil {
 					close(inputDrained)
@@ -922,6 +965,7 @@ func (s *Solver) runOrderWorker(
 				orders = nil
 				retries.clear()
 				depositRetries.clear()
+				traces.abandon(ctx, referenced, "queue_cleared", runErr)
 				continue
 			}
 			if order.processed != nil {

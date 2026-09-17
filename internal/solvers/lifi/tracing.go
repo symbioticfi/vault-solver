@@ -32,6 +32,7 @@ func orderMessageSpanName(event string) string {
 // span is held rather than a context: the worker's context outlives no single attempt, so each call
 // site derives its own context from the one it already has.
 type orderTrace struct {
+	order    *submittedOrder
 	span     trace.Span
 	end      observability.EndFunc
 	attempts map[string]int
@@ -57,10 +58,11 @@ func (t *orderTrace) attempt(ctx context.Context, stage string) (context.Context
 // reaches a terminal state. Owned by the single order-worker goroutine.
 type orderTraces struct {
 	byKey map[string]*orderTrace
-	// held names orders re-queued through the inbox for a recovery retry. They are still
-	// referenced even though no worker queue holds them, so their span stays open until the
-	// redelivery that begins the next attempt.
-	held map[string]bool
+	// held names orders re-queued through the inbox for a recovery retry, with the recovery epoch
+	// they joined. They are still referenced even though no worker queue holds them, so their span
+	// stays open until the redelivery that begins the next attempt, or until that recovery ends
+	// without one.
+	held map[string]uint64
 }
 
 // orderAttrs identifies one order on a span: the same three keys wherever an order is described.
@@ -73,20 +75,30 @@ func orderAttrs(order *submittedOrder) []attribute.KeyValue {
 }
 
 func newOrderTraces() *orderTraces {
-	return &orderTraces{byKey: make(map[string]*orderTrace), held: make(map[string]bool)}
+	return &orderTraces{byKey: make(map[string]*orderTrace), held: make(map[string]uint64)}
 }
 
 // hold keeps the order's processing span open across an inbox re-queue, so the retry that comes
 // back on the next recovery sweep continues this trace instead of opening a second one.
-func (t *orderTraces) hold(order *submittedOrder) {
+func (t *orderTraces) hold(order *submittedOrder, epoch uint64) {
 	if key := orderInboxKey(order); key != "" && t.byKey[key] != nil {
-		t.held[key] = true
+		t.held[key] = epoch
 	}
 }
 
 // isHeld reports whether an inbox re-queue still references the order.
 func (t *orderTraces) isHeld(order *submittedOrder) bool {
-	return t.held[orderInboxKey(order)]
+	_, held := t.held[orderInboxKey(order)]
+	return held
+}
+
+// dropHolds forgets every hold whose inbox re-queue dropped reports gone.
+func (t *orderTraces) dropHolds(dropped func(key string, epoch uint64) bool) {
+	for key, epoch := range t.held {
+		if dropped(key, epoch) {
+			delete(t.held, key)
+		}
+	}
 }
 
 // begin returns the order's processing span, starting it as a child of the feed message span the
@@ -100,8 +112,13 @@ func (t *orderTraces) begin(ctx context.Context, order *submittedOrder) *orderTr
 	spanCtx, end := tracer.Start(
 		trace.ContextWithSpanContext(ctx, order.span), "lifi.order.process", orderAttrs(order)...,
 	)
-	tracked := &orderTrace{span: trace.SpanFromContext(spanCtx), end: end, attempts: make(map[string]int)}
-	t.byKey[key] = tracked
+	tracked := &orderTrace{
+		order: order, span: trace.SpanFromContext(spanCtx), end: end, attempts: make(map[string]int),
+	}
+	// A no-op span has nothing to keep open across attempts.
+	if observability.TracingEnabled() {
+		t.byKey[key] = tracked
+	}
 	return tracked
 }
 
@@ -124,6 +141,23 @@ func (t *orderTraces) finish(order *submittedOrder, err error) {
 	delete(t.byKey, key)
 	delete(t.held, key)
 	tracked.end(err)
+}
+
+// abandon ends the processing span of every order the worker dropped without finishing it, which is
+// every tracked order referenced no longer claims. The drop is not the order's failure: it records an
+// abandoned decline naming reason, and ends with cause, the cancellation when a shutdown dropped it.
+func (t *orderTraces) abandon(
+	ctx context.Context, referenced func(*submittedOrder) bool, reason string, cause error,
+) {
+	for key, tracked := range t.byKey {
+		if referenced(tracked.order) {
+			continue
+		}
+		delete(t.byKey, key)
+		delete(t.held, key)
+		observability.Decline(tracked.context(ctx), "abandoned", reason)
+		tracked.end(cause)
+	}
 }
 
 // finishAll ends every still-open processing span, so a shutdown that drops queued retries leaves

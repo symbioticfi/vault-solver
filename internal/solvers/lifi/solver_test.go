@@ -1726,7 +1726,7 @@ func TestOrderWorkerRecoveryBarrierRetainsTransientCapacityRetry(t *testing.T) {
 			t.Context(),
 			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 			orders,
-			inbox.markRecoveryRetry,
+			inbox,
 			nil,
 		)
 	}()

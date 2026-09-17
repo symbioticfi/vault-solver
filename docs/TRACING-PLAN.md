@@ -355,9 +355,14 @@ event, not an error.
 | `lifi.order.plan` / `.reserve` / `.deposit` / `.submit` / `.complete` | fill pipeline | `.reserve` and `.deposit` are re-entered per retry with `tx.attempt`; `.complete` carries `tx.hash` |
 
 One `lifi.order.process` span covers an order for as long as anything in the worker still references
-it — pending fills, capacity retries, deposit retries — not just one pass; a shutdown that drops
-queued retries ends every still-open span rather than leaking it. LiFi fills are **not** linked to a
-quote; see §6.
+it — pending fills, capacity retries, deposit retries, an inbox re-queue for the next recovery sweep —
+not just one pass. An order the worker drops without finishing is released at once with a `declined`
+event (`abandoned`, reason `queue_cleared` or `recovery_reset`): clearing a retry queue ends the
+orders nothing else references, a shutdown ending them as cancelled, and when a feed disconnect ends
+a recovery the inbox signals the worker, which releases every re-queue from that recovery that was not
+redelivered. A re-queue records the recovery epoch it joined, so a hold is only dropped once its own
+recovery has ended and no copy of the order waits in the inbox. With tracing disabled the worker keeps
+no per-order entry. LiFi fills are **not** linked to a quote; see §6.
 
 **3f / bridgefacilitator** (`internal/solvers/bridgefacilitator`) — see [3F-PLAN](3F-PLAN.md)
 
