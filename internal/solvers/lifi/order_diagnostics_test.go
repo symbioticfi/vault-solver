@@ -109,7 +109,7 @@ func TestOrderRejectionDiagnostics(t *testing.T) {
 			s := &Solver{cfg: cfg, chainID: 11155111, metrics: metrics, log: funcr.NewJSON(func(line string) { logs = append(logs, line) }, funcr.Options{Verbosity: 1})}
 			for range 2 {
 				if order, _ := s.parseOrderMessage(
-					t.Context(), orderMessage{Event: orderSubmitEvent, Data: raw},
+					solverContext(t, s), orderMessage{Event: orderSubmitEvent, Data: raw},
 				); order != nil {
 					t.Fatal("accepted invalid order")
 				}

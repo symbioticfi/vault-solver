@@ -343,7 +343,7 @@ func TestQuoteStateRetriesWithdrawalAfterServerFailure(t *testing.T) {
 
 func TestLIFIMetricsRecordSuccessfulRefresh(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	metrics, err := newLIFIMetrics(reg, newOrderFeed("", "", logr.Discard()), "")
+	metrics, err := newLIFIMetrics(reg, newOrderFeed("", ""), "")
 	if err != nil {
 		t.Fatal(err)
 	}

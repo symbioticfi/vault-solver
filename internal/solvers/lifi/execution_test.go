@@ -93,7 +93,7 @@ func TestParseOrderMessageIgnoresDutchAuctions(t *testing.T) {
 				log:     funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
 			}
 			if order, _ := solver.parseOrderMessage(
-				t.Context(), orderMessage{Event: orderSubmitEvent, Data: raw},
+				solverContext(t, solver), orderMessage{Event: orderSubmitEvent, Data: raw},
 			); order != nil {
 				t.Fatalf("parseOrderMessage() = %+v, want ignored order", order)
 			}
@@ -126,7 +126,7 @@ func TestParseOrderMessageLogsForeignChainAtInfo(t *testing.T) {
 		log:     funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
 	}
 	if order, _ := solver.parseOrderMessage(
-		t.Context(), orderMessage{Event: orderSubmitEvent, Data: raw},
+		solverContext(t, solver), orderMessage{Event: orderSubmitEvent, Data: raw},
 	); order != nil {
 		t.Fatalf("parseOrderMessage() = %+v, want ignored order", order)
 	}
@@ -152,7 +152,7 @@ func TestParseOrderMessageSkipsForeignOutputSettler(t *testing.T) {
 		log:     funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{Verbosity: 1}),
 	}
 	if order, _ := solver.parseOrderMessage(
-		t.Context(), orderMessage{Event: orderSubmitEvent, Data: raw},
+		solverContext(t, solver), orderMessage{Event: orderSubmitEvent, Data: raw},
 	); order != nil {
 		t.Fatalf("parseOrderMessage() = %+v, want ignored order", order)
 	}
@@ -716,7 +716,7 @@ func TestOrderWorkerMetersDepositRetryExpiryFromTimer(t *testing.T) {
 	orders := make(chan *submittedOrder, 1)
 	orders <- order
 	done := make(chan error, 1)
-	go func() { done <- solver.runOrderWorker(t.Context(), nil, orders, nil, nil) }()
+	go func() { done <- solver.runOrderWorker(solverContext(t, solver), nil, orders, nil, nil) }()
 	select {
 	case <-expired:
 	case <-time.After(time.Second):
@@ -1236,7 +1236,7 @@ func TestCompleteFillTreatsIncludedTransactionAsSuccess(t *testing.T) {
 	}
 	pending := &pendingFillState{byOrder: map[string]*pendingFill{"order-1": fill}}
 
-	solver.completeFill(t.Context(), pending, fillCompletion{fill: fill, result: txmanager.Result{
+	solver.completeFill(solverContext(t, solver), pending, fillCompletion{fill: fill, result: txmanager.Result{
 		Outcome: txmanager.OutcomeIncludedUnconfirmed,
 		Err:     errors.New("confirmation wait failed"),
 	}})

@@ -16,6 +16,7 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -103,7 +104,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	feed := newOrderFeed(cfg.OrderServer.WSURL, apiKey, log)
+	feed := newOrderFeed(cfg.OrderServer.WSURL, apiKey)
 	var metrics *lifiMetrics
 	if deps.Metrics != nil {
 		metrics, err = newLIFIMetrics(deps.Metrics.Registerer(), feed, cfg.Strategy.Name)
@@ -140,22 +141,26 @@ func (s *Solver) ShutdownPreparationTimeout() time.Duration {
 }
 
 func (s *Solver) Run(ctx context.Context) error {
+	// The solver logger is narrower than the one solver.Run stored; carry it so every line below,
+	// including the quote and feed loops, logs through it.
+	ctx = observability.WithLogger(ctx, s.log)
+
 	routes, err := s.reader.resolveRoutes(ctx, s.cfg.Adapters)
 	if err != nil {
 		startupErr := errors.Errorf("lifi: resolve routes: %w", err)
-		s.log.Error(startupErr, "adapter resolution failed",
+		observability.Log(ctx).Error(startupErr, "adapter resolution failed",
 			"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
 		return startupErr
 	}
 	if len(routes) == 0 {
 		startupErr := errors.New("lifi: no quoteable routes resolved from configured adapters")
-		s.log.Error(startupErr, "adapter resolution failed",
+		observability.Log(ctx).Error(startupErr, "adapter resolution failed",
 			"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
 		return startupErr
 	}
 	if err := s.reader.validateGasOracles(ctx, routes); err != nil {
 		startupErr := errors.Errorf("lifi: validate gas oracles: %w", err)
-		s.log.Error(startupErr, "gas oracle validation failed",
+		observability.Log(ctx).Error(startupErr, "gas oracle validation failed",
 			"routes", len(routes), "gasAccounting", s.cfg.Gas != nil)
 		return startupErr
 	}
@@ -163,20 +168,20 @@ func (s *Solver) Run(ctx context.Context) error {
 		ctx, s.cfg.Executor, s.cfg.InputSettler, s.cfg.OutputSettler, s.caller,
 	); err != nil {
 		startupErr := errors.Errorf("lifi: validate executor: %w", err)
-		s.log.Error(startupErr, "executor validation failed",
+		observability.Log(ctx).Error(startupErr, "executor validation failed",
 			"executor", s.cfg.Executor.Hex(), "caller", s.caller.Hex(),
 			"inputSettler", s.cfg.InputSettler.Hex(), "outputSettler", s.cfg.OutputSettler.Hex())
 		return startupErr
 	}
 	if err := s.reader.validateZeroGovernanceFee(ctx, s.cfg.InputSettler); err != nil {
 		startupErr := errors.Errorf("lifi: validate governance fee: %w", err)
-		s.log.Error(startupErr, "governance fee validation failed", "inputSettler", s.cfg.InputSettler.Hex())
+		observability.Log(ctx).Error(startupErr, "governance fee validation failed", "inputSettler", s.cfg.InputSettler.Hex())
 		return startupErr
 	}
 	if !s.cfg.usesDiscounts() {
 		if err := s.reader.validateDirectAuthorization(ctx, s.cfg.Executor, routes); err != nil {
 			startupErr := errors.Errorf("lifi: validate direct authorization: %w", err)
-			s.log.Error(startupErr, "external adapter authorization failed",
+			observability.Log(ctx).Error(startupErr, "external adapter authorization failed",
 				"solverMode", s.cfg.SolverMode,
 				"executor", s.cfg.Executor.Hex(),
 				"adapters", s.cfg.Adapters,
@@ -185,12 +190,12 @@ func (s *Solver) Run(ctx context.Context) error {
 		}
 	}
 	if err := s.orders.validateExecutorRegistration(ctx, s.cfg.Executor); err != nil {
-		s.log.Error(err, "executor registration validation failed",
+		observability.Log(ctx).Error(err, "executor registration validation failed",
 			"executor", s.cfg.Executor.Hex(), "baseUrl", s.cfg.OrderServer.BaseURL)
 		return err
 	}
 	if err := s.orders.ensureSupportedContracts(ctx, s.chainID, s.cfg.InputSettler, s.cfg.OutputSettler); err != nil {
-		s.log.Error(err, "supported contract reconciliation failed",
+		observability.Log(ctx).Error(err, "supported contract reconciliation failed",
 			"chainId", s.chainID,
 			"inputSettler", s.cfg.InputSettler.Hex(),
 			"outputSettler", s.cfg.OutputSettler.Hex(),
@@ -198,7 +203,7 @@ func (s *Solver) Run(ctx context.Context) error {
 		return err
 	}
 
-	s.log.Info("starting",
+	observability.Log(ctx).Info("starting",
 		"chainId", s.chainID,
 		"strategy", s.cfg.Strategy.Name,
 		"adapters", len(s.cfg.Adapters),

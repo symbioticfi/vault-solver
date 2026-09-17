@@ -94,16 +94,15 @@ func (s *Solver) processOrderUsingReservations(
 	pending *pendingFillState,
 	reservations *liquidlane.CapacityReservations,
 ) orderProcessingResult {
-	log := observability.TraceLogger(ctx, s.log)
 	if !s.cfg.TokenPolicy.Allows(order.TokenIn) {
 		observability.Decline(ctx, "order_skipped", "input token is out of scope")
-		log.V(1).Info("order skipped: input token out of scope",
+		observability.Log(ctx).V(1).Info("order skipped: input token out of scope",
 			"orderId", order.OrderID, "quoteId", order.QuoteID,
 			"tokenIn", order.TokenIn.Hex(), "scope", s.cfg.TokenPolicy.Scope())
 		return orderProcessingResult{outcome: orderProcessingNotActionable}
 	}
 	if err := s.reader.validateZeroGovernanceFee(ctx, s.cfg.InputSettler); err != nil {
-		log.Error(err, "order skipped: governance fee invariant failed",
+		observability.Log(ctx).Error(err, "order skipped: governance fee invariant failed",
 			"orderId", order.OrderID, "quoteId", order.QuoteID,
 			"inputSettler", s.cfg.InputSettler.Hex())
 		return orderProcessingResult{retryable: true, outcome: orderProcessingRetryableError, err: err}
@@ -124,11 +123,11 @@ func (s *Solver) processOrderUsingReservations(
 	reservationKey := orderID.Hex()
 	if pending != nil && pending.contains(reservationKey) {
 		observability.Decline(ctx, "order_skipped", "a fill for this order is already pending")
-		log.V(1).Info("order skipped: already pending", "orderId", order.OrderID,
+		observability.Log(ctx).V(1).Info("order skipped: already pending", "orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID)
 		return orderProcessingResult{outcome: orderProcessingNotActionable}
 	}
-	log.V(1).Info(
+	observability.Log(ctx).V(1).Info(
 		"order fill planning started",
 		"orderId", order.OrderID,
 		"onChainOrderId", orderID.Hex(),
@@ -140,7 +139,8 @@ func (s *Solver) processOrderUsingReservations(
 	)
 	prepared, err := s.prepareFill(ctx, routes, order, orderID, reservations)
 	if err != nil {
-		log.Error(err, "order fill: prepare current state", "orderId", order.OrderID, "quoteId", order.QuoteID)
+		observability.Log(ctx).Error(err, "order fill: prepare current state",
+			"orderId", order.OrderID, "quoteId", order.QuoteID)
 		return orderProcessingResult{retryable: true, outcome: orderProcessingRetryableError, err: err}
 	}
 	if prepared == nil {
@@ -148,7 +148,7 @@ func (s *Solver) processOrderUsingReservations(
 	}
 	plan, err := s.decideFill(ctx, prepared.input)
 	if err != nil {
-		s.logFillDecisionError(log, err, "order fill: strategy", order)
+		s.logFillDecisionError(observability.Log(ctx), err, "order fill: strategy", order)
 		if !types.IsPermanentFillDecisionError(err) {
 			return orderProcessingResult{
 				retryable:            true,
@@ -163,7 +163,7 @@ func (s *Solver) processOrderUsingReservations(
 		return orderProcessingResult{outcome: orderProcessingStrategyDeclined, err: err}
 	}
 	if plan == nil {
-		log.V(1).Info(
+		observability.Log(ctx).V(1).Info(
 			"order fill strategy declined",
 			"orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(),
@@ -188,7 +188,7 @@ func (s *Solver) processOrderUsingReservations(
 		)
 		unreservedPlan, err := prober.DecideFillWithoutReservations(ctx, unreservedInput)
 		if err != nil {
-			s.logFillDecisionError(log, err, "order fill: strategy without pending reservations", order)
+			s.logFillDecisionError(observability.Log(ctx), err, "order fill: strategy without pending reservations", order)
 			return orderProcessingResult{outcome: orderProcessingStrategyDeclined, err: err}
 		}
 		if unreservedPlan == nil {
@@ -196,7 +196,7 @@ func (s *Solver) processOrderUsingReservations(
 			return orderProcessingResult{outcome: orderProcessingStrategyDeclined}
 		}
 		if err := validateFillPlan(unreservedInput, unreservedPlan); err != nil {
-			log.Error(err, "order fill: reject strategy plan without pending reservations",
+			observability.Log(ctx).Error(err, "order fill: reject strategy plan without pending reservations",
 				"orderId", order.OrderID, "quoteId", order.QuoteID)
 			return orderProcessingResult{outcome: orderProcessingInvalidPlan, err: err}
 		}
@@ -211,14 +211,14 @@ func (s *Solver) processOrderUsingReservations(
 		}
 	}
 	if err := validateFillPlan(prepared.input, plan); err != nil {
-		log.Error(err, "order fill: reject strategy plan", "orderId", order.OrderID,
+		observability.Log(ctx).Error(err, "order fill: reject strategy plan", "orderId", order.OrderID,
 			"quoteId", order.QuoteID)
 		return orderProcessingResult{outcome: orderProcessingInvalidPlan, err: err}
 	}
-	s.logFillPlan(log, order, orderID, plan)
+	s.logFillPlan(observability.Log(ctx), order, orderID, plan)
 	calldata, err := buildFillCalldata(*order, orderID, plan, prepared.signedDiscounts)
 	if err != nil {
-		log.Error(err, "order fill: build calldata", "orderId", order.OrderID, "quoteId", order.QuoteID)
+		observability.Log(ctx).Error(err, "order fill: build calldata", "orderId", order.OrderID, "quoteId", order.QuoteID)
 		return orderProcessingResult{outcome: orderProcessingInvalidPlan, err: err}
 	}
 	fill, err := s.submitFill(
@@ -245,7 +245,8 @@ func (s *Solver) processOrderUsingReservations(
 			// outcome stays what a plan we will not submit has always been.
 			return orderProcessingResult{outcome: orderProcessingNotActionable, err: err}
 		}
-		log.Error(err, "order fill: submit transaction", "orderId", order.OrderID, "quoteId", order.QuoteID)
+		observability.Log(ctx).Error(err, "order fill: submit transaction",
+			"orderId", order.OrderID, "quoteId", order.QuoteID)
 		return orderProcessingResult{retryable: true, outcome: orderProcessingRetryableError, err: err}
 	}
 	if fill == nil {
@@ -346,27 +347,26 @@ func (s *Solver) logFillPlan(
 }
 
 func (s *Solver) openedOrderID(ctx context.Context, order *submittedOrder) (common.Hash, error) {
-	log := observability.TraceLogger(ctx, s.log)
 	orderID, err := s.reader.orderIdentifier(ctx, s.cfg.InputSettler, order.Order)
 	if err != nil {
-		log.Error(err, "order fill: identify order", "orderId", order.OrderID, "quoteId", order.QuoteID)
+		observability.Log(ctx).Error(err, "order fill: identify order", "orderId", order.OrderID, "quoteId", order.QuoteID)
 		return common.Hash{}, err
 	}
 	status, err := s.reader.orderStatus(ctx, s.cfg.InputSettler, orderID)
 	if err != nil {
-		log.Error(err, "order fill: read initial order status", "orderId", order.OrderID,
+		observability.Log(ctx).Error(err, "order fill: read initial order status", "orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID)
 		return common.Hash{}, err
 	}
 	if status == lifiOrderStatusNone {
 		observability.Decline(ctx, "order_deferred", "on-chain deposit is not visible yet")
-		log.Info("on-chain order deposit is not visible yet", "orderId", order.OrderID,
+		observability.Log(ctx).Info("on-chain order deposit is not visible yet", "orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID, "status", status)
 		return common.Hash{}, errOrderDepositNotVisible
 	}
 	if status != lifiOrderStatusDeposited {
 		observability.Decline(ctx, "order_skipped", "on-chain order is no longer fillable")
-		log.Info("order skipped: on-chain order is no longer fillable", "orderId", order.OrderID,
+		observability.Log(ctx).Info("order skipped: on-chain order is no longer fillable", "orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID, "status", status)
 		return common.Hash{}, errOrderNotFillable
 	}
@@ -380,11 +380,10 @@ func (s *Solver) prepareFill(
 	orderID common.Hash,
 	reservationOverride *liquidlane.CapacityReservations,
 ) (*preparedFill, error) {
-	log := observability.TraceLogger(ctx, s.log)
 	pairRoutes := routesForPair(routes, order.TokenIn, order.TokenOut)
 	if len(pairRoutes) == 0 {
 		observability.Decline(ctx, "order_skipped", "no configured route for the order pair")
-		log.V(1).Info("order skipped: no configured route for pair", "orderId", order.OrderID,
+		observability.Log(ctx).V(1).Info("order skipped: no configured route for pair", "orderId", order.OrderID,
 			"quoteId", order.QuoteID, "tokenIn", order.TokenIn.Hex(), "tokenOut", order.TokenOut.Hex())
 		return nil, nil
 	}
@@ -410,7 +409,7 @@ func (s *Solver) prepareFill(
 	}
 	quotes := append([]liquidlane.FillQuote(nil), state.snapshots.Direct...)
 	quotes = append(quotes, state.discountQuotes...)
-	log.V(1).Info(
+	observability.Log(ctx).V(1).Info(
 		"order fill snapshot loaded",
 		"orderId", order.OrderID,
 		"onChainOrderId", orderID.Hex(),
@@ -495,7 +494,7 @@ func (s *Solver) loadFillState(
 		state.chainTime,
 	)
 	state.discountQuotes = refreshedDiscountQuotes
-	s.logDiscountIssues(discountIssues)
+	s.logDiscountIssues(ctx, discountIssues)
 	return state, nil
 }
 
@@ -523,7 +522,7 @@ func (s *Solver) skipExpiredOrder(ctx context.Context, order *submittedOrder, ch
 		return false
 	}
 	observability.Decline(ctx, "order_skipped", "order expired before it could be filled")
-	observability.TraceLogger(ctx, s.log).Info(
+	observability.Log(ctx).Info(
 		"order skipped: expired", "orderId", order.OrderID, "quoteId", order.QuoteID,
 		"chainTime", uint32Unix(chainTime), "expires", order.Order.Expires,
 		"fillDeadline", order.Order.FillDeadline)

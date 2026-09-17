@@ -50,7 +50,7 @@ func TestUnsupportedOrdersDoNotReachSentry(t *testing.T) {
 			before := len(events)
 			raw := mutatedTestOrderJSON(t, cfg, tc.mutate)
 			if order, _ := s.parseOrderMessage(
-				t.Context(), orderMessage{Event: orderSubmitEvent, Data: raw},
+				solverContext(t, s), orderMessage{Event: orderSubmitEvent, Data: raw},
 			); order != nil {
 				t.Fatal("rejected order was accepted")
 			}

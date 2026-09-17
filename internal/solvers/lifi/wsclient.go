@@ -11,10 +11,11 @@ import (
 	"time"
 
 	"github.com/go-errors/errors"
-	"github.com/go-logr/logr"
 	"github.com/gorilla/websocket"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 const (
@@ -31,7 +32,6 @@ type orderMessage struct {
 type orderFeed struct {
 	url           string
 	apiKey        string
-	log           logr.Logger
 	connected     atomic.Bool // watchOnce writes; Prometheus scrapes read concurrently.
 	recoveryReady atomic.Bool // connection recovery writes; Prometheus scrapes read concurrently.
 }
@@ -41,8 +41,8 @@ type orderFeedConnectionHooks struct {
 	whileConnected func(context.Context) // Concurrent with reads and joined on disconnect.
 }
 
-func newOrderFeed(url, apiKey string, log logr.Logger) *orderFeed {
-	return &orderFeed{url: url, apiKey: apiKey, log: log}
+func newOrderFeed(url, apiKey string) *orderFeed {
+	return &orderFeed{url: url, apiKey: apiKey}
 }
 
 func (f *orderFeed) run(
@@ -64,9 +64,10 @@ func (f *orderFeed) run(
 			closeErr.Code == websocket.CloseGoingAway || closeErr.Code == websocket.CloseNoStatusReceived ||
 			closeErr.Code == websocket.CloseAbnormalClosure || closeErr.Code == websocket.CloseServiceRestart ||
 			closeErr.Code == websocket.CloseTryAgainLater) {
-			f.log.Info("order feed disconnected; reconnecting", "error", err.Error(), "backoff", backoff.String())
+			observability.Log(ctx).Info(
+				"order feed disconnected; reconnecting", "error", err.Error(), "backoff", backoff.String())
 		} else {
-			f.log.Error(err, "order feed disconnected; reconnecting", "backoff", backoff.String())
+			observability.Log(ctx).Error(err, "order feed disconnected; reconnecting", "backoff", backoff.String())
 		}
 		timer := time.NewTimer(backoff)
 		select {
@@ -125,7 +126,7 @@ func (f *orderFeed) watchOnce(
 		work.Go(func() { hooks.whileConnected(connectionCtx) })
 	}
 
-	f.log.Info("order feed connected", "url", f.url)
+	observability.Log(ctx).Info("order feed connected", "url", f.url)
 	for {
 		messageType, msg, err := conn.ReadMessage()
 		if err != nil {
@@ -143,11 +144,11 @@ func (f *orderFeed) watchOnce(
 
 		var envelope orderMessage
 		if err := json.Unmarshal(msg, &envelope); err != nil {
-			f.log.V(1).Info("order feed: non-json message ignored")
+			observability.Log(ctx).V(1).Info("order feed: non-json message ignored")
 			continue
 		}
 		if envelope.Event != orderSubmitEvent {
-			f.log.V(1).Info("order feed event ignored", "event", envelope.Event)
+			observability.Log(ctx).V(1).Info("order feed event ignored", "event", envelope.Event)
 			continue
 		}
 		handle(connectionCtx, envelope)

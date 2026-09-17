@@ -23,6 +23,8 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/api/lifiorder"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
@@ -114,11 +116,17 @@ func newTracingOrderFixture(t *testing.T) *tracingOrderFixture {
 	}
 }
 
+// context stands in for Solver.Run, which stores the solver logger on the context it passes down.
+func (f *tracingOrderFixture) context(t *testing.T) context.Context {
+	t.Helper()
+	return observability.WithLogger(t.Context(), f.solver.log)
+}
+
 // admit drives one feed message through the message span into the inbox.
 func (f *tracingOrderFixture) admit(t *testing.T, inbox *orderInbox) error {
 	t.Helper()
 	order, err := f.solver.admitOrderMessage(
-		t.Context(), orderMessage{Event: orderSubmitEvent, Data: f.raw},
+		f.context(t), orderMessage{Event: orderSubmitEvent, Data: f.raw},
 		func(_ context.Context, order *submittedOrder) error { return inbox.enqueue(order) },
 	)
 	if order == nil {
@@ -137,7 +145,7 @@ func (f *tracingOrderFixture) run(t *testing.T) {
 	orders := make(chan *submittedOrder)
 	inboxDone := make(chan error, 1)
 	go func() { inboxDone <- inbox.run(t.Context(), orders) }()
-	if err := f.solver.runOrderWorker(t.Context(), f.routes, orders, nil, nil); err != nil {
+	if err := f.solver.runOrderWorker(f.context(t), f.routes, orders, nil, nil); err != nil {
 		t.Fatalf("runOrderWorker: %v", err)
 	}
 	if err := <-inboxDone; err != nil {
@@ -895,7 +903,7 @@ func TestOrderFeedDialCarriesTraceparent(t *testing.T) {
 		_ = conn.Close()
 	}))
 	defer server.Close()
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
+	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
 
 	_, err := feed.watchOnce(t.Context(), orderFeedConnectionHooks{}, func(context.Context, orderMessage) {})
 	if err == nil {
@@ -947,6 +955,42 @@ func TestOrderLogsCarryTraceIDOnce(t *testing.T) {
 	}
 	if !sawOrderLine {
 		t.Fatalf("no order-path line carried trace_id: %v", lines)
+	}
+}
+
+// The advertised-discount skip line runs inside the quote refresh stage, so it now carries that
+// stage's trace ids — once, because the context holds the base logger and Log stamps at retrieval.
+func TestDiscountSkipLogsCarryTraceIDOnce(t *testing.T) {
+	tracetest.Install(t)
+	var lines []string
+	s := &Solver{
+		log: funcr.NewJSON(func(entry string) { lines = append(lines, entry) }, funcr.Options{Verbosity: 1}),
+		discounts: &fakeDiscountClient{listed: &discounts.List{Discounts: []discounts.ListItem{
+			{DiscountID: testDiscountID, Discount: "not-a-number"},
+		}}},
+	}
+
+	ctx, end := tracer.Start(observability.WithLogger(t.Context(), s.log), "lifi.quotes.refresh")
+	_, degraded := s.quoteDiscountInventories(ctx, nil, time.Unix(1_800_000_000, 0))
+	end(nil)
+
+	if !degraded {
+		t.Fatal("malformed advertised discount was not reported as an issue")
+	}
+	var skipped string
+	for _, line := range lines {
+		if strings.Contains(line, `"private discounts: ignored"`) {
+			skipped = line
+		}
+	}
+	if skipped == "" {
+		t.Fatalf("no skip line was logged: %v", lines)
+	}
+	if n := strings.Count(skipped, `"trace_id"`); n != 1 {
+		t.Fatalf("trace_id appears %d times in %s, want once", n, skipped)
+	}
+	if n := strings.Count(skipped, `"span_id"`); n != 1 {
+		t.Fatalf("span_id appears %d times in %s, want once", n, skipped)
 	}
 }
 

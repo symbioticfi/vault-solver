@@ -24,6 +24,7 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
@@ -274,12 +275,8 @@ func TestRunGatesQuotesOnRecoveryAndDisconnect(t *testing.T) {
 		strategy: recoveryGateStrategy{tokenIn: tokenIn, tokenOut: tokenOut},
 		caller:   common.HexToAddress("0x5555555555555555555555555555555555555555"),
 		orders:   newOrderClient(orderServer.URL, "test-key", cfg.OrderServer.HTTPTimeout, 11155111),
-		feed: newOrderFeed(
-			"ws"+strings.TrimPrefix(webSocketServer.URL, "http"),
-			"test-key",
-			logr.Discard(),
-		),
-		txm: &fakeLifiTxSender{}, log: logr.Discard(),
+		feed:     newOrderFeed("ws"+strings.TrimPrefix(webSocketServer.URL, "http"), "test-key"),
+		txm:      &fakeLifiTxSender{}, log: logr.Discard(),
 		now:          func(context.Context) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
 		maxFeePerGas: func(context.Context) (*big.Int, error) { return big.NewInt(1), nil },
 		wallNow:      func() time.Time { return time.Unix(wallUnix.Load(), 0) },
@@ -759,7 +756,7 @@ func TestProcessOrderDoesNotProbeExternalNilDecision(t *testing.T) {
 	})
 
 	result := s.processOrderWithPending(
-		t.Context(),
+		solverContext(t, s),
 		testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
 		nil,
@@ -806,7 +803,7 @@ func TestProcessOrderClassifiesStrategyErrors(t *testing.T) {
 			)
 
 			result := s.processOrderWithPending(
-				t.Context(),
+				solverContext(t, s),
 				testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 				testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
 				nil,
@@ -842,7 +839,7 @@ func TestProcessOrderSubmitsImmediateFill(t *testing.T) {
 		funcr.Options{Verbosity: 1},
 	)
 
-	s.processOrder(context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut))
+	s.processOrder(solverContext(t, s), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut))
 	if len(txm.reqs) != 1 {
 		t.Fatalf("txmanager.Send calls = %d, want 1", len(txm.reqs))
 	}
@@ -1113,7 +1110,7 @@ func TestProcessOrderSkipsWhenGovernanceFeeInvariantFails(t *testing.T) {
 	s.log = funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{})
 
 	result := s.processOrderWithPending(
-		context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+		solverContext(t, s), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut), nil,
 	)
 	if orderIDReads != 0 || len(txm.reqs) != 0 {
@@ -1907,6 +1904,13 @@ func TestOrderWorkerDrainsAcceptedFillAfterCancellation(t *testing.T) {
 	if s.capacity.Len() != 0 {
 		t.Fatalf("capacity reservations after drain = %d, want 0", s.capacity.Len())
 	}
+}
+
+// solverContext stands in for Solver.Run, which stores the solver logger on the context it passes
+// down to everything below it.
+func solverContext(t *testing.T, s *Solver) context.Context {
+	t.Helper()
+	return observability.WithLogger(t.Context(), s.log)
 }
 
 func receiveFillInput(t *testing.T, inputs <-chan types.FillInput) types.FillInput {

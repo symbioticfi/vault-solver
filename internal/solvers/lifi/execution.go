@@ -391,9 +391,10 @@ func (s *Solver) runOrderFeed(
 		feedDone <- s.feed.run(
 			ctx,
 			orderFeedConnectionHooks{
-				beforeRead: func(context.Context) {
+				beforeRead: func(connectionCtx context.Context) {
 					inbox.beginRecovery()
-					s.log.V(1).Info("order recovery started", "executor", s.cfg.Executor.Hex())
+					observability.Log(connectionCtx).V(1).Info(
+						"order recovery started", "executor", s.cfg.Executor.Hex())
 				},
 				whileConnected: func(connectionCtx context.Context) {
 					defer inbox.endRecovery()
@@ -429,7 +430,7 @@ func (s *Solver) runOrderFeed(
 		workerFinished = true
 		_ = drainTimer.Stop()
 	case <-drainTimer.C:
-		s.log.Info("order inbox drain timed out", "timeout", s.cfg.OrderServer.HTTPTimeout.String())
+		observability.Log(ctx).Info("order inbox drain timed out", "timeout", s.cfg.OrderServer.HTTPTimeout.String())
 		stopWork()
 	}
 	inboxErr := <-inboxDone
@@ -447,7 +448,7 @@ func (s *Solver) acceptOrderMessage(ctx context.Context, inbox *orderInbox, msg 
 			return nil
 		}
 		s.metrics.observeOrderQueueDrop(orderQueueInbox, err)
-		observability.TraceLogger(msgCtx, s.log).Error(err, "order feed: dropped order",
+		observability.Log(msgCtx).Error(err, "order feed: dropped order",
 			"event", msg.Event,
 			"orderId", order.OrderID,
 			"onChainOrderId", order.OnChainOrderID,
@@ -491,7 +492,7 @@ func (s *Solver) recoverOrdersUntilSuccess(
 		result, err := s.recoverOrders(ctx, inbox, recovered)
 		if err == nil {
 			successfulSweeps++
-			s.log.V(1).Info(
+			observability.Log(ctx).V(1).Info(
 				"order recovery sweep completed",
 				"sweep", successfulSweeps,
 				"listedOrders", result.listed,
@@ -500,7 +501,8 @@ func (s *Solver) recoverOrdersUntilSuccess(
 			)
 			if result.discovered == 0 && inbox.tryEndRecovery(result.processedGen) {
 				outcome = observability.ExternalOperationSuccess
-				s.log.Info("order recovery completed", "listedOrders", result.listed, "seenOrders", len(recovered))
+				observability.Log(ctx).Info(
+					"order recovery completed", "listedOrders", result.listed, "seenOrders", len(recovered))
 				return true
 			}
 			if successfulSweeps < maximumOrderRecoverySweeps {
@@ -513,7 +515,7 @@ func (s *Solver) recoverOrdersUntilSuccess(
 			return false
 		}
 		recovered = make(map[string]bool)
-		s.log.Error(err, "order recovery failed; retrying", "backoff", backoff.String())
+		observability.Log(ctx).Error(err, "order recovery failed; retrying", "backoff", backoff.String())
 		if !waitForRetry(ctx, backoff) {
 			return false
 		}
@@ -606,7 +608,6 @@ func (s *Solver) parseOrderMessage(
 	ctx context.Context,
 	msg orderMessage,
 ) (*submittedOrder, error) {
-	log := observability.TraceLogger(ctx, s.log)
 	order, err := parseSubmittedOrder(msg.Data, s.cfg, s.chainID)
 	if err != nil {
 		fields := orderDiagnosticFields(msg.Data, err)
@@ -615,19 +616,19 @@ func (s *Solver) parseOrderMessage(
 		case errors.Is(err, errOrderForDifferentChain):
 			s.metrics.observeOrderParse("other_chain")
 			observability.Decline(ctx, "order_ignored", "order is for another chain")
-			log.Info("order feed: ignored order for another chain", append(fields, "reason", err.Error())...)
+			observability.Log(ctx).Info("order feed: ignored order for another chain", append(fields, "reason", err.Error())...)
 		case errors.Is(err, errNativeInputUnsupported):
 			s.metrics.observeOrderParse("unsupported")
 			observability.Decline(ctx, "order_ignored", "native input is not supported")
-			log.Info("order feed: ignored unsupported order", append(fields, "reason", err.Error())...)
+			observability.Log(ctx).Info("order feed: ignored unsupported order", append(fields, "reason", err.Error())...)
 		case errors.Is(err, errOrderUnsupported):
 			s.metrics.observeOrderParse("unsupported")
 			observability.Decline(ctx, "order_ignored", "order is not fillable by this solver")
-			log.V(1).Info("order feed: ignored unsupported order", append(fields, "reason", err.Error())...)
+			observability.Log(ctx).V(1).Info("order feed: ignored unsupported order", append(fields, "reason", err.Error())...)
 		default:
 			// A message we cannot understand is a real failure, not an expected skip.
 			s.metrics.observeOrderParse("invalid")
-			log.Error(err, "order feed: ignored order", fields...)
+			observability.Log(ctx).Error(err, "order feed: ignored order", fields...)
 			return nil, err
 		}
 		return nil, nil
@@ -640,7 +641,7 @@ func (s *Solver) parseOrderMessage(
 	if isDutchAuctionContext(order.Output.Context) {
 		s.metrics.observeOrderParse("unsupported")
 		observability.Decline(ctx, "order_ignored", "Dutch auction orders are not supported")
-		log.Info("order feed: ignored unsupported Dutch auction",
+		observability.Log(ctx).Info("order feed: ignored unsupported Dutch auction",
 			"event", msg.Event,
 			"orderId", order.OrderID,
 			"onChainOrderId", order.OnChainOrderID,
@@ -649,7 +650,7 @@ func (s *Solver) parseOrderMessage(
 		)
 		return nil, nil
 	}
-	log.Info("order received",
+	observability.Log(ctx).Info("order received",
 		"event", msg.Event,
 		"orderStatus", order.OrderStatus,
 		"orderId", order.OrderID,
@@ -722,7 +723,6 @@ func (s *Solver) runOrderWorker(
 			endStage(attemptErr)
 			finishOrderTrace(order, attemptErr)
 		}()
-		log := observability.TraceLogger(orderCtx, s.log)
 
 		var result orderProcessingResult
 		if reservations == nil {
@@ -744,7 +744,7 @@ func (s *Solver) runOrderWorker(
 			s.metrics.observeOrderQueueDrop(orderQueueDepositRetry, err)
 			if errors.Is(err, errOrderDepositRetryFull) || errors.Is(err, errOrderDepositRetryKey) {
 				attemptErr = err
-				log.Error(err, "order deposit retry: dropped order",
+				observability.Log(orderCtx).Error(err, "order deposit retry: dropped order",
 					"orderId", order.OrderID,
 					"onChainOrderId", order.OnChainOrderID,
 					"quoteId", order.QuoteID,
@@ -753,7 +753,7 @@ func (s *Solver) runOrderWorker(
 				return
 			}
 			observability.Decline(orderCtx, "order_skipped", "deposit did not become visible within retry bounds")
-			log.Info("order skipped: deposit did not become visible within retry bounds",
+			observability.Log(orderCtx).Info("order skipped: deposit did not become visible within retry bounds",
 				"orderId", order.OrderID,
 				"onChainOrderId", order.OnChainOrderID,
 				"quoteId", order.QuoteID,
@@ -785,7 +785,7 @@ func (s *Solver) runOrderWorker(
 			}
 			attemptErr = err
 			s.metrics.observeOrderQueueDrop(orderQueueCapacityRetry, err)
-			log.Error(err, "order retry queue: dropped newest order",
+			observability.Log(orderCtx).Error(err, "order retry queue: dropped newest order",
 				"orderId", order.OrderID,
 				"onChainOrderId", order.OnChainOrderID,
 				"quoteId", order.QuoteID,
@@ -794,7 +794,7 @@ func (s *Solver) runOrderWorker(
 			return
 		}
 		if retries.len() > queuedBefore {
-			log.V(1).Info(
+			observability.Log(orderCtx).V(1).Info(
 				"order fill deferred by pending capacity",
 				"orderId", order.OrderID,
 				"onChainOrderId", order.OnChainOrderID,
@@ -807,7 +807,6 @@ func (s *Solver) runOrderWorker(
 	}
 	complete := func(completion fillCompletion) {
 		filledCtx := traces.context(ctx, completion.fill.order)
-		log := observability.TraceLogger(filledCtx, s.log)
 		completionErr := s.completeFill(filledCtx, &pending, completion)
 		finishOrderTrace(completion.fill.order, completionErr)
 		reservationReleaseGen++
@@ -816,7 +815,7 @@ func (s *Solver) runOrderWorker(
 			if order == nil {
 				break
 			}
-			observability.TraceLogger(traces.context(ctx, order), s.log).V(1).Info(
+			observability.Log(traces.context(ctx, order)).V(1).Info(
 				"order fill retry started",
 				"orderId", order.OrderID,
 				"onChainOrderId", order.OnChainOrderID,
@@ -831,7 +830,7 @@ func (s *Solver) runOrderWorker(
 			retries.clear()
 		}
 		if s.releaseReservationWithoutRefresh(completion.fill.reservationKey) {
-			log.V(1).Info(
+			observability.Log(filledCtx).V(1).Info(
 				"fill capacity released",
 				"orderId", completion.fill.order.OrderID,
 				"onChainOrderId", completion.fill.orderID.Hex(),
@@ -883,7 +882,7 @@ func (s *Solver) runOrderWorker(
 				observability.Decline(
 					orderCtx, "order_skipped", "deposit did not become visible within retry bounds",
 				)
-				observability.TraceLogger(orderCtx, s.log).Info(
+				observability.Log(orderCtx).Info(
 					"order skipped: deposit did not become visible within retry bounds",
 					"orderId", order.OrderID,
 					"onChainOrderId", order.OnChainOrderID,
@@ -923,7 +922,7 @@ func (s *Solver) runOrderWorker(
 			if depositRetries.contains(order) {
 				orderCtx := traces.context(ctx, order)
 				observability.Decline(orderCtx, "order_skipped", "replay of an order awaiting its deposit")
-				observability.TraceLogger(orderCtx, s.log).V(1).Info(
+				observability.Log(orderCtx).V(1).Info(
 					"order feed replay coalesced while awaiting on-chain deposit",
 					"orderId", order.OrderID,
 					"onChainOrderId", order.OnChainOrderID,

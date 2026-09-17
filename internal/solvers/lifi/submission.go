@@ -29,12 +29,11 @@ func (s *Solver) submitFill(
 	chainTime time.Time,
 	chainObservedAt time.Time,
 ) (*pendingFill, error) {
-	log := observability.TraceLogger(ctx, s.log)
 	reservations, ok := fillPlanReservations(plan)
 	if !ok {
 		// Defensive: validateFillPlan normalizes every route before this point. Report it as the
 		// failure it is rather than ending the order's span clean.
-		log.Error(errFillPlanRejected, "order fill: reject strategy plan",
+		observability.Log(ctx).Error(errFillPlanRejected, "order fill: reject strategy plan",
 			"orderId", order.OrderID, "quoteId", order.QuoteID)
 		return nil, errFillPlanRejected
 	}
@@ -44,14 +43,15 @@ func (s *Solver) submitFill(
 	}
 	if status == lifiOrderStatusNone {
 		observability.Decline(ctx, "order_deferred", "on-chain deposit is not visible at submission")
-		log.Info("on-chain order deposit is not visible at submission", "orderId", order.OrderID,
+		observability.Log(ctx).Info("on-chain order deposit is not visible at submission", "orderId", order.OrderID,
 			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID, "status", status)
 		return nil, errOrderDepositNotVisible
 	}
 	if status != lifiOrderStatusDeposited {
 		observability.Decline(ctx, "order_skipped", "on-chain order is no longer fillable at submission")
-		log.Info("order skipped: on-chain order is no longer fillable at submission", "orderId", order.OrderID,
-			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID, "status", status)
+		observability.Log(ctx).Info("order skipped: on-chain order is no longer fillable at submission",
+			"orderId", order.OrderID, "onChainOrderId", calldata.OrderID.Hex(),
+			"quoteId", order.QuoteID, "status", status)
 		return nil, errOrderNotFillable
 	}
 	var cancelAt time.Time
@@ -65,7 +65,7 @@ func (s *Solver) submitFill(
 		)
 		if !deadlineValid {
 			observability.Decline(ctx, "fill_skipped", "execution deadline elapsed before submission")
-			log.Info("order skipped: execution deadline elapsed before submission",
+			observability.Log(ctx).Info("order skipped: execution deadline elapsed before submission",
 				"orderId", order.OrderID, "onChainOrderId", calldata.OrderID.Hex(),
 				"quoteId", order.QuoteID, "deadline", calldata.Deadline.Unix())
 			return nil, nil
@@ -80,7 +80,7 @@ func (s *Solver) submitFill(
 		deadlineRemaining = calldata.Deadline.Sub(chainTime)
 		cancelAtUnix = cancelAt.Unix()
 	}
-	log.V(1).Info(
+	observability.Log(ctx).V(1).Info(
 		"order fill ready for submission",
 		"orderId", order.OrderID,
 		"onChainOrderId", calldata.OrderID.Hex(),
@@ -104,12 +104,12 @@ func (s *Solver) submitFill(
 		Label: "lifi-fill",
 	})
 	if !accepted {
-		log.Info("order skipped: transaction submission canceled", "orderId", order.OrderID,
+		observability.Log(ctx).Info("order skipped: transaction submission canceled", "orderId", order.OrderID,
 			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID)
 		return nil, nil
 	}
 	if s.reserveWithoutRefresh(reservationKey, reservations) {
-		log.V(1).Info(
+		observability.Log(ctx).V(1).Info(
 			"fill capacity reserved",
 			"orderId", order.OrderID,
 			"onChainOrderId", calldata.OrderID.Hex(),
@@ -118,7 +118,7 @@ func (s *Solver) submitFill(
 			"pendingFills", s.capacity.Len(),
 		)
 	}
-	log.V(1).Info(
+	observability.Log(ctx).V(1).Info(
 		"order fill submitted",
 		"orderId", order.OrderID,
 		"onChainOrderId", calldata.OrderID.Hex(),
@@ -187,11 +187,10 @@ func (s *Solver) completeFill(
 	ctx, end := tracer.Start(ctx, "lifi.order.complete", txAttrs...)
 	defer func() { end(err) }()
 
-	log := observability.TraceLogger(ctx, s.log)
 	outcome := completion.result.Outcome
 	if outcome == txmanager.OutcomeConfirmed {
 		s.observeFillAmounts(completion.result, fill)
-		log.Info("order filled", "orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
+		observability.Log(ctx).Info("order filled", "orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
 			"quoteId", fill.order.QuoteID, "tx", completion.result.Hash.Hex())
 		return nil
 	}
@@ -199,7 +198,7 @@ func (s *Solver) completeFill(
 		// The fill stands; the confirmation wait is what failed, and it is the span's error.
 		s.observeFillAmounts(completion.result, fill)
 		err = completion.result.Err
-		log.Error(err, "order fill included but confirmation wait failed",
+		observability.Log(ctx).Error(err, "order fill included but confirmation wait failed",
 			"orderId", fill.order.OrderID,
 			"onChainOrderId", fill.orderID.Hex(),
 			"quoteId", fill.order.QuoteID,
@@ -211,7 +210,7 @@ func (s *Solver) completeFill(
 	if err == nil {
 		err = errors.Errorf("unknown transaction outcome %q", outcome)
 	}
-	log.Error(err, "order fill failed",
+	observability.Log(ctx).Error(err, "order fill failed",
 		"orderId", fill.order.OrderID,
 		"onChainOrderId", fill.orderID.Hex(),
 		"quoteId", fill.order.QuoteID,
