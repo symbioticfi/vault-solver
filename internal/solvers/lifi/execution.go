@@ -814,6 +814,9 @@ func (s *Solver) runOrderWorker(
 	}
 	complete := func(completion fillCompletion) {
 		filledCtx := traces.context(ctx, completion.fill.order)
+		// The capacity release below runs after the processing span has ended, so take the fill's
+		// logger while that span is still open rather than logging through a closed one.
+		filledLog := observability.Log(filledCtx)
 		completionErr := s.completeFill(filledCtx, &pending, completion)
 		finishOrderTrace(completion.fill.order, completionErr)
 		reservationReleaseGen++
@@ -837,7 +840,7 @@ func (s *Solver) runOrderWorker(
 			retries.clear()
 		}
 		if s.releaseReservationWithoutRefresh(completion.fill.reservationKey) {
-			observability.Log(filledCtx).V(1).Info(
+			filledLog.V(1).Info(
 				"fill capacity released",
 				"orderId", completion.fill.order.OrderID,
 				"onChainOrderId", completion.fill.orderID.Hex(),
