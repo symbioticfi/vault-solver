@@ -39,11 +39,11 @@ func (m *Manager) receiptResult(ctx context.Context, pending *pendingTransaction
 		case <-ctx.Done():
 			return Result{}, false
 		}
-		if m.observeReceiptRead(pending, sweep, read) {
+		if m.observeReceiptRead(ctx, pending, sweep, read) {
 			return m.confirmPendingReceipt(ctx, pending, attempt, read.receipt)
 		}
 	}
-	m.finishReceiptSweep(pending, sweep)
+	m.finishReceiptSweep(ctx, pending, sweep)
 	return Result{}, false
 }
 
@@ -154,7 +154,7 @@ func TestReceiptSweepGivesEveryHashFullTimeout(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		backend := &slowReceiptBackend{mockBackend: newMockBackend(), delay: 70 * time.Millisecond}
 		m := New(backend, mustSigner(t), big.NewInt(1), Config{PollInterval: time.Second, ReplacementInterval: 30 * time.Second}, logr.Discard())
-		pending := &pendingTransaction{req: Request{Label: "52 hashes"}, log: logr.Discard(), nonce: 7, cancelDeadline: time.Now().Add(time.Hour)}
+		pending := &pendingTransaction{req: Request{Label: "52 hashes"}, nonce: 7, cancelDeadline: time.Now().Add(time.Hour)}
 		for i := range 52 {
 			tx := types.NewTx(&types.DynamicFeeTx{Nonce: 7, Gas: 21000, GasFeeCap: big.NewInt(int64(i + 1))})
 			pending.attempts = append(pending.attempts, txAttempt{hash: tx.Hash()})

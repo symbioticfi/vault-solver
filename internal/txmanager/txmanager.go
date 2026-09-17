@@ -135,7 +135,6 @@ type pendingTransaction struct {
 	originalHash      common.Hash
 	receiptReads      readStreak
 	obsolescenceReads readStreak
-	log               logr.Logger // send-span-stamped; only the receipt-sweep helpers, which take no ctx, still read it
 	result            chan<- Result
 	resultOnce        sync.Once
 	cancelDeadline    time.Time
@@ -182,8 +181,7 @@ type job struct {
 	req              Request
 	res              chan Result
 	admissionStarted time.Time
-	span             trace.Span  // the caller-derived send span, ended by whoever resolves the request
-	log              logr.Logger // m.log stamped with the request's solver; the worker stores it on every lifecycle context
+	span             trace.Span // the caller-derived send span, ended by whoever resolves the request
 }
 
 type nonceConflict struct {
@@ -454,7 +452,7 @@ func (m *Manager) Start(ctx context.Context) {
 			return
 		case j := <-m.queue:
 			// The send span, not the caller's context, carries the trace across the detached lifecycle.
-			spanCtx := observability.WithLogger(trace.ContextWithSpan(ctx, j.span), j.log)
+			spanCtx := m.jobContext(ctx, j)
 			if err := ctx.Err(); err != nil {
 				m.metrics.finishAdmission(j.req.Label, j.admissionStarted, errManagerStopped)
 				deliverJobResult(j, notAdmittedResult(err))
@@ -489,7 +487,7 @@ func (m *Manager) Start(ctx context.Context) {
 			pending.lifecycle = lifecycle
 			pending.result = j.res
 			m.trackUnminedTransaction(pending)
-			lifecycleSpanCtx := observability.WithLogger(trace.ContextWithSpan(lifecycleCtx, j.span), j.log)
+			lifecycleSpanCtx := m.jobContext(lifecycleCtx, j)
 			m.lifecycleWG.Go(func() {
 				defer m.releaseLifecycleSlot()
 				m.complete(lifecycleSpanCtx, pending)
@@ -604,7 +602,7 @@ func (m *Manager) sendAsync(ctx context.Context, req Request, try bool) (<-chan 
 	select {
 	case m.queue <- job{
 		req: cloneRequest(req), res: res, admissionStarted: admissionStarted,
-		span: span, log: m.requestLog(req),
+		span: span,
 	}:
 		releaseDemandOnReturn = false
 	case <-admissionCtx.Done():
@@ -715,6 +713,12 @@ func (m *Manager) requestLog(req Request) logr.Logger {
 	return m.log.WithValues("solver", req.Solver)
 }
 
+// jobContext derives base into the context the job's work runs on: the send span carries the
+// caller's trace across the detached lifecycle, and the request logger is what Log(ctx) stamps.
+func (m *Manager) jobContext(base context.Context, j job) context.Context {
+	return observability.WithLogger(trace.ContextWithSpan(base, j.span), m.requestLog(j.req))
+}
+
 // broadcast runs on the worker goroutine only, after lifecycle admission, so fee selection, gas
 // estimation, signing, and nonce assignment stay serialized.
 func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingTransaction, err error) {
@@ -806,9 +810,6 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	}
 	m.commitNonce(nonce)
 	return &pendingTransaction{
-		// Stamped from the send span, not the broadcast child: the receipt-sweep helpers below carry
-		// no context of their own and this logger outlives the broadcast span.
-		log:   observability.Log(ctx),
 		req:   req,
 		nonce: nonce,
 		gas:   gas,
@@ -928,7 +929,7 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 			sweep.dispatched(pending, nextIndex)
 		case read := <-receiptResults:
 			receiptResults = nil
-			if m.observeReceiptRead(pending, sweep, read) {
+			if m.observeReceiptRead(ctx, pending, sweep, read) {
 				result, done := m.confirmPendingReceipt(ctx, pending, read.attempt, read.receipt)
 				if done {
 					return result
@@ -936,7 +937,7 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 				// A reorg or an untrusted receipt keeps ownership and resumes polling.
 				sweep = nil
 			} else if sweep.nextIndex(pending) < 0 {
-				m.finishReceiptSweep(pending, sweep)
+				m.finishReceiptSweep(ctx, pending, sweep)
 				// Include superseded variants considered by the priority path.
 				knownAttempts = sweep.knownAttempts
 				sweep = nil
@@ -1008,10 +1009,10 @@ func (m *Manager) requestObsolete(ctx context.Context, req Request) (bool, error
 	return obsolete, nil
 }
 
-func (m *Manager) receiptReadFailed(pending *pendingTransaction, sweep *receiptSweep) {
+func (m *Manager) receiptReadFailed(ctx context.Context, pending *pendingTransaction, sweep *receiptSweep) {
 	read := sweep.firstError
 	diagnostic := sweep.diagnostics
-	pending.receiptReads.failed(pending.log, read.err, "pending transaction receipt unavailable",
+	pending.receiptReads.failed(observability.Log(ctx), read.err, "pending transaction receipt unavailable",
 		"label", pending.req.Label,
 		"hash", read.attempt.hash.Hex(),
 		"originalHash", pending.originalHash.Hex(),
@@ -1029,8 +1030,8 @@ func (m *Manager) receiptReadFailed(pending *pendingTransaction, sweep *receiptS
 	)
 }
 
-func (m *Manager) receiptReadsRecovered(pending *pendingTransaction) {
-	pending.receiptReads.recovered(pending.log, "pending transaction receipt reads recovered",
+func (m *Manager) receiptReadsRecovered(ctx context.Context, pending *pendingTransaction) {
+	pending.receiptReads.recovered(observability.Log(ctx), "pending transaction receipt reads recovered",
 		"label", pending.req.Label, "nonce", pending.nonce)
 }
 
@@ -1049,7 +1050,7 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 	}
 	pending.lifecycle.transitionPhase(lifecyclePhaseConfirming)
 	confirmations := m.confirmations(pending.req)
-	receipt, err := m.waitForConfirmations(ctx, observability.Log(ctx), attempt.hash, receipt, confirmations)
+	receipt, err := m.waitForConfirmations(ctx, attempt.hash, receipt, confirmations)
 	if errors.Is(err, errReceiptReorged) {
 		pending.lifecycle.transitionPhase(lifecyclePhasePending)
 		if pending.nonceConflictHash != (common.Hash{}) {
@@ -1792,7 +1793,6 @@ func (m *Manager) commitNonce(used uint64) {
 
 func (m *Manager) waitForConfirmations(
 	ctx context.Context,
-	log logr.Logger,
 	hash common.Hash,
 	receipt *types.Receipt,
 	confirmations uint64,
@@ -1803,6 +1803,7 @@ func (m *Manager) waitForConfirmations(
 	if confirmations == 0 {
 		return receipt, nil
 	}
+	log := observability.Log(ctx)
 	ticker := time.NewTicker(m.cfg.PollInterval)
 	defer ticker.Stop()
 

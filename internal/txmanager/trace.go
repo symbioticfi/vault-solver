@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ethereum/go-ethereum/common"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
@@ -25,13 +26,29 @@ func startSendSpan(ctx context.Context, req Request) (context.Context, trace.Spa
 	))
 }
 
+// resultAttrs describes a terminal result. A request that never reached the wire has no hash, and
+// the zero hash would read as a real one, so it is left off entirely.
+func resultAttrs(res Result) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{observability.AttrTxOutcome.String(string(res.Outcome))}
+	if res.Hash != (common.Hash{}) {
+		attrs = append(attrs, observability.AttrTxHash.String(res.Hash.Hex()))
+	}
+	return attrs
+}
+
+// RecordResult stamps a send's outcome (and its hash, when it has one) on the span of every given
+// context — typically the submission stage and the pass it belongs to.
+func RecordResult(res Result, ctxs ...context.Context) {
+	attrs := resultAttrs(res)
+	for _, ctx := range ctxs {
+		observability.SetAttributes(ctx, attrs...)
+	}
+}
+
 // endSendSpan closes a send span with the request's terminal result. Outcomes that mean the call did
 // not execute as asked are errors; an inclusion the manager could not fully confirm is not.
 func endSendSpan(span trace.Span, res Result) {
-	span.SetAttributes(observability.AttrTxOutcome.String(string(res.Outcome)))
-	if res.Hash != (common.Hash{}) {
-		span.SetAttributes(observability.AttrTxHash.String(res.Hash.Hex()))
-	}
+	span.SetAttributes(resultAttrs(res)...)
 	switch res.Outcome {
 	case OutcomeReverted, OutcomeCancelled, OutcomeSubmissionError, OutcomeTrackingStopped:
 		message := string(res.Outcome)
