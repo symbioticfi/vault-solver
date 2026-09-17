@@ -137,9 +137,12 @@ type pendingTransaction struct {
 	obsolescenceReads readStreak
 	result            chan<- Result
 	resultOnce        sync.Once
-	cancelDeadline    time.Time
-	cancelRequested   chan struct{}
-	cancelOnce        sync.Once
+	// span is the caller's send span, so the shutdown drain can end it with the result it hands
+	// the caller rather than leaving that to a complete that may conclude differently.
+	span            trace.Span
+	cancelDeadline  time.Time
+	cancelRequested chan struct{}
+	cancelOnce      sync.Once
 }
 
 type txAttempt struct {
@@ -819,6 +822,7 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 			hash: hash, tx: signed, exactRebroadcastPending: broadcastUncertain,
 		}},
 		originalHash: hash,
+		span:         sendSpan,
 	}, nil
 }
 
@@ -842,11 +846,18 @@ func (m *Manager) complete(ctx context.Context, pending *pendingTransaction) {
 	pending.deliver(outcome)
 }
 
-func (pending *pendingTransaction) deliver(result Result) {
+// deliver hands the caller its one terminal result and reports whether this call was the one that
+// delivered it. Every later result is dropped, so only the winner describes what the caller acted on.
+func (pending *pendingTransaction) deliver(result Result) bool {
 	if pending.result == nil {
-		return
+		return false
 	}
-	pending.resultOnce.Do(func() { pending.result <- result })
+	delivered := false
+	pending.resultOnce.Do(func() {
+		pending.result <- result
+		delivered = true
+	})
+	return delivered
 }
 
 func (m *Manager) confirmations(req Request) uint64 {
@@ -1414,13 +1425,20 @@ func (m *Manager) deliverActiveShutdownTimeout() {
 	m.unminedMu.Lock()
 	pending := m.unmined
 	m.unminedMu.Unlock()
-	if pending != nil {
-		pending.deliver(Result{
-			Hash:    pending.originalHash,
-			Outcome: OutcomeTrackingStopped,
-			Err:     errShutdownTimeout,
-		})
+	if pending == nil {
+		return
 	}
+	result := Result{
+		Hash:    pending.originalHash,
+		Outcome: OutcomeTrackingStopped,
+		Err:     errShutdownTimeout,
+	}
+	if !pending.deliver(result) || pending.span == nil {
+		return
+	}
+	// The caller acted on this result, so the span reports it too. complete ends the span again
+	// with whatever its own wait concluded; the SDK ignores that second end.
+	endSendSpan(pending.span, result)
 }
 
 func requestCancellation(pending *pendingTransaction) {
