@@ -7,7 +7,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
@@ -196,29 +195,16 @@ func (s *Solver) pollSource(
 // trackOrder spans an accepted order from claim to enqueue, links it back to the quote that won it
 // (spec §12), and rides its span context on the order so the fill continues this trace.
 func (s *Solver) trackOrder(ctx context.Context, order *resolvedOrder, out chan<- *resolvedOrder) (err error) {
-	attrs := []attribute.KeyValue{
+	ctx, end, quoteTraceID := tracer.StartLinkedKey(ctx, s.links, order.QuoteID, "uniswapx.order.track",
 		observability.AttrOrderHash.String(order.Hash.Hex()),
 		observability.AttrQuoteID.String(order.QuoteID),
-	}
-	var links []trace.Link
-	if link, ok := s.quoteLink(order.QuoteID); ok {
-		links = append(links, link)
-		attrs = append(attrs, observability.AttrQuoteTraceID.String(link.SpanContext.TraceID().String()))
-	}
-	ctx, end := tracer.StartLinked(ctx, "uniswapx.order.track", links, attrs...)
+	)
 	defer func() { end(err) }()
 
-	if len(links) > 0 {
-		order.quoteTraceID = links[0].SpanContext.TraceID().String()
-	} else {
-		// Best effort (spec §12): the quote span is gone — restart, eviction, or it was never ours.
-		// The fill proceeds identically; only the link is lost.
-		trace.SpanFromContext(ctx).AddEvent("link_miss",
-			trace.WithAttributes(attribute.String("key", order.QuoteID)))
-	}
+	// The fill runs on a context rebuilt from order.span, where the linked trace cannot be
+	// recovered from the span alone, so the order carries it.
+	order.quoteTraceID = quoteTraceID
 	order.span = trace.SpanContextFromContext(ctx)
-	// The narrowed base logger, never a trace-stamped one: Log stamps each stage's own span.
-	ctx = observability.WithLogger(ctx, s.orderLogger(order))
 	observability.Log(ctx).V(1).Info(
 		"order queued for fill",
 		"source", order.Source,
@@ -246,6 +232,12 @@ func (s *Solver) orderLogger(order *resolvedOrder) logr.Logger {
 		return s.log
 	}
 	return s.log.WithValues("quoteTraceId", order.quoteTraceID)
+}
+
+// orderContext rebuilds the context one accepted order's fill runs on: its track span, so the fill
+// continues that trace, and the order's quote-linked logger, so every line below carries both.
+func (s *Solver) orderContext(ctx context.Context, order *resolvedOrder) context.Context {
+	return observability.WithLogger(trace.ContextWithSpanContext(ctx, order.span), s.orderLogger(order))
 }
 
 func (s *Solver) recordExclusivePollSuccess(now time.Time) {

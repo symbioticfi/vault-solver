@@ -8,8 +8,6 @@ import (
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
-	"github.com/go-logr/logr"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
 	uxexecutor "github.com/symbioticfi/vault-solver/api/bindings/uniswapx/executor"
@@ -78,11 +76,7 @@ func (s *Solver) fillLoop(
 				orders = nil
 				continue
 			}
-			// The order's track span and quote-linked logger, so every admission line below and
-			// every line the fill logs carries this order's trace ids.
-			orderCtx := observability.WithLogger(
-				trace.ContextWithSpanContext(ctx, order.span), s.orderLogger(order),
-			)
+			orderCtx := s.orderContext(ctx, order)
 			if shutdownErr != nil || ctx.Err() != nil {
 				if shutdownErr == nil {
 					shutdownErr = ctx.Err()
@@ -165,7 +159,7 @@ func (s *Solver) startFill(
 	now time.Time,
 	chainObservedAt time.Time,
 ) (fill *pendingUniswapFill, err error) {
-	ctx, end := tracer.Start(trace.ContextWithSpanContext(ctx, order.span), "uniswapx.fill",
+	ctx, end := tracer.Start(ctx, "uniswapx.fill",
 		observability.AttrOrderHash.String(order.Hash.Hex()),
 		observability.AttrQuoteID.String(order.QuoteID),
 	)
@@ -272,7 +266,7 @@ func (s *Solver) startFill(
 		return nil, errors.Errorf("strategy returned invalid fill plan: %w", err)
 	}
 	plan.Routes = validatedRoutes
-	s.logFillPlan(observability.Log(ctx), order, plan)
+	s.logFillPlan(ctx, order, plan)
 	reservations, ok := liquidstrategies.FillRouteReservations(plan.Routes)
 	if !ok {
 		return nil, errors.New("strategy returned invalid capacity reservations")
@@ -472,7 +466,8 @@ func findRoute(routes []liquidlane.Route, id liquidlane.RouteID) (liquidlane.Rou
 	return liquidlane.Route{}, false
 }
 
-func (s *Solver) logFillPlan(log logr.Logger, order *resolvedOrder, plan *strategytypes.FillPlan) {
+func (s *Solver) logFillPlan(ctx context.Context, order *resolvedOrder, plan *strategytypes.FillPlan) {
+	log := observability.Log(ctx)
 	discountRoutes := 0
 	for index, route := range plan.Routes {
 		if route.DiscountID != nil {
@@ -511,14 +506,11 @@ func (s *Solver) logFillPlan(log logr.Logger, order *resolvedOrder, plan *strate
 // the fill span the submission opened.
 func (s *Solver) completePendingFill(ctx context.Context, completion uniswapFillCompletion) {
 	order := completion.fill.order
-	txAttrs := []attribute.KeyValue{observability.AttrTxOutcome.String(string(completion.result.Outcome))}
-	if completion.result.Hash != (common.Hash{}) { // a request that never reached the wire has no hash
-		txAttrs = append(txAttrs, observability.AttrTxHash.String(completion.result.Hash.Hex()))
-	}
 	// The fill span this result belongs to, plus the order's quote-linked logger.
 	fillCtx := observability.WithLogger(completion.fill.traceContext(ctx), s.orderLogger(order))
-	observability.SetAttributes(fillCtx, txAttrs...) // the fill span this result belongs to
-	ctx, end := tracer.Start(fillCtx, "uniswapx.fill.complete", txAttrs...)
+	txmanager.RecordResult(fillCtx, completion.result)
+	ctx, end := tracer.Start(fillCtx, "uniswapx.fill.complete")
+	txmanager.RecordResult(ctx, completion.result)
 	var err error
 	// Deferred so both spans end on every path, including a panic; ending twice is a no-op.
 	defer func() {

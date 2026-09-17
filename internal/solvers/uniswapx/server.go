@@ -143,9 +143,7 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// Remember the served quote so the fill that wins it can link back to this trace (spec §12).
 	// Indicative and hard quotes share a request shape, so both are remembered; the later wins.
-	if s.links != nil {
-		s.links.Remember(r.Context(), request.QuoteID, quoteLinkTTL)
-	}
+	s.links.Remember(r.Context(), request.QuoteID, quoteLinkTTL)
 }
 
 // declineQuoteRequest answers a malformed body. The caller is at fault, so the server span records a

@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"time"
 
-	"go.opentelemetry.io/otel/trace"
-
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
@@ -24,13 +22,4 @@ func uniswapxRoute(r *http.Request) string {
 		return r.URL.Path
 	}
 	return "other"
-}
-
-// quoteLink returns the span of the quote this order came from, when it is still remembered. A miss
-// is an ordinary result: linking is best effort and never changes what the fill does (spec §12).
-func (s *Solver) quoteLink(quoteID string) (trace.Link, bool) {
-	if s.links == nil {
-		return trace.Link{}, false
-	}
-	return s.links.Lookup(quoteID)
 }
