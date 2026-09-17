@@ -32,6 +32,9 @@ func TestNewTracingDisabledInstallsPropagatorOnly(t *testing.T) {
 	if enabled {
 		t.Fatal("expected tracing disabled")
 	}
+	if TracingEnabled() {
+		t.Fatal("no provider installed, so the package must stay off")
+	}
 	if _, ok := otel.GetTextMapPropagator().(interface{ Fields() []string }); !ok {
 		t.Fatal("propagator not installed")
 	}
@@ -47,10 +50,14 @@ func TestNewTracingEnabledRegistersProvider(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_ENABLED", "true")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1") // never reached; batcher exports async
 	prev := otel.GetTracerProvider()
-	t.Cleanup(func() { otel.SetTracerProvider(prev); InvalidateTracers() })
+	wasEnabled := TracingEnabled()
+	t.Cleanup(func() { otel.SetTracerProvider(prev); InvalidateTracers(); SetEnabled(wasEnabled) })
 	shutdown, enabled := NewTracing(t.Context(), Tracing{Name: "test", Version: "v", Commit: "c", Solvers: []string{"rfq"}, ChainID: 1}, logr.Discard())
 	if !enabled {
 		t.Fatal("expected tracing enabled")
+	}
+	if !TracingEnabled() {
+		t.Fatal("installing a provider must switch the package on")
 	}
 	_, span := otel.Tracer("x").Start(t.Context(), "probe")
 	if !span.SpanContext().IsValid() || !span.IsRecording() {

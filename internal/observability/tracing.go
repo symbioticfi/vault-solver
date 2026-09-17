@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"github.com/go-logr/logr"
 	"go.opentelemetry.io/otel"
@@ -26,6 +27,21 @@ type Tracing struct {
 }
 
 const defaultServiceName = "vault-solver"
+
+// enabled reports whether a real TracerProvider is installed. The default deployment runs with
+// tracing off and must pay nothing for it, so while this is false spans are not started at all and
+// the HTTP middleware is not installed. The cost is that a disabled process no longer continues an
+// inbound traceparent or stamps trace ids on its logs (see docs/TRACING-PLAN.md §3).
+var enabled atomic.Bool
+
+// SetEnabled records whether tracing is on and returns the previous value. NewTracing sets it
+// alongside the provider it installs; the tracetest helper sets it around a recording provider and
+// restores it on cleanup.
+func SetEnabled(on bool) bool { return enabled.Swap(on) }
+
+// TracingEnabled reports whether tracing is on, for the few call sites that would otherwise build
+// tracing-only values before any span exists.
+func TracingEnabled() bool { return enabled.Load() }
 
 // NewTracing installs the W3C propagator and, when OTEL_EXPORTER_ENABLED is truthy, an OTLP/HTTP
 // exporting TracerProvider configured from the standard OTEL_* environment. It never fails startup:
@@ -68,6 +84,7 @@ func NewTracing(ctx context.Context, info Tracing, log logr.Logger) (func(contex
 	)
 	otel.SetTracerProvider(provider)
 	InvalidateTracers()
+	SetEnabled(true)
 	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
 		log.Info("tracing export error", "err", err.Error())
 	}))

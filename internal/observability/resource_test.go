@@ -17,7 +17,8 @@ func TestNewTracingResourceDescribesProcessAndSDK(t *testing.T) {
 	t.Setenv("OTEL_EXPORTER_ENABLED", "true")
 	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:1") // never reached; batcher exports async
 	prev := otel.GetTracerProvider()
-	t.Cleanup(func() { otel.SetTracerProvider(prev); InvalidateTracers() })
+	wasEnabled := TracingEnabled()
+	t.Cleanup(func() { otel.SetTracerProvider(prev); InvalidateTracers(); SetEnabled(wasEnabled) })
 	shutdown, enabled := NewTracing(t.Context(), Tracing{
 		Name: "test", Version: "v1.2.3", Commit: "abc123", Solvers: []string{"rfq", "lifi"}, ChainID: 1,
 	}, logr.Discard())

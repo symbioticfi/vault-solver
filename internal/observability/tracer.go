@@ -39,6 +39,9 @@ const (
 // EndFunc ends a span, recording err when non-nil. Safe to call more than once; later calls are no-ops.
 type EndFunc func(err error)
 
+// noopEnd is what every Start returns while tracing is disabled, so that path allocates nothing.
+var noopEnd EndFunc = func(error) {}
+
 // tracerGeneration counts the TracerProviders installed in this process. Every Tracer caches the
 // tracer it resolved together with the generation it saw, so a span start costs no lock, and a new
 // provider invalidates every cache at once.
@@ -115,6 +118,9 @@ func (t *Tracer) start(
 	extra []trace.SpanStartOption,
 	attrs []attribute.KeyValue,
 ) (context.Context, EndFunc) {
+	if !enabled.Load() {
+		return ctx, noopEnd
+	}
 	// Clip so an append never writes into the precomputed slice two goroutines share.
 	opts := slices.Clip(t.opts)
 	if len(extra) > 0 {
@@ -140,6 +146,9 @@ func (t *Tracer) start(
 func (t *Tracer) StartLinkedKey(
 	ctx context.Context, links *SpanLinks, key, name string, attrs ...attribute.KeyValue,
 ) (context.Context, EndFunc, string) {
+	if !enabled.Load() {
+		return ctx, noopEnd, ""
+	}
 	var (
 		traceID string
 		linked  []trace.Link

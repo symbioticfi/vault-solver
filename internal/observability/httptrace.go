@@ -15,7 +15,12 @@ import (
 // TraceHandler extracts W3C trace context from inbound requests and wraps next in a server span
 // named "<METHOD> <route>". route must return a bounded label, never the raw path. Probe and docs
 // paths produce no span.
+// With tracing disabled the handler is not wrapped at all: otelhttp costs a span's worth of work on
+// every request even against a no-op provider, and the default deployment must not pay it.
 func TraceHandler(next http.Handler, route func(*http.Request) string) http.Handler {
+	if !enabled.Load() {
+		return next
+	}
 	return otelhttp.NewHandler(next, "http.server",
 		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
 			return r.Method + " " + route(r)
@@ -35,9 +40,13 @@ func isProbePath(p string) bool {
 // TraceTransport wraps base (nil means http.DefaultTransport) so every request runs in a client span
 // named "<peer> <METHOD>" and carries traceparent. peer is a short integration name, never a URL.
 // The recorded url.full never carries the query string (see redactURL).
+// With tracing disabled base is returned unwrapped, for the same reason TraceHandler does not wrap.
 func TraceTransport(base http.RoundTripper, peer string) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport
+	}
+	if !enabled.Load() {
+		return base
 	}
 	return otelhttp.NewTransport(redactURL{base: base},
 		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
@@ -55,17 +64,22 @@ type redactURL struct{ base http.RoundTripper }
 
 func (t redactURL) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.URL != nil && req.URL.RawQuery != "" {
-		redacted := *req.URL
-		redacted.RawQuery = ""
-		redacted.User = nil
-		trace.SpanFromContext(req.Context()).
-			SetAttributes(attribute.String("url.full", redacted.String()))
+		if span := trace.SpanFromContext(req.Context()); span.IsRecording() {
+			redacted := *req.URL
+			redacted.RawQuery = ""
+			redacted.User = nil
+			span.SetAttributes(attribute.String("url.full", redacted.String()))
+		}
 	}
 	return t.base.RoundTrip(req)
 }
 
 // InjectTraceHeaders writes ctx's W3C trace context into h, so a connection that is not an
-// http.Client request (a websocket handshake, an RPC dial) still continues the trace.
+// http.Client request (a websocket handshake, an RPC dial) still continues the trace. With tracing
+// disabled there is nothing to continue and nothing is written.
 func InjectTraceHeaders(ctx context.Context, h http.Header) {
+	if !enabled.Load() {
+		return
+	}
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(h))
 }

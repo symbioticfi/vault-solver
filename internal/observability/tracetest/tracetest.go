@@ -30,6 +30,7 @@ func Install(tb testing.TB) *tracetest.SpanRecorder {
 	prevPropagator := otel.GetTextMapPropagator()
 	otel.SetTracerProvider(provider)
 	observability.InvalidateTracers()
+	wasEnabled := observability.SetEnabled(true)
 	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
 		propagation.TraceContext{}, propagation.Baggage{},
 	))
@@ -39,6 +40,7 @@ func Install(tb testing.TB) *tracetest.SpanRecorder {
 		_ = provider.Shutdown(context.Background())
 		otel.SetTracerProvider(prevProvider)
 		observability.InvalidateTracers()
+		observability.SetEnabled(wasEnabled)
 		otel.SetTextMapPropagator(prevPropagator)
 	})
 	return recorder

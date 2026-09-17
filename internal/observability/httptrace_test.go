@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
@@ -134,5 +135,89 @@ func TestTraceTransportKeepsQueryOutOfSpanURL(t *testing.T) {
 	}
 	if full != srv.URL+"/hook" {
 		t.Fatalf("url.full = %q, want %q", full, srv.URL+"/hook")
+	}
+}
+
+// With tracing disabled the middleware is not installed at all, so an inbound traceparent is not
+// continued and no span reaches the handler. That is the deliberate trade-off for a default
+// deployment that pays nothing for tracing (docs/TRACING-PLAN.md section 3).
+func TestTraceHandlerDisabledStartsNoSpan(t *testing.T) {
+	requireW3CPropagator(t)
+	var seen trace.SpanContext
+	h := observability.TraceHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = trace.SpanContextFromContext(r.Context())
+		w.WriteHeader(http.StatusNoContent)
+	}), func(*http.Request) string { return "/quote" })
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/quote", nil)
+	req.Header.Set("traceparent", parentTraceparent)
+
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	if seen.IsValid() {
+		t.Fatalf("disabled handler put a span context on the request: %v", seen)
+	}
+}
+
+// The outbound side of the same trade-off: no client span, and no traceparent on the wire.
+func TestTraceTransportDisabledSendsNoTraceparent(t *testing.T) {
+	requireW3CPropagator(t)
+	var sent http.Header
+	rt := observability.TraceTransport(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		sent = req.Header.Clone()
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+	}), "peer")
+
+	resp, err := rt.RoundTrip(httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://peer.invalid/v1/quote", nil))
+	if err != nil {
+		t.Fatalf("round trip: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if got := sent.Get("traceparent"); got != "" {
+		t.Fatalf("disabled transport sent traceparent %q", got)
+	}
+}
+
+// requireW3CPropagator mirrors NewTracing, which installs the propagator even when it leaves tracing
+// disabled: it is the middleware, not the propagator, that the disabled path drops.
+func requireW3CPropagator(t *testing.T) {
+	t.Helper()
+	previous := otel.GetTextMapPropagator()
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() { otel.SetTextMapPropagator(previous) })
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+// The default deployment runs with tracing off, so the middleware on the quote path and on every
+// outbound client call must cost nothing there.
+func BenchmarkTraceHandlerDisabled(b *testing.B) {
+	h := observability.TraceHandler(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }),
+		func(*http.Request) string { return "/quote" },
+	)
+	req := httptest.NewRequestWithContext(b.Context(), http.MethodPost, "/quote", nil)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		h.ServeHTTP(httptest.NewRecorder(), req)
+	}
+}
+
+func BenchmarkTraceTransportDisabled(b *testing.B) {
+	rt := observability.TraceTransport(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("")), Request: req}, nil
+	}), "peer")
+	req := httptest.NewRequestWithContext(b.Context(), http.MethodGet, "http://peer.invalid/v1/quote?token=secret", nil)
+
+	b.ReportAllocs()
+	for b.Loop() {
+		resp, err := rt.RoundTrip(req)
+		if err != nil {
+			b.Fatal(err)
+		}
+		_ = resp.Body.Close()
 	}
 }

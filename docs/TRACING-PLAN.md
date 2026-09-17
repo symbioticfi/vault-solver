@@ -60,13 +60,21 @@ not a trace id, which is why §6 links quotes to fills solver-side.
 
 `observability.NewTracing(ctx, info, log) (shutdown, enabled)` runs in `cmd/vault-solver/run.go` right
 after the logger is built, and **never fails startup**. It always installs the composite W3C
-`TraceContext` + `Baggage` propagator, so even with tracing disabled an inbound `traceparent` is
-carried through the context, forwarded on outbound calls and stamped on logs, while nothing is
-recorded or exported. When the switch is truthy it builds an OTLP/HTTP exporter and a batching
+`TraceContext` + `Baggage` propagator. When the switch is truthy it builds an OTLP/HTTP exporter and a batching
 `TracerProvider` from the environment and registers it globally; an exporter or resource failure is
 logged at Error and tracing simply stays disabled. `otel.SetErrorHandler` logs export failures at
 Info, so a dead collector is visible without paging. The startup line carries `tracing: true|false`.
 Shutdown flushes on a fresh 5 s context after the solvers and txmanager have drained.
+
+`NewTracing` also records the switch in a package-level flag that every entry point reads. **With
+tracing disabled the package does nothing at all**: `Start` returns the context unchanged with a
+shared no-op end, `TraceHandler` returns the handler it was given and `TraceTransport` the transport,
+and `InjectTraceHeaders` writes nothing. The deliberate trade-off is that a disabled process **no
+longer passes an inbound `traceparent` through**, forwards it on outbound calls, or stamps trace ids
+on its logs, which the previous no-op-provider design did. The default deployment runs with tracing
+off and must pay nothing for it: instrumenting the disabled path cost 38 allocations per inbound
+`/quote` request and 26 per outbound client call (§7). A deployment that wants context propagated
+turns tracing on.
 
 ### 3.2 The tracer wrapper
 
@@ -426,18 +434,23 @@ Tracing must never slow down or break a quote, a fill or a transaction.
   `otel.SetErrorHandler` Info log; no tracing error is ever returned into solver code.
 - **Startup never fails because of tracing.** A bad `OTEL_*` value logs at Error and leaves tracing
   disabled; the bot starts and runs exactly as without it.
-- **Disabled means near-zero cost.** The global provider stays the no-op one: `Start` returns a
-  non-recording span, `end` is a no-op, the `otelhttp` wrappers create non-recording spans, and the
-  only residual work is the W3C header parse on inbound requests and `Log(ctx)` reading the context's
-  logger, which adds two fields only when a remote context is present. Measured on the
-  `internal/observability` benchmarks (`-benchtime 2000x`, amd64):
+- **Disabled means free, not cheap.** Every entry point reads the enablement flag first and returns:
+  `Start` hands back the caller's context and a shared no-op end, the HTTP middleware is not
+  installed, header injection writes nothing, and `beginTrace` builds no RPC span. Nothing calls into
+  otel at all, so the disabled path allocates nothing beyond what the uninstrumented code allocates.
+  Measured on the `internal/observability` benchmarks (`-benchtime 20000x`, amd64, each run alone):
 
   | | before | after |
   |---|---|---|
-  | `Start`+`end`, tracing disabled | 140 ns, 152 B, 5 allocs | 108 ns, 96 B, 3 allocs |
+  | `Start`+`end`, tracing disabled | 149 ns, 96 B, 3 allocs | 4.5 ns, 0 B, 0 allocs |
+  | `TraceHandler` request, tracing disabled | 6.3 µs, 2731 B, 38 allocs | 300 ns, 208 B, 4 allocs |
+  | `TraceTransport` call, tracing disabled | 5.7 µs, 2914 B, 25 allocs | 140 ns, 192 B, 3 allocs |
   | `Log(ctx)` under a span | 170 ns, 144 B, 5 allocs | 22 ns, 0 B, 0 allocs |
 
-  The span-start options are precomputed per `Tracer` and appended only when there are attributes or
+  The residual handler and transport figures are what the bare `http.Handler` and `http.RoundTripper`
+  cost in the same benchmark, so the wrappers themselves are free. The trade-off is in §3.1: a
+  disabled process no longer propagates or logs an inbound trace context. With tracing on, the
+  span-start options are precomputed per `Tracer` and appended only when there are attributes or
   links; `Log(ctx)` is free after the first line under a span because the stamp is memoised.
 - **Enabled cost is bounded and off-path.** Span start and end cost a few microseconds — the
   `internal/observability` benchmark measures the no-op and the recording path, sequentially and

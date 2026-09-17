@@ -32,9 +32,14 @@ type rpcRequestTrace struct {
 	end  observability.EndFunc
 }
 
+// beginTrace opens the span for one logical request. With tracing disabled it builds nothing: the
+// nil trace it returns absorbs the attempt and finish calls on the hot RPC path.
 func (t *fallbackTransport) beginTrace(
 	ctx context.Context, request rpcRequestInfo,
 ) (context.Context, *rpcRequestTrace) {
+	if !observability.TracingEnabled() {
+		return ctx, nil
+	}
 	ctx, end := rpcTracer.StartKind(ctx, request.boundedMethod, trace.SpanKindClient,
 		attribute.String("rpc.system", "jsonrpc"),
 		attribute.String("rpc.method", request.boundedMethod),
@@ -47,7 +52,7 @@ func (t *fallbackTransport) beginTrace(
 
 // attempt records one endpoint attempt. endpoint is the role-local ordinal, never a URL.
 func (tr *rpcRequestTrace) attempt(endpoint string, outcome rpcOutcome) {
-	if !tr.span.IsRecording() {
+	if tr == nil || !tr.span.IsRecording() {
 		return
 	}
 	tr.span.AddEvent("attempt", trace.WithAttributes(
@@ -60,6 +65,9 @@ func (tr *rpcRequestTrace) attempt(endpoint string, outcome rpcOutcome) {
 // bounded label and the per-endpoint errors are on the attempt events, so the status is set from it
 // directly and the shared end policy only closes the span. Repeat calls are no-ops.
 func (tr *rpcRequestTrace) finish(outcome rpcOutcome) {
+	if tr == nil {
+		return
+	}
 	if outcome != rpcOutcomeSuccess {
 		tr.span.SetStatus(codes.Error, string(outcome))
 	}

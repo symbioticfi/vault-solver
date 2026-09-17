@@ -1043,6 +1043,9 @@ func TestOrderProcessSpanSurvivesInboxRetry(t *testing.T) {
 	if len(retries) != 1 {
 		t.Fatalf("recovery retries = %d, want the failed order", len(retries))
 	}
+	// The inbox drops the delivered order's key only just after handing it to the worker, and the
+	// worker can reach the retry first; re-enqueueing before that is coalesced away as a replay.
+	waitForInboxDelivery(t, inbox)
 	if err := inbox.enqueueWait(ctx, retries[0]); err != nil {
 		t.Fatalf("re-enqueue recovery retry: %v", err)
 	}
@@ -1068,4 +1071,19 @@ func TestOrderProcessSpanSurvivesInboxRetry(t *testing.T) {
 			t.Fatalf("%s span parent = %s, want the process span %s", stage, got, want)
 		}
 	}
+}
+
+// waitForInboxDelivery blocks until the inbox has finished handing every queued order to the worker.
+func waitForInboxDelivery(t *testing.T, inbox *orderInbox) {
+	t.Helper()
+	for range 2000 {
+		inbox.mu.Lock()
+		delivered := len(inbox.queued) == 0
+		inbox.mu.Unlock()
+		if delivered {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("inbox did not finish delivering the order")
 }
