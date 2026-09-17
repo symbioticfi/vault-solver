@@ -10,6 +10,8 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/gorilla/websocket"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 // wsConfig tunes the resilient WS client. Timings default to the RedStone example client's values
@@ -93,6 +95,10 @@ func (w *wsClient) Send(frame []byte) bool {
 
 // Run connects and serves until ctx is cancelled, reconnecting with jittered exponential backoff.
 func (w *wsClient) Run(ctx context.Context) error {
+	// The client's logger is narrower than the solver's; carry it so the connection lines below log
+	// through it and pick up the trace ids of whatever span they run in.
+	ctx = observability.WithLogger(ctx, w.log)
+
 	backoff := w.cfg.BackoffInitial
 	for {
 		start := time.Now()
@@ -101,7 +107,7 @@ func (w *wsClient) Run(ctx context.Context) error {
 			return ctx.Err()
 		}
 		if err != nil {
-			w.log.Error(err, "ws connection ended; reconnecting")
+			observability.Log(ctx).Error(err, "ws connection ended; reconnecting")
 		}
 		// Reset backoff if the last connection was healthy for a while.
 		if time.Since(start) > w.cfg.BackoffMax {
@@ -123,14 +129,11 @@ func (w *wsClient) Run(ctx context.Context) error {
 func (w *wsClient) serveOnce(ctx context.Context) error {
 	// A failed dial or subscription must leave the client visibly disconnected throughout backoff.
 	w.onConnectionState(false)
-	conn, resp, err := w.dialer.DialContext(ctx, w.cfg.URL, w.header)
-	if resp != nil && resp.Body != nil {
-		_ = resp.Body.Close() // handshake response body; not used
-	}
+	conn, err := w.dial(ctx)
 	if err != nil {
-		return errors.Errorf("dial %s: %w", w.cfg.URL, err)
+		return err
 	}
-	w.log.Info("connected", "url", w.cfg.URL)
+	observability.Log(ctx).Info("connected", "url", w.cfg.URL)
 
 	// Drop any solves buffered during the downtime: a solve targets one auction (~400ms life), so
 	// anything still queued after a reconnect is stale. Start each connection with a clean send queue.
@@ -147,7 +150,7 @@ func (w *wsClient) serveOnce(ctx context.Context) error {
 		}
 	}
 	w.onConnectionState(true)
-	w.log.Info("subscribed", "topics", w.cfg.Topics)
+	observability.Log(ctx).Info("subscribed", "topics", w.cfg.Topics)
 
 	errCh := make(chan error, 2)
 	var wg sync.WaitGroup
@@ -170,6 +173,25 @@ func (w *wsClient) serveOnce(ctx context.Context) error {
 	_ = conn.Close()
 	wg.Wait()
 	return retErr
+}
+
+// dial opens one connection under an oev.feed.connect span and injects the trace context into a copy
+// of the handshake headers, so the connection itself is findable in the trace backend (spec §6.4). The
+// shared header is copied rather than written to: every dial carries its own traceparent.
+func (w *wsClient) dial(ctx context.Context) (conn *websocket.Conn, err error) {
+	ctx, end := tracer.Start(ctx, "oev.feed.connect")
+	defer func() { end(err) }()
+
+	header := w.header.Clone()
+	observability.InjectTraceHeaders(ctx, header)
+	conn, resp, err := w.dialer.DialContext(ctx, w.cfg.URL, header)
+	if resp != nil && resp.Body != nil {
+		_ = resp.Body.Close() // handshake response body; not used
+	}
+	if err != nil {
+		return nil, errors.Errorf("dial %s: %w", w.cfg.URL, err)
+	}
+	return conn, nil
 }
 
 // readPump reads frames, extends the read deadline on each, dispatches to onMsg, and answers server
@@ -226,7 +248,7 @@ func (w *wsClient) writePump(ctx context.Context, conn *websocket.Conn, errCh ch
 				return
 			}
 		case <-rotate.C:
-			w.log.Info("rotating connection before server cutoff")
+			observability.Log(ctx).Info("rotating connection before server cutoff")
 			w.nonblockErr(errCh, errors.New("rotate"))
 			return
 		}

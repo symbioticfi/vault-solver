@@ -42,7 +42,7 @@ func TestCancellationDuringFeeReadDoesNotImmediatelyBumpAgain(t *testing.T) {
 				}
 				manager.trackUnminedTransaction(pending)
 				backend.blockNextFeeRead = true
-				ctx, cancel := context.WithCancel(t.Context())
+				ctx, cancel := context.WithCancel(managerCtx(t.Context(), manager))
 				defer cancel()
 				result := make(chan Result, 1)
 				go func() { result <- manager.waitForPendingTransaction(ctx, pending) }()

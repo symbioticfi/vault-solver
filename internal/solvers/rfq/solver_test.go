@@ -10,6 +10,8 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 func TestRunExternalFailsForUnauthorizedConfiguredAdapter(t *testing.T) {
@@ -27,7 +29,7 @@ func TestRunExternalFailsForUnauthorizedConfiguredAdapter(t *testing.T) {
 		log:  funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
 	}
 
-	err := s.Run(t.Context())
+	err := s.Run(observability.WithLogger(t.Context(), s.log))
 	if err == nil || !strings.Contains(err.Error(), "rfq: validate direct authorization: adapter is not authorized") {
 		t.Fatalf("Run() error = %v, want direct authorization startup failure", err)
 	}

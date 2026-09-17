@@ -175,6 +175,15 @@ recovery. A successful RPC is not evidence of mined inclusion. Grouping/log tran
 Gas-estimation and receipt-revert logs omit calldata and simulator URLs to avoid copying transaction
 authorizations into logs or Sentry; receipt-revert diagnostics retain the hash, label and nonce.
 
+Each request runs under a `txmanager.send <label>` span opened in `sendAsync` from the caller's
+context, so it is a child of the submitting fill span and covers the admission wait as well as the
+broadcast. The worker carries that span on its own contexts, so it survives the manager's deliberate
+detachment from the caller, and ends it with the terminal `tx.outcome` before the result is delivered.
+Children are `txmanager.broadcast` and one `txmanager.replace` per replacement; account polls root
+`txmanager.account_poll`. The per-request logger is derived from the send span, so every lifecycle
+line carries `trace_id`. Spans, attributes, and the propagation rules are specified in
+[TRACING-PLAN](TRACING-PLAN.md) §3.4–§4.
+
 An active manager refreshes balance, latest nonce and pending nonce into one complete snapshot. Failed
 refreshes retain the previous snapshot; account gauges are absent before first success. A locked
 collector exports a scrape-consistent view. An external-only process exposes no txmanager account series.

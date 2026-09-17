@@ -92,7 +92,9 @@ func TestParseOrderMessageIgnoresDutchAuctions(t *testing.T) {
 				chainID: 11155111,
 				log:     funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
 			}
-			if order := solver.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: raw}); order != nil {
+			if order, _ := solver.parseOrderMessage(
+				solverContext(t, solver), orderMessage{Event: orderSubmitEvent, Data: raw},
+			); order != nil {
 				t.Fatalf("parseOrderMessage() = %+v, want ignored order", order)
 			}
 			logged := strings.Join(logs, "\n")
@@ -123,7 +125,9 @@ func TestParseOrderMessageLogsForeignChainAtInfo(t *testing.T) {
 		chainID: 11155111,
 		log:     funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
 	}
-	if order := solver.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: raw}); order != nil {
+	if order, _ := solver.parseOrderMessage(
+		solverContext(t, solver), orderMessage{Event: orderSubmitEvent, Data: raw},
+	); order != nil {
 		t.Fatalf("parseOrderMessage() = %+v, want ignored order", order)
 	}
 	logged := strings.Join(logs, "\n")
@@ -147,7 +151,9 @@ func TestParseOrderMessageSkipsForeignOutputSettler(t *testing.T) {
 		chainID: 11155111,
 		log:     funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{Verbosity: 1}),
 	}
-	if order := solver.parseOrderMessage(orderMessage{Event: orderSubmitEvent, Data: raw}); order != nil {
+	if order, _ := solver.parseOrderMessage(
+		solverContext(t, solver), orderMessage{Event: orderSubmitEvent, Data: raw},
+	); order != nil {
 		t.Fatalf("parseOrderMessage() = %+v, want ignored order", order)
 	}
 	logged := strings.Join(logs, "\n")
@@ -541,19 +547,13 @@ func TestOrderWorkerMarksTransientFailureForRecovery(t *testing.T) {
 	orders := make(chan *submittedOrder, 1)
 	orders <- order
 	close(orders)
-	type markedRecovery struct {
-		order        *submittedOrder
-		attemptLimit int
-	}
-	marked := make(chan markedRecovery, 1)
+	recovery := &acceptingRecovery{marked: make(chan markedRecovery, 1)}
 
-	if err := solver.runOrderWorker(t.Context(), nil, orders, func(got *submittedOrder, attemptLimit int) {
-		marked <- markedRecovery{order: got, attemptLimit: attemptLimit}
-	}, nil); err != nil {
+	if err := solver.runOrderWorker(t.Context(), nil, orders, recovery, nil); err != nil {
 		t.Fatalf("runOrderWorker: %v", err)
 	}
 	select {
-	case got := <-marked:
+	case got := <-recovery.marked:
 		if got.order != order {
 			t.Fatalf("marked order = %p, want %p", got.order, order)
 		}
@@ -564,6 +564,25 @@ func TestOrderWorkerMarksTransientFailureForRecovery(t *testing.T) {
 		t.Fatal("transient worker failure was not returned to recovery")
 	}
 }
+
+type markedRecovery struct {
+	order        *submittedOrder
+	attemptLimit int
+}
+
+// acceptingRecovery stands in for the inbox: it accepts every re-queue and reports it.
+type acceptingRecovery struct {
+	marked chan markedRecovery
+}
+
+func (r *acceptingRecovery) markRecoveryRetry(order *submittedOrder, attemptLimit int) (uint64, bool) {
+	r.marked <- markedRecovery{order: order, attemptLimit: attemptLimit}
+	return 0, true
+}
+
+func (*acceptingRecovery) requeueDropped(string, uint64) bool { return false }
+
+func (*acceptingRecovery) recoveryResets() <-chan struct{} { return nil }
 
 func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
 	for _, test := range []struct {
@@ -710,7 +729,7 @@ func TestOrderWorkerMetersDepositRetryExpiryFromTimer(t *testing.T) {
 	orders := make(chan *submittedOrder, 1)
 	orders <- order
 	done := make(chan error, 1)
-	go func() { done <- solver.runOrderWorker(t.Context(), nil, orders, nil, nil) }()
+	go func() { done <- solver.runOrderWorker(solverContext(t, solver), nil, orders, nil, nil) }()
 	select {
 	case <-expired:
 	case <-time.After(time.Second):
@@ -1067,7 +1086,7 @@ func TestOrderRecoveryBoundsPersistentWebhookDecodeFailure(t *testing.T) {
 			ctx,
 			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 			orders,
-			inbox.markRecoveryRetry,
+			inbox,
 			nil,
 		)
 	}()
@@ -1230,7 +1249,7 @@ func TestCompleteFillTreatsIncludedTransactionAsSuccess(t *testing.T) {
 	}
 	pending := &pendingFillState{byOrder: map[string]*pendingFill{"order-1": fill}}
 
-	solver.completeFill(pending, fillCompletion{fill: fill, result: txmanager.Result{
+	solver.completeFill(solverContext(t, solver), pending, fillCompletion{fill: fill, result: txmanager.Result{
 		Outcome: txmanager.OutcomeIncludedUnconfirmed,
 		Err:     errors.New("confirmation wait failed"),
 	}})
@@ -1240,4 +1259,73 @@ func TestCompleteFillTreatsIncludedTransactionAsSuccess(t *testing.T) {
 		!strings.Contains(logged, "order fill included but confirmation wait failed") {
 		t.Fatalf("included completion: pending=%d logs=%s", pending.len(), logged)
 	}
+}
+
+// One undecodable listing must not abort the sweep: it is logged, metered and skipped, the healthy
+// orders around it are still recovered, and recovery reaches its end so quoting is ungated.
+func TestOrderRecoverySkipsUndecodableOrder(t *testing.T) {
+	cfg := testLifiConfig()
+	tokenIn := common.HexToAddress("0x6666666666666666666666666666666666666666")
+	tokenOut := common.HexToAddress("0x7777777777777777777777777777777777777777")
+	healthy := testListedOrderJSON(t, cfg, tokenIn, tokenOut, orderStatusSigned)
+	var malformedBody map[string]any
+	if err := json.Unmarshal(healthy, &malformedBody); err != nil {
+		t.Fatalf("unmarshal listed order: %v", err)
+	}
+	malformedBody["inputSettler"] = "not-an-address"
+	mapField(t, malformedBody, "meta")["orderIdentifier"] = "malformed-order"
+	malformed, err := json.Marshal(malformedBody)
+	if err != nil {
+		t.Fatalf("marshal malformed order: %v", err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var orders []json.RawMessage
+		if r.URL.Query().Get("status") == orderStatusSigned {
+			orders = []json.RawMessage{malformed, healthy}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(testListedOrdersPageJSON(t, orders, len(orders), 0))
+	}))
+	defer server.Close()
+
+	registry := prometheus.NewRegistry()
+	metrics, err := newLIFIMetrics(registry, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	solver := &Solver{
+		cfg:     cfg,
+		chainID: 11155111,
+		orders:  newOrderClient(server.URL, "test-key", time.Second, 11155111),
+		log:     logr.Discard(),
+		metrics: metrics,
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	inbox := newOrderInbox(4)
+	inbox.beginRecovery()
+	defer inbox.endRecovery()
+	orders := make(chan *submittedOrder)
+	go func() { _ = inbox.run(ctx, orders) }()
+	var delivered atomic.Int32
+	go func() {
+		for order := range orders {
+			if order.processed != nil {
+				close(order.processed)
+				continue
+			}
+			delivered.Add(1)
+		}
+	}()
+
+	if !solver.recoverOrdersUntilSuccess(ctx, inbox) {
+		t.Fatalf("an undecodable listing aborted the recovery sweep: %v", ctx.Err())
+	}
+	if got := delivered.Load(); got != 1 {
+		t.Fatalf("recovered orders = %d, want the one healthy order", got)
+	}
+	// Parse outcomes count feed observations: the malformed listing is re-read by the second,
+	// converging sweep.
+	metricstest.RequireWorkflowEventCount(t, registry, Name, "order_parse", "invalid", 2)
+	metricstest.RequireExternalOperationCount(t, registry, Name, orderRecoveryOperation, "success", 1)
 }

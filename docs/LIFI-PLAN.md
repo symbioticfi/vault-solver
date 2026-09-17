@@ -101,6 +101,17 @@ shutdown-preparation duration used to bound process-wide transaction draining. R
 | LI.FI order server | external | Standing quotes and matched-order discovery. |
 | OIF settlers | on-chain (LI.FI-owned) | Order lifecycle; **we do not deploy these**. |
 
+**Tracing:** each quote cycle roots its own trace, and each order message roots another. The message's
+span context rides on the queued `submittedOrder` through the inbox and both retry queues, so the
+worker's processing span continues the message's trace even though it runs on the detached work
+context, and one processing span covers an order until it is terminal, retries included. **There is no
+quote-to-fill link here**, unlike RFQ and UniswapX: this solver publishes standing quotes per asset
+pair rather than per request, and the order server assigns the quote id we only learn from the order
+message, so there is no quote event of ours to link back to. The `quote.id` LI.FI reports is recorded
+as an attribute instead.
+Spans and attributes for this solver are specified in [TRACING-PLAN](TRACING-PLAN.md) §5; §6 records
+why this is the one solver without a quote-to-fill link.
+
 ---
 
 ## 3. On-chain contract — `LiquidLaneLifiExecutor`

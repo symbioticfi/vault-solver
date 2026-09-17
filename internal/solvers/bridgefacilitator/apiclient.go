@@ -13,6 +13,7 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 )
 
@@ -35,7 +36,7 @@ func newAPIClient(baseURL string, sgnr signer.Signer, chainID *big.Int, timeout 
 	cfg.Servers = threef.ServerConfigurations{{URL: baseURL}}
 	// Bound every call; the generated client otherwise uses http.DefaultClient (no timeout) and a hung
 	// request would stall the single solver loop, redemption scans included.
-	cfg.HTTPClient = &http.Client{Timeout: timeout}
+	cfg.HTTPClient = &http.Client{Timeout: timeout, Transport: observability.TraceTransport(nil, "3f-api")}
 	return &apiClient{
 		c:       threef.NewAPIClient(cfg),
 		sgnr:    sgnr,

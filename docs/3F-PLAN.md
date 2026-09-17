@@ -284,6 +284,18 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
    signs the returned execution offer, submits `createOffer`, and records the live-offer cache only
    after a successful submit. Strategy output cannot set nonce or signature.
 
+**Tracing.** Each discovery pass roots its own trace, and every offer the strategy returns gets its own
+auction span beneath it. Because 3F lists every auction in one response and decides for all of them in
+one call, the listing and decide stages are siblings of the per-auction spans rather than children of
+one. Because the API discards the created offer id, a submitted offer's span is remembered under **two**
+process-local keys: `req:<adapter>:<request address>`, the only identifiers present both at offer time
+and on the settlement path, which reads an adapter's Requests on-chain (the adapter is included because
+one Request can take offers through several adapters), and `auction:<adapter>:<auction id>`, which is what the
+API's offer listing reports. One redeem links back to every offer it finalizes, so it is the one caller
+that resolves several keys at once and records a `link_miss` per key that missed.
+Spans, attributes, and quote-to-fill links for this solver are specified in
+[TRACING-PLAN](TRACING-PLAN.md) §5–§6.
+
 ---
 
 ## 7. Make-driven codegen

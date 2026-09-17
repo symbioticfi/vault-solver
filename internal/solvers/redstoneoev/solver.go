@@ -44,6 +44,10 @@ type Solver struct {
 	seen                 *seenAuctions // de-dup of already-processed auction ids, touched before bid dispatch
 	log                  logr.Logger
 
+	// links remembers each sent bid's auction span so the result frames that arrive later — in their
+	// own trace — can link back to it (spec §12). Best effort: a miss changes nothing.
+	links *observability.SpanLinks
+
 	state stateCache // cached executor accounting, refreshed by the ops loop
 	// stateRefreshCh coalesces event-driven refresh requests without blocking the WS read loop on RPC.
 	stateRefreshCh chan struct{}

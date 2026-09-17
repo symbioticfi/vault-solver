@@ -17,6 +17,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/api/morphographql"
 	"github.com/symbioticfi/vault-solver/api/morphographql/scalars"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 // maxDiscoverMarkets bounds the candidate markets one discovery poll proposes (the `first` arg + a defensive
@@ -75,7 +76,7 @@ type morphoPosition struct {
 }
 
 func newMorphoClient(url string) *morphoClient {
-	hc := &http.Client{Timeout: 8 * time.Second}
+	hc := &http.Client{Timeout: 8 * time.Second, Transport: observability.TraceTransport(nil, "morpho-graphql")}
 	return &morphoClient{
 		gql: boundedGraphQLClient{url: url, hc: hc},
 	}

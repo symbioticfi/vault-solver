@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -129,9 +130,10 @@ func newExec(t *testing.T, st *store, be orderBackend, txm txSender) *executionS
 	return &executionService{
 		chainID: 1, executor: common.HexToAddress("0x0000000000000000000000000000000000000010"),
 		orderLimit: 20, backend: be, store: st, txm: txm, discountsEnabled: true,
-		strategy: fixedFillStrategy{plan: baseFillPlan()},
-		reader:   &fakeRecoveryReader{chainTime: time.Unix(0, 0)},
-		log:      logr.Discard(), now: func() time.Time { return time.Unix(0, 0) },
+		strategy: fixedFillStrategy{plan: baseFillPlan()}, strategyName: defaultStrategyName,
+		reader: &fakeRecoveryReader{chainTime: time.Unix(0, 0)},
+		links:  observability.NewSpanLinks(),
+		log:    logr.Discard(), now: func() time.Time { return time.Unix(0, 0) },
 		inflight: make(map[string]bool),
 	}
 }

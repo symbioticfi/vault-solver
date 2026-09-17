@@ -10,6 +10,8 @@ import (
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 // Every hash gets its own timeout. One timeout must not truncate the sweep or
@@ -35,9 +37,10 @@ func TestReceiptSweepDiagnosticContextAndFrequency(t *testing.T) {
 		b := &diagnosticReceiptBackend{mockBackend: newMockBackend()}
 		m := newStreakManager(t, b, logger)
 		m.cfg.ReplacementInterval = 40 * time.Millisecond
-		pending := &pendingTransaction{req: Request{Label: "diagnostic"}, log: logger, attempts: []txAttempt{{hash: common.HexToHash("1")}, {hash: common.HexToHash("2")}, {hash: common.HexToHash("3")}, {hash: common.HexToHash("4")}}}
+		pending := &pendingTransaction{req: Request{Label: "diagnostic"}, attempts: []txAttempt{{hash: common.HexToHash("1")}, {hash: common.HexToHash("2")}, {hash: common.HexToHash("3")}, {hash: common.HexToHash("4")}}}
+		ctx := observability.WithLogger(t.Context(), logger)
 		for range 2 {
-			if _, done := m.receiptResult(t.Context(), pending); done {
+			if _, done := m.receiptResult(ctx, pending); done {
 				t.Fatal("unexpected terminal receipt")
 			}
 		}
@@ -68,7 +71,8 @@ func TestReceiptSweepDiagnosticsIncludePriorityReads(t *testing.T) {
 	logs, logger := newLogCapture(1)
 	m := newStreakManager(t, newMockBackend(), logger)
 	first, latest := txAttempt{hash: common.HexToHash("1")}, txAttempt{hash: common.HexToHash("2")}
-	pending := &pendingTransaction{req: Request{Label: "diagnostic"}, log: logger, attempts: []txAttempt{first}}
+	pending := &pendingTransaction{req: Request{Label: "diagnostic"}, attempts: []txAttempt{first}}
+	ctx := observability.WithLogger(t.Context(), logger)
 	sweep := newReceiptSweep(pending, 1)
 	pending.attempts = append(pending.attempts, latest)
 	// A priority hash can also be revisited: it is one checked hash, but two RPCs.
@@ -77,9 +81,9 @@ func TestReceiptSweepDiagnosticsIncludePriorityReads(t *testing.T) {
 		{attempt: first, err: ethereum.NotFound, budget: time.Second, duration: time.Millisecond, cancelCause: "none"},
 		{attempt: latest, err: ethereum.NotFound, budget: time.Second, duration: 2 * time.Millisecond, cancelCause: "none"},
 	} {
-		m.observeReceiptRead(pending, sweep, read)
+		m.observeReceiptRead(ctx, pending, sweep, read)
 	}
-	m.finishReceiptSweep(pending, sweep)
+	m.finishReceiptSweep(ctx, pending, sweep)
 	var fields map[string]any
 	if err := json.Unmarshal([]byte((*logs)[0]), &fields); err != nil {
 		t.Fatal(err)

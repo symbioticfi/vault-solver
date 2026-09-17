@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/api/lifiorder"
@@ -52,6 +53,10 @@ type submittedOrder struct {
 	dedupeKey      string
 	processed      chan struct{}
 	recoveryGen    uint64
+	// span is the feed message span this order arrived under. It rides through the inbox and both
+	// retry queues so the worker's processing span continues that trace on the detached work
+	// context (spec §6.4).
+	span trace.SpanContext
 
 	Order        inputsettler.StandardOrder
 	InputSettler common.Address

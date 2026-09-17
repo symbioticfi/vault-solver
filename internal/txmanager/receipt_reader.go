@@ -8,6 +8,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 type receiptRead struct {
@@ -124,7 +126,9 @@ func (s *receiptSweep) dispatched(pending *pendingTransaction, index int) {
 
 // observeReceiptRead reports a validated candidate. Only the lifecycle owner may
 // confirm it, change nonce ownership, or deliver a terminal result.
-func (m *Manager) observeReceiptRead(pending *pendingTransaction, sweep *receiptSweep, read receiptRead) bool {
+func (m *Manager) observeReceiptRead(
+	ctx context.Context, pending *pendingTransaction, sweep *receiptSweep, read receiptRead,
+) bool {
 	sweep.diagnostics.observe(read)
 	if errors.Is(read.err, ethereum.NotFound) {
 		return false
@@ -136,19 +140,19 @@ func (m *Manager) observeReceiptRead(pending *pendingTransaction, sweep *receipt
 		return false
 	}
 	if err := validateReceipt(read.attempt.hash, read.receipt); err != nil {
-		pending.log.Error(err, "invalid pending transaction receipt", "label", pending.req.Label, "hash", read.attempt.hash.Hex(), "nonce", pending.nonce)
+		observability.Log(ctx).Error(err, "invalid pending transaction receipt", "label", pending.req.Label, "hash", read.attempt.hash.Hex(), "nonce", pending.nonce)
 		return false
 	}
-	m.receiptReadsRecovered(pending)
+	m.receiptReadsRecovered(ctx, pending)
 	return true
 }
 
-func (m *Manager) finishReceiptSweep(pending *pendingTransaction, sweep *receiptSweep) {
+func (m *Manager) finishReceiptSweep(ctx context.Context, pending *pendingTransaction, sweep *receiptSweep) {
 	// A nonempty sweep without RPC errors clears the transport failure streak.
 	// Invalid receipts are logged separately and never complete the lifecycle.
 	if sweep.firstError != nil {
-		m.receiptReadFailed(pending, sweep)
+		m.receiptReadFailed(ctx, pending, sweep)
 	} else {
-		m.receiptReadsRecovered(pending)
+		m.receiptReadsRecovered(ctx, pending)
 	}
 }

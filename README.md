@@ -368,6 +368,45 @@ The observability listener (default `:9090`) serves `/metrics`, `/healthz`, and 
 config is required for the collectors below. During graceful shutdown readiness drops first, while
 liveness and metrics remain available until the shared transaction manager finishes its bounded drain.
 
+### OpenTelemetry tracing
+
+Tracing is off unless `OTEL_EXPORTER_ENABLED` is `1`, `true`, `yes`, `on`, or `enabled` (the same
+switch the RFQ backend uses). Everything else is the standard OpenTelemetry environment, read by the
+SDK: `OTEL_EXPORTER_OTLP_ENDPOINT` (default `http://localhost:4318`, OTLP over HTTP/protobuf),
+`OTEL_SERVICE_NAME` (default `vault-solver`; set it per deployment, e.g. `vault-solver-rfq`),
+`OTEL_RESOURCE_ATTRIBUTES`, `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` (default
+`parentbased_always_on`; use `parentbased_traceidratio` to thin background-loop traces without
+dropping backend-initiated ones), `OTEL_EXPORTER_OTLP_HEADERS`, and the `OTEL_BSP_*` batch settings.
+`OTEL_TRACES_EXPORTER` and `OTEL_EXPORTER_OTLP_PROTOCOL` are ignored: the exporter is always OTLP/HTTP.
+There is no YAML equivalent; tracing is configured only by these variables.
+
+```yaml
+# deploy/docker-compose.yml, or -e flags on docker run
+environment:
+  OTEL_EXPORTER_ENABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+```
+
+An inbound `/quote` continues the caller's trace; every outbound HTTP call, JSON-RPC call, and
+transaction carries `traceparent` onward. Log lines under traced work carry `trace_id` and `span_id`,
+and Sentry events are tagged with `trace_id`. Spans carry `solver`, `quote.id`, `order.id`, `tx.hash`,
+and the other identifiers listed in [docs/TRACING-PLAN.md](docs/TRACING-PLAN.md). A fill links back to
+the quote that produced it when the process still remembers that quote (best effort, in-memory);
+after a restart the fill simply starts a new trace. LI.FI fills are not linked, because its standing
+quotes have no per-request quote event to link from.
+
+A websocket or IPC RPC endpoint is traced at the call level, one span per JSON-RPC call plus one for
+the dial; it receives `traceparent` only on the websocket handshake, so the provider can tie the
+connection to your trace but not an individual call.
+
+No secret is ever recorded on a span: RPC endpoints appear as ordinals rather than URLs, and an
+outbound client span records the request URL **without its query string**, so a webhook URL that
+carries a token in the query does not put it in the trace.
+
+Tracing never blocks a quote or a fill: spans are exported in the background from a bounded queue,
+export failures are logged at Info, and a bad `OTEL_*` setting disables tracing at startup instead of
+failing it. The observability listener itself is never traced.
+
 ### Error diagnostics
 
 LI.FI order rejection logs include available `orderId`, `onChainOrderId`, `orderType`,

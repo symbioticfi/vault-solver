@@ -13,6 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 )
 
@@ -145,7 +146,7 @@ func TestRunLogsStartupValidationFailures(t *testing.T) {
 				log:           funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
 			}
 
-			err := s.Run(t.Context())
+			err := s.Run(observability.WithLogger(t.Context(), s.log))
 			if err == nil || !strings.Contains(err.Error(), tc.wantError) {
 				t.Fatalf("Run() error = %v, want %q", err, tc.wantError)
 			}
@@ -187,7 +188,7 @@ func TestRunInternalModeAllowsNoAdaptersAndSkipsDirectAuthorizationGate(t *testi
 		log: logr.Discard(),
 	}
 
-	err := solver.Run(t.Context())
+	err := solver.Run(observability.WithLogger(t.Context(), solver.log))
 	if err == nil || !strings.Contains(err.Error(), stop.Error()) {
 		t.Fatalf("Run() error = %v, want later order-service failure", err)
 	}
@@ -344,7 +345,9 @@ func TestPollOrdersRecoversTerminalExclusiveOrder(t *testing.T) {
 				solver.lastExclusivePoll.Store(999)
 			}
 
-			if err := solver.pollOrders(t.Context(), make(chan *resolvedOrder, 1)); err != nil {
+			// Run stores the solver logger on the context it hands the poll loop; stand in for it.
+			pollCtx := observability.WithLogger(t.Context(), solver.log)
+			if err := solver.pollOrders(pollCtx, make(chan *resolvedOrder, 1)); err != nil {
 				t.Fatal(err)
 			}
 			wantBreaker := !tc.startup
@@ -379,7 +382,7 @@ func TestPollOrdersRecoversTerminalExclusiveOrder(t *testing.T) {
 
 			initialLogCount := strings.Count(logged, "historical exclusive obligation missed")
 			solver.exclusiveStateUnknown.Store(true)
-			if err := solver.pollOrders(t.Context(), make(chan *resolvedOrder, 1)); err != nil {
+			if err := solver.pollOrders(pollCtx, make(chan *resolvedOrder, 1)); err != nil {
 				t.Fatal(err)
 			}
 			if got := strings.Count(

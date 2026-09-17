@@ -10,6 +10,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 const maxAdvertisedDiscountRoutes = 256
@@ -126,7 +127,7 @@ func (s *Solver) resolveAdvertisedRoutes(
 		adapters[key.adapter] = true
 	}
 	if skipped > 0 {
-		s.log.V(1).Info(
+		observability.Log(ctx).V(1).Info(
 			"ignore advertised discount routes above safety cap",
 			"cap", maxAdvertisedDiscountRoutes,
 			"skipped", skipped,
@@ -153,7 +154,7 @@ func (s *Solver) resolveAdvertisedRoutes(
 			continue
 		}
 		if err := s.reader.validateGasTokens([]liquidlane.Route{route}); err != nil {
-			s.log.V(1).Info(
+			observability.Log(ctx).V(1).Info(
 				"skip advertised discount route",
 				"adapter", route.Adapter.Hex(),
 				"tokenIn", route.TokenIn.Hex(),
@@ -178,16 +179,16 @@ func (s *Solver) resolveAdvertisedAdapters(
 		return routes
 	}
 	if len(adapters) == 1 {
-		s.log.Error(err, "skip unresolved advertised discount adapter", "adapter", adapters[0].Hex())
+		observability.Log(ctx).Error(err, "skip unresolved advertised discount adapter", "adapter", adapters[0].Hex())
 		return nil
 	}
-	s.log.Error(err, "batch advertised adapter resolution failed; retry individually")
+	observability.Log(ctx).Error(err, "batch advertised adapter resolution failed; retry individually")
 
 	var resolved []liquidlane.Route
 	for _, adapter := range adapters {
 		adapterRoutes, err := s.reader.resolveRoutes(ctx, []common.Address{adapter})
 		if err != nil {
-			s.log.Error(err, "skip unresolved advertised discount adapter", "adapter", adapter.Hex())
+			observability.Log(ctx).Error(err, "skip unresolved advertised discount adapter", "adapter", adapter.Hex())
 			continue
 		}
 		resolved = append(resolved, adapterRoutes...)

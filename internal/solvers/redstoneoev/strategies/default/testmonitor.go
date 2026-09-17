@@ -13,6 +13,7 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/morpho"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
@@ -88,29 +89,32 @@ func (m *testMonitor) run(ctx context.Context) {
 }
 
 func (m *testMonitor) refresh(ctx context.Context) {
+	// The monitor logger is narrower than the strategy's; carry it for every line below.
+	ctx = observability.WithLogger(ctx, m.log)
+
 	adapter, ok := m.loadAdapter()
 	if !ok {
-		m.log.V(1).Info("test monitor adapter snapshot unavailable; keeping cache")
+		observability.Log(ctx).V(1).Info("test monitor adapter snapshot unavailable; keeping cache")
 		return
 	}
 	loan, redeemable, ok := adapterMarketScope(adapter)
 	if !ok {
-		m.log.V(1).Info("test monitor adapter snapshot incomplete; keeping cache")
+		observability.Log(ctx).V(1).Info("test monitor adapter snapshot incomplete; keeping cache")
 		return
 	}
 	startBlock, startTime, err := m.reader.ReadHead(ctx)
 	if err != nil {
-		m.log.Error(err, "test monitor header read failed; keeping cache")
+		observability.Log(ctx).Error(err, "test monitor header read failed; keeping cache")
 		return
 	}
 	morphoAddr, err := m.reader.ReadCallbackMorpho(ctx, m.callback)
 	if err != nil || morphoAddr == (common.Address{}) {
-		m.log.Error(err, "test monitor MORPHO read failed; keeping cache")
+		observability.Log(ctx).Error(err, "test monitor MORPHO read failed; keeping cache")
 		return
 	}
 	params, err := m.reader.ResolveParams(ctx, morphoAddr, m.markets)
 	if err != nil {
-		m.log.Error(err, "test monitor market params read failed; keeping cache")
+		observability.Log(ctx).Error(err, "test monitor market params read failed; keeping cache")
 		return
 	}
 	served := verifyAdapterPair(params, loan, redeemable)
@@ -119,26 +123,26 @@ func (m *testMonitor) refresh(ctx context.Context) {
 		want[id] = params[id]
 	}
 	if len(want) == 0 {
-		m.log.V(1).Info("test monitor found no adapter-served markets")
+		observability.Log(ctx).V(1).Info("test monitor found no adapter-served markets")
 		return
 	}
 	markets, prices, err := m.reader.ReadTestMarketStates(ctx, morphoAddr, want)
 	if err != nil {
-		m.log.Error(err, "test monitor market state read failed; keeping cache")
+		observability.Log(ctx).Error(err, "test monitor market state read failed; keeping cache")
 		return
 	}
 	positions, err := m.reader.ReadTestPositions(ctx, morphoAddr, markets, m.positions)
 	if err != nil {
-		m.log.Error(err, "test monitor positions read failed; keeping cache")
+		observability.Log(ctx).Error(err, "test monitor positions read failed; keeping cache")
 		return
 	}
 	endBlock, _, err := m.reader.ReadHead(ctx)
 	if err != nil {
-		m.log.Error(err, "test monitor end-header read failed; keeping cache")
+		observability.Log(ctx).Error(err, "test monitor end-header read failed; keeping cache")
 		return
 	}
 	if endBlock != startBlock {
-		m.log.V(1).Info("test monitor refresh crossed block boundary; keeping cache",
+		observability.Log(ctx).V(1).Info("test monitor refresh crossed block boundary; keeping cache",
 			"startBlock", startBlock, "endBlock", endBlock)
 		return
 	}
