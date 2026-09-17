@@ -60,16 +60,7 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	request := inspectRPCRequest(body)
 	method := request.boundedMethod
 	ctx, requestTrace := t.beginTrace(req.Context(), request)
-	var (
-		nullFallbackID     string
-		nullFallbackMethod string
-		nullFallback       bool
-	)
-	if len(t.endpoints) > 1 && request.nullFallback {
-		nullFallbackID = request.requestID
-		nullFallbackMethod = request.rawMethod
-		nullFallback = true
-	}
+	nullFallback := len(t.endpoints) > 1 && request.nullFallback
 	pendingLookup := isPendingLookupMethod(request.rawMethod)
 	requestObservation := t.metrics.beginRequest(t.role, method)
 
@@ -92,7 +83,7 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		attempt := req.Clone(attemptCtx)
 		attempt.URL = ep
 		attempt.Host = ep.Host
-		injectTraceHeaders(attemptCtx, attempt.Header)
+		observability.InjectTraceHeaders(attemptCtx, attempt.Header)
 		if pendingLookup {
 			attempt.Header.Set(erpcRetryEmptyHeader, "false")
 		}
@@ -105,7 +96,7 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		var inspectedOutcome *rpcOutcome
 		if err == nil && !unavailableHTTPStatus(resp.StatusCode) {
 			if nullFallback && i < len(t.endpoints)-1 && resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				unavailable, inspectedBody, inspectErr := hasNullRPCResult(resp, nullFallbackID)
+				unavailable, inspectedBody, inspectErr := hasNullRPCResult(resp, request.requestID)
 				if inspectErr != nil || unavailable {
 					_ = resp.Body.Close()
 					cancel()
@@ -113,13 +104,13 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 						lastErr = inspectErr
 						lastOutcome = classifyRPCFailure(inspectErr, ctx.Err())
 					} else {
-						lastErr = errors.Errorf("%s returned a null result", nullFallbackMethod)
+						lastErr = errors.Errorf("%s returned a null result", request.rawMethod)
 						lastOutcome = rpcOutcomeNullResult
 					}
 					t.metrics.observeAttempt(t.role, endpoint, method, lastOutcome)
 					requestTrace.attempt(endpoint, lastOutcome)
 					observability.TraceLogger(ctx, t.log).V(1).Info("rpc result unavailable; trying fallback",
-						"endpoint", ep.Redacted(), "method", nullFallbackMethod, "err", lastErr.Error())
+						"endpoint", ep.Redacted(), "method", request.rawMethod, "err", lastErr.Error())
 					continue
 				}
 				outcome := classifyRPCResponse(method, resp.StatusCode, inspectedBody, false, nil)

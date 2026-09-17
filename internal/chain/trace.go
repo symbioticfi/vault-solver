@@ -2,15 +2,12 @@ package chain
 
 import (
 	"context"
-	"net/http"
 	"sync"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/go-errors/errors"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
@@ -100,8 +97,4 @@ func endClientSpan(span trace.Span, err error) {
 		span.SetStatus(codes.Error, err.Error())
 	}
 	span.End()
-}
-
-func injectTraceHeaders(ctx context.Context, header http.Header) {
-	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(header))
 }

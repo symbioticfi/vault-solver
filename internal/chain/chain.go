@@ -19,6 +19,8 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/multicall3"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 // multicallB is the stateless v2 aggregate3 pack/unpack binding (no backend).
@@ -208,7 +210,7 @@ func dialNonHTTP(ctx context.Context, rpcURL, role string) (_ *ethclient.Client,
 		return ec, transport, nil
 	}
 	header := make(http.Header)
-	injectTraceHeaders(ctx, header)
+	observability.InjectTraceHeaders(ctx, header)
 	rc, dialErr := rpc.DialOptions(ctx, rpcURL, rpc.WithHeaders(header))
 	if dialErr != nil {
 		return nil, "", errors.Errorf("chain: dial: %w", dialErr)
