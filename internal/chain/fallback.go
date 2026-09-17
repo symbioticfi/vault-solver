@@ -438,6 +438,15 @@ func isHTTPURL(raw string) bool {
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https")
 }
 
+// rpcTransport labels a non-HTTP endpoint for chain.rpc.transport. Anything that is not a websocket
+// URL reaches the node over a local IPC socket.
+func rpcTransport(raw string) string {
+	if u, err := url.Parse(raw); err == nil && (u.Scheme == "ws" || u.Scheme == "wss") {
+		return rpcTransportWS
+	}
+	return rpcTransportIPC
+}
+
 // parseHTTPEndpoints validates that every URL is HTTP(S) (the only scheme the fallback transport
 // supports) and returns the parsed endpoints in order, dropping duplicates so the same endpoint is
 // never tried twice in a fallover sweep.

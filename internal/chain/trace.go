@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/go-errors/errors"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -12,6 +13,13 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
+)
+
+// rpcTransportWS and rpcTransportIPC label the non-HTTP transports on connect and call spans. An
+// HTTP(S) endpoint carries no transport label: fallbackTransport already spans each of its requests.
+const (
+	rpcTransportWS  = "ws"
+	rpcTransportIPC = "ipc"
 )
 
 // rpcTracer carries no solver attribute: the chain client is shared by every solver. Spans start
@@ -59,6 +67,33 @@ func (tr *rpcRequestTrace) finish(outcome rpcOutcome) {
 		}
 		tr.span.End()
 	})
+}
+
+// traceConnect spans the dial of a non-HTTP endpoint. For a websocket the returned context is what
+// the handshake headers are injected from; IPC has no handshake to carry them.
+func traceConnect(ctx context.Context, role, transport string) (context.Context, func(error)) {
+	//nolint:spancheck // the span is ended by the returned func, not inline
+	ctx, span := rpcTracer.Raw().Start(ctx, "chain.rpc.connect",
+		trace.WithSpanKind(trace.SpanKindClient),
+		trace.WithAttributes(
+			attribute.String("chain.rpc.role", role),
+			attribute.String("chain.rpc.transport", transport),
+		),
+	)
+	return ctx, func(err error) { endClientSpan(span, err) } //nolint:spancheck // see above
+}
+
+// endClientSpan ends an RPC client span, recording err unless the caller simply cancelled.
+func endClientSpan(span trace.Span, err error) {
+	switch {
+	case err == nil:
+	case errors.Is(err, context.Canceled):
+		span.AddEvent("cancelled")
+	default:
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	span.End()
 }
 
 func injectTraceHeaders(ctx context.Context, header http.Header) {

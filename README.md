@@ -395,6 +395,10 @@ the quote that produced it when the process still remembers that quote (best eff
 after a restart the fill simply starts a new trace. LI.FI fills are not linked, because its standing
 quotes have no per-request quote event to link from.
 
+A websocket or IPC RPC endpoint is traced at the call level, one span per JSON-RPC call plus one for
+the dial; it receives `traceparent` only on the websocket handshake, so the provider can tie the
+connection to your trace but not an individual call.
+
 No secret is ever recorded on a span: RPC endpoints appear as ordinals rather than URLs, and an
 outbound client span records the request URL **without its query string**, so a webhook URL that
 carries a token in the query does not put it in the trace.

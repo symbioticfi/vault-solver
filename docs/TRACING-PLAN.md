@@ -24,8 +24,7 @@ inbound request, per outbound HTTP call, per RPC call and per transaction, and t
 line. Go has no auto-instrumentation, so the equivalent is wired by hand at the repo's existing seams.
 
 Out of scope, deliberately: exporting metrics or logs over OTLP (Prometheus and zap JSON logs stay as
-they are), tracing the observability listener (probes are noise), and the non-HTTP RPC dial path
-(`ws://`, IPC), which bypasses the instrumented transport. See §10.
+they are) and tracing the observability listener (probes are noise). See §10.
 
 ## 2. Enablement and configuration
 
@@ -132,6 +131,24 @@ trace. The span ends exactly where the metrics observation finishes: on response
 immediately on a transport-level failure. Status is Error for every outcome other than success.
 Because the chain client is shared by all solvers, RPC spans carry no `solver` attribute; they inherit
 whichever span is in the caller's context. `rpc.jsonrpc.request_id` is empty for batches (§10).
+
+**Non-HTTP JSON-RPC (`ws://`, `wss://`, IPC).** These transports never reach `fallbackTransport`, so
+the spans are produced on our side of the client instead. The dial itself is a `chain.rpc.connect`
+client span carrying `chain.rpc.role` and `chain.rpc.transport` (`ws` or `ipc`); a failed dial ends it
+with status Error. A websocket handshake is the one place this transport can carry a header, so
+`traceparent`/`tracestate`/`baggage` are injected into the upgrade request from that connect span's
+context — go-ethereum reconnects a dropped socket internally and replays the same headers, so the
+provider can tie the connection back to the dial but **never to an individual call**, and IPC has no
+handshake at all. Each call is then spanned locally: `internal/chain/calls.go` shadows exactly the
+backend methods this repo calls (`CallContract`, `HeaderByNumber`, `HeaderByHash`, `FeeHistory`,
+`SuggestGasTipCap`, `EstimateGas`, `TransactionReceipt`, `BalanceAt`, `CodeAt`, `BlockNumber`,
+`SendTransaction`, `NonceAt`, `PendingNonceAt`, `TransactionSenderBalanceAt`) and starts a client span
+named by the JSON-RPC method with `rpc.system=jsonrpc`, `rpc.method`, `chain.rpc.role` and
+`chain.rpc.transport`, so dashboards see one series across transports. `Multicall` is not spanned: it
+reaches the chain through `CallContract`, which is where its `eth_call` span belongs. Read and write
+endpoints are labelled separately, since only one of the two may be non-HTTP. On the HTTP path the
+shadowed methods are plain passthroughs and the transport's spans are the only RPC spans — a new call
+site through the client needs a new shadow or it goes untraced on websocket and IPC.
 
 **WebSocket feeds.** Both feeds dial under a short `"<feed>.feed.connect"` span and inject
 `traceparent` into the handshake headers, so a connection is findable in the trace backend. Per-message
@@ -430,14 +447,14 @@ run against the no-op provider and prove there is no behaviour change when traci
 | `internal/observability/httptrace.go` | `TraceHandler`, `TraceTransport` |
 | `internal/observability/spanlinks.go` | `SpanLinks` |
 | `internal/observability/tracetest` | test provider installation |
-| `internal/chain/trace.go` | JSON-RPC spans, attempt events, header injection |
+| `internal/chain/trace.go` | JSON-RPC spans, attempt events, header injection, the connect span |
+| `internal/chain/calls.go` | per-call spans for websocket/IPC endpoints |
 | `internal/txmanager/trace.go` | the send span's start and terminal end |
 | `internal/solvers/<name>/tracing.go` | each solver's tracer, link keys, TTLs and span helpers |
 
 ## 10. TODO
 
 - [ ] backend returns quote trace id on order list (would replace the RFQ in-memory link)
-- [ ] non-HTTP RPC dial path (`ws://`, IPC) untraced
 - [ ] observability listener untraced by design
 - [ ] promote the duplicated tracing test helpers (`attr`, `endedSpan`, `requireChildOf`, `hasEvent`) into `internal/observability/tracetest`
 - [ ] omit `rpc.jsonrpc.request_id` when empty (batches) instead of setting an empty attribute
