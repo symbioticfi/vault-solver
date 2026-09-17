@@ -136,6 +136,10 @@ func (s *Solver) Name() string { return Name }
 // Run drives discovery/offer, redemption, and reconciliation on their configured cadences until
 // ctx is cancelled.
 func (s *Solver) Run(ctx context.Context) error {
+	// The solver logger is narrower than the one solver.Run stored; carry it so every line below,
+	// including the discovery, redeem and reconcile ticks, logs through it.
+	ctx = observability.WithLogger(ctx, s.log)
+
 	// Build the initial explicit-or-factory snapshot. A successfully empty factory is valid: the
 	// daemon stays alive and picks up future entities on a discovery tick.
 	if err := s.refreshTargetsAndHydrate(ctx); err != nil {
@@ -147,7 +151,7 @@ func (s *Solver) Run(ctx context.Context) error {
 		return errors.Errorf("no configured adapter passed startup validation (must resolve and accept this solver %s as an authorized offer signer via ERC-1271); see per-adapter warnings above", s.signerAddr.Hex())
 	}
 
-	s.log.Info("starting",
+	observability.Log(ctx).Info("starting",
 		"adapters", len(s.targets),
 		"apiBaseUrl", s.cfg.APIBaseURL,
 		"discover", s.cfg.Intervals.Discover.String(),
@@ -170,7 +174,7 @@ func (s *Solver) Run(ctx context.Context) error {
 			return ctx.Err()
 		case <-discoverT.C:
 			if err := s.refreshTargetsAndHydrate(ctx); err != nil {
-				s.log.Error(err, "refresh adapters; keeping last-known-good targets")
+				observability.Log(ctx).Error(err, "refresh adapters; keeping last-known-good targets")
 			}
 			s.discoverAndOffer(ctx)
 		case <-redeemT.C:
@@ -190,7 +194,6 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 	// one the span reports, the rest are logged per offer.
 	var stageErr error
 	defer func() { end(stageErr) }()
-	log := observability.TraceLogger(ctx, s.log)
 
 	now := time.Now()
 	complete := true
@@ -199,12 +202,12 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 		if err != nil {
 			complete = false
 			stageErr = cmp.Or[error](stageErr, err)
-			log.Error(err, "reconcile offers: list offers", "adapter", t.Adapter.Hex())
+			observability.Log(ctx).Error(err, "reconcile offers: list offers", "adapter", t.Adapter.Hex())
 			continue
 		}
 		live := make(map[int64]offerState)
 		for _, o := range offers {
-			offerLog := s.listedOfferLogger(log, t.Adapter, int64(o.AuctionId))
+			offerLog := s.listedOfferLogger(observability.Log(ctx), t.Adapter, int64(o.AuctionId))
 			status := strings.ToUpper(strings.TrimSpace(o.Status))
 			if offerStatusIgnored[status] {
 				observability.Decline(ctx, "offer_not_live", "offer status "+status)
@@ -266,7 +269,6 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 	// and every expected skip below is a decline.
 	var passErr error
 	defer func() { end(passErr) }()
-	log := observability.TraceLogger(ctx, s.log)
 
 	timer := observability.StartOperation(s.operations.offerRefresh)
 	observeRefresh := func(outcome observability.ExternalOperationOutcome) {
@@ -275,7 +277,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 	if !s.canCreateOffer() {
 		observeRefresh(observability.ExternalOperationSkipped)
 		observability.Decline(ctx, "offer_skipped", "transaction lane not ready")
-		log.V(1).Info("skipping offer discovery: transaction lane not ready")
+		observability.Log(ctx).V(1).Info("skipping offer discovery: transaction lane not ready")
 		return
 	}
 	if len(s.targets) == 0 {
@@ -292,11 +294,11 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 	if err != nil {
 		passErr = err
 		observeRefresh(observability.ExternalOperationError)
-		log.Error(err, "discover: list auctions")
+		observability.Log(ctx).Error(err, "discover: list auctions")
 		return
 	}
-	auctions = s.validAuctions(log, auctions)
-	log.V(1).Info("discovered auctions", "count", len(auctions))
+	auctions = s.validAuctions(observability.Log(ctx), auctions)
+	observability.Log(ctx).V(1).Info("discovered auctions", "count", len(auctions))
 
 	// Rebuild coverage from the live API before deciding, so out-of-band offers count and we don't double-offer.
 	offersComplete := s.reconcileOffers(ctx, s.targets)
@@ -307,10 +309,10 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		st, lerr := s.reader.liquidityAndExposure(ctx, t.Adapter)
 		if lerr != nil {
 			liquidityReadsFailed++
-			log.Error(lerr, "offer: liquidity/exposure", "adapter", t.Adapter.Hex())
+			observability.Log(ctx).Error(lerr, "offer: liquidity/exposure", "adapter", t.Adapter.Hex())
 			continue
 		}
-		log.V(1).Info("adapter liquidity",
+		observability.Log(ctx).V(1).Info("adapter liquidity",
 			"adapter", t.Adapter.Hex(), "fundable", st.fundable.String(), "openRequests", st.openCount,
 			"maxAssets", st.maxAssets.String(), "minAssets", st.minAssets.String(),
 			"minYieldPpm", st.minYieldPpm.String())
@@ -339,7 +341,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 	out, err := s.decideOffers(ctx, input)
 	if err != nil {
 		passErr = err
-		log.Error(err, "offer: strategy")
+		observability.Log(ctx).Error(err, "offer: strategy")
 		return
 	}
 	// minYieldByAdapter lets the submission loop validate EVERY strategy's offers (default and webhook),
@@ -352,7 +354,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 	auctionByID := auctionViewsByID(auctions)
 	for _, offer := range out.Offers {
 		if stop := s.offerOnAuction(ctx, offer, auctionByID, minYieldByAdapter); stop {
-			log.V(1).Info("stopping offer submission: transaction lane no longer ready")
+			observability.Log(ctx).V(1).Info("stopping offer submission: transaction lane no longer ready")
 			return
 		}
 	}
@@ -403,36 +405,35 @@ func (s *Solver) offerOnAuction(
 		observability.AttrRequestAddress.String(offer.Request.Hex()),
 	)
 	defer func() { end(err) }()
-	log := observability.TraceLogger(ctx, s.log)
 
 	av, ok := auctionByID[offer.AuctionID]
 	if !ok {
 		err = errors.Errorf("auction %d not found", offer.AuctionID)
-		log.Error(err, "offer: build")
+		observability.Log(ctx).Error(err, "offer: build")
 		return false
 	}
 	floor, known := minYieldByAdapter[offer.Maker]
 	if !known {
 		err = errors.Errorf("offer for adapter %s absent from this pass's snapshot", offer.Maker.Hex())
-		log.Error(err, "offer: unknown maker; skipping", "auctionId", offer.AuctionID)
+		observability.Log(ctx).Error(err, "offer: unknown maker; skipping", "auctionId", offer.AuctionID)
 		return false
 	}
 	maxRate, rateOk := av.maxRateBps()
 	if !rateOk {
 		err = errors.Errorf("auction %d has no resolved maxRate", offer.AuctionID)
-		log.Error(err, "offer: unbiddable auction; skipping", "adapter", offer.Maker.Hex())
+		observability.Log(ctx).Error(err, "offer: unbiddable auction; skipping", "adapter", offer.Maker.Hex())
 		return false
 	}
 	// Backstop for all strategies: the offer must clear the on-chain floor and stay under the auction
 	// max rate, or it reverts (FAILED) / is rejected (NOT_ACCEPTED). Also guards nil/invalid amounts.
 	if err = types.ValidateYield(offer.ExpectedReturn, offer.Principal, floor, maxRate); err != nil {
-		log.Error(err, "offer: yield out of bounds; skipping",
+		observability.Log(ctx).Error(err, "offer: yield out of bounds; skipping",
 			"auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
 		return false
 	}
 	dto, err := s.buildSignedOffer(ctx, av, offer)
 	if err != nil {
-		log.Error(err, "offer: build", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
+		observability.Log(ctx).Error(err, "offer: build", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
 		return false
 	}
 	submitted, err := s.submitOfferIfLaneReady(ctx, dto)
@@ -442,13 +443,13 @@ func (s *Solver) offerOnAuction(
 	}
 	if err != nil {
 		s.observeOfferSubmission("error")
-		log.Error(err, "offer: submit", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
+		observability.Log(ctx).Error(err, "offer: submit", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
 		return false
 	}
 	s.rememberOffer(ctx, offer, dto)
 	s.observeSubmittedOffer(common.HexToAddress(av.depositAsset()), offer.Principal, offer.ExpectedReturn)
 	// No local record: the next reconcile re-lists this offer from the API (the poll is authoritative).
-	log.Info("offer submitted", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex(),
+	observability.Log(ctx).Info("offer submitted", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex(),
 		"request", offer.Request.Hex(), "principal", offer.Principal.String(), "expectedReturn", dto.ExpectedReturn)
 	return false
 }
@@ -501,12 +502,12 @@ func (s *Solver) reconcile(ctx context.Context) {
 		st, err := s.reader.liquidityAndExposure(ctx, t.Adapter)
 		if err != nil {
 			complete = false
-			s.log.Error(err, "reconcile", "adapter", t.Adapter.Hex())
+			observability.Log(ctx).Error(err, "reconcile", "adapter", t.Adapter.Hex())
 			continue
 		}
 		successfulReads++
 		totalOpen += st.openCount
-		s.log.Info("reconcile", "adapter", t.Adapter.Hex(),
+		observability.Log(ctx).Info("reconcile", "adapter", t.Adapter.Hex(),
 			"openRequests", st.openCount, "fundable", st.fundable.String())
 	}
 	s.observeTargetDerivedState(threeFStateActiveRequests, totalOpen, complete)
@@ -583,15 +584,15 @@ func (s *Solver) refreshTargets(ctx context.Context) ([]Target, error) {
 		if r.err != nil {
 			resolutionComplete = false
 			if errors.Is(r.err, errAdapterUnconfigured) {
-				s.log.V(1).Info("skipping adapter: not configured on-chain",
+				observability.Log(ctx).V(1).Info("skipping adapter: not configured on-chain",
 					"adapter", adapterAddr.Hex(), "reason", r.err.Error())
 			} else {
-				s.log.Error(r.err, "skipping adapter: resolution failed", "adapter", adapterAddr.Hex())
+				observability.Log(ctx).Error(r.err, "skipping adapter: resolution failed", "adapter", adapterAddr.Hex())
 			}
 			continue
 		}
 		if !r.authorized {
-			s.log.Info("skipping adapter: solver is not an authorized offer signer",
+			observability.Log(ctx).Info("skipping adapter: solver is not an authorized offer signer",
 				"adapter", adapterAddr.Hex(),
 				"signer", s.signerAddr.Hex(),
 				"offerSigner", r.signer.Hex())
@@ -602,7 +603,7 @@ func (s *Solver) refreshTargets(ctx context.Context) ([]Target, error) {
 		if _, ok := previous[adapterAddr]; !ok {
 			added = append(added, target)
 		}
-		s.log.Info("resolved target",
+		observability.Log(ctx).Info("resolved target",
 			"adapter", adapterAddr.Hex(), "vault", r.vault.Hex(), "collateral", r.collateral.Hex())
 	}
 

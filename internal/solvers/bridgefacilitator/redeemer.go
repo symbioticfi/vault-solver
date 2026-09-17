@@ -21,7 +21,6 @@ type transactionSender interface {
 func (s *Solver) redeemAll(ctx context.Context) {
 	ctx, end := tracer.Start(ctx, "3f.redeem")
 	defer end(nil) // each stage records its own failure; a scan with nothing ready is a decline
-	log := observability.TraceLogger(ctx, s.log)
 
 	var scanDuration time.Duration
 	totalReady := 0
@@ -33,17 +32,17 @@ func (s *Solver) redeemAll(ctx context.Context) {
 		scanDuration += time.Since(scanStarted)
 		if err != nil {
 			complete = false
-			log.Error(err, "redeem: scan ready requests", "adapter", target.Adapter.Hex())
+			observability.Log(ctx).Error(err, "redeem: scan ready requests", "adapter", target.Adapter.Hex())
 			continue
 		}
 		successfulReads++
 		if !scanComplete {
 			complete = false
-			log.Info("redeem: incomplete scan; retaining last-known-good metric",
+			observability.Log(ctx).Info("redeem: incomplete scan; retaining last-known-good metric",
 				"adapter", target.Adapter.Hex(), "validReady", len(ready))
 		}
 		totalReady += len(ready)
-		log.V(1).Info("redeem scan", "adapter", target.Adapter.Hex(), "ready", len(ready))
+		observability.Log(ctx).V(1).Info("redeem scan", "adapter", target.Adapter.Hex(), "ready", len(ready))
 		s.redeemReady(ctx, target, ready)
 	}
 	s.observeTargetDerivedState(threeFStateRedeemable, totalReady, complete)
@@ -84,7 +83,7 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 	// Bound the batch so the multicall calldata + gas stay predictable; the remainder is picked up on
 	// the next redeem-poll cycle (Requests stay active until finalized).
 	if len(ready) > s.cfg.RedeemBatchSize {
-		observability.TraceLogger(ctx, s.log).
+		observability.Log(ctx).
 			Info("capping redeem batch", "ready", len(ready), "limit", s.cfg.RedeemBatchSize)
 		ready = ready[:s.cfg.RedeemBatchSize]
 	}
@@ -109,7 +108,6 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 	for _, key := range missed {
 		trace.SpanFromContext(submitCtx).AddEvent("link_miss", trace.WithAttributes(attribute.String("key", key)))
 	}
-	log := observability.TraceLogger(submitCtx, s.log)
 
 	res := s.txManager.Send(submitCtx, txmanager.Request{
 		Solver: Name,
@@ -128,19 +126,19 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 		if err == nil {
 			err = errors.Errorf("unexpected tx outcome %q", res.Outcome)
 		}
-		log.Error(err, "redeem: tx not included", "requests", len(ready), "outcome", res.Outcome)
+		observability.Log(submitCtx).Error(err, "redeem: tx not included", "requests", len(ready), "outcome", res.Outcome)
 		return
 	}
 	s.observeRedeemedRequests(len(ready))
 	if res.Outcome == txmanager.OutcomeIncludedUnconfirmed {
 		if res.Err != nil {
 			err = res.Err
-			log.Error(res.Err, "redeem included; confirmation tracking stopped",
+			observability.Log(submitCtx).Error(res.Err, "redeem included; confirmation tracking stopped",
 				"requests", len(ready), "tx", res.Hash.Hex())
 		} else {
-			log.Info("redeem included without final confirmation", "requests", len(ready), "tx", res.Hash.Hex())
+			observability.Log(submitCtx).Info("redeem included without final confirmation", "requests", len(ready), "tx", res.Hash.Hex())
 		}
 		return
 	}
-	log.Info("finalized ready requests", "count", len(ready), "tx", res.Hash.Hex())
+	observability.Log(submitCtx).Info("finalized ready requests", "count", len(ready), "tx", res.Hash.Hex())
 }

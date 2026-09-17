@@ -422,6 +422,13 @@ func TestRedeemAllOmitsTxHashWhenNotBroadcast(t *testing.T) {
 	}
 }
 
+// solverContext stands in for Solver.Run, which stores the solver logger on the context it passes
+// down to every tick below it.
+func solverContext(t *testing.T, s *Solver) context.Context {
+	t.Helper()
+	return observability.WithLogger(t.Context(), s.log)
+}
+
 // A listed offer whose submission is still remembered carries that trace on its log lines, so the
 // API's view of an offer joins back to the pass that created it without the trace backend (spec §12).
 func TestReconcileOffersStampsRememberedOfferTrace(t *testing.T) {
@@ -449,7 +456,7 @@ func TestReconcileOffersStampsRememberedOfferTrace(t *testing.T) {
 	wantTraceID := trace.SpanContextFromContext(offerCtx).TraceID().String()
 	endOffer(nil)
 
-	s.reconcileOffers(t.Context(), []Target{{Adapter: adapter}})
+	s.reconcileOffers(solverContext(t, s), []Target{{Adapter: adapter}})
 
 	var stamped bool
 	for _, line := range lines {
@@ -472,7 +479,7 @@ func TestDiscoverAndOfferLogsCarryTraceIDOnce(t *testing.T) {
 		func(entry string) { lines = append(lines, entry) }, funcr.Options{Verbosity: 1},
 	)
 
-	fixture.solver.discoverAndOffer(t.Context())
+	fixture.solver.discoverAndOffer(solverContext(t, fixture.solver))
 
 	if len(lines) == 0 {
 		t.Fatal("no log output captured")
