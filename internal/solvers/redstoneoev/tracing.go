@@ -37,6 +37,11 @@ func (s *Solver) auctionLogger(auctionID string) logr.Logger {
 func (s *Solver) startResultSpan(
 	ctx context.Context, name, auctionID string, attrs ...attribute.KeyValue,
 ) (context.Context, observability.EndFunc) {
+	// A frame that names no auction (a blacklist notice) has nothing to link to and nothing to
+	// narrow the logger by; looking the empty key up would only record a link_miss naming "".
+	if auctionID == "" {
+		return tracer.Start(ctx, name, attrs...)
+	}
 	ctx = observability.WithLogger(ctx, s.auctionLogger(auctionID))
 	ctx, end, _ := tracer.StartLinkedKey(ctx, s.links, auctionID, name,
 		append([]attribute.KeyValue{observability.AttrAuctionID.String(auctionID)}, attrs...)...)

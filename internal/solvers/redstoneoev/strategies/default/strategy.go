@@ -192,8 +192,12 @@ func (s *Strategy) refreshState(ctx context.Context) {
 }
 
 func (s *Strategy) DecideBid(ctx context.Context, input types.BidInput) (types.BidOutput, error) {
-	// The bid entry point: carry the strategy logger so every stage below logs through the context.
-	ctx = observability.WithLogger(ctx, s.log)
+	// The bid entry point: carry the strategy logger so every stage below logs through the context,
+	// unless the caller already installed one. Overwriting it would drop the auctionId the solver
+	// narrowed by, and every line below would lose the auction it belongs to.
+	if _, err := logr.FromContext(ctx); err != nil {
+		ctx = observability.WithLogger(ctx, s.log)
+	}
 
 	if input.Adapter.Address != (common.Address{}) && input.Adapter.Address != s.adapter {
 		return skipBid(skipNoLegs), nil
