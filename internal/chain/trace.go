@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/go-errors/errors"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -83,12 +84,17 @@ func traceConnect(ctx context.Context, role, transport string) (context.Context,
 	return ctx, func(err error) { endClientSpan(span, err) } //nolint:spancheck // see above
 }
 
-// endClientSpan ends an RPC client span, recording err unless the caller simply cancelled.
+// endClientSpan ends an RPC client span, recording err unless the caller simply cancelled or the
+// node had nothing to return. ethclient turns a null result into ethereum.NotFound, which is the
+// routine answer while a transaction is unmined or a block is unknown; over HTTP the same response
+// classifies as a success, so treat it as one here too rather than colouring the span red.
 func endClientSpan(span trace.Span, err error) {
 	switch {
 	case err == nil:
 	case errors.Is(err, context.Canceled):
 		span.AddEvent("cancelled")
+	case errors.Is(err, ethereum.NotFound):
+		span.AddEvent("not_found")
 	default:
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())

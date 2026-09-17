@@ -144,7 +144,10 @@ backend methods this repo calls (`CallContract`, `HeaderByNumber`, `HeaderByHash
 `SuggestGasTipCap`, `EstimateGas`, `TransactionReceipt`, `BalanceAt`, `CodeAt`, `BlockNumber`,
 `SendTransaction`, `NonceAt`, `PendingNonceAt`, `TransactionSenderBalanceAt`) and starts a client span
 named by the JSON-RPC method with `rpc.system=jsonrpc`, `rpc.method`, `chain.rpc.role` and
-`chain.rpc.transport`, so dashboards see one series across transports. `Multicall` is not spanned: it
+`chain.rpc.transport`, so dashboards see one series across transports. A cancelled call and an
+`ethereum.NotFound` (the null result a node returns for an unmined transaction or an unknown block)
+end the span with an event and no Error status: over HTTP the same response classifies as a success,
+and an unmined transaction is the txmanager's steady state, not a fault. `Multicall` is not spanned: it
 reaches the chain through `CallContract`, which is where its `eth_call` span belongs. Read and write
 endpoints are labelled separately, since only one of the two may be non-HTTP. On the HTTP path the
 shadowed methods are plain passthroughs and the transport's spans are the only RPC spans — a new call

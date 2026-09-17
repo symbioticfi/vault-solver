@@ -4,10 +4,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/gorilla/websocket"
 	"go.opentelemetry.io/otel"
@@ -77,16 +81,24 @@ func (s *wsRPC) upgradeHeader() http.Header {
 
 func (s *wsRPC) close() { s.server.Close() }
 
-// chainRPCResult answers the chain id, a head block number and an empty multicall return.
+// chainRPCResult answers the chain id, a head block number, an empty multicall return, and a null
+// receipt — what a node replies while a transaction is still unmined.
 func chainRPCResult(method string) string {
 	switch method {
 	case "eth_blockNumber":
 		return `"0x1"`
 	case rpcMethodCall:
 		return emptyAggregate3Result
+	case rpcMethodGetTransactionReceipt:
+		return `null`
 	default:
 		return `"0x7a69"` // 31337
 	}
+}
+
+// hasEvent reports whether the span recorded an event with the given name.
+func hasEvent(s sdktrace.ReadOnlySpan, name string) bool {
+	return slices.ContainsFunc(s.Events(), func(e sdktrace.Event) bool { return e.Name == name })
 }
 
 // countSpans returns how many ended spans carry the given name.
@@ -174,6 +186,51 @@ func TestDialWebsocket_ConnectSpanErrorOnDialFailure(t *testing.T) {
 	}
 }
 
+// TestTransactionReceiptOverWebsocket_NotFoundIsNotAnError covers the txmanager's steady state: an
+// unmined transaction answers null, which ethclient turns into ethereum.NotFound. The HTTP transport
+// classifies that response as a success, so the websocket span must not report it as an error either
+// or a single pending transaction paints a stream of spans red.
+func TestTransactionReceiptOverWebsocket_NotFoundIsNotAnError(t *testing.T) {
+	rec := tracetest.Install(t)
+	srv := newWSRPC(chainRPCResult)
+	defer srv.close()
+
+	c, err := Dial(t.Context(), []string{srv.url()}, "", testMulticall, logr.Discard())
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer c.Close()
+
+	if _, err = c.TransactionReceipt(t.Context(), common.Hash{}); !errors.Is(err, ethereum.NotFound) {
+		t.Fatalf("TransactionReceipt error = %v, want ethereum.NotFound", err)
+	}
+
+	span := endedSpan(t, rec, rpcMethodGetTransactionReceipt)
+	if span.Status().Code == codes.Error {
+		t.Fatalf("status = %v, want unset for a not-found receipt", span.Status())
+	}
+	if !hasEvent(span, "not_found") {
+		t.Fatalf("events = %v, want a not_found event", span.Events())
+	}
+}
+
+func TestRPCTransport(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want string
+	}{
+		{raw: "ws://node.internal:8546", want: rpcTransportWS},
+		{raw: "wss://node.internal:8546", want: rpcTransportWS},
+		{raw: "/var/run/geth.ipc", want: rpcTransportIPC},
+	} {
+		t.Run(tc.raw, func(t *testing.T) {
+			if got := rpcTransport(tc.raw); got != tc.want {
+				t.Fatalf("rpcTransport(%q) = %q, want %q", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestMulticallOverWebsocket_SpansOneCall pins the span down to CallContract: Multicall reaches the
 // chain through it, so a batched read must not produce a second, nested eth_call span.
 func TestMulticallOverWebsocket_SpansOneCall(t *testing.T) {
@@ -199,8 +256,7 @@ func TestMulticallOverWebsocket_SpansOneCall(t *testing.T) {
 // already spanned by fallbackTransport, so the shadowed methods must stay plain passthroughs.
 func TestDialHTTP_NoMethodLevelSpans(t *testing.T) {
 	rec := tracetest.Install(t)
-	var methods []string
-	srv := rpcRecorder(&methods, chainRPCResult)
+	srv := rpcRecorder(new([]string), chainRPCResult)
 	defer srv.Close()
 
 	c, err := Dial(t.Context(), []string{srv.URL}, "", testMulticall, logr.Discard())
