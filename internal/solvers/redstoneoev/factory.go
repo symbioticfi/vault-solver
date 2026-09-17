@@ -54,7 +54,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		seen:           newSeenAuctions(maxSeenAuctions),
 		stateRefreshCh: make(chan struct{}, 1),
 		log:            log,
-		links:          observability.NewSpanLinks(0),
+		links:          observability.NewSpanLinks(),
 	}
 	if deps.Metrics != nil {
 		s.metrics, err = newMetrics(deps.Metrics.Registerer(), cfg.Strategy.Name, s.wonReservationMetrics)

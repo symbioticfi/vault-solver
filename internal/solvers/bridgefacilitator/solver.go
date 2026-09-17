@@ -123,7 +123,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		offers:     newOfferTracker(),
 		metrics:    metrics,
 		operations: operations,
-		links:      observability.NewSpanLinks(0),
+		links:      observability.NewSpanLinks(),
 	}
 	// Seed the offer nonce sequence from the wall clock so it stays monotonic across restarts.
 	s.nonceSeq.Store(uint64(time.Now().UnixNano()))

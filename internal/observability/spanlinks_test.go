@@ -22,7 +22,7 @@ func tracedContext(t *testing.T) (context.Context, trace.SpanContext) {
 
 func TestSpanLinksRememberLookup(t *testing.T) {
 	ctx, sc := tracedContext(t)
-	l := NewSpanLinks(2)
+	l := newSpanLinks(2)
 	l.Remember(ctx, " Q1 ", time.Minute)
 	link, ok := l.Lookup("q1")
 	if !ok || link.SpanContext.TraceID() != sc.TraceID() {
@@ -33,14 +33,14 @@ func TestSpanLinksRememberLookup(t *testing.T) {
 	}
 	l.Remember(ctx, "", time.Minute)
 	l.Remember(context.Background(), "noctx", time.Minute)
-	if l.Len() != 1 {
-		t.Fatalf("len = %d, want 1 (empty key and no-span ctx ignored)", l.Len())
+	if l.len() != 1 {
+		t.Fatalf("len = %d, want 1 (empty key and no-span ctx ignored)", l.len())
 	}
 }
 
 func TestSpanLinksTTLAndEviction(t *testing.T) {
 	ctx, _ := tracedContext(t)
-	l := NewSpanLinks(2)
+	l := newSpanLinks(2)
 	now := time.Unix(1000, 0)
 	l.now = func() time.Time { return now }
 	l.Remember(ctx, "a", 10*time.Second)
@@ -56,8 +56,8 @@ func TestSpanLinksTTLAndEviction(t *testing.T) {
 	if _, ok := l.Lookup("b"); ok {
 		t.Fatal("b should have expired")
 	}
-	if l.Len() != 1 { // c still stored until swept or looked up
-		t.Fatalf("len = %d", l.Len())
+	if l.len() != 1 { // c still stored until swept or looked up
+		t.Fatalf("len = %d", l.len())
 	}
 }
 
@@ -65,7 +65,7 @@ func TestSpanLinksTTLAndEviction(t *testing.T) {
 // re-remembered key because its stale, already-expired order slot is still queued for eviction.
 func TestSpanLinksReRememberAfterExpiryDoesNotDesyncEviction(t *testing.T) {
 	ctx, _ := tracedContext(t)
-	l := NewSpanLinks(2)
+	l := newSpanLinks(2)
 	now := time.Unix(1000, 0)
 	l.now = func() time.Time { return now }
 

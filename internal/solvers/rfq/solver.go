@@ -77,7 +77,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 	// One process-local map shared by both services: the server remembers each served quote's span,
 	// the fill loop looks it up by quote id to link the two traces (spec §12).
-	links := observability.NewSpanLinks(0)
+	links := observability.NewSpanLinks()
 	exec.links = links
 	return &Solver{
 		cfg:  cfg,

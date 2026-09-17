@@ -4,8 +4,13 @@ package tracetest
 
 import (
 	"context"
+	"slices"
+	"strings"
+	"sync"
 	"testing"
 
+	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
@@ -43,6 +48,32 @@ func Install(tb testing.TB) *tracetest.SpanRecorder {
 // own narrow recorder interface can pass it straight through.
 type Recorder interface {
 	Ended() []sdktrace.ReadOnlySpan
+}
+
+// AllEnded returns every ended span with the given name, in the order they ended.
+func AllEnded(rec Recorder, name string) []sdktrace.ReadOnlySpan {
+	var out []sdktrace.ReadOnlySpan
+	for _, s := range rec.Ended() {
+		if s.Name() == name {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// RequireSpans fails the test unless every named span has ended.
+func RequireSpans(tb testing.TB, rec Recorder, names ...string) {
+	tb.Helper()
+	ended := Names(rec)
+	got := make(map[string]bool, len(ended))
+	for _, name := range ended {
+		got[name] = true
+	}
+	for _, name := range names {
+		if !got[name] {
+			tb.Fatalf("missing span %q; ended spans: %v", name, ended)
+		}
+	}
 }
 
 // Ended returns the ended span with the given name, failing the test when it is missing.
@@ -95,12 +126,79 @@ func HasEvent(s sdktrace.ReadOnlySpan, name string) bool {
 	return false
 }
 
+// RequireAttr fails the test unless the span carries key with the given value.
+func RequireAttr(tb testing.TB, s sdktrace.ReadOnlySpan, key, want string) {
+	tb.Helper()
+	if got := Attr(s, key); got != want {
+		tb.Fatalf("span %q %s = %q, want %q", s.Name(), key, got, want)
+	}
+}
+
+// RequireNoAttr fails the test when the span carries key at all.
+func RequireNoAttr(tb testing.TB, s sdktrace.ReadOnlySpan, key string) {
+	tb.Helper()
+	if got := Attr(s, key); got != "" {
+		tb.Fatalf("span %q %s = %q, want it unset", s.Name(), key, got)
+	}
+}
+
+// EventAttr returns the value key carries on the span's first event named event, and how many such
+// events the span recorded.
+func EventAttr(s sdktrace.ReadOnlySpan, event, key string) (value string, count int) {
+	for _, e := range s.Events() {
+		if e.Name != event {
+			continue
+		}
+		count++
+		if count > 1 {
+			continue
+		}
+		for _, kv := range e.Attributes {
+			if string(kv.Key) == key {
+				value = kv.Value.AsString()
+			}
+		}
+	}
+	return value, count
+}
+
 // RequireNoErrorSpans fails the test when any ended span carries an error status.
 func RequireNoErrorSpans(tb testing.TB, rec Recorder) {
 	tb.Helper()
 	for _, s := range rec.Ended() {
 		if s.Status().Code == codes.Error {
 			tb.Fatalf("span %q ended with error status %q", s.Name(), s.Status().Description)
+		}
+	}
+}
+
+// CaptureLogs returns a JSON logger at the given verbosity and a func reading back the lines it has
+// emitted. Safe to log from several goroutines, which the pipelines under test do.
+func CaptureLogs(tb testing.TB, verbosity int) (logr.Logger, func() []string) {
+	tb.Helper()
+	var mu sync.Mutex
+	var lines []string
+	log := funcr.NewJSON(func(entry string) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, entry)
+	}, funcr.Options{Verbosity: verbosity})
+	return log, func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return slices.Clone(lines)
+	}
+}
+
+// RequireTraceIDsOnce fails the test when a line carries trace_id or span_id more than once, which
+// is what storing an already-stamped logger would produce.
+func RequireTraceIDsOnce(tb testing.TB, lines []string) {
+	tb.Helper()
+	for _, line := range lines {
+		for _, key := range []string{`"trace_id"`, `"span_id"`} {
+			if n := strings.Count(line, key); n > 1 {
+				tb.Fatalf("%s appears %d times in %s", key, n, line)
+			}
 		}
 	}
 }

@@ -38,43 +38,6 @@ const (
 	tracingOnChainOrderID = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 )
 
-// spanRecorder is the slice of tracetest.SpanRecorder these assertions need.
-type spanRecorder interface {
-	Ended() []sdktrace.ReadOnlySpan
-}
-
-func endedSpans(rec spanRecorder, name string) []sdktrace.ReadOnlySpan {
-	out := make([]sdktrace.ReadOnlySpan, 0, 2)
-	for _, s := range rec.Ended() {
-		if s.Name() == name {
-			out = append(out, s)
-		}
-	}
-	return out
-}
-
-func requireSpans(t *testing.T, rec spanRecorder, want ...string) {
-	t.Helper()
-	got := make(map[string]bool, len(rec.Ended()))
-	for _, name := range tracetest.Names(rec) {
-		got[name] = true
-	}
-	for _, name := range want {
-		if !got[name] {
-			t.Fatalf("missing span %q; ended spans: %v", name, tracetest.Names(rec))
-		}
-	}
-}
-
-func hasSpanEvent(s sdktrace.ReadOnlySpan, name string) bool {
-	for _, event := range s.Events() {
-		if event.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
 func orderMessageSpan() string { return "lifi.order." + orderSubmitEvent }
 
 // neverAdmit fails the test if a message this solver should ignore reaches queue admission.
@@ -162,7 +125,7 @@ func TestOrderTraceSpansMessageThroughFill(t *testing.T) {
 
 	fixture.run(t)
 
-	requireSpans(t, rec,
+	tracetest.RequireSpans(t, rec,
 		orderMessageSpan(), "lifi.order.process", "lifi.order.plan",
 		"lifi.order.submit", "lifi.order.complete",
 	)
@@ -233,10 +196,10 @@ func TestOrderTraceDeclinesUnsupportedOrder(t *testing.T) {
 	if span.Status().Code == codes.Error {
 		t.Fatalf("an unsupported order must not be an error span: %v", span.Status())
 	}
-	if !hasSpanEvent(span, "declined") {
+	if !tracetest.HasEvent(span, "declined") {
 		t.Fatalf("message span has no declined event: %v", span.Events())
 	}
-	if hasSpanEvent(span, "exception") {
+	if tracetest.HasEvent(span, "exception") {
 		t.Fatalf("an unsupported order recorded an exception: %v", span.Events())
 	}
 }
@@ -258,7 +221,7 @@ func TestOrderTraceRecordsMalformedMessage(t *testing.T) {
 	if span.Status().Code != codes.Error {
 		t.Fatalf("message span status = %v, want an error", span.Status())
 	}
-	if !hasSpanEvent(span, "exception") {
+	if !tracetest.HasEvent(span, "exception") {
 		t.Fatalf("malformed message recorded no exception: %v", span.Events())
 	}
 }
@@ -277,7 +240,7 @@ func TestOrderProcessTraceRecordsChainFailure(t *testing.T) {
 	if process.Status().Code != codes.Error {
 		t.Fatalf("process span status = %v, want an error", process.Status())
 	}
-	if !hasSpanEvent(process, "exception") {
+	if !tracetest.HasEvent(process, "exception") {
 		t.Fatalf("failed order recorded no exception: %v", process.Events())
 	}
 	if !strings.Contains(process.Status().Description, statusErr.Error()) {
@@ -324,11 +287,11 @@ func TestOrderDepositRetriesShareOneProcessSpan(t *testing.T) {
 		t.Fatalf("runOrderWorker: %v", err)
 	}
 
-	if got := len(endedSpans(rec, "lifi.order.process")); got != 1 {
+	if got := len(tracetest.AllEnded(rec, "lifi.order.process")); got != 1 {
 		t.Fatalf("process spans = %d, want one shared by every retry", got)
 	}
 	process := tracetest.Ended(t, rec, "lifi.order.process")
-	deposits := endedSpans(rec, "lifi.order.deposit")
+	deposits := tracetest.AllEnded(rec, "lifi.order.deposit")
 	if len(deposits) != 2 {
 		t.Fatalf("deposit stage spans = %d, want one per retry (spans %v)", len(deposits), tracetest.Names(rec))
 	}
@@ -417,18 +380,18 @@ func TestOrderCapacityRetrySpansReserveStage(t *testing.T) {
 		t.Fatal("worker did not finish after both fills completed")
 	}
 
-	reserves := endedSpans(rec, "lifi.order.reserve")
+	reserves := tracetest.AllEnded(rec, "lifi.order.reserve")
 	if len(reserves) != 1 {
 		t.Fatalf("reserve stage spans = %d, want one retry (spans %v)", len(reserves), tracetest.Names(rec))
 	}
 	if got := tracetest.Attr(reserves[0], "tx.attempt"); got != "1" {
 		t.Fatalf("reserve span tx.attempt = %q, want 1", got)
 	}
-	if got := len(endedSpans(rec, "lifi.order.process")); got != 2 {
+	if got := len(tracetest.AllEnded(rec, "lifi.order.process")); got != 2 {
 		t.Fatalf("process spans = %d, want one per order", got)
 	}
 	var deferredProcess sdktrace.ReadOnlySpan
-	for _, process := range endedSpans(rec, "lifi.order.process") {
+	for _, process := range tracetest.AllEnded(rec, "lifi.order.process") {
 		if process.SpanContext().SpanID() == reserves[0].Parent().SpanID() {
 			deferredProcess = process
 		}
@@ -483,7 +446,7 @@ func TestOrderReplayKeepsProcessSpanOpenUntilFill(t *testing.T) {
 	}
 	// The replay has been through the worker and the fill is still pending: the span the live copy
 	// writes to must still be open.
-	if got := len(endedSpans(rec, "lifi.order.process")); got != 0 {
+	if got := len(tracetest.AllEnded(rec, "lifi.order.process")); got != 0 {
 		t.Fatalf("process spans ended while the fill was pending = %d, want none (spans %v)",
 			got, tracetest.Names(rec))
 	}
@@ -497,7 +460,7 @@ func TestOrderReplayKeepsProcessSpanOpenUntilFill(t *testing.T) {
 		t.Fatal("worker did not finish after the fill completed")
 	}
 
-	if got := len(endedSpans(rec, "lifi.order.process")); got != 1 {
+	if got := len(tracetest.AllEnded(rec, "lifi.order.process")); got != 1 {
 		t.Fatalf("process spans = %d, want one shared by the replay (spans %v)", got, tracetest.Names(rec))
 	}
 	process := tracetest.Ended(t, rec, "lifi.order.process")
@@ -561,7 +524,7 @@ func TestOrderWorkerShutdownEndsQueuedDepositRetrySpan(t *testing.T) {
 		t.Fatal("worker did not stop after cancellation")
 	}
 
-	processes := endedSpans(rec, "lifi.order.process")
+	processes := tracetest.AllEnded(rec, "lifi.order.process")
 	if len(processes) != 1 {
 		t.Fatalf("process spans = %d, want exactly one ended at shutdown (spans %v)",
 			len(processes), tracetest.Names(rec))
@@ -572,7 +535,7 @@ func TestOrderWorkerShutdownEndsQueuedDepositRetrySpan(t *testing.T) {
 	if processes[0].Status().Code == codes.Error {
 		t.Fatalf("a cancelled order must not be an error span: %v", processes[0].Status())
 	}
-	if !hasSpanEvent(processes[0], "cancelled") {
+	if !tracetest.HasEvent(processes[0], "cancelled") {
 		t.Fatalf("process span has no cancelled event: %v", processes[0].Events())
 	}
 	if len(fixture.txm.reqs) != 0 {
@@ -690,7 +653,7 @@ func TestOrderReplayKeepsProcessSpanOpenWhileQueuedForCapacity(t *testing.T) {
 	}
 
 	var deferredSpans []sdktrace.ReadOnlySpan
-	for _, process := range endedSpans(rec, "lifi.order.process") {
+	for _, process := range tracetest.AllEnded(rec, "lifi.order.process") {
 		if tracetest.Attr(process, "order.id") == deferred.OrderID {
 			deferredSpans = append(deferredSpans, process)
 		}
@@ -702,7 +665,7 @@ func TestOrderReplayKeepsProcessSpanOpenWhileQueuedForCapacity(t *testing.T) {
 	if got := tracetest.Attr(deferredSpans[0], "tx.hash"); got != txm.fillResult().Hash.Hex() {
 		t.Fatalf("deferred process span tx.hash = %q, want %s", got, txm.fillResult().Hash.Hex())
 	}
-	if got := len(endedSpans(rec, "lifi.order.reserve")); got != 1 {
+	if got := len(tracetest.AllEnded(rec, "lifi.order.reserve")); got != 1 {
 		t.Fatalf("reserve stage spans = %d, want one retry", got)
 	}
 }
@@ -736,10 +699,10 @@ func TestOrderPlanTraceDeclinesUnsupportedOutputContext(t *testing.T) {
 	if plan.Status().Code == codes.Error {
 		t.Fatalf("an unsupported output context must not be an error span: %v", plan.Status())
 	}
-	if !hasSpanEvent(plan, "declined") {
+	if !tracetest.HasEvent(plan, "declined") {
 		t.Fatalf("plan span has no declined event: %v", plan.Events())
 	}
-	if hasSpanEvent(plan, "exception") {
+	if tracetest.HasEvent(plan, "exception") {
 		t.Fatalf("an unsupported output context recorded an exception: %v", plan.Events())
 	}
 	process := tracetest.Ended(t, rec, "lifi.order.process")
@@ -806,7 +769,7 @@ func TestQuoteRefreshTraceReachesOrderServer(t *testing.T) {
 
 	solver.refreshQuotes(t.Context(), nil, newQuoteState(time.Second))
 
-	requireSpans(t, rec, "lifi.quotes.refresh", "lifi.quotes.decide", "lifi.quotes.reconcile")
+	tracetest.RequireSpans(t, rec, "lifi.quotes.refresh", "lifi.quotes.decide", "lifi.quotes.reconcile")
 	refresh := tracetest.Ended(t, rec, "lifi.quotes.refresh")
 	if refresh.Parent().IsValid() {
 		t.Fatalf("quote refresh span has parent %v, want a root", refresh.Parent())
@@ -932,29 +895,18 @@ func TestOrderFeedDialCarriesTraceparent(t *testing.T) {
 func TestOrderLogsCarryTraceIDOnce(t *testing.T) {
 	tracetest.Install(t)
 	fixture := newTracingOrderFixture(t)
-	var mu sync.Mutex
-	var lines []string
-	fixture.solver.log = funcr.NewJSON(func(entry string) {
-		mu.Lock()
-		defer mu.Unlock()
-		lines = append(lines, entry)
-	}, funcr.Options{Verbosity: 1})
+	log, capture := tracetest.CaptureLogs(t, 1)
+	fixture.solver.log = log
 
 	fixture.run(t)
 
-	mu.Lock()
-	defer mu.Unlock()
+	lines := capture()
 	if len(lines) == 0 {
 		t.Fatal("no log output captured")
 	}
+	tracetest.RequireTraceIDsOnce(t, lines)
 	var sawOrderLine bool
 	for _, line := range lines {
-		if n := strings.Count(line, `"trace_id"`); n > 1 {
-			t.Fatalf("trace_id appears %d times in %s", n, line)
-		}
-		if n := strings.Count(line, `"span_id"`); n > 1 {
-			t.Fatalf("span_id appears %d times in %s", n, line)
-		}
 		if strings.Contains(line, `"orderId"`) && strings.Contains(line, `"trace_id"`) {
 			sawOrderLine = true
 		}
@@ -988,12 +940,8 @@ func TestFillCompletionOmitsTxHashWhenNotBroadcast(t *testing.T) {
 	}
 	for _, name := range []string{"lifi.order.process", "lifi.order.complete"} {
 		span := tracetest.Ended(t, rec, name)
-		if got := tracetest.Attr(span, "tx.hash"); got != "" {
-			t.Fatalf("%s tx.hash = %q, want no attribute for a transaction that never went out", name, got)
-		}
-		if got := tracetest.Attr(span, "tx.outcome"); got != string(txmanager.OutcomeSubmissionError) {
-			t.Fatalf("%s tx.outcome = %q, want %s", name, got, txmanager.OutcomeSubmissionError)
-		}
+		tracetest.RequireNoAttr(t, span, "tx.hash") // a transaction that never went out has none
+		tracetest.RequireAttr(t, span, "tx.outcome", string(txmanager.OutcomeSubmissionError))
 	}
 }
 

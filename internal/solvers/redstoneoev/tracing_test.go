@@ -14,34 +14,16 @@ import (
 	"github.com/go-logr/logr/funcr"
 	"github.com/gorilla/websocket"
 	"go.opentelemetry.io/otel/codes"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
-// spanRecorder is the slice of tracetest.SpanRecorder these assertions need.
-type spanRecorder interface {
-	Ended() []sdktrace.ReadOnlySpan
-}
-
-func noSpan(t *testing.T, rec spanRecorder, name string) {
+func noSpan(t *testing.T, rec tracetest.Recorder, name string) {
 	t.Helper()
-	for _, s := range rec.Ended() {
-		if s.Name() == name {
-			t.Fatalf("span %q was started, want none; ended spans: %v", name, tracetest.Names(rec))
-		}
+	if got := tracetest.AllEnded(rec, name); len(got) != 0 {
+		t.Fatalf("span %q was started, want none; ended spans: %v", name, tracetest.Names(rec))
 	}
-}
-
-func eventCount(s sdktrace.ReadOnlySpan, name string) int {
-	n := 0
-	for _, e := range s.Events() {
-		if e.Name == name {
-			n++
-		}
-	}
-	return n
 }
 
 // tracedAuction returns a seeded solver plus a freshly emitted, liquidatable auction frame — the
@@ -178,12 +160,10 @@ func TestAuctionResultLinkMissStaysInert(t *testing.T) {
 	if got := len(result.Links()); got != 0 {
 		t.Fatalf("result links = %d, want 0", got)
 	}
-	if got := eventCount(result, "link_miss"); got != 1 {
-		t.Fatalf("link_miss events = %d, want 1", got)
+	if key, got := tracetest.EventAttr(result, "link_miss", "key"); got != 1 || key != "unknown-auction" {
+		t.Fatalf("link_miss events = %d with key %q, want 1 with unknown-auction", got, key)
 	}
-	if got := tracetest.Attr(result, "quote.trace_id"); got != "" {
-		t.Fatalf("quote.trace_id = %q, want unset on a miss", got)
-	}
+	tracetest.RequireNoAttr(t, result, "quote.trace_id")
 	if pending := s.inFlightSnapshot().pending; len(pending) != 0 {
 		t.Fatalf("a lost auction result must release the reservation, pending = %v", pending)
 	}

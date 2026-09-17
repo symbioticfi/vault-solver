@@ -109,7 +109,7 @@ func seededSolverWithGasAccounting(t *testing.T, gasAccounting bool) (*Solver, *
 		breaker: newBreaker(3, time.Hour),
 		seen:    newSeenAuctions(maxSeenAuctions),
 		log:     logr.Discard(),
-		links:   observability.NewSpanLinks(0),
+		links:   observability.NewSpanLinks(),
 		deps:    solver.Deps{Signer: sgnr},
 		// Disconnected WS client: Send just buffers into its channel, which tests drain to capture solves.
 		ws: newWSClient(wsConfig{URL: "wss://test", APIKey: "k", Topics: []string{"t"}}, logr.Discard(), func(context.Context, []byte) {}, nil),

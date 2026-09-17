@@ -12,9 +12,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
-	"github.com/go-logr/logr/funcr"
 	"go.opentelemetry.io/otel/codes"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
@@ -27,24 +25,6 @@ const (
 	inboundTraceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 	inboundTraceID     = "4bf92f3577b34da6a3ce929d0e0e4736"
 )
-
-// spanRecorder is the slice of tracetest.SpanRecorder these assertions need.
-type spanRecorder interface {
-	Ended() []sdktrace.ReadOnlySpan
-}
-
-func requireSpans(t *testing.T, rec spanRecorder, want ...string) {
-	t.Helper()
-	got := make(map[string]bool, len(rec.Ended()))
-	for _, name := range tracetest.Names(rec) {
-		got[name] = true
-	}
-	for _, name := range want {
-		if !got[name] {
-			t.Fatalf("missing span %q; ended spans: %v", name, tracetest.Names(rec))
-		}
-	}
-}
 
 func postQuote(t *testing.T, h http.Handler, body quoteRequest, traceparent string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -80,7 +60,7 @@ func TestServer_QuoteTracing(t *testing.T) {
 			t.Fatalf("span %s is in trace %s, want the inbound trace %s", s.Name(), got, inboundTraceID)
 		}
 	}
-	requireSpans(t, rec, "POST /quote", "rfq.quote", "rfq.quote.snapshot", "rfq.quote.decide")
+	tracetest.RequireSpans(t, rec, "POST /quote", "rfq.quote", "rfq.quote.snapshot", "rfq.quote.decide")
 
 	server := tracetest.Ended(t, rec, "POST /quote")
 	if got := tracetest.Attr(server, "quote.id"); got != body.QuoteID {
@@ -105,8 +85,7 @@ func TestServer_QuoteTracing(t *testing.T) {
 func TestServer_AccessLogCarriesTraceIDOnce(t *testing.T) {
 	tracetest.Install(t)
 	srv := testServer()
-	var lines []string
-	log := funcr.NewJSON(func(entry string) { lines = append(lines, entry) }, funcr.Options{})
+	log, capture := tracetest.CaptureLogs(t, 0)
 
 	encoded, err := json.Marshal(validQuoteBody())
 	if err != nil {
@@ -119,11 +98,10 @@ func TestServer_AccessLogCarriesTraceIDOnce(t *testing.T) {
 	req.Header.Set("traceparent", inboundTraceparent)
 	srv.handler().ServeHTTP(httptest.NewRecorder(), req)
 
+	lines := capture()
+	tracetest.RequireTraceIDsOnce(t, lines)
 	var sawRequestLine bool
 	for _, line := range lines {
-		if n := strings.Count(line, `"trace_id"`); n > 1 {
-			t.Fatalf("trace_id appears %d times in %s", n, line)
-		}
 		if !strings.Contains(line, `"msg":"request"`) {
 			continue
 		}
@@ -160,7 +138,7 @@ func TestServer_QuoteTracingEndsSpansOnPanic(t *testing.T) {
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("panicking quote = %d, want 500 (body %s)", rr.Code, rr.Body.String())
 	}
-	requireSpans(t, rec, "POST /quote", "rfq.quote", "rfq.quote.decide")
+	tracetest.RequireSpans(t, rec, "POST /quote", "rfq.quote", "rfq.quote.decide")
 }
 
 // A well-formed request this filler cannot quote is not a failure: the span declines instead of
@@ -204,7 +182,7 @@ func TestExecution_OrderTraceLinksToQuote(t *testing.T) {
 
 	e.syncOnce(t.Context())
 
-	requireSpans(t, rec,
+	tracetest.RequireSpans(t, rec,
 		"rfq.execution.sync", "rfq.execution.poll", "rfq.order",
 		"rfq.order.resolve", "rfq.order.plan", "rfq.order.build", "rfq.order.submit", "rfq.order.report",
 	)
@@ -255,12 +233,8 @@ func TestExecution_SubmissionErrorOmitsTxHash(t *testing.T) {
 	}
 	for _, name := range []string{"rfq.order", "rfq.order.submit"} {
 		span := tracetest.Ended(t, rec, name)
-		if got := tracetest.Attr(span, "tx.hash"); got != "" {
-			t.Fatalf("%s tx.hash = %q, want no attribute for a transaction that never went out", name, got)
-		}
-		if got := tracetest.Attr(span, "tx.outcome"); got != string(txmanager.OutcomeSubmissionError) {
-			t.Fatalf("%s tx.outcome = %q, want %s", name, got, txmanager.OutcomeSubmissionError)
-		}
+		tracetest.RequireNoAttr(t, span, "tx.hash") // a transaction that never went out has none
+		tracetest.RequireAttr(t, span, "tx.outcome", string(txmanager.OutcomeSubmissionError))
 	}
 	if got := tracetest.Ended(t, rec, "rfq.order.submit").Status().Code; got != codes.Error {
 		t.Fatalf("submit span status = %v, want Error", got)
@@ -281,24 +255,8 @@ func TestExecution_OrderTraceRecordsLinkMiss(t *testing.T) {
 	if len(order.Links()) != 0 {
 		t.Fatalf("order span links = %v, want none", order.Links())
 	}
-	var misses int
-	for _, event := range order.Events() {
-		if event.Name != "link_miss" {
-			continue
-		}
-		misses++
-		var key string
-		for _, kv := range event.Attributes {
-			if kv.Key == "key" {
-				key = kv.Value.AsString()
-			}
-		}
-		if key != "q1" {
-			t.Fatalf("link_miss key = %q, want q1", key)
-		}
-	}
-	if misses != 1 {
-		t.Fatalf("link_miss events = %d, want 1 (events %v)", misses, order.Events())
+	if key, misses := tracetest.EventAttr(order, "link_miss", "key"); misses != 1 || key != "q1" {
+		t.Fatalf("link_miss events = %d with key %q, want 1 with q1", misses, key)
 	}
 	if txm.calls != 1 {
 		t.Fatalf("txm sends = %d, want the fill to proceed unlinked", txm.calls)
@@ -351,24 +309,20 @@ func TestExecution_OrderTraceDeclinesRefusedFill(t *testing.T) {
 func TestExecution_OrderLogsCarryTraceIDOnce(t *testing.T) {
 	tracetest.Install(t)
 	st, be := fillFixtures(t)
-	var lines []string
 	e := newExec(t, st, be, &fakeTxm{result: confirmedTxResult()})
-	e.log = funcr.NewJSON(func(entry string) { lines = append(lines, entry) }, funcr.Options{Verbosity: 1})
+	log, capture := tracetest.CaptureLogs(t, 1)
+	e.log = log
 
 	// solver.Run stores the solver logger on the context it hands the poll loop; stand in for it.
 	e.syncOnce(observability.WithLogger(t.Context(), e.log))
 
+	lines := capture()
 	if len(lines) == 0 {
 		t.Fatal("no log output captured")
 	}
+	tracetest.RequireTraceIDsOnce(t, lines)
 	var sawOrderLine bool
 	for _, line := range lines {
-		if n := strings.Count(line, `"trace_id"`); n > 1 {
-			t.Fatalf("trace_id appears %d times in %s", n, line)
-		}
-		if n := strings.Count(line, `"span_id"`); n > 1 {
-			t.Fatalf("span_id appears %d times in %s", n, line)
-		}
 		if strings.Contains(line, `"orderId"`) && strings.Contains(line, `"trace_id"`) {
 			sawOrderLine = true
 		}
@@ -383,10 +337,8 @@ func TestExecution_OrderLogsCarryTraceIDOnce(t *testing.T) {
 func TestQuote_DeclineLogsCarryTraceIDOnce(t *testing.T) {
 	tracetest.Install(t)
 	srv := testServer()
-	var lines []string
-	srv.quotes.log = funcr.NewJSON(
-		func(entry string) { lines = append(lines, entry) }, funcr.Options{Verbosity: 1},
-	)
+	log, capture := tracetest.CaptureLogs(t, 1)
+	srv.quotes.log = log
 	body := validQuoteBody()
 	body.TokenInChainID = 2 // not our chain
 
@@ -394,11 +346,10 @@ func TestQuote_DeclineLogsCarryTraceIDOnce(t *testing.T) {
 		t.Fatalf("quote: %v", err)
 	}
 
+	lines := capture()
+	tracetest.RequireTraceIDsOnce(t, lines)
 	var sawDecline bool
 	for _, line := range lines {
-		if n := strings.Count(line, `"trace_id"`); n > 1 {
-			t.Fatalf("trace_id appears %d times in %s", n, line)
-		}
 		if strings.Contains(line, "declining quote: not quotable") && strings.Contains(line, `"trace_id"`) {
 			sawDecline = true
 		}

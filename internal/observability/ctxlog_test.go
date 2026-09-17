@@ -7,6 +7,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
@@ -95,5 +96,63 @@ func TestLogFallsBackToTheDefaultLogger(t *testing.T) {
 	got := lines()
 	if len(got) != 1 || !strings.Contains(got[0], `"msg":"fallback"`) {
 		t.Fatalf("lines = %v, want the line on the default logger", got)
+	}
+}
+
+// The stamp is memoised per span, so a logger narrowed after the span started must get a fresh slot
+// — otherwise the span would keep serving the logger it had before the narrowing.
+func TestWithLoggerAfterASpanStartWins(t *testing.T) {
+	tracetest.Install(t)
+	log, lines := captureJSON()
+	tracer := observability.NewTracer("test", "rfq")
+	ctx, end := tracer.Start(observability.WithLogger(t.Context(), log), "rfq.order")
+	defer end(nil)
+
+	observability.Log(ctx).Info("before")
+	ctx = observability.WithLogger(ctx, log.WithValues("orderId", "o1"))
+	observability.Log(ctx).Info("after")
+
+	got := lines()
+	if len(got) != 2 {
+		t.Fatalf("lines = %v, want two", got)
+	}
+	if strings.Contains(got[0], `"orderId"`) {
+		t.Fatalf("first line predates the narrowing: %s", got[0])
+	}
+	if !strings.Contains(got[1], `"orderId":"o1"`) {
+		t.Fatalf("narrowed logger lost: %s", got[1])
+	}
+	spanID := trace.SpanContextFromContext(ctx).SpanID().String()
+	for _, line := range got {
+		if !strings.Contains(line, `"span_id":"`+spanID+`"`) {
+			t.Fatalf("line does not carry the span id: %s", line)
+		}
+	}
+	tracetest.RequireTraceIDsOnce(t, got)
+}
+
+// The memoised logger is what keeps a hot span's log lines allocation-free; it must still be the
+// same logger every call.
+func BenchmarkLogUnderASpan(b *testing.B) {
+	tracetest.Install(b)
+	tracer := observability.NewTracer("test", "rfq")
+	ctx, end := tracer.Start(observability.WithLogger(b.Context(), logr.Discard()), "rfq.order")
+	defer end(nil)
+	observability.Log(ctx) // fill the slot; the benchmark measures the steady state
+
+	b.ReportAllocs()
+	for b.Loop() {
+		observability.Log(ctx)
+	}
+}
+
+func BenchmarkStartEnd(b *testing.B) {
+	tracer := observability.NewTracer("test", "rfq")
+	ctx := b.Context()
+
+	b.ReportAllocs()
+	for b.Loop() {
+		_, end := tracer.Start(ctx, "rfq.order")
+		end(nil)
 	}
 }

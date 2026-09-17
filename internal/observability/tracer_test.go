@@ -2,7 +2,9 @@ package observability_test
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/go-errors/errors"
 	"go.opentelemetry.io/otel/codes"
@@ -74,7 +76,7 @@ func TestStartLinked(t *testing.T) {
 	tr := observability.NewTracer("test", "rfq")
 	quoteCtx, endQuote := tr.Start(t.Context(), "rfq.quote")
 	endQuote(nil)
-	link := observability.LinkFromContext(quoteCtx)
+	link := trace.Link{SpanContext: trace.SpanContextFromContext(quoteCtx)}
 	_, end := tr.StartLinked(t.Context(), "rfq.order", []trace.Link{link})
 	end(nil)
 	s := tracetest.Ended(t, rec, "rfq.order")
@@ -153,4 +155,67 @@ func BenchmarkStartEndRecordingParallel(b *testing.B) {
 			end(nil)
 		}
 	})
+}
+
+func TestStartLinkedKeyLinksAndStampsTheLogger(t *testing.T) {
+	rec := tracetest.Install(t)
+	tr := observability.NewTracer("test", "rfq")
+	links := observability.NewSpanLinks()
+	log, lines := tracetest.CaptureLogs(t, 1)
+
+	quoteCtx, endQuote := tr.Start(t.Context(), "rfq.quote")
+	links.Remember(quoteCtx, "q1", time.Minute)
+	endQuote(nil)
+	quoteTrace := trace.SpanContextFromContext(quoteCtx).TraceID().String()
+
+	ctx, end, gotTrace := tr.StartLinkedKey(
+		observability.WithLogger(t.Context(), log), links, "q1", "rfq.order",
+		observability.AttrOrderID.String("o1"),
+	)
+	observability.Log(ctx).Info("linked")
+	end(nil)
+
+	if gotTrace != quoteTrace {
+		t.Fatalf("returned trace id = %q, want %q", gotTrace, quoteTrace)
+	}
+	span := tracetest.Ended(t, rec, "rfq.order")
+	if len(span.Links()) != 1 || span.Links()[0].SpanContext.TraceID().String() != quoteTrace {
+		t.Fatalf("link not recorded: %v", span.Links())
+	}
+	tracetest.RequireAttr(t, span, "quote.trace_id", quoteTrace)
+	tracetest.RequireAttr(t, span, "order.id", "o1")
+	if tracetest.HasEvent(span, "link_miss") {
+		t.Fatal("a resolved link must not record link_miss")
+	}
+	got := lines()
+	if len(got) != 1 || !strings.Contains(got[0], `"quoteTraceId":"`+quoteTrace+`"`) {
+		t.Fatalf("lines = %v, want one carrying quoteTraceId", got)
+	}
+	tracetest.RequireTraceIDsOnce(t, got)
+}
+
+func TestStartLinkedKeyRecordsAMissAndCarriesOn(t *testing.T) {
+	rec := tracetest.Install(t)
+	tr := observability.NewTracer("test", "rfq")
+
+	// A nil map is the same miss as an unknown key: linking is best effort (spec §12).
+	for name, links := range map[string]*observability.SpanLinks{
+		"rfq.order.nil":   nil,
+		"rfq.order.empty": observability.NewSpanLinks(),
+	} {
+		_, end, gotTrace := tr.StartLinkedKey(t.Context(), links, "q1", name)
+		end(nil)
+		if gotTrace != "" {
+			t.Fatalf("%s: trace id = %q, want empty on a miss", name, gotTrace)
+		}
+		span := tracetest.Ended(t, rec, name)
+		if len(span.Links()) != 0 {
+			t.Fatalf("%s: links = %v, want none", name, span.Links())
+		}
+		tracetest.RequireNoAttr(t, span, "quote.trace_id")
+		key, misses := tracetest.EventAttr(span, "link_miss", "key")
+		if misses != 1 || key != "q1" {
+			t.Fatalf("%s: link_miss events = %d with key %q, want 1 with q1", name, misses, key)
+		}
+	}
 }

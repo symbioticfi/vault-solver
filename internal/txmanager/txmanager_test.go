@@ -15,7 +15,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
-	"github.com/go-logr/logr/funcr"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 
@@ -3249,13 +3248,7 @@ func TestTrySendBusyLaneDeclinesWithoutErrorStatus(t *testing.T) {
 // from a logger that already carries trace ids.
 func TestSendLifecycleLogsCarryTraceIDOnce(t *testing.T) {
 	tracetest.Install(t)
-	var mu sync.Mutex
-	var lines []string
-	log := funcr.NewJSON(func(entry string) {
-		mu.Lock()
-		defer mu.Unlock()
-		lines = append(lines, entry)
-	}, funcr.Options{Verbosity: 1})
+	log, capture := tracetest.CaptureLogs(t, 1)
 	m := New(newMockBackend(), mustSigner(t), big.NewInt(11155111),
 		Config{Confirmations: 0, PollInterval: time.Millisecond}, log)
 	startManagerForTest(t, m)
@@ -3269,16 +3262,13 @@ func TestSendLifecycleLogsCarryTraceIDOnce(t *testing.T) {
 		t.Fatalf("outcome %v err %v", res.Outcome, res.Err)
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
+	lines := capture()
+	tracetest.RequireTraceIDsOnce(t, lines)
 	want := `"trace_id":"` + parent.SpanContext().TraceID().String() + `"`
 	// "sent" comes from the worker's broadcast, "transaction confirmed" from the detached lifecycle
 	// goroutine: both must reach the request's logger and carry the caller's trace.
 	seen := map[string]bool{"sent": false, "transaction confirmed": false}
 	for _, line := range lines {
-		if n := strings.Count(line, `"trace_id"`); n > 1 {
-			t.Fatalf("trace_id appears %d times in %s", n, line)
-		}
 		for msg := range seen {
 			if !strings.Contains(line, `"msg":"`+msg+`"`) {
 				continue

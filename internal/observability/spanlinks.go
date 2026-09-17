@@ -13,7 +13,8 @@ const defaultSpanLinkEntries = 1024
 
 // SpanLinks remembers span contexts by an application key (quote id, auction id, request address)
 // so later work in a different context tree can link back to them (spec §12). It is process-local,
-// bounded, and best effort: a miss is an ordinary (link, false) result, never an error.
+// bounded, and best effort: a miss is an ordinary (link, false) result, never an error. A nil
+// *SpanLinks disables linking, so callers never need to guard on it.
 type SpanLinks struct {
 	mu      sync.Mutex
 	max     int
@@ -34,17 +35,21 @@ type orderedKey struct {
 	seq uint64
 }
 
-// NewSpanLinks creates a map holding at most maxEntries (1024 when <= 0).
-func NewSpanLinks(maxEntries int) *SpanLinks {
-	if maxEntries <= 0 {
-		maxEntries = defaultSpanLinkEntries
-	}
+// NewSpanLinks creates a map holding at most defaultSpanLinkEntries entries.
+func NewSpanLinks() *SpanLinks {
+	return newSpanLinks(defaultSpanLinkEntries)
+}
+
+func newSpanLinks(maxEntries int) *SpanLinks {
 	return &SpanLinks{max: maxEntries, now: time.Now, entries: make(map[string]spanLinkEntry, maxEntries)}
 }
 
 // Remember stores the span context of ctx under key for ttl. Empty keys and contexts without a
 // valid span context are ignored, so callers never need to check tracing state first.
 func (l *SpanLinks) Remember(ctx context.Context, key string, ttl time.Duration) {
+	if l == nil {
+		return
+	}
 	sc := trace.SpanContextFromContext(ctx)
 	key = normalizeLinkKey(key)
 	if key == "" || !sc.IsValid() {
@@ -69,6 +74,9 @@ func (l *SpanLinks) Remember(ctx context.Context, key string, ttl time.Duration)
 
 // Lookup returns a link to the remembered span, dropping it if expired.
 func (l *SpanLinks) Lookup(key string) (trace.Link, bool) {
+	if l == nil {
+		return trace.Link{}, false
+	}
 	key = normalizeLinkKey(key)
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -83,8 +91,8 @@ func (l *SpanLinks) Lookup(key string) (trace.Link, bool) {
 	return trace.Link{SpanContext: entry.sc}, true
 }
 
-// Len reports stored entries, expired or not (for tests and diagnostics).
-func (l *SpanLinks) Len() int {
+// len reports stored entries, expired or not (for tests and diagnostics).
+func (l *SpanLinks) len() int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return len(l.entries)

@@ -3,11 +3,12 @@ package observability
 import (
 	"context"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -33,47 +34,38 @@ func isProbePath(p string) bool {
 
 // TraceTransport wraps base (nil means http.DefaultTransport) so every request runs in a client span
 // named "<peer> <METHOD>" and carries traceparent. peer is a short integration name, never a URL.
-// The recorded url.full never carries the query string (see stripQuery).
+// The recorded url.full never carries the query string (see redactURL).
 func TraceTransport(base http.RoundTripper, peer string) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	return stripQuery{next: otelhttp.NewTransport(restoreQuery{base: base},
+	return otelhttp.NewTransport(redactURL{base: base},
 		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
 			return peer + " " + r.Method
 		}),
 		otelhttp.WithSpanOptions(trace.WithAttributes(attribute.String("peer.service", peer))),
-	)}
+	)
 }
 
-// strippedQuery carries the request URL past otelhttp, which clones the request before handing it to
-// the transport below it.
-type strippedQuery struct{}
+// redactURL sits below otelhttp, which records the request URL as url.full and offers no option to
+// omit the query string: an operator-configured peer URL (the webhook strategy's) may embed a token.
+// otelhttp has already set the attribute by the time it calls down, so overwriting it here leaves
+// the request that goes on the wire untouched.
+type redactURL struct{ base http.RoundTripper }
 
-// stripQuery hides the query string from otelhttp, which records the request URL as url.full and
-// offers no option to omit it: an operator-configured peer URL (the webhook strategy's) may embed a
-// token. Userinfo needs no such care — otelhttp already strips that from url.full.
-type stripQuery struct{ next http.RoundTripper }
-
-func (t stripQuery) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.URL == nil || req.URL.RawQuery == "" {
-		return t.next.RoundTrip(req)
+func (t redactURL) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL != nil && req.URL.RawQuery != "" {
+		redacted := *req.URL
+		redacted.RawQuery = ""
+		redacted.User = nil
+		trace.SpanFromContext(req.Context()).
+			SetAttributes(attribute.String("url.full", redacted.String()))
 	}
-	stripped := req.Clone(context.WithValue(req.Context(), strippedQuery{}, req.URL))
-	stripped.URL.RawQuery = ""
-	return t.next.RoundTrip(stripped)
+	return t.base.RoundTrip(req)
 }
 
-// restoreQuery puts the real URL back on the request that goes on the wire, keeping everything
-// otelhttp set on it (traceparent, the body wrapper it measures).
-type restoreQuery struct{ base http.RoundTripper }
-
-func (t restoreQuery) RoundTrip(req *http.Request) (*http.Response, error) {
-	original, ok := req.Context().Value(strippedQuery{}).(*url.URL)
-	if !ok {
-		return t.base.RoundTrip(req)
-	}
-	restored := req.Clone(req.Context())
-	restored.URL = original
-	return t.base.RoundTrip(restored)
+// InjectTraceHeaders writes ctx's W3C trace context into h, so a connection that is not an
+// http.Client request (a websocket handshake, an RPC dial) still continues the trace.
+func InjectTraceHeaders(ctx context.Context, h http.Header) {
+	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(h))
 }

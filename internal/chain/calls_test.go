@@ -15,7 +15,6 @@ import (
 	"github.com/gorilla/websocket"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
@@ -93,19 +92,6 @@ func chainRPCResult(method string) string {
 	default:
 		return `"0x7a69"` // 31337
 	}
-}
-
-// countSpans returns how many ended spans carry the given name.
-func countSpans(rec interface {
-	Ended() []sdktrace.ReadOnlySpan
-}, name string) int {
-	n := 0
-	for _, s := range rec.Ended() {
-		if s.Name() == name {
-			n++
-		}
-	}
-	return n
 }
 
 // TestDialWebsocket_PropagatesOnHandshakeAndSpansCalls covers the whole websocket path: the
@@ -241,7 +227,7 @@ func TestMulticallOverWebsocket_SpansOneCall(t *testing.T) {
 	if _, err = c.Multicall(t.Context(), nil); err != nil {
 		t.Fatalf("Multicall: %v", err)
 	}
-	if n := countSpans(rec, rpcMethodCall); n != 1 {
+	if n := len(tracetest.AllEnded(rec, rpcMethodCall)); n != 1 {
 		t.Fatalf("eth_call spans = %d, want exactly one", n)
 	}
 }
@@ -266,11 +252,11 @@ func TestDialHTTP_NoMethodLevelSpans(t *testing.T) {
 		t.Fatalf("BlockNumber: %v", err)
 	}
 
-	if n := countSpans(rec, "chain.rpc.connect"); n != 0 {
+	if n := len(tracetest.AllEnded(rec, "chain.rpc.connect")); n != 0 {
 		t.Fatalf("connect spans = %d, want none on the HTTP path", n)
 	}
 	for _, method := range []string{rpcMethodCall, "eth_blockNumber", rpcMethodChainID} {
-		if n := countSpans(rec, method); n != 1 {
+		if n := len(tracetest.AllEnded(rec, method)); n != 1 {
 			t.Fatalf("%s spans = %d, want the single transport span", method, n)
 		}
 	}

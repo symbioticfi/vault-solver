@@ -124,7 +124,7 @@ func newTracingFixture(t *testing.T, strategy types.Strategy, createStatus int) 
 		log:                  logr.Discard(),
 		laneReady:            func() bool { return true },
 		offers:               newOfferTracker(),
-		links:                observability.NewSpanLinks(0),
+		links:                observability.NewSpanLinks(),
 		targets:              []Target{{Adapter: adapter, Vault: common.HexToAddress(tracingVaultHex), Collateral: asset}},
 		targetsAuthoritative: true,
 	}
@@ -300,7 +300,7 @@ func newRedeemFixture(t *testing.T, outcome txmanager.Outcome, hash common.Hash)
 		cfg:                  &Config{RedeemBatchSize: 10},
 		reader:               newReader(chainClient, common.Address{}),
 		log:                  logr.Discard(),
-		links:                observability.NewSpanLinks(0),
+		links:                observability.NewSpanLinks(),
 		targets:              []Target{{Adapter: adapter}},
 		targetsAuthoritative: true,
 	}
@@ -375,24 +375,8 @@ func TestRedeemAllSendsWithoutRememberedOfferSpan(t *testing.T) {
 	if got := tracetest.Attr(submit, "offer.linked_count"); got != "0" {
 		t.Fatalf("offer.linked_count = %q, want 0", got)
 	}
-	misses := 0
-	for _, event := range submit.Events() {
-		if event.Name != "link_miss" {
-			continue
-		}
-		misses++
-		var key string
-		for _, kv := range event.Attributes {
-			if kv.Key == "key" {
-				key = kv.Value.AsString()
-			}
-		}
-		if key != requestLinkKey(request) {
-			t.Fatalf("link_miss key = %q, want %s", key, requestLinkKey(request))
-		}
-	}
-	if misses != 1 {
-		t.Fatalf("link_miss events = %d, want 1 (events %v)", misses, submit.Events())
+	if key, misses := tracetest.EventAttr(submit, "link_miss", "key"); misses != 1 || key != requestLinkKey(request) {
+		t.Fatalf("link_miss events = %d with key %q, want 1 with %s", misses, key, requestLinkKey(request))
 	}
 	tracetest.RequireNoErrorSpans(t, rec)
 }
@@ -410,12 +394,8 @@ func TestRedeemAllOmitsTxHashWhenNotBroadcast(t *testing.T) {
 	}
 	for _, name := range []string{"3f.redeem", "3f.redeem.submit"} {
 		span := tracetest.Ended(t, rec, name)
-		if got := tracetest.Attr(span, "tx.hash"); got != "" {
-			t.Fatalf("%s tx.hash = %q, want no attribute for a transaction that never went out", name, got)
-		}
-		if got := tracetest.Attr(span, "tx.outcome"); got != string(txmanager.OutcomeSubmissionError) {
-			t.Fatalf("%s tx.outcome = %q, want %s", name, got, txmanager.OutcomeSubmissionError)
-		}
+		tracetest.RequireNoAttr(t, span, "tx.hash") // a transaction that never went out has none
+		tracetest.RequireAttr(t, span, "tx.outcome", string(txmanager.OutcomeSubmissionError))
 	}
 	if got := tracetest.Ended(t, rec, "3f.redeem.submit").Status().Code; got != codes.Error {
 		t.Fatalf("submit span status = %v, want Error", got)
@@ -449,7 +429,7 @@ func TestReconcileOffersStampsRememberedOfferTrace(t *testing.T) {
 		api:    newAPIClient(api.URL, fakeSigner{}, big.NewInt(1), time.Second, logr.Discard()),
 		log:    funcr.NewJSON(func(entry string) { lines = append(lines, entry) }, funcr.Options{Verbosity: 1}),
 		offers: newOfferTracker(),
-		links:  observability.NewSpanLinks(0),
+		links:  observability.NewSpanLinks(),
 	}
 	offerCtx, endOffer := tracer.Start(t.Context(), "3f.auction")
 	s.links.Remember(offerCtx, auctionLinkKey(adapter, tracingAuctionID), time.Hour)
@@ -474,24 +454,18 @@ func TestReconcileOffersStampsRememberedOfferTrace(t *testing.T) {
 func TestDiscoverAndOfferLogsCarryTraceIDOnce(t *testing.T) {
 	tracetest.Install(t)
 	fixture := newTracingFixture(t, stubOfferStrategy{offers: tracingOffer()}, http.StatusCreated)
-	var lines []string
-	fixture.solver.log = funcr.NewJSON(
-		func(entry string) { lines = append(lines, entry) }, funcr.Options{Verbosity: 1},
-	)
+	log, capture := tracetest.CaptureLogs(t, 1)
+	fixture.solver.log = log
 
 	fixture.solver.discoverAndOffer(solverContext(t, fixture.solver))
 
+	lines := capture()
 	if len(lines) == 0 {
 		t.Fatal("no log output captured")
 	}
+	tracetest.RequireTraceIDsOnce(t, lines)
 	var sawOfferLine bool
 	for _, line := range lines {
-		if n := strings.Count(line, `"trace_id"`); n > 1 {
-			t.Fatalf("trace_id appears %d times in %s", n, line)
-		}
-		if n := strings.Count(line, `"span_id"`); n > 1 {
-			t.Fatalf("span_id appears %d times in %s", n, line)
-		}
 		if strings.Contains(line, `"auctionId"`) && strings.Contains(line, `"trace_id"`) {
 			sawOfferLine = true
 		}

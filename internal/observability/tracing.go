@@ -90,5 +90,5 @@ func TraceLogger(ctx context.Context, log logr.Logger) logr.Logger {
 	if !sc.IsValid() {
 		return log
 	}
-	return log.WithValues("trace_id", sc.TraceID().String(), "span_id", sc.SpanID().String())
+	return stampLogger(log, sc)
 }

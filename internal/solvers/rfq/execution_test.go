@@ -132,7 +132,7 @@ func newExec(t *testing.T, st *store, be orderBackend, txm txSender) *executionS
 		orderLimit: 20, backend: be, store: st, txm: txm, discountsEnabled: true,
 		strategy: fixedFillStrategy{plan: baseFillPlan()}, strategyName: defaultStrategyName,
 		reader: &fakeRecoveryReader{chainTime: time.Unix(0, 0)},
-		links:  observability.NewSpanLinks(0),
+		links:  observability.NewSpanLinks(),
 		log:    logr.Discard(), now: func() time.Time { return time.Unix(0, 0) },
 		inflight: make(map[string]bool),
 	}

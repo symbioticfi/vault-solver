@@ -34,7 +34,7 @@ func testServer() *server {
 	}
 	return &server{
 		sharedSecret: testSecret, quotes: q,
-		links: observability.NewSpanLinks(0),
+		links: observability.NewSpanLinks(),
 	}
 }
 

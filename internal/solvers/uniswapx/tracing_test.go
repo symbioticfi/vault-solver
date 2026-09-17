@@ -19,7 +19,6 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
 	"go.opentelemetry.io/otel/codes"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -36,24 +35,6 @@ const (
 	inboundTraceID     = "4bf92f3577b34da6a3ce929d0e0e4736"
 	tracingStrategy    = "default"
 )
-
-// spanRecorder is the slice of tracetest.SpanRecorder these assertions need.
-type spanRecorder interface {
-	Ended() []sdktrace.ReadOnlySpan
-}
-
-func requireSpans(t *testing.T, rec spanRecorder, want ...string) {
-	t.Helper()
-	got := make(map[string]bool, len(rec.Ended()))
-	for _, name := range tracetest.Names(rec) {
-		got[name] = true
-	}
-	for _, name := range want {
-		if !got[name] {
-			t.Fatalf("missing span %q; ended spans: %v", name, tracetest.Names(rec))
-		}
-	}
-}
 
 func postQuote(t *testing.T, handler http.Handler, request quoteRequest) *httptest.ResponseRecorder {
 	t.Helper()
@@ -75,7 +56,7 @@ func newTracingQuoteSolver(t *testing.T, tokenIn common.Address, strategy strate
 	solver := newBlockingQuoteTestSolver(t, tokenIn, strategy)
 	solver.cfg.QuoteServer = QuoteServerConfig{HTTPTimeout: time.Second}
 	solver.cfg.Strategy = StrategyConfig{Name: tracingStrategy}
-	solver.links = observability.NewSpanLinks(0)
+	solver.links = observability.NewSpanLinks()
 	solver.log = logr.Discard()
 	return solver
 }
@@ -101,7 +82,7 @@ func TestQuoteServerTracing(t *testing.T) {
 			t.Fatalf("span %s is in trace %s, want the inbound trace %s", span.Name(), got, inboundTraceID)
 		}
 	}
-	requireSpans(t, rec, "POST /quote", "uniswapx.quote", "uniswapx.quote.decide")
+	tracetest.RequireSpans(t, rec, "POST /quote", "uniswapx.quote", "uniswapx.quote.decide")
 
 	server := tracetest.Ended(t, rec, "POST /quote")
 	if got := tracetest.Attr(server, "quote.id"); got != request.QuoteID {
@@ -170,7 +151,7 @@ func TestQuoteServerTracingEndsSpansOnPanic(t *testing.T) {
 	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("panicking quote = %d, want 500 (body %s)", response.Code, response.Body.String())
 	}
-	requireSpans(t, rec, "POST /quote", "uniswapx.quote", "uniswapx.quote.decide")
+	tracetest.RequireSpans(t, rec, "POST /quote", "uniswapx.quote", "uniswapx.quote.decide")
 }
 
 // A malformed body is the caller's fault, so the server span declines rather than erroring.
@@ -242,7 +223,7 @@ func newTracingFillFixture(t *testing.T) *tracingFillFixture {
 	solver.cfg.TokenPolicy = policy
 	solver.cfg.Strategy = StrategyConfig{Name: tracingStrategy}
 	solver.cfg.OrderServer.Sources.ExclusiveV2 = true
-	solver.links = observability.NewSpanLinks(0)
+	solver.links = observability.NewSpanLinks()
 	entry := tracingOrderEntry(t, solver.cfg, direct.order.TokenIn, direct.order.TokenOut, direct.now)
 	solver.orders = orderPollerFunc(func(context.Context, int64, *common.Address) ([]orderEntry, error) {
 		return []orderEntry{entry}, nil
@@ -389,7 +370,7 @@ func TestOrderTraceLinksQuoteToFill(t *testing.T) {
 
 	fixture.run(t)
 
-	requireSpans(t, rec,
+	tracetest.RequireSpans(t, rec,
 		"uniswapx.orders.poll", "uniswapx.order.track", "uniswapx.fill",
 		"uniswapx.fill.plan", "uniswapx.fill.build", "uniswapx.fill.submit", "uniswapx.fill.complete",
 	)
@@ -460,12 +441,8 @@ func TestFillCompletionOmitsTxHashWhenNotBroadcast(t *testing.T) {
 
 	for _, name := range []string{"uniswapx.fill", "uniswapx.fill.complete"} {
 		span := tracetest.Ended(t, rec, name)
-		if got := tracetest.Attr(span, "tx.hash"); got != "" {
-			t.Fatalf("%s tx.hash = %q, want no attribute for a transaction that never went out", name, got)
-		}
-		if got := tracetest.Attr(span, "tx.outcome"); got != string(txmanager.OutcomeSubmissionError) {
-			t.Fatalf("%s tx.outcome = %q, want %s", name, got, txmanager.OutcomeSubmissionError)
-		}
+		tracetest.RequireNoAttr(t, span, "tx.hash") // a transaction that never went out has none
+		tracetest.RequireAttr(t, span, "tx.outcome", string(txmanager.OutcomeSubmissionError))
 	}
 }
 
@@ -481,26 +458,10 @@ func TestOrderTraceRecordsLinkMiss(t *testing.T) {
 	if len(track.Links()) != 0 {
 		t.Fatalf("track span links = %v, want none", track.Links())
 	}
-	var misses int
-	for _, event := range track.Events() {
-		if event.Name != "link_miss" {
-			continue
-		}
-		misses++
-		var key string
-		for _, kv := range event.Attributes {
-			if kv.Key == "key" {
-				key = kv.Value.AsString()
-			}
-		}
-		if key != fixture.entry.QuoteID {
-			t.Fatalf("link_miss key = %q, want %s", key, fixture.entry.QuoteID)
-		}
+	if key, misses := tracetest.EventAttr(track, "link_miss", "key"); misses != 1 || key != fixture.entry.QuoteID {
+		t.Fatalf("link_miss events = %d with key %q, want 1 with %s", misses, key, fixture.entry.QuoteID)
 	}
-	if misses != 1 {
-		t.Fatalf("link_miss events = %d, want 1 (events %v)", misses, track.Events())
-	}
-	requireSpans(t, rec, "uniswapx.fill", "uniswapx.fill.complete")
+	tracetest.RequireSpans(t, rec, "uniswapx.fill", "uniswapx.fill.complete")
 	if _, filled := fixture.solver.filled[common.HexToHash(fixture.entry.OrderHash)]; !filled {
 		t.Fatal("unlinked order did not fill")
 	}
@@ -519,10 +480,10 @@ func TestFillTraceDeclinesUnfillableOrder(t *testing.T) {
 	if fill.Status().Code == codes.Error {
 		t.Fatalf("an unfillable order must not be an error span: %v", fill.Status())
 	}
-	if !hasSpanEvent(fill, "declined") {
+	if !tracetest.HasEvent(fill, "declined") {
 		t.Fatalf("fill span has no declined event: %v", fill.Events())
 	}
-	if hasSpanEvent(fill, "exception") {
+	if tracetest.HasEvent(fill, "exception") {
 		t.Fatalf("an unfillable order recorded an exception: %v", fill.Events())
 	}
 }
@@ -543,7 +504,7 @@ func TestFillTraceRecordsPreflightFailure(t *testing.T) {
 	if fill.Status().Code != codes.Error {
 		t.Fatalf("fill span status = %v, want an error", fill.Status())
 	}
-	if !hasSpanEvent(fill, "exception") {
+	if !tracetest.HasEvent(fill, "exception") {
 		t.Fatalf("failed fill recorded no exception: %v", fill.Events())
 	}
 	if !strings.Contains(fill.Status().Description, preflightErr.Error()) {
@@ -551,38 +512,23 @@ func TestFillTraceRecordsPreflightFailure(t *testing.T) {
 	}
 }
 
-func hasSpanEvent(s sdktrace.ReadOnlySpan, name string) bool {
-	for _, event := range s.Events() {
-		if event.Name == name {
-			return true
-		}
-	}
-	return false
-}
-
 // Trace loggers are derived from the base logger at each span-starting site, never from an
 // already-derived one: re-deriving appends a second trace_id/span_id pair to every line.
 func TestOrderLogsCarryTraceIDOnce(t *testing.T) {
 	tracetest.Install(t)
 	fixture := newTracingFillFixture(t)
-	var lines []string
-	fixture.solver.log = funcr.NewJSON(
-		func(entry string) { lines = append(lines, entry) }, funcr.Options{Verbosity: 1},
-	)
+	log, capture := tracetest.CaptureLogs(t, 1)
+	fixture.solver.log = log
 
 	fixture.run(t)
 
+	lines := capture()
 	if len(lines) == 0 {
 		t.Fatal("no log output captured")
 	}
+	tracetest.RequireTraceIDsOnce(t, lines)
 	var sawOrderLine, sawAdmissionLine bool
 	for _, line := range lines {
-		if n := strings.Count(line, `"trace_id"`); n > 1 {
-			t.Fatalf("trace_id appears %d times in %s", n, line)
-		}
-		if n := strings.Count(line, `"span_id"`); n > 1 {
-			t.Fatalf("span_id appears %d times in %s", n, line)
-		}
 		if strings.Contains(line, `"orderHash"`) && strings.Contains(line, `"trace_id"`) {
 			sawOrderLine = true
 		}

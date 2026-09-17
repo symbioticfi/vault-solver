@@ -2,10 +2,12 @@ package observability
 
 import (
 	"context"
+	"slices"
 	"sync"
 	"sync/atomic"
 
 	"github.com/go-errors/errors"
+	"github.com/go-logr/logr"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -22,10 +24,8 @@ const (
 	AttrOrderID        = attribute.Key("order.id")
 	AttrOrderHash      = attribute.Key("order.hash")
 	AttrOrderOnchainID = attribute.Key("order.onchain_id")
-	AttrOfferID        = attribute.Key("offer.id")
 	AttrAuctionID      = attribute.Key("auction.id")
 	AttrAdapter        = attribute.Key("adapter.address")
-	AttrVault          = attribute.Key("vault.address")
 	AttrRequestAddress = attribute.Key("request.address")
 	AttrStrategy       = attribute.Key("strategy.name")
 	AttrTxLabel        = attribute.Key("tx.label")
@@ -57,8 +57,8 @@ type resolvedTracer struct {
 
 // Tracer starts spans that carry the owning solver's name. Obtain one per package with NewTracer.
 type Tracer struct {
-	name     string               // instrumentation scope
-	solver   []attribute.KeyValue // empty for shared components
+	name     string                  // instrumentation scope
+	opts     []trace.SpanStartOption // the solver attribute, precomputed; nil for shared components
 	resolved atomic.Pointer[resolvedTracer]
 }
 
@@ -68,7 +68,7 @@ type Tracer struct {
 func NewTracer(name, solver string) *Tracer {
 	t := &Tracer{name: name}
 	if solver != "" {
-		t.solver = []attribute.KeyValue{AttrSolver.String(solver)}
+		t.opts = []trace.SpanStartOption{trace.WithAttributes(AttrSolver.String(solver))}
 	}
 	return t
 }
@@ -97,14 +97,52 @@ func (t *Tracer) Start(ctx context.Context, name string, attrs ...attribute.KeyV
 func (t *Tracer) StartLinked(
 	ctx context.Context, name string, links []trace.Link, attrs ...attribute.KeyValue,
 ) (context.Context, EndFunc) {
-	opts := []trace.SpanStartOption{trace.WithAttributes(t.solver...), trace.WithAttributes(attrs...)}
+	opts := t.opts
+	if len(attrs) > 0 {
+		opts = append(opts, trace.WithAttributes(attrs...))
+	}
 	if len(links) > 0 {
 		opts = append(opts, trace.WithLinks(links...))
 	}
 	//nolint:spancheck // span is ended by the returned EndFunc, not inline
 	ctx, span := t.Raw().Start(ctx, name, opts...)
+	ctx = withStamped(ctx, span.SpanContext())
 	var once sync.Once
 	return ctx, func(err error) { once.Do(func() { endSpan(span, err) }) } //nolint:spancheck // see above
+}
+
+// StartLinkedKey starts name linked to the span remembered under key (spec §12). On a hit it adds
+// the link and quote.trace_id, stamps quoteTraceId on the context's base logger, and returns the
+// linked trace id; on a miss it records a link_miss event naming the key and returns "". Never
+// fails: a nil links map or an unknown key is an ordinary miss.
+func (t *Tracer) StartLinkedKey(
+	ctx context.Context, links *SpanLinks, key, name string, attrs ...attribute.KeyValue,
+) (context.Context, EndFunc, string) {
+	var (
+		traceID string
+		linked  []trace.Link
+	)
+	if link, ok := links.Lookup(key); ok {
+		traceID = link.SpanContext.TraceID().String()
+		linked = []trace.Link{link}
+		attrs = append(slices.Clip(attrs), AttrQuoteTraceID.String(traceID))
+	}
+	ctx, end := t.StartLinked(ctx, name, linked, attrs...)
+	if traceID == "" {
+		LinkMiss(ctx, key)
+		return ctx, end, ""
+	}
+	if base, err := logr.FromContext(ctx); err == nil {
+		ctx = WithLogger(ctx, base.WithValues("quoteTraceId", traceID))
+	}
+	return ctx, end, traceID
+}
+
+// LinkMiss records that the span remembered under key was gone — restart, eviction, or it was never
+// ours. Best effort (spec §12): the work proceeds identically, only the link is lost. Callers
+// resolving several keys at once emit one event per missed key.
+func LinkMiss(ctx context.Context, key string) {
+	trace.SpanFromContext(ctx).AddEvent("link_miss", trace.WithAttributes(attribute.String("key", key)))
 }
 
 func endSpan(span trace.Span, err error) {
@@ -126,7 +164,11 @@ func endSpan(span trace.Span, err error) {
 // Decline records an expected non-error outcome (no quote, not profitable, paused adapter) on the
 // current span as a declined event. Status is left unset, mirroring the V(1) logging rule.
 func Decline(ctx context.Context, decision, reason string) {
-	trace.SpanFromContext(ctx).AddEvent("declined", trace.WithAttributes(
+	span := trace.SpanFromContext(ctx)
+	if !span.IsRecording() {
+		return
+	}
+	span.AddEvent("declined", trace.WithAttributes(
 		attribute.String("decision", decision), attribute.String("reason", reason),
 	))
 }
@@ -134,9 +176,4 @@ func Decline(ctx context.Context, decision, reason string) {
 // SetAttributes adds attributes to the current span (e.g. a tx hash learned after Send returns).
 func SetAttributes(ctx context.Context, attrs ...attribute.KeyValue) {
 	trace.SpanFromContext(ctx).SetAttributes(attrs...)
-}
-
-// LinkFromContext returns a link to the span in ctx; the zero Link when there is none.
-func LinkFromContext(ctx context.Context) trace.Link {
-	return trace.Link{SpanContext: trace.SpanContextFromContext(ctx)}
 }

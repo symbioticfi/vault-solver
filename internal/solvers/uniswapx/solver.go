@@ -171,7 +171,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		confirmations:     deps.TxManager.Confirmations(),
 		orders:            newOrderClient(cfg.OrderServer, orderKey),
 		discounts:         discountClient,
-		links:             observability.NewSpanLinks(0),
+		links:             observability.NewSpanLinks(),
 		log:               log,
 		reportFatal:       deps.ReportFatal,
 		refreshCh:         make(chan struct{}, 1),
