@@ -194,12 +194,12 @@ unique gauges/histograms; the framework does not know them. RFQ, LI.FI, and Unis
 `not_admitted`. Unknown event/outcome, amount-kind, or state-view observations increment one bounded
 contract-drift counter instead of disappearing silently. Detailed gas, fee, and transaction lifecycle
 accounting remains in the [shared transaction manager](TXMANAGER-PLAN.md#8-observability).
-The generic HTTP chain transport records bounded logical requests and endpoint attempts by read/write/shared
+The generic HTTP chain transport records bounded logical requests and endpoint attempts by read/write/cancel/shared
 role, method, ordinal endpoint, and outcome; configured URLs and error strings never become labels.
 `solver_bot_solver_info{solver}` exposes bounded config-time membership for fleet joins.
 
-A process is one execution lane: one chain client (primary/fallback read set plus optional private write
-endpoint), one signer, and one nonce-serialized txmanager shared by its configured solvers. Different
+A process is one execution lane: one chain client (primary/fallback reads, optional private write endpoint,
+and optional cancellation broadcast endpoint), one signer, and one nonce-serialized txmanager shared by its configured solvers. Different
 signer/RPC tuples run as separate processes with disjoint solver subsets and unique Prometheus `instance`
 (or deployment-supplied `lane`) target labels. Committed dashboards use the standard Kubernetes `pod` target
 label and query namespace/pod options from Prometheus rather than embedding deployment names. Application metrics do not carry URLs or deployment names.

@@ -466,7 +466,7 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | Framework | `solver_bot_service_ready` | — | `1` exactly when the shared `/readyz` gate admits work, otherwise `0`. This is process/nonce-lane readiness, not a claim that every solver upstream is healthy; combine it with solver freshness and connectivity. |
 | Framework | `solver_bot_solver_info` | `solver` | Constant `1` for each solver configured in this process. Prometheus target labels such as `instance`/`lane` make process membership explicit without adding deployment-specific labels in application code. |
 | Framework | `solver_bot_external_operation_duration_seconds` | `solver`, `strategy`, `operation`, `outcome` | Count and latency of allowlisted recurring solver operations such as polls and authoritative refreshes. Outcomes are bounded to `success`, `degraded`, `skipped`, or `error`; errors and request-derived values never become labels. |
-| RPC | `solver_bot_rpc_requests_total` | `role`, `method`, `outcome` | Logical HTTP JSON-RPC calls. Roles are `read`, `write`, or `shared`; methods and outcomes are bounded, with transport, HTTP 3xx/4xx/5xx, rate-limit, decode, context, and JSON-RPC errors separated. Redirects are not followed; 3xx responses fall through to the next read endpoint. |
+| RPC | `solver_bot_rpc_requests_total` | `role`, `method`, `outcome` | Logical HTTP JSON-RPC calls. Roles are `read`, `write`, `cancel`, or `shared`; methods and outcomes are bounded, with transport, HTTP 3xx/4xx/5xx, rate-limit, decode, context, and JSON-RPC errors separated. Redirects are not followed; 3xx responses fall through to the next read endpoint. |
 | RPC | `solver_bot_rpc_attempts_total` | `role`, `endpoint`, `method`, `outcome` | Per-endpoint attempts, including failed primary and successful fallback attempts. `endpoint` is only a role-local ordinal (`0`, `1`, …); configured URLs and error text are never labels. |
 | RPC | `solver_bot_rpc_inflight` | `role` | Calls whose response bodies have not completed; a sustained value exposes a hung endpoint or consumer. |
 | RPC | `solver_bot_rpc_request_duration_seconds` | `role`, `method`, `outcome` | End-to-end HTTP JSON-RPC latency through response-body consumption. |
@@ -560,9 +560,13 @@ including the applicable shared `chain`/`signer`/`txManager`/`observability` blo
 inline there.
 
 The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S) endpoints tried
-in order for reads when the primary is unavailable. Signed broadcasts and both startup nonce reads
+in order for reads when the primary is unavailable. Normal signed broadcasts and both startup nonce reads
 are pinned to `writeRpcUrl`, or the primary `rpcUrl` when it is omitted, and never fall over across
-endpoints. Sender-balance telemetry prefers that endpoint but falls back to the ordinary read client when a
+endpoints. Optional `cancelRpcUrl` routes only same-nonce self-cancellations, including their fee replacements
+and exact rebroadcasts, to a separate endpoint. Set `cancelRpcUrl: ${CANCEL_RPC_URL}` and, for mainnet,
+`CANCEL_RPC_URL=https://boost.rpc.mevblocker.io/fast`. When omitted or empty, cancellation uses the ordinary
+write RPC. A configured cancellation RPC failure is returned without broadcasting to another endpoint.
+Sender-balance telemetry prefers the ordinary write endpoint but falls back to the read client when a
 submission-only relay rejects `eth_getBalance`. Receipt confirmation uses the
 [canonicality checks](docs/TXMANAGER-PLAN.md#5-receipt-polling-and-confirmation) independently of endpoint
 affinity, while retaining normal read fallbacks. An HTTP 3xx response is not followed and falls through to the next read
@@ -570,7 +574,7 @@ endpoint. A non-final endpoint's JSON-RPC `null` receipt or header result falls 
 to the next read endpoint; the final endpoint's `null` remains the ordinary not-found result. Unavailable
 multi-read snapshots retry on a later poll; OEV compares both number and hash around each latest-state
 snapshot and retries a changed head once immediately. A second crossing fails startup or retains the runtime's
-last-known-good snapshot until the next poll. An explicit write endpoint must report the same chain ID as the
+last-known-good snapshot until the next poll. Explicit write and cancellation endpoints must report the same chain ID as the
 read endpoint.
 
 For transaction-sending solvers, startup fails closed when the write endpoint's pending nonce differs

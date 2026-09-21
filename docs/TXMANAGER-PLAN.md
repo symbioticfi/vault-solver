@@ -132,8 +132,14 @@ Operational counters are not a canonical accounting ledger.
 
 ## 6. RPC routing, nonce conflicts and restart
 
-Broadcasts and both latest/pending account nonce reads use one non-fallback write endpoint:
+Normal broadcasts and both latest/pending account nonce reads use one non-fallback write endpoint:
 `chain.writeRpcUrl`, or primary `chain.rpcUrl` when omitted. An explicit write endpoint is chain-ID checked.
+Optional `chain.cancelRpcUrl` routes same-nonce zero-value self-cancellations to a dedicated, chain-ID-checked
+endpoint. Initial cancellation, later cancellation fee bumps, and exact cancellation rebroadcasts all use
+that route. Normal fill replacements and nonce reads continue through the ordinary write endpoint.
+An empty cancellation URL preserves the ordinary write route; a configured endpoint's error never triggers
+cross-endpoint fallback. `txmanager` selects the optional `SendCancellationTransaction` backend capability
+only for cancellation attempts; plain EVM backends without that capability keep using `SendTransaction`.
 Fee, receipt and state reads use the ordinary read client/fallbacks. Signed bytes are never automatically
 replayed across read endpoints. Balance telemetry prefers the write endpoint and can fall back to the
 read client when a submission-only relay does not support balance reads. General transport behavior
@@ -141,7 +147,8 @@ remains documented in the [README configuration section](../README.md#configurat
 
 Startup requires write-endpoint latest and pending nonces to agree. Standard nonce methods cannot reveal
 a future transaction queued beyond a gap or a private hidden submission; equality is not recovery proof.
-Exact signed attempts are kept in memory. Before an upgrade from a build allowing multiple unresolved
+Exact signed attempts are kept in memory. Restart reconciliation must include any separately configured
+cancellation endpoint. Before an upgrade from a build allowing multiple unresolved
 nonces, drain the EOA's write-endpoint pool. After an unclean exit, reconcile outstanding private
 submissions before reusing the EOA. Packaged Compose uses `unless-stopped`: automatic restart can reuse
 a nonce before a hidden attempt becomes visible and does not reconstruct lost ownership.

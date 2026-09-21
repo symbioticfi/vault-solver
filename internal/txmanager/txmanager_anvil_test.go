@@ -5,11 +5,18 @@ package txmanager
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"io"
 	"math/big"
 	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,16 +26,18 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-logr/logr"
 
+	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 )
 
 func TestAnvilTxManagerPendingLifecycle(t *testing.T) {
 	t.Run("fee bump replacement", testAnvilReplacement)
-	t.Run("timeout cancellation unblocks later nonce", testAnvilCancellation)
+	t.Run("timeout cancellation unblocks later nonce", func(t *testing.T) { testAnvilCancellation(t, false) })
+	t.Run("dedicated cancellation RPC unblocks later nonce", func(t *testing.T) { testAnvilCancellation(t, true) })
 }
 
 func testAnvilReplacement(t *testing.T) {
-	rpcClient, ethClient := startAnvilWithoutMining(t)
+	rpcClient, ethClient, _ := startAnvilWithoutMining(t)
 	sgnr := anvilSigner(t)
 	manager := New(
 		ethClient,
@@ -76,11 +85,25 @@ func testAnvilReplacement(t *testing.T) {
 	}
 }
 
-func testAnvilCancellation(t *testing.T) {
-	rpcClient, ethClient := startAnvilWithoutMining(t)
+func testAnvilCancellation(t *testing.T, dedicatedCancellationRPC bool) {
+	t.Helper()
+	rpcClient, ethClient, endpoint := startAnvilWithoutMining(t)
+	var backend Backend = ethClient
+	var writeSends, cancelSends atomic.Int64
+	if dedicatedCancellationRPC {
+		writeURL := anvilBroadcastProxy(t, endpoint, &writeSends)
+		cancelURL := anvilBroadcastProxy(t, endpoint, &cancelSends)
+		client, err := chain.Dial(t.Context(), []string{endpoint}, writeURL, cancelURL,
+			"0xcA11bde05977b3631167028862bE2a173976CA11")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(client.Close)
+		backend = client
+	}
 	sgnr := anvilSigner(t)
 	manager := New(
-		ethClient,
+		backend,
 		sgnr,
 		big.NewInt(31337),
 		Config{
@@ -168,6 +191,43 @@ func testAnvilCancellation(t *testing.T) {
 	if secondResult := waitForTxResult(t, second.result); secondResult.Err != nil {
 		t.Fatalf("later transaction remained blocked: %v", secondResult.Err)
 	}
+	if dedicatedCancellationRPC && (writeSends.Load() != 2 || cancelSends.Load() != 1) {
+		t.Fatalf("broadcast routing: write=%d cancel=%d, want two normal calls and one cancellation", writeSends.Load(), cancelSends.Load())
+	}
+}
+
+func anvilBroadcastProxy(t *testing.T, endpoint string, broadcasts *atomic.Int64) string {
+	t.Helper()
+	target, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := r.Body.Close(); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var request struct {
+			Method string `json:"method"`
+		}
+		if err := json.Unmarshal(body, &request); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if request.Method == "eth_sendRawTransaction" {
+			broadcasts.Add(1)
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		proxy.ServeHTTP(w, r)
+	}))
+	t.Cleanup(server.Close)
+	return server.URL
 }
 
 type poolTransaction struct {
@@ -280,7 +340,7 @@ func anvilSigner(t *testing.T) signer.Signer {
 	return sgnr
 }
 
-func startAnvilWithoutMining(t *testing.T) (*rpc.Client, *ethclient.Client) {
+func startAnvilWithoutMining(t *testing.T) (*rpc.Client, *ethclient.Client, string) {
 	t.Helper()
 	anvil, err := exec.LookPath("anvil")
 	if err != nil {
@@ -333,7 +393,7 @@ func startAnvilWithoutMining(t *testing.T) (*rpc.Client, *ethclient.Client) {
 			if callErr := client.CallContext(t.Context(), &chainID, "eth_chainId"); callErr == nil {
 				ethClient := ethclient.NewClient(client)
 				t.Cleanup(ethClient.Close)
-				return client, ethClient
+				return client, ethClient, url
 			}
 			client.Close()
 		}
@@ -345,5 +405,5 @@ func startAnvilWithoutMining(t *testing.T) (*rpc.Client, *ethclient.Client) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("anvil did not become ready:\n%s", output.String())
-	return nil, nil
+	return nil, nil, ""
 }

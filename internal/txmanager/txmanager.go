@@ -57,6 +57,12 @@ type accountBalanceBackend interface {
 	BalanceAt(ctx context.Context, account common.Address, blockNumber *big.Int) (*big.Int, error)
 }
 
+// cancellationBackend optionally routes same-nonce self-cancellations to a separate endpoint.
+// Plain EVM backends keep using SendTransaction for every broadcast.
+type cancellationBackend interface {
+	SendCancellationTransaction(ctx context.Context, tx *types.Transaction) error
+}
+
 // Config tunes fee selection and confirmation behavior.
 type Config struct {
 	Confirmations       uint64        // blocks to wait past inclusion before returning
@@ -788,7 +794,7 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 		return nil, err
 	}
 	signed, sendErr := m.signAndSend(
-		broadcastCtx, nonce, req.To, req.Data, value, gas, fees, false,
+		broadcastCtx, nonce, req.To, req.Data, value, gas, fees, false, false,
 	)
 	if signed == nil {
 		return nil, errors.Errorf("send %q: %w", req.Label, sendErr)
@@ -1169,7 +1175,7 @@ func (m *Manager) tryReplace(
 		return m.tryReplace(ctx, pending, true)
 	}
 	sendCtx, cancelSend := replacementBroadcastContext(ctx, pending, cancellation)
-	signed, sendErr := m.signAndSend(sendCtx, pending.nonce, to, data, value, gas, fees, true)
+	signed, sendErr := m.signAndSend(sendCtx, pending.nonce, to, data, value, gas, fees, true, cancellation)
 	cancelSend()
 	if signed == nil {
 		observability.Log(ctx).Error(sendErr, "pending transaction replacement rejected",
@@ -1239,7 +1245,7 @@ func (m *Manager) rebroadcastUncertainAttempt(ctx context.Context, pending *pend
 		return false
 	}
 	attempt.exactRebroadcastPending = false
-	err := m.sendSigned(ctx, attempt.tx, true)
+	err := m.sendSigned(ctx, attempt.tx, true, false)
 	known := isKnownTransactionError(err)
 	if isNonceConsumedError(err) {
 		pending.nonceConflictHash = attempt.hash
@@ -1289,7 +1295,7 @@ func (m *Manager) rebroadcastLatestAttempt(
 			continue
 		}
 		sendCtx, cancelSend := replacementBroadcastContext(ctx, pending, cancellation)
-		err := m.sendSigned(sendCtx, attempt.tx, true)
+		err := m.sendSigned(sendCtx, attempt.tx, true, cancellation)
 		cancelSend()
 		if isNonceConsumedError(err) {
 			pending.nonceConflictHash = attempt.hash
@@ -1572,6 +1578,7 @@ func (m *Manager) signAndSend(
 	gas uint64,
 	fees feeQuote,
 	existingLifecycle bool,
+	cancellation bool,
 ) (*types.Transaction, error) {
 	tx := types.NewTx(&types.DynamicFeeTx{
 		ChainID:   m.chainID,
@@ -1590,7 +1597,7 @@ func (m *Manager) signAndSend(
 	if err := ctx.Err(); err != nil {
 		return nil, errors.Errorf("sign transaction: %w", err)
 	}
-	sendErr := m.sendSigned(ctx, signed, existingLifecycle)
+	sendErr := m.sendSigned(ctx, signed, existingLifecycle, cancellation)
 	if errors.Is(sendErr, errNonceLanePaused) || isDefiniteBroadcastRejection(sendErr) ||
 		(!existingLifecycle && isPendingNonceCollision(sendErr)) {
 		return nil, errors.Errorf("broadcast rejected before acceptance: %w", sendErr)
@@ -1602,6 +1609,7 @@ func (m *Manager) sendSigned(
 	ctx context.Context,
 	signed *types.Transaction,
 	existingLifecycle bool,
+	cancellation bool,
 ) error {
 	if !existingLifecycle {
 		if err := m.nonceConflictError(); err != nil {
@@ -1610,6 +1618,11 @@ func (m *Manager) sendSigned(
 	}
 	sendCtx, cancel := context.WithTimeout(ctx, m.broadcastTimeout())
 	defer cancel()
+	if cancellation {
+		if backend, ok := m.backend.(cancellationBackend); ok {
+			return backend.SendCancellationTransaction(sendCtx, signed)
+		}
+	}
 	err := m.backend.SendTransaction(sendCtx, signed)
 	if !existingLifecycle && (isNonceConsumedError(err) || isPendingNonceCollision(err)) {
 		m.markNonceConflict(signed.Nonce(), signed.Hash())

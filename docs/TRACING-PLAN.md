@@ -161,7 +161,7 @@ that triggered it, and the operator's receiver gets `traceparent`.
 through `otelhttp`, so there is exactly one span per logical JSON-RPC request no matter how many
 endpoints are attempted. The span is named by the bounded method (`batch` for batches), is a client
 span, and carries `rpc.system=jsonrpc`, `rpc.method`, `rpc.jsonrpc.request_id`, `chain.rpc.role`
-(`read`/`write`/`shared`) and `chain.rpc.batch`. Each endpoint attempt adds an `attempt` event with
+(`read`/`write`/`cancel`/`shared`) and `chain.rpc.batch`. Each endpoint attempt adds an `attempt` event with
 the role-local **ordinal** and its classified outcome — never the URL, the same rule the metrics
 follow. Every attempt's request gets `traceparent` injected, so the RPC provider can continue the
 trace. The span ends exactly where the metrics observation finishes: on response-body close, or
@@ -179,14 +179,14 @@ provider can tie the connection back to the dial but **never to an individual ca
 handshake at all. Each call is then spanned locally: `internal/chain/calls.go` shadows exactly the
 backend methods this repo calls (`CallContract`, `HeaderByNumber`, `HeaderByHash`, `FeeHistory`,
 `SuggestGasTipCap`, `EstimateGas`, `TransactionReceipt`, `BalanceAt`, `CodeAt`, `BlockNumber`,
-`SendTransaction`, `NonceAt`, `PendingNonceAt`, `TransactionSenderBalanceAt`) and starts a client span
+`SendTransaction`, `SendCancellationTransaction`, `NonceAt`, `PendingNonceAt`, `TransactionSenderBalanceAt`) and starts a client span
 named by the JSON-RPC method with `rpc.system=jsonrpc`, `rpc.method`, `chain.rpc.role` and
 `chain.rpc.transport`, so dashboards see one series across transports. A cancelled call and an
 `ethereum.NotFound` (the null result a node returns for an unmined transaction or an unknown block)
 end the span with an event and no Error status: over HTTP the same response classifies as a success,
 and an unmined transaction is the txmanager's steady state, not a fault. `Multicall` is not spanned: it
-reaches the chain through `CallContract`, which is where its `eth_call` span belongs. Read and write
-endpoints are labelled separately, since only one of the two may be non-HTTP. On the HTTP path the
+reaches the chain through `CallContract`, which is where its `eth_call` span belongs. Read, write, and cancellation
+endpoints are labelled separately, since their transports may differ. On the HTTP path the
 shadowed methods are plain passthroughs and the transport's spans are the only RPC spans — a new call
 site through the client needs a new shadow or it goes untraced on websocket and IPC.
 
