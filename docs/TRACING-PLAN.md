@@ -364,8 +364,10 @@ event (`abandoned`, reason `queue_cleared` or `recovery_reset`): clearing a retr
 orders nothing else references, a shutdown ending them as cancelled, and when a feed disconnect ends
 a recovery the inbox signals the worker, which releases every re-queue from that recovery that was not
 redelivered. A re-queue records the recovery epoch it joined, so a hold is only dropped once its own
-recovery has ended and no copy of the order waits in the inbox. With tracing disabled the worker keeps
-no per-order entry. LiFi fills are **not** linked to a quote; see §6.
+recovery has ended and no copy of the order waits in the inbox. If a delivery overlaps the reset, the
+inbox signals again after clearing the delivered order's queued key so the worker rechecks retained
+holds. With tracing disabled the worker keeps no per-order entry. LiFi fills are **not** linked to a
+quote; see §6.
 
 **3f / bridgefacilitator** (`internal/solvers/bridgefacilitator`) — see [3F-PLAN](3F-PLAN.md)
 
