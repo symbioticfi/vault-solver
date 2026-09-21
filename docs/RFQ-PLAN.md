@@ -497,3 +497,14 @@ generated from, and refreshed with `make refresh-rfq-openapi` (`RFQ_OPENAPI_URL=
   `ResolveDiscountResponse` `anyOf` union is consumed via its single shape (the batch shape is accepted
   only when it contains exactly one entry — fail closed). `apitypes.go` is unchanged: it is the filler's
   own inbound `/quote` server contract (Huma validation tags), not a backend-client type.
+
+### Discount HTTP correlation
+
+Discount publish, listing and resolution bodies contain only discount data. The
+backend's existing request ID is carried in `X-Request-Id`, including on errors;
+it is not duplicated in a JSON `requestId`. The shared discount client reads the
+header into its diagnostic `RequestID` field. There is no fallback to a body ID.
+Public and internal clients are regenerated from the matching backend OpenAPI
+specifications when this contract changes. Deploy these generated clients with
+the backend header-only contract so resolve-union decoding no longer requires the
+removed body field.

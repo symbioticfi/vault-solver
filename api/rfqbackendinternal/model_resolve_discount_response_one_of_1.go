@@ -20,8 +20,7 @@ var _ MappedNullable = &ResolveDiscountResponseOneOf1{}
 
 // ResolveDiscountResponseOneOf1 struct for ResolveDiscountResponseOneOf1
 type ResolveDiscountResponseOneOf1 struct {
-	RequestId            string                                        `json:"requestId"`
-	Discounts            []ResolveDiscountResponseOneOf1DiscountsInner `json:"discounts"`
+	Discounts            []ResolveDiscountResponseOneOf `json:"discounts"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -31,9 +30,8 @@ type _ResolveDiscountResponseOneOf1 ResolveDiscountResponseOneOf1
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewResolveDiscountResponseOneOf1(requestId string, discounts []ResolveDiscountResponseOneOf1DiscountsInner) *ResolveDiscountResponseOneOf1 {
+func NewResolveDiscountResponseOneOf1(discounts []ResolveDiscountResponseOneOf) *ResolveDiscountResponseOneOf1 {
 	this := ResolveDiscountResponseOneOf1{}
-	this.RequestId = requestId
 	this.Discounts = discounts
 	return &this
 }
@@ -46,34 +44,10 @@ func NewResolveDiscountResponseOneOf1WithDefaults() *ResolveDiscountResponseOneO
 	return &this
 }
 
-// GetRequestId returns the RequestId field value
-func (o *ResolveDiscountResponseOneOf1) GetRequestId() string {
-	if o == nil {
-		var ret string
-		return ret
-	}
-
-	return o.RequestId
-}
-
-// GetRequestIdOk returns a tuple with the RequestId field value
-// and a boolean to check if the value has been set.
-func (o *ResolveDiscountResponseOneOf1) GetRequestIdOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.RequestId, true
-}
-
-// SetRequestId sets field value
-func (o *ResolveDiscountResponseOneOf1) SetRequestId(v string) {
-	o.RequestId = v
-}
-
 // GetDiscounts returns the Discounts field value
-func (o *ResolveDiscountResponseOneOf1) GetDiscounts() []ResolveDiscountResponseOneOf1DiscountsInner {
+func (o *ResolveDiscountResponseOneOf1) GetDiscounts() []ResolveDiscountResponseOneOf {
 	if o == nil {
-		var ret []ResolveDiscountResponseOneOf1DiscountsInner
+		var ret []ResolveDiscountResponseOneOf
 		return ret
 	}
 
@@ -82,7 +56,7 @@ func (o *ResolveDiscountResponseOneOf1) GetDiscounts() []ResolveDiscountResponse
 
 // GetDiscountsOk returns a tuple with the Discounts field value
 // and a boolean to check if the value has been set.
-func (o *ResolveDiscountResponseOneOf1) GetDiscountsOk() ([]ResolveDiscountResponseOneOf1DiscountsInner, bool) {
+func (o *ResolveDiscountResponseOneOf1) GetDiscountsOk() ([]ResolveDiscountResponseOneOf, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -90,7 +64,7 @@ func (o *ResolveDiscountResponseOneOf1) GetDiscountsOk() ([]ResolveDiscountRespo
 }
 
 // SetDiscounts sets field value
-func (o *ResolveDiscountResponseOneOf1) SetDiscounts(v []ResolveDiscountResponseOneOf1DiscountsInner) {
+func (o *ResolveDiscountResponseOneOf1) SetDiscounts(v []ResolveDiscountResponseOneOf) {
 	o.Discounts = v
 }
 
@@ -104,7 +78,6 @@ func (o ResolveDiscountResponseOneOf1) MarshalJSON() ([]byte, error) {
 
 func (o ResolveDiscountResponseOneOf1) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
-	toSerialize["requestId"] = o.RequestId
 	toSerialize["discounts"] = o.Discounts
 
 	for key, value := range o.AdditionalProperties {
@@ -119,7 +92,6 @@ func (o *ResolveDiscountResponseOneOf1) UnmarshalJSON(data []byte) (err error) {
 	// by unmarshalling the object into a generic map with string keys and checking
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
-		"requestId",
 		"discounts",
 	}
 
@@ -150,7 +122,6 @@ func (o *ResolveDiscountResponseOneOf1) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
-		delete(additionalProperties, "requestId")
 		delete(additionalProperties, "discounts")
 		o.AdditionalProperties = additionalProperties
 	}
