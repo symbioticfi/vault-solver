@@ -446,6 +446,9 @@ calls retain this outbound ID in typed client errors and the structured `backend
 context, without adding it to the error text or Sentry title. HTTP request IDs are separate from business
 `requestId`/`quoteId` fields in JSON. End-to-end correlation requires the backend to accept and
 log the same header; solver-side propagation alone does not establish that guarantee.
+Discount responses use `X-Request-Id` for correlation; the client reads that header
+and does not require a JSON `requestId`. Deploy this client update together with
+the backend change that removes the duplicate body field.
 
 Sentry groups these diagnosed errors by `(solver, message, reason_code)`; other errors retain
 `(solver, message)`. Dynamic identifiers remain event context. No additional log sites are introduced.
