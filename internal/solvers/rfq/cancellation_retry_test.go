@@ -37,7 +37,7 @@ func TestExecutionCancellationRetryRequiresSafeOutcome(t *testing.T) {
 		{name: "tracking stopped", mutate: func(_ *executionService, txm *fakeTxm) { txm.result.Outcome = txmanager.OutcomeTrackingStopped }, want: statusSubmitted},
 		{name: "no receipt", mutate: func(_ *executionService, txm *fakeTxm) { txm.result.Receipt = nil }, want: statusFailed},
 		{name: "failed cancellation", mutate: func(_ *executionService, txm *fakeTxm) { txm.result.Receipt.Status = ethtypes.ReceiptStatusFailed }, want: statusFailed},
-		{name: "order expires during backoff", mutate: func(e *executionService, _ *fakeTxm) {
+		{name: "order expires before next poll", mutate: func(e *executionService, _ *fakeTxm) {
 			e.reader.(*fakeRecoveryReader).chainTime = time.Unix(4_102_444_797, 0)
 		}, want: statusFailed},
 		{name: "order expires while cancellation confirms", mutate: func(e *executionService, txm *fakeTxm) {
@@ -92,7 +92,7 @@ func TestExecutionCancellationRetryRevalidatesBackendAndDeadline(t *testing.T) {
 				t.Fatalf("order = %+v, want scheduled retry", st.order("o1"))
 			}
 			tc.change(be, e)
-			now = now.Add(5 * time.Second)
+			now = now.Add(3 * time.Second)
 			e.syncOnce(t.Context())
 			if txm.calls != 1 {
 				t.Fatalf("sends after order became unavailable = %d, want 1", txm.calls)
@@ -190,7 +190,7 @@ func TestExecutionCancellationRetryExpiresWithoutBackendReconciliation(t *testin
 			be.order = nil
 			be.executable = nil
 			if listed {
-				now = now.Add(5 * time.Second)
+				now = now.Add(3 * time.Second)
 				e.syncOnce(t.Context())
 				if st.order("o1").Status != statusSubmitting {
 					t.Fatalf("order = %+v, want unsigned retry awaiting an executable order", st.order("o1"))
@@ -227,7 +227,7 @@ func TestExecutionRetryDeadlineDoesNotExpireUnknownInclusion(t *testing.T) {
 		Hash: common.HexToHash("0x5678"), Outcome: txmanager.OutcomeTrackingStopped,
 		Err: errors.New("tracking stopped"),
 	}
-	now = now.Add(5 * time.Second)
+	now = now.Add(3 * time.Second)
 	e.syncOnce(t.Context())
 	be.open = nil
 	be.order = nil

@@ -54,7 +54,7 @@ type executionService struct {
 	executor               common.Address
 	orderLimit             int
 	maxCancellationRetries int
-	cancellationRetryDelay time.Duration
+	pollInterval           time.Duration
 	vaults                 []recoveryVault
 	whitelist              adapterWhitelist // nil disables adapter filtering
 	tokenPolicy            tokenpolicy.Policy
@@ -91,9 +91,9 @@ type fillReader interface {
 	validateDirectAuthorization(ctx context.Context, executor common.Address, vaults []recoveryVault) error
 }
 
-func (e *executionService) run(ctx context.Context, interval time.Duration) {
+func (e *executionService) run(ctx context.Context) {
 	e.syncOnce(ctx)
-	t := time.NewTicker(interval)
+	t := time.NewTicker(e.pollInterval)
 	defer t.Stop()
 	for {
 		select {
@@ -261,7 +261,7 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 			status = statusSubmitted
 		}
 		e.store.markStatus(orderID, status, res.Hash, sendErr.Error())
-		retryAt := e.now().Add(e.cancellationRetryDelay)
+		retryAt := e.now().Add(e.pollInterval)
 		retryDeadline, stillValid := liquidlane.CancellationDeadline(orderDeadline, chainTime, chainObservedAt, retryAt)
 		if ctx.Err() == nil && stillValid && outcome == txmanager.OutcomeCancelled &&
 			res.Receipt != nil && res.Receipt.Status == ethtypes.ReceiptStatusSuccessful &&

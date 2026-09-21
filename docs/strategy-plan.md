@@ -207,8 +207,8 @@ The [shared manager ownership contract](TXMANAGER-PLAN.md#1-ownership-and-admiss
 
 The manager distinguishes confirmed cancellation from cancellation inclusion with an interrupted
 confirmation wait. RFQ owns the retry policy: a confirmed cancellation can re-enter fill planning after
-a bounded backoff and a fresh open-order poll. Each retry resolves the executable order, chain inputs,
-strategy plan, and discount signatures again. Retry budgets remain process-local; neither strategy code
+one configured poll interval and a fresh open-order poll. Each retry resolves the executable order,
+chain inputs, strategy plan, and discount signatures again. Retry budgets remain process-local; neither strategy code
 nor the generic manager decides whether to replay a protocol order.
 
 The adjacent `internal/liquidlane/discounts` package owns the discount rules shared by RFQ, LI.FI, and

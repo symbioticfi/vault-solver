@@ -133,7 +133,7 @@ func buildServices(
 		executor:               cfg.Executor,
 		orderLimit:             cfg.OrderLimit,
 		maxCancellationRetries: cfg.MaxCancellationRetries,
-		cancellationRetryDelay: cfg.CancellationRetryDelay,
+		pollInterval:           cfg.PollInterval,
 		vaults:                 cfg.Adapters,
 		whitelist:              execWhitelist,
 		tokenPolicy:            cfg.TokenPolicy,
@@ -220,7 +220,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	execDone := make(chan struct{})
 	go func() {
 		defer close(execDone)
-		s.exec.run(execCtx, s.cfg.PollInterval)
+		s.exec.run(execCtx)
 	}()
 
 	var runErr error

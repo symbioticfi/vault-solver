@@ -330,10 +330,10 @@ For liquidity commitments, the built-in strategies apply these limits:
 - RFQ external mode excludes discount inventory at quote time. Excess input can be absorbed only by a
   direct swap, whose calldata caps output. After a successful cancellation reaches the configured
   confirmations, a still-open, unexpired order can be retried with a fresh fill plan and newly resolved
-  discount signatures. `solvers[].config.maxCancellationRetries` defaults to `2` additional attempts
-  (`0` disables them); `cancellationRetryDelayMs` defaults to `5000`. Reverted transactions are not
-  retried, and uncertain fill or cancellation inclusion is reconciled through the backend. Retry counts
-  are local to each process and reset on restart.
+  discount signatures. `solvers[].config.maxCancellationRetries` defaults to `3` additional attempts
+  (`0` disables them); retries wait at least one `pollIntervalMs` interval before a fresh open-order poll
+  can re-arm the order. Reverted transactions are not retried, and uncertain fill or cancellation
+  inclusion is reconciled through the backend. Retry counts are local to each process and reset on restart.
 - LI.FI and UniswapX split shared vault capacity across token pairs before quoting. A pair can therefore
   quote less than the vault's total free liquidity. This does not reserve every repeated quote request.
 - The default OEV strategy permits one pending bundle per adapter. New auction frames arriving during a
