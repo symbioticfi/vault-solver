@@ -207,7 +207,7 @@ Children: `txmanager.broadcast` (fee quote, gas estimate, nonce, sign, send — 
 grandchild automatically) and one `txmanager.replace` per replacement carrying `tx.attempt` and
 `tx.cancellation`. Receipt polls are ordinary RPC child spans. Attributes: `solver` (from
 `Request.Solver`), `tx.label`, `tx.hash` and `tx.nonce` once known, and terminal `tx.outcome`; status
-is Error for `reverted`, `cancelled`, `submission_error` and `tracking_stopped`, and unset for
+is Error for `reverted`, `cancelled`, `cancelled_unconfirmed`, `submission_error` and `tracking_stopped`, and unset for
 `confirmed` and `included_unconfirmed`. The send span **ends before the result is delivered** to the
 caller, so a caller resuming its own trace never races the span it nests under. A send declined because
 the lane is busy gets a `declined` event with `decision=not_admitted`, `reason=lane_busy`, and ends

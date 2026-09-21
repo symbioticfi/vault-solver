@@ -121,7 +121,8 @@ valid evidence for the same nonce.
 | `confirmed` | Normal call succeeded and satisfied confirmation policy. |
 | `included_unconfirmed` | Successful inclusion observed, but confirmation waiting ended with an error. |
 | `reverted` | Receipt reports execution failure; an error during confirmation is retained in the result. |
-| `cancelled` | Cancellation inclusion observed; inspect `Err` because the confirmation wait can also have failed. |
+| `cancelled` | Successful cancellation receipt satisfied confirmation policy; `Err` explains that the requested call was cancelled. |
+| `cancelled_unconfirmed` | Successful cancellation inclusion observed, but confirmation waiting ended with an error. This is not proof that it is safe to retry the call. |
 | `submission_error` | Submission/pre-sign path failed without a retained pending lifecycle. |
 | `tracking_stopped` | Lifecycle tracking stopped before a terminal receipt was established. |
 
@@ -232,6 +233,8 @@ Receipt tests cover 52 independent budgets, timer handling during blocked reads,
 recovery, teardown and coincident cancellation/replacement ticks. Existing tests cover fee limits,
 ambiguous broadcasts, nonce conflicts, admission, result semantics and logging. The local Anvil target
 covers real pending replacements/cancellations; unit test success alone is not that integration proof.
+Cancellation outcome tests also distinguish a satisfied confirmation policy from an interrupted wait;
+RFQ tests consume that distinction when deciding whether another fill is safe.
 Run repository-required build, race/coverage and lint gates for implementation changes. Current reader
 validation is local; it does not establish deployment or production rollout status.
 

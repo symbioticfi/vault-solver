@@ -328,8 +328,12 @@ For liquidity commitments, the built-in strategies apply these limits:
   Expiration is at least `now + offerExpiryBuffer`. Webhook `liveOffers[]` now includes decimal-string
   `principal`; remote strategies must reserve it as well as the live request slot.
 - RFQ external mode excludes discount inventory at quote time. Excess input can be absorbed only by a
-  direct swap, whose calldata caps output. A failed transaction with a recorded hash is not resubmitted;
-  uncertain inclusion is reconciled through the backend.
+  direct swap, whose calldata caps output. After a successful cancellation reaches the configured
+  confirmations, a still-open, unexpired order can be retried with a fresh fill plan and newly resolved
+  discount signatures. `solvers[].config.maxCancellationRetries` defaults to `2` additional attempts
+  (`0` disables them); `cancellationRetryDelayMs` defaults to `5000`. Reverted transactions are not
+  retried, and uncertain fill or cancellation inclusion is reconciled through the backend. Retry counts
+  are local to each process and reset on restart.
 - LI.FI and UniswapX split shared vault capacity across token pairs before quoting. A pair can therefore
   quote less than the vault's total free liquidity. This does not reserve every repeated quote request.
 - The default OEV strategy permits one pending bundle per adapter. New auction frames arriving during a
@@ -476,7 +480,7 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | Workflow | `solver_bot_workflow_last_observation_timestamp` | `solver`, `strategy`, `view` | Freshness paired with each retained workflow state count. |
 | RFQ | `rfq_filler_http_request_duration_seconds` | `method`, `route`, `status` | Quote-server request count (`_count`), status funnel, and latency. Routes are allowlisted and methods are normalized to `GET`, `POST`, or `other` to bound cardinality. |
 | RFQ | `rfq_filler_http_requests_total` | `method`, `route`, `status` | Deprecated one-release compatibility counter for existing alerts; migrate to `rfq_filler_http_request_duration_seconds_count`. |
-| RFQ | `rfq_active_orders` | — | Current queued, submitting, or submitted obligations awaiting terminal backend state. |
+| RFQ | `rfq_active_orders` | — | Current queued, submitting, submitted, or cancellation-retry obligations awaiting terminal backend state. |
 | RFQ | `rfq_oldest_active_order_age_seconds` | — | Age of the oldest active obligation; catches a single stuck order that a count-only alert can miss. |
 | LI.FI | `lifi_active_quotes` | — | Process-local quote count from the last successful publication or suspension reconciliation. It can remain nonzero after the remote quotes expire at `quoteTtl`, so use it with refresh freshness rather than as backend state. |
 | LI.FI | `lifi_active_quote_ranges` | — | Number of currently active standing-quote ranges from the last successful reconciliation. |

@@ -1,6 +1,7 @@
 package rfq
 
 import (
+	"math"
 	"math/big"
 	"strconv"
 	"time"
@@ -16,20 +17,22 @@ import (
 
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parseConfig.
 type rawConfig struct {
-	BackendURL             string            `yaml:"backendUrl"`
-	BackendSharedSecretEnv string            `yaml:"backendSharedSecretEnv"`
-	ListenAddr             string            `yaml:"listenAddr"`
-	Executor               string            `yaml:"executor"`
-	Reactor                string            `yaml:"reactor"`
-	LiquidityLens          string            `yaml:"liquidityLens"`
-	PollIntervalMs         int               `yaml:"pollIntervalMs"`
-	OrderLimit             int               `yaml:"orderLimit"`
-	SolverMode             string            `yaml:"solverMode"`
-	TokensToQuote          string            `yaml:"tokensToQuote"`
-	PermissionedTokens     []string          `yaml:"permissionedTokens"`
-	MinAmountsIn           map[string]string `yaml:"minAmountsIn"`
-	Adapters               []string          `yaml:"adapters"`
-	Strategy               rawStrategyConfig `yaml:"strategy"`
+	BackendURL               string            `yaml:"backendUrl"`
+	BackendSharedSecretEnv   string            `yaml:"backendSharedSecretEnv"`
+	ListenAddr               string            `yaml:"listenAddr"`
+	Executor                 string            `yaml:"executor"`
+	Reactor                  string            `yaml:"reactor"`
+	LiquidityLens            string            `yaml:"liquidityLens"`
+	PollIntervalMs           int               `yaml:"pollIntervalMs"`
+	OrderLimit               int               `yaml:"orderLimit"`
+	MaxCancellationRetries   *int              `yaml:"maxCancellationRetries"`
+	CancellationRetryDelayMs *int              `yaml:"cancellationRetryDelayMs"`
+	SolverMode               string            `yaml:"solverMode"`
+	TokensToQuote            string            `yaml:"tokensToQuote"`
+	PermissionedTokens       []string          `yaml:"permissionedTokens"`
+	MinAmountsIn             map[string]string `yaml:"minAmountsIn"`
+	Adapters                 []string          `yaml:"adapters"`
+	Strategy                 rawStrategyConfig `yaml:"strategy"`
 }
 
 type rawStrategyConfig struct {
@@ -59,6 +62,10 @@ type Config struct {
 	PollInterval time.Duration
 	// OrderLimit caps how many open orders are fetched per poll.
 	OrderLimit int
+	// MaxCancellationRetries bounds additional fills after confirmed cancellations per order.
+	// Zero disables retries. Each retry re-fetches the executable order and discount signatures.
+	MaxCancellationRetries int
+	CancellationRetryDelay time.Duration
 	// SolverMode is the deployment profile operators set: "external" (default) or "internal". It drives
 	// the discount-API gate and adapter scoping (see usesDiscounts / restrictsToAdapters / quoteScopesToAdapters):
 	//   - external: never calls the internal-only discounts API; adapters are REQUIRED and scope quoting AND filling.
@@ -94,11 +101,13 @@ const (
 
 // Defaults applied when a field is unset.
 const (
-	defaultListenAddr   = ":42073"
-	defaultPollInterval = 3 * time.Second
-	defaultOrderLimit   = 20
-	defaultSolverMode   = solverModeExternal
-	defaultStrategyName = "default"
+	defaultListenAddr             = ":42073"
+	defaultPollInterval           = 3 * time.Second
+	defaultOrderLimit             = 20
+	defaultSolverMode             = solverModeExternal
+	defaultStrategyName           = "default"
+	defaultMaxCancellationRetries = 2
+	defaultCancellationRetryDelay = 5 * time.Second
 )
 
 // parseConfig decodes and validates the opaque rfq solver config block.
@@ -133,6 +142,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		Executor:               executor,
 		PollInterval:           defaultPollInterval,
 		OrderLimit:             defaultOrderLimit,
+		MaxCancellationRetries: defaultMaxCancellationRetries,
 		SolverMode:             mode,
 		TokenPolicy:            tokenPolicy,
 		Strategy: StrategyConfig{
@@ -145,6 +155,19 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	}
 	if raw.OrderLimit > 0 {
 		cfg.OrderLimit = raw.OrderLimit
+	}
+	if raw.MaxCancellationRetries != nil {
+		if *raw.MaxCancellationRetries < 0 {
+			return nil, errors.New("maxCancellationRetries must be non-negative")
+		}
+		cfg.MaxCancellationRetries = *raw.MaxCancellationRetries
+	}
+	if raw.CancellationRetryDelayMs != nil && int64(*raw.CancellationRetryDelayMs) > math.MaxInt64/int64(time.Millisecond) {
+		return nil, errors.New("cancellationRetryDelayMs exceeds the supported duration")
+	}
+	cfg.CancellationRetryDelay, err = parse.MsDuration(raw.CancellationRetryDelayMs, defaultCancellationRetryDelay, "cancellationRetryDelayMs")
+	if err != nil {
+		return nil, err
 	}
 	if raw.Reactor != "" {
 		if cfg.Reactor, err = parse.Address(raw.Reactor, "reactor"); err != nil {

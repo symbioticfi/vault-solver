@@ -54,6 +54,40 @@ func TestParseConfig_Defaults(t *testing.T) {
 	}
 }
 
+func TestParseConfigCancellationRetryPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		yaml        string
+		wantRetries int
+		wantDelay   time.Duration
+		wantErr     bool
+	}{
+		{name: "defaults", wantRetries: 2, wantDelay: 5 * time.Second},
+		{name: "disabled", yaml: "maxCancellationRetries: 0", wantDelay: 5 * time.Second},
+		{name: "custom", yaml: "maxCancellationRetries: 1\ncancellationRetryDelayMs: 12000", wantRetries: 1, wantDelay: 12 * time.Second},
+		{name: "negative retries", yaml: "maxCancellationRetries: -1", wantErr: true},
+		{name: "negative backoff", yaml: "cancellationRetryDelayMs: -1", wantErr: true},
+		{name: "zero backoff", yaml: "cancellationRetryDelayMs: 0", wantErr: true},
+		{name: "backoff overflows duration", yaml: "cancellationRetryDelayMs: 9223372036855", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := parseCfg(t, minimalConfig+oneAdapter+tc.yaml+"\n")
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected invalid retry config to fail")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.MaxCancellationRetries != tc.wantRetries || cfg.CancellationRetryDelay != tc.wantDelay {
+				t.Fatalf("retry policy = %d/%s, want %d/%s", cfg.MaxCancellationRetries, cfg.CancellationRetryDelay, tc.wantRetries, tc.wantDelay)
+			}
+		})
+	}
+}
+
 func TestParseConfig_Strategy(t *testing.T) {
 	cfg, err := parseCfg(t, minimalConfig+`
 strategy:

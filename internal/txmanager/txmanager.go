@@ -92,12 +92,13 @@ type Request struct {
 type Outcome string
 
 const (
-	OutcomeConfirmed           Outcome = "confirmed"
-	OutcomeIncludedUnconfirmed Outcome = "included_unconfirmed"
-	OutcomeReverted            Outcome = "reverted"
-	OutcomeCancelled           Outcome = "cancelled"
-	OutcomeSubmissionError     Outcome = "submission_error"
-	OutcomeTrackingStopped     Outcome = "tracking_stopped"
+	OutcomeConfirmed            Outcome = "confirmed"
+	OutcomeIncludedUnconfirmed  Outcome = "included_unconfirmed"
+	OutcomeReverted             Outcome = "reverted"
+	OutcomeCancelled            Outcome = "cancelled"
+	OutcomeCancelledUnconfirmed Outcome = "cancelled_unconfirmed"
+	OutcomeSubmissionError      Outcome = "submission_error"
+	OutcomeTrackingStopped      Outcome = "tracking_stopped"
 )
 
 // Included reports whether the request reached the chain, even if confirmation tracking stopped.
@@ -1094,7 +1095,7 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 	if err != nil {
 		outcome := OutcomeIncludedUnconfirmed
 		if attempt.cancellation {
-			outcome = OutcomeCancelled
+			outcome = OutcomeCancelledUnconfirmed
 		}
 		return Result{Hash: attempt.hash, Receipt: receipt, Outcome: outcome, Err: err}, true
 	}

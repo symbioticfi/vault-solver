@@ -102,14 +102,18 @@ func (f *fakeRecoveryReader) validateDirectAuthorization(
 }
 
 type fakeTxm struct {
-	calls   int
-	lastReq txmanager.Request
-	result  txmanager.Result
+	calls    int
+	lastReq  txmanager.Request
+	result   txmanager.Result
+	onResult func()
 }
 
 func (f *fakeTxm) Send(_ context.Context, req txmanager.Request) txmanager.Result {
 	f.calls++
 	f.lastReq = req
+	if f.onResult != nil {
+		f.onResult()
+	}
 	return f.result
 }
 
@@ -130,6 +134,7 @@ func newExec(t *testing.T, st *store, be orderBackend, txm txSender) *executionS
 	return &executionService{
 		chainID: 1, executor: common.HexToAddress("0x0000000000000000000000000000000000000010"),
 		orderLimit: 20, backend: be, store: st, txm: txm, discountsEnabled: true,
+		maxCancellationRetries: defaultMaxCancellationRetries, cancellationRetryDelay: defaultCancellationRetryDelay,
 		strategy: fixedFillStrategy{plan: baseFillPlan()}, strategyName: defaultStrategyName,
 		reader: &fakeRecoveryReader{chainTime: time.Unix(0, 0)},
 		links:  observability.NewSpanLinks(),
@@ -672,5 +677,39 @@ func TestExecutionDoesNotResubmitPaidOrUncertainFailures(t *testing.T) {
 				t.Fatalf("lost tracking hash: %+v", got)
 			}
 		})
+	}
+}
+
+func TestExecutionRetriesConfirmedCancellationAfterBackoff(t *testing.T) {
+	st, be := fillFixtures(t)
+	now := time.Unix(0, 0)
+	st.now = func() time.Time { return now }
+	txm := &fakeTxm{result: confirmedCancellation()}
+	e := newExec(t, st, be, txm)
+	e.now = st.now
+	be.order.OrderStatus = "open"
+	e.syncOnce(t.Context())
+	if active, _ := st.activeOrderMetrics(); active != 1 {
+		t.Fatalf("active obligations during retry wait = %d, want 1", active)
+	}
+	now = now.Add(4 * time.Second)
+	e.syncOnce(t.Context())
+	if txm.calls != 1 {
+		t.Fatalf("sends before backoff = %d, want 1", txm.calls)
+	}
+	if st.order("o1").TxHash != txm.result.Hash {
+		t.Fatal("cancellation tracking hash was cleared before retry admission")
+	}
+	now = now.Add(time.Second)
+	e.syncOnce(t.Context())
+	if txm.calls != 2 {
+		t.Fatalf("sends after confirmed cancellation and backoff = %d, want 2", txm.calls)
+	}
+	for range 5 {
+		now = now.Add(5 * time.Second)
+		e.syncOnce(t.Context())
+	}
+	if txm.calls != 3 {
+		t.Fatalf("sends after retry budget exhausted = %d, want initial plus two retries", txm.calls)
 	}
 }
