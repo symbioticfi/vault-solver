@@ -129,22 +129,24 @@ func buildServices(
 		now:              time.Now,
 	}
 	exec := &executionService{
-		chainID:          chainID,
-		executor:         cfg.Executor,
-		orderLimit:       cfg.OrderLimit,
-		vaults:           cfg.Adapters,
-		whitelist:        execWhitelist,
-		tokenPolicy:      cfg.TokenPolicy,
-		discountsEnabled: cfg.usesDiscounts(),
-		backend:          newBackendClient(cfg.BackendURL),
-		store:            st,
-		reader:           rdr,
-		strategy:         quoteStrategy,
-		strategyName:     cfg.Strategy.Name,
-		txm:              txm,
-		log:              log,
-		now:              time.Now,
-		inflight:         make(map[string]bool),
+		chainID:                chainID,
+		executor:               cfg.Executor,
+		orderLimit:             cfg.OrderLimit,
+		maxCancellationRetries: cfg.MaxCancellationRetries,
+		pollInterval:           cfg.PollInterval,
+		vaults:                 cfg.Adapters,
+		whitelist:              execWhitelist,
+		tokenPolicy:            cfg.TokenPolicy,
+		discountsEnabled:       cfg.usesDiscounts(),
+		backend:                newBackendClient(cfg.BackendURL),
+		store:                  st,
+		reader:                 rdr,
+		strategy:               quoteStrategy,
+		strategyName:           cfg.Strategy.Name,
+		txm:                    txm,
+		log:                    log,
+		now:                    time.Now,
+		inflight:               make(map[string]bool),
 	}
 	return quotes, exec
 }
@@ -218,7 +220,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	execDone := make(chan struct{})
 	go func() {
 		defer close(execDone)
-		s.exec.run(execCtx, s.cfg.PollInterval)
+		s.exec.run(execCtx)
 	}()
 
 	var runErr error

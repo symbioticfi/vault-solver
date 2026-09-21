@@ -63,7 +63,7 @@ func endSendSpan(span trace.Span, res Result) {
 
 func isSendFailure(outcome Outcome) bool {
 	switch outcome {
-	case OutcomeReverted, OutcomeCancelled, OutcomeSubmissionError, OutcomeTrackingStopped:
+	case OutcomeReverted, OutcomeCancelled, OutcomeCancelledUnconfirmed, OutcomeSubmissionError, OutcomeTrackingStopped:
 		return true
 	case OutcomeConfirmed, OutcomeIncludedUnconfirmed:
 		return false

@@ -9,20 +9,22 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
-// orderStatus is the local order lifecycle. queued → submitting → submitted → {filled|expired|failed}.
+// orderStatus is the local order lifecycle. Confirmed cancellation can enter retry_waiting before
+// another open-order poll returns it to queued; other signed failures are terminal.
 type orderStatus string
 
 const (
-	statusQueued     orderStatus = "queued"
-	statusSubmitting orderStatus = "submitting"
-	statusSubmitted  orderStatus = "submitted"
-	statusFilled     orderStatus = "filled"
-	statusExpired    orderStatus = "expired"
-	statusFailed     orderStatus = "failed"
+	statusQueued       orderStatus = "queued"
+	statusSubmitting   orderStatus = "submitting"
+	statusSubmitted    orderStatus = "submitted"
+	statusFilled       orderStatus = "filled"
+	statusExpired      orderStatus = "expired"
+	statusFailed       orderStatus = "failed"
+	statusRetryWaiting orderStatus = "retry_waiting"
 )
 
 func (s orderStatus) active() bool {
-	return s == statusQueued || s == statusSubmitting || s == statusSubmitted
+	return s == statusQueued || s == statusSubmitting || s == statusSubmitted || s == statusRetryWaiting
 }
 
 const (
@@ -31,16 +33,19 @@ const (
 	terminalOrderTTL = 3 * time.Hour
 )
 
-// orderRecord is the local tracking state for one order. The executable payload (encodedOrder,
-// signature, deadline) is fetched fresh from the backend at fill time, so it is not persisted here.
+// orderRecord is the local tracking state for one order. The executable payload is fetched fresh
+// from the backend at fill time; only a translated deadline is retained to bound unsigned retries.
 type orderRecord struct {
-	OrderID   string
-	QuoteID   string
-	Status    orderStatus
-	TxHash    common.Hash
-	LastError string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	OrderID             string
+	QuoteID             string
+	Status              orderStatus
+	TxHash              common.Hash
+	LastError           string
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	CancellationRetries int
+	RetryAt             time.Time
+	RetryDeadline       time.Time
 }
 
 // queuedOrder is the input to upsertQueued, carrying the fields known when an order is first polled.
@@ -82,9 +87,8 @@ func (s *store) sweep() {
 
 /* ───────── orders ───────── */
 
-// upsertQueued retries failed work only while no transaction hash has been recorded.
-// A reverted/cancelled or ambiguously tracked transaction must not be paid for again just because
-// the backend still lists the order as open. Polls keep terminal records alive until it disappears.
+// upsertQueued re-arms unsigned failures and explicitly scheduled cancellation retries. A retry
+// requires both the backoff and another open-order poll. Other signed failures stay terminal.
 func (s *store) upsertQueued(in queuedOrder) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -98,6 +102,15 @@ func (s *store) upsertQueued(in queuedOrder) bool {
 	if rec.Status == statusFailed && rec.TxHash == (common.Hash{}) {
 		rec.Status = statusQueued
 		rec.LastError = ""
+	}
+	if rec.Status == statusRetryWaiting && !now.Before(rec.RetryDeadline) {
+		rec.Status = statusExpired
+	}
+	if rec.Status == statusRetryWaiting && !now.Before(rec.RetryAt) {
+		rec.Status = statusQueued
+		rec.TxHash = common.Hash{} // the previous nonce was consumed by a confirmed cancellation
+		rec.LastError = ""
+		rec.RetryAt = time.Time{}
 	}
 	rec.QuoteID = parse.OrDefault(in.QuoteID, rec.QuoteID)
 	rec.UpdatedAt = now
@@ -161,6 +174,22 @@ func (s *store) recordAttempt(orderID string) int {
 	defer s.mu.Unlock()
 	s.attempts[orderID]++
 	return s.attempts[orderID]
+}
+
+// scheduleCancellationRetry is called only after a successful, confirmed cancellation receipt.
+// The consumed nonce is safe to leave behind, but the retry budget survives re-queuing the order.
+func (s *store) scheduleCancellationRetry(orderID string, limit int, retryAt, deadline time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec := s.orders[orderID]
+	if rec == nil || rec.CancellationRetries >= limit {
+		return false
+	}
+	rec.CancellationRetries++
+	rec.Status = statusRetryWaiting
+	rec.RetryAt = retryAt
+	rec.RetryDeadline = deadline
+	return true
 }
 
 func cloneOrder(rec *orderRecord) *orderRecord {

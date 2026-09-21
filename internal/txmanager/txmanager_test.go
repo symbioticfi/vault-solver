@@ -2657,6 +2657,7 @@ func TestOutcomeIncluded(t *testing.T) {
 		{outcome: OutcomeIncludedUnconfirmed, want: true},
 		{outcome: OutcomeReverted},
 		{outcome: OutcomeCancelled},
+		{outcome: OutcomeCancelledUnconfirmed},
 		{outcome: OutcomeSubmissionError},
 		{outcome: OutcomeTrackingStopped},
 		{outcome: ""},

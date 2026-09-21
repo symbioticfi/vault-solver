@@ -45,7 +45,10 @@ type ChainConfig struct {
 	// Other reads stay on `rpcUrl`. Point this at the private/MEV-protected endpoint that accepts the
 	// fills so startup observes its private nonce lane. Optional; empty means `rpcUrl` serves both.
 	WriteRPCURL string `yaml:"writeRpcUrl,omitempty"`
-	ChainID     uint64 `yaml:"chainId"`
+	// CancelRPCURL overrides only same-nonce self-cancellation broadcasts. Empty uses the ordinary
+	// transaction broadcast route; nonce, fee and receipt reads keep their existing endpoints.
+	CancelRPCURL string `yaml:"cancelRpcUrl,omitempty"`
+	ChainID      uint64 `yaml:"chainId"`
 	// WSURL is optional; when set it enables live log subscriptions (a latency optimization only).
 	WSURL string `yaml:"wsUrl,omitempty"`
 	// MulticallAddress overrides the Multicall3 contract used to batch reads. Defaults to the

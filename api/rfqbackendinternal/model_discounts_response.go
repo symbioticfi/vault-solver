@@ -19,7 +19,6 @@ var _ MappedNullable = &DiscountsResponse{}
 
 // DiscountsResponse struct for DiscountsResponse
 type DiscountsResponse struct {
-	RequestId            string                            `json:"requestId" validate:"regexp=^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"`
 	Protocol             string                            `json:"protocol" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	Discounts            []DiscountsResponseDiscountsInner `json:"discounts"`
 	AdditionalProperties map[string]interface{}
@@ -31,9 +30,8 @@ type _DiscountsResponse DiscountsResponse
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewDiscountsResponse(requestId string, protocol string, discounts []DiscountsResponseDiscountsInner) *DiscountsResponse {
+func NewDiscountsResponse(protocol string, discounts []DiscountsResponseDiscountsInner) *DiscountsResponse {
 	this := DiscountsResponse{}
-	this.RequestId = requestId
 	this.Protocol = protocol
 	this.Discounts = discounts
 	return &this
@@ -45,30 +43,6 @@ func NewDiscountsResponse(requestId string, protocol string, discounts []Discoun
 func NewDiscountsResponseWithDefaults() *DiscountsResponse {
 	this := DiscountsResponse{}
 	return &this
-}
-
-// GetRequestId returns the RequestId field value
-func (o *DiscountsResponse) GetRequestId() string {
-	if o == nil {
-		var ret string
-		return ret
-	}
-
-	return o.RequestId
-}
-
-// GetRequestIdOk returns a tuple with the RequestId field value
-// and a boolean to check if the value has been set.
-func (o *DiscountsResponse) GetRequestIdOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.RequestId, true
-}
-
-// SetRequestId sets field value
-func (o *DiscountsResponse) SetRequestId(v string) {
-	o.RequestId = v
 }
 
 // GetProtocol returns the Protocol field value
@@ -129,7 +103,6 @@ func (o DiscountsResponse) MarshalJSON() ([]byte, error) {
 
 func (o DiscountsResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
-	toSerialize["requestId"] = o.RequestId
 	toSerialize["protocol"] = o.Protocol
 	toSerialize["discounts"] = o.Discounts
 
@@ -158,7 +131,6 @@ func (o *DiscountsResponse) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
-		delete(additionalProperties, "requestId")
 		delete(additionalProperties, "protocol")
 		delete(additionalProperties, "discounts")
 		o.AdditionalProperties = additionalProperties

@@ -94,10 +94,17 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   expires while waiting for admission and switches to same-nonce cancellation before dead calldata can hold
   the shared nonce lane.
 - **Retries distinguish unsent work from transactions.** Failed pre-submission work with no recorded hash
-  may be retried while the order is open. A reverted or cancelled transaction retains its hash and is not
-  re-armed by open-order polling. If transaction tracking stops with inclusion unknown, the order stays
-  submitted and reconciles the backend without broadcasting another fill. These protections are in-memory;
-  persistence across process restarts remains outside this change.
+  may be retried while the order is open. A successful cancellation that satisfies txmanager's confirmation
+  policy may enter `retry_waiting`, retaining its hash until one `pollIntervalMs` interval elapses and a
+  fresh open-order poll re-arms it. `maxCancellationRetries` defaults to three additional attempts; zero
+  disables retries. The retry budget survives re-queuing; retrying clears only the consumed cancellation
+  hash and runs the full executable-order lookup, chain deadline validation, strategy plan, and discount
+  resolution again. Retry waiting counts as an active obligation and reconciles terminal
+  backend status; its retained order deadline also expires it locally if backend views disappear or stay
+  stale. No retry is scheduled during shutdown or when the order expires before the next attempt.
+  Reverted transactions stay failed; unknown inclusion or `cancelled_unconfirmed` stays submitted for backend
+  reconciliation without another fill. These protections and retry budgets are in-memory per process;
+  persistence and coordination across replicas remain outside this change.
 - **Shutdown joins accepted fills.** RFQ stops new polling and shuts down its quote listener, then waits for
   the execution loop to finish. A fill already admitted by txmanager keeps its lifecycle ownership and RFQ
   records the terminal result before `Run` returns; the framework's bounded txmanager drain remains the hard
@@ -237,6 +244,7 @@ solvers:
       reactor:              "0x…"
       pollIntervalMs: 3000
       orderLimit: 20
+      maxCancellationRetries: 3                         # additional attempts; 0 disables
       solverMode: external                              # "external" (default) | "internal" — see below
       minAmountsIn:                                     # optional per-input-token floor (base units)
         "0x…tokenIn": "1000000000000000000"             # below ⇒ no quote (204); equal ⇒ still quotes
@@ -325,6 +333,10 @@ dropping features.
    output capacity is absorbed as price impact, matching the other exact-input scopes. Cold fill
    planning applies the same constraint. Unit-tested across scope gating, permissionless aggregation,
    single-route capped output, webhook rejection, and fresh planning.
+6. **(done) Confirmed-cancellation recovery** — distinguish confirmed cancellation from an interrupted
+   confirmation wait, then allow bounded RFQ retries after one poll interval and a fresh open-order poll.
+   Every retry revalidates the executable order and builds new calldata with fresh discount signatures. Regression tests
+   cover the retry budget, disabled retries, expired/unavailable orders, uncertain results, and shutdown.
 
 **Reads are multicall-batched** end to end: amount-specific strategy evaluation uses the shared
 per-route fill-quote batch (`paused`, `getMaxAssets`, `getAmountOut`, `minDiscount`), while inventory
@@ -497,3 +509,14 @@ generated from, and refreshed with `make refresh-rfq-openapi` (`RFQ_OPENAPI_URL=
   `ResolveDiscountResponse` `anyOf` union is consumed via its single shape (the batch shape is accepted
   only when it contains exactly one entry — fail closed). `apitypes.go` is unchanged: it is the filler's
   own inbound `/quote` server contract (Huma validation tags), not a backend-client type.
+
+### Discount HTTP correlation
+
+Discount publish, listing and resolution bodies contain only discount data. The
+backend's existing request ID is carried in `X-Request-Id`, including on errors;
+it is not duplicated in a JSON `requestId`. The shared discount client reads the
+header into its diagnostic `RequestID` field. There is no fallback to a body ID.
+Public and internal clients are regenerated from the matching backend OpenAPI
+specifications when this contract changes. Deploy these generated clients with
+the backend header-only contract so resolve-union decoding no longer requires the
+removed body field.
