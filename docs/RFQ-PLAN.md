@@ -110,7 +110,7 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   records the terminal result before `Run` returns; the framework's bounded txmanager drain remains the hard
   stop for an unresolved lifecycle.
 - **Quotes follow transaction-lane readiness.** `/quote` preserves pure request validation, then returns the
-  normal no-quote `204` before chain reads or strategy work while the lane is occupied or conflicted. Readiness
+  normal no-quote `204` before chain reads or strategy work while no transaction sender is ready. Readiness
   is checked again after strategy planning so a pass that observes a mid-plan state change is discarded before
   its response.
 - **On-chain reads use the shared LiquidLane reader over `chain.Multicall`.** Exact-input pricing is
@@ -122,7 +122,7 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   `IVaultV2`/`IERC4626` (from a standalone `core-mirror` build) are vendored via `make refresh-abi` +
   `bindings` (two `FORGE_OUT`/`CORE_MIRROR_OUT` sources). The nested `fill`/order ABI is encoded/decoded
   via the generated bindings, never hand-rolled.
-- **Signer** — the framework's single EOA is the RFQ **caller** (must be in the Executor's `callers`
+- **Signer** — the framework's primary EOA is the RFQ **caller** (must be in the Executor's `callers`
   allowlist, added by the owner via `setCallers`).
 - **Tracing follows the two pipelines.** An inbound quote continues the backend's trace; each poll cycle
   roots its own. The two are minutes apart and in separate traces, so the quote server remembers each
@@ -131,6 +131,29 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   the only join available; if it ever returns the quote's trace id, that replaces the lookup and nothing
   else changes. Spans, attributes, and quote-to-fill links for this solver are specified in
   [TRACING-PLAN](TRACING-PLAN.md) §5–§6.
+
+### Parallel order execution
+
+With `txManager.delegation`, the poll loop dispatches at most `TxManager.Capacity()` fill workers.
+Per-order ownership spans planning through the terminal transaction result. Each worker re-reads the
+store after acquisition so an old polling snapshot cannot resubmit an order completed by another worker.
+Backend reconciliation remains synchronous; shutdown joins all accepted workers. Without delegation,
+the original sequential loop remains in place.
+
+Fresh fill reads, strategy selection and reservation run under a planning mutex. A process-local
+`liquidlane.CapacityLedger` records exact-output direct fills by physical vault/output-token capacity.
+Quote capacity reads share this mutex. Both paths capture existing reservations before RPC reads so a
+receipt arriving during a read cannot combine older on-chain capacity with a newly released reservation.
+Quotes and subsequent fills subtract these commitments. Selected strategy legs must fit the candidates
+and cannot combine exclusive route alternatives. Exact-input discounts reserve the entire capacity domain
+and the single-use discount ID; pending direct fills exclude discounted alternatives in the same domain.
+Subtracting commitments after route allocation may conservatively underallocate shared-route liquidity.
+Reservations release on preparation failure or terminal transaction results; unresolved inclusion retains
+them until backend reconciliation sees a terminal order. They do not coordinate other integrations or
+survive restart: reconcile all senders before restart and configure disjoint concurrent liquidity scopes.
+
+The executor caller remains the primary EOA for both direct and delegated transactions. Account pool,
+packed transport, nonce ownership and setup are defined in the [transaction manager plan](TXMANAGER-PLAN.md).
 
 ### Component port map (TS → Go)
 
@@ -346,6 +369,10 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
 ---
 
 ## 5. Open items / prerequisites
+
+- **Done:** opt-in delegated parallel execution, bounded per-order workers, pending capacity/discount
+  reservations, and independent sender shutdown/cancellation. Operational prerequisite: provision and
+  fund the exact delegate caller set before enabling `txManager.delegation`.
 
 - **Pareto AA_FalconXUSDC activation** — the token-agnostic RFQ implementation supports the
   18-decimal mainnet tranche `0xC26A6Fa2C37b38E549a4a1807543801Db684f99C` through the existing

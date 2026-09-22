@@ -20,7 +20,7 @@ are listed under [Solvers](#solvers).
   logic lives here.
 - **`internal/{config,chain,signer,txmanager}`** — solver-agnostic infra: two-stage config, vault /
   Multicall3 reads, a pluggable signer, and a nonce-serialized transaction broadcaster that shares
-  one unresolved signed lifecycle across solvers.
+  one unresolved signed lifecycle per sending account across solvers.
 - **`api/`** — committed codegen: contract `bindings/` (abigen) and protocol API clients, each
   refreshable from upstream.
 
@@ -30,8 +30,8 @@ the relevant protocol API on each tick; no database.
 ## Solvers
 
 Solvers are listed in config under `solvers:` — one or more, **at most one entry per solver type**.
-Every solver shares the chain client and signer. Transaction-sending solvers also share the single
-nonce-serialized `txManager`, so multiple solvers on one EOA never race on nonces. Solvers whose
+Every solver shares the chain client and signer. Transaction-sending solvers also share `txManager`, which serializes each EOA independently.
+Optional EIP-7702 delegation adds auxiliary senders behind the same primary identity. Solvers whose
 settlement is submitted externally do not start it. Each entry's `config` block is typed and validated
 by its own solver. Adding a solver touches **no** framework code — see the recipe in
 [`CLAUDE.md`](./CLAUDE.md).
@@ -40,7 +40,7 @@ Sharing is deliberately process-scoped. Deploy solvers that use a different sign
 write endpoint as a separate process with its own config subset and txmanager. Assign each scrape target a
 unique Prometheus `instance` (and optionally a stable `lane` target label). One EOA must never be configured
 in two processes: independent txmanagers would race on its nonce even when their RPC URLs differ. Solvers
-that share an EOA belong in one process so they retain one serialized nonce lane.
+that share an EOA belong in one process. This exclusivity also applies to every auxiliary sender.
 
 | `solver.name` | Integration | Docs | Example config |
 |---|---|---|---|
@@ -307,8 +307,8 @@ The solvers split protocol plumbing (reads, signing, submission — fixed) from 
 This is the seam for customizing a solver without forking. Contract and trust model:
 [`docs/strategy-plan.md`](docs/strategy-plan.md).
 
-The shared `txManager` serializes transaction-sending solvers on one EOA. While a transaction is queued
-or active, RFQ/UniswapX decline new quotes, LI.FI retires standing curves, and 3F stops new offers;
+The shared `txManager` serializes each sending account. When no account can immediately accept work,
+RFQ/UniswapX decline new quotes, LI.FI retires standing curves, and 3F stops new offers;
 reconciliation continues. Pending calls can be replaced or cancelled with the same nonce. Each pending
 receipt RPC has its own timeout and does not block the lifecycle loop's replacement/cancellation timers.
 
@@ -321,6 +321,66 @@ solver preparation/drain and manager shutdown. A timeout does not guarantee that
 Defaults, fee headroom, request/result semantics, nonce recovery and internal ownership are documented
 in the [transaction manager plan](docs/TXMANAGER-PLAN.md). Integration-specific deadline and capacity
 rules remain in each solver's plan.
+
+### Parallel orders with EIP-7702
+
+Configure one to five auxiliary accounts to execute up to **two to six simultaneous transactions** using
+[CoW Protocol's Solver7702Delegate](https://github.com/cowprotocol/solver-7702-delegate). The primary
+`signer` remains the protocol identity and is the preferred sender. When it is busy, an auxiliary signs
+its own transaction to the primary account, packing `bytes20(target) || calldata`. The executor still
+sees the primary address as `msg.sender`; each sender has its own nonce, fee replacements and cancellation.
+RFQ dispatches a bounded set of order workers. LI.FI and UniswapX use the pool through their existing
+asynchronous submission paths, retaining their own quote and pending-fill gates.
+
+```yaml
+txManager:
+  maxFeeGwei: 50
+  delegation:
+    delegateAddress: ${SOLVER_DELEGATE_ADDRESS}
+    auxiliarySigners:
+      - keyEnv: SOLVER_AUXILIARY_1_PRIVATE_KEY
+      - keystorePath: /run/secrets/solver-auxiliary-2.json
+        passphraseEnv: SOLVER_AUXILIARY_2_PASSPHRASE
+```
+
+Provision this before starting the service:
+
+1. Use an EIP-7702-capable chain and RPC. Deploy the artifact pinned at
+   [`5bb720265b69d9d97ab4b18f8de7fc3940a22b35`](https://github.com/cowprotocol/solver-7702-delegate/tree/5bb720265b69d9d97ab4b18f8de7fc3940a22b35)
+   with the auxiliary addresses in its five-slot constructor array, padding unused slots with zero.
+   Follow the [upstream setup guide](https://docs.cow.fi/cow-protocol/tutorials/solvers/solver-7702-delegate)
+   to authorize that implementation on the primary EOA. Authorizations are chain- and nonce-sensitive;
+   drain the accounts before changing them. The bot neither deploys nor signs delegation authorizations.
+2. Fund every sender with native gas currency and any native value its requests require. Keep the
+   primary address authorized in each executor. Auxiliary accounts need no executor permissions, but
+   their delegate access grants them control over calls made by the primary: secure their keys accordingly.
+3. Configure **all** nonzero approved auxiliary callers, each once, using env-var names or keystores.
+   Startup checks the primary's delegation, the pinned runtime (including compiler metadata), the exact
+   approved caller set, empty auxiliary account code, and all senders' latest/pending nonces.
+   A differently compiled implementation fails validation even if its source looks equivalent.
+
+Do not rotate/revoke delegation or use any sender outside this process while transactions are unresolved.
+Auxiliary calls recheck the primary's delegation before signing and estimate the actual forwarded call;
+normal replacements keep the same sender and packed payload. Cancellation never forwards a fill: auxiliaries
+send a zero-value self-transfer, and the delegated primary sends a zero-value transfer to address zero.
+Forwarding adds gas overhead. LI.FI/UniswapX retain their configured settlement/route gas budgets;
+calibrate those budgets against forwarded executor calls on the intended deployment.
+
+RFQ subtracts pending direct-fill output from quote and fill capacity. Exact-input discounted fills reserve
+their entire backing-vault capacity domain and discount ID until settlement. Uncertain outcomes retain
+reservations until terminal backend reconciliation. Reservations are local to an integration and process;
+use disjoint liquidity scopes for concurrently configured integrations. Before restarting after an unclean
+exit, reconcile every sender's outstanding public/private transactions; there is no durable ownership journal.
+
+The current **3F offer-signing flow is incompatible**: the delegate does not implement ERC-1271. Startup
+rejects combining 3F with this setting; run 3F separately with an undelegated signer. Other protocols that
+verify code-bearing EOA signatures through ERC-1271 also require a compatibility check before use.
+
+Omit `delegation` to retain the existing single-account behavior. With delegation enabled, all
+`solver_bot_txmanager_*` metrics add a `sender` label containing the lowercase public sending address;
+aggregate it when comparing process totals. Account balance/nonce metrics expose each funded sender.
+
+### Liquidity commitments
 
 For liquidity commitments, the built-in strategies apply these limits:
 
@@ -577,7 +637,7 @@ inline there.
 The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S) endpoints tried
 in order for reads when the primary is unavailable. Normal signed broadcasts and both startup nonce reads
 are pinned to `writeRpcUrl`, or the primary `rpcUrl` when it is omitted, and never fall over across
-endpoints. Optional `cancelRpcUrl` routes only same-nonce self-cancellations, including their fee replacements
+endpoints. Optional `cancelRpcUrl` routes only same-nonce cancellations, including their fee replacements
 and exact rebroadcasts, to a separate endpoint. Set `cancelRpcUrl: ${CANCEL_RPC_URL}` and, for mainnet,
 `CANCEL_RPC_URL=https://boost.rpc.mevblocker.io/fast`. When omitted or empty, cancellation uses the ordinary
 write RPC. A configured cancellation RPC failure is returned without broadcasting to another endpoint.
@@ -593,7 +653,7 @@ last-known-good snapshot until the next poll. Explicit write and cancellation en
 read endpoint.
 
 For transaction-sending solvers, startup fails closed when the write endpoint's pending nonce differs
-from its latest mined nonce because `txManager` cannot recover an unknown signed lifecycle. The EOA
+from its latest mined nonce because `txManager` cannot recover an unknown signed lifecycle. Each EOA
 must be exclusive to this process: standard nonce reads cannot reveal a future transaction queued
 beyond a gap. Before upgrading from a build that allowed several unresolved signed nonces, drain that
 EOA's write-endpoint pool. After an unclean exit, nonce equality alone cannot rule out a private
@@ -604,7 +664,8 @@ fail-closed for operator investigation; automatic restart does not recover the l
 For controlled maintenance, stop the service and reconcile outstanding private submissions before bringing
 the EOA back.
 
-Runtime nonce collisions pause admission/readiness until ownership is established. See
+Runtime nonce collisions pause the affected sender until ownership is established; other pool senders
+can remain ready. See
 [nonce conflict and restart behavior](docs/TXMANAGER-PLAN.md#6-rpc-routing-nonce-conflicts-and-restart)
 for exact-hash reconciliation and reorg handling. LiquidLane state reads always use RPC `latest`; an archive node
 is not required.

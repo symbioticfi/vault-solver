@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
 	"gopkg.in/yaml.v3"
@@ -67,6 +68,8 @@ type SignerConfig struct {
 
 // TxManagerConfig tunes the shared transaction sender.
 type TxManagerConfig struct {
+	// Delegation optionally adds independent sending accounts behind the primary solver identity.
+	Delegation *DelegationConfig `yaml:"delegation,omitempty"`
 	// Confirmations to wait for before treating a transaction as final.
 	Confirmations uint64 `yaml:"confirmations"`
 	// MaxFeeGwei is the required absolute EIP-1559 max fee per gas.
@@ -83,6 +86,28 @@ type TxManagerConfig struct {
 	PendingTimeoutMs int `yaml:"pendingTimeoutMs"`
 	// ShutdownTimeoutMs bounds how long shutdown drains an accepted transaction lifecycle.
 	ShutdownTimeoutMs int `yaml:"shutdownTimeoutMs"`
+}
+
+// DelegationConfig describes a pre-provisioned packed-call EIP-7702 delegate.
+// Keys retain the same env-name/keystore indirection as the primary signer.
+type DelegationConfig struct {
+	DelegateAddress  string         `yaml:"delegateAddress"`
+	AuxiliarySigners []SignerConfig `yaml:"auxiliarySigners"`
+}
+
+func (c DelegationConfig) validate() error {
+	if !common.IsHexAddress(c.DelegateAddress) || common.HexToAddress(c.DelegateAddress) == (common.Address{}) {
+		return errors.New("txManager.delegation.delegateAddress must be a nonzero address")
+	}
+	if len(c.AuxiliarySigners) < 1 || len(c.AuxiliarySigners) > 5 {
+		return errors.New("txManager.delegation.auxiliarySigners requires between one and five signers")
+	}
+	for i, s := range c.AuxiliarySigners {
+		if err := s.validate(); err != nil {
+			return errors.Errorf("txManager.delegation.auxiliarySigners[%d]: %w", i, err)
+		}
+	}
+	return nil
 }
 
 // SolverConfig names the solver implementation and carries its opaque, deferred config.
@@ -206,6 +231,11 @@ func (c *Config) ValidateTxManager() error {
 }
 
 func (c TxManagerConfig) validate(required bool) error {
+	if c.Delegation != nil {
+		if err := c.Delegation.validate(); err != nil {
+			return err
+		}
+	}
 	if c.MaxFeeGwei < 0 || required && c.MaxFeeGwei == 0 ||
 		math.IsNaN(c.MaxFeeGwei) || math.IsInf(c.MaxFeeGwei, 0) {
 		return errors.New("txManager.maxFeeGwei must be finite and positive")

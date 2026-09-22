@@ -1,0 +1,28 @@
+[
+  {
+    "type": "constructor",
+    "inputs": [
+      {
+        "name": "approvedCallers",
+        "type": "address[5]",
+        "internalType": "address[5]"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "fallback",
+    "stateMutability": "payable"
+  },
+  {
+    "type": "error",
+    "name": "Unauthorized",
+    "inputs": [
+      {
+        "name": "sender",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  }
+]

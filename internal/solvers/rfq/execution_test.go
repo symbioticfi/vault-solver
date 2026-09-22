@@ -600,7 +600,7 @@ func TestExecutionRecoveryMarksPermissionedScopeAsSingleRoute(t *testing.T) {
 	e.strategy = strategy
 
 	plan, err := e.buildFillPlan(
-		t.Context(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
+		t.Context(), "o1", &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
 	)
 	if err != nil {
 		t.Fatalf("buildFillPlan: %v", err)
@@ -630,7 +630,7 @@ func TestExecutionRejectsPermissionedScopeMultiLegFillPlan(t *testing.T) {
 	e.strategy = fixedFillStrategy{plan: plan}
 
 	got, err := e.buildFillPlan(
-		t.Context(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
+		t.Context(), "o1", &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
 	)
 	if err == nil || !strings.Contains(err.Error(), "single-route input requires exactly one leg") {
 		t.Fatalf("buildFillPlan error = %v, want single-route rejection", err)

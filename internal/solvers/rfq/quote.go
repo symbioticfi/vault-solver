@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -36,6 +37,8 @@ type quoteService struct {
 	reader           quoteCandidateReader
 	strategy         types.Strategy
 	strategyName     string // registry key, reported as the strategy.name span attribute
+	reservations     *liquidlane.CapacityLedger
+	planningMu       *sync.Mutex
 	log              logr.Logger
 	now              func() time.Time
 }
@@ -214,7 +217,22 @@ func (qs *quoteService) snapshotCandidates(
 ) (candidates []liquidlane.QuoteCandidate, err error) {
 	ctx, end := tracer.Start(ctx, "rfq.quote.snapshot")
 	defer func() { end(err) }()
-	return qs.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount)
+	// Share the execution snapshot lock so no new fill can reserve while these
+	// reads are in progress. Capture existing commitments before the RPC: their
+	// completion during it must not combine stale capacity with a released ledger.
+	if qs.planningMu != nil {
+		qs.planningMu.Lock()
+		defer qs.planningMu.Unlock()
+	}
+	var reserved liquidlane.CapacityReservations
+	if qs.reservations != nil {
+		reserved = qs.reservations.Snapshot()
+	}
+	candidates, err = qs.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount)
+	if err == nil && qs.reservations != nil {
+		candidates = candidatesAfterReservations(candidates, reserved)
+	}
+	return candidates, err
 }
 
 // decideQuote runs the strategy as the rfq.quote.decide stage.

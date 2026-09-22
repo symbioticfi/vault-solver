@@ -81,6 +81,9 @@ func deduplicateAdapters(adapters []common.Address) []common.Address {
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
+	if deps.TxManager != nil && deps.TxManager.Capacity() > 1 {
+		return nil, errors.New("3f: Solver7702Delegate does not support ERC-1271 offer signatures; run 3F separately with an undelegated signer")
+	}
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return nil, err

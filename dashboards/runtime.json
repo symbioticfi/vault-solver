@@ -3003,7 +3003,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "max by (address) (max by (namespace, job, instance, address) ((solver_bot_txmanager_account_balance_wei{namespace=\"${namespace}\"} / 1e18) * on (namespace, job, instance) group_left (address) (max by (namespace, job, instance, address) (solver_bot_txmanager_account_info{namespace=\"${namespace}\"}))))",
+                      "expr": "max by (address) (max by (namespace, job, instance, address) ((solver_bot_txmanager_account_balance_wei{namespace=\"${namespace}\"} / 1e18) * on (namespace, job, instance, sender) group_left (address) (max by (namespace, job, instance, sender, address) (solver_bot_txmanager_account_info{namespace=\"${namespace}\"}))))",
                       "instant": false,
                       "legendFormat": "{{address}}",
                       "range": true
@@ -3164,7 +3164,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "max by(address)(clamp_min(solver_bot_txmanager_account_pending_nonce{namespace=\"${namespace}\"} - solver_bot_txmanager_account_latest_nonce{namespace=\"${namespace}\"}, 0) * on(namespace,job,instance) group_left(address) max by(namespace,job,instance,address)(solver_bot_txmanager_account_info{namespace=\"${namespace}\"}))",
+                      "expr": "max by(address)(clamp_min(solver_bot_txmanager_account_pending_nonce{namespace=\"${namespace}\"} - solver_bot_txmanager_account_latest_nonce{namespace=\"${namespace}\"}, 0) * on(namespace,job,instance,sender) group_left(address) max by(namespace,job,instance,sender,address)(solver_bot_txmanager_account_info{namespace=\"${namespace}\"}))",
                       "instant": false,
                       "range": true,
                       "format": "time_series",
@@ -3962,7 +3962,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "clamp_min(time() - (min by (address) (solver_bot_txmanager_account_last_successful_refresh_timestamp{namespace=\"${namespace}\"} * on (namespace, job, instance) group_left (address) (max by (namespace, job, instance, address) (solver_bot_txmanager_account_info{namespace=\"${namespace}\"}))) > 0), 0) or ((min by (address) (solver_bot_txmanager_account_last_successful_refresh_timestamp{namespace=\"${namespace}\"} * on (namespace, job, instance) group_left (address) (max by (namespace, job, instance, address) (solver_bot_txmanager_account_info{namespace=\"${namespace}\"}))) == 0) - 1)",
+                      "expr": "clamp_min(time() - (min by (address) (solver_bot_txmanager_account_last_successful_refresh_timestamp{namespace=\"${namespace}\"} * on (namespace, job, instance, sender) group_left (address) (max by (namespace, job, instance, sender, address) (solver_bot_txmanager_account_info{namespace=\"${namespace}\"}))) > 0), 0) or ((min by (address) (solver_bot_txmanager_account_last_successful_refresh_timestamp{namespace=\"${namespace}\"} * on (namespace, job, instance, sender) group_left (address) (max by (namespace, job, instance, sender, address) (solver_bot_txmanager_account_info{namespace=\"${namespace}\"}))) == 0) - 1)",
                       "instant": true,
                       "legendFormat": "",
                       "range": false,

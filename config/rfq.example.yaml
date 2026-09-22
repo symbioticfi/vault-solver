@@ -25,6 +25,12 @@ signer:
   # keystorePath / passphraseEnv are also supported (see the 3f example) — provide exactly one key source.
 
 txManager:
+  # Optional EIP-7702 parallel senders; see README "Parallel orders with EIP-7702".
+  # The primary must already delegate to the pinned Solver7702Delegate implementation.
+  # delegation:
+  #   delegateAddress: ${SOLVER_DELEGATE_ADDRESS}
+  #   auxiliarySigners:             # one to five funded EOAs, matching every approved caller
+  #     - keyEnv: SOLVER_AUXILIARY_1_PRIVATE_KEY
   confirmations: 2                 # blocks to wait past inclusion before treating a fill as final (default 2)
   maxFeeGwei: 50                   # global fee cap; the normal lifecycle stops one bump below it
   accountPollIntervalMs: 30000     # signer balance/latest/pending nonce metric refresh
