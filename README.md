@@ -600,6 +600,14 @@ is not required.
 **Never commit a real key or live config** — keys are supplied via env/file behind the `Signer`
 interface; `*.local.*` and `.env` are gitignored.
 
+## Images and deployments
+
+Pushes to `stage` and `main` run the test/lint gate, publish an image tagged with the full commit SHA,
+and pass its digest to the corresponding workflow in `vault-solver-deploy`. Commit tags are immutable:
+reruns and branch promotions reuse the published image and its original build metadata. Publication is
+serialized per commit across both branches. A missing tag permits a build; registry or authentication
+errors fail the job.
+
 ## Code generation
 
 Generated code is committed for hermetic builds; refresh from upstream on demand:
