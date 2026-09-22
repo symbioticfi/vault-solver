@@ -104,6 +104,41 @@ func TestReceiptReadTimeoutDoesNotCancelFill(t *testing.T) {
 	})
 }
 
+func TestCancellationOutcomeRequiresConfirmations(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		stop bool
+		want Outcome
+	}{
+		{name: "confirmed", want: OutcomeCancelled},
+		{name: "confirmation wait stopped", stop: true, want: OutcomeCancelledUnconfirmed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := newMockBackend()
+			manager := New(backend, mustSigner(t), big.NewInt(1), Config{
+				Confirmations: 2, PollInterval: time.Millisecond,
+			}, logr.Discard())
+			tx := types.NewTx(&types.DynamicFeeTx{Nonce: 7, To: ptr(manager.signer.Address())})
+			receipt := successfulReceipt(tx, backend.head-2)
+			if tc.stop {
+				receipt = successfulReceipt(tx, backend.head)
+			}
+			backend.receipts[tx.Hash()] = receipt
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if tc.stop {
+				cancel()
+			}
+			result, done := manager.confirmPendingReceipt(ctx, &pendingTransaction{
+				req: Request{Label: "rfq-fill"}, nonce: 7,
+			}, txAttempt{hash: tx.Hash(), tx: tx, cancellation: true}, receipt)
+			if !done || result.Outcome != tc.want || result.Receipt == nil {
+				t.Fatalf("cancellation result = %+v, done = %v, want %s", result, done, tc.want)
+			}
+		})
+	}
+}
+
 func assertCancellationLog(t *testing.T, logs []string, hash common.Hash, deadline time.Time, reason string) {
 	t.Helper()
 	count := 0

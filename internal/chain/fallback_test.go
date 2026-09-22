@@ -529,7 +529,7 @@ func TestDial_SingleHTTPEndpointServesChainID(t *testing.T) {
 	defer srv.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{srv.URL}, "", multicall)
+	c, err := Dial(t.Context(), []string{srv.URL}, "", "", multicall)
 	if err != nil {
 		t.Fatalf("Dial single http endpoint: %v", err)
 	}
@@ -558,7 +558,7 @@ func TestDial_FallbackServesChainID(t *testing.T) {
 	defer fallback.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall)
+	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", "", multicall)
 	if err != nil {
 		t.Fatalf("Dial via fallback: %v", err)
 	}
@@ -618,7 +618,7 @@ func TestDial_FallbackServesReceiptAndHeadersAfterPrimaryNull(t *testing.T) {
 	defer fallback.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall)
+	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", "", multicall)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -674,7 +674,7 @@ func TestDial_FinalNullReceiptReturnsNotFound(t *testing.T) {
 	defer fallback.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall)
+	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", "", multicall)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -751,7 +751,7 @@ func TestDial_WriteRPCRoutesBroadcastsAndNonces(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err := DialWithMetrics(
-		t.Context(), []string{read.URL}, write.URL, multicall, rpcMetrics,
+		t.Context(), []string{read.URL}, write.URL, "", multicall, rpcMetrics,
 	)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
@@ -842,7 +842,7 @@ func TestDialDoesNotFollowRPCRedirects(t *testing.T) {
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
 	client, err := DialWithMetrics(
-		t.Context(), []string{redirect.URL}, "", multicall, metrics,
+		t.Context(), []string{redirect.URL}, "", "", multicall, metrics,
 	)
 	if client != nil || err == nil {
 		t.Fatalf("redirecting Dial = (%v, %v), want nil/error", client, err)
@@ -887,7 +887,7 @@ func TestTransactionSenderBalanceFallsBackWhenWriteRPCRejectsRead(t *testing.T) 
 	defer write.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	client, err := Dial(t.Context(), []string{read.URL}, write.URL, multicall)
+	client, err := Dial(t.Context(), []string{read.URL}, write.URL, "", multicall)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -913,7 +913,7 @@ func TestDial_RejectsMismatchedWriteRPCChainID(t *testing.T) {
 	defer write.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{read.URL}, write.URL, multicall)
+	c, err := Dial(t.Context(), []string{read.URL}, write.URL, "", multicall)
 	if c != nil || err == nil || !strings.Contains(err.Error(), "write rpc chain id mismatch") {
 		t.Fatalf("Dial mismatch result = (%v, %v)", c, err)
 	}
@@ -964,7 +964,7 @@ func TestDial_BroadcastDoesNotFallBackAcrossReadEndpoints(t *testing.T) {
 	defer fallback.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", multicall)
+	c, err := Dial(t.Context(), []string{primary.URL, fallback.URL}, "", "", multicall)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -1016,7 +1016,7 @@ func TestMulticallUsesLatestBlockTag(t *testing.T) {
 	defer server.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{server.URL}, "", multicall)
+	c, err := Dial(t.Context(), []string{server.URL}, "", "", multicall)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -1046,7 +1046,7 @@ func TestDial_NoWriteRPCReusesPrimary(t *testing.T) {
 	defer srv.Close()
 
 	const multicall = "0xcA11bde05977b3631167028862bE2a173976CA11"
-	c, err := Dial(t.Context(), []string{srv.URL}, "", multicall)
+	c, err := Dial(t.Context(), []string{srv.URL}, "", "", multicall)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}

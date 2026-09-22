@@ -20,7 +20,6 @@ var _ MappedNullable = &ResolveDiscountResponseOneOf{}
 
 // ResolveDiscountResponseOneOf struct for ResolveDiscountResponseOneOf
 type ResolveDiscountResponseOneOf struct {
-	RequestId            string                               `json:"requestId"`
 	DiscountId           string                               `json:"discountId" validate:"regexp=^0x[a-fA-F0-9]{64}$"`
 	Discount             ResolveDiscountResponseOneOfDiscount `json:"discount"`
 	SignerSignature      string                               `json:"signerSignature" validate:"regexp=^0x[a-fA-F0-9]+$"`
@@ -35,9 +34,8 @@ type _ResolveDiscountResponseOneOf ResolveDiscountResponseOneOf
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewResolveDiscountResponseOneOf(requestId string, discountId string, discount ResolveDiscountResponseOneOfDiscount, signerSignature string, protocolDeadline int64, protocolSignature string) *ResolveDiscountResponseOneOf {
+func NewResolveDiscountResponseOneOf(discountId string, discount ResolveDiscountResponseOneOfDiscount, signerSignature string, protocolDeadline int64, protocolSignature string) *ResolveDiscountResponseOneOf {
 	this := ResolveDiscountResponseOneOf{}
-	this.RequestId = requestId
 	this.DiscountId = discountId
 	this.Discount = discount
 	this.SignerSignature = signerSignature
@@ -52,30 +50,6 @@ func NewResolveDiscountResponseOneOf(requestId string, discountId string, discou
 func NewResolveDiscountResponseOneOfWithDefaults() *ResolveDiscountResponseOneOf {
 	this := ResolveDiscountResponseOneOf{}
 	return &this
-}
-
-// GetRequestId returns the RequestId field value
-func (o *ResolveDiscountResponseOneOf) GetRequestId() string {
-	if o == nil {
-		var ret string
-		return ret
-	}
-
-	return o.RequestId
-}
-
-// GetRequestIdOk returns a tuple with the RequestId field value
-// and a boolean to check if the value has been set.
-func (o *ResolveDiscountResponseOneOf) GetRequestIdOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.RequestId, true
-}
-
-// SetRequestId sets field value
-func (o *ResolveDiscountResponseOneOf) SetRequestId(v string) {
-	o.RequestId = v
 }
 
 // GetDiscountId returns the DiscountId field value
@@ -208,7 +182,6 @@ func (o ResolveDiscountResponseOneOf) MarshalJSON() ([]byte, error) {
 
 func (o ResolveDiscountResponseOneOf) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
-	toSerialize["requestId"] = o.RequestId
 	toSerialize["discountId"] = o.DiscountId
 	toSerialize["discount"] = o.Discount
 	toSerialize["signerSignature"] = o.SignerSignature
@@ -227,7 +200,6 @@ func (o *ResolveDiscountResponseOneOf) UnmarshalJSON(data []byte) (err error) {
 	// by unmarshalling the object into a generic map with string keys and checking
 	// that every required field exists as a key in the generic map.
 	requiredProperties := []string{
-		"requestId",
 		"discountId",
 		"discount",
 		"signerSignature",
@@ -262,7 +234,6 @@ func (o *ResolveDiscountResponseOneOf) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
-		delete(additionalProperties, "requestId")
 		delete(additionalProperties, "discountId")
 		delete(additionalProperties, "discount")
 		delete(additionalProperties, "signerSignature")

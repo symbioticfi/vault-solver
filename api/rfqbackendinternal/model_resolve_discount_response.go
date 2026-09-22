@@ -85,14 +85,9 @@ func (dst *ResolveDiscountResponse) UnmarshalJSON(data []byte) error {
 	} else { // no match
 		if err != nil {
 			return fmt.Errorf("data failed to match schemas in oneOf(ResolveDiscountResponse): %v", err)
-		} else {
-			return fmt.Errorf("data failed to match schemas in oneOf(ResolveDiscountResponse)")
 		}
-		if err != nil {
-			return fmt.Errorf("data failed to match schemas in oneOf(ResolveDiscountResponse): %v", err)
-		} else {
-			return fmt.Errorf("data failed to match schemas in oneOf(ResolveDiscountResponse)")
-		}
+
+		return fmt.Errorf("data failed to match schemas in oneOf(ResolveDiscountResponse)")
 	}
 }
 

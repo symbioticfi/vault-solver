@@ -26,22 +26,25 @@ import (
 var multicallB = multicall3.NewMulticall3()
 
 // Client is an ethclient.Client plus the chain id and the Multicall3 address, cached at dial time.
-// When a separate write RPC is configured, writeClient carries transaction broadcasts and account
+// When a separate write RPC is configured, writeClient carries normal transaction broadcasts and account
 // nonce reads so startup observes one coherent nonce lane. Sender balance telemetry tries that endpoint
 // first and falls back to the read client when the write endpoint does not support balance reads. All
-// other reads stay on the embedded (primary) client. Broadcasts never use cross-endpoint fallback: an ambiguous first send
+// other reads stay on the embedded (primary) client. cancelClient routes same-nonce self-cancellations
+// to an optional dedicated endpoint. Broadcasts never use cross-endpoint fallback: an ambiguous first send
 // must remain visible to txmanager instead of being masked by a later endpoint's response.
 type Client struct {
 	*ethclient.Client
 
-	writeClient *ethclient.Client
-	chainID     *big.Int
-	multicall   common.Address
+	writeClient  *ethclient.Client
+	cancelClient *ethclient.Client
+	chainID      *big.Int
+	multicall    common.Address
 
 	// How each endpoint's calls are traced (see calls.go). Both are zero for HTTP(S), where the
 	// instrumented transport already spans every request.
-	readCalls  callTracing
-	writeCalls callTracing
+	readCalls   callTracing
+	writeCalls  callTracing
+	cancelCalls callTracing
 }
 
 // Dial connects to the EVM RPC endpoint(s), records the chain id, and pins the Multicall3 address
@@ -52,8 +55,9 @@ type Client struct {
 // writeRPCURL, when non-empty, is dialed as a SEPARATE client used to broadcast transactions and
 // read account nonces (see SendTransaction, NonceAt, and PendingNonceAt). Every other read stays on
 // the primary. When it is empty, broadcasts and nonce reads use rpcURLs[0] without falling over.
-func Dial(ctx context.Context, rpcURLs []string, writeRPCURL, multicallAddr string) (*Client, error) {
-	return dial(ctx, rpcURLs, writeRPCURL, multicallAddr, nil)
+// cancelRPCURL overrides only same-nonce self-cancellation broadcasts; empty uses the write client.
+func Dial(ctx context.Context, rpcURLs []string, writeRPCURL, cancelRPCURL, multicallAddr string) (*Client, error) {
+	return dial(ctx, rpcURLs, writeRPCURL, cancelRPCURL, multicallAddr, nil)
 }
 
 // DialWithMetrics is Dial with generic HTTP JSON-RPC instrumentation on the supplied registry.
@@ -61,16 +65,18 @@ func DialWithMetrics(
 	ctx context.Context,
 	rpcURLs []string,
 	writeRPCURL string,
+	cancelRPCURL string,
 	multicallAddr string,
 	rpcMetrics *RPCMetrics,
 ) (*Client, error) {
-	return dial(ctx, rpcURLs, writeRPCURL, multicallAddr, rpcMetrics)
+	return dial(ctx, rpcURLs, writeRPCURL, cancelRPCURL, multicallAddr, rpcMetrics)
 }
 
 func dial(
 	ctx context.Context,
 	rpcURLs []string,
 	writeRPCURL string,
+	cancelRPCURL string,
 	multicallAddr string,
 	rpcMetrics *RPCMetrics,
 ) (*Client, error) {
@@ -134,22 +140,45 @@ func dial(
 		writeCalls = callTracing{role: rpcRoleWrite, transport: writeTransport}
 	}
 
-	return &Client{
-		Client:      ec,
-		writeClient: writeClient,
-		chainID:     id,
-		multicall:   common.HexToAddress(multicallAddr),
-		readCalls:   readCalls,
-		writeCalls:  writeCalls,
-	}, nil
+	client := &Client{
+		Client:       ec,
+		writeClient:  writeClient,
+		cancelClient: writeClient,
+		chainID:      id,
+		multicall:    common.HexToAddress(multicallAddr),
+		readCalls:    readCalls,
+		writeCalls:   writeCalls,
+		cancelCalls:  writeCalls,
+	}
+	if cancelRPCURL != "" {
+		cc, cancelTransport, cancelErr := dialClient(ctx, []string{cancelRPCURL}, rpcRoleCancel, rpcMetrics)
+		if cancelErr != nil {
+			client.Close()
+			return nil, errors.Errorf("chain: dial cancellation rpc: %w", cancelErr)
+		}
+		client.cancelClient = cc
+		cancelID, cancelErr := cc.ChainID(ctx)
+		if cancelErr != nil {
+			client.Close()
+			return nil, errors.Errorf("chain: get cancellation rpc chain id: %w", cancelErr)
+		}
+		if cancelID.Cmp(id) != 0 {
+			client.Close()
+			return nil, errors.Errorf("chain: cancellation rpc chain id mismatch: read %s, cancellation %s", id, cancelID)
+		}
+		client.cancelCalls = callTracing{role: rpcRoleCancel, transport: cancelTransport}
+	}
+	return client, nil
 }
 
-// Close closes the primary client and, when a separate write client was dialed, that one too. It
-// overrides the promoted ethclient method so the write client is not leaked.
+// Close closes the primary client and every separately dialed broadcast client exactly once.
 func (c *Client) Close() {
 	c.Client.Close()
 	if c.writeClient != nil && c.writeClient != c.Client {
 		c.writeClient.Close()
+	}
+	if c.cancelClient != nil && c.cancelClient != c.Client && c.cancelClient != c.writeClient {
+		c.cancelClient.Close()
 	}
 }
 

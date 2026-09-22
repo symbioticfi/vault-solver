@@ -19,7 +19,6 @@ var _ MappedNullable = &PublishDiscountResponse{}
 
 // PublishDiscountResponse struct for PublishDiscountResponse
 type PublishDiscountResponse struct {
-	RequestId            string `json:"requestId" validate:"regexp=^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"`
 	DiscountId           string `json:"discountId" validate:"regexp=^0x[a-fA-F0-9]{64}$"`
 	AdditionalProperties map[string]interface{}
 }
@@ -30,9 +29,8 @@ type _PublishDiscountResponse PublishDiscountResponse
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewPublishDiscountResponse(requestId string, discountId string) *PublishDiscountResponse {
+func NewPublishDiscountResponse(discountId string) *PublishDiscountResponse {
 	this := PublishDiscountResponse{}
-	this.RequestId = requestId
 	this.DiscountId = discountId
 	return &this
 }
@@ -43,30 +41,6 @@ func NewPublishDiscountResponse(requestId string, discountId string) *PublishDis
 func NewPublishDiscountResponseWithDefaults() *PublishDiscountResponse {
 	this := PublishDiscountResponse{}
 	return &this
-}
-
-// GetRequestId returns the RequestId field value
-func (o *PublishDiscountResponse) GetRequestId() string {
-	if o == nil {
-		var ret string
-		return ret
-	}
-
-	return o.RequestId
-}
-
-// GetRequestIdOk returns a tuple with the RequestId field value
-// and a boolean to check if the value has been set.
-func (o *PublishDiscountResponse) GetRequestIdOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.RequestId, true
-}
-
-// SetRequestId sets field value
-func (o *PublishDiscountResponse) SetRequestId(v string) {
-	o.RequestId = v
 }
 
 // GetDiscountId returns the DiscountId field value
@@ -103,7 +77,6 @@ func (o PublishDiscountResponse) MarshalJSON() ([]byte, error) {
 
 func (o PublishDiscountResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
-	toSerialize["requestId"] = o.RequestId
 	toSerialize["discountId"] = o.DiscountId
 
 	for key, value := range o.AdditionalProperties {
@@ -131,7 +104,6 @@ func (o *PublishDiscountResponse) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
-		delete(additionalProperties, "requestId")
 		delete(additionalProperties, "discountId")
 		o.AdditionalProperties = additionalProperties
 	}

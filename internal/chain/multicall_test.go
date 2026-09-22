@@ -98,7 +98,7 @@ func TestMulticallWithTimeUsesOneLatestCall(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(response)
 			}))
 			defer server.Close()
-			client, err := Dial(t.Context(), []string{server.URL}, "", multicall.Hex())
+			client, err := Dial(t.Context(), []string{server.URL}, "", "", multicall.Hex())
 			if err != nil {
 				t.Fatal(err)
 			}

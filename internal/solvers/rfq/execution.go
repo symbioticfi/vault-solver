@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
@@ -49,21 +50,23 @@ type executable struct {
 // own goroutine; per-order work is guarded by an in-flight set so overlapping poll cycles never
 // double-submit the same order.
 type executionService struct {
-	chainID           int64
-	executor          common.Address
-	orderLimit        int
-	vaults            []recoveryVault
-	whitelist         adapterWhitelist // nil disables adapter filtering
-	tokenPolicy       tokenpolicy.Policy
-	discountsEnabled  bool // false (external solver) skips the backend discounts API entirely
-	backend           orderBackend
-	store             *store
-	reader            fillReader
-	strategy          types.Strategy
-	strategyName      string // registry key, reported as the strategy.name span attribute
-	txm               txSender
-	metrics           *rfqMetrics
-	orderPollObserver *observability.OperationObserver
+	chainID                int64
+	executor               common.Address
+	orderLimit             int
+	maxCancellationRetries int
+	pollInterval           time.Duration
+	vaults                 []recoveryVault
+	whitelist              adapterWhitelist // nil disables adapter filtering
+	tokenPolicy            tokenpolicy.Policy
+	discountsEnabled       bool // false (external solver) skips the backend discounts API entirely
+	backend                orderBackend
+	store                  *store
+	reader                 fillReader
+	strategy               types.Strategy
+	strategyName           string // registry key, reported as the strategy.name span attribute
+	txm                    txSender
+	metrics                *rfqMetrics
+	orderPollObserver      *observability.OperationObserver
 	// links is shared with the server: it holds the span context of each quote this process served,
 	// so a fill can link back to it (spec §12). nil disables linking.
 	links *observability.SpanLinks
@@ -88,9 +91,9 @@ type fillReader interface {
 	validateDirectAuthorization(ctx context.Context, executor common.Address, vaults []recoveryVault) error
 }
 
-func (e *executionService) run(ctx context.Context, interval time.Duration) {
+func (e *executionService) run(ctx context.Context) {
 	e.syncOnce(ctx)
-	t := time.NewTicker(interval)
+	t := time.NewTicker(e.pollInterval)
 	defer t.Stop()
 	for {
 		select {
@@ -163,10 +166,17 @@ func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
 	)
 	defer end(nil) // each stage records its own failure; terminal skips are declined events here
 
+	// A confirmed cancellation leaves no unresolved fill. Bound both retry waiting and subsequent
+	// unsigned preparation when backend views disappear; submitted/unknown inclusion keeps tracking.
+	unsignedRetry := o.Status == statusRetryWaiting || o.Status == statusQueued || o.Status == statusSubmitting
+	if unsignedRetry && !o.RetryDeadline.IsZero() && !e.now().Before(o.RetryDeadline) {
+		e.store.markStatus(o.OrderID, statusExpired, common.Hash{}, "order deadline has passed")
+		return
+	}
 	switch o.Status {
 	case statusQueued, statusSubmitting:
 		e.submitOrder(ctx, o.OrderID)
-	case statusSubmitted:
+	case statusSubmitted, statusRetryWaiting:
 		e.reconcileTerminalStatus(ctx, o.OrderID)
 	case statusFilled, statusExpired, statusFailed:
 		// terminal — nothing to do
@@ -245,13 +255,23 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 			}
 			e.metrics.fillAmounts.ObserveOutcome(fillOutcome)
 		}
-		observability.Log(ctx).Error(sendErr, "fill failed", "attempt", attempt, "tx", res.Hash.Hex())
 		status := statusFailed
-		if outcome == txmanager.OutcomeTrackingStopped {
+		if outcome == txmanager.OutcomeTrackingStopped || outcome == txmanager.OutcomeCancelledUnconfirmed {
 			// Inclusion is unknown; reconcile the backend without sending another transaction.
 			status = statusSubmitted
 		}
 		e.store.markStatus(orderID, status, res.Hash, sendErr.Error())
+		retryAt := e.now().Add(e.pollInterval)
+		retryDeadline, stillValid := liquidlane.CancellationDeadline(orderDeadline, chainTime, chainObservedAt, retryAt)
+		if ctx.Err() == nil && stillValid && outcome == txmanager.OutcomeCancelled &&
+			res.Receipt != nil && res.Receipt.Status == ethtypes.ReceiptStatusSuccessful &&
+			e.store.scheduleCancellationRetry(orderID, e.maxCancellationRetries, retryAt, retryDeadline) {
+			observability.Log(ctx).Info("fill cancelled; retry scheduled", "attempt", attempt,
+				"tx", res.Hash.Hex(), "retryAt", retryAt)
+			return
+		}
+		observability.Log(ctx).Error(sendErr, "fill failed", "attempt", attempt, "tx", res.Hash.Hex(),
+			"outcome", outcome)
 		return
 	}
 	if outcome == txmanager.OutcomeConfirmed {
