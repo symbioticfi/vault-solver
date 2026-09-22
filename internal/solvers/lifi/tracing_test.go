@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -1290,4 +1291,49 @@ func TestOrderInboxRequeueDropped(t *testing.T) {
 	if !inbox.requeueDropped(orderInboxKey(abandoned), abandonedEpoch) {
 		t.Fatal("order dropped by the reset not reported")
 	}
+}
+
+func TestOrderInboxRecoveryResetDuringDelivery(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		inbox := newOrderInbox(1)
+		inbox.beginRecovery()
+		order := &submittedOrder{OrderID: "delivering"}
+		if err := inbox.enqueue(order); err != nil {
+			t.Fatalf("enqueue: %v", err)
+		}
+		orders := make(chan *submittedOrder)
+		done := make(chan error, 1)
+		go func() { done <- inbox.run(ctx, orders) }()
+		synctest.Wait() // The inbox is blocked handing the order to its consumer.
+
+		inbox.endRecovery()
+		select {
+		case <-inbox.recoveryResets():
+		default:
+			t.Fatal("ending recovery did not signal a reset")
+		}
+		// A worker handling this reset still sees the in-flight delivery as queued.
+		if inbox.requeueDropped(orderInboxKey(order), 0) {
+			t.Fatal("order reported dropped before delivery finished")
+		}
+
+		if got := <-orders; got != order {
+			t.Fatalf("delivered order = %v, want %v", got, order)
+		}
+		synctest.Wait()
+		select {
+		case <-inbox.recoveryResets():
+		default:
+			t.Fatal("finishing delivery did not signal another recovery reset")
+		}
+		if !inbox.requeueDropped(orderInboxKey(order), 0) {
+			t.Fatal("delivered order still retains a recovery hold")
+		}
+		inbox.closeInput()
+		if err := <-done; err != nil {
+			t.Fatalf("order inbox: %v", err)
+		}
+	})
 }
