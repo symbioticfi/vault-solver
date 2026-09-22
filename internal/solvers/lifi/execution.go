@@ -214,10 +214,7 @@ func (q *orderInbox) endRecovery() {
 	q.recoveryGen = 0
 	q.recoveryEpoch++
 	q.mu.Unlock()
-	select {
-	case q.reset <- struct{}{}:
-	default:
-	}
+	q.signalRecoveryReset()
 }
 
 // markRecoveryRetry re-queues an order for the next recovery sweep and reports whether it did, with
@@ -256,8 +253,16 @@ func (q *orderInbox) requeueDropped(key string, epoch uint64) bool {
 	return epoch < q.recoveryEpoch && !q.queued[key]
 }
 
-// recoveryResets signals, coalesced, each time a recovery ends.
+// recoveryResets signals, coalesced, each time a recovery ends and after any overlapping delivery
+// clears its queued key, so the worker rechecks holds retained during the handoff.
 func (q *orderInbox) recoveryResets() <-chan struct{} { return q.reset }
+
+func (q *orderInbox) signalRecoveryReset() {
+	select {
+	case q.reset <- struct{}{}:
+	default:
+	}
+}
 
 func (q *orderInbox) takeRecoveryRetries() []*submittedOrder {
 	q.mu.Lock()
@@ -323,6 +328,7 @@ func (q *orderInbox) run(ctx context.Context, out chan<- *submittedOrder) error 
 		q.orders[0] = nil
 		q.orders = q.orders[1:]
 		q.delivering = order
+		recoveryEpoch := q.recoveryEpoch
 		if len(q.orders) == 0 {
 			q.orders = nil
 		}
@@ -344,7 +350,12 @@ func (q *orderInbox) run(ctx context.Context, out chan<- *submittedOrder) error 
 		if key := orderInboxKey(order); key != "" {
 			delete(q.queued, key)
 		}
+		recoveryEnded := recoveryEpoch < q.recoveryEpoch
 		q.mu.Unlock()
+		if recoveryEnded {
+			// The worker may have handled the reset before this delivery cleared its queued key.
+			q.signalRecoveryReset()
+		}
 	}
 }
 
