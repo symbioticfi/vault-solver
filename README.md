@@ -541,13 +541,25 @@ clear the local fill-failure breaker; accounting systems must use canonical on-c
 ### Grafana dashboards
 
 Six native Grafana Dashboard Schema v2 templates are committed under
-[`dashboards/`](dashboards/): a fleet-safe Runtime dashboard and single-instance dashboards for 3F,
-RFQ, LI.FI, UniswapX, and OEV. Each JSON file carries a repository-level `uid`; a Schema v2 provisioner
-must copy it to the Dashboard resource's `metadata.name` and omit it from `spec`, because Grafana derives
-the stable dashboard URL from resource metadata rather than a `DashboardSpec` field. The selectable
-`${datasource}` has a schema-required empty current value that Grafana resolves on load, so no datasource
-UID is embedded. Namespace/pod selectors are query-driven over the standard Kubernetes target labels
-`namespace`, `pod`, `job`, and `instance`; no cluster namespace or pod-name pattern is embedded.
+[`dashboards/`](dashboards/): one unified dashboard each for Runtime, 3F, RFQ, LI.FI, UniswapX, and OEV.
+Choose **Namespace** to select the environment. Solver dashboards aggregate all replicas in that
+namespace. Runtime also has a **Pod (RPC / resources)** filter for RPC and process diagnostics;
+**All** includes every replica, and the selector includes pods observed earlier in the selected time
+range. Execution totals remain aggregated across the namespace regardless of the pod selection.
+Counter increases are calculated per process before summing, percentiles use combined histogram
+buckets, and shared account balances are not summed across replicas.
+
+Expanded amount tables show observed increases during the selected period. Retained counter peaks
+are in collapsed diagnostics: they include the first observed nonzero sample but may also include
+activity before the selected period, so they are not period volume. Token amounts are shown in atomic
+units and must not be summed across different tokens without decimal and price normalization.
+
+Each JSON file contains a Dashboard Schema v2 specification. Assign its dashboard identity through
+the Dashboard resource's `metadata.name` when provisioning; neither a dashboard UID nor a datasource
+UID is embedded in the template. Grafana resolves the empty `${datasource}` selection on load.
+Discovery uses the scrape labels `namespace` and `kubernetes_pod`; adapt these labels to your
+collector if needed. Runtime RPC queries normalize `exported_role` to `role` when the scraper has
+renamed the exporter's role label, and otherwise retain the native `role` label.
 
 ## Configuration
 
