@@ -4626,7 +4626,7 @@
       "spec": {
         "id": 101,
         "title": "Reported builds",
-        "description": "Build versions currently reporting in this environment. Use alongside exporter coverage to identify an older metrics schema without infrastructure breakdowns.",
+        "description": "Build versions currently reporting in this environment, grouped by version, commit and presence of solver metadata to help identify an older metrics schema.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
