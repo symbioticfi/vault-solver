@@ -8,6 +8,7 @@ SHELL := bash
 
 # Pinned codegen tool versions.
 ABIGEN_VERSION           ?= v1.17.5
+SOLVER_DELEGATE_REVISION  := 5bb720265b69d9d97ab4b18f8de7fc3940a22b35
 GOLANGCI_LINT_VERSION    ?= v2.13.2
 GENQLIENT_VERSION        ?= v0.8.1
 GQLFETCH_VERSION         ?= v0.7.0
@@ -72,7 +73,7 @@ BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
             AdaptiveCurveIrm:oev/irm MorphoOracle:oev/oracle \
             AggregatorV3:chainlink/aggregator \
             FrontendLiquidityLens:lens \
-            ERC20:erc20 Multicall3:multicall3
+            ERC20:erc20 Multicall3:multicall3 Solver7702Delegate:solverdelegate
 # The OEV contracts (Morpho + its AdaptiveCurve IRM + market oracle, RedStone
 # Executor, SymbioticOevSolver), the LI.FI input settler ABI, plus a minimal ERC20
 # (decimals() only) aren't in our default Foundry build, so their ABIs are hand-vendored under
@@ -167,6 +168,14 @@ refresh-morpho-graphql-schema: ## Re-pull the live Morpho GraphQL schema SDL (MO
 		python3 -c 'from pathlib import Path; import sys; path = Path(sys.argv[1]); path.write_text(path.read_text().rstrip() + "\n")' "$$tmp"; \
 		mv "$$tmp" api/graphql/morpho/schema.graphql
 	@echo "vendored api/graphql/morpho/schema.graphql"
+
+.PHONY: refresh-solver-delegate
+refresh-solver-delegate: ## Vendor the pinned EIP-7702 delegate artifact and regenerate its binding
+	@mkdir -p api/bindings/solverdelegate
+	curl -fsSL "https://raw.githubusercontent.com/cowprotocol/solver-7702-delegate/$(SOLVER_DELEGATE_REVISION)/out/Solver7702Delegate.sol/Solver7702Delegate.json" -o api/bindings/solverdelegate/artifact.json
+	curl -fsSL "https://raw.githubusercontent.com/cowprotocol/solver-7702-delegate/$(SOLVER_DELEGATE_REVISION)/LICENSE-MIT" -o api/bindings/solverdelegate/LICENSE-MIT
+	jq '.abi' api/bindings/solverdelegate/artifact.json > api/abi/Solver7702Delegate.json
+	$(MAKE) bindings BINDINGS_V2='Solver7702Delegate:solverdelegate'
 
 .PHONY: bindings
 bindings: ## Generate Go bindings from vendored ABIs (grouped per integration; package = leaf dir)
@@ -276,6 +285,10 @@ test-oev-live: ## OEV live checks — Morpho API discovery plus optional Sepolia
 .PHONY: test-txmanager-anvil
 test-txmanager-anvil: ## Exercise replacement/cancellation against an Anvil mempool with automine disabled
 	go test -race -tags integration -run TestAnvilTxManagerPendingLifecycle -v ./internal/txmanager
+
+.PHONY: test-delegation-anvil
+test-delegation-anvil: ## Exercise real EIP-7702 parallel calls and cancellation against local Anvil
+	go test -race -tags integration -run TestAnvilParallelDelegatedCalls -v ./internal/delegation
 
 .PHONY: format
 format: ## Run golangci-lint with autofix

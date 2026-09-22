@@ -75,6 +75,14 @@ type executionService struct {
 
 	inflightMu sync.Mutex
 	inflight   map[string]bool
+	// The poll goroutine is the sole dispatcher. Workers retain per-order ownership
+	// through terminal tx results, and run joins them before shutdown returns.
+	maxConcurrentOrders int
+	workers             sync.WaitGroup
+	// planningMu serializes the fresh capacity snapshot and reservation. The ledger
+	// is also read by concurrent quote handlers; its own lock protects those reads.
+	planningMu   sync.Mutex
+	reservations liquidlane.CapacityLedger
 }
 
 // fillReader is the on-chain surface used to assemble fill-time strategy inputs.
@@ -92,6 +100,7 @@ type fillReader interface {
 }
 
 func (e *executionService) run(ctx context.Context) {
+	defer e.workers.Wait()
 	e.syncOnce(ctx)
 	t := time.NewTicker(e.pollInterval)
 	defer t.Stop()
@@ -117,7 +126,17 @@ func (e *executionService) syncOnce(ctx context.Context) {
 		backendErrorLogger(observability.Log(ctx), err).Error(err, "poll open orders")
 	}
 	for _, o := range e.store.activeOrders() {
-		e.handleOrder(ctx, o)
+		if ctx.Err() != nil {
+			break
+		}
+		if e.maxConcurrentOrders <= 1 || o.Status == statusSubmitted || o.Status == statusRetryWaiting {
+			e.handleOrder(ctx, o)
+		} else if e.acquire(o.OrderID) {
+			e.workers.Go(func() {
+				defer e.release(o.OrderID)
+				e.processOrder(ctx, o)
+			})
+		}
 	}
 	e.store.sweep() // evict stale terminal orders so the maps stay bounded
 }
@@ -157,7 +176,16 @@ func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
 		return
 	}
 	defer e.release(o.OrderID)
+	e.processOrder(ctx, o)
+}
 
+func (e *executionService) processOrder(ctx context.Context, o *orderRecord) {
+	// A prior worker may have finished between activeOrders' snapshot and our
+	// ownership acquisition. Never dispatch a stale submitting/queued state.
+	o = e.store.order(o.OrderID)
+	if o == nil {
+		return
+	}
 	// The narrowed base logger, never a trace-stamped one: Log stamps each stage's own span.
 	ctx = observability.WithLogger(ctx, e.log.WithValues("orderId", o.OrderID, "quoteId", o.QuoteID))
 	ctx, end, _ := tracer.StartLinkedKey(ctx, e.links, o.QuoteID, "rfq.order",
@@ -223,11 +251,17 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		return
 	}
 
-	selected, err := e.buildFillPlan(ctx, exec, order, outputToken, required)
+	selected, err := e.buildFillPlan(ctx, orderID, exec, order, outputToken, required)
 	if err != nil || selected == nil {
 		e.fail(ctx, orderID, "strategy fill plan: "+errString(err))
 		return
 	}
+	retainReservation := false
+	defer func() {
+		if !retainReservation {
+			e.reservations.Delete(orderID)
+		}
+	}()
 	traceAdapter(ctx, selected.Legs)
 
 	calldata, discountValidUntil, ok := e.buildFillCalldata(ctx, orderID, exec, order, selected, chainTime)
@@ -245,6 +279,10 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		Solver: Name,
 		To:     e.executor, Data: calldata, CancelAt: cancelAt, Label: "rfq-fill",
 	})
+	// An unresolved broadcast may still spend this capacity. Keep its reservation
+	// until backend reconciliation establishes a terminal order state.
+	retainReservation = res.Outcome == txmanager.OutcomeTrackingStopped ||
+		res.Outcome == txmanager.OutcomeIncludedUnconfirmed || res.Outcome == txmanager.OutcomeCancelledUnconfirmed
 	attempt := e.store.recordAttempt(orderID)
 	outcome := res.Outcome
 	if !outcome.Included() {
@@ -393,13 +431,16 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 	switch bo.OrderStatus {
 	case "filled":
 		e.store.markStatus(orderID, statusFilled, txHash, "")
+		e.reservations.Delete(orderID)
 	case "expired":
 		e.store.markStatus(orderID, statusExpired, txHash, "")
+		e.reservations.Delete(orderID)
 	case backendOrderStatusOpen:
 		// still open; leave as-is for the next cycle
 	case "error", "cancelled", "unverified", "insufficient-funds":
 		observability.Decline(ctx, "fill_failed", "backend terminal status "+bo.OrderStatus)
 		e.store.markStatus(orderID, statusFailed, txHash, "backend terminal status "+bo.OrderStatus)
+		e.reservations.Delete(orderID)
 	default:
 		// The client tolerates a dropped or renamed field, so "" or a new value reaches here. Marking
 		// it failed would re-arm the order and re-submit a fill the backend may still consider live.
@@ -415,6 +456,7 @@ var errUnknownOrderStatus = errors.New("unrecognized backend order status")
 // structural constraints on the returned plan.
 func (e *executionService) buildFillPlan(
 	ctx context.Context,
+	orderID string,
 	exec *executable,
 	order executor.IReactorOrder,
 	outputToken common.Address,
@@ -422,6 +464,14 @@ func (e *executionService) buildFillPlan(
 ) (plan *fillPlan, err error) {
 	ctx, end := tracer.Start(ctx, "rfq.order.plan", observability.AttrStrategy.String(e.strategyName))
 	defer func() { end(err) }()
+	var reserved liquidlane.CapacityReservations
+	if e.maxConcurrentOrders > 1 {
+		e.planningMu.Lock()
+		defer e.planningMu.Unlock()
+		// A prior receipt may finish during the reads. Keep its reservation in
+		// this snapshot so pre-receipt capacity cannot be offered again.
+		reserved = e.reservations.Snapshot()
+	}
 
 	// Direct inventories are filtered to adapters this executor is authorized to fill through. Skipped
 	// when no candidate vaults are configured (a discount-only solver), leaving discount legs only.
@@ -449,6 +499,9 @@ func (e *executionService) buildFillPlan(
 			return nil, errors.Errorf("fill: read LiquidLane candidates: %w", err)
 		}
 	}
+	if e.maxConcurrentOrders > 1 {
+		candidates = candidatesAfterReservations(candidates, reserved)
+	}
 	input := newFillInput(e.chainID, e.executor, req, candidates, required, requireSingleRoute, e.now())
 	plan, err = e.strategy.BuildFillPlan(ctx, input)
 	if err != nil || plan == nil {
@@ -456,6 +509,15 @@ func (e *executionService) buildFillPlan(
 	}
 	if verr := validateSingleRoute(input.RequireSingleRoute, len(plan.Legs)); verr != nil {
 		return nil, errors.Errorf("fill: strategy: %w", verr)
+	}
+	if e.maxConcurrentOrders > 1 {
+		plannedReservations, rerr := fillReservations(plan, candidates)
+		if rerr != nil {
+			return nil, rerr
+		}
+		if !e.reservations.Set(orderID, plannedReservations) {
+			return nil, errors.New("fill: cannot reserve plan capacity")
+		}
 	}
 	return plan, nil
 }
@@ -618,7 +680,7 @@ func errString(err error) string {
 func (e *executionService) acquire(orderID string) bool {
 	e.inflightMu.Lock()
 	defer e.inflightMu.Unlock()
-	if e.inflight[orderID] {
+	if e.inflight[orderID] || (e.maxConcurrentOrders > 0 && len(e.inflight) >= e.maxConcurrentOrders) {
 		return false
 	}
 	e.inflight[orderID] = true

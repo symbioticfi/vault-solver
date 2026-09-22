@@ -161,6 +161,9 @@ assertion because the PR19 ABI has no getter.
 - **The request fee ceiling is protocol policy.** With gas accounting disabled, UniswapX supplies no
   request ceiling. With it enabled, `MaxFeePerGas` supplies the decision-time profitability ceiling
   including one normal replacement. The manager owns [fee selection and headroom](TXMANAGER-PLAN.md#4-fees-replacements-and-cancellation).
+- **Optional parallel senders.** `txManager.delegation` preserves the primary executor-caller identity
+  while the shared pool assigns async fills to independent sender nonces. Existing per-order and
+  capacity reservations and quote gates remain authoritative; a free sender alone does not bypass them.
 - **Signed lifecycle ownership remains in txmanager.** UniswapX consumes its
   [nonce safety and terminal results](TXMANAGER-PLAN.md#6-rpc-routing-nonce-conflicts-and-restart),
   retaining its own quote/readiness gates while a request is active or ownership is uncertain.

@@ -65,15 +65,28 @@ type cancellationBackend interface {
 
 // Config tunes fee selection and confirmation behavior.
 type Config struct {
-	Confirmations       uint64        // blocks to wait past inclusion before returning
-	MaxFeeGwei          float64       // absolute max fee per gas; app config requires a positive value
-	TipGwei             float64       // minimum priority fee; 0 => derive it from recent fee history
-	PollInterval        time.Duration // receipt/confirmation poll cadence; 0 => 2s
-	BroadcastTimeout    time.Duration // maximum duration of one transaction submission RPC; 0 => 5s
-	AccountPollInterval time.Duration // signer balance/nonce metric refresh cadence; 0 => 30s
-	ReplacementInterval time.Duration // pending tx fee-bump cadence; 0 => 30s
-	PendingTimeout      time.Duration // switch from replacing the call to cancelling its nonce; 0 => 5m
-	ShutdownTimeout     time.Duration // maximum graceful drain after manager cancellation; 0 => 1m
+	// Preparer optionally validates and transforms calls for an account transport.
+	// It runs after admission, before gas estimation and signing, never on cancellation.
+	Preparer RequestPreparer
+	// CancellationRecipient overrides the zero-value self-transfer destination.
+	// A delegated sender uses an empty-code recipient to keep cancellation at 21,000 gas.
+	CancellationRecipient *common.Address
+	Confirmations         uint64        // blocks to wait past inclusion before returning
+	MaxFeeGwei            float64       // absolute max fee per gas; app config requires a positive value
+	TipGwei               float64       // minimum priority fee; 0 => derive it from recent fee history
+	PollInterval          time.Duration // receipt/confirmation poll cadence; 0 => 2s
+	BroadcastTimeout      time.Duration // maximum duration of one transaction submission RPC; 0 => 5s
+	AccountPollInterval   time.Duration // signer balance/nonce metric refresh cadence; 0 => 30s
+	ReplacementInterval   time.Duration // pending tx fee-bump cadence; 0 => 30s
+	PendingTimeout        time.Duration // switch from replacing the call to cancelling its nonce; 0 => 5m
+	ShutdownTimeout       time.Duration // maximum graceful drain after manager cancellation; 0 => 1m
+}
+
+// RequestPreparer is a protocol-agnostic account transport supplied at composition time.
+// Implementations must be safe for concurrent use and preserve request ownership/deadlines.
+type RequestPreparer interface {
+	Validate(context.Context) error
+	Prepare(ctx context.Context, req Request) (Request, error)
 }
 
 // Request is a transaction to send. Value nil means 0. Stateful solver calls leave GasLimit at 0 so
@@ -176,6 +189,7 @@ type Manager struct {
 	laneStateMu          sync.Mutex
 	laneStateSubscribers map[uint64]chan struct{}
 	nextLaneStateID      uint64
+	onLaneStateChange    func() // immutable after pool construction, before Start
 
 	mu        sync.Mutex // guards the local nonce and runtime nonce conflict
 	nonce     uint64
@@ -278,6 +292,9 @@ func (m *Manager) Confirmations() uint64 {
 	return m.cfg.Confirmations
 }
 
+// Capacity is one unresolved signed lifecycle for this sending account.
+func (m *Manager) Capacity() int { return 1 }
+
 // ValidateFeeHeadroom rejects a configured priority-fee floor that can never fit under the initial
 // transaction cap after reserving one ordinary replacement and one cancellation bump.
 func (m *Manager) ValidateFeeHeadroom() error {
@@ -343,6 +360,11 @@ func (m *Manager) SubscribeLaneState() (<-chan struct{}, func()) {
 // a transaction queued beyond a gap, so safety also relies on exclusive EOA ownership and Start's
 // invariant that later work cannot reach admission or signing until the active lifecycle is terminal.
 func (m *Manager) Initialize(ctx context.Context) error {
+	if m.cfg.Preparer != nil {
+		if err := m.cfg.Preparer.Validate(ctx); err != nil {
+			return err
+		}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.initializeNonceLocked(ctx)
@@ -542,7 +564,10 @@ func (m *Manager) SendAsync(ctx context.Context, req Request) (<-chan Result, bo
 }
 
 func (m *Manager) sendAsync(ctx context.Context, req Request, try bool) (<-chan Result, bool) {
-	admissionStarted := time.Now()
+	return m.sendAsyncAt(ctx, req, try, time.Now())
+}
+
+func (m *Manager) sendAsyncAt(ctx context.Context, req Request, try bool, admissionStarted time.Time) (<-chan Result, bool) {
 	m.addAdmissionDemand()
 	releaseDemandOnReturn := true
 	defer func() {
@@ -748,6 +773,12 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 
 	if req.MaxFeePerGas != nil && req.MaxFeePerGas.Sign() <= 0 {
 		return nil, errors.Errorf("send %q: request max fee per gas must be positive", req.Label)
+	}
+	if m.cfg.Preparer != nil {
+		req, err = m.cfg.Preparer.Prepare(broadcastCtx, req)
+		if err != nil {
+			return nil, errors.Errorf("prepare transaction: %w", err)
+		}
 	}
 	normalLimit := m.normalFeeLimit(req)
 	fees, err := m.currentFees(broadcastCtx, reserveFeeBump(normalLimit))
@@ -1167,6 +1198,9 @@ func (m *Manager) tryReplace(
 	gas := pending.gas
 	if cancellation {
 		to = m.signer.Address()
+		if m.cfg.CancellationRecipient != nil {
+			to = *m.cfg.CancellationRecipient
+		}
 		data = nil
 		value = new(big.Int)
 		gas = cancellationGasLimit
@@ -1760,6 +1794,9 @@ func (m *Manager) clearNonceConflict(nonce uint64) {
 }
 
 func (m *Manager) notifyLaneStateChange() {
+	if m.onLaneStateChange != nil {
+		m.onLaneStateChange()
+	}
 	m.laneStateMu.Lock()
 	defer m.laneStateMu.Unlock()
 	for _, changes := range m.laneStateSubscribers {

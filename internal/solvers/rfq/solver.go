@@ -71,6 +71,11 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	quotes, exec := buildServices(
 		cfg, chainID, st, rdr, deps.TxManager, deps.TxManager.LaneReady, quoteStrategy, log,
 	)
+	exec.maxConcurrentOrders = deps.TxManager.Capacity()
+	if exec.maxConcurrentOrders > 1 {
+		quotes.reservations = &exec.reservations
+		quotes.planningMu = &exec.planningMu
+	}
 	exec.metrics = metrics
 	if metrics != nil {
 		exec.orderPollObserver = metrics.orderPollObserver

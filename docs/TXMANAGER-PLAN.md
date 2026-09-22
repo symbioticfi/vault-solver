@@ -9,8 +9,8 @@ entry point. Configuration is defined by [config.go](../internal/config/config.g
 
 ## 1. Ownership and admission
 
-One process has one chain client, signer and transaction manager shared by its transaction-sending
-solvers. Only one signed nonce lifecycle may be unresolved. The same EOA must not be assigned to two
+One process has one chain client, primary protocol signer and transaction service shared by its
+transaction-sending solvers. Each sending account owns at most one unresolved signed nonce lifecycle. The same EOA must not be assigned to two
 processes, even with different RPC URLs: the managers cannot coordinate nonce ownership across processes.
 An integration submitted externally can return false from `RequiresTxManager`; an external-only process
 does not initialize/start the manager or require `txManager.maxFeeGwei`.
@@ -23,8 +23,38 @@ Once enqueued, the manager owns execution: caller cancellation is not proof the 
 Definitive pre-sign/submission failures can finish without a receipt; accepted ambiguous sends stay tracked.
 
 `Available()` reports nonce safety; `Idle()` reports absence of queued/admitted demand. `LaneReady()`
-requires both. Quote producers use `LaneReady`; already-owned recovery work can continue during contention.
+requires both for a single manager. A pool reports ready when any account is safe and idle and no
+request is waiting for admission; its `Idle` means every account is idle. Quote producers use `LaneReady`; already-owned recovery work can continue during contention.
 Subscribers receive coalesced change notifications and must re-read state and unsubscribe when done.
+
+### Optional account pool
+
+`solver.Deps.TxManager` is the `txmanager.Sender` interface, implemented by the existing `Manager` and
+`Pool`. `txManager.delegation` adds one to five auxiliary signers to the primary, for capacity two to six.
+All accounts share fee/deadline policy and RPC routing. Pool admission scans idle accounts primary-first,
+waits on coalesced lane notifications when full, and honors caller cancellation and request deadlines.
+Assignment is permanent for a signed lifecycle: failure, ambiguity or nonce conflict never causes an
+automatic replay on another account. Shutdown drains all accounts concurrently under their existing bounds.
+
+The pool and manager remain protocol-agnostic. `cmd/vault-solver/transactions.go` composes the signers,
+per-sender metrics and an `internal/delegation.Forwarder` implementing the generic `RequestPreparer`.
+That adapter validates the pinned CoW Solver7702Delegate runtime, immutable allowlist, EIP-7702 primary
+designator and undelegated auxiliary EOAs at startup. It checks the designator again before an auxiliary
+call, then packs `bytes20(target) || calldata`, forwards value and forces outer-call gas estimation.
+Prepared calldata is retained for fee replacements. The primary sends its ordinary calls directly.
+Cancellation bypasses preparation: auxiliaries self-transfer; the delegated primary sends zero value to
+address zero with 21,000 gas because a self-call would execute its fallback.
+
+Vendored contract source-of-truth is `api/bindings/solverdelegate/artifact.json`, pinned by
+`SOLVER_DELEGATE_REVISION` in Makefile. `make refresh-solver-delegate` vendors its ABI and regenerates the
+constructor binding. No automatic deployment, authorization signing or caller rotation is performed.
+Every configured account must be exclusive to this process; provisioning/revocation requires draining all
+accounts. Runtime checks cannot prevent an operator changing delegation after a call has been signed.
+
+Solvers keep order deduplication and liquidity reservations. RFQ uses bounded workers and serialized
+snapshot/reservation planning; LI.FI and UniswapX already own asynchronous pending-fill workflows. 3F
+rejects the pool because the exact upstream delegate lacks ERC-1271 for its code-bearing offer signer.
+See [operator setup](../README.md#parallel-orders-with-eip-7702).
 
 ## 2. Request contract
 
@@ -53,7 +83,8 @@ The public YAML block is `txManager`. Values below are application defaults, aft
 | `accountPollIntervalMs` | 30000 | Complete sender balance/nonce telemetry refresh cadence. |
 | `replacementIntervalMs` | 30000 | Pending replacement/rebroadcast cadence. |
 | `pendingTimeoutMs` | 300000 | Switch an unresolved call to cancellation; must be at least the replacement interval. |
-| `shutdownTimeoutMs` | 60000 | Hard bound on manager drain after shutdown begins. |
+| `shutdownTimeoutMs` | 60000 | Hard bound on each account manager drain after shutdown begins. |
+| `delegation` | Omitted | Installed delegate address and one to five auxiliary `SignerConfig` entries; no parallel pool when absent. |
 
 Polling defaults to 2 seconds in the Go manager; it is not a separate YAML field. Pending receipt reads
 and obsolescence checks each use `min(2 seconds, replacementInterval/2)`; fee reads use
@@ -134,7 +165,7 @@ Operational counters are not a canonical accounting ledger.
 
 Normal broadcasts and both latest/pending account nonce reads use one non-fallback write endpoint:
 `chain.writeRpcUrl`, or primary `chain.rpcUrl` when omitted. An explicit write endpoint is chain-ID checked.
-Optional `chain.cancelRpcUrl` routes same-nonce zero-value self-cancellations to a dedicated, chain-ID-checked
+Optional `chain.cancelRpcUrl` routes same-nonce zero-value cancellations to a dedicated, chain-ID-checked
 endpoint. Initial cancellation, later cancellation fee bumps, and exact cancellation rebroadcasts all use
 that route. Normal fill replacements and nonce reads continue through the ordinary write endpoint.
 An empty cancellation URL preserves the ordinary write route; a configured endpoint's error never triggers
@@ -175,6 +206,10 @@ The manager hard stop can return before an uncooperative backend exits; worker t
 context compliance, and process teardown remains the ultimate bound.
 
 ## 8. Observability
+
+When delegation is enabled, every txmanager collector has a constant `sender` label per sending EOA.
+Without delegation, the existing metric label schema is unchanged. Pool admission failures before account
+assignment are attributed to the primary collector.
 
 The generic manager logs with the request's solver and operation label. Receipt transport failures emit
 one error at streak start, debug while repeating, an error reminder every five minutes and an info on
@@ -248,6 +283,10 @@ validation is local; it does not establish deployment or production rollout stat
 Keep shared lifecycle design and metric contracts here. Update integration plans only when their own
 request construction, readiness, capacity or protocol behavior changes. Preserve operator-facing setup,
 EOA exclusivity and maintenance warnings in README, with links here for the detailed mechanism.
+
+The delegated Anvil regression runs with `make test-delegation-anvil`. It deploys
+the pinned artifact, installs a real signed EIP-7702 authorization, broadcasts primary/auxiliary calls
+before mining either, and checks caller identity, native value, independent nonces and cancellation.
 
 ### Receipt failure diagnostics
 

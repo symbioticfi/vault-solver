@@ -198,12 +198,16 @@ The generic HTTP chain transport records bounded logical requests and endpoint a
 role, method, ordinal endpoint, and outcome; configured URLs and error strings never become labels.
 `solver_bot_solver_info{solver}` exposes bounded config-time membership for fleet joins.
 
-A process is one execution lane: one chain client (primary/fallback reads, optional private write endpoint,
-and optional cancellation broadcast endpoint), one signer, and one nonce-serialized txmanager shared by its configured solvers. Different
+A process has one chain client (primary/fallback reads, optional private write endpoint,
+and optional cancellation broadcast endpoint), one primary protocol identity, and a shared transaction service.
+By default it has one sending account; optional EIP-7702 delegation adds independent auxiliary senders
+while preserving the primary caller identity. Each account retains one unresolved nonce lifecycle. Different
 signer/RPC tuples run as separate processes with disjoint solver subsets and unique Prometheus `instance`
 (or deployment-supplied `lane`) target labels. Committed dashboards use the standard Kubernetes `pod` target
 label and query namespace/pod options from Prometheus rather than embedding deployment names. Application metrics do not carry URLs or deployment names.
-The [shared manager ownership contract](TXMANAGER-PLAN.md#1-ownership-and-admission) requires an exclusive EOA per process.
+The [shared manager ownership contract](TXMANAGER-PLAN.md#1-ownership-and-admission) requires every sending EOA to be exclusive to one process. RFQ reserves pending fill capacity before
+concurrent submission; LI.FI and UniswapX retain their existing per-integration ledgers. These ledgers
+do not coordinate overlapping liquidity across integrations; configure disjoint scopes.
 
 The manager distinguishes confirmed cancellation from cancellation inclusion with an interrupted
 confirmation wait. RFQ owns the retry policy: a confirmed cancellation can re-enter fill planning after

@@ -304,7 +304,9 @@ for retry.
 
 Standing curves also follow the shared transaction lane. On any coalesced lane-state change, LI.FI first
 expires its known active curves; if the lane is ready again, it rebuilds and republishes from fresh state.
-While the lane is occupied or nonce ownership is unresolved, both periodic refresh and final publication
+With the optional delegated account pool, readiness means at least one sender is safe and idle; the
+executor caller remains the primary EOA. Existing async fills and capacity reservations are unchanged.
+When no sender is ready, both periodic refresh and final publication
 checks fail closed. An immutable matched order that has already entered transaction admission remains retained
 and waits without signing through a nonce conflict until the lane recovers, its cancellation deadline expires,
 or shutdown begins. This prevents new exclusive matches from being advertised without abandoning

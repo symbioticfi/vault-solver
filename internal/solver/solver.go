@@ -25,7 +25,7 @@ import (
 // race on the sending account's nonce.
 type Deps struct {
 	Chain     *chain.Client
-	TxManager *txmanager.Manager
+	TxManager txmanager.Sender
 	Signer    signer.Signer
 	Log       logr.Logger
 	Metrics   *observability.Metrics

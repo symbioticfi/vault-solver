@@ -15,7 +15,6 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 	"github.com/symbioticfi/vault-solver/internal/solver"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 	"github.com/symbioticfi/vault-solver/internal/version"
 )
 
@@ -135,26 +134,16 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	}
 	log.Info("signer ready", "address", sgnr.Address().Hex())
 
-	// Shared, nonce-serialized transaction sender.
-	txMetrics, err := txmanager.NewMetrics(metrics.Registerer())
+	// Shared transaction service: one serialized lane per configured sender.
+	txm, err := newTransactionSender(chainClient, sgnr, chainClient.ChainID(), cfg.TxManager, metrics.Registerer(), log)
 	if err != nil {
 		return err
 	}
-	txm := txmanager.NewWithMetrics(chainClient, sgnr, chainClient.ChainID(), txmanager.Config{
-		Confirmations:       cfg.TxManager.Confirmations,
-		MaxFeeGwei:          cfg.TxManager.MaxFeeGwei,
-		TipGwei:             cfg.TxManager.TipGwei,
-		BroadcastTimeout:    time.Duration(cfg.TxManager.BroadcastTimeoutMs) * time.Millisecond,
-		AccountPollInterval: time.Duration(cfg.TxManager.AccountPollIntervalMs) * time.Millisecond,
-		ReplacementInterval: time.Duration(cfg.TxManager.ReplacementIntervalMs) * time.Millisecond,
-		PendingTimeout:      time.Duration(cfg.TxManager.PendingTimeoutMs) * time.Millisecond,
-		ShutdownTimeout:     time.Duration(cfg.TxManager.ShutdownTimeoutMs) * time.Millisecond,
-	}, txMetrics, log)
 	runCtx, reportFatal := context.WithCancelCause(ctx)
 	defer reportFatal(nil)
 
-	// Build every configured solver. Transaction-sending solvers share the single nonce-serialized
-	// txManager so they never race on nonces.
+	// Build every configured solver. Transaction-sending solvers share the sender pool
+	// so each account has exactly one nonce owner.
 	deps := solver.Deps{
 		Chain: chainClient, TxManager: txm, Signer: sgnr, Log: log, Metrics: metrics,
 		ReportFatal: reportFatal,

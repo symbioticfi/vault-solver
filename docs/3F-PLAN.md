@@ -118,12 +118,16 @@ not block recovery work.
 > The **offer signer** (EIP-712, off-chain) and the **tx sender** are distinct protocol roles, but the
 > current framework backs both with the same `Signer`/EOA. txmanager owns only the on-chain nonce.
 
+The current offer-signing flow cannot use `txManager.delegation`: Solver7702Delegate has no ERC-1271
+implementation, and the adapter treats a code-bearing signer as a contract signer. The factory rejects
+this combination. Run 3F separately with an undelegated signer.
+
 ### 5.2 `solver` — generic interface + registry
 
 ```go
 type Deps struct {
     Chain     *chain.Client
-    TxManager *txmanager.Manager
+    TxManager txmanager.Sender
     Signer    signer.Signer
     Log       logr.Logger
     Metrics   *observability.Metrics
