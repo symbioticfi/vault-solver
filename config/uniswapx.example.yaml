@@ -6,7 +6,8 @@ chain:
   rpcUrl: ${ETH_RPC_URL_MAINNET} # state, fees, and receipts
   # rpcFallbackUrls:             # optional read-only fallbacks, tried in order
   #   - ${ETH_RPC_URL_MAINNET_BACKUP}
-  writeRpcUrl: ${WRITE_RPC_URL}  # broadcasts + nonce reads; must support same-nonce replacement/cancellation
+  writeRpcUrl: ${WRITE_RPC_URL}  # normal broadcasts + nonce reads; must support same-nonce replacement
+  # cancelRpcUrl: ${CANCEL_RPC_URL} # cancellation broadcasts only; unset uses the ordinary write RPC
   chainId: 1                     # must match the RPC chain ID
 
 signer:
@@ -25,6 +26,7 @@ txManager:
 observability:
   addr: ":9090"                  # framework metrics and health endpoints
   debug: false                   # enable debug-level logs
+  # Tracing: set env OTEL_EXPORTER_ENABLED=true and OTEL_EXPORTER_OTLP_ENDPOINT (see README).
 
 solvers:
   - name: uniswapx-filler

@@ -24,7 +24,7 @@ var (
 
 // Run warms the caches, starts the strategy + ops loops, and serves the WS stream until ctx cancels.
 func (s *Solver) Run(ctx context.Context) error {
-	s.log.Info("starting",
+	observability.Log(ctx).Info("starting",
 		"callback", s.cfg.Callback.Hex(), "executor", s.cfg.Executor.Hex(), "adapter", s.cfg.Adapter.Hex(),
 		"strategy", s.strategyName,
 		"dryRun", s.dryRun, "signer", s.deps.Signer.Address().Hex())
@@ -34,7 +34,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	if err := s.refreshStateWithBoundaryRetry(runCtx); err != nil {
 		startupErr := errors.Errorf("initial state refresh: %w", err)
-		s.log.Error(startupErr, "initial state refresh failed")
+		observability.Log(runCtx).Error(startupErr, "initial state refresh failed")
 		return startupErr
 	}
 	wg.Go(func() { s.strategy.Run(runCtx) })
@@ -65,7 +65,7 @@ func (s *Solver) opsLoop(ctx context.Context) {
 
 func (s *Solver) refreshStateAndLog(ctx context.Context) {
 	if err := s.refreshStateWithBoundaryRetry(ctx); err != nil && ctx.Err() == nil {
-		s.log.Error(err, "state refresh failed; keeping cache")
+		observability.Log(ctx).Error(err, "state refresh failed; keeping cache")
 	}
 }
 
@@ -80,7 +80,7 @@ func (s *Solver) refreshStateWithBoundaryRetry(ctx context.Context) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}
-	s.log.V(1).Info("state refresh crossed block boundary; retrying latest snapshot", "error", err)
+	observability.Log(ctx).V(1).Info("state refresh crossed block boundary; retrying latest snapshot", "error", err)
 
 	err = s.refreshState(ctx)
 	if !errors.Is(err, errStateRefreshBlockBoundary) {

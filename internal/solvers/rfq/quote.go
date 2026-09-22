@@ -11,6 +11,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
@@ -34,6 +35,7 @@ type quoteService struct {
 	minAmountsIn     map[common.Address]*big.Int
 	reader           quoteCandidateReader
 	strategy         types.Strategy
+	strategyName     string // registry key, reported as the strategy.name span attribute
 	log              logr.Logger
 	now              func() time.Time
 }
@@ -92,26 +94,54 @@ type quoteObservation struct {
 // well-formed but this filler can't quote it (wrong type/chain, input token out of scope or below its
 // configured minimum, no whitelisted adapter, no matching asset, or no viable strategy). An error is
 // returned only for malformed input or a failed dependency.
-func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (quoteDecision, error) {
+func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (decision quoteDecision, err error) {
+	// The service's own logger, so the pipeline logs through it whatever context the caller brought.
+	ctx = observability.WithLogger(ctx, qs.log)
+	ctx, end := tracer.Start(ctx, "rfq.quote")
+	// Deferred so the span still ends when the pipeline panics; recoverPanics turns that into a 500
+	// without unwinding past here, and an unended span is never exported.
+	defer func() {
+		var bad *badRequestError
+		switch {
+		case errors.As(err, &bad):
+			// A malformed payload is the caller's fault (400), not a solver failure.
+			observability.Decline(ctx, "bad_request", bad.Error())
+			end(nil)
+		case err != nil:
+			end(err)
+		default:
+			// A zero outcome means the pipeline panicked: end the span without recording a decision
+			// it never reached.
+			if decision.response == nil && decision.outcome != "" {
+				observability.Decline(ctx, "no_quote", string(decision.outcome))
+			}
+			end(nil)
+		}
+	}()
+	return qs.evaluate(ctx, q)
+}
+
+// evaluate is the quote pipeline; quote wraps it in the rfq.quote span and classifies its outcome.
+func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDecision, error) {
 	parsed, err := q.toStrategy(qs.chainID)
 	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, &badRequestError{errors.Errorf("parse request: %w", err)}
 	}
 	if !qs.canQuote() {
-		qs.log.V(1).Info("declining quote: transaction lane not ready", "quoteId", q.QuoteID)
+		observability.Log(ctx).V(1).Info("declining quote: transaction lane not ready", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil
 	}
 	if parsed == nil {
-		qs.log.V(1).Info("declining quote: not quotable", "quoteId", q.QuoteID, "type", q.Type)
+		observability.Log(ctx).V(1).Info("declining quote: not quotable", "quoteId", q.QuoteID, "type", q.Type)
 		return quoteDecision{outcome: quoteDecisionNotQuotable}, nil
 	}
 	if !qs.tokenPolicy.Allows(parsed.req.TokenIn) {
-		qs.log.V(1).Info("declining quote: input token out of scope",
+		observability.Log(ctx).V(1).Info("declining quote: input token out of scope",
 			"quoteId", q.QuoteID, "tokenIn", lowerAddr(parsed.req.TokenIn), "scope", qs.tokenPolicy.Scope())
 		return quoteDecision{outcome: quoteDecisionNotQuotable}, nil
 	}
 	if minIn, ok := qs.minAmountsIn[parsed.req.TokenIn]; ok && parsed.req.Amount.Cmp(minIn) < 0 {
-		qs.log.V(1).Info("declining quote: input amount below configured minimum",
+		observability.Log(ctx).V(1).Info("declining quote: input amount below configured minimum",
 			"quoteId", q.QuoteID, "tokenIn", lowerAddr(parsed.req.TokenIn),
 			"amount", parsed.req.Amount.String(), "min", minIn.String())
 		return quoteDecision{outcome: quoteDecisionBelowMinimum}, nil
@@ -121,37 +151,39 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (quoteDecisi
 		inv = slices.DeleteFunc(slices.Clone(inv), func(item solverInventory) bool { return item.DiscountID != nil })
 	}
 	if len(inv) == 0 {
-		qs.log.V(1).Info("declining quote: no whitelisted adapters", "quoteId", q.QuoteID)
+		observability.Log(ctx).V(1).Info("declining quote: no whitelisted adapters", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
 	}
 
 	requireSingleRoute := qs.tokenPolicy.RequiresSingleRoute(req.TokenIn)
-	candidates, err := qs.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount)
+	candidates, err := qs.snapshotCandidates(ctx, inv, req)
 	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: read LiquidLane candidates: %w", err)
 	}
 	if len(candidates) == 0 {
-		qs.log.V(1).Info("declining quote: no viable LiquidLane candidates", "quoteId", q.QuoteID)
+		observability.Log(ctx).V(1).Info("declining quote: no viable LiquidLane candidates", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
 	}
 	input := newQuoteInput(qs.chainID, qs.executor, req, candidates, nil, requireSingleRoute, qs.now())
-	out, err := qs.strategy.DecideQuote(ctx, input)
+	out, err := qs.decideQuote(ctx, input)
 	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: strategy: %w", err)
 	}
 	if out.Decision != types.DecisionQuote {
-		qs.log.V(1).Info("declining quote: no viable strategy", "quoteId", q.QuoteID)
+		observability.Log(ctx).V(1).Info("declining quote: no viable strategy", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionStrategyDeclined}, nil
 	}
-	if _, err := strategies.FillPlanFromQuote(input, out); err != nil {
+	plan, err := strategies.FillPlanFromQuote(input, out)
+	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: strategy: %w", err)
 	}
+	traceAdapter(ctx, plan.Legs)
 	if !qs.canQuote() {
-		qs.log.V(1).Info("declining quote: transaction lane no longer ready", "quoteId", q.QuoteID)
+		observability.Log(ctx).V(1).Info("declining quote: transaction lane no longer ready", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil
 	}
 
-	qs.log.V(1).Info("quoted",
+	observability.Log(ctx).V(1).Info("quoted",
 		"quoteId", q.QuoteID, "amountIn", req.Amount.String(),
 		"amountOut", out.QuotedAmountOut.String(), "legs", len(out.Legs))
 
@@ -174,6 +206,24 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (quoteDecisi
 			amountIn: req.Amount, amountOut: out.QuotedAmountOut,
 		},
 	}, nil
+}
+
+// snapshotCandidates reads current on-chain pricing for the request as the rfq.quote.snapshot stage.
+func (qs *quoteService) snapshotCandidates(
+	ctx context.Context, inv []solverInventory, req strategyRequest,
+) (candidates []liquidlane.QuoteCandidate, err error) {
+	ctx, end := tracer.Start(ctx, "rfq.quote.snapshot")
+	defer func() { end(err) }()
+	return qs.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount)
+}
+
+// decideQuote runs the strategy as the rfq.quote.decide stage.
+func (qs *quoteService) decideQuote(
+	ctx context.Context, input types.QuoteInput,
+) (out types.QuoteOutput, err error) {
+	ctx, end := tracer.Start(ctx, "rfq.quote.decide", observability.AttrStrategy.String(qs.strategyName))
+	defer func() { end(err) }()
+	return qs.strategy.DecideQuote(ctx, input)
 }
 
 // canQuote fails closed when the lane-state dependency was not wired. Production construction

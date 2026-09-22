@@ -13,6 +13,7 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/uniswapxservice"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 const (
@@ -41,8 +42,9 @@ func newOrderClient(cfg OrderServerConfig, apiKey string) *orderClient {
 		generatedConfig.DefaultHeader["x-beta-rfq"] = betaRFQHeaderValue
 	}
 	generatedConfig.HTTPClient = &http.Client{
-		Timeout:   cfg.HTTPTimeout,
-		Transport: responseLimitTransport{next: http.DefaultTransport, limit: maxOrderResponseBytes},
+		Timeout: cfg.HTTPTimeout,
+		Transport: observability.TraceTransport(
+			responseLimitTransport{next: http.DefaultTransport, limit: maxOrderResponseBytes}, "uniswapx-api"),
 	}
 	return &orderClient{
 		client:     uniswapxservice.NewAPIClient(generatedConfig),

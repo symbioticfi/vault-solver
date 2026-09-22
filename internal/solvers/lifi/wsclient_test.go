@@ -10,11 +10,12 @@ import (
 	"time"
 
 	"github.com/go-errors/errors"
-	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
 	"github.com/gorilla/websocket"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 func TestOrderFeedDisconnectLogLevel(t *testing.T) {
@@ -74,8 +75,8 @@ func TestOrderFeedDisconnectLogLevel(t *testing.T) {
 					cancel()
 				}
 			}, funcr.Options{})
-			feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", log)
-			_ = feed.run(ctx, orderFeedConnectionHooks{beforeRead: func(connectionCtx context.Context) {
+			feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
+			_ = feed.run(observability.WithLogger(ctx, log), orderFeedConnectionHooks{beforeRead: func(connectionCtx context.Context) {
 				if tc.ready {
 					feed.markRecoveryReady(connectionCtx)
 				}
@@ -126,9 +127,9 @@ func TestOrderFeedBackoffResetsOnlyAfterRecovery(t *testing.T) {
 			cancel()
 		}
 	}, funcr.Options{})
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", log)
+	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
 	attempts := 0
-	_ = feed.run(ctx, orderFeedConnectionHooks{beforeRead: func(connectionCtx context.Context) {
+	_ = feed.run(observability.WithLogger(ctx, log), orderFeedConnectionHooks{beforeRead: func(connectionCtx context.Context) {
 		attempts++
 		if attempts == 3 {
 			feed.markRecoveryReady(connectionCtx)
@@ -179,7 +180,7 @@ func TestWatchOnceReportsUnrecoveredConnection(t *testing.T) {
 	}))
 	defer server.Close()
 
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
+	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
 	ready, err := feed.watchOnce(context.Background(), orderFeedConnectionHooks{}, func(context.Context, orderMessage) {})
 	if ready {
 		t.Fatal("connection closed before recovery completed")
@@ -207,7 +208,7 @@ func TestWatchOnceRunsConnectionWorkAlongsideEventsAndWaitsForIt(t *testing.T) {
 	}))
 	defer server.Close()
 
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
+	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
 	workStarted := make(chan struct{})
 	workCanceled := make(chan struct{})
 	liveHandled := make(chan struct{})
@@ -262,7 +263,7 @@ func TestWatchOnceRunsConnectionStartHookBeforeFirstEvent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
+	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
 	hookStarted := make(chan struct{})
 	releaseHook := make(chan struct{})
 	liveHandled := make(chan struct{})
@@ -308,7 +309,7 @@ func TestOrderFeedRunsConnectionWorkAfterReconnect(t *testing.T) {
 	}))
 	defer server.Close()
 
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
+	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
 	started := make(chan struct{}, 2)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -347,7 +348,7 @@ func TestOrderFeedMetricsLifecycle(t *testing.T) {
 	}))
 	defer server.Close()
 
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "", logr.Discard())
+	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
 	metrics, err := newLIFIMetrics(prometheus.NewRegistry(), feed, "")
 	if err != nil {
 		t.Fatal(err)

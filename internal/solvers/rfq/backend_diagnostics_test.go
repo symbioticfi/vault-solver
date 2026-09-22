@@ -13,21 +13,25 @@ import (
 	"github.com/getsentry/sentry-go"
 	"github.com/go-logr/zapr"
 	"github.com/symbioticfi/vault-solver/internal/observability"
+	"go.opentelemetry.io/otel"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 
 	"github.com/go-errors/errors"
-	"github.com/go-logr/logr"
+
+	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 )
 
 func TestBackendRequestIDPropagationAndFailures(t *testing.T) {
+	tracetest.Install(t)
 	for _, operation := range []string{"list", "executable", "get", "discounts", "resolve"} {
 		for _, supplied := range []string{"", "inbound-request-42"} {
 			t.Run(operation+"/"+supplied, func(t *testing.T) {
-				var received string
+				var received, receivedTraceparent string
 				calls := 0
 				backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					received = r.Header.Get(requestIDHeader)
+					receivedTraceparent = r.Header.Get("traceparent")
 					calls++
 					w.Header().Set(requestIDHeader, "backend-generated-id")
 					w.WriteHeader(http.StatusBadGateway)
@@ -35,6 +39,8 @@ func TestBackendRequestIDPropagationAndFailures(t *testing.T) {
 				defer backend.Close()
 				client := newBackendClient(backend.URL)
 				invoke := func(ctx context.Context) error {
+					ctx, span := otel.Tracer("test").Start(ctx, "op")
+					defer span.End()
 					switch operation {
 					case "list":
 						_, err := client.listOpenOrders(ctx, "filler", 10)
@@ -57,12 +63,17 @@ func TestBackendRequestIDPropagationAndFailures(t *testing.T) {
 				if supplied != "" {
 					req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/quote", nil)
 					req.Header.Set(requestIDHeader, supplied)
-					logRequests(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { err = invoke(r.Context()) }), logr.Discard()).ServeHTTP(httptest.NewRecorder(), req)
+					logRequests(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+						err = invoke(r.Context())
+					})).ServeHTTP(httptest.NewRecorder(), req)
 				} else {
 					err = invoke(t.Context())
 				}
 				if received == "" || (supplied != "" && received != supplied) {
 					t.Fatalf("received ID = %q", received)
+				}
+				if receivedTraceparent == "" {
+					t.Fatalf("received traceparent = %q, want non-empty", receivedTraceparent)
 				}
 				var diagnostic *backendRequestError
 				if !errors.As(err, &diagnostic) || diagnostic.RequestID() != received || strings.Contains(err.Error(), received) {

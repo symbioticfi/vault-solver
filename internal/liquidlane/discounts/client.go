@@ -10,6 +10,7 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/rfqbackendinternal"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 const defaultTimeout = 10 * time.Second
@@ -26,7 +27,7 @@ type Terms struct {
 	Deadline      int64
 }
 
-// Resolved is the fresh signed discount returned at fill time.
+// Resolved is the fresh signed discount returned at fill time. RequestID comes from X-Request-Id.
 type Resolved struct {
 	RequestID         string
 	DiscountID        string
@@ -50,7 +51,7 @@ type ListItem struct {
 	MaxAssets          string
 }
 
-// List is the GET /discounts response projected into solver-owned types.
+// List projects discount data and the X-Request-Id header into solver-owned types.
 type List struct {
 	RequestID string
 	Protocol  string
@@ -65,7 +66,10 @@ type Client struct {
 }
 
 func NewClient(baseURL string) *Client {
-	return NewClientWithHTTPClient(baseURL, &http.Client{Timeout: defaultTimeout})
+	return NewClientWithHTTPClient(baseURL, &http.Client{
+		Timeout:   defaultTimeout,
+		Transport: observability.TraceTransport(nil, "rfq-discounts"),
+	})
 }
 
 // NewClientWithHTTPClient permits callers to attach their existing request correlation transport.
@@ -93,37 +97,26 @@ func (c *Client) Resolve(ctx context.Context, discountID string) (*Resolved, err
 		return nil, errors.New("private discounts: resolve: empty response")
 	}
 	if single := resp.ResolveDiscountResponseOneOf; single != nil {
-		return resolvedFromSingle(single), nil
+		return resolvedFromSingle(httpResp.Header.Get("X-Request-Id"), single), nil
 	}
 	if batch := resp.ResolveDiscountResponseOneOf1; batch != nil {
 		items := batch.GetDiscounts()
 		if len(items) != 1 {
 			return nil, errors.Errorf("private discounts: resolve: expected a single discount, got %d", len(items))
 		}
-		return resolvedFromBatchItem(batch.GetRequestId(), &items[0]), nil
+		return resolvedFromSingle(httpResp.Header.Get("X-Request-Id"), &items[0]), nil
 	}
 	return nil, errors.New("private discounts: resolve: response matched neither discount shape")
 }
 
-func resolvedFromSingle(s *rfqbackendinternal.ResolveDiscountResponseOneOf) *Resolved {
+func resolvedFromSingle(requestID string, s *rfqbackendinternal.ResolveDiscountResponseOneOf) *Resolved {
 	return &Resolved{
-		RequestID:         s.GetRequestId(),
+		RequestID:         requestID,
 		DiscountID:        s.GetDiscountId(),
 		Discount:          termsFromModel(s.GetDiscount()),
 		SignerSignature:   s.GetSignerSignature(),
 		ProtocolDeadline:  s.GetProtocolDeadline(),
 		ProtocolSignature: s.GetProtocolSignature(),
-	}
-}
-
-func resolvedFromBatchItem(requestID string, it *rfqbackendinternal.ResolveDiscountResponseOneOf1DiscountsInner) *Resolved {
-	return &Resolved{
-		RequestID:         requestID,
-		DiscountID:        it.GetDiscountId(),
-		Discount:          termsFromModel(it.GetDiscount()),
-		SignerSignature:   it.GetSignerSignature(),
-		ProtocolDeadline:  it.GetProtocolDeadline(),
-		ProtocolSignature: it.GetProtocolSignature(),
 	}
 }
 
@@ -150,7 +143,7 @@ func (c *Client) ListDiscounts(ctx context.Context) (*List, error) {
 	if resp == nil {
 		return out, nil
 	}
-	out.RequestID = resp.GetRequestId()
+	out.RequestID = httpResp.Header.Get("X-Request-Id")
 	out.Protocol = resp.GetProtocol()
 	gen := resp.GetDiscounts()
 	out.Discounts = make([]ListItem, 0, len(gen))

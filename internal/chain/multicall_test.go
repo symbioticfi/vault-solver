@@ -13,7 +13,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/multicall3"
 )
@@ -99,7 +98,7 @@ func TestMulticallWithTimeUsesOneLatestCall(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(response)
 			}))
 			defer server.Close()
-			client, err := Dial(t.Context(), []string{server.URL}, "", multicall.Hex(), logr.Discard())
+			client, err := Dial(t.Context(), []string{server.URL}, "", "", multicall.Hex())
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -101,14 +102,18 @@ func (f *fakeRecoveryReader) validateDirectAuthorization(
 }
 
 type fakeTxm struct {
-	calls   int
-	lastReq txmanager.Request
-	result  txmanager.Result
+	calls    int
+	lastReq  txmanager.Request
+	result   txmanager.Result
+	onResult func()
 }
 
 func (f *fakeTxm) Send(_ context.Context, req txmanager.Request) txmanager.Result {
 	f.calls++
 	f.lastReq = req
+	if f.onResult != nil {
+		f.onResult()
+	}
 	return f.result
 }
 
@@ -129,9 +134,11 @@ func newExec(t *testing.T, st *store, be orderBackend, txm txSender) *executionS
 	return &executionService{
 		chainID: 1, executor: common.HexToAddress("0x0000000000000000000000000000000000000010"),
 		orderLimit: 20, backend: be, store: st, txm: txm, discountsEnabled: true,
-		strategy: fixedFillStrategy{plan: baseFillPlan()},
-		reader:   &fakeRecoveryReader{chainTime: time.Unix(0, 0)},
-		log:      logr.Discard(), now: func() time.Time { return time.Unix(0, 0) },
+		maxCancellationRetries: defaultMaxCancellationRetries, pollInterval: defaultPollInterval,
+		strategy: fixedFillStrategy{plan: baseFillPlan()}, strategyName: defaultStrategyName,
+		reader: &fakeRecoveryReader{chainTime: time.Unix(0, 0)},
+		links:  observability.NewSpanLinks(),
+		log:    logr.Discard(), now: func() time.Time { return time.Unix(0, 0) },
 		inflight: make(map[string]bool),
 	}
 }
@@ -668,6 +675,58 @@ func TestExecutionDoesNotResubmitPaidOrUncertainFailures(t *testing.T) {
 			}
 			if got := st.order("o1"); got == nil || got.TxHash != hash {
 				t.Fatalf("lost tracking hash: %+v", got)
+			}
+		})
+	}
+}
+
+func TestExecutionRetriesConfirmedCancellationAfterPollInterval(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		yaml         string
+		pollInterval time.Duration
+	}{
+		{name: "default", pollInterval: 3 * time.Second},
+		{name: "custom", yaml: "pollIntervalMs: 12000\n", pollInterval: 12 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := parseCfg(t, minimalConfig+"solverMode: internal\n"+tc.yaml)
+			if err != nil {
+				t.Fatal(err)
+			}
+			st, be := fillFixtures(t)
+			now := time.Unix(0, 0)
+			st.now = func() time.Time { return now }
+			txm := &fakeTxm{result: confirmedCancellation()}
+			_, e := buildServices(cfg, 1, st, nil, txm, nil,
+				fixedFillStrategy{plan: baseFillPlan()}, logr.Discard())
+			e.backend = be
+			e.reader = &fakeRecoveryReader{chainTime: time.Unix(0, 0)}
+			e.now = st.now
+			be.order.OrderStatus = "open"
+			e.syncOnce(t.Context())
+			if active, _ := st.activeOrderMetrics(); active != 1 {
+				t.Fatalf("active obligations during retry wait = %d, want 1", active)
+			}
+			now = now.Add(tc.pollInterval - time.Millisecond)
+			e.syncOnce(t.Context())
+			if txm.calls != 1 {
+				t.Fatalf("sends before poll interval = %d, want 1", txm.calls)
+			}
+			if st.order("o1").TxHash != txm.result.Hash {
+				t.Fatal("cancellation tracking hash was cleared before retry admission")
+			}
+			now = now.Add(time.Millisecond)
+			e.syncOnce(t.Context())
+			if txm.calls != 2 {
+				t.Fatalf("sends after confirmed cancellation and poll interval = %d, want 2", txm.calls)
+			}
+			for range 5 {
+				now = now.Add(tc.pollInterval)
+				e.syncOnce(t.Context())
+			}
+			if txm.calls != 4 {
+				t.Fatalf("sends after retry budget exhausted = %d, want initial plus three retries", txm.calls)
 			}
 		})
 	}

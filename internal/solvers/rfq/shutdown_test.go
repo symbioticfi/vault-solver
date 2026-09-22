@@ -50,7 +50,6 @@ func TestRunDrainsAcceptedExecutionBeforeReturning(t *testing.T) {
 		server: &server{
 			sharedSecret: "test-secret",
 			quotes:       &quoteService{},
-			log:          logr.Discard(),
 		},
 		exec: exec,
 		log:  logr.Discard(),
@@ -112,7 +111,6 @@ func TestRunReportsListenerFailureBeforeDrainingAcceptedExecution(t *testing.T) 
 		server: &server{
 			sharedSecret: "test-secret",
 			quotes:       &quoteService{},
-			log:          logr.Discard(),
 		},
 		exec: exec,
 		log:  logr.Discard(),

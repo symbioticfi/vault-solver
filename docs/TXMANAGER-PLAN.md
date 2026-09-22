@@ -121,7 +121,8 @@ valid evidence for the same nonce.
 | `confirmed` | Normal call succeeded and satisfied confirmation policy. |
 | `included_unconfirmed` | Successful inclusion observed, but confirmation waiting ended with an error. |
 | `reverted` | Receipt reports execution failure; an error during confirmation is retained in the result. |
-| `cancelled` | Cancellation inclusion observed; inspect `Err` because the confirmation wait can also have failed. |
+| `cancelled` | Successful cancellation receipt satisfied confirmation policy; `Err` explains that the requested call was cancelled. |
+| `cancelled_unconfirmed` | Successful cancellation inclusion observed, but confirmation waiting ended with an error. This is not proof that it is safe to retry the call. |
 | `submission_error` | Submission/pre-sign path failed without a retained pending lifecycle. |
 | `tracking_stopped` | Lifecycle tracking stopped before a terminal receipt was established. |
 
@@ -131,8 +132,14 @@ Operational counters are not a canonical accounting ledger.
 
 ## 6. RPC routing, nonce conflicts and restart
 
-Broadcasts and both latest/pending account nonce reads use one non-fallback write endpoint:
+Normal broadcasts and both latest/pending account nonce reads use one non-fallback write endpoint:
 `chain.writeRpcUrl`, or primary `chain.rpcUrl` when omitted. An explicit write endpoint is chain-ID checked.
+Optional `chain.cancelRpcUrl` routes same-nonce zero-value self-cancellations to a dedicated, chain-ID-checked
+endpoint. Initial cancellation, later cancellation fee bumps, and exact cancellation rebroadcasts all use
+that route. Normal fill replacements and nonce reads continue through the ordinary write endpoint.
+An empty cancellation URL preserves the ordinary write route; a configured endpoint's error never triggers
+cross-endpoint fallback. `txmanager` selects the optional `SendCancellationTransaction` backend capability
+only for cancellation attempts; plain EVM backends without that capability keep using `SendTransaction`.
 Fee, receipt and state reads use the ordinary read client/fallbacks. Signed bytes are never automatically
 replayed across read endpoints. Balance telemetry prefers the write endpoint and can fall back to the
 read client when a submission-only relay does not support balance reads. General transport behavior
@@ -140,7 +147,8 @@ remains documented in the [README configuration section](../README.md#configurat
 
 Startup requires write-endpoint latest and pending nonces to agree. Standard nonce methods cannot reveal
 a future transaction queued beyond a gap or a private hidden submission; equality is not recovery proof.
-Exact signed attempts are kept in memory. Before an upgrade from a build allowing multiple unresolved
+Exact signed attempts are kept in memory. Restart reconciliation must include any separately configured
+cancellation endpoint. Before an upgrade from a build allowing multiple unresolved
 nonces, drain the EOA's write-endpoint pool. After an unclean exit, reconcile outstanding private
 submissions before reusing the EOA. Packaged Compose uses `unless-stopped`: automatic restart can reuse
 a nonce before a hidden attempt becomes visible and does not reconstruct lost ownership.
@@ -174,6 +182,15 @@ recovery. A successful RPC is not evidence of mined inclusion. Grouping/log tran
 [observability](../internal/observability/sentry.go), independently of protocol integrations.
 Gas-estimation and receipt-revert logs omit calldata and simulator URLs to avoid copying transaction
 authorizations into logs or Sentry; receipt-revert diagnostics retain the hash, label and nonce.
+
+Each request runs under a `txmanager.send <label>` span opened in `sendAsync` from the caller's
+context, so it is a child of the submitting fill span and covers the admission wait as well as the
+broadcast. The worker carries that span on its own contexts, so it survives the manager's deliberate
+detachment from the caller, and ends it with the terminal `tx.outcome` before the result is delivered.
+Children are `txmanager.broadcast` and one `txmanager.replace` per replacement; account polls root
+`txmanager.account_poll`. The per-request logger is derived from the send span, so every lifecycle
+line carries `trace_id`. Spans, attributes, and the propagation rules are specified in
+[TRACING-PLAN](TRACING-PLAN.md) §3.4–§4.
 
 An active manager refreshes balance, latest nonce and pending nonce into one complete snapshot. Failed
 refreshes retain the previous snapshot; account gauges are absent before first success. A locked
@@ -223,6 +240,8 @@ Receipt tests cover 52 independent budgets, timer handling during blocked reads,
 recovery, teardown and coincident cancellation/replacement ticks. Existing tests cover fee limits,
 ambiguous broadcasts, nonce conflicts, admission, result semantics and logging. The local Anvil target
 covers real pending replacements/cancellations; unit test success alone is not that integration proof.
+Cancellation outcome tests also distinguish a satisfied confirmation policy from an interrupted wait;
+RFQ tests consume that distinction when deciding whether another fill is safe.
 Run repository-required build, race/coverage and lint gates for implementation changes. Current reader
 validation is local; it does not establish deployment or production rollout status.
 

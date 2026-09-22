@@ -10,6 +10,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 const (
@@ -27,11 +28,11 @@ func (s *Solver) quoteDiscountInventories(
 	}
 	listed, err := s.discounts.ListDiscounts(ctx)
 	if err != nil {
-		s.log.Error(err, "private discounts: list for quote")
+		observability.Log(ctx).Error(err, "private discounts: list for quote")
 		return nil, true
 	}
 	inventory, issues := discounts.MatchInventories(listed, bases, discounts.MatchOptions{Now: now})
-	s.logDiscountIssues(issues)
+	s.logDiscountIssues(ctx, issues)
 	return inventory, len(issues) > 0
 }
 
@@ -51,11 +52,11 @@ func (s *Solver) fillDiscountQuotes(
 	}
 	listed, err := s.discounts.ListDiscounts(ctx)
 	if err != nil {
-		s.log.Error(err, "private discounts: list for fill")
+		observability.Log(ctx).Error(err, "private discounts: list for fill")
 		return nil, nil
 	}
 	candidates, issues := discounts.MatchInventories(listed, inventory, discounts.MatchOptions{Now: now})
-	s.logDiscountIssues(issues)
+	s.logDiscountIssues(ctx, issues)
 	sort.Slice(candidates, func(i, j int) bool {
 		if cmp := candidates[i].MaxRate.Cmp(candidates[j].MaxRate); cmp != 0 {
 			return cmp > 0
@@ -88,12 +89,13 @@ func (s *Solver) fillDiscountQuotes(
 			}
 			resolved, resolveErr := s.discounts.Resolve(resolveCtx, candidate.DiscountID.Hex())
 			if resolveErr != nil {
-				s.log.Error(resolveErr, "private discounts: resolve", "discountId", candidate.DiscountID.Hex())
+				observability.Log(resolveCtx).Error(
+					resolveErr, "private discounts: resolve", "discountId", candidate.DiscountID.Hex())
 				return nil
 			}
 			signed, validateErr := discounts.ParseAndValidate(resolved, selection, baseQuote, now)
 			if validateErr != nil {
-				s.logInvalidDiscount(candidate.DiscountID.Hex(), validateErr)
+				s.logInvalidDiscount(resolveCtx, candidate.DiscountID.Hex(), validateErr)
 				return nil
 			}
 			maxAmountOut := liquidlane.AmountOutAfterDiscount(baseQuote.GrossAmountOut, signed.Terms.Discount)
@@ -125,12 +127,13 @@ func (s *Solver) fillDiscountQuotes(
 	return quotes, resolvedByID
 }
 
-func (s *Solver) logInvalidDiscount(discountID string, err error) {
-	s.log.V(1).Info("private discounts: ignored", "discountId", discountID, "error", err.Error())
+func (s *Solver) logInvalidDiscount(ctx context.Context, discountID string, err error) {
+	observability.Log(ctx).V(1).Info(
+		"private discounts: ignored", "discountId", discountID, "error", err.Error())
 }
 
-func (s *Solver) logDiscountIssues(issues []discounts.OfferIssue) {
+func (s *Solver) logDiscountIssues(ctx context.Context, issues []discounts.OfferIssue) {
 	for _, issue := range issues {
-		s.logInvalidDiscount(issue.DiscountID, issue.Err)
+		s.logInvalidDiscount(ctx, issue.DiscountID, issue.Err)
 	}
 }

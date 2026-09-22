@@ -18,7 +18,8 @@ func TestClientResolveSingle(t *testing.T) {
 		_ = json.Unmarshal(raw, &body)
 		gotID, _ = body["discountId"].(string)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"requestId":"00000000-0000-0000-0000-000000000000",` +
+		w.Header().Set("X-Request-Id", "discount-http-attempt")
+		_, _ = w.Write([]byte(`{` +
 			`"discountId":"0x` + hash64 + `",` +
 			`"discount":{"adapter":"0x0000000000000000000000000000000000000abc",` +
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
@@ -36,6 +37,9 @@ func TestClientResolveSingle(t *testing.T) {
 	if gotPath != "/api-internal/v1/discounts" || gotMethod != http.MethodPost || gotID != id {
 		t.Fatalf("request = path %q method %q id %q", gotPath, gotMethod, gotID)
 	}
+	if res.RequestID != "discount-http-attempt" {
+		t.Fatalf("request ID = %q, want response header", res.RequestID)
+	}
 	if res.Discount.Adapter != "0x0000000000000000000000000000000000000abc" ||
 		res.Discount.Discount != "123" || res.Discount.Nonce != "2" ||
 		res.Discount.Deadline != 1900000000 {
@@ -49,7 +53,8 @@ func TestClientResolveSingle(t *testing.T) {
 func TestClientResolveBatchSingleEntryAccepted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"requestId":"00000000-0000-0000-0000-000000000000",` +
+		w.Header().Set("X-Request-Id", "discount-http-attempt")
+		_, _ = w.Write([]byte(`{` +
 			`"discounts":[{"discountId":"0x` + hash64 + `",` +
 			`"discount":{"adapter":"0x0000000000000000000000000000000000000abc",` +
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
@@ -62,6 +67,9 @@ func TestClientResolveBatchSingleEntryAccepted(t *testing.T) {
 	res, err := NewClient(srv.URL).Resolve(context.Background(), "0x"+hash64)
 	if err != nil {
 		t.Fatalf("Resolve batch: %v", err)
+	}
+	if res.RequestID != "discount-http-attempt" {
+		t.Fatalf("request ID = %q, want response header", res.RequestID)
 	}
 	if res.Discount.Adapter != "0x0000000000000000000000000000000000000abc" || res.SignerSignature != "0xdead" {
 		t.Fatalf("resolved from batch = %+v", res)
@@ -77,7 +85,8 @@ func TestClientResolveBatchMultipleRejected(t *testing.T) {
 			`"protocol":"0x0000000000000000000000000000000000000bbb","nonce":"2","deadline":1900000000},` +
 			`"signerSignature":"0xdead","protocolDeadline":1900000001,"protocolSignature":"0xbeef"}`
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"requestId":"00000000-0000-0000-0000-000000000000","discounts":[` +
+		w.Header().Set("X-Request-Id", "discount-http-attempt")
+		_, _ = w.Write([]byte(`{"discounts":[` +
 			entry + `,` + entry + `]}`))
 	}))
 	defer srv.Close()
@@ -92,7 +101,8 @@ func TestClientListDiscounts(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"requestId":"00000000-0000-0000-0000-000000000000",` +
+		w.Header().Set("X-Request-Id", "discount-http-attempt")
+		_, _ = w.Write([]byte(`{` +
 			`"protocol":"0x0000000000000000000000000000000000000bbb","discounts":[` +
 			`{"discountId":"0x` + hash64 + `","adapter":"0x0000000000000000000000000000000000000abc",` +
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
@@ -109,6 +119,9 @@ func TestClientListDiscounts(t *testing.T) {
 	if gotPath != "/api-internal/v1/discounts" {
 		t.Fatalf("path = %q", gotPath)
 	}
+	if resp.RequestID != "discount-http-attempt" {
+		t.Fatalf("request ID = %q, want response header", resp.RequestID)
+	}
 	if len(resp.Discounts) != 1 || resp.Discounts[0].CollateralDecimals != 6 ||
 		resp.Discounts[0].MaxAssets != "5000" || resp.Discounts[0].Deadline != 1900000000 {
 		t.Fatalf("discounts = %+v", resp.Discounts)
@@ -120,8 +133,9 @@ func TestClientPreservesBaseURLPathPrefix(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Request-Id", "discount-http-attempt")
 		_, _ = w.Write([]byte(
-			`{"requestId":"00000000-0000-0000-0000-000000000000",` +
+			`{` +
 				`"protocol":"0x0000000000000000000000000000000000000001","discounts":[]}`,
 		))
 	}))

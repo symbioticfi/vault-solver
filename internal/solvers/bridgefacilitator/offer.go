@@ -1,6 +1,7 @@
 package bridgefacilitator
 
 import (
+	"context"
 	"math/big"
 	"time"
 
@@ -15,8 +16,11 @@ import (
 // buildSignedOffer signs a trusted strategy execution offer. Strategy owns pricing and sizing; solver
 // only supplies the auction EIP-712 domain and signature.
 func (s *Solver) buildSignedOffer(
-	av auctionView, offer types.OfferExecution,
-) (threef.CreateOfferDto, error) {
+	ctx context.Context, av auctionView, offer types.OfferExecution,
+) (_ threef.CreateOfferDto, err error) {
+	_, end := tracer.Start(ctx, "3f.offer.build")
+	defer func() { end(err) }()
+
 	auction := av.dto
 	if offer.Principal == nil || offer.ExpectedReturn == nil {
 		return threef.CreateOfferDto{}, errors.Errorf("auction %v: strategy offer is missing amounts", auction.Id)

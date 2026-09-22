@@ -24,6 +24,7 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
@@ -48,7 +49,7 @@ func TestRunLogsExternalAdapterAuthorizationFailure(t *testing.T) {
 		log: funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
 	}
 
-	err := s.Run(t.Context())
+	err := s.Run(observability.WithLogger(t.Context(), s.log))
 	if err == nil || !strings.Contains(err.Error(), "validate direct authorization") {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -72,7 +73,7 @@ func TestRunRejectsNonZeroGovernanceFee(t *testing.T) {
 		log: logr.Discard(),
 	}
 
-	err := s.Run(t.Context())
+	err := s.Run(observability.WithLogger(t.Context(), s.log))
 	if err == nil || !strings.Contains(err.Error(), "validate governance fee") {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -93,7 +94,7 @@ func TestRunLogsExecutorValidationFailure(t *testing.T) {
 		log: funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
 	}
 
-	err := s.Run(t.Context())
+	err := s.Run(observability.WithLogger(t.Context(), s.log))
 	if err == nil || !strings.Contains(err.Error(), "lifi: validate executor: caller is not authorized") {
 		t.Fatalf("Run() error = %v", err)
 	}
@@ -139,7 +140,7 @@ func alwaysReadyTransactionLane() transactionLaneState {
 }
 
 type quoteSubmission struct {
-	Expiry int64 `json:"expiry"`
+	Ranges []json.RawMessage `json:"ranges"`
 }
 
 type quoteSubmissionRequest struct {
@@ -218,7 +219,7 @@ func TestRunGatesQuotesOnRecoveryAndDisconnect(t *testing.T) {
 				t.Errorf("decode quote submission: %v", err)
 				return
 			}
-			if len(request.Quotes) > 0 && request.Quotes[0].Expiry < wallUnix.Load() {
+			if len(request.Quotes) > 0 && len(request.Quotes[0].Ranges) == 0 {
 				if expiryRequests.Add(1) == 1 {
 					http.Error(w, "temporary expiry failure", http.StatusServiceUnavailable)
 					return
@@ -227,7 +228,7 @@ func TestRunGatesQuotesOnRecoveryAndDisconnect(t *testing.T) {
 				case quoteExpired <- struct{}{}:
 				default:
 				}
-				_, _ = w.Write([]byte(`{"status":"success","quotesAdded":1}`))
+				_, _ = w.Write([]byte(`{"status":"success","quotesAdded":0}`))
 				return
 			}
 			if quoteRequests.Add(1) == 2 {
@@ -274,12 +275,8 @@ func TestRunGatesQuotesOnRecoveryAndDisconnect(t *testing.T) {
 		strategy: recoveryGateStrategy{tokenIn: tokenIn, tokenOut: tokenOut},
 		caller:   common.HexToAddress("0x5555555555555555555555555555555555555555"),
 		orders:   newOrderClient(orderServer.URL, "test-key", cfg.OrderServer.HTTPTimeout, 11155111),
-		feed: newOrderFeed(
-			"ws"+strings.TrimPrefix(webSocketServer.URL, "http"),
-			"test-key",
-			logr.Discard(),
-		),
-		txm: &fakeLifiTxSender{}, log: logr.Discard(),
+		feed:     newOrderFeed("ws"+strings.TrimPrefix(webSocketServer.URL, "http"), "test-key"),
+		txm:      &fakeLifiTxSender{}, log: logr.Discard(),
 		now:          func(context.Context) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
 		maxFeePerGas: func(context.Context) (*big.Int, error) { return big.NewInt(1), nil },
 		wallNow:      func() time.Time { return time.Unix(wallUnix.Load(), 0) },
@@ -339,8 +336,13 @@ func TestQuoteLoopExpiresQuotesOnRootCancellation(t *testing.T) {
 			t.Errorf("decode quote submission: %v", err)
 			return
 		}
+		if len(request.Quotes) != 1 {
+			t.Errorf("submitted quotes = %d, want 1", len(request.Quotes))
+			http.Error(w, "expected one quote", http.StatusBadRequest)
+			return
+		}
 		signal := quoteSubmitted
-		if len(request.Quotes) > 0 && request.Quotes[0].Expiry < now.Unix() {
+		if len(request.Quotes[0].Ranges) == 0 {
 			signal = quoteExpired
 		}
 		select {
@@ -348,7 +350,7 @@ func TestQuoteLoopExpiresQuotesOnRootCancellation(t *testing.T) {
 		default:
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","quotesAdded":1}`))
+		_, _ = fmt.Fprintf(w, `{"status":"success","quotesAdded":%d}`, len(request.Quotes[0].Ranges))
 	}))
 	defer orderServer.Close()
 
@@ -412,8 +414,13 @@ func TestQuoteLoopSuspendsWhileLaneBusyAndRepublishesOnCoalescedIdle(t *testing.
 			t.Errorf("decode quote submission: %v", err)
 			return
 		}
+		if len(request.Quotes) != 1 {
+			t.Errorf("submitted quotes = %d, want 1", len(request.Quotes))
+			http.Error(w, "expected one quote", http.StatusBadRequest)
+			return
+		}
 		signal := quoteSubmitted
-		if len(request.Quotes) > 0 && request.Quotes[0].Expiry < now.Unix() {
+		if len(request.Quotes[0].Ranges) == 0 {
 			signal = quoteExpired
 		}
 		select {
@@ -421,7 +428,7 @@ func TestQuoteLoopSuspendsWhileLaneBusyAndRepublishesOnCoalescedIdle(t *testing.
 		default:
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"status":"success","quotesAdded":1}`))
+		_, _ = fmt.Fprintf(w, `{"status":"success","quotesAdded":%d}`, len(request.Quotes[0].Ranges))
 	}))
 	defer orderServer.Close()
 
@@ -749,7 +756,7 @@ func TestProcessOrderDoesNotProbeExternalNilDecision(t *testing.T) {
 	})
 
 	result := s.processOrderWithPending(
-		t.Context(),
+		solverContext(t, s),
 		testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
 		nil,
@@ -796,7 +803,7 @@ func TestProcessOrderClassifiesStrategyErrors(t *testing.T) {
 			)
 
 			result := s.processOrderWithPending(
-				t.Context(),
+				solverContext(t, s),
 				testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 				testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut),
 				nil,
@@ -832,7 +839,7 @@ func TestProcessOrderSubmitsImmediateFill(t *testing.T) {
 		funcr.Options{Verbosity: 1},
 	)
 
-	s.processOrder(context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut))
+	s.processOrder(solverContext(t, s), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut))
 	if len(txm.reqs) != 1 {
 		t.Fatalf("txmanager.Send calls = %d, want 1", len(txm.reqs))
 	}
@@ -1103,7 +1110,7 @@ func TestProcessOrderSkipsWhenGovernanceFeeInvariantFails(t *testing.T) {
 	s.log = funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{})
 
 	result := s.processOrderWithPending(
-		context.Background(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+		solverContext(t, s), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut), nil,
 	)
 	if orderIDReads != 0 || len(txm.reqs) != 0 {
@@ -1719,7 +1726,7 @@ func TestOrderWorkerRecoveryBarrierRetainsTransientCapacityRetry(t *testing.T) {
 			t.Context(),
 			testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 			orders,
-			inbox.markRecoveryRetry,
+			inbox,
 			nil,
 		)
 	}()
@@ -1897,6 +1904,13 @@ func TestOrderWorkerDrainsAcceptedFillAfterCancellation(t *testing.T) {
 	if s.capacity.Len() != 0 {
 		t.Fatalf("capacity reservations after drain = %d, want 0", s.capacity.Len())
 	}
+}
+
+// solverContext stands in for Solver.Run, which stores the solver logger on the context it passes
+// down to everything below it.
+func solverContext(t *testing.T, s *Solver) context.Context {
+	t.Helper()
+	return observability.WithLogger(t.Context(), s.log)
 }
 
 func receiveFillInput(t *testing.T, inputs <-chan types.FillInput) types.FillInput {

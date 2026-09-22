@@ -4,16 +4,17 @@ package defaultstrategy
 
 import (
 	"cmp"
+	"context"
 	"maps"
 	"math/big"
 	"slices"
 	"sort"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/go-logr/logr"
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/morpho"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 const (
@@ -24,11 +25,10 @@ const (
 
 type bundleEngine struct {
 	cfg Config
-	log logr.Logger
 }
 
-func newBundleEngine(cfg Config, log logr.Logger) bundleEngine {
-	return bundleEngine{cfg: cfg, log: log}
+func newBundleEngine(cfg Config) bundleEngine {
+	return bundleEngine{cfg: cfg}
 }
 
 // bundleLeg is one selected liquidation plus estimates used for bundle pricing and gas prediction.
@@ -423,14 +423,23 @@ func (e bundleEngine) priceBundleWithoutGasAccounting(
 	}
 }
 
-func (e bundleEngine) logBundleEconomics(auctionID, msg string, b chosenBundle, rate *big.Int, laneState *liquidLaneState, gasPrice *big.Int, gasLimit uint64, feedCount, scoredLegs int) {
+func (e bundleEngine) logBundleEconomics(
+	ctx context.Context,
+	auctionID, msg string,
+	b chosenBundle,
+	rate *big.Int,
+	laneState *liquidLaneState,
+	gasPrice *big.Int,
+	gasLimit uint64,
+	feedCount, scoredLegs int,
+) {
 	gas := predictGasForFeeds(legHints(b.legs), laneState, feedCount)
 	grossNative := loanToNative(b.grossLoan, rate)
 	gasNative := gasCostNative(gas.Units, gasPrice)
 	netNative := e.bundleNetNativeForFeeds(b, rate, laneState, gasPrice, feedCount)
 	bidNative := e.bundleBidNative(b, rate)
-	e.log.Info(msg,
-		"auction", auctionID,
+	observability.Log(ctx).Info(msg,
+		"auctionId", auctionID,
 		"scoredLegs", scoredLegs,
 		"selectedLegs", len(b.legs),
 		"feedCount", feedCount,

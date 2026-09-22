@@ -74,6 +74,7 @@ type Config struct {
 }
 
 type Deps struct {
+	Solver              string // owning solver name, stamped on this strategy's spans
 	Reader              Reader
 	Signer              signer
 	Log                 logr.Logger

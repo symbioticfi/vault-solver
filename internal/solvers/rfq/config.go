@@ -24,6 +24,7 @@ type rawConfig struct {
 	LiquidityLens          string            `yaml:"liquidityLens"`
 	PollIntervalMs         int               `yaml:"pollIntervalMs"`
 	OrderLimit             int               `yaml:"orderLimit"`
+	MaxCancellationRetries *int              `yaml:"maxCancellationRetries"`
 	SolverMode             string            `yaml:"solverMode"`
 	TokensToQuote          string            `yaml:"tokensToQuote"`
 	PermissionedTokens     []string          `yaml:"permissionedTokens"`
@@ -55,10 +56,14 @@ type Config struct {
 	// is read from the lens's cross-adapter deallocation-cascade estimate instead of each adapter's own
 	// getMaxAssets(tokenToRedeem); zero falls back to the adapter getter.
 	LiquidityLens common.Address
-	// PollInterval is how often the backend is polled for open orders.
+	// PollInterval is how often the backend is polled for open orders and the minimum wait before
+	// a cancellation retry.
 	PollInterval time.Duration
 	// OrderLimit caps how many open orders are fetched per poll.
 	OrderLimit int
+	// MaxCancellationRetries bounds additional fills after confirmed cancellations per order.
+	// Zero disables retries. Each retry re-fetches the executable order and discount signatures.
+	MaxCancellationRetries int
 	// SolverMode is the deployment profile operators set: "external" (default) or "internal". It drives
 	// the discount-API gate and adapter scoping (see usesDiscounts / restrictsToAdapters / quoteScopesToAdapters):
 	//   - external: never calls the internal-only discounts API; adapters are REQUIRED and scope quoting AND filling.
@@ -94,11 +99,12 @@ const (
 
 // Defaults applied when a field is unset.
 const (
-	defaultListenAddr   = ":42073"
-	defaultPollInterval = 3 * time.Second
-	defaultOrderLimit   = 20
-	defaultSolverMode   = solverModeExternal
-	defaultStrategyName = "default"
+	defaultListenAddr             = ":42073"
+	defaultPollInterval           = 3 * time.Second
+	defaultOrderLimit             = 20
+	defaultSolverMode             = solverModeExternal
+	defaultStrategyName           = "default"
+	defaultMaxCancellationRetries = 3
 )
 
 // parseConfig decodes and validates the opaque rfq solver config block.
@@ -133,6 +139,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		Executor:               executor,
 		PollInterval:           defaultPollInterval,
 		OrderLimit:             defaultOrderLimit,
+		MaxCancellationRetries: defaultMaxCancellationRetries,
 		SolverMode:             mode,
 		TokenPolicy:            tokenPolicy,
 		Strategy: StrategyConfig{
@@ -145,6 +152,12 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	}
 	if raw.OrderLimit > 0 {
 		cfg.OrderLimit = raw.OrderLimit
+	}
+	if raw.MaxCancellationRetries != nil {
+		if *raw.MaxCancellationRetries < 0 {
+			return nil, errors.New("maxCancellationRetries must be non-negative")
+		}
+		cfg.MaxCancellationRetries = *raw.MaxCancellationRetries
 	}
 	if raw.Reactor != "" {
 		if cfg.Reactor, err = parse.Address(raw.Reactor, "reactor"); err != nil {

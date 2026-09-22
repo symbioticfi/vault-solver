@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/go-logr/logr"
 )
 
 func TestLogRequests_AssignsAndPropagatesRequestID(t *testing.T) {
@@ -13,7 +11,7 @@ func TestLogRequests_AssignsAndPropagatesRequestID(t *testing.T) {
 	h := logRequests(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = requestID(r.Context()) // handler sees the id on its context
 		w.WriteHeader(http.StatusNoContent)
-	}), logr.Discard())
+	}))
 
 	// No incoming id -> one is generated and echoed on the response.
 	rr := httptest.NewRecorder()
@@ -35,7 +33,7 @@ func TestLogRequests_AssignsAndPropagatesRequestID(t *testing.T) {
 func TestRecoverPanics_Returns500(t *testing.T) {
 	h := recoverPanics(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 		panic("boom")
-	}), logr.Discard())
+	}))
 
 	rr := httptest.NewRecorder()
 	h.ServeHTTP(rr, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/quote", nil)) // must not panic

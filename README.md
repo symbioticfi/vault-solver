@@ -127,7 +127,8 @@ resolved adapter loan asset and a readable initial oracle snapshot. Design, conf
 A same-chain LI.FI Intents solver for LiquidLane-backed RWA → underlying routes. It publishes standing quotes
 from current adapter liquidity with optional gas accounting and receives matched, already-opened escrow orders over the
 LI.FI WebSocket feed. On startup and reconnect it catches up active matches through `GET /orders` before
-publishing quotes; while disconnected it suspends renewal and retries expiry of known curves.
+publishing quotes; while disconnected it suspends renewal and retries withdrawal of known curves
+until the order server acknowledges removal.
 After REST recovery completes, WebSocket closes 1000/1001/1005/1006/1012/1013 are logged at Info.
 Earlier disconnects and other errors remain Error; reconnect backoff resets only after recovery. Before each fill it
 rechecks the canonical order status, adapter state, configured gas cost, and strategy decision, then atomically claims
@@ -327,8 +328,12 @@ For liquidity commitments, the built-in strategies apply these limits:
   Expiration is at least `now + offerExpiryBuffer`. Webhook `liveOffers[]` now includes decimal-string
   `principal`; remote strategies must reserve it as well as the live request slot.
 - RFQ external mode excludes discount inventory at quote time. Excess input can be absorbed only by a
-  direct swap, whose calldata caps output. A failed transaction with a recorded hash is not resubmitted;
-  uncertain inclusion is reconciled through the backend.
+  direct swap, whose calldata caps output. After a successful cancellation reaches the configured
+  confirmations, a still-open, unexpired order can be retried with a fresh fill plan and newly resolved
+  discount signatures. `solvers[].config.maxCancellationRetries` defaults to `3` additional attempts
+  (`0` disables them); retries wait at least one `pollIntervalMs` interval before a fresh open-order poll
+  can re-arm the order. Reverted transactions are not retried, and uncertain fill or cancellation
+  inclusion is reconciled through the backend. Retry counts are local to each process and reset on restart.
 - LI.FI and UniswapX split shared vault capacity across token pairs before quoting. A pair can therefore
   quote less than the vault's total free liquidity. This does not reserve every repeated quote request.
 - The default OEV strategy permits one pending bundle per adapter. New auction frames arriving during a
@@ -367,6 +372,45 @@ The observability listener (default `:9090`) serves `/metrics`, `/healthz`, and 
 config is required for the collectors below. During graceful shutdown readiness drops first, while
 liveness and metrics remain available until the shared transaction manager finishes its bounded drain.
 
+### OpenTelemetry tracing
+
+Tracing is off unless `OTEL_EXPORTER_ENABLED` is `1`, `true`, `yes`, `on`, or `enabled` (the same
+switch the RFQ backend uses). Everything else is the standard OpenTelemetry environment, read by the
+SDK: `OTEL_EXPORTER_OTLP_ENDPOINT` (default `http://localhost:4318`, OTLP over HTTP/protobuf),
+`OTEL_SERVICE_NAME` (default `vault-solver`; set it per deployment, e.g. `vault-solver-rfq`),
+`OTEL_RESOURCE_ATTRIBUTES`, `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` (default
+`parentbased_always_on`; use `parentbased_traceidratio` to thin background-loop traces without
+dropping backend-initiated ones), `OTEL_EXPORTER_OTLP_HEADERS`, and the `OTEL_BSP_*` batch settings.
+`OTEL_TRACES_EXPORTER` and `OTEL_EXPORTER_OTLP_PROTOCOL` are ignored: the exporter is always OTLP/HTTP.
+There is no YAML equivalent; tracing is configured only by these variables.
+
+```yaml
+# deploy/docker-compose.yml, or -e flags on docker run
+environment:
+  OTEL_EXPORTER_ENABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+```
+
+An inbound `/quote` continues the caller's trace; every outbound HTTP call, JSON-RPC call, and
+transaction carries `traceparent` onward. Log lines under traced work carry `trace_id` and `span_id`,
+and Sentry events are tagged with `trace_id`. Spans carry `solver`, `quote.id`, `order.id`, `tx.hash`,
+and the other identifiers listed in [docs/TRACING-PLAN.md](docs/TRACING-PLAN.md). A fill links back to
+the quote that produced it when the process still remembers that quote (best effort, in-memory);
+after a restart the fill simply starts a new trace. LI.FI fills are not linked, because its standing
+quotes have no per-request quote event to link from.
+
+A websocket or IPC RPC endpoint is traced at the call level, one span per JSON-RPC call plus one for
+the dial; it receives `traceparent` only on the websocket handshake, so the provider can tie the
+connection to your trace but not an individual call.
+
+No secret is ever recorded on a span: RPC endpoints appear as ordinals rather than URLs, and an
+outbound client span records the request URL **without its query string**, so a webhook URL that
+carries a token in the query does not put it in the trace.
+
+Tracing never blocks a quote or a fill: spans are exported in the background from a bounded queue,
+export failures are logged at Info, and a bad `OTEL_*` setting disables tracing at startup instead of
+failing it. The observability listener itself is never traced.
+
 ### Error diagnostics
 
 LI.FI order rejection logs include available `orderId`, `onChainOrderId`, `orderType`,
@@ -402,6 +446,9 @@ calls retain this outbound ID in typed client errors and the structured `backend
 context, without adding it to the error text or Sentry title. HTTP request IDs are separate from business
 `requestId`/`quoteId` fields in JSON. End-to-end correlation requires the backend to accept and
 log the same header; solver-side propagation alone does not establish that guarantee.
+Discount responses use `X-Request-Id` for correlation; the client reads that header
+and does not require a JSON `requestId`. Deploy this client update together with
+the backend change that removes the duplicate body field.
 
 Sentry groups these diagnosed errors by `(solver, message, reason_code)`; other errors retain
 `(solver, message)`. Dynamic identifiers remain event context. No additional log sites are introduced.
@@ -422,7 +469,7 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | Framework | `solver_bot_service_ready` | — | `1` exactly when the shared `/readyz` gate admits work, otherwise `0`. This is process/nonce-lane readiness, not a claim that every solver upstream is healthy; combine it with solver freshness and connectivity. |
 | Framework | `solver_bot_solver_info` | `solver` | Constant `1` for each solver configured in this process. Prometheus target labels such as `instance`/`lane` make process membership explicit without adding deployment-specific labels in application code. |
 | Framework | `solver_bot_external_operation_duration_seconds` | `solver`, `strategy`, `operation`, `outcome` | Count and latency of allowlisted recurring solver operations such as polls and authoritative refreshes. Outcomes are bounded to `success`, `degraded`, `skipped`, or `error`; errors and request-derived values never become labels. |
-| RPC | `solver_bot_rpc_requests_total` | `role`, `method`, `outcome` | Logical HTTP JSON-RPC calls. Roles are `read`, `write`, or `shared`; methods and outcomes are bounded, with transport, HTTP 3xx/4xx/5xx, rate-limit, decode, context, and JSON-RPC errors separated. Redirects are not followed; 3xx responses fall through to the next read endpoint. |
+| RPC | `solver_bot_rpc_requests_total` | `role`, `method`, `outcome` | Logical HTTP JSON-RPC calls. Roles are `read`, `write`, `cancel`, or `shared`; methods and outcomes are bounded, with transport, HTTP 3xx/4xx/5xx, rate-limit, decode, context, and JSON-RPC errors separated. Redirects are not followed; 3xx responses fall through to the next read endpoint. |
 | RPC | `solver_bot_rpc_attempts_total` | `role`, `endpoint`, `method`, `outcome` | Per-endpoint attempts, including failed primary and successful fallback attempts. `endpoint` is only a role-local ordinal (`0`, `1`, …); configured URLs and error text are never labels. |
 | RPC | `solver_bot_rpc_inflight` | `role` | Calls whose response bodies have not completed; a sustained value exposes a hung endpoint or consumer. |
 | RPC | `solver_bot_rpc_request_duration_seconds` | `role`, `method`, `outcome` | End-to-end HTTP JSON-RPC latency through response-body consumption. |
@@ -436,7 +483,7 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | Workflow | `solver_bot_workflow_last_observation_timestamp` | `solver`, `strategy`, `view` | Freshness paired with each retained workflow state count. |
 | RFQ | `rfq_filler_http_request_duration_seconds` | `method`, `route`, `status` | Quote-server request count (`_count`), status funnel, and latency. Routes are allowlisted and methods are normalized to `GET`, `POST`, or `other` to bound cardinality. |
 | RFQ | `rfq_filler_http_requests_total` | `method`, `route`, `status` | Deprecated one-release compatibility counter for existing alerts; migrate to `rfq_filler_http_request_duration_seconds_count`. |
-| RFQ | `rfq_active_orders` | — | Current queued, submitting, or submitted obligations awaiting terminal backend state. |
+| RFQ | `rfq_active_orders` | — | Current queued, submitting, submitted, or cancellation-retry obligations awaiting terminal backend state. |
 | RFQ | `rfq_oldest_active_order_age_seconds` | — | Age of the oldest active obligation; catches a single stuck order that a count-only alert can miss. |
 | LI.FI | `lifi_active_quotes` | — | Process-local quote count from the last successful publication or suspension reconciliation. It can remain nonzero after the remote quotes expire at `quoteTtl`, so use it with refresh freshness rather than as backend state. |
 | LI.FI | `lifi_active_quote_ranges` | — | Number of currently active standing-quote ranges from the last successful reconciliation. |
@@ -528,9 +575,13 @@ including the applicable shared `chain`/`signer`/`txManager`/`observability` blo
 inline there.
 
 The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S) endpoints tried
-in order for reads when the primary is unavailable. Signed broadcasts and both startup nonce reads
+in order for reads when the primary is unavailable. Normal signed broadcasts and both startup nonce reads
 are pinned to `writeRpcUrl`, or the primary `rpcUrl` when it is omitted, and never fall over across
-endpoints. Sender-balance telemetry prefers that endpoint but falls back to the ordinary read client when a
+endpoints. Optional `cancelRpcUrl` routes only same-nonce self-cancellations, including their fee replacements
+and exact rebroadcasts, to a separate endpoint. Set `cancelRpcUrl: ${CANCEL_RPC_URL}` and, for mainnet,
+`CANCEL_RPC_URL=https://boost.rpc.mevblocker.io/fast`. When omitted or empty, cancellation uses the ordinary
+write RPC. A configured cancellation RPC failure is returned without broadcasting to another endpoint.
+Sender-balance telemetry prefers the ordinary write endpoint but falls back to the read client when a
 submission-only relay rejects `eth_getBalance`. Receipt confirmation uses the
 [canonicality checks](docs/TXMANAGER-PLAN.md#5-receipt-polling-and-confirmation) independently of endpoint
 affinity, while retaining normal read fallbacks. An HTTP 3xx response is not followed and falls through to the next read
@@ -538,7 +589,7 @@ endpoint. A non-final endpoint's JSON-RPC `null` receipt or header result falls 
 to the next read endpoint; the final endpoint's `null` remains the ordinary not-found result. Unavailable
 multi-read snapshots retry on a later poll; OEV compares both number and hash around each latest-state
 snapshot and retries a changed head once immediately. A second crossing fails startup or retains the runtime's
-last-known-good snapshot until the next poll. An explicit write endpoint must report the same chain ID as the
+last-known-good snapshot until the next poll. Explicit write and cancellation endpoints must report the same chain ID as the
 read endpoint.
 
 For transaction-sending solvers, startup fails closed when the write endpoint's pending nonce differs

@@ -272,7 +272,7 @@
         "tags": [
           "RFQ"
         ],
-        "description": "Publish a signed discount. A signed request with deadline=0 instead cancels (deletes) the discount currently stored for the (adapter, tokenToRedeem) pair; the signer must still produce a valid signature and be authorized for the adapter. Cancellation is backend-only — it stops the discount being served but does not retract the signed object on-chain.",
+        "description": "Publish a signed discount. A signed request with deadline=0 instead cancels (deletes) the discount currently stored for the (adapter, tokenToRedeem) pair; the signer must still produce a valid signature and be authorized for the adapter. Cancellation is backend-only \u2014 it stops the discount being served but does not retract the signed object on-chain.",
         "requestBody": {
           "required": true,
           "content": {
@@ -286,6 +286,20 @@
         "responses": {
           "200": {
             "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -296,6 +310,68 @@
           },
           "400": {
             "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -1784,18 +1860,12 @@
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "properties": {
-          "requestId": {
-            "type": "string",
-            "format": "uuid",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-          },
           "discountId": {
             "type": "string",
             "pattern": "^0x[a-fA-F0-9]{64}$"
           }
         },
         "required": [
-          "requestId",
           "discountId"
         ]
       },

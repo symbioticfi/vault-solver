@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/chain"
 )
@@ -29,7 +28,7 @@ func TestValidateZeroGovernanceFee(t *testing.T) {
 			server := governanceFeeRPC(t, tt.fee)
 			defer server.Close()
 
-			client, err := chain.Dial(t.Context(), []string{server.URL}, "", common.Address{}.Hex(), logr.Discard())
+			client, err := chain.Dial(t.Context(), []string{server.URL}, "", "", common.Address{}.Hex())
 			if err != nil {
 				t.Fatalf("chain.Dial: %v", err)
 			}

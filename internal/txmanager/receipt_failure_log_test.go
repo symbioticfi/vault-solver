@@ -14,6 +14,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 func newLogCapture(verbosity int) (*[]string, logr.Logger) {
@@ -146,12 +148,13 @@ func TestReceiptReadStreakSpansAttempts(t *testing.T) {
 	m := newStreakManager(t, b, logger)
 	req := Request{Label: "split", Solver: "rfq-filler"}
 	pending := &pendingTransaction{
-		req: req, log: m.requestLog(req), nonce: 7, originalHash: first.Hash(),
+		req: req, nonce: 7, originalHash: first.Hash(),
 		attempts: []txAttempt{{hash: first.Hash(), tx: first}, {hash: replacement.Hash(), tx: replacement}},
 	}
+	ctx := observability.WithLogger(t.Context(), m.requestLog(req))
 
 	for range 3 {
-		if _, done := m.receiptResult(t.Context(), pending); done {
+		if _, done := m.receiptResult(ctx, pending); done {
 			t.Fatal("lifecycle completed without a receipt")
 		}
 	}
@@ -167,7 +170,7 @@ func TestReceiptReadStreakSpansAttempts(t *testing.T) {
 		}
 	}
 
-	if _, done := m.receiptResult(t.Context(), pending); done {
+	if _, done := m.receiptResult(ctx, pending); done {
 		t.Fatal("lifecycle completed without a receipt")
 	}
 	if _, info := countLogs(*logs, "pending transaction receipt reads recovered"); info != 1 {
@@ -220,7 +223,7 @@ func TestEstimateFailureDoesNotLogUnpublishedCalldata(t *testing.T) {
 	b.gasEstimate = 0
 	logs, log := newLogCapture(1)
 	m := newStreakManager(t, b, log)
-	_, err := m.estimateGas(t.Context(), Request{To: common.Address{1}, Data: []byte("unpublished-authorization"), Label: "rfq-fill"})
+	_, err := m.estimateGas(managerCtx(t.Context(), m), Request{To: common.Address{1}, Data: []byte("unpublished-authorization"), Label: "rfq-fill"})
 	if err == nil {
 		t.Fatal("expected estimate failure")
 	}

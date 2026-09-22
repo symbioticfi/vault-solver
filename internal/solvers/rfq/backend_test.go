@@ -71,7 +71,7 @@ func TestBackendClient_ResolveDiscount_Single(t *testing.T) {
 		_ = json.Unmarshal(raw, &body)
 		gotID, _ = body["discountId"].(string)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"requestId":"00000000-0000-0000-0000-000000000000",` +
+		_, _ = w.Write([]byte(`{` +
 			`"discountId":"0x` + hash64 + `",` +
 			`"discount":{"adapter":"0x0000000000000000000000000000000000000abc",` +
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
@@ -102,7 +102,7 @@ func TestBackendClient_ResolveDiscount_Single(t *testing.T) {
 func TestBackendClient_ResolveDiscount_BatchSingleEntryAccepted(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"requestId":"00000000-0000-0000-0000-000000000000",` +
+		_, _ = w.Write([]byte(`{` +
 			`"discounts":[{"discountId":"0x` + hash64 + `",` +
 			`"discount":{"adapter":"0x0000000000000000000000000000000000000abc",` +
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
@@ -130,7 +130,7 @@ func TestBackendClient_ResolveDiscount_BatchMultipleRejected(t *testing.T) {
 			`"protocol":"0x0000000000000000000000000000000000000bbb","nonce":"2","deadline":1900000000},` +
 			`"signerSignature":"0xdead","protocolDeadline":1900000001,"protocolSignature":"0xbeef"}`
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"requestId":"00000000-0000-0000-0000-000000000000","discounts":[` +
+		_, _ = w.Write([]byte(`{"discounts":[` +
 			entry + `,` + entry + `]}`))
 	}))
 	defer srv.Close()
@@ -145,7 +145,7 @@ func TestBackendClient_ListDiscounts(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"requestId":"00000000-0000-0000-0000-000000000000",` +
+		_, _ = w.Write([]byte(`{` +
 			`"protocol":"0x0000000000000000000000000000000000000bbb","discounts":[` +
 			`{"discountId":"0x` + hash64 + `","adapter":"0x0000000000000000000000000000000000000abc",` +
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
