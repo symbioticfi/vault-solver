@@ -561,12 +561,6 @@ Discovery uses the scrape labels `namespace` and `kubernetes_pod`; adapt these l
 collector if needed. Runtime RPC queries normalize `exported_role` to `role` when the scraper has
 renamed the exporter's role label, and otherwise retain the native `role` label.
 
-The 3F and UniswapX dashboards also require a **Logs** datasource
-(`grafana-clickhouse-datasource`) connected to ClickHouse with read access to `logs.otel_logs_k8s`.
-Select it in the **Logs** variable when importing either board. Their log panels use raw SQL with
-`ServiceName = 'vault-solver-3f'` and `ServiceName = 'vault-solver-uniswapx'`, respectively; adapt
-the table name and service names in those queries to your log collection setup.
-
 ## Configuration
 
 For LI.FI, UniswapX, and RedStone OEV gas accounting, choose feed age limits using the
