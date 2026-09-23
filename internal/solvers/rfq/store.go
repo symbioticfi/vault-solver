@@ -246,11 +246,13 @@ func snapshotBlocks(inventory []solverInventory) map[liquidlane.CapacityID]uint6
 	blocks := make(map[liquidlane.CapacityID]uint64, len(inventory))
 	for _, item := range inventory {
 		capacityID := liquidlane.RouteCapacityID(item.Route)
-		if block, seen := blocks[capacityID]; seen && (block == 0 || item.BlockNumber == 0) {
-			blocks[capacityID] = 0
-			continue
-		}
-		if block, seen := blocks[capacityID]; !seen || item.BlockNumber < block {
+		block, seen := blocks[capacityID]
+		switch {
+		case !seen:
+			blocks[capacityID] = item.BlockNumber
+		case block == 0:
+			// unknown stays unknown
+		case item.BlockNumber == 0 || item.BlockNumber < block:
 			blocks[capacityID] = item.BlockNumber
 		}
 	}
