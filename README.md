@@ -74,10 +74,12 @@ is polled until eligible adapters appear. Example:
 
 ### RFQ Filler — `rfq-filler`
 
-Numbered mainnet instances are configured in `vault-solver-deploy`, using this same
-`rfq-filler` integration. Presto is `vault-solver-eighth` (`symbiotic_eighth` in RFQ
+Named mainnet instances are configured in `vault-solver-deploy`, using this same
+`rfq-filler` integration. Presto is `vault-solver-presto` (`symbiotic_presto` in RFQ
 backend); its executor and single adapter are set in that repository's mainnet
 deploy matrix. A new instance does not require a new solver type in this application.
+Public solver IDs use `symbiotic_<name>`; workloads, services, and Vault paths use
+`vault-solver-<name>`.
 
 An externally-owned solver/executor for **[Symbiotic RFQ](https://symbiotic.fi)**, on top of per-vault
 `LiquidLaneAdapter`s. It runs a `POST /quote` server that prices swaps for the RFQ backend and a poller
@@ -635,7 +637,10 @@ fail-closed for operator investigation; automatic restart does not recover the l
 For controlled maintenance, stop the service and reconcile outstanding private submissions before bringing
 the EOA back.
 
-Runtime nonce collisions pause admission/readiness until ownership is established. See
+Before replacing or rebroadcasting a pending transaction, the manager checks the latest mined nonce.
+If it has already been consumed, broadcasting stops and tracked receipts are reconciled even when the
+submission RPC previously returned success. A failed nonce read defers the replacement until a later
+attempt. Unexplained nonce consumption pauses admission/readiness until ownership is established. See
 [nonce conflict and restart behavior](docs/TXMANAGER-PLAN.md#6-rpc-routing-nonce-conflicts-and-restart)
 for exact-hash reconciliation and reorg handling. LiquidLane state reads always use RPC `latest`; an archive node
 is not required.

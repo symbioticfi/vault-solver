@@ -58,8 +58,8 @@ The public YAML block is `txManager`. Values below are application defaults, aft
 | `pendingTimeoutMs` | 300000 | Switch an unresolved call to cancellation; must be at least the replacement interval. |
 | `shutdownTimeoutMs` | 60000 | Hard bound on manager drain after shutdown begins. |
 
-Polling defaults to 2 seconds in the Go manager; it is not a separate YAML field. Pending receipt reads
-and obsolescence checks each use `min(2 seconds, replacementInterval/2)`; fee reads use
+Polling defaults to 2 seconds in the Go manager; it is not a separate YAML field. Pending receipt reads,
+replacement nonce reads and obsolescence checks each use `min(2 seconds, replacementInterval/2)`; fee reads use
 `min(1 second, replacementInterval/2)`. These internal read budgets are separate from broadcast timeout.
 Account refresh uses a 5-second context. Backends must honor cancellation.
 
@@ -170,6 +170,18 @@ the lane stays occupied until confirmation completes. An initial-broadcast colli
 without owned canonical evidence, pauses admission/readiness until reconciliation or operator action.
 A later receipt reorg restores the conflict pause. Recovery never relies on guessing that the old call
 cannot land or automatically moving its calldata to a different nonce.
+
+Every replacement attempt first checks the write endpoint's latest **mined** nonce with a bounded RPC.
+This covers ordinary fee bumps, initial and subsequent cancellations, uncertain exact rebroadcasts and
+rebroadcasts at the fee cap. A successful send response from a private relay does not prove the nonce
+is still usable. If the mined nonce has advanced beyond the tracked nonce, no replacement is signed or
+broadcast: the same exact-hash reconciliation above runs and unexplained consumption pauses admission
+and readiness. Receipt polling continues, and a delayed canonical owned receipt can recover normally.
+Nonce advancement alone never synthesizes a success/cancellation result, discards tracked attempts or
+replays the request at a new nonce. A nonce RPC error defers that replacement until a later tick; it does
+not permanently mark a conflict. Pending nonce advancement alone does not suppress replacements.
+This check cannot make inclusion and submission atomic; broadcast errors and receipt tracking remain
+necessary to reconcile an inclusion racing the subsequent send.
 
 ## 7. Shutdown
 
