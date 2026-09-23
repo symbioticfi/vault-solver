@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"math"
 	"os"
+	"time"
 
 	"github.com/go-errors/errors"
 
@@ -38,6 +39,9 @@ type ObservabilityConfig struct {
 // ChainConfig describes the EVM endpoint the bot reads from and sends to.
 type ChainConfig struct {
 	RPCURL string `yaml:"rpcUrl"`
+	// RPCAttemptTimeoutMs bounds each HTTP(S) endpoint attempt, including reading the response body.
+	// Shorter caller deadlines still apply. Zero uses the default of 20 seconds.
+	RPCAttemptTimeoutMs int `yaml:"rpcAttemptTimeoutMs"`
 	// RPCFallbackURLs are additional HTTP(S) RPC endpoints tried, in order, when the primary `rpcUrl`
 	// is unavailable. All must be on the same chain. Optional; empty means no fallback.
 	RPCFallbackURLs []string `yaml:"rpcFallbackUrls,omitempty"`
@@ -96,6 +100,8 @@ type SolverConfig struct {
 const DefaultConfirmations = 2
 
 const (
+	// Keep in sync with chain.defaultRPCAttemptTimeout (internal/chain/fallback.go).
+	DefaultRPCAttemptTimeoutMs   = 20_000
 	DefaultBroadcastTimeoutMs    = 5_000
 	DefaultAccountPollIntervalMs = 30_000
 	DefaultReplacementIntervalMs = 30_000
@@ -139,6 +145,9 @@ func Load(path string) (*Config, error) {
 }
 
 func (c *Config) applyDefaults() {
+	if c.Chain.RPCAttemptTimeoutMs == 0 {
+		c.Chain.RPCAttemptTimeoutMs = DefaultRPCAttemptTimeoutMs
+	}
 	if c.TxManager.Confirmations == 0 {
 		c.TxManager.Confirmations = DefaultConfirmations
 	}
@@ -167,6 +176,9 @@ func (c *Config) applyDefaults() {
 
 // Validate checks required fields and mutually-exclusive options.
 func (c *Config) Validate() error {
+	if c.Chain.RPCAttemptTimeoutMs <= 0 || int64(c.Chain.RPCAttemptTimeoutMs) > math.MaxInt64/int64(time.Millisecond) {
+		return errors.New("chain.rpcAttemptTimeoutMs must be positive and fit in a time.Duration")
+	}
 	if c.Chain.RPCURL == "" {
 		return errors.New("chain.rpcUrl is required")
 	}

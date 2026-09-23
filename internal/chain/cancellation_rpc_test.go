@@ -67,7 +67,7 @@ func TestCancellationRPCRoutesBroadcastsWithoutMovingReads(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			client, err := DialWithMetrics(t.Context(), []string{read.URL}, writeURL, cancelURL, testMulticall, metrics)
+			client, err := DialWithMetrics(t.Context(), []string{read.URL}, writeURL, cancelURL, testMulticall, 0, metrics)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -120,7 +120,7 @@ func TestCancellationRPCRejectsWrongChain(t *testing.T) {
 	defer read.Close()
 	cancel := rpcRecorder(&cancelMethods, func(string) string { return `"0x1"` })
 	defer cancel.Close()
-	client, err := Dial(t.Context(), []string{read.URL}, "", cancel.URL, testMulticall)
+	client, err := Dial(t.Context(), []string{read.URL}, "", cancel.URL, testMulticall, defaultRPCAttemptTimeout)
 	if client != nil {
 		client.Close()
 	}
@@ -144,7 +144,7 @@ func TestCancellationRPCFailureDoesNotBroadcastToOtherEndpoints(t *testing.T) {
 		_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"0x7a69"}`))
 	}))
 	defer cancel.Close()
-	client, err := Dial(t.Context(), []string{read.URL}, write.URL, cancel.URL, testMulticall)
+	client, err := Dial(t.Context(), []string{read.URL}, write.URL, cancel.URL, testMulticall, defaultRPCAttemptTimeout)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -585,7 +585,15 @@ including the applicable shared `chain`/`signer`/`txManager`/`observability` blo
 inline there.
 
 The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S) endpoints tried
-in order for reads when the primary is unavailable. Normal signed broadcasts and both startup nonce reads
+in order for reads when the primary is unavailable. `chain.rpcAttemptTimeoutMs` bounds each HTTP(S)
+endpoint attempt, including reading its response body, for read, write and cancellation RPCs.
+It defaults to `20000` (20 seconds) when omitted or zero; negative or overflowing values are rejected.
+For example, `rpcAttemptTimeoutMs: 5000` allows up to 5 seconds per endpoint attempt. This is not a
+total fallback-chain budget: a shorter caller deadline is divided across the remaining endpoints.
+The txmanager's shorter fee/receipt budgets and `broadcastTimeoutMs` still apply; WebSocket/IPC calls
+are unaffected. When using eRPC, this bounds the solver's wait for eRPC, including eRPC's internal
+retries; upstream timeouts and retries inside eRPC must be configured separately.
+Normal signed broadcasts and both startup nonce reads
 are pinned to `writeRpcUrl`, or the primary `rpcUrl` when it is omitted, and never fall over across
 endpoints. Optional `cancelRpcUrl` routes only same-nonce self-cancellations, including their fee replacements
 and exact rebroadcasts, to a separate endpoint. Set `cancelRpcUrl: ${CANCEL_RPC_URL}` and, for mainnet,
