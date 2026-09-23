@@ -295,6 +295,11 @@
                 "maxAssets": {
                   "type": "string",
                   "pattern": "^\\d+$"
+                },
+                "blockNumber": {
+                  "type": "string",
+                  "pattern": "^\\d+$",
+                  "description": "Block number used to read maxAssets, encoded as a decimal string."
                 }
               },
               "required": [
@@ -307,7 +312,8 @@
                 "signer",
                 "deadline",
                 "maxRate",
-                "maxAssets"
+                "maxAssets",
+                "blockNumber"
               ]
             }
           }

@@ -129,8 +129,8 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   order's own, to `AllocateInventoryCapacity`. A confirmed fill records its inclusion block on the order, and
   its spend then outlives the order's terminal status: it is only dropped when the terminal record is swept.
   The backend reports the block each `/quote` adapter snapshot was read at (`adapters[].blockNumber`,
-  optional until production sends it), and fill-time reads carry the latest header's number read just
-  before them. A snapshot read at or after the inclusion block already reflects the fill and does not
+  optional until production sends it), fill-time direct reads carry the latest header's number read just
+  before them, and discount inventory carries the block `listDiscounts` reports for its `maxAssets`. A snapshot read at or after the inclusion block already reflects the fill and does not
   subtract it; one read before it does, even after the backend reports the order filled. A snapshot with no
   block subtracts only orders still active. A plan leg that matches no candidate fails closed, since its
   liquidity could not be reserved. Whichever path plans an order also records its chain deadline, translated

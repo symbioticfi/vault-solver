@@ -701,9 +701,11 @@ func (e *executionService) discountInventories(
 		// The discounts API does not expose the backing vault. Keep unknown adapters in independent
 		// capacity domains instead of making address(0) look like one shared vault.
 		route.CapacityID = liquidlane.CapacityID(route.ID)
-		out = append(out, liquidlane.DiscountInventory(
+		item := liquidlane.DiscountInventory(
 			route, offer.MaxAssets, offer.MaxRate, offer.DiscountID, time.Unix(offer.Deadline, 0),
-		))
+		)
+		item.BlockNumber = offer.BlockNumber
+		out = append(out, item)
 	}
 	return out
 }

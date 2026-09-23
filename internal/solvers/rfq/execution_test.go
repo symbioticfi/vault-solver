@@ -762,3 +762,22 @@ func TestExecutionRetriesConfirmedCancellationAfterPollInterval(t *testing.T) {
 		})
 	}
 }
+
+// Discount inventory read at fill time carries the block the backend read its maxAssets at, so the
+// snapshot rule applies to capacities that offer a discount alternative too.
+func TestExecution_DiscountInventoriesCarrySnapshotBlock(t *testing.T) {
+	_, be := fillFixtures(t)
+	be.discounts = &discountsResponse{Discounts: []discountListItem{{
+		DiscountID: "0x00000000000000000000000000000000000000000000000000000000000000ab",
+		Adapter:    vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), CollateralDecimals: 6,
+		Discount: "500", Deadline: 4_102_444_800, MaxAssets: "10000000", MaxRate: "1000000000000000000",
+		BlockNumber: "4242",
+	}}}
+	e := newExec(t, newStore(func() time.Time { return time.Unix(0, 0) }), be, &fakeTxm{})
+
+	inv := e.discountInventories(t.Context(), tIn, nil)
+
+	if len(inv) != 1 || inv[0].BlockNumber != 4242 {
+		t.Fatalf("discount inventory = %+v, want one item at block 4242", inv)
+	}
+}
