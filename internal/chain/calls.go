@@ -180,6 +180,39 @@ func (c *Client) TransactionSenderBalanceAt(
 	)
 }
 
+// ReadBalanceAt serves sender balance telemetry from the read endpoints only, so a submission-only
+// relay never pays for it. Admission and replacement keep their write-endpoint reads.
+func (c *Client) ReadBalanceAt(ctx context.Context, account common.Address) (_ *big.Int, err error) {
+	ctx, end := c.readCalls.start(ctx, rpcMethodGetBalance)
+	defer func() { end(err) }()
+	return c.Client.BalanceAt(ctx, account, nil)
+}
+
+// ReadNonces serves nonce telemetry from the read endpoints only: the mined and pending nonces as the
+// primary RPC sees them. The pending nonce may lag a privately submitted transaction until the primary
+// RPC sees it, which is acceptable for a gauge and never for admission.
+func (c *Client) ReadNonces(ctx context.Context, account common.Address) (latestNonce, pendingNonce uint64, err error) {
+	if latestNonce, err = c.readNonceAt(ctx, account); err != nil {
+		return 0, 0, err
+	}
+	if pendingNonce, err = c.readPendingNonceAt(ctx, account); err != nil {
+		return 0, 0, err
+	}
+	return latestNonce, pendingNonce, nil
+}
+
+func (c *Client) readNonceAt(ctx context.Context, account common.Address) (_ uint64, err error) {
+	ctx, end := c.readCalls.start(ctx, rpcMethodGetTransactionCount)
+	defer func() { end(err) }()
+	return c.Client.NonceAt(ctx, account, nil)
+}
+
+func (c *Client) readPendingNonceAt(ctx context.Context, account common.Address) (_ uint64, err error) {
+	ctx, end := c.readCalls.start(ctx, rpcMethodGetTransactionCount)
+	defer func() { end(err) }()
+	return c.Client.PendingNonceAt(ctx, account)
+}
+
 func (c *Client) writeBalanceAt(
 	ctx context.Context, account common.Address, blockNumber *big.Int,
 ) (_ *big.Int, err error) {

@@ -57,6 +57,20 @@ type accountBalanceBackend interface {
 	BalanceAt(ctx context.Context, account common.Address, blockNumber *big.Int) (*big.Int, error)
 }
 
+// accountTelemetryBackend serves the periodic account snapshot from the read endpoints, so telemetry
+// never spends a submission relay's request budget. Without it the manager reads through the same
+// write-endpoint methods admission uses.
+type accountTelemetryBackend interface {
+	ReadBalanceAt(ctx context.Context, account common.Address) (*big.Int, error)
+	ReadNonces(ctx context.Context, account common.Address) (latestNonce, pendingNonce uint64, err error)
+}
+
+// accountReading is one complete telemetry snapshot.
+type accountReading struct {
+	balance                   *big.Int
+	latestNonce, pendingNonce uint64
+}
+
 // cancellationBackend optionally routes same-nonce self-cancellations to a separate endpoint.
 // Plain EVM backends keep using SendTransaction for every broadcast.
 type cancellationBackend interface {
@@ -367,9 +381,10 @@ func (m *Manager) monitorAccount(ctx context.Context) {
 }
 
 func (m *Manager) supportsAccountBalance() bool {
+	_, snapshot := m.backend.(accountTelemetryBackend)
 	_, senderBalance := m.backend.(transactionSenderBalanceBackend)
 	_, ordinaryBalance := m.backend.(accountBalanceBackend)
-	return senderBalance || ordinaryBalance
+	return snapshot || senderBalance || ordinaryBalance
 }
 
 // refreshAccount runs one account poll. It is periodic background work, and the manager's lifetime
@@ -387,23 +402,35 @@ func (m *Manager) refreshAccount(ctx context.Context) {
 func (m *Manager) readAccount(ctx context.Context) error {
 	refreshCtx, cancel := context.WithTimeout(ctx, accountRefreshTimeout)
 	defer cancel()
-	balance, err := m.transactionSenderBalance(refreshCtx)
+	reading, err := m.readAccountTelemetry(refreshCtx)
 	if err != nil {
 		return err
 	}
-	if balance == nil || balance.Sign() < 0 {
+	if reading.balance == nil || reading.balance.Sign() < 0 {
 		return errors.New("txmanager: invalid account balance")
 	}
-	latestNonce, err := m.backend.NonceAt(refreshCtx, m.signer.Address(), nil)
-	if err != nil {
-		return err
-	}
-	pendingNonce, err := m.backend.PendingNonceAt(refreshCtx, m.signer.Address())
-	if err != nil {
-		return err
-	}
-	m.metrics.observeAccount(balance, latestNonce, pendingNonce)
+	m.metrics.observeAccount(reading.balance, reading.latestNonce, reading.pendingNonce)
 	return nil
+}
+
+func (m *Manager) readAccountTelemetry(ctx context.Context) (accountReading, error) {
+	var reading accountReading
+	var err error
+	if backend, ok := m.backend.(accountTelemetryBackend); ok {
+		if reading.balance, err = backend.ReadBalanceAt(ctx, m.signer.Address()); err != nil {
+			return accountReading{}, err
+		}
+		reading.latestNonce, reading.pendingNonce, err = backend.ReadNonces(ctx, m.signer.Address())
+		return reading, err
+	}
+	if reading.balance, err = m.transactionSenderBalance(ctx); err != nil {
+		return accountReading{}, err
+	}
+	if reading.latestNonce, err = m.backend.NonceAt(ctx, m.signer.Address(), nil); err != nil {
+		return accountReading{}, err
+	}
+	reading.pendingNonce, err = m.backend.PendingNonceAt(ctx, m.signer.Address())
+	return reading, err
 }
 
 func (m *Manager) transactionSenderBalance(ctx context.Context) (*big.Int, error) {

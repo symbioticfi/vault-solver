@@ -614,8 +614,9 @@ endpoints. Optional `cancelRpcUrl` routes only same-nonce self-cancellations, in
 and exact rebroadcasts, to a separate endpoint. Set `cancelRpcUrl: ${CANCEL_RPC_URL}` and, for mainnet,
 `CANCEL_RPC_URL=https://boost.rpc.mevblocker.io/fast`. When omitted or empty, cancellation uses the ordinary
 write RPC. A configured cancellation RPC failure is returned without broadcasting to another endpoint.
-Sender-balance telemetry prefers the ordinary write endpoint but falls back to the read client when a
-submission-only relay rejects `eth_getBalance`. Receipt confirmation uses the
+Sender balance and nonce telemetry (the periodic account snapshot behind the `solver_bot_txmanager_account_*`
+metrics) always uses the read RPC, never `writeRpcUrl`, so a submission relay that rate-limits reads cannot
+stall it; only broadcasts, startup nonce reads and replacement nonce checks reach the write endpoint. Receipt confirmation uses the
 [canonicality checks](docs/TXMANAGER-PLAN.md#5-receipt-polling-and-confirmation) independently of endpoint
 affinity, while retaining normal read fallbacks. An HTTP 3xx response is not followed and falls through to the next read
 endpoint. A non-final endpoint's JSON-RPC `null` receipt or header result falls through
