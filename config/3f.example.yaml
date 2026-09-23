@@ -9,6 +9,7 @@
 
 chain:
   rpcUrl: ${ETH_RPC_URL_SEPOLIA}   # primary endpoint for state, fee, and receipt reads
+  # rpcAttemptTimeoutMs: 20000 # per HTTP(S) endpoint attempt; shorter caller deadlines still apply
   chainId: 11155111                # must match the RPC's chain id (asserted at startup)
   # rpcFallbackUrls:               # optional read-only fallbacks, tried in order
   #   - ${ETH_RPC_URL_SEPOLIA_BACKUP}

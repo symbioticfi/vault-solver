@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -28,7 +29,7 @@ func TestValidateZeroGovernanceFee(t *testing.T) {
 			server := governanceFeeRPC(t, tt.fee)
 			defer server.Close()
 
-			client, err := chain.Dial(t.Context(), []string{server.URL}, "", "", common.Address{}.Hex())
+			client, err := chain.Dial(t.Context(), []string{server.URL}, "", "", common.Address{}.Hex(), 20*time.Second)
 			if err != nil {
 				t.Fatalf("chain.Dial: %v", err)
 			}

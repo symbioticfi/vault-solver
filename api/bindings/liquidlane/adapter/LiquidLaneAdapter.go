@@ -78,6 +78,11 @@ type LiquidLaneAdapter struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *LiquidLaneAdapter) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewLiquidLaneAdapter creates a new instance of LiquidLaneAdapter.
 func NewLiquidLaneAdapter() *LiquidLaneAdapter {
 	parsed, err := LiquidLaneAdapterMetaData.ParseABI()
@@ -1608,8 +1613,11 @@ func (LiquidLaneAdapterAddTokenToRedeem) ContractEventName() string {
 // Solidity: event AddTokenToRedeem(address indexed tokenToRedeem, address indexed account)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackAddTokenToRedeemEvent(log *types.Log) (*LiquidLaneAdapterAddTokenToRedeem, error) {
 	event := "AddTokenToRedeem"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterAddTokenToRedeem)
 	if len(log.Data) > 0 {
@@ -1651,8 +1659,11 @@ func (LiquidLaneAdapterDepositToAcquire) ContractEventName() string {
 // Solidity: event DepositToAcquire(address indexed who, address indexed tokenToRedeem, uint256 amount)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackDepositToAcquireEvent(log *types.Log) (*LiquidLaneAdapterDepositToAcquire, error) {
 	event := "DepositToAcquire"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterDepositToAcquire)
 	if len(log.Data) > 0 {
@@ -1692,8 +1703,11 @@ func (LiquidLaneAdapterDoSwap) ContractEventName() string {
 // Solidity: event DoSwap((address,address,uint256,uint256) swap)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackDoSwapEvent(log *types.Log) (*LiquidLaneAdapterDoSwap, error) {
 	event := "DoSwap"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterDoSwap)
 	if len(log.Data) > 0 {
@@ -1732,8 +1746,11 @@ func (LiquidLaneAdapterEIP712DomainChanged) ContractEventName() string {
 // Solidity: event EIP712DomainChanged()
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackEIP712DomainChangedEvent(log *types.Log) (*LiquidLaneAdapterEIP712DomainChanged, error) {
 	event := "EIP712DomainChanged"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterEIP712DomainChanged)
 	if len(log.Data) > 0 {
@@ -1773,8 +1790,11 @@ func (LiquidLaneAdapterInitialize) ContractEventName() string {
 // Solidity: event Initialize((address,address) params)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackInitializeEvent(log *types.Log) (*LiquidLaneAdapterInitialize, error) {
 	event := "Initialize"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterInitialize)
 	if len(log.Data) > 0 {
@@ -1814,8 +1834,11 @@ func (LiquidLaneAdapterInitialized) ContractEventName() string {
 // Solidity: event Initialized(uint64 version)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackInitializedEvent(log *types.Log) (*LiquidLaneAdapterInitialized, error) {
 	event := "Initialized"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterInitialized)
 	if len(log.Data) > 0 {
@@ -1856,8 +1879,11 @@ func (LiquidLaneAdapterInvalidateNonce) ContractEventName() string {
 // Solidity: event InvalidateNonce(address indexed tokenToRedeem, uint256 indexed nonce)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackInvalidateNonceEvent(log *types.Log) (*LiquidLaneAdapterInvalidateNonce, error) {
 	event := "InvalidateNonce"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterInvalidateNonce)
 	if len(log.Data) > 0 {
@@ -1898,8 +1924,11 @@ func (LiquidLaneAdapterOwnershipTransferred) ContractEventName() string {
 // Solidity: event OwnershipTransferred(address indexed previousOwner, address indexed newOwner)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackOwnershipTransferredEvent(log *types.Log) (*LiquidLaneAdapterOwnershipTransferred, error) {
 	event := "OwnershipTransferred"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterOwnershipTransferred)
 	if len(log.Data) > 0 {
@@ -1939,8 +1968,11 @@ func (LiquidLaneAdapterPaused) ContractEventName() string {
 // Solidity: event Paused(address account)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackPausedEvent(log *types.Log) (*LiquidLaneAdapterPaused, error) {
 	event := "Paused"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterPaused)
 	if len(log.Data) > 0 {
@@ -1980,8 +2012,11 @@ func (LiquidLaneAdapterRemoveTokenToRedeem) ContractEventName() string {
 // Solidity: event RemoveTokenToRedeem(address indexed tokenToRedeem)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackRemoveTokenToRedeemEvent(log *types.Log) (*LiquidLaneAdapterRemoveTokenToRedeem, error) {
 	event := "RemoveTokenToRedeem"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterRemoveTokenToRedeem)
 	if len(log.Data) > 0 {
@@ -2023,8 +2058,11 @@ func (LiquidLaneAdapterSetFiller) ContractEventName() string {
 // Solidity: event SetFiller(address indexed marketMaker, address indexed filler, bool isAuthorized)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackSetFillerEvent(log *types.Log) (*LiquidLaneAdapterSetFiller, error) {
 	event := "SetFiller"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterSetFiller)
 	if len(log.Data) > 0 {
@@ -2065,8 +2103,11 @@ func (LiquidLaneAdapterSetLimit) ContractEventName() string {
 // Solidity: event SetLimit(address indexed tokenToRedeem, uint256 newLimit)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackSetLimitEvent(log *types.Log) (*LiquidLaneAdapterSetLimit, error) {
 	event := "SetLimit"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterSetLimit)
 	if len(log.Data) > 0 {
@@ -2107,8 +2148,11 @@ func (LiquidLaneAdapterSetMarketMaker) ContractEventName() string {
 // Solidity: event SetMarketMaker(address indexed newMarketMaker, bool newCanAcquire)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackSetMarketMakerEvent(log *types.Log) (*LiquidLaneAdapterSetMarketMaker, error) {
 	event := "SetMarketMaker"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterSetMarketMaker)
 	if len(log.Data) > 0 {
@@ -2149,8 +2193,11 @@ func (LiquidLaneAdapterSetMinDiscount) ContractEventName() string {
 // Solidity: event SetMinDiscount(address indexed tokenToRedeem, uint256 newMinDiscount)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackSetMinDiscountEvent(log *types.Log) (*LiquidLaneAdapterSetMinDiscount, error) {
 	event := "SetMinDiscount"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterSetMinDiscount)
 	if len(log.Data) > 0 {
@@ -2190,8 +2237,11 @@ func (LiquidLaneAdapterSetPauser) ContractEventName() string {
 // Solidity: event SetPauser(address indexed newPauser)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackSetPauserEvent(log *types.Log) (*LiquidLaneAdapterSetPauser, error) {
 	event := "SetPauser"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterSetPauser)
 	if len(log.Data) > 0 {
@@ -2232,8 +2282,11 @@ func (LiquidLaneAdapterSetReceiver) ContractEventName() string {
 // Solidity: event SetReceiver(address indexed who, address indexed receiver)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackSetReceiverEvent(log *types.Log) (*LiquidLaneAdapterSetReceiver, error) {
 	event := "SetReceiver"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterSetReceiver)
 	if len(log.Data) > 0 {
@@ -2273,8 +2326,11 @@ func (LiquidLaneAdapterSetUnpauser) ContractEventName() string {
 // Solidity: event SetUnpauser(address indexed newUnpauser)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackSetUnpauserEvent(log *types.Log) (*LiquidLaneAdapterSetUnpauser, error) {
 	event := "SetUnpauser"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterSetUnpauser)
 	if len(log.Data) > 0 {
@@ -2314,8 +2370,11 @@ func (LiquidLaneAdapterSetVault) ContractEventName() string {
 // Solidity: event SetVault(address indexed vault)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackSetVaultEvent(log *types.Log) (*LiquidLaneAdapterSetVault, error) {
 	event := "SetVault"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterSetVault)
 	if len(log.Data) > 0 {
@@ -2355,8 +2414,11 @@ func (LiquidLaneAdapterUnpaused) ContractEventName() string {
 // Solidity: event Unpaused(address account)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackUnpausedEvent(log *types.Log) (*LiquidLaneAdapterUnpaused, error) {
 	event := "Unpaused"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterUnpaused)
 	if len(log.Data) > 0 {
@@ -2398,8 +2460,11 @@ func (LiquidLaneAdapterWithdrawToAcquire) ContractEventName() string {
 // Solidity: event WithdrawToAcquire(address indexed who, address indexed tokenToRedeem, uint256 amount)
 func (liquidLaneAdapter *LiquidLaneAdapter) UnpackWithdrawToAcquireEvent(log *types.Log) (*LiquidLaneAdapterWithdrawToAcquire, error) {
 	event := "WithdrawToAcquire"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneAdapterWithdrawToAcquire)
 	if len(log.Data) > 0 {

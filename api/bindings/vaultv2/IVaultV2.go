@@ -53,6 +53,11 @@ type IVaultV2 struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *IVaultV2) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewIVaultV2 creates a new instance of IVaultV2.
 func NewIVaultV2() *IVaultV2 {
 	parsed, err := IVaultV2MetaData.ParseABI()
@@ -1240,8 +1245,11 @@ func (IVaultV2AccrueInterest) ContractEventName() string {
 // Solidity: event AccrueInterest(uint256 newTotalAssets, uint256 managementFeeShares, uint256 performanceFeeShares, uint256 protocolFeeShares)
 func (iVaultV2 *IVaultV2) UnpackAccrueInterestEvent(log *types.Log) (*IVaultV2AccrueInterest, error) {
 	event := "AccrueInterest"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iVaultV2.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IVaultV2AccrueInterest)
 	if len(log.Data) > 0 {
@@ -1284,8 +1292,11 @@ func (IVaultV2Claim) ContractEventName() string {
 // Solidity: event Claim(address indexed claimer, address indexed receiver, uint256 tokenId, uint256 assets)
 func (iVaultV2 *IVaultV2) UnpackClaimEvent(log *types.Log) (*IVaultV2Claim, error) {
 	event := "Claim"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iVaultV2.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IVaultV2Claim)
 	if len(log.Data) > 0 {
@@ -1325,8 +1336,11 @@ func (IVaultV2Initialize) ContractEventName() string {
 // Solidity: event Initialize((string,string,address,bool,address,uint256,bool,address,address,address,address,address,address,address) params)
 func (iVaultV2 *IVaultV2) UnpackInitializeEvent(log *types.Log) (*IVaultV2Initialize, error) {
 	event := "Initialize"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iVaultV2.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IVaultV2Initialize)
 	if len(log.Data) > 0 {
@@ -1367,8 +1381,11 @@ func (IVaultV2Pull) ContractEventName() string {
 // Solidity: event Pull(uint256 assets, address indexed receiver)
 func (iVaultV2 *IVaultV2) UnpackPullEvent(log *types.Log) (*IVaultV2Pull, error) {
 	event := "Pull"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iVaultV2.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IVaultV2Pull)
 	if len(log.Data) > 0 {
@@ -1409,8 +1426,11 @@ func (IVaultV2Push) ContractEventName() string {
 // Solidity: event Push(uint256 assets, address indexed owner)
 func (iVaultV2 *IVaultV2) UnpackPushEvent(log *types.Log) (*IVaultV2Push, error) {
 	event := "Push"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iVaultV2.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IVaultV2Push)
 	if len(log.Data) > 0 {
@@ -1450,8 +1470,11 @@ func (IVaultV2SetDelegator) ContractEventName() string {
 // Solidity: event SetDelegator(address indexed delegator)
 func (iVaultV2 *IVaultV2) UnpackSetDelegatorEvent(log *types.Log) (*IVaultV2SetDelegator, error) {
 	event := "SetDelegator"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iVaultV2.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IVaultV2SetDelegator)
 	if len(log.Data) > 0 {
@@ -1491,8 +1514,11 @@ func (IVaultV2SetDepositLimit) ContractEventName() string {
 // Solidity: event SetDepositLimit(uint256 limit)
 func (iVaultV2 *IVaultV2) UnpackSetDepositLimitEvent(log *types.Log) (*IVaultV2SetDepositLimit, error) {
 	event := "SetDepositLimit"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iVaultV2.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IVaultV2SetDepositLimit)
 	if len(log.Data) > 0 {
@@ -1532,8 +1558,11 @@ func (IVaultV2SetDepositWhitelist) ContractEventName() string {
 // Solidity: event SetDepositWhitelist(bool status)
 func (iVaultV2 *IVaultV2) UnpackSetDepositWhitelistEvent(log *types.Log) (*IVaultV2SetDepositWhitelist, error) {
 	event := "SetDepositWhitelist"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iVaultV2.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IVaultV2SetDepositWhitelist)
 	if len(log.Data) > 0 {
@@ -1574,8 +1603,11 @@ func (IVaultV2SetDepositorWhitelistStatus) ContractEventName() string {
 // Solidity: event SetDepositorWhitelistStatus(address indexed account, bool status)
 func (iVaultV2 *IVaultV2) UnpackSetDepositorWhitelistStatusEvent(log *types.Log) (*IVaultV2SetDepositorWhitelistStatus, error) {
 	event := "SetDepositorWhitelistStatus"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iVaultV2.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IVaultV2SetDepositorWhitelistStatus)
 	if len(log.Data) > 0 {
@@ -1615,8 +1647,11 @@ func (IVaultV2SetIsDepositLimit) ContractEventName() string {
 // Solidity: event SetIsDepositLimit(bool status)
 func (iVaultV2 *IVaultV2) UnpackSetIsDepositLimitEvent(log *types.Log) (*IVaultV2SetIsDepositLimit, error) {
 	event := "SetIsDepositLimit"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iVaultV2.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IVaultV2SetIsDepositLimit)
 	if len(log.Data) > 0 {
@@ -1657,8 +1692,11 @@ func (IVaultV2SetManagementFee) ContractEventName() string {
 // Solidity: event SetManagementFee(uint256 fee, address indexed receiver)
 func (iVaultV2 *IVaultV2) UnpackSetManagementFeeEvent(log *types.Log) (*IVaultV2SetManagementFee, error) {
 	event := "SetManagementFee"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iVaultV2.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IVaultV2SetManagementFee)
 	if len(log.Data) > 0 {
@@ -1699,8 +1737,11 @@ func (IVaultV2SetPerformanceFee) ContractEventName() string {
 // Solidity: event SetPerformanceFee(uint256 fee, address indexed receiver)
 func (iVaultV2 *IVaultV2) UnpackSetPerformanceFeeEvent(log *types.Log) (*IVaultV2SetPerformanceFee, error) {
 	event := "SetPerformanceFee"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iVaultV2.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IVaultV2SetPerformanceFee)
 	if len(log.Data) > 0 {
@@ -1740,8 +1781,11 @@ func (IVaultV2SetWithdrawalQueue) ContractEventName() string {
 // Solidity: event SetWithdrawalQueue(address indexed withdrawalQueue)
 func (iVaultV2 *IVaultV2) UnpackSetWithdrawalQueueEvent(log *types.Log) (*IVaultV2SetWithdrawalQueue, error) {
 	event := "SetWithdrawalQueue"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iVaultV2.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IVaultV2SetWithdrawalQueue)
 	if len(log.Data) > 0 {
@@ -1783,8 +1827,11 @@ func (IVaultV2UpdateProtocolFee) ContractEventName() string {
 // Solidity: event UpdateProtocolFee(address indexed receiver, uint96 managementFee, uint96 performanceFee)
 func (iVaultV2 *IVaultV2) UnpackUpdateProtocolFeeEvent(log *types.Log) (*IVaultV2UpdateProtocolFee, error) {
 	event := "UpdateProtocolFee"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iVaultV2.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IVaultV2UpdateProtocolFee)
 	if len(log.Data) > 0 {

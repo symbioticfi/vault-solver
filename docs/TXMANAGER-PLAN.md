@@ -135,6 +135,14 @@ Operational counters are not a canonical accounting ledger.
 
 ## 6. RPC routing, nonce conflicts and restart
 
+`chain.rpcAttemptTimeoutMs` configures the HTTP(S) transport's per-endpoint attempt cap (default
+20,000 ms), including response-body reads, on all read/write/cancellation clients. Shorter caller
+deadlines remain authoritative and are shared across remaining fallback endpoints. Fee/receipt read
+budgets and `txManager.broadcastTimeoutMs` are unchanged. This controls the solver's wait for an
+endpoint such as eRPC, not eRPC's own upstream retry policy; WebSocket/IPC behavior is unchanged.
+Both `chain.Dial` and `chain.DialWithMetrics` accept the attempt timeout explicitly and use the
+same transport path; enabling metrics does not change how the timeout is selected.
+
 Normal broadcasts and both latest/pending account nonce reads use one non-fallback write endpoint:
 `chain.writeRpcUrl`, or primary `chain.rpcUrl` when omitted. An explicit write endpoint is chain-ID checked.
 Optional `chain.cancelRpcUrl` routes same-nonce zero-value self-cancellations to a dedicated, chain-ID-checked

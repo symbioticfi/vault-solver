@@ -74,6 +74,11 @@ is polled until eligible adapters appear. Example:
 
 ### RFQ Filler — `rfq-filler`
 
+Numbered mainnet instances are configured in `vault-solver-deploy`, using this same
+`rfq-filler` integration. Presto is `vault-solver-eighth` (`symbiotic_eighth` in RFQ
+backend); its executor and single adapter are set in that repository's mainnet
+deploy matrix. A new instance does not require a new solver type in this application.
+
 An externally-owned solver/executor for **[Symbiotic RFQ](https://symbiotic.fi)**, on top of per-vault
 `LiquidLaneAdapter`s. It runs a `POST /quote` server that prices swaps for the RFQ backend and a poller
 that fills the orders it is awarded, settling on-chain through the adapter.
@@ -536,6 +541,11 @@ result also advances `settled_success` or `settled_failed`, so lifecycle dashboa
 Event timestamps reset to `0` on restart; use `max_over_time(...[$__range])` when a dashboard should
 retain a pre-restart observation inside its selected range.
 
+3F skips adapters with a zero offer signer, vault, or asset without blocking snapshot freshness.
+Discovery failures and errors reading required `vault()`, `offerSigner()`, or `asset()` values still
+prevent a complete target snapshot. A reverted or malformed `isValidSignature()` response instead
+excludes the adapter as unauthorized without making discovery incomplete.
+
 External-operation labels are fixed at construction: 3F exposes `target_refresh`, `offer_refresh`,
 `active_request_refresh`, and `redeemable_refresh`; RFQ exposes `order_poll`; LI.FI exposes
 `quote_refresh`, `quote_suspend`, and `order_recovery`; UniswapX exposes `quote_refresh`,
@@ -585,7 +595,15 @@ including the applicable shared `chain`/`signer`/`txManager`/`observability` blo
 inline there.
 
 The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S) endpoints tried
-in order for reads when the primary is unavailable. Normal signed broadcasts and both startup nonce reads
+in order for reads when the primary is unavailable. `chain.rpcAttemptTimeoutMs` bounds each HTTP(S)
+endpoint attempt, including reading its response body, for read, write and cancellation RPCs.
+It defaults to `20000` (20 seconds) when omitted or zero; negative or overflowing values are rejected.
+For example, `rpcAttemptTimeoutMs: 5000` allows up to 5 seconds per endpoint attempt. This is not a
+total fallback-chain budget: a shorter caller deadline is divided across the remaining endpoints.
+The txmanager's shorter fee/receipt budgets and `broadcastTimeoutMs` still apply; WebSocket/IPC calls
+are unaffected. When using eRPC, this bounds the solver's wait for eRPC, including eRPC's internal
+retries; upstream timeouts and retries inside eRPC must be configured separately.
+Normal signed broadcasts and both startup nonce reads
 are pinned to `writeRpcUrl`, or the primary `rpcUrl` when it is omitted, and never fall over across
 endpoints. Optional `cancelRpcUrl` routes only same-nonce self-cancellations, including their fee replacements
 and exact rebroadcasts, to a separate endpoint. Set `cancelRpcUrl: ${CANCEL_RPC_URL}` and, for mainnet,

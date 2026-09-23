@@ -48,6 +48,11 @@ type Multicall3 struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *Multicall3) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewMulticall3 creates a new instance of Multicall3.
 func NewMulticall3() *Multicall3 {
 	parsed, err := Multicall3MetaData.ParseABI()

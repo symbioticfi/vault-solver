@@ -101,6 +101,11 @@ type Reactor struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *Reactor) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewReactor creates a new instance of Reactor.
 func NewReactor() *Reactor {
 	parsed, err := ReactorMetaData.ParseABI()
@@ -358,8 +363,11 @@ func (ReactorEIP712DomainChanged) ContractEventName() string {
 // Solidity: event EIP712DomainChanged()
 func (reactor *Reactor) UnpackEIP712DomainChangedEvent(log *types.Log) (*ReactorEIP712DomainChanged, error) {
 	event := "EIP712DomainChanged"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != reactor.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ReactorEIP712DomainChanged)
 	if len(log.Data) > 0 {
@@ -399,8 +407,11 @@ func (ReactorFill) ContractEventName() string {
 // Solidity: event Fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address,(address,uint256,address)[]) order)
 func (reactor *Reactor) UnpackFillEvent(log *types.Log) (*ReactorFill, error) {
 	event := "Fill"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != reactor.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ReactorFill)
 	if len(log.Data) > 0 {
@@ -441,8 +452,11 @@ func (ReactorInvalidateNonce) ContractEventName() string {
 // Solidity: event InvalidateNonce(address indexed swapper, uint256 nonce)
 func (reactor *Reactor) UnpackInvalidateNonceEvent(log *types.Log) (*ReactorInvalidateNonce, error) {
 	event := "InvalidateNonce"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != reactor.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ReactorInvalidateNonce)
 	if len(log.Data) > 0 {

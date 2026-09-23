@@ -4,6 +4,7 @@
 
 chain:
   rpcUrl: ${ETH_RPC_URL_MAINNET} # state, fees, and receipts
+  # rpcAttemptTimeoutMs: 20000 # per HTTP(S) endpoint attempt; shorter caller deadlines still apply
   # rpcFallbackUrls:             # optional read-only fallbacks, tried in order
   #   - ${ETH_RPC_URL_MAINNET_BACKUP}
   writeRpcUrl: ${WRITE_RPC_URL}  # normal broadcasts + nonce reads; must support same-nonce replacement

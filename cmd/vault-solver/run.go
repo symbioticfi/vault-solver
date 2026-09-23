@@ -118,7 +118,8 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	}
 	rpcURLs := append([]string{cfg.Chain.RPCURL}, cfg.Chain.RPCFallbackURLs...)
 	chainClient, err := chain.DialWithMetrics(
-		ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.CancelRPCURL, cfg.Chain.MulticallAddress, rpcMetrics,
+		ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.CancelRPCURL, cfg.Chain.MulticallAddress,
+		time.Duration(cfg.Chain.RPCAttemptTimeoutMs)*time.Millisecond, rpcMetrics,
 	)
 	if err != nil {
 		return err

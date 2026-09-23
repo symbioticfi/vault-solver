@@ -91,6 +91,11 @@ type LiquidLaneLifiExecutor struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *LiquidLaneLifiExecutor) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewLiquidLaneLifiExecutor creates a new instance of LiquidLaneLifiExecutor.
 func NewLiquidLaneLifiExecutor() *LiquidLaneLifiExecutor {
 	parsed, err := LiquidLaneLifiExecutorMetaData.ParseABI()
