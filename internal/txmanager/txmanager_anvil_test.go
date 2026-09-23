@@ -94,7 +94,7 @@ func testAnvilCancellation(t *testing.T, dedicatedCancellationRPC bool) {
 		writeURL := anvilBroadcastProxy(t, endpoint, &writeSends)
 		cancelURL := anvilBroadcastProxy(t, endpoint, &cancelSends)
 		client, err := chain.Dial(t.Context(), []string{endpoint}, writeURL, cancelURL,
-			"0xcA11bde05977b3631167028862bE2a173976CA11")
+			"0xcA11bde05977b3631167028862bE2a173976CA11", 20*time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}

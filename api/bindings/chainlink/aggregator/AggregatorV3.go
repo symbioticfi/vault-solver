@@ -35,6 +35,11 @@ type AggregatorV3 struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *AggregatorV3) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewAggregatorV3 creates a new instance of AggregatorV3.
 func NewAggregatorV3() *AggregatorV3 {
 	parsed, err := AggregatorV3MetaData.ParseABI()

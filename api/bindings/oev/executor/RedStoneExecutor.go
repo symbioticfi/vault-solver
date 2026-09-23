@@ -35,6 +35,11 @@ type RedStoneExecutor struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *RedStoneExecutor) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewRedStoneExecutor creates a new instance of RedStoneExecutor.
 func NewRedStoneExecutor() *RedStoneExecutor {
 	parsed, err := RedStoneExecutorMetaData.ParseABI()
@@ -197,8 +202,11 @@ func (RedStoneExecutorLiquidationFailed) ContractEventName() string {
 // Solidity: event LiquidationFailed(address indexed solver, uint256 nonce)
 func (redStoneExecutor *RedStoneExecutor) UnpackLiquidationFailedEvent(log *types.Log) (*RedStoneExecutorLiquidationFailed, error) {
 	event := "LiquidationFailed"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != redStoneExecutor.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(RedStoneExecutorLiquidationFailed)
 	if len(log.Data) > 0 {

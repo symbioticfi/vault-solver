@@ -262,6 +262,83 @@ func TestRefreshTargetsPublishesOnlyAuthoritativeTargetSnapshots(t *testing.T) {
 	})
 }
 
+func TestTargetRefreshSkippedAdapterFreshness(t *testing.T) {
+	adapter := common.HexToAddress("0xA0")
+	skipped := common.HexToAddress("0xA1")
+	vault := common.HexToAddress("0xB0")
+	signer := common.HexToAddress("0xC0")
+	asset := common.HexToAddress("0xD0")
+	for _, tc := range []struct {
+		name          string
+		withValid     bool
+		signerResult  chain.CallResult
+		authoritative bool
+	}{
+		{"valid and unconfigured", true, chain.CallResult{Success: true, ReturnData: abiEncodeAddress(t, common.Address{})}, true},
+		{"all unconfigured", false, chain.CallResult{Success: true, ReturnData: abiEncodeAddress(t, common.Address{})}, true},
+		{"reverted signer read", true, chain.CallResult{Success: false}, false},
+		{"malformed signer read", true, chain.CallResult{Success: true, ReturnData: []byte{1}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			targets := []Target{{Adapter: skipped}}
+			results := []chain.CallResult{
+				{Success: true, ReturnData: abiEncodeAddress(t, vault)},
+				tc.signerResult,
+				{Success: true, ReturnData: abiEncodeBytes4(t, erc1271MagicValue)},
+			}
+			wantCount := 0
+			if tc.withValid {
+				targets = append(targets, Target{Adapter: adapter})
+				results = append(results,
+					chain.CallResult{Success: true, ReturnData: abiEncodeAddress(t, vault)},
+					chain.CallResult{Success: true, ReturnData: abiEncodeAddress(t, signer)},
+					chain.CallResult{Success: true, ReturnData: abiEncodeBytes4(t, erc1271MagicValue)},
+				)
+				wantCount = 1
+			}
+			responses := [][]byte{abiEncodeAggregate3CallResults(t, results)}
+			if tc.withValid {
+				responses = append(responses, abiEncodeAggregate3Results(t, abiEncodeAddress(t, asset)))
+			}
+			client, stop := newMulticallFakeClient(t, responses...)
+			defer stop()
+			m, reg := newThreeFTestMetrics(t)
+			m.now = func() time.Time { return time.Unix(456, 0) }
+			views := []string{threeFStateTargets, threeFStateOffers, threeFStateActiveRequests, threeFStateRedeemable}
+			for _, view := range views {
+				seedThreeFObservation(m, view)
+			}
+			s := &Solver{
+				cfg: &Config{Targets: targets}, reader: newReader(client, common.Address{}),
+				log: logr.Discard(), offers: newOfferTracker(), metrics: m, operations: m.operations,
+			}
+			if _, err := s.refreshTargets(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if len(s.targets) != wantCount || (wantCount == 1 && s.targets[0].Adapter != adapter) {
+				t.Fatalf("targets = %+v, want %d valid targets", s.targets, wantCount)
+			}
+			if s.targetsAuthoritative != tc.authoritative {
+				t.Fatalf("authoritative = %v, want %v", s.targetsAuthoritative, tc.authoritative)
+			}
+			for _, view := range views {
+				if view != threeFStateTargets {
+					s.observeTargetDerivedState(view, 0, true)
+				}
+				if !tc.authoritative {
+					requireThreeFObservation(t, reg, view, 7, 123)
+					continue
+				}
+				count := 0
+				if view == threeFStateTargets {
+					count = wantCount
+				}
+				requireThreeFObservation(t, reg, view, float64(count), 456)
+			}
+		})
+	}
+}
+
 func TestTargetDerivedMetricsRequireAuthoritativeTargetSnapshot(t *testing.T) {
 	m, reg := newThreeFTestMetrics(t)
 	views := []string{threeFStateOffers, threeFStateActiveRequests, threeFStateRedeemable}

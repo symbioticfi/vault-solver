@@ -35,6 +35,11 @@ type IVaultController struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *IVaultController) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewIVaultController creates a new instance of IVaultController.
 func NewIVaultController() *IVaultController {
 	parsed, err := IVaultControllerMetaData.ParseABI()

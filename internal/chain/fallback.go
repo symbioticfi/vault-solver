@@ -15,10 +15,11 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
-// rpcAttemptTimeout bounds a single endpoint attempt so a hung endpoint fails over instead of
+// defaultRPCAttemptTimeout bounds a single endpoint attempt so a hung endpoint fails over instead of
 // blocking. Short caller deadlines are divided across the remaining endpoints.
 const (
-	rpcAttemptTimeout              = 20 * time.Second
+	// Keep in sync with config.DefaultRPCAttemptTimeoutMs (internal/config/config.go).
+	defaultRPCAttemptTimeout       = 20 * time.Second
 	jsonRPCVersion                 = "2.0"
 	rpcMethodCall                  = "eth_call"
 	rpcMethodChainID               = "eth_chainId"
@@ -38,10 +39,11 @@ const (
 // It plugs in below go-ethereum's read client. Signed broadcasts and startup nonce reads use an
 // isolated single-endpoint write client.
 type fallbackTransport struct {
-	endpoints []*url.URL
-	base      http.RoundTripper
-	metrics   *RPCMetrics
-	role      string
+	endpoints      []*url.URL
+	base           http.RoundTripper
+	metrics        *RPCMetrics
+	role           string
+	attemptTimeout time.Duration // zero uses defaultRPCAttemptTimeout
 }
 
 func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -68,7 +70,7 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	)
 	for i, ep := range t.endpoints {
 		endpoint := endpointLabel(i)
-		attemptTimeout := endpointAttemptTimeout(ctx, len(t.endpoints)-i)
+		attemptTimeout := endpointAttemptTimeout(ctx, len(t.endpoints)-i, t.attemptTimeout)
 		if attemptTimeout <= 0 {
 			lastErr = ctx.Err()
 			if lastErr == nil {
@@ -408,23 +410,26 @@ func hasNullRPCResult(resp *http.Response, requestID string) (bool, []byte, erro
 	return bytes.Equal(bytes.TrimSpace(response.Result), []byte("null")), body, nil
 }
 
-func endpointAttemptTimeout(ctx context.Context, endpointsLeft int) time.Duration {
+func endpointAttemptTimeout(ctx context.Context, endpointsLeft int, timeout time.Duration) time.Duration {
 	if endpointsLeft <= 0 {
 		return 0
 	}
+	if timeout == 0 {
+		timeout = defaultRPCAttemptTimeout
+	}
 	deadline, bounded := ctx.Deadline()
 	if !bounded {
-		return rpcAttemptTimeout
+		return timeout
 	}
 	remaining := time.Until(deadline)
 	if remaining <= 0 {
 		return 0
 	}
-	return min(rpcAttemptTimeout, remaining/time.Duration(endpointsLeft))
+	return min(timeout, remaining/time.Duration(endpointsLeft))
 }
 
 // isHTTPURL reports whether raw is an http(s) URL — the schemes the fallback transport (and thus the
-// per-call rpcAttemptTimeout) supports.
+// per-attempt timeout) supports.
 func isHTTPURL(raw string) bool {
 	u, err := url.Parse(raw)
 	return err == nil && (u.Scheme == "http" || u.Scheme == "https")

@@ -398,7 +398,9 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
   cleared by an authoritative empty snapshot, and resets on process restart; it is intentionally not
   called an oldest-request age because the contract views do not expose that transition time. Its initial
   zero is ambiguous with an authoritative empty state and must be read with the matching freshness. Each
-  complete target refresh publishes freshness, including a successful empty snapshot. A partial
+  complete target refresh publishes freshness, including a successful empty snapshot. Adapters with
+  a confirmed zero offer signer, vault, or asset are excluded without making discovery incomplete;
+  an entirely unconfigured set therefore produces an authoritative empty snapshot. A partial
   per-adapter read still installs the safe resolved runtime subset, but retains the previous target
   count and freshness; while that parent snapshot is non-authoritative, the derived `offers`,
   `active_requests`, and `redeemable` views also retain their last-known-good counts and freshness.

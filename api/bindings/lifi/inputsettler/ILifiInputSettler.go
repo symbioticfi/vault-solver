@@ -74,6 +74,11 @@ type ILifiInputSettler struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *ILifiInputSettler) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewILifiInputSettler creates a new instance of ILifiInputSettler.
 func NewILifiInputSettler() *ILifiInputSettler {
 	parsed, err := ILifiInputSettlerMetaData.ParseABI()
@@ -805,8 +810,11 @@ func (ILifiInputSettlerEIP712DomainChanged) ContractEventName() string {
 // Solidity: event EIP712DomainChanged()
 func (iLifiInputSettler *ILifiInputSettler) UnpackEIP712DomainChangedEvent(log *types.Log) (*ILifiInputSettlerEIP712DomainChanged, error) {
 	event := "EIP712DomainChanged"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iLifiInputSettler.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ILifiInputSettlerEIP712DomainChanged)
 	if len(log.Data) > 0 {
@@ -848,8 +856,11 @@ func (ILifiInputSettlerFinalised) ContractEventName() string {
 // Solidity: event Finalised(bytes32 indexed orderId, bytes32 solver, bytes32 destination)
 func (iLifiInputSettler *ILifiInputSettler) UnpackFinalisedEvent(log *types.Log) (*ILifiInputSettlerFinalised, error) {
 	event := "Finalised"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iLifiInputSettler.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ILifiInputSettlerFinalised)
 	if len(log.Data) > 0 {
@@ -890,8 +901,11 @@ func (ILifiInputSettlerGovernanceFeeChanged) ContractEventName() string {
 // Solidity: event GovernanceFeeChanged(uint64 oldGovernanceFee, uint64 newGovernanceFee)
 func (iLifiInputSettler *ILifiInputSettler) UnpackGovernanceFeeChangedEvent(log *types.Log) (*ILifiInputSettlerGovernanceFeeChanged, error) {
 	event := "GovernanceFeeChanged"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iLifiInputSettler.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ILifiInputSettlerGovernanceFeeChanged)
 	if len(log.Data) > 0 {
@@ -932,8 +946,11 @@ func (ILifiInputSettlerNextGovernanceFee) ContractEventName() string {
 // Solidity: event NextGovernanceFee(uint64 nextGovernanceFee, uint64 nextGovernanceFeeTime)
 func (iLifiInputSettler *ILifiInputSettler) UnpackNextGovernanceFeeEvent(log *types.Log) (*ILifiInputSettlerNextGovernanceFee, error) {
 	event := "NextGovernanceFee"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iLifiInputSettler.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ILifiInputSettlerNextGovernanceFee)
 	if len(log.Data) > 0 {
@@ -973,8 +990,11 @@ func (ILifiInputSettlerOpen) ContractEventName() string {
 // Solidity: event Open(bytes32 indexed orderId)
 func (iLifiInputSettler *ILifiInputSettler) UnpackOpenEvent(log *types.Log) (*ILifiInputSettlerOpen, error) {
 	event := "Open"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iLifiInputSettler.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ILifiInputSettlerOpen)
 	if len(log.Data) > 0 {
@@ -1015,8 +1035,11 @@ func (ILifiInputSettlerOpen0) ContractEventName() string {
 // Solidity: event Open(bytes32 indexed orderId, (address,uint256,uint256,uint32,uint32,address,uint256[2][],(bytes32,bytes32,uint256,bytes32,uint256,bytes32,bytes,bytes)[]) order)
 func (iLifiInputSettler *ILifiInputSettler) UnpackOpen0Event(log *types.Log) (*ILifiInputSettlerOpen0, error) {
 	event := "Open0"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iLifiInputSettler.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ILifiInputSettlerOpen0)
 	if len(log.Data) > 0 {
@@ -1058,8 +1081,11 @@ func (ILifiInputSettlerOrderPurchased) ContractEventName() string {
 // Solidity: event OrderPurchased(bytes32 indexed orderId, bytes32 solver, bytes32 purchaser)
 func (iLifiInputSettler *ILifiInputSettler) UnpackOrderPurchasedEvent(log *types.Log) (*ILifiInputSettlerOrderPurchased, error) {
 	event := "OrderPurchased"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iLifiInputSettler.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ILifiInputSettlerOrderPurchased)
 	if len(log.Data) > 0 {
@@ -1099,8 +1125,11 @@ func (ILifiInputSettlerOwnershipHandoverCanceled) ContractEventName() string {
 // Solidity: event OwnershipHandoverCanceled(address indexed pendingOwner)
 func (iLifiInputSettler *ILifiInputSettler) UnpackOwnershipHandoverCanceledEvent(log *types.Log) (*ILifiInputSettlerOwnershipHandoverCanceled, error) {
 	event := "OwnershipHandoverCanceled"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iLifiInputSettler.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ILifiInputSettlerOwnershipHandoverCanceled)
 	if len(log.Data) > 0 {
@@ -1140,8 +1169,11 @@ func (ILifiInputSettlerOwnershipHandoverRequested) ContractEventName() string {
 // Solidity: event OwnershipHandoverRequested(address indexed pendingOwner)
 func (iLifiInputSettler *ILifiInputSettler) UnpackOwnershipHandoverRequestedEvent(log *types.Log) (*ILifiInputSettlerOwnershipHandoverRequested, error) {
 	event := "OwnershipHandoverRequested"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iLifiInputSettler.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ILifiInputSettlerOwnershipHandoverRequested)
 	if len(log.Data) > 0 {
@@ -1182,8 +1214,11 @@ func (ILifiInputSettlerOwnershipTransferred) ContractEventName() string {
 // Solidity: event OwnershipTransferred(address indexed oldOwner, address indexed newOwner)
 func (iLifiInputSettler *ILifiInputSettler) UnpackOwnershipTransferredEvent(log *types.Log) (*ILifiInputSettlerOwnershipTransferred, error) {
 	event := "OwnershipTransferred"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iLifiInputSettler.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ILifiInputSettlerOwnershipTransferred)
 	if len(log.Data) > 0 {
@@ -1223,8 +1258,11 @@ func (ILifiInputSettlerRefunded) ContractEventName() string {
 // Solidity: event Refunded(bytes32 indexed orderId)
 func (iLifiInputSettler *ILifiInputSettler) UnpackRefundedEvent(log *types.Log) (*ILifiInputSettlerRefunded, error) {
 	event := "Refunded"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iLifiInputSettler.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ILifiInputSettlerRefunded)
 	if len(log.Data) > 0 {
