@@ -49,7 +49,7 @@ func (f *fakeQuoteCandidateReader) readQuoteCandidates(
 	if inputDecimals == 0 {
 		inputDecimals = 18
 	}
-	for _, item := range withoutReservedDiscounts(inventory, reservations) {
+	for _, item := range inventory {
 		if item.TokenIn == tokenIn && item.TokenOut == tokenOut {
 			item.TokenInDecimals = inputDecimals
 			matching = append(matching, item)

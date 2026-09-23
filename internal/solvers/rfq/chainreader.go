@@ -67,7 +67,7 @@ func (r *reader) readQuoteCandidates(
 	reservations liquidlane.CapacityReservations,
 ) ([]liquidlane.QuoteCandidate, error) {
 	matching := make([]liquidlane.Inventory, 0, len(inventory))
-	for _, item := range withoutReservedDiscounts(inventory, reservations) {
+	for _, item := range inventory {
 		if item.TokenIn == tokenIn && item.TokenOut == tokenOut {
 			matching = append(matching, item)
 		}

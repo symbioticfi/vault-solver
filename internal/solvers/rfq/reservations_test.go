@@ -150,18 +150,68 @@ func TestStoreReservationNeverOutlivesOrder(t *testing.T) {
 	}
 }
 
-func TestReservedDiscountIsNotOfferedAgain(t *testing.T) {
+func TestFillPlanReservations(t *testing.T) {
 	id := common.HexToHash("0xab")
-	other := common.HexToHash("0xcd")
-	route := testInventory(vlt, tIn, tOut, maxUint256(), maxUint256()).Route
-	taken := liquidlane.DiscountInventory(route, big.NewInt(1), big.NewInt(1), id, time.Unix(1, 0))
-	free := liquidlane.DiscountInventory(route, big.NewInt(1), big.NewInt(1), other, time.Unix(1, 0))
-	reservations := liquidlane.CapacityReservations{}
-	reservations.Add(discountReservationID(id), big.NewInt(1))
+	inventory := testInventory(vlt, tIn, tOut, maxUint256(), maxUint256())
+	direct := liquidlane.QuoteCandidate{Route: inventory.Route}
+	discounted := liquidlane.QuoteCandidate{Route: inventory.Route, DiscountID: &id}
+	capacityOnly := func(amount int64) liquidlane.CapacityReservations {
+		out := liquidlane.CapacityReservations{}
+		out.Add(vltFillCapacity(), big.NewInt(amount))
+		return out
+	}
 
-	got := withoutReservedDiscounts([]solverInventory{taken, free}, reservations)
-	if len(got) != 1 || *got[0].DiscountID != other {
-		t.Fatalf("inventory = %+v, want only the unreserved discount", got)
+	for _, tc := range []struct {
+		name       string
+		legs       []fillLeg
+		candidates []liquidlane.QuoteCandidate
+		want       liquidlane.CapacityReservations
+		wantErr    bool
+	}{
+		{
+			name:       "direct leg reserves its output",
+			legs:       []fillLeg{{Adapter: vlt, AmountOut: big.NewInt(5)}},
+			candidates: []liquidlane.QuoteCandidate{direct},
+			want:       capacityOnly(5),
+		},
+		{
+			// The adapter never consumes a discount nonce, so only vault capacity is held.
+			name:       "discount leg reserves capacity, not the discount",
+			legs:       []fillLeg{{Adapter: vlt, AmountOut: big.NewInt(7), DiscountID: &id}},
+			candidates: []liquidlane.QuoteCandidate{direct, discounted},
+			want:       capacityOnly(7),
+		},
+		{
+			name:       "legs on one vault accumulate",
+			legs:       []fillLeg{{Adapter: vlt, AmountOut: big.NewInt(2)}, {Adapter: vlt, AmountOut: big.NewInt(3), DiscountID: &id}},
+			candidates: []liquidlane.QuoteCandidate{direct, discounted},
+			want:       capacityOnly(5),
+		},
+		{
+			name:       "unmatched leg fails closed",
+			legs:       []fillLeg{{Adapter: vlt, AmountOut: big.NewInt(1), DiscountID: &id}},
+			candidates: []liquidlane.QuoteCandidate{direct},
+			wantErr:    true,
+		},
+		{name: "empty plan fails", candidates: []liquidlane.QuoteCandidate{direct}, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := fillPlanReservations(&fillPlan{Legs: tc.legs}, tc.candidates)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if tc.wantErr {
+				return
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("reservations = %v, want %v", got, tc.want)
+			}
+			for capacityID, amount := range tc.want {
+				if got[capacityID] == nil || got[capacityID].Cmp(amount) != 0 {
+					t.Fatalf("reservations = %v, want %v", got, tc.want)
+				}
+			}
+		})
 	}
 }
 

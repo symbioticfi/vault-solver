@@ -117,12 +117,14 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 - **Won orders reserve liquidity until they finish.** The store owns a `liquidlane.CapacityLedger` keyed by
   order ID. The poll loop plans and reserves each newly won order as soon as it is polled, whether or not
   another transaction occupies the lane. The submitter plans it again from fresh state right before sending
-  and replaces the reservation. A reservation holds each leg's output per physical vault capacity, plus the
-  single-use discount ID of a discount leg. It is released only when the order leaves the active set (filled,
-  expired or failed); a cancellation retry keeps it, and a failure without a recorded hash that the backend
-  still lists open is reserved again when re-armed. Quotes pass every reservation, and fill planning every
-  reservation except the order's own, to `AllocateInventoryCapacity`; reserved discounts are dropped from
-  inventory. A plan leg that matches no candidate fails closed, since its liquidity could not be reserved.
+  and replaces the reservation. A reservation holds each leg's output per physical vault capacity, whether
+  the leg is direct or discounted. Discounts themselves are not held: `LiquidLaneAdapter` checks but never
+  consumes a discount's nonce, so one discount can back any number of fills until it is revoked or expires.
+  A reservation is released only when the order leaves the active set (filled, expired or failed); a
+  cancellation retry keeps it, and a failure without a recorded hash that the backend still lists open is
+  reserved again when re-armed. Quotes pass every reservation, and fill planning every reservation except the
+  order's own, to `AllocateInventoryCapacity`. A plan leg that matches no candidate fails closed, since its
+  liquidity could not be reserved.
   The ledger is process-local and does not survive restart.
 - **Polling never waits on a transaction.** The poll loop polls, reserves and reconciles. A single submitter
   goroutine sends won orders oldest award first, because the shared nonce lane admits one fill at a time;

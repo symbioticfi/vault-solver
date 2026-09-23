@@ -99,7 +99,7 @@ quoted output at the available `maxAssets` instead of declining in every token s
 is reflected as worse execution price and price impact. Awarded orders are planned again from current
 LiquidLane state at fill time; the solver does not retain quote-time route plans.
 RFQ keeps quoting while fills are queued or pending. As soon as a won order is polled, its planned output
-is reserved against the vault capacity it spends, and single-use discounts it uses are held. Quotes and
+is reserved against the vault capacity it spends, including capacity reached through a discount. Quotes and
 later fill plans subtract every reservation until the order is filled, expires or fails. Fills are still
 sent one at a time on the shared nonce lane. Reservations are local to the process and are not restored
 after a restart.
