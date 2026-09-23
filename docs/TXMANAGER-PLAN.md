@@ -152,8 +152,10 @@ An empty cancellation URL preserves the ordinary write route; a configured endpo
 cross-endpoint fallback. `txmanager` selects the optional `SendCancellationTransaction` backend capability
 only for cancellation attempts; plain EVM backends without that capability keep using `SendTransaction`.
 Fee, receipt and state reads use the ordinary read client/fallbacks. Signed bytes are never automatically
-replayed across read endpoints. Balance telemetry prefers the write endpoint and can fall back to the
-read client when a submission-only relay does not support balance reads. General transport behavior
+replayed across read endpoints. Account telemetry (balance plus mined and pending nonce gauges) reads only
+through the read client, via the optional `accountTelemetryBackend` capability `chain.Client` provides, so a
+submission relay that rate-limits reads never stalls the refresh; its pending nonce may lag a private
+submission until the primary RPC sees it, which is acceptable for a gauge and never used for admission. General transport behavior
 remains documented in the [README configuration section](../README.md#configuration).
 
 Startup requires write-endpoint latest and pending nonces to agree. Standard nonce methods cannot reveal
@@ -238,9 +240,9 @@ Definitions: [metrics.go](../internal/txmanager/metrics.go),
 | Txmanager | `solver_bot_txmanager_lifecycle_duration_seconds` | `label`, `outcome` | Time from worker admission through broadcast and terminal tracking. It excludes pre-admission nonce-lane wait, so use admission rejections alongside its latency distribution. |
 | Txmanager | `solver_bot_txmanager_phase_duration_seconds` | `label`, `phase`, `outcome` | Time spent in each reached worker phase: `prebroadcast`, `pending`, or `confirming`. Reorgs may return a lifecycle to `pending`; the emitted sample contains the cumulative time spent in that phase. |
 | Txmanager | `solver_bot_txmanager_account_info` | `address` | Constant `1` identifying the active public transaction-sender address; absent when no configured solver starts txmanager. Private key material is never exposed. |
-| Txmanager | `solver_bot_txmanager_account_balance_wei` | — | Last complete native-token balance snapshot of the sender; absent until the first successful complete refresh. A distinct write endpoint is tried first, then the fallback-capable read client if the submission endpoint does not serve balance reads. |
+| Txmanager | `solver_bot_txmanager_account_balance_wei` | — | Last complete native-token balance snapshot of the sender; absent until the first successful complete refresh. Read through the read client, never the write endpoint. |
 | Txmanager | `solver_bot_txmanager_account_latest_nonce` | — | Mined nonce from the same complete snapshot; absent until the first successful refresh. |
-| Txmanager | `solver_bot_txmanager_account_pending_nonce` | — | Pending nonce from the same complete snapshot; compare with latest nonce to detect unknown pending work. It is absent until the first successful refresh. |
+| Txmanager | `solver_bot_txmanager_account_pending_nonce` | — | Pending nonce from the same complete snapshot as the primary read RPC sees it, so it may lag a privately submitted transaction; compare with latest nonce to detect unknown pending work. It is absent until the first successful refresh. |
 | Txmanager | `solver_bot_txmanager_account_refreshes_total` | `outcome` | Complete periodic account snapshots classified as `success` or `error`; failed reads retain the previous scrape-consistent snapshot. |
 | Txmanager | `solver_bot_txmanager_account_last_successful_refresh_timestamp` | — | Freshness of the retained balance and nonce snapshot; absent until the first successful refresh. |
 

@@ -206,3 +206,60 @@ func gatherAccountSnapshot(t *testing.T, gatherer prometheus.Gatherer) accountSn
 	}
 	return snapshot
 }
+
+// A backend that serves the read-endpoint snapshot must be the only thing the refresh touches:
+// the write-endpoint balance and nonce reads used by admission are never called.
+type accountSnapshotTestBackend struct {
+	*accountMetricsBackend
+
+	writeReads int
+}
+
+func (b *accountSnapshotTestBackend) ReadBalanceAt(context.Context, common.Address) (*big.Int, error) {
+	return big.NewInt(7), nil
+}
+
+func (b *accountSnapshotTestBackend) ReadNonces(context.Context, common.Address) (latestNonce, pendingNonce uint64, err error) {
+	return 21, 22, nil
+}
+
+func (b *accountSnapshotTestBackend) TransactionSenderBalanceAt(context.Context, common.Address, *big.Int) (*big.Int, error) {
+	b.writeReads++
+	return nil, errors.New("write endpoint must not serve telemetry")
+}
+
+func (b *accountSnapshotTestBackend) NonceAt(context.Context, common.Address, *big.Int) (uint64, error) {
+	b.writeReads++
+	return 0, errors.New("write endpoint must not serve telemetry")
+}
+
+func (b *accountSnapshotTestBackend) PendingNonceAt(context.Context, common.Address) (uint64, error) {
+	b.writeReads++
+	return 0, errors.New("write endpoint must not serve telemetry")
+}
+
+func TestAccountRefreshPrefersReadEndpointSnapshot(t *testing.T) {
+	backend := &accountSnapshotTestBackend{accountMetricsBackend: &accountMetricsBackend{
+		mockBackend: newMockBackend(), balance: big.NewInt(1),
+	}}
+	reg := prometheus.NewRegistry()
+	metrics, err := NewMetrics(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metrics.account.now = func() time.Time { return time.Unix(5, 0) }
+	sgnr := mustSigner(t)
+	metrics.bindAccount(sgnr.Address())
+	manager := NewWithMetrics(backend, sgnr, big.NewInt(11155111), Config{}, metrics, logr.Discard())
+
+	manager.refreshAccount(t.Context())
+
+	want := accountSnapshot{balanceWei: 7, latestNonce: 21, pendingNonce: 22, refreshedAt: 5}
+	if got := gatherAccountSnapshot(t, reg); got != want {
+		t.Fatalf("account snapshot = %+v, want %+v", got, want)
+	}
+	if backend.writeReads != 0 {
+		t.Fatalf("refresh made %d write-endpoint reads, want none", backend.writeReads)
+	}
+	assertAccountRefreshes(t, metrics.account, 1, 0)
+}
