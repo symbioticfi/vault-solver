@@ -45,6 +45,11 @@ type ThreeFAdapter struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *ThreeFAdapter) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewThreeFAdapter creates a new instance of ThreeFAdapter.
 func NewThreeFAdapter() *ThreeFAdapter {
 	parsed, err := ThreeFAdapterMetaData.ParseABI()
@@ -998,8 +1003,11 @@ func (ThreeFAdapterFinalizeRequest) ContractEventName() string {
 // Solidity: event FinalizeRequest(address indexed request)
 func (threeFAdapter *ThreeFAdapter) UnpackFinalizeRequestEvent(log *types.Log) (*ThreeFAdapterFinalizeRequest, error) {
 	event := "FinalizeRequest"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != threeFAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ThreeFAdapterFinalizeRequest)
 	if len(log.Data) > 0 {
@@ -1039,8 +1047,11 @@ func (ThreeFAdapterInitialized) ContractEventName() string {
 // Solidity: event Initialized(uint64 version)
 func (threeFAdapter *ThreeFAdapter) UnpackInitializedEvent(log *types.Log) (*ThreeFAdapterInitialized, error) {
 	event := "Initialized"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != threeFAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ThreeFAdapterInitialized)
 	if len(log.Data) > 0 {
@@ -1083,8 +1094,11 @@ func (ThreeFAdapterOnRequestConsumed) ContractEventName() string {
 // Solidity: event OnRequestConsumed(address indexed request, (address,uint256,uint256,uint256,uint256,bool) offer, uint256 principalAssets, uint256 yieldAssets)
 func (threeFAdapter *ThreeFAdapter) UnpackOnRequestConsumedEvent(log *types.Log) (*ThreeFAdapterOnRequestConsumed, error) {
 	event := "OnRequestConsumed"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != threeFAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ThreeFAdapterOnRequestConsumed)
 	if len(log.Data) > 0 {
@@ -1125,8 +1139,11 @@ func (ThreeFAdapterOwnershipTransferred) ContractEventName() string {
 // Solidity: event OwnershipTransferred(address indexed previousOwner, address indexed newOwner)
 func (threeFAdapter *ThreeFAdapter) UnpackOwnershipTransferredEvent(log *types.Log) (*ThreeFAdapterOwnershipTransferred, error) {
 	event := "OwnershipTransferred"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != threeFAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ThreeFAdapterOwnershipTransferred)
 	if len(log.Data) > 0 {
@@ -1168,8 +1185,11 @@ func (ThreeFAdapterSetLimitsPerRequest) ContractEventName() string {
 // Solidity: event SetLimitsPerRequest(uint256 minYieldPerRequest, uint256 minAssetsPerRequest, uint256 maxAssetsPerRequest)
 func (threeFAdapter *ThreeFAdapter) UnpackSetLimitsPerRequestEvent(log *types.Log) (*ThreeFAdapterSetLimitsPerRequest, error) {
 	event := "SetLimitsPerRequest"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != threeFAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ThreeFAdapterSetLimitsPerRequest)
 	if len(log.Data) > 0 {
@@ -1209,8 +1229,11 @@ func (ThreeFAdapterSetOfferSigner) ContractEventName() string {
 // Solidity: event SetOfferSigner(address indexed offerSigner)
 func (threeFAdapter *ThreeFAdapter) UnpackSetOfferSignerEvent(log *types.Log) (*ThreeFAdapterSetOfferSigner, error) {
 	event := "SetOfferSigner"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != threeFAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ThreeFAdapterSetOfferSigner)
 	if len(log.Data) > 0 {
@@ -1250,8 +1273,11 @@ func (ThreeFAdapterSetVault) ContractEventName() string {
 // Solidity: event SetVault(address indexed vault)
 func (threeFAdapter *ThreeFAdapter) UnpackSetVaultEvent(log *types.Log) (*ThreeFAdapterSetVault, error) {
 	event := "SetVault"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != threeFAdapter.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ThreeFAdapterSetVault)
 	if len(log.Data) > 0 {

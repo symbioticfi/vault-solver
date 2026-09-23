@@ -54,6 +54,11 @@ type AdaptiveCurveIrm struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *AdaptiveCurveIrm) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewAdaptiveCurveIrm creates a new instance of AdaptiveCurveIrm.
 func NewAdaptiveCurveIrm() *AdaptiveCurveIrm {
 	parsed, err := AdaptiveCurveIrmMetaData.ParseABI()

@@ -35,6 +35,11 @@ type UniversalDelegator struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *UniversalDelegator) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewUniversalDelegator creates a new instance of UniversalDelegator.
 func NewUniversalDelegator() *UniversalDelegator {
 	parsed, err := UniversalDelegatorMetaData.ParseABI()

@@ -35,6 +35,11 @@ type FrontendLiquidityLens struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *FrontendLiquidityLens) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewFrontendLiquidityLens creates a new instance of FrontendLiquidityLens.
 func NewFrontendLiquidityLens() *FrontendLiquidityLens {
 	parsed, err := FrontendLiquidityLensMetaData.ParseABI()

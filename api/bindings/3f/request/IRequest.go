@@ -45,6 +45,11 @@ type IRequest struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *IRequest) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewIRequest creates a new instance of IRequest.
 func NewIRequest() *IRequest {
 	parsed, err := IRequestMetaData.ParseABI()
@@ -502,8 +507,11 @@ func (IRequestAuthorizedMinting) ContractEventName() string {
 // Solidity: event AuthorizedMinting(address indexed to, uint256 ptAmount, uint256 ytAmount)
 func (iRequest *IRequest) UnpackAuthorizedMintingEvent(log *types.Log) (*IRequestAuthorizedMinting, error) {
 	event := "AuthorizedMinting"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iRequest.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IRequestAuthorizedMinting)
 	if len(log.Data) > 0 {
@@ -544,8 +552,11 @@ func (IRequestFundsPulled) ContractEventName() string {
 // Solidity: event FundsPulled(address indexed puller, uint256 amount)
 func (iRequest *IRequest) UnpackFundsPulledEvent(log *types.Log) (*IRequestFundsPulled, error) {
 	event := "FundsPulled"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iRequest.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IRequestFundsPulled)
 	if len(log.Data) > 0 {
@@ -585,8 +596,11 @@ func (IRequestMintToRepaidDelaySet) ContractEventName() string {
 // Solidity: event MintToRepaidDelaySet(uint40 mintToRepaidDelay)
 func (iRequest *IRequest) UnpackMintToRepaidDelaySetEvent(log *types.Log) (*IRequestMintToRepaidDelaySet, error) {
 	event := "MintToRepaidDelaySet"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iRequest.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IRequestMintToRepaidDelaySet)
 	if len(log.Data) > 0 {
@@ -626,8 +640,11 @@ func (IRequestRepaid) ContractEventName() string {
 // Solidity: event Repaid(uint256 amount)
 func (iRequest *IRequest) UnpackRepaidEvent(log *types.Log) (*IRequestRepaid, error) {
 	event := "Repaid"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iRequest.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IRequestRepaid)
 	if len(log.Data) > 0 {

@@ -35,6 +35,11 @@ type ERC20 struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *ERC20) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewERC20 creates a new instance of ERC20.
 func NewERC20() *ERC20 {
 	parsed, err := ERC20MetaData.ParseABI()
