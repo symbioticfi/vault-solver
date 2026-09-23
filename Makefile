@@ -7,11 +7,11 @@ SHELL := bash
 .DEFAULT_GOAL := help
 
 # Pinned codegen tool versions.
-ABIGEN_VERSION           ?= v1.17.5
+ABIGEN_VERSION           ?= v1.17.6
 GOLANGCI_LINT_VERSION    ?= v2.13.2
 GENQLIENT_VERSION        ?= v0.8.1
 GQLFETCH_VERSION         ?= v0.7.0
-GENQLIENT_X_TOOLS_VERSION ?= v0.49.0
+GENQLIENT_X_TOOLS_VERSION ?= v0.50.0
 # Java openapi-generator (downloaded on demand by hack/openapi-generator-cli.sh). 7.12.0 is the floor:
 # it ingests OpenAPI 3.1 (the RFQ backend spec); 5.4.0/7.0.1 fail on it.
 OPENAPI_GENERATOR_VERSION ?= 7.25.0

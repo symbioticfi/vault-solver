@@ -35,6 +35,11 @@ type IERC4626 struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *IERC4626) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewIERC4626 creates a new instance of IERC4626.
 func NewIERC4626() *IERC4626 {
 	parsed, err := IERC4626MetaData.ParseABI()
@@ -946,8 +951,11 @@ func (IERC4626Approval) ContractEventName() string {
 // Solidity: event Approval(address indexed owner, address indexed spender, uint256 value)
 func (iERC4626 *IERC4626) UnpackApprovalEvent(log *types.Log) (*IERC4626Approval, error) {
 	event := "Approval"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iERC4626.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IERC4626Approval)
 	if len(log.Data) > 0 {
@@ -990,8 +998,11 @@ func (IERC4626Deposit) ContractEventName() string {
 // Solidity: event Deposit(address indexed sender, address indexed owner, uint256 assets, uint256 shares)
 func (iERC4626 *IERC4626) UnpackDepositEvent(log *types.Log) (*IERC4626Deposit, error) {
 	event := "Deposit"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iERC4626.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IERC4626Deposit)
 	if len(log.Data) > 0 {
@@ -1033,8 +1044,11 @@ func (IERC4626Transfer) ContractEventName() string {
 // Solidity: event Transfer(address indexed from, address indexed to, uint256 value)
 func (iERC4626 *IERC4626) UnpackTransferEvent(log *types.Log) (*IERC4626Transfer, error) {
 	event := "Transfer"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iERC4626.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IERC4626Transfer)
 	if len(log.Data) > 0 {
@@ -1078,8 +1092,11 @@ func (IERC4626Withdraw) ContractEventName() string {
 // Solidity: event Withdraw(address indexed sender, address indexed receiver, address indexed owner, uint256 assets, uint256 shares)
 func (iERC4626 *IERC4626) UnpackWithdrawEvent(log *types.Log) (*IERC4626Withdraw, error) {
 	event := "Withdraw"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iERC4626.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IERC4626Withdraw)
 	if len(log.Data) > 0 {

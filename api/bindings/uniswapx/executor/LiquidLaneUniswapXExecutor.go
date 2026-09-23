@@ -112,6 +112,11 @@ type LiquidLaneUniswapXExecutor struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *LiquidLaneUniswapXExecutor) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewLiquidLaneUniswapXExecutor creates a new instance of LiquidLaneUniswapXExecutor.
 func NewLiquidLaneUniswapXExecutor() *LiquidLaneUniswapXExecutor {
 	parsed, err := LiquidLaneUniswapXExecutorMetaData.ParseABI()
@@ -360,8 +365,11 @@ func (LiquidLaneUniswapXExecutorInitialized) ContractEventName() string {
 // Solidity: event Initialized(uint64 version)
 func (liquidLaneUniswapXExecutor *LiquidLaneUniswapXExecutor) UnpackInitializedEvent(log *types.Log) (*LiquidLaneUniswapXExecutorInitialized, error) {
 	event := "Initialized"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneUniswapXExecutor.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneUniswapXExecutorInitialized)
 	if len(log.Data) > 0 {
@@ -402,8 +410,11 @@ func (LiquidLaneUniswapXExecutorOwnershipTransferred) ContractEventName() string
 // Solidity: event OwnershipTransferred(address indexed previousOwner, address indexed newOwner)
 func (liquidLaneUniswapXExecutor *LiquidLaneUniswapXExecutor) UnpackOwnershipTransferredEvent(log *types.Log) (*LiquidLaneUniswapXExecutorOwnershipTransferred, error) {
 	event := "OwnershipTransferred"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneUniswapXExecutor.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneUniswapXExecutorOwnershipTransferred)
 	if len(log.Data) > 0 {
@@ -443,8 +454,11 @@ func (LiquidLaneUniswapXExecutorSetCallers) ContractEventName() string {
 // Solidity: event SetCallers(address[] newCallers)
 func (liquidLaneUniswapXExecutor *LiquidLaneUniswapXExecutor) UnpackSetCallersEvent(log *types.Log) (*LiquidLaneUniswapXExecutorSetCallers, error) {
 	event := "SetCallers"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != liquidLaneUniswapXExecutor.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(LiquidLaneUniswapXExecutorSetCallers)
 	if len(log.Data) > 0 {

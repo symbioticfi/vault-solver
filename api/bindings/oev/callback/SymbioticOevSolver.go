@@ -35,6 +35,11 @@ type SymbioticOevSolver struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *SymbioticOevSolver) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewSymbioticOevSolver creates a new instance of SymbioticOevSolver.
 func NewSymbioticOevSolver() *SymbioticOevSolver {
 	parsed, err := SymbioticOevSolverMetaData.ParseABI()
@@ -427,8 +432,11 @@ func (SymbioticOevSolverBundleResult) ContractEventName() string {
 // Solidity: event BundleResult(bytes32 indexed auctionKey, uint256 totalProfitLoan, uint256 minProfitLoan, uint256 gasUsed, bool bidAuthorized)
 func (symbioticOevSolver *SymbioticOevSolver) UnpackBundleResultEvent(log *types.Log) (*SymbioticOevSolverBundleResult, error) {
 	event := "BundleResult"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != symbioticOevSolver.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(SymbioticOevSolverBundleResult)
 	if len(log.Data) > 0 {
@@ -475,8 +483,11 @@ func (SymbioticOevSolverLegResult) ContractEventName() string {
 // Solidity: event LegResult(bytes32 indexed auctionKey, bytes32 indexed marketId, address indexed borrower, uint256 code, uint256 seizedAssets, uint256 repaidAssets, uint256 profitLoan, uint256 gasUsed)
 func (symbioticOevSolver *SymbioticOevSolver) UnpackLegResultEvent(log *types.Log) (*SymbioticOevSolverLegResult, error) {
 	event := "LegResult"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != symbioticOevSolver.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(SymbioticOevSolverLegResult)
 	if len(log.Data) > 0 {
@@ -517,8 +528,11 @@ func (SymbioticOevSolverOwnerUpdated) ContractEventName() string {
 // Solidity: event OwnerUpdated(address indexed previous, address indexed next)
 func (symbioticOevSolver *SymbioticOevSolver) UnpackOwnerUpdatedEvent(log *types.Log) (*SymbioticOevSolverOwnerUpdated, error) {
 	event := "OwnerUpdated"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != symbioticOevSolver.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(SymbioticOevSolverOwnerUpdated)
 	if len(log.Data) > 0 {
@@ -560,8 +574,11 @@ func (SymbioticOevSolverPayBidResult) ContractEventName() string {
 // Solidity: event PayBidResult(bytes32 indexed auctionKey, uint256 bidAmount, bool paid)
 func (symbioticOevSolver *SymbioticOevSolver) UnpackPayBidResultEvent(log *types.Log) (*SymbioticOevSolverPayBidResult, error) {
 	event := "PayBidResult"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != symbioticOevSolver.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(SymbioticOevSolverPayBidResult)
 	if len(log.Data) > 0 {

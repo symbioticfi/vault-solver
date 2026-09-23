@@ -35,6 +35,11 @@ type IWhitelist struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *IWhitelist) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewIWhitelist creates a new instance of IWhitelist.
 func NewIWhitelist() *IWhitelist {
 	parsed, err := IWhitelistMetaData.ParseABI()

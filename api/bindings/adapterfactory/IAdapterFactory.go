@@ -35,6 +35,11 @@ type IAdapterFactory struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *IAdapterFactory) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewIAdapterFactory creates a new instance of IAdapterFactory.
 func NewIAdapterFactory() *IAdapterFactory {
 	parsed, err := IAdapterFactoryMetaData.ParseABI()
@@ -380,8 +385,11 @@ func (IAdapterFactoryAddEntity) ContractEventName() string {
 // Solidity: event AddEntity(address indexed entity)
 func (iAdapterFactory *IAdapterFactory) UnpackAddEntityEvent(log *types.Log) (*IAdapterFactoryAddEntity, error) {
 	event := "AddEntity"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iAdapterFactory.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IAdapterFactoryAddEntity)
 	if len(log.Data) > 0 {
@@ -421,8 +429,11 @@ func (IAdapterFactoryBlacklist) ContractEventName() string {
 // Solidity: event Blacklist(uint64 indexed version)
 func (iAdapterFactory *IAdapterFactory) UnpackBlacklistEvent(log *types.Log) (*IAdapterFactoryBlacklist, error) {
 	event := "Blacklist"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iAdapterFactory.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IAdapterFactoryBlacklist)
 	if len(log.Data) > 0 {
@@ -463,8 +474,11 @@ func (IAdapterFactoryMigrate) ContractEventName() string {
 // Solidity: event Migrate(address indexed entity, uint64 newVersion)
 func (iAdapterFactory *IAdapterFactory) UnpackMigrateEvent(log *types.Log) (*IAdapterFactoryMigrate, error) {
 	event := "Migrate"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iAdapterFactory.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IAdapterFactoryMigrate)
 	if len(log.Data) > 0 {
@@ -504,8 +518,11 @@ func (IAdapterFactoryWhitelist) ContractEventName() string {
 // Solidity: event Whitelist(address indexed implementation)
 func (iAdapterFactory *IAdapterFactory) UnpackWhitelistEvent(log *types.Log) (*IAdapterFactoryWhitelist, error) {
 	event := "Whitelist"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != iAdapterFactory.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(IAdapterFactoryWhitelist)
 	if len(log.Data) > 0 {

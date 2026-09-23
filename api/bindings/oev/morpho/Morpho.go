@@ -35,6 +35,11 @@ type Morpho struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *Morpho) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewMorpho creates a new instance of Morpho.
 func NewMorpho() *Morpho {
 	parsed, err := MorphoMetaData.ParseABI()

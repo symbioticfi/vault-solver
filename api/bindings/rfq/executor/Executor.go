@@ -101,6 +101,11 @@ type Executor struct {
 	abi abi.ABI
 }
 
+// GetABI returns the ABI associated with this contract binding.
+func (c *Executor) GetABI() abi.ABI {
+	return c.abi
+}
+
 // NewExecutor creates a new instance of Executor.
 func NewExecutor() *Executor {
 	parsed, err := ExecutorMetaData.ParseABI()
@@ -372,8 +377,11 @@ func (ExecutorOwnershipTransferred) ContractEventName() string {
 // Solidity: event OwnershipTransferred(address indexed previousOwner, address indexed newOwner)
 func (executor *Executor) UnpackOwnershipTransferredEvent(log *types.Log) (*ExecutorOwnershipTransferred, error) {
 	event := "OwnershipTransferred"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != executor.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ExecutorOwnershipTransferred)
 	if len(log.Data) > 0 {
@@ -413,8 +421,11 @@ func (ExecutorSetCallers) ContractEventName() string {
 // Solidity: event SetCallers(address[] newCallers)
 func (executor *Executor) UnpackSetCallersEvent(log *types.Log) (*ExecutorSetCallers, error) {
 	event := "SetCallers"
+	if len(log.Topics) == 0 {
+		return nil, bind.ErrNoEventSignature
+	}
 	if log.Topics[0] != executor.abi.Events[event].ID {
-		return nil, errors.New("event signature mismatch")
+		return nil, bind.ErrEventSignatureMismatch
 	}
 	out := new(ExecutorSetCallers)
 	if len(log.Data) > 0 {
