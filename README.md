@@ -637,7 +637,10 @@ fail-closed for operator investigation; automatic restart does not recover the l
 For controlled maintenance, stop the service and reconcile outstanding private submissions before bringing
 the EOA back.
 
-Runtime nonce collisions pause admission/readiness until ownership is established. See
+Before replacing or rebroadcasting a pending transaction, the manager checks the latest mined nonce.
+If it has already been consumed, broadcasting stops and tracked receipts are reconciled even when the
+submission RPC previously returned success. A failed nonce read defers the replacement until a later
+attempt. Unexplained nonce consumption pauses admission/readiness until ownership is established. See
 [nonce conflict and restart behavior](docs/TXMANAGER-PLAN.md#6-rpc-routing-nonce-conflicts-and-restart)
 for exact-hash reconciliation and reorg handling. LiquidLane state reads always use RPC `latest`; an archive node
 is not required.

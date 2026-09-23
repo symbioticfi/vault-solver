@@ -22,6 +22,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-logr/logr"
@@ -34,6 +35,62 @@ func TestAnvilTxManagerPendingLifecycle(t *testing.T) {
 	t.Run("fee bump replacement", testAnvilReplacement)
 	t.Run("timeout cancellation unblocks later nonce", func(t *testing.T) { testAnvilCancellation(t, false) })
 	t.Run("dedicated cancellation RPC unblocks later nonce", func(t *testing.T) { testAnvilCancellation(t, true) })
+	t.Run("external inclusion stops silent relay cancellations", testAnvilConsumedNonce)
+}
+
+// Reads use a real chain; sends model a private relay that acknowledges the
+// signed bytes without forwarding them or checking the mined nonce.
+type acceptingAnvilRelay struct {
+	*ethclient.Client
+
+	sends int
+}
+
+func (b *acceptingAnvilRelay) SendTransaction(context.Context, *types.Transaction) error {
+	b.sends++
+	return nil
+}
+
+func testAnvilConsumedNonce(t *testing.T) {
+	t.Helper()
+	rpcClient, ethClient, _ := startAnvilWithoutMining(t)
+	relay := &acceptingAnvilRelay{Client: ethClient}
+	sgnr := anvilSigner(t)
+	m := New(relay, sgnr, big.NewInt(31337), Config{MaxFeeGwei: 100, TipGwei: 1}, logr.Discard())
+	pending, err := m.broadcast(t.Context(), Request{
+		To: common.HexToAddress("0xdead"), GasLimit: 21_000, Label: "private fill",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A different instance uses the same key and nonce with different calldata.
+	to := common.HexToAddress("0xbeef")
+	external, err := sgnr.SignTx(t.Context(), types.NewTx(&types.DynamicFeeTx{
+		ChainID: big.NewInt(31337), Nonce: 0, To: &to, Gas: 21_000,
+		GasFeeCap: big.NewInt(10_000_000_000), GasTipCap: big.NewInt(1_000_000_000),
+	}), big.NewInt(31337))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ethClient.SendTransaction(t.Context(), external); err != nil {
+		t.Fatal(err)
+	}
+	mineAnvilBlock(t, rpcClient)
+	receipt, err := ethClient.TransactionReceipt(t.Context(), external.Hash())
+	if err != nil || receipt.Status != types.ReceiptStatusSuccessful {
+		t.Fatalf("external inclusion: receipt=%+v err=%v", receipt, err)
+	}
+	for range 3 {
+		if _, err := m.tryReplace(t.Context(), pending, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if relay.sends != 1 || len(pending.attempts) != 1 || m.Available() {
+		t.Fatalf("consumed nonce was not paused: sends=%d attempts=%d available=%v", relay.sends, len(pending.attempts), m.Available())
+	}
+	if result, done := m.receiptResult(t.Context(), pending); done {
+		t.Fatalf("unrelated receipt completed our lifecycle: %+v", result)
+	}
 }
 
 func testAnvilReplacement(t *testing.T) {

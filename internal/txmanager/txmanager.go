@@ -141,6 +141,7 @@ type pendingTransaction struct {
 	nonceConflictHash common.Hash
 	originalHash      common.Hash
 	receiptReads      readStreak
+	nonceReads        readStreak
 	obsolescenceReads readStreak
 	result            chan<- Result
 	resultOnce        sync.Once
@@ -1138,6 +1139,9 @@ func (m *Manager) tryReplace(
 		return cancellation, nil
 	}
 	cancellation = cancellation || pending.cancellationDue(time.Now())
+	if available, err := m.replacementNonceAvailable(ctx, pending); err != nil || !available {
+		return cancellation, err
+	}
 	if !cancellation && m.rebroadcastUncertainAttempt(ctx, pending) {
 		return false, nil
 	}
