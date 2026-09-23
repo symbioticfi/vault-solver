@@ -526,6 +526,11 @@ result also advances `settled_success` or `settled_failed`, so lifecycle dashboa
 Event timestamps reset to `0` on restart; use `max_over_time(...[$__range])` when a dashboard should
 retain a pre-restart observation inside its selected range.
 
+3F skips adapters with a zero offer signer, vault, or asset without blocking snapshot freshness.
+Discovery failures and errors reading required `vault()`, `offerSigner()`, or `asset()` values still
+prevent a complete target snapshot. A reverted or malformed `isValidSignature()` response instead
+excludes the adapter as unauthorized without making discovery incomplete.
+
 External-operation labels are fixed at construction: 3F exposes `target_refresh`, `offer_refresh`,
 `active_request_refresh`, and `redeemable_refresh`; RFQ exposes `order_poll`; LI.FI exposes
 `quote_refresh`, `quote_suspend`, and `order_recovery`; UniswapX exposes `quote_refresh`,
