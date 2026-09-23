@@ -376,6 +376,122 @@ func TestQuoteUsesBackendSnapshotBlock(t *testing.T) {
 	}
 }
 
+// A confirmed spend outlives the order's terminal status: a snapshot read before the inclusion block
+// still subtracts it after the backend reports the order filled. Only sweeping the record drops it.
+func TestConfirmedSpendSurvivesFilledStatusForOlderSnapshots(t *testing.T) {
+	capacityID := vltFillCapacity()
+	item := func(block uint64) solverInventory {
+		inv := testInventory(vlt, tIn, tOut, maxUint256(), maxUint256())
+		inv.BlockNumber = block
+		return inv
+	}
+	now := time.Unix(0, 0)
+	st := newStore(func() time.Time { return now })
+	st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
+	held := liquidlane.CapacityReservations{}
+	held.Add(capacityID, big.NewInt(7))
+	if !st.reserve("o1", held) {
+		t.Fatal("reserve")
+	}
+	st.markIncluded("o1", 100)
+	st.markStatus("o1", statusFilled, common.Hash{}, "")
+
+	for _, tc := range []struct {
+		name       string
+		inventory  []solverInventory
+		subtracted bool
+	}{
+		{name: "older snapshot", inventory: []solverInventory{item(99)}, subtracted: true},
+		{name: "snapshot at inclusion", inventory: []solverInventory{item(100)}},
+		{name: "unknown snapshot block", inventory: []solverInventory{item(0)}},
+		{name: "no inventory", inventory: nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := st.pendingReservations("", tc.inventory)[capacityID]
+			if (got != nil) != tc.subtracted {
+				t.Fatalf("reserved = %v, want subtracted %v", got, tc.subtracted)
+			}
+		})
+	}
+
+	now = now.Add(terminalOrderTTL + time.Second)
+	st.sweep()
+	if st.reserved("o1") {
+		t.Fatal("swept order kept its spend")
+	}
+}
+
+// Fill-time state read after a confirmed fill already reflects it; the read's block decides
+// whether that still-open order's reservation is subtracted again.
+func TestFillPlanningSkipsConfirmedSpendFreshStateReflects(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		chainBlock uint64
+		want       orderStatus
+	}{
+		{name: "read at inclusion block fills", chainBlock: 100, want: statusFilled},
+		{name: "read before inclusion block subtracts", chainBlock: 99, want: statusFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, be := fillFixtures(t)
+			st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
+			st.upsertQueued(queuedOrder{OrderID: "prior", QuoteID: "q0"})
+			spent := liquidlane.CapacityReservations{}
+			spent.Add(vltFillCapacity(), big.NewInt(900000))
+			if !st.reserve("prior", spent) {
+				t.Fatal("reserve prior")
+			}
+			st.markIncluded("prior", 100)
+			st.markStatus("prior", statusSubmitted, common.HexToHash("0x1"), "") // backend still says open
+			txm := &fakeTxm{result: confirmedTxResult()}
+			e := newExec(t, st, be, txm)
+			e.strategy = newDefaultTestStrategy()
+			reader := e.reader.(*fakeRecoveryReader)
+			reader.chainBlock = tc.chainBlock
+			// Fresh on-chain capacity, already net of the prior fill: exactly enough for o1 alone.
+			reader.permInv = []solverInventory{testInventory(vlt, tIn, tOut, big.NewInt(1_000000), maxUint256())}
+
+			for _, o := range st.ordersAwaitingSubmission() {
+				if o.OrderID == "o1" {
+					e.handleOrder(t.Context(), o)
+				}
+			}
+
+			if rec := st.order("o1"); rec == nil || rec.Status != tc.want {
+				t.Fatalf("order = %+v, want %s", rec, tc.want)
+			}
+		})
+	}
+}
+
+// The deadline bound also applies from the poll loop, so an order that expires while the submitter is
+// busy releases its reservation without waiting for the submitter.
+func TestPollExpiresQueuedReservationWhileSubmitterBusy(t *testing.T) {
+	st, be := fillFixtures(t)
+	now := time.Unix(1_000, 0)
+	st.now = func() time.Time { return now }
+	e := newExec(t, st, be, &fakeTxm{result: confirmedTxResult()})
+	e.now = st.now
+	e.reader.(*fakeRecoveryReader).chainTime = time.Unix(4_102_444_700, 0)
+	e.sending.Store(true)
+
+	e.syncOnce(t.Context())
+	if !st.reserved("o1") {
+		t.Fatal("won order was not reserved")
+	}
+	be.executable, be.order, be.open = nil, nil, nil
+	now = now.Add(200 * time.Second)
+
+	e.syncOnce(t.Context()) // the submitter never runs
+
+	if rec := st.order("o1"); rec == nil || rec.Status != statusExpired {
+		t.Fatalf("order = %+v, want expired by the poll loop", rec)
+	}
+	if st.reserved("o1") {
+		t.Fatal("expired order kept its reservation")
+	}
+}
+
 // lockedBackend serializes the fake backend, which the poll loop and submitter now share.
 type lockedBackend struct {
 	mu    sync.Mutex

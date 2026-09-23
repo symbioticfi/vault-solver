@@ -118,18 +118,22 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   order ID. A newly won order is reserved on the poll cycle that first sees it: by the submitter's own plan
   when the submitter is idle, or by the poll loop when the submitter is busy with another fill, so an
   in-flight transaction never delays the reservation and an idle path plans each order only once. The
-  submitter always plans again from fresh state right before sending and replaces the reservation. A reservation holds each leg's output per physical vault capacity, whether
+  submitter always plans again from fresh state right before sending and replaces the reservation. The poll
+  loop also applies the order-deadline bound to queued orders, so one that expires while the submitter is busy
+  releases its reservation at once. A reservation holds each leg's output per physical vault capacity, whether
   the leg is direct or discounted. Discounts themselves are not held: `LiquidLaneAdapter` checks but never
   consumes a discount's nonce, so one discount can back any number of fills until it is revoked or expires.
   A reservation is released only when the order leaves the active set (filled, expired or failed); a
   cancellation retry keeps it, and a failure without a recorded hash that the backend still lists open is
   reserved again when re-armed. Quotes pass every reservation, and fill planning every reservation except the
-  order's own, to `AllocateInventoryCapacity`. A confirmed fill records its inclusion block on the order. The
-  backend reports the block each `/quote` adapter snapshot was read at (`adapters[].blockNumber`, optional
-  until production sends it); a snapshot read at or after the inclusion block already reflects the fill, so
-  that order's reservation is not subtracted from it, while an earlier or unreported block keeps the
-  subtraction. Fill-time reads report no block and subtract every other order. A plan leg that matches no
-  candidate fails closed, since its liquidity could not be reserved. Whichever path plans an order also records its chain deadline, translated
+  order's own, to `AllocateInventoryCapacity`. A confirmed fill records its inclusion block on the order, and
+  its spend then outlives the order's terminal status: it is only dropped when the terminal record is swept.
+  The backend reports the block each `/quote` adapter snapshot was read at (`adapters[].blockNumber`,
+  optional until production sends it), and fill-time reads carry the latest header's number read just
+  before them. A snapshot read at or after the inclusion block already reflects the fill and does not
+  subtract it; one read before it does, even after the backend reports the order filled. A snapshot with no
+  block subtracts only orders still active. A plan leg that matches no candidate fails closed, since its
+  liquidity could not be reserved. Whichever path plans an order also records its chain deadline, translated
   to wall time, as the bound on unsigned work, so an order the backend stops reporting expires locally, and
   releases its reservation, once a fill could no longer land.
   The ledger is process-local and does not survive restart.

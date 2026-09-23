@@ -27,12 +27,14 @@ func newReader(c *chain.Client, log logr.Logger, liquidityLens common.Address) *
 	return &reader{ll: liquidlane.NewReader(c, log, liquidityLens), chain: c, chainID: c.ChainID().Int64()}
 }
 
-func (r *reader) latestBlockTime(ctx context.Context) (time.Time, error) {
+// latestBlock returns the latest block's number and timestamp. Inventory read afterwards reflects at
+// least that block, so the number is a safe lower bound for reservation accounting.
+func (r *reader) latestBlock(ctx context.Context) (uint64, time.Time, error) {
 	header, err := r.chain.HeaderByNumber(ctx, nil)
 	if err != nil {
-		return time.Time{}, errors.Errorf("latest block header: %w", err)
+		return 0, time.Time{}, errors.Errorf("latest block header: %w", err)
 	}
-	return time.Unix(int64(header.Time), 0), nil
+	return header.Number.Uint64(), time.Unix(int64(header.Time), 0), nil
 }
 
 // recoveryVault is one configured LiquidLane adapter plus the Vault and Asset derived from it. Config

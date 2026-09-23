@@ -89,7 +89,7 @@ type executionService struct {
 // fillReader is the on-chain surface used to assemble fill-time strategy inputs.
 type fillReader interface {
 	quoteCandidateReader
-	latestBlockTime(ctx context.Context) (time.Time, error)
+	latestBlock(ctx context.Context) (uint64, time.Time, error)
 	readPermissionedVaultInventories(
 		ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,
 	) ([]solverInventory, error)
@@ -136,6 +136,7 @@ func (e *executionService) syncOnce(ctx context.Context) {
 		switch {
 		case !o.Status.awaitsSubmission():
 			e.handleOrder(ctx, o)
+		case e.expireQueued(o):
 		case e.sending.Load():
 			e.reserveWon(ctx, o)
 		}
@@ -172,6 +173,33 @@ func (e *executionService) wakeSubmitter() {
 	}
 }
 
+// expireUnsigned expires an order whose recorded deadline has passed while no transaction was signed
+// for it. A confirmed cancellation leaves no unresolved fill, so retry waiting and subsequent unsigned
+// preparation are bounded when backend views disappear; submitted/unknown inclusion keeps tracking.
+// The caller owns the order through the in-flight set, so a fill in Send is never expired.
+func (e *executionService) expireUnsigned(o *orderRecord) bool {
+	unsignedRetry := o.Status == statusRetryWaiting || o.Status == statusQueued || o.Status == statusSubmitting
+	if !unsignedRetry || o.RetryDeadline.IsZero() || e.now().Before(o.RetryDeadline) {
+		return false
+	}
+	e.store.markStatus(o.OrderID, statusExpired, common.Hash{}, "order deadline has passed")
+	return true
+}
+
+// expireQueued applies the deadline bound from the poll loop, so a queued order does not keep its
+// reservation past its deadline while the submitter is busy with another fill. An order the
+// submitter owns is left to it.
+func (e *executionService) expireQueued(o *orderRecord) bool {
+	if !e.acquire(o.OrderID) {
+		return false
+	}
+	defer e.release(o.OrderID)
+	if o = e.store.order(o.OrderID); o == nil || !o.Status.awaitsSubmission() {
+		return false
+	}
+	return e.expireUnsigned(o)
+}
+
 // reserveWon holds a won order's liquidity as soon as it is polled, before its turn on the
 // transaction lane. It records no outcome: submission plans again and owns every failure.
 func (e *executionService) reserveWon(ctx context.Context, o *orderRecord) {
@@ -191,10 +219,13 @@ func (e *executionService) reserveWon(ctx context.Context, o *orderRecord) {
 		return
 	}
 	chainObservedAt := e.now()
-	if chainTime, err := e.reader.latestBlockTime(ctx); err == nil {
+	// A failed header read still reserves: block zero subtracts every other order, and submission
+	// records the deadline bound later.
+	chainBlock, chainTime, err := e.reader.latestBlock(ctx)
+	if err == nil {
 		e.boundByOrderDeadline(o.OrderID, order, chainTime, chainObservedAt)
 	}
-	if _, err := e.buildFillPlan(ctx, o.OrderID, exec, order, outputToken, required); err != nil {
+	if _, err := e.buildFillPlan(ctx, o.OrderID, exec, order, outputToken, required, chainBlock); err != nil {
 		observability.Log(ctx).V(1).Info("won order not reserved yet; submission plans again",
 			"orderId", o.OrderID, "quoteId", o.QuoteID, "err", err.Error())
 	}
@@ -248,11 +279,7 @@ func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
 	)
 	defer end(nil) // each stage records its own failure; terminal skips are declined events here
 
-	// A confirmed cancellation leaves no unresolved fill. Bound both retry waiting and subsequent
-	// unsigned preparation when backend views disappear; submitted/unknown inclusion keeps tracking.
-	unsignedRetry := o.Status == statusRetryWaiting || o.Status == statusQueued || o.Status == statusSubmitting
-	if unsignedRetry && !o.RetryDeadline.IsZero() && !e.now().Before(o.RetryDeadline) {
-		e.store.markStatus(o.OrderID, statusExpired, common.Hash{}, "order deadline has passed")
+	if e.expireUnsigned(o) {
 		return
 	}
 	switch o.Status {
@@ -293,7 +320,7 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		return
 	}
 	chainObservedAt := e.now()
-	chainTime, err := e.reader.latestBlockTime(ctx)
+	chainBlock, chainTime, err := e.reader.latestBlock(ctx)
 	if err != nil {
 		observability.Log(ctx).Error(err, "read chain time")
 		return
@@ -306,7 +333,7 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	}
 	e.boundByOrderDeadline(orderID, order, chainTime, chainObservedAt)
 
-	selected, err := e.buildFillPlan(ctx, orderID, exec, order, outputToken, required)
+	selected, err := e.buildFillPlan(ctx, orderID, exec, order, outputToken, required, chainBlock)
 	if err != nil || selected == nil {
 		e.fail(ctx, orderID, "strategy fill plan: "+errString(err))
 		return
@@ -519,12 +546,12 @@ func (e *executionService) buildFillPlan(
 	order executor.IReactorOrder,
 	outputToken common.Address,
 	required *big.Int,
+	snapshotBlock uint64,
 ) (plan *fillPlan, err error) {
 	ctx, end := tracer.Start(ctx, "rfq.order.plan", observability.AttrStrategy.String(e.strategyName))
 	defer func() { end(err) }()
 	e.planningMu.Lock()
 	defer e.planningMu.Unlock()
-	// Fill-time reads carry no snapshot block, so every other order's reservation is subtracted.
 	pending := func(inventory []solverInventory) liquidlane.CapacityReservations {
 		return e.store.pendingReservations(orderID, inventory)
 	}
@@ -536,6 +563,10 @@ func (e *executionService) buildFillPlan(
 		direct, derr := e.reader.readPermissionedVaultInventories(ctx, e.executor, order.Request.TokenIn, e.vaults)
 		if derr != nil {
 			return nil, derr
+		}
+		// Read after the header, so the state reflects at least snapshotBlock.
+		for index := range direct {
+			direct[index].BlockNumber = snapshotBlock
 		}
 		inv = append(inv, direct...)
 	}
