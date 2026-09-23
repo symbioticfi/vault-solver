@@ -75,9 +75,10 @@ is polled until eligible adapters appear. Example:
 ### RFQ Filler — `rfq-filler`
 
 Numbered mainnet instances are configured in `vault-solver-deploy`, using this same
-`rfq-filler` integration. Presto is `vault-solver-eighth` (`symbiotic_eighth` in RFQ
+`rfq-filler` integration. Presto is `vault-solver-eighth` (`symbiotic_presto` in RFQ
 backend); its executor and single adapter are set in that repository's mainnet
 deploy matrix. A new instance does not require a new solver type in this application.
+Public solver IDs use `symbiotic_<name>`; numbered workload names remain unchanged.
 
 An externally-owned solver/executor for **[Symbiotic RFQ](https://symbiotic.fi)**, on top of per-vault
 `LiquidLaneAdapter`s. It runs a `POST /quote` server that prices swaps for the RFQ backend and a poller
