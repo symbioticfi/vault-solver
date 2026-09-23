@@ -1,7 +1,7 @@
 /*
 Symbiotic RFQ Backend Internal API
 
-Internal RFQ backend API: discount listing and resolution.
+Internal RFQ backend API: health, discount listing and resolution.
 
 API version: 1.0.0
 */
@@ -49,6 +49,8 @@ type APIClient struct {
 	// API Services
 
 	RFQAPI *RFQAPIService
+
+	SystemAPI *SystemAPIService
 }
 
 type service struct {
@@ -68,6 +70,7 @@ func NewAPIClient(cfg *Configuration) *APIClient {
 
 	// API Services
 	c.RFQAPI = (*RFQAPIService)(&c.common)
+	c.SystemAPI = (*SystemAPIService)(&c.common)
 
 	return c
 }

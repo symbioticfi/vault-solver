@@ -106,13 +106,38 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   reconciliation without another fill. These protections and retry budgets are in-memory per process;
   persistence and coordination across replicas remain outside this change.
 - **Shutdown joins accepted fills.** RFQ stops new polling and shuts down its quote listener, then waits for
-  the execution loop to finish. A fill already admitted by txmanager keeps its lifecycle ownership and RFQ
+  the poll loop and the submitter to finish. A fill already admitted by txmanager keeps its lifecycle ownership and RFQ
   records the terminal result before `Run` returns; the framework's bounded txmanager drain remains the hard
   stop for an unresolved lifecycle.
-- **Quotes follow transaction-lane readiness.** `/quote` preserves pure request validation, then returns the
-  normal no-quote `204` before chain reads or strategy work while the lane is occupied or conflicted. Readiness
-  is checked again after strategy planning so a pass that observes a mid-plan state change is discarded before
-  its response.
+- **Quotes follow nonce safety, not lane idleness.** `/quote` preserves pure request validation, then returns
+  the normal no-quote `204` before chain reads or strategy work only while the nonce lane is conflicted
+  (`txmanager.Available`). A queued or pending fill does not block quoting; its liquidity is subtracted
+  through reservations instead. Nonce safety is checked again after strategy planning so a pass that observes
+  a mid-plan conflict is discarded before its response.
+- **Won orders reserve liquidity until they finish.** The store owns a `liquidlane.CapacityLedger` keyed by
+  order ID. A newly won order is reserved on the poll cycle that first sees it: by the submitter's own plan
+  when the submitter is idle, or by the poll loop when the submitter is busy with another fill, so an
+  in-flight transaction never delays the reservation and an idle path plans each order only once. The
+  submitter always plans again from fresh state right before sending and replaces the reservation. A reservation holds each leg's output per physical vault capacity, whether
+  the leg is direct or discounted. Discounts themselves are not held: `LiquidLaneAdapter` checks but never
+  consumes a discount's nonce, so one discount can back any number of fills until it is revoked or expires.
+  A reservation is released only when the order leaves the active set (filled, expired or failed); a
+  cancellation retry keeps it, and a failure without a recorded hash that the backend still lists open is
+  reserved again when re-armed. Quotes pass every reservation, and fill planning every reservation except the
+  order's own, to `AllocateInventoryCapacity`. A confirmed fill records its inclusion block on the order. The
+  backend reports the block each `/quote` adapter snapshot was read at (`adapters[].blockNumber`, optional
+  until production sends it); a snapshot read at or after the inclusion block already reflects the fill, so
+  that order's reservation is not subtracted from it, while an earlier or unreported block keeps the
+  subtraction. Fill-time reads report no block and subtract every other order. A plan leg that matches no
+  candidate fails closed, since its liquidity could not be reserved. Whichever path plans an order also records its chain deadline, translated
+  to wall time, as the bound on unsigned work, so an order the backend stops reporting expires locally, and
+  releases its reservation, once a fill could no longer land.
+  The ledger is process-local and does not survive restart.
+- **Polling never waits on a transaction.** The poll loop polls, reserves and reconciles. A single submitter
+  goroutine sends won orders oldest award first, because the shared nonce lane admits one fill at a time;
+  per-order ownership keeps the two from handling the same order. Reservation planning and submission
+  planning are serialized by one planning mutex so two won orders cannot claim the same free capacity; quotes
+  read the ledger without it.
 - **On-chain reads use the shared LiquidLane reader over `chain.Multicall`.** Exact-input pricing is
   route-specific and reads the executable amount after the adapter's current `minDiscount`; adapters
   that produce the same output asset are never collapsed into one oracle observation.
@@ -367,6 +392,11 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   Deployment status for this item lives here rather than in the README, which `AGENTS.md` reserves
   for the external operator-facing runtime and configuration surface.
 
+- **Snapshot block on production quotes.** The staging backend reports `adapters[].blockNumber` on
+  `/quote`; production does not yet. Until it does, production quotes subtract every reservation until the
+  order is terminal, so capacity a fill has already consumed on-chain is under-offered between inclusion and
+  the backend marking the order filled. Nothing to change here once production ships the field.
+
 - **Authorized caller of the `Executor`** — the bot EOA must be added to the Executor's `callers`
   allowlist (owner-only `setCallers`) before fills land (onboarding
   prereq, analogous to 3F's offer-signer). Document; do not grant from the bot.
@@ -493,6 +523,11 @@ The RFQ backend serves its spec at `/api/v1/openapi.json` (hono-openapi, generat
 vendored at `openapi/rfq-backend.openapi.json` as the contract-of-record the `rfqbackend` client is
 generated from, and refreshed with `make refresh-rfq-openapi` (`RFQ_OPENAPI_URL=...`).
 
+- **Currently vendored from staging.** Both specs were last refreshed from `swap.sepolia.gprptest.net`,
+  which carries the `/quote` snapshot block, the reshaped `/liquidity` response, the approval-cancel payload
+  and the internal `/health` route ahead of production. The daily drift check still compares against the
+  production URLs in `hack/schema-sources.json`, so it reports drift until production ships the same build;
+  refresh from production once it does.
 - **The temp railway deployment is stale.** As of this writing it is built from a commit *before* the
   backend renamed discount `vault`→`adapter` and order `signature`→`protocolSignature`, so its served
   spec disagrees with both the current backend code and the current filler. The vendored file is

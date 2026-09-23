@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/big"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -46,9 +47,10 @@ type executable struct {
 	outputs      []backendOut
 }
 
-// executionService polls the backend for open orders and fills them via the Executor. It runs in its
-// own goroutine; per-order work is guarded by an in-flight set so overlapping poll cycles never
-// double-submit the same order.
+// executionService polls the backend for open orders and fills them via the Executor. The poll loop
+// reserves each won order's liquidity and reconciles submitted ones; a single submitter sends fills
+// in award order, because the shared nonce lane admits one at a time. Per-order work is guarded by an
+// in-flight set so the two goroutines never handle the same order at once.
 type executionService struct {
 	chainID                int64
 	executor               common.Address
@@ -75,6 +77,13 @@ type executionService struct {
 
 	inflightMu sync.Mutex
 	inflight   map[string]bool
+	// planningMu serializes the reservation snapshot, fresh reads and plan so two won orders
+	// cannot both claim the same free capacity. Quotes read the ledger without it.
+	planningMu sync.Mutex
+	submitWake chan struct{}
+	// sending is set while the submitter handles orders. The poll loop reserves won orders itself
+	// only then; an idle submitter reserves them through its own plan on the wake that follows.
+	sending atomic.Bool
 }
 
 // fillReader is the on-chain surface used to assemble fill-time strategy inputs.
@@ -92,6 +101,12 @@ type fillReader interface {
 }
 
 func (e *executionService) run(ctx context.Context) {
+	submitterDone := make(chan struct{})
+	go func() {
+		defer close(submitterDone)
+		e.submitLoop(ctx)
+	}()
+	defer func() { <-submitterDone }()
 	e.syncOnce(ctx)
 	t := time.NewTicker(e.pollInterval)
 	defer t.Stop()
@@ -105,8 +120,9 @@ func (e *executionService) run(ctx context.Context) {
 	}
 }
 
-// syncOnce polls open orders, then advances every active order's state machine. It roots the fill
-// trace for this cycle: the quote that produced an order lives in the backend's trace, not here.
+// syncOnce polls open orders, reserves newly won ones and reconciles submitted ones, then wakes the
+// submitter. It roots the fill trace for this cycle: the quote that produced an order lives in the
+// backend's trace, not here. It never waits on a transaction.
 func (e *executionService) syncOnce(ctx context.Context) {
 	ctx, end := tracer.Start(ctx, "rfq.execution.sync")
 	var err error
@@ -117,9 +133,71 @@ func (e *executionService) syncOnce(ctx context.Context) {
 		backendErrorLogger(observability.Log(ctx), err).Error(err, "poll open orders")
 	}
 	for _, o := range e.store.activeOrders() {
-		e.handleOrder(ctx, o)
+		switch {
+		case !o.Status.awaitsSubmission():
+			e.handleOrder(ctx, o)
+		case e.sending.Load():
+			e.reserveWon(ctx, o)
+		}
 	}
 	e.store.sweep() // evict stale terminal orders so the maps stay bounded
+	e.wakeSubmitter()
+}
+
+// submitLoop sends won orders oldest first, one pass per wake. A pass may block for a whole
+// transaction lifecycle; polling and reservation continue meanwhile.
+func (e *executionService) submitLoop(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-e.submitWake:
+		}
+		e.sending.Store(true)
+		for _, o := range e.store.ordersAwaitingSubmission() {
+			if ctx.Err() != nil {
+				e.sending.Store(false)
+				return
+			}
+			e.handleOrder(ctx, o)
+		}
+		e.sending.Store(false)
+	}
+}
+
+func (e *executionService) wakeSubmitter() {
+	select {
+	case e.submitWake <- struct{}{}:
+	default:
+	}
+}
+
+// reserveWon holds a won order's liquidity as soon as it is polled, before its turn on the
+// transaction lane. It records no outcome: submission plans again and owns every failure.
+func (e *executionService) reserveWon(ctx context.Context, o *orderRecord) {
+	if e.store.reserved(o.OrderID) || e.isInflight(o.OrderID) {
+		return
+	}
+	exec, err := e.resolveExecutable(ctx, o)
+	if err != nil || exec == nil {
+		return
+	}
+	order, err := decodeOrder(exec.encodedOrder)
+	if err != nil {
+		return
+	}
+	outputToken, required, err := executableOrderTerms(exec, order, e.executor)
+	if err != nil {
+		return
+	}
+	chainObservedAt := e.now()
+	if chainTime, err := e.reader.latestBlockTime(ctx); err == nil {
+		e.boundByOrderDeadline(o.OrderID, order, chainTime, chainObservedAt)
+	}
+	if _, err := e.buildFillPlan(ctx, o.OrderID, exec, order, outputToken, required); err != nil {
+		observability.Log(ctx).V(1).Info("won order not reserved yet; submission plans again",
+			"orderId", o.OrderID, "quoteId", o.QuoteID, "err", err.Error())
+	}
 }
 
 func (e *executionService) pollOpenOrders(ctx context.Context) (err error) {
@@ -157,6 +235,10 @@ func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
 		return
 	}
 	defer e.release(o.OrderID)
+	// The caller's snapshot can predate a transaction the other goroutine just finished.
+	if o = e.store.order(o.OrderID); o == nil {
+		return
+	}
 
 	// The narrowed base logger, never a trace-stamped one: Log stamps each stage's own span.
 	ctx = observability.WithLogger(ctx, e.log.WithValues("orderId", o.OrderID, "quoteId", o.QuoteID))
@@ -222,8 +304,9 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		e.fail(ctx, orderID, "order deadline has passed")
 		return
 	}
+	e.boundByOrderDeadline(orderID, order, chainTime, chainObservedAt)
 
-	selected, err := e.buildFillPlan(ctx, exec, order, outputToken, required)
+	selected, err := e.buildFillPlan(ctx, orderID, exec, order, outputToken, required)
 	if err != nil || selected == nil {
 		e.fail(ctx, orderID, "strategy fill plan: "+errString(err))
 		return
@@ -260,22 +343,26 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 			// Inclusion is unknown; reconcile the backend without sending another transaction.
 			status = statusSubmitted
 		}
-		e.store.markStatus(orderID, status, res.Hash, sendErr.Error())
 		retryAt := e.now().Add(e.pollInterval)
 		retryDeadline, stillValid := liquidlane.CancellationDeadline(orderDeadline, chainTime, chainObservedAt, retryAt)
+		// Scheduled before any terminal status so a retrying order keeps its reservation.
 		if ctx.Err() == nil && stillValid && outcome == txmanager.OutcomeCancelled &&
 			res.Receipt != nil && res.Receipt.Status == ethtypes.ReceiptStatusSuccessful &&
-			e.store.scheduleCancellationRetry(orderID, e.maxCancellationRetries, retryAt, retryDeadline) {
+			e.store.scheduleCancellationRetry(orderID, e.maxCancellationRetries, retryAt, retryDeadline, res.Hash, sendErr.Error()) {
 			observability.Log(ctx).Info("fill cancelled; retry scheduled", "attempt", attempt,
 				"tx", res.Hash.Hex(), "retryAt", retryAt)
 			return
 		}
+		e.store.markStatus(orderID, status, res.Hash, sendErr.Error())
 		observability.Log(ctx).Error(sendErr, "fill failed", "attempt", attempt, "tx", res.Hash.Hex(),
 			"outcome", outcome)
 		return
 	}
 	if outcome == txmanager.OutcomeConfirmed {
 		observability.Log(ctx).Info("filled order", "tx", res.Hash.Hex())
+		if res.Receipt != nil && res.Receipt.BlockNumber != nil {
+			e.store.markIncluded(orderID, res.Receipt.BlockNumber.Uint64())
+		}
 	} else {
 		observability.Log(ctx).Error(res.Err, "fill included but confirmation wait failed",
 			"attempt", attempt, "tx", res.Hash.Hex())
@@ -292,6 +379,17 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	}
 	e.store.markStatus(orderID, statusSubmitted, res.Hash, "")
 	e.reconcileTerminalStatus(ctx, orderID)
+}
+
+// boundByOrderDeadline records the order's chain deadline as the local bound on unsigned work, so a
+// won order the backend stops reporting cannot hold its reservation past the point a fill could land.
+func (e *executionService) boundByOrderDeadline(
+	orderID string, order executor.IReactorOrder, chainTime, chainObservedAt time.Time,
+) {
+	orderDeadline := time.Unix(order.Request.Deadline.Int64(), 0)
+	if deadline, ok := liquidlane.CancellationDeadline(orderDeadline, chainTime, chainObservedAt, e.now()); ok {
+		e.store.boundUnsignedWork(orderID, deadline)
+	}
 }
 
 // buildFillCalldata resolves the plan's discount legs and encodes the Executor fill. It reports
@@ -410,11 +508,13 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 
 var errUnknownOrderStatus = errors.New("unrecognized backend order status")
 
-// buildFillPlan gives the trusted strategy the awarded order terms plus current solver inputs. The
-// strategy owns route economics; the solver assembles the fresh snapshot and enforces solver-owned
-// structural constraints on the returned plan.
+// buildFillPlan gives the trusted strategy the awarded order terms plus current solver inputs, then
+// replaces the order's reservation with the plan. The strategy owns route economics; the solver
+// assembles the fresh snapshot, subtracts every other won order and enforces solver-owned structural
+// constraints on the returned plan.
 func (e *executionService) buildFillPlan(
 	ctx context.Context,
+	orderID string,
 	exec *executable,
 	order executor.IReactorOrder,
 	outputToken common.Address,
@@ -422,6 +522,12 @@ func (e *executionService) buildFillPlan(
 ) (plan *fillPlan, err error) {
 	ctx, end := tracer.Start(ctx, "rfq.order.plan", observability.AttrStrategy.String(e.strategyName))
 	defer func() { end(err) }()
+	e.planningMu.Lock()
+	defer e.planningMu.Unlock()
+	// Fill-time reads carry no snapshot block, so every other order's reservation is subtracted.
+	pending := func(inventory []solverInventory) liquidlane.CapacityReservations {
+		return e.store.pendingReservations(orderID, inventory)
+	}
 
 	// Direct inventories are filtered to adapters this executor is authorized to fill through. Skipped
 	// when no candidate vaults are configured (a discount-only solver), leaving discount legs only.
@@ -444,7 +550,7 @@ func (e *executionService) buildFillPlan(
 	requireSingleRoute := e.tokenPolicy.RequiresSingleRoute(req.TokenIn)
 	var candidates []liquidlane.QuoteCandidate
 	if len(inv) > 0 {
-		candidates, err = e.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount)
+		candidates, err = e.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount, pending)
 		if err != nil {
 			return nil, errors.Errorf("fill: read LiquidLane candidates: %w", err)
 		}
@@ -456,6 +562,13 @@ func (e *executionService) buildFillPlan(
 	}
 	if verr := validateSingleRoute(input.RequireSingleRoute, len(plan.Legs)); verr != nil {
 		return nil, errors.Errorf("fill: strategy: %w", verr)
+	}
+	reservations, err := fillPlanReservations(plan, candidates)
+	if err != nil {
+		return nil, err
+	}
+	if !e.store.reserve(orderID, reservations) {
+		return nil, errors.New("fill: order is no longer active")
 	}
 	return plan, nil
 }
@@ -629,6 +742,12 @@ func (e *executionService) release(orderID string) {
 	e.inflightMu.Lock()
 	defer e.inflightMu.Unlock()
 	delete(e.inflight, orderID)
+}
+
+func (e *executionService) isInflight(orderID string) bool {
+	e.inflightMu.Lock()
+	defer e.inflightMu.Unlock()
+	return e.inflight[orderID]
 }
 
 /* ───────── executable helpers ───────── */

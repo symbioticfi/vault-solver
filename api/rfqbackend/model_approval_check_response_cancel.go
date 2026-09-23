@@ -14,41 +14,41 @@ import (
 	"encoding/json"
 )
 
-// checks if the ApprovalCheckResponseApproval type satisfies the MappedNullable interface at compile time
-var _ MappedNullable = &ApprovalCheckResponseApproval{}
+// checks if the ApprovalCheckResponseCancel type satisfies the MappedNullable interface at compile time
+var _ MappedNullable = &ApprovalCheckResponseCancel{}
 
-// ApprovalCheckResponseApproval Unsigned approve(Reactor, maxUint256) transaction, or null when allowance covers the requested amount.
-type ApprovalCheckResponseApproval struct {
+// ApprovalCheckResponseCancel Unsigned approve(Reactor, 0) transaction when allowance is nonzero but insufficient. Execute cancel before approval. Null when allowance is zero or already sufficient.
+type ApprovalCheckResponseCancel struct {
 	To                   string `json:"to" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	Data                 string `json:"data" validate:"regexp=^0x[a-fA-F0-9]+$"`
 	Value                string `json:"value"`
 	AdditionalProperties map[string]interface{}
 }
 
-type _ApprovalCheckResponseApproval ApprovalCheckResponseApproval
+type _ApprovalCheckResponseCancel ApprovalCheckResponseCancel
 
-// NewApprovalCheckResponseApproval instantiates a new ApprovalCheckResponseApproval object
+// NewApprovalCheckResponseCancel instantiates a new ApprovalCheckResponseCancel object
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewApprovalCheckResponseApproval(to string, data string, value string) *ApprovalCheckResponseApproval {
-	this := ApprovalCheckResponseApproval{}
+func NewApprovalCheckResponseCancel(to string, data string, value string) *ApprovalCheckResponseCancel {
+	this := ApprovalCheckResponseCancel{}
 	this.To = to
 	this.Data = data
 	this.Value = value
 	return &this
 }
 
-// NewApprovalCheckResponseApprovalWithDefaults instantiates a new ApprovalCheckResponseApproval object
+// NewApprovalCheckResponseCancelWithDefaults instantiates a new ApprovalCheckResponseCancel object
 // This constructor will only assign default values to properties that have it defined,
 // but it doesn't guarantee that properties required by API are set
-func NewApprovalCheckResponseApprovalWithDefaults() *ApprovalCheckResponseApproval {
-	this := ApprovalCheckResponseApproval{}
+func NewApprovalCheckResponseCancelWithDefaults() *ApprovalCheckResponseCancel {
+	this := ApprovalCheckResponseCancel{}
 	return &this
 }
 
 // GetTo returns the To field value
-func (o *ApprovalCheckResponseApproval) GetTo() string {
+func (o *ApprovalCheckResponseCancel) GetTo() string {
 	if o == nil {
 		var ret string
 		return ret
@@ -59,7 +59,7 @@ func (o *ApprovalCheckResponseApproval) GetTo() string {
 
 // GetToOk returns a tuple with the To field value
 // and a boolean to check if the value has been set.
-func (o *ApprovalCheckResponseApproval) GetToOk() (*string, bool) {
+func (o *ApprovalCheckResponseCancel) GetToOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -67,12 +67,12 @@ func (o *ApprovalCheckResponseApproval) GetToOk() (*string, bool) {
 }
 
 // SetTo sets field value
-func (o *ApprovalCheckResponseApproval) SetTo(v string) {
+func (o *ApprovalCheckResponseCancel) SetTo(v string) {
 	o.To = v
 }
 
 // GetData returns the Data field value
-func (o *ApprovalCheckResponseApproval) GetData() string {
+func (o *ApprovalCheckResponseCancel) GetData() string {
 	if o == nil {
 		var ret string
 		return ret
@@ -83,7 +83,7 @@ func (o *ApprovalCheckResponseApproval) GetData() string {
 
 // GetDataOk returns a tuple with the Data field value
 // and a boolean to check if the value has been set.
-func (o *ApprovalCheckResponseApproval) GetDataOk() (*string, bool) {
+func (o *ApprovalCheckResponseCancel) GetDataOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -91,12 +91,12 @@ func (o *ApprovalCheckResponseApproval) GetDataOk() (*string, bool) {
 }
 
 // SetData sets field value
-func (o *ApprovalCheckResponseApproval) SetData(v string) {
+func (o *ApprovalCheckResponseCancel) SetData(v string) {
 	o.Data = v
 }
 
 // GetValue returns the Value field value
-func (o *ApprovalCheckResponseApproval) GetValue() string {
+func (o *ApprovalCheckResponseCancel) GetValue() string {
 	if o == nil {
 		var ret string
 		return ret
@@ -107,7 +107,7 @@ func (o *ApprovalCheckResponseApproval) GetValue() string {
 
 // GetValueOk returns a tuple with the Value field value
 // and a boolean to check if the value has been set.
-func (o *ApprovalCheckResponseApproval) GetValueOk() (*string, bool) {
+func (o *ApprovalCheckResponseCancel) GetValueOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -115,11 +115,11 @@ func (o *ApprovalCheckResponseApproval) GetValueOk() (*string, bool) {
 }
 
 // SetValue sets field value
-func (o *ApprovalCheckResponseApproval) SetValue(v string) {
+func (o *ApprovalCheckResponseCancel) SetValue(v string) {
 	o.Value = v
 }
 
-func (o ApprovalCheckResponseApproval) MarshalJSON() ([]byte, error) {
+func (o ApprovalCheckResponseCancel) MarshalJSON() ([]byte, error) {
 	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
@@ -127,7 +127,7 @@ func (o ApprovalCheckResponseApproval) MarshalJSON() ([]byte, error) {
 	return json.Marshal(toSerialize)
 }
 
-func (o ApprovalCheckResponseApproval) ToMap() (map[string]interface{}, error) {
+func (o ApprovalCheckResponseCancel) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["to"] = o.To
 	toSerialize["data"] = o.Data
@@ -140,20 +140,20 @@ func (o ApprovalCheckResponseApproval) ToMap() (map[string]interface{}, error) {
 	return toSerialize, nil
 }
 
-func (o *ApprovalCheckResponseApproval) UnmarshalJSON(data []byte) (err error) {
+func (o *ApprovalCheckResponseCancel) UnmarshalJSON(data []byte) (err error) {
 	// Required-property validation removed by hack/openapi-relax-client.py:
 	// upstream may drop fields at any time; absent values zero-value instead of
 	// failing the whole decode.
 
-	varApprovalCheckResponseApproval := _ApprovalCheckResponseApproval{}
+	varApprovalCheckResponseCancel := _ApprovalCheckResponseCancel{}
 
-	err = json.Unmarshal(data, &varApprovalCheckResponseApproval)
+	err = json.Unmarshal(data, &varApprovalCheckResponseCancel)
 
 	if err != nil {
 		return err
 	}
 
-	*o = ApprovalCheckResponseApproval(varApprovalCheckResponseApproval)
+	*o = ApprovalCheckResponseCancel(varApprovalCheckResponseCancel)
 
 	additionalProperties := make(map[string]interface{})
 
@@ -167,38 +167,38 @@ func (o *ApprovalCheckResponseApproval) UnmarshalJSON(data []byte) (err error) {
 	return err
 }
 
-type NullableApprovalCheckResponseApproval struct {
-	value *ApprovalCheckResponseApproval
+type NullableApprovalCheckResponseCancel struct {
+	value *ApprovalCheckResponseCancel
 	isSet bool
 }
 
-func (v NullableApprovalCheckResponseApproval) Get() *ApprovalCheckResponseApproval {
+func (v NullableApprovalCheckResponseCancel) Get() *ApprovalCheckResponseCancel {
 	return v.value
 }
 
-func (v *NullableApprovalCheckResponseApproval) Set(val *ApprovalCheckResponseApproval) {
+func (v *NullableApprovalCheckResponseCancel) Set(val *ApprovalCheckResponseCancel) {
 	v.value = val
 	v.isSet = true
 }
 
-func (v NullableApprovalCheckResponseApproval) IsSet() bool {
+func (v NullableApprovalCheckResponseCancel) IsSet() bool {
 	return v.isSet
 }
 
-func (v *NullableApprovalCheckResponseApproval) Unset() {
+func (v *NullableApprovalCheckResponseCancel) Unset() {
 	v.value = nil
 	v.isSet = false
 }
 
-func NewNullableApprovalCheckResponseApproval(val *ApprovalCheckResponseApproval) *NullableApprovalCheckResponseApproval {
-	return &NullableApprovalCheckResponseApproval{value: val, isSet: true}
+func NewNullableApprovalCheckResponseCancel(val *ApprovalCheckResponseCancel) *NullableApprovalCheckResponseCancel {
+	return &NullableApprovalCheckResponseCancel{value: val, isSet: true}
 }
 
-func (v NullableApprovalCheckResponseApproval) MarshalJSON() ([]byte, error) {
+func (v NullableApprovalCheckResponseCancel) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.value)
 }
 
-func (v *NullableApprovalCheckResponseApproval) UnmarshalJSON(src []byte) error {
+func (v *NullableApprovalCheckResponseCancel) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }

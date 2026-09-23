@@ -57,12 +57,14 @@ func (r *reader) readVaultInventories(
 // readQuoteCandidates turns amount-independent inventory into current,
 // amount-normalized LiquidLane candidates. This protocol/on-chain adaptation
 // belongs to the solver; strategies receive only the completed decision input.
+// Capacity held by won, unfinished orders is subtracted before allocation.
 func (r *reader) readQuoteCandidates(
 	ctx context.Context,
 	inventory []solverInventory,
 	tokenIn common.Address,
 	tokenOut common.Address,
 	amountIn *big.Int,
+	pending pendingReservations,
 ) ([]liquidlane.QuoteCandidate, error) {
 	matching := make([]liquidlane.Inventory, 0, len(inventory))
 	for _, item := range inventory {
@@ -97,7 +99,11 @@ func (r *reader) readQuoteCandidates(
 	for index := range matching {
 		matching[index].TokenInDecimals = inputDecimals
 	}
-	allocated := liquidgreedy.AllocateInventoryCapacity(matching, nil, 0)
+	var reservations liquidlane.CapacityReservations
+	if pending != nil {
+		reservations = pending(matching)
+	}
+	allocated := liquidgreedy.AllocateInventoryCapacity(matching, reservations, 0)
 	if len(allocated) == 0 {
 		return nil, nil
 	}

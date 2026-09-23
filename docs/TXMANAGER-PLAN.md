@@ -23,7 +23,10 @@ Once enqueued, the manager owns execution: caller cancellation is not proof the 
 Definitive pre-sign/submission failures can finish without a receipt; accepted ambiguous sends stay tracked.
 
 `Available()` reports nonce safety; `Idle()` reports absence of queued/admitted demand. `LaneReady()`
-requires both. Quote producers use `LaneReady`; already-owned recovery work can continue during contention.
+requires both. Quote producers that cannot account for pending work use `LaneReady`; RFQ uses `Available`
+and subtracts pending fills through its own reservations. Already-owned recovery work can continue during
+contention. Process readiness (`/readyz`) follows `Available`, so a pending transaction never takes quote
+servers out of rotation; only startup, shutdown and nonce conflicts do.
 Subscribers receive coalesced change notifications and must re-read state and unsubscribe when done.
 
 ## 2. Request contract

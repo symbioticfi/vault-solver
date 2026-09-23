@@ -69,7 +69,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 
 	quotes, exec := buildServices(
-		cfg, chainID, st, rdr, deps.TxManager, deps.TxManager.LaneReady, quoteStrategy, log,
+		cfg, chainID, st, rdr, deps.TxManager, deps.TxManager.Available, quoteStrategy, log,
 	)
 	exec.metrics = metrics
 	if metrics != nil {
@@ -102,7 +102,7 @@ func buildServices(
 	st *store,
 	rdr *reader,
 	txm txSender,
-	laneReady func() bool,
+	laneAvailable func() bool,
 	quoteStrategy types.Strategy,
 	log logr.Logger,
 ) (*quoteService, *executionService) {
@@ -118,7 +118,8 @@ func buildServices(
 		discountsEnabled: cfg.usesDiscounts(),
 		chainID:          chainID,
 		executor:         cfg.Executor,
-		laneReady:        laneReady,
+		laneAvailable:    laneAvailable,
+		reservations:     st.pendingReservations,
 		whitelist:        quoteWhitelist,
 		tokenPolicy:      cfg.TokenPolicy,
 		minAmountsIn:     cfg.MinAmountsIn,
@@ -147,6 +148,7 @@ func buildServices(
 		log:                    log,
 		now:                    time.Now,
 		inflight:               make(map[string]bool),
+		submitWake:             make(chan struct{}, 1),
 	}
 	return quotes, exec
 }

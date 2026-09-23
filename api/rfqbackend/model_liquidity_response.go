@@ -19,11 +19,14 @@ var _ MappedNullable = &LiquidityResponse{}
 
 // LiquidityResponse struct for LiquidityResponse
 type LiquidityResponse struct {
-	TokenIn              string                         `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	TokenOut             string                         `json:"tokenOut" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	TokenInInfo          LiquidityResponseTokenInInfo   `json:"tokenInInfo"`
-	TokenOutInfo         LiquidityResponseTokenInInfo   `json:"tokenOutInfo"`
-	Levels               []LiquidityResponseLevelsInner `json:"levels"`
+	TokenIn      string                       `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	TokenOut     string                       `json:"tokenOut" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	TokenInInfo  LiquidityResponseTokenInInfo `json:"tokenInInfo"`
+	TokenOutInfo LiquidityResponseTokenInInfo `json:"tokenOutInfo"`
+	// Sum of solvers[].liquidity in tokenOut base units. Shared inventory is counted for each eligible solver.
+	TotalLiquidity string `json:"totalLiquidity" validate:"regexp=^\\d+$"`
+	// Eligible solvers with positive liquidity, sorted by liquidity descending.
+	Solvers              []LiquidityResponseSolversInner `json:"solvers"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -33,13 +36,14 @@ type _LiquidityResponse LiquidityResponse
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewLiquidityResponse(tokenIn string, tokenOut string, tokenInInfo LiquidityResponseTokenInInfo, tokenOutInfo LiquidityResponseTokenInInfo, levels []LiquidityResponseLevelsInner) *LiquidityResponse {
+func NewLiquidityResponse(tokenIn string, tokenOut string, tokenInInfo LiquidityResponseTokenInInfo, tokenOutInfo LiquidityResponseTokenInInfo, totalLiquidity string, solvers []LiquidityResponseSolversInner) *LiquidityResponse {
 	this := LiquidityResponse{}
 	this.TokenIn = tokenIn
 	this.TokenOut = tokenOut
 	this.TokenInInfo = tokenInInfo
 	this.TokenOutInfo = tokenOutInfo
-	this.Levels = levels
+	this.TotalLiquidity = totalLiquidity
+	this.Solvers = solvers
 	return &this
 }
 
@@ -147,28 +151,52 @@ func (o *LiquidityResponse) SetTokenOutInfo(v LiquidityResponseTokenInInfo) {
 	o.TokenOutInfo = v
 }
 
-// GetLevels returns the Levels field value
-func (o *LiquidityResponse) GetLevels() []LiquidityResponseLevelsInner {
+// GetTotalLiquidity returns the TotalLiquidity field value
+func (o *LiquidityResponse) GetTotalLiquidity() string {
 	if o == nil {
-		var ret []LiquidityResponseLevelsInner
+		var ret string
 		return ret
 	}
 
-	return o.Levels
+	return o.TotalLiquidity
 }
 
-// GetLevelsOk returns a tuple with the Levels field value
+// GetTotalLiquidityOk returns a tuple with the TotalLiquidity field value
 // and a boolean to check if the value has been set.
-func (o *LiquidityResponse) GetLevelsOk() ([]LiquidityResponseLevelsInner, bool) {
+func (o *LiquidityResponse) GetTotalLiquidityOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return o.Levels, true
+	return &o.TotalLiquidity, true
 }
 
-// SetLevels sets field value
-func (o *LiquidityResponse) SetLevels(v []LiquidityResponseLevelsInner) {
-	o.Levels = v
+// SetTotalLiquidity sets field value
+func (o *LiquidityResponse) SetTotalLiquidity(v string) {
+	o.TotalLiquidity = v
+}
+
+// GetSolvers returns the Solvers field value
+func (o *LiquidityResponse) GetSolvers() []LiquidityResponseSolversInner {
+	if o == nil {
+		var ret []LiquidityResponseSolversInner
+		return ret
+	}
+
+	return o.Solvers
+}
+
+// GetSolversOk returns a tuple with the Solvers field value
+// and a boolean to check if the value has been set.
+func (o *LiquidityResponse) GetSolversOk() ([]LiquidityResponseSolversInner, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.Solvers, true
+}
+
+// SetSolvers sets field value
+func (o *LiquidityResponse) SetSolvers(v []LiquidityResponseSolversInner) {
+	o.Solvers = v
 }
 
 func (o LiquidityResponse) MarshalJSON() ([]byte, error) {
@@ -185,7 +213,8 @@ func (o LiquidityResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize["tokenOut"] = o.TokenOut
 	toSerialize["tokenInInfo"] = o.TokenInInfo
 	toSerialize["tokenOutInfo"] = o.TokenOutInfo
-	toSerialize["levels"] = o.Levels
+	toSerialize["totalLiquidity"] = o.TotalLiquidity
+	toSerialize["solvers"] = o.Solvers
 
 	for key, value := range o.AdditionalProperties {
 		toSerialize[key] = value
@@ -216,7 +245,8 @@ func (o *LiquidityResponse) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "tokenOut")
 		delete(additionalProperties, "tokenInInfo")
 		delete(additionalProperties, "tokenOutInfo")
-		delete(additionalProperties, "levels")
+		delete(additionalProperties, "totalLiquidity")
+		delete(additionalProperties, "solvers")
 		o.AdditionalProperties = additionalProperties
 	}
 

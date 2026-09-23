@@ -315,9 +315,9 @@ through the context.
 | `rfq.quote` | `quoteService.quote` | `adapter.address` set here when the chosen plan's legs share one adapter; a bad request or a no-quote outcome is a `declined` event, not an error |
 | `rfq.quote.snapshot` | `snapshotCandidates` | chain read |
 | `rfq.quote.decide` | `decideQuote` | strategy stage |
-| `rfq.execution.sync` | `executionService.syncOnce` | root per poll cycle |
+| `rfq.execution.sync` | `executionService.syncOnce` | root per poll cycle; parents won-order reservation (`rfq.order.resolve`/`rfq.order.plan`) and submitted-order reconciliation |
 | `rfq.execution.poll` | `pollOpenOrders` | backend HTTP inside |
-| `rfq.order` | `handleOrder` | `order.id`, `quote.id`, link to the quote span (§6); `adapter.address` once the chosen plan's legs share one adapter |
+| `rfq.order` | `handleOrder` | `order.id`, `quote.id`, link to the quote span (§6); `adapter.address` once the chosen plan's legs share one adapter. A submission from the submitter goroutine is a root span, since that goroutine has no cycle span; reconciliation from the poll loop is a child of `rfq.execution.sync` |
 | `rfq.order.resolve` | `resolveExecutable` | backend fetch of the executable order |
 | `rfq.order.plan` | strategy `BuildFillPlan` | strategy stage |
 | `rfq.order.build` | `buildFillCalldata` | a terminal skip is declined on the order span, not on this stage |
