@@ -103,7 +103,7 @@ func TestDialWebsocket_PropagatesOnHandshakeAndSpansCalls(t *testing.T) {
 	defer srv.close()
 
 	ctx, parent := otel.Tracer("test").Start(t.Context(), "caller")
-	c, err := Dial(ctx, []string{srv.url()}, "", "", testMulticall)
+	c, err := Dial(ctx, []string{srv.url()}, "", "", testMulticall, defaultRPCAttemptTimeout)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestDialWebsocket_ConnectSpanErrorOnDialFailure(t *testing.T) {
 	endpoint := srv.url()
 	srv.close() // nothing is listening any more, so the handshake fails
 
-	if _, err := Dial(t.Context(), []string{endpoint}, "", "", testMulticall); err == nil {
+	if _, err := Dial(t.Context(), []string{endpoint}, "", "", testMulticall, defaultRPCAttemptTimeout); err == nil {
 		t.Fatal("expected a dial error against a closed endpoint")
 	}
 
@@ -174,7 +174,7 @@ func TestTransactionReceiptOverWebsocket_NotFoundIsNotAnError(t *testing.T) {
 	srv := newWSRPC(chainRPCResult)
 	defer srv.close()
 
-	c, err := Dial(t.Context(), []string{srv.url()}, "", "", testMulticall)
+	c, err := Dial(t.Context(), []string{srv.url()}, "", "", testMulticall, defaultRPCAttemptTimeout)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestMulticallOverWebsocket_SpansOneCall(t *testing.T) {
 	srv := newWSRPC(chainRPCResult)
 	defer srv.close()
 
-	c, err := Dial(t.Context(), []string{srv.url()}, "", "", testMulticall)
+	c, err := Dial(t.Context(), []string{srv.url()}, "", "", testMulticall, defaultRPCAttemptTimeout)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestDialHTTP_NoMethodLevelSpans(t *testing.T) {
 	srv := rpcRecorder(new([]string), chainRPCResult)
 	defer srv.Close()
 
-	c, err := Dial(t.Context(), []string{srv.URL}, "", "", testMulticall)
+	c, err := Dial(t.Context(), []string{srv.URL}, "", "", testMulticall, defaultRPCAttemptTimeout)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}

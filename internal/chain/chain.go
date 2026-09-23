@@ -56,30 +56,27 @@ type Client struct {
 // read account nonces (see SendTransaction, NonceAt, and PendingNonceAt). Every other read stays on
 // the primary. When it is empty, broadcasts and nonce reads use rpcURLs[0] without falling over.
 // cancelRPCURL overrides only same-nonce self-cancellation broadcasts; empty uses the write client.
-func Dial(ctx context.Context, rpcURLs []string, writeRPCURL, cancelRPCURL, multicallAddr string) (*Client, error) {
-	return dial(ctx, rpcURLs, writeRPCURL, cancelRPCURL, multicallAddr, nil)
+// attemptTimeout bounds each HTTP(S) endpoint attempt; zero preserves the 20-second default.
+func Dial(
+	ctx context.Context,
+	rpcURLs []string,
+	writeRPCURL, cancelRPCURL, multicallAddr string,
+	attemptTimeout time.Duration,
+) (*Client, error) {
+	return DialWithMetrics(ctx, rpcURLs, writeRPCURL, cancelRPCURL, multicallAddr, attemptTimeout, nil)
 }
 
 // DialWithMetrics is Dial with generic HTTP JSON-RPC instrumentation on the supplied registry.
 func DialWithMetrics(
 	ctx context.Context,
 	rpcURLs []string,
-	writeRPCURL string,
-	cancelRPCURL string,
-	multicallAddr string,
+	writeRPCURL, cancelRPCURL, multicallAddr string,
+	attemptTimeout time.Duration,
 	rpcMetrics *RPCMetrics,
 ) (*Client, error) {
-	return dial(ctx, rpcURLs, writeRPCURL, cancelRPCURL, multicallAddr, rpcMetrics)
-}
-
-func dial(
-	ctx context.Context,
-	rpcURLs []string,
-	writeRPCURL string,
-	cancelRPCURL string,
-	multicallAddr string,
-	rpcMetrics *RPCMetrics,
-) (*Client, error) {
+	if attemptTimeout < 0 {
+		return nil, errors.New("chain: rpc attempt timeout must not be negative")
+	}
 	if len(rpcURLs) == 0 {
 		return nil, errors.New("chain: no rpc url configured")
 	}
@@ -95,7 +92,7 @@ func dial(
 	if writeEndpoint == "" {
 		readRole = rpcRoleShared
 	}
-	ec, readTransport, err := dialClient(ctx, rpcURLs, readRole, rpcMetrics)
+	ec, readTransport, err := dialClient(ctx, rpcURLs, readRole, attemptTimeout, rpcMetrics)
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +110,7 @@ func dial(
 	writeClient := ec
 	writeCalls := readCalls
 	if writeEndpoint != "" {
-		wc, writeTransport, wcErr := dialClient(ctx, []string{writeEndpoint}, rpcRoleWrite, rpcMetrics)
+		wc, writeTransport, wcErr := dialClient(ctx, []string{writeEndpoint}, rpcRoleWrite, attemptTimeout, rpcMetrics)
 		if wcErr != nil {
 			ec.Close()
 			return nil, errors.Errorf("chain: dial write rpc: %w", wcErr)
@@ -151,7 +148,7 @@ func dial(
 		cancelCalls:  writeCalls,
 	}
 	if cancelRPCURL != "" {
-		cc, cancelTransport, cancelErr := dialClient(ctx, []string{cancelRPCURL}, rpcRoleCancel, rpcMetrics)
+		cc, cancelTransport, cancelErr := dialClient(ctx, []string{cancelRPCURL}, rpcRoleCancel, attemptTimeout, rpcMetrics)
 		if cancelErr != nil {
 			client.Close()
 			return nil, errors.Errorf("chain: dial cancellation rpc: %w", cancelErr)
@@ -190,6 +187,7 @@ func dialClient(
 	ctx context.Context,
 	rpcURLs []string,
 	role string,
+	attemptTimeout time.Duration,
 	rpcMetrics *RPCMetrics,
 ) (*ethclient.Client, string, error) {
 	if len(rpcURLs) == 1 && !isHTTPURL(rpcURLs[0]) {
@@ -202,10 +200,11 @@ func dialClient(
 	rpcMetrics.bindTransport(role, len(endpoints))
 	httpClient := &http.Client{
 		Transport: &fallbackTransport{
-			endpoints: endpoints,
-			base:      http.DefaultTransport,
-			metrics:   rpcMetrics,
-			role:      role,
+			endpoints:      endpoints,
+			base:           http.DefaultTransport,
+			metrics:        rpcMetrics,
+			role:           role,
+			attemptTimeout: attemptTimeout,
 		},
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
