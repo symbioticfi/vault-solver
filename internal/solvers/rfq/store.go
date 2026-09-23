@@ -1,11 +1,15 @@
 package rfq
 
 import (
+	"cmp"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
@@ -27,6 +31,11 @@ func (s orderStatus) active() bool {
 	return s == statusQueued || s == statusSubmitting || s == statusSubmitted || s == statusRetryWaiting
 }
 
+// awaitsSubmission reports a won order the submitter still has to send.
+func (s orderStatus) awaitsSubmission() bool {
+	return s == statusQueued || s == statusSubmitting
+}
+
 const (
 	// terminalOrderTTL is how long terminal orders (and their attempt counts) are retained for
 	// reconciliation/observability before eviction.
@@ -46,6 +55,9 @@ type orderRecord struct {
 	CancellationRetries int
 	RetryAt             time.Time
 	RetryDeadline       time.Time
+	// IncludedAt is the block a confirmed fill landed in; zero until then. A snapshot read at or
+	// after it already reflects the fill, so the reservation is not subtracted from it.
+	IncludedAt uint64
 }
 
 // queuedOrder is the input to upsertQueued, carrying the fields known when an order is first polled.
@@ -57,10 +69,14 @@ type queuedOrder struct {
 // store is the filler's in-memory operational state. The HTTP server and the poll loop touch it
 // concurrently, so every accessor is mutex-guarded.
 type store struct {
-	mu       sync.Mutex
-	orders   map[string]*orderRecord // by orderId
-	attempts map[string]int          // by orderId
-	now      func() time.Time
+	mu sync.Mutex
+	// reservations hold the liquidity of won orders until they leave the active set, and the spend
+	// of confirmed fills until their record is swept, so a snapshot older than the fill still
+	// subtracts it. Writes happen under mu so an entry never outlives its order record.
+	reservations liquidlane.CapacityLedger
+	orders       map[string]*orderRecord // by orderId
+	attempts     map[string]int          // by orderId
+	now          func() time.Time
 }
 
 func newStore(now func() time.Time) *store {
@@ -81,6 +97,7 @@ func (s *store) sweep() {
 		if !rec.Status.active() && now.Sub(rec.UpdatedAt) > terminalOrderTTL {
 			delete(s.orders, id)
 			delete(s.attempts, id)
+			s.reservations.Delete(id)
 		}
 	}
 }
@@ -105,6 +122,7 @@ func (s *store) upsertQueued(in queuedOrder) bool {
 	}
 	if rec.Status == statusRetryWaiting && !now.Before(rec.RetryDeadline) {
 		rec.Status = statusExpired
+		s.reservations.Delete(in.OrderID)
 	}
 	if rec.Status == statusRetryWaiting && !now.Before(rec.RetryAt) {
 		rec.Status = statusQueued
@@ -136,6 +154,22 @@ func (s *store) activeOrders() []*orderRecord {
 	return out
 }
 
+// ordersAwaitingSubmission returns won orders still to be sent, oldest award first.
+func (s *store) ordersAwaitingSubmission() []*orderRecord {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*orderRecord, 0, len(s.orders))
+	for _, rec := range s.orders {
+		if rec.Status.awaitsSubmission() {
+			out = append(out, cloneOrder(rec))
+		}
+	}
+	slices.SortFunc(out, func(a, b *orderRecord) int {
+		return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.OrderID, b.OrderID))
+	})
+	return out
+}
+
 func (s *store) activeOrderMetrics() (int, time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -161,11 +195,94 @@ func (s *store) markStatus(orderID string, status orderStatus, txHash common.Has
 		return
 	}
 	rec.Status = status
+	if !status.active() && rec.IncludedAt == 0 {
+		// Nothing was spent. A confirmed spend stays until sweep for older snapshots.
+		s.reservations.Delete(orderID)
+	}
 	if txHash != (common.Hash{}) {
 		rec.TxHash = txHash
 	}
 	rec.LastError = lastErr
 	rec.UpdatedAt = s.now()
+}
+
+// reserve replaces an active order's reservation. It refuses an order that has already left the
+// active set, so a plan finishing after a terminal transition cannot leak capacity.
+func (s *store) reserve(orderID string, reservations liquidlane.CapacityReservations) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.orders[orderID]
+	if !ok || !rec.Status.active() {
+		return false
+	}
+	return s.reservations.Set(orderID, reservations)
+}
+
+// reserved reports whether an order already holds a reservation.
+func (s *store) reserved(orderID string) bool {
+	return s.reservations.Has(orderID)
+}
+
+// pendingReservations is the liquidity won orders hold against inventory, without one order so it
+// can plan its own replacement. Before a fill is confirmed its reservation is always subtracted.
+// After, a snapshot read before the inclusion block still subtracts the spend, whether or not the
+// backend has since reported the order filled, while one read at or after it does not, since it
+// already reflects the fill. A snapshot with an unknown block subtracts only orders still active.
+func (s *store) pendingReservations(excludedOrderID string, inventory []solverInventory) liquidlane.CapacityReservations {
+	blocks := snapshotBlocks(inventory)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reservations.SnapshotIf(func(orderID string, capacityID liquidlane.CapacityID) bool {
+		if orderID == excludedOrderID {
+			return false
+		}
+		rec := s.orders[orderID]
+		if rec == nil || rec.IncludedAt == 0 {
+			return true
+		}
+		block, known := blocks[capacityID]
+		if !known || block == 0 {
+			return rec.Status.active()
+		}
+		return block < rec.IncludedAt
+	})
+}
+
+// snapshotBlocks is the oldest reported snapshot block per capacity; zero when any item's is unknown.
+func snapshotBlocks(inventory []solverInventory) map[liquidlane.CapacityID]uint64 {
+	blocks := make(map[liquidlane.CapacityID]uint64, len(inventory))
+	for _, item := range inventory {
+		capacityID := liquidlane.RouteCapacityID(item.Route)
+		block, seen := blocks[capacityID]
+		switch {
+		case !seen:
+			blocks[capacityID] = item.BlockNumber
+		case block == 0:
+			// unknown stays unknown
+		case item.BlockNumber == 0 || item.BlockNumber < block:
+			blocks[capacityID] = item.BlockNumber
+		}
+	}
+	return blocks
+}
+
+// markIncluded records the block a confirmed fill landed in.
+func (s *store) markIncluded(orderID string, block uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rec := s.orders[orderID]; rec != nil {
+		rec.IncludedAt = block
+	}
+}
+
+// boundUnsignedWork sets the deadline after which unsigned preparation of an order expires locally.
+// A bound already recorded (from a cancellation retry) is kept.
+func (s *store) boundUnsignedWork(orderID string, deadline time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rec := s.orders[orderID]; rec != nil && rec.RetryDeadline.IsZero() {
+		rec.RetryDeadline = deadline
+	}
 }
 
 // recordAttempt increments and returns the attempt count for an order.
@@ -178,7 +295,9 @@ func (s *store) recordAttempt(orderID string) int {
 
 // scheduleCancellationRetry is called only after a successful, confirmed cancellation receipt.
 // The consumed nonce is safe to leave behind, but the retry budget survives re-queuing the order.
-func (s *store) scheduleCancellationRetry(orderID string, limit int, retryAt, deadline time.Time) bool {
+func (s *store) scheduleCancellationRetry(
+	orderID string, limit int, retryAt, deadline time.Time, txHash common.Hash, lastErr string,
+) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec := s.orders[orderID]
@@ -187,6 +306,9 @@ func (s *store) scheduleCancellationRetry(orderID string, limit int, retryAt, de
 	}
 	rec.CancellationRetries++
 	rec.Status = statusRetryWaiting
+	rec.TxHash = txHash
+	rec.LastError = lastErr
+	rec.UpdatedAt = s.now()
 	rec.RetryAt = retryAt
 	rec.RetryDeadline = deadline
 	return true

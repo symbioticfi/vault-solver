@@ -180,7 +180,7 @@ func TestExecution_OrderTraceLinksToQuote(t *testing.T) {
 	endQuote(nil)
 	quoteTraceID := trace.SpanContextFromContext(quoteCtx).TraceID().String()
 
-	e.syncOnce(t.Context())
+	syncCycle(t.Context(), e)
 
 	tracetest.RequireSpans(t, rec,
 		"rfq.execution.sync", "rfq.execution.poll", "rfq.order",
@@ -226,7 +226,7 @@ func TestExecution_SubmissionErrorOmitsTxHash(t *testing.T) {
 	}}
 	e := newExec(t, st, be, txm)
 
-	e.syncOnce(t.Context())
+	syncCycle(t.Context(), e)
 
 	if txm.calls != 1 {
 		t.Fatalf("txm sends = %d, want 1", txm.calls)
@@ -249,7 +249,7 @@ func TestExecution_OrderTraceRecordsLinkMiss(t *testing.T) {
 	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
 
-	e.syncOnce(t.Context())
+	syncCycle(t.Context(), e)
 
 	order := tracetest.Ended(t, rec, "rfq.order")
 	if len(order.Links()) != 0 {
@@ -285,9 +285,10 @@ func TestExecution_OrderTraceDeclinesRefusedFill(t *testing.T) {
 	}
 	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
+	offerDiscountCandidate(e, be, h)
 	e.strategy = fixedFillStrategy{plan: discountFillPlan(h)}
 
-	e.syncOnce(t.Context())
+	syncCycle(t.Context(), e)
 
 	if txm.calls != 0 {
 		t.Fatalf("txm sends = %d, want none for a refused fill", txm.calls)
@@ -314,7 +315,7 @@ func TestExecution_OrderLogsCarryTraceIDOnce(t *testing.T) {
 	e.log = log
 
 	// solver.Run stores the solver logger on the context it hands the poll loop; stand in for it.
-	e.syncOnce(observability.WithLogger(t.Context(), e.log))
+	syncCycle(observability.WithLogger(t.Context(), e.log), e)
 
 	lines := capture()
 	if len(lines) == 0 {
@@ -366,7 +367,7 @@ func TestExecution_FillsWithTracingDisabled(t *testing.T) {
 	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
 
-	e.syncOnce(t.Context())
+	syncCycle(t.Context(), e)
 
 	if rec := st.order("o1"); rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled", rec)

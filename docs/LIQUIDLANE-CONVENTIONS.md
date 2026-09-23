@@ -179,7 +179,9 @@ Never sum them. `internal/liquidlane/strategies/greedy` encodes the one-candidat
 tasks across RFQ, LI.FI, and UniswapX; execution reservations use the shared `CapacityID`.
 RFQ requests normalize the backend's pair inventory. LI.FI and UniswapX allocate their complete live
 inventory across routes before selecting a pair, so different token pairs share one unreserved vault budget.
-Accepted-fill reservations are subtracted once before dividing that budget. Returned quotes are not themselves
+Accepted-fill reservations are subtracted once before dividing that budget. RFQ reserves every won order,
+not only submitted ones, and subtracts those reservations from both the backend's inventory and its fill-time
+reads. Returned quotes are not themselves
 reservations, so repeated matches within a pair still require fresh fill planning.
 Excess input may be absorbed only into a direct allocation: direct calldata caps output, whereas a signed
 discount prices the entire `amountIn` on-chain and cannot honor an off-chain output cap.

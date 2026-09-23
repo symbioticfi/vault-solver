@@ -1,7 +1,7 @@
 /*
 Symbiotic RFQ Backend Internal API
 
-Internal RFQ backend API: discount listing and resolution.
+Internal RFQ backend API: health, discount listing and resolution.
 
 API version: 1.0.0
 */
@@ -19,16 +19,18 @@ var _ MappedNullable = &DiscountsResponseDiscountsInner{}
 
 // DiscountsResponseDiscountsInner struct for DiscountsResponseDiscountsInner
 type DiscountsResponseDiscountsInner struct {
-	DiscountId           string `json:"discountId" validate:"regexp=^0x[a-fA-F0-9]{64}$"`
-	Adapter              string `json:"adapter" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	TokenToRedeem        string `json:"tokenToRedeem" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Collateral           string `json:"collateral" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	CollateralDecimals   int64  `json:"collateralDecimals"`
-	Discount             string `json:"discount" validate:"regexp=^\\d+$"`
-	Signer               string `json:"signer" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Deadline             int64  `json:"deadline"`
-	MaxRate              string `json:"maxRate" validate:"regexp=^\\d+$"`
-	MaxAssets            string `json:"maxAssets" validate:"regexp=^\\d+$"`
+	DiscountId         string `json:"discountId" validate:"regexp=^0x[a-fA-F0-9]{64}$"`
+	Adapter            string `json:"adapter" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	TokenToRedeem      string `json:"tokenToRedeem" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Collateral         string `json:"collateral" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	CollateralDecimals int64  `json:"collateralDecimals"`
+	Discount           string `json:"discount" validate:"regexp=^\\d+$"`
+	Signer             string `json:"signer" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Deadline           int64  `json:"deadline"`
+	MaxRate            string `json:"maxRate" validate:"regexp=^\\d+$"`
+	MaxAssets          string `json:"maxAssets" validate:"regexp=^\\d+$"`
+	// Block number used to read maxAssets, encoded as a decimal string.
+	BlockNumber          string `json:"blockNumber" validate:"regexp=^\\d+$"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -38,7 +40,7 @@ type _DiscountsResponseDiscountsInner DiscountsResponseDiscountsInner
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewDiscountsResponseDiscountsInner(discountId string, adapter string, tokenToRedeem string, collateral string, collateralDecimals int64, discount string, signer string, deadline int64, maxRate string, maxAssets string) *DiscountsResponseDiscountsInner {
+func NewDiscountsResponseDiscountsInner(discountId string, adapter string, tokenToRedeem string, collateral string, collateralDecimals int64, discount string, signer string, deadline int64, maxRate string, maxAssets string, blockNumber string) *DiscountsResponseDiscountsInner {
 	this := DiscountsResponseDiscountsInner{}
 	this.DiscountId = discountId
 	this.Adapter = adapter
@@ -50,6 +52,7 @@ func NewDiscountsResponseDiscountsInner(discountId string, adapter string, token
 	this.Deadline = deadline
 	this.MaxRate = maxRate
 	this.MaxAssets = maxAssets
+	this.BlockNumber = blockNumber
 	return &this
 }
 
@@ -301,6 +304,30 @@ func (o *DiscountsResponseDiscountsInner) SetMaxAssets(v string) {
 	o.MaxAssets = v
 }
 
+// GetBlockNumber returns the BlockNumber field value
+func (o *DiscountsResponseDiscountsInner) GetBlockNumber() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.BlockNumber
+}
+
+// GetBlockNumberOk returns a tuple with the BlockNumber field value
+// and a boolean to check if the value has been set.
+func (o *DiscountsResponseDiscountsInner) GetBlockNumberOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.BlockNumber, true
+}
+
+// SetBlockNumber sets field value
+func (o *DiscountsResponseDiscountsInner) SetBlockNumber(v string) {
+	o.BlockNumber = v
+}
+
 func (o DiscountsResponseDiscountsInner) MarshalJSON() ([]byte, error) {
 	toSerialize, err := o.ToMap()
 	if err != nil {
@@ -321,6 +348,7 @@ func (o DiscountsResponseDiscountsInner) ToMap() (map[string]interface{}, error)
 	toSerialize["deadline"] = o.Deadline
 	toSerialize["maxRate"] = o.MaxRate
 	toSerialize["maxAssets"] = o.MaxAssets
+	toSerialize["blockNumber"] = o.BlockNumber
 
 	for key, value := range o.AdditionalProperties {
 		toSerialize[key] = value
@@ -357,6 +385,7 @@ func (o *DiscountsResponseDiscountsInner) UnmarshalJSON(data []byte) (err error)
 		delete(additionalProperties, "deadline")
 		delete(additionalProperties, "maxRate")
 		delete(additionalProperties, "maxAssets")
+		delete(additionalProperties, "blockNumber")
 		o.AdditionalProperties = additionalProperties
 	}
 

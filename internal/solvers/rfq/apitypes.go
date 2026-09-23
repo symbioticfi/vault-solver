@@ -38,6 +38,8 @@ type quoteAdapter struct {
 	MaxAssets     string  `json:"maxAssets" pattern:"^[0-9]+$"`
 	MaxRate       string  `json:"maxRate" pattern:"^[0-9]+$"`
 	DiscountID    *string `json:"discountId,omitempty" pattern:"^0x[a-fA-F0-9]{64}$"`
+	// BlockNumber is the block maxAssets was read at. Optional until every backend reports it.
+	BlockNumber *string `json:"blockNumber,omitempty" pattern:"^[0-9]+$"`
 }
 
 // quoteResponse is the filler → backend quote (POST /quote 200).
@@ -146,11 +148,20 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (
 		h := common.HexToHash(*v.DiscountID)
 		discountID = &h
 	}
-	route := liquidlane.NewRoute(chainID, adapter, common.Address{}, tokenIn, asset, 0, v.AssetDecimals)
-	if discountID != nil {
-		return liquidlane.DiscountInventory(route, maxAssets, maxRate, *discountID, time.Time{}), nil
+	var blockNumber uint64
+	if v.BlockNumber != nil && *v.BlockNumber != "" {
+		blockNumber, err = strconv.ParseUint(*v.BlockNumber, 10, 64)
+		if err != nil {
+			return solverInventory{}, errors.Errorf("%s: invalid block number %q", idxField(index, "blockNumber"), *v.BlockNumber)
+		}
 	}
-	return liquidlane.DirectInventory(route, maxAssets, maxRate), nil
+	route := liquidlane.NewRoute(chainID, adapter, common.Address{}, tokenIn, asset, 0, v.AssetDecimals)
+	inventory := liquidlane.DirectInventory(route, maxAssets, maxRate)
+	if discountID != nil {
+		inventory = liquidlane.DiscountInventory(route, maxAssets, maxRate, *discountID, time.Time{})
+	}
+	inventory.BlockNumber = blockNumber
+	return inventory, nil
 }
 
 // parseUint256 parses a base-10 non-negative integer string into a big.Int.

@@ -27,12 +27,14 @@ func newReader(c *chain.Client, log logr.Logger, liquidityLens common.Address) *
 	return &reader{ll: liquidlane.NewReader(c, log, liquidityLens), chain: c, chainID: c.ChainID().Int64()}
 }
 
-func (r *reader) latestBlockTime(ctx context.Context) (time.Time, error) {
+// latestBlock returns the latest block's number and timestamp. Inventory read afterwards reflects at
+// least that block, so the number is a safe lower bound for reservation accounting.
+func (r *reader) latestBlock(ctx context.Context) (uint64, time.Time, error) {
 	header, err := r.chain.HeaderByNumber(ctx, nil)
 	if err != nil {
-		return time.Time{}, errors.Errorf("latest block header: %w", err)
+		return 0, time.Time{}, errors.Errorf("latest block header: %w", err)
 	}
-	return time.Unix(int64(header.Time), 0), nil
+	return header.Number.Uint64(), time.Unix(int64(header.Time), 0), nil
 }
 
 // recoveryVault is one configured LiquidLane adapter plus the Vault and Asset derived from it. Config
@@ -57,12 +59,14 @@ func (r *reader) readVaultInventories(
 // readQuoteCandidates turns amount-independent inventory into current,
 // amount-normalized LiquidLane candidates. This protocol/on-chain adaptation
 // belongs to the solver; strategies receive only the completed decision input.
+// Capacity held by won, unfinished orders is subtracted before allocation.
 func (r *reader) readQuoteCandidates(
 	ctx context.Context,
 	inventory []solverInventory,
 	tokenIn common.Address,
 	tokenOut common.Address,
 	amountIn *big.Int,
+	pending pendingReservations,
 ) ([]liquidlane.QuoteCandidate, error) {
 	matching := make([]liquidlane.Inventory, 0, len(inventory))
 	for _, item := range inventory {
@@ -97,7 +101,11 @@ func (r *reader) readQuoteCandidates(
 	for index := range matching {
 		matching[index].TokenInDecimals = inputDecimals
 	}
-	allocated := liquidgreedy.AllocateInventoryCapacity(matching, nil, 0)
+	var reservations liquidlane.CapacityReservations
+	if pending != nil {
+		reservations = pending(matching)
+	}
+	allocated := liquidgreedy.AllocateInventoryCapacity(matching, reservations, 0)
 	if len(allocated) == 0 {
 		return nil, nil
 	}

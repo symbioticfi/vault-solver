@@ -49,6 +49,8 @@ type ListItem struct {
 	Deadline           int64
 	MaxRate            string
 	MaxAssets          string
+	// BlockNumber is the block maxAssets was read at; empty when the backend does not report it.
+	BlockNumber string
 }
 
 // List projects discount data and the X-Request-Id header into solver-owned types.
@@ -160,6 +162,7 @@ func (c *Client) ListDiscounts(ctx context.Context) (*List, error) {
 			Deadline:           d.GetDeadline(),
 			MaxRate:            d.GetMaxRate(),
 			MaxAssets:          d.GetMaxAssets(),
+			BlockNumber:        d.GetBlockNumber(),
 		})
 	}
 	return out, nil

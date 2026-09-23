@@ -19,7 +19,10 @@ var _ MappedNullable = &LiquidityRequest{}
 
 // LiquidityRequest struct for LiquidityRequest
 type LiquidityRequest struct {
-	TokenIn              string   `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	TokenIn string `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	// Restricts solvers and totalLiquidity to this configured solver. Takes precedence over solverIds. No eligible liquidity returns a zero total and an empty solvers array.
+	SolverId *string `json:"solverId,omitempty"`
+	// Restricts solvers and totalLiquidity to these configured solver ids. Used only when solverId is omitted; omit both filters to include every eligible enabled solver.
 	SolverIds            []string `json:"solverIds,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
@@ -68,6 +71,38 @@ func (o *LiquidityRequest) SetTokenIn(v string) {
 	o.TokenIn = v
 }
 
+// GetSolverId returns the SolverId field value if set, zero value otherwise.
+func (o *LiquidityRequest) GetSolverId() string {
+	if o == nil || IsNil(o.SolverId) {
+		var ret string
+		return ret
+	}
+	return *o.SolverId
+}
+
+// GetSolverIdOk returns a tuple with the SolverId field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *LiquidityRequest) GetSolverIdOk() (*string, bool) {
+	if o == nil || IsNil(o.SolverId) {
+		return nil, false
+	}
+	return o.SolverId, true
+}
+
+// HasSolverId returns a boolean if a field has been set.
+func (o *LiquidityRequest) HasSolverId() bool {
+	if o != nil && !IsNil(o.SolverId) {
+		return true
+	}
+
+	return false
+}
+
+// SetSolverId gets a reference to the given string and assigns it to the SolverId field.
+func (o *LiquidityRequest) SetSolverId(v string) {
+	o.SolverId = &v
+}
+
 // GetSolverIds returns the SolverIds field value if set, zero value otherwise.
 func (o *LiquidityRequest) GetSolverIds() []string {
 	if o == nil || IsNil(o.SolverIds) {
@@ -111,6 +146,9 @@ func (o LiquidityRequest) MarshalJSON() ([]byte, error) {
 func (o LiquidityRequest) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["tokenIn"] = o.TokenIn
+	if !IsNil(o.SolverId) {
+		toSerialize["solverId"] = o.SolverId
+	}
 	if !IsNil(o.SolverIds) {
 		toSerialize["solverIds"] = o.SolverIds
 	}
@@ -141,6 +179,7 @@ func (o *LiquidityRequest) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "tokenIn")
+		delete(additionalProperties, "solverId")
 		delete(additionalProperties, "solverIds")
 		o.AdditionalProperties = additionalProperties
 	}

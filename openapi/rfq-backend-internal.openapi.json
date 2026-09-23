@@ -3,9 +3,66 @@
   "info": {
     "title": "Symbiotic RFQ Backend Internal API",
     "version": "1.0.0",
-    "description": "Internal RFQ backend API: discount listing and resolution."
+    "description": "Internal RFQ backend API: health, discount listing and resolution."
   },
   "paths": {
+    "/api-internal/v1/health": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api-internal/v1/discounts": {
       "get": {
         "tags": [
@@ -238,6 +295,11 @@
                 "maxAssets": {
                   "type": "string",
                   "pattern": "^\\d+$"
+                },
+                "blockNumber": {
+                  "type": "string",
+                  "pattern": "^\\d+$",
+                  "description": "Block number used to read maxAssets, encoded as a decimal string."
                 }
               },
               "required": [
@@ -250,7 +312,8 @@
                 "signer",
                 "deadline",
                 "maxRate",
-                "maxAssets"
+                "maxAssets",
+                "blockNumber"
               ]
             }
           }
@@ -294,6 +357,26 @@
             }
           }
         }
+      },
+      "HealthResponse": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "draining"
+            ]
+          },
+          "timestamp": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "timestamp"
+        ]
       },
       "ResolveDiscountRequest": {
         "oneOf": [

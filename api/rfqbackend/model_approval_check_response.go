@@ -21,7 +21,7 @@ var _ MappedNullable = &ApprovalCheckResponse{}
 type ApprovalCheckResponse struct {
 	RequestId            string                                `json:"requestId"`
 	Approval             NullableApprovalCheckResponseApproval `json:"approval"`
-	Cancel               interface{}                           `json:"cancel"`
+	Cancel               NullableApprovalCheckResponseCancel   `json:"cancel"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -31,7 +31,7 @@ type _ApprovalCheckResponse ApprovalCheckResponse
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewApprovalCheckResponse(requestId string, approval NullableApprovalCheckResponseApproval, cancel interface{}) *ApprovalCheckResponse {
+func NewApprovalCheckResponse(requestId string, approval NullableApprovalCheckResponseApproval, cancel NullableApprovalCheckResponseCancel) *ApprovalCheckResponse {
 	this := ApprovalCheckResponse{}
 	this.RequestId = requestId
 	this.Approval = approval
@@ -98,27 +98,29 @@ func (o *ApprovalCheckResponse) SetApproval(v ApprovalCheckResponseApproval) {
 }
 
 // GetCancel returns the Cancel field value
-func (o *ApprovalCheckResponse) GetCancel() interface{} {
-	if o == nil {
-		var ret interface{}
+// If the value is explicit nil, the zero value for ApprovalCheckResponseCancel will be returned
+func (o *ApprovalCheckResponse) GetCancel() ApprovalCheckResponseCancel {
+	if o == nil || o.Cancel.Get() == nil {
+		var ret ApprovalCheckResponseCancel
 		return ret
 	}
 
-	return o.Cancel
+	return *o.Cancel.Get()
 }
 
 // GetCancelOk returns a tuple with the Cancel field value
 // and a boolean to check if the value has been set.
-func (o *ApprovalCheckResponse) GetCancelOk() (*interface{}, bool) {
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *ApprovalCheckResponse) GetCancelOk() (*ApprovalCheckResponseCancel, bool) {
 	if o == nil {
 		return nil, false
 	}
-	return &o.Cancel, true
+	return o.Cancel.Get(), o.Cancel.IsSet()
 }
 
 // SetCancel sets field value
-func (o *ApprovalCheckResponse) SetCancel(v interface{}) {
-	o.Cancel = v
+func (o *ApprovalCheckResponse) SetCancel(v ApprovalCheckResponseCancel) {
+	o.Cancel.Set(&v)
 }
 
 func (o ApprovalCheckResponse) MarshalJSON() ([]byte, error) {
@@ -133,7 +135,7 @@ func (o ApprovalCheckResponse) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["requestId"] = o.RequestId
 	toSerialize["approval"] = o.Approval.Get()
-	toSerialize["cancel"] = o.Cancel
+	toSerialize["cancel"] = o.Cancel.Get()
 
 	for key, value := range o.AdditionalProperties {
 		toSerialize[key] = value
