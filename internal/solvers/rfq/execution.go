@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/big"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -80,6 +81,9 @@ type executionService struct {
 	// cannot both claim the same free capacity. Quotes read the ledger without it.
 	planningMu sync.Mutex
 	submitWake chan struct{}
+	// sending is set while the submitter handles orders. The poll loop reserves won orders itself
+	// only then; an idle submitter reserves them through its own plan on the wake that follows.
+	sending atomic.Bool
 }
 
 // fillReader is the on-chain surface used to assemble fill-time strategy inputs.
@@ -129,10 +133,11 @@ func (e *executionService) syncOnce(ctx context.Context) {
 		backendErrorLogger(observability.Log(ctx), err).Error(err, "poll open orders")
 	}
 	for _, o := range e.store.activeOrders() {
-		if o.Status.awaitsSubmission() {
-			e.reserveWon(ctx, o)
-		} else {
+		switch {
+		case !o.Status.awaitsSubmission():
 			e.handleOrder(ctx, o)
+		case e.sending.Load():
+			e.reserveWon(ctx, o)
 		}
 	}
 	e.store.sweep() // evict stale terminal orders so the maps stay bounded
@@ -148,12 +153,15 @@ func (e *executionService) submitLoop(ctx context.Context) {
 			return
 		case <-e.submitWake:
 		}
+		e.sending.Store(true)
 		for _, o := range e.store.ordersAwaitingSubmission() {
 			if ctx.Err() != nil {
+				e.sending.Store(false)
 				return
 			}
 			e.handleOrder(ctx, o)
 		}
+		e.sending.Store(false)
 	}
 }
 
@@ -181,6 +189,10 @@ func (e *executionService) reserveWon(ctx context.Context, o *orderRecord) {
 	outputToken, required, err := executableOrderTerms(exec, order, e.executor)
 	if err != nil {
 		return
+	}
+	chainObservedAt := e.now()
+	if chainTime, err := e.reader.latestBlockTime(ctx); err == nil {
+		e.boundByOrderDeadline(o.OrderID, order, chainTime, chainObservedAt)
 	}
 	if _, err := e.buildFillPlan(ctx, o.OrderID, exec, order, outputToken, required); err != nil {
 		observability.Log(ctx).V(1).Info("won order not reserved yet; submission plans again",
@@ -292,6 +304,7 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		e.fail(ctx, orderID, "order deadline has passed")
 		return
 	}
+	e.boundByOrderDeadline(orderID, order, chainTime, chainObservedAt)
 
 	selected, err := e.buildFillPlan(ctx, orderID, exec, order, outputToken, required)
 	if err != nil || selected == nil {
@@ -363,6 +376,17 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	}
 	e.store.markStatus(orderID, statusSubmitted, res.Hash, "")
 	e.reconcileTerminalStatus(ctx, orderID)
+}
+
+// boundByOrderDeadline records the order's chain deadline as the local bound on unsigned work, so a
+// won order the backend stops reporting cannot hold its reservation past the point a fill could land.
+func (e *executionService) boundByOrderDeadline(
+	orderID string, order executor.IReactorOrder, chainTime, chainObservedAt time.Time,
+) {
+	orderDeadline := time.Unix(order.Request.Deadline.Int64(), 0)
+	if deadline, ok := liquidlane.CancellationDeadline(orderDeadline, chainTime, chainObservedAt, e.now()); ok {
+		e.store.boundUnsignedWork(orderID, deadline)
+	}
 }
 
 // buildFillCalldata resolves the plan's discount legs and encodes the Executor fill. It reports

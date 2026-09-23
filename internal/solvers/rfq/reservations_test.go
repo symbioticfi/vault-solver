@@ -56,18 +56,80 @@ func TestQuoteSubtractsWonOrderReservations(t *testing.T) {
 	}
 }
 
-func TestPollReservesWonOrderBeforeSubmission(t *testing.T) {
+// The poll loop reserves a won order only while the submitter is busy with another fill. An idle
+// submitter is woken instead and reserves through its own plan, so each order is planned once.
+func TestPollReservesWonOrderOnlyWhileSubmitterBusy(t *testing.T) {
+	for _, busy := range []bool{true, false} {
+		t.Run(map[bool]string{true: "busy submitter", false: "idle submitter"}[busy], func(t *testing.T) {
+			st, be := fillFixtures(t)
+			txm := &fakeTxm{result: confirmedTxResult()}
+			e := newExec(t, st, be, txm)
+			plans := 0
+			e.strategy = fixedFillStrategy{plan: baseFillPlan(), onBuild: func() { plans++ }}
+			e.sending.Store(busy)
+
+			e.syncOnce(t.Context())
+
+			if txm.calls != 0 {
+				t.Fatalf("poll sent %d transactions, want none", txm.calls)
+			}
+			want := big.NewInt(0)
+			if busy {
+				want = big.NewInt(900000)
+			}
+			if got := reservedOn(st, vltFillCapacity()); got.Cmp(want) != 0 {
+				t.Fatalf("reserved = %s, want %s", got, want)
+			}
+			if (plans == 1) != busy {
+				t.Fatalf("plans = %d during poll, want 1 only for a busy submitter", plans)
+			}
+		})
+	}
+}
+
+// A reserved order the backend stops reporting cannot hold capacity forever: unsigned work expires at
+// the order's own deadline.
+func TestReservationExpiresAtOrderDeadlineWhenBackendForgetsOrder(t *testing.T) {
 	st, be := fillFixtures(t)
-	txm := &fakeTxm{result: confirmedTxResult()}
-	e := newExec(t, st, be, txm)
+	now := time.Unix(1_000, 0)
+	st.now = func() time.Time { return now }
+	e := newExec(t, st, be, &fakeTxm{result: confirmedTxResult()})
+	e.now = st.now
+	e.reader.(*fakeRecoveryReader).chainTime = time.Unix(4_102_444_700, 0)
+	e.sending.Store(true) // a busy submitter: the poll loop reserves
 
 	e.syncOnce(t.Context())
-
-	if txm.calls != 0 {
-		t.Fatalf("poll sent %d transactions, want none", txm.calls)
+	if !st.reserved("o1") {
+		t.Fatal("won order was not reserved")
 	}
-	if got := reservedOn(st, vltFillCapacity()); got.Cmp(big.NewInt(900000)) != 0 {
-		t.Fatalf("reserved = %s, want the plan's 900000 output", got)
+	be.executable, be.order, be.open = nil, nil, nil
+
+	syncCycle(t.Context(), e)
+	if !st.reserved("o1") {
+		t.Fatal("reservation released before the order deadline")
+	}
+	now = now.Add(200 * time.Second) // the deadline is 100 s past the observed chain time
+	syncCycle(t.Context(), e)
+
+	if rec := st.order("o1"); rec == nil || rec.Status != statusExpired {
+		t.Fatalf("order = %+v, want expired at its deadline", rec)
+	}
+	if st.reserved("o1") {
+		t.Fatal("expired order kept its reservation")
+	}
+}
+
+// The submitter records the same bound when it plans an order itself.
+func TestSubmissionRecordsOrderDeadlineBound(t *testing.T) {
+	st, be := fillFixtures(t)
+	e := newExec(t, st, be, &fakeTxm{result: confirmedTxResult()})
+	e.now = func() time.Time { return time.Unix(1_000, 0) }
+	e.reader.(*fakeRecoveryReader).chainTime = time.Unix(4_102_444_700, 0)
+
+	syncCycle(t.Context(), e)
+
+	if want := time.Unix(1_100, 0); !st.order("o1").RetryDeadline.Equal(want) {
+		t.Fatalf("recorded deadline = %v, want chain deadline translated to %v", st.order("o1").RetryDeadline, want)
 	}
 }
 

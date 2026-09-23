@@ -100,7 +100,8 @@ is reflected as worse execution price and price impact. Awarded orders are plann
 LiquidLane state at fill time; the solver does not retain quote-time route plans.
 RFQ keeps quoting while fills are queued or pending. As soon as a won order is polled, its planned output
 is reserved against the vault capacity it spends, including capacity reached through a discount. Quotes and
-later fill plans subtract every reservation until the order is filled, expires or fails. Fills are still
+later fill plans subtract every reservation until the order is filled, expires or fails; an order the backend
+stops reporting expires locally at its own deadline. Fills are still
 sent one at a time on the shared nonce lane. Reservations are local to the process and are not restored
 after a restart.
 Design, config, and roadmap:

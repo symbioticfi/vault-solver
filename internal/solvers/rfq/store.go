@@ -223,6 +223,16 @@ func (s *store) pendingReservations(excludedOrderID string) liquidlane.CapacityR
 	return s.reservations.SnapshotExcluding(excludedOrderID)
 }
 
+// boundUnsignedWork sets the deadline after which unsigned preparation of an order expires locally.
+// A bound already recorded (from a cancellation retry) is kept.
+func (s *store) boundUnsignedWork(orderID string, deadline time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rec := s.orders[orderID]; rec != nil && rec.RetryDeadline.IsZero() {
+		rec.RetryDeadline = deadline
+	}
+}
+
 // recordAttempt increments and returns the attempt count for an order.
 func (s *store) recordAttempt(orderID string) int {
 	s.mu.Lock()

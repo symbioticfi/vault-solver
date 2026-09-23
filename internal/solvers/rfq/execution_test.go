@@ -255,14 +255,10 @@ func TestExecution_CancellationDeadlineAccountsForPlanningLatency(t *testing.T) 
 	wallNow := time.Unix(1_000, 0)
 	e.now = func() time.Time { return wallNow }
 	e.reader.(*fakeRecoveryReader).chainTime = time.Unix(1_010, 0)
-	builds := 0
 	e.strategy = fixedFillStrategy{
 		plan: baseFillPlan(),
 		onBuild: func() {
-			// The first plan only reserves the won order; the second precedes submission.
-			if builds++; builds == 2 {
-				wallNow = wallNow.Add(15 * time.Second)
-			}
+			wallNow = wallNow.Add(15 * time.Second)
 		},
 	}
 

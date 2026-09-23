@@ -138,9 +138,7 @@ func TestExecutionCancellationRetryRefreshesDiscountCalldata(t *testing.T) {
 	be.order.OrderStatus = "filled"
 	txm.result = confirmedTxResult()
 	syncCycle(t.Context(), e)
-	// Plans: the award reservation, the first submission and the retry rebuild. The retry keeps its
-	// reservation while waiting, so it is not reserved again.
-	if txm.calls != 2 || be.resolveCalls != 2 || builds != 3 || st.order("o1").Status != statusFilled {
+	if txm.calls != 2 || be.resolveCalls != 2 || builds != 2 || st.order("o1").Status != statusFilled {
 		t.Fatalf("retry did not rebuild and fill: sends=%d resolves=%d plans=%d order=%+v", txm.calls, be.resolveCalls, builds, st.order("o1"))
 	}
 	if !txm.lastReq.CancelAt.Equal(time.Unix(190, 0)) {

@@ -115,16 +115,19 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   through reservations instead. Nonce safety is checked again after strategy planning so a pass that observes
   a mid-plan conflict is discarded before its response.
 - **Won orders reserve liquidity until they finish.** The store owns a `liquidlane.CapacityLedger` keyed by
-  order ID. The poll loop plans and reserves each newly won order as soon as it is polled, whether or not
-  another transaction occupies the lane. The submitter plans it again from fresh state right before sending
-  and replaces the reservation. A reservation holds each leg's output per physical vault capacity, whether
+  order ID. A newly won order is reserved on the poll cycle that first sees it: by the submitter's own plan
+  when the submitter is idle, or by the poll loop when the submitter is busy with another fill, so an
+  in-flight transaction never delays the reservation and an idle path plans each order only once. The
+  submitter always plans again from fresh state right before sending and replaces the reservation. A reservation holds each leg's output per physical vault capacity, whether
   the leg is direct or discounted. Discounts themselves are not held: `LiquidLaneAdapter` checks but never
   consumes a discount's nonce, so one discount can back any number of fills until it is revoked or expires.
   A reservation is released only when the order leaves the active set (filled, expired or failed); a
   cancellation retry keeps it, and a failure without a recorded hash that the backend still lists open is
   reserved again when re-armed. Quotes pass every reservation, and fill planning every reservation except the
   order's own, to `AllocateInventoryCapacity`. A plan leg that matches no candidate fails closed, since its
-  liquidity could not be reserved.
+  liquidity could not be reserved. Whichever path plans an order also records its chain deadline, translated
+  to wall time, as the bound on unsigned work, so an order the backend stops reporting expires locally, and
+  releases its reservation, once a fill could no longer land.
   The ledger is process-local and does not survive restart.
 - **Polling never waits on a transaction.** The poll loop polls, reserves and reconciles. A single submitter
   goroutine sends won orders oldest award first, because the shared nonce lane admits one fill at a time;
