@@ -49,7 +49,7 @@ func TestQuoteDecisionMetricsClassifyAuthenticatedRequestsOnce(t *testing.T) {
 			want: quoteDecisionQuoted, wantCode: http.StatusOK,
 		},
 		"lane unavailable": {
-			configure: func(s *server) { s.quotes.laneReady = func() bool { return false } },
+			configure: func(s *server) { s.quotes.laneAvailable = func() bool { return false } },
 			want:      quoteDecisionLaneUnavailable, wantCode: http.StatusNoContent,
 		},
 		"not quotable": {
@@ -176,6 +176,7 @@ func (failingQuoteReader) readQuoteCandidates(
 	common.Address,
 	common.Address,
 	*big.Int,
+	liquidlane.CapacityReservations,
 ) ([]liquidlane.QuoteCandidate, error) {
 	return nil, errors.New("read failed")
 }

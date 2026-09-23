@@ -223,7 +223,9 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		laneStateChanged, unsubscribe := txm.SubscribeLaneState()
 		background.Go(func() {
 			defer unsubscribe()
-			watchReadiness(gctx, laneStateChanged, txm.LaneReady, health.SetReady)
+			// Readiness tracks nonce safety, not idleness: a pending transaction must not take quote
+			// servers out of rotation. Solvers apply their own lane gates to new commitments.
+			watchReadiness(gctx, laneStateChanged, txm.Available, health.SetReady)
 		})
 	}
 	for i, slv := range solvers {
@@ -268,13 +270,13 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 func watchReadiness(
 	ctx context.Context,
 	laneStateChanged <-chan struct{},
-	laneReady func() bool,
+	laneAvailable func() bool,
 	setReady func(bool),
 ) {
 	for {
 		select {
 		case <-laneStateChanged:
-			setReady(laneReady())
+			setReady(laneAvailable())
 		case <-ctx.Done():
 			setReady(false)
 			return

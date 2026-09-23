@@ -32,6 +32,7 @@ type fakeQuoteCandidateReader struct {
 	out           map[common.Address]*big.Int
 	inputDecimals int
 	queries       [][]liquidlane.Route
+	reserved      []liquidlane.CapacityReservations
 }
 
 func (f *fakeQuoteCandidateReader) readQuoteCandidates(
@@ -40,19 +41,21 @@ func (f *fakeQuoteCandidateReader) readQuoteCandidates(
 	tokenIn common.Address,
 	tokenOut common.Address,
 	amount *big.Int,
+	reservations liquidlane.CapacityReservations,
 ) ([]liquidlane.QuoteCandidate, error) {
+	f.reserved = append(f.reserved, reservations)
 	matching := make([]liquidlane.Inventory, 0, len(inventory))
 	inputDecimals := f.inputDecimals
 	if inputDecimals == 0 {
 		inputDecimals = 18
 	}
-	for _, item := range inventory {
+	for _, item := range withoutReservedDiscounts(inventory, reservations) {
 		if item.TokenIn == tokenIn && item.TokenOut == tokenOut {
 			item.TokenInDecimals = inputDecimals
 			matching = append(matching, item)
 		}
 	}
-	matching = liquidgreedy.AllocateInventoryCapacity(matching, nil, 0)
+	matching = liquidgreedy.AllocateInventoryCapacity(matching, reservations, 0)
 	routes := make([]liquidlane.Route, 0, len(matching))
 	for _, item := range matching {
 		routes = append(routes, item.Route)
@@ -81,4 +84,12 @@ func maxUint256() *big.Int {
 func testInventory(adapter, tokenIn, tokenOut common.Address, maxAssets, maxRate *big.Int) solverInventory {
 	route := liquidlane.NewRoute(1, adapter, common.Address{}, tokenIn, tokenOut, 18, 6)
 	return liquidlane.DirectInventory(route, maxAssets, maxRate)
+}
+
+// syncCycle runs one poll cycle followed by the submitter pass it wakes, synchronously.
+func syncCycle(ctx context.Context, e *executionService) {
+	e.syncOnce(ctx)
+	for _, o := range e.store.ordersAwaitingSubmission() {
+		e.handleOrder(ctx, o)
+	}
 }

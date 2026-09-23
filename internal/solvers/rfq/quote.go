@@ -23,12 +23,14 @@ import (
 type quoteService struct {
 	chainID  int64
 	executor common.Address
-	// laneReady is safe for concurrent use and reflects whether the shared nonce lane can immediately
-	// accept work. It is sampled before and after quote planning so work is declined whenever either
-	// check observes an occupied or conflicted lane.
-	laneReady   func() bool
-	whitelist   adapterWhitelist // nil disables adapter filtering
-	tokenPolicy tokenpolicy.Policy
+	// laneAvailable is safe for concurrent use and reports nonce safety only. A busy lane does not
+	// block quoting: pending fills are accounted through reservations instead. It is sampled before
+	// and after quote planning so work is declined whenever either check observes a nonce conflict.
+	laneAvailable func() bool
+	// reservations returns the liquidity held by won, unfinished orders; nil means none.
+	reservations func(excludedOrderID string) liquidlane.CapacityReservations
+	whitelist    adapterWhitelist // nil disables adapter filtering
+	tokenPolicy  tokenpolicy.Policy
 	// minAmountsIn holds per-input-token minimum request sizes in base units; a token absent from the
 	// map (or a nil map) has no minimum.
 	discountsEnabled bool
@@ -47,6 +49,7 @@ type quoteCandidateReader interface {
 		tokenIn common.Address,
 		tokenOut common.Address,
 		amountIn *big.Int,
+		reservations liquidlane.CapacityReservations,
 	) ([]liquidlane.QuoteCandidate, error)
 }
 
@@ -128,7 +131,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDec
 		return quoteDecision{outcome: quoteDecisionError}, &badRequestError{errors.Errorf("parse request: %w", err)}
 	}
 	if !qs.canQuote() {
-		observability.Log(ctx).V(1).Info("declining quote: transaction lane not ready", "quoteId", q.QuoteID)
+		observability.Log(ctx).V(1).Info("declining quote: transaction nonce lane unavailable", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil
 	}
 	if parsed == nil {
@@ -179,7 +182,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDec
 	}
 	traceAdapter(ctx, plan.Legs)
 	if !qs.canQuote() {
-		observability.Log(ctx).V(1).Info("declining quote: transaction lane no longer ready", "quoteId", q.QuoteID)
+		observability.Log(ctx).V(1).Info("declining quote: transaction nonce lane no longer available", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil
 	}
 
@@ -214,7 +217,11 @@ func (qs *quoteService) snapshotCandidates(
 ) (candidates []liquidlane.QuoteCandidate, err error) {
 	ctx, end := tracer.Start(ctx, "rfq.quote.snapshot")
 	defer func() { end(err) }()
-	return qs.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount)
+	var reserved liquidlane.CapacityReservations
+	if qs.reservations != nil {
+		reserved = qs.reservations("")
+	}
+	return qs.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount, reserved)
 }
 
 // decideQuote runs the strategy as the rfq.quote.decide stage.
@@ -230,7 +237,7 @@ func (qs *quoteService) decideQuote(
 // always supplies the txmanager predicate; keeping the nil case closed prevents a future alternate
 // constructor from silently advertising obligations it cannot fill.
 func (qs *quoteService) canQuote() bool {
-	return qs.laneReady != nil && qs.laneReady()
+	return qs.laneAvailable != nil && qs.laneAvailable()
 }
 
 // lowerAddr renders an address as lowercase hex; RFQ backend payloads use lowercase addresses.

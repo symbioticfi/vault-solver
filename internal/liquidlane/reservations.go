@@ -78,6 +78,14 @@ func (ledger *CapacityLedger) SnapshotExcluding(excludedKey string) CapacityRese
 	return out
 }
 
+// Has reports whether one pending fill holds a reservation.
+func (ledger *CapacityLedger) Has(key string) bool {
+	ledger.mu.RLock()
+	defer ledger.mu.RUnlock()
+	_, ok := ledger.byKey[key]
+	return ok
+}
+
 // Len returns the number of pending fills in the ledger.
 func (ledger *CapacityLedger) Len() int {
 	ledger.mu.RLock()

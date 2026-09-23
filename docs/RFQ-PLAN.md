@@ -106,13 +106,29 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   reconciliation without another fill. These protections and retry budgets are in-memory per process;
   persistence and coordination across replicas remain outside this change.
 - **Shutdown joins accepted fills.** RFQ stops new polling and shuts down its quote listener, then waits for
-  the execution loop to finish. A fill already admitted by txmanager keeps its lifecycle ownership and RFQ
+  the poll loop and the submitter to finish. A fill already admitted by txmanager keeps its lifecycle ownership and RFQ
   records the terminal result before `Run` returns; the framework's bounded txmanager drain remains the hard
   stop for an unresolved lifecycle.
-- **Quotes follow transaction-lane readiness.** `/quote` preserves pure request validation, then returns the
-  normal no-quote `204` before chain reads or strategy work while the lane is occupied or conflicted. Readiness
-  is checked again after strategy planning so a pass that observes a mid-plan state change is discarded before
-  its response.
+- **Quotes follow nonce safety, not lane idleness.** `/quote` preserves pure request validation, then returns
+  the normal no-quote `204` before chain reads or strategy work only while the nonce lane is conflicted
+  (`txmanager.Available`). A queued or pending fill does not block quoting; its liquidity is subtracted
+  through reservations instead. Nonce safety is checked again after strategy planning so a pass that observes
+  a mid-plan conflict is discarded before its response.
+- **Won orders reserve liquidity until they finish.** The store owns a `liquidlane.CapacityLedger` keyed by
+  order ID. The poll loop plans and reserves each newly won order as soon as it is polled, whether or not
+  another transaction occupies the lane. The submitter plans it again from fresh state right before sending
+  and replaces the reservation. A reservation holds each leg's output per physical vault capacity, plus the
+  single-use discount ID of a discount leg. It is released only when the order leaves the active set (filled,
+  expired or failed); a cancellation retry keeps it, and a failure without a recorded hash that the backend
+  still lists open is reserved again when re-armed. Quotes pass every reservation, and fill planning every
+  reservation except the order's own, to `AllocateInventoryCapacity`; reserved discounts are dropped from
+  inventory. A plan leg that matches no candidate fails closed, since its liquidity could not be reserved.
+  The ledger is process-local and does not survive restart.
+- **Polling never waits on a transaction.** The poll loop polls, reserves and reconciles. A single submitter
+  goroutine sends won orders oldest award first, because the shared nonce lane admits one fill at a time;
+  per-order ownership keeps the two from handling the same order. Reservation planning and submission
+  planning are serialized by one planning mutex so two won orders cannot claim the same free capacity; quotes
+  read the ledger without it.
 - **On-chain reads use the shared LiquidLane reader over `chain.Multicall`.** Exact-input pricing is
   route-specific and reads the executable amount after the adapter's current `minDiscount`; adapters
   that produce the same output asset are never collapsed into one oracle observation.
@@ -366,6 +382,12 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
 
   Deployment status for this item lives here rather than in the README, which `AGENTS.md` reserves
   for the external operator-facing runtime and configuration surface.
+
+- **Reservation timing without a data block.** The backend's `/quote` inventory does not yet say which block
+  its `maxAssets` was read at. Until it does, a reservation is held until the order is terminal: between a
+  fill's inclusion and that point, both the backend's `maxAssets` and the reservation reflect the fill, so
+  quotes under-offer that capacity. The backend is adding the block number; once it arrives, only
+  reservations whose fill was not yet included at that block should be subtracted.
 
 - **Authorized caller of the `Executor`** — the bot EOA must be added to the Executor's `callers`
   allowlist (owner-only `setCallers`) before fills land (onboarding

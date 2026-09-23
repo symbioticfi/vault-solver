@@ -140,9 +140,10 @@ func (r *countingQuoteReader) readQuoteCandidates(
 	tokenIn common.Address,
 	tokenOut common.Address,
 	amountIn *big.Int,
+	reservations liquidlane.CapacityReservations,
 ) ([]liquidlane.QuoteCandidate, error) {
 	r.calls++
-	return r.quoteCandidateReader.readQuoteCandidates(ctx, inventory, tokenIn, tokenOut, amountIn)
+	return r.quoteCandidateReader.readQuoteCandidates(ctx, inventory, tokenIn, tokenOut, amountIn, reservations)
 }
 
 type laneFlippingStrategy struct {
@@ -167,7 +168,7 @@ func TestQuoteDeclinesBeforePlanningWhenLaneNotReady(t *testing.T) {
 	srv := testServer()
 	reader := &countingQuoteReader{quoteCandidateReader: srv.quotes.reader}
 	strategy := &countingStrategy{Strategy: srv.quotes.strategy}
-	srv.quotes.laneReady = ready.Load
+	srv.quotes.laneAvailable = ready.Load
 	srv.quotes.reader = reader
 	srv.quotes.strategy = strategy
 
@@ -186,7 +187,7 @@ func TestQuoteDeclinesWhenLaneBecomesBusyDuringPlanning(t *testing.T) {
 
 	srv := testServer()
 	reader := &countingQuoteReader{quoteCandidateReader: srv.quotes.reader}
-	srv.quotes.laneReady = ready.Load
+	srv.quotes.laneAvailable = ready.Load
 	srv.quotes.reader = reader
 	srv.quotes.strategy = &laneFlippingStrategy{
 		Strategy: srv.quotes.strategy,

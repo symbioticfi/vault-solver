@@ -76,9 +76,10 @@ func (f *fakeRecoveryReader) readQuoteCandidates(
 	tokenIn common.Address,
 	tokenOut common.Address,
 	amountIn *big.Int,
+	reservations liquidlane.CapacityReservations,
 ) ([]liquidlane.QuoteCandidate, error) {
 	return (&fakeQuoteCandidateReader{out: f.quoteOut}).readQuoteCandidates(
-		ctx, inventory, tokenIn, tokenOut, amountIn,
+		ctx, inventory, tokenIn, tokenOut, amountIn, reservations,
 	)
 }
 
@@ -136,10 +137,17 @@ func newExec(t *testing.T, st *store, be orderBackend, txm txSender) *executionS
 		orderLimit: 20, backend: be, store: st, txm: txm, discountsEnabled: true,
 		maxCancellationRetries: defaultMaxCancellationRetries, pollInterval: defaultPollInterval,
 		strategy: fixedFillStrategy{plan: baseFillPlan()}, strategyName: defaultStrategyName,
-		reader: &fakeRecoveryReader{chainTime: time.Unix(0, 0)},
-		links:  observability.NewSpanLinks(),
-		log:    logr.Discard(), now: func() time.Time { return time.Unix(0, 0) },
-		inflight: make(map[string]bool),
+		// One configured vault whose fill-time inventory backs baseFillPlan's leg, so the plan's
+		// output is attributable to a candidate and can be reserved.
+		vaults: []recoveryVault{{Adapter: vlt}},
+		reader: &fakeRecoveryReader{
+			chainTime: time.Unix(0, 0),
+			permInv:   []solverInventory{testInventory(vlt, tIn, tOut, maxUint256(), maxUint256())},
+			quoteOut:  map[common.Address]*big.Int{tOut: big.NewInt(900000)},
+		},
+		links: observability.NewSpanLinks(),
+		log:   logr.Discard(), now: func() time.Time { return time.Unix(0, 0) },
+		inflight: make(map[string]bool), submitWake: make(chan struct{}, 1),
 	}
 }
 
@@ -187,6 +195,18 @@ func discountFillPlan(h common.Hash) *types.FillPlan {
 	}
 }
 
+// offerDiscountCandidate makes discount id a live fill-time candidate through vlt, the only source of
+// liquidity, so a discount leg is attributable and can be reserved.
+func offerDiscountCandidate(e *executionService, be *fakeBackend, id common.Hash) {
+	e.vaults = nil
+	be.discounts = &discountsResponse{Discounts: []discountListItem{{
+		DiscountID: id.Hex(), Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
+		Collateral: tOut.Hex(), CollateralDecimals: 6,
+		Discount: "500", Deadline: 4_102_444_800,
+		MaxAssets: "10000000", MaxRate: "1000000000000000000",
+	}}}
+}
+
 // backend order whose payload matches sampleOrder() from order_test.go.
 func fillFixtures(t *testing.T) (*store, *fakeBackend) {
 	t.Helper()
@@ -214,7 +234,7 @@ func TestExecution_DirectFillHappyPath(t *testing.T) {
 	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
 
-	e.syncOnce(context.Background())
+	syncCycle(context.Background(), e)
 
 	rec := st.order("o1")
 	if rec == nil || rec.Status != statusFilled {
@@ -235,14 +255,18 @@ func TestExecution_CancellationDeadlineAccountsForPlanningLatency(t *testing.T) 
 	wallNow := time.Unix(1_000, 0)
 	e.now = func() time.Time { return wallNow }
 	e.reader.(*fakeRecoveryReader).chainTime = time.Unix(1_010, 0)
+	builds := 0
 	e.strategy = fixedFillStrategy{
 		plan: baseFillPlan(),
 		onBuild: func() {
-			wallNow = wallNow.Add(15 * time.Second)
+			// The first plan only reserves the won order; the second precedes submission.
+			if builds++; builds == 2 {
+				wallNow = wallNow.Add(15 * time.Second)
+			}
 		},
 	}
 
-	e.syncOnce(t.Context())
+	syncCycle(t.Context(), e)
 
 	want := time.Unix(4_102_444_790, 0)
 	if !txm.lastReq.CancelAt.Equal(want) {
@@ -264,7 +288,7 @@ func TestExecution_DoesNotAdmitFillWhoseDeadlineElapsedDuringPlanning(t *testing
 		},
 	}
 
-	e.syncOnce(t.Context())
+	syncCycle(t.Context(), e)
 
 	if txm.lastReq.Data != nil {
 		t.Fatal("fill was admitted after its chain deadline elapsed")
@@ -303,7 +327,7 @@ func TestExecution_RejectsBackendOutputMismatch(t *testing.T) {
 	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
 
-	e.syncOnce(context.Background())
+	syncCycle(context.Background(), e)
 
 	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
@@ -322,7 +346,7 @@ func TestExecution_RevertMarksFailed(t *testing.T) {
 	}}
 	e := newExec(t, st, be, txm)
 
-	e.syncOnce(context.Background())
+	syncCycle(context.Background(), e)
 
 	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed", rec)
@@ -365,7 +389,7 @@ func TestExecution_FailedFillOutcomesAreMetered(t *testing.T) {
 			e := newExec(t, st, be, &fakeTxm{result: test.result})
 			e.metrics = metrics
 
-			e.syncOnce(t.Context())
+			syncCycle(t.Context(), e)
 
 			if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
 				t.Fatalf("status = %v, want failed", rec)
@@ -391,7 +415,7 @@ func TestExecution_IncludedUnconfirmedStaysSubmitted(t *testing.T) {
 	}}
 	e := newExec(t, st, be, txm)
 
-	e.syncOnce(context.Background())
+	syncCycle(context.Background(), e)
 
 	if rec := st.order("o1"); rec == nil || rec.Status != statusSubmitted {
 		t.Fatalf("status = %v, want submitted", rec)
@@ -413,9 +437,10 @@ func TestExecution_DiscountFill(t *testing.T) {
 	}
 	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
+	offerDiscountCandidate(e, be, h)
 	e.strategy = fixedFillStrategy{plan: discountFillPlan(h)}
 
-	e.syncOnce(context.Background())
+	syncCycle(context.Background(), e)
 
 	if rec := st.order("o1"); rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled", rec)
@@ -461,10 +486,11 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 	e := newExec(t, st, be, txm)
 	// No vaults configured (discount-only solver); fill-plan recovery prices via the default
 	// strategy's own dependency.
+	e.vaults = nil
 	e.reader = &fakeRecoveryReader{quoteOut: map[common.Address]*big.Int{tOut: big.NewInt(500000)}}
 	e.strategy = newDefaultTestStrategy()
 
-	e.syncOnce(context.Background())
+	syncCycle(context.Background(), e)
 
 	if rec := st.order("o1"); rec == nil || rec.Status != statusFilled {
 		t.Fatalf("status = %v, want filled (discount-only recovery with empty vaults)", rec)
@@ -498,9 +524,10 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	}
 	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
+	offerDiscountCandidate(e, be, h)
 	e.strategy = fixedFillStrategy{plan: discountFillPlan(h)}
 
-	e.syncOnce(context.Background())
+	syncCycle(context.Background(), e)
 
 	rec := st.order("o1")
 	if rec == nil || rec.Status != statusFailed {
@@ -515,7 +542,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 
 	// The order is still open, so the next poll re-arms it and re-evaluates the discount (it could
 	// resolve correctly by then — mirrors the TS filler); a persisting mismatch re-fails with no tx.
-	e.syncOnce(context.Background())
+	syncCycle(context.Background(), e)
 	if be.resolveCalls != 2 {
 		t.Fatalf("resolveDiscount calls after second cycle = %d, want 2 (re-evaluated)", be.resolveCalls)
 	}
@@ -582,7 +609,7 @@ func TestExecution_MissingFillPlanFails(t *testing.T) {
 	e := newExec(t, st, be, txm)
 	e.strategy = fixedFillStrategy{}
 
-	e.syncOnce(context.Background())
+	syncCycle(context.Background(), e)
 
 	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
 		t.Fatalf("status = %v, want failed (missing fill plan)", rec)
@@ -598,9 +625,11 @@ func TestExecutionRecoveryMarksPermissionedScopeAsSingleRoute(t *testing.T) {
 	e.discountsEnabled = false
 	e.tokenPolicy = testPermissionedPolicy(t, tIn)
 	e.strategy = strategy
+	st := e.store
+	st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
 
 	plan, err := e.buildFillPlan(
-		t.Context(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
+		t.Context(), "o1", &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
 	)
 	if err != nil {
 		t.Fatalf("buildFillPlan: %v", err)
@@ -630,7 +659,7 @@ func TestExecutionRejectsPermissionedScopeMultiLegFillPlan(t *testing.T) {
 	e.strategy = fixedFillStrategy{plan: plan}
 
 	got, err := e.buildFillPlan(
-		t.Context(), &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
+		t.Context(), "o1", &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
 	)
 	if err == nil || !strings.Contains(err.Error(), "single-route input requires exactly one leg") {
 		t.Fatalf("buildFillPlan error = %v, want single-route rejection", err)
@@ -668,7 +697,7 @@ func TestExecutionDoesNotResubmitPaidOrUncertainFailures(t *testing.T) {
 			txm := &fakeTxm{result: txmanager.Result{Outcome: outcome, Hash: hash, Err: errors.New("fill failed")}}
 			e := newExec(t, st, be, txm)
 			for range 5 {
-				e.syncOnce(t.Context())
+				syncCycle(t.Context(), e)
 			}
 			if txm.calls != 1 {
 				t.Fatalf("sends = %d, want 1", txm.calls)
@@ -701,15 +730,20 @@ func TestExecutionRetriesConfirmedCancellationAfterPollInterval(t *testing.T) {
 			_, e := buildServices(cfg, 1, st, nil, txm, nil,
 				fixedFillStrategy{plan: baseFillPlan()}, logr.Discard())
 			e.backend = be
-			e.reader = &fakeRecoveryReader{chainTime: time.Unix(0, 0)}
+			e.vaults = []recoveryVault{{Adapter: vlt}}
+			e.reader = &fakeRecoveryReader{
+				chainTime: time.Unix(0, 0),
+				permInv:   []solverInventory{testInventory(vlt, tIn, tOut, maxUint256(), maxUint256())},
+				quoteOut:  map[common.Address]*big.Int{tOut: big.NewInt(900000)},
+			}
 			e.now = st.now
 			be.order.OrderStatus = "open"
-			e.syncOnce(t.Context())
+			syncCycle(t.Context(), e)
 			if active, _ := st.activeOrderMetrics(); active != 1 {
 				t.Fatalf("active obligations during retry wait = %d, want 1", active)
 			}
 			now = now.Add(tc.pollInterval - time.Millisecond)
-			e.syncOnce(t.Context())
+			syncCycle(t.Context(), e)
 			if txm.calls != 1 {
 				t.Fatalf("sends before poll interval = %d, want 1", txm.calls)
 			}
@@ -717,13 +751,13 @@ func TestExecutionRetriesConfirmedCancellationAfterPollInterval(t *testing.T) {
 				t.Fatal("cancellation tracking hash was cleared before retry admission")
 			}
 			now = now.Add(time.Millisecond)
-			e.syncOnce(t.Context())
+			syncCycle(t.Context(), e)
 			if txm.calls != 2 {
 				t.Fatalf("sends after confirmed cancellation and poll interval = %d, want 2", txm.calls)
 			}
 			for range 5 {
 				now = now.Add(tc.pollInterval)
-				e.syncOnce(t.Context())
+				syncCycle(t.Context(), e)
 			}
 			if txm.calls != 4 {
 				t.Fatalf("sends after retry budget exhausted = %d, want initial plus three retries", txm.calls)

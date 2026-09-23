@@ -54,7 +54,7 @@ func TestExecutionCancellationRetryRequiresSafeOutcome(t *testing.T) {
 			e.now = st.now
 			tc.mutate(e, txm)
 			for range 5 {
-				e.syncOnce(t.Context())
+				syncCycle(t.Context(), e)
 				now = now.Add(10 * time.Second)
 			}
 			if txm.calls != 1 || st.order("o1").Status != tc.want {
@@ -87,13 +87,13 @@ func TestExecutionCancellationRetryRevalidatesBackendAndDeadline(t *testing.T) {
 			txm := &fakeTxm{result: confirmedCancellation()}
 			e := newExec(t, st, be, txm)
 			e.now = st.now
-			e.syncOnce(t.Context())
+			syncCycle(t.Context(), e)
 			if st.order("o1").Status != statusRetryWaiting {
 				t.Fatalf("order = %+v, want scheduled retry", st.order("o1"))
 			}
 			tc.change(be, e)
 			now = now.Add(3 * time.Second)
-			e.syncOnce(t.Context())
+			syncCycle(t.Context(), e)
 			if txm.calls != 1 {
 				t.Fatalf("sends after order became unavailable = %d, want 1", txm.calls)
 			}
@@ -120,9 +120,10 @@ func TestExecutionCancellationRetryRefreshesDiscountCalldata(t *testing.T) {
 	txm := &fakeTxm{result: confirmedCancellation()}
 	e := newExec(t, st, be, txm)
 	e.now = st.now
+	offerDiscountCandidate(e, be, id)
 	builds := 0
 	e.strategy = fixedFillStrategy{plan: discountFillPlan(id), onBuild: func() { builds++ }}
-	e.syncOnce(t.Context())
+	syncCycle(t.Context(), e)
 	if !txm.lastReq.CancelAt.Equal(time.Unix(90, 0)) {
 		t.Fatalf("first deadline = %v, want original discount deadline", txm.lastReq.CancelAt)
 	}
@@ -136,8 +137,10 @@ func TestExecutionCancellationRetryRefreshesDiscountCalldata(t *testing.T) {
 	be.executable.ProtocolSignature = strPtr("0x1234")
 	be.order.OrderStatus = "filled"
 	txm.result = confirmedTxResult()
-	e.syncOnce(t.Context())
-	if txm.calls != 2 || be.resolveCalls != 2 || builds != 2 || st.order("o1").Status != statusFilled {
+	syncCycle(t.Context(), e)
+	// Plans: the award reservation, the first submission and the retry rebuild. The retry keeps its
+	// reservation while waiting, so it is not reserved again.
+	if txm.calls != 2 || be.resolveCalls != 2 || builds != 3 || st.order("o1").Status != statusFilled {
 		t.Fatalf("retry did not rebuild and fill: sends=%d resolves=%d plans=%d order=%+v", txm.calls, be.resolveCalls, builds, st.order("o1"))
 	}
 	if !txm.lastReq.CancelAt.Equal(time.Unix(190, 0)) {
@@ -163,7 +166,7 @@ func TestExecutionDoesNotScheduleCancellationRetryDuringShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	txm.onResult = cancel
-	e.syncOnce(ctx)
+	syncCycle(ctx, e)
 	if st.order("o1").Status != statusFailed || st.order("o1").CancellationRetries != 0 {
 		t.Fatalf("shutdown scheduled a new retry: %+v", st.order("o1"))
 	}
@@ -183,7 +186,7 @@ func TestExecutionCancellationRetryExpiresWithoutBackendReconciliation(t *testin
 			txm := &fakeTxm{result: confirmedCancellation()}
 			e := newExec(t, st, be, txm)
 			e.now = st.now
-			e.syncOnce(t.Context())
+			syncCycle(t.Context(), e)
 			if !listed {
 				be.open = nil
 			}
@@ -191,13 +194,13 @@ func TestExecutionCancellationRetryExpiresWithoutBackendReconciliation(t *testin
 			be.executable = nil
 			if listed {
 				now = now.Add(3 * time.Second)
-				e.syncOnce(t.Context())
+				syncCycle(t.Context(), e)
 				if st.order("o1").Status != statusSubmitting {
 					t.Fatalf("order = %+v, want unsigned retry awaiting an executable order", st.order("o1"))
 				}
 			}
 			now = time.Unix(4_102_444_800, 0)
-			e.syncOnce(t.Context())
+			syncCycle(t.Context(), e)
 			if txm.calls != 1 || st.order("o1").Status != statusExpired {
 				t.Fatalf("expired retry state = %+v, sends = %d; want expired and one send", st.order("o1"), txm.calls)
 			}
@@ -206,7 +209,7 @@ func TestExecutionCancellationRetryExpiresWithoutBackendReconciliation(t *testin
 			}
 			be.open = nil
 			now = now.Add(3*time.Hour + time.Second)
-			e.syncOnce(t.Context())
+			syncCycle(t.Context(), e)
 			if st.order("o1") != nil {
 				t.Fatal("expired cancellation retry was not evicted")
 			}
@@ -222,17 +225,17 @@ func TestExecutionRetryDeadlineDoesNotExpireUnknownInclusion(t *testing.T) {
 	txm := &fakeTxm{result: confirmedCancellation()}
 	e := newExec(t, st, be, txm)
 	e.now = st.now
-	e.syncOnce(t.Context())
+	syncCycle(t.Context(), e)
 	txm.result = txmanager.Result{
 		Hash: common.HexToHash("0x5678"), Outcome: txmanager.OutcomeTrackingStopped,
 		Err: errors.New("tracking stopped"),
 	}
 	now = now.Add(3 * time.Second)
-	e.syncOnce(t.Context())
+	syncCycle(t.Context(), e)
 	be.open = nil
 	be.order = nil
 	now = time.Unix(4_102_444_800, 0)
-	e.syncOnce(t.Context())
+	syncCycle(t.Context(), e)
 	if txm.calls != 2 || st.order("o1").Status != statusSubmitted || st.order("o1").TxHash != txm.result.Hash {
 		t.Fatalf("unknown retry inclusion lost tracking: sends=%d order=%+v", txm.calls, st.order("o1"))
 	}
