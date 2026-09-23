@@ -176,7 +176,7 @@ func (failingQuoteReader) readQuoteCandidates(
 	common.Address,
 	common.Address,
 	*big.Int,
-	liquidlane.CapacityReservations,
+	pendingReservations,
 ) ([]liquidlane.QuoteCandidate, error) {
 	return nil, errors.New("read failed")
 }

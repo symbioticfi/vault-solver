@@ -124,8 +124,12 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   A reservation is released only when the order leaves the active set (filled, expired or failed); a
   cancellation retry keeps it, and a failure without a recorded hash that the backend still lists open is
   reserved again when re-armed. Quotes pass every reservation, and fill planning every reservation except the
-  order's own, to `AllocateInventoryCapacity`. A plan leg that matches no candidate fails closed, since its
-  liquidity could not be reserved. Whichever path plans an order also records its chain deadline, translated
+  order's own, to `AllocateInventoryCapacity`. A confirmed fill records its inclusion block on the order. The
+  backend reports the block each `/quote` adapter snapshot was read at (`adapters[].blockNumber`, optional
+  until production sends it); a snapshot read at or after the inclusion block already reflects the fill, so
+  that order's reservation is not subtracted from it, while an earlier or unreported block keeps the
+  subtraction. Fill-time reads report no block and subtract every other order. A plan leg that matches no
+  candidate fails closed, since its liquidity could not be reserved. Whichever path plans an order also records its chain deadline, translated
   to wall time, as the bound on unsigned work, so an order the backend stops reporting expires locally, and
   releases its reservation, once a fill could no longer land.
   The ledger is process-local and does not survive restart.
@@ -388,11 +392,10 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   Deployment status for this item lives here rather than in the README, which `AGENTS.md` reserves
   for the external operator-facing runtime and configuration surface.
 
-- **Reservation timing without a data block.** The backend's `/quote` inventory does not yet say which block
-  its `maxAssets` was read at. Until it does, a reservation is held until the order is terminal: between a
-  fill's inclusion and that point, both the backend's `maxAssets` and the reservation reflect the fill, so
-  quotes under-offer that capacity. The backend is adding the block number; once it arrives, only
-  reservations whose fill was not yet included at that block should be subtracted.
+- **Snapshot block on production quotes.** The staging backend reports `adapters[].blockNumber` on
+  `/quote`; production does not yet. Until it does, production quotes subtract every reservation until the
+  order is terminal, so capacity a fill has already consumed on-chain is under-offered between inclusion and
+  the backend marking the order filled. Nothing to change here once production ships the field.
 
 - **Authorized caller of the `Executor`** — the bot EOA must be added to the Executor's `callers`
   allowlist (owner-only `setCallers`) before fills land (onboarding
@@ -520,6 +523,11 @@ The RFQ backend serves its spec at `/api/v1/openapi.json` (hono-openapi, generat
 vendored at `openapi/rfq-backend.openapi.json` as the contract-of-record the `rfqbackend` client is
 generated from, and refreshed with `make refresh-rfq-openapi` (`RFQ_OPENAPI_URL=...`).
 
+- **Currently vendored from staging.** Both specs were last refreshed from `swap.sepolia.gprptest.net`,
+  which carries the `/quote` snapshot block, the reshaped `/liquidity` response, the approval-cancel payload
+  and the internal `/health` route ahead of production. The daily drift check still compares against the
+  production URLs in `hack/schema-sources.json`, so it reports drift until production ships the same build;
+  refresh from production once it does.
 - **The temp railway deployment is stale.** As of this writing it is built from a commit *before* the
   backend renamed discount `vault`→`adapter` and order `signature`→`protocolSignature`, so its served
   spec disagrees with both the current backend code and the current filler. The vendored file is

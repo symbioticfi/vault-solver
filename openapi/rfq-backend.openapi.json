@@ -14,10 +14,102 @@
         "responses": {
           "200": {
             "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/solver-logos/{filename}": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "description": "Public bundled solver PNG. Use the absolute metadata.logoUrl returned with each quote; filenames include a SHA-256 digest and responses are immutable for one year.",
+        "parameters": [
+          {
+            "name": "filename",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Solver logo",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "$ref": "#/components/schemas/SolverLogo"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -30,6 +122,7 @@
         "tags": [
           "RFQ"
         ],
+        "description": "Returns unsigned ERC-20 transactions for the wallet to execute. Sufficient allowance returns null for both payloads. Zero allowance returns approval only. Nonzero but insufficient allowance returns cancel (approve Reactor for zero) and approval (approve Reactor for maxUint256). Execute cancel before approval, atomically when supported or waiting for each transaction to confirm.",
         "requestBody": {
           "required": true,
           "content": {
@@ -43,6 +136,20 @@
         "responses": {
           "200": {
             "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -53,6 +160,20 @@
           },
           "400": {
             "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -82,6 +203,20 @@
         "responses": {
           "200": {
             "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -92,6 +227,20 @@
           },
           "403": {
             "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -111,6 +260,20 @@
         "responses": {
           "200": {
             "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -121,6 +284,20 @@
           },
           "403": {
             "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -148,6 +325,20 @@
         "responses": {
           "200": {
             "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -158,6 +349,20 @@
           },
           "403": {
             "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -187,6 +392,20 @@
         "responses": {
           "200": {
             "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -197,6 +416,20 @@
           },
           "400": {
             "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -207,6 +440,20 @@
           },
           "404": {
             "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -223,6 +470,8 @@
         "tags": [
           "RFQ"
         ],
+        "summary": "Get solver liquidity",
+        "description": "Returns the adapter inventory available to each eligible solver using the same authorization and live-discount limits as quote construction. Each liquidity value sums adapters[].maxAssets in tokenOut base units; totalLiquidity sums all returned solver values, including shared inventory counted for each solver. Solvers are sorted by liquidity descending. Optional solverId restricts the list and total to one solver and takes precedence over solverIds. Does not request solver quotes or persist quote records. Empty inventory returns 200 with totalLiquidity=0 and solvers=[].",
         "requestBody": {
           "required": true,
           "content": {
@@ -236,6 +485,20 @@
         "responses": {
           "200": {
             "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -246,16 +509,20 @@
           },
           "400": {
             "description": "Error",
-            "content": {
-              "application/json": {
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
                 }
               }
-            }
-          },
-          "404": {
-            "description": "Error",
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -272,7 +539,7 @@
         "tags": [
           "RFQ"
         ],
-        "description": "Publish a signed discount. A signed request with deadline=0 instead cancels (deletes) the discount currently stored for the (adapter, tokenToRedeem) pair; the signer must still produce a valid signature and be authorized for the adapter. Cancellation is backend-only \u2014 it stops the discount being served but does not retract the signed object on-chain.",
+        "description": "Publish a signed discount. A signed request with deadline=0 instead cancels (deletes) the discount currently stored for the (adapter, tokenToRedeem) pair; the signer must still produce a valid signature and be authorized for the adapter. Cancellation is backend-only — it stops the discount being served but does not retract the signed object on-chain.",
         "requestBody": {
           "required": true,
           "content": {
@@ -401,6 +668,20 @@
         "responses": {
           "200": {
             "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -411,6 +692,20 @@
           },
           "400": {
             "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -421,6 +716,20 @@
           },
           "404": {
             "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -431,6 +740,20 @@
           },
           "409": {
             "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -565,6 +888,20 @@
         "responses": {
           "200": {
             "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -575,6 +912,20 @@
           },
           "400": {
             "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -651,10 +1002,37 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Unsigned approve(Reactor, maxUint256) transaction, or null when allowance covers the requested amount."
           },
           "cancel": {
-            "type": "null"
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "to": {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]{40}$"
+                  },
+                  "data": {
+                    "type": "string",
+                    "pattern": "^0x[a-fA-F0-9]+$"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "to",
+                  "data",
+                  "value"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Unsigned approve(Reactor, 0) transaction when allowance is nonzero but insufficient. Execute cancel before approval. Null when allowance is zero or already sufficient."
           }
         },
         "required": [
@@ -839,7 +1217,10 @@
         "properties": {
           "status": {
             "type": "string",
-            "const": "ok"
+            "enum": [
+              "ok",
+              "draining"
+            ]
           },
           "timestamp": {
             "type": "string"
@@ -858,7 +1239,13 @@
             "type": "string",
             "pattern": "^0x[a-fA-F0-9]{40}$"
           },
+          "solverId": {
+            "description": "Restricts solvers and totalLiquidity to this configured solver. Takes precedence over solverIds. No eligible liquidity returns a zero total and an empty solvers array.",
+            "type": "string",
+            "minLength": 1
+          },
           "solverIds": {
+            "description": "Restricts solvers and totalLiquidity to these configured solver ids. Used only when solverId is omitted; omit both filters to include every eligible enabled solver.",
             "minItems": 1,
             "maxItems": 50,
             "type": "array",
@@ -940,199 +1327,32 @@
               "decimals"
             ]
           },
-          "levels": {
+          "totalLiquidity": {
+            "type": "string",
+            "pattern": "^\\d+$",
+            "description": "Sum of solvers[].liquidity in tokenOut base units. Shared inventory is counted for each eligible solver."
+          },
+          "solvers": {
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "amountIn": {
-                  "type": "string",
-                  "pattern": "^\\d+$"
-                },
-                "formattedAmountIn": {
+                "solverId": {
                   "type": "string",
                   "minLength": 1
                 },
-                "referenceAmountOut": {
-                  "anyOf": [
-                    {
-                      "type": "string",
-                      "pattern": "^\\d+$"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "formattedReferenceAmountOut": {
-                  "anyOf": [
-                    {
-                      "type": "string",
-                      "pattern": "^\\d+(\\.\\d+)?$"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "bestQuote": {
-                  "anyOf": [
-                    {
-                      "type": "object",
-                      "properties": {
-                        "solverId": {
-                          "type": "string",
-                          "minLength": 1
-                        },
-                        "solverName": {
-                          "type": "string",
-                          "minLength": 1
-                        },
-                        "filler": {
-                          "type": "string",
-                          "pattern": "^0x[a-fA-F0-9]{40}$"
-                        },
-                        "amountOut": {
-                          "type": "string",
-                          "pattern": "^\\d+$"
-                        },
-                        "formattedAmountOut": {
-                          "type": "string",
-                          "minLength": 1
-                        },
-                        "priceImpactAmountOut": {
-                          "anyOf": [
-                            {
-                              "type": "string",
-                              "pattern": "^-?\\d+$"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "formattedPriceImpactAmountOut": {
-                          "anyOf": [
-                            {
-                              "type": "string",
-                              "pattern": "^-?\\d+(\\.\\d+)?$"
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "priceImpactBps": {
-                          "anyOf": [
-                            {
-                              "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        }
-                      },
-                      "required": [
-                        "solverId",
-                        "solverName",
-                        "filler",
-                        "amountOut",
-                        "formattedAmountOut",
-                        "priceImpactAmountOut",
-                        "formattedPriceImpactAmountOut",
-                        "priceImpactBps"
-                      ]
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "solverQuotes": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "solverId": {
-                        "type": "string",
-                        "minLength": 1
-                      },
-                      "solverName": {
-                        "type": "string",
-                        "minLength": 1
-                      },
-                      "filler": {
-                        "type": "string",
-                        "pattern": "^0x[a-fA-F0-9]{40}$"
-                      },
-                      "amountOut": {
-                        "type": "string",
-                        "pattern": "^\\d+$"
-                      },
-                      "formattedAmountOut": {
-                        "type": "string",
-                        "minLength": 1
-                      },
-                      "priceImpactAmountOut": {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "pattern": "^-?\\d+$"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "formattedPriceImpactAmountOut": {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "pattern": "^-?\\d+(\\.\\d+)?$"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "priceImpactBps": {
-                        "anyOf": [
-                          {
-                            "type": "integer",
-                            "minimum": -9007199254740991,
-                            "maximum": 9007199254740991
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      }
-                    },
-                    "required": [
-                      "solverId",
-                      "solverName",
-                      "filler",
-                      "amountOut",
-                      "formattedAmountOut",
-                      "priceImpactAmountOut",
-                      "formattedPriceImpactAmountOut",
-                      "priceImpactBps"
-                    ]
-                  }
+                "liquidity": {
+                  "type": "string",
+                  "pattern": "^\\d+$",
+                  "description": "Sum of adapters[].maxAssets that the quote builder makes available to this solver, in tokenOut base units."
                 }
               },
               "required": [
-                "amountIn",
-                "formattedAmountIn",
-                "referenceAmountOut",
-                "formattedReferenceAmountOut",
-                "bestQuote",
-                "solverQuotes"
+                "solverId",
+                "liquidity"
               ]
-            }
+            },
+            "description": "Eligible solvers with positive liquidity, sorted by liquidity descending."
           }
         },
         "required": [
@@ -1140,7 +1360,8 @@
           "tokenOut",
           "tokenInInfo",
           "tokenOutInfo",
-          "levels"
+          "totalLiquidity",
+          "solvers"
         ]
       },
       "LocalFaucetFundResponse": {
@@ -1469,13 +1690,9 @@
             }
           },
           "cursor": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "string",
+              "null"
             ]
           }
         },
@@ -1959,6 +2176,10 @@
           "swapper",
           "outputs"
         ]
+      },
+      "SolverLogo": {
+        "type": "string",
+        "format": "binary"
       }
     }
   }

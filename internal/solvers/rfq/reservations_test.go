@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -20,7 +21,7 @@ func vltFillCapacity() liquidlane.CapacityID {
 }
 
 func reservedOn(st *store, capacityID liquidlane.CapacityID) *big.Int {
-	if amount := st.pendingReservations("")[capacityID]; amount != nil {
+	if amount := st.pendingReservations("", nil)[capacityID]; amount != nil {
 		return amount
 	}
 	return new(big.Int)
@@ -46,7 +47,7 @@ func TestQuoteSubtractsWonOrderReservations(t *testing.T) {
 			srv := testServer()
 			reservations := liquidlane.CapacityReservations{}
 			reservations.Add(capacityID, tc.reserved)
-			srv.quotes.reservations = func(string) liquidlane.CapacityReservations { return reservations }
+			srv.quotes.reservations = func(string, []solverInventory) liquidlane.CapacityReservations { return reservations }
 
 			rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, validQuoteBody())
 			if rr.Code != tc.want {
@@ -272,6 +273,104 @@ func TestFillPlanReservations(t *testing.T) {
 				if got[capacityID] == nil || got[capacityID].Cmp(amount) != 0 {
 					t.Fatalf("reservations = %v, want %v", got, tc.want)
 				}
+			}
+		})
+	}
+}
+
+// A snapshot read at or after a fill's confirmed inclusion already reflects it, so the order's
+// reservation is not subtracted from that snapshot. Earlier or unknown snapshot blocks still are.
+func TestPendingReservationsHonourSnapshotBlock(t *testing.T) {
+	capacityID := vltFillCapacity()
+	item := func(block uint64) solverInventory {
+		inv := testInventory(vlt, tIn, tOut, maxUint256(), maxUint256())
+		inv.BlockNumber = block
+		return inv
+	}
+	for _, tc := range []struct {
+		name       string
+		includedAt uint64
+		inventory  []solverInventory
+		subtracted bool
+	}{
+		{name: "not yet included, snapshot known", inventory: []solverInventory{item(100)}, subtracted: true},
+		{name: "snapshot before inclusion", includedAt: 100, inventory: []solverInventory{item(99)}, subtracted: true},
+		{name: "snapshot at inclusion", includedAt: 100, inventory: []solverInventory{item(100)}},
+		{name: "snapshot after inclusion", includedAt: 100, inventory: []solverInventory{item(150)}},
+		{name: "snapshot block unknown", includedAt: 100, inventory: []solverInventory{item(0)}, subtracted: true},
+		{name: "one item of the capacity unknown", includedAt: 100, inventory: []solverInventory{item(150), item(0)}, subtracted: true},
+		{name: "oldest item of the capacity decides", includedAt: 100, inventory: []solverInventory{item(150), item(99)}, subtracted: true},
+		{name: "no inventory given", includedAt: 100, subtracted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newStore(func() time.Time { return time.Unix(0, 0) })
+			st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
+			held := liquidlane.CapacityReservations{}
+			held.Add(capacityID, big.NewInt(7))
+			if !st.reserve("o1", held) {
+				t.Fatal("reserve")
+			}
+			if tc.includedAt != 0 {
+				st.markIncluded("o1", tc.includedAt)
+			}
+			got := st.pendingReservations("", tc.inventory)[capacityID]
+			if (got != nil) != tc.subtracted {
+				t.Fatalf("reserved = %v, want subtracted %v", got, tc.subtracted)
+			}
+		})
+	}
+}
+
+func TestConfirmedFillRecordsInclusionBlock(t *testing.T) {
+	st, be := fillFixtures(t)
+	be.order.OrderStatus = "open" // keep the order active so its record is inspectable
+	result := confirmedTxResult()
+	result.Receipt = &ethtypes.Receipt{TxHash: result.Hash, Status: ethtypes.ReceiptStatusSuccessful, BlockNumber: big.NewInt(4242)}
+	e := newExec(t, st, be, &fakeTxm{result: result})
+
+	syncCycle(t.Context(), e)
+
+	if rec := st.order("o1"); rec == nil || rec.IncludedAt != 4242 {
+		t.Fatalf("order = %+v, want inclusion block 4242", rec)
+	}
+}
+
+// End to end: the backend reports the block its maxAssets was read at; once that block is at or past
+// the confirmed fill's inclusion, the quote no longer subtracts the still-open order's reservation.
+func TestQuoteUsesBackendSnapshotBlock(t *testing.T) {
+	body := validQuoteBody()
+	parsed, err := body.toStrategy(1)
+	if err != nil || parsed == nil {
+		t.Fatalf("parse quote body: %v", err)
+	}
+	capacityID := liquidlane.RouteCapacityID(parsed.inv[0].Route)
+	for _, tc := range []struct {
+		name  string
+		block *string
+		want  int
+	}{
+		{name: "no block reported", want: http.StatusNoContent},
+		{name: "block before inclusion", block: strPtr("99"), want: http.StatusNoContent},
+		{name: "block at inclusion", block: strPtr("100"), want: http.StatusOK},
+		{name: "malformed block", block: strPtr("0x64"), want: http.StatusUnprocessableEntity},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newStore(func() time.Time { return time.Unix(0, 0) })
+			st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
+			held := liquidlane.CapacityReservations{}
+			held.Add(capacityID, big.NewInt(10_000_000)) // the whole advertised capacity
+			if !st.reserve("o1", held) {
+				t.Fatal("reserve")
+			}
+			st.markIncluded("o1", 100)
+			srv := testServer()
+			srv.quotes.reservations = st.pendingReservations
+			req := validQuoteBody()
+			req.Adapters[0].BlockNumber = tc.block
+
+			rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, req)
+			if rr.Code != tc.want {
+				t.Fatalf("quote status = %d, want %d (body %s)", rr.Code, tc.want, rr.Body.String())
 			}
 		})
 	}

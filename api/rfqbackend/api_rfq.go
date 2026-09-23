@@ -39,6 +39,8 @@ func (r ApiApiV1CheckApprovalPostRequest) Execute() (*ApprovalCheckResponse, *ht
 /*
 ApiV1CheckApprovalPost Method for ApiV1CheckApprovalPost
 
+Returns unsigned ERC-20 transactions for the wallet to execute. Sufficient allowance returns null for both payloads. Zero allowance returns approval only. Nonzero but insufficient allowance returns cancel (approve Reactor for zero) and approval (approve Reactor for maxUint256). Execute cancel before approval, atomically when supported or waiting for each transaction to confirm.
+
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiApiV1CheckApprovalPostRequest
 */
@@ -299,7 +301,9 @@ func (r ApiApiV1LiquidityPostRequest) Execute() (*LiquidityResponse, *http.Respo
 }
 
 /*
-ApiV1LiquidityPost Method for ApiV1LiquidityPost
+ApiV1LiquidityPost Get solver liquidity
+
+Returns the adapter inventory available to each eligible solver using the same authorization and live-discount limits as quote construction. Each liquidity value sums adapters[].maxAssets in tokenOut base units; totalLiquidity sums all returned solver values, including shared inventory counted for each solver. Solvers are sorted by liquidity descending. Optional solverId restricts the list and total to one solver and takes precedence over solverIds. Does not request solver quotes or persist quote records. Empty inventory returns 200 with totalLiquidity=0 and solvers=[].
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiApiV1LiquidityPostRequest
@@ -378,17 +382,6 @@ func (a *RFQAPIService) ApiV1LiquidityPostExecute(r ApiApiV1LiquidityPostRequest
 			error: localVarHTTPResponse.Status,
 		}
 		if localVarHTTPResponse.StatusCode == 400 {
-			var v ErrorResponse
-			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
-			if err != nil {
-				newErr.error = err.Error()
-				return localVarReturnValue, localVarHTTPResponse, newErr
-			}
-			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
-			newErr.model = v
-			return localVarReturnValue, localVarHTTPResponse, newErr
-		}
-		if localVarHTTPResponse.StatusCode == 404 {
 			var v ErrorResponse
 			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
 			if err != nil {

@@ -66,14 +66,20 @@ func (ledger *CapacityLedger) Snapshot() CapacityReservations {
 // SnapshotExcluding returns the aggregate reservation without one pending fill.
 // It lets an owner plan a replacement before releasing the old reservation.
 func (ledger *CapacityLedger) SnapshotExcluding(excludedKey string) CapacityReservations {
+	return ledger.SnapshotIf(func(key string, _ CapacityID) bool { return key != excludedKey })
+}
+
+// SnapshotIf aggregates only the reservations keep admits, decided per pending fill and capacity.
+func (ledger *CapacityLedger) SnapshotIf(keep func(key string, capacityID CapacityID) bool) CapacityReservations {
 	ledger.mu.RLock()
 	defer ledger.mu.RUnlock()
 	out := make(CapacityReservations)
 	for key, reservations := range ledger.byKey {
-		if key == excludedKey {
-			continue
+		for capacityID, amount := range reservations {
+			if keep(key, capacityID) {
+				out.Add(capacityID, amount)
+			}
 		}
-		out.AddAll(reservations)
 	}
 	return out
 }

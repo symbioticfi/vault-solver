@@ -64,7 +64,7 @@ func (r *reader) readQuoteCandidates(
 	tokenIn common.Address,
 	tokenOut common.Address,
 	amountIn *big.Int,
-	reservations liquidlane.CapacityReservations,
+	pending pendingReservations,
 ) ([]liquidlane.QuoteCandidate, error) {
 	matching := make([]liquidlane.Inventory, 0, len(inventory))
 	for _, item := range inventory {
@@ -98,6 +98,10 @@ func (r *reader) readQuoteCandidates(
 	}
 	for index := range matching {
 		matching[index].TokenInDecimals = inputDecimals
+	}
+	var reservations liquidlane.CapacityReservations
+	if pending != nil {
+		reservations = pending(matching)
 	}
 	allocated := liquidgreedy.AllocateInventoryCapacity(matching, reservations, 0)
 	if len(allocated) == 0 {

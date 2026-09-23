@@ -55,6 +55,9 @@ type orderRecord struct {
 	CancellationRetries int
 	RetryAt             time.Time
 	RetryDeadline       time.Time
+	// IncludedAt is the block a confirmed fill landed in; zero until then. A snapshot read at or
+	// after it already reflects the fill, so the reservation is not subtracted from it.
+	IncludedAt uint64
 }
 
 // queuedOrder is the input to upsertQueued, carrying the fields known when an order is first polled.
@@ -217,10 +220,50 @@ func (s *store) reserved(orderID string) bool {
 	return s.reservations.Has(orderID)
 }
 
-// pendingReservations is the liquidity every won, unfinished order holds, optionally without one
-// order so it can plan its own replacement.
-func (s *store) pendingReservations(excludedOrderID string) liquidlane.CapacityReservations {
-	return s.reservations.SnapshotExcluding(excludedOrderID)
+// pendingReservations is the liquidity won, unfinished orders hold against inventory, without one
+// order so it can plan its own replacement. A reservation is skipped for a capacity whose every
+// snapshot was read at or after the order's confirmed inclusion, since that snapshot already reflects
+// the fill; an unknown snapshot block keeps the subtraction.
+func (s *store) pendingReservations(excludedOrderID string, inventory []solverInventory) liquidlane.CapacityReservations {
+	blocks := snapshotBlocks(inventory)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reservations.SnapshotIf(func(orderID string, capacityID liquidlane.CapacityID) bool {
+		if orderID == excludedOrderID {
+			return false
+		}
+		rec := s.orders[orderID]
+		if rec == nil || rec.IncludedAt == 0 {
+			return true
+		}
+		block, known := blocks[capacityID]
+		return !known || block == 0 || block < rec.IncludedAt
+	})
+}
+
+// snapshotBlocks is the oldest reported snapshot block per capacity; zero when any item's is unknown.
+func snapshotBlocks(inventory []solverInventory) map[liquidlane.CapacityID]uint64 {
+	blocks := make(map[liquidlane.CapacityID]uint64, len(inventory))
+	for _, item := range inventory {
+		capacityID := liquidlane.RouteCapacityID(item.Route)
+		if block, seen := blocks[capacityID]; seen && (block == 0 || item.BlockNumber == 0) {
+			blocks[capacityID] = 0
+			continue
+		}
+		if block, seen := blocks[capacityID]; !seen || item.BlockNumber < block {
+			blocks[capacityID] = item.BlockNumber
+		}
+	}
+	return blocks
+}
+
+// markIncluded records the block a confirmed fill landed in.
+func (s *store) markIncluded(orderID string, block uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rec := s.orders[orderID]; rec != nil {
+		rec.IncludedAt = block
+	}
 }
 
 // boundUnsignedWork sets the deadline after which unsigned preparation of an order expires locally.

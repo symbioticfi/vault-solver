@@ -76,10 +76,10 @@ func (f *fakeRecoveryReader) readQuoteCandidates(
 	tokenIn common.Address,
 	tokenOut common.Address,
 	amountIn *big.Int,
-	reservations liquidlane.CapacityReservations,
+	pending pendingReservations,
 ) ([]liquidlane.QuoteCandidate, error) {
 	return (&fakeQuoteCandidateReader{out: f.quoteOut}).readQuoteCandidates(
-		ctx, inventory, tokenIn, tokenOut, amountIn, reservations,
+		ctx, inventory, tokenIn, tokenOut, amountIn, pending,
 	)
 }
 

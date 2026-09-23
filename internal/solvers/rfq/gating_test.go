@@ -140,10 +140,10 @@ func (r *countingQuoteReader) readQuoteCandidates(
 	tokenIn common.Address,
 	tokenOut common.Address,
 	amountIn *big.Int,
-	reservations liquidlane.CapacityReservations,
+	pending pendingReservations,
 ) ([]liquidlane.QuoteCandidate, error) {
 	r.calls++
-	return r.quoteCandidateReader.readQuoteCandidates(ctx, inventory, tokenIn, tokenOut, amountIn, reservations)
+	return r.quoteCandidateReader.readQuoteCandidates(ctx, inventory, tokenIn, tokenOut, amountIn, pending)
 }
 
 type laneFlippingStrategy struct {

@@ -360,6 +360,9 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	}
 	if outcome == txmanager.OutcomeConfirmed {
 		observability.Log(ctx).Info("filled order", "tx", res.Hash.Hex())
+		if res.Receipt != nil && res.Receipt.BlockNumber != nil {
+			e.store.markIncluded(orderID, res.Receipt.BlockNumber.Uint64())
+		}
 	} else {
 		observability.Log(ctx).Error(res.Err, "fill included but confirmation wait failed",
 			"attempt", attempt, "tx", res.Hash.Hex())
@@ -521,7 +524,10 @@ func (e *executionService) buildFillPlan(
 	defer func() { end(err) }()
 	e.planningMu.Lock()
 	defer e.planningMu.Unlock()
-	reserved := e.store.pendingReservations(orderID)
+	// Fill-time reads carry no snapshot block, so every other order's reservation is subtracted.
+	pending := func(inventory []solverInventory) liquidlane.CapacityReservations {
+		return e.store.pendingReservations(orderID, inventory)
+	}
 
 	// Direct inventories are filtered to adapters this executor is authorized to fill through. Skipped
 	// when no candidate vaults are configured (a discount-only solver), leaving discount legs only.
@@ -544,7 +550,7 @@ func (e *executionService) buildFillPlan(
 	requireSingleRoute := e.tokenPolicy.RequiresSingleRoute(req.TokenIn)
 	var candidates []liquidlane.QuoteCandidate
 	if len(inv) > 0 {
-		candidates, err = e.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount, reserved)
+		candidates, err = e.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount, pending)
 		if err != nil {
 			return nil, errors.Errorf("fill: read LiquidLane candidates: %w", err)
 		}

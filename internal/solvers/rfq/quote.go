@@ -27,8 +27,9 @@ type quoteService struct {
 	// block quoting: pending fills are accounted through reservations instead. It is sampled before
 	// and after quote planning so work is declined whenever either check observes a nonce conflict.
 	laneAvailable func() bool
-	// reservations returns the liquidity held by won, unfinished orders; nil means none.
-	reservations func(excludedOrderID string) liquidlane.CapacityReservations
+	// reservations returns the liquidity held by won, unfinished orders against a resolved
+	// inventory; nil means none.
+	reservations func(excludedOrderID string, inventory []solverInventory) liquidlane.CapacityReservations
 	whitelist    adapterWhitelist // nil disables adapter filtering
 	tokenPolicy  tokenpolicy.Policy
 	// minAmountsIn holds per-input-token minimum request sizes in base units; a token absent from the
@@ -49,9 +50,14 @@ type quoteCandidateReader interface {
 		tokenIn common.Address,
 		tokenOut common.Address,
 		amountIn *big.Int,
-		reservations liquidlane.CapacityReservations,
+		pending pendingReservations,
 	) ([]liquidlane.QuoteCandidate, error)
 }
+
+// pendingReservations returns the capacity won orders hold against the given resolved inventory.
+// It is called once the inventory carries capacity IDs, so a reservation can be compared with the
+// block each snapshot was read at. nil means nothing is reserved.
+type pendingReservations func(inventory []solverInventory) liquidlane.CapacityReservations
 
 type quoteDecisionOutcome string
 
@@ -217,11 +223,13 @@ func (qs *quoteService) snapshotCandidates(
 ) (candidates []liquidlane.QuoteCandidate, err error) {
 	ctx, end := tracer.Start(ctx, "rfq.quote.snapshot")
 	defer func() { end(err) }()
-	var reserved liquidlane.CapacityReservations
+	var pending pendingReservations
 	if qs.reservations != nil {
-		reserved = qs.reservations("")
+		pending = func(inventory []solverInventory) liquidlane.CapacityReservations {
+			return qs.reservations("", inventory)
+		}
 	}
-	return qs.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount, reserved)
+	return qs.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount, pending)
 }
 
 // decideQuote runs the strategy as the rfq.quote.decide stage.

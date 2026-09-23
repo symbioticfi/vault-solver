@@ -49,6 +49,9 @@ type Inventory struct {
 	// AdapterMinDiscount is the adapter's current minimum accepted discount in parts per million.
 	// It is a physical validation fact, not part of the strategy wire shape.
 	AdapterMinDiscount *big.Int `json:"-"`
+	// BlockNumber is the block the snapshot was read at when the source reports it; zero is unknown.
+	// It is a freshness fact for reservation accounting, not part of the strategy wire shape.
+	BlockNumber uint64 `json:"-"`
 
 	DiscountID *common.Hash `json:"discountId"`
 
