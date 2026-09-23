@@ -579,11 +579,11 @@ func (s *Solver) refreshTargets(ctx context.Context) ([]Target, error) {
 	for i, adapterAddr := range adapters {
 		r := resolved[i]
 		if r.err != nil {
-			resolutionComplete = false
 			if errors.Is(r.err, errAdapterUnconfigured) {
 				observability.Log(ctx).V(1).Info("skipping adapter: not configured on-chain",
 					"adapter", adapterAddr.Hex(), "reason", r.err.Error())
 			} else {
+				resolutionComplete = false
 				observability.Log(ctx).Error(r.err, "skipping adapter: resolution failed", "adapter", adapterAddr.Hex())
 			}
 			continue
