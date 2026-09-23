@@ -34,6 +34,14 @@ solver maps that boundary shape into the shared LiquidLane terms from
 `/discounts` flow). Both are in scope for full parity — discount legs are built in **P3** (§4), after
 the direct path is solid; they are sequenced last, not dropped.
 
+The HTTP inventory also accepts optional `blockNumber` as an unsigned decimal string.
+It identifies the block pinned by the backend for the on-chain `maxAssets`/`maxRate`
+multicall, including liquidity-lens reads. Discount caps may further reduce those
+values. The field remains optional for older backend versions, is validated by Huma,
+and is informational at this boundary: pricing and fill-time chain reads are unchanged.
+Deploy the accepting solver before enabling this field in backend requests; older
+solver binaries reject it as an unexpected property.
+
 ---
 
 ## 2. How it maps onto the framework

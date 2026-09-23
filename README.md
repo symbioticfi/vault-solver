@@ -83,6 +83,11 @@ An externally-owned solver/executor for **[Symbiotic RFQ](https://symbiotic.fi)*
 `LiquidLaneAdapter`s. It runs a `POST /quote` server that prices swaps for the RFQ backend and a poller
 that fills the orders it is awarded, settling on-chain through the adapter.
 
+The quote API accepts optional `adapters[].blockNumber` as a decimal string identifying
+the backend's on-chain `maxAssets`/`maxRate` read. This field is informational; fill planning
+still reads current chain state. Deploy this solver version before a backend that sends
+the field. Requests from older backends that omit it remain supported.
+
 It runs either in `external` mode (the open-source filler; quoting and filling scoped to the operator's
 own adapters) or `internal` mode (Symbiotic-internal; adds the private discounts flow). The caller EOA
 must be an authorized caller of the RFQ `Executor` (its `setCallers` allowlist, granted by the owner).

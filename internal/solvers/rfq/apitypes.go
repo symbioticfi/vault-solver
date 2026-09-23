@@ -36,6 +36,7 @@ type quoteAdapter struct {
 	Asset         string  `json:"asset" pattern:"^0x[a-fA-F0-9]{40}$"`
 	AssetDecimals int     `json:"assetDecimals" minimum:"0" maximum:"255"`
 	MaxAssets     string  `json:"maxAssets" pattern:"^[0-9]+$"`
+	BlockNumber   *string `json:"blockNumber,omitempty" pattern:"^[0-9]+$" doc:"Block used by the backend to read on-chain maxAssets and maxRate"`
 	MaxRate       string  `json:"maxRate" pattern:"^[0-9]+$"`
 	DiscountID    *string `json:"discountId,omitempty" pattern:"^0x[a-fA-F0-9]{64}$"`
 }

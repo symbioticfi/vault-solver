@@ -127,6 +127,47 @@ func TestServer_QuoteSchemaValidation(t *testing.T) {
 	}
 }
 
+func TestServer_QuoteInventoryBlockNumber(t *testing.T) {
+	cases := []struct {
+		name     string
+		value    json.RawMessage
+		wantCode int
+	}{
+		{"omitted by older backends", nil, http.StatusOK},
+		{"decimal string", json.RawMessage(`"24000000"`), http.StatusOK},
+		{"above JavaScript integer precision", json.RawMessage(`"9007199254740993"`), http.StatusOK},
+		{"hex string", json.RawMessage(`"0x16e3600"`), http.StatusUnprocessableEntity},
+		{"negative string", json.RawMessage(`"-1"`), http.StatusUnprocessableEntity},
+		{"empty string", json.RawMessage(`""`), http.StatusUnprocessableEntity},
+		{"JSON number", json.RawMessage(`24000000`), http.StatusUnprocessableEntity},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := validQuoteBody()
+			raw, err := json.Marshal(body.Adapters[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var adapter map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &adapter); err != nil {
+				t.Fatal(err)
+			}
+			if tc.value != nil {
+				adapter["blockNumber"] = tc.value
+			}
+			request := struct {
+				quoteRequest
+
+				Adapters []map[string]json.RawMessage `json:"adapters"`
+			}{body, []map[string]json.RawMessage{adapter}}
+			rr := do(t, testServer().handler(), http.MethodPost, "/quote", testSecret, request)
+			if rr.Code != tc.wantCode {
+				t.Fatalf("quote = %d, want %d (body %s)", rr.Code, tc.wantCode, rr.Body.String())
+			}
+		})
+	}
+}
+
 func TestServer_ServesOpenAPISpec(t *testing.T) {
 	rr := do(t, testServer().handler(), http.MethodGet, "/openapi.json", "", nil)
 	if rr.Code != http.StatusOK {
