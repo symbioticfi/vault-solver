@@ -56,18 +56,19 @@ func (f *fakeBackend) listDiscounts(context.Context) (*discountsResponse, error)
 // fakeRecoveryReader is the solver-owned on-chain surface used to assemble fill-time inputs.
 // readPermissionedVaultInventories is only invoked when vaults are configured.
 type fakeRecoveryReader struct {
-	permInv   []solverInventory
-	permErr   error
-	authErr   error
-	authCalls int
-	setCalls  int
-	quoteOut  map[common.Address]*big.Int
-	chainTime time.Time
-	chainErr  error
+	permInv    []solverInventory
+	permErr    error
+	authErr    error
+	authCalls  int
+	setCalls   int
+	quoteOut   map[common.Address]*big.Int
+	chainBlock uint64
+	chainTime  time.Time
+	chainErr   error
 }
 
-func (f *fakeRecoveryReader) latestBlockTime(context.Context) (time.Time, error) {
-	return f.chainTime, f.chainErr
+func (f *fakeRecoveryReader) latestBlock(context.Context) (uint64, time.Time, error) {
+	return f.chainBlock, f.chainTime, f.chainErr
 }
 
 func (f *fakeRecoveryReader) readQuoteCandidates(
@@ -625,7 +626,7 @@ func TestExecutionRecoveryMarksPermissionedScopeAsSingleRoute(t *testing.T) {
 	st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
 
 	plan, err := e.buildFillPlan(
-		t.Context(), "o1", &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
+		t.Context(), "o1", &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000), 0,
 	)
 	if err != nil {
 		t.Fatalf("buildFillPlan: %v", err)
@@ -655,7 +656,7 @@ func TestExecutionRejectsPermissionedScopeMultiLegFillPlan(t *testing.T) {
 	e.strategy = fixedFillStrategy{plan: plan}
 
 	got, err := e.buildFillPlan(
-		t.Context(), "o1", &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000),
+		t.Context(), "o1", &executable{quoteID: "q1"}, sampleOrder(), tOut, big.NewInt(900000), 0,
 	)
 	if err == nil || !strings.Contains(err.Error(), "single-route input requires exactly one leg") {
 		t.Fatalf("buildFillPlan error = %v, want single-route rejection", err)

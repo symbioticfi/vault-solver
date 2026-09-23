@@ -70,8 +70,9 @@ type queuedOrder struct {
 // concurrently, so every accessor is mutex-guarded.
 type store struct {
 	mu sync.Mutex
-	// reservations hold the liquidity of won orders until they leave the active set. Writes happen
-	// under mu so a reservation can never outlive its order; quotes read the ledger's own lock.
+	// reservations hold the liquidity of won orders until they leave the active set, and the spend
+	// of confirmed fills until their record is swept, so a snapshot older than the fill still
+	// subtracts it. Writes happen under mu so an entry never outlives its order record.
 	reservations liquidlane.CapacityLedger
 	orders       map[string]*orderRecord // by orderId
 	attempts     map[string]int          // by orderId
@@ -96,6 +97,7 @@ func (s *store) sweep() {
 		if !rec.Status.active() && now.Sub(rec.UpdatedAt) > terminalOrderTTL {
 			delete(s.orders, id)
 			delete(s.attempts, id)
+			s.reservations.Delete(id)
 		}
 	}
 }
@@ -193,7 +195,8 @@ func (s *store) markStatus(orderID string, status orderStatus, txHash common.Has
 		return
 	}
 	rec.Status = status
-	if !status.active() {
+	if !status.active() && rec.IncludedAt == 0 {
+		// Nothing was spent. A confirmed spend stays until sweep for older snapshots.
 		s.reservations.Delete(orderID)
 	}
 	if txHash != (common.Hash{}) {
@@ -220,10 +223,11 @@ func (s *store) reserved(orderID string) bool {
 	return s.reservations.Has(orderID)
 }
 
-// pendingReservations is the liquidity won, unfinished orders hold against inventory, without one
-// order so it can plan its own replacement. A reservation is skipped for a capacity whose every
-// snapshot was read at or after the order's confirmed inclusion, since that snapshot already reflects
-// the fill; an unknown snapshot block keeps the subtraction.
+// pendingReservations is the liquidity won orders hold against inventory, without one order so it
+// can plan its own replacement. Before a fill is confirmed its reservation is always subtracted.
+// After, a snapshot read before the inclusion block still subtracts the spend, whether or not the
+// backend has since reported the order filled, while one read at or after it does not, since it
+// already reflects the fill. A snapshot with an unknown block subtracts only orders still active.
 func (s *store) pendingReservations(excludedOrderID string, inventory []solverInventory) liquidlane.CapacityReservations {
 	blocks := snapshotBlocks(inventory)
 	s.mu.Lock()
@@ -237,7 +241,10 @@ func (s *store) pendingReservations(excludedOrderID string, inventory []solverIn
 			return true
 		}
 		block, known := blocks[capacityID]
-		return !known || block == 0 || block < rec.IncludedAt
+		if !known || block == 0 {
+			return rec.Status.active()
+		}
+		return block < rec.IncludedAt
 	})
 }
 
