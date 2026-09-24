@@ -194,7 +194,7 @@ func TestStartFillRepricesPartialDiscountLeg(t *testing.T) {
 		{
 			RouteID: discountRoute.ID, CapacityID: discountRoute.CapacityID, Adapter: discountRoute.Adapter,
 			AmountIn: big.NewInt(40), ExpectedAmountOut: big.NewInt(40), MinAmountOut: big.NewInt(40),
-			ReservedAmountOut: big.NewInt(40), DiscountID: hashPointer(common.HexToHash(testDiscountID)),
+			ReservedAmountOut: big.NewInt(41), DiscountID: hashPointer(common.HexToHash(testDiscountID)),
 		},
 	}}}
 	fullDirect := liquidlane.FillQuote{
@@ -534,7 +534,7 @@ func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 	}
 }
 
-func TestFillLoopKeepsQuotesBlockedUntilAcceptedLifecycleCompletes(t *testing.T) {
+func TestFillLoopKeepsReservationsWithoutBlockingQuotes(t *testing.T) {
 	fixture := newDirectExecutionFixture(t)
 	accepted := make(chan struct{}, 1)
 	fixture.txm.accepted = accepted
@@ -556,10 +556,11 @@ func TestFillLoopKeepsQuotesBlockedUntilAcceptedLifecycleCompletes(t *testing.T)
 	waitForExecutionCondition(t, func() bool {
 		return fixture.solver.planningFills.Load() == 0 && fixture.solver.capacity.Len() == 1
 	})
-	if !fixture.solver.quoteBlocked(time.Now().Unix()) {
-		t.Fatal("accepted transaction lifecycle did not block quoting after fill planning completed")
+	if fixture.solver.quoteBlocked(time.Now().Unix()) {
+		t.Fatal("a busy lifecycle must leave unreserved liquidity quotable")
 	}
 
+	fixture.solver.quoteState.Store(&quoteState{expiresAt: fixture.now.Add(time.Minute)})
 	fixture.txm.complete(txmanager.Result{
 		Hash:    common.HexToHash("0x2"),
 		Outcome: txmanager.OutcomeConfirmed,
@@ -574,6 +575,9 @@ func TestFillLoopKeepsQuotesBlockedUntilAcceptedLifecycleCompletes(t *testing.T)
 	}
 	if fixture.solver.quoteBlocked(time.Now().Unix()) {
 		t.Fatal("completed transaction lifecycle kept quoting blocked")
+	}
+	if fixture.solver.quoteState.Load() != nil || fixture.solver.capacity.Len() != 0 {
+		t.Fatal("completion must retire spent inventory and release its reservation")
 	}
 }
 
@@ -702,7 +706,7 @@ func TestCompletePendingFillClassifiesNotAdmittedWithoutFailure(t *testing.T) {
 	fixture.solver.setPendingReservations(
 		t.Context(),
 		fixture.order.Hash,
-		liquidlane.CapacityReservations{fixture.route.CapacityID: big.NewInt(100)},
+		liquidlane.CapacityReservations{fixture.route.CapacityID: big.NewInt(100)}, fixture.solver.capacity.Revision(),
 	)
 	pending := testPendingFill(t, fixture.order)
 
@@ -738,7 +742,7 @@ func TestCompletePendingFillRecordsFailureOutcome(t *testing.T) {
 	fixture.solver.setPendingReservations(
 		t.Context(),
 		fixture.order.Hash,
-		liquidlane.CapacityReservations{fixture.route.CapacityID: big.NewInt(100)},
+		liquidlane.CapacityReservations{fixture.route.CapacityID: big.NewInt(100)}, fixture.solver.capacity.Revision(),
 	)
 
 	fixture.solver.completePendingFill(t.Context(), uniswapFillCompletion{

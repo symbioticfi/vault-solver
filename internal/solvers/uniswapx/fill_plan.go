@@ -7,17 +7,13 @@ import (
 	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 )
-
-var errNoFillPlan = errors.New("no fill plan covers the awarded order")
 
 type preparedFill struct {
 	plan       *types.FillPlan
@@ -25,30 +21,54 @@ type preparedFill struct {
 	validUntil time.Time
 }
 
+// Keep physical budgets separate from advertised discount limits and source subsets.
+func fillCapacityLimits(snapshot fillSnapshot) map[liquidlane.CapacityID]*big.Int {
+	limits := make(map[liquidlane.CapacityID]*big.Int)
+	for _, quotes := range [][]liquidlane.FillQuote{snapshot.Physical, snapshot.Direct} {
+		for _, quote := range quotes {
+			if quote.MaxAssets == nil || quote.MaxAssets.Sign() <= 0 {
+				continue
+			}
+			id := liquidlane.RouteCapacityID(quote.Route)
+			if limits[id] == nil || quote.MaxAssets.Cmp(limits[id]) > 0 {
+				limits[id] = liquidlane.CloneBig(quote.MaxAssets)
+			}
+		}
+	}
+	return limits
+}
+
 func (s *Solver) prepareFill(
 	ctx context.Context, order *resolvedOrder, input types.FillInput,
-	routes []liquidlane.Route, now, observedAt time.Time,
+	routes []liquidlane.Route, now, observedAt time.Time, revision uint64,
 ) (preparedFill, error) {
+	tryPlan := func(plan *types.FillPlan) (preparedFill, error) {
+		reservations, ok := strategies.FillRouteReservations(plan.Routes)
+		if !ok {
+			return preparedFill{}, errors.New("strategy returned invalid capacity reservations")
+		}
+		if !s.setPendingReservations(ctx, order.Hash, reservations, revision) {
+			return preparedFill{}, declineFill(ctx, "fill_declined", "capacity changed during planning")
+		}
+		revision++ // Only our own replacement may advance the version accepted by this attempt.
+		return s.preflightPlan(ctx, order, plan, routes, now)
+	}
 	if !s.cfg.singleSource() {
 		plan, err := s.decideFill(ctx, input)
 		if err != nil {
 			return preparedFill{}, err
 		}
 		if plan == nil || len(plan.Routes) == 0 {
-			return preparedFill{}, errNoFillPlan
+			return preparedFill{}, declineFill(ctx, "fill_declined", "strategy returned no fill plan")
 		}
 		if err := validatePreparedFill(input, plan); err != nil {
 			return preparedFill{}, err
 		}
-		prepared, err := s.preflightPlan(ctx, order, plan, routes, now)
-		if unavailableFillSource(err) {
-			return preparedFill{}, errNoFillPlan
-		}
-		return prepared, err
+		return tryPlan(plan)
 	}
 
-	// Gas is paid by the sender: an awarded single-source order needs its promised
-	// output, not a new margin for gas or price buffer. Transaction fee caps remain.
+	// Gas is paid by the sender; single-source fills retain the configured price
+	// buffer without requiring additional gas repayment. Transaction fee caps remain.
 	input.MaxFeePerGas = new(big.Int)
 	deadline := observedAt.Add(time.Unix(int64(order.Deadline), 0).Sub(now))
 	ctx, cancel := context.WithDeadline(ctx, deadline)
@@ -60,7 +80,7 @@ func (s *Solver) prepareFill(
 	if order.ExclusiveUntil == 0 || uint64(now.Unix()) <= order.ExclusiveUntil {
 		preferred = s.preferredSource(order, time.Now())
 	}
-	var uncertain error
+	var sourceErr error
 	for len(remaining) > 0 {
 		if err := ctx.Err(); err != nil {
 			return preparedFill{}, err
@@ -90,14 +110,14 @@ func (s *Solver) prepareFill(
 		if err := validatePreparedFill(input, plan); err != nil {
 			return preparedFill{}, err
 		}
-		prepared, err := s.preflightPlan(ctx, order, plan, routes, now)
-		if err == nil {
-			return prepared, nil
+		prepared, err := tryPlan(plan)
+		if err == nil || errors.Is(err, errOrderNotFillable) {
+			return prepared, err
 		}
-		// Unclassified failures may be transient. Try alternatives now, but keep
-		// the order retryable if no source can be verified.
-		if !unavailableFillSource(err) {
-			uncertain = err
+		// Try alternatives within this attempt, retaining preflight failures for
+		// the existing retry backoff and breaker if none succeeds.
+		if sourceErr == nil || errors.Is(err, errFillPreflight) {
+			sourceErr = err
 		}
 		selected := plan.Routes[0].CandidateID
 		observability.Log(ctx).V(1).Info("try another single source", "candidateId", selected, "error", err.Error())
@@ -108,10 +128,10 @@ func (s *Solver) prepareFill(
 	if err := ctx.Err(); err != nil {
 		return preparedFill{}, err
 	}
-	if uncertain != nil {
-		return preparedFill{}, uncertain
+	if sourceErr != nil {
+		return preparedFill{}, sourceErr
 	}
-	return preparedFill{}, errNoFillPlan
+	return preparedFill{}, declineFill(ctx, "fill_declined", "no source covers the awarded output")
 }
 
 func validatePreparedFill(input types.FillInput, plan *types.FillPlan) error {
@@ -119,7 +139,8 @@ func validatePreparedFill(input types.FillInput, plan *types.FillPlan) error {
 		TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: input.AmountIn,
 		RequiredAmountOut: input.OutputAmount, RequireSingleRoute: input.RequireSingleRoute,
 		MaxRoutes: types.MaxRoutes, Quotes: input.Quotes, Reservations: input.Reservations,
-		GasSnapshot: input.GasSnapshot, GasPrices: input.GasPrices, MaxFeePerGas: input.MaxFeePerGas,
+		CapacityLimits: input.CapacityLimits,
+		GasSnapshot:    input.GasSnapshot, GasPrices: input.GasPrices, MaxFeePerGas: input.MaxFeePerGas,
 		GasEnvelope: types.LiquidLaneGasEnvelope(),
 	}, plan.Routes)
 	if err != nil {
@@ -141,12 +162,4 @@ func (s *Solver) preflightPlan(
 		return preparedFill{}, errors.Errorf("%w: %w", errFillPreflight, err)
 	}
 	return preparedFill{plan: plan, data: data, validUntil: until}, nil
-}
-
-func unavailableFillSource(err error) bool {
-	if errors.Is(err, liquiddiscounts.ErrUnavailable) {
-		return true
-	}
-	var rpcErr rpc.Error
-	return errors.Is(err, errFillPreflight) && errors.As(err, &rpcErr) && rpcErr.ErrorCode() == 3
 }

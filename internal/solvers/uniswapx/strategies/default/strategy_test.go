@@ -10,6 +10,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 )
 
@@ -52,7 +53,7 @@ func TestDecideQuoteReturnsOneExactInputAmountWithBuffer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if quote == nil || quote.AmountIn.String() != "1000" || quote.AmountOut.String() != "990" {
+	if quote == nil || quote.AmountIn.String() != "1000" || quote.AmountOut.String() != "980" {
 		t.Fatalf("quote = %+v", quote)
 	}
 }
@@ -119,6 +120,96 @@ func TestDecideQuoteAggregatesRoutesOnlyWhenAllowed(t *testing.T) {
 	quote, err = strategy.DecideQuote(context.Background(), input)
 	if err != nil || quote != nil {
 		t.Fatalf("single-route quote = %+v, err %v", quote, err)
+	}
+}
+
+func TestSingleQuoteUsesFullSharedCapacity(t *testing.T) {
+	strategy, err := New(Config{Name: types.SingleName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name            string
+		exactOutput     bool
+		otherPair       bool
+		pending         int64
+		wantIn, wantOut int64
+	}{
+		{"best exact input", false, false, 0, 40, 80},
+		{"best exact output", true, false, 0, 40, 80},
+		{"unrelated pair", false, true, 0, 40, 80},
+		{"better source lacks volume", false, false, 30, 40, 40},
+		{"all sources lack volume", true, false, 30, 0, 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := directQuoteInput(40, 100, new(big.Int).Mul(big.NewInt(2), quoteRateScale))
+			other := input.Inventory[0]
+			other.Route = testRoute("route-2", "capacity-1", 2, input.TokenIn, input.TokenOut)
+			other.MaxRate = quoteRateScale
+			if test.otherPair {
+				other.TokenIn = common.HexToAddress("0x03")
+			}
+			input.Inventory = append(input.Inventory, other)
+			input.Reservations = liquidlane.CapacityReservations{"capacity-1": big.NewInt(test.pending)}
+			if test.exactOutput {
+				input.AmountIn, input.AmountOut = nil, big.NewInt(80)
+			}
+			quote, quoteErr := strategy.DecideQuote(t.Context(), input)
+			if quoteErr != nil || (quote == nil) != (test.wantIn == 0) {
+				t.Fatalf("quote=%+v, err=%v", quote, quoteErr)
+			}
+			if quote != nil && (quote.AmountIn.Int64() != test.wantIn || quote.AmountOut.Int64() != test.wantOut || quote.CandidateID == "") {
+				t.Fatalf("quote=%+v, want %d -> %d", quote, test.wantIn, test.wantOut)
+			}
+		})
+	}
+}
+
+func TestLocalQuoteAndFillAgreeOnReservedPhysicalCapacity(t *testing.T) {
+	for _, name := range []string{types.DefaultName, types.SingleName} {
+		for _, buffer := range []int{0, 100} {
+			t.Run(name+"/"+big.NewInt(int64(buffer)).String(), func(t *testing.T) {
+				strategy, err := New(Config{Name: name, PriceBufferBps: buffer, InventoryReserveBps: buffer})
+				if err != nil {
+					t.Fatal(err)
+				}
+				amount := int64(20)
+				if buffer > 0 {
+					amount = 15
+				}
+				input := directQuoteInput(amount, 40, new(big.Int).Mul(big.NewInt(2), quoteRateScale))
+				id := common.HexToHash("0x01")
+				input.Inventory[0].DiscountID = &id
+				other := input.Inventory[0]
+				other.Route = testRoute("route-2", "capacity-1", 2, input.TokenIn, input.TokenOut)
+				other.MaxAssets, other.MaxRate, other.DiscountID = big.NewInt(100), quoteRateScale, nil
+				input.Inventory = append(input.Inventory, other)
+				input.Reservations = liquidlane.CapacityReservations{"capacity-1": big.NewInt(30)}
+				quote, err := strategy.DecideQuote(t.Context(), input)
+				if err != nil || quote == nil {
+					t.Fatalf("quote=%+v err=%v", quote, err)
+				}
+				narrow := directFillQuote(input.Inventory[0].Route, amount, 40, 2*amount)
+				narrow.DiscountID = &id
+				fillInput := types.FillInput{
+					TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: quote.AmountIn, OutputAmount: quote.AmountOut,
+					ChainTime: input.ChainTime, MaxFeePerGas: new(big.Int), Reservations: input.Reservations,
+					Quotes:         []liquidlane.FillQuote{narrow}, // preference filtering must retain the full budget
+					CapacityLimits: map[liquidlane.CapacityID]*big.Int{"capacity-1": big.NewInt(100)},
+				}
+				plan, err := strategy.DecideFill(t.Context(), fillInput)
+				if err != nil || plan == nil {
+					t.Fatalf("quote %s -> %s cannot be filled: %v", quote.AmountIn, quote.AmountOut, err)
+				}
+				_, err = strategies.ValidateFillRoutes(strategies.FillValidation{
+					TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: quote.AmountIn, RequiredAmountOut: quote.AmountOut,
+					MaxRoutes: types.MaxRoutes, Quotes: fillInput.Quotes, Reservations: input.Reservations, CapacityLimits: fillInput.CapacityLimits,
+				}, plan.Routes)
+				if err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
 	}
 }
 
@@ -205,29 +296,32 @@ func TestDecideQuoteKeepsMatchingRoutesWithinSharedCapacity(t *testing.T) {
 }
 
 func TestDecideQuoteChoosesFreshPrivateAlternative(t *testing.T) {
-	strategy, err := New(Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	input := directQuoteInput(100, 200, quoteRateScale)
-	discountID := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	private := input.Inventory[0]
-	private.DiscountID = &discountID
-	private.MaxRate = new(big.Int).Mul(big.NewInt(2), quoteRateScale)
-	private.ValidUntil = input.QuoteExpiresAt.Add(time.Minute)
-	input.Inventory = append(input.Inventory, private)
+	for _, name := range []string{types.DefaultName, types.SingleName} {
+		t.Run(name, func(t *testing.T) {
+			strategy, err := New(Config{Name: name})
+			if err != nil {
+				t.Fatal(err)
+			}
+			input := directQuoteInput(100, 200, quoteRateScale)
+			discountID := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+			private := input.Inventory[0]
+			private.DiscountID = &discountID
+			private.MaxRate = new(big.Int).Mul(big.NewInt(2), quoteRateScale)
+			private.ValidUntil = input.QuoteExpiresAt.Add(time.Minute)
+			input.Inventory = append(input.Inventory, private)
 
-	quote, err := strategy.DecideQuote(context.Background(), input)
-	if err != nil || quote == nil || quote.AmountOut.String() != "200" {
-		t.Fatalf("private quote = %+v, err %v", quote, err)
-	}
-	input.Inventory[1].ValidUntil = input.QuoteExpiresAt
-	quote, err = strategy.DecideQuote(context.Background(), input)
-	if err != nil || quote == nil || quote.AmountOut.String() != "100" {
-		t.Fatalf("expired private fallback = %+v, err %v", quote, err)
+			quote, err := strategy.DecideQuote(context.Background(), input)
+			if err != nil || quote == nil || quote.AmountOut.String() != "200" {
+				t.Fatalf("private quote = %+v, err %v", quote, err)
+			}
+			input.Inventory[1].ValidUntil = input.QuoteExpiresAt.Add(time.Second)
+			quote, err = strategy.DecideQuote(context.Background(), input)
+			if err != nil || quote == nil || quote.AmountOut.String() != "100" {
+				t.Fatalf("expired private fallback = %+v, err %v", quote, err)
+			}
+		})
 	}
 }
-
 func TestDecideFillBuildsCurrentMultiRoutePlan(t *testing.T) {
 	strategy, err := New(Config{})
 	if err != nil {
@@ -393,82 +487,68 @@ func testGasPrices(token common.Address, amount int64) *liquidlanegas.PriceSnaps
 	return liquidlanegas.NewPriceSnapshot(map[common.Address]*big.Int{token: big.NewInt(amount)})
 }
 
-func TestNewBindsQuoteAndFillAlgorithm(t *testing.T) {
-	for _, name := range []string{types.DefaultName, types.SingleName} {
-		for _, capacity := range []int64{600, 1_000} {
-			t.Run(name+"/"+big.NewInt(capacity).String(), func(t *testing.T) {
-				strategy, err := New(Config{Name: name})
-				if err != nil {
-					t.Fatal(err)
-				}
-				input := directQuoteInput(1_000, capacity, quoteRateScale)
-				other := input.Inventory[0]
-				other.Route = testRoute("route-2", "capacity-2", 2, input.TokenIn, input.TokenOut)
-				input.Inventory = append(input.Inventory, other)
-				quote, err := strategy.DecideQuote(t.Context(), input)
-				if err != nil {
-					t.Fatal(err)
-				}
-				wantDecline := name == types.SingleName && capacity == 600
-				if (quote == nil) != wantDecline {
-					t.Fatalf("quote=%+v, want decline=%t", quote, wantDecline)
-				}
-				if quote != nil && (quote.CandidateID != "") != (capacity == 1_000) {
-					t.Fatalf("source identity must describe a full single-source quote: %+v", quote)
-				}
-				quotes := make([]liquidlane.FillQuote, len(input.Inventory))
-				for i, item := range input.Inventory {
-					quotes[i] = directFillQuote(item.Route, 1_000, capacity, 1_000)
-				}
-				plan, err := strategy.DecideFill(t.Context(), types.FillInput{
-					TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: input.AmountIn,
-					OutputAmount: big.NewInt(900), MaxFeePerGas: new(big.Int), Quotes: quotes,
-				})
-				if err != nil {
-					t.Fatal(err)
-				}
-				if (plan == nil) != wantDecline {
-					t.Fatalf("fill=%+v, want decline=%t", plan, wantDecline)
-				}
-				if plan != nil {
-					wantRoutes := 1
-					if capacity == 600 {
-						wantRoutes = 2
-					}
-					if len(plan.Routes) != wantRoutes {
-						t.Fatalf("routes=%d, want %d", len(plan.Routes), wantRoutes)
-					}
-				}
-			})
-		}
-	}
-	if strategy, err := New(Config{Name: "unsupported"}); err == nil || strategy != nil {
-		t.Fatal("unknown local strategy must fail during construction")
-	}
-}
-
-func TestNewBindsSingleFillGasPolicy(t *testing.T) {
+func TestLocalStrategyAggregation(t *testing.T) {
 	for _, name := range []string{types.DefaultName, types.SingleName} {
 		t.Run(name, func(t *testing.T) {
 			strategy, err := New(Config{Name: name})
 			if err != nil {
 				t.Fatal(err)
 			}
-			tokenIn, tokenOut := testPair()
-			route := testRoute("route-1", "capacity-1", 1, tokenIn, tokenOut)
+			input := directQuoteInput(1000, 600, quoteRateScale)
+			other := input.Inventory[0]
+			other.Route = testRoute("route-2", "capacity-2", 2, input.TokenIn, input.TokenOut)
+			input.Inventory = append(input.Inventory, other)
+			quote, err := strategy.DecideQuote(t.Context(), input)
+			if err != nil || (quote != nil) != (name == types.DefaultName) {
+				t.Fatalf("quote=%+v err=%v", quote, err)
+			}
+			if quote != nil && quote.CandidateID != "" {
+				t.Fatal("aggregate quote identified one source")
+			}
 			plan, err := strategy.DecideFill(t.Context(), types.FillInput{
-				TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(2_000_000), OutputAmount: big.NewInt(1_950_000),
-				MaxFeePerGas: big.NewInt(1), GasPrices: liquidlanegas.NewPriceSnapshot(map[common.Address]*big.Int{tokenOut: quoteRateScale}),
-				Quotes: []liquidlane.FillQuote{directFillQuote(route, 2_000_000, 2_000_000, 2_000_000)},
+				TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: input.AmountIn,
+				OutputAmount: big.NewInt(900), MaxFeePerGas: new(big.Int),
+				Quotes: []liquidlane.FillQuote{directFillQuote(input.Inventory[0].Route, 1000, 600, 1000), directFillQuote(other.Route, 1000, 600, 1000)},
 			})
+			if err != nil || (plan != nil) != (name == types.DefaultName) {
+				t.Fatalf("fill=%+v err=%v", plan, err)
+			}
+			if plan != nil && len(plan.Routes) != 2 {
+				t.Fatalf("routes=%+v", plan.Routes)
+			}
+		})
+	}
+	if strategy, err := New(Config{Name: "unsupported"}); err == nil || strategy != nil {
+		t.Fatal("unknown local strategy accepted")
+	}
+}
+
+func TestLocalStrategyBufferAndGasPolicy(t *testing.T) {
+	for _, name := range []string{types.DefaultName, types.SingleName} {
+		t.Run(name, func(t *testing.T) {
+			s, err := New(Config{Name: name, PriceBufferBps: 100})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if (plan != nil) != (name == types.SingleName) {
-				t.Fatalf("unexpected fill: %+v", plan)
+			input := directQuoteInput(1_000, 2_000, quoteRateScale)
+			quote, err := s.DecideQuote(t.Context(), input)
+			if err != nil || quote == nil || quote.AmountOut.Int64() != 980 {
+				t.Fatalf("quote=%+v err=%v; want 2x quote buffer", quote, err)
 			}
-			if plan != nil && plan.Routes[0].MinAmountOut.Int64() != 1_950_000 {
-				t.Fatal("single fill added an extra gas margin")
+			for _, test := range []struct{ required, fee int64 }{{990, 0}, {991, 0}, {990, 1}} {
+				plan, err := s.DecideFill(t.Context(), types.FillInput{
+					TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: input.AmountIn,
+					OutputAmount: big.NewInt(test.required), MaxFeePerGas: big.NewInt(test.fee),
+					GasPrices: testGasPrices(input.TokenOut, 1_000_000_000_000_000_000),
+					Quotes:    []liquidlane.FillQuote{directFillQuote(input.Inventory[0].Route, 1_000, 2_000, 1_000)},
+				})
+				want := test.required == 990 && (test.fee == 0 || name == types.SingleName)
+				if err != nil || (plan != nil) != want {
+					t.Fatalf("required=%d fee=%d plan=%+v err=%v", test.required, test.fee, plan, err)
+				}
+				if plan != nil && plan.Routes[0].MinAmountOut.Int64() != test.required {
+					t.Fatal("single fill added a gas repayment margin")
+				}
 			}
 		})
 	}

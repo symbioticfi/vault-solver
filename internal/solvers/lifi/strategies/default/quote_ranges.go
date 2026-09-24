@@ -64,7 +64,7 @@ func (s *Strategy) firstSafeRangeInput(
 	maxGasCost *big.Int,
 	routeCount int,
 ) *big.Int {
-	outputBufferBps := s.cfg.PriceBufferBps
+	outputBufferBps := 2 * s.cfg.PriceBufferBps
 	inDecimals := candidates[0].Route.TokenInDecimals
 	outDecimals := candidates[0].Route.TokenOutDecimals
 	isSafeInput := func(amount *big.Int) bool {
@@ -120,7 +120,7 @@ func (s *Strategy) priceQuoteRange(
 			Candidates:      candidates,
 			MaxRoutes:       maxRoutes,
 			MinInput:        s.minAmount,
-			OutputBufferBps: s.cfg.PriceBufferBps,
+			OutputBufferBps: 2 * s.cfg.PriceBufferBps,
 			InputPolicy:     liquidstrategies.RejectUncoveredInput,
 			GasPricing:      &pricing,
 		})
@@ -147,7 +147,7 @@ func (s *Strategy) priceQuoteRange(
 		upper,
 		maxGasCost,
 		routeCount,
-		s.cfg.PriceBufferBps,
+		2*s.cfg.PriceBufferBps,
 		inDecimals,
 		outDecimals,
 	)

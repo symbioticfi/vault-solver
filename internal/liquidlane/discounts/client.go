@@ -93,9 +93,6 @@ func (c *Client) Resolve(ctx context.Context, discountID string) (*Resolved, err
 	resp, httpResp, err := c.api.RFQAPI.ApiInternalV1DiscountsPost(ctx).ResolveDiscountRequest(body).Execute()
 	closeResp(httpResp)
 	if err != nil {
-		if httpResp != nil && (httpResp.StatusCode == http.StatusNotFound || httpResp.StatusCode == http.StatusGone) {
-			return nil, errors.Errorf("%w: %w", ErrUnavailable, err)
-		}
 		return nil, errors.Errorf("private discounts: resolve: %w", err)
 	}
 	if resp == nil {

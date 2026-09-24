@@ -87,8 +87,8 @@ func TestDecideQuotesAppliesBuffersAndCapacity(t *testing.T) {
 		t.Fatalf("expiry = %d", q.Expiry)
 	}
 	if got, ok := new(big.Rat).SetString(q.Ranges[0].Quote); !ok ||
-		got.Sign() <= 0 || got.Cmp(big.NewRat(99, 100)) > 0 {
-		t.Fatalf("quote = %q, want positive rate no greater than buffered 0.99", q.Ranges[0].Quote)
+		got.Sign() <= 0 || got.Cmp(big.NewRat(98, 100)) > 0 {
+		t.Fatalf("quote = %q, want positive rate no greater than buffered 0.98", q.Ranges[0].Quote)
 	}
 	if got := q.Ranges[0].MinAmount.String(); got != "1000" {
 		t.Fatalf("minAmount = %s", got)
@@ -798,7 +798,7 @@ func TestDecideQuotesFiltersPrivateAlternativeExpiredByServerClock(t *testing.T)
 	}
 }
 
-func TestPriceBufferCanBeConsumedBeforeFill(t *testing.T) {
+func TestPriceBufferCoversQuoteToFillAndExecutionWindows(t *testing.T) {
 	strategy, err := New(testStrategyConfig(Config{PriceBufferBps: 100, MinAmount: "10000"}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -823,12 +823,12 @@ func TestPriceBufferCanBeConsumedBeforeFill(t *testing.T) {
 		t.Fatalf("quote = %+v", quotes.Quotes)
 	}
 	quoteRate, ok := new(big.Rat).SetString(quotes.Quotes[0].Ranges[0].Quote)
-	if !ok || quoteRate.Sign() <= 0 || quoteRate.Cmp(big.NewRat(99, 100)) > 0 {
-		t.Fatalf("quote rate = %q, want positive rate no greater than 0.99", quotes.Quotes[0].Ranges[0].Quote)
+	if !ok || quoteRate.Sign() <= 0 || quoteRate.Cmp(big.NewRat(98, 100)) > 0 {
+		t.Fatalf("quote rate = %q, want positive rate no greater than 0.98", quotes.Quotes[0].Ranges[0].Quote)
 	}
 	plan, err := strategy.DecideFill(context.Background(), types.FillInput{
 		TokenIn: tokenIn, TokenOut: tokenOut,
-		AmountIn: big.NewInt(10_000), OutputAmount: big.NewInt(9_900), ChainTime: now,
+		AmountIn: big.NewInt(10_000), OutputAmount: big.NewInt(9_800), ChainTime: now,
 		MaxFeePerGas: big.NewInt(0),
 		Quotes: []liquidlane.FillQuote{{
 			Inventory: liquidlane.Inventory{Route: route, MaxAssets: big.NewInt(20_000)},
@@ -1491,7 +1491,7 @@ func TestDecideQuotesDoesNotDoubleCountSharedCapacityWithinPair(t *testing.T) {
 	}
 }
 
-func TestDecideFillPreservesCurrentOutputAndConfiguredGasFloor(t *testing.T) {
+func TestDecideFillSeparatesBufferedTargetFromEconomicFloor(t *testing.T) {
 	strategy, err := New(testStrategyConfig(Config{PriceBufferBps: 100}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -1522,7 +1522,7 @@ func TestDecideFillPreservesCurrentOutputAndConfiguredGasFloor(t *testing.T) {
 	if plan == nil || len(plan.Routes) != 1 {
 		t.Fatalf("plan = %+v", plan)
 	}
-	if plan.Routes[0].ExpectedAmountOut.String() != "10000" ||
+	if plan.Routes[0].ExpectedAmountOut.String() != "9900" ||
 		plan.Routes[0].MinAmountOut.String() != "9601" {
 		t.Fatalf("plan = %+v", plan)
 	}

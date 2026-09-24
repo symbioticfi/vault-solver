@@ -75,11 +75,13 @@ type FillInput struct {
 
 	Quotes       []liquidlane.FillQuote          `json:"quotes"`
 	Reservations liquidlane.CapacityReservations `json:"reservations"`
-	GasSnapshot  *liquidlanegas.Snapshot         `json:"gasSnapshot"`
-	GasPrices    *liquidlanegas.PriceSnapshot    `json:"gasPrices"`
-	MaxFeePerGas *big.Int                        `json:"maxFeePerGas"`
-	ChainTime    time.Time                       `json:"chainTime"`
-	Trace        strategies.DecisionTrace        `json:"-"`
+	// Full physical budgets before reservations, retained when selecting source subsets.
+	CapacityLimits map[liquidlane.CapacityID]*big.Int `json:"capacityLimits,omitempty"`
+	GasSnapshot    *liquidlanegas.Snapshot            `json:"gasSnapshot"`
+	GasPrices      *liquidlanegas.PriceSnapshot       `json:"gasPrices"`
+	MaxFeePerGas   *big.Int                           `json:"maxFeePerGas"`
+	ChainTime      time.Time                          `json:"chainTime"`
+	Trace          strategies.DecisionTrace           `json:"-"`
 }
 
 type FillPlan struct {

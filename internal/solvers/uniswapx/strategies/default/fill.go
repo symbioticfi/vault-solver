@@ -44,7 +44,8 @@ func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.
 	allocation, err := s.solveFill(strategies.FillTask{
 		TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: input.AmountIn,
 		Quotes: input.Quotes, Reservations: input.Reservations, ValidAfter: validAfter,
-		MaxRoutes: maxRoutes, PrivateCapacityBufferBps: s.cfg.PriceBufferBps,
+		CapacityLimits: input.CapacityLimits,
+		MaxRoutes:      maxRoutes, PriceBufferBps: s.cfg.PriceBufferBps,
 		InventoryReserveBps: s.cfg.InventoryReserveBps,
 		GasPricing:          &gasPricing,
 		Trace:               input.Trace,

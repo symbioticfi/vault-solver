@@ -53,6 +53,15 @@ func TestValidateSignedChecksSelectionDeadlinesAndOutput(t *testing.T) {
 		t.Fatalf("amountOut=%v err=%v", amountOut, err)
 	}
 
+	for _, maximum := range []int64{899, 900, 901} {
+		selection.MaxAmountOut = big.NewInt(maximum)
+		_, err := ValidateSigned(signed, selection, base, now)
+		if (err != nil) != (maximum < 900) {
+			t.Fatalf("maximum=%d err=%v", maximum, err)
+		}
+	}
+	selection.MaxAmountOut = nil
+
 	selection.MinAmountOut = big.NewInt(901)
 	if _, err := ValidateSigned(signed, selection, base, now); err == nil {
 		t.Fatal("expected minimum output rejection")

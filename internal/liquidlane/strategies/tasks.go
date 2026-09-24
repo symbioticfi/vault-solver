@@ -68,13 +68,15 @@ type FillTask struct {
 	Quotes       []liquidlane.FillQuote
 	Reservations liquidlane.CapacityReservations
 	ValidAfter   time.Time
+	// CapacityLimits optionally supplies full physical budgets, before reservations
+	// and inventory reserve. Nil retains capacity inferred from individual sources.
+	CapacityLimits map[liquidlane.CapacityID]*big.Int
 
-	// PrivateCapacityBufferBps reserves headroom for uncapped signed-discount payouts.
-	// It never reduces the output available to honor an order.
-	PrivateCapacityBufferBps int
-	MaxRoutes                int
-	InventoryReserveBps      int
-	InputPolicy              UncoveredInputPolicy
-	GasPricing               *GasPricing
-	Trace                    DecisionTrace
+	// PriceBufferBps lowers the executable output target and reserves upward headroom for private payouts.
+	PriceBufferBps      int
+	MaxRoutes           int
+	InventoryReserveBps int
+	InputPolicy         UncoveredInputPolicy
+	GasPricing          *GasPricing
+	Trace               DecisionTrace
 }

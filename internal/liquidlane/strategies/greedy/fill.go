@@ -25,8 +25,8 @@ func SolveFill(task strategies.FillTask) (*strategies.FillSolution, error) {
 	if task.InputPolicy != strategies.RejectUncoveredInput && task.InputPolicy != strategies.AbsorbUncoveredInput {
 		return nil, errors.New("invalid uncovered input policy")
 	}
-	if task.PrivateCapacityBufferBps < 0 || task.PrivateCapacityBufferBps >= bpsDenominator {
-		return nil, errors.New("private capacity buffer must be in [0,10000)")
+	if task.PriceBufferBps < 0 || task.PriceBufferBps >= bpsDenominator {
+		return nil, errors.Errorf("priceBufferBps: must be in [0,%d)", bpsDenominator)
 	}
 	if task.InventoryReserveBps < 0 || task.InventoryReserveBps >= bpsDenominator {
 		return nil, errors.Errorf("inventoryReserveBps: must be in [0,%d)", bpsDenominator)
@@ -47,7 +47,7 @@ func SolveFill(task strategies.FillTask) (*strategies.FillSolution, error) {
 		candidates,
 		task.AmountIn,
 		min(task.MaxRoutes, len(candidates)),
-		task.PrivateCapacityBufferBps,
+		task.PriceBufferBps,
 		task.InputPolicy,
 	)
 	if len(allocation) == 0 {
@@ -61,9 +61,22 @@ func SolveFill(task strategies.FillTask) (*strategies.FillSolution, error) {
 	}
 	targetTotal := new(big.Int)
 	legs := make([]strategies.GasLeg, 0, len(allocation))
-	for _, leg := range allocation {
-		// The quote-time price margin can be consumed while honoring the awarded output.
-		targetTotal.Add(targetTotal, leg.executableOutput)
+	for index, leg := range allocation {
+		allocation[index].targetOutput = new(big.Int).Sub(
+			leg.executableOutput,
+			applyBpsUp(leg.executableOutput, task.PriceBufferBps),
+		)
+		if allocation[index].targetOutput.Sign() <= 0 {
+			task.Trace.Decline(
+				"fill", "buffer-exceeds-output",
+				"leg", index,
+				"routeId", leg.candidate.quote.ID,
+				"executableAmountOut", leg.executableOutput.String(),
+				"targetAmountOut", allocation[index].targetOutput.String(),
+			)
+			return nil, nil
+		}
+		targetTotal.Add(targetTotal, allocation[index].targetOutput)
 		legs = append(legs, strategies.GasLeg{
 			Route:     leg.candidate.quote.Route,
 			AmountOut: leg.executableOutput,
@@ -98,7 +111,7 @@ func SolveFill(task strategies.FillTask) (*strategies.FillSolution, error) {
 			CandidateID: leg.candidate.id(), RouteID: leg.candidate.quote.ID,
 			CapacityID: liquidlane.RouteCapacityID(leg.candidate.quote.Route),
 			Adapter:    leg.candidate.quote.Adapter, AmountIn: leg.amountIn,
-			ExpectedAmountOut: leg.executableOutput, ReservedAmountOut: leg.reservedOutput,
+			ExpectedAmountOut: leg.targetOutput, ReservedAmountOut: leg.reservedOutput,
 			DiscountID: leg.candidate.quote.DiscountID,
 		}
 	}
@@ -106,9 +119,10 @@ func SolveFill(task strategies.FillTask) (*strategies.FillSolution, error) {
 }
 
 type fillCandidate struct {
-	quote    liquidlane.FillQuote
-	capacity *big.Int
-	maxInput *big.Int
+	quote          liquidlane.FillQuote
+	capacity       *big.Int
+	domainCapacity *big.Int
+	maxInput       *big.Int
 }
 
 type fillRoute struct {
@@ -121,6 +135,7 @@ type fillAllocation struct {
 	amountIn         *big.Int
 	executableOutput *big.Int
 	reservedOutput   *big.Int
+	targetOutput     *big.Int
 }
 
 func (candidate fillCandidate) id() liquidlane.CandidateID {
@@ -146,15 +161,20 @@ func buildFillCandidates(task strategies.FillTask) ([]fillCandidate, error) {
 		}
 		capacityID := liquidlane.RouteCapacityID(quote.Route)
 		capacity := AvailableCapacity(quote.MaxAssets, task.InventoryReserveBps)
-		if reserved := task.Reservations[capacityID]; reserved != nil && reserved.Sign() > 0 {
-			capacity.Sub(capacity, reserved)
+		domainCapacity := liquidlane.CloneBig(capacity)
+		if task.CapacityLimits != nil {
+			domainCapacity = AvailableCapacity(task.CapacityLimits[capacityID], task.InventoryReserveBps)
 		}
+		if reserved := task.Reservations[capacityID]; reserved != nil && reserved.Sign() > 0 {
+			domainCapacity.Sub(domainCapacity, reserved)
+		}
+		capacity = minBig(capacity, domainCapacity)
 		if capacity.Sign() <= 0 {
 			continue
 		}
-		candidate := fillCandidate{quote: quote, capacity: capacity}
+		candidate := fillCandidate{quote: quote, capacity: capacity, domainCapacity: domainCapacity}
 		candidate.maxInput = maxInputWithinCapacity(
-			candidate, task.AmountIn, capacity, task.PrivateCapacityBufferBps,
+			candidate, task.AmountIn, capacity, task.PriceBufferBps,
 		)
 		candidateID := candidate.id()
 		if candidate.maxInput.Sign() <= 0 || seen[candidateID] {
@@ -170,7 +190,7 @@ func greedyFillAllocation(
 	candidates []fillCandidate,
 	amountIn *big.Int,
 	maxRoutes int,
-	privateBufferBps int,
+	priceBufferBps int,
 	inputPolicy strategies.UncoveredInputPolicy,
 ) []fillAllocation {
 	routes := buildFillRoutes(candidates)
@@ -188,7 +208,7 @@ func greedyFillAllocation(
 				continue
 			}
 			choice := fillRouteChoice(
-				route, remaining, capacityLimits, capacityUsed, privateBufferBps,
+				route, remaining, capacityLimits, capacityUsed, priceBufferBps,
 			)
 			if choice != nil && lastRoute && choice.amountIn.Cmp(remaining) < 0 {
 				continue
@@ -280,8 +300,8 @@ func fillCapacityLimits(candidates []fillCandidate) map[liquidlane.CapacityID]*b
 	limits := make(map[liquidlane.CapacityID]*big.Int)
 	for _, candidate := range candidates {
 		capacityID := liquidlane.RouteCapacityID(candidate.quote.Route)
-		if limit := limits[capacityID]; limit == nil || candidate.capacity.Cmp(limit) > 0 {
-			limits[capacityID] = liquidlane.CloneBig(candidate.capacity)
+		if limit := limits[capacityID]; limit == nil || candidate.domainCapacity.Cmp(limit) > 0 {
+			limits[capacityID] = liquidlane.CloneBig(candidate.domainCapacity)
 		}
 	}
 	return limits
@@ -292,7 +312,7 @@ func fillRouteChoice(
 	remaining *big.Int,
 	capacityLimits map[liquidlane.CapacityID]*big.Int,
 	capacityUsed map[liquidlane.CapacityID]*big.Int,
-	privateBufferBps int,
+	priceBufferBps int,
 ) *fillAllocation {
 	capacityID := liquidlane.RouteCapacityID(route.alternatives[0].quote.Route)
 	capacityLeft := liquidlane.CloneBig(capacityLimits[capacityID])
@@ -307,7 +327,7 @@ func fillRouteChoice(
 	legAmount := new(big.Int)
 	for index, candidate := range route.alternatives {
 		candidateCapacity := minBig(capacityLeft, candidate.capacity)
-		amount := maxInputWithinCapacity(candidate, remaining, candidateCapacity, privateBufferBps)
+		amount := maxInputWithinCapacity(candidate, remaining, candidateCapacity, priceBufferBps)
 		if amount.Cmp(candidate.maxInput) > 0 {
 			amount.Set(candidate.maxInput)
 		}
@@ -337,7 +357,7 @@ func fillRouteChoice(
 		candidate:        *best,
 		amountIn:         legAmount,
 		executableOutput: scaledFillOutput(best.quote, legAmount),
-		reservedOutput:   reservedFillOutput(best.quote, legAmount, privateBufferBps),
+		reservedOutput:   reservedCapacityOutput(*best, legAmount, priceBufferBps),
 	}
 }
 
@@ -345,7 +365,7 @@ func maxInputWithinCapacity(
 	candidate fillCandidate,
 	inputLimit *big.Int,
 	capacity *big.Int,
-	privateBufferBps int,
+	priceBufferBps int,
 ) *big.Int {
 	quote := candidate.quote
 	if inputLimit == nil || inputLimit.Sign() <= 0 || capacity == nil || capacity.Sign() <= 0 ||
@@ -353,10 +373,17 @@ func maxInputWithinCapacity(
 		quote.MaxAmountOut == nil || quote.MaxAmountOut.Sign() <= 0 {
 		return new(big.Int)
 	}
-	maxOutput := liquidlane.CloneBig(capacity)
+	precision := big.NewInt(bpsDenominator)
+	buffer := big.NewInt(int64(priceBufferBps))
+	maxOutput := new(big.Int)
 	if quote.DiscountID != nil {
-		maxOutput.Mul(capacity, big.NewInt(bpsDenominator))
-		maxOutput.Div(maxOutput, big.NewInt(int64(bpsDenominator+privateBufferBps)))
+		maxOutput.Mul(capacity, precision)
+		maxOutput.Div(maxOutput, new(big.Int).Add(precision, buffer))
+	} else {
+		maxOutput.Add(capacity, big.NewInt(1))
+		maxOutput.Mul(maxOutput, precision)
+		maxOutput.Sub(maxOutput, big.NewInt(1))
+		maxOutput.Div(maxOutput, new(big.Int).Sub(precision, buffer))
 	}
 	maxInput := new(big.Int).Add(maxOutput, big.NewInt(1))
 	maxInput.Mul(maxInput, quote.AmountIn)
@@ -368,18 +395,23 @@ func maxInputWithinCapacity(
 	return maxInput
 }
 
+func reservedCapacityOutput(
+	candidate fillCandidate,
+	amountIn *big.Int,
+	priceBufferBps int,
+) *big.Int {
+	amountOut := scaledFillOutput(candidate.quote, amountIn)
+	buffer := applyBpsUp(amountOut, priceBufferBps)
+	if candidate.quote.DiscountID != nil {
+		return amountOut.Add(amountOut, buffer)
+	}
+	return amountOut.Sub(amountOut, buffer)
+}
+
 func scaledFillOutput(quote liquidlane.FillQuote, amountIn *big.Int) *big.Int {
 	if quote.AmountIn == nil || quote.AmountIn.Sign() <= 0 ||
 		quote.MaxAmountOut == nil || amountIn == nil {
 		return new(big.Int)
 	}
 	return new(big.Int).Div(new(big.Int).Mul(quote.MaxAmountOut, amountIn), quote.AmountIn)
-}
-
-func reservedFillOutput(quote liquidlane.FillQuote, amountIn *big.Int, privateBufferBps int) *big.Int {
-	output := scaledFillOutput(quote, amountIn)
-	if quote.DiscountID != nil {
-		output.Add(output, applyBpsUp(output, privateBufferBps))
-	}
-	return output
 }

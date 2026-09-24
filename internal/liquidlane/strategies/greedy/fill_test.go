@@ -39,6 +39,31 @@ func TestSolveFillChoosesBestCompleteRoutes(t *testing.T) {
 	}
 }
 
+func TestSolveFillSharesPhysicalBudgetAcrossNarrowSources(t *testing.T) {
+	for _, budget := range []int64{59, 60, 100} {
+		t.Run(big.NewInt(budget).String(), func(t *testing.T) {
+			quotes := []liquidlane.FillQuote{
+				testFillQuote("a", "shared", common.Address{}, common.Address{}, 60, 60, 40, nil),
+				testFillQuote("b", "shared", common.Address{}, common.Address{}, 60, 60, 40, nil),
+			}
+			solution, err := SolveFill(strategies.FillTask{
+				AmountIn: big.NewInt(60), Quotes: quotes, MaxRoutes: 2,
+				CapacityLimits: map[liquidlane.CapacityID]*big.Int{"shared": big.NewInt(budget + 30)},
+				Reservations:   liquidlane.CapacityReservations{"shared": big.NewInt(30)},
+			})
+			if err != nil || (solution != nil) != (budget >= 60) {
+				t.Fatalf("budget=%d solution=%v err=%v", budget, solution, err)
+			}
+			if solution != nil {
+				routes := solution.Finalize(big.NewInt(60))
+				if len(routes) != 2 || routes[0].ReservedAmountOut.Int64() > 40 || routes[1].ReservedAmountOut.Int64() > 40 {
+					t.Fatalf("source limits not respected: %+v", routes)
+				}
+			}
+		})
+	}
+}
+
 func TestSolveFillUsesDirectWhenPrivateCannotCoverLeg(t *testing.T) {
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
@@ -166,7 +191,7 @@ func TestSolveFillGasPricingIsOptional(t *testing.T) {
 
 func TestSolveFillRejectsInvalidBps(t *testing.T) {
 	_, err := SolveFill(strategies.FillTask{AmountIn: big.NewInt(1), Quotes: []liquidlane.FillQuote{{}},
-		MaxRoutes: 1, InventoryReserveBps: bpsDenominator})
+		MaxRoutes: 1, PriceBufferBps: bpsDenominator})
 	if err == nil {
 		t.Fatal("expected invalid bps error")
 	}
@@ -182,12 +207,12 @@ func TestMaxInputWithinCapacityIsExact(t *testing.T) {
 		for capacity := int64(1); capacity <= 233; capacity++ {
 			limit := big.NewInt(137)
 			got := maxInputWithinCapacity(candidate, limit, big.NewInt(capacity), 1234)
-			if reservedFillOutput(candidate.quote, got, 1234).Cmp(big.NewInt(capacity)) > 0 {
+			if reservedCapacityOutput(candidate, got, 1234).Cmp(big.NewInt(capacity)) > 0 {
 				t.Fatalf("discount=%v capacity=%d input=%s exceeds capacity", discount != nil, capacity, got)
 			}
 			if got.Cmp(limit) < 0 {
 				next := new(big.Int).Add(got, big.NewInt(1))
-				if reservedFillOutput(candidate.quote, next, 1234).Cmp(big.NewInt(capacity)) <= 0 {
+				if reservedCapacityOutput(candidate, next, 1234).Cmp(big.NewInt(capacity)) <= 0 {
 					t.Fatalf("discount=%v capacity=%d input=%s is not maximal", discount != nil, capacity, got)
 				}
 			}

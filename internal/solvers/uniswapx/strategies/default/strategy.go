@@ -7,6 +7,7 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/single"
@@ -32,10 +33,11 @@ type Config struct {
 }
 
 type Strategy struct {
-	solveQuote  func(strategies.QuoteTask) (*strategies.QuoteSolution, error)
-	solveFill   func(strategies.FillTask) (*strategies.FillSolution, error)
-	fillPricing func(types.FillInput) (strategies.GasPricing, error)
-	cfg         Config
+	allocateInventory func([]liquidlane.Inventory, liquidlane.CapacityReservations, int) []liquidlane.Inventory
+	solveQuote        func(strategies.QuoteTask) (*strategies.QuoteSolution, error)
+	solveFill         func(strategies.FillTask) (*strategies.FillSolution, error)
+	fillPricing       func(types.FillInput) (strategies.GasPricing, error)
+	cfg               Config
 
 	minAmount       *big.Int
 	executionBuffer time.Duration
@@ -68,6 +70,9 @@ func New(cfg Config) (*Strategy, error) {
 	if cfg.PriceBufferBps < 0 || cfg.PriceBufferBps >= bpsDenominator {
 		return nil, errors.Errorf("priceBufferBps: must be in [0,%d), got %d", bpsDenominator, cfg.PriceBufferBps)
 	}
+	if 2*cfg.PriceBufferBps >= bpsDenominator {
+		return nil, errors.Errorf("2 * priceBufferBps: must be < %d", bpsDenominator)
+	}
 	if cfg.InventoryReserveBps < 0 || cfg.InventoryReserveBps >= bpsDenominator {
 		return nil, errors.Errorf("inventoryReserveBps: must be in [0,%d), got %d", bpsDenominator, cfg.InventoryReserveBps)
 	}
@@ -93,11 +98,13 @@ func New(cfg Config) (*Strategy, error) {
 	}
 	switch cfg.Name {
 	case "", types.DefaultName:
+		strategy.allocateInventory = greedy.AllocateInventoryCapacity
 		strategy.solveQuote, strategy.solveFill = greedy.SolveQuote, greedy.SolveFill
 		strategy.fillPricing = strategy.priceFillGas
 	case types.SingleName:
+		strategy.allocateInventory = single.AllocateInventoryCapacity
 		strategy.solveQuote, strategy.solveFill = single.SolveQuote, single.SolveFill
-		// The sender pays gas; an awarded single fill needs only the promised output.
+		// The sender pays gas; single fills retain the price buffer without a gas repayment floor.
 		strategy.fillPricing = func(types.FillInput) (strategies.GasPricing, error) {
 			return strategies.GasPricing{}, nil
 		}

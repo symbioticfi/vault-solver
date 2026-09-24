@@ -45,10 +45,12 @@ type FillValidation struct {
 
 	Quotes       []liquidlane.FillQuote
 	Reservations liquidlane.CapacityReservations
-	GasSnapshot  *liquidlanegas.Snapshot
-	GasPrices    *liquidlanegas.PriceSnapshot
-	MaxFeePerGas *big.Int
-	GasEnvelope  GasEnvelope
+	// CapacityLimits optionally supplies physical budgets independently of source limits.
+	CapacityLimits map[liquidlane.CapacityID]*big.Int
+	GasSnapshot    *liquidlanegas.Snapshot
+	GasPrices      *liquidlanegas.PriceSnapshot
+	MaxFeePerGas   *big.Int
+	GasEnvelope    GasEnvelope
 }
 
 // ValidateFillRoutes validates and canonicalizes untrusted strategy output.
@@ -105,6 +107,13 @@ func ValidateFillRoutes(input FillValidation, routes []FillRoute) ([]FillRoute, 
 		}
 
 		capacityID := liquidlane.RouteCapacityID(candidate.Route)
+		capacityLimit := candidate.MaxAssets
+		if input.CapacityLimits != nil {
+			capacityLimit = input.CapacityLimits[capacityID]
+			if capacityLimit == nil || capacityLimit.Sign() <= 0 {
+				return nil, errors.Errorf("fill route %d has no physical capacity budget", index)
+			}
+		}
 		normalized[index] = cloneFillRoute(route)
 		normalized[index].CandidateID = id
 		normalized[index].RouteID = candidate.ID
@@ -113,8 +122,8 @@ func ValidateFillRoutes(input FillValidation, routes []FillRoute) ([]FillRoute, 
 		normalized[index].DiscountID = liquidlane.CloneHash(candidate.DiscountID)
 		totalInput.Add(totalInput, route.AmountIn)
 		totalMinimumOutput.Add(totalMinimumOutput, route.MinAmountOut)
-		if limit := capacityLimits[capacityID]; limit == nil || candidate.MaxAssets.Cmp(limit) > 0 {
-			capacityLimits[capacityID] = liquidlane.CloneBig(candidate.MaxAssets)
+		if limit := capacityLimits[capacityID]; limit == nil || capacityLimit.Cmp(limit) > 0 {
+			capacityLimits[capacityID] = liquidlane.CloneBig(capacityLimit)
 		}
 		capacityUsed.Add(capacityID, route.ReservedAmountOut)
 		gasLegs = append(gasLegs, GasLeg{

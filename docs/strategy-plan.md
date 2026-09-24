@@ -187,21 +187,26 @@ then applies a linear conservative floor over route alternatives, worst-case com
 rounding. Every emitted minimum must still map to positive integer output.
 
 For fills, RFQ, LI.FI, and UniswapX pass current amount-specific `FillQuote`s to `SolveFill`. `FillTask`
-also carries pending `CapacityID` reservations, freshness, route limit, private-payout capacity headroom,
+also carries pending `CapacityID` reservations, freshness, route limit, price buffer,
 input coverage, and an optional gas pricing model. The engine selects routes, enforces shared capacity,
 charges complete-plan gas once when that model is present, and returns `FillSolution`, exposing
 `MaxAmountOut` followed by
 `Finalize(requiredAmountOut)`. RFQ maps it to Executor legs without introducing RFQ gas config; LI.FI
 resolves OIF `OutputContext`/`FillAfter`; UniswapX resolves signed-order output/deadline. LI.FI and
 UniswapX build the gas model from their existing runtime facts.
-The canonical `FillRoute` lives in `strategies` alongside fill-plan validation. The solver-owned
-pending-capacity ledger lives in `internal/liquidlane`.
-Allocation policy remains replaceable, while local and remote strategies use the same route identity,
-capacity, amount, and gas-floor invariants.
-Price buffering is applied once at quote time: LI.FI and UniswapX pass exactly `priceBufferBps`, not twice
-that value. Fills use fresh executable output without deducting the quote buffer again. The distinct
-`PrivateCapacityBufferBps` fill input retains upward capacity headroom for uncapped discount payouts;
-direct fills reserve their current output. Inventory reserves and outstanding reservations remain enforced.
+The canonical `FillRoute` and fill-plan validation live in `strategies`. Optional `CapacityLimits`
+separate physical vault budgets from each source's limit. Allocation and validation deduct pending
+reservations from the physical budget; source limits still bound each leg. UniswapX supplies these
+budgets to every fill strategy and retains them across source filtering. Omitting them preserves the
+existing RFQ and LI.FI behavior.
+
+Each solver owns its `liquidlane.CapacityLedger` and reservation lifecycle. The ledger supports atomic
+replacement against a revision; UniswapX uses this before preflight and rechecks revisions before
+returning quotes. All UniswapX strategies can quote unreserved liquidity while the sender is busy.
+RFQ keeps its existing reservation accounting; LI.FI keeps its busy-lane quote gate, with a follow-up
+tracked in [its open items](LIFI-PLAN.md#10-open-items). Nonce conflicts still block quoting.
+Inventory reads remain ordinary latest-state Multicalls. Caches, refresh triggers, retries, and
+reservation release remain solver-owned; reservations are not shared across solvers or processes.
 
 ### Single-source selection
 
@@ -211,6 +216,9 @@ One candidate must cover the whole request, even when a caller otherwise permits
 Quotes compare final output for exact input or required input for exact output, with candidate-ID ties.
 A higher rate cannot compensate for insufficient volume. Fill solving also evaluates complete sources
 individually; the protocol adapter applies the order's required output to the selected solution.
+`single.AllocateInventoryCapacity` gives each alternative the full unreserved capacity of its domain,
+bounded by the source's own limit and inventory reserve. Unlike greedy allocation, it does not divide
+capacity between routes or pairs: only one alternative can be selected, and quotes do not reserve liquidity.
 
 The caller supplies eligible sources, capacity budgets, quote buffer, and any gas pricing. Source modes,
 quote-to-order source preferences, fresh-source retries, and protocol deadlines belong to each solver's
@@ -224,17 +232,16 @@ Current local integrations are:
 | LI.FI | `default` | `greedy` with solver-owned standing quote ranges |
 | UniswapX | `default`, `single` | `greedy`, `single` |
 
-RFQ and LI.FI reject `strategy.name: single` during initialization. Adding support requires adapting
-RFQ's quote/fill contract and uncovered-input policy, or LI.FI's ranges. UniswapX's registration, source
-preference cache, fallback, and gas policy are documented in its
+RFQ and LI.FI reject `strategy.name: single` during initialization; their quote contracts need separate
+integration. UniswapX source preferences, fallback, and gas policy are described in its
 [single-source integration](UNISWAPX-PLAN.md#single-source-integration). RedStone OEV is unchanged.
-Public strategy interfaces, webhook DTOs, caches, protocol lifecycle, and calldata remain solver-local.
 
 All integrations bind their static event/outcome, amount-kind, state-view, and external-operation labels
 through the generic workflow metric families. Solver packages still own those protocol-specific enums and
 unique gauges/histograms; the framework does not know them. RFQ, LI.FI, and UniswapX share the same
 `fill/success` event and token-native amount kinds; RFQ and UniswapX additionally classify `failure` and
-`not_admitted`. Unknown event/outcome, amount-kind, or state-view observations increment one bounded
+`not_admitted`. UniswapX records pre-submission declines separately as `fill/declined`.
+Unknown event/outcome, amount-kind, or state-view observations increment one bounded
 contract-drift counter instead of disappearing silently. Detailed gas, fee, and transaction lifecycle
 accounting remains in the [shared transaction manager](TXMANAGER-PLAN.md#8-observability).
 The generic HTTP chain transport records bounded logical requests and endpoint attempts by read/write/cancel/shared

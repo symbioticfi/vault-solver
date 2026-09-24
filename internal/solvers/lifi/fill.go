@@ -47,7 +47,7 @@ func buildExecutorRoutes(
 		totalAmountIn.Add(totalAmountIn, route.AmountIn)
 		if route.DiscountID == nil {
 			directRoutes = append(directRoutes, executor.ILiquidLaneLifiExecutorFillRoute{
-				Adapter: route.Adapter, AmountIn: route.AmountIn, AmountOut: route.MinAmountOut,
+				Adapter: route.Adapter, AmountIn: route.AmountIn, AmountOut: route.ExpectedAmountOut,
 			})
 			continue
 		}

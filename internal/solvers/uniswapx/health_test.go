@@ -41,16 +41,16 @@ func TestReadyRequiresFreshDeliveryAndQuoteState(t *testing.T) {
 		t.Fatal("solver did not become ready after the transaction nonce lane resumed")
 	}
 	txm.busy = true
-	if solver.ready() {
-		t.Fatal("solver with a busy shared transaction nonce lane should not be ready")
+	if !solver.ready() {
+		t.Fatal("busy sender must not block quoting free capacity")
 	}
 	txm.busy = false
 	if !solver.ready() {
 		t.Fatal("solver did not become ready after the shared transaction nonce lane became idle")
 	}
 	solver.beginFillPlanning()
-	if solver.ready() {
-		t.Fatal("solver planning a fill should not be ready")
+	if !solver.ready() {
+		t.Fatal("planning must not block quoting free capacity")
 	}
 	solver.endFillPlanning()
 	solver.quoteState.Store(&quoteState{

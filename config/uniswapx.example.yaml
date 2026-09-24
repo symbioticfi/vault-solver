@@ -98,6 +98,6 @@ solvers:
       strategy:
         name: default # greedy aggregation; use single for one source covering the whole request
         config:
-          priceBufferBps: 20          # applied once at quote time; fill can consume this margin
+          priceBufferBps: 20          # rate/staleness safety margin in basis points
           inventoryReserveBps: 500    # keep 5% of route capacity uncommitted
           executionDeadlineBuffer: 12s # required lifetime remaining for a safe fill

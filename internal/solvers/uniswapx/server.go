@@ -221,6 +221,7 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 		return declinedQuote(response, quoteDeclineInvalidAmount), nil
 	}
 	epoch := s.quoteEpoch.Load()
+	reservationRevision := s.capacity.Revision()
 	state := s.quoteState.Load()
 	if state == nil || state.epoch != epoch || !state.expiresAt.After(time.Unix(now, 0)) {
 		return declinedQuote(response, quoteDeclineQuoteStateUnavailable), nil
@@ -254,7 +255,7 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 	if err := validateStrategyQuote(input, quote); err != nil {
 		return response, err
 	}
-	if s.quoteEpoch.Load() != epoch || s.quoteState.Load() != state || s.quoteBlocked(s.currentTime()) {
+	if s.quoteEpoch.Load() != epoch || s.quoteState.Load() != state || s.capacity.Revision() != reservationRevision || s.quoteBlocked(s.currentTime()) {
 		return declinedQuote(response, quoteDeclineStateChanged), nil
 	}
 	response.selectedCandidate = quote.CandidateID
@@ -281,8 +282,7 @@ func declinedQuote(response quoteResponse, reason quoteDeclineReason) quoteRespo
 
 func (s *Solver) quoteBlocked(now int64) bool {
 	return s.timeBasedBlockUntil() > now ||
-		s.planningFills.Load() != 0 ||
-		(s.txm != nil && !s.txm.LaneReady()) ||
+		(s.txm != nil && !s.txm.Available()) ||
 		!s.exclusiveDeliveryHealthy()
 }
 

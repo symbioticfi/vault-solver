@@ -57,6 +57,9 @@ func New(cfg Config) (*Strategy, error) {
 	if cfg.PriceBufferBps < 0 || cfg.PriceBufferBps >= bpsDenominator {
 		return nil, errors.Errorf("priceBufferBps: must be in [0,%d), got %d", bpsDenominator, cfg.PriceBufferBps)
 	}
+	if 2*cfg.PriceBufferBps >= bpsDenominator {
+		return nil, errors.Errorf("2 * priceBufferBps: must be < %d", bpsDenominator)
+	}
 	if cfg.InventoryReserveBps < 0 || cfg.InventoryReserveBps >= bpsDenominator {
 		return nil, errors.Errorf("inventoryReserveBps: must be in [0,%d), got %d", bpsDenominator, cfg.InventoryReserveBps)
 	}

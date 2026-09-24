@@ -60,10 +60,10 @@ func (s *Solver) requestQuoteRefresh() {
 }
 
 func (s *Solver) setPendingReservations(
-	ctx context.Context, hash common.Hash, reservations liquidlane.CapacityReservations,
-) {
-	if !s.capacity.Set(hash.Hex(), reservations) {
-		return
+	ctx context.Context, hash common.Hash, reservations liquidlane.CapacityReservations, revision uint64,
+) bool {
+	if !s.capacity.SetAt(hash.Hex(), reservations, revision) {
+		return false
 	}
 	observability.Log(ctx).V(1).Info(
 		"fill capacity reserved",
@@ -71,14 +71,11 @@ func (s *Solver) setPendingReservations(
 		"capacityGroups", len(reservations),
 		"pendingFills", s.capacity.Len(),
 	)
-	s.invalidateQuotes()
 	s.requestQuoteRefresh()
+	return true
 }
 
 func (s *Solver) clearPendingReservations(ctx context.Context, hash common.Hash) {
-	// Stop quotes before releasing capacity. The next snapshot must observe the fill outcome
-	// before the released capacity can be advertised again.
-	s.invalidateQuotes()
 	if !s.capacity.Delete(hash.Hex()) {
 		return
 	}
@@ -380,29 +377,12 @@ func (s *Solver) invalidateQuotes() {
 
 func (s *Solver) beginFillPlanning() {
 	s.planningFills.Add(1)
-	s.quoteEpoch.Add(1)
-	s.quoteState.Store(nil)
 }
 
 func (s *Solver) endFillPlanning() {
 	remaining := s.planningFills.Add(-1)
-	s.quoteEpoch.Add(1)
 	if remaining < 0 {
 		panic("uniswapx: negative planning fill count")
 	}
 	s.requestQuoteRefresh()
-}
-
-// abandonFill prevents order polling from resubmitting an unfillable
-// order. Exclusive-obligation reconciliation remains independent.
-func (s *Solver) abandonFill(order *resolvedOrder) {
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-	if s.abandoned == nil {
-		s.abandoned = make(map[common.Hash]time.Time)
-	}
-	s.abandoned[order.Hash] = time.Unix(int64(order.Deadline), 0)
-	delete(s.inFlight, order.Hash)
-	delete(s.retryAt, order.Hash)
-	delete(s.attempts, order.Hash)
 }

@@ -108,15 +108,15 @@ func (s *Solver) fillLoop(
 			fill, err := s.startFill(orderCtx, routes, order, now, chainObservedAt)
 			s.endFillPlanning()
 			if err != nil {
-				if errors.Is(err, errNoFillPlan) || errors.Is(err, errOrderNotFillable) {
-					s.abandonFill(order)
-					s.observeFillOutcome("failure")
-					observability.Log(orderCtx).Info("order fill abandoned", "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
-					continue
-				}
 				s.retry(order.Hash, now, errors.Is(err, errFillPreflight))
 				if errors.Is(err, errFillPreflight) {
 					s.recordOrderFillFailure(orderCtx, order, now)
+				}
+				if errors.Is(err, errOrderNotFillable) {
+					s.observeFillOutcome(fillOutcomeDeclined)
+					observability.Log(orderCtx).V(1).Info("order not fillable yet", "source", order.Source,
+						"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
+					continue
 				}
 				observability.Log(orderCtx).Error(
 					err, "order fill preparation failed", "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
@@ -152,16 +152,19 @@ func (s *Solver) startFill(
 	now time.Time,
 	chainObservedAt time.Time,
 ) (fill *pendingUniswapFill, err error) {
+	reservationRevision := s.capacity.Revision()
 	ctx, end := tracer.Start(ctx, "uniswapx.fill",
 		observability.AttrOrderHash.String(order.Hash.Hex()),
 		observability.AttrQuoteID.String(order.QuoteID),
 	)
 	defer func() {
+		if fill == nil {
+			s.clearPendingReservations(ctx, order.Hash)
+		}
 		switch {
 		case fill != nil: // the span lives until the transaction result arrives
-		case errors.Is(err, errOrderNotFillable), errors.Is(err, errNoFillPlan):
-			// Deterministic declines are recorded on this span and abandoned by the fill loop.
-			// Exclusive-obligation reconciliation remains independent.
+		case errors.Is(err, errOrderNotFillable):
+			// Declined plans remain retryable and end the span without an error.
 			end(nil)
 		default:
 			end(err)
@@ -219,30 +222,21 @@ func (s *Solver) startFill(
 		TokenIn: order.TokenIn, TokenOut: order.TokenOut, AmountIn: order.AmountIn, OutputAmount: order.AmountOut,
 		Deadline:           order.Deadline,
 		RequireSingleRoute: s.cfg.TokenPolicy.RequiresSingleRoute(order.TokenIn), Quotes: snapshot.Direct,
-		Reservations: s.capacity.Snapshot(),
-		GasSnapshot:  snapshot.GasSnapshot, GasPrices: snapshot.GasPrices, MaxFeePerGas: pricingMaxFee, ChainTime: now,
+		Reservations:   s.capacity.SnapshotExcluding(order.Hash.Hex()),
+		CapacityLimits: fillCapacityLimits(snapshot),
+		GasSnapshot:    snapshot.GasSnapshot, GasPrices: snapshot.GasPrices, MaxFeePerGas: pricingMaxFee, ChainTime: now,
 		Trace: s.decisionTrace(ctx,
 			"source", order.Source,
 			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
 		),
 	}
-	prepared, err := s.prepareFill(ctx, order, fillInput, decisionRoutes, now, chainObservedAt)
+	prepared, err := s.prepareFill(ctx, order, fillInput, decisionRoutes, now, chainObservedAt, reservationRevision)
 	if err != nil {
-		if errors.Is(err, errNoFillPlan) && (!routeSet.complete || discountErr != nil) {
-			return nil, errors.New("fill discovery is incomplete; retry with fresh sources")
-		}
-		if errors.Is(err, errNoFillPlan) {
-			observability.Decline(ctx, "fill_declined", "no source covers the awarded output")
-		}
 		return nil, err
 	}
 	plan, data, discountValidUntil := prepared.plan, prepared.data, prepared.validUntil
 	s.logFillPlan(ctx, order, plan)
-	reservations, ok := strategies.FillRouteReservations(plan.Routes)
-	if !ok {
-		return nil, errors.New("strategy returned invalid capacity reservations")
-	}
 	deadline := fillDeadline(order, discountValidUntil)
 	cancelAt, ok := liquidlane.CancellationDeadline(deadline, now, chainObservedAt, time.Now())
 	if !ok {
@@ -270,14 +264,12 @@ func (s *Solver) startFill(
 	if err != nil {
 		return nil, err
 	}
-	s.setPendingReservations(ctx, order.Hash, reservations)
 	observability.Log(ctx).V(1).Info(
 		"order fill submitted",
 		"source", order.Source,
 		"orderHash", order.Hash.Hex(),
 		"quoteId", order.QuoteID,
 		"routes", len(plan.Routes),
-		"reservationDomains", len(reservations),
 		"gasAccounting", s.cfg.Gas != nil,
 		"pricingMaxFeePerGas", pricingMaxFee.String(),
 	)
@@ -287,9 +279,8 @@ func (s *Solver) startFill(
 	}, nil
 }
 
-// declineFill records an order this solver will not fill as an expected skip on the fill span and
-// returns the sentinel the fill loop treats as terminal local abandonment. Pairing the two
-// here keeps every unfillable path named on the trace and out of the error statistics.
+// declineFill records an expected skip on the fill span. The fill loop owns retry policy;
+// pairing the event and sentinel keeps unfillable plans out of error statistics.
 func declineFill(ctx context.Context, decision, reason string) error {
 	observability.Decline(ctx, decision, reason)
 	return errOrderNotFillable
@@ -372,6 +363,7 @@ func (s *Solver) buildExecutorCalldata(
 			TokenOut:     order.TokenOut,
 			AmountIn:     route.AmountIn,
 			MinAmountOut: route.MinAmountOut,
+			MaxAmountOut: route.ReservedAmountOut,
 		}, physicalQuotes, now)
 		if err != nil {
 			return nil, time.Time{}, errors.Errorf("resolve selected discount %s: %w", route.DiscountID.Hex(), err)
@@ -484,6 +476,8 @@ func (s *Solver) completePendingFill(ctx context.Context, completion uniswapFill
 	}()
 
 	now := time.Now()
+	// A completed transaction may have spent liquidity; retire the cache before releasing it.
+	s.invalidateQuotes()
 	s.clearPendingReservations(ctx, order.Hash)
 	if completion.result.NotAdmitted {
 		// The lane refusing a fill is an expected outcome, not a failure of this fill.

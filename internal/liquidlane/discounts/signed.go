@@ -11,10 +11,6 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 )
 
-// ErrUnavailable identifies a resolved source that cannot satisfy the selected fill.
-// Transport and malformed-response errors remain distinct and may be retried.
-var ErrUnavailable = errors.New("discount source unavailable")
-
 // Selection identifies the route and economic floor chosen before resolving a fresh discount.
 type Selection struct {
 	DiscountID common.Hash
@@ -24,6 +20,8 @@ type Selection struct {
 	AmountIn   *big.Int
 
 	MinAmountOut *big.Int
+	// MaxAmountOut optionally bounds the uncapped payout by the selected capacity reservation.
+	MaxAmountOut *big.Int
 }
 
 // Provider is the shared signed-discount API surface used by direct LiquidLane clients.
@@ -56,6 +54,9 @@ func ValidateSigned(
 	amountOut := liquidlane.AmountOutAfterDiscount(base.GrossAmountOut, signed.Terms.Discount)
 	if selection.MinAmountOut != nil && amountOut.Cmp(selection.MinAmountOut) < 0 {
 		return nil, errors.New("resolved discount no longer meets the selected minimum output")
+	}
+	if selection.MaxAmountOut != nil && amountOut.Cmp(selection.MaxAmountOut) > 0 {
+		return nil, errors.New("resolved discount exceeds the selected capacity reservation")
 	}
 	return amountOut, nil
 }
@@ -111,7 +112,7 @@ func ParseAndValidate(
 		return nil, err
 	}
 	if _, err := ValidateSigned(signed, selection, base, validAfter); err != nil {
-		return nil, errors.Errorf("%w: %w", ErrUnavailable, err)
+		return nil, err
 	}
 	return signed, nil
 }

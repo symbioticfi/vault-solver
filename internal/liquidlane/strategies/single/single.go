@@ -9,7 +9,7 @@ import (
 )
 
 // SolveQuote compares executable quotes, including the caller's buffer and gas.
-// Capacities must already reflect the full inventory's shared capacity allocation.
+// Capacities must already reflect each source's available shared budget and own limit.
 func SolveQuote(task strategies.QuoteTask) (*strategies.QuoteSolution, error) {
 	var best *strategies.QuoteSolution
 	task.MaxRoutes = 1

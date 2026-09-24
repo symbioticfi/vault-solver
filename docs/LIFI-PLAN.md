@@ -462,12 +462,11 @@ type Strategy interface {
   The `default` resolves the supported OutputSettlerSimple contexts: limit and exclusive limit both use
   `output.amount`, while an exclusive order for another solver before `startTime` is declined. Dutch and
   exclusive Dutch orders never reach the strategy because order-feed admission discards them. It fills
-  only when aggregate fresh output covers resolved amount + gas for
+  only when aggregate fresh output covers resolved amount + one execution price buffer + gas for
   every selected leg, the adapter asset matches `output.token`, and `fillDeadline`/`expires` plus
-  private-signature deadlines have at least `executionDeadlineBuffer` remaining. The quote applies
-  `priceBufferBps` once. The fill plan uses fresh executable output
-  without a second downward price buffer and an aggregate internal `minAmountOut = resolvedAmount + gas`. For direct
-  routes, the calldata `amountOut` is the allocated `minAmountOut` and the adapter either produces it or reverts. A
+  private-signature deadlines have at least `executionDeadlineBuffer` remaining. The plan commits a target
+  after downward `priceBufferBps` and an aggregate internal `minAmountOut = resolvedAmount + gas`. For direct
+  routes, the calldata `amountOut` is the buffered target and the adapter either produces it or reverts. A
   private-discount swap uses its signed terms instead of calldata `amountOut`, so
   the strategy requires its full current output plus upward `priceBufferBps` to fit reserved capacity.
   The current adapter minimum is checked directly; there is no separate discount-headroom policy.
@@ -626,7 +625,7 @@ solvers:
 ```
 LI.FI order server ──(WS: opened/funded StandardOrder)──▶ lifi solver
   price: fresh direct getAmountOut or signed-discount output; getMaxAssets → reserved cap
-  decide: current output ≥ resolved output + gas, deadlines buffered ?  ── no ─▶ skip
+  decide: buffered target ≥ resolved output + gas, deadlines buffered ?  ── no ─▶ skip
      │ yes
   build direct FillRoute[] + discount-backed DiscountRoute[]; require combined Σ amountIn == order input
      │
@@ -646,10 +645,10 @@ LI.FI order server ──(WS: opened/funded StandardOrder)──▶ lifi solver
 - **Atomic revert-safety** is the backbone: if the redemption under-delivers, the adapter reverts, or
   the output fill/attestation fails, the entire tx reverts — no partial state, no stuck funds.
 - **Pre-submit skips** (never send a doomed tx): insufficient output
-  (aggregate current output below output amount + selected-leg gas), buffered private output above reserved
+  (aggregate buffered target below output amount + selected-leg gas), buffered private output above reserved
   capacity, invalid current private discount bounds, asset mismatch, deadline/expiry inside the execution
   buffer, or adapter paused.
-- **Inclusion-time enforcement** — direct routes ask the adapter for their allocated minimum; private routes use
+- **Inclusion-time enforcement** — direct routes ask the adapter for the buffered target; private routes use
   the signed terms. If current adapter state cannot execute the request or the OutputSettler cannot pull the
   accepted order amount, the whole transaction reverts.
 - **Optional gas-aware quotes** — when `gas:` is configured, the solver supplies the live txmanager fee cap, latest LiquidLane gas state, and
@@ -911,6 +910,14 @@ still requires the redeploy in phase 0.
 ---
 
 ## 10. Open items
+
+- [ ] **Quote unreserved capacity while the sender is busy.** Deferred as a relatively small,
+  solver-local follow-up using the existing shared `CapacityLedger`. Move reservation installation
+  before transaction admission and use its revision checks during planning and quote publication.
+  Then switch quote gating from `LaneReady()` to `Available()` and adjust coalesced lane-state
+  handling so ordinary sender occupancy does not withdraw standing curves. Preserve nonce-conflict
+  withdrawal and validate HTTP publication races, completion/retry handoff, and recovery. Current
+  LI.FI reservation timing and busy-lane quote gating remain unchanged.
 
 - **Gas calibration: direct-finalise rerun required.** The previous signature-based executor's 51-test
   suite measured a maximum `finaliseWithCurrentTimestamp` call of 478,838 gas. Re-run Foundry gas reports

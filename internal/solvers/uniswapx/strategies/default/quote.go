@@ -28,7 +28,7 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 
 	validAfter := input.QuoteExpiresAt.Add(s.executionBuffer)
 	liveInventory := greedy.FilterLiveInventory(input.Inventory, validAfter)
-	allocatedInventory := greedy.AllocateInventoryCapacity(
+	allocatedInventory := s.allocateInventory(
 		liveInventory, input.Reservations, s.cfg.InventoryReserveBps,
 	)
 	candidates := make([]liquidlane.QuoteCandidate, 0, len(allocatedInventory))
@@ -78,7 +78,7 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 	solution, err := s.solveQuote(strategies.QuoteTask{
 		ExactInput: input.AmountIn, ExactOutput: input.AmountOut,
 		Candidates: candidates, MaxRoutes: maxRoutes, MinInput: s.minAmount,
-		OutputBufferBps: s.cfg.PriceBufferBps,
+		OutputBufferBps: 2 * s.cfg.PriceBufferBps,
 		GasPricing:      &pricing,
 		Trace:           input.Trace,
 	})

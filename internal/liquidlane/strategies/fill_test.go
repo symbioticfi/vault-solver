@@ -73,6 +73,15 @@ func TestValidateFillRoutesRejectsUntrustedOutput(t *testing.T) {
 		"input sum":         func(_ *FillValidation, route *FillRoute) { route.AmountIn = big.NewInt(9) },
 		"output":            func(_ *FillValidation, route *FillRoute) { route.ExpectedAmountOut = big.NewInt(21) },
 		"minimum":           func(_ *FillValidation, route *FillRoute) { route.MinAmountOut = big.NewInt(17) },
+		"missing domain":    func(input *FillValidation, _ *FillRoute) { input.CapacityLimits = map[liquidlane.CapacityID]*big.Int{} },
+		"domain exhausted": func(input *FillValidation, _ *FillRoute) {
+			input.CapacityLimits = map[liquidlane.CapacityID]*big.Int{"capacity-1": big.NewInt(25)}
+			input.Reservations = liquidlane.CapacityReservations{"capacity-1": big.NewInt(6)}
+		},
+		"source limit": func(input *FillValidation, route *FillRoute) {
+			input.CapacityLimits = map[liquidlane.CapacityID]*big.Int{"capacity-1": big.NewInt(1000)}
+			route.ReservedAmountOut = big.NewInt(101)
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {

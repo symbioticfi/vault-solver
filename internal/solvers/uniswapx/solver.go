@@ -68,7 +68,6 @@ type Solver struct {
 	// stateMu guards order retry/dedup, single-source selections and breaker history.
 	stateMu           sync.Mutex
 	selections        map[string]quoteSelection
-	abandoned         map[common.Hash]time.Time
 	filled            map[common.Hash]time.Time
 	retryAt           map[common.Hash]time.Time
 	inFlight          map[common.Hash]bool
@@ -132,7 +131,6 @@ type orderPoller interface {
 type transactionManager interface {
 	MaxFeePerGas(ctx context.Context) (*big.Int, error)
 	SendAsync(ctx context.Context, request txmanager.Request) (<-chan txmanager.Result, bool)
-	LaneReady() bool
 	Available() bool
 }
 
