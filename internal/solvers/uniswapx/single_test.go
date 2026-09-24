@@ -263,9 +263,7 @@ func TestSingleInternalReplacesDiscountAndEncodesOnlyReplacement(t *testing.T) {
 				if fixture.packed.DiscountRoutes[0].AmountIn.Cmp(fixture.order.AmountIn) != 0 {
 					t.Fatal("replacement changed the signed input")
 				}
-				fixture.solver.completePendingFill(t.Context(), uniswapFillCompletion{
-					fill: pending, result: txmanager.Result{NotAdmitted: true, Err: errors.New("sender rejected admission")},
-				})
+				fixture.solver.completePendingFill(t.Context(), pending, txmanager.Result{NotAdmitted: true, Err: errors.New("sender rejected admission")})
 				if held := fixture.solver.capacity.Snapshot()[fixture.route.CapacityID]; held.Int64() != 30 {
 					t.Fatalf("unsent retry retained its reservation or released another fill: %s", held)
 				}

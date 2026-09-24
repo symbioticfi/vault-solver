@@ -525,7 +525,7 @@ func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 		Outcome: txmanager.OutcomeConfirmed,
 	}
 	result := <-pending.result
-	fixture.solver.completePendingFill(t.Context(), uniswapFillCompletion{fill: pending, result: result})
+	fixture.solver.completePendingFill(t.Context(), pending, result)
 	if fixture.solver.capacity.Len() != 0 {
 		t.Fatal("pending reservation was not released")
 	}
@@ -578,6 +578,66 @@ func TestFillLoopKeepsReservationsWithoutBlockingQuotes(t *testing.T) {
 	}
 	if fixture.solver.quoteState.Load() != nil || fixture.solver.capacity.Len() != 0 {
 		t.Fatal("completion must retire spent inventory and release its reservation")
+	}
+}
+
+func TestFillLoopCompletesWhileNextFillPlans(t *testing.T) {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeConfirmed, txmanager.OutcomeReverted} {
+		t.Run(string(outcome), func(t *testing.T) {
+			fixture := newDirectExecutionFixture(t)
+			reader := fixture.solver.reader.(*executionTestReader)
+			planning := make(chan struct{})
+			resume := make(chan struct{})
+			defer close(resume)
+			reads := 0
+			reader.fillSnapshotFn = func(_ []liquidlane.Route, _ *big.Int) fillSnapshot {
+				reads++
+				if reads == 2 {
+					close(planning)
+					<-resume
+				}
+				return reader.snapshot
+			}
+			fixture.solver.quoteState.Store(&quoteState{expiresAt: fixture.now.Add(time.Minute)})
+			second := *fixture.order
+			second.Hash = common.HexToHash("0x02")
+			orders := make(chan *resolvedOrder, 2)
+			for _, order := range []*resolvedOrder{fixture.order, &second} {
+				if !fixture.solver.claim(order.Hash, fixture.now) {
+					t.Fatal("order was not claimed")
+				}
+				orders <- order
+			}
+			close(orders)
+			done := make(chan error, 1)
+			go func() { done <- fixture.solver.fillLoop(t.Context(), []liquidlane.Route{fixture.route}, orders) }()
+			select {
+			case <-planning:
+			case <-time.After(time.Second):
+				t.Fatal("second fill did not reach planning")
+			}
+			fixture.txm.result <- txmanager.Result{Outcome: outcome}
+			waitForExecutionCondition(t, func() bool {
+				fixture.solver.stateMu.Lock()
+				defer fixture.solver.stateMu.Unlock()
+				return !fixture.solver.inFlight[fixture.order.Hash]
+			})
+			if fixture.solver.capacity.Has(fixture.order.Hash.Hex()) || fixture.solver.quoteState.Load() != nil {
+				t.Fatal("completed fill retained its reservation or cached inventory during another plan")
+			}
+			resume <- struct{}{}
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("fill loop did not drain")
+			}
+			if len(fixture.txm.reqs) != 1 || fixture.solver.capacity.Len() != 0 {
+				t.Fatal("plan predating capacity release was admitted or leaked a reservation")
+			}
+		})
 	}
 }
 
@@ -710,13 +770,10 @@ func TestCompletePendingFillClassifiesNotAdmittedWithoutFailure(t *testing.T) {
 	)
 	pending := testPendingFill(t, fixture.order)
 
-	fixture.solver.completePendingFill(t.Context(), uniswapFillCompletion{
-		fill: pending,
-		result: txmanager.Result{
-			Outcome:     txmanager.OutcomeSubmissionError,
-			Err:         errors.New("transaction was not admitted"),
-			NotAdmitted: true,
-		},
+	fixture.solver.completePendingFill(t.Context(), pending, txmanager.Result{
+		Outcome:     txmanager.OutcomeSubmissionError,
+		Err:         errors.New("transaction was not admitted"),
+		NotAdmitted: true,
 	})
 
 	if fixture.solver.capacity.Len() != 0 || fixture.solver.inFlight[fixture.order.Hash] {
@@ -745,12 +802,9 @@ func TestCompletePendingFillRecordsFailureOutcome(t *testing.T) {
 		liquidlane.CapacityReservations{fixture.route.CapacityID: big.NewInt(100)}, fixture.solver.capacity.Revision(),
 	)
 
-	fixture.solver.completePendingFill(t.Context(), uniswapFillCompletion{
-		fill: testPendingFill(t, fixture.order),
-		result: txmanager.Result{
-			Outcome: txmanager.OutcomeReverted,
-			Err:     errors.New("fill reverted"),
-		},
+	fixture.solver.completePendingFill(t.Context(), testPendingFill(t, fixture.order), txmanager.Result{
+		Outcome: txmanager.OutcomeReverted,
+		Err:     errors.New("fill reverted"),
 	})
 
 	metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 1)
@@ -802,12 +856,9 @@ func TestIncludedUnconfirmedFillCompletesWithoutRetry(t *testing.T) {
 		attempts: make(map[common.Hash]int),
 	}
 
-	solver.completePendingFill(t.Context(), uniswapFillCompletion{
-		fill: testPendingFill(t, order),
-		result: txmanager.Result{
-			Outcome: txmanager.OutcomeIncludedUnconfirmed,
-			Err:     errors.New("confirmation wait failed"),
-		},
+	solver.completePendingFill(t.Context(), testPendingFill(t, order), txmanager.Result{
+		Outcome: txmanager.OutcomeIncludedUnconfirmed,
+		Err:     errors.New("confirmation wait failed"),
 	})
 
 	if _, done := solver.filled[hash]; !done {

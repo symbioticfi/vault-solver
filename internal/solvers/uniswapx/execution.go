@@ -41,28 +41,24 @@ func (f *pendingUniswapFill) traceContext(ctx context.Context) context.Context {
 
 func (f *pendingUniswapFill) endFill(err error) { f.end(err) }
 
-type uniswapFillCompletion struct {
-	fill   *pendingUniswapFill
-	result txmanager.Result
-}
-
 func (s *Solver) fillLoop(
 	ctx context.Context,
 	routes []liquidlane.Route,
 	orders <-chan *resolvedOrder,
 ) error {
-	completions := make(chan uniswapFillCompletion, orderQueueCapacity)
-	pending := make(map[common.Hash]*pendingUniswapFill)
+	completions := make(chan struct{}, orderQueueCapacity)
+	// Only this loop owns the count. Result workers finish each lifecycle before
+	// notifying it, so planning cannot delay capacity release or outcome handling.
+	pending := 0
 	ctxDone := ctx.Done()
 	var shutdownErr error
-	for orders != nil || len(pending) > 0 {
+	for orders != nil || pending > 0 {
 		select {
 		case <-ctxDone:
 			shutdownErr = ctx.Err()
 			ctxDone = nil
-		case completion := <-completions:
-			delete(pending, completion.fill.order.Hash)
-			s.completePendingFill(ctx, completion)
+		case <-completions:
+			pending--
 		case order, ok := <-orders:
 			if !ok {
 				orders = nil
@@ -123,23 +119,25 @@ func (s *Solver) fillLoop(
 				)
 				continue
 			}
-			pending[order.Hash] = fill
-			go awaitUniswapFill(fill, completions)
+			pending++
+			go s.awaitUniswapFill(ctx, fill, completions)
 		}
 	}
 	return shutdownErr
 }
 
 // Once txmanager accepts a fill, shutdown may stop new admission but must not drop its terminal result.
-func awaitUniswapFill(
+func (s *Solver) awaitUniswapFill(
+	ctx context.Context,
 	fill *pendingUniswapFill,
-	out chan<- uniswapFillCompletion,
+	out chan<- struct{},
 ) {
 	result, ok := <-fill.result
 	if !ok {
 		result.Err = errors.New("transaction result channel closed without a result")
 	}
-	out <- uniswapFillCompletion{fill: fill, result: result}
+	s.completePendingFill(ctx, fill, result)
+	out <- struct{}{}
 }
 
 // startFill plans and submits the fill for one accepted order. The uniswapx.fill span continues the
@@ -461,27 +459,27 @@ func (s *Solver) logFillPlan(ctx context.Context, order *resolvedOrder, plan *ty
 
 // completePendingFill reports the transaction outcome as the uniswapx.fill.complete stage and closes
 // the fill span the submission opened.
-func (s *Solver) completePendingFill(ctx context.Context, completion uniswapFillCompletion) {
-	order := completion.fill.order
+func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFill, result txmanager.Result) {
+	order := fill.order
 	// The fill span this result belongs to, plus the order's quote-linked logger.
-	fillCtx := observability.WithLogger(completion.fill.traceContext(ctx), s.orderLogger(order))
-	txmanager.RecordResult(fillCtx, completion.result)
+	fillCtx := observability.WithLogger(fill.traceContext(ctx), s.orderLogger(order))
+	txmanager.RecordResult(fillCtx, result)
 	ctx, end := tracer.Start(fillCtx, "uniswapx.fill.complete")
-	txmanager.RecordResult(ctx, completion.result)
+	txmanager.RecordResult(ctx, result)
 	var err error
 	// Deferred so both spans end on every path, including a panic; ending twice is a no-op.
 	defer func() {
 		end(err)
-		completion.fill.endFill(err)
+		fill.endFill(err)
 	}()
 
 	now := time.Now()
 	// A completed transaction may have spent liquidity; retire the cache before releasing it.
 	s.invalidateQuotes()
 	s.clearPendingReservations(ctx, order.Hash)
-	if completion.result.NotAdmitted {
+	if result.NotAdmitted {
 		// The lane refusing a fill is an expected outcome, not a failure of this fill.
-		observability.Decline(ctx, "fill_not_admitted", errorReason(completion.result.Err))
+		observability.Decline(ctx, "fill_not_admitted", errorReason(result.Err))
 		s.observeFillOutcome(liquidlane.FillOutcomeNotAdmitted)
 		s.retry(order.Hash, now, false)
 		observability.Log(ctx).V(1).Info(
@@ -489,13 +487,13 @@ func (s *Solver) completePendingFill(ctx context.Context, completion uniswapFill
 			"source", order.Source,
 			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
-			"error", completion.result.Err,
+			"error", result.Err,
 		)
 		return
 	}
-	outcome := completion.result.Outcome
+	outcome := result.Outcome
 	if !outcome.Included() {
-		err = completion.result.Err
+		err = result.Err
 		if err == nil {
 			err = errors.Errorf("unknown transaction outcome %q", outcome)
 		}
@@ -506,30 +504,30 @@ func (s *Solver) completePendingFill(ctx context.Context, completion uniswapFill
 			err,
 			"order fill failed",
 			"source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
-			"tx", completion.result.Hash.Hex(),
+			"tx", result.Hash.Hex(),
 		)
 		return
 	}
 	if outcome == txmanager.OutcomeConfirmed {
 		observability.Log(ctx).Info("order filled", "source", order.Source, "executor", order.Executor.Hex(),
-			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", completion.result.Hash.Hex())
+			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", result.Hash.Hex())
 	} else {
 		// Included, but the confirmation wait failed: the fill stands, the wait error is the span's.
-		err = completion.result.Err
+		err = result.Err
 		observability.Log(ctx).Error(err, "order fill included but confirmation wait failed",
 			"source", order.Source, "executor", order.Executor.Hex(),
-			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", completion.result.Hash.Hex())
+			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", result.Hash.Hex())
 	}
 	s.recordFillSuccess()
 	s.complete(order.Hash, now)
 	if s.metrics != nil {
 		s.metrics.fillAmounts.Observe(
-			completion.result.Receipt,
+			result.Receipt,
 			order.TokenIn,
 			order.AmountIn,
 			order.TokenOut,
 			order.AmountOut,
-			completion.fill.plannedSurplus,
+			fill.plannedSurplus,
 		)
 	}
 }

@@ -113,8 +113,8 @@ func (s *Solver) recordFillSuccess() {
 	s.stateMu.Lock()
 	hadFailures := len(s.failureTimes) > 0
 	s.failureTimes = nil
-	s.stateMu.Unlock()
 	blockedUntil := s.localBlockUntil.Swap(0)
+	s.stateMu.Unlock()
 	if hadFailures || blockedUntil != 0 {
 		s.log.V(1).Info(
 			"local fill breaker cleared",

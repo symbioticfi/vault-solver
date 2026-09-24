@@ -162,6 +162,11 @@ its reservation, quotes can still use that capacity; this window is accepted to 
 on planning I/O. Revision checks detect reservations installed during quote calculation, not claims or
 future commitments. Neither a quote nor a claimed order is a liquidity reservation.
 
+Each accepted fill handles its transaction result in its own goroutine, invalidating inventory before
+releasing its reservation and recording the outcome. Completion does not wait for another fill's
+planning or admission. The fill loop counts outstanding result handlers and drains them on shutdown;
+a reservation revision change during planning still rejects that plan for a fresh retry.
+
 A planned fill may wait behind another transaction on the shared nonce lane. Its admission deadline
 (`CancelAt`) still applies: if the preceding transaction takes too long, admission returns `not_admitted`
 and existing retry handling applies. Continued quoting does not guarantee execution within exclusivity;
