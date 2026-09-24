@@ -11,6 +11,10 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 )
 
+// ErrUnavailable identifies a resolved source that cannot satisfy the selected fill.
+// Transport and malformed-response errors remain distinct and may be retried.
+var ErrUnavailable = errors.New("discount source unavailable")
+
 // Selection identifies the route and economic floor chosen before resolving a fresh discount.
 type Selection struct {
 	DiscountID common.Hash
@@ -107,7 +111,7 @@ func ParseAndValidate(
 		return nil, err
 	}
 	if _, err := ValidateSigned(signed, selection, base, validAfter); err != nil {
-		return nil, err
+		return nil, errors.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	return signed, nil
 }

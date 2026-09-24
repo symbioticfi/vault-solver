@@ -1,7 +1,7 @@
 # LiquidLane conventions
 
 LiquidLane is shared liquidity infrastructure, not a solver. This document is the compact standard for
-RFQ, LI.FI, OEV, future UniswapX, and any new solver that consumes `LiquidLaneAdapter` state.
+RFQ, LI.FI, OEV, UniswapX, and any new solver that consumes `LiquidLaneAdapter` state.
 
 ## Ownership
 
@@ -9,8 +9,9 @@ RFQ, LI.FI, OEV, future UniswapX, and any new solver that consumes `LiquidLaneAd
 |---|---|
 | `internal/liquidlane` | adapter/vault/route types, latest-state reads, direct authorization, ids, rate math, and the pending-capacity ledger |
 | `internal/liquidlane/snapshot` | common direct/physical inventory, amount-specific fill quote, authorization, and optional gas snapshot composition |
-| `internal/liquidlane/strategies` | canonical fill routes, external-plan validation, and optional settlement gas pricing |
+| `internal/liquidlane/strategies` | shared quote/fill tasks and results, canonical fill routes, minimum-output distribution, gas pricing, and fill-plan validation |
 | `internal/liquidlane/strategies/greedy` | RFQ-like oracle normalization plus greedy quote/fill allocation and fill economics |
+| `internal/liquidlane/strategies/single` | whole-request single-source comparison using the shared task/result contract and greedy calculations |
 | `internal/liquidlane/gas` | shared optional Chainlink token/native facts plus neutral acquire/allocate/deallocate/unknown route prediction from current adapter/vault state |
 | `internal/liquidlane/discounts` | signed-discount HTTP client, live-offer filtering, route matching, fill-quote construction, and fresh-signature validation |
 | `internal/solvers/<name>` | cadence, caches, strategy inputs, economics, protocol messages, calldata, and execution |
@@ -144,7 +145,16 @@ shared predictor owns adapter swap route units. Amount-specific RFQ-like protoco
 against current per-physical-route `FillQuote`s through `NormalizeOracleInventory`; they never group
 oracle prices by output token because the oracle, discount floor, and executable output belong to the
 adapter route. Protocol adapters then map those facts into
-`QuoteTask` or `FillTask`; the shared engine returns `QuoteSolution` or `FillSolution`. It ranks
+`strategies.QuoteTask` or `strategies.FillTask`; the selected algorithm returns `strategies.QuoteSolution`
+or `strategies.FillSolution`. The `greedy` and `single` subpackages expose pure `SolveQuote` and
+`SolveFill` functions using these structures. Strategy implementations, interfaces, and registration
+belong to the solvers. The
+[single-source algorithm](strategy-plan.md#single-source-selection) selects one candidate for the whole
+request from the supplied eligible sources. Its availability in a solver's config is separate from
+its ownership in LiquidLane.
+
+`FillSolution` owns copies of selected routes and finalizes their required minimums without modifying
+the allocation. The greedy engine ranks
 already-priced candidates, enforces one alternative per physical route, solves exact input/output,
 splits across route caps, allocates shared `CapacityID` budgets, applies explicit uncovered-input policy,
 and, when an optional gas pricing model is supplied, converts a complete LiquidLane settlement gas

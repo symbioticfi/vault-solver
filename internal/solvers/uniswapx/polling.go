@@ -249,6 +249,14 @@ func (s *Solver) recordExclusivePollSuccess(now time.Time) {
 func (s *Solver) claim(hash common.Hash, now time.Time) bool {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
+	for hash, deadline := range s.abandoned {
+		if now.After(deadline) {
+			delete(s.abandoned, hash)
+		}
+	}
+	if _, abandoned := s.abandoned[hash]; abandoned {
+		return false
+	}
 	for key, filledAt := range s.filled {
 		if now.Sub(filledAt) > time.Hour {
 			delete(s.filled, key)

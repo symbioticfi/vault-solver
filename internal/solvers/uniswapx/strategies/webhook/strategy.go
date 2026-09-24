@@ -13,7 +13,6 @@ import (
 )
 
 const (
-	Name             = "webhook"
 	decideQuoteRoute = "/decide-quote"
 	decideFillRoute  = "/decide-fill"
 )
@@ -24,7 +23,7 @@ type Strategy struct {
 
 //nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
 func init() {
-	strategies.Register(Name, NewFromConfig)
+	strategies.Register(types.WebhookName, NewFromConfig)
 }
 
 func NewFromConfig(raw yaml.Node) (types.Strategy, error) {

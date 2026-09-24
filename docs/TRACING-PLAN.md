@@ -341,8 +341,10 @@ There are no `rfq.quote.discounts` or `rfq.quote.sign` spans: the pipeline has n
 | `uniswapx.fill.complete` | `completePendingFill` | carries `tx.hash` and `tx.outcome` |
 
 Because the send is asynchronous, `tx.hash` and `tx.outcome` live on `uniswapx.fill.complete` and
-`uniswapx.fill`, not on `uniswapx.fill.submit`. An order this filler cannot fill is a `declined`
-event, not an error.
+`uniswapx.fill`, not on `uniswapx.fill.submit`. An order this filler cannot fill records a `declined`
+event on `uniswapx.fill` before that span ends without an error. For the supported `Dutch_V2` orders,
+this terminal local decline applies to every strategy and both public and exclusive sources;
+exclusive-obligation reconciliation remains independent.
 
 **lifi** (`internal/solvers/lifi`) — see [LIFI-PLAN](LIFI-PLAN.md)
 

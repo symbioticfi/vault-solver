@@ -64,7 +64,7 @@ func (s *Strategy) firstSafeRangeInput(
 	maxGasCost *big.Int,
 	routeCount int,
 ) *big.Int {
-	outputBufferBps := 2 * s.cfg.PriceBufferBps
+	outputBufferBps := s.cfg.PriceBufferBps
 	inDecimals := candidates[0].Route.TokenInDecimals
 	outDecimals := candidates[0].Route.TokenOutDecimals
 	isSafeInput := func(amount *big.Int) bool {
@@ -114,14 +114,14 @@ func (s *Strategy) priceQuoteRange(
 	routeCount int,
 	pricing liquidstrategies.GasPricing,
 ) (*types.QuoteRange, error) {
-	quoteAt := func(amount *big.Int) (*liquidgreedy.QuoteSolution, error) {
-		return liquidgreedy.SolveQuote(liquidgreedy.QuoteTask{
+	quoteAt := func(amount *big.Int) (*liquidstrategies.QuoteSolution, error) {
+		return liquidgreedy.SolveQuote(liquidstrategies.QuoteTask{
 			ExactInput:      amount,
 			Candidates:      candidates,
 			MaxRoutes:       maxRoutes,
 			MinInput:        s.minAmount,
-			OutputBufferBps: 2 * s.cfg.PriceBufferBps,
-			InputPolicy:     liquidgreedy.RejectUncoveredInput,
+			OutputBufferBps: s.cfg.PriceBufferBps,
+			InputPolicy:     liquidstrategies.RejectUncoveredInput,
 			GasPricing:      &pricing,
 		})
 	}
@@ -147,7 +147,7 @@ func (s *Strategy) priceQuoteRange(
 		upper,
 		maxGasCost,
 		routeCount,
-		2*s.cfg.PriceBufferBps,
+		s.cfg.PriceBufferBps,
 		inDecimals,
 		outDecimals,
 	)

@@ -194,7 +194,7 @@ func TestBuildFillCalldata(t *testing.T) {
 	}
 	if len(directRoutes) != 1 || directRoutes[0].Adapter != plan.Routes[0].Adapter ||
 		directRoutes[0].AmountIn.Cmp(plan.Routes[0].AmountIn) != 0 ||
-		directRoutes[0].AmountOut.Cmp(plan.Routes[0].ExpectedAmountOut) != 0 {
+		directRoutes[0].AmountOut.Cmp(plan.Routes[0].MinAmountOut) != 0 {
 		t.Fatalf("direct routes = %+v", directRoutes)
 	}
 	if len(discountRoutes) != 0 {
@@ -264,7 +264,7 @@ func TestBuildFillCalldataSplitsDirectAndResolvedPrivateDiscount(t *testing.T) {
 	_, directRoutes, discountRoutes := unpackFinaliseCalldata(t, calldata.Finalise)
 	if len(directRoutes) != 1 || directRoutes[0].Adapter != directAdapter ||
 		directRoutes[0].AmountIn.Cmp(directAmountIn) != 0 ||
-		directRoutes[0].AmountOut.Cmp(plan.Routes[1].ExpectedAmountOut) != 0 {
+		directRoutes[0].AmountOut.Cmp(plan.Routes[1].MinAmountOut) != 0 {
 		t.Fatalf("direct routes = %+v", directRoutes)
 	}
 	if len(discountRoutes) != 1 {

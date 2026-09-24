@@ -488,6 +488,21 @@ func TestFillTraceDeclinesUnfillableOrder(t *testing.T) {
 	}
 }
 
+func TestSingleFillTraceRecordsTerminalDecline(t *testing.T) {
+	rec := tracetest.Install(t)
+	fixture := newDirectExecutionFixture(t)
+	useExecutionStrategy(t, fixture, "single")
+	fixture.solver.reader.(*executionTestReader).snapshot.Direct[0].MaxAmountOut = big.NewInt(89)
+	_, err := fixture.solver.startFill(t.Context(), []liquidlane.Route{fixture.route}, fixture.order, fixture.now, fixture.now)
+	if !errors.Is(err, errNoFillPlan) {
+		t.Fatalf("fill error = %v", err)
+	}
+	fill := tracetest.Ended(t, rec, "uniswapx.fill")
+	if !tracetest.HasEvent(fill, "declined") || tracetest.HasEvent(fill, "exception") || fill.Status().Code == codes.Error {
+		t.Fatalf("terminal decline: status=%v events=%v", fill.Status(), fill.Events())
+	}
+}
+
 // The other half of the classification: a fill we tried and could not send is a real failure and has
 // to surface as an error span with the cause recorded.
 func TestFillTraceRecordsPreflightFailure(t *testing.T) {

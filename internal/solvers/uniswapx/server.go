@@ -14,7 +14,7 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
-	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 )
 
 const maxQuoteRequestBytes = 32 << 10
@@ -125,6 +125,11 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
+	// Publish the selection before writing: an awarded order can arrive as soon as
+	// the peer receives the response. A failed write may leave a harmless bounded hint.
+	if s.cfg.singleSource() {
+		s.rememberSelection(response, time.Now())
+	}
 	s.observeQuote(quoteOutcomeQuoted)
 	s.observeQuotedAmounts(response)
 	observability.Log(r.Context()).V(1).Info(
@@ -220,7 +225,7 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 	if state == nil || state.epoch != epoch || !state.expiresAt.After(time.Unix(now, 0)) {
 		return declinedQuote(response, quoteDeclineQuoteStateUnavailable), nil
 	}
-	input := strategytypes.QuoteInput{
+	input := types.QuoteInput{
 		RequestID: request.RequestID, QuoteID: request.QuoteID,
 		TokenIn: tokenIn, TokenOut: tokenOut,
 		RequireSingleRoute: state.singleRouteFor[tokenIn],
@@ -252,6 +257,7 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 	if s.quoteEpoch.Load() != epoch || s.quoteState.Load() != state || s.quoteBlocked(s.currentTime()) {
 		return declinedQuote(response, quoteDeclineStateChanged), nil
 	}
+	response.selectedCandidate = quote.CandidateID
 	response.AmountIn = quote.AmountIn.String()
 	response.AmountOut = quote.AmountOut.String()
 	response.quotedPairBounded = quotePairIsBounded(state, tokenIn, tokenOut)
@@ -261,8 +267,8 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 // decideQuote runs the strategy as the uniswapx.quote.decide stage, so a webhook strategy's HTTP
 // call nests under a named decision span.
 func (s *Solver) decideQuote(
-	ctx context.Context, input strategytypes.QuoteInput,
-) (quote *strategytypes.Quote, err error) {
+	ctx context.Context, input types.QuoteInput,
+) (quote *types.Quote, err error) {
 	ctx, end := tracer.Start(ctx, "uniswapx.quote.decide", observability.AttrStrategy.String(s.cfg.Strategy.Name))
 	defer func() { end(err) }()
 	return s.strategy.DecideQuote(ctx, input)
@@ -297,7 +303,7 @@ func supportedQuoteProtocol(value string) bool {
 	return value == "v1" || value == "v2"
 }
 
-func validateStrategyQuote(input strategytypes.QuoteInput, quote *strategytypes.Quote) error {
+func validateStrategyQuote(input types.QuoteInput, quote *types.Quote) error {
 	if quote.AmountIn == nil || quote.AmountIn.Sign() <= 0 || quote.AmountOut == nil || quote.AmountOut.Sign() <= 0 {
 		return errors.New("strategy returned invalid quote amounts")
 	}

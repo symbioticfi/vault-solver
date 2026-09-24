@@ -5,7 +5,6 @@ import (
 	"math/big"
 	"time"
 
-	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"go.opentelemetry.io/otel/trace"
@@ -13,9 +12,9 @@ import (
 	uxexecutor "github.com/symbioticfi/vault-solver/api/bindings/uniswapx/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
-	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 	"github.com/symbioticfi/vault-solver/internal/observability"
-	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -109,14 +108,15 @@ func (s *Solver) fillLoop(
 			fill, err := s.startFill(orderCtx, routes, order, now, chainObservedAt)
 			s.endFillPlanning()
 			if err != nil {
+				if errors.Is(err, errNoFillPlan) || errors.Is(err, errOrderNotFillable) {
+					s.abandonFill(order)
+					s.observeFillOutcome("failure")
+					observability.Log(orderCtx).Info("order fill abandoned", "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
+					continue
+				}
 				s.retry(order.Hash, now, errors.Is(err, errFillPreflight))
 				if errors.Is(err, errFillPreflight) {
 					s.recordOrderFillFailure(orderCtx, order, now)
-				}
-				if errors.Is(err, errOrderNotFillable) {
-					observability.Log(orderCtx).V(1).Info("order not fillable yet", "source", order.Source,
-						"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
-					continue
 				}
 				observability.Log(orderCtx).Error(
 					err, "order fill preparation failed", "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
@@ -159,9 +159,9 @@ func (s *Solver) startFill(
 	defer func() {
 		switch {
 		case fill != nil: // the span lives until the transaction result arrives
-		case errors.Is(err, errOrderNotFillable):
-			// An order we decline to fill is the poll's ordinary outcome, already recorded as a
-			// declined event: the loop retries it later rather than treating it as a failure.
+		case errors.Is(err, errOrderNotFillable), errors.Is(err, errNoFillPlan):
+			// Deterministic declines are recorded on this span and abandoned by the fill loop.
+			// Exclusive-obligation reconciliation remains independent.
 			end(nil)
 		default:
 			end(err)
@@ -174,13 +174,8 @@ func (s *Solver) startFill(
 	if order.Deadline == 0 || int64(order.Deadline) <= now.Unix() {
 		return nil, declineFill(ctx, "fill_skipped", "order deadline has passed")
 	}
-	decisionRoutes, listed, discountErr := s.fillRoutesWithDiscounts(
-		ctx,
-		routes,
-		order.TokenIn,
-		order.TokenOut,
-		now,
-	)
+	routeSet, discountErr := s.routesWithDiscounts(ctx, routes, now, advertisedRouteFilter{tokenIn: order.TokenIn, tokenOut: order.TokenOut})
+	decisionRoutes, listed := routeSet.routes, routeSet.listed
 	if discountErr != nil {
 		observability.Log(ctx).Error(discountErr, "refresh fill discount routes", "orderHash", order.Hash.Hex())
 	}
@@ -219,7 +214,7 @@ func (s *Solver) startFill(
 		pricingMaxFee = maxFee
 		transactionMaxFee = new(big.Int).Set(maxFee)
 	}
-	fillInput := strategytypes.FillInput{
+	fillInput := types.FillInput{
 		OrderID: order.Hash.Hex(), QuoteID: order.QuoteID,
 		TokenIn: order.TokenIn, TokenOut: order.TokenOut, AmountIn: order.AmountIn, OutputAmount: order.AmountOut,
 		Deadline:           order.Deadline,
@@ -232,44 +227,21 @@ func (s *Solver) startFill(
 			"quoteId", order.QuoteID,
 		),
 	}
-	plan, err := s.decideFill(ctx, fillInput)
+	prepared, err := s.prepareFill(ctx, order, fillInput, decisionRoutes, now, chainObservedAt)
 	if err != nil {
+		if errors.Is(err, errNoFillPlan) && (!routeSet.complete || discountErr != nil) {
+			return nil, errors.New("fill discovery is incomplete; retry with fresh sources")
+		}
+		if errors.Is(err, errNoFillPlan) {
+			observability.Decline(ctx, "fill_declined", "no source covers the awarded output")
+		}
 		return nil, err
 	}
-	if plan == nil || len(plan.Routes) == 0 {
-		observability.Log(ctx).V(1).Info(
-			"order fill strategy declined",
-			"source", order.Source,
-			"orderHash", order.Hash.Hex(),
-			"quoteId", order.QuoteID,
-			"fillQuotes", len(fillInput.Quotes),
-			"amountIn", order.AmountIn.String(),
-			"requiredAmountOut", order.AmountOut.String(),
-		)
-		return nil, declineFill(ctx, "fill_declined", "strategy returned no fill plan")
-	}
-	validatedRoutes, err := liquidstrategies.ValidateFillRoutes(liquidstrategies.FillValidation{
-		TokenIn: fillInput.TokenIn, TokenOut: fillInput.TokenOut, AmountIn: fillInput.AmountIn,
-		RequiredAmountOut: fillInput.OutputAmount, RequireSingleRoute: fillInput.RequireSingleRoute,
-		MaxRoutes: strategytypes.MaxRoutes, Quotes: fillInput.Quotes, Reservations: fillInput.Reservations,
-		GasSnapshot: fillInput.GasSnapshot, GasPrices: fillInput.GasPrices, MaxFeePerGas: fillInput.MaxFeePerGas,
-		GasEnvelope: strategytypes.LiquidLaneGasEnvelope(),
-	}, plan.Routes)
-	if err != nil {
-		return nil, errors.Errorf("strategy returned invalid fill plan: %w", err)
-	}
-	plan.Routes = validatedRoutes
+	plan, data, discountValidUntil := prepared.plan, prepared.data, prepared.validUntil
 	s.logFillPlan(ctx, order, plan)
-	reservations, ok := liquidstrategies.FillRouteReservations(plan.Routes)
+	reservations, ok := strategies.FillRouteReservations(plan.Routes)
 	if !ok {
 		return nil, errors.New("strategy returned invalid capacity reservations")
-	}
-	data, discountValidUntil, err := s.buildExecutorCalldata(ctx, order, plan, decisionRoutes, now)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := s.chain.CallContract(ctx, ethereum.CallMsg{From: s.solverAddress, To: &order.Executor, Data: data}, nil); err != nil {
-		return nil, errors.Errorf("%w: %v", errFillPreflight, err)
 	}
 	deadline := fillDeadline(order, discountValidUntil)
 	cancelAt, ok := liquidlane.CancellationDeadline(deadline, now, chainObservedAt, time.Now())
@@ -310,13 +282,13 @@ func (s *Solver) startFill(
 		"pricingMaxFeePerGas", pricingMaxFee.String(),
 	)
 	return &pendingUniswapFill{
-		order: order, plannedSurplus: liquidstrategies.PlannedSurplus(plan.Routes, order.AmountOut), result: result,
+		order: order, plannedSurplus: strategies.PlannedSurplus(plan.Routes, order.AmountOut), result: result,
 		span: trace.SpanFromContext(ctx), end: end,
 	}, nil
 }
 
 // declineFill records an order this solver will not fill as an expected skip on the fill span and
-// returns the sentinel the fill loop already treats as "retry later, not a failure". Pairing the two
+// returns the sentinel the fill loop treats as terminal local abandonment. Pairing the two
 // here keeps every unfillable path named on the trace and out of the error statistics.
 func declineFill(ctx context.Context, decision, reason string) error {
 	observability.Decline(ctx, decision, reason)
@@ -325,8 +297,8 @@ func declineFill(ctx context.Context, decision, reason string) error {
 
 // decideFill runs the strategy as the uniswapx.fill.plan stage.
 func (s *Solver) decideFill(
-	ctx context.Context, input strategytypes.FillInput,
-) (plan *strategytypes.FillPlan, err error) {
+	ctx context.Context, input types.FillInput,
+) (plan *types.FillPlan, err error) {
 	ctx, end := tracer.Start(ctx, "uniswapx.fill.plan", observability.AttrStrategy.String(s.cfg.Strategy.Name))
 	defer func() { end(err) }()
 	return s.strategy.DecideFill(ctx, input)
@@ -355,7 +327,7 @@ func (s *Solver) submitFill(
 func (s *Solver) buildExecutorCalldata(
 	ctx context.Context,
 	order *resolvedOrder,
-	plan *strategytypes.FillPlan,
+	plan *types.FillPlan,
 	routes []liquidlane.Route,
 	now time.Time,
 ) (data []byte, discountValidUntil time.Time, err error) {
@@ -459,7 +431,7 @@ func findRoute(routes []liquidlane.Route, id liquidlane.RouteID) (liquidlane.Rou
 	return liquidlane.Route{}, false
 }
 
-func (s *Solver) logFillPlan(ctx context.Context, order *resolvedOrder, plan *strategytypes.FillPlan) {
+func (s *Solver) logFillPlan(ctx context.Context, order *resolvedOrder, plan *types.FillPlan) {
 	log := observability.Log(ctx)
 	discountRoutes := 0
 	for index, route := range plan.Routes {

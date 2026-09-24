@@ -222,7 +222,7 @@ executor build, registering it with LI.FI, and granting it filler authorization 
 
 An Ethereum-mainnet UniswapX solver backed by LiquidLane routes. It serves the RFQ `POST /quote`
 webhook, polls the Uniswap order API for exclusive and public V2 orders, resolves
-their Dutch amounts from current chain time, and fills profitable orders through a configured
+their Dutch amounts from current chain time, and fills executable orders through a configured
 `LiquidLaneUniswapXExecutor`. The executor uses the same owner-managed caller list as the RFQ executor and
 remains the Reactor-facing filler. Before serving traffic, the solver validates executor bytecode, finds the
 tx-sending EOA in the executor's indexed `callers` list, and, in external mode, checks every configured
@@ -238,7 +238,26 @@ discount-only. Every fill is simulated again immediately before submission. The 
 a fill is captured before reading chain time, so RPC and planning latency consume the order's remaining
 validity instead of extending it.
 
-The quote path is stateless and uses a refreshed on-chain inventory snapshot so it stays within Uniswap's
+Set `strategy.name: single` to use the local UniswapX [single-source strategy](#strategies).
+It uses the same pricing config as `default` and the normal sources allowed by `solverMode`.
+The UniswapX solver remembers the quoted source as a fill preference. If that source is no longer
+usable, it asks the strategy for another source that covers the awarded output, then resolves fresh
+signed terms and simulates the fill before submission.
+
+For the supported UniswapX `Dutch_V2` orders, a verified lack of a currently executable plan abandons
+the local attempt with any strategy, for both public and exclusive orders. A later Dutch-price change
+does not retry an abandoned order. This policy is specific to Dutch auctions. Transport
+or incomplete-discovery failures remain retryable. Exclusive obligations are still reconciled
+independently against actual terminal state.
+
+The optional `quoteServer.selectionTtl` (default `10m`) and `quoteServer.maxSelections` (default `4096`)
+bound the in-memory source preferences. Eviction or restart causes fresh selection from the signed order.
+Once the order is known, the preference applies only through its exclusivity deadline; later fills select afresh.
+Quotes do not reserve capacity. Single-source fills can consume the quote's price buffer and do not
+require additional output to repay gas; the sender still pays transaction gas and fee caps still apply.
+The existing `default` retains its configured gas-coverage requirement for fills.
+
+The quote path uses a refreshed on-chain inventory snapshot so it stays within Uniswap's
 response deadline. Each request is priced once for its concrete amount: the strategy returns one
 `amountIn`/`amountOut` pair after price buffer and, when configured, estimated fill gas, with no precomputed
 ladders, amount ranges, or quote-time route reservation. Omitting the entire `gas:` block disables gas
@@ -314,11 +333,24 @@ The solvers split protocol plumbing (reads, signing, submission — fixed) from 
 **decision** — how to size, price, and select — which is a pluggable *strategy*, chosen in config:
 
 - **`default`** — the built-in in-process strategy for that solver.
+- **`single`** — the local UniswapX strategy that selects one source for the entire request.
+  It chooses the highest final output for exact input, or the lowest required input for exact output,
+  including configured quote buffer and gas costs. A better price with insufficient capacity is rejected;
+  the strategy does not combine sources to cover the request.
 - **`webhook`** — delegates each decision to an **external HTTP service you run**: the solver sends it
   the raw facts as JSON and executes the validated plan it returns, so your service owns the logic.
   LI.FI and UniswapX own separate strategy contracts and independently reject returned fills that exceed
   current capacity or do not cover the order plus configured gas. UniswapX delegates each concrete quote to
   `POST /decide-quote` and each current fill plan to `POST /decide-fill` under the configured webhook URL.
+
+The single-source calculation is shared in LiquidLane; the strategy and its configuration belong to
+UniswapX. RFQ and LI.FI reject `strategy.name: single` at startup.
+Each solver controls its eligible sources, order requirements, and execution. Selecting `single` changes
+how liquidity is chosen within that source set.
+
+LI.FI and UniswapX apply `priceBufferBps` once to quotes. Fill decisions consume this price margin
+rather than deducting it again. `inventoryReserveBps`, pending reservations, and headroom for uncapped
+private-discount payouts remain separate capacity safeguards.
 
 This is the seam for customizing a solver without forking. Contract and trust model:
 [`docs/strategy-plan.md`](docs/strategy-plan.md).

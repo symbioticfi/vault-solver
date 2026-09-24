@@ -7,13 +7,14 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/single"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
-	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies"
+	registry "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 )
-
-const Name = "default"
 
 const (
 	bpsDenominator         = 10_000
@@ -23,6 +24,7 @@ const (
 var defaultMinAmount = big.NewInt(1)
 
 type Config struct {
+	Name                    string `yaml:"-"`
 	PriceBufferBps          int    `yaml:"priceBufferBps"`
 	MinAmount               string `yaml:"minAmount"`
 	InventoryReserveBps     int    `yaml:"inventoryReserveBps"`
@@ -30,7 +32,10 @@ type Config struct {
 }
 
 type Strategy struct {
-	cfg Config
+	solveQuote  func(strategies.QuoteTask) (*strategies.QuoteSolution, error)
+	solveFill   func(strategies.FillTask) (*strategies.FillSolution, error)
+	fillPricing func(types.FillInput) (strategies.GasPricing, error)
+	cfg         Config
 
 	minAmount       *big.Int
 	executionBuffer time.Duration
@@ -38,23 +43,30 @@ type Strategy struct {
 
 //nolint:gochecknoinits // solver-local strategy self-registration mirrors solver registration.
 func init() {
-	strategies.Register(Name, NewFromConfig)
+	registry.Register(types.DefaultName, NewFromConfig)
 }
 
 func NewFromConfig(raw yaml.Node) (types.Strategy, error) {
+	return newFromConfig(raw, types.DefaultName)
+}
+
+// NewSingleFromConfig shares pricing and validation with default, changing only source selection.
+func NewSingleFromConfig(raw yaml.Node) (types.Strategy, error) {
+	return newFromConfig(raw, types.SingleName)
+}
+
+func newFromConfig(raw yaml.Node, name string) (*Strategy, error) {
 	var cfg Config
 	if err := decodeConfig(raw, &cfg); err != nil {
 		return nil, err
 	}
+	cfg.Name = name
 	return New(cfg)
 }
 
 func New(cfg Config) (*Strategy, error) {
 	if cfg.PriceBufferBps < 0 || cfg.PriceBufferBps >= bpsDenominator {
 		return nil, errors.Errorf("priceBufferBps: must be in [0,%d), got %d", bpsDenominator, cfg.PriceBufferBps)
-	}
-	if 2*cfg.PriceBufferBps >= bpsDenominator {
-		return nil, errors.Errorf("2 * priceBufferBps: must be < %d", bpsDenominator)
 	}
 	if cfg.InventoryReserveBps < 0 || cfg.InventoryReserveBps >= bpsDenominator {
 		return nil, errors.Errorf("inventoryReserveBps: must be in [0,%d), got %d", bpsDenominator, cfg.InventoryReserveBps)
@@ -76,9 +88,23 @@ func New(cfg Config) (*Strategy, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Strategy{
+	strategy := &Strategy{
 		cfg: cfg, minAmount: minAmount, executionBuffer: executionBuffer,
-	}, nil
+	}
+	switch cfg.Name {
+	case "", types.DefaultName:
+		strategy.solveQuote, strategy.solveFill = greedy.SolveQuote, greedy.SolveFill
+		strategy.fillPricing = strategy.priceFillGas
+	case types.SingleName:
+		strategy.solveQuote, strategy.solveFill = single.SolveQuote, single.SolveFill
+		// The sender pays gas; an awarded single fill needs only the promised output.
+		strategy.fillPricing = func(types.FillInput) (strategies.GasPricing, error) {
+			return strategies.GasPricing{}, nil
+		}
+	default:
+		return nil, errors.Errorf("UniswapX local strategy %q is not supported", cfg.Name)
+	}
+	return strategy, nil
 }
 
 func decodeConfig(node yaml.Node, out any) error {

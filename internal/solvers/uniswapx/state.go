@@ -392,3 +392,17 @@ func (s *Solver) endFillPlanning() {
 	}
 	s.requestQuoteRefresh()
 }
+
+// abandonFill prevents order polling from resubmitting an unfillable
+// order. Exclusive-obligation reconciliation remains independent.
+func (s *Solver) abandonFill(order *resolvedOrder) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.abandoned == nil {
+		s.abandoned = make(map[common.Hash]time.Time)
+	}
+	s.abandoned[order.Hash] = time.Unix(int64(order.Deadline), 0)
+	delete(s.inFlight, order.Hash)
+	delete(s.retryAt, order.Hash)
+	delete(s.attempts, order.Hash)
+}
