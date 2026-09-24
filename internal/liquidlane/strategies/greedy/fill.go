@@ -166,6 +166,8 @@ func buildFillCandidates(task strategies.FillTask) ([]fillCandidate, error) {
 			domainCapacity = AvailableCapacity(task.CapacityLimits[capacityID], task.InventoryReserveBps)
 		}
 		if reserved := task.Reservations[capacityID]; reserved != nil && reserved.Sign() > 0 {
+			// The ledger cannot tell which adapter spent the reserved vault capacity.
+			capacity.Sub(capacity, reserved)
 			domainCapacity.Sub(domainCapacity, reserved)
 		}
 		capacity = minBig(capacity, domainCapacity)

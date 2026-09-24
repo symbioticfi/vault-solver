@@ -109,6 +109,13 @@ func ValidateFillRoutes(input FillValidation, routes []FillRoute) ([]FillRoute, 
 		capacityID := liquidlane.RouteCapacityID(candidate.Route)
 		capacityLimit := candidate.MaxAssets
 		if input.CapacityLimits != nil {
+			committed := liquidlane.CloneBig(route.ReservedAmountOut)
+			if reserved := input.Reservations[capacityID]; reserved != nil && reserved.Sign() > 0 {
+				committed.Add(committed, reserved)
+			}
+			if committed.Cmp(candidate.MaxAssets) > 0 {
+				return nil, errors.Errorf("fill route %d exceeds unreserved source capacity", index)
+			}
 			capacityLimit = input.CapacityLimits[capacityID]
 			if capacityLimit == nil || capacityLimit.Sign() <= 0 {
 				return nil, errors.Errorf("fill route %d has no physical capacity budget", index)

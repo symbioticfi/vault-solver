@@ -259,7 +259,11 @@ prices and pays actual transaction gas, so that cost is then subsidized by the s
 makes indicative and hard RFQ requests
 indistinguishable, so the solver echoes `quoteId` but does not guess the phase. Fill planning reserves
 selected capacity before signature resolution, simulation, and transaction admission for all strategies
-(`default`, `single`, and `webhook`). Other liquidity remains quotable during planning, queueing, and confirmation; source fallback replaces the reservation.
+(`default`, `single`, and `webhook`). Quoting continues during planning, queueing, and confirmation;
+source fallback replaces the reservation. Until a plan installs its reservation, its capacity remains
+quotable. Pending reservations conservatively reduce every source limit in the same vault/output token.
+A subsequent fill can wait for the preceding transaction and miss its admission or exclusivity deadline;
+see [fill capacity and retries](docs/UNISWAPX-PLAN.md#fill-capacity-and-retries).
 Transaction completion invalidates cached inventory before releasing its reservation; quoting resumes
 after a latest-state refresh. Unsubmitted attempts release capacity without invalidating inventory.
 A quote is returned only if inventory, reservations, and blocking conditions remain unchanged during

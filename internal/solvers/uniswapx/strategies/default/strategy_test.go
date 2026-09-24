@@ -173,29 +173,42 @@ func TestLocalQuoteAndFillAgreeOnReservedPhysicalCapacity(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				amount := int64(20)
-				if buffer > 0 {
-					amount = 15
-				}
-				input := directQuoteInput(amount, 40, new(big.Int).Mul(big.NewInt(2), quoteRateScale))
+				amount := int64(20_000)
+				input := directQuoteInput(amount, 40_000, new(big.Int).Mul(big.NewInt(2), quoteRateScale))
 				id := common.HexToHash("0x01")
 				input.Inventory[0].DiscountID = &id
 				other := input.Inventory[0]
 				other.Route = testRoute("route-2", "capacity-1", 2, input.TokenIn, input.TokenOut)
-				other.MaxAssets, other.MaxRate, other.DiscountID = big.NewInt(100), quoteRateScale, nil
+				other.MaxAssets, other.MaxRate, other.DiscountID = big.NewInt(100_000), quoteRateScale, nil
 				input.Inventory = append(input.Inventory, other)
-				input.Reservations = liquidlane.CapacityReservations{"capacity-1": big.NewInt(30)}
+				input.Reservations = liquidlane.CapacityReservations{"capacity-1": big.NewInt(30_000)}
 				quote, err := strategy.DecideQuote(t.Context(), input)
 				if err != nil || quote == nil {
 					t.Fatalf("quote=%+v err=%v", quote, err)
 				}
-				narrow := directFillQuote(input.Inventory[0].Route, amount, 40, 2*amount)
+				if buffer == 0 {
+					want := int64(25_000)
+					if name == types.SingleName {
+						want = amount
+					}
+					if quote.AmountOut.Int64() != want {
+						t.Fatalf("output=%s, want %d after source reservation", quote.AmountOut, want)
+					}
+				}
+				narrow := directFillQuote(input.Inventory[0].Route, amount, 40_000, 2*amount)
 				narrow.DiscountID = &id
 				fillInput := types.FillInput{
 					TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: quote.AmountIn, OutputAmount: quote.AmountOut,
 					ChainTime: input.ChainTime, MaxFeePerGas: new(big.Int), Reservations: input.Reservations,
-					Quotes:         []liquidlane.FillQuote{narrow}, // preference filtering must retain the full budget
-					CapacityLimits: map[liquidlane.CapacityID]*big.Int{"capacity-1": big.NewInt(100)},
+					Quotes:         []liquidlane.FillQuote{narrow, directFillQuote(other.Route, amount, 100_000, amount)},
+					CapacityLimits: map[liquidlane.CapacityID]*big.Int{"capacity-1": big.NewInt(100_000)},
+				}
+				// A large domain budget must not let the narrow source spend its pending capacity again.
+				blocked := fillInput
+				blocked.Quotes = []liquidlane.FillQuote{narrow}
+				blocked.OutputAmount = big.NewInt(2 * amount)
+				if plan, err := strategy.DecideFill(t.Context(), blocked); err != nil || plan != nil {
+					t.Fatalf("narrow source spent pending capacity: plan=%+v err=%v", plan, err)
 				}
 				plan, err := strategy.DecideFill(t.Context(), fillInput)
 				if err != nil || plan == nil {

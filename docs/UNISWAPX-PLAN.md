@@ -149,10 +149,23 @@ error classification, retry backoff, and the public preflight-failure breaker ap
 
 Every strategy (`default`, `single`, `webhook`) receives physical `capacityLimits` separately from source
 `maxAssets`, using the existing snapshot without extra RPC. Allocation and validation subtract other
-fills' reservations from that budget and enforce each source's limit. Budgets survive preference filtering
-and fallback. A retry reads fresh capacity, excludes its own reservation, and replaces it atomically;
+fills' reservations from both that budget and each source's limit. `maxAssets` includes adapter/delegator
+limits, while reservations are recorded only by vault/token: subtracting them from every source can
+underquote unused adapters, but prevents promising a spent adapter limit. Local quotes apply the same
+conservative subtraction. Budgets survive preference filtering and fallback. A retry reads fresh
+capacity, excludes its own reservation, and replaces it atomically;
 insufficient capacity cannot change the order input/output requirement or release another order's funds.
 The optional `capacityLimits` field is also present in the webhook `/decide-fill` input.
+
+Quoting remains available while a claimed fill reads state and computes its plan. Until the plan installs
+its reservation, quotes can still use that capacity; this window is accepted to avoid blocking quotes
+on planning I/O. Revision checks detect reservations installed during quote calculation, not claims or
+future commitments. Neither a quote nor a claimed order is a liquidity reservation.
+
+A planned fill may wait behind another transaction on the shared nonce lane. Its admission deadline
+(`CancelAt`) still applies: if the preceding transaction takes too long, admission returns `not_admitted`
+and existing retry handling applies. Continued quoting does not guarantee execution within exclusivity;
+the exclusive window must also cover any preceding fill's confirmation time.
 
 The current parser accepts only `Dutch_V2`. All strategies retain polling retries for declined plans and
 unavailable sources. Economic declines record `fill/declined` without opening the public preflight breaker;

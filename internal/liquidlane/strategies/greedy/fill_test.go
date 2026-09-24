@@ -43,8 +43,8 @@ func TestSolveFillSharesPhysicalBudgetAcrossNarrowSources(t *testing.T) {
 	for _, budget := range []int64{59, 60, 100} {
 		t.Run(big.NewInt(budget).String(), func(t *testing.T) {
 			quotes := []liquidlane.FillQuote{
-				testFillQuote("a", "shared", common.Address{}, common.Address{}, 60, 60, 40, nil),
-				testFillQuote("b", "shared", common.Address{}, common.Address{}, 60, 60, 40, nil),
+				testFillQuote("a", "shared", common.Address{}, common.Address{}, 60, 60, 70, nil),
+				testFillQuote("b", "shared", common.Address{}, common.Address{}, 60, 60, 70, nil),
 			}
 			solution, err := SolveFill(strategies.FillTask{
 				AmountIn: big.NewInt(60), Quotes: quotes, MaxRoutes: 2,

@@ -195,10 +195,11 @@ charges complete-plan gas once when that model is present, and returns `FillSolu
 resolves OIF `OutputContext`/`FillAfter`; UniswapX resolves signed-order output/deadline. LI.FI and
 UniswapX build the gas model from their existing runtime facts.
 The canonical `FillRoute` and fill-plan validation live in `strategies`. Optional `CapacityLimits`
-separate physical vault budgets from each source's limit. Allocation and validation deduct pending
-reservations from the physical budget; source limits still bound each leg. UniswapX supplies these
-budgets to every fill strategy and retains them across source filtering. Omitting them preserves the
-existing RFQ and LI.FI behavior.
+separate physical vault budgets from each source's limit. With these budgets, allocation and validation
+deduct pending reservations from both the domain and each source: `MaxAssets` can include adapter or
+delegator limits, and the ledger does not attribute reservations to adapters. This conservatively reduces
+availability even for a source another fill did not use. UniswapX supplies these budgets to every fill
+strategy and retains them across source filtering. Omitting them preserves existing RFQ and LI.FI behavior.
 
 Each solver owns its `liquidlane.CapacityLedger` and reservation lifecycle. The ledger supports atomic
 replacement against a revision; UniswapX uses this before preflight and rechecks revisions before
@@ -216,9 +217,10 @@ One candidate must cover the whole request, even when a caller otherwise permits
 Quotes compare final output for exact input or required input for exact output, with candidate-ID ties.
 A higher rate cannot compensate for insufficient volume. Fill solving also evaluates complete sources
 individually; the protocol adapter applies the order's required output to the selected solution.
-`single.AllocateInventoryCapacity` gives each alternative the full unreserved capacity of its domain,
-bounded by the source's own limit and inventory reserve. Unlike greedy allocation, it does not divide
-capacity between routes or pairs: only one alternative can be selected, and quotes do not reserve liquidity.
+UniswapX prepares both local strategies through `greedy.ReserveInventoryCapacity`, subtracting pending
+reservations from each source after its inventory reserve. Default then divides shared capacity across
+routes; single evaluates each remaining source without fixed shares between alternatives. Only one
+alternative can be selected, and quotes do not reserve liquidity.
 
 The caller supplies eligible sources, capacity budgets, quote buffer, and any gas pricing. Source modes,
 quote-to-order source preferences, fresh-source retries, and protocol deadlines belong to each solver's

@@ -33,7 +33,7 @@ type Config struct {
 }
 
 type Strategy struct {
-	allocateInventory func([]liquidlane.Inventory, liquidlane.CapacityReservations, int) []liquidlane.Inventory
+	allocateInventory func([]liquidlane.Inventory) []liquidlane.Inventory
 	solveQuote        func(strategies.QuoteTask) (*strategies.QuoteSolution, error)
 	solveFill         func(strategies.FillTask) (*strategies.FillSolution, error)
 	fillPricing       func(types.FillInput) (strategies.GasPricing, error)
@@ -98,11 +98,13 @@ func New(cfg Config) (*Strategy, error) {
 	}
 	switch cfg.Name {
 	case "", types.DefaultName:
-		strategy.allocateInventory = greedy.AllocateInventoryCapacity
+		strategy.allocateInventory = func(inventory []liquidlane.Inventory) []liquidlane.Inventory {
+			return greedy.AllocateInventoryCapacity(inventory, nil, 0)
+		}
 		strategy.solveQuote, strategy.solveFill = greedy.SolveQuote, greedy.SolveFill
 		strategy.fillPricing = strategy.priceFillGas
 	case types.SingleName:
-		strategy.allocateInventory = single.AllocateInventoryCapacity
+		strategy.allocateInventory = func(inventory []liquidlane.Inventory) []liquidlane.Inventory { return inventory }
 		strategy.solveQuote, strategy.solveFill = single.SolveQuote, single.SolveFill
 		// The sender pays gas; single fills retain the price buffer without a gas repayment floor.
 		strategy.fillPricing = func(types.FillInput) (strategies.GasPricing, error) {

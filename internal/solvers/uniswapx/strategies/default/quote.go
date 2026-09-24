@@ -28,9 +28,8 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 
 	validAfter := input.QuoteExpiresAt.Add(s.executionBuffer)
 	liveInventory := greedy.FilterLiveInventory(input.Inventory, validAfter)
-	allocatedInventory := s.allocateInventory(
-		liveInventory, input.Reservations, s.cfg.InventoryReserveBps,
-	)
+	availableInventory := greedy.ReserveInventoryCapacity(liveInventory, input.Reservations, s.cfg.InventoryReserveBps)
+	allocatedInventory := s.allocateInventory(availableInventory)
 	candidates := make([]liquidlane.QuoteCandidate, 0, len(allocatedInventory))
 	matchingInventory := 0
 	for _, item := range allocatedInventory {

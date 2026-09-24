@@ -82,6 +82,10 @@ func TestValidateFillRoutesRejectsUntrustedOutput(t *testing.T) {
 			input.CapacityLimits = map[liquidlane.CapacityID]*big.Int{"capacity-1": big.NewInt(1000)}
 			route.ReservedAmountOut = big.NewInt(101)
 		},
+		"reserved source limit": func(input *FillValidation, _ *FillRoute) {
+			input.CapacityLimits = map[liquidlane.CapacityID]*big.Int{"capacity-1": big.NewInt(1000)}
+			input.Reservations = liquidlane.CapacityReservations{"capacity-1": big.NewInt(81)}
+		},
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {
