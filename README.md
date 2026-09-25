@@ -231,7 +231,8 @@ reason before startup returns. The executor ABI has no Reactor getter, so matchi
 the deployed immutable remains a deployment assertion. `solverMode: external` is the default, requires a
 non-empty `adapters` list plus direct authorization, and forbids the discounts block. `solverMode: internal`
 requires that block; direct routes are authorization-filtered from each snapshot while valid signed-discount
-routes remain usable. In internal
+routes remain usable. `discounts.baseUrl` supports HTTP for backends within local infrastructure, as in
+RFQ and LI.FI, as well as HTTPS. `orderServer.baseUrl` still requires HTTPS outside loopback. In internal
 mode `adapters` is optional: a non-empty list scopes quotes and direct fills, while fill-time signed-discount
 recovery may use any adapter advertised by the backend. Without a list the solver quotes and fills
 discount-only. Every fill is simulated again immediately before submission. The wall-clock anchor for
