@@ -320,7 +320,9 @@ direct filler. The PR19 ABI has no `isCaller` helper or Reactor getter, so the c
 be matched to the implementation's immutable during deployment.
 `solverMode: external` (default) forbids `discounts`, requires a non-empty `adapters` list, and requires every
 configured adapter to authorize the executor as a direct filler. `solverMode: internal` requires `discounts`
-and makes `adapters` optional.
+and makes `adapters` optional. `discounts.baseUrl` accepts absolute HTTP and HTTPS URLs with a host
+to support backends within local infrastructure, as in RFQ and LI.FI. The HTTPS requirement for non-loopback
+`orderServer.baseUrl` is unchanged.
 When the list is non-empty it scopes quote candidates and direct fills; fill-time signed-discount recovery
 remains unrestricted, exactly as in RFQ. Without configured adapters the solver operates discount-only.
 Every advertised route is resolved on-chain and accepted only when its asset/decimals, current capacity and

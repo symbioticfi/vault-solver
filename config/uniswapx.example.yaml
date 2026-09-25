@@ -74,7 +74,7 @@ solvers:
 
       # Required only in internal solverMode; forbidden in external mode.
       # discounts:
-      #   baseUrl: ${RFQ_BACKEND_URL} # signed-discount API root
+      #   baseUrl: ${RFQ_BACKEND_URL} # signed-discount API root; HTTP is supported within local infrastructure
       #   httpTimeout: 2s             # timeout for discount list and resolve requests
       #   minimumValidity: 15s        # required remaining signature lifetime at resolution
 

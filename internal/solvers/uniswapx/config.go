@@ -305,8 +305,10 @@ func parseDiscountConfig(raw *rawDiscountConfig) (*DiscountConfig, error) {
 	if raw.BaseURL == "" {
 		return nil, errors.New("discounts.baseUrl is required")
 	}
-	if err := validateServiceURL(raw.BaseURL, "discounts.baseUrl"); err != nil {
-		return nil, err
+	// Discounts may use the same in-cluster HTTP backend as RFQ and LI.FI.
+	backendURL, err := url.Parse(raw.BaseURL)
+	if err != nil || backendURL.Hostname() == "" || (backendURL.Scheme != "http" && backendURL.Scheme != "https") {
+		return nil, errors.New("discounts.baseUrl must be an absolute HTTP or HTTPS URL with a host")
 	}
 	timeout, err := parse.Duration(raw.HTTPTimeout, defaultDiscountTimeout, "discounts.httpTimeout")
 	if err != nil {
