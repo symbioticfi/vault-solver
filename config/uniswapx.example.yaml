@@ -59,6 +59,8 @@ solvers:
         httpTimeout: 450ms        # quote request read/write deadline
         refreshInterval: 12s      # cadence for inventory, gas, and price snapshots
         quoteTtl: 30s             # quote-state lifetime; must be >= 2x refreshInterval
+        # selectionTtl: 10m        # default: 10m; retention while awaiting the signed order
+        # maxSelections: 4096      # default: 4096 remembered single-source quotes
 
       orderServer:
         baseUrl: https://api.uniswap.org/v2 # UniswapX order-service API root
@@ -94,7 +96,7 @@ solvers:
         window: 5m     # failure-counting window and resulting pause duration
 
       strategy:
-        name: default # in-process greedy LiquidLane pricing and fill selection
+        name: default # greedy aggregation; use single for one source covering the whole request
         config:
           priceBufferBps: 20          # rate/staleness safety margin in basis points
           inventoryReserveBps: 500    # keep 5% of route capacity uncommitted

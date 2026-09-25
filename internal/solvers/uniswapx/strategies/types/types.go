@@ -10,10 +10,14 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
-	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 )
 
 const (
+	DefaultName = "default"
+	SingleName  = "single"
+	WebhookName = "webhook"
+
 	// MaxRoutes bounds the physical LiquidLane routes used by one quote or fill.
 	MaxRoutes            = 3
 	settlementGasUnits   = 250_000
@@ -21,8 +25,8 @@ const (
 )
 
 // LiquidLaneGasEnvelope returns the fixed UniswapX executor overhead around route execution.
-func LiquidLaneGasEnvelope() liquidstrategies.GasEnvelope {
-	return liquidstrategies.GasEnvelope{
+func LiquidLaneGasEnvelope() strategies.GasEnvelope {
+	return strategies.GasEnvelope{
 		SettlementUnits: settlementGasUnits, PrivateRouteUnits: privateRouteGasUnits,
 	}
 }
@@ -49,12 +53,13 @@ type QuoteInput struct {
 	MaxFeePerGas   *big.Int                        `json:"maxFeePerGas"`
 	ChainTime      time.Time                       `json:"chainTime"`
 	QuoteExpiresAt time.Time                       `json:"quoteExpiresAt"`
-	Trace          liquidstrategies.DecisionTrace  `json:"-"`
+	Trace          strategies.DecisionTrace        `json:"-"`
 }
 
 type Quote struct {
-	AmountIn  *big.Int `json:"amountIn"`
-	AmountOut *big.Int `json:"amountOut"`
+	CandidateID liquidlane.CandidateID `json:"-"`
+	AmountIn    *big.Int               `json:"amountIn"`
+	AmountOut   *big.Int               `json:"amountOut"`
 }
 
 type FillInput struct {
@@ -70,15 +75,17 @@ type FillInput struct {
 
 	Quotes       []liquidlane.FillQuote          `json:"quotes"`
 	Reservations liquidlane.CapacityReservations `json:"reservations"`
-	GasSnapshot  *liquidlanegas.Snapshot         `json:"gasSnapshot"`
-	GasPrices    *liquidlanegas.PriceSnapshot    `json:"gasPrices"`
-	MaxFeePerGas *big.Int                        `json:"maxFeePerGas"`
-	ChainTime    time.Time                       `json:"chainTime"`
-	Trace        liquidstrategies.DecisionTrace  `json:"-"`
+	// Full physical budgets before reservations, retained when selecting source subsets.
+	CapacityLimits map[liquidlane.CapacityID]*big.Int `json:"capacityLimits,omitempty"`
+	GasSnapshot    *liquidlanegas.Snapshot            `json:"gasSnapshot"`
+	GasPrices      *liquidlanegas.PriceSnapshot       `json:"gasPrices"`
+	MaxFeePerGas   *big.Int                           `json:"maxFeePerGas"`
+	ChainTime      time.Time                          `json:"chainTime"`
+	Trace          strategies.DecisionTrace           `json:"-"`
 }
 
 type FillPlan struct {
 	Routes []FillRoute `json:"routes"`
 }
 
-type FillRoute = liquidstrategies.FillRoute
+type FillRoute = strategies.FillRoute

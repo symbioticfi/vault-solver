@@ -29,6 +29,7 @@ const (
 )
 
 const (
+	fillOutcomeDeclined         = "declined"
 	quoteRefreshOperation       = "quote_refresh"
 	exclusiveOrderPollOperation = "exclusive_order_poll"
 	publicOrderPollOperation    = "public_order_poll"
@@ -69,7 +70,7 @@ func newUniswapXMetrics(
 ) (*uniswapXMetrics, error) {
 	spec := liquidlane.FillWorkflowSpec()
 	spec.Events = append(spec.Events, observability.WorkflowEventSpec{
-		Event: "fill", Outcomes: []string{liquidlane.FillOutcomeFailure, liquidlane.FillOutcomeNotAdmitted},
+		Event: "fill", Outcomes: []string{liquidlane.FillOutcomeFailure, liquidlane.FillOutcomeNotAdmitted, fillOutcomeDeclined},
 	})
 	spec.Strategy = strategyName
 	spec.Operations = []string{

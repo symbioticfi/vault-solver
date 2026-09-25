@@ -911,6 +911,14 @@ still requires the redeploy in phase 0.
 
 ## 10. Open items
 
+- [ ] **Quote unreserved capacity while the sender is busy.** Deferred as a relatively small,
+  solver-local follow-up using the existing shared `CapacityLedger`. Move reservation installation
+  before transaction admission and use its revision checks during planning and quote publication.
+  Then switch quote gating from `LaneReady()` to `Available()` and adjust coalesced lane-state
+  handling so ordinary sender occupancy does not withdraw standing curves. Preserve nonce-conflict
+  withdrawal and validate HTTP publication races, completion/retry handoff, and recovery. Current
+  LI.FI reservation timing and busy-lane quote gating remain unchanged.
+
 - **Gas calibration: direct-finalise rerun required.** The previous signature-based executor's 51-test
   suite measured a maximum `finaliseWithCurrentTimestamp` call of 478,838 gas. Re-run Foundry gas reports
   after the direct-finalise contract cutover and compare the first Sepolia receipts before changing the

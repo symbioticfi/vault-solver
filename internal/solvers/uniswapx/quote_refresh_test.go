@@ -92,6 +92,7 @@ func TestRefreshQuoteStateInternalDiscountScopes(t *testing.T) {
 			},
 		}
 		solver := quoteModeSolver(reader, provider)
+		solver.cfg.Strategy.Name = "single"
 
 		if err := solver.refreshQuoteState(t.Context(), nil); err != nil {
 			t.Fatalf("refreshQuoteState: %v", err)
@@ -124,6 +125,7 @@ func TestRefreshQuoteStateInternalDiscountScopes(t *testing.T) {
 			},
 		}
 		solver := quoteModeSolver(reader, provider)
+		solver.cfg.Strategy.Name = "single"
 		solver.cfg.Adapters = []common.Address{configured.Adapter}
 
 		if err := solver.refreshQuoteState(t.Context(), []liquidlane.Route{configured}); err != nil {
@@ -154,6 +156,7 @@ func TestRefreshQuoteStateInternalDiscountScopes(t *testing.T) {
 		}}}
 		reader := &quoteModeReader{now: now, resolved: []liquidlane.Route{active}}
 		solver := quoteModeSolver(reader, provider)
+		solver.cfg.Strategy.Name = "single"
 
 		if err := solver.refreshQuoteState(t.Context(), nil); err != nil {
 			t.Fatalf("refreshQuoteState: %v", err)
@@ -180,6 +183,7 @@ func TestRefreshQuoteStateInternalDiscountScopes(t *testing.T) {
 			},
 		}
 		solver := quoteModeSolver(reader, provider)
+		solver.cfg.Strategy.Name = "single"
 		solver.cfg.Adapters = []common.Address{configured.Adapter}
 
 		if err := solver.refreshQuoteState(t.Context(), []liquidlane.Route{configured}); err != nil {
@@ -204,6 +208,7 @@ func TestRefreshQuoteStateInternalDiscountFailureFallsBackToDirect(t *testing.T)
 		},
 	}
 	solver := quoteModeSolver(reader, provider)
+	solver.cfg.Strategy.Name = "single"
 	solver.cfg.Adapters = []common.Address{route.Adapter}
 
 	if err := solver.refreshQuoteState(t.Context(), []liquidlane.Route{route}); err != nil {

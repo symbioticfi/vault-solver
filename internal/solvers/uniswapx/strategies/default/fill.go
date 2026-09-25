@@ -5,8 +5,7 @@ import (
 
 	"github.com/go-errors/errors"
 
-	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
-	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 )
 
@@ -38,21 +37,15 @@ func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.
 	if input.RequireSingleRoute {
 		maxRoutes = 1
 	}
-	gasPricing, err := liquidstrategies.NewGasPricing(
-		input.MaxFeePerGas,
-		input.TokenOut,
-		input.GasPrices,
-		input.GasSnapshot,
-		s.cfg.InventoryReserveBps,
-		types.LiquidLaneGasEnvelope(),
-	)
+	gasPricing, err := s.fillPricing(input)
 	if err != nil {
 		return nil, err
 	}
-	allocation, err := liquidgreedy.SolveFill(liquidgreedy.FillTask{
+	allocation, err := s.solveFill(strategies.FillTask{
 		TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: input.AmountIn,
 		Quotes: input.Quotes, Reservations: input.Reservations, ValidAfter: validAfter,
-		MaxRoutes: maxRoutes, PriceBufferBps: s.cfg.PriceBufferBps,
+		CapacityLimits: input.CapacityLimits,
+		MaxRoutes:      maxRoutes, PriceBufferBps: s.cfg.PriceBufferBps,
 		InventoryReserveBps: s.cfg.InventoryReserveBps,
 		GasPricing:          &gasPricing,
 		Trace:               input.Trace,
@@ -79,4 +72,9 @@ func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.
 		return nil, nil
 	}
 	return &types.FillPlan{Routes: routes}, nil
+}
+
+func (s *Strategy) priceFillGas(input types.FillInput) (strategies.GasPricing, error) {
+	return strategies.NewGasPricing(input.MaxFeePerGas, input.TokenOut,
+		input.GasPrices, input.GasSnapshot, s.cfg.InventoryReserveBps, types.LiquidLaneGasEnvelope())
 }

@@ -37,7 +37,7 @@ func New(name string, raw yaml.Node) (types.Strategy, error) {
 	f, ok := registry[name]
 	mu.RUnlock()
 	if !ok {
-		return nil, errors.Errorf("unknown UniswapX strategy %q (registered: %v)", name, Registered())
+		return nil, errors.Errorf("UniswapX strategy %q is not supported (supported: %v)", name, Registered())
 	}
 	return f(raw)
 }

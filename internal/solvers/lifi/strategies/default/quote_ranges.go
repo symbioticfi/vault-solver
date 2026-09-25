@@ -114,14 +114,14 @@ func (s *Strategy) priceQuoteRange(
 	routeCount int,
 	pricing liquidstrategies.GasPricing,
 ) (*types.QuoteRange, error) {
-	quoteAt := func(amount *big.Int) (*liquidgreedy.QuoteSolution, error) {
-		return liquidgreedy.SolveQuote(liquidgreedy.QuoteTask{
+	quoteAt := func(amount *big.Int) (*liquidstrategies.QuoteSolution, error) {
+		return liquidgreedy.SolveQuote(liquidstrategies.QuoteTask{
 			ExactInput:      amount,
 			Candidates:      candidates,
 			MaxRoutes:       maxRoutes,
 			MinInput:        s.minAmount,
 			OutputBufferBps: 2 * s.cfg.PriceBufferBps,
-			InputPolicy:     liquidgreedy.RejectUncoveredInput,
+			InputPolicy:     liquidstrategies.RejectUncoveredInput,
 			GasPricing:      &pricing,
 		})
 	}

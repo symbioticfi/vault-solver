@@ -49,7 +49,7 @@ shared strategy facade.
 | Order version | **V2 first (mainnet)** | "Goal is mainnet" (V2). Add a codec boundary when a second real order version is implemented. |
 | Pricing v1 | **Redemption rate − fixed haircut**, optional gas-aware floor | Ship fast, tune later (matches how `3f`/`rfq` shipped). |
 | On-chain executor | **UniswapX-specific** `LiquidLaneUniswapXExecutor.sol` | Smallest, auditable surface; no multi-venue abstraction yet. |
-| Code organization | **UniswapX-local `default` + `webhook` strategies** | The solver owns its protocol-specific decision contract; neutral LiquidLane facts/math and webhook transport stay shared (§2.1). |
+| Code organization | **Solver-local strategies using shared LiquidLane calculations** | `default` uses greedy functions; `single` uses single-source functions. The solver owns its protocol contract and lifecycle; `webhook` remains a separate remote strategy (§2.1). |
 
 **Directionality (structural constraint):** `LiquidLaneAdapter`s are one-way — they consume a
 token-to-redeem and pay out the vault asset. So the only fillable orders are **RWA-in → vault-asset-out**:
@@ -84,6 +84,7 @@ internal/solvers/uniswapx/
     registry.go
     types/types.go       # DecideQuote / DecideFill
     default/
+    single/
     webhook/
 ```
 
@@ -97,9 +98,9 @@ may carry a `DiscountID`; offer discovery and fill-time resolution of signed ter
 Only proven neutral packages are shared: `internal/liquidlane` for route/inventory types, capacity IDs,
 fixed-point math, readers, and signed-discount client/types; `internal/liquidlane/snapshot` for the
 common direct/physical inventory, amount-specific fill, and optional gas snapshot read path;
-`internal/liquidlane/strategies/greedy` for normalized `QuoteTask`/`FillTask` solving, capacity accounting,
-minimum-output distribution, and gas conversion; `internal/liquidlane/strategies` for canonical fill
-routes, pending-capacity reservations, gas pricing, and webhook-plan validation; and
+`internal/liquidlane/strategies` for quote/fill tasks and results, gas pricing, and fill-plan validation.
+Its `greedy` and `single` subpackages provide pure calculation functions. Strategy implementations and
+contracts remain local under `uniswapx/strategies`, with protocol types in `strategies/types`. Also shared is
 `internal/webhook` for bounded remote-decision transport. The RFQ solver normalizes its protocol facts
 to shared `QuoteCandidate`s; UniswapX and LI.FI strategies start from shared `Inventory`. Their default
 strategies feed the same quote engine. RFQ, LI.FI, and UniswapX pass fresh amount-specific fill
@@ -113,12 +114,67 @@ executor, caller, and route facts rather than the protocol config. Reactor bindi
 assertion because the PR19 ABI has no getter.
 
 - **`EXACT_OUTPUT`:** the strategy solves the concrete requested output against current capacity, price
-  buffer, and gas, and returns the required input. There is no published range or cached quote route.
+  buffer, and gas, and returns the required input. There is no published range; single-source quotes retain a bounded source preference.
 - **Candidate construction:** UniswapX receives no inventory in the quote request, so the solver refreshes
   configured direct inventory and `getAmountOut` values in the background. In internal mode it also resolves
   advertised `(adapter, tokenIn)` routes on-chain; configured adapters scope quotes when present, while an
   empty list produces discount-only quotes from all valid advertisements. Direct and signed-discount
   candidates for one physical route share the same capacity domain.
+
+### Single-source integration
+
+`strategy.name: single` uses the shared LiquidLane [single-source algorithm](strategy-plan.md#single-source-selection).
+Construction binds its capacity allocation, quote/fill functions, and gas policy; protocol adaptation
+and pricing config are shared with `default`. Both use `2 * priceBufferBps` at quote time and one
+configured margin at fill time. Single fills omit the gas-repayment floor; transaction fee caps remain.
+Source eligibility follows `solverMode`: internal uses configured direct routes and private discounts,
+external uses authorized direct routes. Existing quote scoping and unrestricted discount recovery remain.
+
+The solver remembers `quoteId -> candidateId, pair, input amount`, bounded by `quoteServer.selectionTtl`
+(default 10m) and `quoteServer.maxSelections` (default 4096). A hint is stored before writing the response;
+a failed write leaves only an expiring preference. Repeated IDs replace it; pair/input mismatch, expiry,
+eviction, or restart causes fresh selection. Quotes never reserve capacity or authorize spending.
+The quote request has no exclusivity deadline. Once the signed order arrives, preference ends at
+`cosignerData.decayStartTime`; later fills select afresh. See the upstream
+[quote schema](https://developers.uniswap.org/docs/liquidity/uniswapx/filling/mainnet/become-a-quoter)
+and [V2 reactor](https://github.com/Uniswap/UniswapX/blob/main/src/reactors/V2DutchOrderReactor.sol).
+
+Fill planning tries the preferred source first, then remaining complete sources. Fresh signed payouts
+must cover the required output and fit the installed reservation. A failed resolution or preflight
+removes that candidate before retrying; the loop is bounded by the order deadline, anchored before the
+chain-time read. A successful alternative does not count as a failed attempt. If all fail, existing
+error classification, retry backoff, and the public preflight-failure breaker apply.
+
+### Fill capacity and retries
+
+Every strategy (`default`, `single`, `webhook`) receives physical `capacityLimits` separately from source
+`maxAssets`, using the existing snapshot without extra RPC. Allocation and validation subtract other
+fills' reservations from both that budget and each source's limit. `maxAssets` includes adapter/delegator
+limits, while reservations are recorded only by vault/token: subtracting them from every source can
+underquote unused adapters, but prevents promising a spent adapter limit. Local quotes apply the same
+conservative subtraction. Budgets survive preference filtering and fallback. A retry reads fresh
+capacity, excludes its own reservation, and replaces it atomically;
+insufficient capacity cannot change the order input/output requirement or release another order's funds.
+The optional `capacityLimits` field is also present in the webhook `/decide-fill` input.
+
+Quoting remains available while a claimed fill reads state and computes its plan. Until the plan installs
+its reservation, quotes can still use that capacity; this window is accepted to avoid blocking quotes
+on planning I/O. Revision checks detect reservations installed during quote calculation, not claims or
+future commitments. Neither a quote nor a claimed order is a liquidity reservation.
+
+Each accepted fill handles its transaction result in its own goroutine, invalidating inventory before
+releasing its reservation and recording the outcome. Completion does not wait for another fill's
+planning or admission. The fill loop counts outstanding result handlers and drains them on shutdown;
+a reservation revision change during planning still rejects that plan for a fresh retry.
+
+A planned fill may wait behind another transaction on the shared nonce lane. Its admission deadline
+(`CancelAt`) still applies: if the preceding transaction takes too long, admission returns `not_admitted`
+and existing retry handling applies. Continued quoting does not guarantee execution within exclusivity;
+the exclusive window must also cover any preceding fill's confirmation time.
+
+The current parser accepts only `Dutch_V2`. All strategies retain polling retries for declined plans and
+unavailable sources. Economic declines record `fill/declined` without opening the public preflight breaker;
+exclusive obligations remain independently tracked through terminal reconciliation.
 
 ### 2.2 Reuse of the generic layer
 
@@ -139,12 +195,12 @@ assertion because the PR19 ABI has no getter.
   cache invalidation cannot lose a served quote's amounts and a permissive webhook cannot turn the
   unauthenticated endpoint into unbounded Prometheus cardinality. Successful fill receipts publish
   `fill/success`, freshness, and token-native amounts; terminal failures and admission rejection publish
-  `fill/failure` and `fill/not_admitted`, while txmanager remains authoritative for detailed outcomes, gas,
-  fees, and lifecycle state.
+  `fill/failure` and `fill/not_admitted`; pre-submission declines use `fill/declined`.
+  Txmanager remains authoritative for detailed outcomes, gas, fees, and lifecycle state.
   The generic external-operation histogram separately times fixed `quote_refresh`,
   `exclusive_order_poll`, and `public_order_poll` boundaries. A truncated order snapshot or a safe, incomplete
   discount fallback is `degraded`; exclusive reconciliation failures are `error` because they invalidate
-  readiness. An epoch/planning discard or cancellation is `skipped`. Fill planning and transaction
+  readiness. An epoch discard or cancellation is `skipped`. Fill planning and transaction
   submission are outside these source timers.
   Live polling records `exclusive_obligation/won`; outstanding count, nearest deadline, and terminal
   workflow outcomes make won-but-not-delivered obligations visible. A timely terminal delivery may be by another
@@ -155,17 +211,19 @@ assertion because the PR19 ABI has no getter.
 - **Fills use the [shared transaction manager](TXMANAGER-PLAN.md)** asynchronously. `CancelAt` is the
   earliest order, signed-discount or protocol-signature deadline. Its wall-clock observation anchor is
   captured before the chain-time RPC, so lookup/planning latency consumes rather than extends validity.
-  UniswapX treats the lane as busy from lifecycle-slot acquisition through terminal result: quotes and
-  readiness stay blocked during queuing, admission and confirmation. Capacity reservations independently
-  protect already-awarded orders; installing one does not reopen quoting.
+  Capacity reservations protect the selected source before preflight and transaction admission.
+  With every strategy (`default`, `single`, and `webhook`), quote readiness depends on nonce safety,
+  not ordinary sender occupancy; free capacity remains quotable.
 - **The request fee ceiling is protocol policy.** With gas accounting disabled, UniswapX supplies no
   request ceiling. With it enabled, `MaxFeePerGas` supplies the decision-time profitability ceiling
   including one normal replacement. The manager owns [fee selection and headroom](TXMANAGER-PLAN.md#4-fees-replacements-and-cancellation).
 - **Signed lifecycle ownership remains in txmanager.** UniswapX consumes its
   [nonce safety and terminal results](TXMANAGER-PLAN.md#6-rpc-routing-nonce-conflicts-and-restart),
-  retaining its own quote/readiness gates while a request is active or ownership is uncertain.
-- **Pending capacity stays reserved through transaction completion**, then remains unavailable to quotes
-  until a fresh post-fill snapshot is published.
+  retaining its own quote/readiness gates while nonce ownership is uncertain.
+- **Pending capacity stays reserved through transaction completion.** A fallback replaces its own
+  reservation. Transaction completion invalidates the quote cache before releasing capacity and requests
+  a latest-state refresh. Unsubmitted attempts release their reservations without invalidating inventory;
+  no extra block or timestamp metadata is required from the inventory multicall.
 - **On-chain reads use `chain.Multicall`** through the solver's LiquidLane reader; the strategy receives
   validated inventory plus gas snapshots and current fee inputs only when gas accounting is configured.
 - **Addresses + URLs come from `solver.config`**; secrets (`UNISWAP_API_KEY`, the solver key) via `*Env`
@@ -183,9 +241,10 @@ assertion because the PR19 ABI has no getter.
 | `server.go` / `apitypes.go` / `middleware.go` | bounded quote webhook (`POST /quote`), `/health`, `/healthz`, `/ready`; source-IP auth stays at ingress | net-new |
 | `quote_refresh.go` | background inventory and optional gas snapshots, epoch binding, and atomic publication | net-new |
 | `polling.go` | exclusive and public V2 polling; dedup/retry admission and exclusive reconciliation | net-new |
-| `execution.go` | fill planning, discount resolution, executor calldata, preflight, async submission, and completion | mirror `rfq` + net-new |
+| `execution.go` / `fill_plan.go` | fill planning, source fallback, discount resolution, executor calldata, preflight, async submission, and completion | mirror `rfq` + net-new |
+| `selection.go` | bounded quote-source preferences | net-new |
 | `chainreader.go` | config-independent executor/route checks plus refreshed inventory/rate and optional gas snapshots | reader port |
-| `strategies/` | UniswapX-local contract, registry, `default`, and `webhook` decisions (§2.1) | net-new |
+| `strategies/` | UniswapX contract, registry, local `default`/`single` decisions using shared calculations, and remote `webhook` decisions (§2.1) | net-new |
 | `order.go` | V2 Dutch codec, hashes, signature/exclusivity validation | net-new |
 | `orderclient.go` | generated-client adapter, authenticated polling, one ≤6 RPS limiter, pagination/body bounds | net-new |
 | `state.go` / `health.go` / `metrics.go` | reservations, quote epochs, exclusive obligations, dedup/backoff/breakers, readiness and metrics | net-new |
@@ -514,8 +573,9 @@ without opening the breaker; the next successful reconciliation retries it.
 **Hard-quote phase** is run and cosigned by Uniswap; **we do not host it**. The same webhook receives both
 indicative and hard RFQs, and the quoter cannot distinguish them. A fresh `quoteId` is generated for each
 RFQ call, so reserving every response would make the first indicative round consume capacity and can cause
-the later hard round for the same user intent to self-decline. The simple quoter is therefore stateless:
-each request is priced from the latest snapshot, and only a fill transaction accepted for submission creates
+the later hard round for the same user intent to self-decline. The quoter therefore makes no quote-time reservations:
+each request is priced from the latest snapshot. Single-source quotes retain only a bounded source preference;
+only a fill transaction accepted for submission creates
 a pending capacity reservation. The finalized cosigned order is authoritative; it is decoded, signature-
 checked, repriced from current chain state, and simulated immediately before submission.
 
@@ -542,9 +602,10 @@ On the ≤500ms path, mirroring `rfq`'s "one multicall, decimals cached" discipl
    `tokenOut` that adapter's vault asset; native-ETH `tokenOut` is declined in v1 —
    this rule also auto-declines the opposing probe), or no viable inventory.
 2. Read the atomically published direct LiquidLane inventory/rate snapshot, its optional gas snapshot, and its valid advertised
-   signed-discount candidates. Allocate shared capacity across all live routes before filtering to the requested
-   pair, so different input-token routes cannot each quote the full same vault budget. Direct/private alternatives
-   remain one route share, and reservations from accepted fills reduce the common `CapacityID` budget.
+   signed-discount candidates. `default` allocates shared capacity across all live routes before filtering to
+   the requested pair; direct/private alternatives remain one route share. `single` evaluates each source
+   against the full available domain budget, bounded by its own limit, without dividing it between alternatives.
+   Both apply the inventory reserve and subtract reservations from accepted fills from the common `CapacityID` budget.
    Returned quotes themselves are not reservations; repeated concurrent requests within one pair can still contend.
 3. The UniswapX-local `Strategy.DecideQuote` selects a provisional route only to calculate the concrete
    request's executable output and, when gas accounting is configured, full estimated fill gas. It returns
@@ -552,11 +613,12 @@ On the ≤500ms path, mirroring `rfq`'s "one multicall, decimals cached" discipl
 4. Exact input returns the net output after price buffer and optional gas. Exact output uses the same greedy route
    selection in output units, adds buffer and gas, and converts the selected output legs directly to input
    with upward rounding. It neither binary-searches input nor enumerates route combinations; any produced
-   output above the signed requirement remains executor surplus. No ladder, amount range, allocation, or
-   quote-time route is published or retained.
+   output above the signed requirement remains executor surplus. No ladder, amount range, or allocation is published. `default` retains no quote route;
+   `single` retains the selected source as a bounded preference.
 5. Before publishing the result, recheck the snapshot pointer, quote epoch, and every blocking condition.
-   Any fill reservation, breaker, exclusive-state change, occupied or unavailable txmanager nonce lane, or
-   snapshot replacement during strategy execution turns the result into a decline.
+   Any reservation change, breaker activation, exclusive-state change, unavailable txmanager nonce lane, or
+   snapshot replacement during strategy execution turns the result into a decline. Ordinary sender
+   occupancy does not block quotes.
 6. Echo `requestId` and `quoteId`, and return `200` with `amountIn`, `amountOut`, and `filler` =
    `LiquidLaneUniswapXExecutor`. Do not mutate capacity on this path.
 
@@ -580,17 +642,16 @@ is economic, not just gas:
   deadline/decay window still fillable; current strategy economics; and a final `eth_call` simulation
   against the current block. Any failure ⇒ skip, no tx.
 - **Quote from bounded current capacity** — the latest inventory snapshot, optional gas floor, and reservations of
-  already-submitted fills. Quote requests themselves stay stateless because their phase is unknowable. This
+  selected fill plans. Quote requests themselves do not reserve liquidity because their phase is unknowable. This
   means simultaneous winning hard quotes can contend; current-chain replanning and simulation fail closed,
   while the cold-start window and fade breakers limit the operational risk.
-- **Block at order admission, not worker execution** — claiming an order invalidates quote state before it
-  enters the bounded worker queue. The blocker remains through planning and, once the submission occupies
-  the shared lane, until its queued or admitted lifecycle is terminal. Its capacity reservation
-  continues to protect already-awarded orders, but does not replace the lane-occupancy quote gate.
-- **Invalidate quotes across state transitions** — a request may return only against the same snapshot epoch
-  and blocker state it started with. A completed fill invalidates the snapshot before releasing its
-  reservation, and the released capacity remains unavailable until a post-fill chain refresh publishes the
-  next epoch.
+- **Reserve before preflight and admission** — the plan is installed only against the reservation
+  revision used for its decision. Single-source fallback atomically replaces its own reservation;
+  unsubmitted failures release it. Queueing and planning do not globally invalidate quote inventory.
+- **Recheck quote inputs** — quote responses recheck the inventory epoch and
+  reservation revision. Transaction completion retires the cached inventory and requests a latest-state
+  refresh; an unsubmitted decline preserves the cache.
+  Free capacity remains quotable while fills progress; inventory reads rely on normal latest-RPC freshness.
 - **Local breaker** halts quoting after repeated public-order preflight/submission failures; exclusive
   attempts are classified only by their tracked terminal reconciliation. A txmanager result rejected before
   the worker lifecycle is retried without incrementing the local breaker and is counted by
@@ -599,9 +660,9 @@ is economic, not just gas:
 - **Honor trusted `blockUntilTimestamp` notifications** from Uniswap and expose the block/readiness state;
   readiness also fails when the latest published snapshot has no quotable inventory, while health remains
   liveness-only.
-- **Gate quotes on transaction readiness:** an occupied or unavailable nonce lane blocks quote responses,
-  the solver `/ready` endpoint, its readiness metric, and framework readiness. While a nonce conflict pauses
-  the lane, claimed orders return to retry before chain reads, strategy or signed-discount resolution,
+- **Gate quotes on nonce safety:** unresolved nonce ownership blocks quote responses,
+  the solver `/ready` endpoint, its readiness metric, and framework readiness. A busy sender alone does not.
+  While a nonce conflict pauses the lane, claimed orders return to retry before chain reads, strategy or signed-discount resolution,
   calldata construction, and preflight. Exact-hash reconciliation and the fail-closed recovery rule are
   described in §2.2.
 - **Track exclusive obligations locally:** every decodable order assigned to our executor is tracked until
@@ -728,6 +789,12 @@ in the owning repository and the integration harness pins the resulting revision
 - [x] **P0 — Scaffold + codegen.** Vendor UniswapX V2 reactor + Permit2 ABIs → `api/bindings/uniswapx/`;
   vendor `uniswapx-service/swagger.json` spec version 2.0.0 → generated typed poll client; scaffold the
   `uniswapx` package + `init()` register + blank-import from `main`. CGO-free build holds.
+- [x] **Shared reservations.** Use the LiquidLane capacity ledger and revision checks; reserve before
+  preflight/admission and quote free capacity while the sender is busy. Nonce-conflict gates remain.
+- [x] **Single-source integration.** Connect the shared LiquidLane algorithm through a local strategy;
+  retain bounded source preferences, fresh fallback, and existing fill retries with independent exclusive reconciliation.
+  Native regression coverage includes discount replacement and calldata. On-chain single-source E2E remains
+  part of P6; native mock-chain tests do not establish that evidence.
 - [x] **P1 — UniswapX-local strategy layer.** Local contract + registry + `default`/`webhook`, background
   chain and optional gas snapshot, request-scoped exact-input/output pricing, and independent fill decision tests are present. `DiscountID` flows
   through strategy plans and the solver resolves fresh signed terms before execution. RFQ and UniswapX
@@ -739,7 +806,7 @@ in the owning repository and the integration harness pins the resulting revision
   direct + signed-discount routes, actual balance-delta enforcement, same-token multi-output settlement, and
   mock-Reactor coverage. Regenerate and vendor the ABI here, pin the landed RFQ revision in `rfq-integration`,
   and add a canonical-Reactor self-cosign test. Native output remains an optional post-v1 extension (§7).
-- [ ] **P4 — Quote webhook completion.** The bounded stateless server, local strategy pricing, health,
+- [ ] **P4 — Quote webhook completion.** The bounded server, local strategy pricing, health,
   readiness, metrics, phase-agnostic `v1`/`v2` and zero-swapper handling, empty-`204` decline, ingress-owned
   source-IP authentication, native-output decline, and request tests exist. Replay a captured Beta payload
   before marking the phase complete.
@@ -875,7 +942,7 @@ Tracked operational and onboarding steps — **update as items start/finish/drop
 
 ### Internal repositories
 - Sibling solver template — `vault-solver/internal/solvers/rfq/` + [`RFQ-PLAN.md`](RFQ-PLAN.md)
-- Strategy architecture (solver-local `strategies/` registry (package `strategies`, `registry.go`) + `strategies/types` + `strategies/{default,webhook}`, shared
+- Strategy architecture (solver-local `strategies/` registry + `strategies/types` contract + `strategies/{default,single,webhook}`, shared
   LiquidLane allocator + `internal/webhook`) — [`strategy-plan.md`](strategy-plan.md)
 - Framework conventions — [`../CLAUDE.md`](../CLAUDE.md)
 - The RFQ contracts repository owns on-chain adapters and the UniswapX executor. `rfq-integration` pins the

@@ -71,16 +71,26 @@ func TestQuoteDelegatesOneRequestedAmountToStrategy(t *testing.T) {
 	}
 }
 
-func TestQuoteDeclinesWhileSharedTransactionLaneBusy(t *testing.T) {
-	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
-	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
-	strategy := &quoteTestStrategy{quote: &strategytypes.Quote{AmountIn: big.NewInt(100), AmountOut: big.NewInt(90)}}
-	solver := newQuoteTestSolver(t, tokenIn, strategy)
-	solver.txm = &executionTestTxManager{busy: true}
+func TestQuoteAllowsBusySenderButRejectsNonceConflict(t *testing.T) {
+	for _, name := range []string{"default", "single", "webhook"} {
+		t.Run(name, func(t *testing.T) {
+			tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
+			tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
+			strategy := &quoteTestStrategy{quote: &strategytypes.Quote{AmountIn: big.NewInt(100), AmountOut: big.NewInt(90)}}
+			solver := newQuoteTestSolver(t, tokenIn, strategy)
+			solver.cfg.Strategy.Name = name
+			solver.txm = &executionTestTxManager{busy: true}
 
-	response, err := solver.quote(t.Context(), validQuoteRequest(tokenIn, tokenOut))
-	if err != nil || response.declineReason != "blocked" || len(strategy.inputs) != 0 {
-		t.Fatalf("busy-lane quote = %+v, inputs = %d, err %v", response, len(strategy.inputs), err)
+			response, err := solver.quote(t.Context(), validQuoteRequest(tokenIn, tokenOut))
+			if err != nil || response.AmountOut != "90" || len(strategy.inputs) != 1 {
+				t.Fatalf("busy-lane quote = %+v, inputs = %d, err %v", response, len(strategy.inputs), err)
+			}
+			solver.txm = &executionTestTxManager{unavailable: true}
+			response, err = solver.quote(t.Context(), validQuoteRequest(tokenIn, tokenOut))
+			if err != nil || response.declineReason != "blocked" || len(strategy.inputs) != 1 {
+				t.Fatalf("nonce-conflict quote = %+v, err=%v", response, err)
+			}
+		})
 	}
 }
 
@@ -152,18 +162,11 @@ func TestQuoteDeclinesWhenStateChangesDuringStrategy(t *testing.T) {
 		invalidate func(*Solver)
 	}{
 		{
-			name: "fill planning",
-			invalidate: func(s *Solver) {
-				s.beginFillPlanning()
-				s.endFillPlanning()
-			},
-		},
-		{
 			name: "reservation",
 			invalidate: func(s *Solver) {
 				s.setPendingReservations(t.Context(), common.HexToHash("0x1"), liquidlane.CapacityReservations{
 					"capacity-1": big.NewInt(1),
-				})
+				}, s.capacity.Revision())
 			},
 		},
 		{

@@ -20,6 +20,8 @@ type Selection struct {
 	AmountIn   *big.Int
 
 	MinAmountOut *big.Int
+	// MaxAmountOut optionally bounds the uncapped payout by the selected capacity reservation.
+	MaxAmountOut *big.Int
 }
 
 // Provider is the shared signed-discount API surface used by direct LiquidLane clients.
@@ -52,6 +54,9 @@ func ValidateSigned(
 	amountOut := liquidlane.AmountOutAfterDiscount(base.GrossAmountOut, signed.Terms.Discount)
 	if selection.MinAmountOut != nil && amountOut.Cmp(selection.MinAmountOut) < 0 {
 		return nil, errors.New("resolved discount no longer meets the selected minimum output")
+	}
+	if selection.MaxAmountOut != nil && amountOut.Cmp(selection.MaxAmountOut) > 0 {
+		return nil, errors.New("resolved discount exceeds the selected capacity reservation")
 	}
 	return amountOut, nil
 }

@@ -119,3 +119,27 @@ func QuoteCapacity(route liquidlane.Inventory, priceBufferBps int) *big.Int {
 	}
 	return applyBpsDown(route.MaxAssets, bpsDenominator-priceBufferBps)
 }
+
+// ReserveInventoryCapacity conservatively subtracts vault reservations from each
+// source's limit: MaxAssets can include adapter/delegator limits, not just vault
+// liquidity. Returned capacities already include the inventory reserve.
+func ReserveInventoryCapacity(inventory []liquidlane.Inventory, reservations liquidlane.CapacityReservations, reserveBps int) []liquidlane.Inventory {
+	out := make([]liquidlane.Inventory, 0, len(inventory))
+	for _, item := range inventory {
+		if item.MaxAssets == nil || item.MaxAssets.Sign() <= 0 {
+			continue
+		}
+		capacity := AvailableCapacity(item.MaxAssets, reserveBps)
+		if reserved := reservations[liquidlane.RouteCapacityID(item.Route)]; reserved != nil && reserved.Sign() > 0 {
+			capacity.Sub(capacity, reserved)
+		}
+		if capacity.Sign() <= 0 {
+			continue
+		}
+		item.MaxAssets = capacity
+		item.MaxRate = liquidlane.CloneBig(item.MaxRate)
+		item.DiscountID = liquidlane.CloneHash(item.DiscountID)
+		out = append(out, item)
+	}
+	return out
+}

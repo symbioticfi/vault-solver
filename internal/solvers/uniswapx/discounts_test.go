@@ -99,18 +99,17 @@ func TestExternalModeNeverListsDiscounts(t *testing.T) {
 	if err != nil || quoteRoutes.listed != nil || !quoteRoutes.complete || len(quoteRoutes.routes) != 1 {
 		t.Fatalf("external quote routes/error = %+v/%v", quoteRoutes, err)
 	}
-	fillRoutes, filled, err := solver.fillRoutesWithDiscounts(
+	fillSet, err := solver.routesWithDiscounts(
 		t.Context(),
 		[]liquidlane.Route{route},
-		route.TokenIn,
-		route.TokenOut,
 		time.Now(),
+		advertisedRouteFilter{tokenIn: route.TokenIn, tokenOut: route.TokenOut},
 	)
-	if err != nil || filled != nil || len(fillRoutes) != 1 || provider.listCalls != 0 {
+	if err != nil || fillSet.listed != nil || len(fillSet.routes) != 1 || provider.listCalls != 0 {
 		t.Fatalf(
 			"external fill routes/list/calls/error = %+v/%+v/%d/%v",
-			fillRoutes,
-			filled,
+			fillSet.routes,
+			fillSet.listed,
 			provider.listCalls,
 			err,
 		)

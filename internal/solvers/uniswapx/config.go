@@ -13,6 +13,7 @@ import (
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
+	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
@@ -22,9 +23,11 @@ const (
 	defaultPollInterval     = time.Second
 	defaultRefreshInterval  = 12 * time.Second
 	defaultQuoteTTL         = 30 * time.Second
+	defaultSelectionTTL     = 10 * time.Minute
+	defaultMaxSelections    = 4096
 	defaultDiscountTimeout  = 2 * time.Second
 	defaultDiscountValidity = 15 * time.Second
-	defaultStrategyName     = "default"
+	defaultStrategyName     = types.DefaultName
 	defaultSolverMode       = solverModeExternal
 	solverModeExternal      = "external"
 	solverModeInternal      = "internal"
@@ -53,6 +56,8 @@ type rawDiscountConfig struct {
 }
 
 type rawQuoteServerConfig struct {
+	SelectionTTL    string `yaml:"selectionTtl"`
+	MaxSelections   int    `yaml:"maxSelections"`
 	ListenAddress   string `yaml:"listenAddress"`
 	HTTPTimeout     string `yaml:"httpTimeout"`
 	RefreshInterval string `yaml:"refreshInterval"`
@@ -108,6 +113,8 @@ type DiscountConfig struct {
 }
 
 type QuoteServerConfig struct {
+	SelectionTTL    time.Duration
+	MaxSelections   int
 	ListenAddress   string
 	HTTPTimeout     time.Duration
 	RefreshInterval time.Duration
@@ -250,10 +257,22 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	selectionTTL, err := parse.Duration(raw.QuoteServer.SelectionTTL, defaultSelectionTTL, "quoteServer.selectionTtl")
+	if err != nil {
+		return nil, err
+	}
+	maxSelections := raw.QuoteServer.MaxSelections
+	if maxSelections == 0 {
+		maxSelections = defaultMaxSelections
+	}
+	if maxSelections < 1 {
+		return nil, errors.New("quoteServer.maxSelections must be positive")
+	}
 	return &Config{
 		Reactor: reactor, Executor: executor, LiquidityLens: liquidityLens,
 		Adapters: adapters, SolverMode: solverMode, TokenPolicy: policy,
 		QuoteServer: QuoteServerConfig{
+			SelectionTTL: selectionTTL, MaxSelections: maxSelections,
 			ListenAddress:   parse.OrDefault(raw.QuoteServer.ListenAddress, defaultListenAddress),
 			HTTPTimeout:     quoteHTTPTimeout,
 			RefreshInterval: refreshInterval, QuoteTTL: quoteTTL,
@@ -349,3 +368,5 @@ func parseAddressList(values []string, field string) ([]common.Address, error) {
 	}
 	return out, nil
 }
+
+func (c *Config) singleSource() bool { return c.Strategy.Name == types.SingleName }
