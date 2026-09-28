@@ -401,8 +401,12 @@ reads for recent blocks. A refused request returns a `NotAdmitted` submission er
 `fees.maxHeadLagBlocks` behind for two block times, or the balance could not be read at that block);
 nothing is signed and the nonce stays free. Refusals are logged at Info and counted in
 `solver_bot_txmanager_admission_rejections_total{reason="unaffordable|unaffordable_one_block|stale_head"}`.
+The head lag is measured against the wall clock, so a local or forked chain must produce a block every
+`fees.blockTimeMs` (for example `anvil --block-time 12`, or lower `fees.blockTimeMs` to match); otherwise set
+`balance.guard: false` there, or every send is refused as `stale_head`.
 Replacements and cancellations are capped the same way; when the balance cannot fund the 12.5% bump, the
-latest attempt is rebroadcast unchanged. At a next-block base fee `pb`, a fill with gas limit `G` can
+latest attempt is rebroadcast unchanged. A cancellation whose balance read fails is capped at what the
+lifecycle's signed attempts already reserved, so the deadline cancel is still sent. At a next-block base fee `pb`, a fill with gas limit `G` can
 still be sent while the balance covers `G × (1.125·pb + tipFloor)`; the legacy price needs about
 `G × (2·pb + tip)`. As a rule of thumb, fund lanes that fill regularly to about 0.1 ETH (a 4.35M-gas fill
 then still sends up to a next base fee of about 20 gwei, and keeps the full legacy price up to about 11.5 gwei) and idle

@@ -145,7 +145,9 @@ startup log line says so. `balance.guard: false` turns it off without that line.
 
 **Initial send order** (`broadcast`): a fee snapshot and the balance pinned to its head, overlapped with
 the gas estimate; the guard; `Obsolete`; the nonce; sign and send. A refusal therefore signs nothing and
-leaves the nonce free.
+leaves the nonce free. A gas estimate that fails on its own ends the snapshot and balance reads, so the
+send fails at once with the estimate's error (a real submission error, not `NotAdmitted`) instead of
+waiting out a stale head and reporting a refusal a solver would retry.
 
 1. **Snapshot.** The legacy fee read (latest header, plus `FeeHistory(5, latest, [25])` when `tipGwei`
    is 0). The next block's base fee `pb` is the one the fee history reports for the block after its
@@ -156,10 +158,18 @@ leaves the nonce free.
    `fees.maxHeadLagBlocks`, or when its block is below the block that included the previous lifecycle's
    attempt (a lagging upstream would otherwise report the balance from before that fill was paid).
    A stale snapshot is re-read for up to two block times within `CancelAt`, then refused (`stale_head`).
+   The lag is wall-clock time since the header, so a chain that does not produce a block every
+   `fees.blockTimeMs` (automine or idle anvil, an anvil mainnet fork, an idle devnet) has every send
+   refused as `stale_head` once its head is more than `(fees.maxHeadLagBlocks + 1)` block times old: run
+   such a chain with a matching block time (`anvil --block-time 12`, or lower `fees.blockTimeMs`), or set
+   `balance.guard: false` there.
 2. **Balance.** `eth_getBalance` pinned to the snapshot's block: by hash with `requireCanonical` when
    the history's newest block is the header, otherwise by that block's number. A block the node does not
    have is retried within the fee-read budget; any failure refuses (`stale_head`). It never falls back
-   to `latest` or to the telemetry snapshot.
+   to `latest` or to the telemetry snapshot. The hash is the one go-ethereum computes from the header
+   fields it knows (ethclient drops the node's own), so a header field that the go-ethereum version in
+   `go.mod` does not hash would make every hash pin miss; three hash-pinned reads in a row that end not
+   found are logged at Error once per streak, and at Info when a hash-pinned read succeeds again.
 3. **Guard.** `aff = floor((balance − value) / gasLimit)`, and the floor
    `lo = fee(minHorizonBlocks + lag, floorTip)` where `fee(H, tip) = grow(pb, H−1) + tip`, `grow` is the
    exact EIP-1559 maximum (`x += max(x/8, 1)` per block, go-ethereum's denominator, deliberately not a
@@ -183,10 +193,20 @@ instead of an error status on the broadcast and send spans. Solvers treat them a
 **Replacements and cancellations** are capped the same way. Before a new same-nonce attempt is priced,
 the balance is read at the current head, pinned by hash, and the attempt's fee limit becomes
 `min(limit, floor((balance − value) / gasLimit))`, with the cancellation's 21000 gas and zero value.
-When that cannot fund the required 12.5% bump, or the balance cannot be read, nothing new is signed and
-the existing capped exact rebroadcast of the latest applicable attempt runs; it becomes valid again if
-the base fee recedes, and the deadline cancel still fires. A "replacement capped" Info line is logged
-once per lifecycle.
+When that cannot fund the required 12.5% bump, or lies below the latest base fee, or (for a fill
+replacement) the balance cannot be read, nothing new is signed and the existing capped exact rebroadcast
+of the latest applicable attempt runs; it becomes valid again if the base fee recedes. A "replacement
+capped" Info line is logged once per lifecycle, with the reason `balance`, `reserved_balance` or
+`balance_unavailable`.
+
+A cancellation never waits for the balance read: when it fails (a read error, a block the node does not
+have within the fee-read budget, or a head below the previous inclusion), the cancellation is capped at
+the balance the lifecycle already reserved, `floor(max(gasLimit × maxFee + value) / 21000)` over its
+signed attempts. Each of them was checked against the balance when it was signed and their shared nonce
+is not mined, so that balance still holds; a fill of at least 23,625 gas therefore always funds the first
+cancellation's bump, and the deadline cancel still fires during a read outage. The fallback is logged at
+Info once per lifecycle. It assumes the signer is not spent from by anything else, as nonce serialization
+already does.
 
 ## 5. Receipt polling and confirmation
 
@@ -364,7 +384,7 @@ Definitions: [metrics.go](../internal/txmanager/metrics.go),
 | Txmanager | `solver_bot_txmanager_gas_used_total` | `label`, `outcome` | Receipt gas for mined transactions, including reverts. Divide by the matching request count for average gas; this is gas units, not native-token cost. |
 | Txmanager | `solver_bot_txmanager_fee_paid_wei_total` | `label`, `outcome` | Actual native-token fee paid by mined transactions, calculated from receipt `gasUsed × effectiveGasPrice`, including reverted and mined cancellation transactions. |
 | Txmanager | `solver_bot_txmanager_replacements_total` | `label`, `kind` | Successfully broadcast replacements and cancellations. Spikes expose fee-policy or congestion problems that terminal outcomes alone cannot show. |
-| Txmanager | `solver_bot_txmanager_admission_rejections_total` | `label`, `reason` | Requests rejected before signing. Before the worker lifecycle: `manager_stopped`, `nonce_conflict`, `deadline_exceeded`, `caller_cancelled`, or bounded fallback `other`; an expected busy `TrySend` probe is excluded. After worker admission, by the balance guard (§4.1): `unaffordable`, `unaffordable_one_block`, `stale_head`, and `fee_ceiling` (reserved for `Request.MaxFeeWei`, §10). These four start at zero for every label that reaches the worker; they are not also counted in `admission_wait_duration_seconds`, which already recorded the admission. |
+| Txmanager | `solver_bot_txmanager_admission_rejections_total` | `label`, `reason` | Requests rejected before signing. Before the worker lifecycle: `manager_stopped`, `nonce_conflict`, `deadline_exceeded`, `caller_cancelled`, or bounded fallback `other`; an expected busy `TrySend` probe is excluded. After worker admission, by the balance guard (§4.1): `unaffordable`, `unaffordable_one_block`, `stale_head`, and `fee_ceiling` (reserved for `Request.MaxFeeWei`, §10). These four start at zero for every label that reaches the worker, so later refusals are visible to `increase()`; a refusal of a label's very first lifecycle after a restart creates the series at 1, which `increase()` and `rate()` miss (the Info refusal log still records it). They are not also counted in `admission_wait_duration_seconds`, which already recorded the admission. |
 | Txmanager | `solver_bot_txmanager_admission_wait_duration_seconds` | `label`, `outcome` | Time from a real send request until worker admission or a terminal pre-admission outcome. `outcome` is `admitted` or one of the bounded rejection reasons; expected busy `TrySend` probes are excluded. |
 | Txmanager | `solver_bot_txmanager_lifecycle_duration_seconds` | `label`, `outcome` | Time from worker admission through broadcast and terminal tracking. It excludes pre-admission nonce-lane wait, so use admission rejections alongside its latency distribution. |
 | Txmanager | `solver_bot_txmanager_phase_duration_seconds` | `label`, `phase`, `outcome` | Time spent in each reached worker phase: `prebroadcast`, `pending`, or `confirming`. Reorgs may return a lifecycle to `pending`; the emitted sample contains the cumulative time spent in that phase. |
@@ -427,7 +447,9 @@ policy, next-block estimate and shadow evaluator ship in it):
   by guarded sends only; the funding gate's per-poll fee snapshot should refresh them on every account poll.
 - **Glamsterdam (ePBS).** Before the mainnet fork, re-measure the fill gas profile, `referenceGasUnits`,
   `gas.headroomBps`, `fees.blockTimeMs` and the room/tip thresholds if the fork changes gas costs, the block gas
-  limit or slot timing; revalidate on Sepolia first.
+  limit or slot timing; revalidate on Sepolia first. The balance guard pins reads to a header hash that the
+  go-ethereum version in go.mod computes (§4.1): bump it to a release that knows the fork's header fields before
+  the fork activates on a chain the bot runs on, or every guarded send there is refused as `stale_head`.
 
 Keep shared lifecycle design and metric contracts here. Update integration plans only when their own
 request construction, readiness, capacity or protocol behavior changes. Preserve operator-facing setup,

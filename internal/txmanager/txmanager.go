@@ -175,8 +175,10 @@ type pendingTransaction struct {
 	// and pending age are measured from them. Both are zero for a lifecycle built outside broadcast.
 	sendHead uint64
 	sentAt   time.Time
-	// balanceCapLogged keeps the balance-capped replacement log to once per lifecycle.
-	balanceCapLogged bool
+	// balanceCapLogged keeps the balance-capped replacement log to once per lifecycle, and
+	// reservedCapLogged the log of a cancellation capped at the reserved balance.
+	balanceCapLogged  bool
+	reservedCapLogged bool
 }
 
 type txAttempt struct {
@@ -200,6 +202,8 @@ type Manager struct {
 	// lastInclusion is the highest block that included an attempt of a finished lifecycle. Balance
 	// pins below it are stale: they may predate that attempt's payment.
 	lastInclusion atomic.Uint64
+	// hashPinMisses counts the balance reads pinned by header hash in a row that ended not found.
+	hashPinMisses atomic.Uint64
 
 	queue           chan job
 	lifecycleSlot   chan struct{}
@@ -258,6 +262,13 @@ var (
 	errManagerStopped          = errors.New("transaction manager stopped")
 	errEstimateAbandoned       = errors.New("gas estimate abandoned: the send failed before it was needed")
 	errShutdownTimeout         = errors.Errorf("transaction manager shutdown drain timed out: %w", context.DeadlineExceeded)
+)
+
+var (
+	// errReplacementBaseAboveLimit is a replacement whose fee limit is below the latest base fee.
+	errReplacementBaseAboveLimit = errors.New("replacement base fee exceeds fee limit")
+	// errEstimateFailed ends a broadcast's fee and balance reads once its gas estimate has failed.
+	errEstimateFailed = errors.New("gas estimate failed")
 )
 
 // New constructs a Manager. Call Start to launch its worker.
@@ -854,12 +865,19 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	if value == nil {
 		value = new(big.Int)
 	}
-	// The estimate needs neither the fees nor the balance, so it overlaps their reads.
-	waitEstimate, stopEstimate := m.estimateAsync(broadcastCtx, req)
-	defer stopEstimate()
+	// The estimate needs neither the fees nor the balance, so it overlaps their reads. A failed estimate
+	// fails the send whatever they return, so it also ends them: the send then reports the estimate's
+	// error at once instead of waiting out a stale head and returning a refusal a solver would retry.
+	readCtx, stopReads := context.WithCancelCause(broadcastCtx)
+	defer stopReads(nil)
+	estimate := m.estimateAsync(broadcastCtx, req, func() { stopReads(errEstimateFailed) })
+	defer estimate.stop()
 
-	snapshot, err = m.sendSnapshot(broadcastCtx)
+	snapshot, err = m.sendSnapshot(readCtx)
 	if err != nil {
+		if estimateErr := estimate.failure(); estimateErr != nil {
+			return nil, estimateErr
+		}
 		return nil, errors.Errorf("send %q: %w", req.Label, err)
 	}
 	fees, err := m.legacyQuote(snapshot.reading, reserveFeeBump(m.normalFeeLimit(req)))
@@ -868,11 +886,14 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	}
 	var balance *big.Int
 	if snapshot.guarded() {
-		if balance, err = m.pinnedBalance(broadcastCtx, snapshot.pin); err != nil {
+		if balance, err = m.pinnedBalance(readCtx, snapshot.pin); err != nil {
+			if estimateErr := estimate.failure(); estimateErr != nil {
+				return nil, estimateErr
+			}
 			return nil, errors.Errorf("send %q: %w", req.Label, err)
 		}
 	}
-	gas, err := waitEstimate()
+	gas, err := estimate.wait()
 	if err != nil {
 		return nil, err
 	}
@@ -1002,33 +1023,62 @@ func (m *Manager) observeFeeSnapshot(nextBase *big.Int, gas uint64) {
 	})
 }
 
-// estimateAsync starts the gas estimate for req, unless the request supplies its gas limit. wait
-// returns the result; stop cancels an estimate still running and waits for its goroutine, so the
-// estimate never outlives broadcast. Both are called from the worker goroutine only.
-func (m *Manager) estimateAsync(ctx context.Context, req Request) (wait func() (uint64, error), stop func()) {
+// asyncEstimate is a gas estimate running beside the fee and balance reads of one broadcast. Its
+// methods are called from the worker goroutine only; the estimate goroutine writes gas and err before it
+// closes done, and nothing writes them after.
+type asyncEstimate struct {
+	done   chan struct{}
+	gas    uint64
+	err    error
+	failed bool // the estimate failed on its own, not because its context ended
+	cancel context.CancelCauseFunc
+}
+
+// estimateAsync starts the gas estimate for req, unless the request supplies its gas limit. onFailure
+// runs on the estimate goroutine when the estimate fails on its own, after failure reports it.
+func (m *Manager) estimateAsync(ctx context.Context, req Request, onFailure func()) *asyncEstimate {
+	estimate := &asyncEstimate{done: make(chan struct{}), cancel: func(error) {}}
 	if req.GasLimit != 0 {
-		return func() (uint64, error) { return req.GasLimit, nil }, func() {}
+		estimate.gas = req.GasLimit
+		close(estimate.done)
+		return estimate
 	}
 	estimateCtx, cancel := context.WithCancelCause(ctx)
-	type estimate struct {
-		gas uint64
-		err error
-	}
-	done := make(chan estimate, 1)
+	estimate.cancel = cancel
 	go func() {
-		gas, err := m.estimateGas(estimateCtx, req)
-		done <- estimate{gas: gas, err: err}
+		estimate.gas, estimate.err = m.estimateGas(estimateCtx, req)
+		estimate.failed = estimate.err != nil && estimateCtx.Err() == nil
+		close(estimate.done)
+		if estimate.failed {
+			onFailure()
+		}
 	}()
-	var result estimate
-	var once sync.Once
-	wait = func() (uint64, error) {
-		once.Do(func() { result = <-done })
-		return result.gas, result.err
+	return estimate
+}
+
+// wait returns the estimate once it has finished.
+func (e *asyncEstimate) wait() (uint64, error) {
+	<-e.done
+	return e.gas, e.err
+}
+
+// failure returns the estimate's error if it has already failed on its own, without waiting for it.
+func (e *asyncEstimate) failure() error {
+	select {
+	case <-e.done:
+		if e.failed {
+			return e.err
+		}
+	default:
 	}
-	return wait, func() {
-		cancel(errEstimateAbandoned)
-		_, _ = wait()
-	}
+	return nil
+}
+
+// stop cancels an estimate still running and waits for its goroutine, so the estimate never outlives
+// broadcast.
+func (e *asyncEstimate) stop() {
+	e.cancel(errEstimateAbandoned)
+	<-e.done
 }
 
 func estimateMode(req Request) string {
@@ -1590,8 +1640,10 @@ func replacementBroadcastContext(
 
 // replacementFees prices the next same-nonce attempt under limit. With the balance guard on, the limit
 // is also capped at what the signer balance funds at the current head; when that cannot fund the
-// required 12.5% bump, or the balance cannot be read, no new attempt is signed and the capped exact
-// rebroadcast of the latest attempt takes over, which becomes valid again if the base fee recedes.
+// required 12.5% bump, or lies below the latest base fee, no new attempt is signed and the capped exact
+// rebroadcast of the latest attempt takes over, which becomes valid again if the base fee recedes. An
+// unreadable balance stops a fill replacement the same way; a cancellation is instead capped at the
+// balance the lifecycle already reserved (see replacementFundedCap), so the deadline cancel still fires.
 func (m *Manager) replacementFees(
 	ctx context.Context,
 	pending *pendingTransaction,
@@ -1606,22 +1658,87 @@ func (m *Manager) replacementFees(
 		gas, value = cancellationGasLimit, new(big.Int)
 	}
 	required := bumpFee(pending.fees.maxFee)
-	affordable, err := m.replacementBalanceCap(ctx, gas, value)
+	affordable, source, err := m.replacementFundedCap(ctx, pending, cancellation, gas, value)
 	if err != nil {
-		m.logReplacementCapped(ctx, pending, cancellation, "balance_unavailable", nil, required, err)
+		m.logReplacementCapped(ctx, pending, cancellation, source, nil, required, err)
 		return feeQuote{}, errors.Errorf("%w: signer balance unavailable: %w", errReplacementLimitReached, err)
 	}
 	if affordable.Cmp(required) < 0 {
-		m.logReplacementCapped(ctx, pending, cancellation, "balance", affordable, required, nil)
+		m.logReplacementCapped(ctx, pending, cancellation, source, affordable, required, nil)
 		return feeQuote{}, errors.Errorf(
 			"%w: signer balance funds %s wei per gas at gas limit %d, below the required bump %s",
 			errReplacementLimitReached, affordableString(affordable), gas, required,
 		)
 	}
-	if limit == nil || affordable.Cmp(limit) < 0 {
+	balanceBound := limit == nil || affordable.Cmp(limit) < 0
+	if balanceBound {
 		limit = affordable
 	}
-	return m.nextReplacementFees(ctx, pending.fees, limit)
+	fees, err := m.nextReplacementFees(ctx, pending.fees, limit)
+	if balanceBound && errors.Is(err, errReplacementBaseAboveLimit) {
+		// The balance funds the bump but not the latest base fee: hold the latest attempt, which becomes
+		// valid again when the base fee recedes, exactly as when the bump itself is unaffordable.
+		m.logReplacementCapped(ctx, pending, cancellation, source, affordable, required, nil)
+		return feeQuote{}, errors.Errorf("%w: %w", errReplacementLimitReached, err)
+	}
+	return fees, err
+}
+
+// Sources of the fee cap a guarded replacement is funded to, for the "replacement capped" log.
+const (
+	fundedCapBalance            = "balance"
+	fundedCapReserved           = "reserved_balance"
+	fundedCapBalanceUnavailable = "balance_unavailable"
+)
+
+// replacementFundedCap is the largest fee cap a replacement at gas and value can be funded to, and where
+// it came from. It is normally the signer balance read at the current head. When that read fails, a
+// cancellation falls back to the balance the lifecycle already reserved: every attempt was checked
+// against the signer balance when it was signed, and their shared nonce is not mined (the replacement
+// nonce check ran first), so that balance still holds the costliest of them. A cancellation must not
+// wait for a read endpoint to recover: it is what settles the nonce at the request's deadline.
+func (m *Manager) replacementFundedCap(
+	ctx context.Context, pending *pendingTransaction, cancellation bool, gas uint64, value *big.Int,
+) (*big.Int, string, error) {
+	affordable, err := m.replacementBalanceCap(ctx, gas, value)
+	if err == nil {
+		return affordable, fundedCapBalance, nil
+	}
+	if !cancellation {
+		return nil, fundedCapBalanceUnavailable, err
+	}
+	reserved, ok := reservedFeeCap(pending.attempts, gas, value)
+	if !ok {
+		return nil, fundedCapBalanceUnavailable, err
+	}
+	if !pending.reservedCapLogged {
+		pending.reservedCapLogged = true
+		observability.Log(ctx).Info("cancellation capped at the balance its lifecycle reserved",
+			"label", pending.req.Label,
+			"nonce", pending.nonce,
+			"reservedMaxFeePerGas", affordableString(reserved),
+			"error", err.Error(),
+		)
+	}
+	return reserved, fundedCapReserved, nil
+}
+
+// reservedFeeCap is the largest fee cap per gas at gas and value that the costliest signed attempt's
+// gasLimit × maxFee + value covers. It reports false when no attempt carries its signed transaction.
+func reservedFeeCap(attempts []txAttempt, gas uint64, value *big.Int) (*big.Int, bool) {
+	var reserved *big.Int
+	for _, attempt := range attempts {
+		if attempt.tx == nil {
+			continue
+		}
+		if cost := attempt.tx.Cost(); reserved == nil || cost.Cmp(reserved) > 0 {
+			reserved = cost
+		}
+	}
+	if reserved == nil {
+		return nil, false
+	}
+	return affordableMaxFee(reserved, value, gas), true
 }
 
 // logReplacementCapped reports, once per lifecycle, that the balance stopped a replacement from being
@@ -1682,7 +1799,7 @@ func (m *Manager) nextReplacementFees(
 	effectiveTipLimit := new(big.Int).Sub(next.maxFee, next.baseFee)
 	if effectiveTipLimit.Sign() < 0 {
 		return feeQuote{}, errors.Errorf(
-			"replacement base fee %s exceeds fee limit %s", next.baseFee, next.maxFee,
+			"%w: base fee %s, fee limit %s", errReplacementBaseAboveLimit, next.baseFee, next.maxFee,
 		)
 	}
 	if err == nil {

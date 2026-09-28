@@ -23,7 +23,8 @@ import (
 //
 // Goroutine model: the worker goroutine runs the initial-send guard and the lifecycle goroutine runs
 // the replacement cap; the lifecycle slot keeps them from overlapping. The only state they share is
-// Manager.lastInclusion, an atomic the lifecycle goroutine raises when a lifecycle ends in a receipt.
+// Manager.lastInclusion, an atomic the lifecycle goroutine raises when a lifecycle ends in a receipt,
+// and Manager.hashPinMisses, an atomic count both update as their pinned balance reads end.
 
 // ErrUnaffordable reports a request the signer balance cannot keep valid for fees.minHorizonBlocks
 // blocks from a fresh head. Nothing was signed and the nonce was not consumed; the Result is
@@ -44,6 +45,14 @@ var errUnaffordableOneBlock = errors.Errorf("%w for more than one block", ErrUna
 // pinnedReadRetryDelay spaces the retries of a pinned balance read whose block the node does not
 // have yet, inside the fee-read budget.
 const pinnedReadRetryDelay = 200 * time.Millisecond
+
+// hashPinNotFoundErrorAfter is how many balance reads pinned by header hash in a row may end not found
+// before the streak is logged at error level. One such read is a lagging upstream or a reorg; a run of
+// them is either an upstream that serves heads it cannot serve state for, or a header hash computed
+// locally that the node does not know: ethclient drops the node's hash and go-ethereum rehashes the
+// header fields it knows, so a header field it does not know (a later fork, a non-standard chain)
+// yields a hash no node has, and every guarded send would be refused as stale_head.
+const hashPinNotFoundErrorAfter = 3
 
 // pinnedBalanceBackend reads an account balance pinned to one block, by hash (EIP-1898) or number,
 // through the read endpoints. *chain.Client provides it; a backend without it runs with the guard off.
@@ -234,6 +243,7 @@ func (m *Manager) pinnedBalance(ctx context.Context, pin rpc.BlockNumberOrHash) 
 		balance, err := m.balances.ReadBalanceAtBlock(readCtx, m.signer.Address(), pin)
 		switch {
 		case err == nil && balance != nil && balance.Sign() >= 0:
+			m.hashPinFound(ctx, pin)
 			return balance, nil
 		case err == nil:
 			return nil, errors.Errorf("%w: invalid signer balance %v at block %s", ErrStaleHead, balance, pin.String())
@@ -241,10 +251,41 @@ func (m *Manager) pinnedBalance(ctx context.Context, pin rpc.BlockNumberOrHash) 
 			return nil, errors.Errorf("%w: signer balance at block %s: %w", ErrStaleHead, pin.String(), err)
 		}
 		if sleepContext(readCtx, retry) != nil {
-			return nil, errors.Errorf(
+			err = errors.Errorf(
 				"%w: signer balance at block %s not found within %s: %w", ErrStaleHead, pin.String(), m.feeReadTimeout(), err,
 			)
+			// A read the caller abandoned says nothing about the node.
+			if ctx.Err() == nil {
+				m.hashPinNotFound(ctx, pin, err)
+			}
+			return nil, err
 		}
+	}
+}
+
+// hashPinNotFound counts a balance read pinned by header hash that ended not found, and logs the
+// streak at error level once, when it reaches hashPinNotFoundErrorAfter: a refusal is otherwise only an
+// Info line and a stale_head count, which cannot tell this apart from a briefly lagging upstream.
+func (m *Manager) hashPinNotFound(ctx context.Context, pin rpc.BlockNumberOrHash, err error) {
+	if _, byHash := pin.Hash(); !byHash {
+		return
+	}
+	if misses := m.hashPinMisses.Add(1); misses == hashPinNotFoundErrorAfter {
+		observability.Log(ctx).Error(err, "balance reads pinned by header hash keep finding no block",
+			"consecutiveMisses", misses,
+			"hint", "if the node serves this block by number, the go-ethereum this build uses does not hash "+
+				"this chain's header fields; refusals continue as stale_head until it does",
+		)
+	}
+}
+
+// hashPinFound ends a streak of hash-pinned balance reads that found no block.
+func (m *Manager) hashPinFound(ctx context.Context, pin rpc.BlockNumberOrHash) {
+	if _, byHash := pin.Hash(); !byHash {
+		return
+	}
+	if misses := m.hashPinMisses.Swap(0); misses >= hashPinNotFoundErrorAfter {
+		observability.Log(ctx).Info("balance reads pinned by header hash recovered", "consecutiveMisses", misses)
 	}
 }
 

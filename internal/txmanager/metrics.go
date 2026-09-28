@@ -249,8 +249,10 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 }
 
 // guardRefusalReasons are the admission rejections recorded after the worker admitted a request. Each
-// lifecycle's label starts them at zero, so an operation's first refusal is an increase from zero
-// rather than a new series that increase() and rate() cannot see.
+// lifecycle starts them at zero for its label, so once a label has reached the worker its later
+// refusals are increases that increase() and rate() see. Labels are not known before their first
+// request, so a refusal of a label's very first lifecycle after a restart creates its series at 1 in
+// the same worker iteration, which no scrape sees as an increase; its Info refusal log records it.
 var guardRefusalReasons = [...]admissionRejectionReason{
 	admissionRejectionUnaffordable,
 	admissionRejectionUnaffordableOneBlock,

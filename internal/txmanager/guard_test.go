@@ -312,6 +312,32 @@ func TestReplacementNeverExceedsBalance(t *testing.T) {
 			t.Fatalf("balance pins = %v, want the send head then the current head %d", pinned, b.head)
 		}
 	})
+	t.Run("base fee above the balance cap rebroadcasts the capped attempt", func(t *testing.T) {
+		logs, log := newLogCapture(0)
+		var mu sync.Mutex
+		b := newGuardBackend(eth(1_000_000_000_000_000_000))
+		m := New(b, mustSigner(t), big.NewInt(11155111), Config{MaxFeeGwei: 50}, logr.New(&lockedSink{sink: log.GetSink(), mu: &mu}))
+		pending := guardedPending(t, b, m)
+		// The balance funds 25 gwei per gas, above bump(21 gwei), but the latest base fee is 30 gwei.
+		b.baseFee = big.NewInt(30e9)
+		b.setBalance(new(big.Int).Mul(big.NewInt(25e9), big.NewInt(100_000)))
+
+		if _, err := m.tryReplace(managerCtx(t.Context(), m), pending, false); err != nil {
+			t.Fatalf("tryReplace: %v", err)
+		}
+		sent := b.attemptedTransactions()
+		if len(pending.attempts) != 1 || len(sent) != 2 || sent[1].Hash() != pending.originalHash {
+			t.Fatalf("attempts %d sends %v, want the original then its exact rebroadcast", len(pending.attempts), transactionHashes(sent))
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if _, info := countLogs(*logs, "replacement capped"); info != 1 || !pending.balanceCapLogged {
+			t.Fatalf("replacement capped logged %d times, want once: %s", info, strings.Join(*logs, "\n"))
+		}
+		if errorLevel, _ := countLogs(*logs, "cannot replace pending transaction"); errorLevel != 0 {
+			t.Fatalf("balance-capped replacement logged %d errors", errorLevel)
+		}
+	})
 	t.Run("unreadable balance signs nothing new", func(t *testing.T) {
 		b := newGuardBackend(eth(1_000_000_000_000_000_000))
 		m := New(b, mustSigner(t), big.NewInt(11155111), Config{MaxFeeGwei: 50}, logr.Discard())
@@ -361,6 +387,99 @@ func TestCancellationCappedByBalance(t *testing.T) {
 		}
 		if len(pending.attempts) != 1 || len(b.attemptedTransactions()) != 1 {
 			t.Fatalf("attempts %d sends %d, want no cancellation signed", len(pending.attempts), len(b.attemptedTransactions()))
+		}
+	})
+}
+
+// TestCancellationWithUnreadableBalance pins that a balance read failure never stops the deadline
+// cancellation: the attempts already signed were funded when they were signed and their nonce is not
+// mined, so a cancellation is capped at the balance they reserved instead of waiting for the read.
+func TestCancellationWithUnreadableBalance(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		balanceErr error
+	}{
+		{name: "read error", balanceErr: errors.New("read endpoint unavailable")},
+		{name: "block not found", balanceErr: errors.Join(ethereum.NotFound, errors.New("header not found"))},
+	} {
+		t.Run(tc.name+": first cancellation is signed within the reservation", func(t *testing.T) {
+			logs, log := newLogCapture(0)
+			var mu sync.Mutex
+			b := newGuardBackend(eth(1_000_000_000_000_000_000))
+			m := New(b, mustSigner(t), big.NewInt(11155111), Config{
+				MaxFeeGwei: 50, PollInterval: time.Millisecond, ReplacementInterval: 40 * time.Millisecond,
+			}, logr.New(&lockedSink{sink: log.GetSink(), mu: &mu}))
+			pending := guardedPending(t, b, m)
+			b.guardMu.Lock()
+			b.balanceErr = tc.balanceErr
+			b.guardMu.Unlock()
+
+			for range 2 {
+				cancelling, err := m.tryReplace(managerCtx(t.Context(), m), pending, true)
+				if !cancelling || err != nil {
+					t.Fatalf("tryReplace = %t, %v; want a signed cancellation", cancelling, err)
+				}
+			}
+			if len(pending.attempts) < 2 || !pending.attempts[1].cancellation {
+				t.Fatalf("attempts = %+v, want a cancellation", pending.attempts)
+			}
+			fill := pending.attempts[0].tx
+			for _, attempt := range pending.attempts[1:] {
+				if cost := attempt.tx.Cost(); cost.Cmp(fill.Cost()) > 0 {
+					t.Fatalf("cancellation reserves %s wei, more than the funded fill's %s", cost, fill.Cost())
+				}
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if errorLevel, _ := countLogs(*logs, "cannot replace pending transaction"); errorLevel != 0 {
+				t.Fatalf("unreadable balance logged %d errors: %s", errorLevel, strings.Join(*logs, "\n"))
+			}
+			if _, info := countLogs(*logs, "cancellation capped at the balance its lifecycle reserved"); info != 1 {
+				t.Fatalf("reservation cap logged %d times, want once per lifecycle: %s", info, strings.Join(*logs, "\n"))
+			}
+		})
+	}
+	t.Run("the reservation caps the cancellation, then its exact rebroadcast", func(t *testing.T) {
+		b := newGuardBackend(eth(1_000_000_000_000_000_000))
+		m := New(b, mustSigner(t), big.NewInt(11155111), Config{MaxFeeGwei: 1000}, logr.Discard())
+		pending := guardedPending(t, b, m)
+		// The fill reserved 100k × 21 gwei = 100 gwei at 21000 gas; fresh fees ask 2×60 + 1 = 121 gwei.
+		b.baseFee = big.NewInt(60e9)
+		b.guardMu.Lock()
+		b.balanceErr = errors.New("read endpoint unavailable")
+		b.guardMu.Unlock()
+
+		if _, err := m.tryReplace(managerCtx(t.Context(), m), pending, true); err != nil {
+			t.Fatalf("tryReplace: %v", err)
+		}
+		if len(pending.attempts) != 2 || !pending.attempts[1].cancellation {
+			t.Fatalf("attempts = %+v, want a cancellation", pending.attempts)
+		}
+		if cancel := pending.attempts[1].tx; cancel.GasFeeCap().Cmp(big.NewInt(100e9)) != 0 {
+			t.Fatalf("cancellation max fee = %s, want the 100 gwei reservation", cancel.GasFeeCap())
+		}
+		// bump(100 gwei) exceeds the reservation: the cancellation is rebroadcast unchanged.
+		if _, err := m.tryReplace(managerCtx(t.Context(), m), pending, true); err != nil {
+			t.Fatalf("second tryReplace: %v", err)
+		}
+		sent := b.attemptedTransactions()
+		if len(pending.attempts) != 2 || len(sent) != 3 || sent[2].Hash() != pending.attempts[1].hash {
+			t.Fatalf("attempts %d sends %v, want the cancellation rebroadcast unchanged", len(pending.attempts), transactionHashes(sent))
+		}
+	})
+	t.Run("a fill replacement still signs nothing new", func(t *testing.T) {
+		b := newGuardBackend(eth(1_000_000_000_000_000_000))
+		m := New(b, mustSigner(t), big.NewInt(11155111), Config{MaxFeeGwei: 1000}, logr.Discard())
+		pending := guardedPending(t, b, m)
+		b.guardMu.Lock()
+		b.balanceErr = errors.New("read endpoint unavailable")
+		b.guardMu.Unlock()
+
+		if _, err := m.tryReplace(managerCtx(t.Context(), m), pending, false); err != nil {
+			t.Fatalf("tryReplace: %v", err)
+		}
+		if len(pending.attempts) != 1 || len(b.attemptedTransactions()) != 2 {
+			t.Fatalf("attempts %d sends %d, want only the exact rebroadcast", len(pending.attempts), len(b.attemptedTransactions()))
 		}
 	})
 }
@@ -743,5 +862,145 @@ func TestSentLogCarriesFeeFields(t *testing.T) {
 		if !strings.Contains(sent, field) {
 			t.Fatalf("sent log lacks %s: %s", field, sent)
 		}
+	}
+}
+
+// TestEstimateFailureIsNotHiddenByGuardWaits pins that a failing gas estimate ends the stale-head wait
+// and the pinned-balance retries: the send fails with the estimate's error, a real submission error,
+// instead of waiting out the guard's budget and returning a NotAdmitted refusal a solver would retry.
+func TestEstimateFailureIsNotHiddenByGuardWaits(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(b *guardBackend)
+	}{
+		{name: "stale head", setup: func(b *guardBackend) { b.headAges = []time.Duration{time.Hour} }},
+		{name: "balance not found at the pin", setup: func(b *guardBackend) {
+			b.balanceErr = errors.Join(ethereum.NotFound, errors.New("header not found"))
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newGuardBackend(eth(1_000_000_000_000_000_000))
+			b.gasEstimate = 0 // the estimate fails
+			tc.setup(b)
+			// 10 s blocks: a 20 s stale-head budget, so the send must not wait it out.
+			m := newGuardManager(t, b, Config{Fees: FeeConfig{BlockTime: 10 * time.Second}}, nil)
+
+			started := time.Now()
+			res := m.Send(t.Context(), Request{To: common.HexToAddress("0xabc"), Label: "fill"})
+			if errors.Is(res.Err, ErrStaleHead) || res.NotAdmitted || res.Outcome != OutcomeSubmissionError ||
+				res.Err == nil || !strings.Contains(res.Err.Error(), "estimate failed") {
+				t.Fatalf("result = %+v, want the estimate failure as an admitted submission error", res)
+			}
+			if waited := time.Since(started); waited > 5*time.Second {
+				t.Fatalf("estimate failure returned after %s, having waited out the guard", waited)
+			}
+			if len(b.attemptedTransactions()) != 0 {
+				t.Fatal("transaction sent after a failed estimate")
+			}
+		})
+	}
+}
+
+// TestBalanceGuardWithMandatoryTip covers the legacy path with a positive tipGwei: no fee history is
+// read, so the next base fee is grow(latest, 1), the balance is pinned to the header's hash, and the
+// refusal floor and the clamp keep tipGwei.
+func TestBalanceGuardWithMandatoryTip(t *testing.T) {
+	// Latest base fee 10 gwei: pb = 11.25 gwei and the floor is grow(pb, 1) + 2 gwei = 14.65625 gwei.
+	// Legacy prices 2×10 + 2 = 22 gwei: the node suggests 1 gwei and tipGwei 2 is mandatory.
+	const gas = 100_000
+	perGas := func(wei int64) *big.Int { return new(big.Int).Mul(big.NewInt(wei), big.NewInt(gas)) }
+	for _, tc := range []struct {
+		name       string
+		balance    *big.Int
+		wantMaxFee int64
+		wantReason admissionRejectionReason // empty when signed
+	}{
+		{name: "funded send keeps the legacy price", balance: eth(1_000_000_000_000_000_000), wantMaxFee: 22e9},
+		{name: "balance-bound send is clamped with the mandatory tip", balance: perGas(16e9), wantMaxFee: 16e9},
+		{name: "clamped at the floor", balance: perGas(14_656_250_000), wantMaxFee: 14_656_250_000},
+		{
+			name: "one wei below the floor is refused", balance: perGas(14_656_249_999),
+			wantReason: admissionRejectionUnaffordableOneBlock,
+		},
+		{
+			name: "below the next base fee plus tipGwei is unaffordable", balance: perGas(13_249_999_999),
+			wantReason: admissionRejectionUnaffordable,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newGuardBackend(tc.balance)
+			b.baseFee = big.NewInt(10e9) // the fee history's 20 gwei next base fee must not be read
+			m := New(b, mustSigner(t), big.NewInt(11155111), Config{
+				MaxFeeGwei: 50, TipGwei: 2, PollInterval: time.Millisecond,
+			}, logr.Discard())
+			pending, err := m.broadcast(managerCtx(t.Context(), m), Request{
+				To: common.HexToAddress("0xabc"), GasLimit: gas, Label: "fill",
+			})
+			reads, pinned := b.pins()
+			if len(reads) != 1 || pinned[0] != b.head {
+				t.Fatalf("balance pins = %v, want the header %d", pinned, b.head)
+			}
+			if _, byHash := reads[0].Hash(); !byHash || !reads[0].RequireCanonical {
+				t.Fatalf("balance pin %s, want the header hash with requireCanonical", reads[0].String())
+			}
+			if tc.wantReason != "" {
+				if reason, refused := guardRefusalReason(err); !refused || reason != tc.wantReason || pending != nil {
+					t.Fatalf("broadcast = (%v, %v), want a %s refusal", pending, err, tc.wantReason)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("broadcast: %v", err)
+			}
+			tx := pending.attempts[0].tx
+			if tx.GasFeeCap().Int64() != tc.wantMaxFee || tx.GasTipCap().Cmp(big.NewInt(2e9)) != 0 {
+				t.Fatalf("signed fees %s/%s, want %d / the 2 gwei tipGwei", tx.GasFeeCap(), tx.GasTipCap(), tc.wantMaxFee)
+			}
+		})
+	}
+}
+
+// TestHashPinnedBalanceNotFoundEscalates pins that balance reads pinned by header hash that keep
+// finding no block, which is what a header this go-ethereum version hashes differently from the node
+// looks like, page once per streak instead of refusing every send at Info only.
+func TestHashPinnedBalanceNotFoundEscalates(t *testing.T) {
+	cfg := Config{MaxFeeGwei: 50, PollInterval: time.Millisecond, ReplacementInterval: 40 * time.Millisecond}
+	req := Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "fill"}
+	const escalation = "balance reads pinned by header hash keep finding no block"
+	for _, tc := range []struct {
+		name       string
+		offset     int64 // fee history newest block minus the header; -1 pins by number
+		wantErrors int
+	}{
+		{name: "hash pins escalate once per streak", wantErrors: 1},
+		{name: "number pins do not escalate", offset: -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs, log := newLogCapture(0)
+			var mu sync.Mutex
+			b := newGuardBackend(eth(1_000_000_000_000_000_000))
+			b.historyOffset = tc.offset
+			b.balanceErr = errors.Join(ethereum.NotFound, errors.New("header not found"))
+			m := New(b, mustSigner(t), big.NewInt(11155111), cfg, logr.New(&lockedSink{sink: log.GetSink(), mu: &mu}))
+			for range hashPinNotFoundErrorAfter + 2 {
+				if _, err := m.broadcast(managerCtx(t.Context(), m), req); !errors.Is(err, ErrStaleHead) {
+					t.Fatalf("broadcast error = %v, want ErrStaleHead", err)
+				}
+			}
+			b.guardMu.Lock()
+			b.balanceErr = nil
+			b.guardMu.Unlock()
+			if _, err := m.broadcast(managerCtx(t.Context(), m), req); err != nil {
+				t.Fatalf("broadcast after the node found the block: %v", err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if errorLevel, _ := countLogs(*logs, escalation); errorLevel != tc.wantErrors {
+				t.Fatalf("escalation logged %d errors, want %d: %s", errorLevel, tc.wantErrors, strings.Join(*logs, "\n"))
+			}
+			if _, info := countLogs(*logs, "balance reads pinned by header hash recovered"); info != tc.wantErrors {
+				t.Fatalf("recovery logged %d times, want %d", info, tc.wantErrors)
+			}
+		})
 	}
 }
