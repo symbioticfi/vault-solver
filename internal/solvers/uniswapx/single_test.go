@@ -221,6 +221,7 @@ func TestSingleInternalReplacesDiscountAndEncodesOnlyReplacement(t *testing.T) {
 			if reason == "payout exceeds reservation" {
 				failedID = ""
 				first.MaxRate = "900000000000000000"
+				first.Discount = "100000" // Resolving to zero increases the payout beyond the planned 90.
 			}
 			provider := &replacingDiscountProvider{failedID: failedID, fakeDiscountProvider: &fakeDiscountProvider{
 				list: &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{first, second}},

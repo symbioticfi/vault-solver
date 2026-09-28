@@ -113,8 +113,7 @@ orchestration, and mapping validated terms into its executor ABI. Its chain read
 executor, caller, and route facts rather than the protocol config. Reactor binding remains a deployment
 assertion because the PR19 ABI has no getter.
 
-UniswapX logs the selected route's pricing and capacity bounds before signature resolution and preflight.
-Shared rounding, payout validation, and diagnostic units are defined in
+Selected-route debug logs precede signature resolution and preflight. Payout and reservation rules follow
 [LiquidLane conventions](LIQUIDLANE-CONVENTIONS.md#discounts-and-capacity).
 
 - **`EXACT_OUTPUT`:** the strategy solves the concrete requested output against current capacity, price

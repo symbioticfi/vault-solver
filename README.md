@@ -298,7 +298,8 @@ asset and decimals, current physical capacity/rate, adapter minimum discount, to
 gas feeds. Configured adapters scope quoting when present; fill-time discount recovery remains unrestricted,
 matching RFQ solver-mode semantics. A selected discount is resolved again immediately before simulation and
 encoded as a typed `discountSwap`; its adapter, token, output floor, signatures, and expiry window are
-checked fail-closed.
+checked fail-closed. Quotes retain the advertised rate cap; private fills reserve the full expected
+discount payout even when it exceeds the quote.
 
 The order API key is required and read indirectly through `orderServer.apiKeyEnv`. Uniswap's public quote
 contract specifies source-IP allowlisting rather than an application header, so restrict the quote endpoint
@@ -311,8 +312,8 @@ the current `DutchV2OrderEntity`, including nested `cosignerData`, `cosignature`
 Native-asset outputs are currently declined because the supported LiquidLane routes settle ERC-20 vault
 assets.
 Exact-input and exact-output Dutch auctions are supported. Exact-output quotes directly size enough input
-for the requested output, buffer, and gas; rounding or execution output above that requirement remains
-executor surplus. If a Dutch exact-output input grows between planning and execution, the executor consumes
+for the requested output, buffer, and gas. For both order types, output above the order requirement remains
+on the executor. If a Dutch exact-output input grows between planning and execution, the executor consumes
 the planned route input and retains the positive input difference as filler surplus. The Reactor atomically
 enforces the order's aggregate outputs. Multiple outputs are supported when every output uses the same
 ERC-20; mixed-token outputs fail closed because one

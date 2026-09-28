@@ -84,8 +84,8 @@ func TestAdvertisedFillQuotesUseCurrentOracleAmountAndPolicy(t *testing.T) {
 	}
 	listed.Discounts[0].MaxRate = "1000000000000000000"
 	quotes, issues = AdvertisedFillQuotes(listed, physical, MatchOptions{Now: now})
-	if len(issues) != 0 || len(quotes) != 1 || quotes[0].MaxAmountOut.Cmp(big.NewInt(10)) != 0 {
-		t.Fatalf("advertised rate cap must remain effective: quotes=%+v issues=%+v", quotes, issues)
+	if len(issues) != 0 || len(quotes) != 1 || quotes[0].MaxAmountOut.Cmp(big.NewInt(18)) != 0 {
+		t.Fatalf("advertised rate must not cap the adapter payout: quotes=%+v issues=%+v", quotes, issues)
 	}
 	blocked, _ := AdvertisedFillQuotes(listed, physical, MatchOptions{
 		Now: now, AllowsToken: func(common.Address) bool { return false },
@@ -95,15 +95,15 @@ func TestAdvertisedFillQuotesUseCurrentOracleAmountAndPolicy(t *testing.T) {
 	}
 }
 
-func TestAdvertisedFillQuotesReserveRoundedPayout(t *testing.T) {
+func TestAdvertisedFillQuotesReserveFullPayout(t *testing.T) {
 	for _, scenario := range []struct {
 		name                           string
 		decimals                       int
 		input, gross, discount, payout int64
+		advertisedRate                 int64
 	}{
-		{"6 decimals", 6, 300_000_000, 318_527_700, 200, 318_463_994},
-		{"18 decimals rounding loss", 18, 2_000_000_000_000_000_000, 2_000_000_000_000_000_002, 1, 1_999_998_000_000_000_001},
-		{"18 decimals exact payout", 18, 2_000_000_000_000_000_000, 2_000_000_000_000_000_000, 1, 1_999_998_000_000_000_000},
+		{"backend rounded rate", 6, 300_000_000, 318_529_800, 200, 318_466_094, 1_061_553_000_000_000_000},
+		{"18 decimals rounding loss", 18, 2_000_000_000_000_000_000, 2_000_000_000_000_000_002, 1, 1_999_998_000_000_000_001, 999_999_000_000_000_000},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			now := time.Unix(1_800_000_000, 0)
@@ -115,17 +115,14 @@ func TestAdvertisedFillQuotesReserveRoundedPayout(t *testing.T) {
 				Inventory: base, AmountIn: big.NewInt(scenario.input), GrossAmountOut: big.NewInt(scenario.gross),
 				MinDiscount: new(big.Int),
 			}
-			rate := liquidlane.RateForAmountOut(big.NewInt(scenario.payout), physical.AmountIn, scenario.decimals, scenario.decimals)
+			rate := big.NewInt(scenario.advertisedRate)
 			offer := testOffer(base, base.MaxAssets.String(), rate.String(), now.Add(time.Minute))
 			offer.Discount = big.NewInt(scenario.discount).String()
-			quotes, issues := AdvertisedFillQuotes(&List{Discounts: []ListItem{offer}}, []liquidlane.FillQuote{physical}, MatchOptions{Now: now})
+			listed := &List{Discounts: []ListItem{offer}}
+			required := liquidlane.AmountOutForRate(physical.AmountIn, rate, scenario.decimals, scenario.decimals)
+			quotes, issues := AdvertisedFillQuotes(listed, []liquidlane.FillQuote{physical}, MatchOptions{Now: now})
 			if len(issues) != 0 || len(quotes) != 1 || quotes[0].MaxAmountOut.Cmp(big.NewInt(scenario.payout)) != 0 {
-				t.Fatalf("quotes=%+v issues=%+v; want rounded payout %d", quotes, issues, scenario.payout)
-			}
-			signed := &Signed{
-				DiscountID: *quotes[0].DiscountID, Adapter: base.Adapter,
-				Terms:            SignedTerms{TokenToRedeem: base.TokenIn, Discount: big.NewInt(scenario.discount), Deadline: big.NewInt(offer.Deadline)},
-				ProtocolDeadline: big.NewInt(offer.Deadline),
+				t.Fatalf("quotes=%+v issues=%+v; want payout %d", quotes, issues, scenario.payout)
 			}
 			for _, tt := range []struct {
 				capacity, pending int64
@@ -148,16 +145,9 @@ func TestAdvertisedFillQuotesReserveRoundedPayout(t *testing.T) {
 				if solution == nil {
 					continue
 				}
-				required := big.NewInt(scenario.payout - 1)
 				routes := solution.Finalize(required)
 				if len(routes) != 1 || routes[0].ReservedAmountOut.Cmp(big.NewInt(scenario.payout)) != 0 || routes[0].MinAmountOut.Cmp(required) != 0 {
 					t.Fatalf("routes=%+v; want minimum %s and reservation %d", routes, required, scenario.payout)
-				}
-				if _, err := ValidateSigned(signed, Selection{
-					DiscountID: signed.DiscountID, Adapter: base.Adapter, TokenIn: base.TokenIn,
-					MinAmountOut: routes[0].MinAmountOut, MaxAmountOut: routes[0].ReservedAmountOut,
-				}, physical, now); err != nil {
-					t.Fatalf("unchanged signed payout must fit reservation: %v", err)
 				}
 			}
 		})

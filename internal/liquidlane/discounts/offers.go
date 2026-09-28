@@ -125,6 +125,8 @@ func AdvertisedFillQuotes(
 			})
 			continue
 		}
+		// Discount swaps pay the full amount, even when the advertised quote rate is lower.
+		// Plan and reserve that payout rather than an amount capped by the advertised rate.
 		amountOut := liquidlane.AmountOutAfterDiscount(base.GrossAmountOut, offer.Discount)
 		currentRate := liquidlane.RateForAmountOut(
 			amountOut,
@@ -133,16 +135,8 @@ func AdvertisedFillQuotes(
 			base.TokenOutDecimals,
 		)
 		maxRate := minPositive(currentRate, offer.MaxRate)
-		// Account for the rate's lost precision without predicting above the current payout.
-		maxAmountOut := liquidlane.MaxAmountOutForRate(
-			base.AmountIn,
-			maxRate,
-			base.TokenInDecimals,
-			base.TokenOutDecimals,
-		)
-		maxAmountOut = minPositive(maxAmountOut, amountOut)
 		maxAssets := minPositive(offer.MaxAssets, base.MaxAssets)
-		if maxRate.Sign() <= 0 || maxAmountOut.Sign() <= 0 || maxAssets.Sign() <= 0 {
+		if maxRate.Sign() <= 0 || amountOut.Sign() <= 0 || maxAssets.Sign() <= 0 {
 			continue
 		}
 		seen[offer.DiscountID] = true
@@ -158,7 +152,7 @@ func AdvertisedFillQuotes(
 			Inventory:      inventory,
 			AmountIn:       liquidlane.CloneBig(base.AmountIn),
 			GrossAmountOut: liquidlane.CloneBig(base.GrossAmountOut),
-			MaxAmountOut:   maxAmountOut,
+			MaxAmountOut:   amountOut,
 			MinDiscount:    liquidlane.CloneBig(offer.Discount),
 		})
 	}
