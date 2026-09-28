@@ -196,23 +196,36 @@ reservations, so repeated matches within a pair still require fresh fill plannin
 Excess input may be absorbed only into a direct allocation: direct calldata caps output, whereas a signed
 discount prices the entire `amountIn` on-chain and cannot honor an off-chain output cap.
 
+The adapter pays a swap in two floored steps: `getAmountOut(amountIn) = floor(amountIn × price ×
+10^outDec / (1e18 × 10^inDec))`, then `floor(getAmountOut × (1e6 − discount) / 1e6)`. The discount is the
+signed discount of a discount swap, or the adapter `minDiscount` that bounds a direct swap. No single rate
+reproduces both floors for every amount, so exact pricing carries the oracle `price` and the `discount`
+separately (`liquidlane.DiscountedAmountOut`, with exact minimal- and maximal-input inverses). The inventory
+read takes the oracle price from `getAmountOut` at `OraclePriceProbe`, which cancels the decimal scaling,
+and fails a route closed when `getMaxRate` does not reproduce it. Quote candidates built from an inventory
+with a price use this model; candidates without one keep the fixed-rate model.
+
+Backend `maxRate` is the discounted output of one whole input token, floored to collateral base units. It
+is a rounded estimate that can sit on either side of the payout, so it never prices, caps or gates a
+discount leg. It stands in only when no oracle price is known, capped by the adapter's current rate.
+
 For signed discounts:
 
 1. Treat HTTP `nonce` values as base-10 uint256 strings, parse them into `*big.Int`, and reject hex,
    signs, non-digits, and values wider than 256 bits. The EIP-712 value remains the same uint256.
-2. List and validate advertised offers for quote construction.
-3. Never apply `discount` to backend `maxRate` a second time — but do re-derive the rate for the
-   concrete `amountIn` with `ConservativeAdvertisedRate`. The backend floors the discount into the
-   rate while the adapter floors `getAmountOut` first, so the raw rate can price a unit above what the
-   adapter pays, and an over-predicted leg leaves the filler short of the order's signed outputs.
+2. List and validate advertised offers for quote construction, pricing them from the signed `discount`
+   and the current oracle price.
+3. RFQ quote requests carry `adapters[].discount`; a discount leg then prices from the adapter quote at
+   the order amount. Without it (older backends), `ConservativeAdvertisedRate` re-derives a rate that
+   cannot price above what the adapter pays.
 4. Resolve signatures again immediately before fill.
-5. Recheck id, adapter, tokens, current discount bounds, and deadlines.
+5. Recheck id, adapter, tokens, deadlines, and the signed discount against the current adapter minimum,
+   the only discount bound the adapter enforces.
 6. Plan and reserve the full payout, `floor(getAmountOut(amountIn) × (1 − discount / 1e6))`, with the
-   configured capacity buffer. Backend `maxRate` limits quoting, not the signed swap's payout. Fresh
-   signed payouts must cover the selected minimum and fit the reservation.
+   configured capacity buffer. Fresh signed payouts must cover the selected minimum and fit the reservation.
 7. Pass a discount candidate only when the solver's executor can settle `discountSwap` atomically.
 
-Discount discovery, parsing, physical-route matching, cap/rate clipping, advertised fill-quote
+Discount discovery, parsing, physical-route matching, exact pricing, advertised fill-quote
 construction, and fresh signed-term binding/deadline/output validation are shared. Solvers still own when
 resolution happens: LI.FI pre-resolves a bounded candidate set and refreshes adapter state before deciding;
 UniswapX plans from `discounts.AdvertisedFillQuotes` and resolves only the selected route;

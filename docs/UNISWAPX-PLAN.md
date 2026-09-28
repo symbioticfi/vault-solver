@@ -113,8 +113,10 @@ orchestration, and mapping validated terms into its executor ABI. Its chain read
 executor, caller, and route facts rather than the protocol config. Reactor binding remains a deployment
 assertion because the PR19 ABI has no getter.
 
-Selected-route debug logs precede signature resolution and preflight. Payout and reservation rules follow
-[LiquidLane conventions](LIQUIDLANE-CONVENTIONS.md#discounts-and-capacity).
+Selected-route debug logs precede signature resolution and preflight. Pricing, payout and reservation rules
+follow [LiquidLane conventions](LIQUIDLANE-CONVENTIONS.md#discounts-and-capacity): quote candidates carry the
+oracle price read with the inventory and the leg's payout discount, so with no price buffer an exact-input
+quote equals the adapter payout for the same oracle state, and the fill reserves and resolves that payout.
 
 - **`EXACT_OUTPUT`:** the strategy solves the concrete requested output against current capacity, price
   buffer, and gas, and returns the required input. There is no published range; single-source quotes retain a bounded source preference.
@@ -616,8 +618,9 @@ On the ≤500ms path, mirroring `rfq`'s "one multicall, decimals cached" discipl
    request's executable output and, when gas accounting is configured, full estimated fill gas. It returns
    one `amountIn`/`amountOut` pair; below the enabled gas-aware floor or outside current capacity ⇒ decline.
 4. Exact input returns the net output after price buffer and optional gas. Exact output uses the same greedy route
-   selection in output units, adds buffer and gas, and converts the selected output legs directly to input
-   with upward rounding. It neither binary-searches input nor enumerates route combinations; any produced
+   selection in output units, adds buffer and gas, and converts each selected output leg to the minimal input
+   whose adapter payout reaches it, inverting both floored steps. It neither binary-searches input nor
+   enumerates route combinations; any produced
    output above the signed requirement remains executor surplus. No ladder, amount range, or allocation is published. `default` retains no quote route;
    `single` retains the selected source as a bounded preference.
 5. Before publishing the result, recheck the snapshot pointer, quote epoch, and every blocking condition.
@@ -887,6 +890,12 @@ Tracked operational and onboarding steps — **update as items start/finish/drop
 - [ ] Confirm each sourced adapter holds `ALLOCATE_ROLE` on its vault's `UniversalDelegator` (vault-funded
       swaps revert without it) and watch for pending withdrawal-queue sweeps (they zero the vault-funded
       part of `getMaxAssets`).
+- [ ] Grant each restricted token's transfer and redemption permissions to the executor, the adapter and
+      its redemption account, or keep the token out of `permissionedTokens`. On a mainnet fork at block
+      26076942, discount fills through the executor settled only for mROX, PRIME, mHYPER and mM1-USD.
+      JTRSY, JAAA and HYB reverted `TransferBlocked` (none of the three is a hook member), HYBOND
+      `NotKyced(executor)`, mGLOBAL a Midas role check on transfer, and mF-ONE, deJTRSY and deJAAA in the
+      redemption account's `sync()` (Midas role check; Centrifuge `TransferNotAllowed`).
 
 ### 10.4 Beta qualification (real funds, mainnet)
 - [ ] Stand up the quote-webhook endpoint reachably (TLS, registered with Uniswap; source-IP allowlist per

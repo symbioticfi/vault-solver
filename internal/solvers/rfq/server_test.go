@@ -105,6 +105,47 @@ func TestServer_QuoteOK(t *testing.T) {
 	}
 }
 
+func TestServer_QuotePricesSignedDiscountExactly(t *testing.T) {
+	discountID := "0x00000000000000000000000000000000000000000000000000000000000000ab"
+	discountBacked := func(discount string) quoteRequest {
+		body := validQuoteBody()
+		body.Adapters[0].DiscountID = &discountID
+		// The backend's rounded per-token estimate; the signed discount decides the price.
+		body.Adapters[0].MaxRate = "999000000000000000"
+		body.Adapters[0].Discount = &discount
+		return body
+	}
+	srv := testServer()
+	srv.quotes.discountsEnabled = true
+	rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, discountBacked("200"))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("quote = %d, want 200 (body %s)", rr.Code, rr.Body.String())
+	}
+	var resp quoteResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.AmountOut != "999800" { // floor(getAmountOut 1000000 * (1e6 - 200) / 1e6)
+		t.Fatalf("amountOut = %s, want the adapter payout 999800", resp.AmountOut)
+	}
+
+	direct := validQuoteBody()
+	discount := "200"
+	direct.Adapters[0].Discount = &discount
+	for name, tc := range map[string]struct {
+		body quoteRequest
+		want int
+	}{
+		"discount above 100%":         {discountBacked("1000001"), http.StatusBadRequest},
+		"discount without discountId": {direct, http.StatusBadRequest},
+		"malformed discount":          {discountBacked("2%"), http.StatusUnprocessableEntity},
+	} {
+		if got := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, tc.body); got.Code != tc.want {
+			t.Fatalf("%s: code = %d, want %d", name, got.Code, tc.want)
+		}
+	}
+}
+
 func TestServer_QuoteSchemaValidation(t *testing.T) {
 	// Huma validates the request against the struct tags and returns 422 (RFC 9457) on a schema violation.
 	h := testServer().handler()

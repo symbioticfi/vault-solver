@@ -98,6 +98,8 @@ func AllocateInventoryCapacity(
 				item.MaxAssets = itemCap
 				item.MaxRate = liquidlane.CloneBig(item.MaxRate)
 				item.DiscountID = liquidlane.CloneHash(item.DiscountID)
+				item.Price = liquidlane.CloneBig(item.Price)
+				item.Discount = liquidlane.CloneBig(item.Discount)
 				out = append(out, item)
 			}
 			remaining.Sub(remaining, share)
@@ -139,6 +141,8 @@ func ReserveInventoryCapacity(inventory []liquidlane.Inventory, reservations liq
 		item.MaxAssets = capacity
 		item.MaxRate = liquidlane.CloneBig(item.MaxRate)
 		item.DiscountID = liquidlane.CloneHash(item.DiscountID)
+		item.Price = liquidlane.CloneBig(item.Price)
+		item.Discount = liquidlane.CloneBig(item.Discount)
 		out = append(out, item)
 	}
 	return out

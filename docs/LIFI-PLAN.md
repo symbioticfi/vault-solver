@@ -418,6 +418,8 @@ type Strategy interface {
   RFQ-style solvers at both endpoints. Each endpoint is converted to the largest fixed-point rate that
   cannot overquote its integer output, then capped by a linear conservative floor derived from the
   alternatives able to cover each route at `inputHigh`, integer rounding, and configured worst-case complete-plan gas.
+  Candidates built from inventory with an oracle price price each leg exactly like the adapter, which floors
+  `getAmountOut` before its discount, so the floor allows one more unit for each such route.
   The published minimum is revalidated for positive integer output. Two price-movement stages are deducted
   (quote→decision and decision→inclusion). There is no separate LI.FI
   quote planner or minimum-profit setting. If a candidate range starts below the conservative economic floor,

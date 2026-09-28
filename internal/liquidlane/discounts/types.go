@@ -22,8 +22,9 @@ type Offer struct {
 	CollateralDecimals int
 	Discount           *big.Int
 	Deadline           int64
-	// MaxRate is already net of Discount. The backend derives it from the
-	// adapter oracle output and the advertised discount terms.
+	// MaxRate is the backend's advertised rate net of Discount: the discounted output for one
+	// whole TokenToRedeem, floored to collateral base units. It is a rounded estimate that can
+	// differ from the swap payout, so exact pricing uses Discount with the current oracle price.
 	MaxRate   *big.Int
 	MaxAssets *big.Int
 	// BlockNumber is the block MaxAssets was read at; zero when the backend did not report it.

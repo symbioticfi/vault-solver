@@ -18,7 +18,7 @@ import (
 
 const (
 	DefaultMaxTokensPerAdapter = 64
-	inventoryReadsPerRoute     = 4
+	inventoryReadsPerRoute     = 5
 	fillReadsPerRoute          = 4
 )
 
@@ -305,11 +305,16 @@ func (r *Reader) readInventory(ctx context.Context, routes []Route, keepZero boo
 	}
 	calls := make([]chain.Call, 0, len(routes)*inventoryReadsPerRoute)
 	for _, route := range routes {
+		probe, ok := OraclePriceProbe(route.TokenInDecimals, route.TokenOutDecimals)
+		if !ok {
+			probe = new(big.Int) // Keeps the read layout; the price stays unknown.
+		}
 		calls = append(calls,
 			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackPaused()},
 			r.maxAssetsCall(route.Adapter, route.TokenIn),
 			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackGetMaxRate(route.TokenIn)},
 			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackMinDiscount(route.TokenIn)},
+			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackGetAmountOut(route.TokenIn, probe)},
 		)
 	}
 	res, err := r.chain.Multicall(ctx, calls)
@@ -323,6 +328,7 @@ func (r *Reader) readInventory(ctx context.Context, routes []Route, keepZero boo
 	for i, route := range routes {
 		base := i * inventoryReadsPerRoute
 		paused, maxAssetsRes, maxRateRes, minDiscountRes := res[base], res[base+1], res[base+2], res[base+3]
+		priceRes := res[base+4]
 		if !unpaused(paused) {
 			continue
 		}
@@ -339,11 +345,45 @@ func (r *Reader) readInventory(ctx context.Context, routes []Route, keepZero boo
 		if !keepZero && (maxAssets.Sign() <= 0 || maxRate.Sign() <= 0) {
 			continue
 		}
+		price, ok := r.oraclePrice(route, priceRes, maxRate, minDiscount)
+		if !ok {
+			continue
+		}
 		inventory := DirectInventory(route, maxAssets, maxRate)
 		inventory.AdapterMinDiscount = CloneBig(minDiscount)
+		inventory.Price = price
 		out = append(out, inventory)
 	}
 	return out, nil
+}
+
+// oraclePrice decodes the oracle price read through getAmountOut at the price probe. getMaxRate
+// derives from the same price in the same block, so a mismatch means the adapter no longer pays
+// like DiscountedAmountOut and the route fails closed. A nil price with ok leaves the route on
+// rate-based pricing when its decimals cannot express the probe.
+func (r *Reader) oraclePrice(route Route, result chain.CallResult, maxRate, minDiscount *big.Int) (*big.Int, bool) {
+	if _, ok := OraclePriceProbe(route.TokenInDecimals, route.TokenOutDecimals); !ok {
+		return nil, true
+	}
+	if !result.Success {
+		return nil, false
+	}
+	price, err := llAdapter.UnpackGetAmountOut(result.ReturnData)
+	if err != nil || price == nil || price.Sign() <= 0 {
+		return nil, false
+	}
+	if expected := DiscountedRate(price, minDiscount); expected.Cmp(maxRate) != 0 {
+		r.log.Error(errors.New("adapter max rate does not match its oracle price"), "liquidlane: route skipped",
+			"adapter", route.Adapter.Hex(),
+			"tokenIn", route.TokenIn.Hex(),
+			"price", price.String(),
+			"minDiscountPpm", minDiscount.String(),
+			"maxRate", maxRate.String(),
+			"expectedMaxRate", expected.String(),
+		)
+		return nil, false
+	}
+	return price, true
 }
 
 // ReadGasSnapshot returns the latest adapter-local acquire balances and shared vault liquidity needed

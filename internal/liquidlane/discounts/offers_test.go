@@ -59,6 +59,33 @@ func TestMatchInventoriesRejectsDiscountBelowCurrentAdapterMinimum(t *testing.T)
 	}
 }
 
+func TestMatchInventoriesPricesFromOraclePriceAndSignedDiscount(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	base := testPhysicalInventory()
+	base.Price = big.NewInt(1_061_774_000_000_000_000)
+	base.AdapterMinDiscount = new(big.Int)
+	base.MaxRate = liquidlane.DiscountedRate(base.Price, base.AdapterMinDiscount)
+	for _, advertised := range []string{
+		"1061553000000000000", // backend rate: the discounted output for one whole token, floored
+		"2000000000000000000", // stale or wrong advertised rates neither gate nor price the route
+	} {
+		offer := testOffer(base, "1000", advertised, now.Add(time.Minute))
+		offer.Discount = "200"
+
+		inventory, issues := MatchInventories(
+			&List{Discounts: []ListItem{offer}}, []liquidlane.Inventory{base}, MatchOptions{Now: now},
+		)
+		if len(issues) != 0 || len(inventory) != 1 {
+			t.Fatalf("advertised %s: inventory=%+v issues=%+v", advertised, inventory, issues)
+		}
+		got := inventory[0]
+		if got.Price.Cmp(base.Price) != 0 || got.Discount.Cmp(big.NewInt(200)) != 0 ||
+			got.MaxRate.Cmp(liquidlane.DiscountedRate(base.Price, big.NewInt(200))) != 0 {
+			t.Fatalf("advertised %s: priced inventory = %+v", advertised, got)
+		}
+	}
+}
+
 func TestAdvertisedFillQuotesUseCurrentOracleAmountAndPolicy(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	base := testPhysicalInventory()
@@ -124,6 +151,11 @@ func TestAdvertisedFillQuotesReserveFullPayout(t *testing.T) {
 			if len(issues) != 0 || len(quotes) != 1 || quotes[0].MaxAmountOut.Cmp(big.NewInt(scenario.payout)) != 0 {
 				t.Fatalf("quotes=%+v issues=%+v; want payout %d", quotes, issues, scenario.payout)
 			}
+			signed := &Signed{
+				DiscountID: *quotes[0].DiscountID, Adapter: base.Adapter,
+				Terms:            SignedTerms{TokenToRedeem: base.TokenIn, Discount: big.NewInt(scenario.discount), Deadline: big.NewInt(offer.Deadline)},
+				ProtocolDeadline: big.NewInt(offer.Deadline),
+			}
 			for _, tt := range []struct {
 				capacity, pending int64
 				wantFill          bool
@@ -149,12 +181,20 @@ func TestAdvertisedFillQuotesReserveFullPayout(t *testing.T) {
 				if len(routes) != 1 || routes[0].ReservedAmountOut.Cmp(big.NewInt(scenario.payout)) != 0 || routes[0].MinAmountOut.Cmp(required) != 0 {
 					t.Fatalf("routes=%+v; want minimum %s and reservation %d", routes, required, scenario.payout)
 				}
+				// The unchanged signed discount must resolve inside the plan: this is the fill the
+				// rate-capped reservation used to abort with "exceeds the selected capacity reservation".
+				if _, err := ValidateSigned(signed, Selection{
+					DiscountID: signed.DiscountID, Adapter: base.Adapter, TokenIn: base.TokenIn,
+					MinAmountOut: routes[0].MinAmountOut, MaxAmountOut: routes[0].ReservedAmountOut,
+				}, physical, now); err != nil {
+					t.Fatalf("unchanged signed payout must fit the plan: %v", err)
+				}
 			}
 		})
 	}
 }
 
-func TestAdvertisedFillQuotesRejectStaleAdapterEconomics(t *testing.T) {
+func TestAdvertisedFillQuotesCheckSignedDiscountNotAdvertisedRate(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	base := testPhysicalInventory()
 	physical := []liquidlane.FillQuote{{
@@ -167,11 +207,14 @@ func TestAdvertisedFillQuotesRejectStaleAdapterEconomics(t *testing.T) {
 	}}
 
 	tests := []struct {
-		name     string
-		discount string
-		maxRate  string
+		name       string
+		discount   string
+		maxRate    string
+		wantPayout int64 // zero means rejected
 	}{
-		{name: "rate above current maximum", discount: "100000", maxRate: "901"},
+		// The adapter pays floor(10 * 0.9) whatever the backend's rounded rate says.
+		{name: "advertised rate above current maximum", discount: "100000", maxRate: "901", wantPayout: 9},
+		// The adapter reverts a discount below its current minimum.
 		{name: "discount below current minimum", discount: "99999", maxRate: "900"},
 	}
 	for _, tt := range tests {
@@ -181,8 +224,14 @@ func TestAdvertisedFillQuotesRejectStaleAdapterEconomics(t *testing.T) {
 			quotes, issues := AdvertisedFillQuotes(
 				&List{Discounts: []ListItem{offer}}, physical, MatchOptions{Now: now},
 			)
-			if len(quotes) != 0 || len(issues) != 1 {
-				t.Fatalf("quotes=%+v issues=%+v", quotes, issues)
+			if tt.wantPayout == 0 {
+				if len(quotes) != 0 || len(issues) != 1 {
+					t.Fatalf("quotes=%+v issues=%+v", quotes, issues)
+				}
+				return
+			}
+			if len(issues) != 0 || len(quotes) != 1 || quotes[0].MaxAmountOut.Cmp(big.NewInt(tt.wantPayout)) != 0 {
+				t.Fatalf("quotes=%+v issues=%+v; want payout %d", quotes, issues, tt.wantPayout)
 			}
 		})
 	}
@@ -222,14 +271,15 @@ func FuzzAdvertisedFillQuotesStayInsideCurrentFacts(f *testing.F) {
 			return
 		}
 		quote := quotes[0]
-		if quote.MaxAmountOut.Sign() <= 0 || quote.MaxAmountOut.Cmp(big.NewInt(gross)) > 0 {
-			t.Fatalf("amountOut = %s, gross = %d", quote.MaxAmountOut, gross)
+		payout := liquidlane.AmountOutAfterDiscount(big.NewInt(gross), big.NewInt(discount))
+		if quote.MaxAmountOut.Sign() <= 0 || quote.MaxAmountOut.Cmp(payout) != 0 {
+			t.Fatalf("amountOut = %s, adapter payout = %s", quote.MaxAmountOut, payout)
 		}
 		if quote.MaxAssets.Sign() <= 0 || quote.MaxAssets.Cmp(big.NewInt(maxAssets)) > 0 {
 			t.Fatalf("maxAssets = %s, physical = %d", quote.MaxAssets, maxAssets)
 		}
-		if quote.MaxRate.Cmp(base.MaxRate) > 0 {
-			t.Fatalf("maxRate = %s, physical = %s", quote.MaxRate, base.MaxRate)
+		if want := liquidlane.RateForAmountOut(payout, big.NewInt(amountIn), 6, 6); quote.MaxRate.Cmp(want) != 0 {
+			t.Fatalf("maxRate = %s, payout rate = %s", quote.MaxRate, want)
 		}
 	})
 }

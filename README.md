@@ -111,7 +111,11 @@ later fill plans subtract every reservation until the order expires or fails; an
 reporting expires locally at its own deadline. When the backend reports the block an adapter's `maxAssets`
 was read at (`adapters[].blockNumber` on `/quote`), a confirmed fill is subtracted only from snapshots older
 than its inclusion block, for a few hours after the order is filled, and never from newer ones, which
-already reflect it. Fills are still
+already reflect it. Discount-backed `/quote` entries may carry the signed discount as `adapters[].discount`
+(ppm); quotes and fill plans then price that leg exactly as the adapter pays it at the order amount,
+`floor(getAmountOut(amountIn) * (1e6 - discount) / 1e6)`, instead of from the rounded `maxRate`. The
+`/quote` schema rejects unknown fields, so deploy this solver version before a backend that sends
+`adapters[].discount`. Fills are still
 sent one at a time on the shared nonce lane. Reservations are local to the process and are not restored
 after a restart.
 Design, config, and roadmap:
@@ -294,12 +298,14 @@ filters the newest all-status snapshot locally and clears the unknown state only
 the configured lookback cutoff.
 
 In internal mode, advertised LiquidLane routes are resolved on-chain and checked against their advertised
-asset and decimals, current physical capacity/rate, adapter minimum discount, token policy, and configured
+asset and decimals, current physical capacity, adapter minimum discount, token policy, and configured
 gas feeds. Configured adapters scope quoting when present; fill-time discount recovery remains unrestricted,
 matching RFQ solver-mode semantics. A selected discount is resolved again immediately before simulation and
 encoded as a typed `discountSwap`; its adapter, token, output floor, signatures, and expiry window are
-checked fail-closed. Quotes retain the advertised rate cap; private fills reserve the full expected
-discount payout even when it exceeds the quote.
+checked fail-closed. Quotes and fills price every leg as the adapter pays it: the oracle price read with
+the inventory and the signed discount (or the adapter minimum for direct routes), floored in the adapter's
+order. The backend's advertised `maxRate` is a rounded estimate and never prices or gates a discount. With
+`priceBufferBps: 0`, an exact-input quote equals the payout, and the fill reserves and resolves exactly it.
 
 The order API key is required and read indirectly through `orderServer.apiKeyEnv`. Uniswap's public quote
 contract specifies source-IP allowlisting rather than an application header, so restrict the quote endpoint

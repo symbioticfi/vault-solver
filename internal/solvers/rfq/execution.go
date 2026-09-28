@@ -704,6 +704,7 @@ func (e *executionService) discountInventories(
 		item := liquidlane.DiscountInventory(
 			route, offer.MaxAssets, offer.MaxRate, offer.DiscountID, time.Unix(offer.Deadline, 0),
 		)
+		item.Discount = liquidlane.CloneBig(offer.Discount)
 		item.BlockNumber = offer.BlockNumber
 		out = append(out, item)
 	}

@@ -38,6 +38,10 @@ type quoteAdapter struct {
 	MaxAssets     string  `json:"maxAssets" pattern:"^[0-9]+$"`
 	MaxRate       string  `json:"maxRate" pattern:"^[0-9]+$"`
 	DiscountID    *string `json:"discountId,omitempty" pattern:"^0x[a-fA-F0-9]{64}$"`
+	// Discount is the signed discount (ppm) of a discountId entry. The adapter pays
+	// floor(getAmountOut(amountIn) * (1e6 - discount) / 1e6), which maxRate only approximates.
+	// Optional until every backend sends it.
+	Discount *string `json:"discount,omitempty" pattern:"^[0-9]+$"`
 	// BlockNumber is the block maxAssets was read at. Optional until every backend reports it.
 	BlockNumber *string `json:"blockNumber,omitempty" pattern:"^[0-9]+$"`
 }
@@ -148,6 +152,10 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (
 		h := common.HexToHash(*v.DiscountID)
 		discountID = &h
 	}
+	discount, err := v.parseDiscount(index, discountID != nil)
+	if err != nil {
+		return solverInventory{}, err
+	}
 	var blockNumber uint64
 	if v.BlockNumber != nil && *v.BlockNumber != "" {
 		blockNumber, err = strconv.ParseUint(*v.BlockNumber, 10, 64)
@@ -159,9 +167,29 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (
 	inventory := liquidlane.DirectInventory(route, maxAssets, maxRate)
 	if discountID != nil {
 		inventory = liquidlane.DiscountInventory(route, maxAssets, maxRate, *discountID, time.Time{})
+		inventory.Discount = discount
 	}
 	inventory.BlockNumber = blockNumber
 	return inventory, nil
+}
+
+// parseDiscount validates the optional signed discount. It belongs to discount-backed entries only
+// and, like the on-chain discount, cannot exceed 100%.
+func (v *quoteAdapter) parseDiscount(index int, discountBacked bool) (*big.Int, error) {
+	if v.Discount == nil || *v.Discount == "" {
+		return nil, nil
+	}
+	if !discountBacked {
+		return nil, errors.Errorf("%s: requires discountId", idxField(index, "discount"))
+	}
+	discount, err := parseUint256(*v.Discount, idxField(index, "discount"))
+	if err != nil {
+		return nil, err
+	}
+	if discount.Cmp(big.NewInt(liquidlane.DiscountPrecision)) > 0 {
+		return nil, errors.Errorf("%s: must be <= %d", idxField(index, "discount"), liquidlane.DiscountPrecision)
+	}
+	return discount, nil
 }
 
 // parseUint256 parses a base-10 non-negative integer string into a big.Int.

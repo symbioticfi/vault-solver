@@ -49,6 +49,12 @@ type Inventory struct {
 	// AdapterMinDiscount is the adapter's current minimum accepted discount in parts per million.
 	// It is a physical validation fact, not part of the strategy wire shape.
 	AdapterMinDiscount *big.Int `json:"-"`
+	// Price is the adapter oracle price (1e18) read with MaxRate, when known. With the payout
+	// discount it prices amounts exactly like the adapter (see DiscountedAmountOut).
+	Price *big.Int `json:"-"`
+	// Discount is the signed discount (ppm) a discount-backed route pays with. Direct routes
+	// leave it nil: their payout is bounded by AdapterMinDiscount instead.
+	Discount *big.Int `json:"-"`
 	// BlockNumber is the block the snapshot was read at when the source reports it; zero is unknown.
 	// It is a freshness fact for reservation accounting, not part of the strategy wire shape.
 	BlockNumber uint64 `json:"-"`
@@ -71,6 +77,43 @@ type QuoteCandidate struct {
 
 	DiscountID *common.Hash `json:"discountId"`
 	ValidUntil time.Time    `json:"validUntil"`
+
+	// Price and Discount, when both set, price amounts exactly like the adapter and Rate is
+	// DiscountedRate(Price, Discount), kept for ranking. Otherwise amounts follow Rate.
+	Price    *big.Int `json:"-"`
+	Discount *big.Int `json:"-"`
+}
+
+// PayoutDiscount is the discount the adapter applies to this route's payout: the signed discount
+// on discount-backed routes and the adapter minimum on direct ones. Nil when unknown.
+func (i Inventory) PayoutDiscount() *big.Int {
+	if i.DiscountID != nil {
+		return i.Discount
+	}
+	return i.AdapterMinDiscount
+}
+
+// ExactPricing reports whether the candidate carries the adapter's price and payout discount.
+func (c QuoteCandidate) ExactPricing() bool {
+	return validPricing(c.Price, c.Discount)
+}
+
+// AmountOutFor returns the candidate's output for amountIn, before its MaxAmountOut cap.
+func (c QuoteCandidate) AmountOutFor(amountIn *big.Int) *big.Int {
+	if c.ExactPricing() {
+		return DiscountedAmountOut(amountIn, c.Price, c.Discount, c.Route.TokenInDecimals, c.Route.TokenOutDecimals)
+	}
+	return AmountOutForRate(amountIn, c.Rate, c.Route.TokenInDecimals, c.Route.TokenOutDecimals)
+}
+
+// AmountInFor returns the smallest input whose output reaches amountOut.
+func (c QuoteCandidate) AmountInFor(amountOut *big.Int) *big.Int {
+	if c.ExactPricing() {
+		return MinAmountInForDiscountedAmountOut(
+			amountOut, c.Price, c.Discount, c.Route.TokenInDecimals, c.Route.TokenOutDecimals,
+		)
+	}
+	return MinAmountInForAmountOut(amountOut, c.Rate, c.Route.TokenInDecimals, c.Route.TokenOutDecimals)
 }
 
 // FillQuote is a current adapter quote for one concrete amountIn.

@@ -421,25 +421,24 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   single-route constraint above. A richer quoting strategy is a later follow-up (mirrors the
   3F pricing TODO), or an operator can plug their own via the `webhook` strategy (see the strategy
   layer below).
-- **Discount-leg rate rounding** — a discount leg prices off the backend's advertised `maxRate`, which
-  is the adapter oracle price with the discount already applied *and floored*. The adapter rounds down
-  in the opposite order: `getAmountOut` floors `amountIn × price × 10^outDec / (1e18 × 10^inDec)`
-  first, then `swap(DiscountSwap, ...)` applies the discount and floors again. The two nested roundings
-  differ by at most one unit, and the difference falls our way often (roughly a fifth to a half of
-  amounts at a non-zero discount) — so pricing at the raw `maxRate` predicts one unit more output than
-  the adapter delivers. That is not an adapter revert (the adapter computes `amountOut` itself and
-  `InvalidSwapRate` cannot trigger, since `discount ≥ minDiscount`); it reverts in
-  `Reactor._fill`, which pulls the order's *signed* outputs out of the Executor after `execute()`
-  returns. With no `priceBufferBps` in RFQ and `Finalize` distributing the full achievable output, the
-  slack is exactly zero whenever the price has not moved since the quote, so the fill fails gas
-  estimation and the order retries until it expires. `NormalizeOracleInventory` therefore re-derives
-  every discount candidate's rate through `liquidlane.ConservativeAdvertisedRate`, which shaves one
-  unit off the predicted output and converts it back to a rate; the round trip through
-  `RateForAmountOut` floors, so downstream `AmountOutForRate` call sites need no change. Direct legs
-  are unaffected — they already re-derive their rate from a live `getAmountOut` read. The exact
-  alternative (clamp against `AmountOutAfterDiscount(GrossAmountOut, discount)`, as
-  `discounts.AdvertisedFillQuotes` does) needs the discount ppm, which the `/quote` request's
-  `adapters[]` entries do not carry; revisit if that field is ever added to the backend contract.
+- **Discount-leg pricing** — the adapter pays a discount swap in two floored steps: `getAmountOut`
+  floors `amountIn × price × 10^outDec / (1e18 × 10^inDec)`, then `swap(DiscountSwap, ...)` applies the
+  signed discount and floors again. The backend's advertised `maxRate` cannot reproduce that: it is the
+  discounted output of one whole input token, floored to collateral base units, so it can price either
+  side of the payout. Pricing above it is not an adapter revert (`InvalidSwapRate` cannot trigger, since
+  `discount ≥ minDiscount`); it reverts in `Reactor._fill`, which pulls the order's *signed* outputs out
+  of the Executor after `execute()` returns. With no `priceBufferBps` in RFQ the slack is zero whenever
+  the price has not moved since the quote, so such a fill retries until the order expires.
+  Discount-backed `adapters[]` entries therefore carry the signed discount as `adapters[].discount`
+  (optional until every backend sends it), and fill-time discount inventory takes it from `/discounts`.
+  `NormalizeOracleInventory` prices such a leg from the live `getAmountOut` at the order amount,
+  `AmountOutAfterDiscount(GrossAmountOut, discount)`, converted to a rate whose round trip floors: the
+  candidate never prices above the payout and gives up at most one unit. It drops a discount below the
+  adapter's current minimum, which the adapter would revert. Without the field, discount legs fall back
+  to `liquidlane.ConservativeAdvertisedRate`, which shaves one unit off the advertised rate's output.
+  Direct legs already re-derive their rate from the same live `getAmountOut` read. Huma rejects unknown
+  request fields, so this solver version must be deployed before a backend that sends `discount`
+  (symbioticfi/rfq-backend#403).
 - **Quote latency** — `/quote` is synchronous in the backend's fan-out, so keep it cheap: pricing is
   one `getAmountOut` multicall, and `tokenIn` decimals are read once and cached. A warm quote is a
   single multicall; only the first quote for a not-yet-seen `tokenIn` adds a one-off `decimals` read.
