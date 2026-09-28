@@ -6,48 +6,13 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
-)
-
-// UncoveredInputPolicy describes whether a LiquidLane quote must source output
-// for every input unit or may absorb excess input as price impact.
-type UncoveredInputPolicy uint8
-
-const (
-	RejectUncoveredInput UncoveredInputPolicy = iota
-	AbsorbUncoveredInput
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 )
 
 const insufficientCapacityReason = "insufficient-capacity"
 
-// QuoteTask is a protocol-neutral LiquidLane pricing problem. Exactly one of
-// ExactInput and ExactOutput must be set.
-type QuoteTask struct {
-	ExactInput  *big.Int
-	ExactOutput *big.Int
-
-	Candidates []liquidlane.QuoteCandidate
-	MaxRoutes  int
-	MinInput   *big.Int
-
-	OutputBufferBps int
-	InputPolicy     UncoveredInputPolicy
-	GasPricing      *liquidstrategies.GasPricing
-	Trace           liquidstrategies.DecisionTrace
-}
-
-// QuoteSolution is the priced amount pair and the LiquidLane allocation that
-// produced it. Protocol adapters may omit the allocation from their wire reply.
-type QuoteSolution struct {
-	AmountIn       *big.Int
-	GrossAmountOut *big.Int
-	GasCost        *big.Int
-	AmountOut      *big.Int
-	Allocations    []Allocation
-}
-
 // SolveQuote prices one exact-input or exact-output LiquidLane task.
-func SolveQuote(task QuoteTask) (*QuoteSolution, error) {
+func SolveQuote(task strategies.QuoteTask) (*strategies.QuoteSolution, error) {
 	mode := "exact-output"
 	if task.ExactInput != nil {
 		mode = "exact-input"
@@ -66,17 +31,17 @@ func SolveQuote(task QuoteTask) (*QuoteSolution, error) {
 	if task.OutputBufferBps < 0 || task.OutputBufferBps >= bpsDenominator {
 		return nil, errors.Errorf("outputBufferBps: must be in [0,%d)", bpsDenominator)
 	}
-	if task.InputPolicy != RejectUncoveredInput && task.InputPolicy != AbsorbUncoveredInput {
+	if task.InputPolicy != strategies.RejectUncoveredInput && task.InputPolicy != strategies.AbsorbUncoveredInput {
 		return nil, errors.New("invalid uncovered input policy")
 	}
-	if task.ExactOutput != nil && task.InputPolicy == AbsorbUncoveredInput {
+	if task.ExactOutput != nil && task.InputPolicy == strategies.AbsorbUncoveredInput {
 		return nil, errors.New("exact-output quote cannot absorb uncovered input")
 	}
 	if task.MinInput != nil && task.MinInput.Sign() < 0 {
 		return nil, errors.New("minInput: must be non-negative")
 	}
 	routes := newAllocator(task.Candidates)
-	var solution *QuoteSolution
+	var solution *strategies.QuoteSolution
 	if task.ExactInput != nil {
 		solution = solveExactInputQuote(task, routes, task.ExactInput, task.MaxRoutes)
 	} else {
@@ -87,11 +52,11 @@ func SolveQuote(task QuoteTask) (*QuoteSolution, error) {
 }
 
 func solveExactInputQuote(
-	task QuoteTask,
+	task strategies.QuoteTask,
 	allocator allocator,
 	amountIn *big.Int,
 	maxRoutes int,
-) *QuoteSolution {
+) *strategies.QuoteSolution {
 	if amountIn == nil || amountIn.Sign() <= 0 ||
 		(task.MinInput != nil && amountIn.Cmp(task.MinInput) < 0) {
 		task.Trace.Decline(
@@ -104,7 +69,7 @@ func solveExactInputQuote(
 	allocation := allocator.allocateExactInputWithPolicy(
 		amountIn,
 		maxRoutes,
-		task.InputPolicy == RejectUncoveredInput,
+		task.InputPolicy == strategies.RejectUncoveredInput,
 	)
 	if len(allocation.Allocations) == 0 {
 		reason := "no-allocation"
@@ -119,7 +84,7 @@ func solveExactInputQuote(
 		return nil
 	}
 	if allocation.Remaining.Sign() != 0 {
-		if task.InputPolicy == RejectUncoveredInput {
+		if task.InputPolicy == strategies.RejectUncoveredInput {
 			task.Trace.Decline(
 				"quote", insufficientCapacityReason,
 				"amountIn", amountIn.String(),
@@ -161,14 +126,14 @@ func solveExactInputQuote(
 		)
 		return nil
 	}
-	return &QuoteSolution{
+	return &strategies.QuoteSolution{
 		AmountIn: liquidlane.CloneBig(amountIn), GrossAmountOut: grossAmountOut,
 		GasCost: gasCost, AmountOut: amountOut,
 		Allocations: cloneAllocations(allocation.Allocations),
 	}
 }
 
-func solveExactOutputQuote(task QuoteTask, allocator allocator) *QuoteSolution {
+func solveExactOutputQuote(task strategies.QuoteTask, allocator allocator) *strategies.QuoteSolution {
 	if task.ExactOutput == nil || task.ExactOutput.Sign() <= 0 {
 		task.Trace.Decline("quote", "invalid-exact-output")
 		return nil
@@ -198,7 +163,7 @@ func solveExactOutputQuote(task QuoteTask, allocator allocator) *QuoteSolution {
 	return solution
 }
 
-func solveExactOutputQuoteGreedy(task QuoteTask, allocator allocator) *QuoteSolution {
+func solveExactOutputQuoteGreedy(task strategies.QuoteTask, allocator allocator) *strategies.QuoteSolution {
 	targetGross := grossOutputForNet(task.ExactOutput, new(big.Int), task.OutputBufferBps)
 	for targetGross.Sign() > 0 {
 		allocation := allocator.allocateExactOutput(targetGross, task.MaxRoutes)
@@ -220,7 +185,7 @@ func solveExactOutputQuoteGreedy(task QuoteTask, allocator allocator) *QuoteSolu
 		netOutput := applyBpsDown(allocation.TotalAmountOut, bpsDenominator-task.OutputBufferBps)
 		netOutput.Sub(netOutput, gasCost)
 		if netOutput.Cmp(task.ExactOutput) >= 0 {
-			return &QuoteSolution{
+			return &strategies.QuoteSolution{
 				AmountIn: allocation.TotalAmountIn, GrossAmountOut: liquidlane.CloneBig(allocation.TotalAmountOut),
 				GasCost: gasCost, AmountOut: liquidlane.CloneBig(task.ExactOutput),
 				Allocations: cloneAllocations(allocation.Allocations),
@@ -252,10 +217,10 @@ func grossOutputForNet(netOutput, gasCost *big.Int, outputBufferBps int) *big.In
 	)
 }
 
-func quoteGasLegs(allocations []Allocation) []liquidstrategies.GasLeg {
-	legs := make([]liquidstrategies.GasLeg, len(allocations))
+func quoteGasLegs(allocations []strategies.QuoteAllocation) []strategies.GasLeg {
+	legs := make([]strategies.GasLeg, len(allocations))
 	for index, allocation := range allocations {
-		legs[index] = liquidstrategies.GasLeg{
+		legs[index] = strategies.GasLeg{
 			Route: allocation.Candidate.Route, AmountOut: allocation.AmountOut,
 			Private: allocation.Candidate.DiscountID != nil,
 		}
@@ -263,10 +228,10 @@ func quoteGasLegs(allocations []Allocation) []liquidstrategies.GasLeg {
 	return legs
 }
 
-func cloneAllocations(allocations []Allocation) []Allocation {
-	out := make([]Allocation, len(allocations))
+func cloneAllocations(allocations []strategies.QuoteAllocation) []strategies.QuoteAllocation {
+	out := make([]strategies.QuoteAllocation, len(allocations))
 	for index, allocation := range allocations {
-		out[index] = Allocation{
+		out[index] = strategies.QuoteAllocation{
 			Candidate: allocation.Candidate,
 			AmountIn:  liquidlane.CloneBig(allocation.AmountIn),
 			AmountOut: liquidlane.CloneBig(allocation.AmountOut),
@@ -275,7 +240,7 @@ func cloneAllocations(allocations []Allocation) []Allocation {
 	return out
 }
 
-func traceQuoteSolution(trace liquidstrategies.DecisionTrace, mode string, solution *QuoteSolution) {
+func traceQuoteSolution(trace strategies.DecisionTrace, mode string, solution *strategies.QuoteSolution) {
 	if trace == nil || solution == nil {
 		return
 	}

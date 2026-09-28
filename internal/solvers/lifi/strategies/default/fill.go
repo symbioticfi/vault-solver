@@ -62,7 +62,7 @@ func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.
 	if err != nil {
 		return nil, err
 	}
-	allocation, err := liquidgreedy.SolveFill(liquidgreedy.FillTask{
+	allocation, err := liquidgreedy.SolveFill(liquidstrategies.FillTask{
 		TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: input.AmountIn,
 		Quotes: input.Quotes, Reservations: input.Reservations, ValidAfter: validAfter,
 		MaxRoutes: maxRoutes, PriceBufferBps: s.cfg.PriceBufferBps,

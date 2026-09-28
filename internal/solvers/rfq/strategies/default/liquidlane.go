@@ -6,6 +6,7 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 )
@@ -74,11 +75,11 @@ func solveQuote(
 	candidates []liquidlane.QuoteCandidate,
 ) (*types.QuoteOutput, error) {
 	maxRoutes := len(candidates)
-	inputPolicy := liquidgreedy.AbsorbUncoveredInput
+	inputPolicy := strategies.AbsorbUncoveredInput
 	if input.RequireSingleRoute {
 		maxRoutes = 1
 	}
-	solution, err := liquidgreedy.SolveQuote(liquidgreedy.QuoteTask{
+	solution, err := liquidgreedy.SolveQuote(strategies.QuoteTask{
 		ExactInput: input.AmountIn, Candidates: candidates, MaxRoutes: maxRoutes,
 		InputPolicy: inputPolicy,
 	})
@@ -104,14 +105,14 @@ func solveQuote(
 func rfqFillTask(
 	input types.FillInput,
 	candidates []liquidlane.QuoteCandidate,
-) (liquidgreedy.FillTask, map[liquidlane.CandidateID]liquidlane.QuoteCandidate, error) {
+) (strategies.FillTask, map[liquidlane.CandidateID]liquidlane.QuoteCandidate, error) {
 	quotes := make([]liquidlane.FillQuote, 0, len(candidates))
 	sources := make(map[liquidlane.CandidateID]liquidlane.QuoteCandidate, len(candidates))
 	for _, candidate := range candidates {
 		route := candidate.Route
 		candidateID := liquidlane.NewCandidateID(route, candidate.DiscountID)
 		if candidate.ID != candidateID {
-			return liquidgreedy.FillTask{}, nil, errors.Errorf("candidate %q has invalid identity", candidate.ID)
+			return strategies.FillTask{}, nil, errors.Errorf("candidate %q has invalid identity", candidate.ID)
 		}
 		sources[candidateID] = candidate
 		quotes = append(quotes, liquidlane.FillQuote{
@@ -125,11 +126,11 @@ func rfqFillTask(
 		})
 	}
 	maxRoutes := len(quotes)
-	inputPolicy := liquidgreedy.AbsorbUncoveredInput
+	inputPolicy := strategies.AbsorbUncoveredInput
 	if input.RequireSingleRoute {
 		maxRoutes = 1
 	}
-	return liquidgreedy.FillTask{
+	return strategies.FillTask{
 		TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: liquidlane.CloneBig(input.AmountIn),
 		Quotes: quotes, ValidAfter: input.Now, MaxRoutes: maxRoutes, InputPolicy: inputPolicy,
 	}, sources, nil

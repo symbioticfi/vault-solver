@@ -1,7 +1,7 @@
 # LiquidLane conventions
 
 LiquidLane is shared liquidity infrastructure, not a solver. This document is the compact standard for
-RFQ, LI.FI, OEV, future UniswapX, and any new solver that consumes `LiquidLaneAdapter` state.
+RFQ, LI.FI, OEV, UniswapX, and any new solver that consumes `LiquidLaneAdapter` state.
 
 ## Ownership
 
@@ -9,8 +9,9 @@ RFQ, LI.FI, OEV, future UniswapX, and any new solver that consumes `LiquidLaneAd
 |---|---|
 | `internal/liquidlane` | adapter/vault/route types, latest-state reads, direct authorization, ids, rate math, and the pending-capacity ledger |
 | `internal/liquidlane/snapshot` | common direct/physical inventory, amount-specific fill quote, authorization, and optional gas snapshot composition |
-| `internal/liquidlane/strategies` | canonical fill routes, external-plan validation, and optional settlement gas pricing |
+| `internal/liquidlane/strategies` | shared quote/fill tasks and results, canonical fill routes, minimum-output distribution, gas pricing, and fill-plan validation |
 | `internal/liquidlane/strategies/greedy` | RFQ-like oracle normalization plus greedy quote/fill allocation and fill economics |
+| `internal/liquidlane/strategies/single` | whole-request single-source comparison using the shared task/result contract and greedy calculations |
 | `internal/liquidlane/gas` | shared optional Chainlink token/native facts plus neutral acquire/allocate/deallocate/unknown route prediction from current adapter/vault state |
 | `internal/liquidlane/discounts` | signed-discount HTTP client, live-offer filtering, route matching, fill-quote construction, and fresh-signature validation |
 | `internal/solvers/<name>` | cadence, caches, strategy inputs, economics, protocol messages, calldata, and execution |
@@ -45,12 +46,10 @@ Core field rules:
 
 - `MaxAssets` is the current output cap in `tokenOut` units.
 - Direct inventory `MaxRate` is `getMaxRate(tokenIn)` and already includes `minDiscount`. A `FillQuote`
-  derives the same conservative fixed-point fact from `MaxAmountOut / AmountIn`, so fill-time private
-  offers are bounded without another RPC call.
-- Discount `MaxRate` comes from the discounts backend and already includes its advertised discount. It
-  arrives already floored, while the adapter floors `getAmountOut` first and applies the discount
-  second, so pricing directly at it can predict one unit above what the adapter pays. Re-derive it for
-  the concrete `amountIn` with `liquidlane.ConservativeAdvertisedRate` before quoting or sizing a leg.
+  derives the same fixed-point fact for its amount from `MaxAmountOut / AmountIn`.
+- `Price` is the adapter oracle price read with the inventory, and `Discount` the signed ppm discount of a
+  discount route. Discount `MaxRate` is `getMaxRate` at that discount, derived from both; the discounts
+  backend lists no rate.
 - `GrossAmountOut` is raw `getAmountOut`; `MaxAmountOut` is the executable amount after discount.
 - `MinDiscount` is the adapter's current lower bound for a fill.
 - `ValidUntil` is an external offer deadline. Inventory does not carry a duplicate read timestamp;
@@ -144,7 +143,16 @@ shared predictor owns adapter swap route units. Amount-specific RFQ-like protoco
 against current per-physical-route `FillQuote`s through `NormalizeOracleInventory`; they never group
 oracle prices by output token because the oracle, discount floor, and executable output belong to the
 adapter route. Protocol adapters then map those facts into
-`QuoteTask` or `FillTask`; the shared engine returns `QuoteSolution` or `FillSolution`. It ranks
+`strategies.QuoteTask` or `strategies.FillTask`; the selected algorithm returns `strategies.QuoteSolution`
+or `strategies.FillSolution`. The `greedy` and `single` subpackages expose pure `SolveQuote` and
+`SolveFill` functions using these structures. Strategy implementations, interfaces, and registration
+belong to the solvers. The
+[single-source algorithm](strategy-plan.md#single-source-selection) selects one candidate for the whole
+request from the supplied eligible sources. Its availability in a solver's config is separate from
+its ownership in LiquidLane.
+
+`FillSolution` owns copies of selected routes and finalizes their required minimums without modifying
+the allocation. The greedy engine ranks
 already-priced candidates, enforces one alternative per physical route, solves exact input/output,
 splits across route caps, allocates shared `CapacityID` budgets, applies explicit uncovered-input policy,
 and, when an optional gas pricing model is supplied, converts a complete LiquidLane settlement gas
@@ -186,26 +194,42 @@ reservations, so repeated matches within a pair still require fresh fill plannin
 Excess input may be absorbed only into a direct allocation: direct calldata caps output, whereas a signed
 discount prices the entire `amountIn` on-chain and cannot honor an off-chain output cap.
 
+The adapter pays a swap in two floored steps: `getAmountOut(amountIn) = floor(amountIn × price ×
+10^outDec / (1e18 × 10^inDec))`, then `floor(getAmountOut × (1e6 − discount) / 1e6)`. The discount is the
+signed discount of a discount swap, or the adapter `minDiscount` that bounds a direct swap. No single rate
+reproduces both floors for every amount, so exact pricing carries the oracle `price` and the `discount`
+separately (`liquidlane.DiscountedAmountOut`, with exact minimal- and maximal-input inverses). The inventory
+read takes the oracle price from `getAmountOut` at `OraclePriceProbe`, which cancels the decimal scaling,
+and fails a route closed when `getMaxRate` does not reproduce it. Quote candidates built from an inventory
+with a price use this model; candidates without one keep the fixed-rate model. The backend supplies the
+discount, never a rate: its listing carries each discount's ppm, and every RFQ `adapters[]` entry carries
+`discount` (the signed discount, or the adapter `minDiscount` on direct entries).
+
 For signed discounts:
 
 1. Treat HTTP `nonce` values as base-10 uint256 strings, parse them into `*big.Int`, and reject hex,
    signs, non-digits, and values wider than 256 bits. The EIP-712 value remains the same uint256.
-2. List and validate advertised offers for quote construction.
-3. Never apply `discount` to backend `maxRate` a second time — but do re-derive the rate for the
-   concrete `amountIn` with `ConservativeAdvertisedRate`. The backend floors the discount into the
-   rate while the adapter floors `getAmountOut` first, so the raw rate can price a unit above what the
-   adapter pays, and an over-predicted leg leaves the filler short of the order's signed outputs.
+2. List and validate advertised offers for quote construction, pricing them from the signed `discount`
+   and the current oracle price.
+3. RFQ legs price from the adapter quote at the order amount and the entry's `discount`; a direct leg uses
+   the adapter's current minimum instead when that is higher.
 4. Resolve signatures again immediately before fill.
-5. Recheck id, adapter, tokens, current discount bounds, and deadlines.
-6. Reserve capacity for upward price movement: discount swaps release their full computed output and
-   cannot be reduced to a requested amount.
+5. Recheck id, adapter, tokens, deadlines, and the signed discount against the current adapter minimum,
+   the only discount bound the adapter enforces.
+6. Plan and reserve the full payout, `floor(getAmountOut(amountIn) × (1 − discount / 1e6))`, with the
+   configured capacity buffer. Fresh signed payouts must cover the selected minimum and fit the reservation.
 7. Pass a discount candidate only when the solver's executor can settle `discountSwap` atomically.
 
-Discount discovery, parsing, physical-route matching, cap/rate clipping, advertised fill-quote
+Discount discovery, parsing, physical-route matching, exact pricing, advertised fill-quote
 construction, and fresh signed-term binding/deadline/output validation are shared. Solvers still own when
 resolution happens: LI.FI pre-resolves a bounded candidate set and refreshes adapter state before deciding;
-UniswapX resolves only the selected route; RFQ receives backend candidates and resolves selected legs.
+UniswapX plans from `discounts.AdvertisedFillQuotes` and resolves only the selected route;
+RFQ receives backend candidates and resolves selected legs.
 Generated executor calldata and protocol lifecycle remain solver-local.
+
+Payout rejection errors include the fresh gross output, signed discount, payout, minimum and reservation.
+Diagnostic amounts are in token base units, rates use 1e18 precision, and discounts are in ppm;
+signatures are not logged.
 
 ## Solver profiles
 

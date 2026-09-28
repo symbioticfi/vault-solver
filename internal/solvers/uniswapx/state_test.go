@@ -359,7 +359,7 @@ func TestExclusiveTerminalRetentionCoversRecoveryLookback(t *testing.T) {
 	}
 }
 
-func TestClearPendingReservationsInvalidatesQuoteState(t *testing.T) {
+func TestClearPendingReservationsPreservesUnspentQuoteState(t *testing.T) {
 	hash := common.HexToHash("0x1234")
 	solver := &Solver{}
 	if !solver.capacity.Set(hash.Hex(), liquidlane.CapacityReservations{"capacity-1": big.NewInt(1)}) {
@@ -367,10 +367,11 @@ func TestClearPendingReservationsInvalidatesQuoteState(t *testing.T) {
 	}
 	solver.quoteState.Store(&quoteState{expiresAt: time.Now().Add(time.Minute)})
 
+	revision := solver.capacity.Revision()
 	solver.clearPendingReservations(t.Context(), hash)
 
-	if solver.quoteState.Load() != nil {
-		t.Fatal("released capacity remained quotable through the old snapshot")
+	if solver.capacity.Revision() == revision || solver.quoteState.Load() == nil {
+		t.Fatal("release must change the reservation revision while retaining unspent inventory")
 	}
 	if solver.capacity.Len() != 0 {
 		t.Fatal("reservation was not released")
@@ -389,8 +390,8 @@ func TestClaimTracksInflightAndBackoff(t *testing.T) {
 	if !solver.claim(hash, now) || solver.claim(hash, now) {
 		t.Fatal("claim did not enforce in-flight deduplication")
 	}
-	if solver.planningFills.Load() != 1 || solver.quoteState.Load() != nil {
-		t.Fatal("claimed order did not block quotes before fill planning")
+	if solver.planningFills.Load() != 1 || solver.quoteState.Load() == nil {
+		t.Fatal("claim must retain inventory while tracking planning")
 	}
 	solver.endFillPlanning()
 	solver.retry(hash, now, true)

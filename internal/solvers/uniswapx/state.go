@@ -60,10 +60,10 @@ func (s *Solver) requestQuoteRefresh() {
 }
 
 func (s *Solver) setPendingReservations(
-	ctx context.Context, hash common.Hash, reservations liquidlane.CapacityReservations,
-) {
-	if !s.capacity.Set(hash.Hex(), reservations) {
-		return
+	ctx context.Context, hash common.Hash, reservations liquidlane.CapacityReservations, revision uint64,
+) bool {
+	if !s.capacity.SetAt(hash.Hex(), reservations, revision) {
+		return false
 	}
 	observability.Log(ctx).V(1).Info(
 		"fill capacity reserved",
@@ -71,14 +71,11 @@ func (s *Solver) setPendingReservations(
 		"capacityGroups", len(reservations),
 		"pendingFills", s.capacity.Len(),
 	)
-	s.invalidateQuotes()
 	s.requestQuoteRefresh()
+	return true
 }
 
 func (s *Solver) clearPendingReservations(ctx context.Context, hash common.Hash) {
-	// Stop quotes before releasing capacity. The next snapshot must observe the fill outcome
-	// before the released capacity can be advertised again.
-	s.invalidateQuotes()
 	if !s.capacity.Delete(hash.Hex()) {
 		return
 	}
@@ -116,8 +113,8 @@ func (s *Solver) recordFillSuccess() {
 	s.stateMu.Lock()
 	hadFailures := len(s.failureTimes) > 0
 	s.failureTimes = nil
-	s.stateMu.Unlock()
 	blockedUntil := s.localBlockUntil.Swap(0)
+	s.stateMu.Unlock()
 	if hadFailures || blockedUntil != 0 {
 		s.log.V(1).Info(
 			"local fill breaker cleared",
@@ -380,13 +377,10 @@ func (s *Solver) invalidateQuotes() {
 
 func (s *Solver) beginFillPlanning() {
 	s.planningFills.Add(1)
-	s.quoteEpoch.Add(1)
-	s.quoteState.Store(nil)
 }
 
 func (s *Solver) endFillPlanning() {
 	remaining := s.planningFills.Add(-1)
-	s.quoteEpoch.Add(1)
 	if remaining < 0 {
 		panic("uniswapx: negative planning fill count")
 	}

@@ -111,7 +111,10 @@ later fill plans subtract every reservation until the order expires or fails; an
 reporting expires locally at its own deadline. When the backend reports the block an adapter's `maxAssets`
 was read at (`adapters[].blockNumber` on `/quote`), a confirmed fill is subtracted only from snapshots older
 than its inclusion block, for a few hours after the order is filled, and never from newer ones, which
-already reflect it. Fills are still
+already reflect it. Every `/quote` adapter entry carries `discount` (ppm): the signed discount on
+discount-backed entries, the adapter `minDiscount` on direct ones. Quotes and fill plans price each leg as
+the adapter pays it at the order amount, `floor(getAmountOut(amountIn) * (1e6 - discount) / 1e6)`. The
+field replaces `maxRate`, so run this version with a backend that sends it. Fills are still
 sent one at a time on the shared nonce lane. Reservations are local to the process and are not restored
 after a restart.
 Design, config, and roadmap:
@@ -150,8 +153,8 @@ Earlier disconnects and other errors remain Error; reconnect backoff resets only
 rechecks the canonical order status, adapter state, configured gas cost, and strategy decision, then atomically claims
 the input, redeems it through LiquidLane, and fills the output via
 `LiquidLaneLifiExecutor`. Capacity reserved by already-submitted fills is deducted from both later fill
-decisions and standing quotes until those transactions complete. Each token pair advertises the full currently
-available capacity even when several pairs share one vault; accepting a fill reserves its shared `CapacityID`
+decisions and standing quotes until those transactions complete. Each token pair advertises its allocated share of
+available capacity when several pairs share one vault; accepting a fill reserves its shared `CapacityID`
 and immediately refreshes every affected quote. The reservation remains until the shared tx manager returns a
 terminal result under the [shared confirmation policy](docs/TXMANAGER-PLAN.md#5-receipt-polling-and-confirmation).
 Pre-sign or definitive broadcast failures release the reservation without a receipt. Before
@@ -222,7 +225,7 @@ executor build, registering it with LI.FI, and granting it filler authorization 
 
 An Ethereum-mainnet UniswapX solver backed by LiquidLane routes. It serves the RFQ `POST /quote`
 webhook, polls the Uniswap order API for exclusive and public V2 orders, resolves
-their Dutch amounts from current chain time, and fills profitable orders through a configured
+their Dutch amounts from current chain time, and fills executable orders through a configured
 `LiquidLaneUniswapXExecutor`. The executor uses the same owner-managed caller list as the RFQ executor and
 remains the Reactor-facing filler. Before serving traffic, the solver validates executor bytecode, finds the
 tx-sending EOA in the executor's indexed `callers` list, and, in external mode, checks every configured
@@ -231,31 +234,45 @@ reason before startup returns. The executor ABI has no Reactor getter, so matchi
 the deployed immutable remains a deployment assertion. `solverMode: external` is the default, requires a
 non-empty `adapters` list plus direct authorization, and forbids the discounts block. `solverMode: internal`
 requires that block; direct routes are authorization-filtered from each snapshot while valid signed-discount
-routes remain usable. In internal
+routes remain usable. `discounts.baseUrl` supports HTTP for backends within local infrastructure, as in
+RFQ and LI.FI, as well as HTTPS. `orderServer.baseUrl` still requires HTTPS outside loopback. In internal
 mode `adapters` is optional: a non-empty list scopes quotes and direct fills, while fill-time signed-discount
 recovery may use any adapter advertised by the backend. Without a list the solver quotes and fills
 discount-only. Every fill is simulated again immediately before submission. The wall-clock anchor for
 a fill is captured before reading chain time, so RPC and planning latency consume the order's remaining
 validity instead of extending it.
 
-The quote path is stateless and uses a refreshed on-chain inventory snapshot so it stays within Uniswap's
+Set `strategy.name: single` to use the local UniswapX [single-source strategy](#strategies).
+It uses the same pricing config as `default` and the normal sources allowed by `solverMode`.
+The solver prefers the quoted source at fill time, then tries alternatives covering the awarded output.
+Fresh signed terms and simulation validate the chosen source before submission.
+
+The optional `quoteServer.selectionTtl` (default `10m`) and `quoteServer.maxSelections` (default `4096`)
+bound the in-memory source preferences. Eviction or restart causes fresh selection from the signed order.
+Once the order is known, the preference applies only through its exclusivity deadline; later fills select afresh.
+Quotes do not reserve capacity. Single-source fills retain the default strategy's configured price
+buffer but do not require additional output to repay gas; the sender pays gas and fee caps still apply.
+The existing `default` retains its configured gas-coverage requirement for fills.
+
+The quote path uses a refreshed on-chain inventory snapshot so it stays within Uniswap's
 response deadline. Each request is priced once for its concrete amount: the strategy returns one
 `amountIn`/`amountOut` pair after price buffer and, when configured, estimated fill gas, with no precomputed
 ladders, amount ranges, or quote-time route reservation. Omitting the entire `gas:` block disables gas
 accounting in both quote and fill decisions and skips gas-state and Chainlink reads. The tx manager still
 prices and pays actual transaction gas, so that cost is then subsidized by the solver. Uniswap deliberately
 makes indicative and hard RFQ requests
-indistinguishable, so the solver echoes `quoteId` but does not guess the phase. As soon as a polled order is
-admitted to the fill queue, quote publication and `GET /ready` pause. They remain paused during planning and,
-once the submission occupies the shared nonce lane, while it holds that queued or admitted lifecycle,
-including receipt confirmation. The fill's capacity reservation still protects already-awarded orders for
-the same period; it does not reopen quoting. Every posted order gets a fresh route plan from the current chain
-state and is simulated before sending. On completion the quote snapshot is invalidated before capacity is
-released, and that capacity is not advertised again until a fresh post-fill chain snapshot is published.
-A quote is returned only if its snapshot epoch and every blocking condition are unchanged after the strategy
-finishes. Quoting fails closed during startup warmup, stale or unknown exclusive-order delivery, fill
-planning, a queued or admitted txmanager lifecycle, an unavailable nonce lane, an active Uniswap
-`blockUntilTimestamp`, or the configured local fade breaker. A claimed order is requeued before chain reads,
+indistinguishable, so the solver echoes `quoteId` but does not guess the phase. Fill planning reserves
+selected capacity before signature resolution, simulation, and transaction admission for all strategies
+(`default`, `single`, and `webhook`). Quoting continues during planning, queueing, and confirmation;
+source fallback replaces the reservation. Until a plan installs its reservation, its capacity remains
+quotable. Pending reservations conservatively reduce every source limit in the same vault/output token.
+A subsequent fill can wait for the preceding transaction and miss its admission or exclusivity deadline;
+see [fill capacity and retries](docs/UNISWAPX-PLAN.md#fill-capacity-and-retries).
+Transaction completion invalidates cached inventory before releasing its reservation; quoting resumes
+after a latest-state refresh. Unsubmitted attempts release capacity without invalidating inventory.
+A quote is returned only if inventory, reservations, and blocking conditions remain unchanged during
+calculation. Quoting fails closed during startup warmup, stale or unknown exclusive-order delivery,
+an unavailable nonce lane, an active Uniswap `blockUntilTimestamp`, or the configured local fade breaker. A claimed order is requeued before chain reads,
 signed-discount resolution, calldata construction, or preflight while the nonce lane is paused. A txmanager
 result rejected before the worker lifecycle does not count toward the local fill breaker and is reported as
 `solver_bot_txmanager_admission_rejections_total{label="uniswapx-fill"}` rather than a terminal fill
@@ -280,11 +297,14 @@ filters the newest all-status snapshot locally and clears the unknown state only
 the configured lookback cutoff.
 
 In internal mode, advertised LiquidLane routes are resolved on-chain and checked against their advertised
-asset and decimals, current physical capacity/rate, adapter minimum discount, token policy, and configured
+asset and decimals, current physical capacity, adapter minimum discount, token policy, and configured
 gas feeds. Configured adapters scope quoting when present; fill-time discount recovery remains unrestricted,
 matching RFQ solver-mode semantics. A selected discount is resolved again immediately before simulation and
 encoded as a typed `discountSwap`; its adapter, token, output floor, signatures, and expiry window are
-checked fail-closed.
+checked fail-closed. Quotes and fills price every leg as the adapter pays it: the oracle price read with
+the inventory and the signed discount (or the adapter minimum for direct routes), floored in the adapter's
+order. The discount listing carries no rate. With `priceBufferBps: 0`, an exact-input quote equals the
+payout, and the fill reserves and resolves exactly it.
 
 The order API key is required and read indirectly through `orderServer.apiKeyEnv`. Uniswap's public quote
 contract specifies source-IP allowlisting rather than an application header, so restrict the quote endpoint
@@ -297,8 +317,8 @@ the current `DutchV2OrderEntity`, including nested `cosignerData`, `cosignature`
 Native-asset outputs are currently declined because the supported LiquidLane routes settle ERC-20 vault
 assets.
 Exact-input and exact-output Dutch auctions are supported. Exact-output quotes directly size enough input
-for the requested output, buffer, and gas; rounding or execution output above that requirement remains
-executor surplus. If a Dutch exact-output input grows between planning and execution, the executor consumes
+for the requested output, buffer, and gas. For both order types, output above the order requirement remains
+on the executor. If a Dutch exact-output input grows between planning and execution, the executor consumes
 the planned route input and retains the positive input difference as filler surplus. The Reactor atomically
 enforces the order's aggregate outputs. Multiple outputs are supported when every output uses the same
 ERC-20; mixed-token outputs fail closed because one
@@ -314,11 +334,21 @@ The solvers split protocol plumbing (reads, signing, submission — fixed) from 
 **decision** — how to size, price, and select — which is a pluggable *strategy*, chosen in config:
 
 - **`default`** — the built-in in-process strategy for that solver.
+- **`single`** — the local UniswapX strategy that selects one source for the entire request.
+  It chooses the highest final output for exact input, or the lowest required input for exact output,
+  including configured quote buffer and gas costs. A better price with insufficient capacity is rejected;
+  the strategy does not combine sources to cover the request. Each source can use the vault's available
+  capacity up to its own limit, after inventory reserves and pending fills.
 - **`webhook`** — delegates each decision to an **external HTTP service you run**: the solver sends it
   the raw facts as JSON and executes the validated plan it returns, so your service owns the logic.
   LI.FI and UniswapX own separate strategy contracts and independently reject returned fills that exceed
   current capacity or do not cover the order plus configured gas. UniswapX delegates each concrete quote to
   `POST /decide-quote` and each current fill plan to `POST /decide-fill` under the configured webhook URL.
+
+The single-source calculation is shared in LiquidLane; the strategy and its configuration belong to
+UniswapX. RFQ and LI.FI reject `strategy.name: single` at startup.
+Each solver controls its eligible sources, order requirements, and execution. Selecting `single` changes
+how liquidity is chosen within that source set.
 
 This is the seam for customizing a solver without forking. Contract and trust model:
 [`docs/strategy-plan.md`](docs/strategy-plan.md).
@@ -535,7 +565,7 @@ Bounded workflow dimensions:
 |---|---|---|
 | RFQ | `quote/<decision>`, `order/won`, `order_poll/success`, `fill/{success,failure,not_admitted}` | `quote/{input,output}` and successful `fill/{input,output,planned_surplus}` by asset |
 | LI.FI | `order_processing/<result>`, `queue_drop/<stage>`, `fill/success` | Fill amounts by asset and kind |
-| UniswapX | `quote/<decision>`, `{exclusive,public}_order_poll/{ok,failed}`, `exclusive_obligation/{won,settled_in_time,missed}`, `fill/{success,failure,not_admitted}` | Quote and successful-fill amounts by asset and kind; quote amount assets are restricted to the immutable route snapshot used for that decision |
+| UniswapX | `quote/<decision>`, `{exclusive,public}_order_poll/{ok,failed}`, `exclusive_obligation/{won,settled_in_time,missed}`, `fill/{success,failure,not_admitted,declined}` | Quote and successful-fill amounts by asset and kind; quote amount assets are restricted to the immutable route snapshot used for that decision |
 | OEV | `auction/<decision>`, `bid/{enqueued,won,settled_success,settled_failed,would_bid,unresolved}`, `breaker/failure`, `state_refresh/success` | Native bid amounts use `asset="native"`; `kind` is the bid stage, including dry-run `would_bid` |
 | 3F | `offer/{success,error}`, `redeem/success`; state views are `targets`, `offers`, `active_requests`, `redeemable` | Offer `principal` and `expected_yield` by deposit asset |
 

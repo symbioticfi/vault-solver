@@ -1,5 +1,7 @@
 package uniswapx
 
+import "github.com/symbioticfi/vault-solver/internal/liquidlane"
+
 type quoteRequest struct {
 	BlockUntilTimestamp *int64 `json:"blockUntilTimestamp,omitempty"`
 	RequestID           string `json:"requestId"`
@@ -40,6 +42,7 @@ type quoteResponse struct {
 	Filler    string `json:"filler"`
 	QuoteID   string `json:"quoteId"`
 
+	selectedCandidate liquidlane.CandidateID
 	declineReason     quoteDeclineReason
 	quotedPairBounded bool
 }

@@ -116,12 +116,12 @@ func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Rout
 }
 
 func (s *Solver) publishQuoteState(epoch uint64, state *quoteState) bool {
-	if s.planningFills.Load() != 0 || s.quoteEpoch.Load() != epoch {
+	if s.quoteEpoch.Load() != epoch {
 		return false
 	}
 	state.epoch = epoch
 	s.quoteState.Store(state)
-	if s.planningFills.Load() != 0 || s.quoteEpoch.Load() != epoch {
+	if s.quoteEpoch.Load() != epoch {
 		s.quoteState.CompareAndSwap(state, nil)
 		return false
 	}

@@ -7,18 +7,12 @@ import (
 	"sort"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 )
-
-// Allocation is the selected amount for one candidate.
-type Allocation struct {
-	Candidate liquidlane.QuoteCandidate
-	AmountIn  *big.Int
-	AmountOut *big.Int
-}
 
 // allocationResult describes the allocated prefix of an exact-input request.
 type allocationResult struct {
-	Allocations    []Allocation
+	Allocations    []strategies.QuoteAllocation
 	TotalAmountIn  *big.Int
 	TotalAmountOut *big.Int
 	Remaining      *big.Int
@@ -50,7 +44,7 @@ func (a allocator) allocateExactInputWithPolicy(
 		return result
 	}
 
-	result.Allocations = make([]Allocation, 0, min(maxRoutes, len(a.sources)))
+	result.Allocations = make([]strategies.QuoteAllocation, 0, min(maxRoutes, len(a.sources)))
 	used := make(map[liquidlane.RouteID]bool, min(maxRoutes, len(a.sources)))
 	for result.Remaining.Sign() > 0 && len(result.Allocations) < maxRoutes {
 		mustCoverRemaining := requireComplete && len(result.Allocations) == maxRoutes-1
@@ -63,7 +57,7 @@ func (a allocator) allocateExactInputWithPolicy(
 			used[candidate.Route.ID] = true
 			continue
 		}
-		result.Allocations = append(result.Allocations, Allocation{
+		result.Allocations = append(result.Allocations, strategies.QuoteAllocation{
 			Candidate: candidate,
 			AmountIn:  liquidlane.CloneBig(amount),
 			AmountOut: amountOut,
@@ -84,25 +78,20 @@ func (a allocator) allocateExactOutput(targetOutput *big.Int, maxRoutes int) all
 		return result
 	}
 
-	result.Allocations = make([]Allocation, 0, min(maxRoutes, len(a.sources)))
+	result.Allocations = make([]strategies.QuoteAllocation, 0, min(maxRoutes, len(a.sources)))
 	used := make(map[liquidlane.RouteID]bool, min(maxRoutes, len(a.sources)))
 	for result.Remaining.Sign() > 0 && len(result.Allocations) < maxRoutes {
 		candidate, wanted, ok := bestOutputLeg(a.sources, used, result.Remaining)
 		if !ok {
 			break
 		}
-		amountIn := liquidlane.MinAmountInForAmountOut(
-			wanted,
-			candidate.Rate,
-			candidate.Route.TokenInDecimals,
-			candidate.Route.TokenOutDecimals,
-		)
+		amountIn := candidate.AmountInFor(wanted)
 		amountOut := output(candidate, amountIn)
 		if amountIn.Sign() <= 0 || amountIn.Cmp(candidate.MaxAmountIn) > 0 || amountOut.Sign() <= 0 {
 			used[candidate.Route.ID] = true
 			continue
 		}
-		result.Allocations = append(result.Allocations, Allocation{
+		result.Allocations = append(result.Allocations, strategies.QuoteAllocation{
 			Candidate: candidate,
 			AmountIn:  amountIn,
 			AmountOut: amountOut,
@@ -258,12 +247,7 @@ func better(left, right liquidlane.QuoteCandidate) bool {
 }
 
 func output(candidate liquidlane.QuoteCandidate, amountIn *big.Int) *big.Int {
-	amountOut := liquidlane.AmountOutForRate(
-		amountIn,
-		candidate.Rate,
-		candidate.Route.TokenInDecimals,
-		candidate.Route.TokenOutDecimals,
-	)
+	amountOut := candidate.AmountOutFor(amountIn)
 	if amountOut.Cmp(candidate.MaxAmountOut) > 0 {
 		return liquidlane.CloneBig(candidate.MaxAmountOut)
 	}

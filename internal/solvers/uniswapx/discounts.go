@@ -48,18 +48,6 @@ func (s *Solver) quoteRoutesWithDiscounts(
 	return s.routesWithDiscounts(ctx, configured, now, filter)
 }
 
-func (s *Solver) fillRoutesWithDiscounts(
-	ctx context.Context,
-	configured []liquidlane.Route,
-	tokenIn, tokenOut common.Address,
-	now time.Time,
-) ([]liquidlane.Route, *liquiddiscounts.List, error) {
-	result, err := s.routesWithDiscounts(ctx, configured, now, advertisedRouteFilter{
-		tokenIn: tokenIn, tokenOut: tokenOut,
-	})
-	return result.routes, result.listed, err
-}
-
 func (s *Solver) routesWithDiscounts(
 	ctx context.Context,
 	configured []liquidlane.Route,

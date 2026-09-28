@@ -22,7 +22,7 @@ import (
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
-	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -39,7 +39,7 @@ type Solver struct {
 	solverAddress common.Address
 	chain         contractCaller
 	reader        chainReader
-	strategy      strategytypes.Strategy
+	strategy      types.Strategy
 	txm           transactionManager
 	confirmations uint64
 	orders        orderPoller
@@ -51,8 +51,8 @@ type Solver struct {
 	reportFatal func(error)
 
 	// refreshMu serializes chain snapshots. quoteState is immutable after publication and is
-	// replaced atomically. Quote requests are stateless because Uniswap intentionally hides
-	// whether each request is indicative or hard.
+	// replaced atomically. Quotes never reserve capacity because Uniswap intentionally hides
+	// whether each request is indicative or hard; single-source preferences are kept separately.
 	refreshMu             sync.Mutex
 	quoteState            atomic.Pointer[quoteState]
 	quoteEpoch            atomic.Uint64
@@ -65,8 +65,9 @@ type Solver struct {
 	warmupUntil           atomic.Int64
 	lastExclusivePoll     atomic.Int64
 	refreshCh             chan struct{}
-	// stateMu guards order retry/dedup and breaker history.
+	// stateMu guards order retry/dedup, single-source selections and breaker history.
 	stateMu           sync.Mutex
+	selections        map[string]quoteSelection
 	filled            map[common.Hash]time.Time
 	retryAt           map[common.Hash]time.Time
 	inFlight          map[common.Hash]bool
@@ -130,7 +131,6 @@ type orderPoller interface {
 type transactionManager interface {
 	MaxFeePerGas(ctx context.Context) (*big.Int, error)
 	SendAsync(ctx context.Context, request txmanager.Request) (<-chan txmanager.Result, bool)
-	LaneReady() bool
 	Available() bool
 }
 

@@ -6,8 +6,8 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
-	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 )
 
@@ -27,22 +27,19 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 	}
 
 	validAfter := input.QuoteExpiresAt.Add(s.executionBuffer)
-	liveInventory := liquidgreedy.FilterLiveInventory(input.Inventory, validAfter)
-	pairInventory := make([]liquidlane.Inventory, 0, len(liveInventory))
-	allocatedInventory := liquidgreedy.AllocateInventoryCapacity(
-		liveInventory, input.Reservations, s.cfg.InventoryReserveBps,
-	)
+	liveInventory := greedy.FilterLiveInventory(input.Inventory, validAfter)
+	availableInventory := greedy.ReserveInventoryCapacity(liveInventory, input.Reservations, s.cfg.InventoryReserveBps)
+	allocatedInventory := s.allocateInventory(availableInventory)
+	candidates := make([]liquidlane.QuoteCandidate, 0, len(allocatedInventory))
+	matchingInventory := 0
 	for _, item := range allocatedInventory {
-		if item.TokenIn == input.TokenIn && item.TokenOut == input.TokenOut {
-			pairInventory = append(pairInventory, item)
+		if item.TokenIn != input.TokenIn || item.TokenOut != input.TokenOut {
+			continue
 		}
-	}
-	inventory := pairInventory
-	candidates := make([]liquidlane.QuoteCandidate, 0, len(inventory))
-	for _, item := range inventory {
-		candidate := liquidgreedy.NewQuoteCandidate(
+		matchingInventory++
+		candidate := greedy.NewQuoteCandidate(
 			item,
-			liquidgreedy.QuoteCapacity(item, s.cfg.PriceBufferBps),
+			greedy.QuoteCapacity(item, s.cfg.PriceBufferBps),
 		)
 		if candidate != nil {
 			candidates = append(candidates, *candidate)
@@ -55,14 +52,14 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 			"tokenOut", input.TokenOut.Hex(),
 			"inventory", len(input.Inventory),
 			"liveInventory", len(liveInventory),
-			"pairInventory", len(pairInventory),
-			"allocatedInventory", len(inventory),
+			"pairInventory", matchingInventory,
+			"allocatedInventory", matchingInventory,
 			"reservations", len(input.Reservations),
 		)
 		return nil, nil
 	}
 
-	pricing, err := liquidstrategies.NewGasPricing(
+	pricing, err := strategies.NewGasPricing(
 		input.MaxFeePerGas,
 		input.TokenOut,
 		input.GasPrices,
@@ -77,7 +74,7 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 	if input.RequireSingleRoute {
 		maxRoutes = 1
 	}
-	solution, err := liquidgreedy.SolveQuote(liquidgreedy.QuoteTask{
+	solution, err := s.solveQuote(strategies.QuoteTask{
 		ExactInput: input.AmountIn, ExactOutput: input.AmountOut,
 		Candidates: candidates, MaxRoutes: maxRoutes, MinInput: s.minAmount,
 		OutputBufferBps: 2 * s.cfg.PriceBufferBps,
@@ -87,5 +84,8 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 	if err != nil || solution == nil {
 		return nil, err
 	}
-	return &types.Quote{AmountIn: solution.AmountIn, AmountOut: solution.AmountOut}, nil
+	return &types.Quote{
+		AmountIn: solution.AmountIn, AmountOut: solution.AmountOut,
+		CandidateID: solution.SingleCandidateID(),
+	}, nil
 }

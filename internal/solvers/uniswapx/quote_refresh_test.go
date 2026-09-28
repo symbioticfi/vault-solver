@@ -75,13 +75,13 @@ func TestRefreshQuoteStateInternalDiscountScopes(t *testing.T) {
 	)
 	inventory := func(route liquidlane.Route) liquidlane.Inventory {
 		item := liquidlane.DirectInventory(route, big.NewInt(100), big.NewInt(100))
-		item.AdapterMinDiscount = new(big.Int)
+		item.AdapterMinDiscount, item.Price = new(big.Int), big.NewInt(100)
 		return item
 	}
 
 	t.Run("no configured adapters is discount only", func(t *testing.T) {
 		listed := &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{
-			testDiscountOffer(advertised, now.Add(time.Minute), "100", "100"),
+			testDiscountOffer(advertised, now.Add(time.Minute), "100"),
 		}}
 		provider := &fakeDiscountProvider{list: listed}
 		reader := &quoteModeReader{
@@ -92,6 +92,7 @@ func TestRefreshQuoteStateInternalDiscountScopes(t *testing.T) {
 			},
 		}
 		solver := quoteModeSolver(reader, provider)
+		solver.cfg.Strategy.Name = "single"
 
 		if err := solver.refreshQuoteState(t.Context(), nil); err != nil {
 			t.Fatalf("refreshQuoteState: %v", err)
@@ -112,8 +113,8 @@ func TestRefreshQuoteStateInternalDiscountScopes(t *testing.T) {
 
 	t.Run("configured adapters scope quotes", func(t *testing.T) {
 		listed := &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{
-			testDiscountOffer(configured, now.Add(time.Minute), "100", "100"),
-			testDiscountOffer(advertised, now.Add(time.Minute), "100", "100"),
+			testDiscountOffer(configured, now.Add(time.Minute), "100"),
+			testDiscountOffer(advertised, now.Add(time.Minute), "100"),
 		}}
 		provider := &fakeDiscountProvider{list: listed}
 		reader := &quoteModeReader{
@@ -124,6 +125,7 @@ func TestRefreshQuoteStateInternalDiscountScopes(t *testing.T) {
 			},
 		}
 		solver := quoteModeSolver(reader, provider)
+		solver.cfg.Strategy.Name = "single"
 		solver.cfg.Adapters = []common.Address{configured.Adapter}
 
 		if err := solver.refreshQuoteState(t.Context(), []liquidlane.Route{configured}); err != nil {
@@ -150,10 +152,11 @@ func TestRefreshQuoteStateInternalDiscountScopes(t *testing.T) {
 		active.TokenIn = common.HexToAddress("0x7777777777777777777777777777777777777777")
 		active.ID = liquidlane.NewRouteID(1, active.Adapter, active.TokenIn, active.TokenOut)
 		provider := &fakeDiscountProvider{list: &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{
-			testDiscountOffer(inactive, now.Add(time.Minute), "100", "100"),
+			testDiscountOffer(inactive, now.Add(time.Minute), "100"),
 		}}}
 		reader := &quoteModeReader{now: now, resolved: []liquidlane.Route{active}}
 		solver := quoteModeSolver(reader, provider)
+		solver.cfg.Strategy.Name = "single"
 
 		if err := solver.refreshQuoteState(t.Context(), nil); err != nil {
 			t.Fatalf("refreshQuoteState: %v", err)
@@ -169,8 +172,8 @@ func TestRefreshQuoteStateInternalDiscountScopes(t *testing.T) {
 		dynamic.TokenIn = common.HexToAddress("0x8888888888888888888888888888888888888888")
 		dynamic.ID = liquidlane.NewRouteID(1, dynamic.Adapter, dynamic.TokenIn, dynamic.TokenOut)
 		provider := &fakeDiscountProvider{list: &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{
-			testDiscountOffer(configured, now.Add(time.Minute), "100", "100"),
-			testDiscountOffer(dynamic, now.Add(time.Minute), "100", "100"),
+			testDiscountOffer(configured, now.Add(time.Minute), "100"),
+			testDiscountOffer(dynamic, now.Add(time.Minute), "100"),
 		}}}
 		reader := &quoteModeReader{
 			now: now, resolveErr: errors.New("dynamic adapter resolution failed"),
@@ -180,6 +183,7 @@ func TestRefreshQuoteStateInternalDiscountScopes(t *testing.T) {
 			},
 		}
 		solver := quoteModeSolver(reader, provider)
+		solver.cfg.Strategy.Name = "single"
 		solver.cfg.Adapters = []common.Address{configured.Adapter}
 
 		if err := solver.refreshQuoteState(t.Context(), []liquidlane.Route{configured}); err != nil {
@@ -204,6 +208,7 @@ func TestRefreshQuoteStateInternalDiscountFailureFallsBackToDirect(t *testing.T)
 		},
 	}
 	solver := quoteModeSolver(reader, provider)
+	solver.cfg.Strategy.Name = "single"
 	solver.cfg.Adapters = []common.Address{route.Adapter}
 
 	if err := solver.refreshQuoteState(t.Context(), []liquidlane.Route{route}); err != nil {
@@ -233,8 +238,8 @@ func TestResolveAdvertisedRoutesIsolatesInvalidAdapter(t *testing.T) {
 	}
 	solver := quoteModeSolver(reader, &fakeDiscountProvider{})
 	listed := &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{
-		testDiscountOffer(good, now.Add(time.Minute), "100", "100"),
-		testDiscountOffer(bad, now.Add(time.Minute), "100", "100"),
+		testDiscountOffer(good, now.Add(time.Minute), "100"),
+		testDiscountOffer(bad, now.Add(time.Minute), "100"),
 	}}
 
 	routes, complete := solver.resolveAdvertisedRoutes(t.Context(), listed, nil, now, advertisedRouteFilter{})
@@ -271,7 +276,7 @@ func TestRefreshQuoteStateSkipsDynamicRouteWithoutGasFeed(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	route := testDiscountRoute()
 	provider := &fakeDiscountProvider{list: &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{
-		testDiscountOffer(route, now.Add(time.Minute), "100", "100"),
+		testDiscountOffer(route, now.Add(time.Minute), "100"),
 	}}}
 	reader := &quoteModeReader{
 		now: now, resolved: []liquidlane.Route{route},

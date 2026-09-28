@@ -198,18 +198,32 @@ discounts:
   httpTimeout: 3s
   minimumValidity: 20s
 `
-	cfg, err := parseConfig(uniswapXConfigNode(t, raw))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Discounts == nil || cfg.Discounts.HTTPTimeout != 3*time.Second ||
-		cfg.Discounts.MinimumValidity != 20*time.Second {
-		t.Fatalf("discount config = %+v", cfg.Discounts)
-	}
-
-	raw = strings.Replace(raw, "https://backend.example", "http://backend.example", 1)
-	if _, err := parseConfig(uniswapXConfigNode(t, raw)); err == nil {
-		t.Fatal("expected unsafe discounts URL rejection")
+	for _, test := range []struct {
+		url     string
+		wantErr bool
+	}{
+		{"https://backend.example", false},
+		{"http://rfq-backend:42072", false},
+		{"http://localhost:42072", false},
+		{"/api-internal/v1", true},
+		{"http:///discounts", true},
+		{"http://backend:bad", true},
+		{"ftp://backend.example", true},
+	} {
+		t.Run(test.url, func(t *testing.T) {
+			input := strings.Replace(raw, "https://backend.example", test.url, 1)
+			cfg, err := parseConfig(uniswapXConfigNode(t, input))
+			if (err != nil) != test.wantErr {
+				t.Fatalf("parseConfig() error = %v, wantErr %t", err, test.wantErr)
+			}
+			if test.wantErr {
+				return
+			}
+			if cfg.Discounts == nil || cfg.Discounts.BaseURL != test.url ||
+				cfg.Discounts.HTTPTimeout != 3*time.Second || cfg.Discounts.MinimumValidity != 20*time.Second {
+				t.Fatalf("discount config = %+v", cfg.Discounts)
+			}
+		})
 	}
 }
 

@@ -28,22 +28,31 @@ func (reservations CapacityReservations) AddAll(additions CapacityReservations) 
 
 // CapacityLedger owns reservations for pending fills. Its zero value is ready to use.
 type CapacityLedger struct {
-	mu    sync.RWMutex
-	byKey map[string]CapacityReservations
+	mu       sync.RWMutex
+	byKey    map[string]CapacityReservations
+	revision uint64
 }
 
 // Set stores one pending fill reservation. It reports whether the ledger changed.
 func (ledger *CapacityLedger) Set(key string, reservations CapacityReservations) bool {
+	return ledger.set(key, reservations, nil)
+}
+
+func (ledger *CapacityLedger) set(key string, reservations CapacityReservations, revision *uint64) bool {
 	normalized, ok := cloneValidReservations(reservations)
 	if key == "" || !ok {
 		return false
 	}
 	ledger.mu.Lock()
 	defer ledger.mu.Unlock()
+	if revision != nil && ledger.revision != *revision {
+		return false
+	}
 	if ledger.byKey == nil {
 		ledger.byKey = make(map[string]CapacityReservations)
 	}
 	ledger.byKey[key] = normalized
+	ledger.revision++
 	return true
 }
 
@@ -55,6 +64,7 @@ func (ledger *CapacityLedger) Delete(key string) bool {
 		return false
 	}
 	delete(ledger.byKey, key)
+	ledger.revision++
 	return true
 }
 
@@ -111,4 +121,17 @@ func cloneValidReservations(reservations CapacityReservations) (CapacityReservat
 		out.Add(capacityID, amount)
 	}
 	return out, true
+}
+
+// Revision changes whenever an order acquires, replaces or releases capacity.
+// Quotes recheck it after calculation; fill planners use SetAt to reject stale plans.
+func (ledger *CapacityLedger) Revision() uint64 {
+	ledger.mu.RLock()
+	defer ledger.mu.RUnlock()
+	return ledger.revision
+}
+
+// SetAt installs a plan only if no reservation changed since its input was read.
+func (ledger *CapacityLedger) SetAt(key string, reservations CapacityReservations, revision uint64) bool {
+	return ledger.set(key, reservations, &revision)
 }

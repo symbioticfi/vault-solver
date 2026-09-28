@@ -204,7 +204,7 @@ func offerDiscountCandidate(e *executionService, be *fakeBackend, id common.Hash
 		DiscountID: id.Hex(), Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
 		Collateral: tOut.Hex(), CollateralDecimals: 6,
 		Discount: "500", Deadline: 4_102_444_800,
-		MaxAssets: "10000000", MaxRate: "1000000000000000000",
+		MaxAssets: "10000000",
 	}}}
 }
 
@@ -467,7 +467,7 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 		DiscountID: h.Hex(), Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
 		Collateral: tOut.Hex(), CollateralDecimals: 6,
 		Discount: "500", Deadline: 4_102_444_800,
-		MaxAssets: "10000000", MaxRate: "1000000000000000000", // 1e7 liquidity, rate 1.0 → 1000000 out ≥ 900000 required
+		MaxAssets: "10000000", // 1e7 liquidity, rate 1.0 → 1000000 out ≥ 900000 required
 	}}}
 	be.discount = &resolveDiscountResponse{
 		DiscountID: h.Hex(),
@@ -484,7 +484,8 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 	// No vaults configured (discount-only solver); fill-plan recovery prices via the default
 	// strategy's own dependency.
 	e.vaults = nil
-	e.reader = &fakeRecoveryReader{quoteOut: map[common.Address]*big.Int{tOut: big.NewInt(500000)}}
+	// The adapter's own quote prices the discount leg: floor(1000000 * (1e6 - 500) / 1e6) = 999500.
+	e.reader = &fakeRecoveryReader{quoteOut: map[common.Address]*big.Int{tOut: big.NewInt(1_000_000)}}
 	e.strategy = newDefaultTestStrategy()
 
 	syncCycle(context.Background(), e)
@@ -500,6 +501,35 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 	}
 	if want := time.Unix(4_102_444_700, 0); !txm.lastReq.CancelAt.Equal(want) {
 		t.Fatalf("fill CancelAt = %v, want protocol deadline %v", txm.lastReq.CancelAt, want)
+	}
+}
+
+// The backend's advertised rate would cover the order, but the adapter's own quote at the order
+// amount pays less, so no fill is planned: the on-chain payout could not meet the order's output.
+func TestExecution_DiscountLegPricedFromAdapterQuote(t *testing.T) {
+	_, be := fillFixtures(t)
+	st := newStore(func() time.Time { return time.Unix(0, 0) })
+	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
+	be.discounts = &discountsResponse{Discounts: []discountListItem{{
+		DiscountID: h.Hex(), Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
+		Collateral: tOut.Hex(), CollateralDecimals: 6,
+		Discount: "500", Deadline: 4_102_444_800,
+		MaxAssets: "10000000", // advertises 1000000 out; 900000 is required
+	}}}
+	txm := &fakeTxm{result: confirmedTxResult()}
+	e := newExec(t, st, be, txm)
+	e.vaults = nil
+	e.reader = &fakeRecoveryReader{quoteOut: map[common.Address]*big.Int{tOut: big.NewInt(500_000)}}
+	e.strategy = newDefaultTestStrategy()
+
+	syncCycle(context.Background(), e)
+
+	rec := st.order("o1")
+	if rec == nil || rec.Status == statusFilled || !strings.Contains(rec.LastError, "below required amount out") {
+		t.Fatalf("status = %v, want no fill priced above the adapter's 499750 payout", rec)
+	}
+	if be.resolveCalls != 0 || txm.lastReq.Data != nil {
+		t.Fatalf("resolve calls = %d, calldata = %x; want no resolution or fill", be.resolveCalls, txm.lastReq.Data)
 	}
 }
 
@@ -558,10 +588,10 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{
 		{DiscountID: listedID, Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
 			CollateralDecimals: 6, Discount: "500", Deadline: 4_102_444_800,
-			MaxRate: "1000000000000000000", MaxAssets: "10000000"},
+			MaxAssets: "10000000"},
 		{DiscountID: rogueID, Adapter: rogue.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
 			CollateralDecimals: 6, Discount: "500", Deadline: 4_102_444_800,
-			MaxRate: "2000000000000000000", MaxAssets: "10000000"},
+			MaxAssets: "10000000"},
 	}}}
 	st := newStore(func() time.Time { return time.Unix(0, 0) })
 
@@ -588,7 +618,7 @@ func TestExecution_DiscountInventoriesSkipsExpired(t *testing.T) {
 		DiscountID: "0x00000000000000000000000000000000000000000000000000000000000000a1",
 		Adapter:    vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
 		CollateralDecimals: 6, Discount: "500", Deadline: 1,
-		MaxRate: "1000000000000000000", MaxAssets: "10000000",
+		MaxAssets: "10000000",
 	}}}}
 	st := newStore(func() time.Time { return time.Unix(2, 0) })
 	e := newExec(t, st, be, &fakeTxm{})
@@ -770,7 +800,7 @@ func TestExecution_DiscountInventoriesCarrySnapshotBlock(t *testing.T) {
 	be.discounts = &discountsResponse{Discounts: []discountListItem{{
 		DiscountID: "0x00000000000000000000000000000000000000000000000000000000000000ab",
 		Adapter:    vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), CollateralDecimals: 6,
-		Discount: "500", Deadline: 4_102_444_800, MaxAssets: "10000000", MaxRate: "1000000000000000000",
+		Discount: "500", Deadline: 4_102_444_800, MaxAssets: "10000000",
 		BlockNumber: "4242",
 	}}}
 	e := newExec(t, newStore(func() time.Time { return time.Unix(0, 0) }), be, &fakeTxm{})

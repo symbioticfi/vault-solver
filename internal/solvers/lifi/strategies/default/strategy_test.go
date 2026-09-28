@@ -666,9 +666,9 @@ func TestPriceQuoteRangeNeverOverquotesInteriorRouteTransition(t *testing.T) {
 		t.Fatalf("invalid quote rate %q", quoteRange.Quote)
 	}
 	for amount := quoteRange.MinAmount.Int64(); amount <= quoteRange.MaxAmount.Int64(); amount++ {
-		actual, solveErr := liquidgreedy.SolveQuote(liquidgreedy.QuoteTask{
+		actual, solveErr := liquidgreedy.SolveQuote(liquidstrategies.QuoteTask{
 			ExactInput: big.NewInt(amount), Candidates: candidates, MaxRoutes: 3,
-			MinInput: strategy.minAmount, InputPolicy: liquidgreedy.RejectUncoveredInput,
+			MinInput: strategy.minAmount, InputPolicy: liquidstrategies.RejectUncoveredInput,
 		})
 		if solveErr != nil || actual == nil {
 			t.Fatalf("SolveQuote(%d) = %+v, %v", amount, actual, solveErr)

@@ -20,6 +20,8 @@ type Selection struct {
 	AmountIn   *big.Int
 
 	MinAmountOut *big.Int
+	// MaxAmountOut optionally bounds the uncapped payout by the selected capacity reservation.
+	MaxAmountOut *big.Int
 }
 
 // Provider is the shared signed-discount API surface used by direct LiquidLane clients.
@@ -51,7 +53,12 @@ func ValidateSigned(
 	}
 	amountOut := liquidlane.AmountOutAfterDiscount(base.GrossAmountOut, signed.Terms.Discount)
 	if selection.MinAmountOut != nil && amountOut.Cmp(selection.MinAmountOut) < 0 {
-		return nil, errors.New("resolved discount no longer meets the selected minimum output")
+		return nil, errors.Errorf("resolved discount no longer meets the selected minimum output: amountOut=%s minAmountOut=%s reservedAmountOut=%s grossAmountOut=%s discountPpm=%s",
+			amountOut, selection.MinAmountOut, selection.MaxAmountOut, base.GrossAmountOut, signed.Terms.Discount)
+	}
+	if selection.MaxAmountOut != nil && amountOut.Cmp(selection.MaxAmountOut) > 0 {
+		return nil, errors.Errorf("resolved discount exceeds the selected capacity reservation: amountOut=%s minAmountOut=%s reservedAmountOut=%s grossAmountOut=%s discountPpm=%s",
+			amountOut, selection.MinAmountOut, selection.MaxAmountOut, base.GrossAmountOut, signed.Terms.Discount)
 	}
 	return amountOut, nil
 }
@@ -155,13 +162,7 @@ func RefreshFillQuotes(
 		if signed == nil || !ok {
 			continue
 		}
-		if candidate.MaxRate == nil || base.MaxRate == nil || candidate.MaxRate.Cmp(base.MaxRate) > 0 {
-			issues = append(issues, OfferIssue{
-				DiscountID: candidate.DiscountID.Hex(),
-				Err:        errors.New("resolved discount rate exceeds refreshed adapter max rate"),
-			})
-			continue
-		}
+		// ValidateSigned bounds the signed discount by the refreshed adapter minimum.
 		candidate.MaxAssets = minPositive(candidate.MaxAssets, base.MaxAssets)
 		if candidate.MaxAssets.Sign() <= 0 {
 			continue
@@ -178,6 +179,10 @@ func RefreshFillQuotes(
 		candidate.AmountIn = liquidlane.CloneBig(base.AmountIn)
 		candidate.GrossAmountOut = liquidlane.CloneBig(base.GrossAmountOut)
 		candidate.MaxAmountOut = maxAmountOut
+		candidate.MaxRate = liquidlane.RateForAmountOut(
+			maxAmountOut, base.AmountIn, base.TokenInDecimals, base.TokenOutDecimals,
+		)
+		candidate.Discount = liquidlane.CloneBig(signed.Terms.Discount)
 		candidate.MinDiscount = liquidlane.CloneBig(base.MinDiscount)
 		candidate.ValidUntil = ValidUntil(signed)
 		quotes = append(quotes, candidate)

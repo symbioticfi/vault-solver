@@ -5,12 +5,14 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 )
 
 func TestSolveQuoteRejectsOrAbsorbsUncoveredInput(t *testing.T) {
 	candidates := []Candidate{candidate("only", "route", 100, 60)}
 	var declineReason string
-	strict, err := SolveQuote(QuoteTask{
+	strict, err := SolveQuote(strategies.QuoteTask{
 		ExactInput: big.NewInt(100), Candidates: candidates, MaxRoutes: 1,
 		Trace: func(_ string, fields ...any) {
 			declineReason, _ = fields[1].(string)
@@ -22,9 +24,9 @@ func TestSolveQuoteRejectsOrAbsorbsUncoveredInput(t *testing.T) {
 	if declineReason != insufficientCapacityReason {
 		t.Fatalf("decline reason = %q", declineReason)
 	}
-	absorbed, err := SolveQuote(QuoteTask{
+	absorbed, err := SolveQuote(strategies.QuoteTask{
 		ExactInput: big.NewInt(100), Candidates: candidates, MaxRoutes: 1,
-		InputPolicy: AbsorbUncoveredInput,
+		InputPolicy: strategies.AbsorbUncoveredInput,
 	})
 	if err != nil || absorbed == nil || absorbed.AmountOut.Int64() != 60 ||
 		len(absorbed.Allocations) != 1 || absorbed.Allocations[0].AmountIn.Int64() != 100 {
@@ -35,9 +37,9 @@ func TestSolveQuoteRejectsOrAbsorbsUncoveredInput(t *testing.T) {
 func TestSolveQuoteStrictUsesRouteThatCanCoverLastSlot(t *testing.T) {
 	narrow := candidate("narrow", "route-1", 200, 60)
 	wide := candidate("wide", "route-2", 100, 100)
-	quote, err := SolveQuote(QuoteTask{
+	quote, err := SolveQuote(strategies.QuoteTask{
 		ExactInput: big.NewInt(100), Candidates: []Candidate{narrow, wide}, MaxRoutes: 1,
-		InputPolicy: RejectUncoveredInput,
+		InputPolicy: strategies.RejectUncoveredInput,
 	})
 	if err != nil || quote == nil || len(quote.Allocations) != 1 ||
 		quote.Allocations[0].Candidate.ID != "wide" {
@@ -47,7 +49,7 @@ func TestSolveQuoteStrictUsesRouteThatCanCoverLastSlot(t *testing.T) {
 
 func TestSolveQuoteAppliesBufferAndFindsExactOutputInput(t *testing.T) {
 	candidates := []Candidate{candidate("only", "route", 100, 1_000)}
-	exactInput, err := SolveQuote(QuoteTask{
+	exactInput, err := SolveQuote(strategies.QuoteTask{
 		ExactInput: big.NewInt(1_000), Candidates: candidates, MaxRoutes: 1,
 		OutputBufferBps: 200,
 	})
@@ -55,7 +57,7 @@ func TestSolveQuoteAppliesBufferAndFindsExactOutputInput(t *testing.T) {
 		exactInput.GasCost.Sign() != 0 || exactInput.AmountOut.Int64() != 980 {
 		t.Fatalf("exact input = %+v, err %v", exactInput, err)
 	}
-	exactOutput, err := SolveQuote(QuoteTask{
+	exactOutput, err := SolveQuote(strategies.QuoteTask{
 		ExactOutput: big.NewInt(980), Candidates: candidates, MaxRoutes: 1,
 		OutputBufferBps: 200,
 	})
@@ -71,7 +73,7 @@ func TestSolveQuoteExactOutputKeepsRoundingSurplus(t *testing.T) {
 	private.DiscountID = &discountID
 	direct := candidate("direct", "route", 100, 1_000)
 
-	quote, err := SolveQuote(QuoteTask{
+	quote, err := SolveQuote(strategies.QuoteTask{
 		ExactOutput: big.NewInt(119), Candidates: []Candidate{private, direct}, MaxRoutes: 1,
 	})
 	if err != nil || quote == nil || quote.AmountIn.Int64() != 100 || quote.AmountOut.Int64() != 119 ||
@@ -86,7 +88,7 @@ func TestSolveQuoteExactOutputDoesNotDeclineAtWiderWorseAlternative(t *testing.T
 	private.DiscountID = &discountID
 	direct := candidate("direct", "route", 10, 1_000)
 
-	quote, err := SolveQuote(QuoteTask{
+	quote, err := SolveQuote(strategies.QuoteTask{
 		ExactOutput: big.NewInt(150), Candidates: []Candidate{private, direct}, MaxRoutes: 1,
 	})
 	if err != nil || quote == nil || quote.AmountIn.Int64() != 75 || quote.AmountOut.Int64() != 150 {
@@ -100,7 +102,7 @@ func TestSolveQuoteExactOutputUsesWiderAlternativeWhenPrivateCannotCover(t *test
 	private.DiscountID = &discountID
 	direct := candidate("direct", "route", 100, 1_000)
 
-	quote, err := SolveQuote(QuoteTask{
+	quote, err := SolveQuote(strategies.QuoteTask{
 		ExactOutput: big.NewInt(250), Candidates: []Candidate{private, direct}, MaxRoutes: 1,
 	})
 	if err != nil || quote == nil || quote.AmountIn.Int64() != 250 ||
@@ -117,9 +119,9 @@ func TestSolveQuoteExactInputUsesWiderPrivateAlternative(t *testing.T) {
 	wide := candidate("wide-private", "route", 100, 100)
 	wide.DiscountID = &wideDiscountID
 
-	quote, err := SolveQuote(QuoteTask{
+	quote, err := SolveQuote(strategies.QuoteTask{
 		ExactInput: big.NewInt(100), Candidates: []Candidate{narrow, wide}, MaxRoutes: 1,
-		InputPolicy: RejectUncoveredInput,
+		InputPolicy: strategies.RejectUncoveredInput,
 	})
 	if err != nil || quote == nil || len(quote.Allocations) != 1 ||
 		quote.Allocations[0].Candidate.ID != "wide-private" ||
@@ -135,7 +137,7 @@ func TestSolveQuoteExactOutputUsesNarrowPrivateAfterAnotherRoute(t *testing.T) {
 	direct := candidate("direct", "route-1", 100, 1_000)
 	second := candidate("second", "route-2", 150, 100)
 
-	quote, err := SolveQuote(QuoteTask{
+	quote, err := SolveQuote(strategies.QuoteTask{
 		ExactOutput: big.NewInt(250), Candidates: []Candidate{private, direct, second}, MaxRoutes: 2,
 	})
 	if err != nil || quote == nil || quote.AmountIn.Int64() != 150 || len(quote.Allocations) != 2 ||
@@ -145,7 +147,7 @@ func TestSolveQuoteExactOutputUsesNarrowPrivateAfterAnotherRoute(t *testing.T) {
 }
 
 func TestSolveQuoteExactOutputCanUseMinimumInputAsSurplus(t *testing.T) {
-	quote, err := SolveQuote(QuoteTask{
+	quote, err := SolveQuote(strategies.QuoteTask{
 		ExactOutput: big.NewInt(100), MinInput: big.NewInt(80),
 		Candidates: []Candidate{candidate("only", "route", 200, 100)}, MaxRoutes: 1,
 	})
@@ -156,9 +158,9 @@ func TestSolveQuoteExactOutputCanUseMinimumInputAsSurplus(t *testing.T) {
 }
 
 func TestSolveQuoteRejectsAmbiguousExactOutputPolicy(t *testing.T) {
-	_, err := SolveQuote(QuoteTask{
+	_, err := SolveQuote(strategies.QuoteTask{
 		ExactOutput: big.NewInt(1), Candidates: []Candidate{candidate("only", "route", 100, 1)},
-		MaxRoutes: 1, InputPolicy: AbsorbUncoveredInput,
+		MaxRoutes: 1, InputPolicy: strategies.AbsorbUncoveredInput,
 	})
 	if err == nil {
 		t.Fatal("expected exact-output policy error")
@@ -172,7 +174,7 @@ func FuzzSolveQuoteExactOutputFindsNoMoreInputThanExactInput(f *testing.F) {
 		rate := int64(rawRate%200 + 1)
 		buffer := int(rawBuffer % 1_000)
 		candidates := []Candidate{candidate("only", "route", rate, amount)}
-		exactInput, err := SolveQuote(QuoteTask{
+		exactInput, err := SolveQuote(strategies.QuoteTask{
 			ExactInput: big.NewInt(amount), Candidates: candidates, MaxRoutes: 1,
 			OutputBufferBps: buffer,
 		})
@@ -182,7 +184,7 @@ func FuzzSolveQuoteExactOutputFindsNoMoreInputThanExactInput(f *testing.F) {
 		if exactInput == nil {
 			return
 		}
-		exactOutput, err := SolveQuote(QuoteTask{
+		exactOutput, err := SolveQuote(strategies.QuoteTask{
 			ExactOutput: exactInput.AmountOut, Candidates: candidates, MaxRoutes: 1,
 			OutputBufferBps: buffer,
 		})
@@ -210,7 +212,7 @@ func TestSolveQuoteNeverAbsorbsInputIntoDiscount(t *testing.T) {
 			if tc.discount {
 				c.DiscountID = &discountID
 			}
-			got, err := SolveQuote(QuoteTask{ExactInput: big.NewInt(100), Candidates: []Candidate{c}, MaxRoutes: 1, InputPolicy: AbsorbUncoveredInput})
+			got, err := SolveQuote(strategies.QuoteTask{ExactInput: big.NewInt(100), Candidates: []Candidate{c}, MaxRoutes: 1, InputPolicy: strategies.AbsorbUncoveredInput})
 			if err != nil || (got != nil) != tc.wantQuote {
 				t.Fatalf("quote = %+v, err %v", got, err)
 			}

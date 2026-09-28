@@ -115,7 +115,7 @@ func TestRefreshResolvedDiscountQuotesUsesFreshAdapterState(t *testing.T) {
 	}
 }
 
-func TestRefreshResolvedDiscountQuotesRejectsRateAboveFreshAdapterLimit(t *testing.T) {
+func TestRefreshResolvedDiscountQuotesPriceFromFreshAdapterState(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	direct := testDirectDiscountInventory()
 	id := common.HexToHash(testDiscountID)
@@ -128,20 +128,43 @@ func TestRefreshResolvedDiscountQuotesRejectsRateAboveFreshAdapterLimit(t *testi
 		AmountIn:  big.NewInt(1_000), GrossAmountOut: big.NewInt(1_000), MaxAmountOut: big.NewInt(900),
 		MinDiscount: big.NewInt(100_000),
 	}
-	fresh := candidate
-	fresh.Inventory = direct
-	fresh.MaxRate = big.NewInt(800_000_000_000_000_000)
 	signed, err := discounts.ParseSigned(testResolvedDiscount(direct, 100_000, now.Add(time.Minute)))
 	if err != nil {
 		t.Fatalf("ParseSigned: %v", err)
 	}
 
-	got, _ := discounts.RefreshFillQuotes(
-		[]liquidlane.FillQuote{candidate}, map[common.Hash]*discounts.Signed{id: signed},
-		[]liquidlane.FillQuote{fresh}, now,
-	)
-	if len(got) != 0 {
-		t.Fatalf("unsafe quote survived: %+v", got)
+	for _, tt := range []struct {
+		name               string
+		gross, minDiscount int64
+		wantPayout         int64 // zero means rejected
+	}{
+		// A lower oracle price lowers the payout the refreshed quote plans; the rate never gates it.
+		{name: "fresh gross output sets the payout", gross: 950, minDiscount: 100_000, wantPayout: 855},
+		// A raised adapter minimum makes the signed discount revert on-chain.
+		{name: "raised adapter minimum rejects the signed discount", gross: 1_000, minDiscount: 150_000},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			fresh := candidate
+			fresh.Inventory = direct
+			fresh.GrossAmountOut = big.NewInt(tt.gross)
+			fresh.MinDiscount = big.NewInt(tt.minDiscount)
+			fresh.MaxAmountOut = liquidlane.AmountOutAfterDiscount(fresh.GrossAmountOut, fresh.MinDiscount)
+			fresh.MaxRate = liquidlane.RateForAmountOut(fresh.MaxAmountOut, fresh.AmountIn, 6, 6)
+
+			got, issues := discounts.RefreshFillQuotes(
+				[]liquidlane.FillQuote{candidate}, map[common.Hash]*discounts.Signed{id: signed},
+				[]liquidlane.FillQuote{fresh}, now,
+			)
+			if tt.wantPayout == 0 {
+				if len(got) != 0 || len(issues) != 1 {
+					t.Fatalf("unsafe quote survived: quotes=%+v issues=%+v", got, issues)
+				}
+				return
+			}
+			if len(issues) != 0 || len(got) != 1 || got[0].MaxAmountOut.Cmp(big.NewInt(tt.wantPayout)) != 0 {
+				t.Fatalf("quotes=%+v issues=%+v; want payout %d", got, issues, tt.wantPayout)
+			}
+		})
 	}
 }
 
@@ -157,6 +180,7 @@ func testDirectDiscountInventory() liquidlane.Inventory {
 	)
 	inventory := liquidlane.DirectInventory(routeItem, big.NewInt(1_000), big.NewInt(900_000_000_000_000_000))
 	inventory.AdapterMinDiscount = big.NewInt(100_000)
+	inventory.Price = big.NewInt(1_000_000_000_000_000_000) // getMaxRate 0.9e18 at the 10% minimum
 	return inventory
 }
 
@@ -169,8 +193,7 @@ func testDiscountListItem(
 		DiscountID: testDiscountID,
 		Adapter:    direct.Adapter.Hex(), TokenToRedeem: direct.TokenIn.Hex(), Collateral: direct.TokenOut.Hex(),
 		CollateralDecimals: direct.TokenOutDecimals, Deadline: deadline.Unix(),
-		Discount: "100000",
-		MaxRate:  direct.MaxRate.String(), MaxAssets: big.NewInt(maxAssets).String(),
+		Discount: "100000", MaxAssets: big.NewInt(maxAssets).String(),
 	}
 }
 

@@ -8,7 +8,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
-	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 )
 
 func TestSolveFillChoosesBestCompleteRoutes(t *testing.T) {
@@ -27,7 +27,7 @@ func TestSolveFillChoosesBestCompleteRoutes(t *testing.T) {
 			nil,
 		)
 	}
-	allocation, err := SolveFill(FillTask{
+	allocation, err := SolveFill(strategies.FillTask{
 		TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(2), Quotes: quotes, MaxRoutes: 3,
 	})
 	if err != nil || allocation == nil {
@@ -39,13 +39,38 @@ func TestSolveFillChoosesBestCompleteRoutes(t *testing.T) {
 	}
 }
 
+func TestSolveFillSharesPhysicalBudgetAcrossNarrowSources(t *testing.T) {
+	for _, budget := range []int64{59, 60, 100} {
+		t.Run(big.NewInt(budget).String(), func(t *testing.T) {
+			quotes := []liquidlane.FillQuote{
+				testFillQuote("a", "shared", common.Address{}, common.Address{}, 60, 60, 70, nil),
+				testFillQuote("b", "shared", common.Address{}, common.Address{}, 60, 60, 70, nil),
+			}
+			solution, err := SolveFill(strategies.FillTask{
+				AmountIn: big.NewInt(60), Quotes: quotes, MaxRoutes: 2,
+				CapacityLimits: map[liquidlane.CapacityID]*big.Int{"shared": big.NewInt(budget + 30)},
+				Reservations:   liquidlane.CapacityReservations{"shared": big.NewInt(30)},
+			})
+			if err != nil || (solution != nil) != (budget >= 60) {
+				t.Fatalf("budget=%d solution=%v err=%v", budget, solution, err)
+			}
+			if solution != nil {
+				routes := solution.Finalize(big.NewInt(60))
+				if len(routes) != 2 || routes[0].ReservedAmountOut.Int64() > 40 || routes[1].ReservedAmountOut.Int64() > 40 {
+					t.Fatalf("source limits not respected: %+v", routes)
+				}
+			}
+		})
+	}
+}
+
 func TestSolveFillUsesDirectWhenPrivateCannotCoverLeg(t *testing.T) {
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	discountID := common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	direct := testFillQuote("route", "capacity", tokenIn, tokenOut, 100, 100, 100, nil)
 	private := testFillQuote("route", "capacity", tokenIn, tokenOut, 100, 200, 100, &discountID)
-	allocation, err := SolveFill(FillTask{
+	allocation, err := SolveFill(strategies.FillTask{
 		TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(100),
 		Quotes: []liquidlane.FillQuote{private, direct}, MaxRoutes: 1,
 	})
@@ -66,7 +91,7 @@ func TestSolveFillUsesWiderPrivateAlternative(t *testing.T) {
 	narrow := testFillQuote("route", "capacity", tokenIn, tokenOut, 100, 200, 50, &narrowDiscountID)
 	wide := testFillQuote("route", "capacity", tokenIn, tokenOut, 100, 100, 100, &wideDiscountID)
 
-	solution, err := SolveFill(FillTask{
+	solution, err := SolveFill(strategies.FillTask{
 		TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(100),
 		Quotes: []liquidlane.FillQuote{narrow, wide}, MaxRoutes: 1,
 	})
@@ -86,7 +111,7 @@ func TestSolveFillDoesNotOverbookSharedCapacity(t *testing.T) {
 	high := testFillQuote("high", "shared", tokenIn, tokenOut, 75, 150, 100, nil)
 	wide := testFillQuote("wide", "shared", tokenIn, tokenOut, 75, 75, 60, nil)
 	var declineReason string
-	allocation, err := SolveFill(FillTask{
+	allocation, err := SolveFill(strategies.FillTask{
 		TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(75),
 		Quotes: []liquidlane.FillQuote{high, wide}, MaxRoutes: 2,
 		Trace: func(_ string, fields ...any) {
@@ -108,10 +133,10 @@ func TestSolveFillAbsorbsUncoveredInputAsPriceImpact(t *testing.T) {
 	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	quote := testFillQuote("route", "capacity", tokenIn, tokenOut, 100, 100, 60, nil)
-	solution, err := SolveFill(FillTask{
+	solution, err := SolveFill(strategies.FillTask{
 		TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(100),
 		Quotes: []liquidlane.FillQuote{quote}, MaxRoutes: 1,
-		InputPolicy: AbsorbUncoveredInput,
+		InputPolicy: strategies.AbsorbUncoveredInput,
 	})
 	if err != nil || solution == nil || solution.MaxAmountOut().Int64() != 60 {
 		t.Fatalf("solution = %+v, err %v", solution, err)
@@ -128,7 +153,7 @@ func TestSolveFillGasPricingIsOptional(t *testing.T) {
 	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
 	amount := big.NewInt(10_000_000)
 	quote := testFillQuote("route", "capacity", tokenIn, tokenOut, amount.Int64(), amount.Int64(), amount.Int64(), nil)
-	task := FillTask{
+	task := strategies.FillTask{
 		TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: amount,
 		Quotes: []liquidlane.FillQuote{quote}, MaxRoutes: 1,
 	}
@@ -137,7 +162,7 @@ func TestSolveFillGasPricingIsOptional(t *testing.T) {
 	if err != nil || withoutGas == nil || withoutGas.MaxAmountOut().Cmp(amount) != 0 {
 		t.Fatalf("SolveFill without gas = %v, %v", withoutGas, err)
 	}
-	gasPricing, err := liquidstrategies.NewGasPricing(
+	gasPricing, err := strategies.NewGasPricing(
 		big.NewInt(1),
 		tokenOut,
 		liquidlanegas.NewPriceSnapshot(map[common.Address]*big.Int{
@@ -145,7 +170,7 @@ func TestSolveFillGasPricingIsOptional(t *testing.T) {
 		}),
 		nil,
 		0,
-		liquidstrategies.GasEnvelope{SettlementUnits: 250_000, PrivateRouteUnits: 75_000},
+		strategies.GasEnvelope{SettlementUnits: 250_000, PrivateRouteUnits: 75_000},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -165,18 +190,10 @@ func TestSolveFillGasPricingIsOptional(t *testing.T) {
 }
 
 func TestSolveFillRejectsInvalidBps(t *testing.T) {
-	_, err := SolveFill(FillTask{AmountIn: big.NewInt(1), Quotes: []liquidlane.FillQuote{{}},
+	_, err := SolveFill(strategies.FillTask{AmountIn: big.NewInt(1), Quotes: []liquidlane.FillQuote{{}},
 		MaxRoutes: 1, PriceBufferBps: bpsDenominator})
 	if err == nil {
 		t.Fatal("expected invalid bps error")
-	}
-}
-
-func TestDistributeMinimumsPreservesTotalAndBounds(t *testing.T) {
-	targets := []*big.Int{big.NewInt(200), big.NewInt(800)}
-	minimums := distributeMinimums(targets, big.NewInt(503))
-	if len(minimums) != 2 || minimums[0].String() != "100" || minimums[1].String() != "403" {
-		t.Fatalf("minimums = %v", minimums)
 	}
 }
 
@@ -231,7 +248,7 @@ func FuzzSolveFillPreservesExactInputAndOutputFloor(f *testing.F) {
 				nil,
 			)
 		}
-		allocation, err := SolveFill(FillTask{
+		allocation, err := SolveFill(strategies.FillTask{
 			TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(amount),
 			Quotes: quotes, MaxRoutes: 3,
 		})
@@ -295,7 +312,7 @@ func TestSolveFillNeverAbsorbsInputIntoDiscount(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			q := testFillQuote("route", "capacity", tokenIn, tokenOut, 100, 100, 60, tc.discount)
-			got, err := SolveFill(FillTask{TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(100), Quotes: []liquidlane.FillQuote{q}, MaxRoutes: 1, InputPolicy: AbsorbUncoveredInput})
+			got, err := SolveFill(strategies.FillTask{TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(100), Quotes: []liquidlane.FillQuote{q}, MaxRoutes: 1, InputPolicy: strategies.AbsorbUncoveredInput})
 			if err != nil || (got != nil) != tc.wantFill {
 				t.Fatalf("fill = %+v, err %v", got, err)
 			}
