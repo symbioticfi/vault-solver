@@ -186,6 +186,14 @@ func TestReadBalanceAtBlock(t *testing.T) {
 			wantParam: `"0x7"`, wantNotFound: true, wantErr: true, wantOutcome: rpcOutcomeRPCError,
 		},
 		{
+			// geth's answer for a hash a reorg has replaced since the caller read it: the pin is stale,
+			// exactly like a block the node has not imported yet.
+			name: "canonical hash reorged out", block: rpc.BlockNumberOrHashWithHash(hash, true),
+			reply:     rpcReply{err: &jsonRPCErrorObject{Code: -32000, Message: "hash is not currently canonical"}},
+			wantParam: `{"blockHash":"` + hash.Hex() + `","requireCanonical":true}`, wantNotFound: true, wantErr: true,
+			wantOutcome: rpcOutcomeRPCError,
+		},
+		{
 			name: "null balance", block: rpc.BlockNumberOrHashWithNumber(7),
 			reply: rpcReply{result: nil}, wantParam: `"0x7"`, wantNotFound: true, wantErr: true, wantOutcome: rpcOutcomeSuccess,
 		},
@@ -504,6 +512,7 @@ func TestIsBlockNotFound(t *testing.T) {
 		{name: "transport", err: errors.New("dial tcp: connection refused")},
 		{name: "geth number", err: &testRPCError{code: -32000, message: "header not found"}, want: true},
 		{name: "geth hash", err: &testRPCError{code: -32000, message: "header for hash not found"}, want: true},
+		{name: "geth reorged canonical hash", err: &testRPCError{code: -32000, message: "hash is not currently canonical"}, want: true},
 		{name: "resource not found", err: &testRPCError{code: -32001, message: "Resource not found"}, want: true},
 		{name: "anvil out of range", err: &testRPCError{code: -32602, message: "BlockOutOfRangeError: block height is 1 but requested was 6"}, want: true},
 		{name: "nethermind", err: &testRPCError{code: -32000, message: "Block 0x12 could not be found"}, want: true},

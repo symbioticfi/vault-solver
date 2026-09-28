@@ -7,6 +7,7 @@ package txmanager
 import (
 	"context"
 	"math/big"
+	"math/bits"
 	"slices"
 	"strings"
 	"sync"
@@ -280,14 +281,26 @@ func (m *Manager) Confirmations() uint64 {
 	return m.cfg.Confirmations
 }
 
+// ReferenceGasUnits is the fill gas limit the lane funding gate and quote pricing assume
+// (txManager.balance.referenceGasUnits); zero means the operator has not set one and the gate is off.
+func (m *Manager) ReferenceGasUnits() uint64 {
+	return m.cfg.Balance.ReferenceGasUnits
+}
+
 // ValidateFeeHeadroom rejects a fee configuration whose priority fees can never fit under the
 // initial transaction cap after reserving one ordinary replacement and one cancellation bump: the
 // tipGwei floor and fees.tipFloorGwei (which the balance guard's refusal floor assumes) under both
-// policies, and the whole tip ladder up to fees.congestedTipCapGwei under the horizon policy.
+// policies, and the whole tip ladder up to fees.congestedTipCapGwei under the horizon policy. It also
+// rejects a fees.tipFloorGwei below one wei; the rest of the ladder is at least the floor.
 func (m *Manager) ValidateFeeHeadroom() error {
 	cfg := m.cfg.WithDefaults()
 	if cfg.Fees.Policy != FeePolicyLegacy && cfg.Fees.Policy != FeePolicyHorizon {
 		return errors.Errorf("unknown fee policy %q", cfg.Fees.Policy)
+	}
+	// Checked in wei, as it is signed: a positive gwei value below one wei truncates to a zero tip,
+	// which relays reject and which would leave the refusal floor on the base fee alone.
+	if gweiToWei(cfg.Fees.TipFloorGwei).Sign() <= 0 {
+		return errors.Errorf("fees.tipFloorGwei %v must be at least one wei (0.000000001 gwei)", cfg.Fees.TipFloorGwei)
 	}
 	initialLimit := reserveFeeBump(m.normalFeeLimit(Request{}))
 	if initialLimit == nil {
@@ -1599,8 +1612,31 @@ func (m *Manager) estimateGas(ctx context.Context, req Request) (uint64, error) 
 		)
 		return 0, errors.Errorf("estimate gas %q: %w", req.Label, err)
 	}
-	// 5% headroom over the estimate.
-	return gas + gas/20, nil
+	headroomBps := uint64(defaultGasHeadroomBps)
+	if configured := m.cfg.Gas.HeadroomBps; configured != nil {
+		headroomBps = *configured
+	}
+	limit, err := gasLimitWithHeadroom(gas, headroomBps)
+	if err != nil {
+		return 0, errors.Errorf("estimate gas %q: %w", req.Label, err)
+	}
+	return limit, nil
+}
+
+// gasLimitWithHeadroom adds bps basis points of the estimate to it, rounding the headroom down, so the
+// default 500 bps signs exactly the estimate + estimate/20 the manager always has. The product is
+// computed in 128 bits; a limit that does not fit in 64 bits is an error rather than a wrapped value.
+func gasLimitWithHeadroom(estimate, bps uint64) (uint64, error) {
+	hi, lo := bits.Mul64(estimate, bps)
+	if hi >= basisPoints {
+		return 0, errors.Errorf("gas limit overflows: estimate %d with %d bps headroom", estimate, bps)
+	}
+	headroom, _ := bits.Div64(hi, lo, basisPoints)
+	limit, carry := bits.Add64(estimate, headroom, 0)
+	if carry != 0 {
+		return 0, errors.Errorf("gas limit overflows: estimate %d with %d bps headroom", estimate, bps)
+	}
+	return limit, nil
 }
 
 func optionalBigString(value *big.Int) string {

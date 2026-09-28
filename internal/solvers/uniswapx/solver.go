@@ -20,6 +20,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
@@ -142,6 +143,11 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return nil, err
+	}
+	if cfg.Gas != nil {
+		if err := liquidlanegas.RequireReferenceGasUnits(deps.TxManager.ReferenceGasUnits()); err != nil {
+			return nil, errors.Errorf("%s: %w", Name, err)
+		}
 	}
 	orderKey := os.Getenv(cfg.OrderServer.APIKeyEnv)
 	if orderKey == "" {

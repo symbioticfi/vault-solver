@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"math/big"
 	"strings"
 	"sync"
@@ -270,6 +271,79 @@ func TestSend_HappyPath(t *testing.T) {
 	}
 }
 
+func TestSendAddsConfiguredGasHeadroom(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		headroomBps *uint64
+		want        uint64
+	}{
+		{name: "default is the historical 5%", want: 52_500},
+		{name: "mainnet 800 bps", headroomBps: new(uint64(800)), want: 54_000},
+		{name: "zero headroom", headroomBps: new(uint64(0)), want: 50_000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := newMockBackend()
+			s, err := signer.NewFromHexKey(testKey)
+			if err != nil {
+				t.Fatalf("signer: %v", err)
+			}
+			m := New(b, s, big.NewInt(11155111), Config{
+				PollInterval: time.Millisecond,
+				Gas:          GasConfig{HeadroomBps: tc.headroomBps},
+			}, logr.Discard())
+			startManagerForTest(t, m)
+
+			res := m.Send(t.Context(), Request{To: common.HexToAddress("0xabc"), Data: []byte{0x01}, Label: "headroom"})
+			if res.Err != nil {
+				t.Fatalf("send: %v", res.Err)
+			}
+			tx := b.lastSent()
+			if tx == nil {
+				t.Fatal("no transaction sent")
+			}
+			if tx.Gas() != tc.want {
+				t.Fatalf("gas limit = %d, want %d over a 50000 estimate", tx.Gas(), tc.want)
+			}
+		})
+	}
+}
+
+func TestGasLimitWithHeadroom(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		estimate uint64
+		bps      uint64
+		want     uint64
+		wantErr  bool
+	}{
+		{name: "500 bps", estimate: 50_000, bps: 500, want: 52_500},
+		{name: "500 bps rounds down like estimate/20", estimate: 3_653_314, bps: 500, want: 3_653_314 + 3_653_314/20},
+		{name: "800 bps", estimate: 3_653_314, bps: 800, want: 3_945_579},
+		{name: "zero bps", estimate: 3_653_314, want: 3_653_314},
+		{name: "headroom below one gas", estimate: 19, bps: 500, want: 19},
+		{name: "full estimate headroom", estimate: 21_000, bps: 10_000, want: 42_000},
+		{name: "product beyond 64 bits stays exact", estimate: math.MaxUint64 / 4, bps: 10_000, want: math.MaxUint64 / 4 * 2},
+		{name: "limit overflows", estimate: math.MaxUint64 - 1, bps: 1, wantErr: true},
+		{name: "headroom overflows", estimate: math.MaxUint64, bps: 20_000, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := gasLimitWithHeadroom(tc.estimate, tc.bps)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("gasLimitWithHeadroom(%d, %d) error = %v, wantErr %t", tc.estimate, tc.bps, err, tc.wantErr)
+			}
+			if !tc.wantErr && got != tc.want {
+				t.Fatalf("gasLimitWithHeadroom(%d, %d) = %d, want %d", tc.estimate, tc.bps, got, tc.want)
+			}
+		})
+	}
+	// The default must reproduce the estimate + estimate/20 the manager always signed.
+	for estimate := range uint64(100_000) {
+		if got, err := gasLimitWithHeadroom(estimate, defaultGasHeadroomBps); err != nil || got != estimate+estimate/20 {
+			t.Fatalf("gasLimitWithHeadroom(%d, default) = %d, %v; want %d", estimate, got, err, estimate+estimate/20)
+		}
+	}
+}
+
 func TestMaxFeePerGasMatchesSendFeePolicy(t *testing.T) {
 	b := newMockBackend()
 	m := newTestManager(t, b)
@@ -413,6 +487,11 @@ func TestValidateFeeHeadroom(t *testing.T) {
 		{name: "no global cap", fees: FeeConfig{Policy: FeePolicyHorizon, CongestedTipCapGwei: 1000}},
 		{name: "fee tip floor one wei below reserved cap", maxFee: 50, fees: FeeConfig{TipFloorGwei: 39.506172838}},
 		{name: "fee tip floor equals reserved cap", maxFee: 50, fees: FeeConfig{TipFloorGwei: 39.506172839}, wantErr: true},
+		{name: "fee tip floor of one wei", maxFee: 50, fees: FeeConfig{TipFloorGwei: 0.000000001}},
+		// Positive in gwei but truncated to a 0-wei tip, which Flashbots rejects and which would put the
+		// refusal floor and the funding gate on the base fee alone.
+		{name: "fee tip floor below one wei", maxFee: 50, fees: FeeConfig{TipFloorGwei: 0.0000000005}, wantErr: true},
+		{name: "fee tip floor below one wei without a global cap", fees: FeeConfig{TipFloorGwei: 0.0000000005}, wantErr: true},
 		{name: "default fee tip floor above a tiny cap", maxFee: 0.025, wantErr: true},
 		{name: "congested cap above reserved cap is unused under legacy", maxFee: 18},
 		{name: "default congested cap below reserved cap under horizon", maxFee: 19, fees: FeeConfig{Policy: FeePolicyHorizon}},

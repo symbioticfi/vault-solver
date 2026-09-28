@@ -193,8 +193,11 @@ func (c *Client) ReadBalanceAt(ctx context.Context, account common.Address) (_ *
 // ReadBalanceAtBlock reads an account balance pinned to one block through the read endpoints: by
 // hash as an EIP-1898 object, so a lagging or reorged upstream cannot answer with another block's
 // state, or by explicit number. Block tags such as latest are refused rather than read. A node that
-// does not have the pinned block yet answers with an error wrapping ethereum.NotFound, which callers
-// retry instead of falling back to a head of the node's choosing.
+// does not have the pinned block yet, or (for a hash read with RequireCanonical) no longer has it on
+// its canonical chain after a reorg, answers with an error wrapping ethereum.NotFound, which callers
+// retry from a fresh head instead of falling back to a head of the node's choosing. Without
+// RequireCanonical a node may serve a reorged-out block's state, such as a balance from before the
+// previous fill was paid, so balance checks pin a hash with RequireCanonical set.
 func (c *Client) ReadBalanceAtBlock(
 	ctx context.Context, account common.Address, block rpc.BlockNumberOrHash,
 ) (_ *big.Int, err error) {

@@ -177,14 +177,17 @@ func jsonRPCError(err error) (code int, message string, ok bool) {
 
 // blockNotFoundPhrases are how nodes word a missing block: geth ("header not found", "header for hash
 // not found"), erigon and others ("block not found", "unknown block"), nethermind ("could not be
-// found") and anvil ("BlockOutOfRangeError", sent with -32602).
+// found") and anvil ("BlockOutOfRangeError", sent with -32602). geth's "hash is not currently
+// canonical" answers an EIP-1898 hash read with requireCanonical after a reorg replaced that block:
+// the pin is as stale as one the node has not imported yet, so it is classified the same way.
 var blockNotFoundPhrases = []string{
 	"header not found", "header for hash not found", "block not found", "unknown block",
-	"could not be found", "blockoutofrange",
+	"could not be found", "blockoutofrange", "not currently canonical",
 }
 
 // isBlockNotFound reports whether err is a node saying it does not have the requested block, the
-// usual answer of an upstream that has not imported the pinned block yet.
+// usual answer of an upstream that has not imported the pinned block yet, or no longer has it on
+// its canonical chain.
 func isBlockNotFound(err error) bool {
 	code, message, ok := jsonRPCError(err)
 	if !ok || code == jsonRPCCodeMethodNotFound {

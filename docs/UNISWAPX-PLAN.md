@@ -315,8 +315,10 @@ solvers:
 
 Startup checks configured gas tokens and the Multicall3 timestamp selector.
 The `gas:` block is optional. When omitted, quote/fill decisions skip gas-state and Chainlink reads
-and do not subtract gas. Transaction submission remains dynamically priced without a request ceiling;
-the solver pays that cost without passing it through to the quote. Shared pricing, RPC routing and EOA
+and do not subtract gas. When present, the factory also requires `txManager.balance.referenceGasUnits > 0`
+(read through the generic `Manager.ReferenceGasUnits()`), because `MaxFeePerGas` sizes its quote tip for
+that gas limit and the lane funding gate measures the balance against it. Transaction submission remains
+dynamically priced without a request ceiling; the solver pays that cost without passing it through to the quote. Shared pricing, RPC routing and EOA
 startup requirements are specified in the [transaction manager plan](TXMANAGER-PLAN.md).
 
 Startup scans the executor's indexed `callers(uint256)` entries for the framework signer and checks

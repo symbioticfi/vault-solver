@@ -33,6 +33,18 @@ txManager:
   pendingTimeoutMs: 300000         # switch the active nonce to cancellation after 5m
   shutdownTimeoutMs: 60000         # bound SIGTERM cancellation + receipt drain to 60s
   # tipGwei: 1                     # optional floor; omit/zero to use the minimum p25 tip over five blocks
+  # Fee and gas strategy (optional nested blocks; commented keys show their defaults):
+  # fees:
+  #   policy: legacy               # or horizon: exact validity horizon, block-driven repricing (tipGwei: 0)
+  #   tipFloorGwei: 0.02           # tip in blocks with room; at least one wei
+  # gas:
+  #   headroomBps: 500             # gas-limit headroom over the estimate; 800 is recommended on mainnet
+  # balance:
+  #   guard: true                  # cap every attempt at what the signer balance can fund
+  #   referenceGasUnits: 4350000   # fill gas limit for the lane funding gate; 0 (default) turns it off
+  #   targetEth: 0.1               # funding target, exported for alerts only
+  # shadow:
+  #   enabled: true                # score both fee policies on every head, metrics only
 
 observability:
   addr: ":9090"                    # /metrics, /healthz, /readyz (separate from the quote server below)

@@ -129,3 +129,12 @@ func TestNewNormalizesConfig(t *testing.T) {
 		t.Fatalf("New stored %+v, want the normalized zero Config", m.cfg)
 	}
 }
+
+func TestReferenceGasUnits(t *testing.T) {
+	for _, units := range []uint64{0, 4_350_000} {
+		m := New(nil, nil, big.NewInt(1), Config{Balance: BalanceConfig{ReferenceGasUnits: units}}, logr.Discard())
+		if got := m.ReferenceGasUnits(); got != units {
+			t.Fatalf("ReferenceGasUnits() = %d, want %d", got, units)
+		}
+	}
+}

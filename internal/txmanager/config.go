@@ -53,6 +53,9 @@ type ShadowConfig struct {
 	Disabled bool
 }
 
+// basisPoints is the denominator of every *Bps knob.
+const basisPoints = 10_000
+
 const (
 	defaultBlockTime                 = 12 * time.Second
 	defaultMinHorizonBlocks          = 2

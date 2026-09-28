@@ -66,3 +66,19 @@ func ParseConfig(raw RawConfig) (OracleConfig, error) {
 		TokenUSDFeeds: feeds,
 	}, nil
 }
+
+// ErrReferenceGasUnitsRequired reports gas accounting configured on a lane whose transaction manager
+// assumes no reference fill gas limit.
+var ErrReferenceGasUnitsRequired = errors.New("gas accounting requires txManager.balance.referenceGasUnits > 0")
+
+// RequireReferenceGasUnits refuses gas accounting (a configured gas: block) on a lane whose
+// transaction manager assumes no reference fill gas limit (txmanager.Manager.ReferenceGasUnits).
+// Quote pricing picks its tip for that limit and the lane funding gate measures the balance against
+// it; at zero every block would look roomy, so quotes would keep the floor tip through runs of full
+// blocks, and the gate would stay off while the lane quotes unfunded.
+func RequireReferenceGasUnits(referenceGasUnits uint64) error {
+	if referenceGasUnits == 0 {
+		return ErrReferenceGasUnitsRequired
+	}
+	return nil
+}

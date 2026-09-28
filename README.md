@@ -209,8 +209,8 @@ expected noise and logged at info; malformed identifiers and operational failure
 `solverMode: internal` also enables signed private discounts through the shared backend. `tokensToQuote` uses the same `all`,
 `permissioned`, and `permissionless` scopes as RFQ; permissioned inputs must execute through one physical
 route. The order-server REST/WS endpoints are explicit required config. When `gas:` is configured, each
-Chainlink feed has its own required max age. The default strategy evaluates bounded geometric exact-input ranges across
-available capacity. See the plan for settlement, pricing, concurrency, and onboarding details:
+Chainlink feed has its own required max age and `txManager.balance.referenceGasUnits` must be set.
+The default strategy evaluates bounded geometric exact-input ranges across available capacity. See the plan for settlement, pricing, concurrency, and onboarding details:
 [`docs/LIFI-PLAN.md`](docs/LIFI-PLAN.md) · example
 [`config/lifi.example.yaml`](config/lifi.example.yaml).
 
@@ -258,7 +258,8 @@ The quote path uses a refreshed on-chain inventory snapshot so it stays within U
 response deadline. Each request is priced once for its concrete amount: the strategy returns one
 `amountIn`/`amountOut` pair after price buffer and, when configured, estimated fill gas, with no precomputed
 ladders, amount ranges, or quote-time route reservation. Omitting the entire `gas:` block disables gas
-accounting in both quote and fill decisions and skips gas-state and Chainlink reads. The tx manager still
+accounting in both quote and fill decisions and skips gas-state and Chainlink reads; configuring it requires
+`txManager.balance.referenceGasUnits`. The tx manager still
 prices and pays actual transaction gas, so that cost is then subsidized by the solver. Uniswap deliberately
 makes indicative and hard RFQ requests
 indistinguishable, so the solver echoes `quoteId` but does not guess the phase. Fill planning reserves
@@ -377,7 +378,7 @@ txManager:
     headroomBps: 500        # gas-limit headroom over the estimate; 800 is recommended on mainnet
   balance:
     guard: true             # never sign an attempt the signer balance cannot fund
-    referenceGasUnits: 0    # fill gas limit for the lane funding gate; 0 turns the gate off
+    referenceGasUnits: 0    # fill gas limit for quote pricing and the funding gate; 0 turns the gate off
     targetEth: 0            # funding target exported for alerts
   shadow:
     enabled: true           # score both fee policies on every head, metrics only
@@ -385,8 +386,11 @@ txManager:
 
 Omitted keys keep their defaults; an explicit `0` or `false` is honoured. The balance guard is on under
 both policies: it caps each attempt's max fee at what the balance can pay for the gas limit and refuses a
-send that cannot stay valid for `fees.minHorizonBlocks` (2) blocks, without consuming the nonce. Every key,
-its default and its validation rule are listed in the
+send that cannot stay valid for `fees.minHorizonBlocks` (2) blocks, without consuming the nonce.
+`fees.tipFloorGwei` must be at least one wei (0.000000001). A UniswapX or LI.FI solver with a `gas:` block
+refuses to start while `balance.referenceGasUnits` is 0, because its quotes are priced for that gas limit
+(4400000 covers current fills); set the key in the same deploy as the image. Every key, its default and its
+validation rule are listed in the
 [transaction manager plan](docs/TXMANAGER-PLAN.md#3-configuration-and-time-budgets). Config decoding rejects
 unknown keys, so deploy a config that sets these keys only with an image that knows them.
 

@@ -34,7 +34,7 @@ Subscribers receive coalesced change notifications and must re-read state and un
 | Field | Owner and meaning |
 |---|---|
 | `To`, `Data`, `Value` | Integration supplies the destination, generated calldata and native value; nil value means zero. |
-| `GasLimit` | Zero requests exact-call estimation after admission and before signing, with 5% headroom. A supplied limit is reused for normal replacements. |
+| `GasLimit` | Zero requests exact-call estimation after admission and before signing, with `gas.headroomBps` headroom (5% by default). A supplied limit is reused for normal replacements. |
 | `MaxFeePerGas` | Optional profitability ceiling for the normal call and its replacements; cancellation may exceed it within the global ceiling. |
 | `CancelAt` | Optional wall-clock cancellation deadline. Integrations derive it from the earliest applicable protocol deadline without extending validity during RPC/planning. |
 | `Obsolete` | Context-aware protocol status check before signing and after a receipt sweep finishes without a valid receipt. True drops an unsigned call or starts same-nonce cancellation; errors preserve ownership. It is not an authorization mechanism. |
@@ -72,18 +72,18 @@ and the basis-point and head-lag fields are pointers in `txmanager.Config` becau
 | `fees.maxHorizonBlocks` | 6 | Horizon a horizon-policy send targets when the balance allows (at most 12). |
 | `fees.pricingHorizonBlocks` | 5 | Quote-pricing and funding-gate horizon; at least `minHorizonBlocks + 2`, at most `maxHorizonBlocks`. |
 | `fees.maxHeadLagBlocks` | 2 | Snapshot lag tolerated before a send waits for a newer head (`0` is strict). |
-| `fees.tipFloorGwei` | 0.02 | Tip in blocks with room, and the tip the refusal floor assumes; must be positive. |
+| `fees.tipFloorGwei` | 0.02 | Tip in blocks with room, and the tip the refusal floor assumes; at least one wei (0.000000001). |
 | `fees.singleFullBlockTipGwei` | 0.1 | Tip when one of the last two blocks had no room for the gas limit. |
 | `fees.congestedTipFloorGwei` / `congestedTipCapGwei` | 0.2 / 15 | Clamp of the demand-run tip; the ladder from `tipFloorGwei` up must be non-decreasing. |
 | `fees.congestedRewardBlocks` / `congestedRewardPercentile` | 3 / 50 | A demand run follows the maximum of this reward percentile over this many latest blocks. |
 | `fees.escalateAfterFullMisses` | 2 | Consecutive missed blocks without room before a congestion reprice. |
 | `fees.stallAfterRoomyMisses` | 3 | Missed blocks with room before the stall response (re-estimate, rebroadcast). |
-| `gas.headroomBps` | 500 | Gas-limit headroom over the estimate (0–5000); 500 is the historical 5%. |
+| `gas.headroomBps` | 500 | Gas-limit headroom over the estimate (0–5000), rounded down; 500 signs the historical estimate + estimate/20. |
 | `gas.nextBlockEstimate` | true | Under horizon, estimate in next-block context; rejected or ignored overrides fall back. |
 | `gas.fallbackHeadroomBps` | 1000 | Headroom over a plain fallback estimate; at least `headroomBps`, at most 10000. |
 | `gas.estimateTimeoutMs` | 5000 | Bound on one gas estimate, separate from the fee-read budget. |
 | `balance.guard` | true | Cap every attempt at what the balance funds; refuse what cannot stay valid for `minHorizonBlocks`. Both policies. |
-| `balance.referenceGasUnits` | 0 | Fill gas limit the funding gate and shadow evaluator assume; 0 turns the gate off. |
+| `balance.referenceGasUnits` | 0 | Fill gas limit quote pricing, the funding gate and the shadow evaluator assume; 0 turns the gate off. A UniswapX or LI.FI lane with `gas:` accounting requires it above 0. |
 | `balance.fundingHysteresisBps` | 2000 | Extra balance over the gate threshold needed to become fundable again (0–10000). |
 | `balance.targetEth` | 0 | Operator funding target, exported for alerts only; 0 leaves it unset. |
 | `shadow.enabled` | true | Score virtual fills under both policies on every head, metrics only. |
@@ -92,6 +92,12 @@ Validation also requires `tipGwei: 0` under `horizon`, whose tip comes from the 
 `ValidateFeeHeadroom` additionally rejects a `fees.tipFloorGwei` (both policies) or, under `horizon`, a
 `fees.congestedTipCapGwei` at or above the initial cap `reserveFeeBump(normalFeeLimit)` (39.5 gwei at
 `maxFeeGwei: 50`); the legacy policy never signs the ladder, so a low `maxFeeGwei` stays valid there.
+It also rejects a `fees.tipFloorGwei` below one wei, checked in wei as it is signed: a positive gwei value
+that truncates to a 0-wei tip would pass a gwei comparison, and every rung above it is at least the floor.
+The strategy's rule that `referenceGasUnits > 0` wherever gas pricing is used is enforced by the solvers
+that price gas, not here, since only they know it: the UniswapX and LI.FI factories refuse a `gas:` block
+while the generic `Manager.ReferenceGasUnits()` is 0, because quote pricing would then size the tip for no
+gas (every block roomy) and the funding gate would stay off. Deploy that key together with the image.
 Bounds beyond the strategy's list (fallback headroom and hysteresis at 100%, the reward percentile in
 (0, 100], at most 1024 reward blocks as eth_feeHistory serves) only reject nonsensical values.
 
@@ -199,7 +205,11 @@ Three read-client primitives serve the fee and gas strategy; all are metered and
 promoted reads. `ReadBalanceAtBlock` reads the signer balance pinned to one block, by hash as an
 EIP-1898 object or by explicit number, and refuses tags such as `latest`; a node without the pinned
 block answers with an error wrapping `ethereum.NotFound` (geth, erigon, nethermind and anvil wordings,
-and EIP-1474 `-32001`), which the caller retries instead of reading another head. `EstimateGasWithBlockOverrides`
+and EIP-1474 `-32001`), which the caller retries from a fresh head instead of reading another head. geth's
+"hash is not currently canonical", the answer to a hash read with `requireCanonical` after a reorg replaced
+that block, is the same stale pin and wraps `ethereum.NotFound` too. The balance guard pins a hash with
+`requireCanonical: true`: without it a node may serve the reorged-out block's state, such as the balance
+from before the previous fill was paid. `EstimateGasWithBlockOverrides`
 sends the four-parameter `eth_estimateGas(call, parent, null, {number, time})`; `IsBlockOverridesUnsupported`
 recognises an upstream that rejects the fourth parameter (`-32602`, too many or invalid arguments, also in a
 non-2xx body) but never a revert or a missing parent block. `ProbeBlockOverrides` catches an upstream that
@@ -338,8 +348,8 @@ policy, next-block estimate and shadow evaluator ship in it):
   including a base fee above 3 gwei, and the pooled real lifecycles pass the success gate.
 - **Deploy charts** (vault-solver-deploy): add the new keys only after an image that knows them is live
   everywhere, because config decoding uses `KnownFields(true)`; never run an older image against newer keys.
-- **Enforce `balance.referenceGasUnits > 0` where gas pricing is used.** Only a solver knows whether its quotes
-  price gas, so the check belongs in the UniswapX/LI.FI `gas:` config path, through a generic accessor.
+  The exception is a UniswapX or LI.FI chart with `gas:` enabled: the new image refuses it without
+  `balance.referenceGasUnits`, so that key ships in the same deploy as the image.
 - **Glamsterdam (ePBS).** Before the mainnet fork, re-measure the fill gas profile, `referenceGasUnits`,
   `gas.headroomBps`, `fees.blockTimeMs` and the room/tip thresholds if the fork changes gas costs, the block gas
   limit or slot timing; revalidate on Sepolia first.
