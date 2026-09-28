@@ -58,6 +58,43 @@ The public YAML block is `txManager`. Values below are application defaults, aft
 | `pendingTimeoutMs` | 300000 | Switch an unresolved call to cancellation; must be at least the replacement interval. |
 | `shutdownTimeoutMs` | 60000 | Hard bound on manager drain after shutdown begins. |
 
+The fee and gas strategy adds four nested blocks under `txManager`. Unlike the flat fields above, they start
+from their defaults before decoding, so an omitted key keeps its default while an explicit `0` or `false` is
+honoured and validated. The zero value of `txmanager.Config` carries the same defaults (`Config.WithDefaults`,
+applied by `New`); a `cmd/vault-solver` test pins the two sets together. `run.go` passes every knob explicitly,
+and the basis-point and head-lag fields are pointers in `txmanager.Config` because zero is a valid setting there.
+
+| Setting | Default | Meaning |
+|---|---:|---|
+| `fees.policy` | `legacy` | `legacy` keeps 2×base + tip with timer bumps; `horizon` prices an exact EIP-1559 validity horizon and reprices from block evidence. |
+| `fees.blockTimeMs` | 12000 | Slot time for head lag, the next-block estimate and evaluation cadence. |
+| `fees.minHorizonBlocks` | 2 | Fewest blocks, from the real next block, an attempt must stay valid for; below it the send is refused. |
+| `fees.maxHorizonBlocks` | 6 | Horizon a horizon-policy send targets when the balance allows (at most 12). |
+| `fees.pricingHorizonBlocks` | 5 | Quote-pricing and funding-gate horizon; at least `minHorizonBlocks + 2`, at most `maxHorizonBlocks`. |
+| `fees.maxHeadLagBlocks` | 2 | Snapshot lag tolerated before a send waits for a newer head (`0` is strict). |
+| `fees.tipFloorGwei` | 0.02 | Tip in blocks with room, and the tip the refusal floor assumes; must be positive. |
+| `fees.singleFullBlockTipGwei` | 0.1 | Tip when one of the last two blocks had no room for the gas limit. |
+| `fees.congestedTipFloorGwei` / `congestedTipCapGwei` | 0.2 / 15 | Clamp of the demand-run tip; the ladder from `tipFloorGwei` up must be non-decreasing. |
+| `fees.congestedRewardBlocks` / `congestedRewardPercentile` | 3 / 50 | A demand run follows the maximum of this reward percentile over this many latest blocks. |
+| `fees.escalateAfterFullMisses` | 2 | Consecutive missed blocks without room before a congestion reprice. |
+| `fees.stallAfterRoomyMisses` | 3 | Missed blocks with room before the stall response (re-estimate, rebroadcast). |
+| `gas.headroomBps` | 500 | Gas-limit headroom over the estimate (0–5000); 500 is the historical 5%. |
+| `gas.nextBlockEstimate` | true | Under horizon, estimate in next-block context; rejected or ignored overrides fall back. |
+| `gas.fallbackHeadroomBps` | 1000 | Headroom over a plain fallback estimate; at least `headroomBps`, at most 10000. |
+| `gas.estimateTimeoutMs` | 5000 | Bound on one gas estimate, separate from the fee-read budget. |
+| `balance.guard` | true | Cap every attempt at what the balance funds; refuse what cannot stay valid for `minHorizonBlocks`. Both policies. |
+| `balance.referenceGasUnits` | 0 | Fill gas limit the funding gate and shadow evaluator assume; 0 turns the gate off. |
+| `balance.fundingHysteresisBps` | 2000 | Extra balance over the gate threshold needed to become fundable again (0–10000). |
+| `balance.targetEth` | 0 | Operator funding target, exported for alerts only; 0 leaves it unset. |
+| `shadow.enabled` | true | Score virtual fills under both policies on every head, metrics only. |
+
+Validation also requires `tipGwei: 0` under `horizon`, whose tip comes from the ladder. At startup
+`ValidateFeeHeadroom` additionally rejects a `fees.tipFloorGwei` (both policies) or, under `horizon`, a
+`fees.congestedTipCapGwei` at or above the initial cap `reserveFeeBump(normalFeeLimit)` (39.5 gwei at
+`maxFeeGwei: 50`); the legacy policy never signs the ladder, so a low `maxFeeGwei` stays valid there.
+Bounds beyond the strategy's list (fallback headroom and hysteresis at 100%, the reward percentile in
+(0, 100], at most 1024 reward blocks as eth_feeHistory serves) only reject nonsensical values.
+
 Polling defaults to 2 seconds in the Go manager; it is not a separate YAML field. Pending receipt reads,
 replacement nonce reads and obsolescence checks each use `min(2 seconds, replacementInterval/2)`; fee reads use
 `min(1 second, replacementInterval/2)`. These internal read budgets are separate from broadcast timeout.
@@ -157,6 +194,22 @@ through the read client, via the optional `accountTelemetryBackend` capability `
 submission relay that rate-limits reads never stalls the refresh; its pending nonce may lag a private
 submission until the primary RPC sees it, which is acceptable for a gauge and never used for admission. General transport behavior
 remains documented in the [README configuration section](../README.md#configuration).
+
+Three read-client primitives serve the fee and gas strategy; all are metered and traced like the
+promoted reads. `ReadBalanceAtBlock` reads the signer balance pinned to one block, by hash as an
+EIP-1898 object or by explicit number, and refuses tags such as `latest`; a node without the pinned
+block answers with an error wrapping `ethereum.NotFound` (geth, erigon, nethermind and anvil wordings,
+and EIP-1474 `-32001`), which the caller retries instead of reading another head. `EstimateGasWithBlockOverrides`
+sends the four-parameter `eth_estimateGas(call, parent, null, {number, time})`; `IsBlockOverridesUnsupported`
+recognises an upstream that rejects the fourth parameter (`-32602`, too many or invalid arguments, also in a
+non-2xx body) but never a revert or a missing parent block. `ProbeBlockOverrides` catches an upstream that
+silently ignores it: it estimates, under a state override, code that stops only when `NUMBER` and `TIMESTAMP`
+equal the `NextBlockOverrides` of the latest head and reverts otherwise. Checking the timestamp as well as the
+number (the strategy's probe checks only the number) also catches an upstream that honours the number but not
+the time, which matters because interest accrual in the filled vaults depends on it; and success counts only
+when the estimate exceeds the 21000 intrinsic gas, since an upstream that drops the state override calls an
+empty account and succeeds. A probe error (head unavailable, parent block missing) is inconclusive rather
+than a verdict. `make test-chain-anvil` runs all three against a real EVM.
 
 Startup requires write-endpoint latest and pending nonces to agree. Standard nonce methods cannot reveal
 a future transaction queued beyond a gap or a private hidden submission; equality is not recovery proof.
@@ -269,6 +322,27 @@ Cancellation outcome tests also distinguish a satisfied confirmation policy from
 RFQ tests consume that distinction when deciding whether another fill is safe.
 Run repository-required build, race/coverage and lint gates for implementation changes. Current reader
 validation is local; it does not establish deployment or production rollout status.
+
+### Fee and gas strategy TODO
+
+Deferred from the fee and gas strategy change (the balance guard, funding gate, `Obsolete` wiring, horizon
+policy, next-block estimate and shadow evaluator ship in it):
+
+- **Simulation classification (strategy PR5).** A time-boxed next-block `eth_call` when a stall triggers and
+  before any cancel, filling `first_attempt_total{simulation}` (kept at `"unknown"` until then) and
+  `pending_simulation_total`; `simulation.cancelOnRevert` only after 4 weeks of shadow data without a false revert.
+- **`Request.MaxFeeWei`.** An optional per-request ceiling on the worst-case total fee (`floor(MaxFeeWei / G)` per
+  gas, refused below the floor as `fee_ceiling`), and its solver wiring: UniswapX and LI.FI from their Chainlink
+  native price, RFQ from its discount margin converted to native units.
+- **Flip the code default to `horizon`** once horizon shadow first@3 is at least legacy's and 99.5% over 7 days
+  including a base fee above 3 gwei, and the pooled real lifecycles pass the success gate.
+- **Deploy charts** (vault-solver-deploy): add the new keys only after an image that knows them is live
+  everywhere, because config decoding uses `KnownFields(true)`; never run an older image against newer keys.
+- **Enforce `balance.referenceGasUnits > 0` where gas pricing is used.** Only a solver knows whether its quotes
+  price gas, so the check belongs in the UniswapX/LI.FI `gas:` config path, through a generic accessor.
+- **Glamsterdam (ePBS).** Before the mainnet fork, re-measure the fill gas profile, `referenceGasUnits`,
+  `gas.headroomBps`, `fees.blockTimeMs` and the room/tip thresholds if the fork changes gas costs, the block gas
+  limit or slot timing; revalidate on Sepolia first.
 
 Keep shared lifecycle design and metric contracts here. Update integration plans only when their own
 request construction, readiness, capacity or protocol behavior changes. Preserve operator-facing setup,

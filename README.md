@@ -365,6 +365,31 @@ priority-fee floor, or selects fee-history pricing when zero. `replacementInterv
 The manager remains alive while solvers drain accepted work; orchestrator SIGTERM grace must cover both
 solver preparation/drain and manager shutdown. A timeout does not guarantee that a signed call cannot land.
 
+Fee and gas behaviour is tuned by four optional nested blocks, all with working defaults:
+
+```yaml
+txManager:
+  fees:
+    policy: legacy          # or horizon: exact EIP-1559 validity horizon, block-driven repricing (requires tipGwei: 0)
+    tipFloorGwei: 0.02      # tip in blocks with room; the refusal floor assumes it
+    congestedTipCapGwei: 15 # upper bound of the tip during runs of full blocks (horizon)
+  gas:
+    headroomBps: 500        # gas-limit headroom over the estimate; 800 is recommended on mainnet
+  balance:
+    guard: true             # never sign an attempt the signer balance cannot fund
+    referenceGasUnits: 0    # fill gas limit for the lane funding gate; 0 turns the gate off
+    targetEth: 0            # funding target exported for alerts
+  shadow:
+    enabled: true           # score both fee policies on every head, metrics only
+```
+
+Omitted keys keep their defaults; an explicit `0` or `false` is honoured. The balance guard is on under
+both policies: it caps each attempt's max fee at what the balance can pay for the gas limit and refuses a
+send that cannot stay valid for `fees.minHorizonBlocks` (2) blocks, without consuming the nonce. Every key,
+its default and its validation rule are listed in the
+[transaction manager plan](docs/TXMANAGER-PLAN.md#3-configuration-and-time-budgets). Config decoding rejects
+unknown keys, so deploy a config that sets these keys only with an image that knows them.
+
 Defaults, fee headroom, request/result semantics, nonce recovery and internal ownership are documented
 in the [transaction manager plan](docs/TXMANAGER-PLAN.md). Integration-specific deadline and capacity
 rules remain in each solver's plan.

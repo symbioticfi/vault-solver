@@ -77,7 +77,8 @@ type cancellationBackend interface {
 	SendCancellationTransaction(ctx context.Context, tx *types.Transaction) error
 }
 
-// Config tunes fee selection and confirmation behavior.
+// Config tunes fee selection and confirmation behavior. Its zero value is the safe default (see
+// WithDefaults): the legacy fee policy, the balance guard on and 500 bps of gas headroom.
 type Config struct {
 	Confirmations       uint64        // blocks to wait past inclusion before returning
 	MaxFeeGwei          float64       // absolute max fee per gas; app config requires a positive value
@@ -88,6 +89,10 @@ type Config struct {
 	ReplacementInterval time.Duration // pending tx fee-bump cadence; 0 => 30s
 	PendingTimeout      time.Duration // switch from replacing the call to cancelling its nonce; 0 => 5m
 	ShutdownTimeout     time.Duration // maximum graceful drain after manager cancellation; 0 => 1m
+	Fees                FeeConfig     // fee policy, validity horizons and the priority-fee ladder
+	Gas                 GasConfig     // gas-limit headroom and next-block estimation
+	Balance             BalanceConfig // per-attempt balance guard and lane funding gate
+	Shadow              ShadowConfig  // metrics-only evaluator of both fee policies
 }
 
 // Request is a transaction to send. Value nil means 0. Stateful solver calls leave GasLimit at 0 so
@@ -243,29 +248,11 @@ var (
 
 // New constructs a Manager. Call Start to launch its worker.
 func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log logr.Logger) *Manager {
-	if cfg.PollInterval <= 0 {
-		cfg.PollInterval = defaultPollInterval
-	}
-	if cfg.BroadcastTimeout <= 0 {
-		cfg.BroadcastTimeout = defaultBroadcastTimeout
-	}
-	if cfg.AccountPollInterval <= 0 {
-		cfg.AccountPollInterval = defaultAccountPollInterval
-	}
-	if cfg.ReplacementInterval <= 0 {
-		cfg.ReplacementInterval = defaultReplacementInterval
-	}
-	if cfg.PendingTimeout <= 0 {
-		cfg.PendingTimeout = defaultPendingTimeout
-	}
-	if cfg.ShutdownTimeout <= 0 {
-		cfg.ShutdownTimeout = defaultShutdownTimeout
-	}
 	return &Manager{
 		backend:              backend,
 		signer:               s,
 		chainID:              chainID,
-		cfg:                  cfg,
+		cfg:                  cfg.WithDefaults(),
 		log:                  log.WithName("txmanager"),
 		queue:                make(chan job),
 		lifecycleSlot:        make(chan struct{}, 1),
@@ -293,16 +280,39 @@ func (m *Manager) Confirmations() uint64 {
 	return m.cfg.Confirmations
 }
 
-// ValidateFeeHeadroom rejects a configured priority-fee floor that can never fit under the initial
-// transaction cap after reserving one ordinary replacement and one cancellation bump.
+// ValidateFeeHeadroom rejects a fee configuration whose priority fees can never fit under the
+// initial transaction cap after reserving one ordinary replacement and one cancellation bump: the
+// tipGwei floor and fees.tipFloorGwei (which the balance guard's refusal floor assumes) under both
+// policies, and the whole tip ladder up to fees.congestedTipCapGwei under the horizon policy.
 func (m *Manager) ValidateFeeHeadroom() error {
+	cfg := m.cfg.WithDefaults()
+	if cfg.Fees.Policy != FeePolicyLegacy && cfg.Fees.Policy != FeePolicyHorizon {
+		return errors.Errorf("unknown fee policy %q", cfg.Fees.Policy)
+	}
 	initialLimit := reserveFeeBump(m.normalFeeLimit(Request{}))
-	tip := gweiToWei(m.cfg.TipGwei)
-	if initialLimit != nil && tip.Sign() > 0 && tip.Cmp(initialLimit) >= 0 {
+	if initialLimit == nil {
+		return nil
+	}
+	tip := gweiToWei(cfg.TipGwei)
+	if tip.Sign() > 0 && tip.Cmp(initialLimit) >= 0 {
 		return errors.Errorf(
 			"tip floor %s leaves no base-fee headroom under initial fee limit %s after reserved replacement bumps",
 			tip, initialLimit,
 		)
+	}
+	if floor := gweiToWei(cfg.Fees.TipFloorGwei); floor.Cmp(initialLimit) >= 0 {
+		return errors.Errorf(
+			"fees.tipFloorGwei %s leaves no base-fee headroom under initial fee limit %s after reserved replacement bumps",
+			floor, initialLimit,
+		)
+	}
+	if cfg.Fees.Policy == FeePolicyHorizon {
+		if tipCap := gweiToWei(cfg.Fees.CongestedTipCapGwei); tipCap.Cmp(initialLimit) >= 0 {
+			return errors.Errorf(
+				"fees.congestedTipCapGwei %s leaves no base-fee headroom under initial fee limit %s after reserved replacement bumps",
+				tipCap, initialLimit,
+			)
+		}
 	}
 	return nil
 }

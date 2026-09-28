@@ -141,16 +141,9 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	if err != nil {
 		return err
 	}
-	txm := txmanager.NewWithMetrics(chainClient, sgnr, chainClient.ChainID(), txmanager.Config{
-		Confirmations:       cfg.TxManager.Confirmations,
-		MaxFeeGwei:          cfg.TxManager.MaxFeeGwei,
-		TipGwei:             cfg.TxManager.TipGwei,
-		BroadcastTimeout:    time.Duration(cfg.TxManager.BroadcastTimeoutMs) * time.Millisecond,
-		AccountPollInterval: time.Duration(cfg.TxManager.AccountPollIntervalMs) * time.Millisecond,
-		ReplacementInterval: time.Duration(cfg.TxManager.ReplacementIntervalMs) * time.Millisecond,
-		PendingTimeout:      time.Duration(cfg.TxManager.PendingTimeoutMs) * time.Millisecond,
-		ShutdownTimeout:     time.Duration(cfg.TxManager.ShutdownTimeoutMs) * time.Millisecond,
-	}, txMetrics, log)
+	txm := txmanager.NewWithMetrics(
+		chainClient, sgnr, chainClient.ChainID(), txManagerConfig(cfg.TxManager), txMetrics, log,
+	)
 	runCtx, reportFatal := context.WithCancelCause(ctx)
 	defer reportFatal(nil)
 
@@ -266,6 +259,55 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		}
 	}
 	return err
+}
+
+// txManagerConfig maps the validated YAML block onto the manager's config. Every nested knob is
+// passed explicitly, including zero values the YAML chose, so the manager's own defaults only ever
+// apply to a Config built in code.
+func txManagerConfig(c config.TxManagerConfig) txmanager.Config {
+	return txmanager.Config{
+		Confirmations:       c.Confirmations,
+		MaxFeeGwei:          c.MaxFeeGwei,
+		TipGwei:             c.TipGwei,
+		BroadcastTimeout:    milliseconds(c.BroadcastTimeoutMs),
+		AccountPollInterval: milliseconds(c.AccountPollIntervalMs),
+		ReplacementInterval: milliseconds(c.ReplacementIntervalMs),
+		PendingTimeout:      milliseconds(c.PendingTimeoutMs),
+		ShutdownTimeout:     milliseconds(c.ShutdownTimeoutMs),
+		Fees: txmanager.FeeConfig{
+			Policy:                    txmanager.FeePolicy(c.Fees.Policy),
+			BlockTime:                 milliseconds(c.Fees.BlockTimeMs),
+			MinHorizonBlocks:          uint64(c.Fees.MinHorizonBlocks),
+			MaxHorizonBlocks:          uint64(c.Fees.MaxHorizonBlocks),
+			PricingHorizonBlocks:      uint64(c.Fees.PricingHorizonBlocks),
+			MaxHeadLagBlocks:          new(uint64(c.Fees.MaxHeadLagBlocks)),
+			TipFloorGwei:              c.Fees.TipFloorGwei,
+			SingleFullBlockTipGwei:    c.Fees.SingleFullBlockTipGwei,
+			CongestedTipFloorGwei:     c.Fees.CongestedTipFloorGwei,
+			CongestedTipCapGwei:       c.Fees.CongestedTipCapGwei,
+			CongestedRewardBlocks:     uint64(c.Fees.CongestedRewardBlocks),
+			CongestedRewardPercentile: c.Fees.CongestedRewardPercentile,
+			EscalateAfterFullMisses:   uint64(c.Fees.EscalateAfterFullMisses),
+			StallAfterRoomyMisses:     uint64(c.Fees.StallAfterRoomyMisses),
+		},
+		Gas: txmanager.GasConfig{
+			HeadroomBps:               new(uint64(c.Gas.HeadroomBps)),
+			NextBlockEstimateDisabled: !c.Gas.NextBlockEstimate,
+			FallbackHeadroomBps:       new(uint64(c.Gas.FallbackHeadroomBps)),
+			EstimateTimeout:           milliseconds(c.Gas.EstimateTimeoutMs),
+		},
+		Balance: txmanager.BalanceConfig{
+			GuardDisabled:        !c.Balance.Guard,
+			ReferenceGasUnits:    uint64(c.Balance.ReferenceGasUnits),
+			FundingHysteresisBps: new(uint64(c.Balance.FundingHysteresisBps)),
+			TargetEth:            c.Balance.TargetEth,
+		},
+		Shadow: txmanager.ShadowConfig{Disabled: !c.Shadow.Enabled},
+	}
+}
+
+func milliseconds(ms int) time.Duration {
+	return time.Duration(ms) * time.Millisecond
 }
 
 func watchReadiness(

@@ -402,6 +402,7 @@ func TestValidateFeeHeadroom(t *testing.T) {
 		name    string
 		maxFee  float64
 		tip     float64
+		fees    FeeConfig
 		wantErr bool
 	}{
 		{name: "automatic tip", maxFee: 50},
@@ -409,10 +410,20 @@ func TestValidateFeeHeadroom(t *testing.T) {
 		{name: "floor equals reserved cap", maxFee: 50, tip: 39.506172839, wantErr: true},
 		{name: "floor one wei above reserved cap", maxFee: 50, tip: 39.506172840, wantErr: true},
 		{name: "reported invalid configuration", maxFee: 50, tip: 40, wantErr: true},
+		{name: "no global cap", fees: FeeConfig{Policy: FeePolicyHorizon, CongestedTipCapGwei: 1000}},
+		{name: "fee tip floor one wei below reserved cap", maxFee: 50, fees: FeeConfig{TipFloorGwei: 39.506172838}},
+		{name: "fee tip floor equals reserved cap", maxFee: 50, fees: FeeConfig{TipFloorGwei: 39.506172839}, wantErr: true},
+		{name: "default fee tip floor above a tiny cap", maxFee: 0.025, wantErr: true},
+		{name: "congested cap above reserved cap is unused under legacy", maxFee: 18},
+		{name: "default congested cap below reserved cap under horizon", maxFee: 19, fees: FeeConfig{Policy: FeePolicyHorizon}},
+		{name: "default congested cap above reserved cap under horizon", maxFee: 18, fees: FeeConfig{Policy: FeePolicyHorizon}, wantErr: true},
+		{name: "congested cap one wei below reserved cap", maxFee: 50, fees: FeeConfig{Policy: FeePolicyHorizon, CongestedTipCapGwei: 39.506172838}},
+		{name: "congested cap equals reserved cap", maxFee: 50, fees: FeeConfig{Policy: FeePolicyHorizon, CongestedTipCapGwei: 39.506172839}, wantErr: true},
+		{name: "unknown fee policy", maxFee: 50, fees: FeeConfig{Policy: "fast"}, wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			m := &Manager{cfg: Config{MaxFeeGwei: test.maxFee, TipGwei: test.tip}}
+			m := &Manager{cfg: Config{MaxFeeGwei: test.maxFee, TipGwei: test.tip, Fees: test.fees}}
 			err := m.ValidateFeeHeadroom()
 			if (err != nil) != test.wantErr {
 				t.Fatalf("ValidateFeeHeadroom() error = %v, wantErr %v", err, test.wantErr)

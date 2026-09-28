@@ -277,6 +277,10 @@ test-oev-live: ## OEV live checks — Morpho API discovery plus optional Sepolia
 test-txmanager-anvil: ## Exercise replacement/cancellation against an Anvil mempool with automine disabled
 	go test -race -tags integration -run TestAnvilTxManagerPendingLifecycle -v ./internal/txmanager
 
+.PHONY: test-chain-anvil
+test-chain-anvil: ## Check pinned balance reads and the block-overrides gas-estimate probe against Anvil
+	go test -race -tags integration -run TestAnvilPinnedReadsAndBlockOverrides -v ./internal/chain
+
 .PHONY: format
 format: ## Run golangci-lint with autofix
 	golangci-lint run --fix

@@ -87,6 +87,87 @@ type TxManagerConfig struct {
 	PendingTimeoutMs int `yaml:"pendingTimeoutMs"`
 	// ShutdownTimeoutMs bounds how long shutdown drains an accepted transaction lifecycle.
 	ShutdownTimeoutMs int `yaml:"shutdownTimeoutMs"`
+
+	// The nested blocks below start from their documented defaults before decoding, so an omitted
+	// key keeps its default while an explicit zero or false is honoured and validated. The flat
+	// fields above keep their historical "zero means unset" behaviour.
+
+	// Fees selects the fee policy and tunes its validity horizon and priority-fee ladder.
+	Fees TxFeesConfig `yaml:"fees"`
+	// Gas tunes the gas-limit headroom and the next-block gas estimate.
+	Gas TxGasConfig `yaml:"gas"`
+	// Balance configures the per-attempt balance guard and the lane funding gate.
+	Balance TxBalanceConfig `yaml:"balance"`
+	// Shadow configures the metrics-only evaluator that scores both fee policies on every head.
+	Shadow TxShadowConfig `yaml:"shadow"`
+}
+
+// TxFeesConfig tunes fee selection. Gwei amounts are per unit of gas.
+type TxFeesConfig struct {
+	// Policy is "legacy" (2×base + tip with timer-driven bumps) or "horizon" (an exact EIP-1559
+	// validity horizon with block-driven repricing).
+	Policy string `yaml:"policy"`
+	// BlockTimeMs is the slot time used for head lag, the next-block estimate and evaluation cadence.
+	BlockTimeMs int `yaml:"blockTimeMs"`
+	// MinHorizonBlocks is the fewest blocks, from the real next block, a signed fee must stay valid
+	// for; a send the balance cannot keep valid that long is refused.
+	MinHorizonBlocks int `yaml:"minHorizonBlocks"`
+	// MaxHorizonBlocks is the validity horizon a horizon-policy send targets when the balance allows.
+	MaxHorizonBlocks int `yaml:"maxHorizonBlocks"`
+	// PricingHorizonBlocks is the horizon quotes are priced and the funding gate is measured at.
+	PricingHorizonBlocks int `yaml:"pricingHorizonBlocks"`
+	// MaxHeadLagBlocks is how many blocks a fee snapshot may trail before sends wait for a newer head.
+	MaxHeadLagBlocks int `yaml:"maxHeadLagBlocks"`
+	// TipFloorGwei is the priority fee in blocks with room, and the tip the refusal floor assumes.
+	TipFloorGwei float64 `yaml:"tipFloorGwei"`
+	// SingleFullBlockTipGwei is the tip when one of the last two blocks had no room for the gas limit.
+	SingleFullBlockTipGwei float64 `yaml:"singleFullBlockTipGwei"`
+	// CongestedTipFloorGwei and CongestedTipCapGwei clamp the observed reward in a demand run (both
+	// of the last two blocks without room).
+	CongestedTipFloorGwei float64 `yaml:"congestedTipFloorGwei"`
+	CongestedTipCapGwei   float64 `yaml:"congestedTipCapGwei"`
+	// CongestedRewardBlocks and CongestedRewardPercentile select the reward a demand run follows:
+	// the maximum of that percentile over that many latest blocks.
+	CongestedRewardBlocks     int     `yaml:"congestedRewardBlocks"`
+	CongestedRewardPercentile float64 `yaml:"congestedRewardPercentile"`
+	// EscalateAfterFullMisses is how many consecutive missed blocks without room trigger a reprice.
+	EscalateAfterFullMisses int `yaml:"escalateAfterFullMisses"`
+	// StallAfterRoomyMisses is how many missed blocks with room trigger a re-estimate and rebroadcast.
+	StallAfterRoomyMisses int `yaml:"stallAfterRoomyMisses"`
+}
+
+// TxGasConfig tunes gas-limit selection. Basis points are relative to the gas estimate.
+type TxGasConfig struct {
+	// HeadroomBps is added to the gas estimate to form the gas limit.
+	HeadroomBps int `yaml:"headroomBps"`
+	// NextBlockEstimate estimates gas in the next block's context (blockOverrides) under the horizon
+	// policy; an upstream that rejects or ignores the overrides falls back to a plain estimate.
+	NextBlockEstimate bool `yaml:"nextBlockEstimate"`
+	// FallbackHeadroomBps replaces HeadroomBps when the plain fallback estimate is used.
+	FallbackHeadroomBps int `yaml:"fallbackHeadroomBps"`
+	// EstimateTimeoutMs bounds one gas estimate, separately from the fee-read budget.
+	EstimateTimeoutMs int `yaml:"estimateTimeoutMs"`
+}
+
+// TxBalanceConfig configures the signer balance checks.
+type TxBalanceConfig struct {
+	// Guard caps every attempt's max fee at what the signer balance can fund and refuses a send it
+	// cannot keep valid for minHorizonBlocks. It applies under both fee policies.
+	Guard bool `yaml:"guard"`
+	// ReferenceGasUnits is the gas limit the funding gate and the shadow evaluator assume for a fill.
+	// Zero turns the funding gate off.
+	ReferenceGasUnits int64 `yaml:"referenceGasUnits"`
+	// FundingHysteresisBps is the extra balance, over the gate threshold, needed to become fundable
+	// again after the lane went unfundable.
+	FundingHysteresisBps int `yaml:"fundingHysteresisBps"`
+	// TargetEth is the operator's funding target, exported for alerts only. Zero leaves it unset.
+	TargetEth float64 `yaml:"targetEth"`
+}
+
+// TxShadowConfig configures the metrics-only fee policy evaluator.
+type TxShadowConfig struct {
+	// Enabled scores virtual fills under both fee policies on every head without sending anything.
+	Enabled bool `yaml:"enabled"`
 }
 
 // SolverConfig names the solver implementation and carries its opaque, deferred config.
@@ -107,6 +188,51 @@ const (
 	DefaultReplacementIntervalMs = 30_000
 	DefaultPendingTimeoutMs      = 300_000
 	DefaultShutdownTimeoutMs     = 60_000
+)
+
+// Fee policies accepted by txManager.fees.policy.
+const (
+	FeePolicyLegacy  = "legacy"
+	FeePolicyHorizon = "horizon"
+)
+
+// Defaults for the nested txManager blocks. Keep in sync with the zero-value defaults of
+// txmanager.Config (internal/txmanager); cmd/vault-solver tests pin the two sets together.
+const (
+	DefaultFeePolicy                 = FeePolicyLegacy
+	DefaultBlockTimeMs               = 12_000
+	DefaultMinHorizonBlocks          = 2
+	DefaultMaxHorizonBlocks          = 6
+	DefaultPricingHorizonBlocks      = 5
+	DefaultMaxHeadLagBlocks          = 2
+	DefaultTipFloorGwei              = 0.02
+	DefaultSingleFullBlockTipGwei    = 0.1
+	DefaultCongestedTipFloorGwei     = 0.2
+	DefaultCongestedTipCapGwei       = 15
+	DefaultCongestedRewardBlocks     = 3
+	DefaultCongestedRewardPercentile = 50
+	DefaultEscalateAfterFullMisses   = 2
+	DefaultStallAfterRoomyMisses     = 3
+	DefaultGasHeadroomBps            = 500
+	DefaultFallbackGasHeadroomBps    = 1000
+	DefaultGasEstimateTimeoutMs      = 5000
+	DefaultFundingHysteresisBps      = 2000
+)
+
+// Bounds on the nested txManager knobs.
+const (
+	// MaxHorizonBlocksLimit caps maxHorizonBlocks: a 12-block horizon already prices ×3.65 growth
+	// of the next base fee.
+	MaxHorizonBlocksLimit = 12
+	// MaxGasHeadroomBps caps gas.headroomBps at 50% over the estimate.
+	MaxGasHeadroomBps = 5000
+	// maxBasisPoints caps the other basis-point knobs at 100%.
+	maxBasisPoints = 10_000
+	// maxFeeHistoryBlocks is the largest block count eth_feeHistory serves (go-ethereum's limit).
+	maxFeeHistoryBlocks = 1024
+	// minHorizonPricingGap is how many blocks of base-fee growth the pricing horizon must tolerate
+	// between a quote and its fill, over the minimum horizon.
+	minHorizonPricingGap = 2
 )
 
 // DefaultObservabilityAddr is used when Observability.Addr is unset.
@@ -130,7 +256,7 @@ func Load(path string) (*Config, error) {
 	// expands to "", which surfaces via Validate for required fields.
 	raw = []byte(os.ExpandEnv(string(raw)))
 
-	var cfg Config
+	cfg := defaultConfig()
 	dec := yaml.NewDecoder(bytes.NewReader(raw))
 	dec.KnownFields(true) // reject unknown keys to catch typos early
 	if err := dec.Decode(&cfg); err != nil {
@@ -142,6 +268,40 @@ func Load(path string) (*Config, error) {
 		return nil, errors.Errorf("invalid config %q: %w", path, err)
 	}
 	return &cfg, nil
+}
+
+// defaultConfig is the decode target: the nested txManager blocks start from their defaults, so
+// yaml.v3 overwrites only the keys a config sets (an empty or null block keeps every default).
+func defaultConfig() Config {
+	return Config{TxManager: TxManagerConfig{
+		Fees: TxFeesConfig{
+			Policy:                    DefaultFeePolicy,
+			BlockTimeMs:               DefaultBlockTimeMs,
+			MinHorizonBlocks:          DefaultMinHorizonBlocks,
+			MaxHorizonBlocks:          DefaultMaxHorizonBlocks,
+			PricingHorizonBlocks:      DefaultPricingHorizonBlocks,
+			MaxHeadLagBlocks:          DefaultMaxHeadLagBlocks,
+			TipFloorGwei:              DefaultTipFloorGwei,
+			SingleFullBlockTipGwei:    DefaultSingleFullBlockTipGwei,
+			CongestedTipFloorGwei:     DefaultCongestedTipFloorGwei,
+			CongestedTipCapGwei:       DefaultCongestedTipCapGwei,
+			CongestedRewardBlocks:     DefaultCongestedRewardBlocks,
+			CongestedRewardPercentile: DefaultCongestedRewardPercentile,
+			EscalateAfterFullMisses:   DefaultEscalateAfterFullMisses,
+			StallAfterRoomyMisses:     DefaultStallAfterRoomyMisses,
+		},
+		Gas: TxGasConfig{
+			HeadroomBps:         DefaultGasHeadroomBps,
+			NextBlockEstimate:   true,
+			FallbackHeadroomBps: DefaultFallbackGasHeadroomBps,
+			EstimateTimeoutMs:   DefaultGasEstimateTimeoutMs,
+		},
+		Balance: TxBalanceConfig{
+			Guard:                true,
+			FundingHysteresisBps: DefaultFundingHysteresisBps,
+		},
+		Shadow: TxShadowConfig{Enabled: true},
+	}}
 }
 
 func (c *Config) applyDefaults() {
@@ -240,7 +400,105 @@ func (c TxManagerConfig) validate(required bool) error {
 	if c.ShutdownTimeoutMs <= 0 {
 		return errors.New("txManager.shutdownTimeoutMs must be positive")
 	}
+	if err := c.Fees.validate(); err != nil {
+		return err
+	}
+	if c.Fees.Policy == FeePolicyHorizon && c.TipGwei != 0 {
+		return errors.New("txManager.tipGwei must be 0 under fees.policy horizon, whose tip comes from the fees.*TipGwei ladder")
+	}
+	if err := c.Gas.validate(); err != nil {
+		return err
+	}
+	return c.Balance.validate()
+}
+
+// validate enforces the fee knobs' ranges and orderings. The ceiling of the tip ladder depends on
+// maxFeeGwei and is checked by txmanager.Manager.ValidateFeeHeadroom.
+func (f TxFeesConfig) validate() error {
+	if f.Policy != FeePolicyLegacy && f.Policy != FeePolicyHorizon {
+		return errors.Errorf("txManager.fees.policy must be %q or %q, got %q", FeePolicyLegacy, FeePolicyHorizon, f.Policy)
+	}
+	if !validDurationMs(f.BlockTimeMs) {
+		return errors.New("txManager.fees.blockTimeMs must be positive and fit in a time.Duration")
+	}
+	// Bounding the minimum first keeps minHorizonBlocks + minHorizonPricingGap from overflowing.
+	if f.MinHorizonBlocks < 1 || f.MinHorizonBlocks > MaxHorizonBlocksLimit {
+		return errors.Errorf("txManager.fees.minHorizonBlocks must be between 1 and %d", MaxHorizonBlocksLimit)
+	}
+	if f.PricingHorizonBlocks < f.MinHorizonBlocks+minHorizonPricingGap {
+		return errors.Errorf("txManager.fees.pricingHorizonBlocks must be at least minHorizonBlocks + %d", minHorizonPricingGap)
+	}
+	if f.MaxHorizonBlocks < f.PricingHorizonBlocks || f.MaxHorizonBlocks > MaxHorizonBlocksLimit {
+		return errors.Errorf("txManager.fees.maxHorizonBlocks must be between pricingHorizonBlocks and %d", MaxHorizonBlocksLimit)
+	}
+	if f.MaxHeadLagBlocks < 0 {
+		return errors.New("txManager.fees.maxHeadLagBlocks must not be negative")
+	}
+	if !finite(f.TipFloorGwei) || f.TipFloorGwei <= 0 {
+		return errors.New("txManager.fees.tipFloorGwei must be finite and positive")
+	}
+	ladder := []struct {
+		name  string
+		value float64
+	}{
+		{"tipFloorGwei", f.TipFloorGwei},
+		{"singleFullBlockTipGwei", f.SingleFullBlockTipGwei},
+		{"congestedTipFloorGwei", f.CongestedTipFloorGwei},
+		{"congestedTipCapGwei", f.CongestedTipCapGwei},
+	}
+	for i := 1; i < len(ladder); i++ {
+		if !finite(ladder[i].value) || ladder[i].value < ladder[i-1].value {
+			return errors.Errorf("txManager.fees.%s must be finite and at least %s", ladder[i].name, ladder[i-1].name)
+		}
+	}
+	if f.CongestedRewardBlocks < 1 || f.CongestedRewardBlocks > maxFeeHistoryBlocks {
+		return errors.Errorf("txManager.fees.congestedRewardBlocks must be between 1 and %d", maxFeeHistoryBlocks)
+	}
+	if !finite(f.CongestedRewardPercentile) || f.CongestedRewardPercentile <= 0 || f.CongestedRewardPercentile > 100 {
+		return errors.New("txManager.fees.congestedRewardPercentile must be above 0 and at most 100")
+	}
+	if f.EscalateAfterFullMisses < 1 {
+		return errors.New("txManager.fees.escalateAfterFullMisses must be at least 1")
+	}
+	if f.StallAfterRoomyMisses < 1 {
+		return errors.New("txManager.fees.stallAfterRoomyMisses must be at least 1")
+	}
 	return nil
+}
+
+func (g TxGasConfig) validate() error {
+	if g.HeadroomBps < 0 || g.HeadroomBps > MaxGasHeadroomBps {
+		return errors.Errorf("txManager.gas.headroomBps must be between 0 and %d", MaxGasHeadroomBps)
+	}
+	if g.FallbackHeadroomBps < g.HeadroomBps || g.FallbackHeadroomBps > maxBasisPoints {
+		return errors.Errorf("txManager.gas.fallbackHeadroomBps must be between headroomBps and %d", maxBasisPoints)
+	}
+	if !validDurationMs(g.EstimateTimeoutMs) {
+		return errors.New("txManager.gas.estimateTimeoutMs must be positive and fit in a time.Duration")
+	}
+	return nil
+}
+
+func (b TxBalanceConfig) validate() error {
+	if b.ReferenceGasUnits < 0 {
+		return errors.New("txManager.balance.referenceGasUnits must not be negative")
+	}
+	if b.FundingHysteresisBps < 0 || b.FundingHysteresisBps > maxBasisPoints {
+		return errors.Errorf("txManager.balance.fundingHysteresisBps must be between 0 and %d", maxBasisPoints)
+	}
+	if !finite(b.TargetEth) || b.TargetEth < 0 {
+		return errors.New("txManager.balance.targetEth must be finite and non-negative")
+	}
+	return nil
+}
+
+func finite(v float64) bool {
+	return !math.IsNaN(v) && !math.IsInf(v, 0)
+}
+
+// validDurationMs reports whether ms is a positive millisecond count that fits in a time.Duration.
+func validDurationMs(ms int) bool {
+	return ms > 0 && int64(ms) <= math.MaxInt64/int64(time.Millisecond)
 }
 
 func (s SignerConfig) validate() error {

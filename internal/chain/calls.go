@@ -10,7 +10,9 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/rpc"
 )
 
 // callTracing describes how one dialed endpoint's JSON-RPC calls are traced. Only a non-HTTP
@@ -84,7 +86,7 @@ func (c *Client) SuggestGasTipCap(ctx context.Context) (_ *big.Int, err error) {
 
 // EstimateGas estimates a call's gas through the read endpoint.
 func (c *Client) EstimateGas(ctx context.Context, msg ethereum.CallMsg) (_ uint64, err error) {
-	ctx, end := c.readCalls.start(ctx, "eth_estimateGas")
+	ctx, end := c.readCalls.start(ctx, rpcMethodEstimateGas)
 	defer func() { end(err) }()
 	return c.Client.EstimateGas(ctx, msg)
 }
@@ -186,6 +188,70 @@ func (c *Client) ReadBalanceAt(ctx context.Context, account common.Address) (_ *
 	ctx, end := c.readCalls.start(ctx, rpcMethodGetBalance)
 	defer func() { end(err) }()
 	return c.Client.BalanceAt(ctx, account, nil)
+}
+
+// ReadBalanceAtBlock reads an account balance pinned to one block through the read endpoints: by
+// hash as an EIP-1898 object, so a lagging or reorged upstream cannot answer with another block's
+// state, or by explicit number. Block tags such as latest are refused rather than read. A node that
+// does not have the pinned block yet answers with an error wrapping ethereum.NotFound, which callers
+// retry instead of falling back to a head of the node's choosing.
+func (c *Client) ReadBalanceAtBlock(
+	ctx context.Context, account common.Address, block rpc.BlockNumberOrHash,
+) (_ *big.Int, err error) {
+	param, err := pinnedBlockParam(block)
+	if err != nil {
+		return nil, err
+	}
+	ctx, end := c.readCalls.start(ctx, rpcMethodGetBalance)
+	defer func() { end(err) }()
+
+	var balance *hexutil.Big
+	if callErr := c.Client.Client().CallContext(ctx, &balance, rpcMethodGetBalance, account, param); callErr != nil {
+		if isBlockNotFound(callErr) {
+			return nil, errors.Errorf("chain: balance of %s at block %s: %w: %w", account.Hex(), block.String(), ethereum.NotFound, callErr)
+		}
+		return nil, errors.Errorf("chain: balance of %s at block %s: %w", account.Hex(), block.String(), callErr)
+	}
+	if balance == nil {
+		return nil, errors.Errorf("chain: balance of %s at block %s: %w", account.Hex(), block.String(), ethereum.NotFound)
+	}
+	return (*big.Int)(balance), nil
+}
+
+// EstimateGasWithBlockOverrides estimates msg in the context of the block after parent: the call
+// runs on parent's state with the header fields in overrides, sent as the fourth eth_estimateGas
+// parameter (block overrides, after an empty state-override slot). ethclient has no method for
+// that, so this is a raw call on the read endpoints, metered and traced like the promoted reads. An
+// upstream that rejects the parameter fails with an error IsBlockOverridesUnsupported recognises;
+// one that silently ignores it is detected by ProbeBlockOverrides.
+func (c *Client) EstimateGasWithBlockOverrides(
+	ctx context.Context, msg ethereum.CallMsg, parent *big.Int, overrides ethereum.BlockOverrides,
+) (uint64, error) {
+	if parent == nil || parent.Sign() < 0 {
+		return 0, errors.New("chain: a block-override gas estimate needs an explicit parent block number")
+	}
+	return c.estimateGasWithOverrides(ctx, msg, parent, nil, overrides)
+}
+
+// estimateGasWithOverrides sends eth_estimateGas with all four parameters: the call, the parent
+// block number, state overrides (null when nil) and block overrides.
+func (c *Client) estimateGasWithOverrides(
+	ctx context.Context,
+	msg ethereum.CallMsg,
+	parent *big.Int,
+	state map[common.Address]ethereum.OverrideAccount,
+	overrides ethereum.BlockOverrides,
+) (_ uint64, err error) {
+	ctx, end := c.readCalls.start(ctx, rpcMethodEstimateGas)
+	defer func() { end(err) }()
+
+	var gas hexutil.Uint64
+	if callErr := c.Client.Client().CallContext(
+		ctx, &gas, rpcMethodEstimateGas, callArg(msg), hexutil.EncodeBig(parent), state, overrides,
+	); callErr != nil {
+		return 0, errors.Errorf("chain: estimate gas on block %s with block overrides: %w", parent, callErr)
+	}
+	return uint64(gas), nil
 }
 
 // ReadNonces serves nonce telemetry from the read endpoints only: the mined and pending nonces as the
