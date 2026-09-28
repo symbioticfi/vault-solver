@@ -48,9 +48,16 @@ func RecordResult(ctx context.Context, res Result) {
 // neither is a request withdrawn before it could land.
 func endSendSpan(span trace.Span, res Result) {
 	span.SetAttributes(resultAttrs(res)...)
+	refusal, refused := guardRefusalReason(res.Err)
 	switch {
 	case withdrawnBeforeResult(res):
 		span.AddEvent("cancelled")
+	case res.NotAdmitted && refused:
+		// A balance-guard refusal is an expected skip of an underfunded or briefly stale lane, recorded
+		// as observability.Decline records one.
+		span.AddEvent("declined", trace.WithAttributes(
+			attribute.String("decision", "not_admitted"), attribute.String("reason", string(refusal)),
+		))
 	case !isSendFailure(res.Outcome):
 	case res.Err != nil:
 		observability.EndSpan(span, res.Err)

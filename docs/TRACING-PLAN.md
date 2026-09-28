@@ -211,7 +211,10 @@ is Error for `reverted`, `cancelled`, `cancelled_unconfirmed`, `submission_error
 `confirmed` and `included_unconfirmed`. The send span **ends before the result is delivered** to the
 caller, so a caller resuming its own trace never races the span it nests under. A send declined because
 the lane is busy gets a `declined` event with `decision=not_admitted`, `reason=lane_busy`, and ends
-without a `tx.outcome` (§10). `txmanager.account_poll` roots each account-poll tick.
+without a `tx.outcome` (§10). A send the balance guard refuses before signing (TXMANAGER-PLAN §4.1) gets a
+`declined` event with `decision=not_admitted` and `reason=unaffordable`, `unaffordable_one_block` or
+`stale_head` on both `txmanager.broadcast` and the send span, which keeps `tx.outcome=submission_error` but
+no error status. `txmanager.account_poll` roots each account-poll tick.
 
 The worker stores the request's `solver`-stamped logger on every context of the lifecycle, the send
 span included, so `observability.Log(ctx)` puts `solver`, `label`, `trace_id` and `span_id` on every

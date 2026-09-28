@@ -171,6 +171,12 @@ type pendingTransaction struct {
 	cancelDeadline  time.Time
 	cancelRequested chan struct{}
 	cancelOnce      sync.Once
+	// sendHead is the head the first attempt was priced at and sentAt when it was sent; inclusion delay
+	// and pending age are measured from them. Both are zero for a lifecycle built outside broadcast.
+	sendHead uint64
+	sentAt   time.Time
+	// balanceCapLogged keeps the balance-capped replacement log to once per lifecycle.
+	balanceCapLogged bool
 }
 
 type txAttempt struct {
@@ -188,6 +194,12 @@ type Manager struct {
 	cfg     Config
 	metrics *Metrics
 	log     logr.Logger
+
+	// balances is the pinned-balance reader of the balance guard; nil runs with the guard off.
+	balances pinnedBalanceBackend
+	// lastInclusion is the highest block that included an attempt of a finished lifecycle. Balance
+	// pins below it are stale: they may predate that attempt's payment.
+	lastInclusion atomic.Uint64
 
 	queue           chan job
 	lifecycleSlot   chan struct{}
@@ -244,12 +256,13 @@ var (
 	errRequestObsolete         = errors.New("transaction request is obsolete")
 	errNonceLanePaused         = errors.New("transaction manager nonce lane paused")
 	errManagerStopped          = errors.New("transaction manager stopped")
+	errEstimateAbandoned       = errors.New("gas estimate abandoned: the send failed before it was needed")
 	errShutdownTimeout         = errors.Errorf("transaction manager shutdown drain timed out: %w", context.DeadlineExceeded)
 )
 
 // New constructs a Manager. Call Start to launch its worker.
 func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log logr.Logger) *Manager {
-	return &Manager{
+	m := &Manager{
 		backend:              backend,
 		signer:               s,
 		chainID:              chainID,
@@ -260,6 +273,10 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log log
 		stopping:             make(chan struct{}),
 		laneStateSubscribers: make(map[uint64]chan struct{}),
 	}
+	if balances, ok := backend.(pinnedBalanceBackend); ok && !m.cfg.Balance.GuardDisabled {
+		m.balances = balances
+	}
+	return m
 }
 
 // NewWithMetrics constructs a Manager with transaction lifecycle metrics.
@@ -481,7 +498,15 @@ func (m *Manager) Start(ctx context.Context) {
 	}()
 	defer func() { <-accountMonitorDone }()
 
-	observability.Log(ctx).Info("started", "from", m.signer.Address().Hex())
+	observability.Log(ctx).Info("started",
+		"from", m.signer.Address().Hex(),
+		"feePolicy", string(m.cfg.Fees.Policy),
+		"balanceGuard", m.guardEnabled(),
+	)
+	if !m.cfg.Balance.GuardDisabled && !m.guardEnabled() {
+		observability.Log(ctx).Info("balance guard disabled: the backend cannot read a balance pinned to a block; " +
+			"attempts are signed without checking that the signer can fund them")
+	}
 	lifecycleCtx, cancelLifecycle := context.WithCancelCause(context.WithoutCancel(ctx))
 	defer cancelLifecycle(errManagerStopped)
 	stop := func(reason error) {
@@ -535,11 +560,15 @@ func (m *Manager) Start(ctx context.Context) {
 				if ctx.Err() != nil {
 					outcome = OutcomeTrackingStopped
 				}
+				refusal, refused := guardRefusalReason(err)
+				if refused {
+					m.metrics.guardRefusal(j.req.Label, refusal)
+				}
 				lifecycle.finish(outcome, nil)
 				deliverJobResult(j, Result{
 					Outcome:     outcome,
 					Err:         err,
-					NotAdmitted: errors.Is(err, errNonceLanePaused) || ctx.Err() != nil,
+					NotAdmitted: errors.Is(err, errNonceLanePaused) || ctx.Err() != nil || refused,
 				})
 				m.releaseLifecycleSlot()
 				continue
@@ -781,7 +810,10 @@ func (m *Manager) jobContext(base context.Context, j job) context.Context {
 }
 
 // broadcast runs on the worker goroutine only, after lifecycle admission, so fee selection, gas
-// estimation, signing, and nonce assignment stay serialized.
+// estimation, signing, and nonce assignment stay serialized. The order is: a fresh fee snapshot (with
+// the balance guard's stale-head wait) and the signer balance pinned to its head, overlapped with the
+// gas estimate; the guard; Obsolete; the nonce; then sign and send. A guard refusal therefore happens
+// before anything is signed and leaves the nonce unconsumed.
 func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingTransaction, err error) {
 	sendSpan := trace.SpanFromContext(ctx)
 
@@ -792,7 +824,25 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	}
 	defer cancel()
 	broadcastCtx, end := tracer.Start(broadcastCtx, "txmanager.broadcast")
-	defer func() { end(err) }()
+	var snapshot sendSnapshot
+	defer func() {
+		// A guard refusal is an expected skip of an underfunded or briefly stale lane, not a failure of
+		// the broadcast or anything to page on; the solver decides what it means.
+		if reason, refused := guardRefusalReason(err); refused {
+			observability.Log(ctx).Info("transaction refused before signing",
+				"label", req.Label,
+				"reason", string(reason),
+				"head", snapshot.head,
+				"nextBaseFee", optionalBigString(snapshot.nextBase),
+				"headLagBlocks", snapshot.lag,
+				"error", err.Error(),
+			)
+			observability.Decline(broadcastCtx, "not_admitted", string(reason))
+			end(nil)
+			return
+		}
+		end(err)
+	}()
 	if err := broadcastCtx.Err(); err != nil {
 		return nil, errors.Errorf("send %q before broadcast: %w", req.Label, err)
 	}
@@ -800,18 +850,49 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	if req.MaxFeePerGas != nil && req.MaxFeePerGas.Sign() <= 0 {
 		return nil, errors.Errorf("send %q: request max fee per gas must be positive", req.Label)
 	}
-	normalLimit := m.normalFeeLimit(req)
-	fees, err := m.currentFees(broadcastCtx, reserveFeeBump(normalLimit))
+	value := req.Value
+	if value == nil {
+		value = new(big.Int)
+	}
+	// The estimate needs neither the fees nor the balance, so it overlaps their reads.
+	waitEstimate, stopEstimate := m.estimateAsync(broadcastCtx, req)
+	defer stopEstimate()
+
+	snapshot, err = m.sendSnapshot(broadcastCtx)
 	if err != nil {
 		return nil, errors.Errorf("send %q: %w", req.Label, err)
 	}
-
-	gas := req.GasLimit
-	if gas == 0 {
-		gas, err = m.estimateGas(broadcastCtx, req)
-		if err != nil {
-			return nil, err
+	fees, err := m.legacyQuote(snapshot.reading, reserveFeeBump(m.normalFeeLimit(req)))
+	if err != nil {
+		return nil, errors.Errorf("send %q: %w", req.Label, err)
+	}
+	var balance *big.Int
+	if snapshot.guarded() {
+		if balance, err = m.pinnedBalance(broadcastCtx, snapshot.pin); err != nil {
+			return nil, errors.Errorf("send %q: %w", req.Label, err)
 		}
+	}
+	gas, err := waitEstimate()
+	if err != nil {
+		return nil, err
+	}
+	var guard guardResult
+	if snapshot.guarded() {
+		guard, err = applyBalanceGuard(guardInput{
+			fees:       fees,
+			nextBase:   snapshot.nextBase,
+			lag:        snapshot.lag,
+			minHorizon: m.cfg.Fees.MinHorizonBlocks,
+			floorTip:   m.floorTip(),
+			balance:    balance,
+			value:      value,
+			gas:        gas,
+		})
+		m.observeFeeSnapshot(snapshot.nextBase, gas)
+		if err != nil {
+			return nil, errors.Errorf("send %q: %w", req.Label, err)
+		}
+		fees = guard.fees
 	}
 	obsolete, obsoleteErr := m.requestObsolete(broadcastCtx, req)
 	if obsoleteErr != nil {
@@ -823,10 +904,6 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 		return nil, errors.Errorf("send %q: %w", req.Label, errRequestObsolete)
 	}
 
-	value := req.Value
-	if value == nil {
-		value = new(big.Int)
-	}
 	observability.Log(ctx).V(1).Info(
 		"transaction prepared",
 		"label", req.Label,
@@ -850,6 +927,7 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	if signed == nil {
 		return nil, errors.Errorf("send %q: %w", req.Label, sendErr)
 	}
+	sentAt := time.Now()
 	hash := signed.Hash()
 	// Both spans: the broadcast span is short-lived, the send span keeps the identity for the whole
 	// lifecycle (endSendSpan later overwrites tx.hash with the attempt that actually landed).
@@ -859,15 +937,32 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	}
 	observability.SetAttributes(broadcastCtx, txIdentity...)
 	sendSpan.SetAttributes(txIdentity...)
+	m.metrics.observeAttempt(req.Label, false, fees, gas)
+	if snapshot.guarded() {
+		m.metrics.observeHorizon(req.Label, guard.horizon)
+	}
+	// The fee fields are logged at Info: RFQ and LI.FI run without --debug, and they are what explains
+	// a fill that did not land.
+	sentFields := []any{
+		"label", req.Label, "hash", hash.Hex(), "nonce", nonce,
+		"gasLimit", gas, "estimateMode", estimateMode(req),
+		"tip", fees.tip.String(), "maxFee", fees.maxFee.String(),
+		"requiredBalance", requiredBalance(gas, fees.maxFee, value).String(),
+	}
+	if snapshot.guarded() {
+		sentFields = append(sentFields,
+			"nextBaseFee", snapshot.nextBase.String(), "horizonBlocks", guard.horizon,
+			"balance", balance.String(), "balanceBound", guard.clamped, "headLagBlocks", snapshot.lag,
+		)
+	}
 	broadcastUncertain := sendErr != nil && !isKnownTransactionError(sendErr)
 	if broadcastUncertain {
-		observability.Log(ctx).Error(sendErr, "transaction broadcast uncertain; tracking signed hash",
-			"label", req.Label, "hash", hash.Hex(), "nonce", nonce)
+		observability.Log(ctx).Error(sendErr, "transaction broadcast uncertain; tracking signed hash", sentFields...)
 	} else if sendErr != nil {
 		observability.Log(ctx).Info("transaction already known by write RPC",
-			"label", req.Label, "hash", hash.Hex(), "nonce", nonce, "rpcResult", sendErr.Error())
+			append(sentFields, "rpcResult", sendErr.Error())...)
 	} else {
-		observability.Log(ctx).Info("sent", "label", req.Label, "hash", hash.Hex(), "nonce", nonce)
+		observability.Log(ctx).Info("sent", sentFields...)
 	}
 	m.commitNonce(nonce)
 	return &pendingTransaction{
@@ -881,12 +976,73 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 		}},
 		originalHash: hash,
 		span:         sendSpan,
+		sendHead:     snapshot.head,
+		sentAt:       sentAt,
 	}, nil
+}
+
+// observeFeeSnapshot exports the next base fee a send was guarded at and what a reference fill needs
+// then: balance.referenceGasUnits, or this attempt's gas limit while that is unset.
+func (m *Manager) observeFeeSnapshot(nextBase *big.Int, gas uint64) {
+	if m.metrics == nil {
+		return
+	}
+	reference := m.cfg.Balance.ReferenceGasUnits
+	if reference == 0 {
+		reference = gas
+	}
+	floorTip := m.floorTip()
+	need := func(blocks uint64) *big.Int {
+		return requiredBalance(reference, horizonFee(nextBase, blocks, floorTip), new(big.Int))
+	}
+	m.metrics.observeFeeSnapshot(nextBase, laneRequirements{
+		min:   need(m.cfg.Fees.MinHorizonBlocks),
+		quote: need(m.cfg.Fees.PricingHorizonBlocks),
+		full:  need(m.cfg.Fees.MaxHorizonBlocks),
+	})
+}
+
+// estimateAsync starts the gas estimate for req, unless the request supplies its gas limit. wait
+// returns the result; stop cancels an estimate still running and waits for its goroutine, so the
+// estimate never outlives broadcast. Both are called from the worker goroutine only.
+func (m *Manager) estimateAsync(ctx context.Context, req Request) (wait func() (uint64, error), stop func()) {
+	if req.GasLimit != 0 {
+		return func() (uint64, error) { return req.GasLimit, nil }, func() {}
+	}
+	estimateCtx, cancel := context.WithCancelCause(ctx)
+	type estimate struct {
+		gas uint64
+		err error
+	}
+	done := make(chan estimate, 1)
+	go func() {
+		gas, err := m.estimateGas(estimateCtx, req)
+		done <- estimate{gas: gas, err: err}
+	}()
+	var result estimate
+	var once sync.Once
+	wait = func() (uint64, error) {
+		once.Do(func() { result = <-done })
+		return result.gas, result.err
+	}
+	return wait, func() {
+		cancel(errEstimateAbandoned)
+		_, _ = wait()
+	}
+}
+
+func estimateMode(req Request) string {
+	if req.GasLimit != 0 {
+		return "supplied"
+	}
+	return "latest"
 }
 
 func (m *Manager) complete(ctx context.Context, pending *pendingTransaction) {
 	defer m.removeUnminedTransaction(pending)
 	outcome := m.waitForPendingTransaction(ctx, pending)
+	m.metrics.clearPendingAge(pending.req.Label)
+	m.recordInclusion(pending, outcome)
 	pending.lifecycle.finish(outcome.Outcome, outcome.Receipt)
 	if errors.Is(outcome.Err, errShutdownTimeout) {
 		observability.Log(ctx).Error(outcome.Err, "accepted transaction lifecycle did not drain before shutdown",
@@ -902,6 +1058,41 @@ func (m *Manager) complete(ctx context.Context, pending *pendingTransaction) {
 	// still open. A pending built outside Start carries no span and gets the no-op one from ctx.
 	endSendSpan(trace.SpanFromContext(ctx), outcome)
 	pending.deliver(outcome)
+}
+
+// recordInclusion raises the balance-pin floor to the block that included the lifecycle, and records
+// how it landed relative to its first signed attempt.
+func (m *Manager) recordInclusion(pending *pendingTransaction, outcome Result) {
+	if outcome.Receipt == nil || outcome.Receipt.BlockNumber == nil || !outcome.Receipt.BlockNumber.IsUint64() {
+		return
+	}
+	included := outcome.Receipt.BlockNumber.Uint64()
+	m.noteInclusion(included)
+	if pending.sendHead == 0 || included < pending.sendHead {
+		return
+	}
+	landed, delay := classifyFirstAttempt(pending.attempts, outcome.Hash, included-pending.sendHead)
+	m.metrics.observeInclusion(pending.req.Label, landed, delay)
+}
+
+// classifyFirstAttempt says how a lifecycle landed: cancelled when its cancellation was included,
+// replaced when any replacement or cancellation was signed before its call landed, and otherwise first
+// or late depending on whether the first signed attempt took more than firstAttemptBlocks blocks. An
+// exact rebroadcast of the same bytes signs nothing new, so it keeps a first attempt first.
+func classifyFirstAttempt(attempts []txAttempt, landed common.Hash, delay uint64) (firstAttemptOutcome, uint64) {
+	for _, attempt := range attempts {
+		if attempt.hash == landed && attempt.cancellation {
+			return firstAttemptCancelled, delay
+		}
+	}
+	switch {
+	case len(attempts) > 1:
+		return firstAttemptReplaced, delay
+	case delay > firstAttemptBlocks:
+		return firstAttemptLate, delay
+	default:
+		return firstAttemptFirst, delay
+	}
 }
 
 // deliver hands the caller its one terminal result and reports whether this call was the one that
@@ -950,11 +1141,13 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 		return cancelling
 	}
 	cancelling := false
+	var cancellationStarted time.Time
 	cancelRequested, timeoutC := pending.cancelRequested, timeout.C
 	startCancellation := func(reason string) {
 		if cancelling {
 			return
 		}
+		cancellationStarted = time.Now()
 		if reason == "" {
 			select {
 			case <-pending.cancelRequested:
@@ -1030,6 +1223,11 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 			if sweep == nil {
 				knownAttempts = len(pending.attempts)
 				sweep = newReceiptSweep(pending, knownAttempts)
+			}
+			if cancelling {
+				m.metrics.observePendingAge(pending.req.Label, true, time.Since(cancellationStarted))
+			} else if !pending.sentAt.IsZero() {
+				m.metrics.observePendingAge(pending.req.Label, false, time.Since(pending.sentAt))
 			}
 		case tick := <-replace.C:
 			// A cancellation deadline may coincide with this tick. Do not send a
@@ -1118,6 +1316,7 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 		m.clearNonceConflict(pending.nonce)
 	}
 	pending.lifecycle.transitionPhase(lifecyclePhaseConfirming)
+	m.metrics.clearPendingAge(pending.req.Label)
 	confirmations := m.confirmations(pending.req)
 	receipt, err := m.waitForConfirmations(ctx, attempt.hash, receipt, confirmations)
 	if errors.Is(err, errReceiptReorged) {
@@ -1199,7 +1398,7 @@ func (m *Manager) tryReplace(
 	if cancellation {
 		limit = m.globalFeeLimit()
 	}
-	fees, err := m.nextReplacementFees(ctx, pending.fees, limit)
+	fees, err := m.replacementFees(ctx, pending, cancellation, limit)
 	if !cancellation && pending.cancellationDue(time.Now()) {
 		return m.tryReplace(ctx, pending, true)
 	}
@@ -1245,6 +1444,7 @@ func (m *Manager) tryReplace(
 	pending.attempts = append(pending.attempts, txAttempt{
 		hash: hash, tx: signed, cancellation: cancellation, exactRebroadcastPending: broadcastUncertain,
 	})
+	m.metrics.observeAttempt(pending.req.Label, cancellation, fees, gas)
 	if isNonceConsumedError(sendErr) {
 		pending.nonceConflictHash = hash
 		m.reconcileExistingLifecycleNonce(ctx, pending)
@@ -1388,6 +1588,72 @@ func replacementBroadcastContext(
 	return context.WithDeadline(ctx, pending.cancelDeadline)
 }
 
+// replacementFees prices the next same-nonce attempt under limit. With the balance guard on, the limit
+// is also capped at what the signer balance funds at the current head; when that cannot fund the
+// required 12.5% bump, or the balance cannot be read, no new attempt is signed and the capped exact
+// rebroadcast of the latest attempt takes over, which becomes valid again if the base fee recedes.
+func (m *Manager) replacementFees(
+	ctx context.Context,
+	pending *pendingTransaction,
+	cancellation bool,
+	limit *big.Int,
+) (feeQuote, error) {
+	if !m.guardEnabled() {
+		return m.nextReplacementFees(ctx, pending.fees, limit)
+	}
+	gas, value := pending.gas, pending.value
+	if cancellation {
+		gas, value = cancellationGasLimit, new(big.Int)
+	}
+	required := bumpFee(pending.fees.maxFee)
+	affordable, err := m.replacementBalanceCap(ctx, gas, value)
+	if err != nil {
+		m.logReplacementCapped(ctx, pending, cancellation, "balance_unavailable", nil, required, err)
+		return feeQuote{}, errors.Errorf("%w: signer balance unavailable: %w", errReplacementLimitReached, err)
+	}
+	if affordable.Cmp(required) < 0 {
+		m.logReplacementCapped(ctx, pending, cancellation, "balance", affordable, required, nil)
+		return feeQuote{}, errors.Errorf(
+			"%w: signer balance funds %s wei per gas at gas limit %d, below the required bump %s",
+			errReplacementLimitReached, affordableString(affordable), gas, required,
+		)
+	}
+	if limit == nil || affordable.Cmp(limit) < 0 {
+		limit = affordable
+	}
+	return m.nextReplacementFees(ctx, pending.fees, limit)
+}
+
+// logReplacementCapped reports, once per lifecycle, that the balance stopped a replacement from being
+// signed. The capped exact rebroadcast that follows logs every attempt itself.
+func (m *Manager) logReplacementCapped(
+	ctx context.Context,
+	pending *pendingTransaction,
+	cancellation bool,
+	reason string,
+	affordable, required *big.Int,
+	err error,
+) {
+	if pending.balanceCapLogged {
+		return
+	}
+	pending.balanceCapLogged = true
+	fields := []any{
+		"label", pending.req.Label,
+		"nonce", pending.nonce,
+		"cancellation", cancellation,
+		"reason", reason,
+		"requiredMaxFeePerGas", required.String(),
+	}
+	if affordable != nil {
+		fields = append(fields, "affordableMaxFeePerGas", affordableString(affordable))
+	}
+	if err != nil {
+		fields = append(fields, "error", err.Error())
+	}
+	observability.Log(ctx).Info("replacement capped", fields...)
+}
+
 func (m *Manager) nextReplacementFees(
 	ctx context.Context,
 	previous feeQuote,
@@ -1521,42 +1787,58 @@ func (pending *pendingTransaction) cancellationDue(now time.Time) bool {
 // currentFees computes the current EIP-1559 base fee, tip, and fee cap under the supplied lifecycle
 // limit. A nil limit is unbounded.
 func (m *Manager) currentFees(ctx context.Context, limit *big.Int) (feeQuote, error) {
+	reading, err := m.readFees(ctx)
+	if err != nil {
+		return feeQuote{}, err
+	}
+	return m.legacyQuote(reading, limit)
+}
+
+// readFees reads the legacy fee rule's inputs within the fee-read budget: the latest header and either
+// the fee-history rewards (tipGwei 0) or the node's tip suggestion floored at tipGwei.
+func (m *Manager) readFees(ctx context.Context) (feeReading, error) {
 	feeCtx, cancel := context.WithTimeout(ctx, m.feeReadTimeout())
 	defer cancel()
 
 	head, err := m.backend.HeaderByNumber(feeCtx, nil)
 	if err != nil {
-		return feeQuote{}, errors.Errorf("%w: header by number: %w", errFreshFeesUnavailable, err)
+		return feeReading{}, errors.Errorf("%w: header by number: %w", errFreshFeesUnavailable, err)
 	}
 	if head == nil || head.BaseFee == nil || head.BaseFee.Sign() < 0 {
-		return feeQuote{}, errors.Errorf("%w: latest header must contain a non-negative base fee", errFreshFeesUnavailable)
+		return feeReading{}, errors.Errorf("%w: latest header must contain a non-negative base fee", errFreshFeesUnavailable)
 	}
-	baseFee := new(big.Int).Set(head.BaseFee)
 
 	tipFloor := gweiToWei(m.cfg.TipGwei)
-	var tip *big.Int
 	if tipFloor.Sign() == 0 {
 		history, historyErr := m.backend.FeeHistory(
 			feeCtx, feeHistoryBlocks, nil, []float64{feeHistoryPercentile},
 		)
 		if historyErr != nil {
-			return feeQuote{}, errors.Errorf("%w: fee history: %w", errFreshFeesUnavailable, historyErr)
+			return feeReading{}, errors.Errorf("%w: fee history: %w", errFreshFeesUnavailable, historyErr)
 		}
-		var valid bool
-		tip, valid = feeHistoryTip(history)
+		tip, valid := feeHistoryTip(history)
 		if !valid {
-			return feeQuote{}, errors.Errorf("%w: invalid fee history rewards", errFreshFeesUnavailable)
+			return feeReading{}, errors.Errorf("%w: invalid fee history rewards", errFreshFeesUnavailable)
 		}
-	} else {
-		suggestedTip, tipErr := m.backend.SuggestGasTipCap(feeCtx)
-		if tipErr == nil && suggestedTip != nil && suggestedTip.Sign() >= 0 {
-			tip = maxBigCopy(suggestedTip, tipFloor)
-		} else if ctx.Err() != nil {
-			return feeQuote{}, errors.Errorf("%w: suggest gas tip: %w", errFreshFeesUnavailable, ctx.Err())
-		} else {
-			tip = tipFloor
-		}
+		return feeReading{head: head, tip: tip, history: history}, nil
 	}
+	suggestedTip, tipErr := m.backend.SuggestGasTipCap(feeCtx)
+	switch {
+	case tipErr == nil && suggestedTip != nil && suggestedTip.Sign() >= 0:
+		return feeReading{head: head, tip: maxBigCopy(suggestedTip, tipFloor)}, nil
+	case ctx.Err() != nil:
+		return feeReading{}, errors.Errorf("%w: suggest gas tip: %w", errFreshFeesUnavailable, ctx.Err())
+	default:
+		return feeReading{head: head, tip: tipFloor}, nil
+	}
+}
+
+// legacyQuote prices one fee reading under the legacy rule: 2×base + tip, capped at limit, with the tip
+// clamped under the cap and a positive tipGwei kept mandatory.
+func (m *Manager) legacyQuote(reading feeReading, limit *big.Int) (feeQuote, error) {
+	baseFee := new(big.Int).Set(reading.head.BaseFee)
+	tip := new(big.Int).Set(reading.tip)
+	tipFloor := gweiToWei(m.cfg.TipGwei)
 
 	// 2*baseFee + tip leaves headroom for one base-fee doubling between now and inclusion.
 	maxFee := new(big.Int).Add(new(big.Int).Mul(baseFee, big.NewInt(2)), tip)
@@ -1606,10 +1888,13 @@ func (m *Manager) estimateGas(ctx context.Context, req Request) (uint64, error) 
 		Data:  req.Data,
 	})
 	if err != nil {
-		// Calldata can contain unpublished authorizations. Keep it out of error logs and Sentry.
-		observability.Log(ctx).Error(err, "gas estimation failed",
-			"label", req.Label,
-		)
+		// An estimate broadcast abandoned because the send failed first is not a failure of its own.
+		if !errors.Is(context.Cause(ctx), errEstimateAbandoned) {
+			// Calldata can contain unpublished authorizations. Keep it out of error logs and Sentry.
+			observability.Log(ctx).Error(err, "gas estimation failed",
+				"label", req.Label,
+			)
+		}
 		return 0, errors.Errorf("estimate gas %q: %w", req.Label, err)
 	}
 	headroomBps := uint64(defaultGasHeadroomBps)

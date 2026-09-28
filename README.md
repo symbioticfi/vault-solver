@@ -394,6 +394,22 @@ validation rule are listed in the
 [transaction manager plan](docs/TXMANAGER-PLAN.md#3-configuration-and-time-budgets). Config decoding rejects
 unknown keys, so deploy a config that sets these keys only with an image that knows them.
 
+**Refusals and funding.** The guard reads the signer balance with `eth_getBalance` pinned to the fee
+snapshot's block (by block hash, EIP-1898) through the read endpoints, so those must serve historical-state
+reads for recent blocks. A refused request returns a `NotAdmitted` submission error wrapping
+`txmanager.ErrUnaffordable` (fund the signer) or `txmanager.ErrStaleHead` (the RPC head stayed more than
+`fees.maxHeadLagBlocks` behind for two block times, or the balance could not be read at that block);
+nothing is signed and the nonce stays free. Refusals are logged at Info and counted in
+`solver_bot_txmanager_admission_rejections_total{reason="unaffordable|unaffordable_one_block|stale_head"}`.
+Replacements and cancellations are capped the same way; when the balance cannot fund the 12.5% bump, the
+latest attempt is rebroadcast unchanged. At a next-block base fee `pb`, a fill with gas limit `G` can
+still be sent while the balance covers `G × (1.125·pb + tipFloor)`; the legacy price needs about
+`G × (2·pb + tip)`. As a rule of thumb, fund lanes that fill regularly to about 0.1 ETH (a 4.35M-gas fill
+then still sends up to a next base fee of about 20 gwei, and keeps the full legacy price up to about 11.5 gwei) and idle
+lanes to about 0.036 ETH, topping up below half the target. `solver_bot_txmanager_account_required_balance_wei`
+exports the requirement at the latest guarded send, and the startup `started` log line names the signer
+address; signers must be unique per deployment.
+
 Defaults, fee headroom, request/result semantics, nonce recovery and internal ownership are documented
 in the [transaction manager plan](docs/TXMANAGER-PLAN.md). Integration-specific deadline and capacity
 rules remain in each solver's plan.
@@ -534,8 +550,9 @@ Sentry groups these diagnosed errors by `(solver, message, reason_code)`; other 
 
 ### Metrics
 
-The [txmanager metric reference](docs/TXMANAGER-PLAN.md#metrics) covers transaction outcomes, admission,
-replacements, phase timing and account snapshots, including labels and units.
+The [txmanager metric reference](docs/TXMANAGER-PLAN.md#metrics) covers transaction outcomes, admission
+and balance-guard refusals, replacements, phase timing, first-attempt and inclusion-delay outcomes, attempt
+fees, pending age, required balance and account snapshots, including labels and units.
 
 The registry also includes standard Go/process collectors,
 `solver_bot_build_info{version,commit}`, and `solver_bot_solver_info{solver}`. The first identifies the exact

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"math/big"
 	"net"
@@ -36,6 +37,63 @@ func TestAnvilTxManagerPendingLifecycle(t *testing.T) {
 	t.Run("timeout cancellation unblocks later nonce", func(t *testing.T) { testAnvilCancellation(t, false) })
 	t.Run("dedicated cancellation RPC unblocks later nonce", func(t *testing.T) { testAnvilCancellation(t, true) })
 	t.Run("external inclusion stops silent relay cancellations", testAnvilConsumedNonce)
+	t.Run("unaffordable fill is never broadcast", testAnvilUnaffordableFill)
+}
+
+// testAnvilUnaffordableFill funds the signer below what a 21000-gas fill needs for two blocks: the
+// balance guard must refuse it before signing, so nothing reaches the write endpoint and the nonce stays
+// free for the same request once the signer is funded.
+func testAnvilUnaffordableFill(t *testing.T) {
+	rpcClient, _, endpoint := startAnvilWithoutMining(t)
+	var writeSends atomic.Int64
+	client, err := chain.Dial(t.Context(), []string{endpoint}, anvilBroadcastProxy(t, endpoint, &writeSends), "",
+		"0xcA11bde05977b3631167028862bE2a173976CA11", 20*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	sgnr := anvilSigner(t)
+	manager := New(client, sgnr, big.NewInt(31337), Config{
+		MaxFeeGwei:   100,
+		TipGwei:      1, // A fresh, non-mining chain has no usable fee-history rewards.
+		PollInterval: 20 * time.Millisecond,
+	}, logr.Discard())
+	go manager.Start(t.Context())
+	req := Request{To: common.HexToAddress("0x000000000000000000000000000000000000dEaD"), GasLimit: 21_000, Label: "unaffordable"}
+
+	// 10^12 wei funds under 0.05 gwei per gas; the floor is about 1.125 gwei of base fee plus the 1 gwei tip.
+	setAnvilBalance(t, rpcClient, sgnr.Address(), big.NewInt(1_000_000_000_000))
+	refused := manager.Send(t.Context(), req)
+	if !errors.Is(refused.Err, ErrUnaffordable) || !refused.NotAdmitted {
+		t.Fatalf("underfunded result = %+v, want a not-admitted ErrUnaffordable", refused)
+	}
+	if sends := writeSends.Load(); sends != 0 {
+		t.Fatalf("underfunded fill reached the write endpoint %d times", sends)
+	}
+	if _, queued, err := poolTransactionAt(t.Context(), rpcClient, sgnr.Address(), 0); err != nil || queued {
+		t.Fatalf("txpool holds nonce 0 after a refusal: queued=%t err=%v", queued, err)
+	}
+
+	setAnvilBalance(t, rpcClient, sgnr.Address(), big.NewInt(1_000_000_000_000_000_000))
+	funded, accepted := manager.SendAsync(t.Context(), req)
+	if !accepted {
+		t.Fatal("funded request was not accepted")
+	}
+	waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(poolTransaction) bool { return true })
+	mineAnvilBlock(t, rpcClient)
+	if got := waitForTxResult(t, funded); got.Err != nil {
+		t.Fatalf("funded result: %v", got.Err)
+	}
+	if sends := writeSends.Load(); sends != 1 {
+		t.Fatalf("funded fill broadcast %d times, want 1", sends)
+	}
+}
+
+func setAnvilBalance(t *testing.T, client *rpc.Client, account common.Address, balance *big.Int) {
+	t.Helper()
+	if err := client.CallContext(t.Context(), nil, "anvil_setBalance", account, hexutil.EncodeBig(balance)); err != nil {
+		t.Fatalf("anvil_setBalance: %v", err)
+	}
 }
 
 // Reads use a real chain; sends model a private relay that acknowledges the
