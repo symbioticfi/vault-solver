@@ -36,12 +36,11 @@ type quoteAdapter struct {
 	Asset         string  `json:"asset" pattern:"^0x[a-fA-F0-9]{40}$"`
 	AssetDecimals int     `json:"assetDecimals" minimum:"0" maximum:"255"`
 	MaxAssets     string  `json:"maxAssets" pattern:"^[0-9]+$"`
-	MaxRate       string  `json:"maxRate" pattern:"^[0-9]+$"`
 	DiscountID    *string `json:"discountId,omitempty" pattern:"^0x[a-fA-F0-9]{64}$"`
-	// Discount is the signed discount (ppm) of a discountId entry. The adapter pays
-	// floor(getAmountOut(amountIn) * (1e6 - discount) / 1e6), which maxRate only approximates.
-	// Optional until every backend sends it.
-	Discount *string `json:"discount,omitempty" pattern:"^[0-9]+$"`
+	// Discount (ppm) is what the adapter takes off this entry's payout: the signed discount of a
+	// discountId entry, otherwise the adapter's minDiscount. The adapter pays at most
+	// floor(getAmountOut(amountIn) * (1e6 - discount) / 1e6).
+	Discount string `json:"discount" pattern:"^[0-9]+$"`
 	// BlockNumber is the block maxAssets was read at. Optional until every backend reports it.
 	BlockNumber *string `json:"blockNumber,omitempty" pattern:"^[0-9]+$"`
 }
@@ -143,18 +142,17 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (
 	if err != nil {
 		return solverInventory{}, err
 	}
-	maxRate, err := parseUint256(v.MaxRate, idxField(index, "maxRate"))
-	if err != nil {
-		return solverInventory{}, err
-	}
 	var discountID *common.Hash
 	if v.DiscountID != nil && *v.DiscountID != "" {
 		h := common.HexToHash(*v.DiscountID)
 		discountID = &h
 	}
-	discount, err := v.parseDiscount(index, discountID != nil)
+	discount, err := parseUint256(v.Discount, idxField(index, "discount"))
 	if err != nil {
 		return solverInventory{}, err
+	}
+	if discount.Cmp(big.NewInt(liquidlane.DiscountPrecision)) > 0 {
+		return solverInventory{}, errors.Errorf("%s: must be <= %d", idxField(index, "discount"), liquidlane.DiscountPrecision)
 	}
 	var blockNumber uint64
 	if v.BlockNumber != nil && *v.BlockNumber != "" {
@@ -164,32 +162,15 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (
 		}
 	}
 	route := liquidlane.NewRoute(chainID, adapter, common.Address{}, tokenIn, asset, 0, v.AssetDecimals)
-	inventory := liquidlane.DirectInventory(route, maxAssets, maxRate)
+	// Amount-specific adapter quotes price each entry; see NormalizeOracleInventory.
+	inventory := liquidlane.DirectInventory(route, maxAssets, nil)
+	inventory.AdapterMinDiscount = discount
 	if discountID != nil {
-		inventory = liquidlane.DiscountInventory(route, maxAssets, maxRate, *discountID, time.Time{})
+		inventory = liquidlane.DiscountInventory(route, maxAssets, nil, *discountID, time.Time{})
 		inventory.Discount = discount
 	}
 	inventory.BlockNumber = blockNumber
 	return inventory, nil
-}
-
-// parseDiscount validates the optional signed discount. It belongs to discount-backed entries only
-// and, like the on-chain discount, cannot exceed 100%.
-func (v *quoteAdapter) parseDiscount(index int, discountBacked bool) (*big.Int, error) {
-	if v.Discount == nil || *v.Discount == "" {
-		return nil, nil
-	}
-	if !discountBacked {
-		return nil, errors.Errorf("%s: requires discountId", idxField(index, "discount"))
-	}
-	discount, err := parseUint256(*v.Discount, idxField(index, "discount"))
-	if err != nil {
-		return nil, err
-	}
-	if discount.Cmp(big.NewInt(liquidlane.DiscountPrecision)) > 0 {
-		return nil, errors.Errorf("%s: must be <= %d", idxField(index, "discount"), liquidlane.DiscountPrecision)
-	}
-	return discount, nil
 }
 
 // parseUint256 parses a base-10 non-negative integer string into a big.Int.

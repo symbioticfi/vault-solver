@@ -77,42 +77,17 @@ func NormalizeOracleInventory(
 		if quote.MaxAssets.Cmp(capacity) < 0 {
 			capacity.Set(quote.MaxAssets)
 		}
-		var rate *big.Int
-		switch {
-		case source.DiscountID == nil:
-			rate = liquidlane.RateForAmountOut(
-				quote.MaxAmountOut,
-				amountIn,
-				source.TokenInDecimals,
-				source.TokenOutDecimals,
-			)
-			if source.MaxRate == nil || source.MaxRate.Cmp(rate) < 0 {
-				continue
-			}
-		case source.Discount != nil:
-			// The signed discount prices the leg exactly like the adapter at this amount. Below the
-			// adapter minimum the swap would revert.
-			if quote.MinDiscount == nil || source.Discount.Cmp(quote.MinDiscount) < 0 {
-				continue
-			}
-			rate = liquidlane.RateForAmountOut(
-				liquidlane.AmountOutAfterDiscount(quote.GrossAmountOut, source.Discount),
-				amountIn,
-				source.TokenInDecimals,
-				source.TokenOutDecimals,
-			)
-		default:
-			// Without the signed discount only the backend's advertised maxRate is known. It already has
-			// the discount applied and floored, while the adapter floors getAmountOut first and discounts
-			// second. Re-derive a rate that cannot predict above what the adapter pays.
-			rate = liquidlane.ConservativeAdvertisedRate(
-				amountIn,
-				source.MaxRate,
-				source.TokenInDecimals,
-				source.TokenOutDecimals,
-			)
+		discount := payoutDiscount(source, quote)
+		if discount == nil {
+			continue
 		}
-		if rate == nil || rate.Sign() <= 0 {
+		rate := liquidlane.RateForAmountOut(
+			liquidlane.AmountOutAfterDiscount(quote.GrossAmountOut, discount),
+			amountIn,
+			source.TokenInDecimals,
+			source.TokenOutDecimals,
+		)
+		if rate.Sign() <= 0 {
 			continue
 		}
 		source.MaxRate = rate
@@ -126,4 +101,23 @@ func NormalizeOracleInventory(
 		out = append(out, *candidate)
 	}
 	return out
+}
+
+// payoutDiscount is the discount source pays at in the adapter's current state, or nil when the
+// source cannot execute. A signed discount below the adapter's minimum reverts. A direct swap is
+// bounded by the adapter's current minimum; a higher minimum the inventory was offered at stands.
+func payoutDiscount(source liquidlane.Inventory, quote liquidlane.FillQuote) *big.Int {
+	if quote.MinDiscount == nil {
+		return nil
+	}
+	if source.DiscountID != nil {
+		if source.Discount == nil || source.Discount.Cmp(quote.MinDiscount) < 0 {
+			return nil
+		}
+		return source.Discount
+	}
+	if source.AdapterMinDiscount != nil && source.AdapterMinDiscount.Cmp(quote.MinDiscount) > 0 {
+		return source.AdapterMinDiscount
+	}
+	return quote.MinDiscount
 }

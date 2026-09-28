@@ -73,14 +73,10 @@ type discountPricingPair struct {
 }
 
 func (p *discountPricingPair) list(maxAssets *big.Int) {
-	price, inDec := p.physical.Price, p.route.TokenInDecimals
-	oneToken := liquidlane.AmountOutForRate(pow10(inDec), price, inDec, 6)
 	p.listed = &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{{
 		DiscountID: p.id.Hex(), Adapter: p.route.Adapter.Hex(), TokenToRedeem: p.route.TokenIn.Hex(),
 		Collateral: p.route.TokenOut.Hex(), CollateralDecimals: 6, Discount: p.discount.String(),
 		Deadline: p.now.Add(time.Hour).Unix(), MaxAssets: maxAssets.String(),
-		// The backend's advertised rate: the discounted output for one whole token, floored.
-		MaxRate: new(big.Int).Mul(liquidlane.AmountOutAfterDiscount(oneToken, p.discount), pow10(12)).String(),
 	}}}
 	inventory, issues := liquiddiscounts.MatchInventories(p.listed, []liquidlane.Inventory{p.physical},
 		liquiddiscounts.MatchOptions{Now: p.now})

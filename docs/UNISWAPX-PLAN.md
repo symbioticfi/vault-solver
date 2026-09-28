@@ -358,7 +358,7 @@ RFQ and UniswapX code on 2026-07-20.)
 
 | # | Area | `rfq` does | `uniswapx` must do |
 |---|---|---|---|
-| 1 | Quote-time inventory | Backend sends `adapters[]` (maxAssets/maxRate/decimals) in the `/quote` body; on-chain inventory read is recovery-only | **Self-source on-chain** over configured direct adapters plus internal advertised discount routes. Price from the background-refreshed snapshot (≤500ms) — §2.1 |
+| 1 | Quote-time inventory | Backend sends `adapters[]` (maxAssets/discount/decimals) in the `/quote` body; on-chain inventory read is recovery-only | **Self-source on-chain** over configured direct adapters plus internal advertised discount routes. Price from the background-refreshed snapshot (≤500ms) — §2.1 |
 | 2 | Quote wire contract | Backend schema, `x-rfq-shared-secret`, 204 decline, 422 on schema violation | UniswapX quote schema, **`204` decline**, `requestId` echo, independent opposing-probe handling; published source IPs are enforced at ingress, not through an invented application header — §4.1/§10.1 |
 | 3 | Quoted price policy | Quotes the raw oracle `getAmountOut` (no margin) | UniswapX-local strategy applies the configured price buffer and optional gas-aware floor; below an enabled floor ⇒ decline — §2.1, §5 |
 | 4 | `EXACT_OUTPUT` | Hard-rejected at validation | UniswapX prices the concrete requested output with current capacity and optional gas, returning the required input — §2.1, §5 |

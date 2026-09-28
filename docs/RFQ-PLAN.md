@@ -28,8 +28,8 @@ push path; orders are found exclusively by polling the backend.
 The `/quote` request inventory (`adapters[]`) still matches the TS `solverQuoteRequestSchema`, but the
 solver maps that boundary shape into the shared LiquidLane terms from
 [`LIQUIDLANE-CONVENTIONS.md`](LIQUIDLANE-CONVENTIONS.md): `Inventory` is
-`adapter + tokenIn + tokenOut + maxAssets + maxRate`, and RFQ's external `asset` field is the shared
-`tokenOut`. Pricing leg types are **direct** (`discountId == null`, public adapter rate) and
+`adapter + tokenIn + tokenOut + maxAssets + discount` (the discount the adapter takes off the entry's
+payout), and RFQ's external `asset` field is the shared `tokenOut`. Pricing leg types are **direct** (`discountId == null`, public adapter rate) and
 **discount** (`discountId != null`, a signature-gated private rate negotiated off-chain via the backend
 `/discounts` flow). Both are in scope for full parity — discount legs are built in **P3** (§4), after
 the direct path is solid; they are sequenced last, not dropped.
@@ -344,7 +344,7 @@ dropping features.
    Unit-tested (state machine with fakes, backend httptest).
 3. **(done) Discount legs** — backend `/discounts` (`resolveDiscount` + `listDiscounts`),
    discount-swap encoding (`IReactorDiscountSwapInput` from the resolved signed discount) wired into
-   `Executor.fill`, discount-aware strategy selection (legs price off the vault `maxRate`), and
+   `Executor.fill`, discount-aware strategy selection (legs price off the adapter quote at their discount), and
    discount inventories in fill planning. Direct + discount fills now match the TS filler. Unit-tested
    (discount-leg selection, discount fill resolves + encodes).
 4. **(done) Adapter whitelist** — port of TS filler PR #54: quoting/filling restricted to the
@@ -421,24 +421,20 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   single-route constraint above. A richer quoting strategy is a later follow-up (mirrors the
   3F pricing TODO), or an operator can plug their own via the `webhook` strategy (see the strategy
   layer below).
-- **Discount-leg pricing** — the adapter pays a discount swap in two floored steps: `getAmountOut`
-  floors `amountIn × price × 10^outDec / (1e18 × 10^inDec)`, then `swap(DiscountSwap, ...)` applies the
-  signed discount and floors again. The backend's advertised `maxRate` cannot reproduce that: it is the
-  discounted output of one whole input token, floored to collateral base units, so it can price either
-  side of the payout. Pricing above it is not an adapter revert (`InvalidSwapRate` cannot trigger, since
-  `discount ≥ minDiscount`); it reverts in `Reactor._fill`, which pulls the order's *signed* outputs out
-  of the Executor after `execute()` returns. With no `priceBufferBps` in RFQ the slack is zero whenever
-  the price has not moved since the quote, so such a fill retries until the order expires.
-  Discount-backed `adapters[]` entries therefore carry the signed discount as `adapters[].discount`
-  (optional until every backend sends it), and fill-time discount inventory takes it from `/discounts`.
-  `NormalizeOracleInventory` prices such a leg from the live `getAmountOut` at the order amount,
-  `AmountOutAfterDiscount(GrossAmountOut, discount)`, converted to a rate whose round trip floors: the
-  candidate never prices above the payout and gives up at most one unit. It drops a discount below the
-  adapter's current minimum, which the adapter would revert. Without the field, discount legs fall back
-  to `liquidlane.ConservativeAdvertisedRate`, which shaves one unit off the advertised rate's output.
-  Direct legs already re-derive their rate from the same live `getAmountOut` read. Huma rejects unknown
-  request fields, so this solver version must be deployed before a backend that sends `discount`
-  (symbioticfi/rfq-backend#403).
+- **Leg pricing** — the adapter pays a swap in two floored steps: `getAmountOut` floors
+  `amountIn × price × 10^outDec / (1e18 × 10^inDec)`, then the discount floors again (the signed discount
+  of a discount swap, or the adapter `minDiscount` bounding a direct swap). No per-token rate reproduces
+  that, and pricing above the payout is not an adapter revert (`InvalidSwapRate` cannot trigger, since
+  `discount ≥ minDiscount`); it reverts in `Reactor._fill`, which pulls the order's *signed* outputs out of
+  the Executor after `execute()` returns. With no `priceBufferBps` in RFQ there is no slack for it. Every
+  `adapters[]` entry therefore carries `discount` instead of a rate: the signed discount on discount-backed
+  entries and the adapter `minDiscount` on direct ones; fill-time discount inventory takes the signed
+  discount from `/discounts`. `NormalizeOracleInventory` prices each leg from the live `getAmountOut` at the
+  order amount, `AmountOutAfterDiscount(GrossAmountOut, discount)`, converted to a rate whose round trip
+  floors, so a candidate never prices above the payout and gives up at most one unit. A signed discount
+  below the adapter's current minimum is dropped, since the adapter reverts it; a direct leg prices at the
+  higher of its entry's discount and the current minimum. The field is required and replaces `maxRate`, so
+  this solver and symbioticfi/rfq-backend#403 deploy together.
 - **Quote latency** — `/quote` is synchronous in the backend's fan-out, so keep it cheap: pricing is
   one `getAmountOut` multicall, and `tokenIn` decimals are read once and cached. A warm quote is a
   single multicall; only the first quote for a not-yet-seen `tokenIn` adds a one-off `decimals` read.

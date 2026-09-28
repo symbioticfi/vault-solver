@@ -180,6 +180,7 @@ func testDirectDiscountInventory() liquidlane.Inventory {
 	)
 	inventory := liquidlane.DirectInventory(routeItem, big.NewInt(1_000), big.NewInt(900_000_000_000_000_000))
 	inventory.AdapterMinDiscount = big.NewInt(100_000)
+	inventory.Price = big.NewInt(1_000_000_000_000_000_000) // getMaxRate 0.9e18 at the 10% minimum
 	return inventory
 }
 
@@ -192,8 +193,7 @@ func testDiscountListItem(
 		DiscountID: testDiscountID,
 		Adapter:    direct.Adapter.Hex(), TokenToRedeem: direct.TokenIn.Hex(), Collateral: direct.TokenOut.Hex(),
 		CollateralDecimals: direct.TokenOutDecimals, Deadline: deadline.Unix(),
-		Discount: "100000",
-		MaxRate:  direct.MaxRate.String(), MaxAssets: big.NewInt(maxAssets).String(),
+		Discount: "100000", MaxAssets: big.NewInt(maxAssets).String(),
 	}
 }
 

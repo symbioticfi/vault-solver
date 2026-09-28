@@ -44,10 +44,8 @@ func (s *Solver) fillDiscountQuotes(
 	if s.discounts == nil || len(bases) == 0 {
 		return nil, nil
 	}
-	inventory := make([]liquidlane.Inventory, 0, len(bases))
 	baseByRoute := make(map[liquidlane.RouteID]liquidlane.FillQuote, len(bases))
 	for _, quote := range bases {
-		inventory = append(inventory, quote.Inventory)
 		baseByRoute[quote.ID] = quote
 	}
 	listed, err := s.discounts.ListDiscounts(ctx)
@@ -55,7 +53,8 @@ func (s *Solver) fillDiscountQuotes(
 		observability.Log(ctx).Error(err, "private discounts: list for fill")
 		return nil, nil
 	}
-	candidates, issues := discounts.MatchInventories(listed, inventory, discounts.MatchOptions{Now: now})
+	// Rank advertised discounts by their exact payout rate at the order amount before resolving.
+	candidates, issues := discounts.AdvertisedFillQuotes(listed, bases, discounts.MatchOptions{Now: now})
 	s.logDiscountIssues(ctx, issues)
 	sort.Slice(candidates, func(i, j int) bool {
 		if cmp := candidates[i].MaxRate.Cmp(candidates[j].MaxRate); cmp != 0 {
@@ -104,7 +103,7 @@ func (s *Solver) fillDiscountQuotes(
 			}
 			candidate.ValidUntil = discounts.ValidUntil(signed)
 			quote := &liquidlane.FillQuote{
-				Inventory:      candidate,
+				Inventory:      candidate.Inventory,
 				AmountIn:       liquidlane.CloneBig(baseQuote.AmountIn),
 				GrossAmountOut: liquidlane.CloneBig(baseQuote.GrossAmountOut),
 				MaxAmountOut:   maxAmountOut,

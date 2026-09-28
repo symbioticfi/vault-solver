@@ -162,8 +162,7 @@ func RefreshFillQuotes(
 		if signed == nil || !ok {
 			continue
 		}
-		// ValidateSigned bounds the signed discount by the refreshed adapter minimum; the advertised
-		// rate is a rounded per-token estimate and does not gate the exact payout.
+		// ValidateSigned bounds the signed discount by the refreshed adapter minimum.
 		candidate.MaxAssets = minPositive(candidate.MaxAssets, base.MaxAssets)
 		if candidate.MaxAssets.Sign() <= 0 {
 			continue

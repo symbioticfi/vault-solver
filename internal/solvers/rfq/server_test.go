@@ -47,7 +47,7 @@ func validQuoteBody() quoteRequest {
 		QuoteID: "22222222-2222-4222-8222-222222222222",
 		Adapters: []quoteAdapter{{
 			Adapter: vlt.Hex(), Asset: tOut.Hex(), AssetDecimals: 6,
-			MaxAssets: "10000000", MaxRate: "1000000000000000000",
+			MaxAssets: "10000000", Discount: "0",
 		}},
 	}
 }
@@ -105,40 +105,52 @@ func TestServer_QuoteOK(t *testing.T) {
 	}
 }
 
-func TestServer_QuotePricesSignedDiscountExactly(t *testing.T) {
+func TestServer_QuotePricesEachEntryAtItsDiscount(t *testing.T) {
 	discountID := "0x00000000000000000000000000000000000000000000000000000000000000ab"
-	discountBacked := func(discount string) quoteRequest {
+	withDiscount := func(discount string, discountBacked bool) quoteRequest {
 		body := validQuoteBody()
-		body.Adapters[0].DiscountID = &discountID
-		// The backend's rounded per-token estimate; the signed discount decides the price.
-		body.Adapters[0].MaxRate = "999000000000000000"
-		body.Adapters[0].Discount = &discount
+		body.Adapters[0].Discount = discount
+		if discountBacked {
+			body.Adapters[0].DiscountID = &discountID
+		}
 		return body
 	}
 	srv := testServer()
 	srv.quotes.discountsEnabled = true
-	rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, discountBacked("200"))
-	if rr.Code != http.StatusOK {
-		t.Fatalf("quote = %d, want 200 (body %s)", rr.Code, rr.Body.String())
-	}
-	var resp quoteResponse
-	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if resp.AmountOut != "999800" { // floor(getAmountOut 1000000 * (1e6 - 200) / 1e6)
-		t.Fatalf("amountOut = %s, want the adapter payout 999800", resp.AmountOut)
+	for name, body := range map[string]quoteRequest{
+		"signed discount": withDiscount("200", true),
+		// A direct entry is bounded by the adapter minimum the backend read, when it is higher.
+		"adapter minimum": withDiscount("200", false),
+	} {
+		rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, body)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("%s: quote = %d, want 200 (body %s)", name, rr.Code, rr.Body.String())
+		}
+		var resp quoteResponse
+		if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("%s: decode: %v", name, err)
+		}
+		if resp.AmountOut != "999800" { // floor(getAmountOut 1000000 * (1e6 - 200) / 1e6)
+			t.Fatalf("%s: amountOut = %s, want the adapter payout 999800", name, resp.AmountOut)
+		}
 	}
 
-	direct := validQuoteBody()
-	discount := "200"
-	direct.Adapters[0].Discount = &discount
+	missing := map[string]any{}
+	raw, err := json.Marshal(withDiscount("200", true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &missing); err != nil {
+		t.Fatal(err)
+	}
+	delete(missing["adapters"].([]any)[0].(map[string]any), "discount")
 	for name, tc := range map[string]struct {
-		body quoteRequest
+		body any
 		want int
 	}{
-		"discount above 100%":         {discountBacked("1000001"), http.StatusBadRequest},
-		"discount without discountId": {direct, http.StatusBadRequest},
-		"malformed discount":          {discountBacked("2%"), http.StatusUnprocessableEntity},
+		"discount above 100%": {withDiscount("1000001", true), http.StatusBadRequest},
+		"malformed discount":  {withDiscount("2%", true), http.StatusUnprocessableEntity},
+		"missing discount":    {missing, http.StatusUnprocessableEntity},
 	} {
 		if got := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, tc.body); got.Code != tc.want {
 			t.Fatalf("%s: code = %d, want %d", name, got.Code, tc.want)
@@ -208,7 +220,7 @@ func TestServer_QuoteWhitelist(t *testing.T) {
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
 	rogueAdapter := quoteAdapter{
 		Adapter: rogue.Hex(), Asset: tOut.Hex(), AssetDecimals: 6,
-		MaxAssets: "10000000", MaxRate: "2000000000000000000",
+		MaxAssets: "10000000", Discount: "0",
 	}
 	cases := map[string]struct {
 		whitelist adapterWhitelist

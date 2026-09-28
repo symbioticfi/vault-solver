@@ -87,7 +87,7 @@ func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
 	protocolDeadline := now.Add(45 * time.Second).Unix()
 	provider := &fakeDiscountProvider{
 		list: &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{
-			testDiscountOffer(route, now.Add(time.Minute), "100", "1000000000000000000"),
+			testDiscountOffer(route, now.Add(time.Minute), "100"),
 		}},
 		resolved: &liquiddiscounts.Resolved{
 			DiscountID: testDiscountID,
@@ -237,7 +237,7 @@ func TestStartFillRepricesPartialDiscountLeg(t *testing.T) {
 	deadline := now.Add(time.Minute).Unix()
 	provider := &fakeDiscountProvider{
 		list: &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{
-			testDiscountOffer(discountRoute, now.Add(time.Minute), "100", "1000000000000000000"),
+			testDiscountOffer(discountRoute, now.Add(time.Minute), "100"),
 		}},
 		resolved: &liquiddiscounts.Resolved{
 			DiscountID: testDiscountID,

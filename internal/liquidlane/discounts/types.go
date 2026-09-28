@@ -20,12 +20,10 @@ type Offer struct {
 	TokenToRedeem      common.Address
 	Collateral         common.Address
 	CollateralDecimals int
-	Discount           *big.Int
-	Deadline           int64
-	// MaxRate is the backend's advertised rate net of Discount: the discounted output for one
-	// whole TokenToRedeem, floored to collateral base units. It is a rounded estimate that can
-	// differ from the swap payout, so exact pricing uses Discount with the current oracle price.
-	MaxRate   *big.Int
+	// Discount is the signed discount in ppm. It prices the route with the adapter's current
+	// oracle price: the listing carries no rate.
+	Discount  *big.Int
+	Deadline  int64
 	MaxAssets *big.Int
 	// BlockNumber is the block MaxAssets was read at; zero when the backend did not report it.
 	BlockNumber uint64
@@ -75,10 +73,6 @@ func ParseOffer(item ListItem) (*Offer, error) {
 	if discount.Cmp(big.NewInt(liquidlane.DiscountPrecision)) > 0 {
 		return nil, errors.Errorf("discount: must be <= %d", liquidlane.DiscountPrecision)
 	}
-	maxRate, err := parsePositiveDecimal(item.MaxRate, "maxRate")
-	if err != nil {
-		return nil, err
-	}
 	maxAssets, err := parsePositiveDecimal(item.MaxAssets, "maxAssets")
 	if err != nil {
 		return nil, err
@@ -99,7 +93,7 @@ func ParseOffer(item ListItem) (*Offer, error) {
 		DiscountID: id, Adapter: adapter, TokenToRedeem: tokenToRedeem,
 		Collateral: collateral, CollateralDecimals: item.CollateralDecimals,
 		Discount: discount, Deadline: item.Deadline,
-		MaxRate: maxRate, MaxAssets: maxAssets, BlockNumber: blockNumber,
+		MaxAssets: maxAssets, BlockNumber: blockNumber,
 	}, nil
 }
 

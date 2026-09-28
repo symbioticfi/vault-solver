@@ -214,13 +214,12 @@ func TestSingleInternalReplacesDiscountAndEncodesOnlyReplacement(t *testing.T) {
 			physical.AdapterMinDiscount = new(big.Int)
 			reader.snapshot.Physical = []liquidlane.FillQuote{physical}
 			fixture.solver.capacity.Set("other-fill", liquidlane.CapacityReservations{fixture.route.CapacityID: big.NewInt(30)})
-			first := testDiscountOffer(fixture.route, fixture.now.Add(time.Minute), "130", "1000000000000000000")
+			first := testDiscountOffer(fixture.route, fixture.now.Add(time.Minute), "130")
 			second := first
 			second.DiscountID = common.HexToHash("0x02").Hex()
 			failedID := first.DiscountID
 			if reason == "payout exceeds reservation" {
 				failedID = ""
-				first.MaxRate = "900000000000000000"
 				first.Discount = "100000" // Resolving to zero increases the payout beyond the planned 90.
 			}
 			provider := &replacingDiscountProvider{failedID: failedID, fakeDiscountProvider: &fakeDiscountProvider{

@@ -434,8 +434,9 @@ type Strategy interface {
   allocator chooses the best alternative able to cover each concrete leg. Routes sharing a vault share one
   conservative `CapacityID`; reserve is applied
   before in-flight amounts are subtracted. In internal mode, advertised discount inventory is bounded
-  by current on-chain `getMaxAssets`/`getMaxRate` and its deadline. The backend discount and its already-net
-  `maxRate` are validated together; the strategy must not apply the ppm discount to that rate again.
+  by current on-chain `getMaxAssets` and its deadline, and priced from its signed discount with the adapter's
+  oracle price. At fill time, candidates are ranked by their exact payout at the order amount before any
+  signature is resolved.
   Quote lifetime
   belongs to the solver cadence: by default the head is polled every second, quotes are recalculated once per
   new block, at most three physical routes are used, and `quoteTtl` is 36 seconds. Unchanged quotes are renewed

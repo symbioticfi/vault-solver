@@ -60,7 +60,6 @@ func MatchInventories(
 		if !ok || offer.CollateralDecimals != base.TokenOutDecimals {
 			continue
 		}
-		// The signed discount, not the advertised rate, decides what the adapter pays.
 		if base.AdapterMinDiscount == nil || base.AdapterMinDiscount.Sign() < 0 ||
 			offer.Discount.Cmp(base.AdapterMinDiscount) < 0 {
 			issues = append(issues, OfferIssue{
@@ -69,9 +68,16 @@ func MatchInventories(
 			})
 			continue
 		}
+		maxRate := liquidlane.DiscountedRate(base.Price, offer.Discount)
+		if maxRate.Sign() <= 0 {
+			issues = append(issues, OfferIssue{
+				DiscountID: offer.DiscountID.Hex(),
+				Err:        errors.New("current adapter oracle price is unavailable"),
+			})
+			continue
+		}
 		maxAssets := minPositive(offer.MaxAssets, base.MaxAssets)
-		maxRate := discountRate(offer, base)
-		if maxAssets.Sign() <= 0 || maxRate.Sign() <= 0 {
+		if maxAssets.Sign() <= 0 {
 			continue
 		}
 		seen[offer.DiscountID] = true
@@ -115,8 +121,7 @@ func AdvertisedFillQuotes(
 			})
 			continue
 		}
-		// A discount swap pays its full payout at the signed discount; the advertised rate is a
-		// rounded per-token estimate, so it neither caps nor gates the payout planned and reserved.
+		// A discount swap pays its full payout at the signed discount; plan and reserve all of it.
 		amountOut := liquidlane.AmountOutAfterDiscount(base.GrossAmountOut, offer.Discount)
 		maxAssets := minPositive(offer.MaxAssets, base.MaxAssets)
 		if amountOut.Sign() <= 0 || maxAssets.Sign() <= 0 {
@@ -168,16 +173,6 @@ func fillQuotesByRoute(quotes []liquidlane.FillQuote) map[routeKey]liquidlane.Fi
 		byRoute[newRouteKey(quote.Adapter, quote.TokenIn, quote.TokenOut)] = quote
 	}
 	return byRoute
-}
-
-// discountRate is the rate a discount route ranks at. With the current oracle price it is exact:
-// getMaxRate at the signed discount. Without one, the advertised rate stands in, capped by the
-// adapter's current rate because it was derived from an older oracle read.
-func discountRate(offer Offer, base liquidlane.Inventory) *big.Int {
-	if rate := liquidlane.DiscountedRate(base.Price, offer.Discount); rate.Sign() > 0 {
-		return rate
-	}
-	return minPositive(offer.MaxRate, base.MaxRate)
 }
 
 func tokenAllowed(token common.Address, options MatchOptions) bool {

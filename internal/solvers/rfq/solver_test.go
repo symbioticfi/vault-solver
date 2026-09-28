@@ -127,7 +127,7 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
 	rogueAdapter := quoteAdapter{
 		Adapter: rogue.Hex(), Asset: tOut.Hex(), AssetDecimals: 6,
-		MaxAssets: "10000000", MaxRate: "2000000000000000000", // better rate, but not scoped → must be dropped
+		MaxAssets: "10000000", Discount: "0", // not scoped → must be dropped
 	}
 
 	// (1) Request offering ONLY the non-configured adapter ⇒ declined (nil → HTTP 204).

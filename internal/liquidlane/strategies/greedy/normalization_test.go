@@ -17,93 +17,79 @@ func TestNormalizeOracleInventoryPricesEachPhysicalRoute(t *testing.T) {
 	tokenOut := common.HexToAddress("0x2")
 	first := liquidlane.NewRoute(1, common.HexToAddress("0xa"), common.HexToAddress("0x10"), tokenIn, tokenOut, 18, 6)
 	second := liquidlane.NewRoute(1, common.HexToAddress("0xb"), common.HexToAddress("0x20"), tokenIn, tokenOut, 18, 6)
+	third := liquidlane.NewRoute(1, common.HexToAddress("0xc"), common.HexToAddress("0x30"), tokenIn, tokenOut, 18, 6)
 	amountIn := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+	direct := func(route liquidlane.Route, capacity, minDiscount int64) liquidlane.Inventory {
+		item := liquidlane.DirectInventory(route, big.NewInt(capacity), nil)
+		item.AdapterMinDiscount = big.NewInt(minDiscount)
+		return item
+	}
+	quote := func(route liquidlane.Route, capacity, gross int64) liquidlane.FillQuote {
+		return liquidlane.FillQuote{
+			Inventory: liquidlane.DirectInventory(route, big.NewInt(capacity), nil), AmountIn: amountIn,
+			GrossAmountOut: big.NewInt(gross), MaxAmountOut: big.NewInt(gross), MinDiscount: new(big.Int),
+		}
+	}
 	sources := []liquidlane.Inventory{
-		liquidlane.DirectInventory(first, big.NewInt(2_000_000), big.NewInt(900_000_000_000_000_000)),
-		liquidlane.DirectInventory(second, big.NewInt(2_000_000), big.NewInt(800_000_000_000_000_000)),
+		direct(first, 2_000_000, 0), direct(second, 2_000_000, 0),
+		// The inventory was offered at a 0.1% minimum the chain has since lowered: price at 0.1%.
+		direct(third, 2_000_000, 1_000),
 	}
 	physical := []liquidlane.FillQuote{
-		{Inventory: liquidlane.DirectInventory(first, big.NewInt(1_500_000), nil), AmountIn: amountIn, MaxAmountOut: big.NewInt(900_000)},
-		{Inventory: liquidlane.DirectInventory(second, big.NewInt(2_000_000), nil), AmountIn: amountIn, MaxAmountOut: big.NewInt(800_000)},
+		quote(first, 1_500_000, 900_000), quote(second, 2_000_000, 800_000), quote(third, 2_000_000, 900_000),
 	}
 
 	got := NormalizeOracleInventory(amountIn, sources, physical)
-	if len(got) != 2 || got[0].Rate.String() != "900000000000000000" || got[0].MaxAmountOut.String() != "1500000" ||
-		got[1].Rate.String() != "800000000000000000" {
+	if len(got) != 3 || got[0].Rate.String() != "900000000000000000" || got[0].MaxAmountOut.String() != "1500000" ||
+		got[1].Rate.String() != "800000000000000000" || got[2].Rate.String() != "899100000000000000" {
 		t.Fatalf("normalized = %#v", got)
 	}
 }
 
-func TestNormalizeOracleInventoryUsesSignedRateForPrivateAlternative(t *testing.T) {
+// A discount leg priced from the adapter quote at the order amount never predicts more than the
+// adapter pays and gives up at most one unit, across prices, decimals, discounts and sizes.
+func TestNormalizeOracleInventoryKeepsDiscountLegsWithinOneUnitOfPayout(t *testing.T) {
 	t.Parallel()
-	tokenIn := common.HexToAddress("0x1")
-	tokenOut := common.HexToAddress("0x2")
-	route := liquidlane.NewRoute(1, common.HexToAddress("0xa"), common.HexToAddress("0x10"), tokenIn, tokenOut, 18, 6)
 	discountID := common.HexToHash("0xd")
-	amountIn := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
-	sources := []liquidlane.Inventory{
-		liquidlane.DiscountInventory(
-			route,
-			big.NewInt(1_000_000),
-			big.NewInt(750_000_000_000_000_000),
-			discountID,
-			time.Time{},
-		),
-	}
-	physical := []liquidlane.FillQuote{{
-		Inventory: liquidlane.DirectInventory(route, big.NewInt(1_000_000), nil),
-		AmountIn:  amountIn, MaxAmountOut: big.NewInt(800_000),
-	}}
-
-	got := NormalizeOracleInventory(amountIn, sources, physical)
-	// The advertised 0.75 rate wins over the physical route's 0.8, but is re-derived conservatively:
-	// the backend pre-applies and floors the discount while the adapter floors getAmountOut first, so
-	// the candidate prices one output unit (1e12 rate units at 18→6 decimals) below the advertised rate.
-	if len(got) != 1 || got[0].Rate.String() != "749999000000000000" || got[0].DiscountID == nil {
-		t.Fatalf("normalized = %#v", got)
-	}
-	if out := liquidlane.AmountOutForRate(amountIn, got[0].Rate, 18, 6); out.String() != "749999" {
-		t.Fatalf("amountOut at normalized rate = %s, want one unit below the advertised 750000", out)
+	for _, dec := range [][2]int{{18, 6}, {6, 6}, {18, 18}} {
+		route := liquidlane.NewRoute(1, common.HexToAddress("0xa"), common.HexToAddress("0x10"),
+			common.HexToAddress("0x1"), common.HexToAddress("0x2"), dec[0], dec[1])
+		for _, rawPrice := range []int64{112_837_214, 106_177_400, 111_727_500, 100_000_000} {
+			price := new(big.Int).Mul(big.NewInt(rawPrice), big.NewInt(10_000_000_000))
+			for _, discount := range []int64{0, 1, 200, 40_000} {
+				for step := int64(1); step <= 30; step++ {
+					amountIn := new(big.Int).Mul(big.NewInt(step*step*7_919+step), pow10ForTest(dec[0]-2))
+					gross := liquidlane.AmountOutForRate(amountIn, price, dec[0], dec[1])
+					payout := liquidlane.AmountOutAfterDiscount(gross, big.NewInt(discount))
+					source := liquidlane.DiscountInventory(route, maxUint256ForTest(), nil, discountID, time.Time{})
+					source.Discount = big.NewInt(discount)
+					physical := liquidlane.FillQuote{
+						Inventory: liquidlane.DirectInventory(route, maxUint256ForTest(), nil), AmountIn: amountIn,
+						GrossAmountOut: gross, MaxAmountOut: gross, MinDiscount: new(big.Int),
+					}
+					got := NormalizeOracleInventory(amountIn, []liquidlane.Inventory{source}, []liquidlane.FillQuote{physical})
+					if payout.Sign() == 0 {
+						continue
+					}
+					if len(got) != 1 {
+						t.Fatalf("amountIn %s: candidates = %d, want one", amountIn, len(got))
+					}
+					out := got[0].AmountOutFor(amountIn)
+					if out.Cmp(payout) > 0 || new(big.Int).Sub(payout, out).Cmp(big.NewInt(1)) > 0 {
+						t.Fatalf("amountIn %s: candidate prices %s, adapter pays %s", amountIn, out, payout)
+					}
+				}
+			}
+		}
 	}
 }
 
-// A discount candidate whose advertised rate would over-predict must be normalized to a rate that
-// never prices above what the adapter pays for the same amountIn.
-func TestNormalizeOracleInventoryKeepsDiscountRateBelowAdapter(t *testing.T) {
-	t.Parallel()
-	tokenIn := common.HexToAddress("0x1")
-	tokenOut := common.HexToAddress("0x2")
-	route := liquidlane.NewRoute(1, common.HexToAddress("0xa"), common.HexToAddress("0x10"), tokenIn, tokenOut, 18, 18)
-	discountID := common.HexToHash("0xd")
-	amountIn, _ := new(big.Int).SetString("1000000000000000", 10)
-	price, _ := new(big.Int).SetString("1034567891234567890", 10)
+func pow10ForTest(exponent int) *big.Int {
+	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(max(exponent, 0))), nil)
+}
 
-	// maxRate as the backend derives it: price with a 1 ppm discount applied, floored.
-	advertised := new(big.Int).Mul(price, big.NewInt(liquidlane.DiscountPrecision-1))
-	advertised.Div(advertised, big.NewInt(liquidlane.DiscountPrecision))
-	// What the adapter actually pays: floor getAmountOut first, then apply the same discount.
-	adapterOut := liquidlane.AmountOutAfterDiscount(
-		liquidlane.AmountOutForRate(amountIn, price, 18, 18), big.NewInt(1),
-	)
-	if raw := liquidlane.AmountOutForRate(amountIn, advertised, 18, 18); raw.Cmp(adapterOut) <= 0 {
-		t.Fatalf("fixture no longer reproduces the over-prediction: raw %s, adapter %s", raw, adapterOut)
-	}
-
-	sources := []liquidlane.Inventory{
-		liquidlane.DiscountInventory(route, big.NewInt(1_000_000_000_000_000_000), advertised, discountID, time.Time{}),
-	}
-	physical := []liquidlane.FillQuote{{
-		Inventory: liquidlane.DirectInventory(route, big.NewInt(1_000_000_000_000_000_000), nil),
-		AmountIn:  amountIn, MaxAmountOut: big.NewInt(1),
-	}}
-
-	got := NormalizeOracleInventory(amountIn, sources, physical)
-	if len(got) != 1 {
-		t.Fatalf("candidates = %d, want one", len(got))
-	}
-	if out := liquidlane.AmountOutForRate(amountIn, got[0].Rate, 18, 18); out.Cmp(adapterOut) > 0 {
-		t.Fatalf("normalized rate prices %s, above the adapter's %s", out, adapterOut)
-	}
+func maxUint256ForTest() *big.Int {
+	return new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
 }
 
 // With the oracle price, candidates price like the adapter: private legs at their signed discount,

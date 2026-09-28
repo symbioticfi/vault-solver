@@ -46,12 +46,10 @@ Core field rules:
 
 - `MaxAssets` is the current output cap in `tokenOut` units.
 - Direct inventory `MaxRate` is `getMaxRate(tokenIn)` and already includes `minDiscount`. A `FillQuote`
-  derives the same conservative fixed-point fact from `MaxAmountOut / AmountIn`, so fill-time private
-  offers are bounded without another RPC call.
-- Discount `MaxRate` comes from the discounts backend and already includes its advertised discount. It
-  arrives already floored, while the adapter floors `getAmountOut` first and applies the discount
-  second, so pricing directly at it can predict one unit above what the adapter pays. Re-derive it for
-  the concrete `amountIn` with `liquidlane.ConservativeAdvertisedRate` before quoting or sizing a leg.
+  derives the same fixed-point fact for its amount from `MaxAmountOut / AmountIn`.
+- `Price` is the adapter oracle price read with the inventory, and `Discount` the signed ppm discount of a
+  discount route. Discount `MaxRate` is `getMaxRate` at that discount, derived from both; the discounts
+  backend lists no rate.
 - `GrossAmountOut` is raw `getAmountOut`; `MaxAmountOut` is the executable amount after discount.
 - `MinDiscount` is the adapter's current lower bound for a fill.
 - `ValidUntil` is an external offer deadline. Inventory does not carry a duplicate read timestamp;
@@ -203,11 +201,9 @@ reproduces both floors for every amount, so exact pricing carries the oracle `pr
 separately (`liquidlane.DiscountedAmountOut`, with exact minimal- and maximal-input inverses). The inventory
 read takes the oracle price from `getAmountOut` at `OraclePriceProbe`, which cancels the decimal scaling,
 and fails a route closed when `getMaxRate` does not reproduce it. Quote candidates built from an inventory
-with a price use this model; candidates without one keep the fixed-rate model.
-
-Backend `maxRate` is the discounted output of one whole input token, floored to collateral base units. It
-is a rounded estimate that can sit on either side of the payout, so it never prices, caps or gates a
-discount leg. It stands in only when no oracle price is known, capped by the adapter's current rate.
+with a price use this model; candidates without one keep the fixed-rate model. The backend supplies the
+discount, never a rate: its listing carries each discount's ppm, and every RFQ `adapters[]` entry carries
+`discount` (the signed discount, or the adapter `minDiscount` on direct entries).
 
 For signed discounts:
 
@@ -215,9 +211,8 @@ For signed discounts:
    signs, non-digits, and values wider than 256 bits. The EIP-712 value remains the same uint256.
 2. List and validate advertised offers for quote construction, pricing them from the signed `discount`
    and the current oracle price.
-3. RFQ quote requests carry `adapters[].discount`; a discount leg then prices from the adapter quote at
-   the order amount. Without it (older backends), `ConservativeAdvertisedRate` re-derives a rate that
-   cannot price above what the adapter pays.
+3. RFQ legs price from the adapter quote at the order amount and the entry's `discount`; a direct leg uses
+   the adapter's current minimum instead when that is higher.
 4. Resolve signatures again immediately before fill.
 5. Recheck id, adapter, tokens, deadlines, and the signed discount against the current adapter minimum,
    the only discount bound the adapter enforces.

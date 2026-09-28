@@ -702,7 +702,7 @@ func (e *executionService) discountInventories(
 		// capacity domains instead of making address(0) look like one shared vault.
 		route.CapacityID = liquidlane.CapacityID(route.ID)
 		item := liquidlane.DiscountInventory(
-			route, offer.MaxAssets, offer.MaxRate, offer.DiscountID, time.Unix(offer.Deadline, 0),
+			route, offer.MaxAssets, nil, offer.DiscountID, time.Unix(offer.Deadline, 0),
 		)
 		item.Discount = liquidlane.CloneBig(offer.Discount)
 		item.BlockNumber = offer.BlockNumber
