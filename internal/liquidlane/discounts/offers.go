@@ -60,18 +60,19 @@ func MatchInventories(
 		if !ok || offer.CollateralDecimals != base.TokenOutDecimals {
 			continue
 		}
-		if base.MaxRate == nil || base.MaxRate.Sign() <= 0 || offer.MaxRate.Cmp(base.MaxRate) > 0 {
-			issues = append(issues, OfferIssue{
-				DiscountID: offer.DiscountID.Hex(),
-				Err:        errors.New("advertised discount rate exceeds current adapter max rate"),
-			})
-			continue
-		}
 		if base.AdapterMinDiscount == nil || base.AdapterMinDiscount.Sign() < 0 ||
 			offer.Discount.Cmp(base.AdapterMinDiscount) < 0 {
 			issues = append(issues, OfferIssue{
 				DiscountID: offer.DiscountID.Hex(),
 				Err:        errors.New("advertised discount is below current adapter minimum"),
+			})
+			continue
+		}
+		maxRate := liquidlane.DiscountedRate(base.Price, offer.Discount)
+		if maxRate.Sign() <= 0 {
+			issues = append(issues, OfferIssue{
+				DiscountID: offer.DiscountID.Hex(),
+				Err:        errors.New("current adapter oracle price is unavailable"),
 			})
 			continue
 		}
@@ -83,11 +84,13 @@ func MatchInventories(
 		candidate := liquidlane.DiscountInventory(
 			base.Route,
 			maxAssets,
-			offer.MaxRate,
+			maxRate,
 			offer.DiscountID,
 			time.Unix(offer.Deadline, 0),
 		)
 		candidate.AdapterMinDiscount = liquidlane.CloneBig(base.AdapterMinDiscount)
+		candidate.Price = liquidlane.CloneBig(base.Price)
+		candidate.Discount = liquidlane.CloneBig(offer.Discount)
 		inventory = append(inventory, candidate)
 	}
 	return inventory, issues
@@ -111,13 +114,6 @@ func AdvertisedFillQuotes(
 		if !ok || offer.CollateralDecimals != base.TokenOutDecimals {
 			continue
 		}
-		if base.MaxRate == nil || base.MaxRate.Sign() <= 0 || offer.MaxRate.Cmp(base.MaxRate) > 0 {
-			issues = append(issues, OfferIssue{
-				DiscountID: offer.DiscountID.Hex(),
-				Err:        errors.New("advertised discount rate exceeds current adapter max rate"),
-			})
-			continue
-		}
 		if base.MinDiscount == nil || base.MinDiscount.Sign() < 0 || offer.Discount.Cmp(base.MinDiscount) < 0 {
 			issues = append(issues, OfferIssue{
 				DiscountID: offer.DiscountID.Hex(),
@@ -125,40 +121,28 @@ func AdvertisedFillQuotes(
 			})
 			continue
 		}
+		// A discount swap pays its full payout at the signed discount; plan and reserve all of it.
 		amountOut := liquidlane.AmountOutAfterDiscount(base.GrossAmountOut, offer.Discount)
-		currentRate := liquidlane.RateForAmountOut(
-			amountOut,
-			base.AmountIn,
-			base.TokenInDecimals,
-			base.TokenOutDecimals,
-		)
-		maxRate := minPositive(currentRate, offer.MaxRate)
-		// Account for the rate's lost precision without predicting above the current payout.
-		maxAmountOut := liquidlane.MaxAmountOutForRate(
-			base.AmountIn,
-			maxRate,
-			base.TokenInDecimals,
-			base.TokenOutDecimals,
-		)
-		maxAmountOut = minPositive(maxAmountOut, amountOut)
 		maxAssets := minPositive(offer.MaxAssets, base.MaxAssets)
-		if maxRate.Sign() <= 0 || maxAmountOut.Sign() <= 0 || maxAssets.Sign() <= 0 {
+		if amountOut.Sign() <= 0 || maxAssets.Sign() <= 0 {
 			continue
 		}
 		seen[offer.DiscountID] = true
 		inventory := liquidlane.DiscountInventory(
 			base.Route,
 			maxAssets,
-			maxRate,
+			liquidlane.RateForAmountOut(amountOut, base.AmountIn, base.TokenInDecimals, base.TokenOutDecimals),
 			offer.DiscountID,
 			time.Unix(offer.Deadline, 0),
 		)
 		inventory.AdapterMinDiscount = liquidlane.CloneBig(base.AdapterMinDiscount)
+		inventory.Price = liquidlane.CloneBig(base.Price)
+		inventory.Discount = liquidlane.CloneBig(offer.Discount)
 		quotes = append(quotes, liquidlane.FillQuote{
 			Inventory:      inventory,
 			AmountIn:       liquidlane.CloneBig(base.AmountIn),
 			GrossAmountOut: liquidlane.CloneBig(base.GrossAmountOut),
-			MaxAmountOut:   maxAmountOut,
+			MaxAmountOut:   amountOut,
 			MinDiscount:    liquidlane.CloneBig(offer.Discount),
 		})
 	}

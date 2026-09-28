@@ -162,13 +162,7 @@ func RefreshFillQuotes(
 		if signed == nil || !ok {
 			continue
 		}
-		if candidate.MaxRate == nil || base.MaxRate == nil || candidate.MaxRate.Cmp(base.MaxRate) > 0 {
-			issues = append(issues, OfferIssue{
-				DiscountID: candidate.DiscountID.Hex(),
-				Err:        errors.New("resolved discount rate exceeds refreshed adapter max rate"),
-			})
-			continue
-		}
+		// ValidateSigned bounds the signed discount by the refreshed adapter minimum.
 		candidate.MaxAssets = minPositive(candidate.MaxAssets, base.MaxAssets)
 		if candidate.MaxAssets.Sign() <= 0 {
 			continue
@@ -185,6 +179,10 @@ func RefreshFillQuotes(
 		candidate.AmountIn = liquidlane.CloneBig(base.AmountIn)
 		candidate.GrossAmountOut = liquidlane.CloneBig(base.GrossAmountOut)
 		candidate.MaxAmountOut = maxAmountOut
+		candidate.MaxRate = liquidlane.RateForAmountOut(
+			maxAmountOut, base.AmountIn, base.TokenInDecimals, base.TokenOutDecimals,
+		)
+		candidate.Discount = liquidlane.CloneBig(signed.Terms.Discount)
 		candidate.MinDiscount = liquidlane.CloneBig(base.MinDiscount)
 		candidate.ValidUntil = ValidUntil(signed)
 		quotes = append(quotes, candidate)

@@ -10,7 +10,7 @@ func TestParseOfferBlockNumber(t *testing.T) {
 		DiscountID: "0x00000000000000000000000000000000000000000000000000000000000000ab",
 		Adapter:    "0x0000000000000000000000000000000000000003", TokenToRedeem: "0x0000000000000000000000000000000000000001",
 		Collateral: "0x0000000000000000000000000000000000000002", CollateralDecimals: 6,
-		Discount: "500", Deadline: 4_102_444_800, MaxRate: "1000000000000000000", MaxAssets: "10000000",
+		Discount: "500", Deadline: 4_102_444_800, MaxAssets: "10000000",
 	}
 	for _, tc := range []struct {
 		name    string

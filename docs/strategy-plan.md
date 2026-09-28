@@ -264,7 +264,7 @@ chain inputs, strategy plan, and discount signatures again. Retry budgets remain
 nor the generic manager decides whether to replay a protocol order.
 
 The adjacent `internal/liquidlane/discounts` package owns the discount rules shared by RFQ, LI.FI, and
-UniswapX: parse and filter live offers, bind offers to physical routes, cap advertised rate/capacity,
+UniswapX: parse and filter live offers, bind offers to physical routes, price them from the signed discount, cap capacity,
 derive amount-specific candidates, and revalidate resolved id/adapter/token/deadlines plus the current
 output floor. Resolution timing is deliberately not hidden behind a common strategy facade: LI.FI
 pre-resolves and refreshes state, while UniswapX and RFQ resolve selected routes. Each solver maps the

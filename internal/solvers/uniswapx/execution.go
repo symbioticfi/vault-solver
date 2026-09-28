@@ -425,9 +425,6 @@ func (s *Solver) logFillPlan(ctx context.Context, order *resolvedOrder, plan *ty
 	log := observability.Log(ctx)
 	discountRoutes := 0
 	for index, route := range plan.Routes {
-		if route.DiscountID != nil {
-			discountRoutes++
-		}
 		fields := []any{
 			"source", order.Source,
 			"orderHash", order.Hash.Hex(),
@@ -443,6 +440,7 @@ func (s *Solver) logFillPlan(ctx context.Context, order *resolvedOrder, plan *ty
 			"private", route.DiscountID != nil,
 		}
 		if route.DiscountID != nil {
+			discountRoutes++
 			fields = append(fields, "discountId", route.DiscountID.Hex())
 			for _, quote := range quotes {
 				if liquidlane.NewCandidateID(quote.Route, quote.DiscountID) != route.CandidateID {
@@ -452,7 +450,6 @@ func (s *Solver) logFillPlan(ctx context.Context, order *resolvedOrder, plan *ty
 					"quotedAmountIn", quote.AmountIn.String(),
 					"grossAmountOut", quote.GrossAmountOut.String(),
 					"advertisedDiscountPpm", quote.MinDiscount.String(),
-					"discountedAmountOut", liquidlane.AmountOutAfterDiscount(quote.GrossAmountOut, quote.MinDiscount).String(),
 					"maxRate", quote.MaxRate.String(),
 					"maxAmountOut", quote.MaxAmountOut.String(),
 					"maxAssets", quote.MaxAssets.String(),

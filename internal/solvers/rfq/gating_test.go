@@ -333,6 +333,7 @@ func TestQuoteNormalizesDiscountRateWithInputDecimals(t *testing.T) {
 	request := validQuoteBody()
 	discountID := "0x00000000000000000000000000000000000000000000000000000000000000ab"
 	request.Adapters[0].DiscountID = &discountID
+	request.Adapters[0].Discount = "200"
 
 	decision, err := srv.quotes.quote(t.Context(), &request)
 	if err != nil || decision.response != nil {
@@ -342,13 +343,12 @@ func TestQuoteNormalizesDiscountRateWithInputDecimals(t *testing.T) {
 		t.Fatalf("candidates = %d, want one", len(strategy.quoteInput.Candidates))
 	}
 	candidate := strategy.quoteInput.Candidates[0]
-	// The advertised 1:1 rate is normalized against the on-chain tokenIn decimals (18, not the
-	// backend's 0) and then shaved by one output unit — 1e12 rate units at 18→6 — so the candidate can
-	// never price above what the adapter pays for the same amountIn.
+	// The adapter quote for 1e18 at the on-chain tokenIn decimals (18, not the backend's 0) is
+	// 1000000; the signed 200 ppm discount pays floor(1000000 * 0.9998) = 999800 for it.
 	if candidate.Route.TokenInDecimals != 18 ||
-		candidate.Rate.Cmp(mustBig(t, "999999000000000000")) != 0 ||
-		candidate.MaxAmountIn.Cmp(mustBig(t, "10000010000010000010")) != 0 {
-		t.Fatalf("candidate = %+v, want the conservative 18-decimal discount rate", candidate)
+		candidate.Rate.Cmp(mustBig(t, "999800000000000000")) != 0 ||
+		candidate.MaxAmountIn.Cmp(mustBig(t, "10002000400080016003")) != 0 {
+		t.Fatalf("candidate = %+v, want the 18-decimal payout rate at the signed discount", candidate)
 	}
 }
 

@@ -6,39 +6,45 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 )
 
-// NewQuoteCandidate converts a fixed-rate inventory alternative and its
-// already-buffered output capacity into the canonical greedy quote shape.
+// NewQuoteCandidate converts an inventory alternative and its already-buffered
+// output capacity into the canonical greedy quote shape. With the oracle price
+// and payout discount it prices amounts exactly like the adapter; otherwise it
+// uses the inventory's fixed rate.
 func NewQuoteCandidate(
 	item liquidlane.Inventory,
 	maxAmountOut *big.Int,
 ) *liquidlane.QuoteCandidate {
-	if item.MaxRate == nil || item.MaxRate.Sign() <= 0 ||
-		maxAmountOut == nil || maxAmountOut.Sign() <= 0 {
+	if maxAmountOut == nil || maxAmountOut.Sign() <= 0 {
 		return nil
 	}
-	maxAmountIn := liquidlane.MaxAmountInForRate(
-		maxAmountOut,
-		item.MaxRate,
-		item.TokenInDecimals,
-		item.TokenOutDecimals,
-	)
-	if maxAmountIn.Sign() <= 0 || liquidlane.AmountOutForRate(
-		maxAmountIn,
-		item.MaxRate,
-		item.TokenInDecimals,
-		item.TokenOutDecimals,
-	).Sign() <= 0 {
-		return nil
-	}
-	return &liquidlane.QuoteCandidate{
+	candidate := liquidlane.QuoteCandidate{
 		ID:           liquidlane.NewCandidateID(item.Route, item.DiscountID),
 		Route:        item.Route,
 		Rate:         liquidlane.CloneBig(item.MaxRate),
-		MaxAmountIn:  maxAmountIn,
 		MaxAmountOut: liquidlane.CloneBig(maxAmountOut),
 		DiscountID:   liquidlane.CloneHash(item.DiscountID),
 		ValidUntil:   item.ValidUntil,
 	}
+	discount := item.PayoutDiscount()
+	if rate := liquidlane.DiscountedRate(item.Price, discount); rate.Sign() > 0 {
+		candidate.Rate = rate
+		candidate.Price = liquidlane.CloneBig(item.Price)
+		candidate.Discount = liquidlane.CloneBig(discount)
+		candidate.MaxAmountIn = liquidlane.MaxAmountInForDiscountedAmountOut(
+			maxAmountOut, item.Price, discount, item.TokenInDecimals, item.TokenOutDecimals,
+		)
+	} else {
+		if item.MaxRate == nil || item.MaxRate.Sign() <= 0 {
+			return nil
+		}
+		candidate.MaxAmountIn = liquidlane.MaxAmountInForRate(
+			maxAmountOut, item.MaxRate, item.TokenInDecimals, item.TokenOutDecimals,
+		)
+	}
+	if candidate.MaxAmountIn.Sign() <= 0 || candidate.AmountOutFor(candidate.MaxAmountIn).Sign() <= 0 {
+		return nil
+	}
+	return &candidate
 }
 
 // NormalizeOracleInventory turns amount-independent RFQ inventory into exact-input
@@ -71,32 +77,22 @@ func NormalizeOracleInventory(
 		if quote.MaxAssets.Cmp(capacity) < 0 {
 			capacity.Set(quote.MaxAssets)
 		}
-		var rate *big.Int
-		if source.DiscountID == nil {
-			rate = liquidlane.RateForAmountOut(
-				quote.MaxAmountOut,
-				amountIn,
-				source.TokenInDecimals,
-				source.TokenOutDecimals,
-			)
-			if source.MaxRate == nil || source.MaxRate.Cmp(rate) < 0 {
-				continue
-			}
-		} else {
-			// A discount leg prices off the backend's advertised maxRate, which already has the
-			// discount applied and floored, while the adapter floors getAmountOut first and discounts
-			// second. Re-derive a rate that cannot predict above what the adapter pays.
-			rate = liquidlane.ConservativeAdvertisedRate(
-				amountIn,
-				source.MaxRate,
-				source.TokenInDecimals,
-				source.TokenOutDecimals,
-			)
+		discount := payoutDiscount(source, quote)
+		if discount == nil {
+			continue
 		}
-		if rate == nil || rate.Sign() <= 0 {
+		rate := liquidlane.RateForAmountOut(
+			liquidlane.AmountOutAfterDiscount(quote.GrossAmountOut, discount),
+			amountIn,
+			source.TokenInDecimals,
+			source.TokenOutDecimals,
+		)
+		if rate.Sign() <= 0 {
 			continue
 		}
 		source.MaxRate = rate
+		// The amount-specific quote is fresher than a snapshot price, so price at its rate.
+		source.Price, source.Discount = nil, nil
 		candidate := NewQuoteCandidate(source, capacity)
 		if candidate == nil || seen[candidate.ID] {
 			continue
@@ -105,4 +101,23 @@ func NormalizeOracleInventory(
 		out = append(out, *candidate)
 	}
 	return out
+}
+
+// payoutDiscount is the discount source pays at in the adapter's current state, or nil when the
+// source cannot execute. A signed discount below the adapter's minimum reverts. A direct swap is
+// bounded by the adapter's current minimum; a higher minimum the inventory was offered at stands.
+func payoutDiscount(source liquidlane.Inventory, quote liquidlane.FillQuote) *big.Int {
+	if quote.MinDiscount == nil {
+		return nil
+	}
+	if source.DiscountID != nil {
+		if source.Discount == nil || source.Discount.Cmp(quote.MinDiscount) < 0 {
+			return nil
+		}
+		return source.Discount
+	}
+	if source.AdapterMinDiscount != nil && source.AdapterMinDiscount.Cmp(quote.MinDiscount) > 0 {
+		return source.AdapterMinDiscount
+	}
+	return quote.MinDiscount
 }

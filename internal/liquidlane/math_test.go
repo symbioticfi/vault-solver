@@ -29,37 +29,6 @@ func TestRateMathAcrossDecimals(t *testing.T) {
 	}
 }
 
-func TestMaxAmountOutForRate(t *testing.T) {
-	for _, tt := range []struct {
-		name          string
-		amount, rate  *big.Int
-		inDec, outDec int
-		want          int64
-	}{
-		{"exact", big.NewInt(1e18), big.NewInt(1e18), 18, 6, 1_000_000},
-		{"18 decimal rate precision", big.NewInt(2e18), big.NewInt(999_999_000_000_000_000), 18, 18, 1_999_998_000_000_000_001},
-		{"fractional 18 to 6", big.NewInt(1), big.NewInt(1e18), 18, 6, 0},
-		{"fractional 6 to 18", big.NewInt(1), big.NewInt(1), 6, 18, 0},
-		{"whole rate interval", big.NewInt(1e18), big.NewInt(1), 6, 18, 1_999_999_999_999},
-		{"nil amount", nil, big.NewInt(1), 6, 6, 0},
-		{"zero rate", big.NewInt(1), new(big.Int), 6, 6, 0},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			got := MaxAmountOutForRate(tt.amount, tt.rate, tt.inDec, tt.outDec)
-			if got.Cmp(big.NewInt(tt.want)) != 0 {
-				t.Fatalf("MaxAmountOutForRate() = %s, want %d", got, tt.want)
-			}
-			if tt.amount != nil && tt.amount.Sign() > 0 && tt.rate.Sign() > 0 {
-				next := new(big.Int).Add(got, big.NewInt(1))
-				if RateForAmountOut(got, tt.amount, tt.inDec, tt.outDec).Cmp(tt.rate) > 0 ||
-					RateForAmountOut(next, tt.amount, tt.inDec, tt.outDec).Cmp(tt.rate) <= 0 {
-					t.Fatal("output must fit the rate cap and the next unit must exceed it")
-				}
-			}
-		})
-	}
-}
-
 func TestMinAmountInForAmountOutRoundsUp(t *testing.T) {
 	got := MinAmountInForAmountOut(
 		big.NewInt(1),
@@ -99,90 +68,6 @@ func TestRateMathRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-// adapterDiscountAmountOut mirrors what LiquidLaneAdapter pays for a discount swap: getAmountOut
-// floors amountIn × price × 10^outDec / (1e18 × 10^inDec), then swap(DiscountSwap, ...) applies the
-// ppm discount and floors again.
-func adapterDiscountAmountOut(amountIn, price *big.Int, discountPpm int64, inDec, outDec int) *big.Int {
-	return AmountOutAfterDiscount(AmountOutForRate(amountIn, price, inDec, outDec), big.NewInt(discountPpm))
-}
-
-// advertisedRate mirrors how a discount offer's maxRate is derived (and how the adapter derives
-// getMaxRate): the oracle price with the ppm discount applied, rounded down.
-func advertisedRate(price *big.Int, discountPpm int64) *big.Int {
-	rate := new(big.Int).Mul(price, big.NewInt(DiscountPrecision-discountPpm))
-	return rate.Div(rate, big.NewInt(DiscountPrecision))
-}
-
-// The raw advertised rate over-predicts by exactly one unit here: the adapter's nested rounding
-// (floor getAmountOut, then discount) lands a unit below pricing off the pre-discounted rate.
-func TestConservativeAdvertisedRateFixesKnownOverprediction(t *testing.T) {
-	price := mustBig(t, "1034567891234567890")
-	amountIn := mustBig(t, "1000000000000000")
-	rate := advertisedRate(price, 1)
-
-	adapter := adapterDiscountAmountOut(amountIn, price, 1, 18, 18)
-	if adapter.String() != "1034566856666675" {
-		t.Fatalf("adapter amountOut = %s", adapter)
-	}
-	if raw := AmountOutForRate(amountIn, rate, 18, 18); raw.String() != "1034566856666676" {
-		t.Fatalf("raw advertised amountOut = %s, want one unit above the adapter", raw)
-	}
-
-	safe := AmountOutForRate(amountIn, ConservativeAdvertisedRate(amountIn, rate, 18, 18), 18, 18)
-	if safe.Cmp(adapter) != 0 {
-		t.Fatalf("conservative amountOut = %s, want exactly the adapter value %s", safe, adapter)
-	}
-}
-
-// The pricing invariant the fill depends on: at a conservative advertised rate we never predict more
-// output than the adapter pays, across decimal pairs, discounts, and sizes.
-func TestConservativeAdvertisedRateNeverExceedsAdapter(t *testing.T) {
-	price := mustBig(t, "1034567891234567890")
-	decimals := [][2]int{{18, 18}, {18, 6}, {6, 6}, {8, 18}, {6, 18}}
-	discounts := []int64{0, 1, 100, 5_000, 250_000}
-
-	for _, dec := range decimals {
-		inDec, outDec := dec[0], dec[1]
-		for _, discount := range discounts {
-			rate := advertisedRate(price, discount)
-			for step := int64(1); step <= 500; step++ {
-				amountIn := new(big.Int).Mul(big.NewInt(step*7_919), pow10(max(inDec-6, 0)))
-				safeRate := ConservativeAdvertisedRate(amountIn, rate, inDec, outDec)
-				if safeRate.Sign() <= 0 {
-					continue // not quotable at this size; the caller drops the leg
-				}
-				got := AmountOutForRate(amountIn, safeRate, inDec, outDec)
-				if want := adapterDiscountAmountOut(amountIn, price, discount, inDec, outDec); got.Cmp(want) > 0 {
-					t.Fatalf(
-						"in=%d out=%d discount=%d amountIn=%s: predicted %s > adapter %s",
-						inDec, outDec, discount, amountIn, got, want,
-					)
-				}
-			}
-		}
-	}
-}
-
-func TestConservativeAdvertisedRateRejectsInvalidInput(t *testing.T) {
-	rate := mustBig(t, "1000000000000000000")
-	tests := map[string]struct {
-		amountIn *big.Int
-		rate     *big.Int
-	}{
-		"nil amount":  {amountIn: nil, rate: rate},
-		"zero amount": {amountIn: new(big.Int), rate: rate},
-		"nil rate":    {amountIn: rate, rate: nil},
-		"dust output": {amountIn: big.NewInt(1), rate: rate}, // one unit of output at most, shaved to zero
-	}
-	for name, tt := range tests {
-		t.Run(name, func(t *testing.T) {
-			if got := ConservativeAdvertisedRate(tt.amountIn, tt.rate, 18, 6); got.Sign() != 0 {
-				t.Fatalf("ConservativeAdvertisedRate() = %s, want 0", got)
-			}
-		})
-	}
-}
-
 func TestAmountOutAfterDiscount(t *testing.T) {
 	tests := map[string]struct {
 		gross    *big.Int
@@ -200,5 +85,127 @@ func TestAmountOutAfterDiscount(t *testing.T) {
 				t.Fatalf("AmountOutAfterDiscount() = %s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+// Payouts the live mainnet LiquidLane adapter 0x59CDDE0D345c0eE6ED453FE7d3fb365Fe0721E85 paid on a
+// fork of block 26076942 (USDC collateral, minDiscount 0, so getMaxRate is the oracle price).
+func TestDiscountedAmountOutMatchesMainnetAdapter(t *testing.T) {
+	tests := []struct {
+		name            string
+		price, amountIn string
+		inDec           int
+		discount        int64
+		payout          string
+	}{
+		{"mHYPER", "1128372140000000000", "1000000000000000000000", 18, 200, "1128146465"},
+		{"PRIME", "1061774000000000000", "123456789", 6, 200, "131056991"},
+		{"mROX", "1150136460000000000", "123456789012345678901", 18, 1_000, "141850161"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			price, amountIn := mustBig(t, tt.price), mustBig(t, tt.amountIn)
+			got := DiscountedAmountOut(amountIn, price, big.NewInt(tt.discount), tt.inDec, 6)
+			if got.String() != tt.payout {
+				t.Fatalf("DiscountedAmountOut() = %s, want the executed payout %s", got, tt.payout)
+			}
+		})
+	}
+}
+
+// contractPayout restates LiquidLaneAdapter independently of the helpers under test:
+// amountIn.mulDiv(price * 10**outDec, 1e18 * 10**inDec).mulDiv(1e6 - discount, 1e6).
+func contractPayout(amountIn, price *big.Int, discount int64, inDec, outDec int) *big.Int {
+	ten := big.NewInt(10)
+	gross := new(big.Int).Mul(price, new(big.Int).Exp(ten, big.NewInt(int64(outDec)), nil))
+	gross.Mul(gross, amountIn)
+	gross.Quo(gross, new(big.Int).Mul(big.NewInt(1e18), new(big.Int).Exp(ten, big.NewInt(int64(inDec)), nil)))
+	gross.Mul(gross, big.NewInt(1_000_000-discount))
+	return gross.Quo(gross, big.NewInt(1_000_000))
+}
+
+func TestDiscountedPricingMirrorsAdapterAndInvertsExactly(t *testing.T) {
+	// 8- and 6-decimal oracle prices as read from the mainnet adapter's feeds, plus a round one.
+	prices := []string{
+		"1128372140000000000", "1150136460000000000", "1061774000000000000",
+		"1117275000000000000", "989216000000000000", "1000000000000000000",
+	}
+	decimals := [][2]int{{18, 6}, {6, 6}, {18, 18}, {8, 6}, {6, 18}, {0, 6}}
+	discounts := []int64{0, 1, 37, 200, 1_000, 40_000, 100_000, 999_999}
+	for _, dec := range decimals {
+		inDec, outDec := dec[0], dec[1]
+		for _, raw := range prices {
+			price := mustBig(t, raw)
+			for _, ppm := range discounts {
+				discount := big.NewInt(ppm)
+				if want := AmountOutAfterDiscount(price, discount); DiscountedRate(price, discount).Cmp(want) != 0 {
+					t.Fatalf("DiscountedRate = %s, want getMaxRate formula %s", DiscountedRate(price, discount), want)
+				}
+				// Sizes from dust to millions of tokens, off round numbers.
+				for step := int64(1); step <= 40; step++ {
+					amountIn := new(big.Int).Mul(big.NewInt(step*step*step*7_919+step*104_729), pow10(max(inDec-4, 0)))
+					checkDiscountedPricing(t, amountIn, price, discount, inDec, outDec)
+				}
+			}
+		}
+	}
+}
+
+func checkDiscountedPricing(t *testing.T, amountIn, price, discount *big.Int, inDec, outDec int) {
+	t.Helper()
+	payout := DiscountedAmountOut(amountIn, price, discount, inDec, outDec)
+	if want := contractPayout(amountIn, price, discount.Int64(), inDec, outDec); payout.Cmp(want) != 0 {
+		t.Fatalf("payout(%s) = %s, contract %s", amountIn, payout, want)
+	}
+	if payout.Sign() > 0 {
+		minimum := MinAmountInForDiscountedAmountOut(payout, price, discount, inDec, outDec)
+		below := new(big.Int).Sub(minimum, big.NewInt(1))
+		if DiscountedAmountOut(minimum, price, discount, inDec, outDec).Cmp(payout) < 0 ||
+			DiscountedAmountOut(below, price, discount, inDec, outDec).Cmp(payout) >= 0 {
+			t.Fatalf("minimum input %s for %s is not minimal", minimum, payout)
+		}
+	}
+	maximum := MaxAmountInForDiscountedAmountOut(payout, price, discount, inDec, outDec)
+	above := new(big.Int).Add(maximum, big.NewInt(1))
+	if DiscountedAmountOut(maximum, price, discount, inDec, outDec).Cmp(payout) > 0 ||
+		DiscountedAmountOut(above, price, discount, inDec, outDec).Cmp(payout) <= 0 {
+		t.Fatalf("maximum input %s for cap %s is not maximal", maximum, payout)
+	}
+}
+
+func TestOraclePriceProbeReturnsPriceThroughGetAmountOut(t *testing.T) {
+	price := mustBig(t, "1128372140000000000")
+	for _, dec := range [][2]int{{18, 6}, {6, 6}, {18, 18}, {0, 18}, {6, 24}} {
+		probe, ok := OraclePriceProbe(dec[0], dec[1])
+		if !ok {
+			t.Fatalf("decimals %v: probe unavailable", dec)
+		}
+		if got := AmountOutForRate(probe, price, dec[0], dec[1]); got.Cmp(price) != 0 {
+			t.Fatalf("decimals %v: getAmountOut(probe) = %s, want price", dec, got)
+		}
+	}
+	if _, ok := OraclePriceProbe(0, 19); ok {
+		t.Fatal("probe must be unavailable when outDec exceeds 18 + inDec")
+	}
+}
+
+func TestDiscountedPricingRejectsInvalidInput(t *testing.T) {
+	price := mustBig(t, "1000000000000000000")
+	for name, discount := range map[string]*big.Int{
+		"nil":           nil,
+		"negative":      big.NewInt(-1),
+		"full discount": big.NewInt(DiscountPrecision),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if DiscountedAmountOut(price, price, discount, 18, 6).Sign() != 0 ||
+				MinAmountInForDiscountedAmountOut(big.NewInt(1), price, discount, 18, 6).Sign() != 0 ||
+				MaxAmountInForDiscountedAmountOut(big.NewInt(1), price, discount, 18, 6).Sign() != 0 ||
+				DiscountedRate(price, discount).Sign() != 0 {
+				t.Fatal("invalid discount must price nothing")
+			}
+		})
+	}
+	if DiscountedRate(nil, new(big.Int)).Sign() != 0 || DiscountedAmountOut(price, new(big.Int), new(big.Int), 18, 6).Sign() != 0 {
+		t.Fatal("missing price must price nothing")
 	}
 }

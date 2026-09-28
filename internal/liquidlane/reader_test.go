@@ -233,23 +233,33 @@ func TestReaderResolveRoutesFailsClosedForConfiguredAdapterRoutes(t *testing.T) 
 }
 
 func TestReaderReadInventoryUsesLatestAndFailsClosedPerRoute(t *testing.T) {
-	backend := &scriptedLiquidLaneBackend{
-		latest: [][]chain.CallResult{{
+	maxRate := big.NewInt(1_000_000_000_000_000_000)
+	// getMaxRate is floor(price * (1e6 - minDiscount) / 1e6): 1e18 at a 10% minimum discount.
+	price := big.NewInt(1_111_111_111_111_111_112)
+	route := func(maxAssets chain.CallResult, priceRead chain.CallResult) []chain.CallResult {
+		return []chain.CallResult{
 			successOutput(t, "paused", false),
-			successOutput(t, "getMaxAssets", big.NewInt(100)),
-			successOutput(t, "getMaxRate", big.NewInt(1_000_000_000_000_000_000)),
+			maxAssets,
+			successOutput(t, "getMaxRate", maxRate),
 			successOutput(t, "minDiscount", big.NewInt(100_000)),
-			{Success: true, ReturnData: []byte{0xff}},
-			successOutput(t, "getMaxAssets", big.NewInt(200)),
-			successOutput(t, "getMaxRate", big.NewInt(1_000_000_000_000_000_000)),
-			successOutput(t, "minDiscount", big.NewInt(100_000)),
-		}},
+			priceRead,
+		}
 	}
+	var results []chain.CallResult
+	results = append(results, route(successOutput(t, "getMaxAssets", big.NewInt(100)), successOutput(t, "getAmountOut", price))...)
+	results = append(results, route(chain.CallResult{Success: true, ReturnData: []byte{0xff}}, successOutput(t, "getAmountOut", price))...)
+	// A price that does not reproduce getMaxRate means the adapter prices differently: fail closed.
+	results = append(results, route(
+		successOutput(t, "getMaxAssets", big.NewInt(300)),
+		successOutput(t, "getAmountOut", new(big.Int).Add(price, big.NewInt(1_000_000))),
+	)...)
+	results = append(results, route(successOutput(t, "getMaxAssets", big.NewInt(400)), chain.CallResult{})...)
+	backend := &scriptedLiquidLaneBackend{latest: [][]chain.CallResult{results}}
 	r := &Reader{
 		chain: backend, log: logr.Discard(), dec: fixedDecimals{}, chainID: 11155111,
 		maxTokensPerAdapter: DefaultMaxTokensPerAdapter,
 	}
-	routes := []Route{testReaderRoute(1), testReaderRoute(2)}
+	routes := []Route{testReaderRoute(1), testReaderRoute(2), testReaderRoute(3), testReaderRoute(4)}
 
 	inventory, err := r.ReadInventory(context.Background(), routes)
 	if err != nil {
@@ -259,7 +269,7 @@ func TestReaderReadInventoryUsesLatestAndFailsClosedPerRoute(t *testing.T) {
 		t.Fatalf("inventory = %+v", inventory)
 	}
 	if inventory[0].MaxRate.String() != "1000000000000000000" ||
-		inventory[0].AdapterMinDiscount.String() != "100000" {
+		inventory[0].AdapterMinDiscount.String() != "100000" || inventory[0].Price.Cmp(price) != 0 {
 		t.Fatalf("executable inventory = %+v", inventory[0])
 	}
 }
@@ -439,6 +449,7 @@ func TestReaderReadAdapterSnapshotCombinesSharedFacts(t *testing.T) {
 			successOutput(t, "getMaxAssets", big.NewInt(120)),
 			successOutput(t, "getMaxRate", big.NewInt(900)),
 			successOutput(t, "minDiscount", big.NewInt(100_000)),
+			successOutput(t, "getAmountOut", big.NewInt(1_000)), // oracle price: floor(1000 * 0.9) = 900
 		},
 	}}
 	r := &Reader{
@@ -492,10 +503,12 @@ func TestReaderReadAdapterSnapshotKeepsZeroCapacityRoutes(t *testing.T) {
 			successOutput(t, "getMaxAssets", big.NewInt(0)),
 			successOutput(t, "getMaxRate", big.NewInt(900)),
 			successOutput(t, "minDiscount", big.NewInt(100_000)),
+			successOutput(t, "getAmountOut", big.NewInt(1_000)), // floor(1000 * 0.9) = 900
 			successOutput(t, "paused", false),
 			successOutput(t, "getMaxAssets", big.NewInt(120)),
 			successOutput(t, "getMaxRate", big.NewInt(800)),
 			successOutput(t, "minDiscount", big.NewInt(100_000)),
+			successOutput(t, "getAmountOut", big.NewInt(889)), // floor(889 * 0.9) = 800
 		},
 	}}
 	r := &Reader{

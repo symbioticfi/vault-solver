@@ -418,6 +418,8 @@ type Strategy interface {
   RFQ-style solvers at both endpoints. Each endpoint is converted to the largest fixed-point rate that
   cannot overquote its integer output, then capped by a linear conservative floor derived from the
   alternatives able to cover each route at `inputHigh`, integer rounding, and configured worst-case complete-plan gas.
+  Candidates built from inventory with an oracle price price each leg exactly like the adapter, which floors
+  `getAmountOut` before its discount, so the floor allows one more unit for each such route.
   The published minimum is revalidated for positive integer output. Two price-movement stages are deducted
   (quote→decision and decision→inclusion). There is no separate LI.FI
   quote planner or minimum-profit setting. If a candidate range starts below the conservative economic floor,
@@ -432,8 +434,9 @@ type Strategy interface {
   allocator chooses the best alternative able to cover each concrete leg. Routes sharing a vault share one
   conservative `CapacityID`; reserve is applied
   before in-flight amounts are subtracted. In internal mode, advertised discount inventory is bounded
-  by current on-chain `getMaxAssets`/`getMaxRate` and its deadline. The backend discount and its already-net
-  `maxRate` are validated together; the strategy must not apply the ppm discount to that rate again.
+  by current on-chain `getMaxAssets` and its deadline, and priced from its signed discount with the adapter's
+  oracle price. At fill time, candidates are ranked by their exact payout at the order amount before any
+  signature is resolved.
   Quote lifetime
   belongs to the solver cadence: by default the head is polled every second, quotes are recalculated once per
   new block, at most three physical routes are used, and `quoteTtl` is 36 seconds. Unchanged quotes are renewed

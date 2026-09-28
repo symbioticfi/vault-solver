@@ -47,7 +47,6 @@ type ListItem struct {
 	Discount           string
 	Signer             string
 	Deadline           int64
-	MaxRate            string
 	MaxAssets          string
 	// BlockNumber is the block maxAssets was read at; empty when the backend does not report it.
 	BlockNumber string
@@ -160,7 +159,6 @@ func (c *Client) ListDiscounts(ctx context.Context) (*List, error) {
 			Discount:           d.GetDiscount(),
 			Signer:             d.GetSigner(),
 			Deadline:           d.GetDeadline(),
-			MaxRate:            d.GetMaxRate(),
 			MaxAssets:          d.GetMaxAssets(),
 			BlockNumber:        d.GetBlockNumber(),
 		})

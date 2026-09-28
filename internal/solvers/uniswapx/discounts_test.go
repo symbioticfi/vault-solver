@@ -39,14 +39,14 @@ func TestDiscountInventoriesUseConfiguredPhysicalRoute(t *testing.T) {
 	route := testDiscountRoute()
 	policy, _ := tokenpolicy.New(tokenpolicy.All, nil)
 	listed := &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{
-		testDiscountOffer(route, now.Add(time.Minute), "80", "100"),
+		testDiscountOffer(route, now.Add(time.Minute), "80"),
 	}}
 	solver := &Solver{
 		cfg:       &Config{Discounts: &DiscountConfig{HTTPTimeout: time.Second}, TokenPolicy: policy},
 		discounts: &fakeDiscountProvider{list: listed}, log: logr.Discard(),
 	}
 	physical := liquidlane.DirectInventory(route, big.NewInt(100), big.NewInt(100))
-	physical.AdapterMinDiscount = new(big.Int)
+	physical.AdapterMinDiscount, physical.Price = new(big.Int), big.NewInt(100)
 	inventory := solver.discountInventories(listed, []liquidlane.Inventory{physical}, now)
 	if len(inventory) != 1 || inventory[0].DiscountID == nil || inventory[0].MaxAssets.Cmp(big.NewInt(80)) != 0 {
 		t.Fatalf("discount inventory = %+v", inventory)
@@ -57,7 +57,7 @@ func TestDiscountFillQuotesUseCurrentOracleAmount(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	route := testDiscountRoute()
 	policy, _ := tokenpolicy.New(tokenpolicy.All, nil)
-	offer := testDiscountOffer(route, now.Add(time.Minute), "100", "2000000000000000000")
+	offer := testDiscountOffer(route, now.Add(time.Minute), "100")
 	offer.Discount = "100000"
 	listed := &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{offer}}
 	solver := &Solver{
@@ -217,13 +217,12 @@ func testDiscountOffer(
 	route liquidlane.Route,
 	deadline time.Time,
 	maxAssets string,
-	maxRate string,
 ) liquiddiscounts.ListItem {
 	return liquiddiscounts.ListItem{
 		DiscountID: testDiscountID, Adapter: route.Adapter.Hex(), TokenToRedeem: route.TokenIn.Hex(),
 		Collateral: route.TokenOut.Hex(), CollateralDecimals: route.TokenOutDecimals,
 		Discount: "0", Signer: common.HexToAddress("0x5555555555555555555555555555555555555555").Hex(),
-		Deadline: deadline.Unix(), MaxRate: maxRate, MaxAssets: maxAssets,
+		Deadline: deadline.Unix(), MaxAssets: maxAssets,
 	}
 }
 

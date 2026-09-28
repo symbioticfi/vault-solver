@@ -111,7 +111,10 @@ later fill plans subtract every reservation until the order expires or fails; an
 reporting expires locally at its own deadline. When the backend reports the block an adapter's `maxAssets`
 was read at (`adapters[].blockNumber` on `/quote`), a confirmed fill is subtracted only from snapshots older
 than its inclusion block, for a few hours after the order is filled, and never from newer ones, which
-already reflect it. Fills are still
+already reflect it. Every `/quote` adapter entry carries `discount` (ppm): the signed discount on
+discount-backed entries, the adapter `minDiscount` on direct ones. Quotes and fill plans price each leg as
+the adapter pays it at the order amount, `floor(getAmountOut(amountIn) * (1e6 - discount) / 1e6)`. The
+field replaces `maxRate`, so run this version with a backend that sends it. Fills are still
 sent one at a time on the shared nonce lane. Reservations are local to the process and are not restored
 after a restart.
 Design, config, and roadmap:
@@ -294,11 +297,14 @@ filters the newest all-status snapshot locally and clears the unknown state only
 the configured lookback cutoff.
 
 In internal mode, advertised LiquidLane routes are resolved on-chain and checked against their advertised
-asset and decimals, current physical capacity/rate, adapter minimum discount, token policy, and configured
+asset and decimals, current physical capacity, adapter minimum discount, token policy, and configured
 gas feeds. Configured adapters scope quoting when present; fill-time discount recovery remains unrestricted,
 matching RFQ solver-mode semantics. A selected discount is resolved again immediately before simulation and
 encoded as a typed `discountSwap`; its adapter, token, output floor, signatures, and expiry window are
-checked fail-closed.
+checked fail-closed. Quotes and fills price every leg as the adapter pays it: the oracle price read with
+the inventory and the signed discount (or the adapter minimum for direct routes), floored in the adapter's
+order. The discount listing carries no rate. With `priceBufferBps: 0`, an exact-input quote equals the
+payout, and the fill reserves and resolves exactly it.
 
 The order API key is required and read indirectly through `orderServer.apiKeyEnv`. Uniswap's public quote
 contract specifies source-IP allowlisting rather than an application header, so restrict the quote endpoint
@@ -311,8 +317,8 @@ the current `DutchV2OrderEntity`, including nested `cosignerData`, `cosignature`
 Native-asset outputs are currently declined because the supported LiquidLane routes settle ERC-20 vault
 assets.
 Exact-input and exact-output Dutch auctions are supported. Exact-output quotes directly size enough input
-for the requested output, buffer, and gas; rounding or execution output above that requirement remains
-executor surplus. If a Dutch exact-output input grows between planning and execution, the executor consumes
+for the requested output, buffer, and gas. For both order types, output above the order requirement remains
+on the executor. If a Dutch exact-output input grows between planning and execution, the executor consumes
 the planned route input and retains the positive input difference as filler surplus. The Reactor atomically
 enforces the order's aggregate outputs. Multiple outputs are supported when every output uses the same
 ERC-20; mixed-token outputs fail closed because one

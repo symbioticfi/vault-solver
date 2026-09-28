@@ -71,9 +71,11 @@ func (f *fakeQuoteCandidateReader) readQuoteCandidates(
 		if amountOut == nil {
 			continue
 		}
+		// Like ReadFillQuotes for an adapter without a minimum discount: gross is the direct maximum.
 		quotes = append(quotes, liquidlane.FillQuote{
 			Inventory: liquidlane.Inventory{Route: route, MaxAssets: maxUint256()},
-			AmountIn:  liquidlane.CloneBig(amount), MaxAmountOut: liquidlane.CloneBig(amountOut),
+			AmountIn:  liquidlane.CloneBig(amount), GrossAmountOut: liquidlane.CloneBig(amountOut),
+			MaxAmountOut: liquidlane.CloneBig(amountOut), MinDiscount: new(big.Int),
 		})
 	}
 	return liquidgreedy.NormalizeOracleInventory(amount, matching, quotes), nil

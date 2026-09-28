@@ -15,7 +15,6 @@ func TestParseOffer(t *testing.T) {
 		CollateralDecimals: 6,
 		Discount:           "100000",
 		Deadline:           1_900_000_000,
-		MaxRate:            "1000000000000000000",
 		MaxAssets:          "5000",
 	})
 	if err != nil {
@@ -35,7 +34,6 @@ func TestParseOfferRejectsInvalidDiscount(t *testing.T) {
 		CollateralDecimals: 6,
 		Discount:           "1000001",
 		Deadline:           1_900_000_000,
-		MaxRate:            "1000000000000000000",
 		MaxAssets:          "5000",
 	}
 	if _, err := ParseOffer(item); err == nil {
@@ -56,7 +54,6 @@ func TestParseOfferRejectsMalformedIDAndExpiredShape(t *testing.T) {
 		CollateralDecimals: 6,
 		Discount:           "100000",
 		Deadline:           1_900_000_000,
-		MaxRate:            "1",
 		MaxAssets:          "1",
 	}
 	if _, err := ParseOffer(item); err == nil {

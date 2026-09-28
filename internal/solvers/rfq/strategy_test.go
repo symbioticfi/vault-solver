@@ -154,7 +154,7 @@ func TestQuoteRejectsWebhookMultiLegPlanForPermissionedScope(t *testing.T) {
 	request := validQuoteBody()
 	request.Adapters = append(request.Adapters, quoteAdapter{
 		Adapter: "0x0000000000000000000000000000000000000004", Asset: tOut.Hex(), AssetDecimals: 6,
-		MaxAssets: "10000000", MaxRate: "1000000000000000000",
+		MaxAssets: "10000000", Discount: "0",
 	})
 
 	decision, err := quoteServer.quotes.quote(t.Context(), &request)

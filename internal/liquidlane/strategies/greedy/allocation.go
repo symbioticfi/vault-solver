@@ -85,12 +85,7 @@ func (a allocator) allocateExactOutput(targetOutput *big.Int, maxRoutes int) all
 		if !ok {
 			break
 		}
-		amountIn := liquidlane.MinAmountInForAmountOut(
-			wanted,
-			candidate.Rate,
-			candidate.Route.TokenInDecimals,
-			candidate.Route.TokenOutDecimals,
-		)
+		amountIn := candidate.AmountInFor(wanted)
 		amountOut := output(candidate, amountIn)
 		if amountIn.Sign() <= 0 || amountIn.Cmp(candidate.MaxAmountIn) > 0 || amountOut.Sign() <= 0 {
 			used[candidate.Route.ID] = true
@@ -252,12 +247,7 @@ func better(left, right liquidlane.QuoteCandidate) bool {
 }
 
 func output(candidate liquidlane.QuoteCandidate, amountIn *big.Int) *big.Int {
-	amountOut := liquidlane.AmountOutForRate(
-		amountIn,
-		candidate.Rate,
-		candidate.Route.TokenInDecimals,
-		candidate.Route.TokenOutDecimals,
-	)
+	amountOut := candidate.AmountOutFor(amountIn)
 	if amountOut.Cmp(candidate.MaxAmountOut) > 0 {
 		return liquidlane.CloneBig(candidate.MaxAmountOut)
 	}

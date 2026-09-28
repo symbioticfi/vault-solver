@@ -237,12 +237,18 @@ func candidateFloorRate(
 		byRoute[candidate.Route.ID] = append(byRoute[candidate.Route.ID], candidate)
 	}
 	var rate *big.Int
+	exactRoutes := 0
 	for _, alternatives := range byRoute {
 		maxInput := new(big.Int)
+		exact := false
 		for _, candidate := range alternatives {
 			if candidate.MaxAmountIn.Cmp(maxInput) > 0 {
 				maxInput.Set(candidate.MaxAmountIn)
 			}
+			exact = exact || candidate.ExactPricing()
+		}
+		if exact {
+			exactRoutes++
 		}
 		legLimit := minBig(maximumInput, maxInput)
 		var best *big.Int
@@ -264,11 +270,14 @@ func candidateFloorRate(
 	// Every complete greedy plan uses at most routeCount candidates whose
 	// effective rates are no lower than rate. Summing their floors loses at
 	// most routeCount-1 output units; a non-zero output buffer can lose one more.
+	// An exactly priced leg pays like the adapter, which floors getAmountOut
+	// before its discount, so it can land one unit below a single floor at its
+	// effective rate.
 	loss := new(big.Int)
 	if gasCost != nil {
 		loss.Set(gasCost)
 	}
-	loss.Add(loss, big.NewInt(int64(routeCount-1)))
+	loss.Add(loss, big.NewInt(int64(routeCount-1+exactRoutes)))
 	if outputBufferBps > 0 {
 		loss.Add(loss, big.NewInt(1))
 	}
