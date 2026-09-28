@@ -51,6 +51,7 @@ func (s *Solver) prepareFill(
 			return preparedFill{}, declineFill(ctx, "fill_declined", "capacity changed during planning")
 		}
 		revision++ // Only our own replacement may advance the version accepted by this attempt.
+		s.logFillPlan(ctx, order, plan, input.Quotes)
 		return s.preflightPlan(ctx, order, plan, routes, now)
 	}
 	if !s.cfg.singleSource() {

@@ -8,6 +8,8 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/single"
 )
 
 const testOfferID = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -80,11 +82,85 @@ func TestAdvertisedFillQuotesUseCurrentOracleAmountAndPolicy(t *testing.T) {
 	if len(issues) != 0 || len(quotes) != 1 || quotes[0].MaxAmountOut.Cmp(big.NewInt(18)) != 0 {
 		t.Fatalf("quotes=%+v issues=%+v", quotes, issues)
 	}
+	listed.Discounts[0].MaxRate = "1000000000000000000"
+	quotes, issues = AdvertisedFillQuotes(listed, physical, MatchOptions{Now: now})
+	if len(issues) != 0 || len(quotes) != 1 || quotes[0].MaxAmountOut.Cmp(big.NewInt(10)) != 0 {
+		t.Fatalf("advertised rate cap must remain effective: quotes=%+v issues=%+v", quotes, issues)
+	}
 	blocked, _ := AdvertisedFillQuotes(listed, physical, MatchOptions{
 		Now: now, AllowsToken: func(common.Address) bool { return false },
 	})
 	if len(blocked) != 0 {
 		t.Fatalf("blocked quotes = %+v", blocked)
+	}
+}
+
+func TestAdvertisedFillQuotesReserveRoundedPayout(t *testing.T) {
+	for _, scenario := range []struct {
+		name                           string
+		decimals                       int
+		input, gross, discount, payout int64
+	}{
+		{"6 decimals", 6, 300_000_000, 318_527_700, 200, 318_463_994},
+		{"18 decimals rounding loss", 18, 2_000_000_000_000_000_000, 2_000_000_000_000_000_002, 1, 1_999_998_000_000_000_001},
+		{"18 decimals exact payout", 18, 2_000_000_000_000_000_000, 2_000_000_000_000_000_000, 1, 1_999_998_000_000_000_000},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			now := time.Unix(1_800_000_000, 0)
+			base := testPhysicalInventory()
+			base.TokenInDecimals, base.TokenOutDecimals = scenario.decimals, scenario.decimals
+			base.MaxRate, base.MaxAssets = big.NewInt(2e18), big.NewInt(scenario.payout)
+			base.AdapterMinDiscount = new(big.Int)
+			physical := liquidlane.FillQuote{
+				Inventory: base, AmountIn: big.NewInt(scenario.input), GrossAmountOut: big.NewInt(scenario.gross),
+				MinDiscount: new(big.Int),
+			}
+			rate := liquidlane.RateForAmountOut(big.NewInt(scenario.payout), physical.AmountIn, scenario.decimals, scenario.decimals)
+			offer := testOffer(base, base.MaxAssets.String(), rate.String(), now.Add(time.Minute))
+			offer.Discount = big.NewInt(scenario.discount).String()
+			quotes, issues := AdvertisedFillQuotes(&List{Discounts: []ListItem{offer}}, []liquidlane.FillQuote{physical}, MatchOptions{Now: now})
+			if len(issues) != 0 || len(quotes) != 1 || quotes[0].MaxAmountOut.Cmp(big.NewInt(scenario.payout)) != 0 {
+				t.Fatalf("quotes=%+v issues=%+v; want rounded payout %d", quotes, issues, scenario.payout)
+			}
+			signed := &Signed{
+				DiscountID: *quotes[0].DiscountID, Adapter: base.Adapter,
+				Terms:            SignedTerms{TokenToRedeem: base.TokenIn, Discount: big.NewInt(scenario.discount), Deadline: big.NewInt(offer.Deadline)},
+				ProtocolDeadline: big.NewInt(offer.Deadline),
+			}
+			for _, tt := range []struct {
+				capacity, pending int64
+				wantFill          bool
+			}{
+				{scenario.payout, 0, true},
+				{scenario.payout - 1, 0, false},
+				{scenario.payout, 1, false},
+			} {
+				quote := quotes[0]
+				quote.MaxAssets = big.NewInt(tt.capacity)
+				solution, err := single.SolveFill(strategies.FillTask{
+					TokenIn: base.TokenIn, TokenOut: base.TokenOut, AmountIn: physical.AmountIn,
+					Quotes: []liquidlane.FillQuote{quote}, ValidAfter: now,
+					Reservations: liquidlane.CapacityReservations{liquidlane.RouteCapacityID(base.Route): big.NewInt(tt.pending)},
+				})
+				if err != nil || (solution != nil) != tt.wantFill {
+					t.Fatalf("capacity=%d pending=%d: solution=%+v err=%v; want fill %v", tt.capacity, tt.pending, solution, err, tt.wantFill)
+				}
+				if solution == nil {
+					continue
+				}
+				required := big.NewInt(scenario.payout - 1)
+				routes := solution.Finalize(required)
+				if len(routes) != 1 || routes[0].ReservedAmountOut.Cmp(big.NewInt(scenario.payout)) != 0 || routes[0].MinAmountOut.Cmp(required) != 0 {
+					t.Fatalf("routes=%+v; want minimum %s and reservation %d", routes, required, scenario.payout)
+				}
+				if _, err := ValidateSigned(signed, Selection{
+					DiscountID: signed.DiscountID, Adapter: base.Adapter, TokenIn: base.TokenIn,
+					MinAmountOut: routes[0].MinAmountOut, MaxAmountOut: routes[0].ReservedAmountOut,
+				}, physical, now); err != nil {
+					t.Fatalf("unchanged signed payout must fit reservation: %v", err)
+				}
+			}
+		})
 	}
 }
 

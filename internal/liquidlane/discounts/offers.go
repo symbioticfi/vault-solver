@@ -133,12 +133,14 @@ func AdvertisedFillQuotes(
 			base.TokenOutDecimals,
 		)
 		maxRate := minPositive(currentRate, offer.MaxRate)
-		maxAmountOut := liquidlane.AmountOutForRate(
+		// Account for the rate's lost precision without predicting above the current payout.
+		maxAmountOut := liquidlane.MaxAmountOutForRate(
 			base.AmountIn,
 			maxRate,
 			base.TokenInDecimals,
 			base.TokenOutDecimals,
 		)
+		maxAmountOut = minPositive(maxAmountOut, amountOut)
 		maxAssets := minPositive(offer.MaxAssets, base.MaxAssets)
 		if maxRate.Sign() <= 0 || maxAmountOut.Sign() <= 0 || maxAssets.Sign() <= 0 {
 			continue

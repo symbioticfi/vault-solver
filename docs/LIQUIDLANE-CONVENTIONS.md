@@ -217,6 +217,14 @@ resolution happens: LI.FI pre-resolves a bounded candidate set and refreshes ada
 UniswapX resolves only the selected route; RFQ receives backend candidates and resolves selected legs.
 Generated executor calldata and protocol lifecycle remain solver-local.
 
+`discounts.AdvertisedFillQuotes` retains the advertised rate cap. It takes the largest integer output
+whose floored rate fits that cap, then limits it to the current payout after discount. This recovers
+precision lost in the output-to-rate conversion, including for 18-decimal tokens. Fresh signed payouts
+must still cover the selected minimum and fit the reservation; rate caps or changed terms can still prevent a fill.
+Payout rejection errors include the fresh gross output, signed discount, payout, minimum and reservation.
+Diagnostic amounts are in token base units, rates use 1e18 precision, and discounts are in ppm;
+signatures are not logged.
+
 ## Solver profiles
 
 | Solver | LiquidLane usage | Solver-local responsibility |
