@@ -234,7 +234,6 @@ func (s *Solver) startFill(
 		return nil, err
 	}
 	plan, data, discountValidUntil := prepared.plan, prepared.data, prepared.validUntil
-	s.logFillPlan(ctx, order, plan)
 	deadline := fillDeadline(order, discountValidUntil)
 	cancelAt, ok := liquidlane.CancellationDeadline(deadline, now, chainObservedAt, time.Now())
 	if !ok {
@@ -376,6 +375,7 @@ func (s *Solver) buildExecutorCalldata(
 			"adapter", route.Adapter.Hex(),
 			"amountIn", route.AmountIn.String(),
 			"discountDeadline", signed.Terms.Deadline,
+			"discountPpm", signed.Terms.Discount.String(),
 			"protocolDeadline", signed.ProtocolDeadline,
 		)
 		discountRoutes = append(discountRoutes, uxexecutor.ILiquidLaneUniswapXExecutorDiscountRoute{
@@ -421,7 +421,7 @@ func findRoute(routes []liquidlane.Route, id liquidlane.RouteID) (liquidlane.Rou
 	return liquidlane.Route{}, false
 }
 
-func (s *Solver) logFillPlan(ctx context.Context, order *resolvedOrder, plan *types.FillPlan) {
+func (s *Solver) logFillPlan(ctx context.Context, order *resolvedOrder, plan *types.FillPlan, quotes []liquidlane.FillQuote) {
 	log := observability.Log(ctx)
 	discountRoutes := 0
 	for index, route := range plan.Routes {
@@ -444,6 +444,21 @@ func (s *Solver) logFillPlan(ctx context.Context, order *resolvedOrder, plan *ty
 		}
 		if route.DiscountID != nil {
 			fields = append(fields, "discountId", route.DiscountID.Hex())
+			for _, quote := range quotes {
+				if liquidlane.NewCandidateID(quote.Route, quote.DiscountID) != route.CandidateID {
+					continue
+				}
+				fields = append(fields,
+					"quotedAmountIn", quote.AmountIn.String(),
+					"grossAmountOut", quote.GrossAmountOut.String(),
+					"advertisedDiscountPpm", quote.MinDiscount.String(),
+					"discountedAmountOut", liquidlane.AmountOutAfterDiscount(quote.GrossAmountOut, quote.MinDiscount).String(),
+					"maxRate", quote.MaxRate.String(),
+					"maxAmountOut", quote.MaxAmountOut.String(),
+					"maxAssets", quote.MaxAssets.String(),
+				)
+				break
+			}
 		}
 		log.V(1).Info("order fill route selected", fields...)
 	}

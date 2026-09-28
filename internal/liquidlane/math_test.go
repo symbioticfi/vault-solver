@@ -29,6 +29,37 @@ func TestRateMathAcrossDecimals(t *testing.T) {
 	}
 }
 
+func TestMaxAmountOutForRate(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		amount, rate  *big.Int
+		inDec, outDec int
+		want          int64
+	}{
+		{"exact", big.NewInt(1e18), big.NewInt(1e18), 18, 6, 1_000_000},
+		{"18 decimal rate precision", big.NewInt(2e18), big.NewInt(999_999_000_000_000_000), 18, 18, 1_999_998_000_000_000_001},
+		{"fractional 18 to 6", big.NewInt(1), big.NewInt(1e18), 18, 6, 0},
+		{"fractional 6 to 18", big.NewInt(1), big.NewInt(1), 6, 18, 0},
+		{"whole rate interval", big.NewInt(1e18), big.NewInt(1), 6, 18, 1_999_999_999_999},
+		{"nil amount", nil, big.NewInt(1), 6, 6, 0},
+		{"zero rate", big.NewInt(1), new(big.Int), 6, 6, 0},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MaxAmountOutForRate(tt.amount, tt.rate, tt.inDec, tt.outDec)
+			if got.Cmp(big.NewInt(tt.want)) != 0 {
+				t.Fatalf("MaxAmountOutForRate() = %s, want %d", got, tt.want)
+			}
+			if tt.amount != nil && tt.amount.Sign() > 0 && tt.rate.Sign() > 0 {
+				next := new(big.Int).Add(got, big.NewInt(1))
+				if RateForAmountOut(got, tt.amount, tt.inDec, tt.outDec).Cmp(tt.rate) > 0 ||
+					RateForAmountOut(next, tt.amount, tt.inDec, tt.outDec).Cmp(tt.rate) <= 0 {
+					t.Fatal("output must fit the rate cap and the next unit must exceed it")
+				}
+			}
+		})
+	}
+}
+
 func TestMinAmountInForAmountOutRoundsUp(t *testing.T) {
 	got := MinAmountInForAmountOut(
 		big.NewInt(1),

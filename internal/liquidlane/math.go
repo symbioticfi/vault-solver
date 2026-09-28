@@ -32,6 +32,21 @@ func AmountOutForRate(amountIn, rate *big.Int, tokenInDecimals, tokenOutDecimals
 	return num.Div(num, den)
 }
 
+// MaxAmountOutForRate returns the largest output whose floored RateForAmountOut
+// does not exceed rate. Invert floor(output * scale / input) <= rate using the
+// exclusive upper rate bound: floor((input * (rate + 1) - 1) / scale).
+func MaxAmountOutForRate(amountIn, rate *big.Int, tokenInDecimals, tokenOutDecimals int) *big.Int {
+	if amountIn == nil || rate == nil || amountIn.Sign() <= 0 || rate.Sign() <= 0 {
+		return new(big.Int)
+	}
+	numerator := new(big.Int).Add(rate, big.NewInt(1))
+	numerator.Mul(numerator, amountIn)
+	numerator.Mul(numerator, pow10(tokenOutDecimals))
+	numerator.Sub(numerator, big.NewInt(1))
+	denominator := new(big.Int).Mul(rateScale, pow10(tokenInDecimals))
+	return numerator.Div(numerator, denominator)
+}
+
 func MaxAmountInForRate(maxAssets, rate *big.Int, tokenInDecimals, tokenOutDecimals int) *big.Int {
 	if maxAssets == nil || rate == nil || maxAssets.Sign() <= 0 || rate.Sign() <= 0 {
 		return new(big.Int)

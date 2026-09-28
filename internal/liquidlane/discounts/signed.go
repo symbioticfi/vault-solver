@@ -53,10 +53,12 @@ func ValidateSigned(
 	}
 	amountOut := liquidlane.AmountOutAfterDiscount(base.GrossAmountOut, signed.Terms.Discount)
 	if selection.MinAmountOut != nil && amountOut.Cmp(selection.MinAmountOut) < 0 {
-		return nil, errors.New("resolved discount no longer meets the selected minimum output")
+		return nil, errors.Errorf("resolved discount no longer meets the selected minimum output: amountOut=%s minAmountOut=%s reservedAmountOut=%s grossAmountOut=%s discountPpm=%s",
+			amountOut, selection.MinAmountOut, selection.MaxAmountOut, base.GrossAmountOut, signed.Terms.Discount)
 	}
 	if selection.MaxAmountOut != nil && amountOut.Cmp(selection.MaxAmountOut) > 0 {
-		return nil, errors.New("resolved discount exceeds the selected capacity reservation")
+		return nil, errors.Errorf("resolved discount exceeds the selected capacity reservation: amountOut=%s minAmountOut=%s reservedAmountOut=%s grossAmountOut=%s discountPpm=%s",
+			amountOut, selection.MinAmountOut, selection.MaxAmountOut, base.GrossAmountOut, signed.Terms.Discount)
 	}
 	return amountOut, nil
 }

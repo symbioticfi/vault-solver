@@ -3,6 +3,7 @@ package discounts
 import (
 	"context"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -58,6 +59,13 @@ func TestValidateSignedChecksSelectionDeadlinesAndOutput(t *testing.T) {
 		_, err := ValidateSigned(signed, selection, base, now)
 		if (err != nil) != (maximum < 900) {
 			t.Fatalf("maximum=%d err=%v", maximum, err)
+		}
+		if maximum == 899 {
+			for _, field := range []string{"amountOut=900", "minAmountOut=900", "reservedAmountOut=899", "grossAmountOut=1000", "discountPpm=100000"} {
+				if !strings.Contains(err.Error(), field) {
+					t.Fatalf("payout rejection is missing %s: %v", field, err)
+				}
+			}
 		}
 	}
 	selection.MaxAmountOut = nil
