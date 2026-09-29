@@ -2415,8 +2415,8 @@
       "kind": "Panel",
       "spec": {
         "id": 28,
-        "title": "Replacements and cancellations",
-        "description": " Values aggregate all matching services.",
+        "title": "Replacements, cancellations and rebroadcasts",
+        "description": "Same-nonce fee replacements, cancellations and exact rebroadcasts over the selected range, by why they were sent. Replacement reasons: interval (legacy timer bump); validity, congestion, stall, gas or fallback (horizon fee policy). Cancellations report why cancellation started (pending_timeout, request_deadline, shutdown, obsolete). Rebroadcasts are stall, uncertain (ambiguous first broadcast) or capped (fee cap reached). Values aggregate all matching services.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2432,7 +2432,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum by (label, kind) (((sum by (namespace, job, instance, label, kind) (increase(solver_bot_txmanager_replacements_total{namespace=\"${namespace}\"}[$__range])))) )",
+                      "expr": "sum by (label, kind, reason) (((sum by (namespace, job, instance, label, kind, reason) (increase(solver_bot_txmanager_replacements_total{namespace=\"${namespace}\"}[$__range])))) )",
                       "instant": true,
                       "legendFormat": "",
                       "range": false,

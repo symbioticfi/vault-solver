@@ -164,10 +164,10 @@ func TestMetrics(t *testing.T) {
 			time.Sleep(2 * time.Millisecond)
 			synctest.Wait()
 			assertMetric(t, metrics.replacements.WithLabelValues(
-				"lifi-fill", replacementKindReplacement,
+				"lifi-fill", replacementKindReplacement, replaceReasonInterval,
 			), 1)
 			assertMetric(t, metrics.replacements.WithLabelValues(
-				"lifi-fill", replacementKindCancellation,
+				"lifi-fill", replacementKindCancellation, "pending_timeout",
 			), 0)
 
 			if completed := <-result; completed.Outcome != OutcomeCancelled {
@@ -176,10 +176,12 @@ func TestMetrics(t *testing.T) {
 			assertMetric(t, metrics.replacements.WithLabelValues(
 				"lifi-fill",
 				replacementKindReplacement,
+				replaceReasonInterval,
 			), 1)
 			assertMetric(t, metrics.replacements.WithLabelValues(
 				"lifi-fill",
 				replacementKindCancellation,
+				"pending_timeout",
 			), 1)
 		})
 	})

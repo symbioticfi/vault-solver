@@ -23,6 +23,9 @@ txManager:
   pendingTimeoutMs: 300000        # switch the active nonce to cancellation after 5m
   shutdownTimeoutMs: 60000        # bound SIGTERM cancellation + receipt drain to 60s
   tipGwei: 0                      # observed Etherscan Fast: minimum p25 tip from the latest five blocks
+  # feePolicy: horizon            # legacy (default) | horizon: exact EIP-1559 fee bound, tip that rises only
+  #                               # in runs of full blocks, next-block gas, repricing on block evidence
+  # horizon: {maxBlocks: 6, tipFloorGwei: 0.02, fullBlockTipGwei: 0.1, congestedTipCapGwei: 15}
 
 observability:
   addr: ":9090"                  # framework metrics and health endpoints

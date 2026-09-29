@@ -81,7 +81,7 @@ func testAnvilConsumedNonce(t *testing.T) {
 		t.Fatalf("external inclusion: receipt=%+v err=%v", receipt, err)
 	}
 	for range 3 {
-		if _, err := m.tryReplace(t.Context(), pending, true); err != nil {
+		if _, err := m.tryReplace(t.Context(), pending, replaceIntent{cancellation: true}); err != nil {
 			t.Fatal(err)
 		}
 	}

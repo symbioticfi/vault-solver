@@ -57,11 +57,24 @@ The public YAML block is `txManager`. Values below are application defaults, aft
 | `replacementIntervalMs` | 30000 | Pending replacement/rebroadcast cadence. |
 | `pendingTimeoutMs` | 300000 | Switch an unresolved call to cancellation; must be at least the replacement interval. |
 | `shutdownTimeoutMs` | 60000 | Hard bound on manager drain after shutdown begins. |
+| `feePolicy` | `legacy` | `horizon` switches pricing and repricing to the [horizon policy](#41-horizon-fee-policy); `tipGwei` must then stay zero. |
+| `horizon.maxBlocks` | 6 | Blocks (3–12) the initial fee cap keeps the full tip valid at the maximum base-fee increase. |
+| `horizon.blockTimeMs` | 12000 | Slot time: sets the twice-per-block evaluation tick and the next-block estimate timestamp. |
+| `horizon.tipFloorGwei` | 0.02 | Tip while the last two blocks had room for the call. |
+| `horizon.fullBlockTipGwei` | 0.1 | Tip when one of the last two blocks had no room. |
+| `horizon.congestedTipFloorGwei` / `congestedTipCapGwei` | 0.2 / 15 | Clamp on the market tip used when both had no room. |
+| `horizon.congestedRewardBlocks` / `congestedRewardPercentile` | 3 / 50 | That market tip: the highest reward percentile over these recent blocks. |
+| `horizon.escalateAfterFullBlocks` | 2 | Consecutive full blocks a valid pending call must lose before its tip is repriced. |
+| `horizon.stallAfterBlocks` | 3 | Blocks with room a valid pending call may lose before it is re-estimated and rebroadcast. |
+| `horizon.gasHeadroomBps` / `fallbackGasHeadroomBps` | 500 / 1000 | Headroom over the next-block estimate, and over a latest-state estimate when the read RPC rejects block overrides. |
 
 Polling defaults to 2 seconds in the Go manager; it is not a separate YAML field. Pending receipt reads,
 replacement nonce reads and obsolescence checks each use `min(2 seconds, replacementInterval/2)`; fee reads use
 `min(1 second, replacementInterval/2)`. These internal read budgets are separate from broadcast timeout.
-Account refresh uses a 5-second context. Backends must honor cancellation.
+Account refresh uses a 5-second context. Backends must honor cancellation. Under the horizon policy the
+replacement loop ticks every `blockTimeMs/2` and acts only on a new block; `replacementIntervalMs` then only
+paces the fallback bump when fee windows stay unreadable, and an ambiguous broadcast may still be rebroadcast
+while more than `broadcastTimeoutMs + blockTimeMs` remains before its deadline.
 
 ## 4. Fees, replacements and cancellation
 
@@ -86,6 +99,62 @@ A `nonce too low` response never by itself authorizes re-signing the calldata at
 The cancellation bound is the earlier of the pending timeout and a supplied `CancelAt`. A cancellation
 check may become due during fee lookup and promote the replacement. A deadline coinciding with a
 replacement tick must not produce a second broadcast for the same tick.
+
+The paragraphs above describe the default `legacy` policy. It is unchanged by the horizon policy below.
+
+### 4.1 Horizon fee policy
+
+`feePolicy: horizon` keeps the same caps, nonce checks, cancellation deadlines and exact-hash tracking, and
+changes three things: how a call is priced, how its gas is sized, and when a pending call is repriced.
+Spend is `gasUsed × (baseFee + tip)`; the fee cap only decides validity, so the policy spends headroom on the
+cap and economizes on the tip.
+
+- **Fee cap from the exact base-fee bound.** One read of the latest header and an `eth_feeHistory` window
+  (`max(congestedRewardBlocks, escalateAfterFullBlocks, stallAfterBlocks, 2)` blocks) gives the next block's
+  base fee as the node computes it. The cap is that base fee grown by the EIP-1559 maximum,
+  `max(baseFee/8, 1)` per full block (go-ethereum's `DefaultBaseFeeChangeDenominator`, not a knob), for
+  `maxBlocks − 1` blocks, plus the tip. At the default 6 that is about 1.8× the next base fee, close to the
+  legacy 2× of the latest one. The initial cap still reserves a replacement bump under the request and global
+  limits; a lower limit shortens the horizon, and one below the next base fee fails the send.
+- **Tip from block fullness.** A block "has room" when `gasLimit × (1 − gasUsedRatio)` covers the call's
+  gas. Room in both of the last two blocks means any positive tip is included, so the call pays
+  `tipFloorGwei`; one full block pays `fullBlockTipGwei`; only a run of two full blocks, where the call must
+  outbid the marginal transaction, pays the highest `congestedRewardPercentile` reward of the last
+  `congestedRewardBlocks` blocks, clamped to the congested floor and cap.
+- **Gas against the next block.** Without a request gas limit, the call is estimated with
+  `eth_estimateGas(call, "latest", null, {number: head+1, time: head.time + blockTime})`, so time-dependent
+  work the latest block already did (Morpho interest accrual, for one) is sized for the block the call
+  targets, plus `gasHeadroomBps`. An endpoint that rejects the fourth parameter (invalid params) falls back to
+  a latest-state estimate with `fallbackGasHeadroomBps`, logged once per process at Info; a reverting
+  next-block estimate fails the send like a reverting legacy estimate. An endpoint that silently ignores the
+  parameter returns a latest-state estimate with the tighter headroom, which is the legacy behaviour.
+- **Repricing on block evidence.** The loop evaluates each new block (older heads from another endpoint are
+  ignored) against the current attempt, counting only blocks after the one it was sent at:
+  - a fee cap that would lapse within two blocks at the tip floor is repriced (`validity`);
+  - the last `escalateAfterFullBlocks` blocks full while the attempt was valid, with the tip rule now asking
+    for at least a replacement bump, reprice the tip (`congestion`);
+  - `stallAfterBlocks` blocks with room lost while valid mean the relay dropped the attempt, a builder it
+    cannot reach built them, or the call outgrew its gas. A normal call is re-estimated for the next block
+    and replaced with a larger gas limit once the raw estimate exceeds its limit (`gas`); otherwise its exact
+    bytes are rebroadcast, and after two such rebroadcasts a minimal bump replaces them (`stall`);
+  - anything else holds, because waiting is free.
+
+  A reprice uses the ordinary replacement rule (at least a 12.5% bump of both fields, the fresh horizon fees
+  when higher, capped at the request or global limit, capped-rebroadcast at the cap). An ambiguous first
+  broadcast is rebroadcast on the first new block.
+- **Cancellation** starts at the same deadline, shutdown or `Obsolete` triggers and is sent at once. Its fees
+  come from the horizon rule for 21,000 gas, and it is then repriced by the same block evidence rather than
+  by a timer; a cancellation whose broadcast failed is retried every tick.
+- **Fallback.** If fee windows stay unreadable for `replacementIntervalMs`, the pending attempt gets one
+  cached-bump replacement per interval (`fallback`), so it cannot freeze. Unreadable windows use the same
+  read-streak logging as receipt reads.
+- **Quote pricing.** `MaxFeePerGas` returns one replacement bump over the horizon cap for the size of the
+  latest signed call, so a request ceiling taken from it at quote time still leaves the fill a full horizon.
+  `ValidateFeeHeadroom` rejects a congested tip cap that cannot fit under the initial fee limit.
+
+The bound holds only on chains using the Ethereum base-fee rule (mainnet, Hoodi, Sepolia). Evaluated windows
+are the latest blocks, so a lifecycle that goes unevaluated for longer than the window judges only the most
+recent blocks.
 
 ## 5. Receipt polling and confirmation
 
@@ -234,7 +303,7 @@ Definitions: [metrics.go](../internal/txmanager/metrics.go),
 | Txmanager | `solver_bot_txmanager_inflight` | `label` | Requests accepted by the txmanager worker and still awaiting a terminal result; sustained values expose stuck transactions or nonce congestion. |
 | Txmanager | `solver_bot_txmanager_gas_used_total` | `label`, `outcome` | Receipt gas for mined transactions, including reverts. Divide by the matching request count for average gas; this is gas units, not native-token cost. |
 | Txmanager | `solver_bot_txmanager_fee_paid_wei_total` | `label`, `outcome` | Actual native-token fee paid by mined transactions, calculated from receipt `gasUsed × effectiveGasPrice`, including reverted and mined cancellation transactions. |
-| Txmanager | `solver_bot_txmanager_replacements_total` | `label`, `kind` | Successfully broadcast replacements and cancellations. Spikes expose fee-policy or congestion problems that terminal outcomes alone cannot show. |
+| Txmanager | `solver_bot_txmanager_replacements_total` | `label`, `kind`, `reason` | Successfully broadcast replacements, cancellations and exact rebroadcasts (`kind` = `replacement`, `cancellation`, `rebroadcast`). Replacement `reason` is `interval` (legacy timer) or, under the horizon policy, `validity`, `congestion`, `stall`, `gas` or `fallback`; a cancellation reports why cancellation started (`pending_timeout`, `request_deadline`, `shutdown`, `obsolete`); a rebroadcast is `stall`, `uncertain` (ambiguous first broadcast) or `capped` (fee cap reached). Spikes expose fee-policy, relay or congestion problems that terminal outcomes alone cannot show. |
 | Txmanager | `solver_bot_txmanager_admission_rejections_total` | `label`, `reason` | Requests rejected before the signed worker lifecycle. Reasons are `manager_stopped`, `nonce_conflict`, `deadline_exceeded`, `caller_cancelled`, or bounded fallback `other`; an expected busy `TrySend` probe is excluded. |
 | Txmanager | `solver_bot_txmanager_admission_wait_duration_seconds` | `label`, `outcome` | Time from a real send request until worker admission or a terminal pre-admission outcome. `outcome` is `admitted` or one of the bounded rejection reasons; expected busy `TrySend` probes are excluded. |
 | Txmanager | `solver_bot_txmanager_lifecycle_duration_seconds` | `label`, `outcome` | Time from worker admission through broadcast and terminal tracking. It excludes pre-admission nonce-lane wait, so use admission rejections alongside its latency distribution. |
@@ -267,8 +336,16 @@ ambiguous broadcasts, nonce conflicts, admission, result semantics and logging. 
 covers real pending replacements/cancellations; unit test success alone is not that integration proof.
 Cancellation outcome tests also distinguish a satisfied confirmation policy from an interrupted wait;
 RFQ tests consume that distinction when deciding whether another fill is safe.
+Horizon tests cover the base-fee bound, the tip rule, each repricing decision, fee-window parsing, the
+next-block estimate and its fallbacks, and scripted-chain lifecycles for stall rebroadcasts, congestion,
+validity, gas growth, unreadable windows and deadline cancellation; legacy tests are unchanged.
 Run repository-required build, race/coverage and lint gates for implementation changes. Current reader
 validation is local; it does not establish deployment or production rollout status.
+
+Before enabling `feePolicy: horizon` on a deployment, check that its read RPC honours `eth_estimateGas`
+block overrides (the "next-block gas estimate unsupported" Info line says it does not) and watch
+`replacements_total{reason}`: sustained `stall` rebroadcasts point at the relay, `gas` at contention on
+the same vaults, and `fallback` at unreadable fee history.
 
 Keep shared lifecycle design and metric contracts here. Update integration plans only when their own
 request construction, readiness, capacity or protocol behavior changes. Preserve operator-facing setup,

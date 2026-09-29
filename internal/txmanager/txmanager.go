@@ -88,6 +88,8 @@ type Config struct {
 	ReplacementInterval time.Duration // pending tx fee-bump cadence; 0 => 30s
 	PendingTimeout      time.Duration // switch from replacing the call to cancelling its nonce; 0 => 5m
 	ShutdownTimeout     time.Duration // maximum graceful drain after manager cancellation; 0 => 1m
+	FeePolicy           FeePolicy     // pricing and repricing policy; "" => FeePolicyLegacy
+	Horizon             HorizonConfig // tunes FeePolicyHorizon; ignored by the legacy policy
 }
 
 // Request is a transaction to send. Value nil means 0. Stateful solver calls leave GasLimit at 0 so
@@ -165,6 +167,10 @@ type pendingTransaction struct {
 	cancelDeadline  time.Time
 	cancelRequested chan struct{}
 	cancelOnce      sync.Once
+	// cancelReason is why cancellation started, reported on the cancellation's replacement metric.
+	// Only the lifecycle goroutine reads or writes it, as it does horizon.
+	cancelReason string
+	horizon      horizonProgress
 }
 
 type txAttempt struct {
@@ -180,8 +186,15 @@ type Manager struct {
 	signer  signer.Signer
 	chainID *big.Int
 	cfg     Config
+	horizon horizonPolicy
 	metrics *Metrics
 	log     logr.Logger
+
+	// lastGas is the gas limit of the latest signed call, which horizon pricing uses to judge whether
+	// recent blocks had room for a fill. overrideFallbackLogged limits the next-block estimate
+	// fallback notice to once per process.
+	lastGas                atomic.Uint64
+	overrideFallbackLogged atomic.Bool
 
 	queue           chan job
 	lifecycleSlot   chan struct{}
@@ -261,11 +274,16 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log log
 	if cfg.ShutdownTimeout <= 0 {
 		cfg.ShutdownTimeout = defaultShutdownTimeout
 	}
+	if cfg.FeePolicy == "" {
+		cfg.FeePolicy = FeePolicyLegacy
+	}
+	cfg.Horizon = cfg.Horizon.withDefaults()
 	return &Manager{
 		backend:              backend,
 		signer:               s,
 		chainID:              chainID,
 		cfg:                  cfg,
+		horizon:              newHorizonPolicy(cfg.Horizon),
 		log:                  log.WithName("txmanager"),
 		queue:                make(chan job),
 		lifecycleSlot:        make(chan struct{}, 1),
@@ -297,6 +315,12 @@ func (m *Manager) Confirmations() uint64 {
 // transaction cap after reserving one ordinary replacement and one cancellation bump.
 func (m *Manager) ValidateFeeHeadroom() error {
 	initialLimit := reserveFeeBump(m.normalFeeLimit(Request{}))
+	if m.horizonEnabled() && initialLimit != nil && m.horizon.congestedTipCap.Cmp(initialLimit) >= 0 {
+		return errors.Errorf(
+			"horizon congested tip cap %s leaves no base-fee headroom under initial fee limit %s after reserved replacement bumps",
+			m.horizon.congestedTipCap, initialLimit,
+		)
+	}
 	tip := gweiToWei(m.cfg.TipGwei)
 	if initialLimit != nil && tip.Sign() > 0 && tip.Cmp(initialLimit) >= 0 {
 		return errors.Errorf(
@@ -731,7 +755,16 @@ func (m *Manager) releaseAdmissionDemand() {
 // configured limit permits it. Send recomputes the initial fees immediately before signing.
 func (m *Manager) MaxFeePerGas(ctx context.Context) (*big.Int, error) {
 	limit := m.normalFeeLimit(Request{})
-	fees, err := m.currentFees(ctx, reserveFeeBump(limit))
+	var fees feeQuote
+	var err error
+	if m.horizonEnabled() {
+		var snapshot feeSnapshot
+		if snapshot, _, err = m.readFeeSnapshot(ctx); err == nil {
+			fees, err = horizonFees(snapshot, m.lastGas.Load(), reserveFeeBump(limit), m.horizon)
+		}
+	} else {
+		fees, err = m.currentFees(ctx, reserveFeeBump(limit))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -778,16 +811,25 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 		return nil, errors.Errorf("send %q: request max fee per gas must be positive", req.Label)
 	}
 	normalLimit := m.normalFeeLimit(req)
-	fees, err := m.currentFees(broadcastCtx, reserveFeeBump(normalLimit))
-	if err != nil {
-		return nil, errors.Errorf("send %q: %w", req.Label, err)
-	}
-
-	gas := req.GasLimit
-	if gas == 0 {
-		gas, err = m.estimateGas(broadcastCtx, req)
+	var fees feeQuote
+	var gas, sentHead uint64
+	if m.horizonEnabled() {
+		quote, quoteErr := m.horizonBroadcastFees(broadcastCtx, req, reserveFeeBump(normalLimit))
+		if quoteErr != nil {
+			return nil, quoteErr
+		}
+		fees, gas, sentHead = quote.fees, quote.gas, quote.head
+	} else {
+		fees, err = m.currentFees(broadcastCtx, reserveFeeBump(normalLimit))
 		if err != nil {
-			return nil, err
+			return nil, errors.Errorf("send %q: %w", req.Label, err)
+		}
+		gas = req.GasLimit
+		if gas == 0 {
+			gas, err = m.estimateGas(broadcastCtx, req)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 	obsolete, obsoleteErr := m.requestObsolete(broadcastCtx, req)
@@ -847,6 +889,7 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 		observability.Log(ctx).Info("sent", "label", req.Label, "hash", hash.Hex(), "nonce", nonce)
 	}
 	m.commitNonce(nonce)
+	m.lastGas.Store(gas)
 	return &pendingTransaction{
 		req:   req,
 		nonce: nonce,
@@ -858,6 +901,7 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 		}},
 		originalHash: hash,
 		span:         sendSpan,
+		horizon:      horizonProgress{sentHead: sentHead, lastHead: sentHead, lastEvaluation: time.Now()},
 	}, nil
 }
 
@@ -910,39 +954,34 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 	var receiptResults <-chan receiptRead
 	poll := time.NewTicker(m.cfg.PollInterval)
 	defer poll.Stop()
-	replace := time.NewTicker(m.cfg.ReplacementInterval)
+	replace := time.NewTicker(m.replacementTick())
 	defer replace.Stop()
 	timeout := time.NewTimer(max(time.Until(pending.cancelDeadline), 0))
 	defer timeout.Stop()
 
 	var replacementStarted time.Time
-	tryReplace := func(cancellation bool) bool {
+	tryReplace := func(intent replaceIntent) bool {
 		replacementStarted = time.Now()
 		replaceCtx, end := tracer.Start(ctx, "txmanager.replace",
 			observability.AttrTxAttempt.Int(len(pending.attempts)+1),
-			attribute.Bool("tx.cancellation", cancellation),
+			attribute.Bool("tx.cancellation", intent.cancellation),
+			attribute.String("tx.replace_reason", intent.reason),
 		)
-		cancelling, err := m.tryReplace(replaceCtx, pending, cancellation)
+		cancelling, err := m.tryReplace(replaceCtx, pending, intent)
 		end(err)
 		return cancelling
 	}
 	cancelling := false
 	cancelRequested, timeoutC := pending.cancelRequested, timeout.C
+	cancel := func() replaceIntent { return replaceIntent{cancellation: true, reason: pending.cancellationReason()} }
 	startCancellation := func(reason string) {
 		if cancelling {
 			return
 		}
 		if reason == "" {
-			select {
-			case <-pending.cancelRequested:
-				reason = "shutdown"
-			default:
-				reason = "pending_timeout"
-				if pending.cancelDeadline.Equal(pending.req.CancelAt) {
-					reason = "request_deadline"
-				}
-			}
+			reason = pending.cancellationReason()
 		}
+		pending.cancelReason = reason
 		cancelling, cancelRequested, timeoutC = true, nil, nil
 		observability.Log(ctx).Info("pending transaction cancellation requested",
 			"label", pending.req.Label,
@@ -991,7 +1030,7 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 				// Give receipts precedence before checking obsolescence.
 				if !cancelling && m.pendingRequestObsolete(ctx, pending) {
 					startCancellation("obsolete")
-					tryReplace(true)
+					tryReplace(cancel())
 				}
 			}
 		case <-ctx.Done():
@@ -1002,7 +1041,7 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 			}
 		case <-cancelRequested:
 			startCancellation("shutdown")
-			tryReplace(true)
+			tryReplace(cancel())
 		case <-poll.C:
 			if sweep == nil {
 				knownAttempts = len(pending.attempts)
@@ -1014,17 +1053,28 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 			if !tick.After(replacementStarted) {
 				continue
 			}
-			if !cancelling && pending.cancellationDue(time.Now()) {
+			dueNow := !cancelling && pending.cancellationDue(time.Now())
+			if dueNow {
 				startCancellation("")
 			}
-			if tryReplace(cancelling) {
+			var promoted bool
+			switch {
+			case m.horizonEnabled() && !dueNow:
+				// Under the horizon policy a tick only reprices on block evidence.
+				promoted = m.evaluateHorizon(ctx, pending, cancelling, tryReplace)
+			case cancelling:
+				promoted = tryReplace(cancel())
+			default:
+				promoted = tryReplace(replaceIntent{reason: replaceReasonInterval})
+			}
+			if promoted {
 				// A fee lookup can cross the deadline and promote this replacement to
 				// cancellation. Disarm the expired timer before the next select.
 				startCancellation("")
 			}
 		case <-timeoutC:
 			startCancellation("")
-			tryReplace(true)
+			tryReplace(cancel())
 		}
 	}
 }
@@ -1157,11 +1207,19 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 	return Result{Hash: attempt.hash, Receipt: receipt, Outcome: OutcomeConfirmed}, true
 }
 
+// replaceIntent says what a replacement sends and why.
+type replaceIntent struct {
+	cancellation bool
+	reason       string // replacements_total{reason}; a cancellation reports why cancellation started
+	gas          uint64 // non-zero sets a normal call's new gas limit
+}
+
 // tryReplace reports whether cancellation mode was entered, even if submission fails, plus the
 // replacement failure for the calling span. Both are already logged.
 func (m *Manager) tryReplace(
-	ctx context.Context, pending *pendingTransaction, cancellation bool,
+	ctx context.Context, pending *pendingTransaction, intent replaceIntent,
 ) (bool, error) {
+	cancellation := intent.cancellation
 	if m.hasNonceConflict(pending.nonce) {
 		return cancellation, nil
 	}
@@ -1172,13 +1230,18 @@ func (m *Manager) tryReplace(
 	if !cancellation && m.rebroadcastUncertainAttempt(ctx, pending) {
 		return false, nil
 	}
-	limit := m.normalFeeLimit(pending.req)
-	if cancellation {
-		limit = m.globalFeeLimit()
+	promoted := replaceIntent{cancellation: true, reason: pending.cancellationReason()}
+	gas := pending.gas
+	if intent.gas > 0 {
+		gas = intent.gas
 	}
-	fees, err := m.nextReplacementFees(ctx, pending.fees, limit)
+	limit, feeGas := m.normalFeeLimit(pending.req), gas
+	if cancellation {
+		limit, feeGas = m.globalFeeLimit(), cancellationGasLimit
+	}
+	fees, err := m.nextReplacementFees(ctx, pending.fees, limit, feeGas)
 	if !cancellation && pending.cancellationDue(time.Now()) {
-		return m.tryReplace(ctx, pending, true)
+		return m.tryReplace(ctx, pending, promoted)
 	}
 	if err != nil {
 		if errors.Is(err, errReplacementLimitReached) &&
@@ -1195,7 +1258,6 @@ func (m *Manager) tryReplace(
 	to := pending.req.To
 	data := pending.req.Data
 	value := pending.value
-	gas := pending.gas
 	if cancellation {
 		to = m.signer.Address()
 		data = nil
@@ -1203,7 +1265,7 @@ func (m *Manager) tryReplace(
 		gas = cancellationGasLimit
 	}
 	if !cancellation && pending.cancellationDue(time.Now()) {
-		return m.tryReplace(ctx, pending, true)
+		return m.tryReplace(ctx, pending, promoted)
 	}
 	sendCtx, cancelSend := replacementBroadcastContext(ctx, pending, cancellation)
 	signed, sendErr := m.signAndSend(sendCtx, pending.nonce, to, data, value, gas, fees, true, cancellation)
@@ -1219,6 +1281,10 @@ func (m *Manager) tryReplace(
 	hash := signed.Hash()
 	broadcastUncertain := sendErr != nil && !isKnownTransactionError(sendErr)
 	pending.fees = cloneFeeQuote(fees)
+	if !cancellation {
+		pending.gas = gas
+	}
+	pending.horizon.sentHead, pending.horizon.stallRebroadcasts = pending.horizon.lastHead, 0
 	pending.attempts = append(pending.attempts, txAttempt{
 		hash: hash, tx: signed, cancellation: cancellation, exactRebroadcastPending: broadcastUncertain,
 	})
@@ -1245,16 +1311,23 @@ func (m *Manager) tryReplace(
 		)
 		return cancellation, nil
 	}
-	kind := replacementKindReplacement
-	if cancellation {
+	kind, reason := replacementKindReplacement, intent.reason
+	switch {
+	case cancellation && (!intent.cancellation || reason == ""):
+		kind, reason = replacementKindCancellation, promoted.reason
+	case cancellation:
 		kind = replacementKindCancellation
+	case reason == "":
+		reason = replaceReasonInterval
 	}
-	m.metrics.replacement(pending.req.Label, kind)
+	m.metrics.replacement(pending.req.Label, kind, reason)
 	observability.Log(ctx).Info("pending transaction replaced",
 		"label", pending.req.Label,
 		"hash", hash.Hex(),
 		"nonce", pending.nonce,
 		"cancellation", cancellation,
+		"reason", reason,
+		"gasLimit", gas,
 		"maxFeePerGas", fees.maxFee.String(),
 		"maxPriorityFeePerGas", fees.tip.String(),
 	)
@@ -1281,6 +1354,9 @@ func (m *Manager) rebroadcastUncertainAttempt(ctx context.Context, pending *pend
 	if isNonceConsumedError(err) {
 		pending.nonceConflictHash = attempt.hash
 		m.reconcileExistingLifecycleNonce(ctx, pending)
+	}
+	if err == nil || known {
+		m.metrics.replacement(pending.req.Label, replacementKindRebroadcast, rebroadcastReasonUncertain)
 	}
 	switch {
 	case err == nil:
@@ -1313,7 +1389,7 @@ func (m *Manager) hasExactRebroadcastSlack(pending *pendingTransaction, now time
 	if pending.cancelDeadline.IsZero() {
 		return true
 	}
-	return pending.cancelDeadline.Sub(now) > m.cfg.BroadcastTimeout+m.cfg.ReplacementInterval
+	return pending.cancelDeadline.Sub(now) > m.cfg.BroadcastTimeout+m.replacementCadence()
 }
 
 func (m *Manager) rebroadcastLatestAttempt(
@@ -1331,6 +1407,9 @@ func (m *Manager) rebroadcastLatestAttempt(
 		if isNonceConsumedError(err) {
 			pending.nonceConflictHash = attempt.hash
 			m.reconcileExistingLifecycleNonce(ctx, pending)
+		}
+		if err == nil || isKnownTransactionError(err) {
+			m.metrics.replacement(pending.req.Label, replacementKindRebroadcast, rebroadcastReasonCapped)
 		}
 		if err != nil {
 			observability.Log(ctx).Error(err, "capped transaction rebroadcast failed",
@@ -1365,12 +1444,21 @@ func replacementBroadcastContext(
 	return context.WithDeadline(ctx, pending.cancelDeadline)
 }
 
+// freshFees prices a replacement of gas units from current chain state, without a limit.
+func (m *Manager) freshFees(ctx context.Context, gas uint64) (feeQuote, error) {
+	if m.horizonEnabled() {
+		return m.horizonFreshFees(ctx, gas)
+	}
+	return m.currentFees(ctx, nil)
+}
+
 func (m *Manager) nextReplacementFees(
 	ctx context.Context,
 	previous feeQuote,
 	limit *big.Int,
+	gas uint64,
 ) (feeQuote, error) {
-	current, err := m.currentFees(ctx, nil)
+	current, err := m.freshFees(ctx, gas)
 	if err != nil && !errors.Is(err, errFreshFeesUnavailable) {
 		return feeQuote{}, err
 	}
@@ -1481,6 +1569,28 @@ func (m *Manager) deliverActiveShutdownTimeout() {
 
 func requestCancellation(pending *pendingTransaction) {
 	pending.cancelOnce.Do(func() { close(pending.cancelRequested) })
+}
+
+// cancellationReason is why the lifecycle cancels: the reason recorded when cancellation started,
+// or else the one that makes it due now.
+func (pending *pendingTransaction) cancellationReason() string {
+	if pending.cancelReason != "" {
+		return pending.cancelReason
+	}
+	select {
+	case <-pending.cancelRequested:
+		return "shutdown"
+	default:
+	}
+	if pending.cancelDeadline.Equal(pending.req.CancelAt) {
+		return "request_deadline"
+	}
+	return "pending_timeout"
+}
+
+// latestAttempt is the most recently signed variant of the pending nonce.
+func (pending *pendingTransaction) latestAttempt() txAttempt {
+	return pending.attempts[len(pending.attempts)-1]
 }
 
 func (pending *pendingTransaction) cancellationDue(now time.Time) bool {

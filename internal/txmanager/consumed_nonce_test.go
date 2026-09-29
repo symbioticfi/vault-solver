@@ -66,7 +66,7 @@ func TestReplacementsStopWhenMinedNonceAdvances(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.existingCancellation {
-				if _, err := m.tryReplace(t.Context(), pending, true); err != nil {
+				if _, err := m.tryReplace(t.Context(), pending, replaceIntent{cancellation: true}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -78,7 +78,7 @@ func TestReplacementsStopWhenMinedNonceAdvances(t *testing.T) {
 			fees := cloneFeeQuote(pending.fees)
 			b.latestNonce, b.pendingNonce = 8, 8
 			for range 3 {
-				if _, err := m.tryReplace(t.Context(), pending, tc.cancellation); err != nil {
+				if _, err := m.tryReplace(t.Context(), pending, replaceIntent{cancellation: tc.cancellation}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -106,7 +106,7 @@ func TestPendingNonceAdvanceDoesNotSuppressReplacement(t *testing.T) {
 		t.Fatal(err)
 	}
 	b.pendingNonce = 8 // Our unmined submission advances pending, not latest.
-	if _, err := m.tryReplace(t.Context(), pending, false); err != nil {
+	if _, err := m.tryReplace(t.Context(), pending, replaceIntent{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(b.attemptedTransactions()) != 2 || !m.Available() {
@@ -126,7 +126,7 @@ func TestConsumedNonceRequiresCanonicalOwnedReceipt(t *testing.T) {
 			b.latestNonce, b.pendingNonce = 8, 8
 			b.receipts[pending.originalHash] = successfulReceipt(pending.attempts[0].tx, 100)
 			b.reorgedHeader = orphaned
-			if _, err := m.tryReplace(t.Context(), pending, true); err != nil {
+			if _, err := m.tryReplace(t.Context(), pending, replaceIntent{cancellation: true}); err != nil {
 				t.Fatal(err)
 			}
 			if len(b.attemptedTransactions()) != 1 {
@@ -160,7 +160,7 @@ func TestReplacementNonceReadFailureDefersBroadcastAndRecovers(t *testing.T) {
 					wantErr = context.DeadlineExceeded
 				}
 				started := time.Now()
-				if _, err := m.tryReplace(t.Context(), pending, true); !errors.Is(err, wantErr) {
+				if _, err := m.tryReplace(t.Context(), pending, replaceIntent{cancellation: true}); !errors.Is(err, wantErr) {
 					t.Fatalf("nonce read error = %v, want %v", err, wantErr)
 				}
 				if elapsed := time.Since(started); elapsed > 2*time.Second {
@@ -170,7 +170,7 @@ func TestReplacementNonceReadFailureDefersBroadcastAndRecovers(t *testing.T) {
 					t.Fatal("failed nonce read broadcast a cancellation or permanently conflicted the lane")
 				}
 				b.blockNonce, b.nonceErr = false, nil
-				if _, err := m.tryReplace(t.Context(), pending, true); err != nil {
+				if _, err := m.tryReplace(t.Context(), pending, replaceIntent{cancellation: true}); err != nil {
 					t.Fatal(err)
 				}
 				if len(b.attemptedTransactions()) != 2 {

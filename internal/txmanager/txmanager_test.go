@@ -1044,7 +1044,7 @@ func TestAmbiguousReplacementGetsOneExactRebroadcast(t *testing.T) {
 		fees:  cloneFeeQuote(original),
 	}
 
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending, replaceIntent{})
 	firstBump := bumpFee(original.maxFee)
 	if pending.fees.maxFee.Cmp(firstBump) != 0 {
 		t.Fatalf("ambiguous replacement max fee = %s, want %s", pending.fees.maxFee, firstBump)
@@ -1054,14 +1054,14 @@ func TestAmbiguousReplacementGetsOneExactRebroadcast(t *testing.T) {
 	}
 	firstHash := pending.attempts[0].hash
 
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending, replaceIntent{})
 	attempted := b.attemptedTransactions()
 	if len(attempted) != 2 || attempted[0].Hash() != firstHash || attempted[1].Hash() != firstHash ||
 		len(pending.attempts) != 1 || pending.attempts[0].exactRebroadcastPending {
 		t.Fatalf("exact replacement retry = %v, pending %+v", transactionHashes(attempted), pending)
 	}
 
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending, replaceIntent{})
 	if len(pending.attempts) != 2 {
 		t.Fatalf("post-retry replacement attempts = %+v", pending.attempts)
 	}
@@ -1086,7 +1086,7 @@ func TestCancellationRequestBypassesAmbiguousExactRebroadcast(t *testing.T) {
 	pending.cancelRequested = make(chan struct{})
 	requestCancellation(pending)
 
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending, replaceIntent{})
 	attempted := b.attemptedTransactions()
 	if len(attempted) != 2 || attempted[1].Hash() == attempted[0].Hash() {
 		t.Fatalf("cancellation attempts = %v, want a new same-nonce transaction", transactionHashes(attempted))
@@ -1142,7 +1142,7 @@ func TestExactRebroadcastNonceTooLowReconcilesOriginalReceipt(t *testing.T) {
 		t.Fatalf("broadcast: %v", err)
 	}
 
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending, replaceIntent{})
 	attempted := b.attemptedTransactions()
 	if len(attempted) != 2 || attempted[0].Hash() != attempted[1].Hash() || len(pending.attempts) != 1 {
 		t.Fatalf("nonce-low exact retry = %v, tracked = %+v", transactionHashes(attempted), pending.attempts)
@@ -1219,7 +1219,7 @@ func TestCappedAmbiguousCancellationRebroadcastsExactSignedTransaction(t *testin
 		attempts: []txAttempt{{hash: signed.Hash(), tx: signed, cancellation: true}},
 	}
 
-	m.tryReplace(t.Context(), pending, true)
+	m.tryReplace(t.Context(), pending, replaceIntent{cancellation: true})
 	if b.sendCalls != 1 || len(b.sent) != 1 {
 		t.Fatalf("exact rebroadcast calls/sent = %d/%d, want 1/1", b.sendCalls, len(b.sent))
 	}
@@ -1249,6 +1249,7 @@ func TestNormalFeeLimitReservesOneCancellationBump(t *testing.T) {
 		t.Context(),
 		feeQuote{baseFee: fees.baseFee, tip: fees.tip, maxFee: normalLimit},
 		m.globalFeeLimit(),
+		cancellationGasLimit,
 	)
 	if err != nil {
 		t.Fatalf("cancellation fees: %v", err)
@@ -1285,7 +1286,7 @@ func TestReplacementFeesRespectCapAndFullBump(t *testing.T) {
 			b.history = constantFeeHistory(test.current.tip)
 			m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
 
-			got, err := m.nextReplacementFees(t.Context(), test.previous, gweiToWei(50))
+			got, err := m.nextReplacementFees(t.Context(), test.previous, gweiToWei(50), 21_000)
 			if test.wantErr {
 				if !errors.Is(err, errReplacementLimitReached) {
 					t.Fatalf("nextReplacementFees error = %v, want replacement limit", err)
@@ -1880,7 +1881,9 @@ func forkedReceiptHeader(number uint64, fork string) *types.Header {
 	if cached, ok := receiptHeaderCache.Load(key); ok {
 		return types.CopyHeader(cached.(*types.Header))
 	}
-	header := &types.Header{Number: new(big.Int).SetUint64(number), BaseFee: big.NewInt(20e9)}
+	header := &types.Header{
+		Number: new(big.Int).SetUint64(number), BaseFee: big.NewInt(20e9), GasLimit: 60_000_000, Time: number * 12,
+	}
 	if number > 0 {
 		header.ParentHash = forkedReceiptHeader(number-1, fork).Hash()
 	}
@@ -2217,7 +2220,7 @@ func TestReplacementNonceTooLowReconcilesOwnedInclusionWithoutPausing(t *testing
 		t.Fatalf("initial broadcast: %v", err)
 	}
 
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending, replaceIntent{})
 	if !m.Available() {
 		t.Fatal("owned canonical inclusion paused the nonce lane")
 	}
@@ -2251,7 +2254,7 @@ func TestReplacementNonceTooLowWithoutOwnedReceiptPauses(t *testing.T) {
 		t.Fatalf("initial broadcast: %v", err)
 	}
 
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending, replaceIntent{})
 	if m.Available() {
 		t.Fatal("unexplained nonce consumption left the nonce lane available")
 	}
@@ -2279,7 +2282,7 @@ func TestReplacementNonceTooLowDelayedReceiptResumesThenReorgPauses(t *testing.T
 	if err != nil {
 		t.Fatalf("initial broadcast: %v", err)
 	}
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending, replaceIntent{})
 	if m.Available() {
 		t.Fatal("replacement nonce conflict did not pause the lane")
 	}
@@ -2486,7 +2489,7 @@ func TestAmbiguousBroadcastErrorsTrackExactSignedHash(t *testing.T) {
 		t.Fatalf("next nonce = %d, want 8 while exact hash remains tracked", m.nonce)
 	}
 	originalHash, originalFees := pending.originalHash, cloneFeeQuote(pending.fees)
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending, replaceIntent{})
 	attempted := b.attemptedTransactions()
 	if len(attempted) != 2 || attempted[0].Hash() != originalHash || attempted[1].Hash() != originalHash ||
 		len(pending.attempts) != 1 || pending.attempts[0].exactRebroadcastPending {
@@ -2495,7 +2498,7 @@ func TestAmbiguousBroadcastErrorsTrackExactSignedHash(t *testing.T) {
 	if pending.fees.maxFee.Cmp(originalFees.maxFee) != 0 || pending.fees.tip.Cmp(originalFees.tip) != 0 {
 		t.Fatalf("exact retry changed fees: got %+v want %+v", pending.fees, originalFees)
 	}
-	m.tryReplace(t.Context(), pending, false)
+	m.tryReplace(t.Context(), pending, replaceIntent{})
 	attempted = b.attemptedTransactions()
 	if len(attempted) != 3 || attempted[2].Hash() == originalHash || len(pending.attempts) != 2 ||
 		pending.fees.maxFee.Cmp(bumpFee(originalFees.maxFee)) != 0 {
