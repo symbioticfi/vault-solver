@@ -192,7 +192,8 @@ Omitting LI.FI's `gas:` block disables gas accounting in quote/fill decisions an
 Chainlink reads; the tx manager still prices and pays the actual transaction gas.
 
 The executor contract is the registered LI.FI solver account. It is registered once through EIP-1271 using
-a caller signature bound to the executor's EIP-712 domain, appears as `exclusiveFor` in quotes, and calls the
+a caller signature bound to the executor's EIP-712 domain (`hack/lifi-register-executor.sh`; startup fails until
+the API key lists the executor), appears as `exclusiveFor` in quotes, and calls the
 settler's direct finalise path. The framework signer is an authorized executor caller and transaction sender;
 fills do not carry a per-order `AllowOpen` signature.
 The owner manages callers, while ERC-1271 validates domain-separated registration signatures against the
