@@ -192,6 +192,10 @@ type txAttempt struct {
 	tx                      *types.Transaction
 	cancellation            bool
 	exactRebroadcastPending bool
+	// pricedHead is, for a replacement the horizon policy priced from a fresh fee snapshot, the newest block
+	// that snapshot knew of (header or fee history): the pending evaluation counts only later blocks as
+	// missed. Zero when it was priced without one (the legacy cached bump) or from a stale one.
+	pricedHead uint64
 }
 
 // Manager serializes signed lifecycles and owns accepted work through its terminal result.
@@ -1648,7 +1652,8 @@ func (m *Manager) replace(
 	if !cancellation && m.rebroadcastUncertainAttempt(ctx, pending) {
 		return false, nil
 	}
-	fees, gas, err := m.replacementPricing(ctx, pending, cancellation, plan)
+	price, err := m.replacementPricing(ctx, pending, cancellation, plan)
+	fees, gas := price.fees, price.gas
 	if !cancellation && pending.cancellationDue(time.Now()) {
 		return m.replace(ctx, pending, true, plan)
 	}
@@ -1694,6 +1699,7 @@ func (m *Manager) replace(
 	}
 	pending.attempts = append(pending.attempts, txAttempt{
 		hash: hash, tx: signed, cancellation: cancellation, exactRebroadcastPending: broadcastUncertain,
+		pricedHead: m.pricedHead(price.snapshot, time.Now()),
 	})
 	m.metrics.observeAttempt(pending.req.Label, cancellation, fees, gas)
 	reason := ""
@@ -1744,13 +1750,21 @@ func (m *Manager) replace(
 	return cancellation, nil
 }
 
-// replacementPricing prices the next same-nonce attempt and returns its fees and gas limit: 21000 for a
-// cancellation, the plan's for a planned fill replacement, the pending call's otherwise. A horizon snapshot
-// (see replacementSnapshot) prices it with repriceFees or cancellationFees; without one it is the legacy
-// cached bump of replacementFees.
+// replacementPrice is a priced same-nonce attempt: its fees, its gas limit, and the horizon fee snapshot that
+// priced it (nil for the legacy cached bump).
+type replacementPrice struct {
+	fees     feeQuote
+	gas      uint64
+	snapshot *feeSnapshot
+}
+
+// replacementPricing prices the next same-nonce attempt at its gas limit: 21000 for a cancellation, the
+// plan's for a planned fill replacement, the pending call's otherwise. A horizon snapshot (see
+// replacementSnapshot) prices it with repriceFees or cancellationFees; without one it is the legacy cached
+// bump of replacementFees. The gas limit is set even on error.
 func (m *Manager) replacementPricing(
 	ctx context.Context, pending *pendingTransaction, cancellation bool, plan *replacementPlan,
-) (feeQuote, uint64, error) {
+) (replacementPrice, error) {
 	gas := pending.gas
 	switch {
 	case cancellation:
@@ -1765,10 +1779,20 @@ func (m *Manager) replacementPricing(
 	snapshot := m.replacementSnapshot(ctx, pending, cancellation, plan)
 	if snapshot == nil {
 		fees, err := m.replacementFees(ctx, pending, cancellation, limit)
-		return fees, gas, err
+		return replacementPrice{fees: fees, gas: gas}, err
 	}
 	fees, err := m.horizonReplacementFees(ctx, pending, cancellation, gas, limit, snapshot)
-	return fees, gas, err
+	return replacementPrice{fees: fees, gas: gas, snapshot: snapshot}, err
+}
+
+// pricedHead is the head an attempt priced from snapshot is counted from (txAttempt.pricedHead): the newest
+// block the snapshot knew of, or zero without a snapshot or when it trails the next block at now by more
+// than fees.maxHeadLagBlocks, since blocks it did not know of may have been mined before the attempt was sent.
+func (m *Manager) pricedHead(snapshot *feeSnapshot, now time.Time) uint64 {
+	if snapshot == nil || snapshot.lag(now, m.cfg.Fees.BlockTime) > m.maxHeadLagBlocks() {
+		return 0
+	}
+	return max(headerNumber(snapshot.header), snapshot.historyHead)
 }
 
 // replacementSnapshot is the fee snapshot a horizon-policy replacement is priced from, or nil for the legacy
@@ -1920,6 +1944,9 @@ func (m *Manager) hasExactRebroadcastSlack(pending *pendingTransaction, now time
 	return pending.cancelDeadline.Sub(now) > m.cfg.BroadcastTimeout+next
 }
 
+// rebroadcastLatestAttempt is the capped exact rebroadcast: when a replacement cannot be funded or is
+// over its limit, the latest attempt of the kind is sent again unchanged ("already known" counts as sent).
+// It reports whether there was one to send.
 func (m *Manager) rebroadcastLatestAttempt(
 	ctx context.Context,
 	pending *pendingTransaction,
@@ -1936,22 +1963,22 @@ func (m *Manager) rebroadcastLatestAttempt(
 			pending.nonceConflictHash = attempt.hash
 			m.reconcileExistingLifecycleNonce(ctx, pending)
 		}
-		if err != nil {
-			observability.Log(ctx).Error(err, "capped transaction rebroadcast failed",
-				"label", pending.req.Label,
-				"hash", attempt.hash.Hex(),
-				"nonce", pending.nonce,
-				"cancellation", cancellation,
-			)
-		} else {
-			m.metrics.rebroadcast(pending.req.Label, rebroadcastCapped)
-			observability.Log(ctx).Info("capped transaction rebroadcast",
-				"label", pending.req.Label,
-				"hash", attempt.hash.Hex(),
-				"nonce", pending.nonce,
-				"cancellation", cancellation,
-			)
+		fields := []any{
+			"label", pending.req.Label,
+			"hash", attempt.hash.Hex(),
+			"nonce", pending.nonce,
+			"cancellation", cancellation,
 		}
+		// "already known" is the normal answer to resending the same bytes: the endpoint still holds them.
+		if err != nil && !isKnownTransactionError(err) {
+			observability.Log(ctx).Error(err, "capped transaction rebroadcast failed", fields...)
+			return true
+		}
+		m.metrics.rebroadcast(pending.req.Label, rebroadcastCapped)
+		if err != nil {
+			fields = append(fields, "rpcResult", err.Error())
+		}
+		observability.Log(ctx).Info("capped transaction rebroadcast", fields...)
 		return true
 	}
 	return false

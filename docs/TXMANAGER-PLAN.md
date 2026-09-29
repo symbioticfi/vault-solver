@@ -138,7 +138,8 @@ with the same nonce and may exceed the request cap, but never the global cap.
 All signed variants are retained by exact hash. An ambiguous send does not prove absence from the
 network. The next normal replacement tick rebroadcasts the uncertain attempt's exact bytes once, without
 adding a duplicate hash or changing fees; a later tick can bump fees. A cancellation deadline or shutdown
-bypasses that grace retry. At the fee cap, the latest applicable attempt can be rebroadcast unchanged.
+bypasses that grace retry. At the fee cap, the latest applicable attempt can be rebroadcast unchanged;
+"already known" is that rebroadcast's normal answer, counted and logged at Info like a sent one.
 A `nonce too low` response never by itself authorizes re-signing the calldata at a different nonce.
 
 The cancellation bound is the earlier of the pending timeout and a supplied `CancelAt`. A cancellation
@@ -377,12 +378,15 @@ Under horizon the lifecycle loop ([pending.go](../internal/txmanager/pending.go)
 block evidence (strategy §2.7, §2.8). Its replacement ticker fires every `fees.blockTimeMs/2`. Each tick runs, in
 order: nothing while a re-estimate is in flight or the nonce is in conflict; the first cancellation again while
 cancellation is due and none is signed yet (rule 1: `CancelAt`, `pendingTimeout`, shutdown and `Obsolete` keep
-starting cancellation exactly as under legacy); the one exact retry of an ambiguous broadcast (§4); otherwise the
+starting cancellation exactly as under legacy; a first cancellation that failed is retried at the next tick and
+then once per `replacementIntervalMs`, the legacy cadence, so one that cannot be priced or sent does not repeat
+its reads and its Error log every half block); the one exact retry of an ambiguous broadcast (§4); otherwise the
 span `txmanager.evaluate`, which reads one fee snapshot (§4.3; the shared snapshot while its six blocks cover the
 blocks since the latest send or stall rebroadcast plus 3, a longer `eth_feeHistory` otherwise) and decides only
 at a new head. Heads are monotonic: the loop keeps the newest head any read reported (`maxSeenHead`) and ignores a
-read below it (a lagging eRPC upstream) or one whose fee history did not advance; a head trailing the next block
-by more than `maxHeadLagBlocks` holds. The decision, `evaluatePending` in [fees.go](../internal/txmanager/fees.go),
+read below it (a lagging eRPC upstream) or one whose fee history did not advance. A read whose head trails the
+next block by more than `maxHeadLagBlocks` decides nothing and counts toward the fallback below like a failed
+read, since an upstream stuck on one head still answers every read. The decision, `evaluatePending` in [fees.go](../internal/txmanager/fees.go),
 is pure and stateless: from the latest attempt's fees and gas limit, the head it was sent at, and one fee history
 it judges every block since, which also covers skipped heads. A block is valid for the attempt when its base fee
 is at most the attempt's fee cap, and has room when `header.gasLimit × (1 − gasUsedRatio) ≥ G`. First match wins,
@@ -426,13 +430,24 @@ it. Then (strategy §2.2.6):
 A request that supplied its gas limit, and a pending cancellation, are not re-estimated: a cancellation's stall
 rebroadcasts it and its reprices follow the same table, which keeps it live without a bump per interval.
 
-Other rules. A new attempt, by any path, restarts the counts at the newest head seen. When a reorg removes an
-included attempt's receipt (§5), the counts restart at `max(maxSeenHead, its block)`, so the blocks it was included
-in are not misses, and its exact bytes are rebroadcast at once to the endpoint it used (a private relay may have
-dropped a transaction it saw included). When evaluation reads fail for at least `replacementIntervalMs`, the §4
+Other rules. A new attempt, by any path, restarts the counts at the head it was sent at, and that head is not
+decided on again, so at most one fee-changing send follows it. For a reprice planned at an evaluated head, and for
+a cancellation priced from a fresh snapshot (the deadline, shutdown, `Obsolete` or simulated-revert cancellation),
+that is the newest block the pricing snapshot knew of (`txAttempt.pricedHead`, header or fee history). When it is
+unknown, the counts restart at the head of the next fresh evaluation read, which decides nothing: the fallback's
+cached bump (priced without a snapshot, while no read showed the head), a replacement or stall rebroadcast after a
+re-estimate (priced from the snapshot the estimate ran on, which a block may have outrun; a stall rebroadcast
+restarts only the roomy-miss count), and a reorg. Counting from an older head would count blocks the attempt
+could not be in, and could sign a second fee-changing replacement at the head of the first. When a reorg removes
+an included attempt's receipt (§5), the confirmation wait has seen blocks after the inclusion that no evaluation
+read did, so the counts restart at the next fresh read's head (reads below the lost inclusion block are a lagging
+upstream's), and the blocks it was included in are not misses; its exact bytes are rebroadcast at once to the
+endpoint it used (a private relay may have dropped a transaction it saw included). When evaluation reads fail, or
+return a head trailing the next block by more than `maxHeadLagBlocks`, for at least `replacementIntervalMs`, the §4
 cached bump (fresh fees when they can be read, balance-capped) replaces the latest attempt once per replacement
-interval, reason `fallback`, until a read succeeds; the run of failures is logged at Info when it starts and ends
-and at Error after five minutes.
+interval, reason `fallback`, until a fresh read succeeds; every fallback attempt runs the mined-nonce check, which
+is what finds a landed cancellation while the reads are down. The run of failed or stale reads is logged at Info
+when it starts and ends and at Error after five minutes.
 
 The strategy is inconsistent about the stall cadence: its rule table (§2.7) reprices "after 2 such
 rebroadcasts", while its cancellation summary (§2.8) says "a minimal bump after 6" roomy misses. The table is
@@ -698,11 +713,20 @@ policy, next-block estimate and shadow evaluator ship in it):
 - **`Request.MaxFeeWei`.** An optional per-request ceiling on the worst-case total fee (`floor(MaxFeeWei / G)` per
   gas, refused below the floor as `fee_ceiling`), and its solver wiring: UniswapX and LI.FI from their Chainlink
   native price, RFQ from its discount margin converted to native units.
-- **Stall cadence.** The strategy's rule table (§2.7) reprices a stalled attempt after two exact rebroadcasts
-  (at 3, 6 and 9 roomy misses), which is implemented (§4.4); its cancellation summary (§2.8) says "a minimal bump
-  after 6". Confirm the intent with the strategy's owner, and revisit `stallRebroadcastsBeforeReprice` against
-  `rebroadcasts_total{reason="stall"}` and real stall outcomes; a relay that deduplicates a dropped hash is served
-  sooner by one rebroadcast.
+- **Stall cadence (decide before horizon serves RFQ).** The strategy's rule table (§2.7) reprices a stalled
+  attempt after two exact rebroadcasts (at 3, 6 and 9 roomy misses), which is implemented (§4.4); its
+  cancellation summary (§2.8) says "a minimal bump after 6". At 12 s blocks the ninth miss is at least 108 s after
+  the send, beyond an RFQ fill's ~90 s deadline (about 7 blocks), so an RFQ fill whose hash a relay dropped while
+  still deduplicating it never gets the reprice that would reach builders again; the §2.8 reading (about 72 s)
+  would. Confirm the intent with the strategy's owner before enabling horizon for RFQ; if §2.8 is meant, set
+  `stallRebroadcastsBeforeReprice` to 1 and update the `evaluatePending` table rows and the stall lifecycle
+  tests. Either way revisit it against `rebroadcasts_total{reason="stall"}` and real stall outcomes.
+- **Capped horizon reprices repeat every head.** Under horizon a reprice the balance or the request cap blocks is
+  decided again at every new head (validity while the base fee stays high, a stall after its two rebroadcasts,
+  congestion), and each runs its re-estimate, a nonce read, a pinned balance read and the capped exact rebroadcast
+  (every 12 s, against every `replacementIntervalMs` under legacy). "already known" no longer logs an Error there
+  (§4); if the RPC load matters, pace the capped path, for example once per replacement interval or only when the
+  next base fee or the balance changed.
 - **Flip the code default to `horizon`** once horizon shadow first@3 is at least legacy's and 99.5% over 7 days
   including a base fee above 3 gwei, and the pooled real lifecycles pass the success gate.
 - **Deploy charts** (vault-solver-deploy): add the new keys only after an image that knows them is live

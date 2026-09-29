@@ -208,7 +208,9 @@ grandchild automatically) and one `txmanager.replace` per replacement carrying `
 `tx.cancellation`, plus `tx.reprice_reason` (`validity`, `congestion`, `stall`, `gas`, `fallback`) when the
 horizon policy's pending evaluation planned it. Under `fees.policy: horizon` each evaluation tick of a pending
 lifecycle (TXMANAGER-PLAN §4.4) is a `txmanager.evaluate` child carrying `tx.cancellation`, `fee.head` (the fee
-history's newest block), `pending.decision` (`hold`, `reprice`, `stall`, `no_new_head`, `stale_head` or
+history's newest block), `pending.decision` (`hold`, `reprice`, `stall`, `no_new_head`, `stale_head` (the head
+trails the next block by more than `fees.maxHeadLagBlocks`; it counts toward the fallback without an error
+status), `resync` (the counts of an attempt sent at an unknown head start at this read, which decides nothing) or
 `uncertain_rebroadcast`) and, once decided, `pending.reason`, `pending.full_misses` and `pending.roomy_misses`; a
 failed fee read ends it with an error status. Its snapshot read nests under it, and so does a re-estimate it starts,
 which runs past its end. Receipt polls are ordinary RPC child spans. Attributes: `solver` (from

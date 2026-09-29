@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/go-errors/errors"
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/symbioticfi/vault-solver/internal/chain"
@@ -19,8 +20,16 @@ import (
 // the tick: a revert cancels the lifecycle once the mined nonce is known to be free, a stall estimate above
 // the gas limit replaces the gas limit, and otherwise a stall rebroadcasts the exact bytes. A pending
 // cancellation follows the same rules without re-estimation. A reorg that removes an inclusion restarts the
-// miss count and rebroadcasts the included bytes at once. When the evaluation reads fail for
-// replacementIntervalMs, the legacy cached bump takes over, once per replacement interval, until they recover.
+// miss count and rebroadcasts the included bytes at once. When the evaluation reads fail, or answer with a
+// head trailing the next block by more than fees.maxHeadLagBlocks, for replacementIntervalMs, the legacy
+// cached bump takes over, once per replacement interval, until a fresh read succeeds.
+//
+// Miss counts start at the head an attempt was sent at: the evaluated head for a reprice planned there, the
+// head of the fee snapshot a cancellation was priced from, and otherwise, when that head is unknown (the
+// fallback's cached bump, a replacement or stall rebroadcast after a re-estimate the head may have outrun, a
+// reorg), the head of the next fresh read, at which nothing is decided. Counting from a head older than the
+// send would count blocks the attempt could not be in, and could sign a second fee-changing replacement at
+// the head of the first.
 //
 // Goroutine model: a pendingEvaluator belongs to its lifecycle goroutine, which calls its methods from the
 // waitForPendingTransaction select loop only. At most one re-estimate runs at a time, on its own goroutine;
@@ -41,7 +50,8 @@ const cancelReasonSimulatedRevert = "simulated_revert"
 const (
 	evaluationUncertain = "uncertain_rebroadcast" // an ambiguous broadcast got its one exact retry
 	evaluationNoNewHead = "no_new_head"           // the head did not advance, or a lagging upstream went back
-	evaluationStaleHead = "stale_head"            // the new head trails the real next block too far to judge
+	evaluationStaleHead = "stale_head"            // the head trails the real next block too far to judge
+	evaluationResync    = "resync"                // the counts of an attempt sent at an unknown head start here
 )
 
 // pendingEvaluator is the horizon policy's state of one pending lifecycle.
@@ -50,9 +60,10 @@ type pendingEvaluator struct {
 	pending *pendingTransaction
 	actions pendingActions
 
-	// maxSeenHead is the highest head (header or fee history) an evaluation read reported; a read below it
-	// comes from a lagging upstream and is ignored. evaluatedHead is the newest fee-history block decided
-	// on, so each head is decided once and at most one fee-changing send follows it.
+	// maxSeenHead is the highest head (header or fee history) an evaluation read, or the fee snapshot an
+	// attempt was priced from, reported; a read below it comes from a lagging upstream and is ignored.
+	// evaluatedHead is the newest fee-history block decided on, or at which the latest attempt's counts
+	// started, so each head is decided once and at most one fee-changing send follows it.
 	maxSeenHead   uint64
 	evaluatedHead uint64
 	// sentAt is the head the latest attempt was sent at, stallBase the head since which its roomy misses
@@ -62,12 +73,20 @@ type pendingEvaluator struct {
 	stallBase    uint64
 	rebroadcasts int
 	attempts     int
+	// unanchored is set while the latest attempt was sent at a head the evaluator does not know, and
+	// stallUnanchored while its latest stall rebroadcast was: the next fresh read restarts the counts
+	// concerned at its own head (sentAt and stallBase, or stallBase alone). Until then both are provisionally
+	// maxSeenHead.
+	unanchored      bool
+	stallUnanchored bool
 
-	// reads is the failure streak of the evaluation reads, failingSince when the current run of failures
-	// began (zero after a successful read), and lastFallback when the fallback last replaced.
-	reads        readStreak
-	failingSince time.Time
-	lastFallback time.Time
+	// reads is the failure streak of the evaluation reads (a stale head counts as a failure), failingSince
+	// when the current run of failures began (zero after a fresh read), and lastFallback when the fallback
+	// last replaced. lastCancelRetry is when the tick last retried an unsigned first cancellation.
+	reads           readStreak
+	failingSince    time.Time
+	lastFallback    time.Time
+	lastCancelRetry time.Time
 
 	// estimate is the re-estimate in flight, or nil; no evaluation runs while it is set.
 	estimate *pendingEstimate
@@ -129,16 +148,29 @@ func (ev *pendingEvaluator) tick(ctx context.Context, cancelling bool) {
 		return
 	}
 	if cancelling && !hasCancellationAttempt(ev.pending.attempts) {
-		ev.actions.replace(true, nil)
+		ev.retryCancellation(time.Now())
 		return
 	}
 	// The span carries a failed read's error; the read streak logs it.
 	_ = ev.evaluate(ctx, cancelling)
 }
 
+// retryCancellation signs the first cancellation again after it failed, at the first tick and then at most
+// once per replacement interval, the legacy policy's cadence: one that cannot be priced or sent usually
+// fails the same way at the next tick, and each retry repeats its reads and its Error log.
+func (ev *pendingEvaluator) retryCancellation(now time.Time) {
+	if !ev.lastCancelRetry.IsZero() && now.Sub(ev.lastCancelRetry) < ev.m.cfg.ReplacementInterval {
+		return
+	}
+	ev.lastCancelRetry = now
+	ev.actions.replace(true, nil)
+}
+
 // evaluate is one evaluation tick, the span txmanager.evaluate. An ambiguous broadcast first gets its one
-// exact retry, as on the legacy path. Then one fee snapshot is read; a failed read counts toward the
-// fallback. At a new, fresh head the latest attempt is decided on and acted upon.
+// exact retry, as on the legacy path. Then one fee snapshot is read; a failed read, or one whose head
+// trails the next block by more than fees.maxHeadLagBlocks, counts toward the fallback. A fresh read
+// restarts the counts of an attempt sent at an unknown head, and otherwise, at a new head, the latest
+// attempt is decided on and acted upon.
 func (ev *pendingEvaluator) evaluate(ctx context.Context, cancelling bool) (err error) {
 	ctx, end := tracer.Start(ctx, "txmanager.evaluate", attribute.Bool("tx.cancellation", cancelling))
 	defer func() { end(err) }()
@@ -158,24 +190,47 @@ func (ev *pendingEvaluator) evaluate(ctx context.Context, cancelling bool) (err 
 		ev.readFailed(ctx, cancelling, now, err)
 		return err
 	}
-	ev.readRecovered(ctx)
 	head := snapshot.historyHead
 	seen := max(head, headerNumber(snapshot.header))
 	observability.SetAttributes(ctx, attribute.Int64("fee.head", int64(head)))
-	if seen < ev.maxSeenHead || head <= ev.evaluatedHead {
+	lag := snapshot.lag(time.Now(), m.cfg.Fees.BlockTime)
+	if maxLag := m.maxHeadLagBlocks(); lag > maxLag {
+		// Neither misses nor prices can be judged from a head this far behind; wait for a fresh one, as a new
+		// send does. An upstream stuck on a head still answers every read, so a stale one counts toward the
+		// fallback like a failed read: without it the lifecycle would neither reprice nor recheck its nonce.
+		ev.maxSeenHead = max(ev.maxSeenHead, seen)
+		observability.SetAttributes(ctx, attribute.String("pending.decision", evaluationStaleHead))
+		ev.readFailed(ctx, cancelling, now, errors.Errorf(
+			"%w: head %d trails the next block by %d blocks, more than fees.maxHeadLagBlocks %d", ErrStaleHead, seen, lag, maxLag,
+		))
+		return nil
+	}
+	ev.readRecovered(ctx)
+	if seen < ev.maxSeenHead {
+		// A lagging upstream answered.
 		observability.SetAttributes(ctx, attribute.String("pending.decision", evaluationNoNewHead))
 		return nil
 	}
-	ev.maxSeenHead, ev.evaluatedHead = seen, head
-	lag := snapshot.lag(time.Now(), m.cfg.Fees.BlockTime)
-	if lag > m.maxHeadLagBlocks() {
-		// Misses counted against a head this far behind are real, but pricing from it is not: wait for a
-		// fresh one, as a new send does.
-		observability.SetAttributes(ctx, attribute.String("pending.decision", evaluationStaleHead))
-		observability.Log(ctx).V(1).Info("pending transaction evaluation head is stale; holding",
-			"label", pending.req.Label, "nonce", pending.nonce, "head", head, "headLagBlocks", lag)
+	ev.maxSeenHead = seen
+	if ev.unanchored {
+		// The latest attempt was sent at a head no fresh read had shown: its counts start here, and nothing
+		// is decided at this head, which may be the one it was signed at.
+		ev.evaluatedHead = max(ev.evaluatedHead, head)
+		ev.sentAt, ev.stallBase = seen, seen
+		ev.unanchored, ev.stallUnanchored = false, false
+		observability.SetAttributes(ctx, attribute.String("pending.decision", evaluationResync))
+		observability.Log(ctx).V(1).Info("pending transaction miss counts restarted",
+			"label", pending.req.Label, "nonce", pending.nonce, "cancellation", cancelling, "head", seen)
 		return nil
 	}
+	if ev.stallUnanchored {
+		ev.stallBase, ev.stallUnanchored = seen, false
+	}
+	if head <= ev.evaluatedHead {
+		observability.SetAttributes(ctx, attribute.String("pending.decision", evaluationNoNewHead))
+		return nil
+	}
+	ev.evaluatedHead = head
 	gas := pending.gas
 	if cancelling {
 		gas = cancellationGasLimit
@@ -216,7 +271,7 @@ func (ev *pendingEvaluator) respond(ctx context.Context, cancelling bool, decisi
 		return
 	}
 	if decision.action == pendingStall {
-		ev.stallRebroadcast(ctx, cancelling)
+		ev.stallRebroadcast(ctx, cancelling, true)
 		return
 	}
 	ev.actions.replace(cancelling, &replacementPlan{snapshot: snapshot, reason: decision.reason, cancellation: cancelling})
@@ -240,7 +295,8 @@ func (ev *pendingEvaluator) startEstimate(ctx context.Context, decision pendingD
 // lifecycle once the mined nonce is known to be free; a stall whose estimate exceeds the gas limit signs a
 // gas-limit replacement at bumped fees; any other stall rebroadcasts the exact bytes; and a reprice signs at
 // max(gasLimit, estimate + headroom). An estimate that failed otherwise tells nothing: a stall rebroadcasts
-// and a reprice keeps the gas limit. A cancellation that began meanwhile drops the result.
+// and a reprice keeps the gas limit. A cancellation that began meanwhile drops the result. The head may have
+// advanced while the estimate ran, so the counts of what it sends restart at the next fresh read.
 func (ev *pendingEvaluator) finishEstimate(ctx context.Context, cancelling bool) {
 	estimate := ev.estimate
 	if estimate == nil {
@@ -267,22 +323,33 @@ func (ev *pendingEvaluator) finishEstimate(ctx context.Context, cancelling bool)
 		observability.Log(ctx).Info("pending transaction re-estimate unavailable; keeping its gas limit",
 			append(fields, "error", err.Error())...)
 		if stall {
-			ev.stallRebroadcast(ctx, false)
+			ev.stallRebroadcast(ctx, false, false)
 			return
 		}
-		ev.actions.replace(false, &replacementPlan{snapshot: estimate.snapshot, reason: estimate.decision.reason})
+		ev.replaceAfterEstimate(&replacementPlan{snapshot: estimate.snapshot, reason: estimate.decision.reason})
 	case stall && estimate.result.gas > pending.gas:
 		// Its whole headroom is used up, which estimate noise (at most about 1%) does not explain: a fill on
 		// the same vault landed first. Without more gas the call can only run out of it.
 		observability.Log(ctx).Info("pending transaction re-estimate exceeds its gas limit; replacing the gas limit",
 			append(fields, "estimate", estimate.result.gas, "newGasLimit", limit)...)
-		ev.actions.replace(false, &replacementPlan{snapshot: estimate.snapshot, gas: limit, reason: repriceGas})
+		ev.replaceAfterEstimate(&replacementPlan{snapshot: estimate.snapshot, gas: limit, reason: repriceGas})
 	case stall:
-		ev.stallRebroadcast(ctx, false)
+		ev.stallRebroadcast(ctx, false, false)
 	default:
-		ev.actions.replace(false, &replacementPlan{
+		ev.replaceAfterEstimate(&replacementPlan{
 			snapshot: estimate.snapshot, gas: max(pending.gas, limit), reason: estimate.decision.reason,
 		})
+	}
+}
+
+// replaceAfterEstimate signs the replacement a finished re-estimate decided, priced from the snapshot the
+// estimate ran on. The head may have passed that snapshot meanwhile, so a new attempt's counts restart at the
+// next fresh read rather than at the snapshot's head.
+func (ev *pendingEvaluator) replaceAfterEstimate(plan *replacementPlan) {
+	ev.actions.replace(false, plan)
+	if count := len(ev.pending.attempts); count != ev.attempts {
+		ev.attempts, ev.rebroadcasts = count, 0
+		ev.unanchor()
 	}
 }
 
@@ -307,9 +374,10 @@ func (ev *pendingEvaluator) simulatedRevert(ctx context.Context, estimate *pendi
 }
 
 // stallRebroadcast sends the latest attempt's exact bytes again ("already known" counts as sent) and
-// restarts the roomy-miss count from the current head. A call is not rebroadcast once its deadline
+// restarts the roomy-miss count from the current head: the evaluated one when anchored, and otherwise, after
+// a re-estimate the head may have outrun, the next fresh read's. A call is not rebroadcast once its deadline
 // cancellation is due or too near for the rebroadcast to matter (hasExactRebroadcastSlack).
-func (ev *pendingEvaluator) stallRebroadcast(ctx context.Context, cancelling bool) {
+func (ev *pendingEvaluator) stallRebroadcast(ctx context.Context, cancelling, anchored bool) {
 	m, pending := ev.m, ev.pending
 	if now := time.Now(); !cancelling && (pending.cancellationDue(now) || !m.hasExactRebroadcastSlack(pending, now)) {
 		observability.Log(ctx).V(1).Info("pending transaction stalled near its cancellation deadline; not rebroadcasting",
@@ -325,19 +393,20 @@ func (ev *pendingEvaluator) stallRebroadcast(ctx context.Context, cancelling boo
 	}
 	if m.rebroadcastExact(ctx, pending, attempt, rebroadcastStall) {
 		ev.rebroadcasts++
-		ev.stallBase = ev.maxSeenHead
+		ev.stallBase, ev.stallUnanchored = ev.maxSeenHead, !anchored
 	}
 }
 
 // reorged handles a reorg that removed an attempt's inclusion (strategy §2.7): the blocks it was included
-// in are not misses, so the counts restart from the current head, and its exact bytes go straight back to
-// the endpoint it used, since a private relay may have dropped a transaction it saw included. The mined
-// nonce is checked first, as before every rebroadcast.
+// in are not misses, and its exact bytes go straight back to the endpoint it used, since a private relay may
+// have dropped a transaction it saw included. The confirmation wait saw blocks after the inclusion that no
+// evaluation read did, so the counts restart at the next fresh read's head, and a read below the lost
+// inclusion is a lagging upstream's. The mined nonce is checked first, as before every rebroadcast.
 func (ev *pendingEvaluator) reorged(ctx context.Context, inclusion reorgedInclusion) {
 	ev.abandonEstimate()
 	ev.maxSeenHead = max(ev.maxSeenHead, inclusion.block)
-	ev.attempts = len(ev.pending.attempts)
-	ev.sentAt, ev.stallBase, ev.rebroadcasts = ev.maxSeenHead, ev.maxSeenHead, 0
+	ev.attempts, ev.rebroadcasts = len(ev.pending.attempts), 0
+	ev.unanchor()
 	if inclusion.attempt.tx == nil {
 		return
 	}
@@ -358,9 +427,9 @@ func (ev *pendingEvaluator) read(ctx context.Context) (*feeSnapshot, error) {
 	return m.readFeeSnapshot(ctx, min(blocks, maxFeeHistoryBlocks))
 }
 
-// readFailed records a failed evaluation read. Once reads have failed for replacementIntervalMs, the legacy
-// cached bump, which is also balance-capped, replaces the latest attempt once per replacement interval
-// until they recover (strategy §2.7 fallback).
+// readFailed records a failed or stale evaluation read. Once reads have failed for replacementIntervalMs,
+// the legacy cached bump, which is also balance-capped, replaces the latest attempt once per replacement
+// interval until a fresh read succeeds (strategy §2.7 fallback).
 func (ev *pendingEvaluator) readFailed(ctx context.Context, cancelling bool, now time.Time, err error) {
 	pending := ev.pending
 	ev.reads.failed(observability.Log(ctx), err, "pending transaction evaluation reads unavailable",
@@ -376,19 +445,39 @@ func (ev *pendingEvaluator) readFailed(ctx context.Context, cancelling bool, now
 	ev.actions.replace(cancelling, &replacementPlan{reason: repriceFallback, cancellation: cancelling})
 }
 
+// readRecovered ends a run of failed or stale evaluation reads at a fresh read.
 func (ev *pendingEvaluator) readRecovered(ctx context.Context) {
 	ev.reads.recovered(observability.Log(ctx), "pending transaction evaluation reads recovered",
 		"label", ev.pending.req.Label, "nonce", ev.pending.nonce)
 	ev.failingSince = time.Time{}
 }
 
-// syncAttempts restarts the counts when an attempt was signed since the last tick, by any path: it was sent
-// at the newest head seen.
+// syncAttempts restarts the counts when an attempt was signed since the last tick, by any path: at the head
+// its fee snapshot knew of (txAttempt.pricedHead) when it was priced from a fresh one, the evaluation's for
+// a reprice planned at a head, and otherwise at the next fresh read. The head is then not decided on again,
+// so no second fee-changing replacement follows at the head that signed one.
 func (ev *pendingEvaluator) syncAttempts() {
-	if count := len(ev.pending.attempts); count != ev.attempts {
-		ev.attempts = count
-		ev.sentAt, ev.stallBase, ev.rebroadcasts = ev.maxSeenHead, ev.maxSeenHead, 0
+	count := len(ev.pending.attempts)
+	if count == ev.attempts {
+		return
 	}
+	ev.attempts, ev.rebroadcasts = count, 0
+	head := ev.pending.attempts[count-1].pricedHead
+	if head == 0 {
+		ev.unanchor()
+		return
+	}
+	ev.maxSeenHead = max(ev.maxSeenHead, head)
+	ev.evaluatedHead = max(ev.evaluatedHead, head)
+	ev.sentAt, ev.stallBase = ev.maxSeenHead, ev.maxSeenHead
+	ev.unanchored, ev.stallUnanchored = false, false
+}
+
+// unanchor defers the start of the latest attempt's counts to the next fresh read (see evaluate); until then
+// they provisionally start at the newest head seen, which keeps the evaluation's fee history short.
+func (ev *pendingEvaluator) unanchor() {
+	ev.sentAt, ev.stallBase = ev.maxSeenHead, ev.maxSeenHead
+	ev.unanchored, ev.stallUnanchored = true, false
 }
 
 // abandonEstimate cancels the re-estimate in flight, if any, and waits for its goroutine. An abandoned

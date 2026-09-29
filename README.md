@@ -386,7 +386,8 @@ Configure `maxFeeGwei` for every transaction-sending process. It also caps cance
 priority-fee floor, or selects fee-history pricing when zero. `replacementIntervalMs`, `pendingTimeoutMs`,
 `broadcastTimeoutMs` and `shutdownTimeoutMs` control replacement, cancellation and shutdown bounds; under
 `fees.policy: horizon` pending attempts follow blocks instead, and `replacementIntervalMs` only paces the
-fallback when the fee reads fail and sizes the shutdown budget.
+fallback when the fee reads fail or return a stale head and the retries of a failed first cancellation, and
+sizes the shutdown budget.
 The manager remains alive while solvers drain accepted work; orchestrator SIGTERM grace must cover both
 solver preparation/drain and manager shutdown. A timeout does not guarantee that a signed call cannot land.
 
@@ -470,7 +471,8 @@ limit replaces the gas limit at bumped fees (`gas`), and otherwise the exact sig
 two rebroadcasts the next stall reprices (`stall`). A pending cancellation follows the same rules without the
 re-estimate, and a reorg that removes an inclusion rebroadcasts it at once. Replacements stay capped by the
 request cap and the balance guard (the latest attempt is rebroadcast unchanged when they cannot fund the bump).
-If the fee reads fail for `replacementIntervalMs`, the legacy timed bump takes over until they recover.
+If the fee reads fail, or keep returning a head more than `fees.maxHeadLagBlocks` behind (an upstream stuck on
+one block), for `replacementIntervalMs`, the legacy timed bump takes over until a fresh read succeeds.
 `solver_bot_txmanager_repricings_total{reason}` and `solver_bot_txmanager_rebroadcasts_total{reason}` count
 these; repeated `stall` or any `gas` repricing is worth an alert (silent drops, or fills on the same vault
 using up the gas headroom). With horizon, the read budgets follow the block time (`min(1s, blockTime/4)` for fee
