@@ -38,20 +38,33 @@ type executionTestReader struct {
 	fillSnapshotFn   func([]liquidlane.Route, *big.Int) fillSnapshot
 	now              time.Time
 	latestBlockReads int
-	nonceUsed        bool
-	nonceReads       []permit2NonceRead
 }
 
-type permit2NonceRead struct {
-	permit2, swapper common.Address
-	nonce            *big.Int
+// statusOrders answers the fill Obsolete hook's order lookups from a fixed status per hash.
+type statusOrders struct {
+	orderPoller
+
+	statuses map[common.Hash]string
+	err      error
+	lookups  [][]common.Hash
 }
 
-func (r *executionTestReader) orderNonceUsed(
-	_ context.Context, permit2, swapper common.Address, nonce *big.Int,
-) (bool, error) {
-	r.nonceReads = append(r.nonceReads, permit2NonceRead{permit2: permit2, swapper: swapper, nonce: nonce})
-	return r.nonceUsed, nil
+func (o *statusOrders) ordersByHash(
+	_ context.Context, _ int64, hashes []common.Hash,
+) (map[common.Hash]orderTerminal, error) {
+	o.lookups = append(o.lookups, append([]common.Hash(nil), hashes...))
+	if o.err != nil {
+		return nil, o.err
+	}
+	terminals := make(map[common.Hash]orderTerminal, len(hashes))
+	for _, hash := range hashes {
+		status, ok := o.statuses[hash]
+		if !ok {
+			return nil, errors.Errorf("GET /orders by hash: missing order %s", hash.Hex())
+		}
+		terminals[hash] = orderTerminal{Status: status}
+	}
+	return terminals, nil
 }
 
 type failingListener struct{ err error }
@@ -827,17 +840,26 @@ func TestCompletePendingFillRecordsFailureOutcome(t *testing.T) {
 	)
 }
 
-func TestStartFillChecksPermit2NonceForObsolescence(t *testing.T) {
-	for _, withPermit2 := range []bool{true, false} {
-		t.Run(map[bool]string{true: "permit2 resolved", false: "permit2 unknown"}[withPermit2], func(t *testing.T) {
+func TestStartFillObsoleteHookReadsOrderStatus(t *testing.T) {
+	for _, tc := range []struct {
+		status    string
+		lookupErr error
+		obsolete  bool
+		wantErr   bool
+	}{
+		{status: orderStatusOpen},
+		{status: orderStatusFilled, obsolete: true},
+		{status: orderStatusCancelled, obsolete: true},
+		{status: orderStatusExpired, obsolete: true},
+		{status: orderStatusError, obsolete: true},
+		{status: orderStatusInsufficientFunds, obsolete: true},
+		{status: "renamed-status", wantErr: true},
+		{status: "api unavailable", lookupErr: errors.New("GET /orders by hash: 503"), wantErr: true},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
 			fixture := newDirectExecutionFixture(t)
-			fixture.order.Swapper = common.HexToAddress("0x6666666666666666666666666666666666666666")
-			fixture.order.Nonce = big.NewInt(0x1_2345)
-			if withPermit2 {
-				fixture.solver.permit2 = startupPermit2
-			}
-			reader := fixture.solver.reader.(*executionTestReader)
-			reader.nonceUsed = true
+			orders := &statusOrders{statuses: map[common.Hash]string{fixture.order.Hash: tc.status}, err: tc.lookupErr}
+			fixture.solver.orders = orders
 
 			if _, err := fixture.solver.startFill(
 				t.Context(), []liquidlane.Route{fixture.route}, fixture.order, fixture.now, fixture.now,
@@ -845,26 +867,29 @@ func TestStartFillChecksPermit2NonceForObsolescence(t *testing.T) {
 				t.Fatalf("startFill: %v", err)
 			}
 			obsolete := fixture.txm.reqs[0].Obsolete
-			if !withPermit2 {
-				if obsolete != nil {
-					t.Fatal("fill without a resolved permit2 has an Obsolete hook")
-				}
-				return
-			}
 			if obsolete == nil {
 				t.Fatal("fill request has no Obsolete hook")
 			}
-			if used, err := obsolete(t.Context()); err != nil || !used {
-				t.Fatalf("Obsolete() = %v, %v; want the spent Permit2 nonce", used, err)
+			got, err := obsolete(t.Context())
+			if (err != nil) != tc.wantErr || got != tc.obsolete {
+				t.Fatalf("Obsolete() = %v, %v; want obsolete %v, error %v", got, err, tc.obsolete, tc.wantErr)
 			}
-			if len(reader.nonceReads) != 1 {
-				t.Fatalf("nonce reads = %d, want 1", len(reader.nonceReads))
-			}
-			got := reader.nonceReads[0]
-			if got.permit2 != startupPermit2 || got.swapper != fixture.order.Swapper || got.nonce.Cmp(fixture.order.Nonce) != 0 {
-				t.Fatalf("nonce read = %+v, want the order's swapper and nonce on the resolved permit2", got)
+			if len(orders.lookups) != 1 || len(orders.lookups[0]) != 1 || orders.lookups[0][0] != fixture.order.Hash {
+				t.Fatalf("order lookups = %v, want one lookup of %s", orders.lookups, fixture.order.Hash.Hex())
 			}
 		})
+	}
+}
+
+func TestStartFillWithoutOrderClientLeavesObsoleteUnset(t *testing.T) {
+	fixture := newDirectExecutionFixture(t)
+	if _, err := fixture.solver.startFill(
+		t.Context(), []liquidlane.Route{fixture.route}, fixture.order, fixture.now, fixture.now,
+	); err != nil {
+		t.Fatalf("startFill: %v", err)
+	}
+	if fixture.txm.reqs[0].Obsolete != nil {
+		t.Fatal("fill without an order client has an Obsolete hook")
 	}
 }
 

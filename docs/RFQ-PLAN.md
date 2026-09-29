@@ -69,7 +69,7 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   process collectors, so `/metrics` carries CPU,
   memory, goroutines, GC, and FDs. Successful receipts record `fill/success` and token-native amounts;
   transaction failures and pre-admission rejections record `fill/failure` and `fill/not_admitted` without
-  amounts, and a fill retired because the order nonce was already spent records `fill/obsolete`. RFQ win/fill workflow events, backlog gauges, and the txmanager lifecycle make
+  amounts, and a fill retired because the backend reported the order no longer open records `fill/obsolete`. RFQ win/fill workflow events, backlog gauges, and the txmanager lifecycle make
   awarded-but-unfinished orders and the quote→fill funnel visible without inventing realized PnL. The
   canonical names, labels, and meanings are in the
   [README metrics table](../README.md#metrics).
@@ -92,10 +92,12 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   and consumes the manager result. Each request uses the earliest signed-order or selected
   discount/protocol deadline, translated from an observed chain timestamp to wall time after planning, so it
   expires while waiting for admission and switches to same-nonce cancellation before dead calldata can hold
-  the shared nonce lane. With `reactor` configured, the request also carries an `Obsolete` check that reads
-  `Reactor.isUsedNonce(swapper, nonce)`. Orders are bound to our executor, so a spent nonce means the swapper
-  invalidated the order or an earlier fill of ours whose inclusion was unknown already landed. The manager then
-  drops the unsigned call or cancels the pending one early instead of holding the lane until the deadline.
+  the shared nonce lane. The request also carries an `Obsolete` check that reads the order's backend view
+  (`getOrder`, the source `reconcileTerminalStatus` already uses). `open` keeps the fill alive; `filled`,
+  `expired`, `cancelled`, `error`, `unverified` and `insufficient-funds` mean it can no longer succeed, so the
+  manager drops the unsigned call or cancels the pending one early instead of holding the lane until the
+  deadline. The backend status covers what an on-chain nonce read cannot (an unfunded swapper, backend-side
+  cancellation); a read error or an unknown status preserves the lifecycle.
 - **Retries distinguish unsent work from transactions.** Failed pre-submission work with no recorded hash
   may be retried while the order is open. A successful cancellation that satisfies txmanager's confirmation
   policy may enter `retry_waiting`, retaining its hash until one `pollIntervalMs` interval elapses and a
@@ -275,7 +277,7 @@ solvers:
       backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET # env var NAME (secret never in config)
       listenAddr: ":42073"                              # quote HTTP server (poll-only; no /notify)
       executor:             "0x…"                       # Executor (bot EOA is an authorized caller — setCallers allowlist)
-      reactor:              "0x…"                       # Reactor; its isUsedNonce lets a pending fill cancel early
+      reactor:              "0x…"
       pollIntervalMs: 3000
       orderLimit: 20
       maxCancellationRetries: 3                         # additional attempts; 0 disables

@@ -50,8 +50,7 @@ type Config struct {
 	// Executor is the Executor contract (the on-chain filler identity; the bot EOA must be an authorized
 	// caller — added to the Executor's callers allowlist via setCallers by its owner).
 	Executor common.Address
-	// Reactor is the RFQ Reactor; optional. When set, a pending fill is cancelled as soon as the
-	// Reactor reports the order nonce spent (filled or invalidated by the swapper).
+	// Reactor is the RFQ Reactor (used at execution time); optional.
 	Reactor common.Address
 	// LiquidityLens is the optional FrontendLiquidityLens address. When set, LiquidLane swappable headroom
 	// is read from the lens's cross-adapter deallocation-cascade estimate instead of each adapter's own

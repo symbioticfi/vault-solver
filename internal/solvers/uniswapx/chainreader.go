@@ -5,26 +5,19 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
 	uxexecutor "github.com/symbioticfi/vault-solver/api/bindings/uniswapx/executor"
-	uxpermit2 "github.com/symbioticfi/vault-solver/api/bindings/uniswapx/permit2"
-	uxreactor "github.com/symbioticfi/vault-solver/api/bindings/uniswapx/reactor"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	liquidsnapshot "github.com/symbioticfi/vault-solver/internal/liquidlane/snapshot"
 )
 
-var (
-	uniswapXExecutor = uxexecutor.NewLiquidLaneUniswapXExecutor()
-	uniswapXReactor  = uxreactor.NewV2DutchOrderReactor()
-	permit2Binding   = uxpermit2.NewPermit2()
-)
+var uniswapXExecutor = uxexecutor.NewLiquidLaneUniswapXExecutor()
 
 const maxExecutorCallers = 256
 
@@ -148,53 +141,6 @@ func (r *reader) physicalFillQuotes(
 	amountIn *big.Int,
 ) ([]liquidlane.FillQuote, error) {
 	return r.snapshots.ReadFillQuotes(ctx, routes, tokenIn, amountIn)
-}
-
-// reactorPermit2 reads the Permit2 contract the reactor spends order nonces through.
-func (r *reader) reactorPermit2(ctx context.Context, reactor common.Address) (common.Address, error) {
-	ret, err := r.chain.CallContract(ctx, ethereum.CallMsg{To: &reactor, Data: uniswapXReactor.PackPermit2()}, nil)
-	if err != nil {
-		return common.Address{}, errors.Errorf("call reactor permit2: %w", err)
-	}
-	permit2, err := uniswapXReactor.UnpackPermit2(ret)
-	if err != nil {
-		return common.Address{}, errors.Errorf("unpack reactor permit2: %w", err)
-	}
-	if permit2 == (common.Address{}) {
-		return common.Address{}, errors.Errorf("reactor %s reports a zero permit2", reactor.Hex())
-	}
-	return permit2, nil
-}
-
-// orderNonceUsed reports whether Permit2 has spent the swapper's unordered order nonce. The reactor
-// spends it on every fill and the swapper can spend it to cancel, so a set bit means no further fill
-// of that order can succeed.
-func (r *reader) orderNonceUsed(
-	ctx context.Context, permit2, swapper common.Address, nonce *big.Int,
-) (bool, error) {
-	if nonce == nil || nonce.Sign() < 0 {
-		return false, errors.New("order nonce must be a non-negative integer")
-	}
-	word, bit := permit2NonceBit(nonce)
-	data, err := permit2Binding.TryPackNonceBitmap(swapper, word)
-	if err != nil {
-		return false, errors.Errorf("pack nonceBitmap: %w", err)
-	}
-	ret, err := r.chain.CallContract(ctx, ethereum.CallMsg{To: &permit2, Data: data}, nil)
-	if err != nil {
-		return false, errors.Errorf("call nonceBitmap: %w", err)
-	}
-	bitmap, err := permit2Binding.UnpackNonceBitmap(ret)
-	if err != nil {
-		return false, errors.Errorf("unpack nonceBitmap: %w", err)
-	}
-	return bitmap.Bit(bit) == 1, nil
-}
-
-// permit2NonceBit locates an unordered nonce in Permit2's bitmap the way SignatureTransfer's
-// bitmapPositions does: word nonce >> 8, bit nonce & 0xff.
-func permit2NonceBit(nonce *big.Int) (word *big.Int, bit int) {
-	return new(big.Int).Rsh(nonce, 8), int(new(big.Int).And(nonce, big.NewInt(0xff)).Int64())
 }
 
 func (r *reader) latestBlockTime(ctx context.Context) (time.Time, error) {

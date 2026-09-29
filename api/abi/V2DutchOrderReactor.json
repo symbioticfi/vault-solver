@@ -1,9 +1,0 @@
-[
-  {
-    "type": "function",
-    "name": "permit2",
-    "stateMutability": "view",
-    "inputs": [],
-    "outputs": [{ "name": "", "type": "address", "internalType": "contract IPermit2" }]
-  }
-]

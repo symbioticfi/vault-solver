@@ -81,10 +81,6 @@ type resolvedOrder struct {
 	AmountOut      *big.Int
 	Deadline       uint32
 	ExclusiveUntil uint64
-	// Swapper and Nonce identify the Permit2 nonce the reactor spends when the order is filled or
-	// the swapper cancels it, which is how a pending fill learns the order is gone.
-	Swapper common.Address
-	Nonce   *big.Int
 	// span is the uniswapx.order.track span the poll accepted this order under. It rides through the
 	// orders channel so the fill this order produces continues that trace (spec §9.4).
 	span trace.SpanContext
@@ -345,7 +341,6 @@ func parseAndResolveV2Order(
 		Source: source, Executor: cfg.Executor,
 		TokenIn: order.BaseInput.Token, TokenOut: tokenOut,
 		AmountIn: amountIn, AmountOut: amountOut, Deadline: deadline, ExclusiveUntil: start,
-		Swapper: order.Info.Swapper, Nonce: new(big.Int).Set(order.Info.Nonce),
 	}, nil
 }
 

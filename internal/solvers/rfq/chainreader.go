@@ -6,12 +6,10 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
-	rfqreactor "github.com/symbioticfi/vault-solver/api/bindings/rfq/reactor"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
@@ -37,29 +35,6 @@ func (r *reader) latestBlock(ctx context.Context) (uint64, time.Time, error) {
 		return 0, time.Time{}, errors.Errorf("latest block header: %w", err)
 	}
 	return header.Number.Uint64(), time.Unix(int64(header.Time), 0), nil
-}
-
-var reactorBinding = rfqreactor.NewReactor()
-
-// orderNonceUsed reports whether the Reactor has spent the swapper's order nonce. A spent nonce means
-// the order was filled (possibly by our own pending fill, which the txmanager checks first) or the
-// swapper invalidated it, so no further fill of that order can succeed.
-func (r *reader) orderNonceUsed(
-	ctx context.Context, reactor, swapper common.Address, nonce *big.Int,
-) (bool, error) {
-	data, err := reactorBinding.TryPackIsUsedNonce(swapper, nonce)
-	if err != nil {
-		return false, errors.Errorf("pack isUsedNonce: %w", err)
-	}
-	ret, err := r.chain.CallContract(ctx, ethereum.CallMsg{To: &reactor, Data: data}, nil)
-	if err != nil {
-		return false, errors.Errorf("call isUsedNonce: %w", err)
-	}
-	used, err := reactorBinding.UnpackIsUsedNonce(ret)
-	if err != nil {
-		return false, errors.Errorf("unpack isUsedNonce: %w", err)
-	}
-	return used, nil
 }
 
 // recoveryVault is one configured LiquidLane adapter plus the Vault and Asset derived from it. Config

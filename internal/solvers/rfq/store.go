@@ -25,8 +25,8 @@ const (
 	statusExpired      orderStatus = "expired"
 	statusFailed       orderStatus = "failed"
 	statusRetryWaiting orderStatus = "retry_waiting"
-	// statusObsolete is terminal: the Reactor spent the order nonce before our fill could land, so the
-	// order is never re-armed, even while the backend still lists it as open.
+	// statusObsolete is terminal: the backend reported the order no longer fillable while our fill was
+	// being sent, so it is never re-armed, even if a stale open-order listing still returns it.
 	statusObsolete orderStatus = "obsolete"
 )
 

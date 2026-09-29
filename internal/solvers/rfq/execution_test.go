@@ -30,6 +30,7 @@ type fakeBackend struct {
 	resolveCalls int
 	listCalls    int
 	orderListErr error
+	orderErr     error
 }
 
 func (f *fakeBackend) listOpenOrders(context.Context, string, int) ([]backendOrder, error) {
@@ -38,7 +39,9 @@ func (f *fakeBackend) listOpenOrders(context.Context, string, int) ([]backendOrd
 func (f *fakeBackend) getExecutableOrder(context.Context, string, string) (*backendOrder, error) {
 	return f.executable, nil
 }
-func (f *fakeBackend) getOrder(context.Context, string) (*backendOrder, error) { return f.order, nil }
+func (f *fakeBackend) getOrder(context.Context, string) (*backendOrder, error) {
+	return f.order, f.orderErr
+}
 
 func (f *fakeBackend) resolveDiscount(context.Context, string) (*resolveDiscountResponse, error) {
 	f.resolveCalls++
@@ -65,14 +68,6 @@ type fakeRecoveryReader struct {
 	chainBlock uint64
 	chainTime  time.Time
 	chainErr   error
-	nonceUsed  bool
-	nonceErr   error
-	nonceReads []nonceRead
-}
-
-type nonceRead struct {
-	reactor, swapper common.Address
-	nonce            *big.Int
 }
 
 func (f *fakeRecoveryReader) latestBlock(context.Context) (uint64, time.Time, error) {
@@ -109,13 +104,6 @@ func (f *fakeRecoveryReader) validateDirectAuthorization(
 ) error {
 	f.authCalls++
 	return f.authErr
-}
-
-func (f *fakeRecoveryReader) orderNonceUsed(
-	_ context.Context, reactor, swapper common.Address, nonce *big.Int,
-) (bool, error) {
-	f.nonceReads = append(f.nonceReads, nonceRead{reactor: reactor, swapper: swapper, nonce: nonce})
-	return f.nonceUsed, f.nonceErr
 }
 
 type fakeTxm struct {

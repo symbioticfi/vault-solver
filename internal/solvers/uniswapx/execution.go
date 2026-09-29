@@ -277,15 +277,29 @@ func (s *Solver) startFill(
 	}, nil
 }
 
-// orderObsolete returns the fill's Obsolete hook: once Permit2 has spent the order nonce, another
-// filler took the order or the swapper cancelled it, and the pending fill can only revert.
+// orderObsolete returns the fill's Obsolete hook: the order's status in the Uniswap order API, the
+// same lookup exclusive-obligation reconciliation uses. Once the order is filled (by another filler;
+// a receipt of ours takes precedence), cancelled, expired, errored or unfunded, the pending fill can
+// only revert. An open order, an unknown status or a failed lookup keeps the fill alive.
 func (s *Solver) orderObsolete(order *resolvedOrder) func(context.Context) (bool, error) {
-	if s.permit2 == (common.Address{}) || order.Nonce == nil {
+	if s.orders == nil {
 		return nil
 	}
-	permit2, swapper, nonce := s.permit2, order.Swapper, new(big.Int).Set(order.Nonce)
+	hash := order.Hash
 	return func(ctx context.Context) (bool, error) {
-		return s.reader.orderNonceUsed(ctx, permit2, swapper, nonce)
+		terminals, err := s.orders.ordersByHash(ctx, s.chainID, []common.Hash{hash})
+		if err != nil {
+			return false, errors.Errorf("look up order %s: %w", hash.Hex(), err)
+		}
+		switch status := terminals[hash].Status; status {
+		case orderStatusOpen:
+			return false, nil
+		case orderStatusFilled, orderStatusCancelled, orderStatusExpired, orderStatusError,
+			orderStatusInsufficientFunds:
+			return true, nil
+		default:
+			return false, errors.Errorf("order %s has unknown status %q", hash.Hex(), status)
+		}
 	}
 }
 

@@ -72,7 +72,6 @@ BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
             AdaptiveCurveIrm:oev/irm MorphoOracle:oev/oracle \
             AggregatorV3:chainlink/aggregator \
             FrontendLiquidityLens:lens \
-            Permit2:uniswapx/permit2 V2DutchOrderReactor:uniswapx/reactor \
             ERC20:erc20 Multicall3:multicall3
 # The OEV contracts (Morpho + its AdaptiveCurve IRM + market oracle, RedStone
 # Executor, SymbioticOevSolver), the LI.FI input settler ABI, plus a minimal ERC20
@@ -80,11 +79,6 @@ BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
 # api/abi/ (not in ABIS/CORE_MIRROR_ABIS/refresh-abi). RedStoneExecutor avoids the rfq Executor
 # name clash; solver ERC-20 reads (asset/balanceOf) reuse erc4626, the generic chain.Decimals reader
 # uses erc20.
-# Uniswap's Permit2 and V2DutchOrderReactor are not in our Foundry build either, so api/abi/Permit2.json
-# and api/abi/V2DutchOrderReactor.json are hand-vendored to the one view each the UniswapX solver reads:
-# Permit2.nonceBitmap (https://github.com/Uniswap/permit2/blob/main/src/SignatureTransfer.sol) to see a
-# spent order nonce, and the reactor's permit2() (https://github.com/Uniswap/UniswapX/blob/main/src/reactors/BaseReactor.sol)
-# to find that Permit2.
 # Multicall3 is v2 like everything else — api/abi/Multicall3.json is hand-vendored (not a Foundry contract),
 # so it's in BINDINGS_V2 but not ABIS. The chain.Multicall transport packs/unpacks aggregate3 and does its
 # own eth_call. getCurrentBlockTimestamp is sourced from

@@ -54,7 +54,6 @@ type executable struct {
 type executionService struct {
 	chainID                int64
 	executor               common.Address
-	reactor                common.Address // zero disables the fill's Obsolete check
 	orderLimit             int
 	maxCancellationRetries int
 	pollInterval           time.Duration
@@ -99,8 +98,6 @@ type fillReader interface {
 	resolveVaults(ctx context.Context, vaults []recoveryVault) ([]recoveryVault, error)
 	setQuoteAdapters(resolved []recoveryVault)
 	validateDirectAuthorization(ctx context.Context, executor common.Address, vaults []recoveryVault) error
-	// orderNonceUsed reports whether the Reactor has spent the order nonce (filled or invalidated).
-	orderNonceUsed(ctx context.Context, reactor, swapper common.Address, nonce *big.Int) (bool, error)
 }
 
 func (e *executionService) run(ctx context.Context) {
@@ -357,7 +354,7 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	res, sendErr := e.sendFill(ctx, txmanager.Request{
 		Solver: Name,
 		To:     e.executor, Data: calldata, CancelAt: cancelAt, Label: "rfq-fill",
-		Obsolete: e.orderObsolete(order),
+		Obsolete: e.orderObsolete(orderID),
 	})
 	attempt := e.store.recordAttempt(orderID)
 	outcome := res.Outcome
@@ -416,22 +413,42 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	e.reconcileTerminalStatus(ctx, orderID)
 }
 
-// orderObsolete returns the fill's Obsolete hook: the order can no longer be filled once the Reactor
-// has spent its nonce. Without a configured Reactor the txmanager keeps the pending fill until its
-// deadline, as before.
-func (e *executionService) orderObsolete(order executor.IReactorOrder) func(context.Context) (bool, error) {
-	if e.reactor == (common.Address{}) || order.Request.Nonce == nil {
-		return nil
-	}
-	reactor, swapper, nonce := e.reactor, order.Swapper, new(big.Int).Set(order.Request.Nonce)
+// orderObsolete returns the fill's Obsolete hook: the backend view of the order, the same source
+// reconcileTerminalStatus reads. Once the backend reports a terminal status the fill can no longer
+// succeed; an unknown status or a failed read keeps the pending fill alive.
+func (e *executionService) orderObsolete(orderID string) func(context.Context) (bool, error) {
 	return func(ctx context.Context) (bool, error) {
-		return e.reader.orderNonceUsed(ctx, reactor, swapper, nonce)
+		bo, err := e.backend.getOrder(ctx, orderID)
+		if err != nil {
+			return false, errors.Errorf("get order %s: %w", orderID, err)
+		}
+		if bo == nil {
+			return false, errors.Errorf("order %s not found", orderID)
+		}
+		terminal, known := backendOrderTerminal(bo.OrderStatus)
+		if !known {
+			return false, errors.Errorf("order %s: %w %q", orderID, errUnknownOrderStatus, bo.OrderStatus)
+		}
+		return terminal, nil
 	}
 }
 
-// retireObsoleteOrder ends an order whose nonce the Reactor already spent: it was filled, possibly by
-// an earlier fill of ours whose inclusion was unknown, or the swapper invalidated it. Retrying cannot
-// succeed, so the order becomes terminal and the backend's status is recorded when it has one.
+// backendOrderTerminal classifies a backend order status: open orders can still be filled, and every
+// other known status is final. known is false for a status this solver does not recognize.
+func backendOrderTerminal(status string) (terminal, known bool) {
+	switch status {
+	case backendOrderStatusOpen:
+		return false, true
+	case "filled", "expired", "error", "cancelled", "unverified", "insufficient-funds":
+		return true, true
+	default:
+		return false, false
+	}
+}
+
+// retireObsoleteOrder ends an order the backend reports as no longer fillable: it was filled,
+// possibly by an earlier fill of ours whose inclusion was unknown, cancelled, expired, or failed.
+// Retrying cannot succeed, so the order becomes terminal and the backend's status is recorded.
 func (e *executionService) retireObsoleteOrder(
 	ctx context.Context, orderID string, res txmanager.Result, sendErr error,
 ) {
@@ -439,7 +456,7 @@ func (e *executionService) retireObsoleteOrder(
 		e.metrics.fillAmounts.ObserveOutcome(liquidlane.FillOutcomeObsolete)
 	}
 	observability.Decline(ctx, "fill_obsolete", sendErr.Error())
-	observability.Log(ctx).Info("fill skipped: order nonce already used",
+	observability.Log(ctx).Info("fill skipped: order no longer fillable",
 		"tx", res.Hash.Hex(), "outcome", res.Outcome)
 	e.store.markStatus(orderID, statusObsolete, res.Hash, sendErr.Error())
 	e.reconcileTerminalStatus(ctx, orderID)

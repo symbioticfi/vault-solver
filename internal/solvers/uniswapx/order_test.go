@@ -152,9 +152,6 @@ func TestParseAndResolveOrder(t *testing.T) {
 	if resolved.AmountIn.Cmp(big.NewInt(100)) != 0 || resolved.AmountOut.Cmp(big.NewInt(210)) != 0 {
 		t.Fatalf("resolved amounts = %s/%s, want 100/210", resolved.AmountIn, resolved.AmountOut)
 	}
-	if resolved.Swapper != recipient || resolved.Nonce == nil || resolved.Nonce.Cmp(big.NewInt(1)) != 0 {
-		t.Fatalf("resolved Permit2 nonce owner = %s/%v, want %s/1", resolved.Swapper, resolved.Nonce, recipient)
-	}
 
 	t.Run("accepts the cosigner authorized by each order", func(t *testing.T) {
 		rotatedKey, keyErr := crypto.HexToECDSA(

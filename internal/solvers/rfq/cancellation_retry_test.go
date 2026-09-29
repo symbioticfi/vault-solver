@@ -243,50 +243,45 @@ func TestExecutionRetryDeadlineDoesNotExpireUnknownInclusion(t *testing.T) {
 	}
 }
 
-var testReactor = common.HexToAddress("0x00000000000000000000000000000000000000c0")
+func TestExecutionObsoleteHookReadsBackendOrderStatus(t *testing.T) {
+	for _, tc := range []struct {
+		status   string
+		order    bool
+		readErr  error
+		obsolete bool
+		wantErr  bool
+	}{
+		{status: "open", order: true},
+		{status: "filled", order: true, obsolete: true},
+		{status: "expired", order: true, obsolete: true},
+		{status: "cancelled", order: true, obsolete: true},
+		{status: "error", order: true, obsolete: true},
+		{status: "unverified", order: true, obsolete: true},
+		{status: "insufficient-funds", order: true, obsolete: true},
+		{status: "renamed-status", order: true, wantErr: true},
+		{status: "", order: true, wantErr: true},
+		{status: "missing order", wantErr: true},
+		{status: "backend unavailable", order: true, readErr: errors.New("backend unavailable"), wantErr: true},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			st, be := fillFixtures(t)
+			txm := &fakeTxm{result: confirmedTxResult()}
+			e := newExec(t, st, be, txm)
+			syncCycle(t.Context(), e)
+			if txm.lastReq.Obsolete == nil {
+				t.Fatal("fill request has no Obsolete hook")
+			}
 
-func TestExecutionObsoleteHookReadsReactorNonce(t *testing.T) {
-	st, be := fillFixtures(t)
-	txm := &fakeTxm{result: confirmedTxResult()}
-	e := newExec(t, st, be, txm)
-	e.reactor = testReactor
-	reader := e.reader.(*fakeRecoveryReader)
-	reader.nonceUsed = true
-
-	syncCycle(t.Context(), e)
-
-	if txm.lastReq.Obsolete == nil {
-		t.Fatal("fill request has no Obsolete hook with a configured reactor")
-	}
-	used, err := txm.lastReq.Obsolete(t.Context())
-	if err != nil || !used {
-		t.Fatalf("Obsolete() = %v, %v; want the reader's spent nonce", used, err)
-	}
-	want := sampleOrder()
-	if len(reader.nonceReads) != 1 {
-		t.Fatalf("nonce reads = %d, want 1", len(reader.nonceReads))
-	}
-	got := reader.nonceReads[0]
-	if got.reactor != testReactor || got.swapper != want.Swapper || got.nonce.Cmp(want.Request.Nonce) != 0 {
-		t.Fatalf("nonce read = %+v, want reactor %s swapper %s nonce %s",
-			got, testReactor.Hex(), want.Swapper.Hex(), want.Request.Nonce)
-	}
-
-	reader.nonceErr = errors.New("rpc unavailable")
-	if _, err := txm.lastReq.Obsolete(t.Context()); err == nil {
-		t.Fatal("Obsolete() hid the read error; the txmanager must keep the lifecycle on unknown status")
-	}
-}
-
-func TestExecutionWithoutReactorLeavesObsoleteUnset(t *testing.T) {
-	st, be := fillFixtures(t)
-	txm := &fakeTxm{result: confirmedTxResult()}
-	e := newExec(t, st, be, txm)
-
-	syncCycle(t.Context(), e)
-
-	if txm.calls != 1 || txm.lastReq.Obsolete != nil {
-		t.Fatalf("sends = %d, Obsolete set = %v; want one send without a hook", txm.calls, txm.lastReq.Obsolete != nil)
+			be.order = nil
+			if tc.order {
+				be.order = &backendOrder{OrderID: "o1", OrderStatus: tc.status, QuoteID: "q1"}
+			}
+			be.orderErr = tc.readErr
+			obsolete, err := txm.lastReq.Obsolete(t.Context())
+			if (err != nil) != tc.wantErr || obsolete != tc.obsolete {
+				t.Fatalf("Obsolete() = %v, %v; want obsolete %v, error %v", obsolete, err, tc.obsolete, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -323,7 +318,6 @@ func TestExecutionRetiresObsoleteOrderWithoutRetry(t *testing.T) {
 			e := newExec(t, st, be, txm)
 			e.now = st.now
 			e.metrics = metrics
-			e.reactor = testReactor
 
 			for range 5 {
 				syncCycle(t.Context(), e)

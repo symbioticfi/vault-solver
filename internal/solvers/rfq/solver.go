@@ -132,7 +132,6 @@ func buildServices(
 	exec := &executionService{
 		chainID:                chainID,
 		executor:               cfg.Executor,
-		reactor:                cfg.Reactor,
 		orderLimit:             cfg.OrderLimit,
 		maxCancellationRetries: cfg.MaxCancellationRetries,
 		pollInterval:           cfg.PollInterval,

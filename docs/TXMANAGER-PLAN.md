@@ -251,9 +251,9 @@ Definitions: [metrics.go](../internal/txmanager/metrics.go),
 | Integration | Keeps its own policy and links to this lifecycle |
 |---|---|
 | [3F](3F-PLAN.md#51-txmanager--nonce-serialized-sender) | Finalize multicall, off-chain offer signing, offer gating and continued reconciliation/redemption. |
-| [RFQ](RFQ-PLAN.md) | Executor fill calldata, signed order/discount deadlines, Reactor order-nonce obsolescence, quote gating and result accounting. |
+| [RFQ](RFQ-PLAN.md) | Executor fill calldata, signed order/discount deadlines, backend order-status obsolescence, quote gating and result accounting. |
 | [LI.FI](LIFI-PLAN.md) | Finalise calldata, order-status obsolescence, protocol validity and capacity/retry bookkeeping. |
-| [UniswapX](UNISWAPX-PLAN.md) | Reactor/executor calldata, earliest validity deadline, Permit2 order-nonce obsolescence, profitability ceiling and exclusive-order obligations. |
+| [UniswapX](UNISWAPX-PLAN.md) | Reactor/executor calldata, earliest validity deadline, order-API status obsolescence, profitability ceiling and exclusive-order obligations. |
 | [OEV](OEV-PLAN.md) | External settlement and protocol bid nonce; does not start txmanager in an OEV-only process. |
 
 Protocol order/bid nonces are not the shared sender's transaction nonce. Strategy code receives facts and
