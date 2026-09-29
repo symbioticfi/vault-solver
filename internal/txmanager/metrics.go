@@ -16,6 +16,7 @@ const (
 
 	replacementKindReplacement  = "replacement"
 	replacementKindCancellation = "cancellation"
+	replacementKindRebroadcast  = "rebroadcast"
 
 	admissionOutcomeAdmitted admissionOutcome = "admitted"
 
@@ -96,8 +97,8 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
 			Name:      "replacements_total",
-			Help:      "Successfully broadcast transaction replacements and cancellations.",
-		}, []string{"label", "kind"}),
+			Help:      "Successfully broadcast transaction replacements, cancellations and exact rebroadcasts, by why they were sent.",
+		}, []string{"label", "kind", "reason"}),
 		admissionRejections: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
@@ -255,8 +256,8 @@ func classifyAdmissionRejection(err error) admissionRejectionReason {
 	}
 }
 
-func (m *Metrics) replacement(label, kind string) {
+func (m *Metrics) replacement(label, kind, reason string) {
 	if m != nil {
-		m.replacements.WithLabelValues(label, kind).Inc()
+		m.replacements.WithLabelValues(label, kind, reason).Inc()
 	}
 }

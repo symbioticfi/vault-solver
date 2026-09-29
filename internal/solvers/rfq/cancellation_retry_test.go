@@ -12,7 +12,11 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -236,5 +240,95 @@ func TestExecutionRetryDeadlineDoesNotExpireUnknownInclusion(t *testing.T) {
 	syncCycle(t.Context(), e)
 	if txm.calls != 2 || st.order("o1").Status != statusSubmitted || st.order("o1").TxHash != txm.result.Hash {
 		t.Fatalf("unknown retry inclusion lost tracking: sends=%d order=%+v", txm.calls, st.order("o1"))
+	}
+}
+
+func TestExecutionObsoleteHookReadsBackendOrderStatus(t *testing.T) {
+	for _, tc := range []struct {
+		status   string
+		order    bool
+		readErr  error
+		obsolete bool
+		wantErr  bool
+	}{
+		{status: "open", order: true},
+		{status: "filled", order: true, obsolete: true},
+		{status: "expired", order: true, obsolete: true},
+		{status: "cancelled", order: true, obsolete: true},
+		{status: "error", order: true, obsolete: true},
+		{status: "unverified", order: true, obsolete: true},
+		{status: "insufficient-funds", order: true, obsolete: true},
+		{status: "renamed-status", order: true, wantErr: true},
+		{status: "", order: true, wantErr: true},
+		{status: "missing order", wantErr: true},
+		{status: "backend unavailable", order: true, readErr: errors.New("backend unavailable"), wantErr: true},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			st, be := fillFixtures(t)
+			txm := &fakeTxm{result: confirmedTxResult()}
+			e := newExec(t, st, be, txm)
+			syncCycle(t.Context(), e)
+			if txm.lastReq.Obsolete == nil {
+				t.Fatal("fill request has no Obsolete hook")
+			}
+
+			be.order = nil
+			if tc.order {
+				be.order = &backendOrder{OrderID: "o1", OrderStatus: tc.status, QuoteID: "q1"}
+			}
+			be.orderErr = tc.readErr
+			obsolete, err := txm.lastReq.Obsolete(t.Context())
+			if (err != nil) != tc.wantErr || obsolete != tc.obsolete {
+				t.Fatalf("Obsolete() = %v, %v; want obsolete %v, error %v", obsolete, err, tc.obsolete, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestExecutionRetiresObsoleteOrderWithoutRetry(t *testing.T) {
+	obsoleteCancellation := confirmedCancellation()
+	obsoleteCancellation.Err = errors.Errorf("pending transaction cancelled: %w", txmanager.ErrRequestObsolete)
+	unconfirmed := obsoleteCancellation
+	unconfirmed.Outcome = txmanager.OutcomeCancelledUnconfirmed
+	for _, tc := range []struct {
+		name          string
+		result        txmanager.Result
+		backendStatus string
+		want          orderStatus
+	}{
+		{name: "cancelled pending fill", result: obsoleteCancellation, backendStatus: "open", want: statusObsolete},
+		{name: "cancellation confirmation failed", result: unconfirmed, backendStatus: "open", want: statusObsolete},
+		{name: "dropped before signing", result: txmanager.Result{
+			Outcome: txmanager.OutcomeSubmissionError,
+			Err:     errors.Errorf("send %q: %w", "rfq-fill", txmanager.ErrRequestObsolete),
+		}, backendStatus: "open", want: statusObsolete},
+		{name: "backend already reports the fill", result: obsoleteCancellation, backendStatus: "filled", want: statusFilled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, be := fillFixtures(t)
+			now := time.Unix(0, 0)
+			st.now = func() time.Time { return now }
+			be.order.OrderStatus = tc.backendStatus
+			reg := prometheus.NewRegistry()
+			metrics, err := newRFQMetrics(reg, st, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			txm := &fakeTxm{result: tc.result}
+			e := newExec(t, st, be, txm)
+			e.now = st.now
+			e.metrics = metrics
+
+			for range 5 {
+				syncCycle(t.Context(), e)
+				now = now.Add(10 * time.Second)
+			}
+
+			if txm.calls != 1 || st.order("o1").Status != tc.want {
+				t.Fatalf("sends = %d, order = %+v; want one send and %s", txm.calls, st.order("o1"), tc.want)
+			}
+			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeObsolete, 1)
+			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 0)
+		})
 	}
 }

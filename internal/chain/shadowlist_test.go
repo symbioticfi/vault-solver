@@ -13,7 +13,7 @@ import (
 // from the embedded *ethclient.Client. It is the txmanager Backend interface plus the reads the
 // solvers and the chain helpers make directly.
 var methodsTheRepoCallsOnClient = []string{
-	"NonceAt", "PendingNonceAt", "FeeHistory", "SuggestGasTipCap",
+	"NonceAt", "PendingNonceAt", "FeeHistory",
 	"HeaderByNumber", "HeaderByHash", "EstimateGas", "SendTransaction", "TransactionReceipt",
 	"CallContract", "BalanceAt", "CodeAt", "BlockNumber",
 }

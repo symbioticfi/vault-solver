@@ -287,7 +287,7 @@ func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
 		e.submitOrder(ctx, o.OrderID)
 	case statusSubmitted, statusRetryWaiting:
 		e.reconcileTerminalStatus(ctx, o.OrderID)
-	case statusFilled, statusExpired, statusFailed:
+	case statusFilled, statusExpired, statusFailed, statusObsolete:
 		// terminal — nothing to do
 	}
 }
@@ -354,9 +354,14 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	res, sendErr := e.sendFill(ctx, txmanager.Request{
 		Solver: Name,
 		To:     e.executor, Data: calldata, CancelAt: cancelAt, Label: "rfq-fill",
+		Obsolete: e.orderObsolete(orderID),
 	})
 	attempt := e.store.recordAttempt(orderID)
 	outcome := res.Outcome
+	if !outcome.Included() && errors.Is(sendErr, txmanager.ErrRequestObsolete) {
+		e.retireObsoleteOrder(ctx, orderID, res, sendErr)
+		return
+	}
 	if !outcome.Included() {
 		if e.metrics != nil {
 			fillOutcome := liquidlane.FillOutcomeFailure
@@ -405,6 +410,55 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		)
 	}
 	e.store.markStatus(orderID, statusSubmitted, res.Hash, "")
+	e.reconcileTerminalStatus(ctx, orderID)
+}
+
+// orderObsolete returns the fill's Obsolete hook: the backend view of the order, the same source
+// reconcileTerminalStatus reads. Once the backend reports a terminal status the fill can no longer
+// succeed; an unknown status or a failed read keeps the pending fill alive.
+func (e *executionService) orderObsolete(orderID string) func(context.Context) (bool, error) {
+	return func(ctx context.Context) (bool, error) {
+		bo, err := e.backend.getOrder(ctx, orderID)
+		if err != nil {
+			return false, errors.Errorf("get order %s: %w", orderID, err)
+		}
+		if bo == nil {
+			return false, errors.Errorf("order %s not found", orderID)
+		}
+		terminal, known := backendOrderTerminal(bo.OrderStatus)
+		if !known {
+			return false, errors.Errorf("order %s: %w %q", orderID, errUnknownOrderStatus, bo.OrderStatus)
+		}
+		return terminal, nil
+	}
+}
+
+// backendOrderTerminal classifies a backend order status: open orders can still be filled, and every
+// other known status is final. known is false for a status this solver does not recognize.
+func backendOrderTerminal(status string) (terminal, known bool) {
+	switch status {
+	case backendOrderStatusOpen:
+		return false, true
+	case "filled", "expired", "error", "cancelled", "unverified", "insufficient-funds":
+		return true, true
+	default:
+		return false, false
+	}
+}
+
+// retireObsoleteOrder ends an order the backend reports as no longer fillable: it was filled,
+// possibly by an earlier fill of ours whose inclusion was unknown, cancelled, expired, or failed.
+// Retrying cannot succeed, so the order becomes terminal and the backend's status is recorded.
+func (e *executionService) retireObsoleteOrder(
+	ctx context.Context, orderID string, res txmanager.Result, sendErr error,
+) {
+	if e.metrics != nil {
+		e.metrics.fillAmounts.ObserveOutcome(liquidlane.FillOutcomeObsolete)
+	}
+	observability.Decline(ctx, "fill_obsolete", sendErr.Error())
+	observability.Log(ctx).Info("fill skipped: order no longer fillable",
+		"tx", res.Hash.Hex(), "outcome", res.Outcome)
+	e.store.markStatus(orderID, statusObsolete, res.Hash, sendErr.Error())
 	e.reconcileTerminalStatus(ctx, orderID)
 }
 

@@ -37,7 +37,7 @@ Subscribers receive coalesced change notifications and must re-read state and un
 | `GasLimit` | Zero requests exact-call estimation after admission and before signing, with 5% headroom. A supplied limit is reused for normal replacements. |
 | `MaxFeePerGas` | Optional profitability ceiling for the normal call and its replacements; cancellation may exceed it within the global ceiling. |
 | `CancelAt` | Optional wall-clock cancellation deadline. Integrations derive it from the earliest applicable protocol deadline without extending validity during RPC/planning. |
-| `Obsolete` | Context-aware protocol status check before signing and after a receipt sweep finishes without a valid receipt. True drops an unsigned call or starts same-nonce cancellation; errors preserve ownership. It is not an authorization mechanism. |
+| `Obsolete` | Context-aware protocol status check before signing and after a receipt sweep finishes without a valid receipt. True drops an unsigned call or starts same-nonce cancellation; errors preserve ownership. Either way the result's `Err` wraps the exported `ErrRequestObsolete`, so the integration can retire the work instead of retrying it. It is not an authorization mechanism. |
 | `Confirmations` | Optional override of the manager confirmation depth; an explicit zero skips depth waiting. |
 | `Label`, `Solver` | Stable operation name and owning integration for logs/metrics/Sentry. |
 
@@ -51,25 +51,83 @@ The public YAML block is `txManager`. Values below are application defaults, aft
 |---|---:|---|
 | `confirmations` | 2 | Blocks after inclusion; a request may override. Zero in YAML is treated as unset. |
 | `maxFeeGwei` | Required for transaction senders | Finite positive global EIP-1559 ceiling, including cancellation. |
-| `tipGwei` | 0 | Positive mandatory priority-fee floor; zero selects fee-history pricing. |
 | `broadcastTimeoutMs` | 5000 | Independent timeout of each submission RPC. |
 | `accountPollIntervalMs` | 30000 | Complete sender balance/nonce telemetry refresh cadence. |
-| `replacementIntervalMs` | 30000 | Pending replacement/rebroadcast cadence. |
+| `replacementIntervalMs` | 30000 | Fallback bump cadence while fee history is unreadable; also bounds the internal read budgets below. |
 | `pendingTimeoutMs` | 300000 | Switch an unresolved call to cancellation; must be at least the replacement interval. |
 | `shutdownTimeoutMs` | 60000 | Hard bound on manager drain after shutdown begins. |
+| `horizon.maxBlocks` | 6 | Blocks (3–12) the initial fee cap keeps the full tip valid at the maximum base-fee increase. |
+| `horizon.blockTimeMs` | 12000 | Slot time: sets the twice-per-block evaluation tick and the next-block estimate timestamp. |
+| `horizon.tipFloorGwei` | 0.02 | Tip while the last two blocks had room for the call. |
+| `horizon.fullBlockTipGwei` | 0.1 | Tip when one of the last two blocks had no room. |
+| `horizon.congestedTipFloorGwei` / `congestedTipCapGwei` | 0.2 / 15 | Clamp on the market tip used when both had no room. |
+| `horizon.congestedRewardBlocks` / `congestedRewardPercentile` | 3 / 50 | That market tip: the highest reward percentile over these recent blocks. |
+| `horizon.escalateAfterFullBlocks` | 2 | Consecutive full blocks a valid pending call must lose before its tip is repriced. |
+| `horizon.stallAfterBlocks` | 3 | Blocks with room a valid pending call may lose before it is re-estimated and rebroadcast. |
+| `horizon.gasHeadroomBps` / `fallbackGasHeadroomBps` | 500 / 1000 | Headroom over the next-block estimate, and over a latest-state estimate when the read RPC rejects block overrides. |
 
 Polling defaults to 2 seconds in the Go manager; it is not a separate YAML field. Pending receipt reads,
 replacement nonce reads and obsolescence checks each use `min(2 seconds, replacementInterval/2)`; fee reads use
 `min(1 second, replacementInterval/2)`. These internal read budgets are separate from broadcast timeout.
-Account refresh uses a 5-second context. Backends must honor cancellation.
+Account refresh uses a 5-second context. Backends must honor cancellation. The replacement loop ticks
+every `blockTimeMs/2` and acts only on a new block; `replacementIntervalMs` only paces the fallback bump
+when fee windows stay unreadable, and an ambiguous broadcast may still be rebroadcast while more than
+`broadcastTimeoutMs + blockTimeMs` remains before its deadline.
 
 ## 4. Fees, replacements and cancellation
 
-A positive `tipGwei` is mandatory; a larger node suggestion is advisory and clamped to available headroom.
-With zero tip, pricing uses the median gas-weighted p25 priority reward from the latest five blocks,
-also clamped to headroom, so one low-reward block cannot drag the tip to zero. Missing/invalid fee history
-fails new submissions closed; a positive floor provides an operator-controlled fallback. Startup rejects
-a floor leaving no base-fee room under the initial cap; runtime admission also checks the current base fee.
+Every call is priced for inclusion in the next block at the lowest spend. Spend is
+`gasUsed × (baseFee + tip)`; the fee cap only decides validity, so the manager spends headroom on the cap
+and economizes on the tip. This replaced an earlier policy that priced from the fee-history reward median
+with a 2× base-fee cap and an optional `tipGwei` floor, and bumped every pending call on a
+`replacementIntervalMs` timer: `tipGwei` was removed, and `replacementIntervalMs` now only paces the
+fallback below.
+
+- **Fee cap from the exact base-fee bound.** One read of the latest header and an `eth_feeHistory` window
+  (`max(congestedRewardBlocks, escalateAfterFullBlocks, stallAfterBlocks, 2)` blocks) gives the next block's
+  base fee as the node computes it. The cap is that base fee grown by the EIP-1559 maximum,
+  `max(baseFee/8, 1)` per full block (go-ethereum's `DefaultBaseFeeChangeDenominator`, not a knob), for
+  `maxBlocks − 1` blocks, plus the tip. At the default 6 that is about 1.8× the next base fee. The initial
+  cap reserves a replacement bump under the request and global limits (below); a lower limit shortens the
+  horizon, and one below the next base fee fails the send. Missing or invalid fee history fails new
+  submissions closed.
+- **Tip from block fullness.** A block "has room" when `gasLimit × (1 − gasUsedRatio)` covers the call's
+  gas. Room in both of the last two blocks means any positive tip is included, so the call pays
+  `tipFloorGwei`; one full block pays `fullBlockTipGwei`; only a run of two full blocks, where the call must
+  outbid the marginal transaction, pays the highest `congestedRewardPercentile` reward of the last
+  `congestedRewardBlocks` blocks, clamped to the congested floor and cap.
+- **Gas against the next block.** Without a request gas limit, the call is estimated with
+  `eth_estimateGas(call, "latest", null, {number: head+1, time: head.time + blockTime})`, so time-dependent
+  work the latest block already did (Morpho interest accrual, for one) is sized for the block the call
+  targets, plus `gasHeadroomBps`. An endpoint that rejects the fourth parameter (invalid params) falls back to
+  a latest-state estimate with `fallbackGasHeadroomBps`, logged once per process at Info, as does a backend
+  without the chain client's next-block method; a reverting next-block estimate fails the send. An endpoint
+  that silently ignores the parameter returns a latest-state estimate with the tighter headroom.
+- **Repricing on block evidence.** The loop evaluates each new block (older heads from another endpoint are
+  ignored) against the current attempt, counting only blocks after the one it was sent at. That send head is
+  the fresher of the fee window's newest block and the latest header, and the wall clock bounds it: no more
+  blocks than elapsed slots, plus one in flight, can follow a send, so a read endpoint that served a stale fee
+  window when the call went out cannot turn blocks mined before the send into blocks it missed:
+  - a fee cap that would lapse within two blocks at the tip floor is repriced (`validity`);
+  - the last `escalateAfterFullBlocks` blocks full while the attempt was valid, with the tip rule now asking
+    for at least a replacement bump, reprice the tip (`congestion`);
+  - `stallAfterBlocks` blocks with room lost while valid mean the relay dropped the attempt, a builder it
+    cannot reach built them, or the call outgrew its gas. A normal call is re-estimated for the next block
+    and replaced with a larger gas limit once the raw estimate exceeds its limit (`gas`); otherwise its exact
+    bytes are rebroadcast, and after two such rebroadcasts a minimal bump replaces them (`stall`);
+  - anything else holds, because waiting is free.
+
+  A reprice uses the ordinary replacement rule below (at least a 12.5% bump of both fields, the fresh fees
+  when higher, capped at the request or global limit, capped-rebroadcast at the cap).
+- **Cancellation** starts at the deadline, shutdown or `Obsolete` triggers and is sent at once. Its fees come
+  from the same rule for 21,000 gas, and it is then repriced by the same block evidence; a cancellation whose
+  broadcast failed is retried every tick.
+- **Fallback.** If fee windows stay unreadable for `replacementIntervalMs`, the pending attempt gets one
+  cached-bump replacement per interval (`fallback`), so it cannot freeze. Unreadable windows use the same
+  read-streak logging as receipt reads.
+- **Quote pricing.** `MaxFeePerGas` returns one replacement bump over the fee cap for the size of the latest
+  signed call, so a request ceiling taken from it at quote time still leaves the fill a full horizon.
+  Startup (`ValidateFeeHeadroom`) rejects a congested tip cap that cannot fit under the initial fee limit.
 
 Normal calls reserve one 12.5% bump below the global ceiling for cancellation. Initial sends reserve
 another bump inside their normal ceiling for a replacement. Request profitability limits also bound
@@ -78,14 +136,18 @@ fresh fees fall back to bumping the last signed fees. Cancellation is a 21,000-g
 with the same nonce and may exceed the request cap, but never the global cap.
 
 All signed variants are retained by exact hash. An ambiguous send does not prove absence from the
-network. The next normal replacement tick rebroadcasts the uncertain attempt's exact bytes once, without
-adding a duplicate hash or changing fees; a later tick can bump fees. A cancellation deadline or shutdown
+network. The next evaluated block rebroadcasts the uncertain attempt's exact bytes once, without adding a
+duplicate hash or changing fees; later evidence can reprice it. A cancellation deadline or shutdown
 bypasses that grace retry. At the fee cap, the latest applicable attempt can be rebroadcast unchanged.
 A `nonce too low` response never by itself authorizes re-signing the calldata at a different nonce.
 
 The cancellation bound is the earlier of the pending timeout and a supplied `CancelAt`. A cancellation
 check may become due during fee lookup and promote the replacement. A deadline coinciding with a
 replacement tick must not produce a second broadcast for the same tick.
+
+The base-fee bound holds only on chains using the Ethereum base-fee rule (mainnet, Hoodi, Sepolia).
+Evaluated windows are the latest blocks, so a lifecycle that goes unevaluated for longer than the window
+judges only the most recent blocks.
 
 ## 5. Receipt polling and confirmation
 
@@ -124,9 +186,9 @@ valid evidence for the same nonce.
 | `confirmed` | Normal call succeeded and satisfied confirmation policy. |
 | `included_unconfirmed` | Successful inclusion observed, but confirmation waiting ended with an error. |
 | `reverted` | Receipt reports execution failure; an error during confirmation is retained in the result. |
-| `cancelled` | Successful cancellation receipt satisfied confirmation policy; `Err` explains that the requested call was cancelled. |
-| `cancelled_unconfirmed` | Successful cancellation inclusion observed, but confirmation waiting ended with an error. This is not proof that it is safe to retry the call. |
-| `submission_error` | Submission/pre-sign path failed without a retained pending lifecycle. |
+| `cancelled` | Successful cancellation receipt satisfied confirmation policy; `Err` explains that the requested call was cancelled and wraps `ErrRequestObsolete` when `Obsolete` started the cancellation. |
+| `cancelled_unconfirmed` | Successful cancellation inclusion observed, but confirmation waiting ended with an error. This is not proof that it is safe to retry the call. `Err` also wraps `ErrRequestObsolete` when `Obsolete` started the cancellation. |
+| `submission_error` | Submission/pre-sign path failed without a retained pending lifecycle, including an unsigned call `Obsolete` dropped (`Err` wraps `ErrRequestObsolete`). |
 | `tracking_stopped` | Lifecycle tracking stopped before a terminal receipt was established. |
 
 `Result.NotAdmitted` distinguishes admission rejection from an admitted operation failure. `Err`, receipt
@@ -234,7 +296,7 @@ Definitions: [metrics.go](../internal/txmanager/metrics.go),
 | Txmanager | `solver_bot_txmanager_inflight` | `label` | Requests accepted by the txmanager worker and still awaiting a terminal result; sustained values expose stuck transactions or nonce congestion. |
 | Txmanager | `solver_bot_txmanager_gas_used_total` | `label`, `outcome` | Receipt gas for mined transactions, including reverts. Divide by the matching request count for average gas; this is gas units, not native-token cost. |
 | Txmanager | `solver_bot_txmanager_fee_paid_wei_total` | `label`, `outcome` | Actual native-token fee paid by mined transactions, calculated from receipt `gasUsed × effectiveGasPrice`, including reverted and mined cancellation transactions. |
-| Txmanager | `solver_bot_txmanager_replacements_total` | `label`, `kind` | Successfully broadcast replacements and cancellations. Spikes expose fee-policy or congestion problems that terminal outcomes alone cannot show. |
+| Txmanager | `solver_bot_txmanager_replacements_total` | `label`, `kind`, `reason` | Successfully broadcast replacements, cancellations and exact rebroadcasts (`kind` = `replacement`, `cancellation`, `rebroadcast`). Replacement `reason` is `validity`, `congestion`, `stall`, `gas` or `fallback`; a cancellation reports why cancellation started (`pending_timeout`, `request_deadline`, `shutdown`, `obsolete`); a rebroadcast is `stall`, `uncertain` (ambiguous first broadcast) or `capped` (fee cap reached). Spikes expose fee-policy, relay or congestion problems that terminal outcomes alone cannot show. |
 | Txmanager | `solver_bot_txmanager_admission_rejections_total` | `label`, `reason` | Requests rejected before the signed worker lifecycle. Reasons are `manager_stopped`, `nonce_conflict`, `deadline_exceeded`, `caller_cancelled`, or bounded fallback `other`; an expected busy `TrySend` probe is excluded. |
 | Txmanager | `solver_bot_txmanager_admission_wait_duration_seconds` | `label`, `outcome` | Time from a real send request until worker admission or a terminal pre-admission outcome. `outcome` is `admitted` or one of the bounded rejection reasons; expected busy `TrySend` probes are excluded. |
 | Txmanager | `solver_bot_txmanager_lifecycle_duration_seconds` | `label`, `outcome` | Time from worker admission through broadcast and terminal tracking. It excludes pre-admission nonce-lane wait, so use admission rejections alongside its latency distribution. |
@@ -251,9 +313,9 @@ Definitions: [metrics.go](../internal/txmanager/metrics.go),
 | Integration | Keeps its own policy and links to this lifecycle |
 |---|---|
 | [3F](3F-PLAN.md#51-txmanager--nonce-serialized-sender) | Finalize multicall, off-chain offer signing, offer gating and continued reconciliation/redemption. |
-| [RFQ](RFQ-PLAN.md) | Executor fill calldata, signed order/discount deadlines, quote gating and result accounting. |
+| [RFQ](RFQ-PLAN.md) | Executor fill calldata, signed order/discount deadlines, backend order-status obsolescence, quote gating and result accounting. |
 | [LI.FI](LIFI-PLAN.md) | Finalise calldata, order-status obsolescence, protocol validity and capacity/retry bookkeeping. |
-| [UniswapX](UNISWAPX-PLAN.md) | Reactor/executor calldata, earliest validity deadline, profitability ceiling and exclusive-order obligations. |
+| [UniswapX](UNISWAPX-PLAN.md) | Reactor/executor calldata, earliest validity deadline, order-API status obsolescence, profitability ceiling and exclusive-order obligations. |
 | [OEV](OEV-PLAN.md) | External settlement and protocol bid nonce; does not start txmanager in an OEV-only process. |
 
 Protocol order/bid nonces are not the shared sender's transaction nonce. Strategy code receives facts and
@@ -264,11 +326,20 @@ returns decisions; it does not gain a signer, nonce manager or transaction-sendi
 Receipt tests cover 52 independent budgets, timer handling during blocked reads, new/old hashes, reorg
 recovery, teardown and coincident cancellation/replacement ticks. Existing tests cover fee limits,
 ambiguous broadcasts, nonce conflicts, admission, result semantics and logging. The local Anvil target
-covers real pending replacements/cancellations; unit test success alone is not that integration proof.
+covers a real pending call repriced after a base-fee spike and real cancellations; unit test success alone
+is not that integration proof.
 Cancellation outcome tests also distinguish a satisfied confirmation policy from an interrupted wait;
 RFQ tests consume that distinction when deciding whether another fill is safe.
+Fee tests cover the base-fee bound, the tip rule, each repricing decision, fee-window parsing, the
+next-block estimate and its fallbacks, a stale send head, and scripted-chain lifecycles for stall
+rebroadcasts, congestion, validity, gas growth, unreadable windows and deadline cancellation. Lifecycle tests that need a replacement
+mine a block that supplies the evidence, since no timer bumps a pending call.
 Run repository-required build, race/coverage and lint gates for implementation changes. Current reader
 validation is local; it does not establish deployment or production rollout status.
+
+For each deployment, check that its read RPC honours `eth_estimateGas` block overrides (the
+"next-block gas estimate unsupported" Info line says it does not) and watch `replacements_total{reason}`: sustained `stall` rebroadcasts point at the relay, `gas` at contention on
+the same vaults, and `fallback` at unreadable fee history.
 
 Keep shared lifecycle design and metric contracts here. Update integration plans only when their own
 request construction, readiness, capacity or protocol behavior changes. Preserve operator-facing setup,

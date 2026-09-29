@@ -152,6 +152,7 @@
                             "no_candidates": {"text": "No eligible candidates"},
                             "not_admitted": {"text": "Not admitted"},
                             "not_quotable": {"text": "Order not quotable"},
+                            "obsolete": {"text": "Settled elsewhere"},
                             "offer_refresh": {"text": "Refresh offers"},
                             "offers": {"text": "Offers"},
                             "ok": {"text": "Success"},
@@ -681,6 +682,7 @@
                             "no_candidates": {"text": "No eligible candidates"},
                             "not_admitted": {"text": "Not admitted"},
                             "not_quotable": {"text": "Order not quotable"},
+                            "obsolete": {"text": "Settled elsewhere"},
                             "offer_refresh": {"text": "Refresh offers"},
                             "offers": {"text": "Offers"},
                             "ok": {"text": "Success"},
@@ -1574,7 +1576,7 @@
             "transformations": []
           }
         },
-        "description": "Fill attempts recorded as failure or not admitted. Includes retries; not a count of unique lost orders.",
+        "description": "Fill attempts recorded as failure or not admitted. Includes retries; not a count of unique lost orders. Fills retired because the order was settled elsewhere (obsolete) are excluded.",
         "id": 41,
         "links": [],
         "title": "Failed execution attempts · period",
@@ -2292,7 +2294,7 @@
       "spec": {
         "id": 200,
         "title": "Fill outcomes over time",
-        "description": "Observed successful / failed / rejected fill attempts per second. Retries count again. Rate preserves counter resets and idle windows.",
+        "description": "Observed successful / failed / rejected fill attempts per second, plus fills retired as obsolete because the order was settled elsewhere first. Retries count again. Rate preserves counter resets and idle windows.",
         "links": [],
         "data": {
           "kind": "QueryGroup",

@@ -70,7 +70,10 @@ func newUniswapXMetrics(
 ) (*uniswapXMetrics, error) {
 	spec := liquidlane.FillWorkflowSpec()
 	spec.Events = append(spec.Events, observability.WorkflowEventSpec{
-		Event: "fill", Outcomes: []string{liquidlane.FillOutcomeFailure, liquidlane.FillOutcomeNotAdmitted, fillOutcomeDeclined},
+		Event: "fill", Outcomes: []string{
+			liquidlane.FillOutcomeFailure, liquidlane.FillOutcomeNotAdmitted, liquidlane.FillOutcomeObsolete,
+			fillOutcomeDeclined,
+		},
 	})
 	spec.Strategy = strategyName
 	spec.Operations = []string{
