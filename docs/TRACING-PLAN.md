@@ -235,13 +235,17 @@ attributes of what was read before the refusal (`fee.next_base`, `balance.afford
 once the estimate returned), which are what explain it; `fee.horizon` is set only once a fee cap was priced.
 `txmanager.shadow` roots each tick of the shadow fee evaluator (TXMANAGER-PLAN §4.5), every half block while
 `shadow.enabled` and metrics are on: `fee.head` (the snapshot's fee-history head), `shadow.new_head` (whether it
-advanced the evaluator) and `shadow.scored` (virtual fills scored); a shared snapshot read it triggers nests under
-it, and a failed read ends it with an error status (logged at Info only, the evaluator being metrics-only).
+advanced the evaluator) and `shadow.scored` (virtual fills scored); the header and fee-history RPC spans of a
+shared snapshot read it starts nest under it, also when a send, quote or pending evaluation joins that read, and a
+failed read ends it with an error status (logged at Info only, the evaluator being metrics-only).
 Under `fees.policy: horizon`, `txmanager.block_overrides_probe` roots each check that the read endpoint honours
 `eth_estimateGas` block overrides (TXMANAGER-PLAN §4.3), at startup and every 10 minutes; an inconclusive probe
 ends with an error status. A quote's `MaxFeePerGas` opens no span of its own: its fee snapshot's RPC spans, when
 a read is needed at all, nest under the quoting span, and a read shared by concurrent quotes nests under the
-first of them. A send's own snapshot read nests under `txmanager.broadcast`, or under the quote it joined.
+first of them. A send's own snapshot read nests under `txmanager.broadcast`, or, when it joined a read already in
+flight, under the span that started that read, in that span's trace: a quote's span, or the `txmanager.shadow`
+tick of the shadow evaluator, which starts one about every half block. A pending evaluation's or cancellation's
+joined read nests the same way.
 
 The worker stores the request's `solver`-stamped logger on every context of the lifecycle, the send
 span included, so `observability.Log(ctx)` puts `solver`, `label`, `trace_id` and `span_id` on every

@@ -336,7 +336,7 @@
       "spec": {
         "id": 303,
         "title": "Shadow first@3 by fee policy · last 24 hours",
-        "description": "Share of the shadow evaluator's virtual fills (one per head per policy) whose first attempt would land within 3 blocks, excluding refused ones. Fee-side only: local blocks, relay reach, reverts and competitor fills are not modelled, and consecutive heads are correlated. The strategy's gate for switching a lane to horizon: horizon ≥ legacy and ≥ 99.5% over 7 days; alert below 99% over 24 hours.",
+        "description": "Share of the shadow evaluator's virtual fills (one per head per policy) whose first attempt would land within 3 blocks, excluding refused ones. Fee-side only: local blocks, relay reach, reverts and competitor fills are not modelled, and consecutive heads are correlated. The strategy's gate for switching a lane to horizon: horizon ≥ legacy and ≥ 99.5% over 7 days; alert below 99% over 24 hours. Pooled across the namespace; each solver dashboard's fee-strategy row splits it by signer, over 24 hours and 7 days.",
         "links": [],
         "data": {
           "kind": "QueryGroup",

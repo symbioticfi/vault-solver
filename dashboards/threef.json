@@ -425,6 +425,200 @@
         }
       }
     },
+    "panel-303": {
+      "kind": "Panel",
+      "spec": {
+        "id": 303,
+        "title": "Shadow first@3 by signer and fee policy · 24 hours and 7 days",
+        "description": "Per signer of this integration: the share of the shadow evaluator's virtual fills (one per head per policy, of balance.referenceGasUnits gas, or the latest fill's gas limit while that is unset, at this lane's balance) whose first attempt would land within 3 blocks, excluding refused ones. The gate for moving this lane to horizon: horizon ≥ legacy and ≥ 99.5% over 7 days, including a base fee above 3 gwei; alert when the policy in use (solver_bot_txmanager_fee_policy_info) falls below 99% over 24 hours. Fee-side only: local blocks, relay reach, reverts and competitor fills are not modelled, and consecutive heads are correlated.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (address, policy) ((sum by (namespace, job, instance, policy) (increase(solver_bot_txmanager_shadow_lifecycles_total{namespace=\"${namespace}\",outcome=~\"first1|first2|first3\"}[24h])) and on (namespace, job, instance) (max by (namespace, job, instance) (max_over_time(solver_bot_solver_info{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\"}[24h])))) * on (namespace, job, instance) group_left (address) (topk by (namespace, job, instance) (1, max by (namespace, job, instance, address) (max_over_time(solver_bot_txmanager_account_info{namespace=\"${namespace}\"}[24h]))))) / sum by (address, policy) ((sum by (namespace, job, instance, policy) (increase(solver_bot_txmanager_shadow_lifecycles_total{namespace=\"${namespace}\",outcome!=\"refused\"}[24h])) and on (namespace, job, instance) (max by (namespace, job, instance) (max_over_time(solver_bot_solver_info{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\"}[24h])))) * on (namespace, job, instance) group_left (address) (topk by (namespace, job, instance) (1, max by (namespace, job, instance, address) (max_over_time(solver_bot_txmanager_account_info{namespace=\"${namespace}\"}[24h])))))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "{{policy}} 24h · {{address}}",
+                      "format": "time_series"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (address, policy) ((sum by (namespace, job, instance, policy) (increase(solver_bot_txmanager_shadow_lifecycles_total{namespace=\"${namespace}\",outcome=~\"first1|first2|first3\"}[7d])) and on (namespace, job, instance) (max by (namespace, job, instance) (max_over_time(solver_bot_solver_info{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\"}[7d])))) * on (namespace, job, instance) group_left (address) (topk by (namespace, job, instance) (1, max by (namespace, job, instance, address) (max_over_time(solver_bot_txmanager_account_info{namespace=\"${namespace}\"}[7d]))))) / sum by (address, policy) ((sum by (namespace, job, instance, policy) (increase(solver_bot_txmanager_shadow_lifecycles_total{namespace=\"${namespace}\",outcome!=\"refused\"}[7d])) and on (namespace, job, instance) (max by (namespace, job, instance) (max_over_time(solver_bot_solver_info{namespace=\"${namespace}\",solver=\"3f-bridge-facilitator\"}[7d])))) * on (namespace, job, instance) group_left (address) (topk by (namespace, job, instance) (1, max by (namespace, job, instance, address) (max_over_time(solver_bot_txmanager_account_info{namespace=\"${namespace}\"}[7d])))))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "{{policy}} 7d · {{address}}",
+                      "format": "time_series"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "colorMode": "value",
+              "graphMode": "none",
+              "justifyMode": "center",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": ["lastNotNull"],
+                "fields": "",
+                "values": false
+              },
+              "text": {"valueSize": 30},
+              "textMode": "value_and_name",
+              "wideLayout": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "percentunit",
+                "decimals": 2,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "red"},
+                    {"value": 0.99, "color": "yellow"},
+                    {"value": 0.995, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "thresholds"},
+                "noValue": "No data"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-304": {
+      "kind": "Panel",
+      "spec": {
+        "id": 304,
+        "title": "Redeem gas · selected period",
+        "description": "Gas of redeem transactions in the selected period: the highest gas limit signed for one (the estimate plus gas.headroomBps) and the mean receipt gas of confirmed ones. 3F leaves balance.referenceGasUnits unset, so the shadow evaluator and the required-balance gauges use the latest redeem's gas limit.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max(max_over_time(solver_bot_txmanager_attempt_gas_limit{namespace=\"${namespace}\",label=\"redeem\",kind=\"fill\"}[$__range]))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "Peak attempt gas limit",
+                      "format": "time_series"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum(sum by (namespace, job, instance) (increase(solver_bot_txmanager_gas_used_total{namespace=\"${namespace}\",label=\"redeem\",outcome=\"confirmed\"}[$__range]))) / sum(sum by (namespace, job, instance) (increase(solver_bot_txmanager_requests_total{namespace=\"${namespace}\",label=\"redeem\",outcome=\"confirmed\"}[$__range])))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "Receipt gas per confirmed redeem",
+                      "format": "time_series"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "colorMode": "none",
+              "graphMode": "none",
+              "justifyMode": "center",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": ["lastNotNull"],
+                "fields": "",
+                "values": false
+              },
+              "text": {"valueSize": 30},
+              "textMode": "value_and_name",
+              "wideLayout": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "text"}
+                  ]
+                },
+                "color": {"mode": "thresholds"},
+                "noValue": "No data"
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
     "panel-10": {
       "kind": "Panel",
       "spec": {
@@ -5130,6 +5324,26 @@
                       "width": 6,
                       "height": 7,
                       "element": {"kind": "ElementReference", "name": "panel-302"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 7,
+                      "width": 12,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-303"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 7,
+                      "width": 12,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-304"}
                     }
                   }
                 ]

@@ -226,7 +226,14 @@ type feeSnapshotCache struct {
 // ctx's cancellation, since other callers may be waiting on it, and bounded by the fee-read budget; ctx
 // only bounds this caller's wait.
 func (c *feeSnapshotCache) get(ctx context.Context, maxAge time.Duration) (*feeSnapshot, error) {
-	if snapshot := c.cached(maxAge); snapshot != nil {
+	return c.getNewer(ctx, maxAge, time.Time{})
+}
+
+// getNewer is get for a reader that polls: it also reads (or joins a read) when the cached snapshot is not
+// newer than seen, the read time of the snapshot the caller took last, so a poll never takes the snapshot it
+// already has for a new one. The zero seen accepts any cached snapshot.
+func (c *feeSnapshotCache) getNewer(ctx context.Context, maxAge time.Duration, seen time.Time) (*feeSnapshot, error) {
+	if snapshot := c.cached(maxAge); snapshot != nil && snapshot.readAt.After(seen) {
 		return snapshot, nil
 	}
 	results := c.flight.DoChan(feeSnapshotKey, func() (any, error) {

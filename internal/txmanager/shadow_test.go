@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ethereum/go-ethereum/core/types"
@@ -156,6 +157,32 @@ func TestShadowEvaluatorScoresBothPolicies(t *testing.T) {
 			chain: func() *shadowChain { return newShadowChain().full(gwei(0.05), start+1) },
 			cfg:   Config{ReplacementInterval: 15 * time.Second}, lane: funded,
 			wantLegacy: shadowReplaced, wantHoriz: shadowFirst2,
+		},
+		{
+			// Full blocks paying 0.0011 gwei: the legacy p25 tip (0.001 gwei) loses, its 15 s bump (0.001125 gwei,
+			// fee cap 2.251 gwei) wins the second block. The horizon floor tip wins the first.
+			name:  "a legacy bump wins a run the first tip loses",
+			chain: func() *shadowChain { return newShadowChain().full(gwei(0.0011), start+1, start+2, start+3) },
+			cfg:   Config{ReplacementInterval: 15 * time.Second}, lane: funded,
+			wantLegacy: shadowReplaced, wantHoriz: shadowFirst1,
+		},
+		{
+			// The same run with a balance funding 2.1 gwei per gas: enough for the 2.001 gwei legacy cap, not for
+			// its 2.251 gwei bump, so no replacement is signed and the first attempt stays in force.
+			name:       "a legacy bump the balance cannot fund",
+			chain:      func() *shadowChain { return newShadowChain().full(gwei(0.0011), start+1, start+2, start+3) },
+			cfg:        Config{ReplacementInterval: 15 * time.Second},
+			lane:       &shadowLane{gas: shadowTestGas, balance: new(big.Int).Mul(big.NewInt(shadowTestGas), gwei(2.1))},
+			wantLegacy: shadowMissed3, wantHoriz: shadowFirst1,
+		},
+		{
+			// A run after the send with a balance funding 2.1 gwei per gas: the horizon cap fee(6, 0.02 gwei) =
+			// 2.047 gwei is affordable, but the congestion reprice needs at least its 2.303 gwei bump, so none is
+			// signed and the capped first attempt never wins a 5 gwei block.
+			name:       "a horizon reprice the balance cannot fund",
+			chain:      func() *shadowChain { return newShadowChain().full(gwei(5), start+1, start+2, start+3) },
+			lane:       &shadowLane{gas: shadowTestGas, balance: new(big.Int).Mul(big.NewInt(shadowTestGas), gwei(2.1))},
+			wantLegacy: shadowMissed3, wantHoriz: shadowMissed3,
 		},
 		{
 			// The balance funds 1 gwei per gas, below the 2-block floor fee(2, 0.02 gwei) = 1.145 gwei.
@@ -471,20 +498,133 @@ func TestShadowTickEmitsOutcomesAndFeeGauges(t *testing.T) {
 	if got := testutil.ToFloat64(metrics.nextBaseFee); got != 1e9 {
 		t.Fatalf("fee_next_base_fee_wei = %v, want 1e9", got)
 	}
+}
 
-	// A tick within the shadow interval shares the cached snapshot: no fee-history read of its own.
-	historyReads := func() int {
+// TestShadowTickSharesOnlyANewerRecentSnapshot: a tick takes another reader's snapshot when it is newer than
+// the evaluator's last one and younger than the share age (a quarter block), and otherwise reads its own; it
+// never takes its own previous snapshot again, however recent.
+func TestShadowTickSharesOnlyANewerRecentSnapshot(t *testing.T) {
+	const blockTime = 100 * time.Millisecond // a 50 ms interval, a 25 ms share age
+	for _, tc := range []struct {
+		name     string
+		other    bool          // another reader reads after the evaluator's previous tick
+		age      time.Duration // age of the cached snapshot at the tick
+		wantRead bool
+	}{
+		{name: "the evaluator's own snapshot, however recent", age: time.Millisecond, wantRead: true},
+		{name: "another reader's newer snapshot within the share age", other: true, age: 20 * time.Millisecond},
+		{name: "another reader's newer snapshot past the share age", other: true, age: 30 * time.Millisecond, wantRead: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				backend := newHorizonBackend(big.NewInt(1e18))
+				m := NewWithMetrics(backend, mustSigner(t), big.NewInt(1), Config{
+					MaxFeeGwei: 50,
+					Fees:       FeeConfig{BlockTime: blockTime},
+					Balance:    BalanceConfig{ReferenceGasUnits: shadowTestGas, GuardDisabled: true},
+				}, newTestMetrics(t), logr.Discard())
+				historyReads := func() int {
+					backend.hmu.Lock()
+					defer backend.hmu.Unlock()
+					return len(backend.historyReads)
+				}
+				evaluator := m.newShadowEvaluator()
+				if err := m.shadowTick(t.Context(), evaluator); err != nil {
+					t.Fatal(err)
+				}
+				if tc.other {
+					time.Sleep(time.Millisecond)
+					if _, err := m.snapshots.get(t.Context(), 0); err != nil {
+						t.Fatal(err)
+					}
+				}
+				time.Sleep(tc.age)
+				reads := historyReads()
+				if err := m.shadowTick(t.Context(), evaluator); err != nil {
+					t.Fatal(err)
+				}
+				if read := historyReads() > reads; read != tc.wantRead {
+					t.Fatalf("tick read a snapshot of its own: %t, want %t", read, tc.wantRead)
+				}
+			})
+		})
+	}
+}
+
+// TestShadowReadsEveryTickAndSeesEveryHead: a shadow evaluator nothing else shares snapshots with reads one at
+// every tick, half a block apart, even though each read takes time, so it sees every head: here heads arrive
+// alternately 80 and 120 ms apart against 100 ms blocks, and a read once per block would miss every other one.
+func TestShadowReadsEveryTickAndSeesEveryHead(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		const (
+			blockTime = 100 * time.Millisecond // a tick every 50 ms
+			pairs     = 10                     // head pairs, one per 200 ms
+			firstHead = 100
+		)
+		backend := newHorizonBackend(big.NewInt(1e18))
+		backend.historyDelay = time.Millisecond
+		metrics := newTestMetrics(t)
+		m := NewWithMetrics(backend, mustSigner(t), big.NewInt(1), Config{
+			MaxFeeGwei: 50,
+			Fees:       FeeConfig{BlockTime: blockTime},
+			Balance:    BalanceConfig{ReferenceGasUnits: shadowTestGas, GuardDisabled: true},
+		}, metrics, logr.Discard())
+		ctx, cancel := context.WithCancel(t.Context())
+		shadowDone := make(chan struct{})
+		go func() {
+			defer close(shadowDone)
+			m.runShadow(ctx)
+		}()
+		advance := func() {
+			backend.hmu.Lock()
+			backend.number++
+			backend.hmu.Unlock()
+		}
+		// Heads arrive 60 and 140 ms into every 200 ms: the first of each pair is the newest for only 80 ms.
+		go func() {
+			time.Sleep(60 * time.Millisecond)
+			for pair := range pairs {
+				advance()
+				time.Sleep(80 * time.Millisecond)
+				advance()
+				if pair < pairs-1 {
+					time.Sleep(120 * time.Millisecond)
+				}
+			}
+		}()
+		const ticks = 2 * pairs * 2 // 2 s of 50 ms ticks
+		time.Sleep(ticks*blockTime/2 + blockTime/4)
+		synctest.Wait()
+		cancel()
+		<-shadowDone
+
 		backend.hmu.Lock()
-		defer backend.hmu.Unlock()
-		return len(backend.historyReads)
-	}
-	reads := historyReads()
-	if err := m.shadowTick(t.Context(), evaluator); err != nil {
-		t.Fatal(err)
-	}
-	if got := historyReads(); got != reads {
-		t.Fatalf("fee history reads = %d, want %d (the cached snapshot)", got, reads)
-	}
+		reads := 0
+		for _, read := range backend.historyReads {
+			if read.blocks == feeSnapshotBlocks {
+				reads++
+			}
+		}
+		lastHead := backend.number
+		backend.hmu.Unlock()
+		if reads != ticks {
+			t.Fatalf("fee snapshot reads = %d over %d ticks, want one per tick", reads, ticks)
+		}
+		if lastHead != firstHead+2*pairs {
+			t.Fatalf("last head = %d, want %d", lastHead, firstHead+2*pairs)
+		}
+		// A fill starts at every head; those at least three heads before the last are scored.
+		wantScored := float64(lastHead - firstHead - firstAttemptBlocks + 1)
+		for _, policy := range shadowPolicies {
+			scored := 0.0
+			for _, outcome := range shadowOutcomes {
+				scored += testutil.ToFloat64(metrics.shadowLifecycles.WithLabelValues(string(policy), string(outcome)))
+			}
+			if scored != wantScored {
+				t.Fatalf("%s fills scored = %v, want %v (one per head)", policy, scored, wantScored)
+			}
+		}
+	})
 }
 
 func TestShadowGasFallsBackToTheLatestFill(t *testing.T) {

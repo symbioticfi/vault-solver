@@ -466,8 +466,9 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   after hoodi, once the shadow gate passes and the stall-cadence decision is settled (a horizon stall reprice
   at nine missed blocks falls after an RFQ fill's ~90 s deadline; see
   [TXMANAGER-PLAN §10](TXMANAGER-PLAN.md#10-verification-and-maintenance)). The RFQ dashboard's fee-strategy row
-  shows the lane's funding, first-attempt outcomes and refusals; lanes that have not filled are funded to 0.036
-  ETH and raised to 0.1 on their first fill.
+  shows the lane's funding, first-attempt outcomes, refusals, the shadow first@3 per signer and policy that gates
+  the move, and the fill gas; lanes that have not filled are funded to 0.036 ETH and raised to 0.1 on their first
+  fill.
 - **Quote latency** — `/quote` is synchronous in the backend's fan-out, so keep it cheap: pricing is
   one `getAmountOut` multicall, and `tokenIn` decimals are read once and cached. A warm quote is a
   single multicall; only the first quote for a not-yet-seen `tokenIn` adds a one-off `decimals` read.

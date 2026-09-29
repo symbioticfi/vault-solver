@@ -585,6 +585,7 @@ func (m *Manager) Start(ctx context.Context) {
 	// job's solver-stamped one below.
 	ctx = observability.WithLogger(ctx, m.log)
 	m.metrics.bindAccount(m.signer.Address())
+	m.metrics.setFeePolicy(m.cfg.Fees.Policy)
 	if m.cfg.Balance.TargetEth > 0 {
 		m.metrics.setBalanceTarget(ethToWei(m.cfg.Balance.TargetEth))
 	}

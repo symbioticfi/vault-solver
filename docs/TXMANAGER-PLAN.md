@@ -327,7 +327,8 @@ guard's (§4.1) and apply under horizon even with the guard off, since the horiz
 head. Invalid shapes (no gas limit, ratios outside [0, 1], short reward rows) fail the read; a history without
 rewards counts as zero rewards. A per-process cache (`feeSnapshotCache`) keeps the latest snapshot and shares one
 read among concurrent callers (`singleflight`), detached from any one caller's cancellation and bounded by the
-fee-read budget. Quotes reuse a snapshot read less than `pollInterval` ago. A send always reads its own,
+fee-read budget. Quotes reuse a snapshot read less than `pollInterval` ago; the shadow evaluator reuses only one
+newer than its previous and less than a quarter block old (§4.5). A send always reads its own,
 joining a read already in flight (strategy §2.5 step 1): a cached snapshot can trail the head by a block inside
 the poll interval, and its next-block estimate would then run on top of a block that is already mined and miss
 that block's state, such as a same-vault fill. Goroutine model: the worker, quote goroutines, the lifecycle
@@ -507,10 +508,15 @@ does not include it. Outcomes, in `shadow_lifecycles_total{policy, outcome}`: `f
 first attempt lands in that block, no replacement signed before it), `replaced` (a later attempt lands within the
 three blocks), `missed3` (none does) and `refused`. first@3 is `(first1 + first2 + first3) / (all − refused)`.
 
-Inputs and cost. It takes the manager's shared fee snapshot (§4.3) every `fees.blockTimeMs/2`, reusing one read
-within that time by a send, a quote or a pending evaluation, so it adds at most one latest header and one
-`eth_feeHistory(6, latest, [25, p50])` per half block on the read endpoints, nothing on the write endpoint, and
-only while no other reader shares them. Each snapshot's history is merged into a short block store (the view
+Inputs and cost. It takes the manager's shared fee snapshot (§4.3) once per tick, every `fees.blockTimeMs/2`: a
+snapshot a send, a quote or a pending evaluation read since its previous tick and less than a quarter block ago
+(`shadowShareAge`), or else a read it starts itself, which those readers share in turn. It never takes its own
+previous snapshot again, so a read that takes time does not make the next tick skip its read: alone (the normal
+case under `legacy`, where nothing else reads snapshots) it reads at every tick, and snapshots it takes are at most
+three quarters of a block apart plus a read's latency, so it sees every head that stays the newest longer than
+that. It adds at most one latest header and one `eth_feeHistory(6, latest, [25, p50])` per half block on the read
+endpoints (about 14,400 of each a day), nothing on the write endpoint. Each snapshot's history is merged into a
+short block store (the view
 blocks of the oldest waiting fill onward, under a dozen at the defaults), from which the snapshot either policy
 would have read at any head of the window is rebuilt. A fill starts only at a consistent snapshot (fee history
 ending at the header) whose lag a send would accept (`fees.maxHeadLagBlocks`); older or repeated heads are
@@ -750,8 +756,14 @@ first@3 per policy, shadow outcomes and hourly first@1/2/3, the real first-attem
 simulation, inclusion delay p50/p99) and **Attempt pricing and repricing** (attempt fees and gas limits, the
 validity-horizon histogram, repricings, rebroadcasts and guard refusals, pending age, gas estimates by mode and
 their latency, spend per confirmed fill and its tip share). Each solver dashboard has a **Fee strategy and lane
-funding** row filtered to its operation label and, for account series, to the instances running that solver
-(`solver_bot_solver_info`).
+funding** row filtered to its operation label and, for account and shadow series, to the instances running that
+solver (`solver_bot_solver_info`): lane funding, first-attempt outcomes, refusals and repricings, the shadow first@3
+per signer and policy over 24 hours and 7 days (the per-lane gate of §10), and the fill gas (peak signed gas limit
+and receipt gas per confirmed fill) that `balance.referenceGasUnits` and the quote gas-units model are calibrated
+from. Series that increase() must see from the first event start at zero: the guard refusals, repricings and
+rebroadcasts, every `first_attempt_total` outcome and the `confirmed` spend series (`requests_total`,
+`gas_used_total`, `fee_paid_wei_total`, `tip_paid_wei_total`) for each label that reaches the worker, and every
+shadow series from startup.
 
 ### Metrics
 
@@ -770,7 +782,7 @@ Definitions: [metrics.go](../internal/txmanager/metrics.go),
 | Txmanager | `solver_bot_txmanager_admission_wait_duration_seconds` | `label`, `outcome` | Time from a real send request until worker admission or a terminal pre-admission outcome. `outcome` is `admitted` or one of the bounded rejection reasons; expected busy `TrySend` probes are excluded. |
 | Txmanager | `solver_bot_txmanager_lifecycle_duration_seconds` | `label`, `outcome` | Time from worker admission through broadcast and terminal tracking. It excludes pre-admission nonce-lane wait, so use admission rejections alongside its latency distribution. |
 | Txmanager | `solver_bot_txmanager_phase_duration_seconds` | `label`, `phase`, `outcome` | Time spent in each reached worker phase: `prebroadcast`, `pending`, or `confirming`. Reorgs may return a lifecycle to `pending`; the emitted sample contains the cumulative time spent in that phase. |
-| Txmanager | `solver_bot_txmanager_first_attempt_total` | `label`, `outcome`, `simulation` | Lifecycles that reached the chain: `first` (the first signed attempt landed within 3 blocks of its send head, exact rebroadcasts allowed), `late` (it landed later), `replaced` (a replacement or cancellation was signed before the call landed) or `cancelled` (the cancellation landed). `simulation` is `unknown` until next-block simulation classifies non-first lifecycles (§10). |
+| Txmanager | `solver_bot_txmanager_first_attempt_total` | `label`, `outcome`, `simulation` | Lifecycles that reached the chain: `first` (the first signed attempt landed within 3 blocks of its send head, exact rebroadcasts allowed), `late` (it landed later), `replaced` (a replacement or cancellation was signed before the call landed) or `cancelled` (the cancellation landed). `simulation` is `unknown` until next-block simulation classifies non-first lifecycles (§10). Every outcome starts at zero for each label that reaches the worker, so a pod's first non-first lifecycle is an increase the 28-day ratio counts. |
 | Txmanager | `solver_bot_txmanager_inclusion_delay_blocks` | `label` | Blocks from the head the first attempt was signed at to the block that included the call (1 is the next block); cancellations are excluded. |
 | Txmanager | `solver_bot_txmanager_pending_age_seconds` | `label`, `kind` | Age of the unresolved lifecycle's call (`fill`, since its first send) or cancellation (`cancellation`, since it began), refreshed on receipt polls and removed at inclusion or the end of the lifecycle. |
 | Txmanager | `solver_bot_txmanager_attempt_tip_wei`, `_attempt_max_fee_wei`, `_attempt_gas_limit` | `label`, `kind` | Priority fee, fee cap and gas limit of the latest signed attempt, `fill` (initial send and replacements) or `cancellation`. |
@@ -782,7 +794,8 @@ Definitions: [metrics.go](../internal/txmanager/metrics.go),
 | Txmanager | `solver_bot_txmanager_gas_estimate_duration_seconds` | `mode` | Duration of each gas estimate RPC; under horizon bounded by `gas.estimateTimeoutMs`, whose 5000 ms default is unmeasured through eRPC. |
 | Txmanager | `solver_bot_txmanager_account_required_balance_wei` | `horizon` | Balance a reference fill (`balance.referenceGasUnits`, or the latest attempt's gas limit while that is 0) needs at that base fee and the floor tip: `min` (`fees.minHorizonBlocks`, can still send), `quote` (`fees.pricingHorizonBlocks`) and `full` (`fees.maxHorizonBlocks`). Refreshed with `fee_next_base_fee_wei`. |
 | Txmanager | `solver_bot_txmanager_shadow_lifecycles_total` | `policy`, `outcome` | Virtual fills the shadow evaluator (§4.5) scored, one per policy (`legacy`, `horizon`) per head: `first1`, `first2`, `first3` (the first attempt lands in that block after its head, no replacement signed), `replaced` (a replacement lands within three blocks), `missed3` or `refused`. Every series starts at zero. It has no `label`: a virtual fill belongs to the lane, not to an operation; deployments are told apart by scrape target labels. first@3 is `(first1 + first2 + first3) / (all − refused)`. |
-| Txmanager | `solver_bot_txmanager_tip_paid_wei_total` | `label`, `outcome` | Priority fees paid by mined transactions: receipt `gasUsed` times the landed attempt's tip cap, which is what was paid whenever the price stayed below the fee cap and otherwise an upper bound (the receipt carries no base fee). Divided by `fee_paid_wei_total` it is the tip share of spend; divided by `gas_used_total`, the mean effective tip. |
+| Txmanager | `solver_bot_txmanager_tip_paid_wei_total` | `label`, `outcome` | Priority fees paid by mined transactions: receipt `gasUsed` times the landed attempt's tip cap, which is what was paid whenever the price stayed below the fee cap and otherwise an upper bound (the receipt carries no base fee). Divided by `fee_paid_wei_total` it is the tip share of spend; divided by `gas_used_total`, the mean effective tip. Its `confirmed` series starts at zero with those of `requests_total`, `gas_used_total` and `fee_paid_wei_total` for each label that reaches the worker, so the ratios count a pod's first confirmed fill on both sides. |
+| Txmanager | `solver_bot_txmanager_fee_policy_info` | `policy` | Constant `1` labelled with the fee policy the process signs with (`fees.policy`: `legacy` or `horizon`), from startup. Joined on the scrape target labels and `policy`, it selects the shadow outcomes of the policy in use for the 24-hour first@3 alert. |
 | Txmanager | `solver_bot_txmanager_account_fundable` | — | `1` while the lane funding gate (§4.2) is open, `0` while closed, including from startup until its first evaluation; absent while the gate is off (`balance.referenceGasUnits` 0). |
 | Txmanager | `solver_bot_txmanager_account_balance_target_wei` | — | `balance.targetEth` in wei, exported for alerts only (page on `account_fundable == 0` below it, warn at or above it); absent when unset. |
 | Txmanager | `solver_bot_txmanager_account_info` | `address` | Constant `1` identifying the active public transaction-sender address; absent when no configured solver starts txmanager. Private key material is never exposed. |
@@ -847,7 +860,8 @@ policy, next-block estimate and shadow evaluator ship in it):
   next base fee or the balance changed.
 - **Shadow gate, then per-lane rollout (deploy D3).** Move a lane to `fees.policy: horizon` once at least 7 days of
   shadow data (§4.5), including an episode with a base fee above 3 gwei, show horizon first@3 at least legacy's
-  and at least 99.5% (`shadow_lifecycles_total`, dashboard row "First attempts and shadow fee evaluation"). The
+  and at least 99.5% (`shadow_lifecycles_total`: per signer in each solver dashboard's fee-strategy row, pooled in
+  the runtime row "First attempts and shadow fee evaluation"). The
   99.5% is an assumption: recalibrate it against the first week of legacy shadow data, since the shadow's p50
   displacement stand-in is stricter than the replay's. Canary order: hoodi (2–3 days, which also measures the
   testnet tip floors), mainnet RFQ `symbiotic` (3 days), all RFQ lanes, UniswapX, LI.FI, 3F. Settle the stall
@@ -887,7 +901,9 @@ policy, next-block estimate and shadow evaluator ship in it):
   account_balance_target_wei`, on a shared signer, on write/cancel RPC error ratio above 5% over 15m or p95 above
   2 s, on `increase(repricings_total{reason="stall"}[1h]) >= 2` or any `gas` repricing, on any
   `gas_estimates_total{mode="fallback"}` increase, on `max(pending_age_seconds{kind="cancellation"}) > 120`, and on
-  a 24-hour shadow first@3 below 0.99 for the policy in use. Refusals are a dashboard series, not an alert.
+  a 24-hour shadow first@3 below 0.99 for the policy in use (the per-process ratio by `policy`, joined
+  `and on (namespace, job, instance, policy)` with `fee_policy_info`). Refusals are a dashboard series, not an
+  alert.
 - **Funding gate on every fee snapshot.** The strategy re-evaluates `Fundable()` on each fee snapshot as well as
   on account polls; it follows account polls and guarded sends (§4.2). The shadow evaluator reads a snapshot every
   half block but has only the last-read balance, which after a fill can be the one before it was paid, so it

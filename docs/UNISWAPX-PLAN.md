@@ -939,8 +939,9 @@ Tracked operational and onboarding steps — **update as items start/finish/drop
 - [ ] Self-funding loops (keep solver-gas / pay-bid pots fed from profit) if needed.
 - [ ] Recalibrate the quote gas-units model (`internal/liquidlane/gas`: 0.9–1.1M units modelled against 3.0–3.6M
       measured) before enabling `gas:` on mainnet; `MaxFeePerGas` and the funding gate then price
-      `balance.referenceGasUnits` (4400000), which ships with the same deploy. The runtime and UniswapX dashboards'
-      fee-strategy rows show the measured `attempt_gas_limit` and receipt gas to calibrate from.
+      `balance.referenceGasUnits` (4400000), which ships with the same deploy. The UniswapX dashboard's fee-strategy
+      row ("Fill gas": the peak `attempt_gas_limit` and receipt gas per confirmed fill) and the runtime dashboard's
+      "Latest attempt gas limit by operation" show the measured gas to calibrate from.
 - [ ] Move this lane to `fees.policy: horizon` in the strategy's canary order (after the RFQ lanes) once the
       shadow gate passes ([TXMANAGER-PLAN §10](TXMANAGER-PLAN.md#10-verification-and-maintenance)); its
       `replacementIntervalMs: 15000` then only paces the fallback path. The shadow's legacy baseline already models

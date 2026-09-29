@@ -29,10 +29,14 @@ import (
 // It is fee-side only: blocks our relay cannot reach, reverts and competitor fills are not modelled, and
 // consecutive heads are correlated, so the effective sample is smaller than one virtual fill per head.
 //
-// Input: the fee snapshot the rest of the manager shares (feeSnapshotCache), taken at most once per half
-// block and only when no send, quote or pending evaluation read one more recently; it makes no RPC of its
-// own. Each snapshot's fee history is merged into a short store of blocks, from which the evaluator rebuilds
-// the snapshot each policy would have seen at any head it needs.
+// Input: the fee snapshot the rest of the manager shares (feeSnapshotCache), one per tick, every half block. A
+// tick takes a snapshot a send, quote or pending evaluation read since the evaluator's previous one and less
+// than a quarter block ago; otherwise it starts the shared read itself (the latest header and one
+// eth_feeHistory, on the read endpoints), which those readers then share in turn. So it adds at most one read
+// per tick, one per half block when nothing else reads (the legacy policy's normal case), and consecutive
+// snapshots it takes are at most three quarters of a block apart plus a read's latency: it sees every head
+// that stays the newest for longer. Each snapshot's fee history is merged into a short store of blocks, from
+// which the evaluator rebuilds the snapshot each policy would have seen at any head it needs.
 //
 // Goroutine model: Start runs one goroutine (runShadow) that owns its shadowEvaluator; nothing else reads or
 // writes it. It reads the manager's shared state only through the snapshot cache and atomics.
@@ -99,6 +103,7 @@ type shadowEvaluator struct {
 	gasLimit uint64 // gas limit of the newest header, which room is measured against (as tipRule does)
 	head     uint64 // newest fee-history block merged
 	pending  []shadowStart
+	seen     time.Time // read time of the latest snapshot a tick took, which the next one never takes again
 }
 
 func newShadowEvaluator(rules shadowRules) *shadowEvaluator {
@@ -407,9 +412,17 @@ func (m *Manager) shadowEnabled() bool {
 }
 
 // shadowInterval is how often the shadow evaluator takes a fee snapshot: every half block, so it sees each
-// head, sharing any snapshot read within that time.
+// head within half a block of its arrival when it reads its own.
 func (m *Manager) shadowInterval() time.Duration {
 	return max(m.cfg.Fees.BlockTime/2, time.Millisecond)
+}
+
+// shadowShareAge is the age below which a tick takes another reader's newer snapshot instead of reading: half
+// the interval. A shared snapshot then trails the tick by at most a quarter block, and the evaluator's own
+// read is never reused by its next tick however long the read took (it takes only newer snapshots), so
+// without other readers it reads at every tick rather than every other one at a fixed phase in the slot.
+func (m *Manager) shadowShareAge() time.Duration {
+	return m.shadowInterval() / 2
 }
 
 // shadowGas is the virtual fill's gas limit: balance.referenceGasUnits, or the latest signed fill's gas
@@ -469,17 +482,18 @@ func (m *Manager) runShadow(ctx context.Context) {
 	}
 }
 
-// shadowTick is one evaluation, the root span txmanager.shadow: the shared fee snapshot (read only when none
-// is younger than the shadow interval), a virtual fill at a new head, and the scores it completes. A new
-// head also refreshes the next-base-fee and required-balance gauges for the reference fill, so they follow
-// every head even while the funding gate is off.
+// shadowTick is one evaluation, the root span txmanager.shadow: the shared fee snapshot (another reader's
+// newer one younger than shadowShareAge, or else a read), a virtual fill at a new head, and the scores it
+// completes. A new head also refreshes the next-base-fee and required-balance gauges for the reference fill,
+// so they follow every head even while the funding gate is off.
 func (m *Manager) shadowTick(ctx context.Context, evaluator *shadowEvaluator) (err error) {
 	ctx, end := tracer.Start(ctx, "txmanager.shadow")
 	defer func() { end(err) }()
-	snapshot, err := m.snapshots.get(ctx, m.shadowInterval())
+	snapshot, err := m.snapshots.getNewer(ctx, m.shadowShareAge(), evaluator.seen)
 	if err != nil {
 		return err
 	}
+	evaluator.seen = snapshot.readAt
 	gas := m.shadowGas()
 	var lane *shadowLane
 	if gas > 0 {

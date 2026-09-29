@@ -35,9 +35,10 @@ type horizonBackend struct {
 	ratios        map[uint64]float64  // gas-used ratio by block; 0.5 by default
 	baseFees      map[uint64]*big.Int // base fee by block; latestBase by default
 	runRewards    map[uint64]*big.Int
-	historyErr    error    // returned by every fee history read while set
-	historyHeads  []uint64 // newest block of every fee history served
-	balance       *big.Int // nil: no pinned balance capability is exercised (reads fail)
+	historyErr    error         // returned by every fee history read while set
+	historyDelay  time.Duration // how long a fee history read takes after it read the chain
+	historyHeads  []uint64      // newest block of every fee history served
+	balance       *big.Int      // nil: no pinned balance capability is exercised (reads fail)
 	balanceReads  []rpc.BlockNumberOrHash
 	historyReads  []feeHistoryRequest
 
@@ -101,8 +102,22 @@ func (b *horizonBackend) HeaderByNumber(ctx context.Context, number *big.Int) (*
 }
 
 func (b *horizonBackend) FeeHistory(
-	_ context.Context, blockCount uint64, newest *big.Int, percentiles []float64,
+	ctx context.Context, blockCount uint64, newest *big.Int, percentiles []float64,
 ) (*ethereum.FeeHistory, error) {
+	history, delay, err := b.feeHistory(blockCount, newest, percentiles)
+	if err == nil && delay > 0 {
+		select {
+		case <-time.After(delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return history, err
+}
+
+func (b *horizonBackend) feeHistory(
+	blockCount uint64, newest *big.Int, percentiles []float64,
+) (*ethereum.FeeHistory, time.Duration, error) {
 	b.hmu.Lock()
 	defer b.hmu.Unlock()
 	request := feeHistoryRequest{blocks: blockCount, percentiles: append([]float64(nil), percentiles...)}
@@ -111,7 +126,7 @@ func (b *horizonBackend) FeeHistory(
 	}
 	b.historyReads = append(b.historyReads, request)
 	if b.historyErr != nil {
-		return nil, b.historyErr
+		return nil, 0, b.historyErr
 	}
 	var offset int64
 	if len(b.historyOffset) > 0 {
@@ -144,7 +159,7 @@ func (b *horizonBackend) FeeHistory(
 		history.Reward = append(history.Reward, row)
 	}
 	history.BaseFee = append(history.BaseFee, new(big.Int).Set(b.nextBase))
-	return history, nil
+	return history, b.historyDelay, nil
 }
 
 func (b *horizonBackend) ReadBalanceAtBlock(

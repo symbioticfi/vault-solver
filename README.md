@@ -517,10 +517,12 @@ matches or beats that block's median reward. `solver_bot_txmanager_shadow_lifecy
 `first2`, `first3`, `replaced`, `missed3`, `refused`) gives about 7,200 virtual fills per policy a day, where real
 fills number a few a week. Move a lane to `fees.policy: horizon` once seven days of it show horizon first@3 at least
 as high as legacy's and at least 99.5%, including a period with a base fee above 3 gwei; alert when the policy in
-use falls below 99% over 24 hours. It reuses the fee snapshot the tx manager reads anyway, adding at most one
-latest-header and one fee-history read per half block on the read endpoints when nothing else read one, and it
-also keeps `solver_bot_txmanager_fee_next_base_fee_wei` and `solver_bot_txmanager_account_required_balance_wei`
-current on every head. It covers the fee side only: blocks built outside the relay's reach, reverts and competitor
+use falls below 99% over 24 hours (`solver_bot_txmanager_fee_policy_info{policy}` says which policy a process
+uses). It shares the fee snapshot the tx manager reads anyway: every half block it takes one a send, quote or
+pending evaluation read within the last quarter block, or else reads one itself, so it adds at most one
+latest-header and one fee-history read per half block on the read endpoints (about 14,400 of each a day when
+nothing else reads, as under `legacy`). It also keeps `solver_bot_txmanager_fee_next_base_fee_wei` and
+`solver_bot_txmanager_account_required_balance_wei` current on every head. It covers the fee side only: blocks built outside the relay's reach, reverts and competitor
 fills show up in the real `solver_bot_txmanager_first_attempt_total`.
 
 Under horizon a pending attempt is not bumped on a timer. Every half block (`fees.blockTimeMs`/2) the manager
@@ -706,8 +708,9 @@ Sentry groups these diagnosed errors by `(solver, message, reason_code)`; other 
 
 The [txmanager metric reference](docs/TXMANAGER-PLAN.md#metrics) covers transaction outcomes, admission
 and balance-guard refusals, replacements, phase timing, first-attempt and inclusion-delay outcomes, attempt
-fees, pending age, required balance and account snapshots, shadow fee-policy outcomes and the priority fees paid
-(`tip_paid_wei_total`, whose ratio to `fee_paid_wei_total` is the tip share of spend), including labels and units.
+fees, pending age, required balance and account snapshots, shadow fee-policy outcomes, the fee policy in use
+(`fee_policy_info`) and the priority fees paid (`tip_paid_wei_total`, whose ratio to `fee_paid_wei_total` is the
+tip share of spend), including labels and units.
 
 The registry also includes standard Go/process collectors,
 `solver_bot_build_info{version,commit}`, and `solver_bot_solver_info{solver}`. The first identifies the exact
@@ -806,7 +809,10 @@ Runtime's **Lane funding and fee inputs**, **First attempts and shadow fee evalu
 repricing** rows show each signer's balance against what a reference fill needs and its target, the funding gate,
 the shadow first@3 per fee policy, the real first-attempt ratio pooled over 28 days with a 95% Wilson interval,
 inclusion delay, attempt fees and horizons, repricings, refusals, gas-estimate modes and spend per confirmed fill;
-each solver dashboard has a **Fee strategy and lane funding** row for its own operation.
+each solver dashboard has a **Fee strategy and lane funding** row for its own operation: lane funding, first-attempt
+outcomes, refusals and repricings, the shadow first@3 per signer and fee policy over 24 hours and 7 days (the
+per-lane gate for moving to `horizon`), and the fill gas (peak signed gas limit and receipt gas per confirmed fill)
+to calibrate `balance.referenceGasUnits` from.
 Counter increases are calculated per process before summing, percentiles use combined histogram
 buckets, and shared account balances are not summed across replicas.
 

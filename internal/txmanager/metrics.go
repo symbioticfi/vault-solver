@@ -108,6 +108,7 @@ type Metrics struct {
 	rebroadcasts        *prometheus.CounterVec
 	tipPaidWei          *prometheus.CounterVec
 	shadowLifecycles    *prometheus.CounterVec
+	feePolicy           *prometheus.GaugeVec
 	account             *accountMetrics
 }
 
@@ -223,13 +224,13 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
 			Name:      "fee_next_base_fee_wei",
-			Help:      "Base fee of the next block from the latest fee snapshot a send was priced or guarded at, or the funding gate's account poll read.",
+			Help:      "Base fee of the next block from the latest fee snapshot a send was priced or guarded at, the funding gate's account poll read, or the shadow evaluator took at a new head.",
 		}),
 		requiredBalance: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
 			Name:      "account_required_balance_wei",
-			Help:      "Balance a reference fill needs at the latest next base fee and the floor tip: min (fees.minHorizonBlocks, can send), quote (fees.pricingHorizonBlocks, funding gate) or full (fees.maxHorizonBlocks).",
+			Help:      "Balance a reference fill needs at the latest next base fee (fee_next_base_fee_wei, refreshed with it) and the floor tip: min (fees.minHorizonBlocks, can send), quote (fees.pricingHorizonBlocks, funding gate) or full (fees.maxHorizonBlocks).",
 		}, []string{"horizon"}),
 		gasEstimates: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: metricsNamespace,
@@ -268,6 +269,12 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Name:      "shadow_lifecycles_total",
 			Help:      "Virtual fills the shadow evaluator scored, one per fee policy per head: first1, first2 or first3 (the first attempt would have been included that many blocks after its head), replaced (included within 3 blocks after a replacement), missed3 (not included within 3 blocks) or refused (the policy would not have signed it).",
 		}, []string{"policy", "outcome"}),
+		feePolicy: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: metricsNamespace,
+			Subsystem: metricsSubsystem,
+			Name:      "fee_policy_info",
+			Help:      "Constant 1 labelled with the fee policy this process signs with (fees.policy: legacy or horizon), from startup; joined on the scrape target labels it selects the shadow outcomes of the policy in use.",
+		}, []string{"policy"}),
 	}
 	for _, collector := range []prometheus.Collector{
 		m.requests,
@@ -294,6 +301,7 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 		m.rebroadcasts,
 		m.tipPaidWei,
 		m.shadowLifecycles,
+		m.feePolicy,
 		m.account,
 	} {
 		if err := reg.Register(collector); err != nil {
@@ -316,12 +324,25 @@ var guardRefusalReasons = [...]admissionRejectionReason{
 }
 
 // repricingReasons and rebroadcastReasons start at zero for every label that reaches the worker, like
-// guardRefusalReasons, so the first stall or gas repricing of a label is an increase the alerts see.
+// guardRefusalReasons, so the first stall or gas repricing of a label is an increase the alerts see. So do
+// the first-attempt outcomes and the confirmed spend series (see beginLifecycle).
 var (
 	repricingReasons   = [...]string{repriceValidity, repriceCongestion, repriceStall, repriceGas, repriceFallback}
 	rebroadcastReasons = [...]string{rebroadcastStall, rebroadcastReorg, rebroadcastUncertain, rebroadcastCapped}
 )
 
+// firstAttemptOutcomes are the values of first_attempt_total{outcome}.
+var firstAttemptOutcomes = [...]firstAttemptOutcome{
+	firstAttemptFirst, firstAttemptLate, firstAttemptReplaced, firstAttemptCancelled,
+}
+
+// beginLifecycle starts a lifecycle's observation. It first creates, at zero, the label's series whose first
+// increment the dashboards and alerts must see: a series created at its first increment is invisible to
+// increase(). That matters most for first_attempt_total, whose non-first outcomes are rare enough to be the
+// first of their series on a new pod, and which the 28-day first-attempt ratio sums. The confirmed spend series
+// (requests, receipt gas, fee and tip paid) start together, so the spend-per-fill and tip-share ratios count a
+// pod's first confirmed fill in numerator and denominator alike. Only a label's very first lifecycle on a pod
+// can still go uncounted, when it completes before any scrape saw the zeros.
 func (m *Metrics) beginLifecycle(label string) lifecycleObservation {
 	if m == nil {
 		return lifecycleObservation{}
@@ -335,6 +356,14 @@ func (m *Metrics) beginLifecycle(label string) lifecycleObservation {
 	for _, reason := range rebroadcastReasons {
 		m.rebroadcasts.WithLabelValues(label, reason)
 	}
+	for _, outcome := range firstAttemptOutcomes {
+		m.firstAttempts.WithLabelValues(label, string(outcome), simulationUnknown)
+	}
+	confirmed := string(OutcomeConfirmed)
+	m.requests.WithLabelValues(label, confirmed)
+	m.gasUsed.WithLabelValues(label, confirmed)
+	m.feePaidWei.WithLabelValues(label, confirmed)
+	m.tipPaidWei.WithLabelValues(label, confirmed)
 	m.inflight.WithLabelValues(label).Inc()
 	now := time.Now()
 	observation := lifecycleObservation{
@@ -564,6 +593,15 @@ func (m *Metrics) startShadow() {
 			m.shadowLifecycles.WithLabelValues(string(policy), string(outcome))
 		}
 	}
+}
+
+// setFeePolicy exports the fee policy the manager signs with as the one series of fee_policy_info.
+func (m *Metrics) setFeePolicy(policy FeePolicy) {
+	if m == nil {
+		return
+	}
+	m.feePolicy.Reset()
+	m.feePolicy.WithLabelValues(string(policy)).Set(1)
 }
 
 // shadowLifecycle counts one scored virtual fill.

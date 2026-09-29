@@ -484,3 +484,70 @@ func assertHistogramDuration(t *testing.T, observer prometheus.Observer, want ti
 	t.Helper()
 	metricstest.RequireHistogram(t, observer, 1, want.Seconds())
 }
+
+// TestBeginLifecycleStartsOutcomeSeriesAtZero: once a label's lifecycle begins, every first-attempt outcome and
+// the confirmed spend series exist at zero, so the first late, replaced or cancelled lifecycle of a label on a
+// new pod is an increase the 28-day ratio counts, and the spend and tip-share ratios gain their first confirmed
+// fill in numerator and denominator alike.
+func TestBeginLifecycleStartsOutcomeSeriesAtZero(t *testing.T) {
+	metrics := newTestMetrics(t)
+	metrics.beginLifecycle("rfq-fill")
+	for _, tc := range []struct {
+		name      string
+		collector prometheus.Collector
+		want      int
+	}{
+		{"first_attempt_total", metrics.firstAttempts, len(firstAttemptOutcomes)},
+		{"requests_total", metrics.requests, 1},
+		{"gas_used_total", metrics.gasUsed, 1},
+		{"fee_paid_wei_total", metrics.feePaidWei, 1},
+		{"tip_paid_wei_total", metrics.tipPaidWei, 1},
+	} {
+		if got := testutil.CollectAndCount(tc.collector); got != tc.want {
+			t.Fatalf("%s series after beginLifecycle = %d, want %d", tc.name, got, tc.want)
+		}
+	}
+	for _, outcome := range firstAttemptOutcomes {
+		assertMetric(t, metrics.firstAttempts.WithLabelValues("rfq-fill", string(outcome), simulationUnknown), 0)
+	}
+	confirmed := string(OutcomeConfirmed)
+	assertMetric(t, metrics.requests.WithLabelValues("rfq-fill", confirmed), 0)
+	assertMetric(t, metrics.gasUsed.WithLabelValues("rfq-fill", confirmed), 0)
+	assertMetric(t, metrics.feePaidWei.WithLabelValues("rfq-fill", confirmed), 0)
+	assertMetric(t, metrics.tipPaidWei.WithLabelValues("rfq-fill", confirmed), 0)
+}
+
+// TestStartExportsTheFeePolicy: a started manager exports its fee policy as the one fee_policy_info series, which
+// alert rules join to select the shadow outcomes of the policy in use.
+func TestStartExportsTheFeePolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		backend Backend
+		cfg     Config
+		want    FeePolicy
+	}{
+		{name: "the zero config signs legacy", backend: newMockBackend(), want: FeePolicyLegacy},
+		{
+			name:    "horizon",
+			backend: newHorizonBackend(big.NewInt(1e18)),
+			cfg:     Config{MaxFeeGwei: 50, Fees: FeeConfig{Policy: FeePolicyHorizon}},
+			want:    FeePolicyHorizon,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			metrics := newTestMetrics(t)
+			startTestManager(t, tc.backend, tc.cfg, metrics)
+			deadline := time.Now().Add(5 * time.Second)
+			for testutil.CollectAndCount(metrics.feePolicy) == 0 {
+				if time.Now().After(deadline) {
+					t.Fatal("fee_policy_info not exported after Start")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if got := testutil.CollectAndCount(metrics.feePolicy); got != 1 {
+				t.Fatalf("fee_policy_info series = %d, want 1", got)
+			}
+			assertMetric(t, metrics.feePolicy.WithLabelValues(string(tc.want)), 1)
+		})
+	}
+}
