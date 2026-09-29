@@ -34,9 +34,9 @@ import (
 var ErrUnaffordable = errors.New("signer balance cannot fund the transaction")
 
 // ErrStaleHead reports a request refused because the fee snapshot stayed too far behind the chain
-// head, or the signer balance could not be read at the snapshot's block, for longer than the guard
-// waits. Nothing was signed and the nonce was not consumed; the Result is NotAdmitted. It is
-// transient: the next request is priced from a fresh read.
+// head, or the signer balance (or, under the horizon policy, the next-block gas estimate) could not be
+// read at the snapshot's block, for longer than the guard waits. Nothing was signed and the nonce was
+// not consumed; the Result is NotAdmitted. It is transient: the next request is priced from a fresh read.
 var ErrStaleHead = errors.New("fee snapshot head is stale")
 
 // errUnaffordableOneBlock is ErrUnaffordable where the balance still funds the next block at the floor
@@ -134,7 +134,7 @@ func (m *Manager) sendSnapshot(ctx context.Context) (sendSnapshot, error) {
 // freshSnapshot reads the legacy fee inputs until their head is fresh (see checkSnapshot and
 // awaitFreshSnapshot).
 func (m *Manager) freshSnapshot(ctx context.Context) (sendSnapshot, error) {
-	return m.awaitFreshSnapshot(ctx, func(ctx context.Context, _ bool) (snapshot sendSnapshot, stale, err error) {
+	return m.awaitFreshSnapshot(ctx, func(ctx context.Context) (snapshot sendSnapshot, stale, err error) {
 		reading, err := m.readFees(ctx)
 		if err != nil {
 			return sendSnapshot{}, nil, err
@@ -145,8 +145,8 @@ func (m *Manager) freshSnapshot(ctx context.Context) (sendSnapshot, error) {
 }
 
 // snapshotRead reads one send snapshot. A stale snapshot is reported through stale and a failed read
-// through err; again is set once an earlier read in the same wait was stale, so a cached read is bypassed.
-type snapshotRead func(ctx context.Context, again bool) (snapshot sendSnapshot, stale, err error)
+// through err.
+type snapshotRead func(ctx context.Context) (snapshot sendSnapshot, stale, err error)
 
 // awaitFreshSnapshot reads until the snapshot's head is fresh. A stale head is waited out for up to two
 // block times, bounded by ctx and so by CancelAt, and then refused with ErrStaleHead: an eRPC hiccup or a
@@ -161,7 +161,7 @@ func (m *Manager) awaitFreshSnapshot(ctx context.Context, read snapshotRead) (se
 	}
 	var stale error
 	for {
-		snapshot, nowStale, err := read(ctx, stale != nil)
+		snapshot, nowStale, err := read(ctx)
 		if err != nil {
 			// A read the deadline cut short while waiting out a stale head is still that stale head.
 			if stale != nil && waitCtx.Err() != nil {

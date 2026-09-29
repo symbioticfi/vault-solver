@@ -210,7 +210,7 @@ func (c *Client) ReadBalanceAtBlock(
 
 	var balance *hexutil.Big
 	if callErr := c.Client.Client().CallContext(ctx, &balance, rpcMethodGetBalance, account, param); callErr != nil {
-		if isBlockNotFound(callErr) {
+		if IsBlockNotFound(callErr) {
 			return nil, errors.Errorf("chain: balance of %s at block %s: %w: %w", account.Hex(), block.String(), ethereum.NotFound, callErr)
 		}
 		return nil, errors.Errorf("chain: balance of %s at block %s: %w", account.Hex(), block.String(), callErr)

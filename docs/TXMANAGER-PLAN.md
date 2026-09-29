@@ -112,8 +112,10 @@ Account refresh uses a 5-second context. Backends must honor cancellation.
 With the balance guard on (§4.1), a new send waits out a stale fee snapshot for at most two
 `fees.blockTimeMs` (bounded by `CancelAt`), polling every `min(pollInterval, blockTime/4)`, and retries a
 pinned balance read whose block the node does not have yet within the fee-read budget. The gas estimate
-runs concurrently with those reads. Under the horizon policy (§4.3) the snapshot and the stale-head wait come
-first, then the estimate runs concurrently with the pinned balance read, bounded by `gas.estimateTimeoutMs`.
+runs concurrently with those reads. Under the horizon policy (§4.3) the estimate needs the snapshot's header: it
+starts on the first snapshot read, so it overlaps the stale-head wait (restarting on each newer header), and runs
+concurrently with the pinned balance read, bounded by `gas.estimateTimeoutMs`. On both paths a failed estimate
+ends the wait and the reads at once and fails the send with its own error.
 
 ## 4. Fees, replacements and cancellation
 
@@ -299,10 +301,12 @@ guard's (§4.1) and apply under horizon even with the guard off, since the horiz
 head. Invalid shapes (no gas limit, ratios outside [0, 1], short reward rows) fail the read; a history without
 rewards counts as zero rewards. A per-process cache (`feeSnapshotCache`) keeps the latest snapshot and shares one
 read among concurrent callers (`singleflight`), detached from any one caller's cancellation and bounded by the
-fee-read budget. Quotes and sends reuse a snapshot read less than `pollInterval` ago; a send whose snapshot is
-stale forces a new read. Goroutine model: the worker, quote goroutines and, later, the lifecycle goroutine and
-the shadow evaluator read; the goroutine running the shared read is the only writer, under the cache mutex, and
-a stored snapshot is immutable.
+fee-read budget. Quotes reuse a snapshot read less than `pollInterval` ago. A send always reads its own,
+joining a read already in flight (strategy §2.5 step 1): a cached snapshot can trail the head by a block inside
+the poll interval, and its next-block estimate would then run on top of a block that is already mined and miss
+that block's state, such as a same-vault fill. Goroutine model: the worker, quote goroutines and, later, the
+lifecycle goroutine and the shadow evaluator read; the goroutine running the shared read is the only writer,
+under the cache mutex, and a stored snapshot is immutable.
 
 **Tip rule** (`tipRule`, per gas limit `G`). A block has room when `header.gasLimit × (1 − gasUsedRatio) ≥ G`,
 our own gas limit rather than a fixed size. With `N` the snapshot's newest block: neither `N` nor `N−1` with room
@@ -311,8 +315,9 @@ clamped to `[congestedTipFloorGwei, congestedTipCapGwei]`; exactly one without r
 `singleFullBlockTipGwei`; otherwise `tipFloorGwei`. The tip is never zero, and `tipGwei` must be 0 under
 horizon (config validation and `ValidateFeeHeadroom`).
 
-**Initial send** (`initialFees`), in the order of strategy §2.5: the snapshot with the stale-head wait; then,
-concurrently, the gas estimate on top of the snapshot's header and the signer balance pinned to its block; then
+**Initial send** (`initialFees`), in the order of strategy §2.5: the snapshot with the stale-head wait; the gas
+estimate on top of the snapshot's header; the signer balance pinned to its block, concurrently with the estimate;
+then
 
 ```
 floor  = fee(minHorizonBlocks + lag, tipFloor)
@@ -343,10 +348,19 @@ the quote with `fee limit reached`, as a legacy quote fails when the base fee is
 the snapshot's header `N`, plus `gas.headroomBps`. It is used only once the capability probe has confirmed that
 the read endpoint honours the overrides: until the first conclusive probe, after one that found them rejected or
 ignored, or when a call is rejected (`IsBlockOverridesUnsupported`), the plain estimate at `latest` with
-`gas.fallbackHeadroomBps` is used (`estimateMode: fallback`). A revert or any other estimate error fails the send
-without consuming the nonce, as today. With `gas.nextBlockEstimate: false` the plain estimate keeps
-`gas.headroomBps` (`estimateMode: latest`). Every horizon estimate has its own `gas.estimateTimeoutMs` budget; the
-legacy estimate stays unbounded except by `CancelAt`. The probe (`ProbeBlockOverrides`, §6) runs from `Start` at
+`gas.fallbackHeadroomBps` is used: `estimateMode: unconfirmed` before any conclusive probe (at startup, or while
+every probe so far was inconclusive), and `fallback` once the endpoint is known to reject or ignore the overrides,
+or a call rejected them. The estimate is pinned to `N` like the balance read, and an upstream that has not
+imported `N` yet (eRPC does not fail over on "header not found") is retried in the same way within the estimate's
+budget; a parent still missing then refuses the send as `stale_head` (NotAdmitted, outcome `block_not_found`). It
+never falls back to `latest`, which on that upstream is older than the block the fees are priced at. A revert or
+any other estimate error fails the send without consuming the nonce, as today. The estimate starts on the first
+snapshot read rather than after the stale-head wait (a deviation from strategy §2.5's order): a failing fill then
+ends the wait with its revert, as on the legacy path, instead of a `stale_head` refusal a solver would retry; each
+newer header the wait reads restarts it, so the attempt's estimate is always on top of the header it is priced
+from. With `gas.nextBlockEstimate: false` the plain estimate keeps `gas.headroomBps` (`estimateMode: latest`).
+Every horizon estimate has its own `gas.estimateTimeoutMs` budget; the legacy estimate stays unbounded except by
+`CancelAt`. The probe (`ProbeBlockOverrides`, §6) runs from `Start` at
 startup and every 10 minutes, one minute after an inconclusive one, as the root span
 `txmanager.block_overrides_probe`; verdict changes are logged at Info, an inconclusive run like a failed read
 (Info, then Error after five minutes). A backend without the capability logs one startup line.
@@ -516,12 +530,14 @@ Funding-gate changes are Info lines (`lane unfundable: …`, `lane fundable`, `l
 the sender, balance, threshold, reopening balance, next base fee and head; the "started" line also says
 whether the gate runs and its `referenceGasUnits`.
 The Info `sent` line (and its "already known" and "uncertain" variants) carries `gasLimit`, `estimateMode`
-(`supplied`, `latest`, or under horizon `next_block` or `fallback`), `tip`, `maxFee` and `requiredBalance`
-(`gasLimit × maxFee + value`); under the balance guard or the horizon policy it adds `nextBaseFee`,
-`horizonBlocks` (blocks from the next one the fee cap stays valid at the floor tip) and `headLagBlocks`, and
-with the guard `balance` and `balanceBound`. The `txmanager.broadcast` span carries `gas.estimate_mode`, and
-when known `fee.next_base`, `fee.horizon` and `balance.affordable`. It is Info because RFQ and LI.FI run without
-`--debug`. The "started" line names the sender address, the fee policy and whether the guard runs.
+(`supplied`, `latest`, or under horizon `next_block`, `fallback` or `unconfirmed`), `tip`, `maxFee` and
+`requiredBalance` (`gasLimit × maxFee + value`); under the balance guard or the horizon policy it adds
+`nextBaseFee`, `horizonBlocks` (blocks from the next one the fee cap stays valid at the floor tip) and
+`headLagBlocks`, and with the guard `balance` and `balanceBound`. The `txmanager.broadcast` span carries
+`gas.estimate_mode`, and when known `fee.next_base`, `fee.horizon` and `balance.affordable`; a send refused
+before signing keeps what was read before the refusal (`fee.next_base`, `balance.affordable`), and
+`fee.horizon` needs a priced fee cap. The `sent` line is Info because RFQ and LI.FI run without `--debug`. The
+"started" line names the sender address, the fee policy and whether the guard runs.
 Guard refusals are declined, not failed, on the `txmanager.broadcast` and send spans
 (`decision=not_admitted`, `reason` as in `admission_rejections_total`).
 
@@ -553,7 +569,7 @@ Definitions: [metrics.go](../internal/txmanager/metrics.go),
 | Txmanager | `solver_bot_txmanager_attempt_tip_wei`, `_attempt_max_fee_wei`, `_attempt_gas_limit` | `label`, `kind` | Priority fee, fee cap and gas limit of the latest signed attempt, `fill` (initial send and replacements) or `cancellation`. |
 | Txmanager | `solver_bot_txmanager_attempt_horizon_blocks` | `label` | Histogram of the blocks, from the next one, an initial attempt's fee cap stays valid at the floor tip when the horizon policy or the guard priced it; below 3 with `balanceBound` in the `sent` log means the balance, not the policy, set it. |
 | Txmanager | `solver_bot_txmanager_fee_next_base_fee_wei` | — | Next block's base fee from the latest fee snapshot a send was priced or guarded at, or the latest account poll while the funding gate is on. |
-| Txmanager | `solver_bot_txmanager_gas_estimates_total` | `label`, `mode`, `outcome` | Gas estimates of new attempts: `mode` `latest` (legacy, or next-block estimates off), `next_block` or `fallback` (horizon without confirmed next-block estimates); `outcome` `ok`, `revert`, `unsupported` (overrides rejected, followed by a fallback) or `error`. Any `fallback` under horizon means an upstream rejects or ignores block overrides. Estimates a failed send abandoned are not counted. |
+| Txmanager | `solver_bot_txmanager_gas_estimates_total` | `label`, `mode`, `outcome` | Gas estimates of new attempts: `mode` `latest` (legacy, or next-block estimates off), and under horizon `next_block`, `unconfirmed` (at latest before any conclusive capability probe: startup, or only inconclusive probes, which the probe logs itself) or `fallback` (at latest because the probe found the overrides rejected or ignored, a call rejected them, or the backend lacks the capability); `outcome` `ok`, `revert`, `unsupported` (overrides rejected, followed by a fallback), `block_not_found` (the pinned parent block never arrived within the budget; the send was refused as `stale_head`) or `error`. Any `fallback` under horizon means an upstream rejects or ignores block overrides; `unconfirmed` does not. Estimates a send abandoned before they returned (it failed first, or a newer header replaced them during the stale-head wait) are not counted. |
 | Txmanager | `solver_bot_txmanager_gas_estimate_duration_seconds` | `mode` | Duration of each gas estimate RPC; under horizon bounded by `gas.estimateTimeoutMs`, whose 5000 ms default is unmeasured through eRPC. |
 | Txmanager | `solver_bot_txmanager_account_required_balance_wei` | `horizon` | Balance a reference fill (`balance.referenceGasUnits`, or the latest attempt's gas limit while that is 0) needs at that base fee and the floor tip: `min` (`fees.minHorizonBlocks`, can still send), `quote` (`fees.pricingHorizonBlocks`) and `full` (`fees.maxHorizonBlocks`). |
 | Txmanager | `solver_bot_txmanager_account_fundable` | — | `1` while the lane funding gate (§4.2) is open, `0` while closed, including from startup until its first evaluation; absent while the gate is off (`balance.referenceGasUnits` 0). |

@@ -268,23 +268,23 @@ func (c *feeSnapshotCache) store(snapshot *feeSnapshot) {
 	c.latest = snapshot
 }
 
-// horizonSendSnapshot is the fee snapshot a new horizon-policy attempt is priced from: a recent cached one,
-// re-read while it is stale (see checkFeeSnapshot) for up to two block times within ctx, then refused with
-// ErrStaleHead. The staleness rules are the balance guard's, and apply whether or not the guard runs: the
-// exact validity horizon is only exact from a fresh head.
-func (m *Manager) horizonSendSnapshot(ctx context.Context) (sendSnapshot, error) {
-	return m.awaitFreshSnapshot(ctx, func(ctx context.Context, again bool) (snapshot sendSnapshot, stale, err error) {
-		maxAge := m.cfg.PollInterval
-		if again {
-			maxAge = 0
-		}
-		fees, err := m.snapshots.get(ctx, maxAge)
+// horizonSendSnapshot is the fee snapshot a new horizon-policy attempt is priced from: its own read of the
+// latest header and fee history (strategy §2.5 step 1), sharing a read already in flight but never the
+// quotes' cached snapshot, which can trail the head by a block within the poll interval. A stale one is read
+// again (see checkFeeSnapshot) for up to two block times within ctx, then refused with ErrStaleHead. The
+// staleness rules are the balance guard's, and apply whether or not the guard runs: the exact validity
+// horizon is only exact from a fresh head. onRead sees every consistent snapshot read, stale or not, before
+// it is checked, so the gas estimate can start on the first one.
+func (m *Manager) horizonSendSnapshot(ctx context.Context, onRead func(*feeSnapshot)) (sendSnapshot, error) {
+	return m.awaitFreshSnapshot(ctx, func(ctx context.Context) (snapshot sendSnapshot, stale, err error) {
+		fees, err := m.snapshots.get(ctx, 0)
 		switch {
 		case errors.Is(err, errSnapshotInconsistent):
 			return sendSnapshot{}, err, nil
 		case err != nil:
 			return sendSnapshot{}, nil, err
 		}
+		onRead(fees)
 		snapshot, stale = m.checkFeeSnapshot(fees, time.Now())
 		return snapshot, stale, nil
 	})

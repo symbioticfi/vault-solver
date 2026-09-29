@@ -521,8 +521,8 @@ func TestIsBlockNotFound(t *testing.T) {
 		{name: "pruned state", err: &testRPCError{code: -32000, message: "missing trie node abc (path ) state 0x is not available"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isBlockNotFound(tc.err); got != tc.want {
-				t.Fatalf("isBlockNotFound(%v) = %t, want %t", tc.err, got, tc.want)
+			if got := IsBlockNotFound(tc.err); got != tc.want {
+				t.Fatalf("IsBlockNotFound(%v) = %t, want %t", tc.err, got, tc.want)
 			}
 		})
 	}

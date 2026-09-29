@@ -15,6 +15,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-logr/logr"
+
+	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 )
 
 // horizonBackend is a mockBackend for the horizon policy: fresh latest headers with a block gas limit, a
@@ -38,6 +40,7 @@ type horizonBackend struct {
 
 	nextBlockGas   uint64
 	nextBlockErr   error
+	nextBlockErrs  []error // returned by the first next-block estimates, in order, before nextBlockErr
 	nextBlockCalls []nextBlockCall
 	probeResult    bool
 	probeErr       error
@@ -158,6 +161,9 @@ func (b *horizonBackend) EstimateGasWithBlockOverrides(
 	b.hmu.Lock()
 	b.nextBlockCalls = append(b.nextBlockCalls, nextBlockCall{parent: new(big.Int).Set(parent), overrides: overrides})
 	gas, err := b.nextBlockGas, b.nextBlockErr
+	if len(b.nextBlockErrs) > 0 {
+		err, b.nextBlockErrs = b.nextBlockErrs[0], b.nextBlockErrs[1:]
+	}
 	b.hmu.Unlock()
 	if err := b.waitEstimate(ctx); err != nil {
 		return 0, err
@@ -303,7 +309,9 @@ func TestHorizonSendIsGuardedByTheBalance(t *testing.T) {
 		}
 	})
 	t.Run("below the floor nothing is signed", func(t *testing.T) {
-		b := newHorizonBackend(new(big.Int).Sub(perGas(floor), big.NewInt(1)))
+		rec := tracetest.Install(t)
+		balance := new(big.Int).Sub(perGas(floor), big.NewInt(1))
+		b := newHorizonBackend(balance)
 		metrics := newTestMetrics(t)
 		m := newHorizonManager(t, b, horizonConfig(), metrics)
 		startManagerForTest(t, m)
@@ -315,6 +323,12 @@ func TestHorizonSendIsGuardedByTheBalance(t *testing.T) {
 			t.Fatalf("refused fill sent %d transactions", len(sent))
 		}
 		assertMetric(t, metrics.admissionRejections.WithLabelValues("fill", string(admissionRejectionUnaffordableOneBlock)), 1)
+		// The refusal is what these attributes explain: the base fee and what the balance funded.
+		broadcast := tracetest.Ended(t, rec, "txmanager.broadcast")
+		tracetest.RequireAttr(t, broadcast, "fee.next_base", "1000000000")
+		tracetest.RequireAttr(t, broadcast, "balance.affordable", new(big.Int).Div(balance, big.NewInt(gas)).String())
+		tracetest.RequireAttr(t, broadcast, "gas.estimate_mode", estimateModeSupplied)
+		tracetest.RequireNoAttr(t, broadcast, "fee.horizon")
 	})
 	t.Run("a request cap below the floor is a submission error", func(t *testing.T) {
 		b := newHorizonBackend(big.NewInt(1e18))
@@ -384,6 +398,79 @@ func TestHorizonSendWaitsOutStaleSnapshots(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestHorizonSendReadsAFreshSnapshot pins strategy §2.5 step 1: a send reads its own header rather than the
+// quotes' cached snapshot, which can be a block old while still inside the poll interval, and estimates on
+// top of that header.
+func TestHorizonSendReadsAFreshSnapshot(t *testing.T) {
+	b := newHorizonBackend(big.NewInt(1e18))
+	b.headAges = []time.Duration{12 * time.Second, 0} // the cached header is one block time old
+	cfg := horizonConfig()
+	cfg.PollInterval = time.Hour // the cached snapshot is still inside the quotes' TTL
+	m := newHorizonManager(t, b, cfg, nil)
+	m.overrides.swap(blockOverridesSupported)
+	if _, err := m.MaxFeePerGas(t.Context()); err != nil {
+		t.Fatalf("MaxFeePerGas: %v", err)
+	}
+	b.set(func(b *horizonBackend) { b.number++ })
+	if _, err := m.broadcast(managerCtx(t.Context(), m), fillRequest(0)); err != nil {
+		t.Fatalf("broadcast: %v", err)
+	}
+	if reads := b.feeHistoryReads(); len(reads) != 2 {
+		t.Fatalf("fee history read %d times, want the quote's and the send's own", len(reads))
+	}
+	if calls := b.nextBlockEstimates(); len(calls) != 1 || calls[0].parent.Uint64() != 101 {
+		t.Fatalf("next-block estimates = %+v, want one on top of the fresh header 101", calls)
+	}
+}
+
+// TestHorizonEstimateOverlapsTheStaleHeadWait pins the legacy path's behaviour under horizon: the estimate
+// starts on the first snapshot's header, so a failing fill ends a stale-head wait with its own error instead
+// of a stale_head refusal a solver would retry, and a newer header re-runs it on that header.
+func TestHorizonEstimateOverlapsTheStaleHeadWait(t *testing.T) {
+	cfg := horizonConfig()
+	cfg.Fees.BlockTime = time.Second // a two-second stale-head wait
+	t.Run("a revert ends the wait", func(t *testing.T) {
+		b := newHorizonBackend(big.NewInt(1e18))
+		b.headAges = []time.Duration{time.Hour}
+		b.nextBlockErr = rpcCodeError{code: 3, message: "execution reverted"}
+		m := newHorizonManager(t, b, cfg, nil)
+		m.overrides.swap(blockOverridesSupported)
+		started := time.Now()
+		_, err := m.broadcast(managerCtx(t.Context(), m), fillRequest(0))
+		if err == nil || errors.Is(err, ErrStaleHead) || !strings.Contains(err.Error(), "execution reverted") {
+			t.Fatalf("broadcast error = %v, want the revert rather than a stale head", err)
+		}
+		if elapsed := time.Since(started); elapsed >= 2*cfg.Fees.BlockTime {
+			t.Fatalf("revert reported after %s, want before the stale-head wait ends", elapsed)
+		}
+		if len(b.attemptedTransactions()) != 0 || len(b.balanceReads) != 0 {
+			t.Fatalf("reverting fill sent %d transactions and read the balance %d times",
+				len(b.attemptedTransactions()), len(b.balanceReads))
+		}
+	})
+	t.Run("a newer header re-runs the estimate on it", func(t *testing.T) {
+		b := newHorizonBackend(big.NewInt(1e18))
+		b.headAges = []time.Duration{time.Hour, 0}
+		m := newHorizonManager(t, b, cfg, nil)
+		m.overrides.swap(blockOverridesSupported)
+		pending, err := m.broadcast(managerCtx(t.Context(), m), fillRequest(0))
+		if err != nil {
+			t.Fatalf("broadcast: %v", err)
+		}
+		calls := b.nextBlockEstimates()
+		if len(calls) != 2 {
+			t.Fatalf("next-block estimates = %d, want one on the stale header and one on the fresh one", len(calls))
+		}
+		if fresh := uint64(time.Now().Unix()); calls[0].overrides.Time >= fresh || calls[1].overrides.Time < fresh {
+			t.Fatalf("estimates at times %d and %d, want the stale header's then the fresh one's", calls[0].overrides.Time,
+				calls[1].overrides.Time)
+		}
+		if pending.gas != 105_000 {
+			t.Fatalf("gas limit = %d, want the fresh estimate with headroom", pending.gas)
+		}
+	})
 }
 
 func TestHorizonMaxFeePerGas(t *testing.T) {
@@ -473,13 +560,13 @@ func TestHorizonQuoteFillsAfterThreeBlocksOfGrowth(t *testing.T) {
 	for drift := range uint64(5) {
 		b := newHorizonBackend(big.NewInt(1e18))
 		cfg := horizonConfig()
+		cfg.PollInterval = time.Hour // the fill reads its own snapshot, not the quote's cached one
 		cfg.Balance.ReferenceGasUnits = gas
 		m := newHorizonManager(t, b, cfg, nil)
 		quoted, err := m.MaxFeePerGas(t.Context())
 		if err != nil {
 			t.Fatalf("MaxFeePerGas: %v", err)
 		}
-		m.snapshots.store(nil) // the fill reads the grown base fee, not the quote's cached snapshot
 		b.set(func(b *horizonBackend) {
 			b.number += drift
 			b.nextBase = grow(big.NewInt(1e9), drift)
@@ -514,9 +601,9 @@ func TestHorizonSentLogAndMetrics(t *testing.T) {
 			sent = entry
 		}
 	}
-	// No probe ran, so the estimate falls back to latest with 1000 bps: 90000 + 9000.
+	// No probe ran, so the estimate is unconfirmed: at latest with 1000 bps, 90000 + 9000.
 	for _, field := range []string{
-		`"gasLimit":99000`, `"estimateMode":"fallback"`, `"tip":"20000000"`, `"maxFee":"1822032470"`,
+		`"gasLimit":99000`, `"estimateMode":"unconfirmed"`, `"tip":"20000000"`, `"maxFee":"1822032470"`,
 		`"nextBaseFee":"1000000000"`, `"horizonBlocks":6`, `"balance":"1000000000000000000"`,
 		`"balanceBound":false`, `"headLagBlocks":0`,
 	} {
@@ -524,7 +611,8 @@ func TestHorizonSentLogAndMetrics(t *testing.T) {
 			t.Fatalf("sent log lacks %s: %s", field, sent)
 		}
 	}
-	assertMetric(t, metrics.gasEstimates.WithLabelValues("fill", estimateModeFallback, gasEstimateOK), 1)
+	assertMetric(t, metrics.gasEstimates.WithLabelValues("fill", estimateModeUnconfirmed, gasEstimateOK), 1)
+	assertMetric(t, metrics.gasEstimates.WithLabelValues("fill", estimateModeFallback, gasEstimateOK), 0)
 }
 
 func TestValidateFeeHeadroomRejectsTipGweiUnderHorizon(t *testing.T) {

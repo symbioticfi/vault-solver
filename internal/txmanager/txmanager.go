@@ -967,11 +967,12 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	} else {
 		priced, err = m.priceLegacyAttempt(broadcastCtx, req, value)
 	}
+	// A refusal is annotated too: the next base fee and what the balance funded are what explain it.
+	annotateBroadcast(broadcastCtx, priced, value)
 	if err != nil {
 		return nil, err
 	}
 	fees, gas := priced.fees, priced.gas
-	annotateBroadcast(broadcastCtx, priced, value)
 	obsolete, obsoleteErr := m.requestObsolete(broadcastCtx, req)
 	if obsoleteErr != nil {
 		// Obsolescence is only a liveness optimization. The solver already validated the call,
@@ -1123,14 +1124,19 @@ func (m *Manager) priceLegacyAttempt(ctx context.Context, req Request, value *bi
 	return priced, nil
 }
 
-// annotateBroadcast records how an attempt was priced on the broadcast span.
+// annotateBroadcast records how an attempt was priced on the broadcast span, as far as pricing got: an
+// attempt refused or failed before signing carries what was read before it stopped, and a fee horizon only
+// once a fee cap was priced.
 func annotateBroadcast(ctx context.Context, priced pricedAttempt, value *big.Int) {
-	attrs := []attribute.KeyValue{attribute.String("gas.estimate_mode", priced.estimateMode)}
+	var attrs []attribute.KeyValue
+	if priced.estimateMode != "" {
+		attrs = append(attrs, attribute.String("gas.estimate_mode", priced.estimateMode))
+	}
 	if priced.snapshot.nextBase != nil {
-		attrs = append(attrs,
-			attribute.String("fee.next_base", priced.snapshot.nextBase.String()),
-			attribute.Int64("fee.horizon", int64(min(priced.horizon, maxReportedHorizonBlocks))),
-		)
+		attrs = append(attrs, attribute.String("fee.next_base", priced.snapshot.nextBase.String()))
+		if priced.fees.maxFee != nil {
+			attrs = append(attrs, attribute.Int64("fee.horizon", int64(min(priced.horizon, maxReportedHorizonBlocks))))
+		}
 	}
 	if priced.balance != nil && priced.gas > 0 {
 		attrs = append(attrs, attribute.String("balance.affordable",
@@ -1214,10 +1220,11 @@ func (e *asyncEstimate) failure() error {
 }
 
 // stop cancels an estimate still running and waits for its goroutine, so the estimate never outlives
-// broadcast.
-func (e *asyncEstimate) stop() {
+// broadcast. It reports whether the estimate had already failed on its own, whose error then stands.
+func (e *asyncEstimate) stop() bool {
 	e.cancel(errEstimateAbandoned)
 	<-e.done
+	return e.failed
 }
 
 func (m *Manager) complete(ctx context.Context, pending *pendingTransaction) {

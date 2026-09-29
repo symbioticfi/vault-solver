@@ -16,10 +16,13 @@ import (
 
 // Gas estimation modes (strategy §2.2). The legacy policy estimates at latest. The horizon policy
 // estimates in the next block's context, eth_estimateGas with block overrides {N+1, t + blockTime} on top
-// of the snapshot's header, which sees the interest accrual and state the fill will actually run against;
-// when the read endpoint rejects the overrides (per call) or the capability probe found that it ignores
-// them, it estimates at latest with the larger gas.fallbackHeadroomBps. Every estimate has its own
-// gas.estimateTimeoutMs budget, separate from the fee reads, and is counted in gas_estimates_total{mode}.
+// of the snapshot's header, which sees the interest accrual and state the fill will actually run against.
+// That estimate is pinned to N like the balance read, and is retried in the same way while the upstream it
+// lands on has not imported N yet, then refused as a stale head. When the read endpoint rejects the
+// overrides (per call) or the capability probe found that it ignores them, it estimates at latest with the
+// larger gas.fallbackHeadroomBps; until the first conclusive probe it does the same, counted as unconfirmed
+// rather than as a fallback. Every estimate has its own gas.estimateTimeoutMs budget, separate from the fee
+// reads, and is counted in gas_estimates_total{mode, outcome}.
 //
 // Goroutine model: estimates run on the worker's estimate goroutine; the probe loop (Start) is the only
 // writer of Manager.overrides, an atomic the estimates read.
@@ -29,7 +32,13 @@ const (
 	estimateModeSupplied  = "supplied"   // the request carried its gas limit; nothing was estimated
 	estimateModeLatest    = "latest"     // plain estimate at latest: the legacy policy, or next-block estimates off
 	estimateModeNextBlock = "next_block" // estimate with next-block overrides
-	estimateModeFallback  = "fallback"   // plain estimate at latest because next-block estimates are unavailable
+	// estimateModeFallback is a plain estimate at latest because the read endpoint cannot give a next-block
+	// one: the probe found the overrides rejected or ignored, a call rejected them, or the backend lacks
+	// the capability. It is the mode an upstream alert follows.
+	estimateModeFallback = "fallback"
+	// estimateModeUnconfirmed is a plain estimate at latest before any conclusive probe: at startup, or
+	// while every probe so far was inconclusive. It says nothing about the upstreams.
+	estimateModeUnconfirmed = "unconfirmed"
 )
 
 // Values of gas_estimates_total{outcome}.
@@ -37,7 +46,10 @@ const (
 	gasEstimateOK          = "ok"
 	gasEstimateReverted    = "revert"
 	gasEstimateUnsupported = "unsupported"
-	gasEstimateError       = "error"
+	// gasEstimateBlockNotFound is a next-block estimate whose parent block the node still did not have when
+	// its budget ended; the send was refused as a stale head.
+	gasEstimateBlockNotFound = "block_not_found"
+	gasEstimateError         = "error"
 )
 
 // blockOverridesProbeInterval is how often the capability probe re-checks that the read endpoint honours
@@ -94,29 +106,36 @@ func (m *Manager) callMsg(req Request) ethereum.CallMsg {
 
 // estimateHorizonGas estimates a horizon-policy request's gas limit on top of head, the header its fees
 // are priced from. Only a next-block estimate the probe has confirmed is used with gas.headroomBps: until
-// the first conclusive probe, and after one that found the overrides ignored, the plain estimate with
-// gas.fallbackHeadroomBps is used, since an upstream that ignores them answers with the parent block's
-// estimate. A per-call rejection of the overrides falls back the same way; a revert or any other error
-// fails the send (nothing is signed and the nonce is not consumed).
+// the first conclusive probe (unconfirmed), and after one that found the overrides ignored (fallback), the
+// plain estimate with gas.fallbackHeadroomBps is used, since an upstream that ignores them answers with the
+// parent block's estimate. A per-call rejection of the overrides falls back the same way. A parent block
+// the node never served within the budget refuses the send with ErrStaleHead (NotAdmitted, logged by the
+// broadcast at Info); a revert or any other error fails it. Nothing is signed and the nonce is not consumed.
 func (m *Manager) estimateHorizonGas(ctx context.Context, req Request, head *types.Header) (uint64, string, error) {
 	msg := m.callMsg(req)
-	if m.nextBlock != nil && m.overrides.load() == blockOverridesSupported {
+	verdict := m.overrides.load()
+	if m.nextBlock != nil && verdict == blockOverridesSupported {
 		overrides := chain.NextBlockOverrides(head, m.cfg.Fees.BlockTime)
 		gas, err := m.boundedEstimate(ctx, req.Label, estimateModeNextBlock, func(ctx context.Context) (uint64, error) {
-			return m.nextBlock.EstimateGasWithBlockOverrides(ctx, msg, head.Number, overrides)
+			return m.nextBlockEstimate(ctx, msg, head.Number, overrides)
 		})
-		if err == nil {
+		switch {
+		case err == nil:
 			return m.gasLimit(req, gas, m.gasHeadroomBps(), estimateModeNextBlock)
-		}
-		if !chain.IsBlockOverridesUnsupported(err) {
+		case errors.Is(err, ErrStaleHead):
+			return 0, estimateModeNextBlock, errors.Errorf("estimate gas %q: %w", req.Label, err)
+		case !chain.IsBlockOverridesUnsupported(err):
 			return 0, estimateModeNextBlock, m.gasEstimateFailed(ctx, req, estimateModeNextBlock, err)
 		}
 		observability.Log(ctx).Info("next-block gas estimate rejected by the read endpoint; estimating at latest",
 			"label", req.Label, "error", err.Error())
 	}
 	mode, headroom := estimateModeFallback, m.fallbackGasHeadroomBps()
-	if m.cfg.Gas.NextBlockEstimateDisabled {
+	switch {
+	case m.cfg.Gas.NextBlockEstimateDisabled:
 		mode, headroom = estimateModeLatest, m.gasHeadroomBps()
+	case m.nextBlock != nil && verdict == blockOverridesUnknown:
+		mode = estimateModeUnconfirmed
 	}
 	gas, err := m.boundedEstimate(ctx, req.Label, mode, func(ctx context.Context) (uint64, error) {
 		return m.backend.EstimateGas(ctx, msg)
@@ -125,6 +144,34 @@ func (m *Manager) estimateHorizonGas(ctx context.Context, req Request, head *typ
 		return 0, mode, m.gasEstimateFailed(ctx, req, mode, err)
 	}
 	return m.gasLimit(req, gas, headroom, mode)
+}
+
+// nextBlockEstimate runs the next-block estimate on top of parent until ctx, the estimate's budget, ends.
+// parent is the snapshot's header, which one upstream reported; another that has not imported it yet
+// answers "header not found", and eRPC does not fail over on that. Like the pinned balance read (strategy
+// §2.4) the estimate is retried then, and a parent still missing when the budget ends is ErrStaleHead: it
+// never falls back to latest, which on that upstream is an older block than the one the fees are priced at.
+func (m *Manager) nextBlockEstimate(
+	ctx context.Context, msg ethereum.CallMsg, parent *big.Int, overrides ethereum.BlockOverrides,
+) (uint64, error) {
+	retry := minPositiveDuration(pinnedReadRetryDelay, m.cfg.PollInterval)
+	var notFound error
+	for {
+		gas, err := m.nextBlock.EstimateGasWithBlockOverrides(ctx, msg, parent, overrides)
+		switch {
+		case err == nil:
+			return gas, nil
+		case chain.IsBlockNotFound(err):
+			notFound = err
+		case notFound == nil || ctx.Err() == nil:
+			return 0, err
+		}
+		// The node lacked parent, on this call or on the one before a retry the budget cut short.
+		if sleepContext(ctx, retry) != nil {
+			return 0, errors.Errorf("%w: next-block gas estimate parent block %s not found within %s: %w",
+				ErrStaleHead, parent, m.gasEstimateTimeout(), notFound)
+		}
+	}
 }
 
 // boundedEstimate runs one estimate within gas.estimateTimeoutMs and records it.
@@ -172,6 +219,8 @@ func gasEstimateOutcome(err error) string {
 		return gasEstimateOK
 	case chain.IsExecutionReverted(err):
 		return gasEstimateReverted
+	case chain.IsBlockNotFound(err):
+		return gasEstimateBlockNotFound
 	case chain.IsBlockOverridesUnsupported(err):
 		return gasEstimateUnsupported
 	default:

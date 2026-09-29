@@ -119,7 +119,7 @@ func blockOverridesProbeCode(number, time uint64) []byte {
 // revert, or a node that lacks the parent block (anvil reports that as -32602 too), is never
 // classified as unsupported.
 func IsBlockOverridesUnsupported(err error) bool {
-	if err == nil || IsExecutionReverted(err) || isBlockNotFound(err) {
+	if err == nil || IsExecutionReverted(err) || IsBlockNotFound(err) {
 		return false
 	}
 	code, message, ok := jsonRPCError(err)
@@ -185,10 +185,11 @@ var blockNotFoundPhrases = []string{
 	"could not be found", "blockoutofrange", "not currently canonical",
 }
 
-// isBlockNotFound reports whether err is a node saying it does not have the requested block, the
+// IsBlockNotFound reports whether err is a node saying it does not have the requested block, the
 // usual answer of an upstream that has not imported the pinned block yet, or no longer has it on
-// its canonical chain.
-func isBlockNotFound(err error) bool {
+// its canonical chain. A read pinned to a block another upstream reported (a pinned balance, a
+// next-block gas estimate on top of a header) retries it rather than failing.
+func IsBlockNotFound(err error) bool {
 	code, message, ok := jsonRPCError(err)
 	if !ok || code == jsonRPCCodeMethodNotFound {
 		return false

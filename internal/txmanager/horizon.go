@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"time"
 
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 )
 
@@ -28,23 +29,50 @@ type pricedAttempt struct {
 }
 
 // priceHorizonAttempt prices a new horizon-policy attempt (strategy §2.5): a fresh fee snapshot, with the
-// stale-head wait; then, concurrently, the next-block gas estimate on top of its header and the signer
-// balance pinned to its block; then initialFees. A refusal returns before anything is signed. The returned
-// attempt carries the snapshot even on error, for the refusal log.
+// stale-head wait; the next-block gas estimate on top of its header, which starts on the first snapshot
+// read and so overlaps that wait; the signer balance pinned to its block; then initialFees. A refusal
+// returns before anything is signed. The returned attempt carries the snapshot even on error, for the
+// refusal log.
 func (m *Manager) priceHorizonAttempt(ctx context.Context, req Request, value *big.Int) (priced pricedAttempt, err error) {
-	priced.snapshot, err = m.horizonSendSnapshot(ctx)
+	// A failed estimate fails the send whatever the reads return, so it also ends them: as on the legacy
+	// path, the send then reports the estimate's error at once instead of waiting out a stale head and
+	// returning a refusal a solver would retry.
+	readCtx, stopReads := context.WithCancelCause(ctx)
+	defer stopReads(nil)
+	var (
+		estimate  *asyncEstimate
+		estimated *types.Header
+	)
+	// estimateOn (re)starts the estimate on top of a snapshot read's header, so it ends on top of the header
+	// the attempt is priced from. An estimate that has failed is kept: its error fails the send.
+	estimateOn := func(fees *feeSnapshot) {
+		head := fees.header
+		if estimate != nil {
+			if estimated.Hash() == head.Hash() || estimate.stop() {
+				return
+			}
+		}
+		estimated = head
+		estimate = m.estimateAsync(ctx, req, func(ctx context.Context) (uint64, string, error) {
+			return m.estimateHorizonGas(ctx, req, head)
+		}, func() { stopReads(errEstimateFailed) })
+	}
+	defer func() {
+		if estimate != nil {
+			estimate.stop()
+		}
+	}()
+
+	priced.snapshot, err = m.horizonSendSnapshot(readCtx, estimateOn)
+	if estimate != nil {
+		if estimateErr := estimate.failure(); estimateErr != nil {
+			return priced, estimateErr
+		}
+	}
 	if err != nil {
 		return priced, errors.Errorf("send %q: %w", req.Label, err)
 	}
 	snapshot := priced.snapshot
-	// A failed estimate fails the send whatever the balance read returns, so it also ends that read.
-	readCtx, stopReads := context.WithCancelCause(ctx)
-	defer stopReads(nil)
-	estimate := m.estimateAsync(ctx, req, func(ctx context.Context) (uint64, string, error) {
-		return m.estimateHorizonGas(ctx, req, snapshot.fees.header)
-	}, func() { stopReads(errEstimateFailed) })
-	defer estimate.stop()
-
 	if m.guardEnabled() {
 		if priced.balance, err = m.pinnedBalance(readCtx, snapshot.pin); err != nil {
 			if estimateErr := estimate.failure(); estimateErr != nil {

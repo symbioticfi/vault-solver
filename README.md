@@ -421,7 +421,8 @@ unknown keys, so deploy a config that sets these keys only with an image that kn
 snapshot's block (by block hash, EIP-1898) through the read endpoints, so those must serve historical-state
 reads for recent blocks. A refused request returns a `NotAdmitted` submission error wrapping
 `txmanager.ErrUnaffordable` (fund the signer) or `txmanager.ErrStaleHead` (the RPC head stayed more than
-`fees.maxHeadLagBlocks` behind for two block times, or the balance could not be read at that block);
+`fees.maxHeadLagBlocks` behind for two block times, or the balance, or under horizon the next-block gas
+estimate, could not be read at that block);
 nothing is signed and the nonce stays free. Refusals are logged at Info and counted in
 `solver_bot_txmanager_admission_rejections_total{reason="unaffordable|unaffordable_one_block|stale_head"}`.
 The head lag is measured against the wall clock, so a local or forked chain must produce a block every
@@ -446,14 +447,16 @@ two blocks had no room for the attempt's gas limit, and the recent median reward
 attempt valid for `minHorizonBlocks` fails as `fee limit reached`. Gas is estimated in the next block's context
 (`eth_estimateGas` with block overrides, plus `gas.headroomBps`), each estimate bounded by
 `gas.estimateTimeoutMs` (5000). The manager checks at startup and every 10 minutes that the read endpoints honour
-those overrides; until one check confirms it, or when an endpoint rejects or ignores them, it estimates at
-`latest` with `gas.fallbackHeadroomBps` (1000) instead, which
-`solver_bot_txmanager_gas_estimates_total{mode="fallback"}` makes visible (alert on any increase), and the `sent`
-log names the `estimateMode`. Quotes that price gas (`MaxFeePerGas`, UniswapX and LI.FI with `gas:`) are priced
-`fees.pricingHorizonBlocks` (5) blocks ahead, about `1.8·pb + 1.125·tip` against about `2.25·latest` under
-legacy, from a fee snapshot cached for the poll interval, so a quoted fill still sends after three blocks of
-maximum base-fee growth. For now a pending horizon attempt is still replaced on the `replacementIntervalMs`
-timer, as under legacy.
+those overrides; until one check confirms it (`mode="unconfirmed"`), or when an endpoint rejects or ignores them
+(`mode="fallback"`), it estimates at `latest` with `gas.fallbackHeadroomBps` (1000) instead.
+`solver_bot_txmanager_gas_estimates_total{mode="fallback"}` means an upstream rejects or ignores the overrides
+(alert on any increase); `unconfirmed` only means no check has concluded yet, and the `sent` log names the
+`estimateMode`. A next-block estimate whose block the read upstream has not imported yet is retried within that
+budget and then refused before signing as `stale_head`, like the pinned balance read. Quotes that price gas
+(`MaxFeePerGas`, UniswapX and LI.FI with `gas:`) are priced `fees.pricingHorizonBlocks` (5) blocks ahead, about
+`1.8·pb + 1.125·tip` against about `2.25·latest` under legacy, from a fee snapshot cached for the poll interval,
+so a quoted fill still sends after three blocks of maximum base-fee growth. For now a pending horizon attempt is
+still replaced on the `replacementIntervalMs` timer, as under legacy.
 
 <a id="txmanager-funding-gate"></a>**Funding gate.** With `balance.referenceGasUnits` set (RFQ 4350000,
 UniswapX and LI.FI 4400000), the tx manager also reports whether the signer balance funds a fill of that gas

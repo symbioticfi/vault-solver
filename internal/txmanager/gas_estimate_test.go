@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"math/big"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,17 +25,22 @@ func (e rpcCodeError) ErrorCode() int { return e.code }
 type withoutNextBlockEstimates struct{ Backend }
 
 func TestHorizonGasEstimateModes(t *testing.T) {
+	// A node without the pinned parent block yet: a lagging upstream behind the one the snapshot came from.
+	notFound := rpcCodeError{code: -32000, message: "header not found"}
 	for _, tc := range []struct {
-		name         string
-		cfg          func(cfg *Config)
-		backend      func(b *horizonBackend) Backend
-		verdict      blockOverridesSupport
-		nextBlockErr error
-		wantGas      uint64
-		wantMode     string
-		wantErr      bool
-		wantNextCall bool
-		wantCounts   map[[2]string]float64 // {mode, outcome} -> count
+		name          string
+		cfg           func(cfg *Config)
+		backend       func(b *horizonBackend) Backend
+		verdict       blockOverridesSupport
+		nextBlockErr  error
+		nextBlockErrs []error
+		wantGas       uint64
+		wantMode      string
+		wantErr       bool
+		wantStaleHead bool // the failed estimate refuses the send as stale_head (NotAdmitted)
+		wantErrorLog  bool // "gas estimation failed" is logged at Error
+		wantNextCall  bool
+		wantCounts    map[[2]string]float64 // {mode, outcome} -> count
 	}{
 		{
 			name: "a confirmed next-block estimate", verdict: blockOverridesSupported,
@@ -46,14 +53,18 @@ func TestHorizonGasEstimateModes(t *testing.T) {
 			wantGas: 108_000, wantMode: estimateModeNextBlock, wantNextCall: true,
 		},
 		{
-			// Until a probe confirms the overrides, an upstream that ignores them cannot be told apart.
+			// Until a probe confirms the overrides, an upstream that ignores them cannot be told apart. That
+			// is not an upstream fault, so it is counted apart from the fallback the alert follows.
 			name:    "unconfirmed overrides estimate at latest with the fallback headroom",
-			wantGas: 99_000, wantMode: estimateModeFallback,
-			wantCounts: map[[2]string]float64{{estimateModeFallback, gasEstimateOK}: 1},
+			wantGas: 99_000, wantMode: estimateModeUnconfirmed,
+			wantCounts: map[[2]string]float64{
+				{estimateModeUnconfirmed, gasEstimateOK}: 1, {estimateModeFallback, gasEstimateOK}: 0,
+			},
 		},
 		{
 			name: "overrides the probe found ignored", verdict: blockOverridesUnsupported,
 			wantGas: 99_000, wantMode: estimateModeFallback,
+			wantCounts: map[[2]string]float64{{estimateModeFallback, gasEstimateOK}: 1},
 		},
 		{
 			name: "a per-call rejection falls back", verdict: blockOverridesSupported,
@@ -66,9 +77,30 @@ func TestHorizonGasEstimateModes(t *testing.T) {
 		{
 			name: "a next-block revert fails the send", verdict: blockOverridesSupported,
 			nextBlockErr: rpcCodeError{code: 3, message: "execution reverted"},
-			wantErr:      true, wantNextCall: true,
+			wantErr:      true, wantErrorLog: true, wantNextCall: true,
 			wantCounts: map[[2]string]float64{
 				{estimateModeNextBlock, gasEstimateReverted}: 1, {estimateModeFallback, gasEstimateOK}: 0,
+			},
+		},
+		{
+			// The estimate is pinned to the snapshot's header, like the balance read, and is retried the same
+			// way when the upstream it lands on has not imported that block yet.
+			name: "a lagging upstream is retried until it has the parent block", verdict: blockOverridesSupported,
+			nextBlockErrs: []error{notFound, notFound},
+			wantGas:       105_000, wantMode: estimateModeNextBlock, wantNextCall: true,
+			wantCounts: map[[2]string]float64{
+				{estimateModeNextBlock, gasEstimateOK}: 1, {estimateModeNextBlock, gasEstimateBlockNotFound}: 0,
+				{estimateModeFallback, gasEstimateOK}: 0,
+			},
+		},
+		{
+			name: "a parent block that never arrives refuses the send as a stale head", verdict: blockOverridesSupported,
+			cfg:          func(cfg *Config) { cfg.Gas.EstimateTimeout = 30 * time.Millisecond },
+			nextBlockErr: notFound,
+			wantErr:      true, wantStaleHead: true, wantNextCall: true,
+			wantCounts: map[[2]string]float64{
+				{estimateModeNextBlock, gasEstimateBlockNotFound}: 1, {estimateModeNextBlock, gasEstimateError}: 0,
+				{estimateModeFallback, gasEstimateOK}: 0,
 			},
 		},
 		{
@@ -85,7 +117,7 @@ func TestHorizonGasEstimateModes(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := newHorizonBackend(big.NewInt(1e18))
-			b.nextBlockErr = tc.nextBlockErr
+			b.nextBlockErr, b.nextBlockErrs = tc.nextBlockErr, tc.nextBlockErrs
 			var backend Backend = b
 			if tc.backend != nil {
 				backend = tc.backend(b)
@@ -95,12 +127,19 @@ func TestHorizonGasEstimateModes(t *testing.T) {
 				tc.cfg(&cfg)
 			}
 			metrics := newTestMetrics(t)
-			m := newHorizonManager(t, backend, cfg, metrics)
+			logs, log := newLogCapture(0)
+			var mu sync.Mutex
+			m := NewWithMetrics(backend, mustSigner(t), big.NewInt(11155111), cfg, metrics,
+				logr.New(&lockedSink{sink: log.GetSink(), mu: &mu}))
 			m.overrides.swap(tc.verdict)
 			pending, err := m.broadcast(managerCtx(t.Context(), m), fillRequest(0))
 			if tc.wantErr {
 				if err == nil || pending != nil || len(b.attemptedTransactions()) != 0 {
 					t.Fatalf("broadcast = (%v, %v), want a failed estimate and nothing sent", pending, err)
+				}
+				if reason, refused := guardRefusalReason(err); refused != tc.wantStaleHead ||
+					(refused && reason != admissionRejectionStaleHead) {
+					t.Fatalf("broadcast error %v refused as %q (%t), want stale_head %t", err, reason, refused, tc.wantStaleHead)
 				}
 			} else {
 				if err != nil {
@@ -126,6 +165,12 @@ func TestHorizonGasEstimateModes(t *testing.T) {
 			for key, want := range tc.wantCounts {
 				assertMetric(t, metrics.gasEstimates.WithLabelValues("fill", key[0], key[1]), want)
 			}
+			mu.Lock()
+			defer mu.Unlock()
+			if errorLevel, _ := countLogs(*logs, "gas estimation failed"); (errorLevel > 0) != tc.wantErrorLog {
+				t.Fatalf("gas estimation failed logged %d times at Error, want logged %t: %s",
+					errorLevel, tc.wantErrorLog, strings.Join(*logs, "\n"))
+			}
 		})
 	}
 }
@@ -144,7 +189,7 @@ func TestHorizonGasEstimateTimeout(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > 5*time.Second {
 		t.Fatalf("estimate took %s despite a 20 ms budget", elapsed)
 	}
-	assertMetric(t, metrics.gasEstimates.WithLabelValues("fill", estimateModeFallback, gasEstimateError), 1)
+	assertMetric(t, metrics.gasEstimates.WithLabelValues("fill", estimateModeUnconfirmed, gasEstimateError), 1)
 }
 
 func TestProbeBlockOverrides(t *testing.T) {

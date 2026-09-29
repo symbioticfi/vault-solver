@@ -92,6 +92,23 @@ func TestAnvilPinnedReadsAndBlockOverrides(t *testing.T) {
 		}
 	})
 
+	// A parent the upstream has not imported yet: the txmanager retries it, then refuses the send as a
+	// stale head, and must never take it for a rejection of the overrides.
+	t.Run("next-block estimate on a missing parent is not found", func(t *testing.T) {
+		head, headErr := client.HeaderByNumber(t.Context(), nil)
+		if headErr != nil {
+			t.Fatal(headErr)
+		}
+		ahead := types.CopyHeader(head)
+		ahead.Number = new(big.Int).Add(head.Number, big.NewInt(100))
+		to := common.HexToAddress("0x1111111111111111111111111111111111111111")
+		_, estimateErr := client.EstimateGasWithBlockOverrides(t.Context(), ethereum.CallMsg{From: account, To: &to, Value: big.NewInt(1)},
+			ahead.Number, NextBlockOverrides(ahead, 12*time.Second))
+		if !IsBlockNotFound(estimateErr) || IsBlockOverridesUnsupported(estimateErr) {
+			t.Fatalf("estimate error = %v, want block not found and not an overrides rejection", estimateErr)
+		}
+	})
+
 	t.Run("probe detects honoured overrides", func(t *testing.T) {
 		supported, probeErr := client.ProbeBlockOverrides(t.Context(), 12*time.Second)
 		if probeErr != nil || !supported {
