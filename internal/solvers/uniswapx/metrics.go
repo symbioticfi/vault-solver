@@ -19,6 +19,7 @@ const (
 	quoteOutcomeError                  quoteMetricOutcome = "error"
 	quoteOutcomeQuoted                 quoteMetricOutcome = "quoted"
 	quoteOutcomeDeclinedBlocked        quoteMetricOutcome = "declined_blocked"
+	quoteOutcomeDeclinedUnfundable     quoteMetricOutcome = "declined_lane_unfundable"
 	quoteOutcomeDeclinedInvalidRequest quoteMetricOutcome = "declined_invalid_request"
 	quoteOutcomeDeclinedPairOutOfScope quoteMetricOutcome = "declined_pair_out_of_scope"
 	quoteOutcomeDeclinedInvalidAmount  quoteMetricOutcome = "declined_invalid_amount"
@@ -37,7 +38,8 @@ const (
 
 var quoteMetricOutcomes = [...]quoteMetricOutcome{
 	quoteOutcomeInvalid, quoteOutcomeBreakerNotification, quoteOutcomeError, quoteOutcomeQuoted,
-	quoteOutcomeDeclinedBlocked, quoteOutcomeDeclinedInvalidRequest, quoteOutcomeDeclinedPairOutOfScope,
+	quoteOutcomeDeclinedBlocked, quoteOutcomeDeclinedUnfundable, quoteOutcomeDeclinedInvalidRequest,
+	quoteOutcomeDeclinedPairOutOfScope,
 	quoteOutcomeDeclinedInvalidAmount, quoteOutcomeDeclinedQuoteState, quoteOutcomeDeclinedStrategy,
 	quoteOutcomeDeclinedStateChanged, quoteOutcomeDeclinedUnknown,
 }
@@ -129,7 +131,7 @@ func newUniswapXMetrics(
 		}),
 		ready: prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 			Name: "uniswapx_ready",
-			Help: "1 when current quote cache, breaker state, exclusive delivery, and the transaction nonce lane permit quoting.",
+			Help: "1 when current quote cache, breaker state, exclusive delivery, and the transaction nonce lane and its funding permit quoting.",
 		}, func() float64 {
 			if solver.ready() {
 				return 1
@@ -221,6 +223,8 @@ func metricOutcomeForDecline(reason quoteDeclineReason) quoteMetricOutcome {
 	switch reason {
 	case quoteDeclineBlocked:
 		return quoteOutcomeDeclinedBlocked
+	case quoteDeclineLaneUnfundable:
+		return quoteOutcomeDeclinedUnfundable
 	case quoteDeclineInvalidRequest:
 		return quoteOutcomeDeclinedInvalidRequest
 	case quoteDeclinePairOutOfScope:

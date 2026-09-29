@@ -214,7 +214,11 @@ the lane is busy gets a `declined` event with `decision=not_admitted`, `reason=l
 without a `tx.outcome` (§10). A send the balance guard refuses before signing (TXMANAGER-PLAN §4.1) gets a
 `declined` event with `decision=not_admitted` and `reason=unaffordable`, `unaffordable_one_block` or
 `stale_head` on both `txmanager.broadcast` and the send span, which keeps `tx.outcome=submission_error` but
-no error status. `txmanager.account_poll` roots each account-poll tick.
+no error status. The solver stage that submitted it treats any `NotAdmitted` result the same way: a
+`declined` event whose `reason` is `txmanager.NotAdmittedReason` (`fill_not_admitted` on
+`rfq.order.submit`, `rfq.order`, `uniswapx.fill.complete` and `lifi.order.complete`; `redeem_not_admitted` on
+`3f.redeem.submit`) and no error status. `txmanager.account_poll` roots each account-poll tick; with the
+funding gate on it also covers the gate's balance and fee-history reads.
 
 The worker stores the request's `solver`-stamped logger on every context of the lifecycle, the send
 span included, so `observability.Log(ctx)` puts `solver`, `label`, `trace_id` and `span_id` on every
@@ -384,7 +388,7 @@ quote; see §6.
 | `3f.offer.decide` | strategy call | batch stage under `3f.sync`, tagged `strategy.name` |
 | `3f.auction` | per offer the strategy returns | `auction.id`, `adapter.address`, `request.address` |
 | `3f.offer.build` / `3f.offer.submit` | `buildSignedOffer` / `submitOfferIfLaneReady` | under `3f.auction` |
-| `3f.redeem` | `redeemAll` | root |
+| `3f.redeem` | `redeemAll` | root; a pass the unaffordable-redeem backoff holds records a `redeem_skipped` decline per adapter with ready requests instead of sending |
 | `3f.redeem.read` | `readyToRedeem` | per adapter scan, `adapter.address` |
 | `3f.redeem.submit` | batched finalize `Send` | one link per matched offer, plus `offer.linked_count` (§6) |
 

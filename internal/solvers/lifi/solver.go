@@ -82,6 +82,8 @@ type txSender interface {
 
 type transactionLaneState interface {
 	LaneReady() bool
+	// Fundable reports whether the signer balance funds a reference fill at the pricing horizon.
+	Fundable() bool
 	SubscribeLaneState() (<-chan struct{}, func())
 }
 

@@ -27,6 +27,10 @@ type quoteService struct {
 	// block quoting: pending fills are accounted through reservations instead. It is sampled before
 	// and after quote planning so work is declined whenever either check observes a nonce conflict.
 	laneAvailable func() bool
+	// laneFundable is safe for concurrent use and reports whether the signer balance funds a reference
+	// fill at the pricing horizon. Sampled with laneAvailable, so an underfunded lane stops quoting
+	// before the balance guard would refuse the fill and the backend mark the order failed.
+	laneFundable func() bool
 	// reservations returns the liquidity held by won, unfinished orders against a resolved
 	// inventory; nil means none.
 	reservations func(excludedOrderID string, inventory []solverInventory) liquidlane.CapacityReservations
@@ -64,6 +68,7 @@ type quoteDecisionOutcome string
 const (
 	quoteDecisionQuoted           quoteDecisionOutcome = "quoted"
 	quoteDecisionLaneUnavailable  quoteDecisionOutcome = "lane_unavailable"
+	quoteDecisionLaneUnfundable   quoteDecisionOutcome = "lane_unfundable"
 	quoteDecisionNotQuotable      quoteDecisionOutcome = "not_quotable"
 	quoteDecisionBelowMinimum     quoteDecisionOutcome = "below_minimum"
 	quoteDecisionNoCandidates     quoteDecisionOutcome = "no_candidates"
@@ -75,6 +80,7 @@ const (
 var quoteDecisionOutcomes = [...]quoteDecisionOutcome{
 	quoteDecisionQuoted,
 	quoteDecisionLaneUnavailable,
+	quoteDecisionLaneUnfundable,
 	quoteDecisionNotQuotable,
 	quoteDecisionBelowMinimum,
 	quoteDecisionNoCandidates,
@@ -136,9 +142,10 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDec
 	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, &badRequestError{errors.Errorf("parse request: %w", err)}
 	}
-	if !qs.canQuote() {
-		observability.Log(ctx).V(1).Info("declining quote: transaction nonce lane unavailable", "quoteId", q.QuoteID)
-		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil
+	if declined := qs.laneDecline(); declined != "" {
+		observability.Log(ctx).V(1).Info("declining quote: transaction lane cannot back it",
+			"quoteId", q.QuoteID, "reason", string(declined))
+		return quoteDecision{outcome: declined}, nil
 	}
 	if parsed == nil {
 		observability.Log(ctx).V(1).Info("declining quote: not quotable", "quoteId", q.QuoteID, "type", q.Type)
@@ -187,9 +194,10 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDec
 		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: strategy: %w", err)
 	}
 	traceAdapter(ctx, plan.Legs)
-	if !qs.canQuote() {
-		observability.Log(ctx).V(1).Info("declining quote: transaction nonce lane no longer available", "quoteId", q.QuoteID)
-		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil
+	if declined := qs.laneDecline(); declined != "" {
+		observability.Log(ctx).V(1).Info("declining quote: transaction lane can no longer back it",
+			"quoteId", q.QuoteID, "reason", string(declined))
+		return quoteDecision{outcome: declined}, nil
 	}
 
 	observability.Log(ctx).V(1).Info("quoted",
@@ -241,11 +249,20 @@ func (qs *quoteService) decideQuote(
 	return qs.strategy.DecideQuote(ctx, input)
 }
 
-// canQuote fails closed when the lane-state dependency was not wired. Production construction
-// always supplies the txmanager predicate; keeping the nil case closed prevents a future alternate
-// constructor from silently advertising obligations it cannot fill.
-func (qs *quoteService) canQuote() bool {
-	return qs.laneAvailable != nil && qs.laneAvailable()
+// laneDecline reports why the transaction lane cannot back a new quote, or "" when it can: a nonce
+// conflict (lane_unavailable), or a signer balance that no longer funds a reference fill at the pricing
+// horizon (lane_unfundable). It fails closed when a lane-state dependency was not wired. Production
+// construction always supplies the txmanager predicates; keeping the nil case closed prevents a future
+// alternate constructor from silently advertising obligations it cannot fill.
+func (qs *quoteService) laneDecline() quoteDecisionOutcome {
+	switch {
+	case qs.laneAvailable == nil || !qs.laneAvailable():
+		return quoteDecisionLaneUnavailable
+	case qs.laneFundable == nil || !qs.laneFundable():
+		return quoteDecisionLaneUnfundable
+	default:
+		return ""
+	}
 }
 
 // lowerAddr renders an address as lowercase hex; RFQ backend payloads use lowercase addresses.

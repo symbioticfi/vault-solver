@@ -304,8 +304,13 @@ for retry.
 
 Standing curves also follow the shared transaction lane. On any coalesced lane-state change, LI.FI first
 expires its known active curves; if the lane is ready again, it rebuilds and republishes from fresh state.
-While the lane is occupied or nonce ownership is unresolved, both periodic refresh and final publication
-checks fail closed. An immutable matched order that has already entered transaction admission remains retained
+While the lane is occupied or nonce ownership is unresolved, or the manager's funding gate is closed
+(`Fundable`: the signer balance no longer funds a `balance.referenceGasUnits` fill at the pricing horizon,
+[TXMANAGER-PLAN §4.2](TXMANAGER-PLAN.md#42-lane-funding-gate)), both periodic refresh and final publication
+checks fail closed; the gate's close and reopening arrive as lane-state signals. A fill the manager refuses
+before signing (`NotAdmitted`: the balance guard's `ErrUnaffordable`, a stale head, a paused lane) completes as
+an expected skip, declined on `lifi.order.complete` and logged at Info (`order fill not admitted`) rather than
+as a failed fill. An immutable matched order that has already entered transaction admission remains retained
 and waits without signing through a nonce conflict until the lane recovers, its cancellation deadline expires,
 or shutdown begins. This prevents new exclusive matches from being advertised without abandoning
 already-accepted work.

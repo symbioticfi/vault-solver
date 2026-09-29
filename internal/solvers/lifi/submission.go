@@ -202,6 +202,20 @@ func (s *Solver) completeFill(
 		)
 		return err
 	}
+	if completion.result.NotAdmitted {
+		// The manager refused the fill before signing (an unfundable balance, a stale head, a paused
+		// nonce lane): an expected skip it already logged and counted, not a failed fill.
+		reason := txmanager.NotAdmittedReason(completion.result.Err)
+		observability.Decline(ctx, "fill_not_admitted", reason)
+		observability.Log(ctx).Info("order fill not admitted",
+			"orderId", fill.order.OrderID,
+			"onChainOrderId", fill.orderID.Hex(),
+			"quoteId", fill.order.QuoteID,
+			"reason", reason,
+			"error", completion.result.Err,
+		)
+		return nil
+	}
 	err = completion.result.Err
 	if err == nil {
 		err = errors.Errorf("unknown transaction outcome %q", outcome)

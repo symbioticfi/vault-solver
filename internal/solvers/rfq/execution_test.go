@@ -30,6 +30,7 @@ type fakeBackend struct {
 	resolveCalls int
 	listCalls    int
 	orderListErr error
+	orderErr     error
 }
 
 func (f *fakeBackend) listOpenOrders(context.Context, string, int) ([]backendOrder, error) {
@@ -38,7 +39,9 @@ func (f *fakeBackend) listOpenOrders(context.Context, string, int) ([]backendOrd
 func (f *fakeBackend) getExecutableOrder(context.Context, string, string) (*backendOrder, error) {
 	return f.executable, nil
 }
-func (f *fakeBackend) getOrder(context.Context, string) (*backendOrder, error) { return f.order, nil }
+func (f *fakeBackend) getOrder(context.Context, string) (*backendOrder, error) {
+	return f.order, f.orderErr
+}
 
 func (f *fakeBackend) resolveDiscount(context.Context, string) (*resolveDiscountResponse, error) {
 	f.resolveCalls++
@@ -135,7 +138,7 @@ func newExec(t *testing.T, st *store, be orderBackend, txm txSender) *executionS
 	t.Helper()
 	return &executionService{
 		chainID: 1, executor: common.HexToAddress("0x0000000000000000000000000000000000000010"),
-		orderLimit: 20, backend: be, store: st, txm: txm, discountsEnabled: true,
+		orderLimit: 20, backend: be, store: st, txm: txm, laneFundable: func() bool { return true }, discountsEnabled: true,
 		maxCancellationRetries: defaultMaxCancellationRetries, pollInterval: defaultPollInterval,
 		strategy: fixedFillStrategy{plan: baseFillPlan()}, strategyName: defaultStrategyName,
 		// One configured vault whose fill-time inventory backs baseFillPlan's leg, so the plan's
@@ -754,7 +757,7 @@ func TestExecutionRetriesConfirmedCancellationAfterPollInterval(t *testing.T) {
 			now := time.Unix(0, 0)
 			st.now = func() time.Time { return now }
 			txm := &fakeTxm{result: confirmedCancellation()}
-			_, e := buildServices(cfg, 1, st, nil, txm, nil,
+			_, e := buildServices(cfg, 1, st, nil, txm, openLane(),
 				fixedFillStrategy{plan: baseFillPlan()}, logr.Discard())
 			e.backend = be
 			e.vaults = []recoveryVault{{Adapter: vlt}}

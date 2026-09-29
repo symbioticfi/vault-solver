@@ -85,6 +85,20 @@ func (s *Solver) fillLoop(
 				)
 				continue
 			}
+			// Checked before any chain read, discount resolution or planning: while the signer cannot
+			// fund a reference fill the guard would refuse this one, and planning it on every poll
+			// would only re-poll the refusal hot.
+			if !s.txm.Fundable() {
+				s.endFillPlanning()
+				s.retry(order.Hash, time.Now(), false)
+				observability.Log(orderCtx).V(1).Info(
+					"order fill deferred while the signer balance cannot fund a fill",
+					"source", order.Source,
+					"orderHash", order.Hash.Hex(),
+					"quoteId", order.QuoteID,
+				)
+				continue
+			}
 			observability.Log(orderCtx).V(1).Info(
 				"order fill planning started",
 				"source", order.Source,
@@ -256,6 +270,9 @@ func (s *Solver) startFill(
 	result, err := s.submitFill(ctx, txmanager.Request{
 		Solver: Name,
 		To:     order.Executor, Data: data, MaxFeePerGas: transactionMaxFee, CancelAt: cancelAt,
+		Obsolete: func(checkCtx context.Context) (bool, error) {
+			return s.fillObsolete(checkCtx, order.Hash)
+		},
 		Label: "uniswapx-fill",
 	})
 	if err != nil {
@@ -274,6 +291,31 @@ func (s *Solver) startFill(
 		order: order, plannedSurplus: strategies.PlannedSurplus(plan.Routes, order.AmountOut), result: result,
 		span: trace.SpanFromContext(ctx), end: end,
 	}, nil
+}
+
+// fillObsolete is the fill request's Obsolete check: true once the order API reports the order filled
+// (by another filler, or by this lifecycle, whose receipts the manager reads first and whose mined nonce
+// it checks before signing a cancellation), cancelled or expired, so the manager cancels the pending fill
+// instead of holding the nonce lane until CancelAt. Open, error and insufficient-funds keep the fill
+// alive: the latter two can clear while the signed order is still valid. A failed read or an unknown
+// status is an error, which keeps it alive too.
+func (s *Solver) fillObsolete(ctx context.Context, hash common.Hash) (bool, error) {
+	terminals, err := s.orders.ordersByHash(ctx, s.chainID, []common.Hash{hash})
+	if err != nil {
+		return false, errors.Errorf("read order %s status: %w", hash.Hex(), err)
+	}
+	terminal, ok := terminals[hash]
+	if !ok {
+		return false, errors.Errorf("read order %s status: order not returned", hash.Hex())
+	}
+	switch terminal.Status {
+	case orderStatusFilled, orderStatusCancelled, orderStatusExpired:
+		return true, nil
+	case orderStatusOpen, orderStatusError, orderStatusInsufficientFunds:
+		return false, nil
+	default:
+		return false, errors.Errorf("read order %s status: unrecognized status %q", hash.Hex(), terminal.Status)
+	}
 }
 
 // declineFill records an expected skip on the fill span. The fill loop owns retry policy;
@@ -491,14 +533,20 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 	s.clearPendingReservations(ctx, order.Hash)
 	if result.NotAdmitted {
 		// The lane refusing a fill is an expected outcome, not a failure of this fill.
-		observability.Decline(ctx, "fill_not_admitted", errorReason(result.Err))
+		reason := txmanager.NotAdmittedReason(result.Err)
+		observability.Decline(ctx, "fill_not_admitted", reason)
 		s.observeFillOutcome(liquidlane.FillOutcomeNotAdmitted)
-		s.retry(order.Hash, now, false)
+		// A balance the guard cannot fund this fill from stays short until someone funds it: back the
+		// order off exponentially rather than re-planning it on every poll. Other refusals (a stale
+		// head, a paused lane) are transient and retry at the poll interval. Neither counts toward the
+		// fade breaker.
+		s.retry(order.Hash, now, errors.Is(result.Err, txmanager.ErrUnaffordable))
 		observability.Log(ctx).V(1).Info(
 			"order fill was not admitted",
 			"source", order.Source,
 			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
+			"reason", reason,
 			"error", result.Err,
 		)
 		return
@@ -542,14 +590,6 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 			fill.plannedSurplus,
 		)
 	}
-}
-
-// errorReason renders an error for a span event attribute, naming its absence rather than "".
-func errorReason(err error) string {
-	if err == nil {
-		return "not reported"
-	}
-	return err.Error()
 }
 
 func (s *Solver) recordOrderFillFailure(ctx context.Context, order *resolvedOrder, now time.Time) {

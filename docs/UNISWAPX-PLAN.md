@@ -177,6 +177,22 @@ A planned fill may wait behind another transaction on the shared nonce lane. Its
 and existing retry handling applies. Continued quoting does not guarantee execution within exclusivity;
 the exclusive window must also cover any preceding fill's confirmation time.
 
+While the manager's funding gate is closed (`Fundable`, [TXMANAGER-PLAN §4.2](TXMANAGER-PLAN.md#42-lane-funding-gate)),
+a claimed order is returned to its poll-interval retry before any chain read, discount resolution or planning,
+exactly like a paused nonce lane, so an unfundable lane does not plan fills only for the balance guard to
+refuse them. A fill the guard still refuses (`ErrUnaffordable`, for example a fill larger than
+`balance.referenceGasUnits` or a base-fee jump between polls) takes the failure backoff (the poll interval
+doubling up to 30 s) instead of the plain retry; like every `not_admitted` result it neither opens the fade
+breaker nor logs an error. A transient refusal (`stale_head`, a paused lane) keeps the plain retry.
+
+Each fill request carries an `Obsolete` check against the order API (`GET /orders?orderHashes=`): `filled` (by
+another filler), `cancelled` or `expired` makes the manager cancel the pending fill at its nonce, before its
+`CancelAt`, instead of holding the lane. The manager reads the fill's own receipts before each check and the
+mined nonce before signing the cancellation, so a `filled` that is our own inclusion wins. `open`, `error` and
+`insufficient-funds` keep the fill (the latter two can clear while the signed order is still valid); a failed
+read or an unrecognized status is an error, which keeps it too. The check shares the order client's request
+pacing with polling and runs once per receipt sweep (the manager's poll interval) while a fill is pending.
+
 The current parser accepts only `Dutch_V2`. All strategies retain polling retries for declined plans and
 unavailable sources. Economic declines record `fill/declined` without opening the public preflight breaker;
 exclusive obligations remain independently tracked through terminal reconciliation.
@@ -626,8 +642,8 @@ On the ≤500ms path, mirroring `rfq`'s "one multicall, decimals cached" discipl
    output above the signed requirement remains executor surplus. No ladder, amount range, or allocation is published. `default` retains no quote route;
    `single` retains the selected source as a bounded preference.
 5. Before publishing the result, recheck the snapshot pointer, quote epoch, and every blocking condition.
-   Any reservation change, breaker activation, exclusive-state change, unavailable txmanager nonce lane, or
-   snapshot replacement during strategy execution turns the result into a decline. Ordinary sender
+   Any reservation change, breaker activation, exclusive-state change, unavailable txmanager nonce lane,
+   closed funding gate, or snapshot replacement during strategy execution turns the result into a decline. Ordinary sender
    occupancy does not block quotes.
 6. Echo `requestId` and `quoteId`, and return `200` with `amountIn`, `amountOut`, and `filler` =
    `LiquidLaneUniswapXExecutor`. Do not mutate capacity on this path.
@@ -672,6 +688,9 @@ is economic, not just gas:
   liveness-only.
 - **Gate quotes on nonce safety:** unresolved nonce ownership blocks quote responses,
   the solver `/ready` endpoint, its readiness metric, and framework readiness. A busy sender alone does not.
+  A closed lane funding gate blocks quote responses (decline `lane-unfundable`, metric
+  `declined_lane_unfundable`), the solver `/ready` endpoint and its readiness metric, but not framework
+  readiness, which must not flap with the base fee.
   While a nonce conflict pauses the lane, claimed orders return to retry before chain reads, strategy or signed-discount resolution,
   calldata construction, and preflight. Exact-hash reconciliation and the fail-closed recovery rule are
   described in §2.2.

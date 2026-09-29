@@ -115,6 +115,21 @@ discovery exits before chain/API planning, and lane readiness is checked again i
 `createOffer`. Existing offer tracking, auction reconciliation, and redemption continue so contention does
 not block recovery work.
 
+**Funding (strategy §2.10).** The only 3F transaction is the batched finalize/redeem (at most
+`redeemBatchSize` requests every `redeemPoll`, no `CancelAt`), and it recovers fronted liquidity, so 3F takes
+no gate on the manager's lane funding (`Fundable`,
+[TXMANAGER-PLAN §4.2](TXMANAGER-PLAN.md#42-lane-funding-gate)): offers keep the `LaneReady` gate above, and
+an unfundable lane only delays redeem. Redeem runs regardless and lets the balance guard decide per attempt.
+When the guard refuses a batch as unaffordable (`txmanager.ErrUnaffordable`, a `NotAdmitted` result), the
+redeemer halves the batch (down to one request) and skips redeem sends for 1, 2, 4 and then 12 `redeemPoll`
+intervals after successive refusals (5, 10, 20, 60 minutes at the default poll; a shape over the configured
+poll that counts whole passes). Scans continue during the backoff so `redeemable` stays fresh. The episode
+ends when a lane-state signal finds the funding gate reopened after it was closed; an included redeem ends
+the wait and doubles the batch back toward `redeemBatchSize`. The first refusal of an episode is one Info
+line; later ones are V(1). Any `NotAdmitted` result is declined on `3f.redeem.submit` and logged at Info
+rather than as `redeem: tx not included` at Error; a transient refusal (`stale_head`, a paused lane) does not
+back off. The backoff state is owned by the `Run` goroutine, which also handles the lane-state signals.
+
 > The **offer signer** (EIP-712, off-chain) and the **tx sender** are distinct protocol roles, but the
 > current framework backs both with the same `Signer`/EOA. txmanager owns only the on-chain nonce.
 
@@ -384,6 +399,11 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
   custom strategy or the built-in `webhook` strategy. The strategy returns principal and expected
   return; the solver only signs and submits the returned offer.
 - **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state.
+- **Redeem funding gate and 3F owner sign-off.** `balance.referenceGasUnits` for 3F (the gas of a full
+  10-request finalize batch) is unmeasured, so it stays 0: the funding gate and its alert are off for 3F, and
+  a redeem backoff then ends only on its schedule (at most 60 minutes), never on a funding signal. Measure it
+  from `solver_bot_txmanager_attempt_gas_limit{label="redeem"}` and set it. The redeem decision above (no gate,
+  halve and back off) still needs the 3F owner's confirmation.
 - **WS live-log subscription** (`chain.wsUrl`) — config field present but unused; the poll-based reconcile/redeem path is sufficient for v0.
 
 **Testing and observability:**

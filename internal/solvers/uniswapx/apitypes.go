@@ -23,6 +23,7 @@ type quoteDeclineReason string
 
 const (
 	quoteDeclineBlocked               quoteDeclineReason = "blocked"
+	quoteDeclineLaneUnfundable        quoteDeclineReason = "lane-unfundable"
 	quoteDeclineInvalidRequest        quoteDeclineReason = "invalid-request"
 	quoteDeclinePairOutOfScope        quoteDeclineReason = "pair-out-of-scope"
 	quoteDeclineInvalidAmount         quoteDeclineReason = "invalid-amount"

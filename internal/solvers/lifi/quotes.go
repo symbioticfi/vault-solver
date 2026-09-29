@@ -130,7 +130,21 @@ func (s *Solver) runConnectedQuoteLoop(
 }
 
 func (s *Solver) transactionLaneReady() bool {
-	return s.txLaneState != nil && s.txLaneState.LaneReady()
+	return s.quoteLaneBlocked() == ""
+}
+
+// quoteLaneBlocked reports why the transaction lane cannot back a published curve, or "" when it can:
+// the lane is busy or nonce-unsafe, or the signer balance no longer funds a reference fill at the pricing
+// horizon (a fill won then would be refused by the balance guard). An unwired lane fails closed.
+func (s *Solver) quoteLaneBlocked() string {
+	switch {
+	case s.txLaneState == nil || !s.txLaneState.LaneReady():
+		return "transaction lane is unavailable"
+	case !s.txLaneState.Fundable():
+		return "signer balance cannot fund a fill at the pricing horizon"
+	default:
+		return ""
+	}
 }
 
 func (s *Solver) subscribeTransactionLaneState() (<-chan struct{}, func()) {
@@ -217,11 +231,12 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	outcome := observability.ExternalOperationError
 	defer func() { timer.Finish(ctx, outcome) }()
 
-	if !s.transactionLaneReady() {
+	if blocked := s.quoteLaneBlocked(); blocked != "" {
 		outcome = observability.ExternalOperationSkipped
-		observability.Decline(ctx, "quotes_skipped", "transaction lane is unavailable")
+		observability.Decline(ctx, "quotes_skipped", blocked)
 		observability.Log(ctx).V(1).Info(
-			"quote refresh skipped: transaction lane unavailable",
+			"quote refresh skipped: transaction lane cannot back quotes",
+			"reason", blocked,
 			"activePairs", len(state.active),
 			"pendingFills", s.capacity.Len(),
 		)
@@ -291,11 +306,12 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 			"latestExpiry", latestExpiry,
 		)
 	}
-	if !s.transactionLaneReady() {
+	if blocked := s.quoteLaneBlocked(); blocked != "" {
 		outcome = observability.ExternalOperationSkipped
-		observability.Decline(ctx, "quotes_skipped", "transaction lane is unavailable")
+		observability.Decline(ctx, "quotes_skipped", blocked)
 		observability.Log(ctx).V(1).Info(
-			"quote plan discarded: transaction lane unavailable",
+			"quote plan discarded: transaction lane can no longer back quotes",
+			"reason", blocked,
 			"quotePairs", len(out.Quotes),
 			"quoteRanges", quoteRangeCount(out.Quotes),
 		)

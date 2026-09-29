@@ -133,6 +133,8 @@ type transactionManager interface {
 	MaxFeePerGas(ctx context.Context) (*big.Int, error)
 	SendAsync(ctx context.Context, request txmanager.Request) (<-chan txmanager.Result, bool)
 	Available() bool
+	// Fundable reports whether the signer balance funds a reference fill at the pricing horizon.
+	Fundable() bool
 }
 
 type contractCaller interface {

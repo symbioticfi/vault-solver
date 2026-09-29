@@ -184,8 +184,8 @@ func quoteDeclineDecision(reason quoteDeclineReason) string {
 	switch reason {
 	case quoteDeclineInvalidRequest, quoteDeclineInvalidAmount:
 		return "bad_request"
-	case quoteDeclineBlocked, quoteDeclinePairOutOfScope, quoteDeclineQuoteStateUnavailable,
-		quoteDeclineStrategy, quoteDeclineStateChanged:
+	case quoteDeclineBlocked, quoteDeclineLaneUnfundable, quoteDeclinePairOutOfScope,
+		quoteDeclineQuoteStateUnavailable, quoteDeclineStrategy, quoteDeclineStateChanged:
 		return "no_quote"
 	}
 	return "no_quote"
@@ -202,6 +202,9 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 		response.AmountIn = request.Amount
 	}
 	now := s.currentTime()
+	if s.laneUnfundable() {
+		return declinedQuote(response, quoteDeclineLaneUnfundable), nil
+	}
 	if s.quoteBlocked(now) {
 		return declinedQuote(response, quoteDeclineBlocked), nil
 	}
@@ -280,10 +283,19 @@ func declinedQuote(response quoteResponse, reason quoteDeclineReason) quoteRespo
 	return response
 }
 
+// quoteBlocked reports whether quoting is off: a time-based blocker, an unsafe nonce lane, a signer
+// balance that no longer funds a reference fill at the pricing horizon, or stale exclusive delivery.
 func (s *Solver) quoteBlocked(now int64) bool {
 	return s.timeBasedBlockUntil() > now ||
 		(s.txm != nil && !s.txm.Available()) ||
+		s.laneUnfundable() ||
 		!s.exclusiveDeliveryHealthy()
+}
+
+// laneUnfundable reports the transaction lane's funding gate closed. A quote made then would be won
+// only for the balance guard to refuse its fill.
+func (s *Solver) laneUnfundable() bool {
+	return s.txm != nil && !s.txm.Fundable()
 }
 
 func (s *Solver) timeBasedBlockUntil() int64 {

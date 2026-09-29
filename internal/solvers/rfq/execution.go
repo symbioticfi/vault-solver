@@ -67,8 +67,11 @@ type executionService struct {
 	strategy               types.Strategy
 	strategyName           string // registry key, reported as the strategy.name span attribute
 	txm                    txSender
-	metrics                *rfqMetrics
-	orderPollObserver      *observability.OperationObserver
+	// laneFundable reports whether the signer balance funds a reference fill at the pricing horizon; a
+	// confirmed cancellation is retried only while it does. nil means unknown and suppresses the retry.
+	laneFundable      func() bool
+	metrics           *rfqMetrics
+	orderPollObserver *observability.OperationObserver
 	// links is shared with the server: it holds the span context of each quote this process served,
 	// so a fill can link back to it (spec §12). nil disables linking.
 	links *observability.SpanLinks
@@ -354,6 +357,9 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	res, sendErr := e.sendFill(ctx, txmanager.Request{
 		Solver: Name,
 		To:     e.executor, Data: calldata, CancelAt: cancelAt, Label: "rfq-fill",
+		Obsolete: func(checkCtx context.Context) (bool, error) {
+			return e.orderObsolete(checkCtx, orderID)
+		},
 	})
 	attempt := e.store.recordAttempt(orderID)
 	outcome := res.Outcome
@@ -372,15 +378,31 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		}
 		retryAt := e.now().Add(e.pollInterval)
 		retryDeadline, stillValid := liquidlane.CancellationDeadline(orderDeadline, chainTime, chainObservedAt, retryAt)
+		retry := ctx.Err() == nil && stillValid && outcome == txmanager.OutcomeCancelled &&
+			res.Receipt != nil && res.Receipt.Status == ethtypes.ReceiptStatusSuccessful
+		if retry && !e.fundable() {
+			// Another fill would be refused (or signed without headroom) while the signer cannot fund a
+			// reference fill; the order fails instead of retrying against the balance.
+			retry = false
+			observability.Log(ctx).Info("fill cancelled; retry suppressed while the signer balance cannot fund a fill",
+				"attempt", attempt, "tx", res.Hash.Hex())
+		}
 		// Scheduled before any terminal status so a retrying order keeps its reservation.
-		if ctx.Err() == nil && stillValid && outcome == txmanager.OutcomeCancelled &&
-			res.Receipt != nil && res.Receipt.Status == ethtypes.ReceiptStatusSuccessful &&
-			e.store.scheduleCancellationRetry(orderID, e.maxCancellationRetries, retryAt, retryDeadline, res.Hash, sendErr.Error()) {
+		if retry && e.store.scheduleCancellationRetry(orderID, e.maxCancellationRetries, retryAt, retryDeadline, res.Hash, sendErr.Error()) {
 			observability.Log(ctx).Info("fill cancelled; retry scheduled", "attempt", attempt,
 				"tx", res.Hash.Hex(), "retryAt", retryAt)
 			return
 		}
 		e.store.markStatus(orderID, status, res.Hash, sendErr.Error())
+		if res.NotAdmitted {
+			// The manager refused the fill before signing (an unfundable balance, a stale head, a paused
+			// nonce lane): an expected skip it already logged and counted, not a failed transaction.
+			reason := txmanager.NotAdmittedReason(res.Err)
+			observability.Decline(ctx, "fill_not_admitted", reason)
+			observability.Log(ctx).Info("fill not admitted", "attempt", attempt, "reason", reason,
+				"error", sendErr.Error())
+			return
+		}
 		observability.Log(ctx).Error(sendErr, "fill failed", "attempt", attempt, "tx", res.Hash.Hex(),
 			"outcome", outcome)
 		return
@@ -461,6 +483,36 @@ func (e *executionService) buildFillCalldata(
 	return calldata, discountValidUntil, true
 }
 
+// fundable reports whether the lane may take on another fill; an unwired predicate fails closed.
+func (e *executionService) fundable() bool {
+	return e.laneFundable != nil && e.laneFundable()
+}
+
+// orderObsolete is the fill request's Obsolete check: true once the backend reports the order filled,
+// cancelled or expired, so the manager drops an unsigned fill or cancels a pending one instead of holding
+// the nonce lane until CancelAt. A filled status can describe this lifecycle's own fill; the manager reads
+// the fill's receipts before every pending check and checks the mined nonce before signing a cancellation,
+// so its own inclusion wins. Every other status keeps the fill alive, as does a failed or unrecognized
+// read (an error): the backend may mark an order errored or unfunded while the signed order still fills,
+// and the execution-time contracts stay authoritative.
+func (e *executionService) orderObsolete(ctx context.Context, orderID string) (bool, error) {
+	bo, err := e.backend.getOrder(ctx, orderID)
+	if err != nil {
+		return false, errors.Errorf("read order %s status: %w", orderID, err)
+	}
+	if bo == nil {
+		return false, errors.Errorf("read order %s status: order not found", orderID)
+	}
+	switch bo.OrderStatus {
+	case "filled", "cancelled", "expired":
+		return true, nil
+	case backendOrderStatusOpen, "error", "unverified", "insufficient-funds":
+		return false, nil
+	default:
+		return false, errors.Errorf("read order %s status: %w %q", orderID, errUnknownOrderStatus, bo.OrderStatus)
+	}
+}
+
 // sendFill submits the fill as the rfq.order.submit stage and reports the transaction on both that
 // stage and the order span it belongs to. The returned error is the failure the outcome carries,
 // synthesized when the manager reports a non-inclusive outcome without one.
@@ -468,7 +520,15 @@ func (e *executionService) sendFill(
 	ctx context.Context, req txmanager.Request,
 ) (res txmanager.Result, err error) {
 	submitCtx, end := tracer.Start(ctx, "rfq.order.submit")
-	defer func() { end(err) }()
+	defer func() {
+		// A refusal before signing is an expected skip of the stage, not its failure.
+		if res.NotAdmitted {
+			observability.Decline(submitCtx, "fill_not_admitted", txmanager.NotAdmittedReason(res.Err))
+			end(nil)
+			return
+		}
+		end(err)
+	}()
 
 	res = e.txm.Send(submitCtx, req)
 	txmanager.RecordResult(submitCtx, res) // the stage

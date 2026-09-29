@@ -113,6 +113,7 @@ func TestQuoteDeclineMetricsUseBoundedOutcomes(t *testing.T) {
 		outcome quoteMetricOutcome
 	}{
 		{name: "blocked", reason: quoteDeclineBlocked, outcome: quoteOutcomeDeclinedBlocked},
+		{name: "lane unfundable", reason: quoteDeclineLaneUnfundable, outcome: quoteOutcomeDeclinedUnfundable},
 		{name: "invalid request", reason: quoteDeclineInvalidRequest, outcome: quoteOutcomeDeclinedInvalidRequest},
 		{name: "pair out of scope", reason: quoteDeclinePairOutOfScope, outcome: quoteOutcomeDeclinedPairOutOfScope},
 		{name: "invalid amount", reason: quoteDeclineInvalidAmount, outcome: quoteOutcomeDeclinedInvalidAmount},

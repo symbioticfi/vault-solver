@@ -204,6 +204,10 @@ type Manager struct {
 	lastInclusion atomic.Uint64
 	// hashPinMisses counts the balance reads pinned by header hash in a row that ended not found.
 	hashPinMisses atomic.Uint64
+	// fundingGateOn is set once in New: balance.referenceGasUnits is positive and the backend can read
+	// the signer balance on account polls. funding is the gate's state (funding.go).
+	fundingGateOn bool
+	funding       fundingGate
 
 	queue           chan job
 	lifecycleSlot   chan struct{}
@@ -287,6 +291,7 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log log
 	if balances, ok := backend.(pinnedBalanceBackend); ok && !m.cfg.Balance.GuardDisabled {
 		m.balances = balances
 	}
+	m.fundingGateOn = m.cfg.Balance.ReferenceGasUnits > 0 && m.supportsAccountBalance()
 	return m
 }
 
@@ -382,10 +387,11 @@ func (m *Manager) LaneReady() bool {
 	return m.Available() && m.Idle()
 }
 
-// SubscribeLaneState returns an independent, coalesced change stream. Consumers must call
-// LaneReady after every signal instead of assuming which edge occurred, and must call unsubscribe
-// when they stop. Signals cover both nonce-conflict and admission-demand edges. Independent
-// subscriptions prevent readiness and solvers from stealing signals from each other.
+// SubscribeLaneState returns an independent, coalesced change stream. Consumers must re-read
+// LaneReady (and Fundable, if they gate on it) after every signal instead of assuming which edge
+// occurred, and must call unsubscribe when they stop. Signals cover nonce-conflict, admission-demand
+// and funding-gate edges. Independent subscriptions prevent readiness and solvers from stealing
+// signals from each other.
 func (m *Manager) SubscribeLaneState() (<-chan struct{}, func()) {
 	m.laneStateMu.Lock()
 	id := m.nextLaneStateID
@@ -414,8 +420,9 @@ func (m *Manager) Initialize(ctx context.Context) error {
 	return m.initializeNonceLocked(ctx)
 }
 
+// monitorAccount polls the signer account while account metrics or the funding gate need it.
 func (m *Manager) monitorAccount(ctx context.Context) {
-	if m.metrics == nil || !m.supportsAccountBalance() {
+	if (m.metrics == nil && !m.fundingGateOn) || !m.supportsAccountBalance() {
 		return
 	}
 	m.refreshAccount(ctx)
@@ -450,18 +457,27 @@ func (m *Manager) refreshAccount(ctx context.Context) {
 	}
 }
 
+// readAccount reads the account telemetry snapshot when metrics are on, then evaluates the funding gate
+// from its balance when the gate is on. A failed read keeps the previous snapshot and gate state.
 func (m *Manager) readAccount(ctx context.Context) error {
 	refreshCtx, cancel := context.WithTimeout(ctx, accountRefreshTimeout)
 	defer cancel()
-	reading, err := m.readAccountTelemetry(refreshCtx)
-	if err != nil {
-		return err
+	var balance *big.Int
+	if m.metrics != nil {
+		reading, err := m.readAccountTelemetry(refreshCtx)
+		if err != nil {
+			return err
+		}
+		if reading.balance == nil || reading.balance.Sign() < 0 {
+			return errors.New("txmanager: invalid account balance")
+		}
+		m.metrics.observeAccount(reading.balance, reading.latestNonce, reading.pendingNonce)
+		balance = reading.balance
 	}
-	if reading.balance == nil || reading.balance.Sign() < 0 {
-		return errors.New("txmanager: invalid account balance")
+	if !m.fundingGateOn {
+		return nil
 	}
-	m.metrics.observeAccount(reading.balance, reading.latestNonce, reading.pendingNonce)
-	return nil
+	return m.refreshFunding(refreshCtx, balance)
 }
 
 func (m *Manager) readAccountTelemetry(ctx context.Context) (accountReading, error) {
@@ -502,6 +518,9 @@ func (m *Manager) Start(ctx context.Context) {
 	// job's solver-stamped one below.
 	ctx = observability.WithLogger(ctx, m.log)
 	m.metrics.bindAccount(m.signer.Address())
+	if m.cfg.Balance.TargetEth > 0 {
+		m.metrics.setBalanceTarget(ethToWei(m.cfg.Balance.TargetEth))
+	}
 	accountMonitorDone := make(chan struct{})
 	go func() {
 		defer close(accountMonitorDone)
@@ -513,10 +532,16 @@ func (m *Manager) Start(ctx context.Context) {
 		"from", m.signer.Address().Hex(),
 		"feePolicy", string(m.cfg.Fees.Policy),
 		"balanceGuard", m.guardEnabled(),
+		"fundingGate", m.fundingGateOn,
+		"referenceGasUnits", m.cfg.Balance.ReferenceGasUnits,
 	)
 	if !m.cfg.Balance.GuardDisabled && !m.guardEnabled() {
 		observability.Log(ctx).Info("balance guard disabled: the backend cannot read a balance pinned to a block; " +
 			"attempts are signed without checking that the signer can fund them")
+	}
+	if m.cfg.Balance.ReferenceGasUnits > 0 && !m.fundingGateOn {
+		observability.Log(ctx).Info("funding gate disabled: the backend cannot read the signer balance; " +
+			"Fundable always reports true")
 	}
 	lifecycleCtx, cancelLifecycle := context.WithCancelCause(context.WithoutCancel(ctx))
 	defer cancelLifecycle(errManagerStopped)
@@ -892,6 +917,9 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 			}
 			return nil, errors.Errorf("send %q: %w", req.Label, err)
 		}
+		// The pinned balance and the next base fee are a fee snapshot of the lane: the funding gate
+		// follows it between account polls, so a refusal below closes the gate at once.
+		m.evaluateFunding(ctx, balance, snapshot.nextBase, snapshot.historyHead)
 	}
 	gas, err := estimate.wait()
 	if err != nil {
@@ -1002,8 +1030,9 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	}, nil
 }
 
-// observeFeeSnapshot exports the next base fee a send was guarded at and what a reference fill needs
-// then: balance.referenceGasUnits, or this attempt's gas limit while that is unset.
+// observeFeeSnapshot exports the next base fee a send was guarded at, or an account poll of the funding
+// gate read, and what a reference fill needs then: balance.referenceGasUnits, or this attempt's gas limit
+// while that is unset.
 func (m *Manager) observeFeeSnapshot(nextBase *big.Int, gas uint64) {
 	if m.metrics == nil {
 		return

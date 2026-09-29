@@ -71,6 +71,11 @@ count is an error. Either source is filtered to non-zero vault/asset targets tha
 solver's signer (validated via the adapter's ERC-1271 `isValidSignature`). An empty factory is valid and
 is polled until eligible adapters appear. Example:
 [`config/3f.example.yaml`](config/3f.example.yaml).
+Redeem is not gated on lane funding: when the tx manager's balance guard refuses a finalize batch as
+unaffordable, the solver halves the batch (down to one request) and skips redeem sends for 1, 2, 4 and then
+12 `redeemPoll` intervals (5, 10, 20 and 60 minutes by default), still scanning so the redeemable metric
+stays fresh. The backoff ends when the [funding gate](#txmanager-funding-gate) reopens, and each included
+redeem doubles the batch back toward `redeemBatchSize`. One Info line reports each such episode.
 
 ### RFQ Filler — `rfq-filler`
 
@@ -117,6 +122,11 @@ the adapter pays it at the order amount, `floor(getAmountOut(amountIn) * (1e6 - 
 field replaces `maxRate`, so run this version with a backend that sends it. Fills are still
 sent one at a time on the shared nonce lane. Reservations are local to the process and are not restored
 after a restart.
+While the tx manager's [funding gate](#txmanager-funding-gate) is closed, quotes are declined (quote decision
+`lane_unfundable`) and a fill cancelled at its deadline is not retried. A fill the balance guard refuses
+fails the order without a retry and is logged at Info (`fill not admitted`), not as a failed fill. While a
+fill is pending, the backend reporting the order `filled`, `cancelled` or `expired` makes the tx manager
+cancel it at its nonce instead of holding the lane until the order deadline.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).
@@ -162,6 +172,8 @@ signing and after a receipt sweep without a valid receipt, the tx manager rechec
 An observed `Claimed` or `Refunded` then switches the owned nonce to cancellation instead of
 retaining liquidity until `pendingTimeoutMs`. `None`, an unrecognized status, or an unavailable status read
 leaves the current lifecycle unchanged and is retried, so a lagging latest-state RPC cannot cancel a fresh fill.
+Standing quotes are also withdrawn while the tx manager's [funding gate](#txmanager-funding-gate) is closed and
+republished when it reopens; a fill the balance guard refuses is logged at Info (`order fill not admitted`).
 Orders
 that the built-in strategy proves fillable without, but blocked by, pending reservations enter a bounded FIFO
 without blocking later deliveries. The worker retries them after every reservation release and returns a still-
@@ -273,11 +285,16 @@ Transaction completion invalidates cached inventory before releasing its reserva
 after a latest-state refresh. Unsubmitted attempts release capacity without invalidating inventory.
 A quote is returned only if inventory, reservations, and blocking conditions remain unchanged during
 calculation. Quoting fails closed during startup warmup, stale or unknown exclusive-order delivery,
-an unavailable nonce lane, an active Uniswap `blockUntilTimestamp`, or the configured local fade breaker. A claimed order is requeued before chain reads,
-signed-discount resolution, calldata construction, or preflight while the nonce lane is paused. A txmanager
+an unavailable nonce lane, a closed tx manager [funding gate](#txmanager-funding-gate) (decline
+`declined_lane_unfundable`), an active Uniswap `blockUntilTimestamp`, or the configured local fade breaker. A claimed order is requeued before chain reads,
+signed-discount resolution, calldata construction, or preflight while the nonce lane is paused or the
+funding gate is closed. A txmanager
 result rejected before the worker lifecycle does not count toward the local fill breaker and is reported as
 `solver_bot_txmanager_admission_rejections_total{label="uniswapx-fill"}` rather than a terminal fill
-failure. `GET /ready` exposes that state and
+failure; a fill the balance guard refuses as unaffordable is retried with the failure backoff (the poll
+interval doubling up to 30 seconds) instead of every poll. While a fill is pending, the order API reporting
+the order `filled` (by another filler), `cancelled` or `expired` makes the tx manager cancel it at its nonce
+instead of holding the lane until the deadline. `GET /ready` exposes that state and
 also returns not-ready when the latest snapshot has no quotable inventory;
 `GET /health` and its probe-friendly alias `GET /healthz` remain liveness-only.
 
@@ -357,7 +374,8 @@ This is the seam for customizing a solver without forking. Contract and trust mo
 The shared `txManager` serializes transaction-sending solvers on one EOA. While a transaction is queued
 or active, UniswapX declines new quotes, LI.FI retires standing curves, and 3F stops new offers;
 reconciliation continues. RFQ keeps quoting and accounts for pending fills through reservations; it stops
-only while the nonce lane is conflicted. Pending calls can be replaced or cancelled with the same nonce. Each pending
+only while the nonce lane is conflicted. RFQ, UniswapX and LI.FI also stop new commitments while the
+[funding gate](#txmanager-funding-gate) is closed. Pending calls can be replaced or cancelled with the same nonce. Each pending
 receipt RPC has its own timeout and does not block the lifecycle loop's replacement/cancellation timers.
 
 Configure `maxFeeGwei` for every transaction-sending process. It also caps cancellation; `tipGwei` sets a
@@ -411,8 +429,25 @@ still be sent while the balance covers `G × (1.125·pb + tipFloor)`; the legacy
 `G × (2·pb + tip)`. As a rule of thumb, fund lanes that fill regularly to about 0.1 ETH (a 4.35M-gas fill
 then still sends up to a next base fee of about 20 gwei, and keeps the full legacy price up to about 11.5 gwei) and idle
 lanes to about 0.036 ETH, topping up below half the target. `solver_bot_txmanager_account_required_balance_wei`
-exports the requirement at the latest guarded send, and the startup `started` log line names the signer
-address; signers must be unique per deployment.
+exports the requirement at the latest guarded send (and on every account poll while the funding gate is on),
+and the startup `started` log line names the signer address; signers must be unique per deployment.
+
+<a id="txmanager-funding-gate"></a>**Funding gate.** With `balance.referenceGasUnits` set (RFQ 4350000,
+UniswapX and LI.FI 4400000), the tx manager also reports whether the signer balance funds a fill of that gas
+limit priced `fees.pricingHorizonBlocks` (5) blocks ahead: `referenceGasUnits × (1.125⁴·pb + tipFloor)`,
+about `G × (1.6·pb + tipFloor)`. The margin over the two-block send floor means a quote made just before the
+base fee climbs still fills. The gate is re-evaluated on every account poll and every guarded send, so set
+`accountPollIntervalMs: 12000` on mainnet to follow the base fee each block; once closed it reopens only at
+`balance.fundingHysteresisBps` (20%) above the threshold. While it is closed RFQ and UniswapX decline quotes,
+UniswapX defers won orders before planning them, LI.FI withdraws its standing quotes, and RFQ does not retry a
+cancelled fill; 3F offers are not gated and 3F redeem backs off as described in the 3F section. It starts closed until
+its first evaluation, is off (always fundable) while `referenceGasUnits` is 0, and is separate from `/readyz`,
+which must not flap with the base fee. Changes are logged at Info (`lane unfundable`, `lane fundable again`).
+`solver_bot_txmanager_account_fundable` (1 open, 0 closed; absent while the gate is off) and
+`solver_bot_txmanager_account_balance_target_wei` (from `balance.targetEth`; absent when unset) are meant for
+alerts: page when the lane is unfundable and its balance is below target, warn when it is unfundable at or
+above target (a base-fee spike the target does not cover). At 0.1 ETH a 4.35M-gas lane keeps quoting up to a
+next base fee of about 14.3 gwei.
 
 Defaults, fee headroom, request/result semantics, nonce recovery and internal ownership are documented
 in the [transaction manager plan](docs/TXMANAGER-PLAN.md). Integration-specific deadline and capacity
@@ -597,7 +632,7 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | UniswapX | `uniswapx_exclusive_obligations_outstanding` | — | Live-observed or recovered obligations still awaiting terminal classification. |
 | UniswapX | `uniswapx_exclusive_nearest_deadline_timestamp` | — | Nearest outstanding exclusivity deadline; alerts on urgent or stuck obligations. |
 | UniswapX | `uniswapx_block_until_timestamp` | — | Maximum deadline among remote, local-fill, exclusive-fade, and startup-warmup time-based quote blockers. |
-| UniswapX | `uniswapx_ready` | — | Scrape-time availability: `1` only when current quote state, breakers, exclusive delivery, and the transaction nonce lane permit quoting. |
+| UniswapX | `uniswapx_ready` | — | Scrape-time availability: `1` only when current quote state, breakers, exclusive delivery, and the transaction nonce lane and its funding gate permit quoting. |
 | UniswapX | `uniswapx_last_quote_refresh_timestamp` | — | Last atomic quote-state publication. A successful publication may contain no inventory, so freshness alone is not readiness. |
 | UniswapX | `uniswapx_last_exclusive_poll_timestamp` | — | Last successful exclusive poll plus recovery/obligation reconciliation. |
 | UniswapX | `uniswapx_pending_fills` | — | Admitted fills holding LiquidLane capacity while awaiting a txmanager terminal result. |

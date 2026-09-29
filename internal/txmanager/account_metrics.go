@@ -34,6 +34,11 @@ type accountMetrics struct {
 	successRefreshes uint64
 	errorRefreshes   uint64
 	now              func() time.Time
+	// fundable is the funding gate's last evaluation, exported once the gate has evaluated; targetWei is
+	// balance.targetEth, exported when set.
+	fundable, hasFundable bool
+	targetWei             float64
+	hasTarget             bool
 
 	infoDesc         *prometheus.Desc
 	balanceDesc      *prometheus.Desc
@@ -41,6 +46,8 @@ type accountMetrics struct {
 	pendingNonceDesc *prometheus.Desc
 	refreshesDesc    *prometheus.Desc
 	lastRefreshDesc  *prometheus.Desc
+	fundableDesc     *prometheus.Desc
+	targetDesc       *prometheus.Desc
 }
 
 func newAccountMetrics() *accountMetrics {
@@ -72,6 +79,14 @@ func newAccountMetrics() *accountMetrics {
 			"account_last_successful_refresh_timestamp",
 			"Unix timestamp of the last complete signer balance and nonce snapshot.",
 		),
+		fundableDesc: newAccountMetricDesc(
+			"account_fundable",
+			"1 while the lane funding gate is open (the signer balance funds balance.referenceGasUnits at the pricing horizon), else 0; absent while the gate is off or before its first evaluation.",
+		),
+		targetDesc: newAccountMetricDesc(
+			"account_balance_target_wei",
+			"Operator funding target of the transaction-sending account (balance.targetEth) in wei; absent when unset.",
+		),
 	}
 }
 
@@ -91,6 +106,8 @@ func (m *accountMetrics) Describe(ch chan<- *prometheus.Desc) {
 	ch <- m.pendingNonceDesc
 	ch <- m.refreshesDesc
 	ch <- m.lastRefreshDesc
+	ch <- m.fundableDesc
+	ch <- m.targetDesc
 }
 
 func (m *accountMetrics) Collect(ch chan<- prometheus.Metric) {
@@ -100,6 +117,8 @@ func (m *accountMetrics) Collect(ch chan<- prometheus.Metric) {
 	hasSnapshot := m.hasSnapshot
 	successRefreshes := m.successRefreshes
 	errorRefreshes := m.errorRefreshes
+	fundable, hasFundable := m.fundable, m.hasFundable
+	targetWei, hasTarget := m.targetWei, m.hasTarget
 	m.mu.RUnlock()
 
 	if address == "" {
@@ -118,6 +137,16 @@ func (m *accountMetrics) Collect(ch chan<- prometheus.Metric) {
 		float64(errorRefreshes),
 		accountRefreshError,
 	)
+	if hasFundable {
+		value := 0.0
+		if fundable {
+			value = 1
+		}
+		ch <- prometheus.MustNewConstMetric(m.fundableDesc, prometheus.GaugeValue, value)
+	}
+	if hasTarget {
+		ch <- prometheus.MustNewConstMetric(m.targetDesc, prometheus.GaugeValue, targetWei)
+	}
 	if !hasSnapshot {
 		return
 	}
@@ -158,6 +187,18 @@ func (m *accountMetrics) observeError() {
 	m.mu.Unlock()
 }
 
+func (m *accountMetrics) observeFundable(fundable bool) {
+	m.mu.Lock()
+	m.fundable, m.hasFundable = fundable, true
+	m.mu.Unlock()
+}
+
+func (m *accountMetrics) setTarget(targetWei *big.Int) {
+	m.mu.Lock()
+	m.targetWei, m.hasTarget = weiFloat(targetWei), true
+	m.mu.Unlock()
+}
+
 func (m *Metrics) bindAccount(address common.Address) {
 	if m != nil {
 		m.account.bind(address)
@@ -174,5 +215,19 @@ func (m *Metrics) observeAccount(balance *big.Int, latestNonce, pendingNonce uin
 func (m *Metrics) observeAccountRefreshError() {
 	if m != nil {
 		m.account.observeError()
+	}
+}
+
+// observeFundable exports the funding gate's latest evaluation.
+func (m *Metrics) observeFundable(fundable bool) {
+	if m != nil {
+		m.account.observeFundable(fundable)
+	}
+}
+
+// setBalanceTarget exports the operator's funding target, which only alerts compare the balance with.
+func (m *Metrics) setBalanceTarget(targetWei *big.Int) {
+	if m != nil && targetWei != nil && targetWei.Sign() > 0 {
+		m.account.setTarget(targetWei)
 	}
 }

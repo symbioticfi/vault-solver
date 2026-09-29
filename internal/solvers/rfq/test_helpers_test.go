@@ -99,3 +99,8 @@ func syncCycle(ctx context.Context, e *executionService) {
 		e.handleOrder(ctx, o)
 	}
 }
+
+// openLane is a transaction lane that is nonce-safe and funded.
+func openLane() laneGate {
+	return laneGate{available: func() bool { return true }, fundable: func() bool { return true }}
+}

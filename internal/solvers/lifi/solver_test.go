@@ -115,6 +115,7 @@ type recoveryGateStrategy struct {
 
 type testTransactionLaneState struct {
 	ready       func() bool
+	fundable    func() bool // nil is a funded lane
 	changes     <-chan struct{}
 	onSubscribe func()
 	unsubscribe func()
@@ -122,6 +123,10 @@ type testTransactionLaneState struct {
 
 func (s *testTransactionLaneState) LaneReady() bool {
 	return s.ready()
+}
+
+func (s *testTransactionLaneState) Fundable() bool {
+	return s.fundable == nil || s.fundable()
 }
 
 func (s *testTransactionLaneState) SubscribeLaneState() (<-chan struct{}, func()) {

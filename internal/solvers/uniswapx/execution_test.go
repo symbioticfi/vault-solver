@@ -377,6 +377,7 @@ type executionTestTxManager struct {
 	maxFeeReads int
 	reqs        []txmanager.Request
 	unavailable bool
+	unfundable  bool
 	busy        bool
 	accepted    chan<- struct{}
 }
@@ -387,6 +388,7 @@ func (m *executionTestTxManager) MaxFeePerGas(context.Context) (*big.Int, error)
 }
 
 func (m *executionTestTxManager) Available() bool { return !m.unavailable }
+func (m *executionTestTxManager) Fundable() bool  { return !m.unfundable }
 func (m *executionTestTxManager) LaneReady() bool { return !m.unavailable && !m.busy }
 
 func (m *executionTestTxManager) SendAsync(

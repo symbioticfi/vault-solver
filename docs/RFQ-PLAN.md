@@ -93,13 +93,27 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   discount/protocol deadline, translated from an observed chain timestamp to wall time after planning, so it
   expires while waiting for admission and switches to same-nonce cancellation before dead calldata can hold
   the shared nonce lane.
+- **Orders that ended elsewhere release the lane.** Each fill request carries an `Obsolete` check that reads
+  the backend order (`GET /orders?orderId=`): `filled`, `cancelled` or `expired` makes the manager drop an
+  unsigned fill or cancel a pending one instead of holding the nonce lane until `CancelAt`. The manager reads
+  the fill's own receipts before each check and the mined nonce before signing a cancellation, so a `filled`
+  that is our own inclusion wins. `open`, `error`, `unverified` and `insufficient-funds` keep the fill (the
+  backend may flag an order that still fills), and a failed read or an unrecognized status is an error, which
+  keeps it too.
+- **Refusals before signing are expected skips.** A `NotAdmitted` result (the balance guard's
+  `ErrUnaffordable`, a `stale_head`, a paused nonce lane) marks the order failed without a retry loop, as
+  before, but is logged at Info (`fill not admitted`, with `txmanager.NotAdmittedReason`) and declined on the
+  `rfq.order` and `rfq.order.submit` spans rather than logged as `fill failed` at Error. An admitted
+  submission failure keeps its Error.
 - **Retries distinguish unsent work from transactions.** Failed pre-submission work with no recorded hash
   may be retried while the order is open. A successful cancellation that satisfies txmanager's confirmation
   policy may enter `retry_waiting`, retaining its hash until one `pollIntervalMs` interval elapses and a
   fresh open-order poll re-arms it. `maxCancellationRetries` defaults to three additional attempts; zero
   disables retries. The retry budget survives re-queuing; retrying clears only the consumed cancellation
   hash and runs the full executable-order lookup, chain deadline validation, strategy plan, and discount
-  resolution again. Retry waiting counts as an active obligation and reconciles terminal
+  resolution again. A retry is scheduled only while the manager's funding gate (`Fundable`,
+  [TXMANAGER-PLAN §4.2](TXMANAGER-PLAN.md#42-lane-funding-gate)) is open; otherwise the order fails and the
+  suppression is logged at Info. Retry waiting counts as an active obligation and reconciles terminal
   backend status; its retained order deadline also expires it locally if backend views disappear or stay
   stale. No retry is scheduled during shutdown or when the order expires before the next attempt.
   Reverted transactions stay failed; unknown inclusion or `cancelled_unconfirmed` stays submitted for backend
@@ -109,11 +123,16 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   the poll loop and the submitter to finish. A fill already admitted by txmanager keeps its lifecycle ownership and RFQ
   records the terminal result before `Run` returns; the framework's bounded txmanager drain remains the hard
   stop for an unresolved lifecycle.
-- **Quotes follow nonce safety, not lane idleness.** `/quote` preserves pure request validation, then returns
-  the normal no-quote `204` before chain reads or strategy work only while the nonce lane is conflicted
-  (`txmanager.Available`). A queued or pending fill does not block quoting; its liquidity is subtracted
-  through reservations instead. Nonce safety is checked again after strategy planning so a pass that observes
-  a mid-plan conflict is discarded before its response.
+- **Quotes follow nonce safety and lane funding, not lane idleness.** `/quote` preserves pure request
+  validation, then returns the normal no-quote `204` before chain reads or strategy work while the nonce lane
+  is conflicted (`txmanager.Available`, decision `lane_unavailable`) or the funding gate is closed
+  (`txmanager.Fundable`, decision `lane_unfundable`: the signer balance no longer funds a
+  `balance.referenceGasUnits` fill at the pricing horizon, so the fill a won quote needs would be refused).
+  A queued or pending fill does not block quoting; its liquidity is subtracted through reservations
+  instead. Both are checked again after strategy planning so a pass that observes a mid-plan change is
+  discarded before its response. The funding gate is off while `referenceGasUnits` is 0; the strategy's
+  RFQ value is 4350000. RFQ's quote → resolve → fill latency is assumed to fit the gate's three blocks of
+  margin (strategy §2.10); it is unmeasured.
 - **Won orders reserve liquidity until they finish.** The store owns a `liquidlane.CapacityLedger` keyed by
   order ID. A newly won order is reserved on the poll cycle that first sees it: by the submitter's own plan
   when the submitter is idle, or by the poll loop when the submitter is busy with another fill, so an

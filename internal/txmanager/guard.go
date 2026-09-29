@@ -71,15 +71,27 @@ type feeReading struct {
 // the next block's base fee, how far the snapshot trails the real next block, and the block the signer
 // balance is read at.
 type sendSnapshot struct {
-	reading  feeReading
-	head     uint64   // header number; zero when the header carried none
-	nextBase *big.Int // nil when the guard is off
-	lag      uint64
-	pin      rpc.BlockNumberOrHash
+	reading     feeReading
+	head        uint64   // header number; zero when the header carried none
+	historyHead uint64   // newest block the fee history describes, where the balance is pinned
+	nextBase    *big.Int // nil when the guard is off
+	lag         uint64
+	pin         rpc.BlockNumberOrHash
 }
 
 func (s sendSnapshot) guarded() bool {
 	return s.nextBase != nil
+}
+
+// NotAdmittedReason is the bounded reason a NotAdmitted result's error was refused for, as
+// admission_rejections_total counts it: unaffordable, unaffordable_one_block and stale_head from the
+// balance guard, or nonce_conflict, manager_stopped, deadline_exceeded, caller_cancelled and other before
+// the worker lifecycle. Solvers put it on their declined span event and expected-skip log line.
+func NotAdmittedReason(err error) string {
+	if reason, ok := guardRefusalReason(err); ok {
+		return string(reason)
+	}
+	return string(classifyAdmissionRejection(err))
 }
 
 // guardRefusalReason classifies a pre-signing refusal of the balance guard for metrics, spans and logs.
@@ -183,7 +195,9 @@ func (m *Manager) checkSnapshot(reading feeReading, now time.Time) (sendSnapshot
 	if historyHead == number {
 		pin = rpc.BlockNumberOrHashWithHash(head.Hash(), true)
 	}
-	return sendSnapshot{reading: reading, head: number, nextBase: nextBase, lag: lag, pin: pin}, nil
+	return sendSnapshot{
+		reading: reading, head: number, historyHead: historyHead, nextBase: nextBase, lag: lag, pin: pin,
+	}, nil
 }
 
 // feeHistoryNext returns the newest block a fee history describes and the base fee it reports for the

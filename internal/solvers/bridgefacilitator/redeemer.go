@@ -20,6 +20,11 @@ func (s *Solver) redeemAll(ctx context.Context) {
 	ctx, end := tracer.Start(ctx, "3f.redeem")
 	defer end(nil) // each stage records its own failure; a scan with nothing ready is a decline
 
+	if !s.redeem.beginPass() {
+		// Scans still run, so the redeemable metric stays fresh while the backoff holds the sends.
+		observability.Log(ctx).V(1).Info("redeem: backing off after an unaffordable batch; scanning only",
+			"passesLeft", s.redeem.skipPasses, "batchLimit", s.redeem.limit(s.cfg.RedeemBatchSize))
+	}
 	var scanDuration time.Duration
 	totalReady := 0
 	complete := true
@@ -78,12 +83,16 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 	if len(ready) == 0 {
 		return
 	}
+	if s.redeem.holding {
+		observability.Decline(ctx, "redeem_skipped", "backing off after an unaffordable redeem")
+		return
+	}
 	// Bound the batch so the multicall calldata + gas stay predictable; the remainder is picked up on
-	// the next redeem-poll cycle (Requests stay active until finalized).
-	if len(ready) > s.cfg.RedeemBatchSize {
+	// the next redeem-poll cycle (Requests stay active until finalized). A backoff halves the bound.
+	if limit := s.redeem.limit(s.cfg.RedeemBatchSize); len(ready) > limit {
 		observability.Log(ctx).
-			Info("capping redeem batch", "ready", len(ready), "limit", s.cfg.RedeemBatchSize)
-		ready = ready[:s.cfg.RedeemBatchSize]
+			Info("capping redeem batch", "ready", len(ready), "limit", limit)
+		ready = ready[:limit]
 	}
 
 	// finalizeRequest takes one request; batch them into the adapter's own multicall so all ready
@@ -115,6 +124,10 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 	})
 	txmanager.RecordResult(submitCtx, res) // the stage
 	txmanager.RecordResult(ctx, res)       // the redeem pass it belongs to
+	if res.NotAdmitted {
+		s.redeemNotAdmitted(submitCtx, len(ready), res.Err)
+		return
+	}
 	if !res.Outcome.Included() {
 		err = res.Err
 		if err == nil {
@@ -123,6 +136,7 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 		observability.Log(submitCtx).Error(err, "redeem: tx not included", "requests", len(ready), "outcome", res.Outcome)
 		return
 	}
+	s.redeem.succeeded(s.cfg.RedeemBatchSize)
 	s.observeRedeemedRequests(len(ready))
 	if res.Outcome == txmanager.OutcomeIncludedUnconfirmed {
 		if res.Err != nil {
@@ -135,4 +149,29 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 		return
 	}
 	observability.Log(submitCtx).Info("finalized ready requests", "count", len(ready), "tx", res.Hash.Hex())
+}
+
+// redeemNotAdmitted handles a redeem the manager refused before signing. It is an expected skip the
+// manager already logged and counted, so the stage is declined rather than failed. An unaffordable batch
+// halves the next one and backs off (redeemBackoff), logged at Info once per episode; any other refusal
+// (a stale head, a paused nonce lane) is transient and the next scheduled pass retries it.
+func (s *Solver) redeemNotAdmitted(ctx context.Context, requests int, refusal error) {
+	reason := txmanager.NotAdmittedReason(refusal)
+	observability.Decline(ctx, "redeem_not_admitted", reason)
+	if !errors.Is(refusal, txmanager.ErrUnaffordable) {
+		observability.Log(ctx).Info("redeem: not admitted; retrying next pass",
+			"requests", requests, "reason", reason, "error", refusal)
+		return
+	}
+	first := s.redeem.refused(requests)
+	fields := []any{
+		"requests", requests, "reason", reason, "nextBatchLimit", s.redeem.batchLimit,
+		"skippedPasses", s.redeem.skipPasses, "error", refusal,
+	}
+	if first {
+		observability.Log(ctx).Info("redeem: the signer balance cannot fund the batch; halving it and backing off "+
+			"until the lane is funded", fields...)
+		return
+	}
+	observability.Log(ctx).V(1).Info("redeem: batch still unaffordable; backing off further", fields...)
 }

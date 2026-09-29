@@ -26,6 +26,7 @@ func testServer() *server {
 		chainID:       1,
 		executor:      execAddr,
 		laneAvailable: func() bool { return true },
+		laneFundable:  func() bool { return true },
 		reader:        &fakeQuoteCandidateReader{out: map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}},
 		strategy:      newDefaultTestStrategy(),
 		strategyName:  defaultStrategyName,

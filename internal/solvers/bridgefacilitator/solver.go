@@ -44,14 +44,19 @@ func init() {
 
 // Solver owns the 3F Bridge Facilitator lifecycle and delegates offer decisions to strategy.
 type Solver struct {
-	cfg        *Config
-	deps       solver.Deps
-	api        *apiClient
-	reader     *reader
-	txManager  transactionSender
-	strategy   types.Strategy
-	log        logr.Logger
-	laneReady  func() bool    // shared txmanager lane state; safe for the single Run goroutine
+	cfg       *Config
+	deps      solver.Deps
+	api       *apiClient
+	reader    *reader
+	txManager transactionSender
+	strategy  types.Strategy
+	log       logr.Logger
+	laneReady func() bool // shared txmanager lane state; safe for the single Run goroutine
+	// fundable and laneStates are the shared txmanager funding gate and its change stream. Offers do not
+	// gate on funding (an unfundable lane only delays redeem); they end a redeem backoff.
+	fundable   func() bool
+	laneStates func() (<-chan struct{}, func())
+	redeem     redeemBackoff  // Run goroutine only
 	signerAddr common.Address // the solver's own signer address (diagnostics only), set in factory
 	probe      signerProbe    // one-time (hash, sig) used to validate offer-signer authorization, set in factory
 	nonceSeq   atomic.Uint64
@@ -117,6 +122,8 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		strategy:   offerStrategy,
 		log:        deps.Log.WithName(Name),
 		laneReady:  deps.TxManager.LaneReady,
+		fundable:   deps.TxManager.Fundable,
+		laneStates: deps.TxManager.SubscribeLaneState,
 		signerAddr: deps.Signer.Address(),
 		probe:      probe,
 		offers:     newOfferTracker(),
@@ -158,6 +165,9 @@ func (s *Solver) Run(ctx context.Context) error {
 	defer discoverT.Stop()
 	defer redeemT.Stop()
 	defer reconcileT.Stop()
+	laneStateChanges, unsubscribe := s.subscribeLaneState()
+	defer unsubscribe()
+	s.redeem.fundable = s.laneFundable()
 
 	// Run one pass immediately rather than waiting a full interval.
 	s.discoverAndOffer(ctx)
@@ -176,6 +186,8 @@ func (s *Solver) Run(ctx context.Context) error {
 			s.redeemAll(ctx)
 		case <-reconcileT.C:
 			s.reconcile(ctx)
+		case <-laneStateChanges:
+			s.onLaneStateChange(ctx)
 		}
 	}
 }

@@ -52,6 +52,10 @@ func TestQuoteDecisionMetricsClassifyAuthenticatedRequestsOnce(t *testing.T) {
 			configure: func(s *server) { s.quotes.laneAvailable = func() bool { return false } },
 			want:      quoteDecisionLaneUnavailable, wantCode: http.StatusNoContent,
 		},
+		"lane unfundable": {
+			configure: func(s *server) { s.quotes.laneFundable = func() bool { return false } },
+			want:      quoteDecisionLaneUnfundable, wantCode: http.StatusNoContent,
+		},
 		"not quotable": {
 			body: func() quoteRequest {
 				body := validQuoteBody()

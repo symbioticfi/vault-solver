@@ -69,7 +69,10 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 
 	quotes, exec := buildServices(
-		cfg, chainID, st, rdr, deps.TxManager, deps.TxManager.Available, quoteStrategy, log,
+		cfg, chainID, st, rdr, deps.TxManager, laneGate{
+			available: deps.TxManager.Available,
+			fundable:  deps.TxManager.Fundable,
+		}, quoteStrategy, log,
 	)
 	exec.metrics = metrics
 	if metrics != nil {
@@ -93,6 +96,16 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}, nil
 }
 
+// laneGate is the shared transaction lane's generic state RFQ commitments depend on. Both predicates
+// are safe for concurrent use.
+type laneGate struct {
+	// available reports nonce safety (txmanager Available).
+	available func() bool
+	// fundable reports that the signer balance funds a reference fill at the pricing horizon
+	// (txmanager Fundable).
+	fundable func() bool
+}
+
 // buildServices wires the quote and execution services from the parsed config and shared deps.
 // Split from factory so the config → service wiring (notably the adapter whitelist reaching both
 // services) is unit-testable without a chain client.
@@ -102,7 +115,7 @@ func buildServices(
 	st *store,
 	rdr *reader,
 	txm txSender,
-	laneAvailable func() bool,
+	lane laneGate,
 	quoteStrategy types.Strategy,
 	log logr.Logger,
 ) (*quoteService, *executionService) {
@@ -118,7 +131,8 @@ func buildServices(
 		discountsEnabled: cfg.usesDiscounts(),
 		chainID:          chainID,
 		executor:         cfg.Executor,
-		laneAvailable:    laneAvailable,
+		laneAvailable:    lane.available,
+		laneFundable:     lane.fundable,
 		reservations:     st.pendingReservations,
 		whitelist:        quoteWhitelist,
 		tokenPolicy:      cfg.TokenPolicy,
@@ -145,6 +159,7 @@ func buildServices(
 		strategy:               quoteStrategy,
 		strategyName:           cfg.Strategy.Name,
 		txm:                    txm,
+		laneFundable:           lane.fundable,
 		log:                    log,
 		now:                    time.Now,
 		inflight:               make(map[string]bool),
