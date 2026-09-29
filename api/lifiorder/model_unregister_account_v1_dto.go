@@ -19,7 +19,7 @@ var _ MappedNullable = &UnregisterAccountV1Dto{}
 
 // UnregisterAccountV1Dto struct for UnregisterAccountV1Dto
 type UnregisterAccountV1Dto struct {
-	// Account address. EVM: hex20 EOA or hex32 bytes32 (last 20 bytes are extracted). Solana: base58 ed25519 public key. Tron: T-prefixed base58check or 0x hex.
+	// Account address. EVM: hex20 EOA or hex32 bytes32 (last 20 bytes are extracted). Solana: base58 ed25519 public key. Tron: T-prefixed base58check or 0x hex. Stellar: G-address.
 	Account string `json:"account"`
 	// CAIP-2 chain identifier. Selects how the account is parsed; accounts are keyed by address alone.
 	Chain                string `json:"chain"`

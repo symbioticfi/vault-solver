@@ -27,8 +27,6 @@ orders["discriminator"] = {
         "Dutch_V2": "#/components/schemas/DutchV2OrderEntity",
         "Dutch_V3": "#/components/schemas/DutchV3OrderEntity",
         "Priority": "#/components/schemas/PriorityOrderEntity",
-        "Hybrid": "#/components/schemas/HybridOrderEntity",
-        "Relay": "#/components/schemas/RelayOrderEntity",
     },
 }
 

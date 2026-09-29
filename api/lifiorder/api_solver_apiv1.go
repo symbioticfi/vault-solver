@@ -163,7 +163,7 @@ func (r ApiAccountsControllerRegisterSolverAccountRequest) Execute() (*RegisterA
 /*
 AccountsControllerRegisterSolverAccount Register a solver account (V1)
 
-Submit a signed server-issued message to register an account for reputation tracking. Supports EVM ECDSA (EOA), EVM EIP-1271 (smart contract wallet), and Solana ed25519 signatures. The message must have been obtained from GET /api/v1/solver/register/message. Note: the message is single-use and is consumed on the first POST attempt regardless of outcome. If registration fails, call GET /register/message again before retrying.
+Submit a signed server-issued message to register an account for reputation tracking. Supports EVM ECDSA (EOA), EVM EIP-1271 (smart contract wallet), Solana ed25519, Tron TIP-191, and Stellar SEP-53 signatures. Stellar requires an existing account whose original key meets all thresholds on the configured verification network. Permissions are checked at registration, not continuously. The message must have been obtained from GET /api/v1/solver/register/message. Note: the message is single-use and is consumed on the first POST attempt regardless of outcome. If registration fails, call GET /register/message again before retrying.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiAccountsControllerRegisterSolverAccountRequest
@@ -286,6 +286,17 @@ func (a *SolverAPIV1APIService) AccountsControllerRegisterSolverAccountExecute(r
 			}
 			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
 			newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 503 {
+			var v HttpErrorDto
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+			newErr.model = v
 		}
 		return localVarReturnValue, localVarHTTPResponse, newErr
 	}
@@ -320,7 +331,7 @@ func (r ApiAccountsControllerUnregisterSolverAccountRequest) Execute() (*Unregis
 /*
 AccountsControllerUnregisterSolverAccount Unregister a solver account (V1)
 
-Removes a registered account. The account is accepted in its native form per chain: EVM hex, Solana base58, Tron T-prefixed base58check or 0x hex. The chain selects how the account is parsed; accounts are keyed by address alone. Only accounts registered to the calling solver can be removed.
+Removes a registered account. The account is accepted in its native form per chain: EVM hex, Solana base58, Tron T-prefixed base58check or 0x hex, Stellar G-address. The chain selects how the account is parsed; accounts are keyed by address alone. Only accounts registered to the calling solver can be removed. Quotes with the account in exclusiveFor may still be accepted for up to 30 seconds after it is removed.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiAccountsControllerUnregisterSolverAccountRequest

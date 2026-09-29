@@ -63,8 +63,8 @@ type OrderMetaDto struct {
 	QuoteId NullableString `json:"quoteId"`
 	// Solver address that filled the order
 	SolverAddress NullableString `json:"solverAddress,omitempty"`
-	// Integrator key hash identifying the integrator this order belongs to
-	IntegratorKeyHash    *string `json:"integratorKeyHash,omitempty"`
+	// Integrator key hash identifying the integrator this order belongs to. Null when the order was not quoted through an integrator key.
+	IntegratorKeyHash    NullableString `json:"integratorKeyHash"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -74,7 +74,7 @@ type _OrderMetaDto OrderMetaDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOrderMetaDto(submitTime float32, orderStatus string, orderIdentifier string, onChainOrderId string, destinationAddress string, sendingTokenAddress NullableString, sendingTokenAmount NullableString, receivingTokenAddress NullableString, receivingTokenAmount NullableString, orderInitiatedTxHash NullableString, orderDeliveredTxHash NullableString, orderVerifiedTxHash NullableString, orderSettledTxHash NullableString, refundTxHash NullableString, signedAt NullableString, expiredAt NullableString, deliveredAt NullableString, settledAt NullableString, refundedAt NullableString, lastCompactDepositBlockNumber NullableString, quoteId NullableString) *OrderMetaDto {
+func NewOrderMetaDto(submitTime float32, orderStatus string, orderIdentifier string, onChainOrderId string, destinationAddress string, sendingTokenAddress NullableString, sendingTokenAmount NullableString, receivingTokenAddress NullableString, receivingTokenAmount NullableString, orderInitiatedTxHash NullableString, orderDeliveredTxHash NullableString, orderVerifiedTxHash NullableString, orderSettledTxHash NullableString, refundTxHash NullableString, signedAt NullableString, expiredAt NullableString, deliveredAt NullableString, settledAt NullableString, refundedAt NullableString, lastCompactDepositBlockNumber NullableString, quoteId NullableString, integratorKeyHash NullableString) *OrderMetaDto {
 	this := OrderMetaDto{}
 	this.SubmitTime = submitTime
 	this.OrderStatus = orderStatus
@@ -97,6 +97,7 @@ func NewOrderMetaDto(submitTime float32, orderStatus string, orderIdentifier str
 	this.RefundedAt = refundedAt
 	this.LastCompactDepositBlockNumber = lastCompactDepositBlockNumber
 	this.QuoteId = quoteId
+	this.IntegratorKeyHash = integratorKeyHash
 	return &this
 }
 
@@ -687,36 +688,30 @@ func (o *OrderMetaDto) UnsetSolverAddress() {
 	o.SolverAddress.Unset()
 }
 
-// GetIntegratorKeyHash returns the IntegratorKeyHash field value if set, zero value otherwise.
+// GetIntegratorKeyHash returns the IntegratorKeyHash field value
+// If the value is explicit nil, the zero value for string will be returned
 func (o *OrderMetaDto) GetIntegratorKeyHash() string {
-	if o == nil || IsNil(o.IntegratorKeyHash) {
+	if o == nil || o.IntegratorKeyHash.Get() == nil {
 		var ret string
 		return ret
 	}
-	return *o.IntegratorKeyHash
+
+	return *o.IntegratorKeyHash.Get()
 }
 
-// GetIntegratorKeyHashOk returns a tuple with the IntegratorKeyHash field value if set, nil otherwise
+// GetIntegratorKeyHashOk returns a tuple with the IntegratorKeyHash field value
 // and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
 func (o *OrderMetaDto) GetIntegratorKeyHashOk() (*string, bool) {
-	if o == nil || IsNil(o.IntegratorKeyHash) {
+	if o == nil {
 		return nil, false
 	}
-	return o.IntegratorKeyHash, true
+	return o.IntegratorKeyHash.Get(), o.IntegratorKeyHash.IsSet()
 }
 
-// HasIntegratorKeyHash returns a boolean if a field has been set.
-func (o *OrderMetaDto) HasIntegratorKeyHash() bool {
-	if o != nil && !IsNil(o.IntegratorKeyHash) {
-		return true
-	}
-
-	return false
-}
-
-// SetIntegratorKeyHash gets a reference to the given string and assigns it to the IntegratorKeyHash field.
+// SetIntegratorKeyHash sets field value
 func (o *OrderMetaDto) SetIntegratorKeyHash(v string) {
-	o.IntegratorKeyHash = &v
+	o.IntegratorKeyHash.Set(&v)
 }
 
 func (o OrderMetaDto) MarshalJSON() ([]byte, error) {
@@ -753,9 +748,7 @@ func (o OrderMetaDto) ToMap() (map[string]interface{}, error) {
 	if o.SolverAddress.IsSet() {
 		toSerialize["solverAddress"] = o.SolverAddress.Get()
 	}
-	if !IsNil(o.IntegratorKeyHash) {
-		toSerialize["integratorKeyHash"] = o.IntegratorKeyHash
-	}
+	toSerialize["integratorKeyHash"] = o.IntegratorKeyHash.Get()
 
 	for key, value := range o.AdditionalProperties {
 		toSerialize[key] = value

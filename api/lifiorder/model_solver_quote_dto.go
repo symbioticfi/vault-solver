@@ -19,11 +19,11 @@ var _ MappedNullable = &SolverQuoteDto{}
 
 // SolverQuoteDto struct for SolverQuoteDto
 type SolverQuoteDto struct {
-	// Unique identifier for the solver quote
+	// Stable identifier derived from the quote set route, quote, and range
 	Id string `json:"id"`
-	// Creation timestamp
+	// Timestamp when the containing quote set was received
 	CreatedAt string `json:"createdAt"`
-	// Last update timestamp
+	// Timestamp when the containing quote set was received
 	UpdatedAt string `json:"updatedAt"`
 	// Source chain network ID
 	FromChainNetworkId string `json:"fromChainNetworkId"`
@@ -51,13 +51,13 @@ type SolverQuoteDto struct {
 	MaxAmount string `json:"maxAmount"`
 	// Exclusive for address
 	ExclusiveFor NullableString `json:"exclusiveFor"`
-	// Source asset record ID
+	// Source asset record ID. Always null for quote quoteSet data
 	FromAssetRecordId NullableFloat32 `json:"fromAssetRecordId"`
-	// Destination asset record ID
+	// Destination asset record ID. Always null for quote quoteSet data
 	ToAssetRecordId NullableFloat32 `json:"toAssetRecordId"`
-	// Source chain record ID
+	// Source chain record ID. Always null for quote quoteSet data
 	FromChainRecordId NullableFloat32 `json:"fromChainRecordId"`
-	// Destination chain record ID
+	// Destination chain record ID. Always null for quote quoteSet data
 	ToChainRecordId NullableFloat32 `json:"toChainRecordId"`
 	// Associated solver ID
 	SolverId float32 `json:"solverId"`

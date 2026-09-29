@@ -1,7 +1,7 @@
 /*
 UniswapX
 
-REST API for retrieving signed UniswapX orders. Dutch (V1/V2/V3), Priority, Hybrid, and Relay orders are served by /orders; limit orders are served by /limit-orders. Order submission is handled by the Uniswap Trading API and is not part of this specification.
+REST API for retrieving signed UniswapX orders. Dutch (V1/V2/V3) and Priority orders are served by /orders; limit orders are served by /limit-orders. Order submission is handled by the Uniswap Trading API and is not part of this specification.
 
 API version: 2.0.0
 */
@@ -42,9 +42,12 @@ type DutchV2OrderEntity struct {
 	// Defined when the order has a quote request associated with it.
 	RequestId *string `json:"requestId,omitempty"`
 	// Transaction hash of the fill. Defined once the order has been filled.
-	TxHash               *string         `json:"txHash,omitempty" validate:"regexp=^0x[0-9a-fA-F]{64}$"`
+	TxHash *string `json:"txHash,omitempty" validate:"regexp=^0x[0-9a-fA-F]{64}$"`
+	// Block in which the order was filled. Defined once the fill has been recorded.
+	FillBlock *float32 `json:"fillBlock,omitempty"`
+	// Unix timestamp (seconds) of the block in which the order was filled. Defined for fills recorded after this field was introduced; older fills only carry fillBlock.
+	FillTimestamp        *float32        `json:"fillTimestamp,omitempty"`
 	SettledAmounts       []SettledAmount `json:"settledAmounts,omitempty"`
-	Route                *Route          `json:"route,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -530,6 +533,70 @@ func (o *DutchV2OrderEntity) SetTxHash(v string) {
 	o.TxHash = &v
 }
 
+// GetFillBlock returns the FillBlock field value if set, zero value otherwise.
+func (o *DutchV2OrderEntity) GetFillBlock() float32 {
+	if o == nil || IsNil(o.FillBlock) {
+		var ret float32
+		return ret
+	}
+	return *o.FillBlock
+}
+
+// GetFillBlockOk returns a tuple with the FillBlock field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *DutchV2OrderEntity) GetFillBlockOk() (*float32, bool) {
+	if o == nil || IsNil(o.FillBlock) {
+		return nil, false
+	}
+	return o.FillBlock, true
+}
+
+// HasFillBlock returns a boolean if a field has been set.
+func (o *DutchV2OrderEntity) HasFillBlock() bool {
+	if o != nil && !IsNil(o.FillBlock) {
+		return true
+	}
+
+	return false
+}
+
+// SetFillBlock gets a reference to the given float32 and assigns it to the FillBlock field.
+func (o *DutchV2OrderEntity) SetFillBlock(v float32) {
+	o.FillBlock = &v
+}
+
+// GetFillTimestamp returns the FillTimestamp field value if set, zero value otherwise.
+func (o *DutchV2OrderEntity) GetFillTimestamp() float32 {
+	if o == nil || IsNil(o.FillTimestamp) {
+		var ret float32
+		return ret
+	}
+	return *o.FillTimestamp
+}
+
+// GetFillTimestampOk returns a tuple with the FillTimestamp field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *DutchV2OrderEntity) GetFillTimestampOk() (*float32, bool) {
+	if o == nil || IsNil(o.FillTimestamp) {
+		return nil, false
+	}
+	return o.FillTimestamp, true
+}
+
+// HasFillTimestamp returns a boolean if a field has been set.
+func (o *DutchV2OrderEntity) HasFillTimestamp() bool {
+	if o != nil && !IsNil(o.FillTimestamp) {
+		return true
+	}
+
+	return false
+}
+
+// SetFillTimestamp gets a reference to the given float32 and assigns it to the FillTimestamp field.
+func (o *DutchV2OrderEntity) SetFillTimestamp(v float32) {
+	o.FillTimestamp = &v
+}
+
 // GetSettledAmounts returns the SettledAmounts field value if set, zero value otherwise.
 func (o *DutchV2OrderEntity) GetSettledAmounts() []SettledAmount {
 	if o == nil || IsNil(o.SettledAmounts) {
@@ -560,38 +627,6 @@ func (o *DutchV2OrderEntity) HasSettledAmounts() bool {
 // SetSettledAmounts gets a reference to the given []SettledAmount and assigns it to the SettledAmounts field.
 func (o *DutchV2OrderEntity) SetSettledAmounts(v []SettledAmount) {
 	o.SettledAmounts = v
-}
-
-// GetRoute returns the Route field value if set, zero value otherwise.
-func (o *DutchV2OrderEntity) GetRoute() Route {
-	if o == nil || IsNil(o.Route) {
-		var ret Route
-		return ret
-	}
-	return *o.Route
-}
-
-// GetRouteOk returns a tuple with the Route field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *DutchV2OrderEntity) GetRouteOk() (*Route, bool) {
-	if o == nil || IsNil(o.Route) {
-		return nil, false
-	}
-	return o.Route, true
-}
-
-// HasRoute returns a boolean if a field has been set.
-func (o *DutchV2OrderEntity) HasRoute() bool {
-	if o != nil && !IsNil(o.Route) {
-		return true
-	}
-
-	return false
-}
-
-// SetRoute gets a reference to the given Route and assigns it to the Route field.
-func (o *DutchV2OrderEntity) SetRoute(v Route) {
-	o.Route = &v
 }
 
 func (o DutchV2OrderEntity) MarshalJSON() ([]byte, error) {
@@ -638,11 +673,14 @@ func (o DutchV2OrderEntity) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.TxHash) {
 		toSerialize["txHash"] = o.TxHash
 	}
+	if !IsNil(o.FillBlock) {
+		toSerialize["fillBlock"] = o.FillBlock
+	}
+	if !IsNil(o.FillTimestamp) {
+		toSerialize["fillTimestamp"] = o.FillTimestamp
+	}
 	if !IsNil(o.SettledAmounts) {
 		toSerialize["settledAmounts"] = o.SettledAmounts
-	}
-	if !IsNil(o.Route) {
-		toSerialize["route"] = o.Route
 	}
 
 	for key, value := range o.AdditionalProperties {
@@ -686,8 +724,9 @@ func (o *DutchV2OrderEntity) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "quoteId")
 		delete(additionalProperties, "requestId")
 		delete(additionalProperties, "txHash")
+		delete(additionalProperties, "fillBlock")
+		delete(additionalProperties, "fillTimestamp")
 		delete(additionalProperties, "settledAmounts")
-		delete(additionalProperties, "route")
 		o.AdditionalProperties = additionalProperties
 	}
 

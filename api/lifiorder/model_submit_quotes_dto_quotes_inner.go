@@ -19,21 +19,21 @@ var _ MappedNullable = &SubmitQuotesDtoQuotesInner{}
 
 // SubmitQuotesDtoQuotesInner struct for SubmitQuotesDtoQuotesInner
 type SubmitQuotesDtoQuotesInner struct {
-	// Source chain network ID
+	// Source chain identifier in CAIP-2 format. Existing network IDs are also accepted.
 	FromChain string `json:"fromChain"`
-	// Destination chain network ID
+	// Destination chain identifier in CAIP-2 format. Existing network IDs are also accepted.
 	ToChain string `json:"toChain"`
 	// Source asset identifier. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars. Bitcoin: slip44:0 or slip44:1.
 	FromAsset string `json:"fromAsset"`
 	// Destination asset identifier. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars. Bitcoin: slip44:0 or slip44:1.
 	ToAsset string `json:"toAsset"`
-	// Decimals of the source token
+	// Decimals of the source token, 0 to 36
 	FromDecimals int32 `json:"fromDecimals"`
-	// Decimals of the destination token
+	// Decimals of the destination token, 0 to 36
 	ToDecimals int32 `json:"toDecimals"`
 	// Array of quote ranges with different price tiers. At most 1000 ranges per quote.
 	Ranges []SubmitQuotesDtoQuotesInnerRangesInner `json:"ranges"`
-	// Expiry timestamp of the quote in seconds
+	// Expiry timestamp in Unix seconds. Quotes that have already expired on receipt are skipped.
 	Expiry int32 `json:"expiry"`
 	// Exclusive solver address allowed to fill this quote. The address format follows fromChain. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars.
 	ExclusiveFor *string `json:"exclusiveFor,omitempty"`

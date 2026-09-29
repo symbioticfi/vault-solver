@@ -21,11 +21,11 @@ var _ MappedNullable = &RegisterAccountV1Dto{}
 type RegisterAccountV1Dto struct {
 	// The server-issued registration message
 	Message string `json:"message"`
-	// Signature of the message. EVM: hex-encoded ECDSA or EIP-1271 signature. Solana: base58-encoded ed25519 signature.
+	// Signature of the message. EVM: hex-encoded ECDSA or EIP-1271 signature. Solana: base58-encoded ed25519 signature. Tron: hex-encoded TIP-191 signature. Stellar: base64-encoded SEP-53 signature.
 	Signature string `json:"signature"`
-	// Account address. EVM: hex20 EOA or hex32 bytes32 (last 20 bytes are extracted). Solana: base58 ed25519 public key (on-curve, not a PDA). Must be unique across all solvers.
+	// Account address. EVM: hex20 EOA or hex32 bytes32 (last 20 bytes are extracted). Solana: base58 ed25519 public key (on-curve, not a PDA). Tron: T-prefixed base58check or 0x hex. Stellar: G-address. Must be unique across all solvers.
 	Account string `json:"account"`
-	// CAIP-2 chain identifier for the account. Supported chains: GET /chains/supported.
+	// CAIP-2 chain identifier for the account. Stellar registration uses the configured verification network. Other supported chains: GET /chains/supported.
 	Chain                string `json:"chain"`
 	AdditionalProperties map[string]interface{}
 }

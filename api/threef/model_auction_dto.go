@@ -19,6 +19,7 @@ var _ MappedNullable = &AuctionDto{}
 
 // AuctionDto struct for AuctionDto
 type AuctionDto struct {
+	RepaymentPricing *AuctionDtoRepaymentPricing `json:"repaymentPricing,omitempty"`
 	// Auction ID
 	Id float32 `json:"id"`
 	// Request contract address
@@ -74,6 +75,38 @@ func NewAuctionDto(id float32, requestId string, amountRequested NullableString,
 func NewAuctionDtoWithDefaults() *AuctionDto {
 	this := AuctionDto{}
 	return &this
+}
+
+// GetRepaymentPricing returns the RepaymentPricing field value if set, zero value otherwise.
+func (o *AuctionDto) GetRepaymentPricing() AuctionDtoRepaymentPricing {
+	if o == nil || IsNil(o.RepaymentPricing) {
+		var ret AuctionDtoRepaymentPricing
+		return ret
+	}
+	return *o.RepaymentPricing
+}
+
+// GetRepaymentPricingOk returns a tuple with the RepaymentPricing field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *AuctionDto) GetRepaymentPricingOk() (*AuctionDtoRepaymentPricing, bool) {
+	if o == nil || IsNil(o.RepaymentPricing) {
+		return nil, false
+	}
+	return o.RepaymentPricing, true
+}
+
+// HasRepaymentPricing returns a boolean if a field has been set.
+func (o *AuctionDto) HasRepaymentPricing() bool {
+	if o != nil && !IsNil(o.RepaymentPricing) {
+		return true
+	}
+
+	return false
+}
+
+// SetRepaymentPricing gets a reference to the given AuctionDtoRepaymentPricing and assigns it to the RepaymentPricing field.
+func (o *AuctionDto) SetRepaymentPricing(v AuctionDtoRepaymentPricing) {
+	o.RepaymentPricing = &v
 }
 
 // GetId returns the Id field value
@@ -409,6 +442,9 @@ func (o AuctionDto) MarshalJSON() ([]byte, error) {
 
 func (o AuctionDto) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	if !IsNil(o.RepaymentPricing) {
+		toSerialize["repaymentPricing"] = o.RepaymentPricing
+	}
 	toSerialize["id"] = o.Id
 	toSerialize["requestId"] = o.RequestId
 	toSerialize["amountRequested"] = o.AmountRequested.Get()
@@ -449,6 +485,7 @@ func (o *AuctionDto) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "repaymentPricing")
 		delete(additionalProperties, "id")
 		delete(additionalProperties, "requestId")
 		delete(additionalProperties, "amountRequested")

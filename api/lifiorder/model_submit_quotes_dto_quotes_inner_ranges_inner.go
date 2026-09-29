@@ -19,15 +19,15 @@ var _ MappedNullable = &SubmitQuotesDtoQuotesInnerRangesInner{}
 
 // SubmitQuotesDtoQuotesInnerRangesInner struct for SubmitQuotesDtoQuotesInnerRangesInner
 type SubmitQuotesDtoQuotesInnerRangesInner struct {
-	// Lower bound of the input amount this range applies to. Denominated in `fromAsset` raw on-chain base units (integer scaled by `fromDecimals`). Inclusive — compared directly against the user's `fromAmount`.
-	MinAmount string `json:"minAmount" validate:"regexp=^(0|[1-9][0-9]*)$"`
-	// Upper bound of the input amount this range applies to. Denominated in `fromAsset` raw on-chain base units (integer scaled by `fromDecimals`). Inclusive — compared directly against the user's `fromAmount`.
-	MaxAmount string `json:"maxAmount" validate:"regexp=^(0|[1-9][0-9]*)$"`
-	// Exchange rate for this range — write it like a normal price: `toAsset` per 1 `fromAsset` (e.g. `0.999` = 0.999 USDC per 1 USDT). Do **not** scale for `fromDecimals`/`toDecimals`; the API does that for you.  Full formula:      outputBase = floor( (inputBase / 10^fromDecimals) * quote * 10^toDecimals )  Example (USDT → USDC, 18 → 6 decimals): for `inputBase = 10^18` (1 USDT) at `quote = 0.999`, the user receives `outputBase = 999000` (0.999 USDC).
-	Quote string `json:"quote" validate:"regexp=^(0|[1-9]\\d*)(\\.\\d+)?$"`
+	// Lower bound of the input amount this range applies to. Denominated in `fromAsset` raw on-chain base units (integer scaled by `fromDecimals`). Inclusive — compared directly against the user's `fromAmount`. At most 78 digits.
+	MinAmount string `json:"minAmount" validate:"regexp=^(0|[1-9]\\d{0\\,77})$"`
+	// Upper bound of the input amount this range applies to. Denominated in `fromAsset` raw on-chain base units (integer scaled by `fromDecimals`). Inclusive — compared directly against the user's `fromAmount`. At most 78 digits.
+	MaxAmount string `json:"maxAmount" validate:"regexp=^(0|[1-9]\\d{0\\,77})$"`
+	// Exchange rate for this range — write it like a normal price: `toAsset` per 1 `fromAsset` (e.g. `0.999` = 0.999 USDC per 1 USDT). Do **not** scale for `fromDecimals`/`toDecimals`; the API does that for you.  Full formula:      outputBase = floor( (inputBase / 10^fromDecimals) * quote * 10^toDecimals )  Example (USDT → USDC, 18 → 6 decimals): for `inputBase = 10^18` (1 USDT) at `quote = 0.999`, the user receives `outputBase = 999000` (0.999 USDC).  Must be greater than zero, with at most 36 integer and 36 fractional digits.
+	Quote string `json:"quote" validate:"regexp=^(?=.*[1-9])(0|[1-9]\\d{0\\,35})(\\.\\d{1\\,36})?$"`
 	// The fixed cost to add to the quote in `fromAsset` raw base units. On cross-chain quotes it prices the default oracle and only applies when `oracleCosts` is omitted. On same-chain quotes it covers all local settlement costs.
-	FixedCost *string `json:"fixedCost,omitempty" validate:"regexp=^(0|[1-9][0-9]*)$"`
-	// Fixed costs for the oracle pairs supported by this quote range. Each entry identifies one pair by its contracts on `fromChain` and `toChain`, and gives the total cost in `fromAsset` raw base units. Cross-chain quotes only: use `fixedCost` for same-chain swaps. When both fields are present, `oracleCosts` takes precedence.
+	FixedCost *string `json:"fixedCost,omitempty" validate:"regexp=^(0|[1-9]\\d{0\\,77})$"`
+	// Fixed costs for the oracle pairs supported by this quote range. Each entry identifies one pair by its contracts on `fromChain` and `toChain`, and gives the total cost in `fromAsset` raw base units. At most 20 entries per range. Cross-chain quotes only: use `fixedCost` for same-chain swaps. When both fields are present, `oracleCosts` takes precedence.
 	OracleCosts          []SubmitQuotesDtoQuotesInnerRangesInnerOracleCostsInner `json:"oracleCosts,omitempty"`
 	AdditionalProperties map[string]interface{}
 }

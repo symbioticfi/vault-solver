@@ -1,7 +1,7 @@
 /*
 UniswapX
 
-REST API for retrieving signed UniswapX orders. Dutch (V1/V2/V3), Priority, Hybrid, and Relay orders are served by /orders; limit orders are served by /limit-orders. Order submission is handled by the Uniswap Trading API and is not part of this specification.
+REST API for retrieving signed UniswapX orders. Dutch (V1/V2/V3) and Priority orders are served by /orders; limit orders are served by /limit-orders. Order submission is handled by the Uniswap Trading API and is not part of this specification.
 
 API version: 2.0.0
 */

@@ -39,7 +39,7 @@ type SubmittedOrderQuoteDto struct {
 	FromAssetDecimals float32 `json:"fromAssetDecimals"`
 	// Destination asset decimals
 	ToAssetDecimals float32 `json:"toAssetDecimals"`
-	// Quote rate
+	// Quote rate as a plain decimal string, never in exponent notation
 	Quote string `json:"quote"`
 	// Input amount
 	InputAmount string `json:"inputAmount"`
