@@ -200,17 +200,20 @@ waiting out a stale head and reporting a refusal a solver would retry.
    refused as `stale_head` once its head is more than `(fees.maxHeadLagBlocks + 1)` block times old: run
    such a chain with a matching block time (`anvil --block-time 12`, or lower `fees.blockTimeMs`), or set
    `balance.guard: false` there.
-2. **Balance.** `eth_getBalance` pinned to the snapshot's block: by hash with `requireCanonical` when
-   the history's newest block is the header, otherwise by that block's number. A block the node does not
-   have is retried within the fee-read budget; any failure refuses (`stale_head`). It never falls back
-   to `latest` or to the telemetry snapshot. The hash is the one go-ethereum computes from the header
-   fields it knows (ethclient drops the node's own), so a header field that the go-ethereum version in
-   `go.mod` does not hash would make every hash pin miss; three hash-pinned reads in a row that end not
-   found are logged at Error once per streak, and at Info when a hash-pinned read succeeds again. Likewise
-   three pinned reads in a row (by hash or number) that fail with any other error, or return no balance, are
-   logged at Error once per streak ("balance reads pinned to a block keep failing"), and at Info on the next
-   success: a read endpoint that rejects the EIP-1898 parameter or cannot serve recent state would otherwise
-   stop every send of the lane with only Info refusals. The guard still fails closed.
+2. **Balance.** `eth_getBalance` pinned to the snapshot's block by number: the fee history's newest
+   block, which is the header or one block behind it. A block the node does not have is retried within
+   the fee-read budget; any failure refuses (`stale_head`). It never falls back to `latest` or to the
+   telemetry snapshot. The pin is deliberately a number, not the header hash: ethclient drops the node's
+   hash and go-ethereum rehashes the header fields it knows, so a fork that adds a header field before
+   the go-ethereum in `go.mod` knows it would make every hash pin miss and stop every send, and a number
+   is the block parameter every endpoint and proxy serves. A reorg between the fee read and the balance
+   read can only change which sibling's balance is read at that height, and the pin never predates the
+   previous inclusion. Three pinned reads in a row that end not found are logged at Error once per
+   streak ("balance reads pinned to a block keep finding no block"), and at Info when one finds its block
+   again; likewise three pinned reads in a row that fail with any other error, or return no balance, are
+   logged at Error once per streak ("balance reads pinned to a block keep failing"), and at Info on the
+   next success: a read endpoint that cannot serve recent state would otherwise stop every send of the
+   lane with only Info refusals. The guard still fails closed.
 3. **Guard.** `aff = floor((balance − value) / gasLimit)`, and the floor
    `lo = fee(minHorizonBlocks + lag, floorTip)` where `fee(H, tip) = grow(pb, H−1) + tip`, `grow` is the
    exact EIP-1559 maximum (`x += max(x/8, 1)` per block, go-ethereum's denominator, deliberately not a
@@ -232,7 +235,7 @@ reason, logs the refusal at Info (with the head, next base fee and lag), and rec
 instead of an error status on the broadcast and send spans. Solvers treat them as expected skips.
 
 **Replacements and cancellations** are capped the same way. Before a new same-nonce attempt is priced,
-the balance is read at the current head, pinned by hash, and the attempt's fee limit becomes
+the balance is read at the current head, pinned by number, and the attempt's fee limit becomes
 `min(limit, floor((balance − value) / gasLimit))`, with the cancellation's 21000 gas and zero value.
 When that cannot fund the required 12.5% bump, or lies below the latest base fee, or (for a fill
 replacement) the balance cannot be read, nothing new is signed and the existing capped exact rebroadcast
@@ -664,9 +667,8 @@ EIP-1898 object or by explicit number, and refuses tags such as `latest`; a node
 block answers with an error wrapping `ethereum.NotFound` (geth, erigon, nethermind and anvil wordings,
 and EIP-1474 `-32001`), which the caller retries from a fresh head instead of reading another head. geth's
 "hash is not currently canonical", the answer to a hash read with `requireCanonical` after a reorg replaced
-that block, is the same stale pin and wraps `ethereum.NotFound` too. The balance guard pins a hash with
-`requireCanonical: true`: without it a node may serve the reorged-out block's state, such as the balance
-from before the previous fill was paid. `EstimateGasWithBlockOverrides`
+that block, is the same stale pin and wraps `ethereum.NotFound` too. The primitive accepts a hash (use
+`requireCanonical: true` with it), but the balance guard pins by number (§4.1). `EstimateGasWithBlockOverrides`
 sends the four-parameter `eth_estimateGas(call, parent, null, {number, time})`; `IsBlockOverridesUnsupported`
 recognises an upstream that rejects the fourth parameter (`-32602`, too many or invalid arguments, also in a
 non-2xx body) but never a revert or a missing parent block. `ProbeBlockOverrides` catches an upstream that
@@ -955,9 +957,8 @@ policy, next-block estimate and shadow evaluator ship in it):
   on a base-fee drop; measure it from `attempt_gas_limit{label="redeem"}`, then set it. The 3F owner still has to confirm the redeem decision.
 - **Glamsterdam (ePBS).** Before the mainnet fork, re-measure the fill gas profile, `referenceGasUnits`,
   `gas.headroomBps`, `fees.blockTimeMs` and the room/tip thresholds if the fork changes gas costs, the block gas
-  limit or slot timing; revalidate on Sepolia first. The balance guard pins reads to a header hash that the
-  go-ethereum version in go.mod computes (§4.1): bump it to a release that knows the fork's header fields before
-  the fork activates on a chain the bot runs on, or every guarded send there is refused as `stale_head`.
+  limit or slot timing; revalidate on Sepolia first. The balance guard pins reads by block number, so it
+  does not depend on go-ethereum knowing the fork's header fields.
 
 Keep shared lifecycle design and metric contracts here. Update integration plans only when their own
 request construction, readiness, capacity or protocol behavior changes. Preserve operator-facing setup,

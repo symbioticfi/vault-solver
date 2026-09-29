@@ -331,8 +331,8 @@ func TestHorizonSendIsGuardedByTheBalance(t *testing.T) {
 		}
 		if pins := b.balanceReads; len(pins) != 1 {
 			t.Fatalf("balance read %d times, want one pinned read", len(pins))
-		} else if _, byHash := pins[0].Hash(); !byHash || !pins[0].RequireCanonical {
-			t.Fatalf("balance pin = %s, want the header hash with requireCanonical", pins[0].String())
+		} else if _, byNumber := pins[0].Number(); !byNumber {
+			t.Fatalf("balance pin = %s, want the snapshot's block number", pins[0].String())
 		}
 	})
 	t.Run("below the floor nothing is signed", func(t *testing.T) {

@@ -636,9 +636,8 @@ func TestFeeHistoryBehindHeaderChargesLag(t *testing.T) {
 		offset     int64
 		wantErr    error
 		wantPinned func(head uint64) uint64
-		wantByHash bool
 	}{
-		{name: "same block", offset: 0, wantPinned: func(head uint64) uint64 { return head }, wantByHash: true},
+		{name: "same block", offset: 0, wantPinned: func(head uint64) uint64 { return head }},
 		{name: "one block behind", offset: -1, wantErr: ErrUnaffordable, wantPinned: func(head uint64) uint64 { return head - 1 }},
 		{name: "one block ahead", offset: 1, wantPinned: func(head uint64) uint64 { return head + 1 }},
 		{name: "two blocks behind", offset: -2, wantErr: ErrStaleHead},
@@ -669,11 +668,8 @@ func TestFeeHistoryBehindHeaderChargesLag(t *testing.T) {
 			if len(reads) != 1 || pinned[0] != tc.wantPinned(b.head) {
 				t.Fatalf("balance pins = %v, want block %d", pinned, tc.wantPinned(b.head))
 			}
-			if _, byHash := reads[0].Hash(); byHash != tc.wantByHash {
-				t.Fatalf("pin by hash = %t, want %t", byHash, tc.wantByHash)
-			}
-			if hash, ok := reads[0].Hash(); ok && !reads[0].RequireCanonical {
-				t.Fatalf("hash pin %s does not require a canonical block", hash)
+			if _, byNumber := reads[0].Number(); !byNumber {
+				t.Fatalf("balance pin %s, want a block number (a locally computed header hash can miss)", reads[0].String())
 			}
 		})
 	}
@@ -981,8 +977,8 @@ func TestBalanceGuardWithMandatoryTip(t *testing.T) {
 			if len(reads) != 1 || pinned[0] != b.head {
 				t.Fatalf("balance pins = %v, want the header %d", pinned, b.head)
 			}
-			if _, byHash := reads[0].Hash(); !byHash || !reads[0].RequireCanonical {
-				t.Fatalf("balance pin %s, want the header hash with requireCanonical", reads[0].String())
+			if _, byNumber := reads[0].Number(); !byNumber {
+				t.Fatalf("balance pin %s, want the header's block number", reads[0].String())
 			}
 			if tc.wantReason != "" {
 				if reason, refused := guardRefusalReason(err); !refused || reason != tc.wantReason || pending != nil {
@@ -1001,12 +997,9 @@ func TestBalanceGuardWithMandatoryTip(t *testing.T) {
 	}
 }
 
-// TestHashPinnedBalanceNotFoundEscalates pins that balance reads pinned by header hash that keep
-// finding no block, which is what a header this go-ethereum version hashes differently from the node
-// looks like, page once per streak instead of refusing every send at Info only.
 // TestPinnedBalanceReadErrorsEscalate pins that a read endpoint whose pinned balance reads keep failing with an
-// error other than not found (here a proxy rejecting the EIP-1898 block parameter) is logged at error level
-// once per streak, by hash or by number, while every send stays refused as stale_head: before, each refusal was
+// error other than not found (here a proxy rejecting the block parameter) is logged at error level
+// once per streak, whichever block the snapshot pins, while every send stays refused as stale_head: before, each refusal was
 // one Info line and the lane stopped sending without paging.
 func TestPinnedBalanceReadErrorsEscalate(t *testing.T) {
 	cfg := Config{MaxFeeGwei: 50, PollInterval: time.Millisecond, ReplacementInterval: 40 * time.Millisecond}
@@ -1014,13 +1007,13 @@ func TestPinnedBalanceReadErrorsEscalate(t *testing.T) {
 	const escalation = "balance reads pinned to a block keep failing"
 	for _, tc := range []struct {
 		name       string
-		offset     int64 // fee history newest block minus the header; -1 pins by number
+		offset     int64 // fee history newest block minus the header
 		err        error
 		wantErrors int
 	}{
-		{name: "rejected hash pins escalate once per streak", err: errors.New("invalid argument 1: hex string without 0x prefix"), wantErrors: 1},
-		{name: "rejected number pins escalate once per streak", offset: -1, err: errors.New("missing trie node"), wantErrors: 1},
-		{name: "not found is the hash-pin streak, not this one", err: errors.Join(ethereum.NotFound, errors.New("header not found"))},
+		{name: "rejected pins at the header escalate once per streak", err: errors.New("invalid argument 1: hex string without 0x prefix"), wantErrors: 1},
+		{name: "rejected pins a block behind escalate once per streak", offset: -1, err: errors.New("missing trie node"), wantErrors: 1},
+		{name: "not found is the not-found streak, not this one", err: errors.Join(ethereum.NotFound, errors.New("header not found"))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logs, log := newLogCapture(0)
@@ -1052,17 +1045,19 @@ func TestPinnedBalanceReadErrorsEscalate(t *testing.T) {
 	}
 }
 
-func TestHashPinnedBalanceNotFoundEscalates(t *testing.T) {
+// TestPinnedBalanceNotFoundEscalates pins that pinned balance reads that keep finding no block, an upstream
+// serving heads it cannot serve state for, page once per streak instead of refusing every send at Info only.
+func TestPinnedBalanceNotFoundEscalates(t *testing.T) {
 	cfg := Config{MaxFeeGwei: 50, PollInterval: time.Millisecond, ReplacementInterval: 40 * time.Millisecond}
 	req := Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "fill"}
-	const escalation = "balance reads pinned by header hash keep finding no block"
+	const escalation = "balance reads pinned to a block keep finding no block"
 	for _, tc := range []struct {
 		name       string
-		offset     int64 // fee history newest block minus the header; -1 pins by number
+		offset     int64 // fee history newest block minus the header
 		wantErrors int
 	}{
-		{name: "hash pins escalate once per streak", wantErrors: 1},
-		{name: "number pins do not escalate", offset: -1},
+		{name: "pins at the header escalate once per streak", wantErrors: 1},
+		{name: "pins a block behind escalate once per streak", offset: -1, wantErrors: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			logs, log := newLogCapture(0)
@@ -1071,7 +1066,7 @@ func TestHashPinnedBalanceNotFoundEscalates(t *testing.T) {
 			b.historyOffset = tc.offset
 			b.balanceErr = errors.Join(ethereum.NotFound, errors.New("header not found"))
 			m := New(b, mustSigner(t), big.NewInt(11155111), cfg, logr.New(&lockedSink{sink: log.GetSink(), mu: &mu}))
-			for range hashPinNotFoundErrorAfter + 2 {
+			for range pinNotFoundErrorAfter + 2 {
 				if _, err := m.broadcast(managerCtx(t.Context(), m), req); !errors.Is(err, ErrStaleHead) {
 					t.Fatalf("broadcast error = %v, want ErrStaleHead", err)
 				}
@@ -1087,7 +1082,7 @@ func TestHashPinnedBalanceNotFoundEscalates(t *testing.T) {
 			if errorLevel, _ := countLogs(*logs, escalation); errorLevel != tc.wantErrors {
 				t.Fatalf("escalation logged %d errors, want %d: %s", errorLevel, tc.wantErrors, strings.Join(*logs, "\n"))
 			}
-			if _, info := countLogs(*logs, "balance reads pinned by header hash recovered"); info != tc.wantErrors {
+			if _, info := countLogs(*logs, "balance reads pinned to a block find their block again"); info != tc.wantErrors {
 				t.Fatalf("recovery logged %d times, want %d", info, tc.wantErrors)
 			}
 		})

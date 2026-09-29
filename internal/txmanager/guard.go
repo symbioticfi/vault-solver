@@ -24,9 +24,8 @@ import (
 // Goroutine model: the worker goroutine runs the initial-send guard and the lifecycle goroutine runs
 // the replacement cap; the lifecycle slot keeps them from overlapping. The only state they share is
 // Manager.lastInclusion, an atomic the lifecycle goroutine raises when a lifecycle ends in a receipt,
-// Manager.hashPinMisses and Manager.pinnedReadErrors, atomic counts both update as their pinned balance
-// reads end, and the last
-// signer balance read (Manager.balanceMu). The account-poll goroutine reads pinned balances through the
+// Manager.pinMisses and Manager.pinnedReadErrors, atomic counts both update as their pinned balance
+// reads end, and the last signer balance read (Manager.balanceMu). The account-poll goroutine reads pinned balances through the
 // same path for the funding gate.
 
 // ErrUnaffordable reports a request the signer balance cannot keep valid for fees.minHorizonBlocks
@@ -49,13 +48,10 @@ var errUnaffordableOneBlock = errors.Errorf("%w for more than one block", ErrUna
 // have yet, inside the fee-read budget.
 const pinnedReadRetryDelay = 200 * time.Millisecond
 
-// hashPinNotFoundErrorAfter is how many balance reads pinned by header hash in a row may end not found
-// before the streak is logged at error level. One such read is a lagging upstream or a reorg; a run of
-// them is either an upstream that serves heads it cannot serve state for, or a header hash computed
-// locally that the node does not know: ethclient drops the node's hash and go-ethereum rehashes the
-// header fields it knows, so a header field it does not know (a later fork, a non-standard chain)
-// yields a hash no node has, and every guarded send would be refused as stale_head.
-const hashPinNotFoundErrorAfter = 3
+// pinNotFoundErrorAfter is how many pinned balance reads in a row may end not found before the streak is
+// logged at error level. One such read is an upstream a block behind the head it served; a run of them is
+// an upstream that serves heads it cannot serve state for, which refuses every send as stale_head.
+const pinNotFoundErrorAfter = 3
 
 // pinnedReadErrorAfter is how many pinned balance reads in a row, pinned by hash or number, may fail with an
 // error other than not found (or return no balance) before the streak is logged at error level. Such a read
@@ -64,8 +60,8 @@ const hashPinNotFoundErrorAfter = 3
 // without paging. The guard still fails closed; this only makes it visible.
 const pinnedReadErrorAfter = 3
 
-// pinnedBalanceBackend reads an account balance pinned to one block, by hash (EIP-1898) or number,
-// through the read endpoints. *chain.Client provides it; a backend without it runs with the guard off.
+// pinnedBalanceBackend reads an account balance pinned to one block through the read endpoints. The
+// guard always pins by number. *chain.Client provides it; a backend without it runs with the guard off.
 type pinnedBalanceBackend interface {
 	ReadBalanceAtBlock(ctx context.Context, account common.Address, block rpc.BlockNumberOrHash) (*big.Int, error)
 }
@@ -219,8 +215,12 @@ func (m *Manager) checkSnapshot(reading feeReading, now time.Time) (sendSnapshot
 
 // snapshotPin reports a snapshot stale when it trails the real next block by more than
 // fees.maxHeadLagBlocks or its fee history ends below the previous lifecycle's inclusion block, and
-// otherwise returns the block its signer balance is read at: the header by hash, with requireCanonical,
-// when the fee history ends at it, and the fee history's newest block by number otherwise. head carries a
+// otherwise returns the block its signer balance is read at: the fee history's newest block, by number.
+// The pin is deliberately not the header hash: go-ethereum rehashes a header from the fields it knows
+// (ethclient drops the node's own hash), so a fork that adds a header field before go.mod knows it would
+// make every hash pin miss and stop every send; and a number is the block parameter every endpoint and
+// proxy serves. A reorg between the fee read and the balance read can only change which sibling's
+// balance is read at that height, and the pin never predates the previous inclusion. head carries a
 // usable block number and historyHead is at most one block from it.
 func (m *Manager) snapshotPin(head *types.Header, historyHead, lag uint64) (rpc.BlockNumberOrHash, error) {
 	number := head.Number.Uint64()
@@ -231,9 +231,6 @@ func (m *Manager) snapshotPin(head *types.Header, historyHead, lag uint64) (rpc.
 	}
 	if last := m.lastInclusion.Load(); historyHead < last {
 		return rpc.BlockNumberOrHash{}, errors.Errorf("head %d is below the previous inclusion block %d", historyHead, last)
-	}
-	if historyHead == number {
-		return rpc.BlockNumberOrHashWithHash(head.Hash(), true), nil
 	}
 	return rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(int64(historyHead))), nil
 }
@@ -283,8 +280,8 @@ func (m *Manager) floorTip() *big.Int {
 	return maxBigCopy(gweiToWei(m.cfg.Fees.TipFloorGwei), gweiToWei(m.cfg.TipGwei))
 }
 
-// pinnedBalance reads the signer balance at pin. A node that does not have the block yet (or, for a
-// hash pin, no longer has it on its canonical chain) is retried within the fee-read budget; any failure
+// pinnedBalance reads the signer balance at pin. A node that does not have the block yet is retried
+// within the fee-read budget; any failure
 // refuses the attempt with ErrStaleHead. It never falls back to latest or to the telemetry snapshot: a
 // lagging upstream could then answer with the balance from before the previous fill was paid.
 func (m *Manager) pinnedBalance(ctx context.Context, pin rpc.BlockNumberOrHash) (*big.Int, error) {
@@ -295,7 +292,7 @@ func (m *Manager) pinnedBalance(ctx context.Context, pin rpc.BlockNumberOrHash) 
 		balance, err := m.balances.ReadBalanceAtBlock(readCtx, m.signer.Address(), pin)
 		switch {
 		case err == nil && balance != nil && balance.Sign() >= 0:
-			m.hashPinFound(ctx, pin)
+			m.pinFound(ctx)
 			m.pinnedReadSucceeded(ctx)
 			m.observeSignerBalance(balance)
 			return balance, nil
@@ -317,25 +314,22 @@ func (m *Manager) pinnedBalance(ctx context.Context, pin rpc.BlockNumberOrHash) 
 			)
 			// A read the caller abandoned says nothing about the node.
 			if ctx.Err() == nil {
-				m.hashPinNotFound(ctx, pin, err)
+				m.pinNotFound(ctx, err)
 			}
 			return nil, err
 		}
 	}
 }
 
-// hashPinNotFound counts a balance read pinned by header hash that ended not found, and logs the
-// streak at error level once, when it reaches hashPinNotFoundErrorAfter: a refusal is otherwise only an
-// Info line and a stale_head count, which cannot tell this apart from a briefly lagging upstream.
-func (m *Manager) hashPinNotFound(ctx context.Context, pin rpc.BlockNumberOrHash, err error) {
-	if _, byHash := pin.Hash(); !byHash {
-		return
-	}
-	if misses := m.hashPinMisses.Add(1); misses == hashPinNotFoundErrorAfter {
-		observability.Log(ctx).Error(err, "balance reads pinned by header hash keep finding no block",
+// pinNotFound counts a pinned balance read that ended not found, and logs the streak at error level once,
+// when it reaches pinNotFoundErrorAfter: a refusal is otherwise only an Info line and a stale_head count,
+// which cannot tell this apart from a briefly lagging upstream.
+func (m *Manager) pinNotFound(ctx context.Context, err error) {
+	if misses := m.pinMisses.Add(1); misses == pinNotFoundErrorAfter {
+		observability.Log(ctx).Error(err, "balance reads pinned to a block keep finding no block",
 			"consecutiveMisses", misses,
-			"hint", "if the node serves this block by number, the go-ethereum this build uses does not hash "+
-				"this chain's header fields; refusals continue as stale_head until it does",
+			"hint", "the read endpoints serve heads they cannot serve state for; refusals continue as "+
+				"stale_head until they catch up",
 		)
 	}
 }
@@ -346,8 +340,8 @@ func (m *Manager) pinnedReadFailed(ctx context.Context, err error) {
 	if failures := m.pinnedReadErrors.Add(1); failures == pinnedReadErrorAfter {
 		observability.Log(ctx).Error(err, "balance reads pinned to a block keep failing",
 			"consecutiveFailures", failures,
-			"hint", "the read endpoints must serve eth_getBalance at a recent block hash (EIP-1898, "+
-				"requireCanonical) and number; refusals continue as stale_head until they do",
+			"hint", "the read endpoints must serve eth_getBalance at a recent block number; refusals continue as "+
+				"stale_head until they do",
 		)
 	}
 }
@@ -359,17 +353,14 @@ func (m *Manager) pinnedReadSucceeded(ctx context.Context) {
 	}
 }
 
-// hashPinFound ends a streak of hash-pinned balance reads that found no block.
-func (m *Manager) hashPinFound(ctx context.Context, pin rpc.BlockNumberOrHash) {
-	if _, byHash := pin.Hash(); !byHash {
-		return
-	}
-	if misses := m.hashPinMisses.Swap(0); misses >= hashPinNotFoundErrorAfter {
-		observability.Log(ctx).Info("balance reads pinned by header hash recovered", "consecutiveMisses", misses)
+// pinFound ends a streak of pinned balance reads that found no block.
+func (m *Manager) pinFound(ctx context.Context) {
+	if misses := m.pinMisses.Swap(0); misses >= pinNotFoundErrorAfter {
+		observability.Log(ctx).Info("balance reads pinned to a block find their block again", "consecutiveMisses", misses)
 	}
 }
 
-// currentHeadBalance reads the signer balance at the current head, pinned by hash as for a new send, for
+// currentHeadBalance reads the signer balance at the current head, pinned by number as for a new send, for
 // a legacy-policy same-nonce replacement. The pending attempt is not mined (the replacement nonce check ran
 // first), so the balance still holds its funds.
 func (m *Manager) currentHeadBalance(ctx context.Context) (*big.Int, error) {
@@ -385,7 +376,7 @@ func (m *Manager) currentHeadBalance(ctx context.Context) (*big.Int, error) {
 	if last := m.lastInclusion.Load(); head.Number.Uint64() < last {
 		return nil, errors.Errorf("%w: head %d is below the previous inclusion block %d", ErrStaleHead, head.Number, last)
 	}
-	return m.pinnedBalance(ctx, rpc.BlockNumberOrHashWithHash(head.Hash(), true))
+	return m.pinnedBalance(ctx, rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(int64(head.Number.Uint64()))))
 }
 
 // noteInclusion raises the block every later balance pin must reach to a lifecycle's inclusion block.

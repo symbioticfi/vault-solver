@@ -218,9 +218,9 @@ type Manager struct {
 	// lastInclusion is the highest block that included an attempt of a finished lifecycle. Balance
 	// pins below it are stale: they may predate that attempt's payment.
 	lastInclusion atomic.Uint64
-	// hashPinMisses counts the balance reads pinned by header hash in a row that ended not found, and
-	// pinnedReadErrors the pinned balance reads in a row that failed otherwise (guard.go).
-	hashPinMisses    atomic.Uint64
+	// pinMisses counts the pinned balance reads in a row that ended not found, and pinnedReadErrors the
+	// pinned balance reads in a row that failed otherwise (guard.go).
+	pinMisses        atomic.Uint64
 	pinnedReadErrors atomic.Uint64
 	// fundingGateOn is set once in New: balance.referenceGasUnits is positive and the backend can read
 	// the signer balance on account polls. funding is the gate's state and fundingReads the account

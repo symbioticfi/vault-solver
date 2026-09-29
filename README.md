@@ -453,7 +453,7 @@ back past a key only after the config drops it, or in the same deploy; within an
 `fees.policy: legacy` is the one-line rollback of the horizon policy.
 
 **Refusals and funding.** The guard reads the signer balance with `eth_getBalance` pinned to the fee
-snapshot's block (by block hash, EIP-1898) through the read endpoints, so those must serve historical-state
+snapshot's block (by block number) through the read endpoints, so those must serve historical-state
 reads for recent blocks. A refused request returns a `NotAdmitted` submission error wrapping
 `txmanager.ErrUnaffordable` (fund the signer) or `txmanager.ErrStaleHead` (the RPC head stayed more than
 `fees.maxHeadLagBlocks` behind for two block times, or the balance, or under horizon the next-block gas
