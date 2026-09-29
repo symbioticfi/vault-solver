@@ -107,7 +107,8 @@ type Request struct {
 	CancelAt     time.Time // optional deadline after which the manager replaces the call with a same-nonce cancellation
 	// Obsolete optionally reports that the call can no longer succeed. It must honor ctx and have no
 	// authorization role: errors preserve the current lifecycle. True before signing drops the call;
-	// true after broadcast switches the owned nonce to cancellation.
+	// true after broadcast switches the owned nonce to cancellation. It is asked only after a receipt sweep
+	// found none of the lifecycle's attempts, and no longer once a reorg removed one of their inclusions.
 	Obsolete      func(ctx context.Context) (bool, error)
 	Confirmations *uint64 // optional wait override; nil uses Config.Confirmations
 	Label         string  // stable operation name for logs and metrics
@@ -171,11 +172,10 @@ type pendingTransaction struct {
 	cancelDeadline  time.Time
 	cancelRequested chan struct{}
 	cancelOnce      sync.Once
-	// sendHead is the head the first attempt was priced at and sentAt when it was sent; inclusion delay
-	// and pending age are measured from them. Both are zero for a lifecycle built outside broadcast.
 	// sendSeen is the newest block the first attempt's fee snapshot knew of, the header or its fee history
-	// one block ahead: the horizon policy's pending evaluation counts only later blocks as missed.
-	sendHead uint64
+	// one block ahead, and sentAt when it was sent: inclusion delay (1 is the block after the newest one the
+	// attempt could know of), pending age and the horizon policy's miss counts are measured from them. Both
+	// are zero for a lifecycle built outside broadcast or priced without a snapshot.
 	sendSeen uint64
 	sentAt   time.Time
 	// balanceCapLogged keeps the balance-capped replacement log to once per lifecycle, and
@@ -185,6 +185,12 @@ type pendingTransaction struct {
 	// reorged is the inclusion a reorg just removed, for the lifecycle loop to rebroadcast under the horizon
 	// policy (see pendingEvaluator.reorged); the loop clears it.
 	reorged *reorgedInclusion
+	// inclusionReorged records that one of this lifecycle's own attempts was included and a reorg removed
+	// it. From then on Request.Obsolete is no longer consulted: an off-chain status such as "filled" may
+	// still describe that removed inclusion (order APIs lag reorgs or never revert a fill), and acting on it
+	// would cancel our own fill, outbidding its rebroadcast. CancelAt, pendingTimeout and, under the horizon
+	// policy, the pending evaluation's re-estimates still end a lifecycle whose order settled elsewhere.
+	inclusionReorged bool
 }
 
 type txAttempt struct {
@@ -212,8 +218,10 @@ type Manager struct {
 	// lastInclusion is the highest block that included an attempt of a finished lifecycle. Balance
 	// pins below it are stale: they may predate that attempt's payment.
 	lastInclusion atomic.Uint64
-	// hashPinMisses counts the balance reads pinned by header hash in a row that ended not found.
-	hashPinMisses atomic.Uint64
+	// hashPinMisses counts the balance reads pinned by header hash in a row that ended not found, and
+	// pinnedReadErrors the pinned balance reads in a row that failed otherwise (guard.go).
+	hashPinMisses    atomic.Uint64
+	pinnedReadErrors atomic.Uint64
 	// fundingGateOn is set once in New: balance.referenceGasUnits is positive and the backend can read
 	// the signer balance on account polls. funding is the gate's state and fundingReads the account
 	// poll's failure streak refreshing it (funding.go).
@@ -358,6 +366,13 @@ func (m *Manager) Confirmations() uint64 {
 // (txManager.balance.referenceGasUnits); zero means the operator has not set one and the gate is off.
 func (m *Manager) ReferenceGasUnits() uint64 {
 	return m.cfg.Balance.ReferenceGasUnits
+}
+
+// QuotePricingUsesReferenceGas reports whether MaxFeePerGas prices a fill of ReferenceGasUnits gas, which
+// the horizon fee policy does (its tip rule depends on whether that gas fits in recent blocks). The legacy
+// policy prices quotes from the latest fees alone, so there the reference only drives the funding gate.
+func (m *Manager) QuotePricingUsesReferenceGas() bool {
+	return m.cfg.Fees.Policy == FeePolicyHorizon
 }
 
 // ValidateFeeHeadroom rejects a fee configuration whose priority fees can never fit under the
@@ -1078,7 +1093,6 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 		}},
 		originalHash: hash,
 		span:         sendSpan,
-		sendHead:     priced.snapshot.head,
 		sendSeen:     max(priced.snapshot.head, priced.snapshot.historyHead),
 		sentAt:       sentAt,
 	}, nil
@@ -1293,10 +1307,10 @@ func (m *Manager) recordInclusion(pending *pendingTransaction, outcome Result) {
 	}
 	included := outcome.Receipt.BlockNumber.Uint64()
 	m.noteInclusion(included)
-	if pending.sendHead == 0 || included < pending.sendHead {
+	if pending.sendSeen == 0 || included < pending.sendSeen {
 		return
 	}
-	landed, delay := classifyFirstAttempt(pending.attempts, outcome.Hash, included-pending.sendHead)
+	landed, delay := classifyFirstAttempt(pending.attempts, outcome.Hash, included-pending.sendSeen)
 	m.metrics.observeInclusion(pending.req.Label, landed, delay)
 }
 
@@ -1458,8 +1472,9 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 				knownAttempts = sweep.knownAttempts
 				sweep = nil
 				// A terminal protocol status may reflect our own transaction.
-				// Give receipts precedence before checking obsolescence.
-				if !cancelling && m.pendingRequestObsolete(ctx, pending) {
+				// Give receipts precedence before checking obsolescence, and stop
+				// checking once a reorg removed our own inclusion (see inclusionReorged).
+				if !cancelling && !pending.inclusionReorged && m.pendingRequestObsolete(ctx, pending) {
 					startCancellation("obsolete")
 					tryReplace(true)
 				}
@@ -1580,6 +1595,7 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 	receipt, err := m.waitForConfirmations(ctx, attempt.hash, receipt, confirmations)
 	if errors.Is(err, errReceiptReorged) {
 		pending.reorged = &reorgedInclusion{attempt: attempt, block: blockNumber(receipt.BlockNumber)}
+		pending.inclusionReorged = true
 		pending.lifecycle.transitionPhase(lifecyclePhasePending)
 		if pending.nonceConflictHash != (common.Hash{}) {
 			m.markNonceConflict(pending.nonce, pending.nonceConflictHash)
@@ -1588,6 +1604,7 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 			"label", pending.req.Label,
 			"hash", attempt.hash.Hex(),
 			"nonce", pending.nonce,
+			"obsoleteChecksStopped", pending.req.Obsolete != nil,
 		)
 		return Result{}, false
 	}
@@ -2906,6 +2923,13 @@ func reserveFeeBump(limit *big.Int) *big.Int {
 
 func maxBigCopy(a, b *big.Int) *big.Int {
 	if a.Cmp(b) >= 0 {
+		return new(big.Int).Set(a)
+	}
+	return new(big.Int).Set(b)
+}
+
+func minBigCopy(a, b *big.Int) *big.Int {
+	if a.Cmp(b) <= 0 {
 		return new(big.Int).Set(a)
 	}
 	return new(big.Int).Set(b)

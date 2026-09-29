@@ -520,7 +520,9 @@ func (e *executionService) fundable() bool {
 // the nonce lane until CancelAt. The manager calls it from its worker and lifecycle goroutines,
 // concurrently with this service's own backend calls. A filled status can describe this lifecycle's own fill; the manager reads
 // the fill's receipts before every pending check and checks the mined nonce before signing a cancellation,
-// so its own inclusion wins. Every other status keeps the fill alive, as does a failed or unrecognized
+// so its own inclusion wins, and it stops asking once a reorg removed that inclusion (the backend never
+// reverts a filled order, so the status could then cancel our own rebroadcast fill). Every other status
+// keeps the fill alive, as does a failed or unrecognized
 // read (an error): the backend may mark an order errored or unfunded while the signed order still fills,
 // and the execution-time contracts stay authoritative.
 func (e *executionService) orderObsolete(ctx context.Context, orderID string) (bool, error) {

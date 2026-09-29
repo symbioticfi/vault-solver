@@ -5,6 +5,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/parse"
 )
@@ -68,17 +69,33 @@ func ParseConfig(raw RawConfig) (OracleConfig, error) {
 }
 
 // ErrReferenceGasUnitsRequired reports gas accounting configured on a lane whose transaction manager
-// assumes no reference fill gas limit.
-var ErrReferenceGasUnitsRequired = errors.New("gas accounting requires txManager.balance.referenceGasUnits > 0")
+// prices quotes for a reference fill but assumes no reference fill gas limit.
+var ErrReferenceGasUnitsRequired = errors.New(
+	"gas accounting under txManager.fees.policy horizon requires txManager.balance.referenceGasUnits > 0")
 
-// RequireReferenceGasUnits refuses gas accounting (a configured gas: block) on a lane whose
-// transaction manager assumes no reference fill gas limit (txmanager.Manager.ReferenceGasUnits).
-// Quote pricing picks its tip for that limit and the lane funding gate measures the balance against
-// it; at zero every block would look roomy, so quotes would keep the floor tip through runs of full
-// blocks, and the gate would stay off while the lane quotes unfunded.
-func RequireReferenceGasUnits(referenceGasUnits uint64) error {
-	if referenceGasUnits == 0 {
+// ReferenceGas is the part of the transaction manager that gas-accounted quote pricing depends on
+// (txmanager.Manager).
+type ReferenceGas interface {
+	// ReferenceGasUnits is the fill gas limit the funding gate and quote pricing assume; 0 is unset.
+	ReferenceGasUnits() uint64
+	// QuotePricingUsesReferenceGas reports whether MaxFeePerGas prices a fill of ReferenceGasUnits gas.
+	QuotePricingUsesReferenceGas() bool
+}
+
+// RequireReferenceGasUnits checks gas accounting (a configured gas: block) against the transaction
+// manager's reference fill gas limit. Where quote pricing picks its tip for that limit (the horizon fee
+// policy) an unset one is refused: every block would look roomy, so quotes would keep the floor tip through
+// runs of full blocks. Elsewhere (the legacy policy) the limit only drives the lane funding gate, which stays
+// off while it is unset, so that is logged once and accepted: a legacy lane with gas: keeps starting without
+// the key, and the key must be set before the lane moves to the horizon policy.
+func RequireReferenceGasUnits(log logr.Logger, txm ReferenceGas) error {
+	if txm.ReferenceGasUnits() > 0 {
+		return nil
+	}
+	if txm.QuotePricingUsesReferenceGas() {
 		return ErrReferenceGasUnitsRequired
 	}
+	log.Info("gas accounting runs with the lane funding gate off: txManager.balance.referenceGasUnits is unset; " +
+		"set it before moving this lane to txManager.fees.policy horizon")
 	return nil
 }

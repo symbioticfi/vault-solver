@@ -514,8 +514,11 @@ func (m *Manager) shadowTick(ctx context.Context, evaluator *shadowEvaluator) (e
 	if !advanced {
 		return nil
 	}
+	// The next base fee is exported at every new head; the lane requirements need a reference gas limit.
 	if gas > 0 {
 		m.observeFeeSnapshot(snapshot.nextBase, gas)
+	} else {
+		m.metrics.observeNextBaseFee(snapshot.nextBase)
 	}
 	for _, score := range scores {
 		m.metrics.shadowLifecycle(score.policy, score.outcome)

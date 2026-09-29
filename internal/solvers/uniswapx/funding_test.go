@@ -39,9 +39,11 @@ func TestQuoteDeclinesWhileLaneUnfundable(t *testing.T) {
 	}
 }
 
-// TestFillLoopDefersQueuedOrderWhileLaneUnfundable checks the gate runs before any chain read, discount
-// resolution or planning, so an unfundable lane does not plan the fill only for the guard to refuse it.
-func TestFillLoopDefersQueuedOrderWhileLaneUnfundable(t *testing.T) {
+// TestFillLoopAttemptsQueuedOrderWhileLaneUnfundable pins that the funding gate, which closes at the pricing
+// horizon, does not stop a won order from being attempted: the balance guard still sends it down to its own
+// floor (fee-gas strategy §2.10 keeps that margin for won quotes), and a refusal backs off exponentially
+// (TestUnaffordableFillIsNotRetriedHot) instead of re-polling hot. Deferring it would fade the order.
+func TestFillLoopAttemptsQueuedOrderWhileLaneUnfundable(t *testing.T) {
 	fixture := newDirectExecutionFixture(t)
 	fixture.txm.unfundable = true
 	if !fixture.solver.claim(fixture.order.Hash, fixture.now) {
@@ -50,21 +52,28 @@ func TestFillLoopDefersQueuedOrderWhileLaneUnfundable(t *testing.T) {
 	orders := make(chan *resolvedOrder, 1)
 	orders <- fixture.order
 	close(orders)
+	// The guard refuses it: the fill loop must then back the order off rather than retry it next poll.
+	fixture.txm.result <- txmanager.Result{
+		Outcome:     txmanager.OutcomeSubmissionError,
+		Err:         errors.Errorf("send %q: %w", "uniswapx-fill", txmanager.ErrUnaffordable),
+		NotAdmitted: true,
+	}
+	before := time.Now()
 
 	if err := fixture.solver.fillLoop(t.Context(), []liquidlane.Route{fixture.route}, orders); err != nil {
 		t.Fatalf("fill loop: %v", err)
 	}
 	reader := fixture.solver.reader.(*executionTestReader)
-	if reader.latestBlockReads != 0 || fixture.strategy.input.OrderID != "" || len(fixture.txm.reqs) != 0 {
-		t.Fatalf("unfundable lane performed fill work: chainReads=%d strategyOrder=%q requests=%d",
-			reader.latestBlockReads, fixture.strategy.input.OrderID, len(fixture.txm.reqs))
+	if reader.latestBlockReads == 0 || len(fixture.txm.reqs) != 1 {
+		t.Fatalf("unfundable lane did not attempt the won order: chainReads=%d requests=%d",
+			reader.latestBlockReads, len(fixture.txm.reqs))
 	}
-	if fixture.solver.planningFills.Load() != 0 || fixture.solver.inFlight[fixture.order.Hash] ||
-		fixture.solver.attempts[fixture.order.Hash] != 0 || len(fixture.solver.failureTimes) != 0 {
-		t.Fatal("deferred order retained planning state or counted as a failure")
+	retryAt, scheduled := fixture.solver.retryAt[fixture.order.Hash]
+	if poll := fixture.solver.cfg.OrderServer.PollInterval; !scheduled || retryAt.Sub(before) < poll {
+		t.Fatalf("refused order retry at %v (scheduled %t), want a backoff of at least %s", retryAt.Sub(before), scheduled, poll)
 	}
-	if _, scheduled := fixture.solver.retryAt[fixture.order.Hash]; !scheduled {
-		t.Fatal("deferred order did not receive a retry")
+	if len(fixture.solver.failureTimes) != 0 {
+		t.Fatal("an unaffordable refusal counted toward the fade breaker")
 	}
 }
 

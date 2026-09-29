@@ -93,7 +93,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, err
 	}
 	if cfg.Gas != nil {
-		if err := liquidlanegas.RequireReferenceGasUnits(deps.TxManager.ReferenceGasUnits()); err != nil {
+		if err := liquidlanegas.RequireReferenceGasUnits(deps.Log.WithName(Name), deps.TxManager); err != nil {
 			return nil, errors.Errorf("%s: %w", Name, err)
 		}
 	}

@@ -409,9 +409,10 @@ type Strategy interface {
   LiquidLane gas snapshot and current `txmanager.MaxFeePerGas` profitability ceiling, including one ordinary
   replacement when the cap permits (under `fees.policy: horizon`, `bump(fee(pricingHorizonBlocks, tip))` from a
   cached fee snapshot, which the fill still clears after three blocks of maximum base-fee growth;
-  [TXMANAGER-PLAN §4.3](TXMANAGER-PLAN.md#43-horizon-fee-policy)). With `gas:` configured the factory also requires
-  `txManager.balance.referenceGasUnits > 0` (the generic `Manager.ReferenceGasUnits()`), because that ceiling's
-  tip is sized for that gas limit and the lane funding gate measures the balance against it.
+  [TXMANAGER-PLAN §4.3](TXMANAGER-PLAN.md#43-horizon-fee-policy)). With `gas:` configured under `fees.policy:
+  horizon` the factory also requires `txManager.balance.referenceGasUnits > 0` (the generic
+  `Manager.ReferenceGasUnits()` and `QuotePricingUsesReferenceGas()`), because that ceiling's tip is then sized for
+  that gas limit; under `legacy` it starts without it, logging once that the lane funding gate stays off.
   The shared LiquidLane predictor derives every adapter swap route as
   acquire/allocate/deallocate/unknown. The solver reads Chainlink native/USD and token/USD feeds at the
   latest state and passes a `tokenOut per native` snapshot to the strategy. Every distinct resolved

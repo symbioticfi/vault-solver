@@ -382,8 +382,12 @@ func TestRepriceFees(t *testing.T) {
 func TestCancellationFees(t *testing.T) {
 	previous := feeQuote{baseFee: big.NewInt(1e9), tip: gwei(0.02), maxFee: big.NewInt(1_822_032_470)}
 	bumpedMax := bumpFee(previous.maxFee)
+	// A fill priced during a demand run at a 20 gwei next base fee: the initial cap reserveFeeBump(50 gwei) and
+	// the 15 gwei cap tip.
+	demandFill := feeQuote{baseFee: gwei(20), tip: gwei(15), maxFee: reserveFeeBump(gwei(50))}
 	for _, tc := range []struct {
 		name        string
+		previous    *feeQuote // nil: the quiet-chain fill above
 		nextBase    *big.Int
 		blocks      []feeBlock
 		balance     *big.Int
@@ -421,14 +425,35 @@ func TestCancellationFees(t *testing.T) {
 			balance: new(big.Int).Mul(gwei(2), big.NewInt(cancellationGasLimit)), wantBinding: feeBindingBalance,
 			wantErr: errReplacementLimitReached,
 		},
+		{
+			// Five blocks of maximum growth after the demand-run fill: tipC = bump(15) = 16.875 gwei no longer
+			// fits over the 36.04 gwei next base fee under the 50 gwei cap. The deadline cancel is still signed
+			// at the cap (strategy §2.8: capped, not refused), paying the 13.96 gwei that fits, and replaces the
+			// fill, whose 39.5 gwei cap would otherwise stay valid past CancelAt.
+			name: "a cap below the tip over the base fee still cancels", previous: &demandFill,
+			nextBase: gwei(36.04), limit: gwei(50),
+			wantMaxFee: gwei(50), wantTip: gwei(16.875), wantBinding: feeBindingCap,
+		},
+		{
+			// 21000 gas does not fit in a run of completely full blocks, so tipC is the 9 gwei run reward; the
+			// balance funds 2.1 gwei per gas, above the 2.05 gwei bump, so the tip is clamped to the cap.
+			name: "a balance below the run tip clamps the tip to the cap", nextBase: big.NewInt(1e9), limit: gwei(50),
+			blocks:     []feeBlock{block(1, gwei(9)), block(1, gwei(9))},
+			balance:    new(big.Int).Mul(gwei(2.1), big.NewInt(cancellationGasLimit)),
+			wantMaxFee: gwei(2.1), wantTip: gwei(2.1), wantBinding: feeBindingBalance,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			blocks := tc.blocks
 			if blocks == nil {
 				blocks = []feeBlock{roomy(), roomy()}
 			}
+			prior := previous
+			if tc.previous != nil {
+				prior = *tc.previous
+			}
 			fees, binding, err := cancellationFees(
-				previous, testSnapshot(tc.nextBase, blocks...), affordableOf(tc.balance, cancellationGasLimit), tc.limit, testPolicy(),
+				prior, testSnapshot(tc.nextBase, blocks...), affordableOf(tc.balance, cancellationGasLimit), tc.limit, testPolicy(),
 			)
 			if binding != tc.wantBinding {
 				t.Fatalf("binding = %q, want %q", binding, tc.wantBinding)

@@ -337,26 +337,33 @@ func repriceFees(
 ) (feeQuote, feeBinding, error) {
 	tip := maxBigCopy(bumpFee(previous.tip), tipRule(snapshot, gas, policy))
 	target := horizonFee(snapshot.nextBase, policy.maxHorizon, tip)
-	return cappedReplacement(previous, snapshot.nextBase, tip, target, affordable, limit)
+	return cappedReplacement(previous, snapshot.nextBase, tip, target, affordable, limit, true)
 }
 
 // cancellationFees prices a same-nonce cancellation, a 21000-gas zero-value self-transfer, under the
 // horizon policy (strategy §2.8): tipC = max(bump(tip), tipRule(21000)) and maxFeeC = max(bump(maxFee),
 // fee(minHorizon + 1, tipC)), one block beyond the refusal floor, capped at limit (the global fee limit;
 // nil is unbounded) and at affordable, the fee cap the signer balance funds over 21000 gas (nil with the
-// balance guard off). It refuses as repriceFees does.
+// balance guard off). Unlike a reprice it is capped, not refused, when the cap leaves less than tipC over
+// the next base fee (strategy §2.8): the deadline cancel must still replace the fill, whose own fee cap
+// may stay valid, and a cap under that room only lowers the tip it pays (the tip is clamped to the cap).
+// Only a cap below the 12.5% bump of the previous fee cap, which no node accepts as a replacement, is
+// refused.
 func cancellationFees(
 	previous feeQuote, snapshot *feeSnapshot, affordable, limit *big.Int, policy horizonPolicy,
 ) (feeQuote, feeBinding, error) {
 	tip := maxBigCopy(bumpFee(previous.tip), tipRule(snapshot, cancellationGasLimit, policy))
 	target := horizonFee(snapshot.nextBase, policy.minHorizon+1, tip)
-	return cappedReplacement(previous, snapshot.nextBase, tip, target, affordable, limit)
+	return cappedReplacement(previous, snapshot.nextBase, tip, target, affordable, limit, false)
 }
 
 // cappedReplacement completes repriceFees and cancellationFees: maxFee = max(bump(previous maxFee),
-// target) under limit and affordable, refused when the cap is below the bump or leaves less than tip over
-// nextBase.
-func cappedReplacement(previous feeQuote, nextBase, tip, target, affordable, limit *big.Int) (feeQuote, feeBinding, error) {
+// target) under limit and affordable, refused when the cap is below the bump. With tipRoom (a reprice) it is
+// also refused when the cap leaves less than tip over nextBase; without (a cancellation) the tip is only
+// clamped to the cap, which still covers the bumped previous tip since that is below the bumped previous cap.
+func cappedReplacement(
+	previous feeQuote, nextBase, tip, target, affordable, limit *big.Int, tipRoom bool,
+) (feeQuote, feeBinding, error) {
 	required := bumpFee(previous.maxFee)
 	maxFee := maxBigCopy(required, target)
 	binding := feeBindingTarget
@@ -374,7 +381,10 @@ func cappedReplacement(previous feeQuote, nextBase, tip, target, affordable, lim
 			errReplacementLimitReached, binding, affordableString(maxFee), required, previous.maxFee,
 		)
 	}
-	if tipRoom := new(big.Int).Sub(maxFee, nextBase); tip.Cmp(tipRoom) > 0 {
+	if !tipRoom {
+		return feeQuote{baseFee: new(big.Int).Set(nextBase), tip: minBigCopy(tip, maxFee), maxFee: maxFee}, binding, nil
+	}
+	if room := new(big.Int).Sub(maxFee, nextBase); tip.Cmp(room) > 0 {
 		return feeQuote{}, binding, errors.Errorf(
 			"%w: %s caps the fee at %s wei per gas, which leaves less than the tip %s over the next base fee %s",
 			errReplacementLimitReached, binding, maxFee, tip, nextBase,

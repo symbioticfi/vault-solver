@@ -495,8 +495,36 @@ func TestShadowTickEmitsOutcomesAndFeeGauges(t *testing.T) {
 	if got := testutil.ToFloat64(metrics.requiredBalance.WithLabelValues(requiredBalanceMin)); got != wantMin {
 		t.Fatalf("account_required_balance_wei{min} = %v, want %v", got, wantMin)
 	}
-	if got := testutil.ToFloat64(metrics.nextBaseFee); got != 1e9 {
+	if got := testutil.ToFloat64(metrics.nextBaseFee.WithLabelValues()); got != 1e9 {
 		t.Fatalf("fee_next_base_fee_wei = %v, want 1e9", got)
+	}
+}
+
+// TestNextBaseFeeIsAbsentUntilReadAndFollowsEveryShadowHead pins that fee_next_base_fee_wei is not exported as
+// 0 before any fee reading, and that the shadow evaluator refreshes it at every new head even when there is no
+// reference gas yet (balance.referenceGasUnits 0 and no fill signed since startup), when the lane requirement
+// gauges stay absent.
+func TestNextBaseFeeIsAbsentUntilReadAndFollowsEveryShadowHead(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	metrics, err := NewMetrics(reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.CollectAndCount(metrics.nextBaseFee); got != 0 {
+		t.Fatalf("fee_next_base_fee_wei series before any reading = %d, want none", got)
+	}
+	backend := newHorizonBackend(big.NewInt(1e18))
+	m := NewWithMetrics(backend, mustSigner(t), big.NewInt(1), Config{MaxFeeGwei: 50}, metrics, logr.Discard())
+	m.metrics.startShadow()
+	evaluator := m.newShadowEvaluator()
+	if err := m.shadowTick(t.Context(), evaluator); err != nil {
+		t.Fatal(err)
+	}
+	if got := testutil.ToFloat64(metrics.nextBaseFee.WithLabelValues()); got != 1e9 {
+		t.Fatalf("fee_next_base_fee_wei = %v, want 1e9", got)
+	}
+	if got := testutil.CollectAndCount(metrics.requiredBalance); got != 0 {
+		t.Fatalf("account_required_balance_wei series without a reference gas = %d, want none", got)
 	}
 }
 

@@ -295,7 +295,7 @@ func TestFundingGatePollRefreshesFeeGauges(t *testing.T) {
 	if telemetryErr, fundingErr := m.readAccount(t.Context()); telemetryErr != nil || fundingErr != nil {
 		t.Fatalf("poll: telemetry %v, funding %v", telemetryErr, fundingErr)
 	}
-	assertMetric(t, metrics.nextBaseFee, 8e9)
+	assertMetric(t, metrics.nextBaseFee.WithLabelValues(), 8e9)
 	assertMetric(t, metrics.requiredBalance.WithLabelValues(requiredBalanceQuote), 55829871093750000)
 }
 

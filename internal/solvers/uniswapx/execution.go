@@ -85,20 +85,10 @@ func (s *Solver) fillLoop(
 				)
 				continue
 			}
-			// Checked before any chain read, discount resolution or planning: while the signer cannot
-			// fund a reference fill the guard would refuse this one, and planning it on every poll
-			// would only re-poll the refusal hot.
-			if !s.txm.Fundable() {
-				s.endFillPlanning()
-				s.retry(order.Hash, time.Now(), false)
-				observability.Log(orderCtx).V(1).Info(
-					"order fill deferred while the signer balance cannot fund a fill",
-					"source", order.Source,
-					"orderHash", order.Hash.Hex(),
-					"quoteId", order.QuoteID,
-				)
-				continue
-			}
+			// The lane funding gate (Fundable) deliberately does not defer a won order: it sits at the
+			// pricing horizon so a quote keeps blocks of margin, and the balance guard still sends down to
+			// its own floor. A fill it refuses as unaffordable backs off exponentially (completePendingFill),
+			// so an unfundable lane does not re-poll hot.
 			observability.Log(orderCtx).V(1).Info(
 				"order fill planning started",
 				"source", order.Source,
@@ -295,7 +285,8 @@ func (s *Solver) startFill(
 
 // fillObsolete is the fill request's Obsolete check: true once the order API reports the order filled
 // (by another filler, or by this lifecycle, whose receipts the manager reads first and whose mined nonce
-// it checks before signing a cancellation), cancelled or expired, so the manager cancels the pending fill
+// it checks before signing a cancellation; after a reorg removed this lifecycle's inclusion the manager no
+// longer asks, since the API lags the reorg), cancelled or expired, so the manager cancels the pending fill
 // instead of holding the nonce lane until CancelAt. Open, error and insufficient-funds keep the fill
 // alive: the latter two can clear while the signed order is still valid. A failed read or an unknown
 // status is an error, which keeps it alive too.

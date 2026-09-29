@@ -231,12 +231,23 @@ func (c *feeSnapshotCache) get(ctx context.Context, maxAge time.Duration) (*feeS
 
 // getNewer is get for a reader that polls: it also reads (or joins a read) when the cached snapshot is not
 // newer than seen, the read time of the snapshot the caller took last, so a poll never takes the snapshot it
-// already has for a new one. The zero seen accepts any cached snapshot.
+// already has for a new one. The zero seen accepts any cached snapshot. The flight checks the cache again
+// before reading: a caller that missed the cache just before a read in flight stored its snapshot, and then
+// the flight just after it ended, takes that snapshot rather than starting a second read.
 func (c *feeSnapshotCache) getNewer(ctx context.Context, maxAge time.Duration, seen time.Time) (*feeSnapshot, error) {
-	if snapshot := c.cached(maxAge); snapshot != nil && snapshot.readAt.After(seen) {
+	usable := func() *feeSnapshot {
+		if snapshot := c.cached(maxAge); snapshot != nil && snapshot.readAt.After(seen) {
+			return snapshot
+		}
+		return nil
+	}
+	if snapshot := usable(); snapshot != nil {
 		return snapshot, nil
 	}
 	results := c.flight.DoChan(feeSnapshotKey, func() (any, error) {
+		if snapshot := usable(); snapshot != nil {
+			return snapshot, nil
+		}
 		snapshot, err := c.read(context.WithoutCancel(ctx))
 		if err != nil {
 			return nil, err

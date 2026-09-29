@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -821,14 +822,20 @@ type reorgChain struct {
 	*pendingChain
 
 	served map[common.Hash]int
+	missed map[common.Hash]int // receipt reads that found none
 }
 
 func (c *reorgChain) TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
 	receipt, err := c.pendingChain.TransactionReceipt(ctx, hash)
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if err == nil {
-		c.mu.Lock()
 		c.served[hash]++
-		c.mu.Unlock()
+	} else {
+		if c.missed == nil {
+			c.missed = map[common.Hash]int{}
+		}
+		c.missed[hash]++
 	}
 	return receipt, err
 }
@@ -837,6 +844,117 @@ func (c *reorgChain) servedReceipts(hash common.Hash) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.served[hash]
+}
+
+func (c *reorgChain) missedReceipts(hash common.Hash) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.missed[hash]
+}
+
+// reorgOwnInclusion mines first, lets the lifecycle find it and start confirming it, then removes it from the
+// chain (receipt gone, nonce back): the confirmation wait's two null reads report the reorg.
+func reorgOwnInclusion(t *testing.T, chain *reorgChain, first *types.Transaction) {
+	t.Helper()
+	waitServed := func(count int) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for chain.servedReceipts(first.Hash()) < count {
+			if time.Now().After(deadline) {
+				t.Fatalf("the receipt was served %d times, want %d", chain.servedReceipts(first.Hash()), count)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	chain.mine(0.5, first)
+	waitServed(2)
+	chain.mine(0.5, nil)
+	waitServed(chain.servedReceipts(first.Hash()) + 2)
+	chain.mu.Lock()
+	delete(chain.receipts, first.Hash())
+	chain.latestNonce = first.Nonce()
+	chain.mu.Unlock()
+}
+
+// TestReorgedInclusionStopsObsoleteChecks pins that a reorg removing the lifecycle's own inclusion does not let
+// an order status that still describes that removed fill cancel it: the RFQ backend never reverts "filled",
+// and the UniswapX order API lags reorgs. Before the fix the next empty receipt sweep asked Obsolete, got
+// "filled", and signed a 21000-gas cancellation at the fill's nonce that outbid the fill (and, under horizon,
+// its reorg rebroadcast).
+func TestReorgedInclusionStopsObsoleteChecks(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		policy FeePolicy
+		// wantSends is what the write endpoint receives before the fill is mined again: the fill, plus under
+		// horizon its immediate reorg rebroadcast (the same bytes).
+		wantSends int
+	}{
+		{name: "legacy", policy: FeePolicyLegacy, wantSends: 1},
+		{name: "horizon", policy: FeePolicyHorizon, wantSends: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chain := &reorgChain{pendingChain: newPendingChain(big.NewInt(1e18)), served: map[common.Hash]int{}}
+			cfg := pendingConfig()
+			cfg.Fees.Policy = tc.policy
+			logs, log := newLogCapture(0)
+			mu := &sync.Mutex{}
+			metrics := newTestMetrics(t)
+			m := NewWithMetrics(chain, mustSigner(t), big.NewInt(11155111), cfg, metrics, logr.New(&lockedSink{sink: log.GetSink(), mu: mu}))
+			startManagerForTest(t, m)
+			h := &pendingHarness{chain: chain.pendingChain, m: m, metrics: metrics, logs: logs, logMu: mu}
+
+			var filledAnswers atomic.Int64
+			req := fillRequest(100_000)
+			req.Confirmations = new(uint64(2))
+			// The order API reports "filled" from the moment our fill was first seen, and keeps doing so.
+			req.Obsolete = func(context.Context) (bool, error) {
+				chain.mu.Lock()
+				filled := len(chain.served) > 0
+				chain.mu.Unlock()
+				if filled {
+					filledAnswers.Add(1)
+				}
+				return filled, nil
+			}
+			result, first := h.send(t, req)
+			reorgOwnInclusion(t, chain, first)
+
+			deadline := time.Now().Add(5 * time.Second)
+			for h.countLog("transaction inclusion reorged; resuming pending lifecycle", `"obsoleteChecksStopped":true`) == 0 {
+				if time.Now().After(deadline) {
+					t.Fatal("the reorg was not logged with the stopped obsolescence checks")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			// Several empty receipt sweeps: each used to end with an Obsolete check.
+			missed := chain.missedReceipts(first.Hash())
+			for chain.missedReceipts(first.Hash()) < missed+5 {
+				if time.Now().After(deadline) {
+					t.Fatal("the lifecycle stopped reading receipts after the reorg")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if got := filledAnswers.Load(); got != 0 {
+				t.Fatalf("Obsolete reported the removed fill %d times after the reorg, want it not asked", got)
+			}
+			sends := chain.waitSends(t, tc.wantSends)
+			for i, tx := range sends {
+				if tx.Hash() != first.Hash() {
+					t.Fatalf("send %d is %s (gas %d), want only the fill's own bytes", i, tx.Hash().Hex(), tx.Gas())
+				}
+			}
+			if h.countLog("pending transaction cancellation requested", "") != 0 {
+				t.Fatal("the reorged fill was cancelled")
+			}
+
+			chain.mine(0.5, first)
+			chain.mine(0.5, nil)
+			chain.mine(0.5, nil)
+			if got := waitResult(t, result); got.Outcome != OutcomeConfirmed || got.Hash != first.Hash() {
+				t.Fatalf("result = %+v, want the fill confirmed", got)
+			}
+		})
+	}
 }
 
 func TestHorizonPendingReorgRebroadcastsWithoutCountingMisses(t *testing.T) {

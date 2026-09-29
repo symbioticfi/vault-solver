@@ -225,7 +225,8 @@ expected noise and logged at info; malformed identifiers and operational failure
 `solverMode: internal` also enables signed private discounts through the shared backend. `tokensToQuote` uses the same `all`,
 `permissioned`, and `permissionless` scopes as RFQ; permissioned inputs must execute through one physical
 route. The order-server REST/WS endpoints are explicit required config. When `gas:` is configured, each
-Chainlink feed has its own required max age and `txManager.balance.referenceGasUnits` must be set.
+Chainlink feed has its own required max age, and `txManager.balance.referenceGasUnits` must be set before the
+lane runs `txManager.fees.policy: horizon`.
 The default strategy evaluates bounded geometric exact-input ranges across available capacity. See the plan for settlement, pricing, concurrency, and onboarding details:
 [`docs/LIFI-PLAN.md`](docs/LIFI-PLAN.md) · example
 [`config/lifi.example.yaml`](config/lifi.example.yaml).
@@ -274,8 +275,8 @@ The quote path uses a refreshed on-chain inventory snapshot so it stays within U
 response deadline. Each request is priced once for its concrete amount: the strategy returns one
 `amountIn`/`amountOut` pair after price buffer and, when configured, estimated fill gas, with no precomputed
 ladders, amount ranges, or quote-time route reservation. Omitting the entire `gas:` block disables gas
-accounting in both quote and fill decisions and skips gas-state and Chainlink reads; configuring it requires
-`txManager.balance.referenceGasUnits`. The tx manager still
+accounting in both quote and fill decisions and skips gas-state and Chainlink reads; configuring it under
+`txManager.fees.policy: horizon` requires `txManager.balance.referenceGasUnits`. The tx manager still
 prices and pays actual transaction gas, so that cost is then subsidized by the solver. Uniswap deliberately
 makes indicative and hard RFQ requests
 indistinguishable, so the solver echoes `quoteId` but does not guess the phase. Fill planning reserves
@@ -291,8 +292,8 @@ A quote is returned only if inventory, reservations, and blocking conditions rem
 calculation. Quoting fails closed during startup warmup, stale or unknown exclusive-order delivery,
 an unavailable nonce lane, a closed tx manager [funding gate](#txmanager-funding-gate) (decline
 `declined_lane_unfundable`), an active Uniswap `blockUntilTimestamp`, or the configured local fade breaker. A claimed order is requeued before chain reads,
-signed-discount resolution, calldata construction, or preflight while the nonce lane is paused or the
-funding gate is closed. A txmanager
+signed-discount resolution, calldata construction, or preflight while the nonce lane is paused; a closed
+funding gate does not requeue it, since the gate leaves won quotes margin above the balance guard's floor. A txmanager
 result rejected before the worker lifecycle does not count toward the local fill breaker and is reported as
 `solver_bot_txmanager_admission_rejections_total{label="uniswapx-fill"}` rather than a terminal fill
 failure; a fill the balance guard refuses as unaffordable is retried with the failure backoff (the poll
@@ -439,9 +440,11 @@ txManager:
 Omitted keys keep their defaults; an explicit `0` or `false` is honoured. The balance guard is on under
 both policies: it caps each attempt's max fee at what the balance can pay for the gas limit and refuses a
 send that cannot stay valid for `fees.minHorizonBlocks` (2) blocks, without consuming the nonce.
-`fees.tipFloorGwei` must be at least one wei (0.000000001). A UniswapX or LI.FI solver with a `gas:` block
-refuses to start while `balance.referenceGasUnits` is 0, because its quotes are priced for that gas limit
-(4400000 covers current fills); set the key in the same deploy as the image. Every key, its default and its
+`fees.tipFloorGwei` must be at least one wei (0.000000001). Under `fees.policy: horizon` a UniswapX or LI.FI
+solver with a `gas:` block refuses to start while `balance.referenceGasUnits` is 0, because its quotes are then
+priced for that gas limit (4400000 covers current fills); under `legacy` it starts, logs once that the funding
+gate stays off, and prices quotes as before. Set the key before (or together with) moving such a lane to
+`horizon`. Every key, its default and its
 validation rule are listed in the
 [transaction manager plan](docs/TXMANAGER-PLAN.md#3-configuration-and-time-budgets). Config decoding rejects
 unknown keys, so roll out in this order: first the image everywhere (with no new keys its defaults apply: the
@@ -456,7 +459,9 @@ reads for recent blocks. A refused request returns a `NotAdmitted` submission er
 `fees.maxHeadLagBlocks` behind for two block times, or the balance, or under horizon the next-block gas
 estimate, could not be read at that block);
 nothing is signed and the nonce stays free. Refusals are logged at Info and counted in
-`solver_bot_txmanager_admission_rejections_total{reason="unaffordable|unaffordable_one_block|stale_head"}`.
+`solver_bot_txmanager_admission_rejections_total{reason="unaffordable|unaffordable_one_block|stale_head"}`;
+three pinned balance reads in a row that fail (an endpoint rejecting the pinned read, or never finding the block
+hash) are also logged once at Error, since they stop every send on the lane.
 The head lag is measured against the wall clock, so a local or forked chain must produce a block every
 `fees.blockTimeMs` (for example `anvil --block-time 12`, or lower `fees.blockTimeMs` to match); otherwise set
 `balance.guard: false` there, or every send is refused as `stale_head`.
@@ -521,8 +526,9 @@ use falls below 99% over 24 hours (`solver_bot_txmanager_fee_policy_info{policy}
 uses). It shares the fee snapshot the tx manager reads anyway: every half block it takes one a send, quote or
 pending evaluation read within the last quarter block, or else reads one itself, so it adds at most one
 latest-header and one fee-history read per half block on the read endpoints (about 14,400 of each a day when
-nothing else reads, as under `legacy`). It also keeps `solver_bot_txmanager_fee_next_base_fee_wei` and
-`solver_bot_txmanager_account_required_balance_wei` current on every head. It covers the fee side only: blocks built outside the relay's reach, reverts and competitor
+nothing else reads, as under `legacy`). It also keeps `solver_bot_txmanager_fee_next_base_fee_wei` current on every head, and
+`solver_bot_txmanager_account_required_balance_wei` once a reference gas limit is known
+(`balance.referenceGasUnits`, or the latest fill's gas limit); both are absent until their first reading. It covers the fee side only: blocks built outside the relay's reach, reverts and competitor
 fills show up in the real `solver_bot_txmanager_first_attempt_total`.
 
 Under horizon a pending attempt is not bumped on a timer. Every half block (`fees.blockTimeMs`/2) the manager
@@ -551,9 +557,9 @@ limit priced `fees.pricingHorizonBlocks` (5) blocks ahead: `referenceGasUnits ×
 about `G × (1.6·pb + tipFloor)`. The margin over the two-block send floor means a quote made just before the
 base fee climbs still fills. The gate is re-evaluated on every account poll and every guarded send, so set
 `accountPollIntervalMs: 12000` on mainnet to follow the base fee each block; once closed it reopens only at
-`balance.fundingHysteresisBps` (20%) above the threshold. While it is closed RFQ and UniswapX decline quotes,
-UniswapX defers won orders before planning them, LI.FI withdraws its standing quotes, and RFQ does not retry a
-cancelled fill; 3F offers are not gated and 3F redeem backs off as described in the 3F section. It starts closed until
+`balance.fundingHysteresisBps` (20%) above the threshold. While it is closed RFQ and UniswapX decline quotes
+(orders already won are still attempted, and the guard decides), LI.FI withdraws its standing quotes, and RFQ
+does not retry a cancelled fill; 3F offers are not gated and 3F redeem backs off as described in the 3F section. It starts closed until
 its first evaluation, is off (always fundable) while `referenceGasUnits` is 0, and is separate from `/readyz`,
 which must not flap with the base fee. Changes are logged at Info (`lane unfundable`, `lane fundable again`), and
 so are the start and end of a run of polls that cannot refresh it (`funding gate refresh failed` /
@@ -602,6 +608,7 @@ make build            # build ./bin/vault-solver
 ./bin/vault-solver version
 make test             # go test -race -cover ./...
 make test-txmanager-anvil # real pending replacement/cancellation against local Anvil
+make test-chain-anvil # pinned balance reads and the eth_estimateGas block-overrides probe against local Anvil
 make lint             # golangci-lint
 ./bin/vault-solver run --config config/3f.example.yaml
 ```

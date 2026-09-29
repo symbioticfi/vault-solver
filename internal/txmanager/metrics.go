@@ -100,7 +100,9 @@ type Metrics struct {
 	attemptMaxFee       *prometheus.GaugeVec
 	attemptGasLimit     *prometheus.GaugeVec
 	attemptHorizon      *prometheus.HistogramVec
-	nextBaseFee         prometheus.Gauge
+	// nextBaseFee has no labels but is a vector so the series is absent until the first fee reading,
+	// rather than exported as 0 (a 0 cannot be told apart from a reading).
+	nextBaseFee         *prometheus.GaugeVec
 	requiredBalance     *prometheus.GaugeVec
 	gasEstimates        *prometheus.CounterVec
 	gasEstimateDuration *prometheus.HistogramVec
@@ -186,7 +188,7 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
 			Name:      "inclusion_delay_blocks",
-			Help:      "Blocks from the head a lifecycle was first signed at to the block that included its call; 1 is the next block. Cancellations are excluded.",
+			Help:      "Blocks from the newest block a lifecycle's first attempt was priced knowing of to the block that included its call; 1 is the next block. Cancellations are excluded.",
 			Buckets:   []float64{0, 1, 2, 3, 4, 5, 6, 8, 12, 25, 50},
 		}, []string{"label"}),
 		pendingAge: prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -220,12 +222,12 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Help:      "Blocks from the next one an initial attempt's fee cap stays valid at the floor tip, when the horizon policy or the balance guard priced it.",
 			Buckets:   []float64{0, 1, 2, 3, 4, 5, 6, 8, 12, 32},
 		}, []string{"label"}),
-		nextBaseFee: prometheus.NewGauge(prometheus.GaugeOpts{
+		nextBaseFee: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
 			Name:      "fee_next_base_fee_wei",
-			Help:      "Base fee of the next block from the latest fee snapshot a send was priced or guarded at, the funding gate's account poll read, or the shadow evaluator took at a new head.",
-		}),
+			Help:      "Base fee of the next block from the latest fee snapshot a send was priced or guarded at, the funding gate's account poll read, or the shadow evaluator took at a new head; absent until the first such reading.",
+		}, []string{}),
 		requiredBalance: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
@@ -523,10 +525,17 @@ func (m *Metrics) observeFeeSnapshot(nextBase *big.Int, required laneRequirement
 	if m == nil {
 		return
 	}
-	m.nextBaseFee.Set(weiFloat(nextBase))
+	m.observeNextBaseFee(nextBase)
 	m.requiredBalance.WithLabelValues(requiredBalanceMin).Set(weiFloat(required.min))
 	m.requiredBalance.WithLabelValues(requiredBalanceQuote).Set(weiFloat(required.quote))
 	m.requiredBalance.WithLabelValues(requiredBalanceFull).Set(weiFloat(required.full))
+}
+
+// observeNextBaseFee records the next block's base fee from a fee reading.
+func (m *Metrics) observeNextBaseFee(nextBase *big.Int) {
+	if m != nil {
+		m.nextBaseFee.WithLabelValues().Set(weiFloat(nextBase))
+	}
 }
 
 // observeGasEstimate counts one gas estimate and records how long it took.

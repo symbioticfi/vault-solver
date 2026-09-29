@@ -283,33 +283,41 @@ func (m *Manager) probeBlockOverrides(ctx context.Context) {
 // the next one. An inconclusive probe keeps the previous verdict; its first failure in a run and the run's
 // end are logged at Info, and a run lasting readFailureReminderInterval at Error.
 func (m *Manager) probeBlockOverridesOnce(ctx context.Context) time.Duration {
+	next, _ := m.tracedBlockOverridesProbe(ctx)
+	return next
+}
+
+// tracedBlockOverridesProbe is probeBlockOverridesOnce inside its txmanager.block_overrides_probe span,
+// which it ends with the probe's error; its log lines carry that span's trace.
+func (m *Manager) tracedBlockOverridesProbe(ctx context.Context) (next time.Duration, err error) {
 	probeCtx, end := tracer.Start(ctx, "txmanager.block_overrides_probe")
+	defer func() { end(err) }()
 	timeoutCtx, cancel := context.WithTimeout(probeCtx, m.gasEstimateTimeout())
+	defer cancel()
 	supported, err := m.nextBlock.ProbeBlockOverrides(timeoutCtx, m.cfg.Fees.BlockTime)
-	cancel()
-	end(err)
 	if ctx.Err() != nil {
-		return 0
+		return 0, err
 	}
+	log := observability.Log(probeCtx)
 	if err != nil {
-		m.probeReads.failed(observability.Log(ctx), err,
+		m.probeReads.failed(log, err,
 			"block overrides probe inconclusive; keeping the previous gas estimate mode",
 			"nextBlockEstimates", m.overrides.load() == blockOverridesSupported)
-		return blockOverridesProbeRetry
+		return blockOverridesProbeRetry, err
 	}
-	m.probeReads.recovered(observability.Log(ctx), "block overrides probe recovered")
+	m.probeReads.recovered(log, "block overrides probe recovered")
 	verdict := blockOverridesUnsupported
 	if supported {
 		verdict = blockOverridesSupported
 	}
 	if previous := m.overrides.swap(verdict); previous != verdict {
 		if supported {
-			observability.Log(ctx).Info("read endpoint honours eth_estimateGas block overrides; estimating gas in " +
+			log.Info("read endpoint honours eth_estimateGas block overrides; estimating gas in " +
 				"the next block's context")
 		} else {
-			observability.Log(ctx).Info("read endpoint rejects or ignores eth_estimateGas block overrides; estimating "+
+			log.Info("read endpoint rejects or ignores eth_estimateGas block overrides; estimating "+
 				"gas at latest with gas.fallbackHeadroomBps", "fallbackHeadroomBps", m.fallbackGasHeadroomBps())
 		}
 	}
-	return blockOverridesProbeInterval
+	return blockOverridesProbeInterval, nil
 }

@@ -177,18 +177,22 @@ A planned fill may wait behind another transaction on the shared nonce lane. Its
 and existing retry handling applies. Continued quoting does not guarantee execution within exclusivity;
 the exclusive window must also cover any preceding fill's confirmation time.
 
-While the manager's funding gate is closed (`Fundable`, [TXMANAGER-PLAN §4.2](TXMANAGER-PLAN.md#42-lane-funding-gate)),
-a claimed order is returned to its poll-interval retry before any chain read, discount resolution or planning,
-exactly like a paused nonce lane, so an unfundable lane does not plan fills only for the balance guard to
-refuse them. A fill the guard still refuses (`ErrUnaffordable`, for example a fill larger than
-`balance.referenceGasUnits` or a base-fee jump between polls) takes the failure backoff (the poll interval
-doubling up to 30 s) instead of the plain retry; like every `not_admitted` result it neither opens the fade
-breaker nor logs an error. A transient refusal (`stale_head`, a paused lane) keeps the plain retry.
+The manager's funding gate (`Fundable`, [TXMANAGER-PLAN §4.2](TXMANAGER-PLAN.md#42-lane-funding-gate)) gates
+quotes only, not the fills of won orders. It closes at the pricing horizon (5 blocks) precisely so a won quote
+keeps about 3 blocks of margin while the balance guard still sends down to its own 2-block floor; deferring
+fills on it would give that margin up and fade exclusive orders the guard would have sent. (This deviates from
+the strategy §2.10 table, which also gates UniswapX fills; its stated purpose, not re-polling refusals hot, is
+met by the backoff below, and RFQ makes the same call.) A fill the guard refuses (`ErrUnaffordable`) takes the
+failure backoff (the poll interval doubling up to 30 s) instead of the plain retry; like every `not_admitted`
+result it neither opens the fade breaker nor logs an error. A transient refusal (`stale_head`, a paused lane)
+keeps the plain retry.
 
 Each fill request carries an `Obsolete` check against the order API (`GET /orders?orderHashes=`): `filled` (by
 another filler), `cancelled` or `expired` makes the manager cancel the pending fill at its nonce, before its
 `CancelAt`, instead of holding the lane. The manager reads the fill's own receipts before each check and the
-mined nonce before signing the cancellation, so a `filled` that is our own inclusion wins. `open`, `error` and
+mined nonce before signing the cancellation, so a `filled` that is our own inclusion wins while that inclusion
+stands; once a reorg removes it the manager stops asking (the API lags reorgs) and `CancelAt` bounds the fill.
+`open`, `error` and
 `insufficient-funds` keep the fill (the latter two can clear while the signed order is still valid); a failed
 read or an unrecognized status is an error, which keeps it too. The check shares the order client's request
 pacing with polling and runs once per receipt sweep (the manager's poll interval) while a fill is pending.
@@ -336,9 +340,11 @@ solvers:
 
 Startup checks configured gas tokens and the Multicall3 timestamp selector.
 The `gas:` block is optional. When omitted, quote/fill decisions skip gas-state and Chainlink reads
-and do not subtract gas. When present, the factory also requires `txManager.balance.referenceGasUnits > 0`
-(read through the generic `Manager.ReferenceGasUnits()`), because `MaxFeePerGas` sizes its quote tip for
-that gas limit and the lane funding gate measures the balance against it. Transaction submission remains
+and do not subtract gas. When present under `fees.policy: horizon`, the factory also requires
+`txManager.balance.referenceGasUnits > 0` (read through the generic `Manager.ReferenceGasUnits()` and
+`QuotePricingUsesReferenceGas()`), because horizon `MaxFeePerGas` sizes its quote tip for that gas limit; under
+`legacy` it starts without it, logging once that the lane funding gate (which measures the balance against it)
+stays off. Transaction submission remains
 dynamically priced without a request ceiling; the solver pays that cost without passing it through to the quote. Shared pricing, RPC routing and EOA
 startup requirements are specified in the [transaction manager plan](TXMANAGER-PLAN.md).
 
@@ -939,7 +945,7 @@ Tracked operational and onboarding steps — **update as items start/finish/drop
 - [ ] Self-funding loops (keep solver-gas / pay-bid pots fed from profit) if needed.
 - [ ] Recalibrate the quote gas-units model (`internal/liquidlane/gas`: 0.9–1.1M units modelled against 3.0–3.6M
       measured) before enabling `gas:` on mainnet; `MaxFeePerGas` and the funding gate then price
-      `balance.referenceGasUnits` (4400000), which ships with the same deploy. The UniswapX dashboard's fee-strategy
+      `balance.referenceGasUnits` (4400000), which must be set before the lane moves to `fees.policy: horizon`. The UniswapX dashboard's fee-strategy
       row ("Fill gas": the peak `attempt_gas_limit` and receipt gas per confirmed fill) and the runtime dashboard's
       "Latest attempt gas limit by operation" show the measured gas to calibrate from.
 - [ ] Move this lane to `fees.policy: horizon` in the strategy's canary order (after the RFQ lanes) once the

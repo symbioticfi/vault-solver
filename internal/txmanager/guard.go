@@ -24,7 +24,8 @@ import (
 // Goroutine model: the worker goroutine runs the initial-send guard and the lifecycle goroutine runs
 // the replacement cap; the lifecycle slot keeps them from overlapping. The only state they share is
 // Manager.lastInclusion, an atomic the lifecycle goroutine raises when a lifecycle ends in a receipt,
-// Manager.hashPinMisses, an atomic count both update as their pinned balance reads end, and the last
+// Manager.hashPinMisses and Manager.pinnedReadErrors, atomic counts both update as their pinned balance
+// reads end, and the last
 // signer balance read (Manager.balanceMu). The account-poll goroutine reads pinned balances through the
 // same path for the funding gate.
 
@@ -55,6 +56,13 @@ const pinnedReadRetryDelay = 200 * time.Millisecond
 // header fields it knows, so a header field it does not know (a later fork, a non-standard chain)
 // yields a hash no node has, and every guarded send would be refused as stale_head.
 const hashPinNotFoundErrorAfter = 3
+
+// pinnedReadErrorAfter is how many pinned balance reads in a row, pinned by hash or number, may fail with an
+// error other than not found (or return no balance) before the streak is logged at error level. Such a read
+// refuses the send as stale_head, which is otherwise only an Info line: a read endpoint that rejects the
+// EIP-1898 block parameter, or cannot serve state at recent blocks, would stop every send on the lane
+// without paging. The guard still fails closed; this only makes it visible.
+const pinnedReadErrorAfter = 3
 
 // pinnedBalanceBackend reads an account balance pinned to one block, by hash (EIP-1898) or number,
 // through the read endpoints. *chain.Client provides it; a backend without it runs with the guard off.
@@ -288,12 +296,20 @@ func (m *Manager) pinnedBalance(ctx context.Context, pin rpc.BlockNumberOrHash) 
 		switch {
 		case err == nil && balance != nil && balance.Sign() >= 0:
 			m.hashPinFound(ctx, pin)
+			m.pinnedReadSucceeded(ctx)
 			m.observeSignerBalance(balance)
 			return balance, nil
 		case err == nil:
-			return nil, errors.Errorf("%w: invalid signer balance %v at block %s", ErrStaleHead, balance, pin.String())
+			err = errors.Errorf("%w: invalid signer balance %v at block %s", ErrStaleHead, balance, pin.String())
+			m.pinnedReadFailed(ctx, err)
+			return nil, err
 		case !errors.Is(err, ethereum.NotFound):
-			return nil, errors.Errorf("%w: signer balance at block %s: %w", ErrStaleHead, pin.String(), err)
+			err = errors.Errorf("%w: signer balance at block %s: %w", ErrStaleHead, pin.String(), err)
+			// A read the caller abandoned says nothing about the node.
+			if ctx.Err() == nil {
+				m.pinnedReadFailed(ctx, err)
+			}
+			return nil, err
 		}
 		if sleepContext(readCtx, retry) != nil {
 			err = errors.Errorf(
@@ -321,6 +337,25 @@ func (m *Manager) hashPinNotFound(ctx context.Context, pin rpc.BlockNumberOrHash
 			"hint", "if the node serves this block by number, the go-ethereum this build uses does not hash "+
 				"this chain's header fields; refusals continue as stale_head until it does",
 		)
+	}
+}
+
+// pinnedReadFailed counts a pinned balance read that failed with an error other than not found, and logs
+// the streak at error level once, when it reaches pinnedReadErrorAfter.
+func (m *Manager) pinnedReadFailed(ctx context.Context, err error) {
+	if failures := m.pinnedReadErrors.Add(1); failures == pinnedReadErrorAfter {
+		observability.Log(ctx).Error(err, "balance reads pinned to a block keep failing",
+			"consecutiveFailures", failures,
+			"hint", "the read endpoints must serve eth_getBalance at a recent block hash (EIP-1898, "+
+				"requireCanonical) and number; refusals continue as stale_head until they do",
+		)
+	}
+}
+
+// pinnedReadSucceeded ends a streak of pinned balance reads that failed.
+func (m *Manager) pinnedReadSucceeded(ctx context.Context) {
+	if failures := m.pinnedReadErrors.Swap(0); failures >= pinnedReadErrorAfter {
+		observability.Log(ctx).Info("balance reads pinned to a block recovered", "consecutiveFailures", failures)
 	}
 }
 

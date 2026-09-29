@@ -16,6 +16,7 @@ import (
 	"github.com/go-logr/logr"
 	"go.opentelemetry.io/otel/codes"
 
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 )
 
@@ -210,7 +211,7 @@ func TestUnaffordableFillIsNeverBroadcast(t *testing.T) {
 					t.Fatalf("signed attempt needs %s, more than the balance %s", need, tc.balance)
 				}
 				assertMetric(t, metrics.attemptMaxFee.WithLabelValues("fill", attemptKindFill), float64(tc.wantMaxFee.Int64()))
-				assertMetric(t, metrics.nextBaseFee, float64(tc.nextBase.Int64()))
+				assertMetric(t, metrics.nextBaseFee.WithLabelValues(), float64(tc.nextBase.Int64()))
 				return
 			}
 			if !errors.Is(res.Err, ErrUnaffordable) || !res.NotAdmitted || res.Outcome != OutcomeSubmissionError {
@@ -247,8 +248,45 @@ func TestUnaffordableRefusalDoesNotConsumeNonce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("funded broadcast: %v", err)
 	}
-	if pending.nonce != 7 || pending.sendHead != b.head {
-		t.Fatalf("funded broadcast nonce %d send head %d, want 7 / %d", pending.nonce, pending.sendHead, b.head)
+	if pending.nonce != 7 || pending.sendSeen != b.head {
+		t.Fatalf("funded broadcast nonce %d send head %d, want 7 / %d", pending.nonce, pending.sendSeen, b.head)
+	}
+}
+
+// TestInclusionDelayCountsFromTheNewestBlockASendKnew pins that inclusion delay and the first-attempt outcome
+// count from the newest block the send's fee snapshot knew of: a fee history one block ahead of the header
+// means that block was already built, so landing in the block after it is the next block (delay 1), not 2.
+func TestInclusionDelayCountsFromTheNewestBlockASendKnew(t *testing.T) {
+	b := newGuardBackend(eth(1_000_000_000_000_000_000))
+	b.historyOffset = 1
+	m := New(b, mustSigner(t), big.NewInt(11155111), Config{MaxFeeGwei: 50}, logr.Discard())
+	pending, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "fill"})
+	if err != nil {
+		t.Fatalf("broadcast: %v", err)
+	}
+	if pending.sendSeen != b.head+1 {
+		t.Fatalf("send seen block %d, want the fee history's %d", pending.sendSeen, b.head+1)
+	}
+
+	for _, tc := range []struct {
+		name        string
+		included    uint64
+		wantOutcome firstAttemptOutcome
+		wantDelay   float64
+	}{
+		{name: "the next block", included: pending.sendSeen + 1, wantOutcome: firstAttemptFirst, wantDelay: 1},
+		{name: "the third block", included: pending.sendSeen + 3, wantOutcome: firstAttemptFirst, wantDelay: 3},
+		{name: "the fourth block", included: pending.sendSeen + 4, wantOutcome: firstAttemptLate, wantDelay: 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			metrics := newTestMetrics(t)
+			m.metrics = metrics
+			m.recordInclusion(pending, Result{
+				Hash: pending.originalHash, Receipt: &types.Receipt{BlockNumber: new(big.Int).SetUint64(tc.included)},
+			})
+			assertMetric(t, metrics.firstAttempts.WithLabelValues("fill", string(tc.wantOutcome), simulationUnknown), 1)
+			metricstest.RequireHistogram(t, metrics.inclusionDelay.WithLabelValues("fill"), 1, tc.wantDelay)
+		})
 	}
 }
 
@@ -966,6 +1004,54 @@ func TestBalanceGuardWithMandatoryTip(t *testing.T) {
 // TestHashPinnedBalanceNotFoundEscalates pins that balance reads pinned by header hash that keep
 // finding no block, which is what a header this go-ethereum version hashes differently from the node
 // looks like, page once per streak instead of refusing every send at Info only.
+// TestPinnedBalanceReadErrorsEscalate pins that a read endpoint whose pinned balance reads keep failing with an
+// error other than not found (here a proxy rejecting the EIP-1898 block parameter) is logged at error level
+// once per streak, by hash or by number, while every send stays refused as stale_head: before, each refusal was
+// one Info line and the lane stopped sending without paging.
+func TestPinnedBalanceReadErrorsEscalate(t *testing.T) {
+	cfg := Config{MaxFeeGwei: 50, PollInterval: time.Millisecond, ReplacementInterval: 40 * time.Millisecond}
+	req := Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "fill"}
+	const escalation = "balance reads pinned to a block keep failing"
+	for _, tc := range []struct {
+		name       string
+		offset     int64 // fee history newest block minus the header; -1 pins by number
+		err        error
+		wantErrors int
+	}{
+		{name: "rejected hash pins escalate once per streak", err: errors.New("invalid argument 1: hex string without 0x prefix"), wantErrors: 1},
+		{name: "rejected number pins escalate once per streak", offset: -1, err: errors.New("missing trie node"), wantErrors: 1},
+		{name: "not found is the hash-pin streak, not this one", err: errors.Join(ethereum.NotFound, errors.New("header not found"))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logs, log := newLogCapture(0)
+			var mu sync.Mutex
+			b := newGuardBackend(eth(1_000_000_000_000_000_000))
+			b.historyOffset = tc.offset
+			b.balanceErr = tc.err
+			m := New(b, mustSigner(t), big.NewInt(11155111), cfg, logr.New(&lockedSink{sink: log.GetSink(), mu: &mu}))
+			for range pinnedReadErrorAfter + 2 {
+				if _, err := m.broadcast(managerCtx(t.Context(), m), req); !errors.Is(err, ErrStaleHead) {
+					t.Fatalf("broadcast error = %v, want ErrStaleHead", err)
+				}
+			}
+			b.guardMu.Lock()
+			b.balanceErr = nil
+			b.guardMu.Unlock()
+			if _, err := m.broadcast(managerCtx(t.Context(), m), req); err != nil {
+				t.Fatalf("broadcast after the endpoint recovered: %v", err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if errorLevel, _ := countLogs(*logs, escalation); errorLevel != tc.wantErrors {
+				t.Fatalf("escalation logged %d errors, want %d: %s", errorLevel, tc.wantErrors, strings.Join(*logs, "\n"))
+			}
+			if _, info := countLogs(*logs, "balance reads pinned to a block recovered"); info != tc.wantErrors {
+				t.Fatalf("recovery logged %d times, want %d", info, tc.wantErrors)
+			}
+		})
+	}
+}
+
 func TestHashPinnedBalanceNotFoundEscalates(t *testing.T) {
 	cfg := Config{MaxFeeGwei: 50, PollInterval: time.Millisecond, ReplacementInterval: 40 * time.Millisecond}
 	req := Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "fill"}

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -205,38 +206,49 @@ func TestFeeSnapshotCache(t *testing.T) {
 		return &feeSnapshot{header: &types.Header{Number: new(big.Int).SetUint64(head)}, historyHead: head, readAt: time.Now()}
 	}
 	t.Run("concurrent callers share one read", func(t *testing.T) {
+		// Inside a synctest bubble synctest.Wait returns only once all eight callers are blocked, so every one
+		// has joined the read in flight (or is waiting on it) before it is released.
+		synctest.Test(t, func(t *testing.T) {
+			var reads atomic.Int64
+			release := make(chan struct{})
+			cache := &feeSnapshotCache{read: func(context.Context) (*feeSnapshot, error) {
+				reads.Add(1)
+				<-release
+				return snapshotAt(100), nil
+			}}
+			var wg sync.WaitGroup
+			results := make(chan *feeSnapshot, 8)
+			for range 8 {
+				wg.Go(func() {
+					snapshot, err := cache.get(t.Context(), time.Hour)
+					if err != nil {
+						t.Errorf("get: %v", err)
+					}
+					results <- snapshot
+				})
+			}
+			synctest.Wait()
+			close(release)
+			wg.Wait()
+			close(results)
+			for snapshot := range results {
+				if snapshot == nil || snapshot.historyHead != 100 {
+					t.Fatalf("a caller got %v, want the shared snapshot", snapshot)
+				}
+			}
+			if got := reads.Load(); got != 1 {
+				t.Fatalf("eight concurrent callers ran %d reads, want 1", got)
+			}
+		})
+	})
+	t.Run("a cached snapshot is reused and maxAge 0 reads", func(t *testing.T) {
 		var reads atomic.Int64
-		release := make(chan struct{})
 		cache := &feeSnapshotCache{read: func(context.Context) (*feeSnapshot, error) {
 			reads.Add(1)
-			<-release
 			return snapshotAt(100), nil
 		}}
-		var wg sync.WaitGroup
-		results := make(chan *feeSnapshot, 8)
-		for range 8 {
-			wg.Go(func() {
-				snapshot, err := cache.get(t.Context(), time.Hour)
-				if err != nil {
-					t.Errorf("get: %v", err)
-				}
-				results <- snapshot
-			})
-		}
-		deadline := time.Now().Add(5 * time.Second)
-		for reads.Load() == 0 && time.Now().Before(deadline) {
-			time.Sleep(time.Millisecond)
-		}
-		close(release)
-		wg.Wait()
-		close(results)
-		for snapshot := range results {
-			if snapshot == nil || snapshot.historyHead != 100 {
-				t.Fatalf("a caller got %v, want the shared snapshot", snapshot)
-			}
-		}
-		if got := reads.Load(); got != 1 {
-			t.Fatalf("eight concurrent callers ran %d reads, want 1", got)
+		if _, err := cache.get(t.Context(), time.Hour); err != nil || reads.Load() != 1 {
+			t.Fatalf("the first get did not read (%d reads, %v)", reads.Load(), err)
 		}
 		if _, err := cache.get(t.Context(), time.Hour); err != nil || reads.Load() != 1 {
 			t.Fatalf("a cached snapshot was read again (%d reads, %v)", reads.Load(), err)

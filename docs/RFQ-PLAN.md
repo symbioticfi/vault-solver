@@ -97,7 +97,9 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   the backend order (`GET /orders?orderId=`): `filled`, `cancelled` or `expired` makes the manager drop an
   unsigned fill or cancel a pending one instead of holding the nonce lane until `CancelAt`. The manager reads
   the fill's own receipts before each check and the mined nonce before signing a cancellation, so a `filled`
-  that is our own inclusion wins. `open`, `error`, `unverified` and `insufficient-funds` keep the fill (the
+  that is our own inclusion wins while that inclusion stands. The backend never reverts `filled`, so once a
+  reorg removes our inclusion the manager stops asking (the fill is rebroadcast; `CancelAt` still bounds it)
+  rather than cancel our own fill on its stale status. `open`, `error`, `unverified` and `insufficient-funds` keep the fill (the
   backend may flag an order that still fills), and a failed read or an unrecognized status is an error, which
   keeps it too.
 - **Refusals before signing are expected skips.** A `NotAdmitted` result (the balance guard's

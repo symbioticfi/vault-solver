@@ -87,7 +87,7 @@ and the basis-point and head-lag fields are pointers in `txmanager.Config` becau
 | `gas.fallbackHeadroomBps` | 1000 | Headroom over a plain fallback estimate; at least `headroomBps`, at most 10000. |
 | `gas.estimateTimeoutMs` | 5000 | Bound on one gas estimate, separate from the fee-read budget. |
 | `balance.guard` | true | Cap every attempt at what the balance funds; refuse what cannot stay valid for `minHorizonBlocks`. Both policies. |
-| `balance.referenceGasUnits` | 0 | Fill gas limit quote pricing, the funding gate and the shadow evaluator assume; 0 turns the gate off. A UniswapX or LI.FI lane with `gas:` accounting requires it above 0. |
+| `balance.referenceGasUnits` | 0 | Fill gas limit quote pricing, the funding gate and the shadow evaluator assume; 0 turns the gate off. A UniswapX or LI.FI lane with `gas:` accounting requires it above 0 under `fees.policy: horizon`. |
 | `balance.fundingHysteresisBps` | 2000 | Extra balance over the gate threshold needed to become fundable again (0–10000). |
 | `balance.targetEth` | 0 | Operator funding target, exported for alerts only; 0 leaves it unset. |
 | `shadow.enabled` | true | Score a virtual fill under both policies on every head (§4.5); metrics only, and only when metrics are registered. |
@@ -100,8 +100,12 @@ It also rejects a `fees.tipFloorGwei` below one wei, checked in wei as it is sig
 that truncates to a 0-wei tip would pass a gwei comparison, and every rung above it is at least the floor.
 The strategy's rule that `referenceGasUnits > 0` wherever gas pricing is used is enforced by the solvers
 that price gas, not here, since only they know it: the UniswapX and LI.FI factories refuse a `gas:` block
-while the generic `Manager.ReferenceGasUnits()` is 0, because quote pricing would then size the tip for no
-gas (every block roomy) and the funding gate would stay off. Deploy that key together with the image.
+while the generic `Manager.ReferenceGasUnits()` is 0 and `Manager.QuotePricingUsesReferenceGas()` is true
+(the horizon policy), because horizon quote pricing would then size the tip for no gas (every block roomy).
+Under the legacy policy `MaxFeePerGas` never reads the reference, so an unset one only leaves the funding gate
+off, as it was before the key existed: the factory logs that once and starts. This keeps a legacy `gas:` lane
+starting on this image with no new keys; the key must be set before such a lane moves to `horizon` (D2 before
+D3 below).
 Bounds beyond the strategy's list (fallback headroom and hysteresis at 100%, the reward percentile in
 (0, 100], at most 1024 reward blocks as eth_feeHistory serves) only reject nonsensical values.
 
@@ -202,7 +206,11 @@ waiting out a stale head and reporting a refusal a solver would retry.
    to `latest` or to the telemetry snapshot. The hash is the one go-ethereum computes from the header
    fields it knows (ethclient drops the node's own), so a header field that the go-ethereum version in
    `go.mod` does not hash would make every hash pin miss; three hash-pinned reads in a row that end not
-   found are logged at Error once per streak, and at Info when a hash-pinned read succeeds again.
+   found are logged at Error once per streak, and at Info when a hash-pinned read succeeds again. Likewise
+   three pinned reads in a row (by hash or number) that fail with any other error, or return no balance, are
+   logged at Error once per streak ("balance reads pinned to a block keep failing"), and at Info on the next
+   success: a read endpoint that rejects the EIP-1898 parameter or cannot serve recent state would otherwise
+   stop every send of the lane with only Info refusals. The guard still fails closed.
 3. **Guard.** `aff = floor((balance − value) / gasLimit)`, and the floor
    `lo = fee(minHorizonBlocks + lag, floorTip)` where `fee(H, tip) = grow(pb, H−1) + tip`, `grow` is the
    exact EIP-1559 maximum (`x += max(x/8, 1)` per block, go-ethereum's denominator, deliberately not a
@@ -300,7 +308,7 @@ Solver use, through the generic API only (integration plans have the detail):
 | Solver | Gate |
 |---|---|
 | RFQ | Quotes decline as `lane_unfundable`; a fill cancelled at its deadline is not retried while unfundable; a fill refused as unaffordable fails without being re-armed. |
-| UniswapX | Quotes decline as `lane-unfundable` (`/ready` and `uniswapx_ready` follow); won orders are deferred before any chain read or planning. |
+| UniswapX | Quotes decline as `lane-unfundable` (`/ready` and `uniswapx_ready` follow). Won orders are still attempted, as RFQ's are: the gate's pricing horizon leaves them margin above the guard's floor, and a refusal as unaffordable takes the exponential failure backoff (a deviation from the strategy's §2.10 table, which gates UniswapX fills too). |
 | LI.FI | Standing quotes are withdrawn and republished on the reopening signal. |
 | 3F | None: offers keep `LaneReady`; redeem runs regardless and backs off on `ErrUnaffordable`, ending the backoff when `SignerBalance` rises above the refusal's or the gate reopens. |
 
@@ -412,7 +420,16 @@ read, since an upstream stuck on one head still answers every read. The decision
 is pure and stateless: from the latest attempt's fees and gas limit, the head it was sent at, and one fee history
 it judges every block since, which also covers skipped heads. A block is valid for the attempt when its base fee
 is at most the attempt's fee cap, and has room when `header.gasLimit × (1 − gasUsedRatio) ≥ G`. First match wins,
-and at most one fee-changing send follows a head:
+and at most one fee-changing send follows a head.
+
+Two deviations from strategy §2.7 are known and accepted for now (§10 TODO "Pending evaluation ordering"). The
+tick is independent of the receipt poll, not run "after the receipt sweep": a tick can evaluate head `H` before a
+sweep read `H`'s receipts, so an attempt included in `H` can still be re-estimated there (its revert then runs the
+mined-nonce check, which either finds the nonce used or signs a cancellation that cannot land; the receipt sweep
+still confirms the fill, but `first_attempt_total` may record it `replaced`). And misses count from the newest
+block the attempt's snapshot knew of (`sendSeen`, the strategy's `sendHead`), not from that plus the head lag a
+send accepts (up to `maxHeadLagBlocks`), since a lagging upstream and a missed slot look the same: with lag the
+first evaluation can count a block built before the send as a miss.
 
 | # | Trigger | Action |
 |---|---|---|
@@ -428,7 +445,8 @@ balance pinned to the snapshot's head (`floor((B' − value) / G')`). A cancella
 refusal floor where the strategy writes a constant 3, capped at the global limit and `B'/21000`; the first
 cancellation (deadline, shutdown, `Obsolete`, simulated revert) is priced the same way from a fresh snapshot, or
 with the legacy cached bump when that read fails, so the deadline cancel always fires. When the cap cannot fund the
-12.5% bump of both fields or the tip over `pb`, nothing new is signed: the §4 capped exact rebroadcast runs and
+12.5% bump of both fields, or for a reprice the tip over `pb` (a cancellation is signed with its tip clamped to the
+cap instead, §4.6), nothing new is signed: the §4 capped exact rebroadcast runs and
 "replacement capped" is logged once per lifecycle with reason `cap`, `balance`, `reserved_balance` or
 `balance_unavailable` (a cancellation still falls back to the balance its lifecycle reserved, §4.1). Every send
 and rebroadcast is preceded by the mined-nonce check of §6.
@@ -521,8 +539,8 @@ blocks of the oldest waiting fill onward, under a dozen at the defaults), from w
 would have read at any head of the window is rebuilt. A fill starts only at a consistent snapshot (fee history
 ending at the header) whose lag a send would accept (`fees.maxHeadLagBlocks`); older or repeated heads are
 ignored, and a fill whose blocks a gap in the reads lost (more than a snapshot's six blocks) is dropped unscored.
-Every new head also refreshes `fee_next_base_fee_wei` and `account_required_balance_wei` for `G_ref`, so they
-follow the base fee whether or not the funding gate is on. It runs only with `shadow.enabled` and registered
+Every new head also refreshes `fee_next_base_fee_wei`, and `account_required_balance_wei` for `G_ref` once there
+is one, so they follow the base fee whether or not the funding gate is on. It runs only with `shadow.enabled` and registered
 metrics; the startup line says whether (`shadowEvaluator`).
 
 Goroutine model: `Start` runs one goroutine that owns the evaluator; it reads the manager only through the
@@ -551,7 +569,10 @@ follow the replacement timer. Under `horizon` it is `cancellationFees`: `tip = m
 and `maxFee = max(bump(maxFee), fee(minHorizonBlocks + 1, tip))`, priced from a fresh snapshot (the legacy bump
 when that read fails), then the §4.4 rules without re-estimation. Both are capped at the global `maxFeeGwei` and at
 `balance / 21000`, falling back to the balance the lifecycle already reserved when that read fails (§4.1), so the
-deadline cancel always fires. The guard removes the balance-infeasible cancels (11 of 21 historically), and
+deadline cancel always fires. Unlike a fill reprice, a horizon cancellation whose cap leaves less than its tip over
+the next base fee is still signed, with the tip clamped to the cap (as legacy signs it): refusing it would leave
+the fill, whose cap can stay valid, free to land after `CancelAt` while the base fee is high. Only a cap below the
+12.5% bump of the previous fee cap, which no node accepts as a replacement, falls back to the capped rebroadcast. The guard removes the balance-infeasible cancels (11 of 21 historically), and
 `Obsolete` or a reverting re-estimate cut competitor fills short instead of holding the lane until `CancelAt`.
 
 Not adopted (strategy §3): soft cancellations (a `softCancellations=true` relay URL or Flashbots Protect, which
@@ -578,7 +599,11 @@ Intermediate new variants superseded before a priority read enter the next ordin
 never queue overlapping sweeps; every attempt remains tracked. `NotFound` is a successful RPC
 without a receipt. RPC failure streaks are judged per sweep, not cleared by one hash while another fails.
 Only after such a sweep completes without a valid receipt does the owner evaluate `Obsolete`: a protocol
-terminal status may describe our own successful fill. The callback is not run on intervening poll ticks.
+terminal status may describe our own successful fill. The callback is not run on intervening poll ticks,
+and never again in a lifecycle whose own inclusion a reorg removed (`inclusionReorged`): an off-chain status
+such as RFQ's or UniswapX's `filled` can still describe that removed fill (the RFQ backend never reverts it),
+and acting on it would sign a cancellation that outbids our own rebroadcast fill. `CancelAt`, `pendingTimeout`
+and, under horizon, a reverting re-estimate still end such a lifecycle if the order settled elsewhere.
 Deadline and shutdown cancellation remain independent of receipt progress. This ordering reduces the
 receipt/status race but cannot make separate on-chain reads atomic; exact-hash reconciliation is retained.
 Invalid receipts are separately rejected: receipt/block number must exist, transaction hash must match,
@@ -753,7 +778,8 @@ rows for it: **Lane funding and fee inputs** (balance against the `min`/`quote`/
 target, the next base fee, the funding gate), **First attempts and shadow fee evaluation** (24-hour shadow
 first@3 per policy, shadow outcomes and hourly first@1/2/3, the real first-attempt ratio pooled over 28 days with a
 95% Wilson interval, since PromQL cannot compute the strategy's Clopper–Pearson one, first-attempt outcomes by
-simulation, inclusion delay p50/p99) and **Attempt pricing and repricing** (attempt fees and gas limits, the
+simulation, inclusion delay p50/p99, each rounded up with `ceil()` because `histogram_quantile` interpolates an
+integer delay k in its `(k−1, k]` bucket to a lower value) and **Attempt pricing and repricing** (attempt fees and gas limits, the
 validity-horizon histogram, repricings, rebroadcasts and guard refusals, pending age, gas estimates by mode and
 their latency, spend per confirmed fill and its tip share). Each solver dashboard has a **Fee strategy and lane
 funding** row filtered to its operation label and, for account and shadow series, to the instances running that
@@ -783,11 +809,11 @@ Definitions: [metrics.go](../internal/txmanager/metrics.go),
 | Txmanager | `solver_bot_txmanager_lifecycle_duration_seconds` | `label`, `outcome` | Time from worker admission through broadcast and terminal tracking. It excludes pre-admission nonce-lane wait, so use admission rejections alongside its latency distribution. |
 | Txmanager | `solver_bot_txmanager_phase_duration_seconds` | `label`, `phase`, `outcome` | Time spent in each reached worker phase: `prebroadcast`, `pending`, or `confirming`. Reorgs may return a lifecycle to `pending`; the emitted sample contains the cumulative time spent in that phase. |
 | Txmanager | `solver_bot_txmanager_first_attempt_total` | `label`, `outcome`, `simulation` | Lifecycles that reached the chain: `first` (the first signed attempt landed within 3 blocks of its send head, exact rebroadcasts allowed), `late` (it landed later), `replaced` (a replacement or cancellation was signed before the call landed) or `cancelled` (the cancellation landed). `simulation` is `unknown` until next-block simulation classifies non-first lifecycles (§10). Every outcome starts at zero for each label that reaches the worker, so a pod's first non-first lifecycle is an increase the 28-day ratio counts. |
-| Txmanager | `solver_bot_txmanager_inclusion_delay_blocks` | `label` | Blocks from the head the first attempt was signed at to the block that included the call (1 is the next block); cancellations are excluded. |
+| Txmanager | `solver_bot_txmanager_inclusion_delay_blocks` | `label` | Blocks from the newest block the first attempt's fee snapshot knew of (the header, or its fee history one block ahead) to the block that included the call (1 is the next block); cancellations are excluded. A header that trailed the wall clock (up to `fees.maxHeadLagBlocks`, which pricing charges as lag) can still inflate it by that many blocks, since a missed slot and a lagging upstream look the same. |
 | Txmanager | `solver_bot_txmanager_pending_age_seconds` | `label`, `kind` | Age of the unresolved lifecycle's call (`fill`, since its first send) or cancellation (`cancellation`, since it began), refreshed on receipt polls and removed at inclusion or the end of the lifecycle. |
 | Txmanager | `solver_bot_txmanager_attempt_tip_wei`, `_attempt_max_fee_wei`, `_attempt_gas_limit` | `label`, `kind` | Priority fee, fee cap and gas limit of the latest signed attempt, `fill` (initial send and replacements) or `cancellation`. |
 | Txmanager | `solver_bot_txmanager_attempt_horizon_blocks` | `label` | Histogram of the blocks, from the next one, an initial attempt's fee cap stays valid at the floor tip when the horizon policy or the guard priced it; below 3 with `balanceBound` in the `sent` log means the balance, not the policy, set it. |
-| Txmanager | `solver_bot_txmanager_fee_next_base_fee_wei` | — | Next block's base fee from the latest fee snapshot a send was priced or guarded at, the latest account poll while the funding gate is on, or the shadow evaluator at every new head (§4.5). |
+| Txmanager | `solver_bot_txmanager_fee_next_base_fee_wei` | — | Next block's base fee from the latest fee snapshot a send was priced or guarded at, the latest account poll while the funding gate is on, or the shadow evaluator at every new head (§4.5). Absent until the first such reading, never exported as 0. |
 | Txmanager | `solver_bot_txmanager_gas_estimates_total` | `label`, `mode`, `outcome` | Gas estimates of new attempts and of the horizon pending evaluation's re-estimates (§4.4): `mode` `latest` (legacy, or next-block estimates off), and under horizon `next_block`, `unconfirmed` (at latest before any conclusive capability probe: startup, or only inconclusive probes, which the probe logs itself) or `fallback` (at latest because the probe found the overrides rejected or ignored, a call rejected them, or the backend lacks the capability); `outcome` `ok`, `revert`, `unsupported` (overrides rejected, followed by a fallback), `block_not_found` (the pinned parent block never arrived within the budget; the send was refused as `stale_head`) or `error`. Any `fallback` under horizon means an upstream rejects or ignores block overrides; `unconfirmed` does not. Estimates a send abandoned before they returned (it failed first, or a newer header replaced them during the stale-head wait) are not counted. |
 | Txmanager | `solver_bot_txmanager_repricings_total` | `label`, `reason` | Fee-changing replacements the horizon pending evaluation signed (§4.4): `validity`, `congestion`, `stall`, `gas` (a stall re-estimate above the gas limit) or `fallback` (the timed cached bump after evaluation reads failed for `replacementIntervalMs`). Every reason starts at zero for each label that reaches the worker; repeated `stall` or any `gas` is the strategy's warning (silent drops, same-vault gas shifts). |
 | Txmanager | `solver_bot_txmanager_rebroadcasts_total` | `label`, `reason` | Exact rebroadcasts of signed bytes the endpoint accepted or already knew: `stall`, `reorg`, `uncertain` (an ambiguous broadcast's one retry, both policies) or `capped` (no fundable replacement under the cap, both policies). They sign nothing new, so a lifecycle landing on one still counts as `first_attempt_total{outcome="first"}` when on time. |
@@ -858,6 +884,20 @@ policy, next-block estimate and shadow evaluator ship in it):
   (every 12 s, against every `replacementIntervalMs` under legacy). "already known" no longer logs an Error there
   (§4); if the RPC load matters, pace the capped path, for example once per replacement interval or only when the
   next base fee or the balance changed.
+- **Pending evaluation ordering (decide before horizon serves RFQ).** Two known deviations from strategy §2.7
+  (§4.4): the evaluation tick is not ordered after a receipt sweep that saw its head, and miss counts start at
+  `sendSeen` without the send's head lag. Candidate fixes: run a priority receipt read of the tracked hashes
+  before a re-estimate or a fee-changing send; count a block as a miss only when its timestamp is after the send
+  (needs header timestamps, which `eth_feeHistory` does not return). Measure first how often
+  `first_attempt_total{outcome="replaced"}` follows an inclusion in the evaluated head.
+- **Obsolete "filled" against a lagging read endpoint.** RFQ and UniswapX report `filled` as soon as our own fill
+  lands. If the write endpoint already has that block and the read endpoint's receipt does not yet, the obsolete
+  cancellation's mined-nonce check finds the nonce used, and nonce reconciliation, re-reading receipts on the
+  lagging read endpoint, briefly pauses the lane (Error "transaction manager paused pending nonce reconciliation",
+  `/readyz` NotReady, quotes declined) until a later sweep reads the receipt; the outcome is still Confirmed. The
+  mirror case (write endpoint behind the API) signs a cancellation for a used nonce. LI.FI's on-chain `Obsolete`
+  already had this exposure. Fix by letting the receipt sweep resolve a nonce found used on the `Obsolete` path
+  for a bounded number of polls before marking a conflict.
 - **Shadow gate, then per-lane rollout (deploy D3).** Move a lane to `fees.policy: horizon` once at least 7 days of
   shadow data (§4.5), including an episode with a base fee above 3 gwei, show horizon first@3 at least legacy's
   and at least 99.5% (`shadow_lifecycles_total`: per signer in each solver dashboard's fee-strategy row, pooled in
@@ -891,8 +931,9 @@ policy, next-block estimate and shadow evaluator ship in it):
     must be unique; alert on `count by (address) (account_info) > 1`).
   - D2: `balance.referenceGasUnits` per lane (RFQ 4350000; UniswapX and LI.FI 4400000; 3F omitted),
     `balance.targetEth` (0.1 for lanes that fill, 0.036 for idle RFQ lanes), and `fees.pricingHorizonBlocks: 5`.
-    Exception: a UniswapX or LI.FI chart with `gas:` enabled must ship `referenceGasUnits` in the same deploy as
-    the image, which refuses it otherwise.
+    A UniswapX or LI.FI chart with `gas:` enabled must have `referenceGasUnits` before D3 moves it to
+    `horizon` (the factory refuses a `gas:` lane under `horizon` without it); under `legacy` it starts without
+    the key, with the funding gate off, so the image can go out first like every other lane.
   - D3: `fees.policy: horizon` per lane after the shadow gate above, and a note on the UniswapX chart that
     `replacementIntervalMs: 15000` then only paces the fallback path and sizes the shutdown budget.
 - **Alert rules (alerting repository, not yet named).** Neither repository holds Prometheus rules. From strategy
