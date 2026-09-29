@@ -19,6 +19,8 @@ var _ MappedNullable = &QuoteMetadataDto{}
 
 // QuoteMetadataDto struct for QuoteMetadataDto
 type QuoteMetadataDto struct {
+	// Oracle identities encoded in the open intent transaction
+	Oracle QuoteOracleMetadataDto `json:"oracle"`
 	// Solver address that can fill this quote, rendered in the quote input chain's native address format, or null
 	ExclusiveFor         NullableString `json:"exclusiveFor"`
 	AdditionalProperties map[string]interface{}
@@ -30,8 +32,9 @@ type _QuoteMetadataDto QuoteMetadataDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewQuoteMetadataDto(exclusiveFor NullableString) *QuoteMetadataDto {
+func NewQuoteMetadataDto(oracle QuoteOracleMetadataDto, exclusiveFor NullableString) *QuoteMetadataDto {
 	this := QuoteMetadataDto{}
+	this.Oracle = oracle
 	this.ExclusiveFor = exclusiveFor
 	return &this
 }
@@ -42,6 +45,30 @@ func NewQuoteMetadataDto(exclusiveFor NullableString) *QuoteMetadataDto {
 func NewQuoteMetadataDtoWithDefaults() *QuoteMetadataDto {
 	this := QuoteMetadataDto{}
 	return &this
+}
+
+// GetOracle returns the Oracle field value
+func (o *QuoteMetadataDto) GetOracle() QuoteOracleMetadataDto {
+	if o == nil {
+		var ret QuoteOracleMetadataDto
+		return ret
+	}
+
+	return o.Oracle
+}
+
+// GetOracleOk returns a tuple with the Oracle field value
+// and a boolean to check if the value has been set.
+func (o *QuoteMetadataDto) GetOracleOk() (*QuoteOracleMetadataDto, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.Oracle, true
+}
+
+// SetOracle sets field value
+func (o *QuoteMetadataDto) SetOracle(v QuoteOracleMetadataDto) {
+	o.Oracle = v
 }
 
 // GetExclusiveFor returns the ExclusiveFor field value
@@ -80,6 +107,7 @@ func (o QuoteMetadataDto) MarshalJSON() ([]byte, error) {
 
 func (o QuoteMetadataDto) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	toSerialize["oracle"] = o.Oracle
 	toSerialize["exclusiveFor"] = o.ExclusiveFor.Get()
 
 	for key, value := range o.AdditionalProperties {
@@ -107,6 +135,7 @@ func (o *QuoteMetadataDto) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "oracle")
 		delete(additionalProperties, "exclusiveFor")
 		o.AdditionalProperties = additionalProperties
 	}

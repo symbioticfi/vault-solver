@@ -33,10 +33,18 @@ type OfferDto struct {
 	Asset NullableResolvedAssetDto `json:"asset"`
 	// Vault metadata resolved for the linked request or null
 	Vault NullableResolvedVaultDto `json:"vault"`
-	// Offer amount as a numeric string (uint256). For offers with a broadcast transaction, this reflects the linked transaction amount when present.
+	// Current pending fill amount, otherwise total successful principal, otherwise original offered amount (uint256 string).
 	Amount string `json:"amount"`
 	// Expected yield amount as a numeric string (uint256). Total repayment is `amount + expectedReturn`.
 	ExpectedReturn string `json:"expectedReturn"`
+	// Cumulative successfully funded principal, independent of the latest offer status (uint256 string).
+	FilledAmount string `json:"filledAmount"`
+	// Cumulative yield of successful fills, rounded per fill (uint256 string).
+	FilledExpectedReturn string `json:"filledExpectedReturn"`
+	// Current broadcast or authorized principal; excludes unbroadcast reservations (uint256 string).
+	PendingAmount string `json:"pendingAmount"`
+	// Yield for the current broadcast or authorized fill (uint256 string).
+	PendingExpectedReturn string `json:"pendingExpectedReturn"`
 	// Nonce for replay protection (uint256)
 	Nonce string `json:"nonce"`
 	// Offer expiration timestamp (uint256)
@@ -52,7 +60,7 @@ type _OfferDto OfferDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOfferDto(id float32, auctionId float32, status string, maker string, requestId string, asset NullableResolvedAssetDto, vault NullableResolvedVaultDto, amount string, expectedReturn string, nonce string, expiration string, signature NullableString) *OfferDto {
+func NewOfferDto(id float32, auctionId float32, status string, maker string, requestId string, asset NullableResolvedAssetDto, vault NullableResolvedVaultDto, amount string, expectedReturn string, filledAmount string, filledExpectedReturn string, pendingAmount string, pendingExpectedReturn string, nonce string, expiration string, signature NullableString) *OfferDto {
 	this := OfferDto{}
 	this.Id = id
 	this.AuctionId = auctionId
@@ -63,6 +71,10 @@ func NewOfferDto(id float32, auctionId float32, status string, maker string, req
 	this.Vault = vault
 	this.Amount = amount
 	this.ExpectedReturn = expectedReturn
+	this.FilledAmount = filledAmount
+	this.FilledExpectedReturn = filledExpectedReturn
+	this.PendingAmount = pendingAmount
+	this.PendingExpectedReturn = pendingExpectedReturn
 	this.Nonce = nonce
 	this.Expiration = expiration
 	this.Signature = signature
@@ -297,6 +309,102 @@ func (o *OfferDto) SetExpectedReturn(v string) {
 	o.ExpectedReturn = v
 }
 
+// GetFilledAmount returns the FilledAmount field value
+func (o *OfferDto) GetFilledAmount() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.FilledAmount
+}
+
+// GetFilledAmountOk returns a tuple with the FilledAmount field value
+// and a boolean to check if the value has been set.
+func (o *OfferDto) GetFilledAmountOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.FilledAmount, true
+}
+
+// SetFilledAmount sets field value
+func (o *OfferDto) SetFilledAmount(v string) {
+	o.FilledAmount = v
+}
+
+// GetFilledExpectedReturn returns the FilledExpectedReturn field value
+func (o *OfferDto) GetFilledExpectedReturn() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.FilledExpectedReturn
+}
+
+// GetFilledExpectedReturnOk returns a tuple with the FilledExpectedReturn field value
+// and a boolean to check if the value has been set.
+func (o *OfferDto) GetFilledExpectedReturnOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.FilledExpectedReturn, true
+}
+
+// SetFilledExpectedReturn sets field value
+func (o *OfferDto) SetFilledExpectedReturn(v string) {
+	o.FilledExpectedReturn = v
+}
+
+// GetPendingAmount returns the PendingAmount field value
+func (o *OfferDto) GetPendingAmount() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.PendingAmount
+}
+
+// GetPendingAmountOk returns a tuple with the PendingAmount field value
+// and a boolean to check if the value has been set.
+func (o *OfferDto) GetPendingAmountOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.PendingAmount, true
+}
+
+// SetPendingAmount sets field value
+func (o *OfferDto) SetPendingAmount(v string) {
+	o.PendingAmount = v
+}
+
+// GetPendingExpectedReturn returns the PendingExpectedReturn field value
+func (o *OfferDto) GetPendingExpectedReturn() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.PendingExpectedReturn
+}
+
+// GetPendingExpectedReturnOk returns a tuple with the PendingExpectedReturn field value
+// and a boolean to check if the value has been set.
+func (o *OfferDto) GetPendingExpectedReturnOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.PendingExpectedReturn, true
+}
+
+// SetPendingExpectedReturn sets field value
+func (o *OfferDto) SetPendingExpectedReturn(v string) {
+	o.PendingExpectedReturn = v
+}
+
 // GetNonce returns the Nonce field value
 func (o *OfferDto) GetNonce() string {
 	if o == nil {
@@ -390,6 +498,10 @@ func (o OfferDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["vault"] = o.Vault.Get()
 	toSerialize["amount"] = o.Amount
 	toSerialize["expectedReturn"] = o.ExpectedReturn
+	toSerialize["filledAmount"] = o.FilledAmount
+	toSerialize["filledExpectedReturn"] = o.FilledExpectedReturn
+	toSerialize["pendingAmount"] = o.PendingAmount
+	toSerialize["pendingExpectedReturn"] = o.PendingExpectedReturn
 	toSerialize["nonce"] = o.Nonce
 	toSerialize["expiration"] = o.Expiration
 	toSerialize["signature"] = o.Signature.Get()
@@ -428,6 +540,10 @@ func (o *OfferDto) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "vault")
 		delete(additionalProperties, "amount")
 		delete(additionalProperties, "expectedReturn")
+		delete(additionalProperties, "filledAmount")
+		delete(additionalProperties, "filledExpectedReturn")
+		delete(additionalProperties, "pendingAmount")
+		delete(additionalProperties, "pendingExpectedReturn")
 		delete(additionalProperties, "nonce")
 		delete(additionalProperties, "expiration")
 		delete(additionalProperties, "signature")

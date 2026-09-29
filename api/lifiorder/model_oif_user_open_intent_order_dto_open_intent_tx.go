@@ -111,19 +111,9 @@ func (dst *OifUserOpenIntentOrderDtoOpenIntentTx) UnmarshalJSON(data []byte) err
 	} else { // no match
 		if err != nil {
 			return fmt.Errorf("data failed to match schemas in oneOf(OifUserOpenIntentOrderDtoOpenIntentTx): %v", err)
-		} else {
-			return fmt.Errorf("data failed to match schemas in oneOf(OifUserOpenIntentOrderDtoOpenIntentTx)")
 		}
-		if err != nil {
-			return fmt.Errorf("data failed to match schemas in oneOf(OifUserOpenIntentOrderDtoOpenIntentTx): %v", err)
-		} else {
-			return fmt.Errorf("data failed to match schemas in oneOf(OifUserOpenIntentOrderDtoOpenIntentTx)")
-		}
-		if err != nil {
-			return fmt.Errorf("data failed to match schemas in oneOf(OifUserOpenIntentOrderDtoOpenIntentTx): %v", err)
-		} else {
-			return fmt.Errorf("data failed to match schemas in oneOf(OifUserOpenIntentOrderDtoOpenIntentTx)")
-		}
+
+		return fmt.Errorf("data failed to match schemas in oneOf(OifUserOpenIntentOrderDtoOpenIntentTx)")
 	}
 }
 

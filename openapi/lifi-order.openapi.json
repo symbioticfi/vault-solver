@@ -163,7 +163,8 @@
                     "orderSettledTxHash": null,
                     "refundTxHash": null,
                     "refundedAt": null,
-                    "solverAddress": null
+                    "solverAddress": null,
+                    "integratorKeyHash": null
                   }
                 }
               }
@@ -323,6 +324,18 @@
               "example": "137",
               "type": "string"
             }
+          },
+          {
+            "name": "solverId",
+            "required": false,
+            "in": "query",
+            "description": "ID of the solver whose quote the order was matched to, regardless of which solver filled it",
+            "schema": {
+              "maximum": 2147483647,
+              "exclusiveMinimum": 0,
+              "example": 1,
+              "type": "integer"
+            }
           }
         ],
         "responses": {
@@ -407,7 +420,8 @@
                         "orderSettledTxHash": null,
                         "refundTxHash": null,
                         "refundedAt": null,
-                        "solverAddress": "0xc7dd6725037229bce71aa5f7d1aa72454e316304"
+                        "solverAddress": "0xc7dd6725037229bce71aa5f7d1aa72454e316304",
+                        "integratorKeyHash": null
                       }
                     },
                     {
@@ -463,7 +477,8 @@
                         "orderSettledTxHash": null,
                         "refundTxHash": null,
                         "refundedAt": null,
-                        "solverAddress": null
+                        "solverAddress": null,
+                        "integratorKeyHash": null
                       }
                     }
                   ],
@@ -600,7 +615,8 @@
                     "orderSettledTxHash": null,
                     "refundTxHash": null,
                     "refundedAt": null,
-                    "solverAddress": null
+                    "solverAddress": null,
+                    "integratorKeyHash": "62af8704764faf8ea82fc61ce9c4c3908b6cb97d463a634e9e587d7c885db0ef"
                   }
                 }
               }
@@ -762,7 +778,7 @@
             "name": "fromChain",
             "required": false,
             "in": "query",
-            "description": "Source chain network ID",
+            "description": "Source chain identifier in CAIP-2 format. Existing network IDs are also accepted.",
             "schema": {
               "minLength": 1,
               "example": "11155111",
@@ -773,7 +789,7 @@
             "name": "toChain",
             "required": false,
             "in": "query",
-            "description": "Destination chain network ID",
+            "description": "Destination chain identifier in CAIP-2 format. Existing network IDs are also accepted.",
             "schema": {
               "minLength": 1,
               "example": "84532",
@@ -812,7 +828,7 @@
                 "example": {
                   "data": [
                     {
-                      "id": "90",
+                      "id": "84b35c95746622880f7c25e7c527fcd5ddcdf7014405e6630ed8e405eb21c2d0",
                       "createdAt": "2025-10-20T23:31:56.408Z",
                       "updatedAt": "2025-10-20T23:31:56.408Z",
                       "fromChainNetworkId": "11155111",
@@ -830,13 +846,13 @@
                       "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
                       "fromAssetRecordId": null,
                       "toAssetRecordId": null,
-                      "fromChainRecordId": 11,
-                      "toChainRecordId": 12,
+                      "fromChainRecordId": null,
+                      "toChainRecordId": null,
                       "solverId": 2,
                       "integratorKeyHash": null
                     },
                     {
-                      "id": "91",
+                      "id": "73b35c95746622880f7c25e7c527fcd5ddcdf7014405e6630ed8e405eb21c2d1",
                       "createdAt": "2025-10-20T23:31:56.408Z",
                       "updatedAt": "2025-10-20T23:31:56.408Z",
                       "fromChainNetworkId": "11155111",
@@ -854,13 +870,13 @@
                       "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
                       "fromAssetRecordId": null,
                       "toAssetRecordId": null,
-                      "fromChainRecordId": 11,
-                      "toChainRecordId": 12,
+                      "fromChainRecordId": null,
+                      "toChainRecordId": null,
                       "solverId": 2,
                       "integratorKeyHash": null
                     },
                     {
-                      "id": "92",
+                      "id": "62b35c95746622880f7c25e7c527fcd5ddcdf7014405e6630ed8e405eb21c2d2",
                       "createdAt": "2025-10-20T23:31:56.408Z",
                       "updatedAt": "2025-10-20T23:31:56.408Z",
                       "fromChainNetworkId": "11155111",
@@ -878,13 +894,13 @@
                       "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
                       "fromAssetRecordId": null,
                       "toAssetRecordId": null,
-                      "fromChainRecordId": 11,
-                      "toChainRecordId": 12,
+                      "fromChainRecordId": null,
+                      "toChainRecordId": null,
                       "solverId": 2,
                       "integratorKeyHash": null
                     },
                     {
-                      "id": "93",
+                      "id": "51b35c95746622880f7c25e7c527fcd5ddcdf7014405e6630ed8e405eb21c2d3",
                       "createdAt": "2025-10-20T23:31:56.408Z",
                       "updatedAt": "2025-10-20T23:31:56.408Z",
                       "fromChainNetworkId": "84532",
@@ -902,13 +918,13 @@
                       "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
                       "fromAssetRecordId": null,
                       "toAssetRecordId": null,
-                      "fromChainRecordId": 12,
-                      "toChainRecordId": 11,
+                      "fromChainRecordId": null,
+                      "toChainRecordId": null,
                       "solverId": 2,
                       "integratorKeyHash": null
                     },
                     {
-                      "id": "94",
+                      "id": "40b35c95746622880f7c25e7c527fcd5ddcdf7014405e6630ed8e405eb21c2d4",
                       "createdAt": "2025-10-20T23:31:56.408Z",
                       "updatedAt": "2025-10-20T23:31:56.408Z",
                       "fromChainNetworkId": "84532",
@@ -926,8 +942,8 @@
                       "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
                       "fromAssetRecordId": null,
                       "toAssetRecordId": null,
-                      "fromChainRecordId": 12,
-                      "toChainRecordId": 11,
+                      "fromChainRecordId": null,
+                      "toChainRecordId": null,
                       "solverId": 2,
                       "integratorKeyHash": null
                     }
@@ -1068,6 +1084,7 @@
     },
     "/solver-api/account/unregister": {
       "post": {
+        "description": "Quotes with the account in exclusiveFor may still be accepted for up to 30 seconds after it is removed.",
         "operationId": "SolverApiV0Controller_unregisterSolverAccount",
         "parameters": [],
         "requestBody": {
@@ -1144,6 +1161,384 @@
         ]
       }
     },
+    "/quotes/submit": {
+      "post": {
+        "description": "Submit quotes using CAIP-2 chain identifiers or existing network IDs. CAIP-2 identifiers must refer to a configured chain. Submissions using unregistered legacy network IDs remain accepted.\n    However, for us to actually quote users' intents, the chains need to be enabled by the \"LiFi Intent\" protocol.\n    We periodically update the supported chains, assets, and routes, but if you need a specific chain to be supported, please contact us.",
+        "operationId": "QuoteSubmissionController_submitQuotes",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "description": "Submit or update quotes. Each request can contain up to 50,000 quotes and 100,000 ranges in a JSON body up to 32 MiB after decompression. Split larger inventories between routes. Send every range for a route in the same request because a later submission for that route replaces the earlier submission. To remove a quote, send an empty `ranges` array: `\"ranges\": []`.",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubmitQuotesDto"
+              },
+              "examples": {
+                "submit-quotes": {
+                  "value": {
+                    "quotes": [
+                      {
+                        "fromChain": "11155111",
+                        "toChain": "84532",
+                        "fromAsset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "toAsset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "fromDecimals": 6,
+                        "toDecimals": 6,
+                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                        "expiry": 1816608149,
+                        "ranges": [
+                          {
+                            "minAmount": "300010",
+                            "maxAmount": "8965672",
+                            "quote": "0.000033332222259258",
+                            "fixedCost": "10"
+                          },
+                          {
+                            "minAmount": "8965673",
+                            "maxAmount": "17631335",
+                            "quote": "0.966539042858243881",
+                            "fixedCost": "100"
+                          },
+                          {
+                            "minAmount": "17631336",
+                            "maxAmount": "26297000",
+                            "quote": "0.982984840173200714"
+                          }
+                        ]
+                      },
+                      {
+                        "fromChain": "84532",
+                        "toChain": "11155111",
+                        "fromAsset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "toAsset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "fromDecimals": 6,
+                        "toDecimals": 6,
+                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                        "expiry": 1816608149,
+                        "ranges": [
+                          {
+                            "minAmount": "300010",
+                            "maxAmount": "11120005",
+                            "quote": "0.000033332222259258"
+                          },
+                          {
+                            "minAmount": "11120006",
+                            "maxAmount": "21940001",
+                            "quote": "1.3021597290505059"
+                          },
+                          {
+                            "minAmount": "21940002",
+                            "maxAmount": "32760000",
+                            "quote": "0.985487649454179630"
+                          }
+                        ]
+                      },
+                      {
+                        "fromChain": "84532",
+                        "toChain": "421614",
+                        "fromAsset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "toAsset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "fromDecimals": 6,
+                        "toDecimals": 6,
+                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                        "expiry": 1816608149,
+                        "ranges": [
+                          {
+                            "minAmount": "1000000",
+                            "maxAmount": "100000000",
+                            "quote": "0.5"
+                          }
+                        ]
+                      },
+                      {
+                        "fromChain": "1",
+                        "toChain": "137",
+                        "fromAsset": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
+                        "toAsset": "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
+                        "fromDecimals": 18,
+                        "toDecimals": 6,
+                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                        "expiry": 1816608149,
+                        "ranges": [
+                          {
+                            "minAmount": "10000000000000000",
+                            "maxAmount": "10000000000000000000",
+                            "quote": "3500.0"
+                          }
+                        ]
+                      },
+                      {
+                        "fromChain": "56",
+                        "toChain": "1",
+                        "fromAsset": "0x55d398326f99059fF775485246999027B3197955",
+                        "toAsset": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                        "fromDecimals": 18,
+                        "toDecimals": 6,
+                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                        "expiry": 1816608149,
+                        "ranges": [
+                          {
+                            "minAmount": "1000000000000000000",
+                            "maxAmount": "1000000000000000000000",
+                            "quote": "0.999"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "submit-quotes-solana": {
+                  "summary": "Solana destination with input-chain exclusiveFor",
+                  "value": {
+                    "quotes": [
+                      {
+                        "fromChain": "42161",
+                        "toChain": "1151111081099710",
+                        "fromAsset": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
+                        "toAsset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+                        "fromDecimals": 6,
+                        "toDecimals": 6,
+                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
+                        "expiry": 1816608149,
+                        "ranges": [
+                          {
+                            "minAmount": "1000000",
+                            "maxAmount": "100000000",
+                            "quote": "0.99"
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                },
+                "submit-quotes-per-oracle-costs": {
+                  "summary": "Cross-chain quote with a fixed cost per oracle",
+                  "value": {
+                    "quotes": [
+                      {
+                        "fromChain": "11155111",
+                        "toChain": "84532",
+                        "fromAsset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
+                        "toAsset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                        "fromDecimals": 6,
+                        "toDecimals": 6,
+                        "expiry": 1816608149,
+                        "ranges": [
+                          {
+                            "minAmount": "1000000",
+                            "maxAmount": "1000000000",
+                            "quote": "0.9995",
+                            "oracleCosts": [
+                              {
+                                "inputOracle": "0xa70fE63Dd97e8e0Cb37241ed231FCBca87E99B72",
+                                "outputOracle": "0xa70fE63Dd97e8e0Cb37241ed231FCBca87E99B72",
+                                "fixedCost": "150000"
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Quote submission successful",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmitQuotesResponseDto"
+                },
+                "example": {
+                  "status": "success",
+                  "quotesAdded": 1250
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body or quote validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The API key does not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key is missing, revoked, not active yet, or expired",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "408": {
+            "description": "The request body was not fully received within 15 seconds. Nothing from the request was stored.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body larger than 32 MiB after decompression",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request body is not `application/json`",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The per-solver submission rate limit was exceeded. Nothing from the request was stored. The `Retry-After` header says how many seconds to wait. Overlapping submissions within the limit all run and are ordered by their submission counter.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The service has no capacity for another submission right now, or could not check the submission rate limit. Nothing from the request was stored. Retry after the number of seconds in the `Retry-After` header.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "api-key": []
+          }
+        ],
+        "summary": "Submit quotes",
+        "tags": [
+          "Solver API"
+        ]
+      }
+    },
+    "/api/v1/contracts": {
+      "get": {
+        "description": "Returns the current settler contracts and registered oracle deployments.",
+        "operationId": "ContractsController_getContractsCatalog",
+        "parameters": [
+          {
+            "name": "If-Modified-Since",
+            "in": "header",
+            "description": "Last-Modified value from an earlier response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "description": "ETag from an earlier response.",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The contract catalog.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Caching policy for the catalog response.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Identifies the current catalog response.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Last-Modified": {
+                "description": "When the registered oracle catalog last changed.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContractsCatalogResponseDto"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "The catalog has not changed.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Caching policy for the catalog response.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "ETag": {
+                "description": "Identifies the current catalog response.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "Last-Modified": {
+                "description": "When the registered oracle catalog last changed.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Get contracts",
+        "tags": [
+          "Bridge API"
+        ],
+        "security": []
+      }
+    },
     "/api/v1/solver/register/message": {
       "get": {
         "description": "Generates a unique nonce-based message tied to your solver ID. The message is valid for 24 hours. Sign it with your account and submit to POST /api/v1/solver/register.",
@@ -1189,7 +1584,7 @@
     },
     "/api/v1/solver/register": {
       "post": {
-        "description": "Submit a signed server-issued message to register an account for reputation tracking. Supports EVM ECDSA (EOA), EVM EIP-1271 (smart contract wallet), and Solana ed25519 signatures. The message must have been obtained from GET /api/v1/solver/register/message. Note: the message is single-use and is consumed on the first POST attempt regardless of outcome. If registration fails, call GET /register/message again before retrying.",
+        "description": "Submit a signed server-issued message to register an account for reputation tracking. Supports EVM ECDSA (EOA), EVM EIP-1271 (smart contract wallet), Solana ed25519, Tron TIP-191, and Stellar SEP-53 signatures. Stellar requires an existing account whose original key meets all thresholds on the configured verification network. Permissions are checked at registration, not continuously. The message must have been obtained from GET /api/v1/solver/register/message. Note: the message is single-use and is consumed on the first POST attempt regardless of outcome. If registration fails, call GET /register/message again before retrying.",
         "operationId": "AccountsController_registerSolverAccount",
         "parameters": [],
         "requestBody": {
@@ -1216,6 +1611,15 @@
                     "message": "Register account for solver 1. Nonce: 550e8400-e29b-41d4-a716-446655440000.",
                     "signature": "0x000000000000000000000000a0b1c2d3e4f5061728394a5b6c7d8e9f001122330000000000000000000000000000000000000000000000000000000000000041b9b3c01ce62b1a26b8e7d0a5f4e3c2d1b0a9988776655443322110011223344556778899aabbccddeeff00112233445566778899aabbccddeeff001122334455661c00",
                     "chain": "eip155:8453"
+                  }
+                },
+                "stellar-sep53": {
+                  "summary": "Stellar SEP-53 signature",
+                  "value": {
+                    "account": "GDVEU3DD4KOFECV66VIHWEZOYX4ZKR3WV27L464SIIPOU2IUI3JCZA57",
+                    "message": "Register account for solver 1. Nonce: 550e8400-e29b-41d4-a716-446655440000.",
+                    "signature": "24VoTDupPDKUnrXmoESRg34XVscOVpjRpcjXD0SPwpV2OJrg2PxBPv6H3zjwF91ttMXQZBLoIxoCA11v5CNFBA==",
+                    "chain": "stellar:pubnet"
                   }
                 },
                 "solana-ed25519": {
@@ -1274,6 +1678,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "Account permissions could not be verified",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HttpErrorDto"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -1289,7 +1703,7 @@
     },
     "/api/v1/solver/unregister": {
       "post": {
-        "description": "Removes a registered account. The account is accepted in its native form per chain: EVM hex, Solana base58, Tron T-prefixed base58check or 0x hex. The chain selects how the account is parsed; accounts are keyed by address alone. Only accounts registered to the calling solver can be removed.",
+        "description": "Removes a registered account. The account is accepted in its native form per chain: EVM hex, Solana base58, Tron T-prefixed base58check or 0x hex, Stellar G-address. The chain selects how the account is parsed; accounts are keyed by address alone. Only accounts registered to the calling solver can be removed. Quotes with the account in exclusiveFor may still be accepted for up to 30 seconds after it is removed.",
         "operationId": "AccountsController_unregisterSolverAccount",
         "parameters": [],
         "requestBody": {
@@ -1528,95 +1942,9 @@
         ]
       }
     },
-    "/api/v1/contracts": {
-      "get": {
-        "description": "Returns the current settler contracts and registered oracle deployments.",
-        "operationId": "ContractsController_getContractsCatalog",
-        "parameters": [
-          {
-            "name": "If-Modified-Since",
-            "in": "header",
-            "description": "Last-Modified value from an earlier response.",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "If-None-Match",
-            "in": "header",
-            "description": "ETag from an earlier response.",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The contract catalog.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Caching policy for the catalog response.",
-                "schema": {
-                  "type": "string"
-                }
-              },
-              "ETag": {
-                "description": "Identifies the current catalog response.",
-                "schema": {
-                  "type": "string"
-                }
-              },
-              "Last-Modified": {
-                "description": "When the registered oracle catalog last changed.",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            },
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ContractsCatalogResponseDto"
-                }
-              }
-            }
-          },
-          "304": {
-            "description": "The catalog has not changed.",
-            "headers": {
-              "Cache-Control": {
-                "description": "Caching policy for the catalog response.",
-                "schema": {
-                  "type": "string"
-                }
-              },
-              "ETag": {
-                "description": "Identifies the current catalog response.",
-                "schema": {
-                  "type": "string"
-                }
-              },
-              "Last-Modified": {
-                "description": "When the registered oracle catalog last changed.",
-                "schema": {
-                  "type": "string"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Get contracts",
-        "tags": [
-          "Bridge API"
-        ],
-        "security": []
-      }
-    },
     "/routes": {
       "get": {
-        "description": "Get supported routes by source and destination chain IDs. If none of the parameters are provided, all supported routes will be returned.",
+        "description": "Get supported routes by source and destination chain IDs. If none of the parameters are provided, all supported routes will be returned. Routes on a chain that is not active are not listed.",
         "operationId": "RoutesV0Controller_getSupportedRoutes",
         "parameters": [
           {
@@ -2273,7 +2601,7 @@
     },
     "/api/v1/integrator/routes": {
       "get": {
-        "description": "Discover which routes are currently working on the intent server. Returns all active routes, optionally filtered by source and destination chain (CAIP-2 format).",
+        "description": "Discover which routes are currently working on the intent server. Returns all active routes, optionally filtered by source and destination chain (CAIP-2 format). Routes on a chain that is not active are not listed.",
         "operationId": "RoutesV1Controller_getSupportedRoutes",
         "parameters": [
           {
@@ -2400,248 +2728,6 @@
           "Bridge API v1"
         ],
         "security": []
-      }
-    },
-    "/quotes/submit": {
-      "post": {
-        "description": "We allow solvers to submit quotes on any chain and asset pair.\n    However, for us to actually quote users' intents, the chains need to be enabled by the \"LiFi Intent\" protocol.\n    We periodically update the supported chains, assets, and routes, but if you need a specific chain to be supported, please contact us.",
-        "operationId": "QuoteSubmissionController_submitQuotes",
-        "parameters": [],
-        "requestBody": {
-          "required": true,
-          "description": "Submit or update up to 200K quotes at once. To remove a quote send it with ranges set to empty array eg: `ranges=[]`",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SubmitQuotesDto"
-              },
-              "examples": {
-                "submit-quotes": {
-                  "value": {
-                    "quotes": [
-                      {
-                        "fromChain": "11155111",
-                        "toChain": "84532",
-                        "fromAsset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
-                        "toAsset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-                        "fromDecimals": 6,
-                        "toDecimals": 6,
-                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
-                        "expiry": 1900000000,
-                        "ranges": [
-                          {
-                            "minAmount": "300010",
-                            "maxAmount": "8965672",
-                            "quote": "0.000033332222259258",
-                            "fixedCost": "10"
-                          },
-                          {
-                            "minAmount": "8965673",
-                            "maxAmount": "17631335",
-                            "quote": "0.966539042858243881",
-                            "fixedCost": "100"
-                          },
-                          {
-                            "minAmount": "17631336",
-                            "maxAmount": "26297000",
-                            "quote": "0.982984840173200714"
-                          }
-                        ]
-                      },
-                      {
-                        "fromChain": "84532",
-                        "toChain": "11155111",
-                        "fromAsset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-                        "toAsset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
-                        "fromDecimals": 6,
-                        "toDecimals": 6,
-                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
-                        "expiry": 1900000000,
-                        "ranges": [
-                          {
-                            "minAmount": "300010",
-                            "maxAmount": "11120005",
-                            "quote": "0.000033332222259258"
-                          },
-                          {
-                            "minAmount": "11120006",
-                            "maxAmount": "21940001",
-                            "quote": "1.3021597290505059"
-                          },
-                          {
-                            "minAmount": "21940002",
-                            "maxAmount": "32760000",
-                            "quote": "0.985487649454179630"
-                          }
-                        ]
-                      },
-                      {
-                        "fromChain": "84532",
-                        "toChain": "421614",
-                        "fromAsset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-                        "toAsset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
-                        "fromDecimals": 6,
-                        "toDecimals": 6,
-                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
-                        "expiry": 1977941876,
-                        "ranges": [
-                          {
-                            "minAmount": "1000000",
-                            "maxAmount": "100000000",
-                            "quote": "0.5"
-                          }
-                        ]
-                      },
-                      {
-                        "fromChain": "1",
-                        "toChain": "137",
-                        "fromAsset": "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
-                        "toAsset": "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
-                        "fromDecimals": 18,
-                        "toDecimals": 6,
-                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
-                        "expiry": 1977941876,
-                        "ranges": [
-                          {
-                            "minAmount": "10000000000000000",
-                            "maxAmount": "10000000000000000000",
-                            "quote": "3500.0"
-                          }
-                        ]
-                      },
-                      {
-                        "fromChain": "56",
-                        "toChain": "1",
-                        "fromAsset": "0x55d398326f99059fF775485246999027B3197955",
-                        "toAsset": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-                        "fromDecimals": 18,
-                        "toDecimals": 6,
-                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
-                        "expiry": 1977941876,
-                        "ranges": [
-                          {
-                            "minAmount": "1000000000000000000",
-                            "maxAmount": "1000000000000000000000",
-                            "quote": "0.999"
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                },
-                "submit-quotes-solana": {
-                  "summary": "Solana destination with input-chain exclusiveFor",
-                  "value": {
-                    "quotes": [
-                      {
-                        "fromChain": "42161",
-                        "toChain": "1151111081099710",
-                        "fromAsset": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
-                        "toAsset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-                        "fromDecimals": 6,
-                        "toDecimals": 6,
-                        "exclusiveFor": "0x841F63697cFa0e3B54c4D42b3d679F07F7F2485f",
-                        "expiry": 1900000000,
-                        "ranges": [
-                          {
-                            "minAmount": "1000000",
-                            "maxAmount": "100000000",
-                            "quote": "0.99"
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                },
-                "submit-quotes-per-oracle-costs": {
-                  "summary": "Cross-chain quote with a fixed cost per oracle",
-                  "value": {
-                    "quotes": [
-                      {
-                        "fromChain": "11155111",
-                        "toChain": "84532",
-                        "fromAsset": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
-                        "toAsset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-                        "fromDecimals": 6,
-                        "toDecimals": 6,
-                        "expiry": 1900000000,
-                        "ranges": [
-                          {
-                            "minAmount": "1000000",
-                            "maxAmount": "1000000000",
-                            "quote": "0.9995",
-                            "oracleCosts": [
-                              {
-                                "inputOracle": "0xa70fE63Dd97e8e0Cb37241ed231FCBca87E99B72",
-                                "outputOracle": "0xa70fE63Dd97e8e0Cb37241ed231FCBca87E99B72",
-                                "fixedCost": "150000"
-                              }
-                            ]
-                          }
-                        ]
-                      }
-                    ]
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Quote submission successful",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SubmitQuotesResponseDto"
-                },
-                "example": {
-                  "status": "success",
-                  "quotesAdded": 1250
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid request body or quote validation failed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Missing or invalid API key",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Returned if the per-solver quote submission rate limit was exceeded (with a `Retry-After` header in seconds — retry accordingly), or if the submission could not start within the wait budget because other submissions for the same solver were still in progress (no `Retry-After` — retry with exponential backoff). Overlapping submissions normally wait for their turn and succeed.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "api-key": []
-          }
-        ],
-        "summary": "Submit quotes",
-        "tags": [
-          "Solver API"
-        ]
       }
     },
     "/quote/request": {
@@ -2887,14 +2973,14 @@
                   "summary": "Solana origin → EVM destination",
                   "value": {
                     "user": {
-                      "chain": "solana:1151111081099710",
+                      "chain": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
                       "address": "8YLKoCu7NwqHNS8GzuvA2ibsvLrsg22YMfMDafxh1B15"
                     },
                     "intent": {
                       "intentType": "oif-swap",
                       "inputs": [
                         {
-                          "chain": "solana:1151111081099710",
+                          "chain": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
                           "user": "8YLKoCu7NwqHNS8GzuvA2ibsvLrsg22YMfMDafxh1B15",
                           "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
                           "amount": "1000000"
@@ -2918,14 +3004,14 @@
                   "summary": "Solana origin with a separate fee/rent sponsor",
                   "value": {
                     "user": {
-                      "chain": "solana:1151111081099710",
+                      "chain": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
                       "address": "8YLKoCu7NwqHNS8GzuvA2ibsvLrsg22YMfMDafxh1B15"
                     },
                     "intent": {
                       "intentType": "oif-swap",
                       "inputs": [
                         {
-                          "chain": "solana:1151111081099710",
+                          "chain": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
                           "user": "8YLKoCu7NwqHNS8GzuvA2ibsvLrsg22YMfMDafxh1B15",
                           "asset": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
                           "amount": "1000000"
@@ -2941,7 +3027,7 @@
                       "swapType": "exact-input",
                       "metadata": {
                         "sponsor": {
-                          "chain": "solana:1151111081099710",
+                          "chain": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
                           "address": "81qeg9TPZ7eYkz8TdRSsMmedbEJ6xPC3Y1a8hgfy1PCn"
                         }
                       }
@@ -2971,7 +3057,7 @@
                       ],
                       "outputs": [
                         {
-                          "chain": "solana:1151111081099710",
+                          "chain": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
                           "receiver": "8YLKoCu7NwqHNS8GzuvA2ibsvLrsg22YMfMDafxh1B15",
                           "asset": "11111111111111111111111111111111"
                         }
@@ -3364,7 +3450,7 @@
           },
           "quote": {
             "type": "string",
-            "description": "Quote rate",
+            "description": "Quote rate as a plain decimal string, never in exponent notation",
             "example": "0.98548764945417963"
           },
           "inputAmount": {
@@ -3603,8 +3689,11 @@
             "example": "0x742d35Cc6634C0532925a3b8D0C0E1C4C5C5C5C5"
           },
           "integratorKeyHash": {
-            "type": "string",
-            "description": "Integrator key hash identifying the integrator this order belongs to",
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Integrator key hash identifying the integrator this order belongs to. Null when the order was not quoted through an integrator key.",
             "example": "62af8704764faf8ea82fc61ce9c4c3908b6cb97d463a634e9e587d7c885db0ef"
           }
         },
@@ -3629,7 +3718,8 @@
           "settledAt",
           "refundedAt",
           "lastCompactDepositBlockNumber",
-          "quoteId"
+          "quoteId",
+          "integratorKeyHash"
         ]
       },
       "SubmitOrderResponseDto": {
@@ -3801,12 +3891,13 @@
           },
           "chainType": {
             "type": "string",
-            "description": "Type of blockchain (EVM, SVM, TVM)",
+            "description": "Blockchain type: EVM (Ethereum-compatible), SVM (Solana), TVM (Tron), or STL (Stellar)",
             "example": "EVM",
             "enum": [
               "EVM",
               "SVM",
-              "TVM"
+              "TVM",
+              "STL"
             ]
           }
         },
@@ -3874,17 +3965,17 @@
         "properties": {
           "id": {
             "type": "string",
-            "description": "Unique identifier for the solver quote",
-            "example": "84"
+            "description": "Stable identifier derived from the quote set route, quote, and range",
+            "example": "84b35c95746622880f7c25e7c527fcd5ddcdf7014405e6630ed8e405eb21c2d0"
           },
           "createdAt": {
             "type": "string",
-            "description": "Creation timestamp",
+            "description": "Timestamp when the containing quote set was received",
             "example": "2025-10-16T12:49:51.599Z"
           },
           "updatedAt": {
             "type": "string",
-            "description": "Last update timestamp",
+            "description": "Timestamp when the containing quote set was received",
             "example": "2025-10-16T12:49:51.599Z"
           },
           "fromChainNetworkId": {
@@ -3960,32 +4051,32 @@
               "number",
               "null"
             ],
-            "description": "Source asset record ID",
-            "example": 7
+            "description": "Source asset record ID. Always null for quote quoteSet data",
+            "example": null
           },
           "toAssetRecordId": {
             "type": [
               "number",
               "null"
             ],
-            "description": "Destination asset record ID",
-            "example": 8
+            "description": "Destination asset record ID. Always null for quote quoteSet data",
+            "example": null
           },
           "fromChainRecordId": {
             "type": [
               "number",
               "null"
             ],
-            "description": "Source chain record ID",
-            "example": 11
+            "description": "Source chain record ID. Always null for quote quoteSet data",
+            "example": null
           },
           "toChainRecordId": {
             "type": [
               "number",
               "null"
             ],
-            "description": "Destination chain record ID",
-            "example": 12
+            "description": "Destination chain record ID. Always null for quote quoteSet data",
+            "example": null
           },
           "solverId": {
             "type": "number",
@@ -4115,260 +4206,189 @@
           "message"
         ]
       },
-      "RegistrationMessageDataDto": {
+      "SubmitQuotesDto": {
         "type": "object",
         "properties": {
-          "message": {
-            "type": "string",
-            "description": "Server-issued message to sign for account registration",
-            "example": "Register account for solver 1. Nonce: 550e8400-e29b-41d4-a716-446655440000."
-          }
-        },
-        "required": [
-          "message"
-        ]
-      },
-      "GetRegistrationMessageResponseDto": {
-        "type": "object",
-        "properties": {
-          "data": {
-            "description": "Registration message payload",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/RegistrationMessageDataDto"
-              }
-            ]
-          }
-        },
-        "required": [
-          "data"
-        ]
-      },
-      "RegisterAccountV1Dto": {
-        "type": "object",
-        "properties": {
-          "message": {
-            "type": "string",
-            "minLength": 1,
-            "description": "The server-issued registration message",
-            "example": "Register account for solver 1. Nonce: 550e8400-e29b-41d4-a716-446655440000."
-          },
-          "signature": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Signature of the message. EVM: hex-encoded ECDSA or EIP-1271 signature. Solana: base58-encoded ed25519 signature.",
-            "example": "0xdcc30b1938b29dabebd6fe4d1dc675448d6c9540a0a97a11fa20d356794020a07c175b41e6a560f6828ae156bb2ef95518efdf318b72fed2cd920d92f65e95f21b"
-          },
-          "account": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Account address. EVM: hex20 EOA or hex32 bytes32 (last 20 bytes are extracted). Solana: base58 ed25519 public key (on-curve, not a PDA). Must be unique across all solvers.",
-            "example": "0x6fb2a3FDCE5780C65d01997b2d5F6a8851D7858f"
-          },
-          "chain": {
-            "type": "string",
-            "minLength": 1,
-            "description": "CAIP-2 chain identifier for the account. Supported chains: GET /chains/supported.",
-            "example": "eip155:1"
-          }
-        },
-        "required": [
-          "message",
-          "signature",
-          "account",
-          "chain"
-        ]
-      },
-      "RegisterAccountV1ResponseDto": {
-        "type": "object",
-        "properties": {
-          "success": {
-            "type": "boolean",
-            "description": "Indicates if registration was successful",
-            "example": true
-          }
-        },
-        "required": [
-          "success"
-        ]
-      },
-      "UnregisterAccountV1Dto": {
-        "type": "object",
-        "properties": {
-          "account": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Account address. EVM: hex20 EOA or hex32 bytes32 (last 20 bytes are extracted). Solana: base58 ed25519 public key. Tron: T-prefixed base58check or 0x hex.",
-            "example": "0x6fb2a3FDCE5780C65d01997b2d5F6a8851D7858f"
-          },
-          "chain": {
-            "type": "string",
-            "minLength": 1,
-            "description": "CAIP-2 chain identifier. Selects how the account is parsed; accounts are keyed by address alone.",
-            "example": "eip155:1"
-          }
-        },
-        "required": [
-          "account",
-          "chain"
-        ]
-      },
-      "UnregisterAccountV1ResponseDto": {
-        "type": "object",
-        "properties": {
-          "success": {
-            "type": "boolean",
-            "description": "Indicates if unregistration was successful",
-            "example": true
-          }
-        },
-        "required": [
-          "success"
-        ]
-      },
-      "ChainAddressDto": {
-        "type": "object",
-        "properties": {
-          "chain": {
-            "type": "string",
-            "description": "CAIP-2 chain identifier.",
-            "example": "eip155:1"
-          },
-          "address": {
-            "type": "string",
-            "description": "Contract address in the native format of its chain.",
-            "example": "0x008c3800f3ad9b3b662d002e90cc00000000ee17"
-          }
-        },
-        "required": [
-          "chain",
-          "address"
-        ]
-      },
-      "ContractsByKindDto": {
-        "type": "object",
-        "properties": {
-          "oracle": {
-            "description": "Deprecated. This field is always an empty array.",
-            "deprecated": true,
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ChainAddressDto"
-            }
-          },
-          "inputSettler": {
-            "description": "Input settler contracts registered by the solver",
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ChainAddressDto"
-            }
-          },
-          "outputSettler": {
-            "description": "Output settler contracts registered by the solver",
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ChainAddressDto"
-            }
-          }
-        },
-        "required": [
-          "oracle",
-          "inputSettler",
-          "outputSettler"
-        ]
-      },
-      "SupportedContractsResponseDto": {
-        "type": "object",
-        "properties": {
-          "data": {
-            "$ref": "#/components/schemas/ContractsByKindDto"
-          }
-        },
-        "required": [
-          "data"
-        ]
-      },
-      "PutSupportedContractsDto": {
-        "type": "object",
-        "properties": {
-          "oracle": {
-            "description": "Deprecated and ignored. Use `oracleCosts` when submitting quotes.",
-            "deprecated": true,
-            "maxItems": 1000,
+          "quotes": {
+            "maxItems": 50000,
             "type": "array",
             "items": {
               "type": "object",
               "properties": {
-                "chain": {
+                "fromChain": {
                   "type": "string",
                   "minLength": 1,
-                  "description": "CAIP-2 chain identifier, e.g. \"eip155:1\"",
-                  "example": "eip155:1"
+                  "description": "Source chain identifier in CAIP-2 format. Existing network IDs are also accepted.",
+                  "example": "84532"
                 },
-                "address": {
+                "toChain": {
                   "type": "string",
                   "minLength": 1,
-                  "description": "Native contract address for the chain",
-                  "example": "0x008c3800f3ad9b3b662d002e90cc00000000ee17"
+                  "description": "Destination chain identifier in CAIP-2 format. Existing network IDs are also accepted.",
+                  "example": "11155420"
+                },
+                "fromAsset": {
+                  "description": "Source asset identifier. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars. Bitcoin: slip44:0 or slip44:1.",
+                  "example": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+                  "type": "string"
+                },
+                "toAsset": {
+                  "description": "Destination asset identifier. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars. Bitcoin: slip44:0 or slip44:1.",
+                  "example": "0x5fd84259d66Cd46123540766Be93DFE6D43130D8",
+                  "type": "string"
+                },
+                "fromDecimals": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 36,
+                  "description": "Decimals of the source token, 0 to 36",
+                  "example": 6
+                },
+                "toDecimals": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 36,
+                  "description": "Decimals of the destination token, 0 to 36",
+                  "example": 6
+                },
+                "ranges": {
+                  "maxItems": 1000,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "minAmount": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^(0|[1-9]\\d{0,77})$",
+                        "description": "Lower bound of the input amount this range applies to. Denominated in `fromAsset` raw on-chain base units (integer scaled by `fromDecimals`). Inclusive — compared directly against the user's `fromAmount`. At most 78 digits.",
+                        "example": "1000000"
+                      },
+                      "maxAmount": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^(0|[1-9]\\d{0,77})$",
+                        "description": "Upper bound of the input amount this range applies to. Denominated in `fromAsset` raw on-chain base units (integer scaled by `fromDecimals`). Inclusive — compared directly against the user's `fromAmount`. At most 78 digits.",
+                        "example": "1000000000"
+                      },
+                      "quote": {
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^(?=.*[1-9])(0|[1-9]\\d{0,35})(\\.\\d{1,36})?$",
+                        "description": "Exchange rate for this range — write it like a normal price: `toAsset` per 1 `fromAsset` (e.g. `0.999` = 0.999 USDC per 1 USDT). Do **not** scale for `fromDecimals`/`toDecimals`; the API does that for you.\n\nFull formula:\n\n    outputBase = floor( (inputBase / 10^fromDecimals) * quote * 10^toDecimals )\n\nExample (USDT → USDC, 18 → 6 decimals): for `inputBase = 10^18` (1 USDT) at `quote = 0.999`, the user receives `outputBase = 999000` (0.999 USDC).\n\nMust be greater than zero, with at most 36 integer and 36 fractional digits.",
+                        "example": "0.99"
+                      },
+                      "fixedCost": {
+                        "description": "The fixed cost to add to the quote in `fromAsset` raw base units. On cross-chain quotes it prices the default oracle and only applies when `oracleCosts` is omitted. On same-chain quotes it covers all local settlement costs.",
+                        "example": "10",
+                        "type": "string",
+                        "minLength": 1,
+                        "pattern": "^(0|[1-9]\\d{0,77})$"
+                      },
+                      "oracleCosts": {
+                        "description": "Fixed costs for the oracle pairs supported by this quote range. Each entry identifies one pair by its contracts on `fromChain` and `toChain`, and gives the total cost in `fromAsset` raw base units. At most 20 entries per range. Cross-chain quotes only: use `fixedCost` for same-chain swaps. When both fields are present, `oracleCosts` takes precedence.",
+                        "example": [
+                          {
+                            "inputOracle": "0xa70fE63Dd97e8e0Cb37241ed231FCBca87E99B72",
+                            "outputOracle": "0xa70fE63Dd97e8e0Cb37241ed231FCBca87E99B72",
+                            "fixedCost": "150000"
+                          }
+                        ],
+                        "minItems": 1,
+                        "maxItems": 20,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "inputOracle": {
+                              "description": "Oracle contract address on `fromChain`. Together with `outputOracle`, it identifies the pair priced by this entry. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars.",
+                              "example": "0xa70fE63Dd97e8e0Cb37241ed231FCBca87E99B72",
+                              "type": "string"
+                            },
+                            "outputOracle": {
+                              "description": "Oracle contract address on `toChain`. Together with `inputOracle`, it identifies the pair priced by this entry. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars.",
+                              "example": "0xa70fE63Dd97e8e0Cb37241ed231FCBca87E99B72",
+                              "type": "string"
+                            },
+                            "fixedCost": {
+                              "type": "string",
+                              "minLength": 1,
+                              "pattern": "^(0|[1-9]\\d{0,77})$",
+                              "description": "Total fixed cost for this oracle pair in fromAsset raw base units",
+                              "example": "150000"
+                            }
+                          },
+                          "required": [
+                            "inputOracle",
+                            "outputOracle",
+                            "fixedCost"
+                          ]
+                        }
+                      }
+                    },
+                    "required": [
+                      "minAmount",
+                      "maxAmount",
+                      "quote"
+                    ]
+                  },
+                  "description": "Array of quote ranges with different price tiers. At most 1000 ranges per quote."
+                },
+                "expiry": {
+                  "type": "integer",
+                  "minimum": 1000000000,
+                  "maximum": 4102444800,
+                  "description": "Expiry timestamp in Unix seconds. Quotes that have already expired on receipt are skipped.",
+                  "example": 1900000000
+                },
+                "exclusiveFor": {
+                  "description": "Exclusive solver address allowed to fill this quote. The address format follows fromChain. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars.",
+                  "example": "0x1234567890123456789012345678901234567890",
+                  "type": "string"
+                },
+                "integratorKeyHash": {
+                  "description": "Integrator key hash this quote is tagged for. If provided, the quote will only be served to the specific integrator. If omitted, the quote is treated as an open-market quote, served only to requests that carry no X-Integrator-Key header.",
+                  "example": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
+                  "type": "string",
+                  "pattern": "^[a-f0-9]{64}$"
                 }
               },
               "required": [
-                "chain",
-                "address"
+                "fromChain",
+                "toChain",
+                "fromAsset",
+                "toAsset",
+                "fromDecimals",
+                "toDecimals",
+                "ranges",
+                "expiry"
               ]
-            }
-          },
-          "inputSettler": {
-            "maxItems": 1000,
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "chain": {
-                  "type": "string",
-                  "minLength": 1,
-                  "description": "CAIP-2 chain identifier, e.g. \"eip155:1\"",
-                  "example": "eip155:1"
-                },
-                "address": {
-                  "type": "string",
-                  "minLength": 1,
-                  "description": "Native contract address for the chain",
-                  "example": "0x008c3800f3ad9b3b662d002e90cc00000000ee17"
-                }
-              },
-              "required": [
-                "chain",
-                "address"
-              ]
-            }
-          },
-          "outputSettler": {
-            "maxItems": 1000,
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "chain": {
-                  "type": "string",
-                  "minLength": 1,
-                  "description": "CAIP-2 chain identifier, e.g. \"eip155:1\"",
-                  "example": "eip155:1"
-                },
-                "address": {
-                  "type": "string",
-                  "minLength": 1,
-                  "description": "Native contract address for the chain",
-                  "example": "0x008c3800f3ad9b3b662d002e90cc00000000ee17"
-                }
-              },
-              "required": [
-                "chain",
-                "address"
-              ]
-            }
+            },
+            "description": "Quotes to submit. A request can contain at most 50,000 quotes and 100,000 ranges across all quotes."
           }
-        }
+        },
+        "required": [
+          "quotes"
+        ]
+      },
+      "SubmitQuotesResponseDto": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "description": "Status of the quote submission",
+            "example": "success"
+          },
+          "quotesAdded": {
+            "type": "number",
+            "description": "Number of deduplicated quote ranges accepted by the submission. Identical resubmissions count as accepted even when no rows change.",
+            "example": 1250
+          }
+        },
+        "required": [
+          "status",
+          "quotesAdded"
+        ]
       },
       "CatalogInputSettlerDto": {
         "type": "object",
@@ -4397,6 +4417,25 @@
           "chain",
           "address",
           "type"
+        ]
+      },
+      "ChainAddressDto": {
+        "type": "object",
+        "properties": {
+          "chain": {
+            "type": "string",
+            "description": "CAIP-2 chain identifier.",
+            "example": "eip155:1"
+          },
+          "address": {
+            "type": "string",
+            "description": "Contract address in the native format of its chain.",
+            "example": "0x008c3800f3ad9b3b662d002e90cc00000000ee17"
+          }
+        },
+        "required": [
+          "chain",
+          "address"
         ]
       },
       "CatalogOracleContractDto": {
@@ -4538,16 +4577,254 @@
           "oracles"
         ]
       },
+      "RegistrationMessageDataDto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "description": "Server-issued message to sign for account registration",
+            "example": "Register account for solver 1. Nonce: 550e8400-e29b-41d4-a716-446655440000."
+          }
+        },
+        "required": [
+          "message"
+        ]
+      },
+      "GetRegistrationMessageResponseDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "description": "Registration message payload",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RegistrationMessageDataDto"
+              }
+            ]
+          }
+        },
+        "required": [
+          "data"
+        ]
+      },
+      "RegisterAccountV1Dto": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The server-issued registration message",
+            "example": "Register account for solver 1. Nonce: 550e8400-e29b-41d4-a716-446655440000."
+          },
+          "signature": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Signature of the message. EVM: hex-encoded ECDSA or EIP-1271 signature. Solana: base58-encoded ed25519 signature. Tron: hex-encoded TIP-191 signature. Stellar: base64-encoded SEP-53 signature.",
+            "example": "0xdcc30b1938b29dabebd6fe4d1dc675448d6c9540a0a97a11fa20d356794020a07c175b41e6a560f6828ae156bb2ef95518efdf318b72fed2cd920d92f65e95f21b"
+          },
+          "account": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Account address. EVM: hex20 EOA or hex32 bytes32 (last 20 bytes are extracted). Solana: base58 ed25519 public key (on-curve, not a PDA). Tron: T-prefixed base58check or 0x hex. Stellar: G-address. Must be unique across all solvers.",
+            "example": "0x6fb2a3FDCE5780C65d01997b2d5F6a8851D7858f"
+          },
+          "chain": {
+            "type": "string",
+            "minLength": 1,
+            "description": "CAIP-2 chain identifier for the account. Stellar registration uses the configured verification network. Other supported chains: GET /chains/supported.",
+            "example": "eip155:1"
+          }
+        },
+        "required": [
+          "message",
+          "signature",
+          "account",
+          "chain"
+        ]
+      },
+      "RegisterAccountV1ResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates if registration was successful",
+            "example": true
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "UnregisterAccountV1Dto": {
+        "type": "object",
+        "properties": {
+          "account": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Account address. EVM: hex20 EOA or hex32 bytes32 (last 20 bytes are extracted). Solana: base58 ed25519 public key. Tron: T-prefixed base58check or 0x hex. Stellar: G-address.",
+            "example": "0x6fb2a3FDCE5780C65d01997b2d5F6a8851D7858f"
+          },
+          "chain": {
+            "type": "string",
+            "minLength": 1,
+            "description": "CAIP-2 chain identifier. Selects how the account is parsed; accounts are keyed by address alone.",
+            "example": "eip155:1"
+          }
+        },
+        "required": [
+          "account",
+          "chain"
+        ]
+      },
+      "UnregisterAccountV1ResponseDto": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "Indicates if unregistration was successful",
+            "example": true
+          }
+        },
+        "required": [
+          "success"
+        ]
+      },
+      "ContractsByKindDto": {
+        "type": "object",
+        "properties": {
+          "oracle": {
+            "description": "Deprecated. This field is always an empty array.",
+            "deprecated": true,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChainAddressDto"
+            }
+          },
+          "inputSettler": {
+            "description": "Input settler contracts registered by the solver",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChainAddressDto"
+            }
+          },
+          "outputSettler": {
+            "description": "Output settler contracts registered by the solver",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChainAddressDto"
+            }
+          }
+        },
+        "required": [
+          "oracle",
+          "inputSettler",
+          "outputSettler"
+        ]
+      },
+      "SupportedContractsResponseDto": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "$ref": "#/components/schemas/ContractsByKindDto"
+          }
+        },
+        "required": [
+          "data"
+        ]
+      },
+      "PutSupportedContractsDto": {
+        "type": "object",
+        "properties": {
+          "oracle": {
+            "description": "Deprecated and ignored. Use `oracleCosts` when submitting quotes.",
+            "deprecated": true,
+            "maxItems": 1000,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "chain": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "CAIP-2 chain identifier, e.g. \"eip155:1\"",
+                  "example": "eip155:1"
+                },
+                "address": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Native contract address for the chain",
+                  "example": "0x008c3800f3ad9b3b662d002e90cc00000000ee17"
+                }
+              },
+              "required": [
+                "chain",
+                "address"
+              ]
+            }
+          },
+          "inputSettler": {
+            "maxItems": 1000,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "chain": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "CAIP-2 chain identifier, e.g. \"eip155:1\"",
+                  "example": "eip155:1"
+                },
+                "address": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Native contract address for the chain",
+                  "example": "0x008c3800f3ad9b3b662d002e90cc00000000ee17"
+                }
+              },
+              "required": [
+                "chain",
+                "address"
+              ]
+            }
+          },
+          "outputSettler": {
+            "maxItems": 1000,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "chain": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "CAIP-2 chain identifier, e.g. \"eip155:1\"",
+                  "example": "eip155:1"
+                },
+                "address": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Native contract address for the chain",
+                  "example": "0x008c3800f3ad9b3b662d002e90cc00000000ee17"
+                }
+              },
+              "required": [
+                "chain",
+                "address"
+              ]
+            }
+          }
+        }
+      },
       "RouteChainInfoDto": {
         "type": "object",
         "properties": {
           "chainType": {
             "type": "string",
-            "description": "Type of blockchain (EVM, Bitcoin, etc.)",
+            "description": "Blockchain type: EVM (Ethereum-compatible), SVM (Solana), TVM (Tron), or STL (Stellar)",
             "example": "EVM",
             "enum": [
               "EVM",
-              "SVM"
+              "SVM",
+              "TVM",
+              "STL"
             ]
           },
           "chainId": {
@@ -4865,188 +5142,6 @@
         },
         "required": [
           "routes"
-        ]
-      },
-      "SubmitQuotesDto": {
-        "type": "object",
-        "properties": {
-          "quotes": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "fromChain": {
-                  "type": "string",
-                  "minLength": 1,
-                  "description": "Source chain network ID",
-                  "example": "84532"
-                },
-                "toChain": {
-                  "type": "string",
-                  "minLength": 1,
-                  "description": "Destination chain network ID",
-                  "example": "11155420"
-                },
-                "fromAsset": {
-                  "description": "Source asset identifier. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars. Bitcoin: slip44:0 or slip44:1.",
-                  "example": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-                  "type": "string"
-                },
-                "toAsset": {
-                  "description": "Destination asset identifier. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars. Bitcoin: slip44:0 or slip44:1.",
-                  "example": "0x5fd84259d66Cd46123540766Be93DFE6D43130D8",
-                  "type": "string"
-                },
-                "fromDecimals": {
-                  "type": "integer",
-                  "minimum": -9007199254740991,
-                  "maximum": 9007199254740991,
-                  "description": "Decimals of the source token",
-                  "example": 6
-                },
-                "toDecimals": {
-                  "type": "integer",
-                  "minimum": -9007199254740991,
-                  "maximum": 9007199254740991,
-                  "description": "Decimals of the destination token",
-                  "example": 6
-                },
-                "ranges": {
-                  "maxItems": 1000,
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "minAmount": {
-                        "type": "string",
-                        "minLength": 1,
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "description": "Lower bound of the input amount this range applies to. Denominated in `fromAsset` raw on-chain base units (integer scaled by `fromDecimals`). Inclusive — compared directly against the user's `fromAmount`.",
-                        "example": "1000000"
-                      },
-                      "maxAmount": {
-                        "type": "string",
-                        "minLength": 1,
-                        "pattern": "^(0|[1-9][0-9]*)$",
-                        "description": "Upper bound of the input amount this range applies to. Denominated in `fromAsset` raw on-chain base units (integer scaled by `fromDecimals`). Inclusive — compared directly against the user's `fromAmount`.",
-                        "example": "1000000000"
-                      },
-                      "quote": {
-                        "type": "string",
-                        "minLength": 1,
-                        "pattern": "^(0|[1-9]\\d*)(\\.\\d+)?$",
-                        "description": "Exchange rate for this range — write it like a normal price: `toAsset` per 1 `fromAsset` (e.g. `0.999` = 0.999 USDC per 1 USDT). Do **not** scale for `fromDecimals`/`toDecimals`; the API does that for you.\n\nFull formula:\n\n    outputBase = floor( (inputBase / 10^fromDecimals) * quote * 10^toDecimals )\n\nExample (USDT → USDC, 18 → 6 decimals): for `inputBase = 10^18` (1 USDT) at `quote = 0.999`, the user receives `outputBase = 999000` (0.999 USDC).",
-                        "example": "0.99"
-                      },
-                      "fixedCost": {
-                        "description": "The fixed cost to add to the quote in `fromAsset` raw base units. On cross-chain quotes it prices the default oracle and only applies when `oracleCosts` is omitted. On same-chain quotes it covers all local settlement costs.",
-                        "example": "10",
-                        "type": "string",
-                        "minLength": 1,
-                        "pattern": "^(0|[1-9][0-9]*)$"
-                      },
-                      "oracleCosts": {
-                        "description": "Fixed costs for the oracle pairs supported by this quote range. Each entry identifies one pair by its contracts on `fromChain` and `toChain`, and gives the total cost in `fromAsset` raw base units. Cross-chain quotes only: use `fixedCost` for same-chain swaps. When both fields are present, `oracleCosts` takes precedence.",
-                        "example": [
-                          {
-                            "inputOracle": "0xa70fE63Dd97e8e0Cb37241ed231FCBca87E99B72",
-                            "outputOracle": "0xa70fE63Dd97e8e0Cb37241ed231FCBca87E99B72",
-                            "fixedCost": "150000"
-                          }
-                        ],
-                        "minItems": 1,
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "inputOracle": {
-                              "description": "Oracle contract address on `fromChain`. Together with `outputOracle`, it identifies the pair priced by this entry. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars.",
-                              "example": "0xa70fE63Dd97e8e0Cb37241ed231FCBca87E99B72",
-                              "type": "string"
-                            },
-                            "outputOracle": {
-                              "description": "Oracle contract address on `toChain`. Together with `inputOracle`, it identifies the pair priced by this entry. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars.",
-                              "example": "0xa70fE63Dd97e8e0Cb37241ed231FCBca87E99B72",
-                              "type": "string"
-                            },
-                            "fixedCost": {
-                              "type": "string",
-                              "minLength": 1,
-                              "pattern": "^(0|[1-9][0-9]*)$",
-                              "description": "Total fixed cost for this oracle pair in fromAsset raw base units",
-                              "example": "150000"
-                            }
-                          },
-                          "required": [
-                            "inputOracle",
-                            "outputOracle",
-                            "fixedCost"
-                          ]
-                        }
-                      }
-                    },
-                    "required": [
-                      "minAmount",
-                      "maxAmount",
-                      "quote"
-                    ]
-                  },
-                  "description": "Array of quote ranges with different price tiers. At most 1000 ranges per quote."
-                },
-                "expiry": {
-                  "type": "integer",
-                  "minimum": 1000000000,
-                  "maximum": 4102444800,
-                  "description": "Expiry timestamp of the quote in seconds",
-                  "example": 1900000000
-                },
-                "exclusiveFor": {
-                  "description": "Exclusive solver address allowed to fill this quote. The address format follows fromChain. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars.",
-                  "example": "0x1234567890123456789012345678901234567890",
-                  "type": "string"
-                },
-                "integratorKeyHash": {
-                  "description": "Integrator key hash this quote is tagged for. If provided, the quote will only be served to the specific integrator. If omitted, the quote is treated as an open-market quote, served only to requests that carry no X-Integrator-Key header.",
-                  "example": "a1b2c3d4e5f60000000000000000000000000000000000000000000000000000",
-                  "type": "string",
-                  "pattern": "^[a-f0-9]{64}$"
-                }
-              },
-              "required": [
-                "fromChain",
-                "toChain",
-                "fromAsset",
-                "toAsset",
-                "fromDecimals",
-                "toDecimals",
-                "ranges",
-                "expiry"
-              ]
-            },
-            "description": "Array of quotes to submit"
-          }
-        },
-        "required": [
-          "quotes"
-        ]
-      },
-      "SubmitQuotesResponseDto": {
-        "type": "object",
-        "properties": {
-          "status": {
-            "type": "string",
-            "description": "Status of the quote submission",
-            "example": "success"
-          },
-          "quotesAdded": {
-            "type": "number",
-            "description": "Number of deduplicated quote ranges accepted by the submission. Identical resubmissions count as accepted even when no rows change.",
-            "example": 1250
-          }
-        },
-        "required": [
-          "status",
-          "quotesAdded"
         ]
       },
       "OifQuoteRequestDto": {
@@ -5628,10 +5723,14 @@
                     ]
                   },
                   "oracle": {
-                    "description": "Oracle contracts accepted for the route, identified by chain and address. When provided, returned quotes must use an accepted contract on both the source and destination chains. Contracts marked as retired are excluded. Omit or pass an empty list to use the configured oracle pairs. Ignored for same-chain swaps.",
+                    "description": "Accepted oracle deployment addresses, identified by chain and address. When provided, both addresses of the oracle pair selected for the quote must appear in this list under their respective source and destination chains. For cross-chain Polymer routes with EVM or Tron on both sides, the order encodes the source oracle in both inputOracle and outputs[].oracle. The destination entry still identifies the destination deployment, which can differ from the encoded output oracle and response metadata.oracle.output. Contracts marked as retired are excluded. Omit or pass an empty list to use the configured oracle pairs. Ignored for same-chain swaps.",
                     "example": [
                       {
-                        "chain": "eip155:1",
+                        "chain": "tron:728126428",
+                        "address": "TPXQkHcGwEdH4Ss8kT4cDxgXt3L4n4zSHJ"
+                      },
+                      {
+                        "chain": "eip155:137",
                         "address": "0x008C3800F3Ad9b3B662d002E90Cc00000000eE17"
                       }
                     ],
@@ -5694,7 +5793,7 @@
                   "sponsor": {
                     "description": "Optional fee/rent sponsor for the origin `open` transaction, as a { chain, address } object. Solana origin only. When set, the returned unsigned transaction uses this address as fee payer and rent payer, and both the sponsor and the user must sign it. Defaults to the input user.",
                     "example": {
-                      "chain": "solana:1151111081099710",
+                      "chain": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
                       "address": "8YLKoCu7NwqHNS8GzuvA2ibsvLrsg22YMfMDafxh1B15"
                     },
                     "type": "object",
@@ -5703,7 +5802,7 @@
                         "type": "string",
                         "minLength": 1,
                         "description": "CAIP-2 chain identifier of the sponsor. Must match the input chain. Only Solana origins are supported.",
-                        "example": "solana:1151111081099710"
+                        "example": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
                       },
                       "address": {
                         "type": "string",
@@ -6203,9 +6302,36 @@
           "outputs"
         ]
       },
+      "QuoteOracleMetadataDto": {
+        "type": "object",
+        "properties": {
+          "input": {
+            "type": "string",
+            "description": "Resolved input oracle in the source chain native address format. For cross-chain Solana origins, this is the Polymer oracle state PDA.",
+            "example": "0x2222222222222222222222222222222222222222"
+          },
+          "output": {
+            "type": "string",
+            "description": "Oracle identity encoded in the order output, rendered in the destination chain native address format. For cross-chain Polymer routes with EVM or Tron on both sides, this identifies the source chain oracle and can differ from the destination deployment accepted in intent.metadata.oracle. Solana routes retain their protocol-specific oracle identities. For same-chain quotes, both oracle fields identify the output settler.",
+            "example": "0x3333333333333333333333333333333333333333"
+          }
+        },
+        "required": [
+          "input",
+          "output"
+        ]
+      },
       "QuoteMetadataDto": {
         "type": "object",
         "properties": {
+          "oracle": {
+            "description": "Oracle identities encoded in the open intent transaction",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QuoteOracleMetadataDto"
+              }
+            ]
+          },
           "exclusiveFor": {
             "type": [
               "string",
@@ -6216,6 +6342,7 @@
           }
         },
         "required": [
+          "oracle",
           "exclusiveFor"
         ]
       },

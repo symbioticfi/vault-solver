@@ -24,11 +24,11 @@ type DiscountsResponseDiscountsInner struct {
 	TokenToRedeem      string `json:"tokenToRedeem" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	Collateral         string `json:"collateral" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	CollateralDecimals int64  `json:"collateralDecimals"`
-	Discount           string `json:"discount" validate:"regexp=^\\d+$"`
-	Signer             string `json:"signer" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Deadline           int64  `json:"deadline"`
-	MaxRate            string `json:"maxRate" validate:"regexp=^\\d+$"`
-	MaxAssets          string `json:"maxAssets" validate:"regexp=^\\d+$"`
+	// Signed discount in ppm. A discount swap pays floor(getAmountOut(tokenToRedeem, amountIn) * (1000000 - discount) / 1000000).
+	Discount  string `json:"discount" validate:"regexp=^\\d+$"`
+	Signer    string `json:"signer" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Deadline  int64  `json:"deadline"`
+	MaxAssets string `json:"maxAssets" validate:"regexp=^\\d+$"`
 	// Block number used to read maxAssets, encoded as a decimal string.
 	BlockNumber          string `json:"blockNumber" validate:"regexp=^\\d+$"`
 	AdditionalProperties map[string]interface{}
@@ -40,7 +40,7 @@ type _DiscountsResponseDiscountsInner DiscountsResponseDiscountsInner
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewDiscountsResponseDiscountsInner(discountId string, adapter string, tokenToRedeem string, collateral string, collateralDecimals int64, discount string, signer string, deadline int64, maxRate string, maxAssets string, blockNumber string) *DiscountsResponseDiscountsInner {
+func NewDiscountsResponseDiscountsInner(discountId string, adapter string, tokenToRedeem string, collateral string, collateralDecimals int64, discount string, signer string, deadline int64, maxAssets string, blockNumber string) *DiscountsResponseDiscountsInner {
 	this := DiscountsResponseDiscountsInner{}
 	this.DiscountId = discountId
 	this.Adapter = adapter
@@ -50,7 +50,6 @@ func NewDiscountsResponseDiscountsInner(discountId string, adapter string, token
 	this.Discount = discount
 	this.Signer = signer
 	this.Deadline = deadline
-	this.MaxRate = maxRate
 	this.MaxAssets = maxAssets
 	this.BlockNumber = blockNumber
 	return &this
@@ -256,30 +255,6 @@ func (o *DiscountsResponseDiscountsInner) SetDeadline(v int64) {
 	o.Deadline = v
 }
 
-// GetMaxRate returns the MaxRate field value
-func (o *DiscountsResponseDiscountsInner) GetMaxRate() string {
-	if o == nil {
-		var ret string
-		return ret
-	}
-
-	return o.MaxRate
-}
-
-// GetMaxRateOk returns a tuple with the MaxRate field value
-// and a boolean to check if the value has been set.
-func (o *DiscountsResponseDiscountsInner) GetMaxRateOk() (*string, bool) {
-	if o == nil {
-		return nil, false
-	}
-	return &o.MaxRate, true
-}
-
-// SetMaxRate sets field value
-func (o *DiscountsResponseDiscountsInner) SetMaxRate(v string) {
-	o.MaxRate = v
-}
-
 // GetMaxAssets returns the MaxAssets field value
 func (o *DiscountsResponseDiscountsInner) GetMaxAssets() string {
 	if o == nil {
@@ -346,7 +321,6 @@ func (o DiscountsResponseDiscountsInner) ToMap() (map[string]interface{}, error)
 	toSerialize["discount"] = o.Discount
 	toSerialize["signer"] = o.Signer
 	toSerialize["deadline"] = o.Deadline
-	toSerialize["maxRate"] = o.MaxRate
 	toSerialize["maxAssets"] = o.MaxAssets
 	toSerialize["blockNumber"] = o.BlockNumber
 
@@ -383,7 +357,6 @@ func (o *DiscountsResponseDiscountsInner) UnmarshalJSON(data []byte) (err error)
 		delete(additionalProperties, "discount")
 		delete(additionalProperties, "signer")
 		delete(additionalProperties, "deadline")
-		delete(additionalProperties, "maxRate")
 		delete(additionalProperties, "maxAssets")
 		delete(additionalProperties, "blockNumber")
 		o.AdditionalProperties = additionalProperties

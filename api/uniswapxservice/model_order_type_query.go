@@ -1,7 +1,7 @@
 /*
 UniswapX
 
-REST API for retrieving signed UniswapX orders. Dutch (V1/V2/V3), Priority, Hybrid, and Relay orders are served by /orders; limit orders are served by /limit-orders. Order submission is handled by the Uniswap Trading API and is not part of this specification.
+REST API for retrieving signed UniswapX orders. Dutch (V1/V2/V3) and Priority orders are served by /orders; limit orders are served by /limit-orders. Order submission is handled by the Uniswap Trading API and is not part of this specification.
 
 API version: 2.0.0
 */
@@ -24,10 +24,8 @@ const (
 	DUTCH_V2    OrderTypeQuery = "Dutch_V2"
 	DUTCH_V3    OrderTypeQuery = "Dutch_V3"
 	LIMIT       OrderTypeQuery = "Limit"
-	RELAY       OrderTypeQuery = "Relay"
 	DUTCH_V1_V2 OrderTypeQuery = "Dutch_V1_V2"
 	PRIORITY    OrderTypeQuery = "Priority"
-	HYBRID      OrderTypeQuery = "Hybrid"
 )
 
 // All allowed values of OrderTypeQuery enum
@@ -36,10 +34,8 @@ var AllowedOrderTypeQueryEnumValues = []OrderTypeQuery{
 	"Dutch_V2",
 	"Dutch_V3",
 	"Limit",
-	"Relay",
 	"Dutch_V1_V2",
 	"Priority",
-	"Hybrid",
 }
 
 func (v *OrderTypeQuery) UnmarshalJSON(src []byte) error {

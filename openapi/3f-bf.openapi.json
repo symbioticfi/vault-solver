@@ -957,13 +957,33 @@
           },
           "amount": {
             "type": "string",
-            "description": "Offer amount as a numeric string (uint256). For offers with a broadcast transaction, this reflects the linked transaction amount when present.",
+            "description": "Current pending fill amount, otherwise total successful principal, otherwise original offered amount (uint256 string).",
             "example": "1000000000"
           },
           "expectedReturn": {
             "type": "string",
             "description": "Expected yield amount as a numeric string (uint256). Total repayment is `amount + expectedReturn`.",
             "example": "5000000"
+          },
+          "filledAmount": {
+            "type": "string",
+            "description": "Cumulative successfully funded principal, independent of the latest offer status (uint256 string).",
+            "example": "0"
+          },
+          "filledExpectedReturn": {
+            "type": "string",
+            "description": "Cumulative yield of successful fills, rounded per fill (uint256 string).",
+            "example": "0"
+          },
+          "pendingAmount": {
+            "type": "string",
+            "description": "Current broadcast or authorized principal; excludes unbroadcast reservations (uint256 string).",
+            "example": "0"
+          },
+          "pendingExpectedReturn": {
+            "type": "string",
+            "description": "Yield for the current broadcast or authorized fill (uint256 string).",
+            "example": "0"
           },
           "nonce": {
             "type": "string",
@@ -992,6 +1012,10 @@
           "vault",
           "amount",
           "expectedReturn",
+          "filledAmount",
+          "filledExpectedReturn",
+          "pendingAmount",
+          "pendingExpectedReturn",
           "nonce",
           "expiration",
           "signature"
@@ -1075,6 +1099,15 @@
       "AuctionDto": {
         "type": "object",
         "properties": {
+          "repaymentPricing": {
+            "type": "object",
+            "description": "Quote horizon for APR; omitted for ordinary auctions.",
+            "properties": {
+              "horizonSeconds": {
+                "type": "integer"
+              }
+            }
+          },
           "id": {
             "type": "number",
             "minimum": 1,

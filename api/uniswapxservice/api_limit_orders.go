@@ -1,7 +1,7 @@
 /*
 UniswapX
 
-REST API for retrieving signed UniswapX orders. Dutch (V1/V2/V3), Priority, Hybrid, and Relay orders are served by /orders; limit orders are served by /limit-orders. Order submission is handled by the Uniswap Trading API and is not part of this specification.
+REST API for retrieving signed UniswapX orders. Dutch (V1/V2/V3) and Priority orders are served by /orders; limit orders are served by /limit-orders. Order submission is handled by the Uniswap Trading API and is not part of this specification.
 
 API version: 2.0.0
 */
@@ -22,22 +22,21 @@ import (
 type LimitOrdersAPIService service
 
 type ApiLimitOrdersGetRequest struct {
-	ctx            context.Context
-	ApiService     *LimitOrdersAPIService
-	limit          *float32
-	orderStatus    *OrderStatus
-	orderHash      *string
-	orderHashes    *string
-	swapper        *string
-	filler         *string
-	executeAddress *string
-	orderType      *OrderTypeQuery
-	pair           *string
-	sortKey        *SortKey
-	sort           *string
-	desc           *bool
-	cursor         *string
-	chainId        *ChainId
+	ctx         context.Context
+	ApiService  *LimitOrdersAPIService
+	limit       *float32
+	orderStatus *OrderStatus
+	orderHash   *string
+	orderHashes *string
+	swapper     *string
+	filler      *string
+	orderType   *OrderTypeQuery
+	pair        *string
+	sortKey     *SortKey
+	sort        *string
+	desc        *bool
+	cursor      *string
+	chainId     *ChainId
 }
 
 // Maximum number of orders to return.
@@ -73,12 +72,6 @@ func (r ApiLimitOrdersGetRequest) Swapper(swapper string) ApiLimitOrdersGetReque
 // Filter by filler address.
 func (r ApiLimitOrdersGetRequest) Filler(filler string) ApiLimitOrdersGetRequest {
 	r.filler = &filler
-	return r
-}
-
-// Filter by execution address.
-func (r ApiLimitOrdersGetRequest) ExecuteAddress(executeAddress string) ApiLimitOrdersGetRequest {
-	r.executeAddress = &executeAddress
 	return r
 }
 
@@ -182,9 +175,6 @@ func (a *LimitOrdersAPIService) LimitOrdersGetExecute(r ApiLimitOrdersGetRequest
 	}
 	if r.filler != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "filler", r.filler, "form", "")
-	}
-	if r.executeAddress != nil {
-		parameterAddToHeaderOrQuery(localVarQueryParams, "executeAddress", r.executeAddress, "form", "")
 	}
 	if r.orderType != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "orderType", r.orderType, "form", "")

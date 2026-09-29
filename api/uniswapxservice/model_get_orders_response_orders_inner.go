@@ -1,7 +1,7 @@
 /*
 UniswapX
 
-REST API for retrieving signed UniswapX orders. Dutch (V1/V2/V3), Priority, Hybrid, and Relay orders are served by /orders; limit orders are served by /limit-orders. Order submission is handled by the Uniswap Trading API and is not part of this specification.
+REST API for retrieving signed UniswapX orders. Dutch (V1/V2/V3) and Priority orders are served by /orders; limit orders are served by /limit-orders. Order submission is handled by the Uniswap Trading API and is not part of this specification.
 
 API version: 2.0.0
 */
@@ -20,9 +20,7 @@ type GetOrdersResponseOrdersInner struct {
 	DutchOrderEntity    *DutchOrderEntity
 	DutchV2OrderEntity  *DutchV2OrderEntity
 	DutchV3OrderEntity  *DutchV3OrderEntity
-	HybridOrderEntity   *HybridOrderEntity
 	PriorityOrderEntity *PriorityOrderEntity
-	RelayOrderEntity    *RelayOrderEntity
 }
 
 // DutchOrderEntityAsGetOrdersResponseOrdersInner is a convenience function that returns DutchOrderEntity wrapped in GetOrdersResponseOrdersInner
@@ -46,24 +44,10 @@ func DutchV3OrderEntityAsGetOrdersResponseOrdersInner(v *DutchV3OrderEntity) Get
 	}
 }
 
-// HybridOrderEntityAsGetOrdersResponseOrdersInner is a convenience function that returns HybridOrderEntity wrapped in GetOrdersResponseOrdersInner
-func HybridOrderEntityAsGetOrdersResponseOrdersInner(v *HybridOrderEntity) GetOrdersResponseOrdersInner {
-	return GetOrdersResponseOrdersInner{
-		HybridOrderEntity: v,
-	}
-}
-
 // PriorityOrderEntityAsGetOrdersResponseOrdersInner is a convenience function that returns PriorityOrderEntity wrapped in GetOrdersResponseOrdersInner
 func PriorityOrderEntityAsGetOrdersResponseOrdersInner(v *PriorityOrderEntity) GetOrdersResponseOrdersInner {
 	return GetOrdersResponseOrdersInner{
 		PriorityOrderEntity: v,
-	}
-}
-
-// RelayOrderEntityAsGetOrdersResponseOrdersInner is a convenience function that returns RelayOrderEntity wrapped in GetOrdersResponseOrdersInner
-func RelayOrderEntityAsGetOrdersResponseOrdersInner(v *RelayOrderEntity) GetOrdersResponseOrdersInner {
-	return GetOrdersResponseOrdersInner{
-		RelayOrderEntity: v,
 	}
 }
 
@@ -125,18 +109,6 @@ func (dst *GetOrdersResponseOrdersInner) UnmarshalJSON(data []byte) error {
 		}
 	}
 
-	// check if the discriminator value is 'Hybrid'
-	if jsonDict["type"] == "Hybrid" {
-		// try to unmarshal JSON data into HybridOrderEntity
-		err = json.Unmarshal(data, &dst.HybridOrderEntity)
-		if err == nil {
-			return nil // data stored in dst.HybridOrderEntity, return on the first match
-		} else {
-			dst.HybridOrderEntity = nil
-			return fmt.Errorf("failed to unmarshal GetOrdersResponseOrdersInner as HybridOrderEntity: %s", err.Error())
-		}
-	}
-
 	// check if the discriminator value is 'Limit'
 	if jsonDict["type"] == "Limit" {
 		// try to unmarshal JSON data into DutchOrderEntity
@@ -161,18 +133,6 @@ func (dst *GetOrdersResponseOrdersInner) UnmarshalJSON(data []byte) error {
 		}
 	}
 
-	// check if the discriminator value is 'Relay'
-	if jsonDict["type"] == "Relay" {
-		// try to unmarshal JSON data into RelayOrderEntity
-		err = json.Unmarshal(data, &dst.RelayOrderEntity)
-		if err == nil {
-			return nil // data stored in dst.RelayOrderEntity, return on the first match
-		} else {
-			dst.RelayOrderEntity = nil
-			return fmt.Errorf("failed to unmarshal GetOrdersResponseOrdersInner as RelayOrderEntity: %s", err.Error())
-		}
-	}
-
 	return nil
 }
 
@@ -190,16 +150,8 @@ func (src GetOrdersResponseOrdersInner) MarshalJSON() ([]byte, error) {
 		return json.Marshal(&src.DutchV3OrderEntity)
 	}
 
-	if src.HybridOrderEntity != nil {
-		return json.Marshal(&src.HybridOrderEntity)
-	}
-
 	if src.PriorityOrderEntity != nil {
 		return json.Marshal(&src.PriorityOrderEntity)
-	}
-
-	if src.RelayOrderEntity != nil {
-		return json.Marshal(&src.RelayOrderEntity)
 	}
 
 	return nil, nil // no data in oneOf schemas
@@ -222,16 +174,8 @@ func (obj *GetOrdersResponseOrdersInner) GetActualInstance() interface{} {
 		return obj.DutchV3OrderEntity
 	}
 
-	if obj.HybridOrderEntity != nil {
-		return obj.HybridOrderEntity
-	}
-
 	if obj.PriorityOrderEntity != nil {
 		return obj.PriorityOrderEntity
-	}
-
-	if obj.RelayOrderEntity != nil {
-		return obj.RelayOrderEntity
 	}
 
 	// all schemas are nil
@@ -252,16 +196,8 @@ func (obj GetOrdersResponseOrdersInner) GetActualInstanceValue() interface{} {
 		return *obj.DutchV3OrderEntity
 	}
 
-	if obj.HybridOrderEntity != nil {
-		return *obj.HybridOrderEntity
-	}
-
 	if obj.PriorityOrderEntity != nil {
 		return *obj.PriorityOrderEntity
-	}
-
-	if obj.RelayOrderEntity != nil {
-		return *obj.RelayOrderEntity
 	}
 
 	// all schemas are nil

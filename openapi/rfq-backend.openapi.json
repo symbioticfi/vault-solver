@@ -471,7 +471,7 @@
           "RFQ"
         ],
         "summary": "Get solver liquidity",
-        "description": "Returns the adapter inventory available to each eligible solver using the same authorization and live-discount limits as quote construction. Each liquidity value sums adapters[].maxAssets in tokenOut base units; totalLiquidity sums all returned solver values, including shared inventory counted for each solver. Solvers are sorted by liquidity descending. Optional solverId restricts the list and total to one solver and takes precedence over solverIds. Does not request solver quotes or persist quote records. Empty inventory returns 200 with totalLiquidity=0 and solvers=[].",
+        "description": "Returns the adapter inventory available to each eligible solver using the same authorization and live-discount limits as quote construction. Each liquidity value sums adapters[].maxAssets in tokenOut base units; totalLiquidity counts the shared internal quote inventory once and adds each external solver's liquidity, so it can differ from the sum of the solver values in either direction: overlapping internal adapters count once, and the unfiltered total includes eligible internal inventory no returned solver is bound to. It is never below any single solver value. Solvers are sorted by liquidity descending. Optional solverId restricts the list and total to one solver and takes precedence over solverIds. Does not request solver quotes or persist quote records. Empty inventory returns 200 with totalLiquidity=0 and solvers=[]. To read several tokens in one request, use /liquidity-batch.",
         "requestBody": {
           "required": true,
           "content": {
@@ -503,6 +503,75 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/LiquidityResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/liquidity-batch": {
+      "post": {
+        "tags": [
+          "RFQ"
+        ],
+        "summary": "Get solver liquidity for several tokens",
+        "description": "Reads the /liquidity snapshot for up to 20 distinct input tokens in one request and returns { tokensIn: [...] }, one snapshot per token in request order. Each snapshot has the same shape and totalLiquidity semantics as /liquidity. The solverId and solverIds filters apply to every token. Every token is checked against the deployment before any inventory is read, so one unsupported token rejects the whole request with 400 and the error details name it. Duplicate tokens, compared case-insensitively, are rejected with 400.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LiquidityBatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LiquidityBatchResponse"
                 }
               }
             }
@@ -1231,6 +1300,157 @@
           "timestamp"
         ]
       },
+      "LiquidityBatchRequest": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "tokensIn": {
+            "minItems": 1,
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^0x[a-fA-F0-9]{40}$"
+            },
+            "description": "1 to 20 distinct input tokens to read in one request. The response holds one snapshot per token, in request order."
+          },
+          "solverId": {
+            "description": "Restricts solvers and totalLiquidity to this configured solver. Takes precedence over solverIds. No eligible liquidity returns a zero total and an empty solvers array.",
+            "type": "string",
+            "minLength": 1
+          },
+          "solverIds": {
+            "description": "Restricts solvers and totalLiquidity to these configured solver ids. Used only when solverId is omitted; omit both filters to include every eligible enabled solver.",
+            "minItems": 1,
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "required": [
+          "tokensIn"
+        ]
+      },
+      "LiquidityBatchResponse": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "tokensIn": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "tokenIn": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$"
+                },
+                "tokenOut": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$"
+                },
+                "tokenInInfo": {
+                  "type": "object",
+                  "properties": {
+                    "address": {
+                      "type": "string",
+                      "pattern": "^0x[a-fA-F0-9]{40}$"
+                    },
+                    "symbol": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "decimals": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 255
+                    }
+                  },
+                  "required": [
+                    "address",
+                    "symbol",
+                    "name",
+                    "decimals"
+                  ]
+                },
+                "tokenOutInfo": {
+                  "type": "object",
+                  "properties": {
+                    "address": {
+                      "type": "string",
+                      "pattern": "^0x[a-fA-F0-9]{40}$"
+                    },
+                    "symbol": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "name": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "decimals": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 255
+                    }
+                  },
+                  "required": [
+                    "address",
+                    "symbol",
+                    "name",
+                    "decimals"
+                  ]
+                },
+                "totalLiquidity": {
+                  "type": "string",
+                  "pattern": "^\\d+$",
+                  "description": "Liquidity in tokenOut base units: the shared internal quote inventory counted once, plus each external solver's liquidity. It can differ from the sum of solvers[].liquidity in either direction, since overlapping internal adapters count once and the unfiltered total includes internal inventory no returned solver is bound to. It is never below any single solvers[].liquidity value."
+                },
+                "solvers": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "solverId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "liquidity": {
+                        "type": "string",
+                        "pattern": "^\\d+$",
+                        "description": "Sum of adapters[].maxAssets that the quote builder makes available to this solver, in tokenOut base units."
+                      }
+                    },
+                    "required": [
+                      "solverId",
+                      "liquidity"
+                    ]
+                  },
+                  "description": "Eligible solvers with positive liquidity, sorted by liquidity descending."
+                }
+              },
+              "required": [
+                "tokenIn",
+                "tokenOut",
+                "tokenInInfo",
+                "tokenOutInfo",
+                "totalLiquidity",
+                "solvers"
+              ]
+            },
+            "description": "One liquidity snapshot per requested tokensIn entry, in request order."
+          }
+        },
+        "required": [
+          "tokensIn"
+        ]
+      },
       "LiquidityRequest": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -1330,7 +1550,7 @@
           "totalLiquidity": {
             "type": "string",
             "pattern": "^\\d+$",
-            "description": "Sum of solvers[].liquidity in tokenOut base units. Shared inventory is counted for each eligible solver."
+            "description": "Liquidity in tokenOut base units: the shared internal quote inventory counted once, plus each external solver's liquidity. It can differ from the sum of solvers[].liquidity in either direction, since overlapping internal adapters count once and the unfiltered total includes internal inventory no returned solver is bound to. It is never below any single solvers[].liquidity value."
           },
           "solvers": {
             "type": "array",

@@ -27,7 +27,7 @@ type ApiQuoteSubmissionControllerSubmitQuotesRequest struct {
 	submitQuotesDto *SubmitQuotesDto
 }
 
-// Submit or update up to 200K quotes at once. To remove a quote send it with ranges set to empty array eg: &#x60;ranges&#x3D;[]&#x60;
+// Submit or update quotes. Each request can contain up to 50,000 quotes and 100,000 ranges in a JSON body up to 32 MiB after decompression. Split larger inventories between routes. Send every range for a route in the same request because a later submission for that route replaces the earlier submission. To remove a quote, send an empty &#x60;ranges&#x60; array: &#x60;\&quot;ranges\&quot;: []&#x60;.
 func (r ApiQuoteSubmissionControllerSubmitQuotesRequest) SubmitQuotesDto(submitQuotesDto SubmitQuotesDto) ApiQuoteSubmissionControllerSubmitQuotesRequest {
 	r.submitQuotesDto = &submitQuotesDto
 	return r
@@ -40,7 +40,7 @@ func (r ApiQuoteSubmissionControllerSubmitQuotesRequest) Execute() (*SubmitQuote
 /*
 QuoteSubmissionControllerSubmitQuotes Submit quotes
 
-We allow solvers to submit quotes on any chain and asset pair.
+Submit quotes using CAIP-2 chain identifiers or existing network IDs. CAIP-2 identifiers must refer to a configured chain. Submissions using unregistered legacy network IDs remain accepted.
 
 	   However, for us to actually quote users' intents, the chains need to be enabled by the "LiFi Intent" protocol.
 	   We periodically update the supported chains, assets, and routes, but if you need a specific chain to be supported, please contact us.
@@ -146,6 +146,17 @@ func (a *SolverAPIAPIService) QuoteSubmissionControllerSubmitQuotesExecute(r Api
 			newErr.model = v
 			return localVarReturnValue, localVarHTTPResponse, newErr
 		}
+		if localVarHTTPResponse.StatusCode == 401 {
+			var v HttpErrorDto
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+			newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
 		if localVarHTTPResponse.StatusCode == 403 {
 			var v HttpErrorDto
 			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
@@ -157,7 +168,51 @@ func (a *SolverAPIAPIService) QuoteSubmissionControllerSubmitQuotesExecute(r Api
 			newErr.model = v
 			return localVarReturnValue, localVarHTTPResponse, newErr
 		}
+		if localVarHTTPResponse.StatusCode == 408 {
+			var v HttpErrorDto
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+			newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 413 {
+			var v HttpErrorDto
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+			newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 415 {
+			var v HttpErrorDto
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+			newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
 		if localVarHTTPResponse.StatusCode == 429 {
+			var v HttpErrorDto
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+			newErr.model = v
+			return localVarReturnValue, localVarHTTPResponse, newErr
+		}
+		if localVarHTTPResponse.StatusCode == 503 {
 			var v HttpErrorDto
 			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
 			if err != nil {
@@ -327,13 +382,13 @@ func (r ApiSolverApiV0ControllerGetSolverQuotesRequest) Offset(offset int32) Api
 	return r
 }
 
-// Source chain network ID
+// Source chain identifier in CAIP-2 format. Existing network IDs are also accepted.
 func (r ApiSolverApiV0ControllerGetSolverQuotesRequest) FromChain(fromChain string) ApiSolverApiV0ControllerGetSolverQuotesRequest {
 	r.fromChain = &fromChain
 	return r
 }
 
-// Destination chain network ID
+// Destination chain identifier in CAIP-2 format. Existing network IDs are also accepted.
 func (r ApiSolverApiV0ControllerGetSolverQuotesRequest) ToChain(toChain string) ApiSolverApiV0ControllerGetSolverQuotesRequest {
 	r.toChain = &toChain
 	return r
@@ -680,6 +735,8 @@ func (r ApiSolverApiV0ControllerUnregisterSolverAccountRequest) Execute() (*Unre
 
 /*
 SolverApiV0ControllerUnregisterSolverAccount Remove solver account (reputation tracking)
+
+Quotes with the account in exclusiveFor may still be accepted for up to 30 seconds after it is removed.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiSolverApiV0ControllerUnregisterSolverAccountRequest

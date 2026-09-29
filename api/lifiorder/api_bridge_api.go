@@ -394,6 +394,7 @@ type ApiOrdersControllerGetOrdersRequest struct {
 	exclusiveFor              *string
 	originChainId             *string
 	destinationChainId        *string
+	solverId                  *int32
 }
 
 // Limit the number of results
@@ -459,6 +460,12 @@ func (r ApiOrdersControllerGetOrdersRequest) OriginChainId(originChainId string)
 // Filter by destination chain ID
 func (r ApiOrdersControllerGetOrdersRequest) DestinationChainId(destinationChainId string) ApiOrdersControllerGetOrdersRequest {
 	r.destinationChainId = &destinationChainId
+	return r
+}
+
+// ID of the solver whose quote the order was matched to, regardless of which solver filled it
+func (r ApiOrdersControllerGetOrdersRequest) SolverId(solverId int32) ApiOrdersControllerGetOrdersRequest {
+	r.solverId = &solverId
 	return r
 }
 
@@ -541,6 +548,9 @@ func (a *BridgeAPIAPIService) OrdersControllerGetOrdersExecute(r ApiOrdersContro
 	}
 	if r.destinationChainId != nil {
 		parameterAddToHeaderOrQuery(localVarQueryParams, "destinationChainId", r.destinationChainId, "form", "")
+	}
+	if r.solverId != nil {
+		parameterAddToHeaderOrQuery(localVarQueryParams, "solverId", r.solverId, "form", "")
 	}
 	// to determine the Content-Type header
 	localVarHTTPContentTypes := []string{}
@@ -904,7 +914,7 @@ func (r ApiRoutesV0ControllerGetSupportedRoutesRequest) Execute() (*GetSupported
 /*
 RoutesV0ControllerGetSupportedRoutes Get supported routes
 
-Get supported routes by source and destination chain IDs. If none of the parameters are provided, all supported routes will be returned.
+Get supported routes by source and destination chain IDs. If none of the parameters are provided, all supported routes will be returned. Routes on a chain that is not active are not listed.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiRoutesV0ControllerGetSupportedRoutesRequest

@@ -19,7 +19,7 @@ var _ MappedNullable = &RouteChainInfoDto{}
 
 // RouteChainInfoDto struct for RouteChainInfoDto
 type RouteChainInfoDto struct {
-	// Type of blockchain (EVM, Bitcoin, etc.)
+	// Blockchain type: EVM (Ethereum-compatible), SVM (Solana), TVM (Tron), or STL (Stellar)
 	ChainType string `json:"chainType"`
 	// Chain ID as a string
 	ChainId string `json:"chainId"`

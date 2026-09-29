@@ -14,11 +14,11 @@ import (
 	"encoding/json"
 )
 
-// checks if the LiquidityResponse type satisfies the MappedNullable interface at compile time
-var _ MappedNullable = &LiquidityResponse{}
+// checks if the LiquidityBatchResponseTokensInInner type satisfies the MappedNullable interface at compile time
+var _ MappedNullable = &LiquidityBatchResponseTokensInInner{}
 
-// LiquidityResponse struct for LiquidityResponse
-type LiquidityResponse struct {
+// LiquidityBatchResponseTokensInInner struct for LiquidityBatchResponseTokensInInner
+type LiquidityBatchResponseTokensInInner struct {
 	TokenIn      string                                         `json:"tokenIn" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	TokenOut     string                                         `json:"tokenOut" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	TokenInInfo  LiquidityBatchResponseTokensInInnerTokenInInfo `json:"tokenInInfo"`
@@ -30,14 +30,14 @@ type LiquidityResponse struct {
 	AdditionalProperties map[string]interface{}
 }
 
-type _LiquidityResponse LiquidityResponse
+type _LiquidityBatchResponseTokensInInner LiquidityBatchResponseTokensInInner
 
-// NewLiquidityResponse instantiates a new LiquidityResponse object
+// NewLiquidityBatchResponseTokensInInner instantiates a new LiquidityBatchResponseTokensInInner object
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewLiquidityResponse(tokenIn string, tokenOut string, tokenInInfo LiquidityBatchResponseTokensInInnerTokenInInfo, tokenOutInfo LiquidityBatchResponseTokensInInnerTokenInInfo, totalLiquidity string, solvers []LiquidityBatchResponseTokensInInnerSolversInner) *LiquidityResponse {
-	this := LiquidityResponse{}
+func NewLiquidityBatchResponseTokensInInner(tokenIn string, tokenOut string, tokenInInfo LiquidityBatchResponseTokensInInnerTokenInInfo, tokenOutInfo LiquidityBatchResponseTokensInInnerTokenInInfo, totalLiquidity string, solvers []LiquidityBatchResponseTokensInInnerSolversInner) *LiquidityBatchResponseTokensInInner {
+	this := LiquidityBatchResponseTokensInInner{}
 	this.TokenIn = tokenIn
 	this.TokenOut = tokenOut
 	this.TokenInInfo = tokenInInfo
@@ -47,16 +47,16 @@ func NewLiquidityResponse(tokenIn string, tokenOut string, tokenInInfo Liquidity
 	return &this
 }
 
-// NewLiquidityResponseWithDefaults instantiates a new LiquidityResponse object
+// NewLiquidityBatchResponseTokensInInnerWithDefaults instantiates a new LiquidityBatchResponseTokensInInner object
 // This constructor will only assign default values to properties that have it defined,
 // but it doesn't guarantee that properties required by API are set
-func NewLiquidityResponseWithDefaults() *LiquidityResponse {
-	this := LiquidityResponse{}
+func NewLiquidityBatchResponseTokensInInnerWithDefaults() *LiquidityBatchResponseTokensInInner {
+	this := LiquidityBatchResponseTokensInInner{}
 	return &this
 }
 
 // GetTokenIn returns the TokenIn field value
-func (o *LiquidityResponse) GetTokenIn() string {
+func (o *LiquidityBatchResponseTokensInInner) GetTokenIn() string {
 	if o == nil {
 		var ret string
 		return ret
@@ -67,7 +67,7 @@ func (o *LiquidityResponse) GetTokenIn() string {
 
 // GetTokenInOk returns a tuple with the TokenIn field value
 // and a boolean to check if the value has been set.
-func (o *LiquidityResponse) GetTokenInOk() (*string, bool) {
+func (o *LiquidityBatchResponseTokensInInner) GetTokenInOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -75,12 +75,12 @@ func (o *LiquidityResponse) GetTokenInOk() (*string, bool) {
 }
 
 // SetTokenIn sets field value
-func (o *LiquidityResponse) SetTokenIn(v string) {
+func (o *LiquidityBatchResponseTokensInInner) SetTokenIn(v string) {
 	o.TokenIn = v
 }
 
 // GetTokenOut returns the TokenOut field value
-func (o *LiquidityResponse) GetTokenOut() string {
+func (o *LiquidityBatchResponseTokensInInner) GetTokenOut() string {
 	if o == nil {
 		var ret string
 		return ret
@@ -91,7 +91,7 @@ func (o *LiquidityResponse) GetTokenOut() string {
 
 // GetTokenOutOk returns a tuple with the TokenOut field value
 // and a boolean to check if the value has been set.
-func (o *LiquidityResponse) GetTokenOutOk() (*string, bool) {
+func (o *LiquidityBatchResponseTokensInInner) GetTokenOutOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -99,12 +99,12 @@ func (o *LiquidityResponse) GetTokenOutOk() (*string, bool) {
 }
 
 // SetTokenOut sets field value
-func (o *LiquidityResponse) SetTokenOut(v string) {
+func (o *LiquidityBatchResponseTokensInInner) SetTokenOut(v string) {
 	o.TokenOut = v
 }
 
 // GetTokenInInfo returns the TokenInInfo field value
-func (o *LiquidityResponse) GetTokenInInfo() LiquidityBatchResponseTokensInInnerTokenInInfo {
+func (o *LiquidityBatchResponseTokensInInner) GetTokenInInfo() LiquidityBatchResponseTokensInInnerTokenInInfo {
 	if o == nil {
 		var ret LiquidityBatchResponseTokensInInnerTokenInInfo
 		return ret
@@ -115,7 +115,7 @@ func (o *LiquidityResponse) GetTokenInInfo() LiquidityBatchResponseTokensInInner
 
 // GetTokenInInfoOk returns a tuple with the TokenInInfo field value
 // and a boolean to check if the value has been set.
-func (o *LiquidityResponse) GetTokenInInfoOk() (*LiquidityBatchResponseTokensInInnerTokenInInfo, bool) {
+func (o *LiquidityBatchResponseTokensInInner) GetTokenInInfoOk() (*LiquidityBatchResponseTokensInInnerTokenInInfo, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -123,12 +123,12 @@ func (o *LiquidityResponse) GetTokenInInfoOk() (*LiquidityBatchResponseTokensInI
 }
 
 // SetTokenInInfo sets field value
-func (o *LiquidityResponse) SetTokenInInfo(v LiquidityBatchResponseTokensInInnerTokenInInfo) {
+func (o *LiquidityBatchResponseTokensInInner) SetTokenInInfo(v LiquidityBatchResponseTokensInInnerTokenInInfo) {
 	o.TokenInInfo = v
 }
 
 // GetTokenOutInfo returns the TokenOutInfo field value
-func (o *LiquidityResponse) GetTokenOutInfo() LiquidityBatchResponseTokensInInnerTokenInInfo {
+func (o *LiquidityBatchResponseTokensInInner) GetTokenOutInfo() LiquidityBatchResponseTokensInInnerTokenInInfo {
 	if o == nil {
 		var ret LiquidityBatchResponseTokensInInnerTokenInInfo
 		return ret
@@ -139,7 +139,7 @@ func (o *LiquidityResponse) GetTokenOutInfo() LiquidityBatchResponseTokensInInne
 
 // GetTokenOutInfoOk returns a tuple with the TokenOutInfo field value
 // and a boolean to check if the value has been set.
-func (o *LiquidityResponse) GetTokenOutInfoOk() (*LiquidityBatchResponseTokensInInnerTokenInInfo, bool) {
+func (o *LiquidityBatchResponseTokensInInner) GetTokenOutInfoOk() (*LiquidityBatchResponseTokensInInnerTokenInInfo, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -147,12 +147,12 @@ func (o *LiquidityResponse) GetTokenOutInfoOk() (*LiquidityBatchResponseTokensIn
 }
 
 // SetTokenOutInfo sets field value
-func (o *LiquidityResponse) SetTokenOutInfo(v LiquidityBatchResponseTokensInInnerTokenInInfo) {
+func (o *LiquidityBatchResponseTokensInInner) SetTokenOutInfo(v LiquidityBatchResponseTokensInInnerTokenInInfo) {
 	o.TokenOutInfo = v
 }
 
 // GetTotalLiquidity returns the TotalLiquidity field value
-func (o *LiquidityResponse) GetTotalLiquidity() string {
+func (o *LiquidityBatchResponseTokensInInner) GetTotalLiquidity() string {
 	if o == nil {
 		var ret string
 		return ret
@@ -163,7 +163,7 @@ func (o *LiquidityResponse) GetTotalLiquidity() string {
 
 // GetTotalLiquidityOk returns a tuple with the TotalLiquidity field value
 // and a boolean to check if the value has been set.
-func (o *LiquidityResponse) GetTotalLiquidityOk() (*string, bool) {
+func (o *LiquidityBatchResponseTokensInInner) GetTotalLiquidityOk() (*string, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -171,12 +171,12 @@ func (o *LiquidityResponse) GetTotalLiquidityOk() (*string, bool) {
 }
 
 // SetTotalLiquidity sets field value
-func (o *LiquidityResponse) SetTotalLiquidity(v string) {
+func (o *LiquidityBatchResponseTokensInInner) SetTotalLiquidity(v string) {
 	o.TotalLiquidity = v
 }
 
 // GetSolvers returns the Solvers field value
-func (o *LiquidityResponse) GetSolvers() []LiquidityBatchResponseTokensInInnerSolversInner {
+func (o *LiquidityBatchResponseTokensInInner) GetSolvers() []LiquidityBatchResponseTokensInInnerSolversInner {
 	if o == nil {
 		var ret []LiquidityBatchResponseTokensInInnerSolversInner
 		return ret
@@ -187,7 +187,7 @@ func (o *LiquidityResponse) GetSolvers() []LiquidityBatchResponseTokensInInnerSo
 
 // GetSolversOk returns a tuple with the Solvers field value
 // and a boolean to check if the value has been set.
-func (o *LiquidityResponse) GetSolversOk() ([]LiquidityBatchResponseTokensInInnerSolversInner, bool) {
+func (o *LiquidityBatchResponseTokensInInner) GetSolversOk() ([]LiquidityBatchResponseTokensInInnerSolversInner, bool) {
 	if o == nil {
 		return nil, false
 	}
@@ -195,11 +195,11 @@ func (o *LiquidityResponse) GetSolversOk() ([]LiquidityBatchResponseTokensInInne
 }
 
 // SetSolvers sets field value
-func (o *LiquidityResponse) SetSolvers(v []LiquidityBatchResponseTokensInInnerSolversInner) {
+func (o *LiquidityBatchResponseTokensInInner) SetSolvers(v []LiquidityBatchResponseTokensInInnerSolversInner) {
 	o.Solvers = v
 }
 
-func (o LiquidityResponse) MarshalJSON() ([]byte, error) {
+func (o LiquidityBatchResponseTokensInInner) MarshalJSON() ([]byte, error) {
 	toSerialize, err := o.ToMap()
 	if err != nil {
 		return []byte{}, err
@@ -207,7 +207,7 @@ func (o LiquidityResponse) MarshalJSON() ([]byte, error) {
 	return json.Marshal(toSerialize)
 }
 
-func (o LiquidityResponse) ToMap() (map[string]interface{}, error) {
+func (o LiquidityBatchResponseTokensInInner) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["tokenIn"] = o.TokenIn
 	toSerialize["tokenOut"] = o.TokenOut
@@ -223,20 +223,20 @@ func (o LiquidityResponse) ToMap() (map[string]interface{}, error) {
 	return toSerialize, nil
 }
 
-func (o *LiquidityResponse) UnmarshalJSON(data []byte) (err error) {
+func (o *LiquidityBatchResponseTokensInInner) UnmarshalJSON(data []byte) (err error) {
 	// Required-property validation removed by hack/openapi-relax-client.py:
 	// upstream may drop fields at any time; absent values zero-value instead of
 	// failing the whole decode.
 
-	varLiquidityResponse := _LiquidityResponse{}
+	varLiquidityBatchResponseTokensInInner := _LiquidityBatchResponseTokensInInner{}
 
-	err = json.Unmarshal(data, &varLiquidityResponse)
+	err = json.Unmarshal(data, &varLiquidityBatchResponseTokensInInner)
 
 	if err != nil {
 		return err
 	}
 
-	*o = LiquidityResponse(varLiquidityResponse)
+	*o = LiquidityBatchResponseTokensInInner(varLiquidityBatchResponseTokensInInner)
 
 	additionalProperties := make(map[string]interface{})
 
@@ -253,38 +253,38 @@ func (o *LiquidityResponse) UnmarshalJSON(data []byte) (err error) {
 	return err
 }
 
-type NullableLiquidityResponse struct {
-	value *LiquidityResponse
+type NullableLiquidityBatchResponseTokensInInner struct {
+	value *LiquidityBatchResponseTokensInInner
 	isSet bool
 }
 
-func (v NullableLiquidityResponse) Get() *LiquidityResponse {
+func (v NullableLiquidityBatchResponseTokensInInner) Get() *LiquidityBatchResponseTokensInInner {
 	return v.value
 }
 
-func (v *NullableLiquidityResponse) Set(val *LiquidityResponse) {
+func (v *NullableLiquidityBatchResponseTokensInInner) Set(val *LiquidityBatchResponseTokensInInner) {
 	v.value = val
 	v.isSet = true
 }
 
-func (v NullableLiquidityResponse) IsSet() bool {
+func (v NullableLiquidityBatchResponseTokensInInner) IsSet() bool {
 	return v.isSet
 }
 
-func (v *NullableLiquidityResponse) Unset() {
+func (v *NullableLiquidityBatchResponseTokensInInner) Unset() {
 	v.value = nil
 	v.isSet = false
 }
 
-func NewNullableLiquidityResponse(val *LiquidityResponse) *NullableLiquidityResponse {
-	return &NullableLiquidityResponse{value: val, isSet: true}
+func NewNullableLiquidityBatchResponseTokensInInner(val *LiquidityBatchResponseTokensInInner) *NullableLiquidityBatchResponseTokensInInner {
+	return &NullableLiquidityBatchResponseTokensInInner{value: val, isSet: true}
 }
 
-func (v NullableLiquidityResponse) MarshalJSON() ([]byte, error) {
+func (v NullableLiquidityBatchResponseTokensInInner) MarshalJSON() ([]byte, error) {
 	return json.Marshal(v.value)
 }
 
-func (v *NullableLiquidityResponse) UnmarshalJSON(src []byte) error {
+func (v *NullableLiquidityBatchResponseTokensInInner) UnmarshalJSON(src []byte) error {
 	v.isSet = true
 	return json.Unmarshal(src, &v.value)
 }
