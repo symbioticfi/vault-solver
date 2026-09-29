@@ -168,6 +168,9 @@ type pendingTransaction struct {
 	// Only the lifecycle goroutine reads or writes it, as it does horizon.
 	cancelReason string
 	horizon      horizonProgress
+	// obsolete records that the request's Obsolete hook started the cancellation, so its result
+	// wraps ErrRequestObsolete. Only the lifecycle goroutine reads or writes it.
+	obsolete bool
 }
 
 type txAttempt struct {
@@ -239,11 +242,16 @@ const (
 	cancellationGasLimit       = 21_000
 )
 
+// ErrRequestObsolete marks a request whose Obsolete hook reported that it can no longer succeed. A
+// result wraps it when the request was dropped before signing, and when a same-nonce cancellation
+// replaced the pending call for that reason, so the owning solver can retire the work instead of
+// retrying it.
+var ErrRequestObsolete = errors.New("transaction request is obsolete")
+
 var (
 	errFreshFeesUnavailable    = errors.New("fresh fees unavailable")
 	errReplacementLimitReached = errors.New("replacement fee limit reached")
 	errReceiptReorged          = errors.New("transaction receipt reorged")
-	errRequestObsolete         = errors.New("transaction request is obsolete")
 	errNonceLanePaused         = errors.New("transaction manager nonce lane paused")
 	errManagerStopped          = errors.New("transaction manager stopped")
 	errShutdownTimeout         = errors.Errorf("transaction manager shutdown drain timed out: %w", context.DeadlineExceeded)
@@ -804,7 +812,7 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 		observability.Log(ctx).Error(obsoleteErr, "transaction obsolescence check unavailable; continuing",
 			"label", req.Label)
 	} else if obsolete {
-		return nil, errors.Errorf("send %q: %w", req.Label, errRequestObsolete)
+		return nil, errors.Errorf("send %q: %w", req.Label, ErrRequestObsolete)
 	}
 
 	value := req.Value
@@ -994,6 +1002,7 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 				// A terminal protocol status may reflect our own transaction.
 				// Give receipts precedence before checking obsolescence.
 				if !cancelling && m.pendingRequestObsolete(ctx, pending) {
+					pending.obsolete = true
 					startCancellation("obsolete")
 					tryReplace(cancel())
 				}
@@ -1139,18 +1148,22 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 		outcome := OutcomeIncludedUnconfirmed
 		if attempt.cancellation {
 			outcome = OutcomeCancelledUnconfirmed
+			if pending.obsolete {
+				err = errors.Join(err, ErrRequestObsolete)
+			}
 		}
 		return Result{Hash: attempt.hash, Receipt: receipt, Outcome: outcome, Err: err}, true
 	}
 	if attempt.cancellation {
+		cancelled := errors.Errorf("send %q: pending transaction cancelled at nonce %d", pending.req.Label, pending.nonce)
+		if pending.obsolete {
+			cancelled = errors.Errorf("%w: %w", cancelled, ErrRequestObsolete)
+		}
 		return Result{
 			Hash:    attempt.hash,
 			Receipt: receipt,
 			Outcome: OutcomeCancelled,
-			Err: errors.Errorf(
-				"send %q: pending transaction cancelled at nonce %d",
-				pending.req.Label, pending.nonce,
-			),
+			Err:     cancelled,
 		}, true
 	}
 	observability.Log(ctx).V(1).Info(

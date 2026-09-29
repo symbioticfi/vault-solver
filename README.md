@@ -115,7 +115,10 @@ already reflect it. Every `/quote` adapter entry carries `discount` (ppm): the s
 discount-backed entries, the adapter `minDiscount` on direct ones. Quotes and fill plans price each leg as
 the adapter pays it at the order amount, `floor(getAmountOut(amountIn) * (1e6 - discount) / 1e6)`. The
 field replaces `maxRate`, so run this version with a backend that sends it. Fills are still
-sent one at a time on the shared nonce lane. Reservations are local to the process and are not restored
+sent one at a time on the shared nonce lane. While a fill is pending, the solver checks the order's backend
+status: once the backend reports it no longer open (filled, cancelled, expired, unfunded or failed), the fill
+is replaced by a same-nonce cancellation instead of holding the lane until the fill deadline, and the order
+is retired without a retry and counted as `fill/obsolete`. Reservations are local to the process and are not restored
 after a restart.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
@@ -229,7 +232,10 @@ their Dutch amounts from current chain time, and fills executable orders through
 `LiquidLaneUniswapXExecutor`. The executor uses the same owner-managed caller list as the RFQ executor and
 remains the Reactor-facing filler. Before serving traffic, the solver validates executor bytecode, finds the
 tx-sending EOA in the executor's indexed `callers` list, and, in external mode, checks every configured
-route's direct authorization. Failures log the relevant executor, caller, or adapters and the underlying
+route's direct authorization. While a fill is pending, the solver checks the order's status in the Uniswap
+order API: once another filler takes the order, or it is cancelled, expires or loses its funding, the fill
+is replaced by a same-nonce cancellation and the order is retired as `fill/obsolete`, without a retry or a
+breaker failure. Failures log the relevant executor, caller, or adapters and the underlying
 reason before startup returns. The executor ABI has no Reactor getter, so matching the configured Reactor to
 the deployed immutable remains a deployment assertion. `solverMode: external` is the default, requires a
 non-empty `adapters` list plus direct authorization, and forbids the discounts block. `solverMode: internal`
@@ -580,9 +586,9 @@ Bounded workflow dimensions:
 
 | Solver | Events and outcomes | Amount/state dimensions |
 |---|---|---|
-| RFQ | `quote/<decision>`, `order/won`, `order_poll/success`, `fill/{success,failure,not_admitted}` | `quote/{input,output}` and successful `fill/{input,output,planned_surplus}` by asset |
+| RFQ | `quote/<decision>`, `order/won`, `order_poll/success`, `fill/{success,failure,not_admitted,obsolete}` | `quote/{input,output}` and successful `fill/{input,output,planned_surplus}` by asset |
 | LI.FI | `order_processing/<result>`, `queue_drop/<stage>`, `fill/success` | Fill amounts by asset and kind |
-| UniswapX | `quote/<decision>`, `{exclusive,public}_order_poll/{ok,failed}`, `exclusive_obligation/{won,settled_in_time,missed}`, `fill/{success,failure,not_admitted,declined}` | Quote and successful-fill amounts by asset and kind; quote amount assets are restricted to the immutable route snapshot used for that decision |
+| UniswapX | `quote/<decision>`, `{exclusive,public}_order_poll/{ok,failed}`, `exclusive_obligation/{won,settled_in_time,missed}`, `fill/{success,failure,not_admitted,obsolete,declined}` | Quote and successful-fill amounts by asset and kind; quote amount assets are restricted to the immutable route snapshot used for that decision |
 | OEV | `auction/<decision>`, `bid/{enqueued,won,settled_success,settled_failed,would_bid,unresolved}`, `breaker/failure`, `state_refresh/success` | Native bid amounts use `asset="native"`; `kind` is the bid stage, including dry-run `would_bid` |
 | 3F | `offer/{success,error}`, `redeem/success`; state views are `targets`, `offers`, `active_requests`, `redeemable` | Offer `principal` and `expected_yield` by deposit asset |
 

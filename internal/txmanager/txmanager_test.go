@@ -433,7 +433,7 @@ func TestBroadcastRejectsObsoleteRequestBeforeSigning(t *testing.T) {
 			return true, nil
 		},
 	})
-	if !errors.Is(err, errRequestObsolete) {
+	if !errors.Is(err, ErrRequestObsolete) {
 		t.Fatalf("broadcast error = %v, want obsolete request", err)
 	}
 	if checks != 1 {
@@ -1400,6 +1400,9 @@ func TestPendingObsolescenceCancelsNonceAndUnblocksLaterTransaction(t *testing.T
 		if got.Err == nil || !strings.Contains(got.Err.Error(), "cancelled at nonce 7") {
 			t.Fatalf("obsolete request result = %+v", got)
 		}
+		if got.Outcome != OutcomeCancelled || !errors.Is(got.Err, ErrRequestObsolete) {
+			t.Fatalf("obsolete cancellation = %s %v, want cancelled wrapping ErrRequestObsolete", got.Outcome, got.Err)
+		}
 	case <-time.After(time.Second):
 		t.Fatal("obsolete request did not cancel promptly")
 	}
@@ -1473,8 +1476,9 @@ func TestWaitingRequestKeepsAbsoluteCancelAtBeforeBroadcast(t *testing.T) {
 		t.Fatal("deadline failure did not return a result")
 	}
 
-	if got := <-first; got.Err == nil || !strings.Contains(got.Err.Error(), "cancelled at nonce 7") {
-		t.Fatalf("lower nonce result = %+v", got)
+	if got := <-first; got.Err == nil || !strings.Contains(got.Err.Error(), "cancelled at nonce 7") ||
+		errors.Is(got.Err, ErrRequestObsolete) {
+		t.Fatalf("lower nonce result = %+v, want a timeout cancellation that is not obsolete", got)
 	}
 	select {
 	case got := <-second:

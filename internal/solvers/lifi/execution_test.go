@@ -1261,6 +1261,31 @@ func TestCompleteFillTreatsIncludedTransactionAsSuccess(t *testing.T) {
 	}
 }
 
+func TestCompleteFillTreatsObsoleteOrderAsExpectedSkip(t *testing.T) {
+	var logs []string
+	solver := &Solver{
+		log: funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
+	}
+	fill := &pendingFill{
+		order:          &submittedOrder{OrderID: "order-1", QuoteID: "quote-1"},
+		orderID:        common.HexToHash("0x1"),
+		reservationKey: "order-1",
+	}
+	pending := &pendingFillState{byOrder: map[string]*pendingFill{"order-1": fill}}
+
+	err := solver.completeFill(solverContext(t, solver), pending, fillCompletion{fill: fill, result: txmanager.Result{
+		Hash:    common.HexToHash("0xc"),
+		Outcome: txmanager.OutcomeCancelled,
+		Err:     errors.Errorf("pending transaction cancelled at nonce 3: %w", txmanager.ErrRequestObsolete),
+	}})
+
+	logged := strings.Join(logs, "\n")
+	if err != nil || pending.len() != 0 || strings.Contains(logged, `"msg":"order fill failed"`) ||
+		!strings.Contains(logged, "order fill obsolete: order settled elsewhere") {
+		t.Fatalf("obsolete completion: err=%v pending=%d logs=%s", err, pending.len(), logged)
+	}
+}
+
 // One undecodable listing must not abort the sweep: it is logged, metered and skipped, the healthy
 // orders around it are still recovered, and recovery reaches its end so quoting is ungated.
 func TestOrderRecoverySkipsUndecodableOrder(t *testing.T) {

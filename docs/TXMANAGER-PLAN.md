@@ -37,7 +37,7 @@ Subscribers receive coalesced change notifications and must re-read state and un
 | `GasLimit` | Zero requests exact-call estimation after admission and before signing, with 5% headroom. A supplied limit is reused for normal replacements. |
 | `MaxFeePerGas` | Optional profitability ceiling for the normal call and its replacements; cancellation may exceed it within the global ceiling. |
 | `CancelAt` | Optional wall-clock cancellation deadline. Integrations derive it from the earliest applicable protocol deadline without extending validity during RPC/planning. |
-| `Obsolete` | Context-aware protocol status check before signing and after a receipt sweep finishes without a valid receipt. True drops an unsigned call or starts same-nonce cancellation; errors preserve ownership. It is not an authorization mechanism. |
+| `Obsolete` | Context-aware protocol status check before signing and after a receipt sweep finishes without a valid receipt. True drops an unsigned call or starts same-nonce cancellation; errors preserve ownership. Either way the result's `Err` wraps the exported `ErrRequestObsolete`, so the integration can retire the work instead of retrying it. It is not an authorization mechanism. |
 | `Confirmations` | Optional override of the manager confirmation depth; an explicit zero skips depth waiting. |
 | `Label`, `Solver` | Stable operation name and owning integration for logs/metrics/Sentry. |
 
@@ -183,9 +183,9 @@ valid evidence for the same nonce.
 | `confirmed` | Normal call succeeded and satisfied confirmation policy. |
 | `included_unconfirmed` | Successful inclusion observed, but confirmation waiting ended with an error. |
 | `reverted` | Receipt reports execution failure; an error during confirmation is retained in the result. |
-| `cancelled` | Successful cancellation receipt satisfied confirmation policy; `Err` explains that the requested call was cancelled. |
-| `cancelled_unconfirmed` | Successful cancellation inclusion observed, but confirmation waiting ended with an error. This is not proof that it is safe to retry the call. |
-| `submission_error` | Submission/pre-sign path failed without a retained pending lifecycle. |
+| `cancelled` | Successful cancellation receipt satisfied confirmation policy; `Err` explains that the requested call was cancelled and wraps `ErrRequestObsolete` when `Obsolete` started the cancellation. |
+| `cancelled_unconfirmed` | Successful cancellation inclusion observed, but confirmation waiting ended with an error. This is not proof that it is safe to retry the call. `Err` also wraps `ErrRequestObsolete` when `Obsolete` started the cancellation. |
+| `submission_error` | Submission/pre-sign path failed without a retained pending lifecycle, including an unsigned call `Obsolete` dropped (`Err` wraps `ErrRequestObsolete`). |
 | `tracking_stopped` | Lifecycle tracking stopped before a terminal receipt was established. |
 
 `Result.NotAdmitted` distinguishes admission rejection from an admitted operation failure. `Err`, receipt
@@ -310,9 +310,9 @@ Definitions: [metrics.go](../internal/txmanager/metrics.go),
 | Integration | Keeps its own policy and links to this lifecycle |
 |---|---|
 | [3F](3F-PLAN.md#51-txmanager--nonce-serialized-sender) | Finalize multicall, off-chain offer signing, offer gating and continued reconciliation/redemption. |
-| [RFQ](RFQ-PLAN.md) | Executor fill calldata, signed order/discount deadlines, quote gating and result accounting. |
+| [RFQ](RFQ-PLAN.md) | Executor fill calldata, signed order/discount deadlines, backend order-status obsolescence, quote gating and result accounting. |
 | [LI.FI](LIFI-PLAN.md) | Finalise calldata, order-status obsolescence, protocol validity and capacity/retry bookkeeping. |
-| [UniswapX](UNISWAPX-PLAN.md) | Reactor/executor calldata, earliest validity deadline, profitability ceiling and exclusive-order obligations. |
+| [UniswapX](UNISWAPX-PLAN.md) | Reactor/executor calldata, earliest validity deadline, order-API status obsolescence, profitability ceiling and exclusive-order obligations. |
 | [OEV](OEV-PLAN.md) | External settlement and protocol bid nonce; does not start txmanager in an OEV-only process. |
 
 Protocol order/bid nonces are not the shared sender's transaction nonce. Strategy code receives facts and

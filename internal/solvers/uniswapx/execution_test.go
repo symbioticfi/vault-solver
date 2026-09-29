@@ -40,6 +40,33 @@ type executionTestReader struct {
 	latestBlockReads int
 }
 
+// statusOrders answers the fill Obsolete hook's order lookups from a fixed status per hash.
+type statusOrders struct {
+	orderPoller
+
+	statuses map[common.Hash]string
+	err      error
+	lookups  [][]common.Hash
+}
+
+func (o *statusOrders) ordersByHash(
+	_ context.Context, _ int64, hashes []common.Hash,
+) (map[common.Hash]orderTerminal, error) {
+	o.lookups = append(o.lookups, append([]common.Hash(nil), hashes...))
+	if o.err != nil {
+		return nil, o.err
+	}
+	terminals := make(map[common.Hash]orderTerminal, len(hashes))
+	for _, hash := range hashes {
+		status, ok := o.statuses[hash]
+		if !ok {
+			return nil, errors.Errorf("GET /orders by hash: missing order %s", hash.Hex())
+		}
+		terminals[hash] = orderTerminal{Status: status}
+	}
+	return terminals, nil
+}
+
 type failingListener struct{ err error }
 
 func (l failingListener) Accept() (net.Conn, error) { return nil, l.err }
@@ -811,6 +838,104 @@ func TestCompletePendingFillRecordsFailureOutcome(t *testing.T) {
 	metricstest.RequireWorkflowEventCount(
 		t, reg, Name, "fill", liquidlane.FillOutcomeNotAdmitted, 0,
 	)
+}
+
+func TestStartFillObsoleteHookReadsOrderStatus(t *testing.T) {
+	for _, tc := range []struct {
+		status    string
+		lookupErr error
+		obsolete  bool
+		wantErr   bool
+	}{
+		{status: orderStatusOpen},
+		{status: orderStatusFilled, obsolete: true},
+		{status: orderStatusCancelled, obsolete: true},
+		{status: orderStatusExpired, obsolete: true},
+		{status: orderStatusError, obsolete: true},
+		{status: orderStatusInsufficientFunds, obsolete: true},
+		{status: "renamed-status", wantErr: true},
+		{status: "api unavailable", lookupErr: errors.New("GET /orders by hash: 503"), wantErr: true},
+	} {
+		t.Run(tc.status, func(t *testing.T) {
+			fixture := newDirectExecutionFixture(t)
+			orders := &statusOrders{statuses: map[common.Hash]string{fixture.order.Hash: tc.status}, err: tc.lookupErr}
+			fixture.solver.orders = orders
+
+			if _, err := fixture.solver.startFill(
+				t.Context(), []liquidlane.Route{fixture.route}, fixture.order, fixture.now, fixture.now,
+			); err != nil {
+				t.Fatalf("startFill: %v", err)
+			}
+			obsolete := fixture.txm.reqs[0].Obsolete
+			if obsolete == nil {
+				t.Fatal("fill request has no Obsolete hook")
+			}
+			got, err := obsolete(t.Context())
+			if (err != nil) != tc.wantErr || got != tc.obsolete {
+				t.Fatalf("Obsolete() = %v, %v; want obsolete %v, error %v", got, err, tc.obsolete, tc.wantErr)
+			}
+			if len(orders.lookups) != 1 || len(orders.lookups[0]) != 1 || orders.lookups[0][0] != fixture.order.Hash {
+				t.Fatalf("order lookups = %v, want one lookup of %s", orders.lookups, fixture.order.Hash.Hex())
+			}
+		})
+	}
+}
+
+func TestStartFillWithoutOrderClientLeavesObsoleteUnset(t *testing.T) {
+	fixture := newDirectExecutionFixture(t)
+	if _, err := fixture.solver.startFill(
+		t.Context(), []liquidlane.Route{fixture.route}, fixture.order, fixture.now, fixture.now,
+	); err != nil {
+		t.Fatalf("startFill: %v", err)
+	}
+	if fixture.txm.reqs[0].Obsolete != nil {
+		t.Fatal("fill without an order client has an Obsolete hook")
+	}
+}
+
+func TestCompletePendingFillRetiresObsoleteOrder(t *testing.T) {
+	for name, result := range map[string]txmanager.Result{
+		"cancelled pending fill": {
+			Hash:    common.HexToHash("0xc"),
+			Outcome: txmanager.OutcomeCancelled,
+			Err:     errors.Errorf("pending transaction cancelled at nonce 3: %w", txmanager.ErrRequestObsolete),
+		},
+		"dropped before signing": {
+			Outcome: txmanager.OutcomeSubmissionError,
+			Err:     errors.Errorf("send %q: %w", "uniswapx-fill", txmanager.ErrRequestObsolete),
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newDirectExecutionFixture(t)
+			fixture.order.Source = orderSourcePublicV2
+			fixture.solver.cfg.Breaker = BreakerConfig{MaxFailures: 1, Window: time.Minute}
+			metrics, reg := newUniswapXTestMetricsWithRegistry(t, fixture.solver)
+			fixture.solver.metrics = metrics
+			fixture.solver.inFlight[fixture.order.Hash] = true
+			fixture.solver.setPendingReservations(
+				t.Context(),
+				fixture.order.Hash,
+				liquidlane.CapacityReservations{fixture.route.CapacityID: big.NewInt(100)}, fixture.solver.capacity.Revision(),
+			)
+
+			fixture.solver.completePendingFill(t.Context(), testPendingFill(t, fixture.order), result)
+
+			if fixture.solver.capacity.Len() != 0 || fixture.solver.inFlight[fixture.order.Hash] {
+				t.Fatal("obsolete fill retained its reservation or in-flight state")
+			}
+			if _, retired := fixture.solver.filled[fixture.order.Hash]; !retired {
+				t.Fatal("obsolete order was not retired")
+			}
+			if _, retry := fixture.solver.retryAt[fixture.order.Hash]; retry || fixture.solver.attempts[fixture.order.Hash] != 0 {
+				t.Fatal("obsolete order was scheduled for another attempt")
+			}
+			if len(fixture.solver.failureTimes) != 0 || fixture.solver.localBlockUntil.Load() != 0 {
+				t.Fatal("obsolete order counted toward the failure breaker")
+			}
+			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeObsolete, 1)
+			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 0)
+		})
+	}
 }
 
 func waitForExecutionCondition(t *testing.T, condition func() bool) {

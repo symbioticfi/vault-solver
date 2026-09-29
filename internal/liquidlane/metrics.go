@@ -19,6 +19,9 @@ const (
 	FillOutcomeSuccess     = "success"
 	FillOutcomeFailure     = "failure"
 	FillOutcomeNotAdmitted = "not_admitted"
+	// FillOutcomeObsolete is a fill the solver retired because the order was settled elsewhere
+	// (filled or cancelled on-chain) before its transaction landed.
+	FillOutcomeObsolete = "obsolete"
 )
 
 // FillWorkflowSpec declares the shared successful-fill signals used by LiquidLane solvers.
