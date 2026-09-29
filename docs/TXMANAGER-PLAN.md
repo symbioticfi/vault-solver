@@ -68,7 +68,12 @@ The public YAML block is `txManager`. Values below are application defaults, aft
 
 Polling defaults to 2 seconds in the Go manager; it is not a separate YAML field. Pending receipt reads,
 replacement nonce reads and obsolescence checks each use `min(2 seconds, replacementInterval/2)`; fee reads use
-`min(1 second, replacementInterval/2)`. These internal read budgets are separate from broadcast timeout.
+`min(1 second, replacementInterval/2)`; a stalled call's gas re-estimate, fallback included, uses
+`min(5 seconds, replacementInterval/2)` and ends no later than the call's cancellation deadline. These
+internal read budgets are separate from broadcast timeout. The initial estimate, before signing, has no
+budget of its own: the request's `CancelAt` and manager shutdown bound it, so a request without `CancelAt`
+(3F `redeem`) can hold the worker and the nonce lane while a read endpoint withholds its estimate
+([3F plan §10](3F-PLAN.md#10-pending--deferred-items-post-phase-3)).
 Account refresh uses a 5-second context. Backends must honor cancellation. The replacement loop ticks
 every `blockTimeMs/2` and acts only on a new block; `replacementIntervalMs` only paces the fallback bump
 when fee windows stay unreadable, and an ambiguous broadcast may still be rebroadcast while more than
@@ -114,7 +119,11 @@ fallback below.
   - `stallAfterBlocks` blocks with room lost while valid mean the relay dropped the attempt, a builder it
     cannot reach built them, or the call outgrew its gas. A normal call is re-estimated for the next block
     and replaced with a larger gas limit once the raw estimate exceeds its limit (`gas`); otherwise its exact
-    bytes are rebroadcast, and after two such rebroadcasts a minimal bump replaces them (`stall`);
+    bytes are rebroadcast, and after two such rebroadcasts a minimal bump replaces them (`stall`). The
+    re-estimate runs on the lifecycle goroutine under its own budget (§3), so a read endpoint that never
+    answers it holds up receipts and shutdown cancellation for at most that budget, and deadline
+    cancellation not at all; cancellation that falls due during it is sent next, never a rebroadcast of
+    the call;
   - anything else holds, because waiting is free.
 
   A reprice uses the ordinary replacement rule below (at least a 12.5% bump of both fields, the fresh fees
@@ -158,8 +167,12 @@ one pending receipt read is outstanding; the reader neither changes ownership no
 
 Each RPC gets its own timeout, bounded by the lifecycle context. There is no shared sweep deadline that
 truncates later hashes. Sequential reads avoid a burst when replacements accumulate. A slow RPC can
-delay discovery of a later receipt, but cannot hold up the owner's timer handling. Other owner I/O,
-including broadcast, obsolescence and confirmation checks, retains its existing bounds.
+delay discovery of a later receipt, but cannot hold up the owner's timer handling. Other owner I/O
+(broadcast, fee and nonce reads, obsolescence and confirmation checks, the stall gas re-estimate) runs
+on the owner itself, so each call carries its own bound: while one runs, the owner services no receipt,
+timer or shutdown request, and the lifecycle context is detached from manager cancellation until the
+shutdown drain expires. New owner I/O must add a bound of its own. Signing is local CPU work today; a
+remote signer must bound `SignTx` itself, because a cancellation signs on that deadline-free context.
 
 An ordinary sweep covers a fixed number of tracked variants in round-robin order. Between RPCs, the
 newest appended variant gets a priority read without resetting the ordinary cursor. Priority and ordinary
@@ -332,7 +345,10 @@ Cancellation outcome tests also distinguish a satisfied confirmation policy from
 RFQ tests consume that distinction when deciding whether another fill is safe.
 Fee tests cover the base-fee bound, the tip rule, each repricing decision, fee-window parsing, the
 next-block estimate and its fallbacks, a stale send head, and scripted-chain lifecycles for stall
-rebroadcasts, congestion, validity, gas growth, unreadable windows and deadline cancellation. Lifecycle tests that need a replacement
+rebroadcasts, congestion, validity, gas growth, unreadable windows and deadline cancellation. A stall
+re-estimate the read endpoint never answers, next-block or fallback, still lets a mined receipt resolve
+the call and the deadline cancel it on time, and a shutdown request cancels it once the estimate budget
+runs out; neither cancellation is preceded by a rebroadcast of the call. Lifecycle tests that need a replacement
 mine a block that supplies the evidence, since no timer bumps a pending call.
 Run repository-required build, race/coverage and lint gates for implementation changes. Current reader
 validation is local; it does not establish deployment or production rollout status.

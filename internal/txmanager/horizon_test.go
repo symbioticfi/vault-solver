@@ -296,6 +296,9 @@ type horizonChain struct {
 	nextBlockParents     []uint64
 	cancellationTo       common.Address
 	includeCancellations bool
+	// hangEstimates leaves every estimate that would succeed unanswered until its context ends, the way
+	// a read endpoint that keeps the connection open but never replies does.
+	hangEstimates bool
 }
 
 func newHorizonChain(t *testing.T) *horizonChain {
@@ -356,12 +359,61 @@ func (c *horizonChain) FeeHistory(
 }
 
 func (c *horizonChain) EstimateGasNextBlock(
-	_ context.Context, _ ethereum.CallMsg, parent *types.Header, _ time.Duration,
+	ctx context.Context, _ ethereum.CallMsg, parent *types.Header, _ time.Duration,
 ) (uint64, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.nextBlockParents = append(c.nextBlockParents, parent.Number.Uint64())
-	return c.nextBlockGas, c.nextBlockErr
+	gas, err, hang := c.nextBlockGas, c.nextBlockErr, c.hangEstimates
+	c.mu.Unlock()
+	if hang && err == nil {
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	return gas, err
+}
+
+// EstimateGas is the latest-state fallback. It hangs like the next-block estimate and counts every
+// call, answered or not.
+func (c *horizonChain) EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64, error) {
+	c.mu.Lock()
+	hang := c.hangEstimates
+	c.mu.Unlock()
+	if !hang {
+		return c.mockBackend.EstimateGas(ctx, call)
+	}
+	c.estimateCalls.Add(1)
+	<-ctx.Done()
+	return 0, ctx.Err()
+}
+
+// hungEstimate is where a stalled call's re-estimate hangs: in the next-block estimate, or in the
+// latest-state fallback of a read RPC that rejects block overrides.
+type hungEstimate struct {
+	nextBlockErr    error
+	latestEstimates int64 // latest-state estimates the lifecycle makes, the initial one included
+}
+
+var hungEstimates = map[string]hungEstimate{
+	"next-block estimate": {},
+	"latest-state fallback": {
+		nextBlockErr: testRPCError{code: -32602, message: "too many arguments, want at most 3"}, latestEstimates: 2,
+	},
+}
+
+// waitForEstimates waits until count next-block estimates have been requested, answered or not.
+func (c *horizonChain) waitForEstimates(t *testing.T, count int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		c.mu.Lock()
+		requested := len(c.nextBlockParents)
+		c.mu.Unlock()
+		if requested >= count {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d next-block estimates", count)
 }
 
 func (c *horizonChain) SendTransaction(_ context.Context, tx *types.Transaction) error {
@@ -595,6 +647,134 @@ func TestHorizonStallRebroadcastsThenBumps(t *testing.T) {
 	chain.include(replacement)
 	if got := <-result; got.Outcome != OutcomeConfirmed || got.Hash != replacement.Hash() {
 		t.Fatalf("result = %+v, want the replacement confirmed", got)
+	}
+}
+
+// A read endpoint that never answers a stalled call's re-estimate must not hold the lifecycle, which
+// also owns receipts, deadlines and shutdown: once the estimate's budget runs out, the call is
+// rebroadcast and its receipt still resolves it. The latest-state fallback gets the same budget.
+func TestHungStallEstimateDoesNotHoldTheLifecycle(t *testing.T) {
+	for name, hung := range hungEstimates {
+		t.Run(name, func(t *testing.T) {
+			chain := newHorizonChain(t)
+			chain.nextBlockErr = hung.nextBlockErr
+			m := New(chain, mustSigner(t), big.NewInt(11155111), horizonConfig(func(cfg *Config) {
+				cfg.ReplacementInterval = 100 * time.Millisecond // a 50ms estimate budget
+			}), logr.Discard())
+			startManagerForTest(t, m)
+			result, accepted := m.SendAsync(t.Context(), Request{To: common.HexToAddress("0xabc"), Data: []byte{1}, Label: "fill"})
+			if !accepted {
+				t.Fatal("request was not accepted")
+			}
+			original := chain.waitForSends(t, 1)[0]
+
+			chain.set(func(c *horizonChain) { c.hangEstimates = true })
+			chain.mineSlots(0.001, 0.5, 0.5, 0.5)
+			chain.waitForEstimates(t, 2) // the stall re-estimate is in flight
+			chain.include(original)
+			select {
+			case got := <-result:
+				if got.Outcome != OutcomeConfirmed || got.Hash != original.Hash() {
+					t.Fatalf("result = %+v, want the original call confirmed", got)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("a hung stall re-estimate kept the lifecycle from reading a mined receipt")
+			}
+			if sent := chain.sentTransactions(); len(sent) != 2 || sent[1].Hash() != original.Hash() {
+				t.Fatalf("sent %d transactions, want the call and one exact rebroadcast", len(sent))
+			}
+			if got := chain.estimateCalls.Load(); got != hung.latestEstimates {
+				t.Fatalf("latest-state estimates = %d, want %d", got, hung.latestEstimates)
+			}
+		})
+	}
+}
+
+// A stalled call whose re-estimate hangs is cancelled at its deadline, not after the estimate budget:
+// the estimate ends at the deadline, like a normal replacement broadcast, and the call goes straight to
+// cancellation instead of being rebroadcast past it.
+func TestHungStallEstimateYieldsToTheDeadline(t *testing.T) {
+	for name, hung := range hungEstimates {
+		t.Run(name, func(t *testing.T) {
+			chain := newHorizonChain(t)
+			chain.includeCancellations = true
+			chain.nextBlockErr = hung.nextBlockErr
+			m := New(chain, mustSigner(t), big.NewInt(11155111), horizonConfig(nil), logr.Discard())
+			startManagerForTest(t, m)
+			cancelAt := time.Now().Add(500 * time.Millisecond)
+			result, accepted := m.SendAsync(t.Context(), Request{
+				To: common.HexToAddress("0xabc"), Data: []byte{1}, Label: "fill", CancelAt: cancelAt,
+			})
+			if !accepted {
+				t.Fatal("request was not accepted")
+			}
+			chain.waitForSends(t, 1)
+
+			chain.set(func(c *horizonChain) { c.hangEstimates = true })
+			chain.mineSlots(0.001, 0.5, 0.5, 0.5)
+			chain.waitForEstimates(t, 2) // the stall re-estimate is in flight
+			select {
+			case got := <-result:
+				if got.Outcome != OutcomeCancelled {
+					t.Fatalf("outcome = %s, want cancelled", got.Outcome)
+				}
+			case <-time.After(time.Until(cancelAt) + time.Second):
+				t.Fatal("a hung stall re-estimate delayed cancellation past the deadline")
+			}
+			sent := chain.sentTransactions()
+			if len(sent) != 2 || sent[1].To() == nil || *sent[1].To() != chain.cancellationTo {
+				t.Fatalf("sent %d transactions, want the call and its cancellation only", len(sent))
+			}
+			if got := chain.estimateCalls.Load(); got != hung.latestEstimates {
+				t.Fatalf("latest-state estimates = %d, want %d", got, hung.latestEstimates)
+			}
+		})
+	}
+}
+
+// Shutdown requested while a stalled call's re-estimate hangs still cancels the call: once the
+// estimate's budget runs out, the lifecycle sends the cancellation next, not a rebroadcast of the call,
+// and drains long before the shutdown deadline would abandon it.
+func TestHungStallEstimateYieldsToShutdown(t *testing.T) {
+	chain := newHorizonChain(t)
+	chain.includeCancellations = true
+	m := New(chain, mustSigner(t), big.NewInt(11155111), horizonConfig(func(cfg *Config) {
+		cfg.ReplacementInterval = 100 * time.Millisecond // a 50ms estimate budget
+		cfg.ShutdownTimeout = time.Minute
+	}), logr.Discard())
+	managerCtx, cancelManager := context.WithCancel(t.Context())
+	defer cancelManager()
+	startDone := make(chan struct{})
+	go func() {
+		m.Start(managerCtx)
+		close(startDone)
+	}()
+	result, accepted := m.SendAsync(t.Context(), Request{To: common.HexToAddress("0xabc"), Data: []byte{1}, Label: "fill"})
+	if !accepted {
+		t.Fatal("request was not accepted")
+	}
+	chain.waitForSends(t, 1)
+
+	chain.set(func(c *horizonChain) { c.hangEstimates = true })
+	chain.mineSlots(0.001, 0.5, 0.5, 0.5)
+	chain.waitForEstimates(t, 2) // the stall re-estimate is in flight
+	cancelManager()
+	select {
+	case got := <-result:
+		if got.Outcome != OutcomeCancelled {
+			t.Fatalf("outcome = %s (%v), want cancelled", got.Outcome, got.Err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a hung stall re-estimate kept shutdown from cancelling the call")
+	}
+	sent := chain.sentTransactions()
+	if len(sent) != 2 || sent[1].To() == nil || *sent[1].To() != chain.cancellationTo {
+		t.Fatalf("sent %d transactions, want the call and its cancellation only", len(sent))
+	}
+	select {
+	case <-startDone:
+	case <-time.After(time.Second):
+		t.Fatal("transaction manager did not finish draining")
 	}
 }
 
