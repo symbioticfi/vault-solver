@@ -223,6 +223,9 @@ type Manager struct {
 	// balanceMu guards signerBalance, the signer balance the manager read last (SignerBalance).
 	balanceMu     sync.Mutex
 	signerBalance *big.Int
+	// lastFillGas is the gas limit of the latest signed fill (not cancellation) attempt: the shadow
+	// evaluator's reference fill while balance.referenceGasUnits is 0.
+	lastFillGas atomic.Uint64
 
 	// horizon is the horizon fee policy's configuration in wei, and snapshots the fee snapshots it prices
 	// from, read with snapshotRewards' percentiles (fee_snapshot.go). nextBlock is the next-block gas
@@ -598,6 +601,12 @@ func (m *Manager) Start(ctx context.Context) {
 		m.probeBlockOverrides(ctx)
 	}()
 	defer func() { <-probeDone }()
+	shadowDone := make(chan struct{})
+	go func() {
+		defer close(shadowDone)
+		m.runShadow(ctx)
+	}()
+	defer func() { <-shadowDone }()
 
 	observability.Log(ctx).Info("started",
 		"from", m.signer.Address().Hex(),
@@ -605,6 +614,7 @@ func (m *Manager) Start(ctx context.Context) {
 		"balanceGuard", m.guardEnabled(),
 		"fundingGate", m.fundingGateOn,
 		"referenceGasUnits", m.cfg.Balance.ReferenceGasUnits,
+		"shadowEvaluator", m.shadowEnabled(),
 	)
 	if !m.cfg.Balance.GuardDisabled && !m.guardEnabled() {
 		observability.Log(ctx).Info("balance guard disabled: the backend cannot read a balance pinned to a block; " +
@@ -1027,6 +1037,7 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	observability.SetAttributes(broadcastCtx, txIdentity...)
 	sendSpan.SetAttributes(txIdentity...)
 	m.metrics.observeAttempt(req.Label, false, fees, gas)
+	m.lastFillGas.Store(gas)
 	if priced.snapshot.nextBase != nil {
 		m.metrics.observeHorizon(req.Label, priced.horizon)
 	}
@@ -1244,6 +1255,9 @@ func (m *Manager) complete(ctx context.Context, pending *pendingTransaction) {
 	m.metrics.clearPendingAge(pending.req.Label)
 	m.recordInclusion(pending, outcome)
 	pending.lifecycle.finish(outcome.Outcome, outcome.Receipt)
+	if outcome.Receipt != nil {
+		m.metrics.observeTipPaid(pending.req.Label, outcome.Outcome, outcome.Receipt, landedTransaction(pending.attempts, outcome.Hash))
+	}
 	if errors.Is(outcome.Err, errShutdownTimeout) {
 		observability.Log(ctx).Error(outcome.Err, "accepted transaction lifecycle did not drain before shutdown",
 			"label", pending.req.Label,
@@ -1258,6 +1272,16 @@ func (m *Manager) complete(ctx context.Context, pending *pendingTransaction) {
 	// still open. A pending built outside Start carries no span and gets the no-op one from ctx.
 	endSendSpan(trace.SpanFromContext(ctx), outcome)
 	pending.deliver(outcome)
+}
+
+// landedTransaction is the signed attempt with hash, or nil when none of attempts has it.
+func landedTransaction(attempts []txAttempt, hash common.Hash) *types.Transaction {
+	for _, attempt := range attempts {
+		if attempt.hash == hash {
+			return attempt.tx
+		}
+	}
+	return nil
 }
 
 // recordInclusion raises the balance-pin floor to the block that included the lifecycle, and records
@@ -1696,6 +1720,7 @@ func (m *Manager) replace(
 	pending.fees = cloneFeeQuote(fees)
 	if !cancellation {
 		pending.gas = gas
+		m.lastFillGas.Store(gas)
 	}
 	pending.attempts = append(pending.attempts, txAttempt{
 		hash: hash, tx: signed, cancellation: cancellation, exactRebroadcastPending: broadcastUncertain,
@@ -2142,6 +2167,18 @@ func (m *Manager) nextReplacementFees(
 	if err != nil && !errors.Is(err, errFreshFeesUnavailable) {
 		return feeQuote{}, err
 	}
+	fresh := &current
+	if err != nil {
+		fresh = nil
+		observability.Log(ctx).V(1).Info("fresh replacement fees unavailable; using cached bump", "error", err)
+	}
+	return legacyReplacementFees(previous, fresh, limit)
+}
+
+// legacyReplacementFees is the legacy policy's next same-nonce attempt after previous: a 12.5% bump of both
+// fields, raised to the fresh quote current when one was read (nil: the cached bump alone), under limit (nil
+// is unbounded). It is pure, so the shadow evaluator applies exactly the rule a legacy lifecycle signs.
+func legacyReplacementFees(previous feeQuote, current *feeQuote, limit *big.Int) (feeQuote, error) {
 	requiredTip := bumpFee(previous.tip)
 	requiredMaxFee := bumpFee(previous.maxFee)
 	next := feeQuote{
@@ -2149,11 +2186,9 @@ func (m *Manager) nextReplacementFees(
 		tip:     new(big.Int).Set(requiredTip),
 		maxFee:  new(big.Int).Set(requiredMaxFee),
 	}
-	if err == nil {
+	if current != nil {
 		next.baseFee.Set(current.baseFee)
 		next.maxFee = maxBigCopy(current.maxFee, next.maxFee)
-	} else {
-		observability.Log(ctx).V(1).Info("fresh replacement fees unavailable; using cached bump", "error", err)
 	}
 	if limit != nil && next.maxFee.Cmp(limit) > 0 {
 		next.maxFee.Set(limit)
@@ -2164,7 +2199,7 @@ func (m *Manager) nextReplacementFees(
 			"%w: base fee %s, fee limit %s", errReplacementBaseAboveLimit, next.baseFee, next.maxFee,
 		)
 	}
-	if err == nil {
+	if current != nil {
 		freshTip := new(big.Int).Set(current.tip)
 		if freshTip.Cmp(effectiveTipLimit) > 0 {
 			freshTip.Set(effectiveTipLimit)

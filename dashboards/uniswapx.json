@@ -23,6 +23,408 @@
   "description": "Execution totals, token amounts, time trends, transaction costs and operational diagnostics for the selected environment. Counter observations include retries; they are not globally deduplicated order accounting. Period increases may miss the first exported nonzero sample. Missing data stays unknown.",
   "editable": true,
   "elements": {
+    "panel-300": {
+      "kind": "Panel",
+      "spec": {
+        "id": 300,
+        "title": "Lane funding",
+        "description": "Per signer of this integration, in ETH: balance, operator target, and the balance a reference fill needs to keep quoting (quote: fees.pricingHorizonBlocks) and to send at all (min). Quoting stops while the funding gate (right axis, 1 fundable) is closed.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (address) (((solver_bot_txmanager_account_balance_wei{namespace=\"${namespace}\"} / 1e18) and on (namespace, job, instance) (max by (namespace, job, instance) (solver_bot_solver_info{namespace=\"${namespace}\",solver=\"uniswapx-filler\"}))) * on (namespace, job, instance) group_left (address) (max by (namespace, job, instance, address) (solver_bot_txmanager_account_info{namespace=\"${namespace}\"})))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "balance · {{address}}"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (address) (((solver_bot_txmanager_account_balance_target_wei{namespace=\"${namespace}\"} / 1e18) and on (namespace, job, instance) (max by (namespace, job, instance) (solver_bot_solver_info{namespace=\"${namespace}\",solver=\"uniswapx-filler\"}))) * on (namespace, job, instance) group_left (address) (max by (namespace, job, instance, address) (solver_bot_txmanager_account_info{namespace=\"${namespace}\"})))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "target · {{address}}"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "C",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (address, horizon) (((solver_bot_txmanager_account_required_balance_wei{namespace=\"${namespace}\",horizon=~\"min|quote\"} / 1e18) and on (namespace, job, instance) (max by (namespace, job, instance) (solver_bot_solver_info{namespace=\"${namespace}\",solver=\"uniswapx-filler\"}))) * on (namespace, job, instance) group_left (address) (max by (namespace, job, instance, address) (solver_bot_txmanager_account_info{namespace=\"${namespace}\"})))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "required {{horizon}} · {{address}}"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "D",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (address) (((solver_bot_txmanager_account_fundable{namespace=\"${namespace}\"}) and on (namespace, job, instance) (max by (namespace, job, instance) (solver_bot_solver_info{namespace=\"${namespace}\",solver=\"uniswapx-filler\"}))) * on (namespace, job, instance) group_left (address) (max by (namespace, job, instance, address) (solver_bot_txmanager_account_info{namespace=\"${namespace}\"})))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "fundable · {{address}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "suffix: ETH",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 5
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byFrameRefID", "options": "D"},
+                  "properties": [
+                    {"id": "unit", "value": "none"},
+                    {"id": "decimals", "value": 0},
+                    {"id": "custom.axisPlacement", "value": "right"},
+                    {"id": "min", "value": 0},
+                    {"id": "max", "value": 1},
+                    {"id": "custom.lineInterpolation", "value": "stepAfter"}
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "panel-301": {
+      "kind": "Panel",
+      "spec": {
+        "id": 301,
+        "title": "First-attempt outcomes · selected period",
+        "description": "How uniswapx-fill lifecycles that reached the chain landed: first (first signed attempt within 3 blocks), late, replaced or cancelled. Simulation stays \"unknown\" until next-block simulation classifies them.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (outcome, simulation) (sum by (namespace, job, instance, outcome, simulation) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\",label=\"uniswapx-fill\"}[$__range])))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "namespace": true},
+                    "indexByName": {},
+                    "renameByName": {
+                      "label": "Operation",
+                      "outcome": "Outcome",
+                      "reason": "Reason",
+                      "kind": "Kind",
+                      "policy": "Fee policy",
+                      "simulation": "Simulation",
+                      "mode": "Mode",
+                      "signal": "Signal",
+                      "address": "Signer",
+                      "horizon": "Horizon",
+                      "Value": "Count",
+                      "Value #A": "Count"
+                    }
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": false,
+              "sortBy": [
+                {"displayName": "Count", "desc": true}
+              ]
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "Outcome"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "first1": {"text": "First attempt, next block"},
+                            "first2": {"text": "First attempt, 2nd block"},
+                            "first3": {"text": "First attempt, 3rd block"},
+                            "replaced": {"text": "Landed after a replacement"},
+                            "missed3": {"text": "Not landed within 3 blocks"},
+                            "refused": {"text": "Refused (unaffordable or fee limit)"},
+                            "first": {"text": "First attempt within 3 blocks"},
+                            "late": {"text": "First attempt, later than 3 blocks"},
+                            "cancelled": {"text": "Cancellation landed"},
+                            "ok": {"text": "Success"},
+                            "revert": {"text": "Reverted"},
+                            "unsupported": {"text": "Overrides rejected"},
+                            "block_not_found": {"text": "Parent block not found"},
+                            "error": {"text": "Error"}
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "panel-302": {
+      "kind": "Panel",
+      "spec": {
+        "id": 302,
+        "title": "Refusals and repricings · selected period",
+        "description": "uniswapx-fill sends the balance guard refused before signing (nothing signed, nonce kept), and fee-changing replacements the horizon evaluation signed. Refusals are expected skips on an underfunded lane.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "label_replace(sum by (reason) (sum by (namespace, job, instance, reason) (increase(solver_bot_txmanager_admission_rejections_total{namespace=\"${namespace}\",label=\"uniswapx-fill\",reason=~\"unaffordable|unaffordable_one_block|stale_head|fee_ceiling\"}[$__range]))), \"signal\", \"Refused before signing\", \"\", \"\") or label_replace(sum by (reason) (sum by (namespace, job, instance, reason) (increase(solver_bot_txmanager_repricings_total{namespace=\"${namespace}\",label=\"uniswapx-fill\"}[$__range]))), \"signal\", \"Repricing\", \"\", \"\")",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "namespace": true},
+                    "indexByName": {},
+                    "renameByName": {
+                      "label": "Operation",
+                      "outcome": "Outcome",
+                      "reason": "Reason",
+                      "kind": "Kind",
+                      "policy": "Fee policy",
+                      "simulation": "Simulation",
+                      "mode": "Mode",
+                      "signal": "Signal",
+                      "address": "Signer",
+                      "horizon": "Horizon",
+                      "Value": "Count",
+                      "Value #A": "Count"
+                    }
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": false,
+              "sortBy": [
+                {"displayName": "Count", "desc": true}
+              ]
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "Reason"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "unaffordable": {"text": "Unaffordable"},
+                            "unaffordable_one_block": {"text": "Affordable for one block only"},
+                            "stale_head": {"text": "Stale head"},
+                            "fee_ceiling": {"text": "Per-request fee ceiling"},
+                            "validity": {"text": "Validity"},
+                            "congestion": {"text": "Congestion"},
+                            "stall": {"text": "Stall"},
+                            "gas": {"text": "Gas limit"},
+                            "fallback": {"text": "Fallback timer"},
+                            "reorg": {"text": "Reorg"},
+                            "uncertain": {"text": "Uncertain broadcast"},
+                            "capped": {"text": "Capped (no fundable bump)"}
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
     "panel-10": {
       "kind": "Panel",
       "spec": {
@@ -4276,6 +4678,50 @@
                       "width": 24,
                       "height": 6,
                       "element": {"kind": "ElementReference", "name": "panel-21"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Fee strategy and lane funding",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 12,
+                      "height": 7,
+                      "element": {"kind": "ElementReference", "name": "panel-300"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 6,
+                      "height": 7,
+                      "element": {"kind": "ElementReference", "name": "panel-301"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 18,
+                      "y": 0,
+                      "width": 6,
+                      "height": 7,
+                      "element": {"kind": "ElementReference", "name": "panel-302"}
                     }
                   }
                 ]

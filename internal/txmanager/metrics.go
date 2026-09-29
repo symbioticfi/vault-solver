@@ -106,6 +106,8 @@ type Metrics struct {
 	gasEstimateDuration *prometheus.HistogramVec
 	repricings          *prometheus.CounterVec
 	rebroadcasts        *prometheus.CounterVec
+	tipPaidWei          *prometheus.CounterVec
+	shadowLifecycles    *prometheus.CounterVec
 	account             *accountMetrics
 }
 
@@ -254,6 +256,18 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Name:      "rebroadcasts_total",
 			Help:      "Exact rebroadcasts of already signed attempts the endpoint accepted or already knew, by reason: stall, reorg, uncertain (an ambiguous broadcast) or capped (no fundable replacement under the cap).",
 		}, []string{"label", "reason"}),
+		tipPaidWei: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricsNamespace,
+			Subsystem: metricsSubsystem,
+			Name:      "tip_paid_wei_total",
+			Help:      "Priority fees paid by mined transactions: receipt gas used times the landed attempt's tip cap, an upper bound of the tip actually paid when the fee cap set the price.",
+		}, []string{"label", "outcome"}),
+		shadowLifecycles: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricsNamespace,
+			Subsystem: metricsSubsystem,
+			Name:      "shadow_lifecycles_total",
+			Help:      "Virtual fills the shadow evaluator scored, one per fee policy per head: first1, first2 or first3 (the first attempt would have been included that many blocks after its head), replaced (included within 3 blocks after a replacement), missed3 (not included within 3 blocks) or refused (the policy would not have signed it).",
+		}, []string{"policy", "outcome"}),
 	}
 	for _, collector := range []prometheus.Collector{
 		m.requests,
@@ -278,6 +292,8 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 		m.gasEstimateDuration,
 		m.repricings,
 		m.rebroadcasts,
+		m.tipPaidWei,
+		m.shadowLifecycles,
 		m.account,
 	} {
 		if err := reg.Register(collector); err != nil {
@@ -535,4 +551,53 @@ func weiFloat(value *big.Int) float64 {
 	}
 	f, _ := new(big.Float).SetInt(value).Float64()
 	return f
+}
+
+// startShadow creates every shadow_lifecycles_total series at zero, so the first outcome of each kind after a
+// restart is an increase that increase() and rate() see.
+func (m *Metrics) startShadow() {
+	if m == nil {
+		return
+	}
+	for _, policy := range shadowPolicies {
+		for _, outcome := range shadowOutcomes {
+			m.shadowLifecycles.WithLabelValues(string(policy), string(outcome))
+		}
+	}
+}
+
+// shadowLifecycle counts one scored virtual fill.
+func (m *Metrics) shadowLifecycle(policy FeePolicy, outcome shadowOutcome) {
+	if m != nil {
+		m.shadowLifecycles.WithLabelValues(string(policy), string(outcome)).Inc()
+	}
+}
+
+// observeTipPaid counts the priority fee a mined lifecycle paid: the receipt's gas used times the landed
+// attempt's effective tip (see paidTip).
+func (m *Metrics) observeTipPaid(label string, outcome Outcome, receipt *types.Receipt, landed *types.Transaction) {
+	if m == nil {
+		return
+	}
+	tip, ok := paidTip(landed, receipt)
+	if !ok {
+		return
+	}
+	paid := new(big.Int).Mul(new(big.Int).SetUint64(receipt.GasUsed), tip)
+	m.tipPaidWei.WithLabelValues(label, string(outcome)).Add(weiFloat(paid))
+}
+
+// paidTip is the priority fee per gas a mined EIP-1559 transaction paid, from what the receipt carries
+// without its block's base fee: effectiveGasPrice = min(feeCap, baseFee + tipCap), so below the fee cap the
+// tip cap was paid in full, and at the fee cap the paid tip, feeCap − baseFee, is at most the tip cap, which
+// is then reported as an upper bound. It reports false without a transaction or an effective gas price.
+func paidTip(tx *types.Transaction, receipt *types.Receipt) (*big.Int, bool) {
+	if tx == nil || receipt == nil || receipt.EffectiveGasPrice == nil || receipt.EffectiveGasPrice.Sign() < 0 {
+		return nil, false
+	}
+	tip := new(big.Int).Set(tx.GasTipCap())
+	if tip.Cmp(receipt.EffectiveGasPrice) > 0 {
+		tip.Set(receipt.EffectiveGasPrice)
+	}
+	return tip, true
 }

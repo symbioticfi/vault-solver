@@ -23,6 +23,1973 @@
   "description": "Execution totals, token amounts, time trends, transaction costs and operational diagnostics for the selected environment. Counter observations include retries; they are not globally deduplicated order accounting. Period increases may miss the first exported nonzero sample. Missing data stays unknown.",
   "editable": true,
   "elements": {
+    "panel-300": {
+      "kind": "Panel",
+      "spec": {
+        "id": 300,
+        "title": "Signer balance against required and target",
+        "description": "ETH per signer: the balance, the operator target (balance.targetEth; page when the funding gate is closed below it) and what a reference fill (balance.referenceGasUnits, or the latest fill's gas limit) needs at the latest next base fee: min (fees.minHorizonBlocks, can still send), quote (fees.pricingHorizonBlocks, the funding gate) and full (fees.maxHorizonBlocks). Top up below half the target.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (address) ((solver_bot_txmanager_account_balance_wei{namespace=\"${namespace}\"} / 1e18) * on (namespace, job, instance) group_left (address) (max by (namespace, job, instance, address) (solver_bot_txmanager_account_info{namespace=\"${namespace}\"})))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "balance · {{address}}"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (address) ((solver_bot_txmanager_account_balance_target_wei{namespace=\"${namespace}\"} / 1e18) * on (namespace, job, instance) group_left (address) (max by (namespace, job, instance, address) (solver_bot_txmanager_account_info{namespace=\"${namespace}\"})))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "target · {{address}}"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "C",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (address, horizon) ((solver_bot_txmanager_account_required_balance_wei{namespace=\"${namespace}\"} / 1e18) * on (namespace, job, instance) group_left (address) (max by (namespace, job, instance, address) (solver_bot_txmanager_account_info{namespace=\"${namespace}\"})))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "required {{horizon}} · {{address}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "suffix: ETH",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 5
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-301": {
+      "kind": "Panel",
+      "spec": {
+        "id": 301,
+        "title": "Next base fee",
+        "description": "Base fee of the next block, from the latest fee snapshot the transaction manager read (a send, the funding gate's account poll, or the shadow evaluator every head). The strategy's funding table is sized against it.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (address) ((solver_bot_txmanager_fee_next_base_fee_wei{namespace=\"${namespace}\"} / 1e9) * on (namespace, job, instance) group_left (address) (max by (namespace, job, instance, address) (solver_bot_txmanager_account_info{namespace=\"${namespace}\"})))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{address}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "suffix: gwei",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 3
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-302": {
+      "kind": "Panel",
+      "spec": {
+        "id": 302,
+        "title": "Lane funding gate",
+        "description": "1 while the signer funds a reference fill at the pricing horizon (Fundable), 0 while quoting is gated. Absent while balance.referenceGasUnits is 0. Closed with the balance below target pages; closed at or above target means the base fee exceeds what the target covers.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (address) ((solver_bot_txmanager_account_fundable{namespace=\"${namespace}\"}) * on (namespace, job, instance) group_left (address) (max by (namespace, job, instance, address) (solver_bot_txmanager_account_info{namespace=\"${namespace}\"})))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{address}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "min"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "stepAfter",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 0,
+                "min": 0,
+                "max": 1,
+                "mappings": [
+                  {
+                    "type": "value",
+                    "options": {
+                      "0": {"text": "Gated", "color": "red"},
+                      "1": {"text": "Fundable", "color": "green"}
+                    }
+                  }
+                ]
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-303": {
+      "kind": "Panel",
+      "spec": {
+        "id": 303,
+        "title": "Shadow first@3 by fee policy · last 24 hours",
+        "description": "Share of the shadow evaluator's virtual fills (one per head per policy) whose first attempt would land within 3 blocks, excluding refused ones. Fee-side only: local blocks, relay reach, reverts and competitor fills are not modelled, and consecutive heads are correlated. The strategy's gate for switching a lane to horizon: horizon ≥ legacy and ≥ 99.5% over 7 days; alert below 99% over 24 hours.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (policy) (sum by (namespace, job, instance, policy) (increase(solver_bot_txmanager_shadow_lifecycles_total{namespace=\"${namespace}\",outcome=~\"first1|first2|first3\"}[24h]))) / sum by (policy) (sum by (namespace, job, instance, policy) (increase(solver_bot_txmanager_shadow_lifecycles_total{namespace=\"${namespace}\",outcome!=\"refused\"}[24h])))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "{{policy}}",
+                      "format": "time_series"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "stat",
+          "version": "",
+          "spec": {
+            "options": {
+              "colorMode": "value",
+              "graphMode": "none",
+              "justifyMode": "center",
+              "orientation": "auto",
+              "reduceOptions": {
+                "calcs": ["lastNotNull"],
+                "fields": "",
+                "values": false
+              },
+              "text": {"valueSize": 30},
+              "textMode": "value_and_name",
+              "wideLayout": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "percentunit",
+                "decimals": 2,
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "red"},
+                    {"value": 0.99, "color": "yellow"},
+                    {"value": 0.995, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "thresholds"},
+                "noValue": "No data"
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "legacy"},
+                  "properties": [
+                    {"id": "displayName", "value": "Legacy"}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "horizon"},
+                  "properties": [
+                    {"id": "displayName", "value": "Horizon"}
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "panel-304": {
+      "kind": "Panel",
+      "spec": {
+        "id": 304,
+        "title": "Shadow outcomes by fee policy · selected period",
+        "description": "Virtual fills scored during the selected period: first attempt landing in block 1, 2 or 3 after its head, landed only after a replacement, not landed within 3 blocks, or refused (the balance guard or the fee limit). The legacy rule bumps every replacementIntervalMs; the horizon rule reprices from block evidence.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (policy, outcome) (sum by (namespace, job, instance, policy, outcome) (increase(solver_bot_txmanager_shadow_lifecycles_total{namespace=\"${namespace}\"}[$__range])))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "namespace": true},
+                    "indexByName": {},
+                    "renameByName": {
+                      "label": "Operation",
+                      "outcome": "Outcome",
+                      "reason": "Reason",
+                      "kind": "Kind",
+                      "policy": "Fee policy",
+                      "simulation": "Simulation",
+                      "mode": "Mode",
+                      "signal": "Signal",
+                      "address": "Signer",
+                      "horizon": "Horizon",
+                      "Value": "Count",
+                      "Value #A": "Count"
+                    }
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": false,
+              "sortBy": [
+                {"displayName": "Count", "desc": true}
+              ]
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "Fee policy"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "legacy": {"text": "Legacy (2×base, timed bumps)"},
+                            "horizon": {"text": "Horizon (exact validity, block-driven)"}
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Outcome"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "first1": {"text": "First attempt, next block"},
+                            "first2": {"text": "First attempt, 2nd block"},
+                            "first3": {"text": "First attempt, 3rd block"},
+                            "replaced": {"text": "Landed after a replacement"},
+                            "missed3": {"text": "Not landed within 3 blocks"},
+                            "refused": {"text": "Refused (unaffordable or fee limit)"},
+                            "first": {"text": "First attempt within 3 blocks"},
+                            "late": {"text": "First attempt, later than 3 blocks"},
+                            "cancelled": {"text": "Cancellation landed"},
+                            "ok": {"text": "Success"},
+                            "revert": {"text": "Reverted"},
+                            "unsupported": {"text": "Overrides rejected"},
+                            "block_not_found": {"text": "Parent block not found"},
+                            "error": {"text": "Error"}
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "panel-305": {
+      "kind": "Panel",
+      "spec": {
+        "id": 305,
+        "title": "Shadow first@1, first@2 and first@3 · 1 hour windows",
+        "description": "Cumulative share of virtual first attempts landing within 1, 2 and 3 blocks over the preceding hour, per fee policy, excluding refused fills. Dips mark busy episodes; compare the policies at equal times.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (policy) (sum by (namespace, job, instance, policy) (increase(solver_bot_txmanager_shadow_lifecycles_total{namespace=\"${namespace}\",outcome=~\"first1\"}[1h]))) / sum by (policy) (sum by (namespace, job, instance, policy) (increase(solver_bot_txmanager_shadow_lifecycles_total{namespace=\"${namespace}\",outcome!=\"refused\"}[1h])))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{policy}} first@1"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (policy) (sum by (namespace, job, instance, policy) (increase(solver_bot_txmanager_shadow_lifecycles_total{namespace=\"${namespace}\",outcome=~\"first1|first2\"}[1h]))) / sum by (policy) (sum by (namespace, job, instance, policy) (increase(solver_bot_txmanager_shadow_lifecycles_total{namespace=\"${namespace}\",outcome!=\"refused\"}[1h])))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{policy}} first@2"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "C",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (policy) (sum by (namespace, job, instance, policy) (increase(solver_bot_txmanager_shadow_lifecycles_total{namespace=\"${namespace}\",outcome=~\"first1|first2|first3\"}[1h]))) / sum by (policy) (sum by (namespace, job, instance, policy) (increase(solver_bot_txmanager_shadow_lifecycles_total{namespace=\"${namespace}\",outcome!=\"refused\"}[1h])))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{policy}} first@3"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "min", "mean"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "percentunit",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 2,
+                "max": 1
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-306": {
+      "kind": "Panel",
+      "spec": {
+        "id": 306,
+        "title": "Real first-attempt ratio · pooled over 28 days",
+        "description": "Lifecycles that reached the chain in the last 28 days, pooled across operations, and the share whose first signed attempt landed within 3 blocks (exact rebroadcasts allowed), with a 95% Wilson score interval (Prometheus cannot compute the Clopper-Pearson one; Wilson is slightly narrower at small n). At about 8 lifecycles a week, 34 clean ones only bound the failure rate below about 9%.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[28d])))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\",outcome=\"first\"}[28d])))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "C",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\",outcome=\"first\"}[28d])))) / (sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[28d]))))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "D",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "clamp((((sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\",outcome=\"first\"}[28d])))) / (sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[28d]))))) + 1.9208 / (sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[28d])))) - 1.96 * sqrt(((sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\",outcome=\"first\"}[28d])))) / (sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[28d]))))) * (1 - ((sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\",outcome=\"first\"}[28d])))) / (sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[28d])))))) / (sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[28d])))) + 0.9604 / ((sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[28d])))) * (sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[28d]))))))) / (1 + 3.8416 / (sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[28d]))))), 0, 1)",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "E",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "clamp((((sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\",outcome=\"first\"}[28d])))) / (sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[28d]))))) + 1.9208 / (sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[28d])))) + 1.96 * sqrt(((sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\",outcome=\"first\"}[28d])))) / (sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[28d]))))) * (1 - ((sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\",outcome=\"first\"}[28d])))) / (sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[28d])))))) / (sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[28d])))) + 0.9604 / ((sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[28d])))) * (sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[28d]))))))) / (1 + 3.8416 / (sum (sum by (namespace, job, instance) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[28d]))))), 0, 1)",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "merge",
+                "spec": {
+                  "options": {}
+                }
+              },
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "namespace": true},
+                    "indexByName": {},
+                    "renameByName": {
+                      "label": "Operation",
+                      "outcome": "Outcome",
+                      "reason": "Reason",
+                      "kind": "Kind",
+                      "policy": "Fee policy",
+                      "simulation": "Simulation",
+                      "mode": "Mode",
+                      "signal": "Signal",
+                      "address": "Signer",
+                      "horizon": "Horizon",
+                      "Value": "Count",
+                      "Value #A": "Lifecycles",
+                      "Value #B": "First attempts",
+                      "Value #C": "Ratio",
+                      "Value #D": "Lower 95%",
+                      "Value #E": "Upper 95%"
+                    }
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": false},
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byRegexp", "options": "^(Ratio|Lower 95%|Upper 95%)$"},
+                  "properties": [
+                    {"id": "unit", "value": "percentunit"},
+                    {"id": "decimals", "value": 1}
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "panel-307": {
+      "kind": "Panel",
+      "spec": {
+        "id": 307,
+        "title": "Real first-attempt outcomes · selected period",
+        "description": "How lifecycles that reached the chain landed: first (first signed attempt within 3 blocks), late, replaced (a replacement or cancellation was signed first) or cancelled (the cancellation landed). Simulation stays \"unknown\" until next-block simulation classifies non-first lifecycles.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (label, outcome, simulation) (sum by (namespace, job, instance, label, outcome, simulation) (increase(solver_bot_txmanager_first_attempt_total{namespace=\"${namespace}\"}[$__range])))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "namespace": true},
+                    "indexByName": {},
+                    "renameByName": {
+                      "label": "Operation",
+                      "outcome": "Outcome",
+                      "reason": "Reason",
+                      "kind": "Kind",
+                      "policy": "Fee policy",
+                      "simulation": "Simulation",
+                      "mode": "Mode",
+                      "signal": "Signal",
+                      "address": "Signer",
+                      "horizon": "Horizon",
+                      "Value": "Count",
+                      "Value #A": "Count"
+                    }
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": false,
+              "sortBy": [
+                {"displayName": "Count", "desc": true}
+              ]
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "Outcome"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "first1": {"text": "First attempt, next block"},
+                            "first2": {"text": "First attempt, 2nd block"},
+                            "first3": {"text": "First attempt, 3rd block"},
+                            "replaced": {"text": "Landed after a replacement"},
+                            "missed3": {"text": "Not landed within 3 blocks"},
+                            "refused": {"text": "Refused (unaffordable or fee limit)"},
+                            "first": {"text": "First attempt within 3 blocks"},
+                            "late": {"text": "First attempt, later than 3 blocks"},
+                            "cancelled": {"text": "Cancellation landed"},
+                            "ok": {"text": "Success"},
+                            "revert": {"text": "Reverted"},
+                            "unsupported": {"text": "Overrides rejected"},
+                            "block_not_found": {"text": "Parent block not found"},
+                            "error": {"text": "Error"}
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "panel-308": {
+      "kind": "Panel",
+      "spec": {
+        "id": 308,
+        "title": "Inclusion delay · selected period",
+        "description": "Blocks from the head a lifecycle was first signed at to the block that included its call (1 is the next block). Target: p50 = 1 and p99 ≤ 3.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "histogram_quantile(0.50, sum by (le, label) (increase(solver_bot_txmanager_inclusion_delay_blocks_bucket{namespace=\"${namespace}\"}[$__range])))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "histogram_quantile(0.99, sum by (le, label) (increase(solver_bot_txmanager_inclusion_delay_blocks_bucket{namespace=\"${namespace}\"}[$__range])))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "merge",
+                "spec": {
+                  "options": {}
+                }
+              },
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "namespace": true},
+                    "indexByName": {},
+                    "renameByName": {
+                      "label": "Operation",
+                      "outcome": "Outcome",
+                      "reason": "Reason",
+                      "kind": "Kind",
+                      "policy": "Fee policy",
+                      "simulation": "Simulation",
+                      "mode": "Mode",
+                      "signal": "Signal",
+                      "address": "Signer",
+                      "horizon": "Horizon",
+                      "Value": "Count",
+                      "Value #A": "p50",
+                      "Value #B": "p99"
+                    }
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": false},
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 1,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "p50"},
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 1.5, "color": "yellow"}
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "p99"},
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {"mode": "thresholds"}
+                    },
+                    {
+                      "id": "custom.cellOptions",
+                      "value": {"type": "color-text"}
+                    },
+                    {
+                      "id": "thresholds",
+                      "value": {
+                        "mode": "absolute",
+                        "steps": [
+                          {"value": 0, "color": "green"},
+                          {"value": 3.5, "color": "red"}
+                        ]
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "panel-309": {
+      "kind": "Panel",
+      "spec": {
+        "id": 309,
+        "title": "Latest attempt fees by operation",
+        "description": "Priority fee (tip) and fee cap per gas of the latest signed attempt, fill or cancellation, in gwei. The horizon policy pays 0.02 gwei in blocks with room, 0.1 after one full block and the run reward (0.2–15) in demand runs.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (label, kind) (solver_bot_txmanager_attempt_tip_wei{namespace=\"${namespace}\"}) / 1e9",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "tip · {{label}} {{kind}}"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (label, kind) (solver_bot_txmanager_attempt_max_fee_wei{namespace=\"${namespace}\"}) / 1e9",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "fee cap · {{label}} {{kind}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "suffix: gwei",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "stepAfter",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 4
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-310": {
+      "kind": "Panel",
+      "spec": {
+        "id": 310,
+        "title": "Latest attempt gas limit by operation",
+        "description": "Gas limit of the latest signed attempt (estimate plus gas.headroomBps). Measure balance.referenceGasUnits from the fill series before enabling the funding gate.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (label, kind) (solver_bot_txmanager_attempt_gas_limit{namespace=\"${namespace}\"})",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{label}} {{kind}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "stepAfter",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 0
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-311": {
+      "kind": "Panel",
+      "spec": {
+        "id": 311,
+        "title": "Attempt validity horizon · selected period",
+        "description": "Initial attempts by the number of blocks, from the next one, their fee cap stays valid at the floor tip, when the horizon policy or the balance guard priced them (bucket upper bounds). Below 3 means the balance, not the policy, set the cap: fund the lane.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (le) (increase(solver_bot_txmanager_attempt_horizon_blocks_bucket{namespace=\"${namespace}\"}[$__range]))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "{{le}}",
+                      "format": "heatmap"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "bargauge",
+          "version": "",
+          "spec": {
+            "options": {
+              "displayMode": "basic",
+              "orientation": "vertical",
+              "showUnfilled": true,
+              "namePlacement": "auto",
+              "valueMode": "color",
+              "sizing": "auto",
+              "minVizHeight": 16,
+              "minVizWidth": 8,
+              "maxVizHeight": 300,
+              "reduceOptions": {
+                "calcs": ["lastNotNull"],
+                "fields": "",
+                "values": false
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "min": 0,
+                "noValue": "No data",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "blue"}
+                  ]
+                },
+                "color": {"mode": "thresholds"}
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-312": {
+      "kind": "Panel",
+      "spec": {
+        "id": 312,
+        "title": "Repricings, rebroadcasts and refusals · selected period",
+        "description": "Fee-changing replacements the horizon evaluation signed (validity, congestion, stall, gas, fallback), exact rebroadcasts (stall, reorg, uncertain, capped) and sends refused before signing by the balance guard (unaffordable, unaffordable_one_block, stale_head). Any gas repricing, or repeated stall repricings, means silent drops or same-vault gas shifts. Refusals on a funded lane are worth a look.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "label_replace(sum by (label, reason) (sum by (namespace, job, instance, label, reason) (increase(solver_bot_txmanager_repricings_total{namespace=\"${namespace}\"}[$__range]))), \"signal\", \"Repricing\", \"\", \"\") or label_replace(sum by (label, reason) (sum by (namespace, job, instance, label, reason) (increase(solver_bot_txmanager_rebroadcasts_total{namespace=\"${namespace}\"}[$__range]))), \"signal\", \"Rebroadcast\", \"\", \"\") or label_replace(sum by (label, reason) (sum by (namespace, job, instance, label, reason) (increase(solver_bot_txmanager_admission_rejections_total{namespace=\"${namespace}\",reason=~\"unaffordable|unaffordable_one_block|stale_head|fee_ceiling\"}[$__range]))), \"signal\", \"Refused before signing\", \"\", \"\")",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "namespace": true},
+                    "indexByName": {},
+                    "renameByName": {
+                      "label": "Operation",
+                      "outcome": "Outcome",
+                      "reason": "Reason",
+                      "kind": "Kind",
+                      "policy": "Fee policy",
+                      "simulation": "Simulation",
+                      "mode": "Mode",
+                      "signal": "Signal",
+                      "address": "Signer",
+                      "horizon": "Horizon",
+                      "Value": "Count",
+                      "Value #A": "Count"
+                    }
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": false,
+              "sortBy": [
+                {"displayName": "Count", "desc": true}
+              ]
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "Reason"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "unaffordable": {"text": "Unaffordable"},
+                            "unaffordable_one_block": {"text": "Affordable for one block only"},
+                            "stale_head": {"text": "Stale head"},
+                            "fee_ceiling": {"text": "Per-request fee ceiling"},
+                            "validity": {"text": "Validity"},
+                            "congestion": {"text": "Congestion"},
+                            "stall": {"text": "Stall"},
+                            "gas": {"text": "Gas limit"},
+                            "fallback": {"text": "Fallback timer"},
+                            "reorg": {"text": "Reorg"},
+                            "uncertain": {"text": "Uncertain broadcast"},
+                            "capped": {"text": "Capped (no fundable bump)"}
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "panel-313": {
+      "kind": "Panel",
+      "spec": {
+        "id": 313,
+        "title": "Pending age by operation",
+        "description": "Age of the unresolved call (fill, since its first send) or cancellation (since it began). A cancellation pending for more than 120 s is stuck.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "max by (label, kind) (solver_bot_txmanager_pending_age_seconds{namespace=\"${namespace}\"})",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{label}} {{kind}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "s",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"},
+                    {"value": 120, "color": "red"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "line"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 0
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-314": {
+      "kind": "Panel",
+      "spec": {
+        "id": 314,
+        "title": "Gas estimates by mode and outcome · selected period",
+        "description": "Estimates of new attempts and horizon re-estimates: latest (legacy), next_block, unconfirmed (no conclusive capability probe yet) or fallback (an upstream rejects or ignores block overrides; alert on any).",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (label, mode, outcome) (sum by (namespace, job, instance, label, mode, outcome) (increase(solver_bot_txmanager_gas_estimates_total{namespace=\"${namespace}\"}[$__range])))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "namespace": true},
+                    "indexByName": {},
+                    "renameByName": {
+                      "label": "Operation",
+                      "outcome": "Outcome",
+                      "reason": "Reason",
+                      "kind": "Kind",
+                      "policy": "Fee policy",
+                      "simulation": "Simulation",
+                      "mode": "Mode",
+                      "signal": "Signal",
+                      "address": "Signer",
+                      "horizon": "Horizon",
+                      "Value": "Count",
+                      "Value #A": "Count"
+                    }
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": false,
+              "sortBy": [
+                {"displayName": "Count", "desc": true}
+              ]
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "Mode"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "latest": {"text": "Latest block"},
+                            "next_block": {"text": "Next block"},
+                            "fallback": {"text": "Fallback (overrides unavailable)"},
+                            "unconfirmed": {"text": "Unconfirmed probe"},
+                            "supplied": {"text": "Supplied"}
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Outcome"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "first1": {"text": "First attempt, next block"},
+                            "first2": {"text": "First attempt, 2nd block"},
+                            "first3": {"text": "First attempt, 3rd block"},
+                            "replaced": {"text": "Landed after a replacement"},
+                            "missed3": {"text": "Not landed within 3 blocks"},
+                            "refused": {"text": "Refused (unaffordable or fee limit)"},
+                            "first": {"text": "First attempt within 3 blocks"},
+                            "late": {"text": "First attempt, later than 3 blocks"},
+                            "cancelled": {"text": "Cancellation landed"},
+                            "ok": {"text": "Success"},
+                            "revert": {"text": "Reverted"},
+                            "unsupported": {"text": "Overrides rejected"},
+                            "block_not_found": {"text": "Parent block not found"},
+                            "error": {"text": "Error"}
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "panel-315": {
+      "kind": "Panel",
+      "spec": {
+        "id": 315,
+        "title": "Gas estimate p95 by mode",
+        "description": "p95 duration of one gas estimate RPC; under horizon bounded by gas.estimateTimeoutMs (5 s default, unmeasured through eRPC).",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "histogram_quantile(0.95, sum by (le, mode) (rate(solver_bot_txmanager_gas_estimate_duration_seconds_bucket{namespace=\"${namespace}\"}[$__rate_interval])))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{mode}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "s",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 2
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-316": {
+      "kind": "Panel",
+      "spec": {
+        "id": 316,
+        "title": "Spend per confirmed fill · selected period",
+        "description": "Receipt fees of confirmed calls divided by their count, in ETH, and the share of that spend paid as priority fee (tip_paid_wei_total: the landed attempt's tip cap, an upper bound when its fee cap set the price). The base fee is most of the spend and cannot be influenced; compare periods at equal base fee.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (label) (sum by (namespace, job, instance, label) (increase(solver_bot_txmanager_fee_paid_wei_total{namespace=\"${namespace}\",outcome=\"confirmed\"}[$__range]))) / sum by (label) (sum by (namespace, job, instance, label) (increase(solver_bot_txmanager_requests_total{namespace=\"${namespace}\",outcome=\"confirmed\"}[$__range]))) / 1e18",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (label) (sum by (namespace, job, instance, label) (increase(solver_bot_txmanager_tip_paid_wei_total{namespace=\"${namespace}\",outcome=\"confirmed\"}[$__range]))) / sum by (label) (sum by (namespace, job, instance, label) (increase(solver_bot_txmanager_fee_paid_wei_total{namespace=\"${namespace}\",outcome=\"confirmed\"}[$__range])))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "merge",
+                "spec": {
+                  "options": {}
+                }
+              },
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "namespace": true},
+                    "indexByName": {},
+                    "renameByName": {
+                      "label": "Operation",
+                      "outcome": "Outcome",
+                      "reason": "Reason",
+                      "kind": "Kind",
+                      "policy": "Fee policy",
+                      "simulation": "Simulation",
+                      "mode": "Mode",
+                      "signal": "Signal",
+                      "address": "Signer",
+                      "horizon": "Horizon",
+                      "Value": "Count",
+                      "Value #A": "ETH per fill",
+                      "Value #B": "Tip share"
+                    }
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {"showHeader": true, "cellHeight": "sm", "enablePagination": false},
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "ETH per fill"},
+                  "properties": [
+                    {"id": "unit", "value": "suffix: ETH"},
+                    {"id": "decimals", "value": 6}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Tip share"},
+                  "properties": [
+                    {"id": "unit", "value": "percentunit"},
+                    {"id": "decimals", "value": 1}
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
     "panel-10": {
       "kind": "Panel",
       "spec": {
@@ -5691,6 +7658,218 @@
                       "width": 12,
                       "height": 7,
                       "element": {"kind": "ElementReference", "name": "panel-24"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Lane funding and fee inputs",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-300"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 6,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-301"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 18,
+                      "y": 0,
+                      "width": 6,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-302"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "First attempts and shadow fee evaluation",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 8,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-303"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 8,
+                      "y": 0,
+                      "width": 16,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-304"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 6,
+                      "width": 24,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-305"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 14,
+                      "width": 10,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-306"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 10,
+                      "y": 14,
+                      "width": 8,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-307"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 18,
+                      "y": 14,
+                      "width": 6,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-308"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Attempt pricing and repricing",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-309"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 6,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-310"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 18,
+                      "y": 0,
+                      "width": 6,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-311"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 8,
+                      "width": 12,
+                      "height": 7,
+                      "element": {"kind": "ElementReference", "name": "panel-312"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 8,
+                      "width": 12,
+                      "height": 7,
+                      "element": {"kind": "ElementReference", "name": "panel-313"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 15,
+                      "width": 10,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-314"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 10,
+                      "y": 15,
+                      "width": 7,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-315"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 17,
+                      "y": 15,
+                      "width": 7,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-316"}
                     }
                   }
                 ]

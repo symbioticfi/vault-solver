@@ -923,6 +923,11 @@ still requires the redeploy in phase 0.
 
 ## 10. Open items
 
+- [ ] **Measure LI.FI fill gas and recalibrate quote gas units.** `balance.referenceGasUnits` 4400000 borrows
+  UniswapX's value; measure LI.FI's own fills from `solver_bot_txmanager_attempt_gas_limit{label="lifi-fill"}` (the
+  LI.FI dashboard's fee-strategy row) and recalibrate the shared quote gas-units model (0.9–1.1M modelled against
+  3.0–3.6M measured on UniswapX) before enabling `gas:` on mainnet. Switch to `fees.policy: horizon` after the
+  UniswapX lane in the strategy's canary order ([TXMANAGER-PLAN §10](TXMANAGER-PLAN.md#10-verification-and-maintenance)).
 - [ ] **Quote unreserved capacity while the sender is busy.** Deferred as a relatively small,
   solver-local follow-up using the existing shared `CapacityLedger`. Move reservation installation
   before transaction admission and use its revision checks during planning and quote publication.

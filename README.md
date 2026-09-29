@@ -410,6 +410,32 @@ txManager:
     enabled: true           # score both fee policies on every head, metrics only
 ```
 
+| Key | Default | Mainnet | What it does |
+|---|---|---|---|
+| `fees.policy` | `legacy` | `horizon` per lane after the shadow gate | `legacy`: `2×latest + tip`, timed bumps. `horizon`: exact validity horizon, block-driven repricing; requires `tipGwei: 0` |
+| `fees.blockTimeMs` | 12000 | 12000 | Slot time for head lag, the next-block estimate and the evaluation cadence |
+| `fees.minHorizonBlocks` | 2 | 2 | Blocks an attempt must stay valid from the real next block; below that the send is refused |
+| `fees.maxHorizonBlocks` | 6 | 6 | Horizon a horizon send targets (about today's `2×latest`); at most 12 |
+| `fees.pricingHorizonBlocks` | 5 | 5 | Quote pricing and funding-gate horizon; at least `minHorizonBlocks + 2` |
+| `fees.maxHeadLagBlocks` | 2 | 2 | Head lag tolerated before a send waits for a newer head, then refuses `stale_head` |
+| `fees.tipFloorGwei` | 0.02 | 0.02 | Tip in blocks with room; the refusal floor assumes it |
+| `fees.singleFullBlockTipGwei` | 0.1 | 0.1 | Tip when one of the last two blocks had no room for the gas limit |
+| `fees.congestedTipFloorGwei` / `congestedTipCapGwei` | 0.2 / 15 | 0.2 / 15, lower the cap on thin-margin lanes | Clamp of the tip in runs of full blocks |
+| `fees.congestedRewardBlocks` / `congestedRewardPercentile` | 3 / 50 | 3 / 50 | A demand run follows the largest reward at this percentile over this many blocks |
+| `fees.escalateAfterFullMisses` | 2 | 2 | Full blocks missed in a row before a congestion reprice |
+| `fees.stallAfterRoomyMisses` | 3 | 3 | Blocks with room missed before the stall response |
+| `gas.headroomBps` | 500 | 800 | Gas-limit headroom over the estimate (0–5000) |
+| `gas.nextBlockEstimate` | true | true | Horizon: estimate in the next block's context |
+| `gas.fallbackHeadroomBps` | 1000 | 1000 | Headroom when estimating at `latest` instead; at least `headroomBps` |
+| `gas.estimateTimeoutMs` | 5000 | 5000 | Bound on one gas estimate |
+| `balance.guard` | true | true | Cap every attempt at what the balance funds; refuse below the floor |
+| `balance.referenceGasUnits` | 0 (gate off) | RFQ 4350000, UniswapX and LI.FI 4400000, 3F unset | Fill gas limit for quote pricing, the funding gate and the shadow evaluator |
+| `balance.fundingHysteresisBps` | 2000 | 2000 | Extra balance needed to reopen a closed funding gate |
+| `balance.targetEth` | 0 (unset) | 0.1 active lanes, 0.036 idle ones | Funding target, exported for alerts only |
+| `shadow.enabled` | true | true | Score both fee policies on every head, metrics only |
+| `accountPollIntervalMs` | 30000 | 12000 | Account and funding-gate refresh cadence |
+| `replacementIntervalMs` | 30000 | 30000 (UniswapX 15000) | Legacy bump cadence; under horizon only the fallback cadence and the shutdown budget |
+
 Omitted keys keep their defaults; an explicit `0` or `false` is honoured. The balance guard is on under
 both policies: it caps each attempt's max fee at what the balance can pay for the gas limit and refuses a
 send that cannot stay valid for `fees.minHorizonBlocks` (2) blocks, without consuming the nonce.
@@ -418,7 +444,10 @@ refuses to start while `balance.referenceGasUnits` is 0, because its quotes are 
 (4400000 covers current fills); set the key in the same deploy as the image. Every key, its default and its
 validation rule are listed in the
 [transaction manager plan](docs/TXMANAGER-PLAN.md#3-configuration-and-time-budgets). Config decoding rejects
-unknown keys, so deploy a config that sets these keys only with an image that knows them.
+unknown keys, so roll out in this order: first the image everywhere (with no new keys its defaults apply: the
+legacy policy with the balance guard and the shadow evaluator on), then the keys in the config. Roll the image
+back past a key only after the config drops it, or in the same deploy; within an image that knows the keys,
+`fees.policy: legacy` is the one-line rollback of the horizon policy.
 
 **Refusals and funding.** The guard reads the signer balance with `eth_getBalance` pinned to the fee
 snapshot's block (by block hash, EIP-1898) through the read endpoints, so those must serve historical-state
@@ -433,13 +462,32 @@ The head lag is measured against the wall clock, so a local or forked chain must
 `balance.guard: false` there, or every send is refused as `stale_head`.
 Replacements and cancellations are capped the same way; when the balance cannot fund the 12.5% bump, the
 latest attempt is rebroadcast unchanged. A cancellation whose balance read fails is capped at what the
-lifecycle's signed attempts already reserved, so the deadline cancel is still sent. At a next-block base fee `pb`, a fill with gas limit `G` can
-still be sent while the balance covers `G × (1.125·pb + tipFloor)`; the legacy price needs about
-`G × (2·pb + tip)`. As a rule of thumb, fund lanes that fill regularly to about 0.1 ETH (a 4.35M-gas fill
-then still sends up to a next base fee of about 20 gwei, and keeps the full legacy price up to about 11.5 gwei) and idle
-lanes to about 0.036 ETH, topping up below half the target. `solver_bot_txmanager_account_required_balance_wei`
-exports the requirement at the latest guarded send (and on every account poll while the funding gate is on),
-and the startup `started` log line names the signer address; signers must be unique per deployment.
+lifecycle's signed attempts already reserved, so the deadline cancel is still sent.
+`solver_bot_txmanager_account_required_balance_wei` exports the requirements below at the latest next base fee
+(guarded sends, account polls while the funding gate is on, and every head while the shadow evaluator runs), and
+the startup `started` log line names the signer address; signers must be unique per deployment.
+
+**Funding a lane.** At a next base fee `pb` and a fill gas limit `G`, a lane
+
+- keeps quoting (the funding gate) while its balance covers `G × (1.6018·pb + tipFloor)`,
+- can still send while it covers `G × (1.125·pb + tipFloor)`,
+- signs the full six-block horizon while it covers `G × (1.802·pb + tip)` (the legacy price needs about
+  `G × (2·pb + tip)`).
+
+No cancellation reserve is needed: a fill and its cancel share one nonce. For a 4.35M-gas RFQ fill (a 4.4M-gas
+UniswapX fill differs by about 1%):
+
+| Balance | Quotes up to `pb` | Sends up to `pb` | Full horizon up to `pb` |
+|---|---|---|---|
+| 0.036 ETH | 5.2 gwei | 7.3 gwei | 4.6 gwei |
+| 0.05 ETH | 7.2 gwei | 10.2 gwei | 6.4 gwei |
+| 0.1 ETH | 14.3 gwei | 20.4 gwei | 12.7 gwei |
+| 0.12 ETH | 17.2 gwei | 24.5 gwei | 15.3 gwei |
+
+Size each lane by volume rather than funding every lane the same: 0.1 ETH (`balance.targetEth: 0.1`) for lanes
+that fill (RFQ, UniswapX, and LI.FI and 3F until their volume is measured), 0.036 ETH for RFQ lanes that have not
+filled yet (raise it to 0.1 on the first fill), and top up when a lane falls below half its target. A fill costs
+about 0.0006 ETH at a 0.15 gwei base fee and 0.017 ETH at 5 gwei.
 
 **Horizon fee policy.** `fees.policy: horizon` (which requires `tipGwei: 0`) prices each new attempt from the
 node's next-block base fee `pb`: a max fee that stays valid for `fees.maxHorizonBlocks` (6) blocks of maximum
@@ -459,6 +507,21 @@ budget and then refused before signing as `stale_head`, like the pinned balance 
 (`MaxFeePerGas`, UniswapX and LI.FI with `gas:`) are priced `fees.pricingHorizonBlocks` (5) blocks ahead, about
 `1.8·pb + 1.125·tip` against about `2.25·latest` under legacy, from a fee snapshot cached for the poll interval,
 so a quoted fill still sends after three blocks of maximum base-fee growth.
+
+**Shadow evaluator.** With `shadow.enabled` (the default) and metrics on, the tx manager scores a virtual fill of
+`balance.referenceGasUnits` gas (or of the latest fill's gas limit while that is 0) under both policies at every
+new head, without sending anything: it prices it as each policy would, applies each policy's own replacement rule
+(timed bumps every `replacementIntervalMs` for legacy, block-driven repricing for horizon), and counts whether the
+first attempt would have landed in each of the next three blocks, counting a full block as a miss unless the tip
+matches or beats that block's median reward. `solver_bot_txmanager_shadow_lifecycles_total{policy, outcome}` (`first1`,
+`first2`, `first3`, `replaced`, `missed3`, `refused`) gives about 7,200 virtual fills per policy a day, where real
+fills number a few a week. Move a lane to `fees.policy: horizon` once seven days of it show horizon first@3 at least
+as high as legacy's and at least 99.5%, including a period with a base fee above 3 gwei; alert when the policy in
+use falls below 99% over 24 hours. It reuses the fee snapshot the tx manager reads anyway, adding at most one
+latest-header and one fee-history read per half block on the read endpoints when nothing else read one, and it
+also keeps `solver_bot_txmanager_fee_next_base_fee_wei` and `solver_bot_txmanager_account_required_balance_wei`
+current on every head. It covers the fee side only: blocks built outside the relay's reach, reverts and competitor
+fills show up in the real `solver_bot_txmanager_first_attempt_total`.
 
 Under horizon a pending attempt is not bumped on a timer. Every half block (`fees.blockTimeMs`/2) the manager
 reads the fee history since the attempt was sent and, at each new head, holds (waiting costs nothing), or
@@ -643,7 +706,8 @@ Sentry groups these diagnosed errors by `(solver, message, reason_code)`; other 
 
 The [txmanager metric reference](docs/TXMANAGER-PLAN.md#metrics) covers transaction outcomes, admission
 and balance-guard refusals, replacements, phase timing, first-attempt and inclusion-delay outcomes, attempt
-fees, pending age, required balance and account snapshots, including labels and units.
+fees, pending age, required balance and account snapshots, shadow fee-policy outcomes and the priority fees paid
+(`tip_paid_wei_total`, whose ratio to `fee_paid_wei_total` is the tip share of spend), including labels and units.
 
 The registry also includes standard Go/process collectors,
 `solver_bot_build_info{version,commit}`, and `solver_bot_solver_info{solver}`. The first identifies the exact
@@ -738,6 +802,11 @@ Choose **Namespace** to select the environment. Solver dashboards aggregate all 
 namespace. Runtime also has a **Pod (RPC / resources)** filter for RPC and process diagnostics;
 **All** includes every replica, and the selector includes pods observed earlier in the selected time
 range. Execution totals remain aggregated across the namespace regardless of the pod selection.
+Runtime's **Lane funding and fee inputs**, **First attempts and shadow fee evaluation** and **Attempt pricing and
+repricing** rows show each signer's balance against what a reference fill needs and its target, the funding gate,
+the shadow first@3 per fee policy, the real first-attempt ratio pooled over 28 days with a 95% Wilson interval,
+inclusion delay, attempt fees and horizons, repricings, refusals, gas-estimate modes and spend per confirmed fill;
+each solver dashboard has a **Fee strategy and lane funding** row for its own operation.
 Counter increases are calculated per process before summing, percentiles use combined histogram
 buckets, and shared account balances are not summed across replicas.
 

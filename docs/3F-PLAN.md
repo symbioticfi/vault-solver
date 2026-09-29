@@ -408,7 +408,9 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
   10-request finalize batch) is unmeasured, so it stays 0: the funding gate and its alert are off for 3F, and
   a redeem backoff ends on a signer balance rise or its schedule (at most 60 minutes), not on a base-fee drop.
   Measure it from `solver_bot_txmanager_attempt_gas_limit{label="redeem"}` and set it. The redeem decision above (no gate,
-  halve and back off) still needs the 3F owner's confirmation.
+  halve and back off) still needs the 3F owner's confirmation. Until it is set, the tx manager's shadow evaluator
+  sizes its virtual fills from the latest redeem batch's gas limit, so it scores nothing after a restart until the
+  first redeem is signed. 3F is last in the horizon canary order.
 - **WS live-log subscription** (`chain.wsUrl`) — config field present but unused; the poll-based reconcile/redeem path is sufficient for v0.
 
 **Testing and observability:**

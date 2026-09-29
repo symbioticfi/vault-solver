@@ -146,6 +146,9 @@ func newGuardManager(t *testing.T, b Backend, cfg Config, metrics *Metrics) *Man
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = time.Millisecond
 	}
+	// With fast blocks the shadow evaluator's own header and fee-history reads would consume the scripted
+	// heads these tests serve to the send path; it has its own tests (shadow_test.go).
+	cfg.Shadow.Disabled = true
 	m := NewWithMetrics(b, mustSigner(t), big.NewInt(11155111), cfg, metrics, logr.Discard())
 	startManagerForTest(t, m)
 	return m

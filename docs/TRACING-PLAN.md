@@ -233,6 +233,10 @@ guard or the horizon fee policy priced it `fee.next_base` (wei), `fee.horizon` (
 the floor tip) and, with the guard, `balance.affordable` (wei per gas). A send refused before signing keeps the
 attributes of what was read before the refusal (`fee.next_base`, `balance.affordable`, and `gas.estimate_mode`
 once the estimate returned), which are what explain it; `fee.horizon` is set only once a fee cap was priced.
+`txmanager.shadow` roots each tick of the shadow fee evaluator (TXMANAGER-PLAN §4.5), every half block while
+`shadow.enabled` and metrics are on: `fee.head` (the snapshot's fee-history head), `shadow.new_head` (whether it
+advanced the evaluator) and `shadow.scored` (virtual fills scored); a shared snapshot read it triggers nests under
+it, and a failed read ends it with an error status (logged at Info only, the evaluator being metrics-only).
 Under `fees.policy: horizon`, `txmanager.block_overrides_probe` roots each check that the read endpoint honours
 `eth_estimateGas` block overrides (TXMANAGER-PLAN §4.3), at startup and every 10 minutes; an inconclusive probe
 ends with an error status. A quote's `MaxFeePerGas` opens no span of its own: its fee snapshot's RPC spans, when

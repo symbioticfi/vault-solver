@@ -288,6 +288,9 @@ func pendingConfig() Config {
 	cfg.ReplacementInterval = time.Hour
 	cfg.PendingTimeout = time.Hour
 	cfg.ShutdownTimeout = 100 * time.Millisecond
+	// The shadow evaluator reads fee snapshots of its own every half block, which waitEvaluated would count as
+	// the lifecycle's evaluations; it has its own tests (shadow_test.go).
+	cfg.Shadow.Disabled = true
 	return cfg
 }
 
@@ -394,7 +397,8 @@ func TestHorizonPendingRepricesBeforeItTurnsInvalid(t *testing.T) {
 	// The next base fee rose past what fee(2, tipFloor) the signed cap still covers.
 	h.chain.set(func(b *horizonBackend) { b.nextBase = gwei(1.7) })
 	h.chain.waitEvaluated(t, h.chain.mine(0.5, nil))
-	sends := h.chain.sends()
+	// A decision's send can trail the reads waitEvaluated counts; waitSends waits for it, len catches extras.
+	sends := h.chain.waitSends(t, 2)
 	if len(sends) != 2 {
 		t.Fatalf("write endpoint received %d transactions, want the first and one validity reprice", len(sends))
 	}
@@ -427,7 +431,7 @@ func TestHorizonPendingEscalatesAfterTwoFullMisses(t *testing.T) {
 		t.Fatalf("one full block led to %d transactions, want no reprice", len(sends))
 	}
 	h.chain.waitEvaluated(t, h.chain.mine(0.95, nil))
-	sends := h.chain.sends()
+	sends := h.chain.waitSends(t, 2)
 	if len(sends) != 2 {
 		t.Fatalf("two full blocks led to %d transactions, want one congestion reprice", len(sends))
 	}
@@ -471,14 +475,15 @@ func TestHorizonPendingStallRebroadcastsThenReprices(t *testing.T) {
 	}
 	for rebroadcast := 1; rebroadcast <= stallRebroadcastsBeforeReprice; rebroadcast++ {
 		mineRoomy(3)
-		sends := h.chain.sends()
+		// The stall's send follows its re-estimate, which can finish after the reads waitEvaluated counts.
+		sends := h.chain.waitSends(t, 1+rebroadcast)
 		if len(sends) != 1+rebroadcast || sends[rebroadcast].Hash() != first.Hash() {
 			t.Fatalf("after %d stalls the write endpoint received %d transactions, want %d exact rebroadcasts",
 				rebroadcast, len(sends), rebroadcast)
 		}
 	}
 	mineRoomy(3)
-	sends := h.chain.sends()
+	sends := h.chain.waitSends(t, 4)
 	if len(sends) != 4 || sends[3].Hash() == first.Hash() {
 		t.Fatalf("the third stall led to %d transactions, want a reprice after two rebroadcasts", len(sends))
 	}
@@ -611,12 +616,12 @@ func TestHorizonPendingCancellationStaysLive(t *testing.T) {
 			}
 			for rebroadcast := 1; rebroadcast <= stallRebroadcastsBeforeReprice; rebroadcast++ {
 				mineRoomy()
-				if sends := h.chain.sends(); len(sends) != 2+rebroadcast || sends[1+rebroadcast].Hash() != cancellation.Hash() {
+				if sends := h.chain.waitSends(t, 2+rebroadcast); len(sends) != 2+rebroadcast || sends[1+rebroadcast].Hash() != cancellation.Hash() {
 					t.Fatalf("stall %d: write endpoint received %d transactions, want an exact cancellation rebroadcast", rebroadcast, len(sends))
 				}
 			}
 			mineRoomy()
-			sends := h.chain.sends()
+			sends := h.chain.waitSends(t, 5)
 			if len(sends) != 5 || sends[4].Hash() == cancellation.Hash() || sends[4].GasFeeCap().Cmp(bumpFee(cancellation.GasFeeCap())) != 0 {
 				t.Fatalf("third stall: write endpoint received %d transactions, want one minimal cancellation reprice", len(sends))
 			}
