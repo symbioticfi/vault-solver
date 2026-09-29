@@ -37,7 +37,6 @@ type Backend interface {
 		lastBlock *big.Int,
 		rewardPercentiles []float64,
 	) (*ethereum.FeeHistory, error)
-	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
 	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
 	HeaderByHash(ctx context.Context, hash common.Hash) (*types.Header, error)
 	EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64, error)
@@ -81,15 +80,13 @@ type cancellationBackend interface {
 type Config struct {
 	Confirmations       uint64        // blocks to wait past inclusion before returning
 	MaxFeeGwei          float64       // absolute max fee per gas; app config requires a positive value
-	TipGwei             float64       // minimum priority fee; 0 => derive it from recent fee history
 	PollInterval        time.Duration // receipt/confirmation poll cadence; 0 => 2s
 	BroadcastTimeout    time.Duration // maximum duration of one transaction submission RPC; 0 => 5s
 	AccountPollInterval time.Duration // signer balance/nonce metric refresh cadence; 0 => 30s
-	ReplacementInterval time.Duration // pending tx fee-bump cadence; 0 => 30s
+	ReplacementInterval time.Duration // fallback fee-bump cadence while fee windows are unreadable; 0 => 30s
 	PendingTimeout      time.Duration // switch from replacing the call to cancelling its nonce; 0 => 5m
 	ShutdownTimeout     time.Duration // maximum graceful drain after manager cancellation; 0 => 1m
-	FeePolicy           FeePolicy     // pricing and repricing policy; "" => FeePolicyLegacy
-	Horizon             HorizonConfig // tunes FeePolicyHorizon; ignored by the legacy policy
+	Horizon             HorizonConfig // fee horizon, tip and gas-estimate tuning; zero values select defaults
 }
 
 // Request is a transaction to send. Value nil means 0. Stateful solver calls leave GasLimit at 0 so
@@ -237,8 +234,6 @@ const (
 	maxFeeReadTimeout          = time.Second
 	maxReceiptReadTimeout      = 2 * time.Second
 	accountRefreshTimeout      = 5 * time.Second
-	feeHistoryBlocks           = 5
-	feeHistoryPercentile       = 25.0
 	replacementBumpNumerator   = 9
 	replacementBumpDenominator = 8
 	cancellationGasLimit       = 21_000
@@ -274,9 +269,6 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log log
 	if cfg.ShutdownTimeout <= 0 {
 		cfg.ShutdownTimeout = defaultShutdownTimeout
 	}
-	if cfg.FeePolicy == "" {
-		cfg.FeePolicy = FeePolicyLegacy
-	}
 	cfg.Horizon = cfg.Horizon.withDefaults()
 	return &Manager{
 		backend:              backend,
@@ -311,21 +303,15 @@ func (m *Manager) Confirmations() uint64 {
 	return m.cfg.Confirmations
 }
 
-// ValidateFeeHeadroom rejects a configured priority-fee floor that can never fit under the initial
-// transaction cap after reserving one ordinary replacement and one cancellation bump.
+// ValidateFeeHeadroom rejects a configured congested tip cap, the highest tip the manager prices,
+// that can never fit under the initial transaction cap after reserving one ordinary replacement and
+// one cancellation bump.
 func (m *Manager) ValidateFeeHeadroom() error {
 	initialLimit := reserveFeeBump(m.normalFeeLimit(Request{}))
-	if m.horizonEnabled() && initialLimit != nil && m.horizon.congestedTipCap.Cmp(initialLimit) >= 0 {
+	if initialLimit != nil && m.horizon.congestedTipCap.Cmp(initialLimit) >= 0 {
 		return errors.Errorf(
-			"horizon congested tip cap %s leaves no base-fee headroom under initial fee limit %s after reserved replacement bumps",
+			"congested tip cap %s leaves no base-fee headroom under initial fee limit %s after reserved replacement bumps",
 			m.horizon.congestedTipCap, initialLimit,
-		)
-	}
-	tip := gweiToWei(m.cfg.TipGwei)
-	if initialLimit != nil && tip.Sign() > 0 && tip.Cmp(initialLimit) >= 0 {
-		return errors.Errorf(
-			"tip floor %s leaves no base-fee headroom under initial fee limit %s after reserved replacement bumps",
-			tip, initialLimit,
 		)
 	}
 	return nil
@@ -752,19 +738,15 @@ func (m *Manager) releaseAdmissionDemand() {
 }
 
 // MaxFeePerGas returns a profitability ceiling that includes one ordinary replacement when the
-// configured limit permits it. Send recomputes the initial fees immediately before signing.
+// configured limit permits it: one bump over the horizon fee cap for the size of the latest signed
+// call. Send recomputes the initial fees immediately before signing.
 func (m *Manager) MaxFeePerGas(ctx context.Context) (*big.Int, error) {
 	limit := m.normalFeeLimit(Request{})
-	var fees feeQuote
-	var err error
-	if m.horizonEnabled() {
-		var snapshot feeSnapshot
-		if snapshot, _, err = m.readFeeSnapshot(ctx); err == nil {
-			fees, err = horizonFees(snapshot, m.lastGas.Load(), reserveFeeBump(limit), m.horizon)
-		}
-	} else {
-		fees, err = m.currentFees(ctx, reserveFeeBump(limit))
+	snapshot, _, err := m.readFeeSnapshot(ctx)
+	if err != nil {
+		return nil, err
 	}
+	fees, err := horizonFees(snapshot, m.lastGas.Load(), reserveFeeBump(limit), m.horizon)
 	if err != nil {
 		return nil, err
 	}
@@ -810,28 +792,11 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	if req.MaxFeePerGas != nil && req.MaxFeePerGas.Sign() <= 0 {
 		return nil, errors.Errorf("send %q: request max fee per gas must be positive", req.Label)
 	}
-	normalLimit := m.normalFeeLimit(req)
-	var fees feeQuote
-	var gas, sentHead uint64
-	if m.horizonEnabled() {
-		quote, quoteErr := m.horizonBroadcastFees(broadcastCtx, req, reserveFeeBump(normalLimit))
-		if quoteErr != nil {
-			return nil, quoteErr
-		}
-		fees, gas, sentHead = quote.fees, quote.gas, quote.head
-	} else {
-		fees, err = m.currentFees(broadcastCtx, reserveFeeBump(normalLimit))
-		if err != nil {
-			return nil, errors.Errorf("send %q: %w", req.Label, err)
-		}
-		gas = req.GasLimit
-		if gas == 0 {
-			gas, err = m.estimateGas(broadcastCtx, req)
-			if err != nil {
-				return nil, err
-			}
-		}
+	quote, err := m.quoteCall(broadcastCtx, req, reserveFeeBump(m.normalFeeLimit(req)))
+	if err != nil {
+		return nil, err
 	}
+	fees, gas := quote.fees, quote.gas
 	obsolete, obsoleteErr := m.requestObsolete(broadcastCtx, req)
 	if obsoleteErr != nil {
 		// Obsolescence is only a liveness optimization. The solver already validated the call,
@@ -901,7 +866,7 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 		}},
 		originalHash: hash,
 		span:         sendSpan,
-		horizon:      horizonProgress{sentHead: sentHead, lastHead: sentHead, lastEvaluation: time.Now()},
+		horizon:      horizonProgress{sentHead: quote.head, lastHead: quote.head, lastEvaluation: time.Now()},
 	}, nil
 }
 
@@ -1053,19 +1018,13 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 			if !tick.After(replacementStarted) {
 				continue
 			}
-			dueNow := !cancelling && pending.cancellationDue(time.Now())
-			if dueNow {
-				startCancellation("")
-			}
 			var promoted bool
-			switch {
-			case m.horizonEnabled() && !dueNow:
-				// Under the horizon policy a tick only reprices on block evidence.
-				promoted = m.evaluateHorizon(ctx, pending, cancelling, tryReplace)
-			case cancelling:
+			if !cancelling && pending.cancellationDue(time.Now()) {
+				startCancellation("")
 				promoted = tryReplace(cancel())
-			default:
-				promoted = tryReplace(replaceIntent{reason: replaceReasonInterval})
+			} else {
+				// Otherwise a tick only reprices on block evidence.
+				promoted = m.evaluateHorizon(ctx, pending, cancelling, tryReplace)
 			}
 			if promoted {
 				// A fee lookup can cross the deadline and promote this replacement to
@@ -1317,8 +1276,6 @@ func (m *Manager) tryReplace(
 		kind, reason = replacementKindCancellation, promoted.reason
 	case cancellation:
 		kind = replacementKindCancellation
-	case reason == "":
-		reason = replaceReasonInterval
 	}
 	m.metrics.replacement(pending.req.Label, kind, reason)
 	observability.Log(ctx).Info("pending transaction replaced",
@@ -1444,12 +1401,14 @@ func replacementBroadcastContext(
 	return context.WithDeadline(ctx, pending.cancelDeadline)
 }
 
-// freshFees prices a replacement of gas units from current chain state, without a limit.
+// freshFees prices a replacement of gas units from current chain state, without a limit: the fees a
+// new call of that size would get now.
 func (m *Manager) freshFees(ctx context.Context, gas uint64) (feeQuote, error) {
-	if m.horizonEnabled() {
-		return m.horizonFreshFees(ctx, gas)
+	snapshot, _, err := m.readFeeSnapshot(ctx)
+	if err != nil {
+		return feeQuote{}, err
 	}
-	return m.currentFees(ctx, nil)
+	return horizonFees(snapshot, gas, nil, m.horizon)
 }
 
 func (m *Manager) nextReplacementFees(
@@ -1603,104 +1562,6 @@ func (pending *pendingTransaction) cancellationDue(now time.Time) bool {
 	default:
 		return false
 	}
-}
-
-// currentFees computes the current EIP-1559 base fee, tip, and fee cap under the supplied lifecycle
-// limit. A nil limit is unbounded.
-func (m *Manager) currentFees(ctx context.Context, limit *big.Int) (feeQuote, error) {
-	feeCtx, cancel := context.WithTimeout(ctx, m.feeReadTimeout())
-	defer cancel()
-
-	head, err := m.backend.HeaderByNumber(feeCtx, nil)
-	if err != nil {
-		return feeQuote{}, errors.Errorf("%w: header by number: %w", errFreshFeesUnavailable, err)
-	}
-	if head == nil || head.BaseFee == nil || head.BaseFee.Sign() < 0 {
-		return feeQuote{}, errors.Errorf("%w: latest header must contain a non-negative base fee", errFreshFeesUnavailable)
-	}
-	baseFee := new(big.Int).Set(head.BaseFee)
-
-	tipFloor := gweiToWei(m.cfg.TipGwei)
-	var tip *big.Int
-	if tipFloor.Sign() == 0 {
-		history, historyErr := m.backend.FeeHistory(
-			feeCtx, feeHistoryBlocks, nil, []float64{feeHistoryPercentile},
-		)
-		if historyErr != nil {
-			return feeQuote{}, errors.Errorf("%w: fee history: %w", errFreshFeesUnavailable, historyErr)
-		}
-		var valid bool
-		tip, valid = feeHistoryTip(history)
-		if !valid {
-			return feeQuote{}, errors.Errorf("%w: invalid fee history rewards", errFreshFeesUnavailable)
-		}
-	} else {
-		suggestedTip, tipErr := m.backend.SuggestGasTipCap(feeCtx)
-		if tipErr == nil && suggestedTip != nil && suggestedTip.Sign() >= 0 {
-			tip = maxBigCopy(suggestedTip, tipFloor)
-		} else if ctx.Err() != nil {
-			return feeQuote{}, errors.Errorf("%w: suggest gas tip: %w", errFreshFeesUnavailable, ctx.Err())
-		} else {
-			tip = tipFloor
-		}
-	}
-
-	// 2*baseFee + tip leaves headroom for one base-fee doubling between now and inclusion.
-	maxFee := new(big.Int).Add(new(big.Int).Mul(baseFee, big.NewInt(2)), tip)
-	if limit != nil {
-		if maxFee.Cmp(limit) > 0 {
-			maxFee.Set(limit)
-		}
-	}
-	maxTip := new(big.Int).Sub(maxFee, baseFee)
-	if maxTip.Sign() < 0 {
-		return feeQuote{}, errors.Errorf(
-			"fee limit reached: current base fee %s exceeds tx manager max fee %s", baseFee, maxFee,
-		)
-	}
-	if tipFloor.Sign() > 0 && tipFloor.Cmp(maxTip) > 0 {
-		return feeQuote{}, errors.Errorf(
-			"fee limit reached: fee limit %s cannot cover base fee %s plus priority fee floor %s",
-			maxFee, baseFee, tipFloor,
-		)
-	}
-	if tip.Cmp(maxTip) > 0 {
-		tip.Set(maxTip)
-	}
-	return feeQuote{baseFee: baseFee, tip: tip, maxFee: maxFee}, nil
-}
-
-func feeHistoryTip(history *ethereum.FeeHistory) (*big.Int, bool) {
-	if history == nil || len(history.Reward) != feeHistoryBlocks {
-		return nil, false
-	}
-	tips := make([]*big.Int, 0, len(history.Reward))
-	for _, blockRewards := range history.Reward {
-		if len(blockRewards) != 1 || blockRewards[0] == nil || blockRewards[0].Sign() < 0 {
-			return nil, false
-		}
-		tips = append(tips, blockRewards[0])
-	}
-	slices.SortFunc(tips, func(a, b *big.Int) int { return a.Cmp(b) })
-	return new(big.Int).Set(tips[len(tips)/2]), true
-}
-
-func (m *Manager) estimateGas(ctx context.Context, req Request) (uint64, error) {
-	gas, err := m.backend.EstimateGas(ctx, ethereum.CallMsg{
-		From:  m.signer.Address(),
-		To:    &req.To,
-		Value: req.Value,
-		Data:  req.Data,
-	})
-	if err != nil {
-		// Calldata can contain unpublished authorizations. Keep it out of error logs and Sentry.
-		observability.Log(ctx).Error(err, "gas estimation failed",
-			"label", req.Label,
-		)
-		return 0, errors.Errorf("estimate gas %q: %w", req.Label, err)
-	}
-	// 5% headroom over the estimate.
-	return gas + gas/20, nil
 }
 
 func optionalBigString(value *big.Int) string {

@@ -155,7 +155,7 @@ the chosen solver decodes it into its own typed struct.
 ```yaml
 chain: { rpcUrl, writeRpcUrl?, chainId, rpcFallbackUrls?, wsUrl? }
 signer: { keyEnv: SOLVER_PRIVATE_KEY }     # the EIP-1271 signer every served adapter trusts
-txManager: { confirmations: 2, maxFeeGwei, tipGwei, broadcastTimeoutMs, replacementIntervalMs, pendingTimeoutMs, shutdownTimeoutMs, feePolicy, horizon }
+txManager: { confirmations: 2, maxFeeGwei, broadcastTimeoutMs, replacementIntervalMs, pendingTimeoutMs, shutdownTimeoutMs, horizon }
 
 solvers:
   - name: 3f-bridge-facilitator             # ← registry key: selects the impl

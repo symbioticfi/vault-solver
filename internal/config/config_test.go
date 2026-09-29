@@ -49,9 +49,8 @@ func TestLoad_ValidAppliesDefaults(t *testing.T) {
 	if cfg.Observability.Addr != DefaultObservabilityAddr {
 		t.Fatalf("expected default addr %q, got %q", DefaultObservabilityAddr, cfg.Observability.Addr)
 	}
-	if cfg.TxManager.FeePolicy != FeePolicyLegacy || cfg.TxManager.Horizon != defaultHorizon() {
-		t.Fatalf("fee policy defaults = %q %+v, want legacy with horizon defaults",
-			cfg.TxManager.FeePolicy, cfg.TxManager.Horizon)
+	if cfg.TxManager.Horizon != defaultHorizon() {
+		t.Fatalf("fee pricing defaults = %+v, want %+v", cfg.TxManager.Horizon, defaultHorizon())
 	}
 }
 
@@ -66,13 +65,12 @@ func defaultHorizon() HorizonFeeConfig {
 	}
 }
 
-func TestLoad_HorizonFeePolicyKeepsOverridesAndDefaultsTheRest(t *testing.T) {
+func TestLoad_HorizonKeepsOverridesAndDefaultsTheRest(t *testing.T) {
 	cfg, err := Load(writeTemp(t, `
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
 txManager:
   maxFeeGwei: 50
-  feePolicy: horizon
   horizon: {maxBlocks: 5, tipFloorGwei: 0.01, congestedTipCapGwei: 5, gasHeadroomBps: 800}
 solvers: [{name: x}]
 `))
@@ -81,8 +79,8 @@ solvers: [{name: x}]
 	}
 	want := defaultHorizon()
 	want.MaxBlocks, want.TipFloorGwei, want.CongestedTipCapGwei, want.GasHeadroomBps = 5, 0.01, 5, 800
-	if cfg.TxManager.FeePolicy != FeePolicyHorizon || cfg.TxManager.Horizon != want {
-		t.Fatalf("horizon config = %q %+v, want %+v", cfg.TxManager.FeePolicy, cfg.TxManager.Horizon, want)
+	if cfg.TxManager.Horizon != want {
+		t.Fatalf("horizon config = %+v, want %+v", cfg.TxManager.Horizon, want)
 	}
 }
 
@@ -300,10 +298,10 @@ signer: {keyEnv: K}
 txManager: {maxFeeGwei: .nan}
 solvers: [{name: x}]
 `,
-		"negative tip": `
+		"removed tip floor": `
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
-txManager: {maxFeeGwei: 100, tipGwei: -1}
+txManager: {maxFeeGwei: 100, tipGwei: 1}
 solvers: [{name: x}]
 `,
 		"unknown field": `
@@ -341,16 +339,10 @@ chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
 txManager: {maxFeeGwei: 100, shutdownTimeoutMs: -1}
 solvers: [{name: x}]
-`, "unknown fee policy": `
+`, "removed fee policy selector": `
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
-txManager: {maxFeeGwei: 100, feePolicy: fast}
-solvers: [{name: x}]
-`,
-		"legacy tip under horizon": `
-chain: {rpcUrl: http://x, chainId: 1}
-signer: {keyEnv: K}
-txManager: {maxFeeGwei: 100, feePolicy: horizon, tipGwei: 1}
+txManager: {maxFeeGwei: 100, feePolicy: horizon}
 solvers: [{name: x}]
 `,
 		"horizon max blocks too small": `

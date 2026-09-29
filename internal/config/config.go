@@ -76,26 +76,23 @@ type TxManagerConfig struct {
 	Confirmations uint64 `yaml:"confirmations"`
 	// MaxFeeGwei is the required absolute EIP-1559 max fee per gas.
 	MaxFeeGwei float64 `yaml:"maxFeeGwei"`
-	// TipGwei is the minimum EIP-1559 priority fee; 0 derives it from recent fee history.
-	TipGwei float64 `yaml:"tipGwei"`
 	// BroadcastTimeoutMs bounds one transaction submission RPC call independently of replacement cadence.
 	BroadcastTimeoutMs int `yaml:"broadcastTimeoutMs"`
 	// AccountPollIntervalMs controls signer balance and nonce telemetry refresh cadence.
 	AccountPollIntervalMs int `yaml:"accountPollIntervalMs"`
-	// ReplacementIntervalMs is how often a pending transaction is fee-bumped.
+	// ReplacementIntervalMs paces the fallback fee bump of a pending transaction while fee history is
+	// unreadable; with readable fee history, pending transactions are repriced on block evidence.
 	ReplacementIntervalMs int `yaml:"replacementIntervalMs"`
 	// PendingTimeoutMs switches a still-pending call to a same-nonce cancellation.
 	PendingTimeoutMs int `yaml:"pendingTimeoutMs"`
 	// ShutdownTimeoutMs bounds how long shutdown drains an accepted transaction lifecycle.
 	ShutdownTimeoutMs int `yaml:"shutdownTimeoutMs"`
-	// FeePolicy selects "legacy" (the default) or "horizon" pricing and repricing.
-	FeePolicy string `yaml:"feePolicy"`
-	// Horizon tunes the horizon fee policy. It is validated under either policy but used only by
-	// horizon.
+	// Horizon tunes fee pricing and block-evidence repricing.
 	Horizon HorizonFeeConfig `yaml:"horizon"`
 }
 
-// HorizonFeeConfig tunes txManager.feePolicy: horizon. Zero values select the defaults.
+// HorizonFeeConfig tunes txManager fee pricing: the base-fee horizon of the fee cap, the tip rule,
+// the repricing evidence, and gas-estimate headroom. Zero values select the defaults.
 type HorizonFeeConfig struct {
 	// MaxBlocks is how many blocks the initial fee cap keeps the full tip valid at the maximum
 	// EIP-1559 base-fee increase.
@@ -136,13 +133,7 @@ type SolverConfig struct {
 // DefaultConfirmations is used when TxManager.Confirmations is unset.
 const DefaultConfirmations = 2
 
-// Fee policies accepted by txManager.feePolicy.
-const (
-	FeePolicyLegacy  = "legacy"
-	FeePolicyHorizon = "horizon"
-)
-
-// Horizon fee policy defaults, applied to unset txManager.horizon fields.
+// Fee pricing defaults, applied to unset txManager.horizon fields.
 const (
 	DefaultHorizonMaxBlocks                 = 6
 	DefaultHorizonBlockTimeMs               = 12_000
@@ -229,9 +220,6 @@ func (c *Config) applyDefaults() {
 	if c.TxManager.ShutdownTimeoutMs == 0 {
 		c.TxManager.ShutdownTimeoutMs = DefaultShutdownTimeoutMs
 	}
-	if c.TxManager.FeePolicy == "" {
-		c.TxManager.FeePolicy = FeePolicyLegacy
-	}
 	c.TxManager.Horizon.applyDefaults()
 	if c.Observability.Addr == "" {
 		c.Observability.Addr = DefaultObservabilityAddr
@@ -289,9 +277,6 @@ func (c TxManagerConfig) validate(required bool) error {
 		math.IsNaN(c.MaxFeeGwei) || math.IsInf(c.MaxFeeGwei, 0) {
 		return errors.New("txManager.maxFeeGwei must be finite and positive")
 	}
-	if c.TipGwei < 0 || math.IsNaN(c.TipGwei) || math.IsInf(c.TipGwei, 0) {
-		return errors.New("txManager.tipGwei must be finite and non-negative")
-	}
 	if c.BroadcastTimeoutMs <= 0 {
 		return errors.New("txManager.broadcastTimeoutMs must be positive")
 	}
@@ -306,15 +291,6 @@ func (c TxManagerConfig) validate(required bool) error {
 	}
 	if c.ShutdownTimeoutMs <= 0 {
 		return errors.New("txManager.shutdownTimeoutMs must be positive")
-	}
-	switch c.FeePolicy {
-	case FeePolicyLegacy:
-	case FeePolicyHorizon:
-		if c.TipGwei != 0 {
-			return errors.New("txManager.tipGwei applies only to the legacy fee policy; set txManager.horizon tips instead")
-		}
-	default:
-		return errors.Errorf("txManager.feePolicy must be %q or %q", FeePolicyLegacy, FeePolicyHorizon)
 	}
 	return c.Horizon.validate()
 }

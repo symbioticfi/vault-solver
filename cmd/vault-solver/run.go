@@ -144,13 +144,11 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	txm := txmanager.NewWithMetrics(chainClient, sgnr, chainClient.ChainID(), txmanager.Config{
 		Confirmations:       cfg.TxManager.Confirmations,
 		MaxFeeGwei:          cfg.TxManager.MaxFeeGwei,
-		TipGwei:             cfg.TxManager.TipGwei,
 		BroadcastTimeout:    time.Duration(cfg.TxManager.BroadcastTimeoutMs) * time.Millisecond,
 		AccountPollInterval: time.Duration(cfg.TxManager.AccountPollIntervalMs) * time.Millisecond,
 		ReplacementInterval: time.Duration(cfg.TxManager.ReplacementIntervalMs) * time.Millisecond,
 		PendingTimeout:      time.Duration(cfg.TxManager.PendingTimeoutMs) * time.Millisecond,
 		ShutdownTimeout:     time.Duration(cfg.TxManager.ShutdownTimeoutMs) * time.Millisecond,
-		FeePolicy:           txmanager.FeePolicy(cfg.TxManager.FeePolicy),
 		Horizon:             horizonConfig(cfg.TxManager.Horizon),
 	}, txMetrics, log)
 	runCtx, reportFatal := context.WithCancelCause(ctx)
@@ -307,7 +305,7 @@ func monitorTransactionDrain(
 	}
 }
 
-// The horizon fee policy estimates gas against the next block through the chain client; without
+// The transaction manager estimates gas against the next block through the chain client; without
 // this method it silently falls back to latest-state estimates.
 var _ txmanager.NextBlockGasEstimator = (*chain.Client)(nil)
 

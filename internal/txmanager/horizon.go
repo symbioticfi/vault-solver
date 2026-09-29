@@ -18,20 +18,11 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
-// FeePolicy selects how the manager prices a call and when it replaces a pending one.
-type FeePolicy string
-
-const (
-	// FeePolicyLegacy prices from the fee-history reward median with a 2x base-fee cap and bumps a
-	// pending call every ReplacementInterval. It is the default.
-	FeePolicyLegacy FeePolicy = "legacy"
-	// FeePolicyHorizon caps fees at the exact EIP-1559 base-fee bound for HorizonConfig.MaxBlocks
-	// blocks, raises the tip only during runs of full blocks, estimates gas against the next block,
-	// and reprices a pending call only on block evidence.
-	FeePolicyHorizon FeePolicy = "horizon"
-)
-
-// HorizonConfig tunes FeePolicyHorizon. Zero values select the defaults below.
+// HorizonConfig tunes how the manager prices a call and when it replaces a pending one. Every call is
+// priced for inclusion in the next block at the lowest spend: fees are capped at the exact EIP-1559
+// base-fee bound for MaxBlocks blocks, the tip rises only during runs of full blocks, gas is
+// estimated against the next block, and a pending call is repriced only on block evidence. Zero
+// values select the defaults below.
 type HorizonConfig struct {
 	MaxBlocks                 int           // blocks the initial fee cap keeps the full tip valid; 0 => 6
 	BlockTime                 time.Duration // chain slot time; 0 => 12s
@@ -71,7 +62,6 @@ const (
 
 // Replacement and rebroadcast reasons exported on replacements_total{reason}.
 const (
-	replaceReasonInterval      = "interval"
 	replaceReasonValidity      = "validity"
 	replaceReasonCongestion    = "congestion"
 	replaceReasonStall         = "stall"
@@ -378,63 +368,41 @@ type horizonProgress struct {
 	feeReads          readStreak
 }
 
-func (m *Manager) horizonEnabled() bool {
-	return m.cfg.FeePolicy == FeePolicyHorizon
-}
-
-// replacementTick is the cadence of the pending-transaction replacement loop: a timer bump every
-// ReplacementInterval under the legacy policy, twice per block under horizon, where most ticks
-// find no new block and do nothing.
+// replacementTick is the cadence of the pending-transaction replacement loop: twice per block, where
+// most ticks find no new block and do nothing.
 func (m *Manager) replacementTick() time.Duration {
-	if m.horizonEnabled() {
-		return max(m.horizon.blockTime/2, time.Millisecond)
-	}
-	return m.cfg.ReplacementInterval
+	return max(m.horizon.blockTime/2, time.Millisecond)
 }
 
 // replacementCadence is the expected time between replacement decisions, which bounds how close to
 // its deadline an ambiguous broadcast may still be rebroadcast.
 func (m *Manager) replacementCadence() time.Duration {
-	if m.horizonEnabled() {
-		return m.horizon.blockTime
-	}
-	return m.cfg.ReplacementInterval
+	return m.horizon.blockTime
 }
 
-// horizonQuote is a new call's horizon pricing: its fees, its gas limit, and the latest block it was
-// priced at.
-type horizonQuote struct {
+// callQuote is a new call's pricing: its fees, its gas limit, and the latest block it was priced at.
+type callQuote struct {
 	fees feeQuote
 	gas  uint64
 	head uint64
 }
 
-// horizonBroadcastFees prices a new call under the horizon policy. One fee read supplies both the
-// parent header for the next-block gas estimate and the window the tip rule reads.
-func (m *Manager) horizonBroadcastFees(ctx context.Context, req Request, limit *big.Int) (horizonQuote, error) {
+// quoteCall prices a new call under limit. One fee read supplies both the parent header for the
+// next-block gas estimate and the window the tip rule reads.
+func (m *Manager) quoteCall(ctx context.Context, req Request, limit *big.Int) (callQuote, error) {
 	snapshot, header, err := m.readFeeSnapshot(ctx)
 	if err != nil {
-		return horizonQuote{}, errors.Errorf("send %q: %w", req.Label, err)
+		return callQuote{}, errors.Errorf("send %q: %w", req.Label, err)
 	}
-	gas, err := m.horizonGas(ctx, req, header)
+	gas, err := m.callGas(ctx, req, header)
 	if err != nil {
-		return horizonQuote{}, err
+		return callQuote{}, err
 	}
 	fees, err := horizonFees(snapshot, gas, limit, m.horizon)
 	if err != nil {
-		return horizonQuote{}, errors.Errorf("send %q: %w", req.Label, err)
+		return callQuote{}, errors.Errorf("send %q: %w", req.Label, err)
 	}
-	return horizonQuote{fees: fees, gas: gas, head: snapshot.head}, nil
-}
-
-// horizonFreshFees is the horizon counterpart of currentFees for replacements and cancellations:
-// the fees a new call of gas units would get now, without a limit.
-func (m *Manager) horizonFreshFees(ctx context.Context, gas uint64) (feeQuote, error) {
-	snapshot, _, err := m.readFeeSnapshot(ctx)
-	if err != nil {
-		return feeQuote{}, err
-	}
-	return horizonFees(snapshot, gas, nil, m.horizon)
+	return callQuote{fees: fees, gas: gas, head: snapshot.head}, nil
 }
 
 // NextBlockGasEstimator estimates a call as if it were included in the block after parent. The
@@ -446,9 +414,8 @@ type NextBlockGasEstimator interface {
 	) (uint64, error)
 }
 
-// horizonGas sizes a new call for the next block, logging an estimate failure the way the legacy
-// estimate does. A request with a gas limit keeps it.
-func (m *Manager) horizonGas(ctx context.Context, req Request, parent *types.Header) (uint64, error) {
+// callGas sizes a new call for the next block. A request with a gas limit keeps it.
+func (m *Manager) callGas(ctx context.Context, req Request, parent *types.Header) (uint64, error) {
 	if req.GasLimit != 0 {
 		return req.GasLimit, nil
 	}
@@ -530,8 +497,8 @@ func (m *Manager) evaluateHorizon(
 		if time.Since(pending.horizon.lastEvaluation) < m.cfg.ReplacementInterval {
 			return false
 		}
-		// Without block evidence for a whole replacement interval, bump on the legacy cadence so
-		// the attempt cannot freeze.
+		// Without block evidence for a whole replacement interval, bump once per interval so the
+		// attempt cannot freeze.
 		pending.horizon.lastEvaluation = time.Now()
 		return replace(horizonIntent(pending, cancelling, replaceReasonFallback))
 	}

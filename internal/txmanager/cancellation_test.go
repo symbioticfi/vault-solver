@@ -30,6 +30,7 @@ func TestCancellationDuringFeeReadDoesNotImmediatelyBumpAgain(t *testing.T) {
 				manager := New(backend, mustSigner(t), big.NewInt(1), Config{
 					MaxFeeGwei: 100, PollInterval: time.Hour,
 					ReplacementInterval: 40 * time.Millisecond, PendingTimeout: 50 * time.Millisecond,
+					Horizon: HorizonConfig{BlockTime: 80 * time.Millisecond},
 				}, logger)
 				request := Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "rfq-fill"}
 				if requestDeadline {
@@ -47,8 +48,9 @@ func TestCancellationDuringFeeReadDoesNotImmediatelyBumpAgain(t *testing.T) {
 				result := make(chan Result, 1)
 				go func() { result <- manager.waitForPendingTransaction(ctx, pending) }()
 
-				// The 40ms replacement's fee read times out at 60ms, after the 50ms
-				// cancellation deadline. The next scheduled replacement is at 80ms.
+				// The 40ms tick's fee read times out at 60ms, after the 50ms cancellation
+				// deadline, and the fallback replacement it starts is promoted to cancellation.
+				// The next tick is at 80ms.
 				time.Sleep(70 * time.Millisecond)
 				synctest.Wait()
 				backend.mu.Lock()
@@ -57,6 +59,8 @@ func TestCancellationDuringFeeReadDoesNotImmediatelyBumpAgain(t *testing.T) {
 				if sentBeforeNextTick != 2 {
 					t.Fatalf("sent %d transactions before the next replacement tick, want original plus one cancellation", sentBeforeNextTick)
 				}
+				// A block whose base fee outgrows the cancellation's cap reprices it at that tick.
+				backend.mine(gweiToWei(40))
 				time.Sleep(20 * time.Millisecond)
 				synctest.Wait()
 				cancel()

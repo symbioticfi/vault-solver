@@ -192,7 +192,9 @@ func TestConsumedNonceKeepsTrackingUntilOwnedReceiptArrives(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		b.latestNonce, b.pendingNonce = 8, 8
+		// The block that consumed the nonce and two more with room: a stall the manager answers by
+		// checking the mined nonce before rebroadcasting.
+		b.latestNonce, b.pendingNonce, b.head = 8, 8, 103
 		m.trackUnminedTransaction(pending)
 		ctx, cancel := context.WithCancel(t.Context())
 		results := make(chan Result, 1)
@@ -213,8 +215,7 @@ func TestConsumedNonceKeepsTrackingUntilOwnedReceiptArrives(t *testing.T) {
 		default:
 		}
 		b.mu.Lock()
-		b.receipts[pending.originalHash] = successfulReceipt(pending.attempts[0].tx, 100)
-		b.head = 102
+		b.receipts[pending.originalHash] = successfulReceipt(pending.attempts[0].tx, 101)
 		b.mu.Unlock()
 		time.Sleep(time.Second)
 		synctest.Wait()

@@ -145,6 +145,7 @@ func TestMetrics(t *testing.T) {
 					PollInterval:        time.Millisecond,
 					ReplacementInterval: 2 * time.Millisecond,
 					PendingTimeout:      8 * time.Millisecond,
+					Horizon:             HorizonConfig{BlockTime: 2 * time.Millisecond},
 				},
 				metrics,
 				logr.Discard(),
@@ -159,12 +160,14 @@ func TestMetrics(t *testing.T) {
 			if !accepted {
 				t.Fatal("transaction was not accepted")
 			}
-			// Settle admission before advancing the lifecycle's fake clock.
+			// Settle admission before advancing the lifecycle's fake clock, then mine a block whose
+			// base fee outgrows the initial fee cap.
 			synctest.Wait()
+			backend.mine(gweiToWei(40))
 			time.Sleep(2 * time.Millisecond)
 			synctest.Wait()
 			assertMetric(t, metrics.replacements.WithLabelValues(
-				"lifi-fill", replacementKindReplacement, replaceReasonInterval,
+				"lifi-fill", replacementKindReplacement, replaceReasonValidity,
 			), 1)
 			assertMetric(t, metrics.replacements.WithLabelValues(
 				"lifi-fill", replacementKindCancellation, "pending_timeout",
@@ -176,7 +179,7 @@ func TestMetrics(t *testing.T) {
 			assertMetric(t, metrics.replacements.WithLabelValues(
 				"lifi-fill",
 				replacementKindReplacement,
-				replaceReasonInterval,
+				replaceReasonValidity,
 			), 1)
 			assertMetric(t, metrics.replacements.WithLabelValues(
 				"lifi-fill",

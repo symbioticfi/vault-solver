@@ -359,13 +359,12 @@ reconciliation continues. RFQ keeps quoting and accounts for pending fills throu
 only while the nonce lane is conflicted. Pending calls can be replaced or cancelled with the same nonce. Each pending
 receipt RPC has its own timeout and does not block the lifecycle loop's replacement/cancellation timers.
 
-Configure `maxFeeGwei` for every transaction-sending process. It also caps cancellation; `tipGwei` sets a
-priority-fee floor, or selects fee-history pricing when zero. `replacementIntervalMs`, `pendingTimeoutMs`,
-`broadcastTimeoutMs` and `shutdownTimeoutMs` control replacement, cancellation and shutdown bounds.
+Configure `maxFeeGwei` for every transaction-sending process; it also caps cancellation. `pendingTimeoutMs`,
+`broadcastTimeoutMs` and `shutdownTimeoutMs` bound cancellation, submission and shutdown.
 The manager remains alive while solvers drain accepted work; orchestrator SIGTERM grace must cover both
 solver preparation/drain and manager shutdown. A timeout does not guarantee that a signed call cannot land.
 
-`feePolicy: horizon` (default `legacy`) opts into cheaper, block-driven pricing:
+Every call is priced for inclusion in the next block at the lowest spend:
 - The fee cap is the exact EIP-1559 base-fee bound over the next `horizon.maxBlocks` blocks (default 6,
   about 1.8× the next base fee). The charge is still base fee plus tip; the cap sets how long the
   transaction stays valid and the balance a node requires before accepting it (gas limit × cap).
@@ -377,11 +376,11 @@ solver preparation/drain and manager shutdown. A timeout does not guarantee that
 - A pending transaction is repriced on block evidence, not on a timer: when its cap is about to lapse
   or during a run of full blocks. When it keeps missing blocks that had room, it is re-estimated and
   replaced with a larger gas limit if it outgrew its own, otherwise rebroadcast unchanged; a small fee
-  bump follows only after two rebroadcasts.
+  bump follows only after two rebroadcasts. `replacementIntervalMs` only paces a fallback bump while fee
+  history is unreadable.
 
-Under `horizon`, `tipGwei` must stay zero and `replacementIntervalMs` only paces a fallback bump while
-fee history is unreadable. Every knob and default is listed in the
-[transaction manager plan](docs/TXMANAGER-PLAN.md#41-horizon-fee-policy).
+`tipGwei` was removed; a config that still sets it fails to load. Every `horizon.*` knob and default is
+listed in the [transaction manager plan](docs/TXMANAGER-PLAN.md#4-fees-replacements-and-cancellation).
 
 Defaults, fee headroom, request/result semantics, nonce recovery and internal ownership are documented
 in the [transaction manager plan](docs/TXMANAGER-PLAN.md). Integration-specific deadline and capacity

@@ -368,7 +368,7 @@ func (c *horizonChain) waitForSends(t *testing.T, count int) []*types.Transactio
 func horizonConfig(overrides func(*Config)) Config {
 	cfg := Config{
 		MaxFeeGwei: 50, PollInterval: time.Millisecond, ReplacementInterval: time.Hour, PendingTimeout: time.Hour,
-		FeePolicy: FeePolicyHorizon, Horizon: HorizonConfig{BlockTime: 20 * time.Millisecond},
+		Horizon: HorizonConfig{BlockTime: 20 * time.Millisecond},
 	}
 	if overrides != nil {
 		overrides(&cfg)
@@ -440,6 +440,19 @@ func TestHorizonBroadcastGasFallbacks(t *testing.T) {
 					err, pending.gas, chain.estimateCalls.Load(), tc.wantGas, tc.wantLatest)
 			}
 		})
+	}
+}
+
+func TestCallGasWithoutNextBlockEstimatorUsesLatestState(t *testing.T) {
+	b := newMockBackend()
+	// Embedding only the Backend interface hides the mock's next-block estimator.
+	m := New(struct{ Backend }{b}, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+	gas, err := m.callGas(managerCtx(t.Context(), m), Request{
+		To: common.HexToAddress("0xabc"), Label: "fill",
+	}, receiptTestHeader(b.head))
+	if err != nil || gas != 55_000 || b.estimateCalls.Load() != 1 {
+		t.Fatalf("gas = %d, %v after %d estimates; want 50000 plus the 10%% fallback headroom from one estimate",
+			gas, err, b.estimateCalls.Load())
 	}
 }
 

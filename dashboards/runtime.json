@@ -2416,7 +2416,7 @@
       "spec": {
         "id": 28,
         "title": "Replacements, cancellations and rebroadcasts",
-        "description": "Same-nonce fee replacements, cancellations and exact rebroadcasts over the selected range, by why they were sent. Replacement reasons: interval (legacy timer bump); validity, congestion, stall, gas or fallback (horizon fee policy). Cancellations report why cancellation started (pending_timeout, request_deadline, shutdown, obsolete). Rebroadcasts are stall, uncertain (ambiguous first broadcast) or capped (fee cap reached). Values aggregate all matching services.",
+        "description": "Same-nonce fee replacements, cancellations and exact rebroadcasts over the selected range, by why they were sent. Replacement reasons: validity (fee cap about to lapse), congestion (run of full blocks), stall (missed blocks with room), gas (estimate outgrew the limit) or fallback (fee history unreadable). Cancellations report why cancellation started (pending_timeout, request_deadline, shutdown, obsolete). Rebroadcasts are stall, uncertain (ambiguous first broadcast) or capped (fee cap reached). Values aggregate all matching services.",
         "links": [],
         "data": {
           "kind": "QueryGroup",

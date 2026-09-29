@@ -30,12 +30,11 @@ txManager:
   confirmations: 2                 # blocks to wait past inclusion before treating a tx as final (default 2)
   maxFeeGwei: 50                   # global fee cap; the normal lifecycle stops one bump below it
   accountPollIntervalMs: 30000     # signer balance/latest/pending nonce metric refresh
-  replacementIntervalMs: 30000     # attempt a capped fee bump every 30s
+  replacementIntervalMs: 30000     # fallback fee bump cadence while fee history is unreadable
   pendingTimeoutMs: 300000         # switch the active nonce to cancellation after 5m
   shutdownTimeoutMs: 60000         # bound SIGTERM cancellation + receipt drain to 60s
-  # tipGwei: 1                     # optional floor; omit/zero to use the minimum p25 tip over five blocks
-  # feePolicy: horizon             # legacy (default) | horizon: exact EIP-1559 fee bound, tip that rises only
-  #                                # in runs of full blocks, next-block gas, repricing on block evidence
+  # Fees: exact EIP-1559 cap over 6 blocks, a tip that rises only in runs of full blocks, next-block
+  # gas estimates, repricing on block evidence. Defaults shown; see docs/TXMANAGER-PLAN.md section 4.
   # horizon: {maxBlocks: 6, tipFloorGwei: 0.02, fullBlockTipGwei: 0.1, congestedTipCapGwei: 15}
 
 observability:

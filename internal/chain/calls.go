@@ -77,13 +77,6 @@ func (c *Client) FeeHistory(
 	return c.Client.FeeHistory(ctx, blockCount, lastBlock, rewardPercentiles)
 }
 
-// SuggestGasTipCap reads the node's suggested priority fee through the read endpoint.
-func (c *Client) SuggestGasTipCap(ctx context.Context) (_ *big.Int, err error) {
-	ctx, end := c.readCalls.start(ctx, "eth_maxPriorityFeePerGas")
-	defer func() { end(err) }()
-	return c.Client.SuggestGasTipCap(ctx)
-}
-
 // EstimateGas estimates a call's gas through the read endpoint.
 func (c *Client) EstimateGas(ctx context.Context, msg ethereum.CallMsg) (_ uint64, err error) {
 	ctx, end := c.readCalls.start(ctx, "eth_estimateGas")

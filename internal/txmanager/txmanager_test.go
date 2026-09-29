@@ -35,15 +35,15 @@ type feeHistoryRequest struct {
 type mockBackend struct {
 	mu sync.Mutex
 
-	latestNonce   uint64
-	pendingNonce  uint64
-	history       *ethereum.FeeHistory
-	historyErr    error
-	historyReq    feeHistoryRequest
-	tip           *big.Int
-	tipErr        error
-	tipCalls      int
+	latestNonce  uint64
+	pendingNonce uint64
+	historyErr   error
+	historyReq   feeHistoryRequest
+	// Every block in the fee window has baseFee, gasUsedRatio and reward, and the next block's base
+	// fee is baseFee too. The default half-full blocks leave room for any test call.
 	baseFee       *big.Int
+	gasUsedRatio  float64
+	reward        *big.Int
 	gasEstimate   uint64
 	estimateCalls atomic.Int64
 	head          uint64
@@ -64,9 +64,9 @@ func newMockBackend() *mockBackend {
 	return &mockBackend{
 		latestNonce:  7,
 		pendingNonce: 7,
-		history:      constantFeeHistory(big.NewInt(1e9)),
-		tip:          big.NewInt(1e9),
 		baseFee:      big.NewInt(20e9),
+		gasUsedRatio: 0.5,
+		reward:       big.NewInt(1e9),
 		gasEstimate:  50_000,
 		head:         100,
 		receipts:     map[common.Hash]*types.Receipt{},
@@ -99,22 +99,23 @@ func (b *mockBackend) FeeHistory(
 	if newestBlock != nil {
 		b.historyReq.newest = new(big.Int).Set(newestBlock)
 	}
-	return b.history, b.historyErr
-}
-
-func constantFeeHistory(reward *big.Int) *ethereum.FeeHistory {
-	history := &ethereum.FeeHistory{Reward: make([][]*big.Int, feeHistoryBlocks)}
-	for i := range history.Reward {
-		history.Reward[i] = []*big.Int{new(big.Int).Set(reward)}
+	if b.historyErr != nil {
+		return nil, b.historyErr
 	}
-	return history
+	return uniformFeeHistory(b.head, blockCount, b.baseFee, b.gasUsedRatio, b.reward), nil
 }
 
-func (b *mockBackend) SuggestGasTipCap(context.Context) (*big.Int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.tipCalls++
-	return b.tip, b.tipErr
+// uniformFeeHistory is a fee window of count blocks ending at head, each with the same base fee,
+// fullness and reward; the next block's base fee is the same.
+func uniformFeeHistory(head, count uint64, baseFee *big.Int, gasUsedRatio float64, reward *big.Int) *ethereum.FeeHistory {
+	history := &ethereum.FeeHistory{OldestBlock: new(big.Int).SetUint64(head + 1 - count)}
+	for range count {
+		history.BaseFee = append(history.BaseFee, new(big.Int).Set(baseFee))
+		history.GasUsedRatio = append(history.GasUsedRatio, gasUsedRatio)
+		history.Reward = append(history.Reward, []*big.Int{new(big.Int).Set(reward)})
+	}
+	history.BaseFee = append(history.BaseFee, new(big.Int).Set(baseFee))
+	return history
 }
 
 func (b *mockBackend) HeaderByNumber(_ context.Context, number *big.Int) (*types.Header, error) {
@@ -143,6 +144,15 @@ func (b *mockBackend) HeaderByNumber(_ context.Context, number *big.Int) (*types
 	return header, nil
 }
 
+// mine advances the head by one block and sets the base fee of the fee window and the next block, so
+// a pending call whose fee cap no longer covers it reprices on the next evaluation.
+func (b *mockBackend) mine(baseFee *big.Int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.head++
+	b.baseFee = new(big.Int).Set(baseFee)
+}
+
 func (b *mockBackend) HeaderByHash(_ context.Context, hash common.Hash) (*types.Header, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -167,6 +177,14 @@ func (b *mockBackend) EstimateGas(context.Context, ethereum.CallMsg) (uint64, er
 		return 0, errors.New("estimate failed")
 	}
 	return b.gasEstimate, nil
+}
+
+// EstimateGasNextBlock serves the next-block estimate the chain client provides, with the same
+// result as a latest-state estimate.
+func (b *mockBackend) EstimateGasNextBlock(
+	ctx context.Context, call ethereum.CallMsg, _ *types.Header, _ time.Duration,
+) (uint64, error) {
+	return b.EstimateGas(ctx, call)
 }
 
 func (b *mockBackend) SendTransaction(_ context.Context, tx *types.Transaction) error {
@@ -270,7 +288,7 @@ func TestSend_HappyPath(t *testing.T) {
 	}
 }
 
-func TestMaxFeePerGasMatchesSendFeePolicy(t *testing.T) {
+func TestMaxFeePerGasIsOneBumpOverTheHorizonCap(t *testing.T) {
 	b := newMockBackend()
 	m := newTestManager(t, b)
 
@@ -278,110 +296,34 @@ func TestMaxFeePerGasMatchesSendFeePolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MaxFeePerGas: %v", err)
 	}
-	if fee.String() != "46125000000" {
-		t.Fatalf("max fee = %s, want one-replacement ceiling 46125000000", fee)
+	// bumpFee(grow(20 gwei, 5 blocks) + the 0.02 gwei tip floor)
+	if fee.String() != "40568230590" {
+		t.Fatalf("max fee = %s, want one-replacement ceiling 40568230590", fee)
 	}
 }
 
-func TestTipGweiFloorsNodeSuggestionWithoutBreakingFeeCap(t *testing.T) {
-	tests := map[string]struct {
-		tip     *big.Int
-		tipErr  error
-		wantTip int64
-	}{
-		"low suggestion":         {tip: big.NewInt(1_500), wantTip: 1_000_000_000},
-		"higher suggestion":      {tip: big.NewInt(2_000_000_000), wantTip: 2_000_000_000},
-		"suggestion above cap":   {tip: big.NewInt(30_000_000_000), wantTip: 20_500_000_000},
-		"suggestion unavailable": {tipErr: context.DeadlineExceeded, wantTip: 1_000_000_000},
-	}
-	for name, test := range tests {
-		t.Run(name, func(t *testing.T) {
-			b := newMockBackend()
-			b.tip, b.tipErr = test.tip, test.tipErr
-			m := New(b, mustSigner(t), big.NewInt(11155111), Config{TipGwei: 1}, logr.Discard())
-			limit := big.NewInt(40_500_000_000)
-
-			fees, err := m.currentFees(t.Context(), limit)
-			if err != nil {
-				t.Fatalf("currentFees: %v", err)
-			}
-			if fees.tip.Cmp(big.NewInt(test.wantTip)) != 0 {
-				t.Fatalf("tip = %s, want %d", fees.tip, test.wantTip)
-			}
-			if fees.maxFee.Cmp(limit) != 0 {
-				t.Fatalf("max fee = %s, want hard cap %s", fees.maxFee, limit)
-			}
-		})
-	}
-}
-
-func TestTipGweiZeroUsesMedianFeeHistoryPolicy(t *testing.T) {
+func TestFeeSnapshotReadsTheHorizonWindow(t *testing.T) {
 	b := newMockBackend()
-	b.history = &ethereum.FeeHistory{Reward: [][]*big.Int{
-		{big.NewInt(3_000_000_000)},
-		{big.NewInt(500_000_000)},
-		{big.NewInt(2_000_000_000)},
-		{big.NewInt(1_000_000_000)},
-		{big.NewInt(1_500_000_000)},
-	}}
-	b.tip = big.NewInt(1_500)
 	m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
-	limit := big.NewInt(40_500_000_000)
 
-	fees, err := m.currentFees(t.Context(), limit)
+	snapshot, header, err := m.readFeeSnapshot(t.Context())
 	if err != nil {
-		t.Fatalf("currentFees: %v", err)
+		t.Fatalf("readFeeSnapshot: %v", err)
 	}
-	if want := big.NewInt(1_500_000_000); fees.tip.Cmp(want) != 0 {
-		t.Fatalf("tip = %s, want median p25 reward %s", fees.tip, want)
-	}
-	if b.historyReq.blocks != 5 || b.historyReq.newest != nil ||
-		len(b.historyReq.percentiles) != 1 || b.historyReq.percentiles[0] != 25.0 {
+	if b.historyReq.blocks != 3 || b.historyReq.newest != nil ||
+		len(b.historyReq.percentiles) != 1 || b.historyReq.percentiles[0] != 50 {
 		t.Fatalf(
-			"fee history request = blocks %d, newest %v, percentiles %v; want 5, latest, [25]",
+			"fee history request = blocks %d, newest %v, percentiles %v; want 3, latest, [50]",
 			b.historyReq.blocks, b.historyReq.newest, b.historyReq.percentiles,
 		)
 	}
-	if fees.maxFee.Cmp(limit) != 0 {
-		t.Fatalf("max fee = %s, want hard cap %s", fees.maxFee, limit)
-	}
-	b.history.Reward[0][0] = new(big.Int)
-	fees, err = m.currentFees(t.Context(), limit)
-	if err != nil {
-		t.Fatalf("currentFees with zero reward: %v", err)
-	}
-	if fees.tip.Cmp(big.NewInt(1_000_000_000)) != 0 {
-		t.Fatalf("tip = %s, want median unaffected by a single zero reward", fees.tip)
-	}
-	b.history = constantFeeHistory(big.NewInt(30_000_000_000))
-	fees, err = m.currentFees(t.Context(), limit)
-	if err != nil {
-		t.Fatalf("currentFees with reward above cap: %v", err)
-	}
-	if want := big.NewInt(20_500_000_000); fees.tip.Cmp(want) != 0 {
-		t.Fatalf("tip = %s, want reward clamped to %s", fees.tip, want)
-	}
-	b.history.Reward = b.history.Reward[:feeHistoryBlocks-1]
-	if _, err := m.currentFees(t.Context(), limit); !errors.Is(err, errFreshFeesUnavailable) {
-		t.Fatalf("short fee history error = %v, want fresh-fees error", err)
+	if snapshot.head != 100 || header.Number.Uint64() != 100 || snapshot.gasLimit != header.GasLimit ||
+		snapshot.nextBaseFee.Cmp(b.baseFee) != 0 || len(snapshot.blocks) != 3 {
+		t.Fatalf("snapshot = %+v at header %d", snapshot, header.Number)
 	}
 	b.historyErr = errors.New("fee history unavailable")
-	if _, err := m.currentFees(t.Context(), limit); !errors.Is(err, errFreshFeesUnavailable) {
+	if _, _, err := m.readFeeSnapshot(t.Context()); !errors.Is(err, errFreshFeesUnavailable) {
 		t.Fatalf("history error = %v, want fresh-fees error", err)
-	}
-	if b.tipCalls != 0 {
-		t.Fatalf("node suggestion called %d times", b.tipCalls)
-	}
-}
-
-func TestCurrentFeesRejectConfiguredFloorAboveFeeHeadroom(t *testing.T) {
-	b := newMockBackend()
-	b.tip = big.NewInt(30_000_000_000)
-	m := New(b, mustSigner(t), big.NewInt(11155111), Config{TipGwei: 21}, logr.Discard())
-
-	_, err := m.currentFees(t.Context(), big.NewInt(40_500_000_000))
-	if err == nil || !strings.Contains(err.Error(), "priority fee floor") {
-		t.Fatalf("currentFees error = %v, want configured-floor error", err)
 	}
 }
 
@@ -401,18 +343,21 @@ func TestValidateFeeHeadroom(t *testing.T) {
 	tests := []struct {
 		name    string
 		maxFee  float64
-		tip     float64
+		tipCap  float64
 		wantErr bool
 	}{
-		{name: "automatic tip", maxFee: 50},
-		{name: "floor one wei below reserved cap", maxFee: 50, tip: 39.506172838},
-		{name: "floor equals reserved cap", maxFee: 50, tip: 39.506172839, wantErr: true},
-		{name: "floor one wei above reserved cap", maxFee: 50, tip: 39.506172840, wantErr: true},
-		{name: "reported invalid configuration", maxFee: 50, tip: 40, wantErr: true},
+		{name: "default congested tip cap", maxFee: 50},
+		{name: "cap one wei below reserved cap", maxFee: 50, tipCap: 39.506172838},
+		{name: "cap equals reserved cap", maxFee: 50, tipCap: 39.506172839, wantErr: true},
+		{name: "cap one wei above reserved cap", maxFee: 50, tipCap: 39.506172840, wantErr: true},
+		{name: "cap above the global fee cap", maxFee: 50, tipCap: 60, wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			m := &Manager{cfg: Config{MaxFeeGwei: test.maxFee, TipGwei: test.tip}}
+			m := &Manager{
+				cfg:     Config{MaxFeeGwei: test.maxFee},
+				horizon: newHorizonPolicy(HorizonConfig{CongestedTipCapGwei: test.tipCap}),
+			}
 			err := m.ValidateFeeHeadroom()
 			if (err != nil) != test.wantErr {
 				t.Fatalf("ValidateFeeHeadroom() error = %v, wantErr %v", err, test.wantErr)
@@ -440,8 +385,8 @@ func TestSend_ReservesReplacementHeadroomInsideRequestCap(t *testing.T) {
 	if tx.GasFeeCap().Cmp(wantInitialCap) != 0 {
 		t.Fatalf("gas fee cap = %s, want replacement-reserved cap %s", tx.GasFeeCap(), wantInitialCap)
 	}
-	if tx.GasTipCap().Cmp(big.NewInt(1_000_000_000)) != 0 {
-		t.Fatalf("gas tip cap = %s, want 1000000000", tx.GasTipCap())
+	if tx.GasTipCap().Cmp(gweiToWei(defaultHorizonTipFloorGwei)) != 0 {
+		t.Fatalf("gas tip cap = %s, want the tip floor", tx.GasTipCap())
 	}
 }
 
@@ -975,6 +920,7 @@ func TestSendAsyncReplacesPendingTransactionWithHigherFees(t *testing.T) {
 			PollInterval:        time.Millisecond,
 			ReplacementInterval: 2 * time.Millisecond,
 			PendingTimeout:      time.Second,
+			Horizon:             HorizonConfig{BlockTime: 4 * time.Millisecond},
 		},
 		logr.Discard(),
 	)
@@ -991,6 +937,8 @@ func TestSendAsyncReplacesPendingTransactionWithHigherFees(t *testing.T) {
 	if !accepted {
 		t.Fatal("SendAsync was not accepted")
 	}
+	waitForSentTransactions(t, b.mockBackend, 1)
+	b.mine(gweiToWei(33)) // a base fee the initial fee cap no longer covers two blocks ahead
 	select {
 	case got := <-result:
 		if got.Err != nil {
@@ -1159,7 +1107,7 @@ func TestExactRebroadcastNonceTooLowReconcilesOriginalReceipt(t *testing.T) {
 func TestExactRebroadcastSlack(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	m := New(nil, nil, nil, Config{
-		BroadcastTimeout: 5 * time.Second, ReplacementInterval: 5 * time.Second,
+		BroadcastTimeout: 5 * time.Second, Horizon: HorizonConfig{BlockTime: 5 * time.Second},
 	}, logr.Discard())
 	for name, test := range map[string]struct {
 		deadline time.Time
@@ -1237,10 +1185,11 @@ func TestNormalFeeLimitReservesOneCancellationBump(t *testing.T) {
 		logr.Discard(),
 	)
 
-	fees, err := m.currentFees(t.Context(), m.normalFeeLimit(Request{}))
+	quote, err := m.quoteCall(t.Context(), Request{GasLimit: 21_000, Label: "fees"}, m.normalFeeLimit(Request{}))
 	if err != nil {
 		t.Fatalf("fees: %v", err)
 	}
+	fees := quote.fees
 	normalLimit := reserveFeeBump(gweiToWei(50))
 	if fees.maxFee.Cmp(normalLimit) != 0 {
 		t.Fatalf("normal max fee = %s, want reserved limit %s", fees.maxFee, normalLimit)
@@ -1263,28 +1212,36 @@ func TestReplacementFeesRespectCapAndFullBump(t *testing.T) {
 	quote := func(baseFee, tip, maxFee float64) feeQuote {
 		return feeQuote{baseFee: gweiToWei(baseFee), tip: gweiToWei(tip), maxFee: gweiToWei(maxFee)}
 	}
+	// congestedReward, when set, makes every recent block full at that market reward, so the fresh
+	// tip follows it (up to a raised congested cap); otherwise blocks have room and the fresh tip is
+	// the floor.
 	tests := map[string]struct {
-		previous feeQuote
-		current  feeQuote
-		want     feeQuote
-		wantErr  bool
+		previous        feeQuote
+		baseFee         float64
+		congestedReward float64
+		want            feeQuote
+		wantErr         bool
 	}{
 		"fresh tip is bounded by the cap": {
-			previous: quote(20, 1, 44), current: quote(20, 40, 0), want: quote(20, 30, 50),
+			previous: quote(20, 1, 44), baseFee: 20, congestedReward: 40, want: quote(20, 30, 50),
 		},
 		"raw tip bump may exceed effective headroom": {
-			previous: quote(20, 10, 44), current: quote(39.5, 1, 0), want: quote(39.5, 11.25, 50),
+			previous: quote(20, 10, 44), baseFee: 39.5, want: quote(39.5, 11.25, 50),
 		},
 		"max fee bump does not fit": {
-			previous: quote(20, 1, 45), current: quote(20, 1, 0), wantErr: true,
+			previous: quote(20, 1, 45), baseFee: 20, wantErr: true,
 		},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			b := newMockBackend()
-			b.baseFee = test.current.baseFee
-			b.history = constantFeeHistory(test.current.tip)
-			m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
+			b.baseFee = gweiToWei(test.baseFee)
+			if test.congestedReward > 0 {
+				b.gasUsedRatio, b.reward = 1, gweiToWei(test.congestedReward)
+			}
+			m := New(b, mustSigner(t), big.NewInt(11155111), Config{
+				Horizon: HorizonConfig{CongestedTipCapGwei: 45},
+			}, logr.Discard())
 
 			got, err := m.nextReplacementFees(t.Context(), test.previous, gweiToWei(50), 21_000)
 			if test.wantErr {
@@ -1330,7 +1287,8 @@ func TestPendingTimeoutCancelsBlockedNonceAndUnblocksLaterTransaction(t *testing
 			MaxFeeGwei:          50,
 			PollInterval:        time.Millisecond,
 			ReplacementInterval: 2 * time.Millisecond,
-			PendingTimeout:      20 * time.Millisecond,
+			PendingTimeout:      200 * time.Millisecond,
+			Horizon:             HorizonConfig{BlockTime: 4 * time.Millisecond},
 		},
 		logr.Discard(),
 	)
@@ -1346,6 +1304,11 @@ func TestPendingTimeoutCancelsBlockedNonceAndUnblocksLaterTransaction(t *testing
 	if !accepted {
 		t.Fatal("first SendAsync was not accepted")
 	}
+	// A base-fee rise reprices the blocked call up to its 42 gwei profitability cap before the
+	// pending timeout cancels it.
+	waitForSentTransactions(t, b.mockBackend, 1)
+	b.mine(gweiToWei(33))
+	waitForSentTransactions(t, b.mockBackend, 2)
 	second, accepted := m.SendAsync(t.Context(), Request{
 		To: common.HexToAddress("0xdef"), Data: []byte{0x02}, GasLimit: 21_000, Label: "later",
 	})
@@ -1535,12 +1498,10 @@ func TestCancelAtUsesCachedFeesWhenFeeRPCBlocks(t *testing.T) {
 	b := &blockedFeeBackend{replacementBackend: &replacementBackend{
 		mockBackend: newMockBackend(), cancellationTo: sgnr.Address(),
 	}}
-	b.tip = big.NewInt(1_500)
 	m := New(
 		b, sgnr, big.NewInt(11155111),
 		Config{
 			MaxFeeGwei:          50,
-			TipGwei:             1,
 			PollInterval:        time.Millisecond,
 			ReplacementInterval: 10 * time.Millisecond,
 			PendingTimeout:      time.Second,
@@ -2710,6 +2671,12 @@ func (b *blockingEstimateBackend) EstimateGas(ctx context.Context, _ ethereum.Ca
 	close(b.entered)
 	<-ctx.Done()
 	return 0, ctx.Err()
+}
+
+func (b *blockingEstimateBackend) EstimateGasNextBlock(
+	ctx context.Context, call ethereum.CallMsg, _ *types.Header, _ time.Duration,
+) (uint64, error) {
+	return b.EstimateGas(ctx, call)
 }
 
 // TestSend_CallerCancelAfterEnqueueStillReturnsResult guards the fund-moving invariant: once a
