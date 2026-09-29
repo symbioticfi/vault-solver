@@ -18,7 +18,12 @@ if [ -z "${CAST_WALLET_ARGS:-}" ]; then
 fi
 
 lifi() {
-  curl -fsS -H "x-api-key: ${LIFI_API_KEY}" -H 'content-type: application/json' "$@"
+  local body
+  if ! body=$(curl -sS --fail-with-body -H "x-api-key: ${LIFI_API_KEY}" -H 'content-type: application/json' "$@"); then
+    echo "LI.FI ${LIFI_BASE_URL}: ${body}" >&2
+    return 1
+  fi
+  printf '%s\n' "${body}"
 }
 
 # Prints true/false; used via assignment so a failed request aborts under set -e.
