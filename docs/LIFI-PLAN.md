@@ -748,7 +748,8 @@ production.
    caller using domain `{ name: "LiquidLaneLifiExecutor", version: "1", chainId, verifyingContract: executor }`.
    Submit `POST /api/v1/solver/register` with `{ message, signature, account: executor,
    chain: "eip155:<chainId>" }`. LI.FI passes its message hash and the signature to
-   `executor.isValidSignature`. Keep the key only in the environment named by `orderServer.apiKeyEnv`
+   `executor.isValidSignature`. `hack/lifi-register-executor.sh` runs these steps, prechecks the
+   signature against the executor, and is a no-op when the executor is already registered. Keep the key only in the environment named by `orderServer.apiKeyEnv`
    (normally `LIFI_SOLVER_API_KEY`). Under our deployment convention all processes using this executor
    share the key and reputation; use another executor and key for an independent deployment.
 5. **Authorize LiquidLane execution.** For every configured adapter, verify its vault, output asset,
