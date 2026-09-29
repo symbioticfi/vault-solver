@@ -83,7 +83,7 @@ func TestPendingReceiptDoesNotBlockLifecycleEvents(t *testing.T) {
 					req.CancelAt = time.Now().Add(100 * time.Millisecond)
 				}
 				if event == "replacement" {
-					cfg.ReplacementInterval = time.Second
+					cfg.Horizon.BlockTime = 2 * time.Second
 				}
 				m := New(backend, mustSigner(t), big.NewInt(1), cfg, logr.Discard())
 				pending, err := m.broadcast(t.Context(), req)
@@ -95,8 +95,11 @@ func TestPendingReceiptDoesNotBlockLifecycleEvents(t *testing.T) {
 				results := make(chan Result, 1)
 				go func() { results <- m.waitForPendingTransaction(t.Context(), pending) }()
 				synctest.Wait()
-				if event == "shutdown cancellation" {
+				switch event {
+				case "shutdown cancellation":
 					close(pending.cancelRequested)
+				case "replacement":
+					backend.mine(gweiToWei(40)) // outgrows the fee cap; the 1s tick reprices it
 				}
 				delay := 110 * time.Millisecond
 				if event == "replacement" {

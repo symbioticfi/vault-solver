@@ -49,6 +49,39 @@ func TestLoad_ValidAppliesDefaults(t *testing.T) {
 	if cfg.Observability.Addr != DefaultObservabilityAddr {
 		t.Fatalf("expected default addr %q, got %q", DefaultObservabilityAddr, cfg.Observability.Addr)
 	}
+	if cfg.TxManager.Horizon != defaultHorizon() {
+		t.Fatalf("fee pricing defaults = %+v, want %+v", cfg.TxManager.Horizon, defaultHorizon())
+	}
+}
+
+func defaultHorizon() HorizonFeeConfig {
+	return HorizonFeeConfig{
+		MaxBlocks: DefaultHorizonMaxBlocks, BlockTimeMs: DefaultHorizonBlockTimeMs,
+		TipFloorGwei: DefaultHorizonTipFloorGwei, FullBlockTipGwei: DefaultHorizonFullBlockTipGwei,
+		CongestedTipFloorGwei: DefaultHorizonCongestedTipFloorGwei, CongestedTipCapGwei: DefaultHorizonCongestedTipCapGwei,
+		CongestedRewardBlocks: DefaultHorizonCongestedRewardBlocks, CongestedRewardPercentile: DefaultHorizonCongestedRewardPercentile,
+		EscalateAfterFullBlocks: DefaultHorizonEscalateAfterFullBlocks, StallAfterBlocks: DefaultHorizonStallAfterBlocks,
+		GasHeadroomBps: DefaultHorizonGasHeadroomBps, FallbackGasHeadroomBps: DefaultHorizonFallbackGasHeadroomBps,
+	}
+}
+
+func TestLoad_HorizonKeepsOverridesAndDefaultsTheRest(t *testing.T) {
+	cfg, err := Load(writeTemp(t, `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager:
+  maxFeeGwei: 50
+  horizon: {maxBlocks: 5, tipFloorGwei: 0.01, congestedTipCapGwei: 5, gasHeadroomBps: 800}
+solvers: [{name: x}]
+`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := defaultHorizon()
+	want.MaxBlocks, want.TipFloorGwei, want.CongestedTipCapGwei, want.GasHeadroomBps = 5, 0.01, 5, 800
+	if cfg.TxManager.Horizon != want {
+		t.Fatalf("horizon config = %+v, want %+v", cfg.TxManager.Horizon, want)
+	}
 }
 
 const multiSolverConfig = `
@@ -265,10 +298,10 @@ signer: {keyEnv: K}
 txManager: {maxFeeGwei: .nan}
 solvers: [{name: x}]
 `,
-		"negative tip": `
+		"removed tip floor": `
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
-txManager: {maxFeeGwei: 100, tipGwei: -1}
+txManager: {maxFeeGwei: 100, tipGwei: 1}
 solvers: [{name: x}]
 `,
 		"unknown field": `
@@ -305,6 +338,83 @@ solvers: [{name: x}]
 chain: {rpcUrl: http://x, chainId: 1}
 signer: {keyEnv: K}
 txManager: {maxFeeGwei: 100, shutdownTimeoutMs: -1}
+solvers: [{name: x}]
+`, "removed fee policy selector": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, feePolicy: horizon}
+solvers: [{name: x}]
+`,
+		"horizon max blocks too small": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, horizon: {maxBlocks: 2}}
+solvers: [{name: x}]
+`,
+		"horizon max blocks too large": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, horizon: {maxBlocks: 13}}
+solvers: [{name: x}]
+`,
+		"horizon negative block time": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, horizon: {blockTimeMs: -1}}
+solvers: [{name: x}]
+`,
+		"horizon negative tip": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, horizon: {tipFloorGwei: -1}}
+solvers: [{name: x}]
+`,
+		"horizon tips out of order": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, horizon: {tipFloorGwei: 1, fullBlockTipGwei: 0.5}}
+solvers: [{name: x}]
+`,
+		"horizon congested cap below its floor": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, horizon: {congestedTipFloorGwei: 3, congestedTipCapGwei: 2}}
+solvers: [{name: x}]
+`,
+		"horizon percentile above 100": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, horizon: {congestedRewardPercentile: 101}}
+solvers: [{name: x}]
+`,
+		"horizon negative stall threshold": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, horizon: {stallAfterBlocks: -1}}
+solvers: [{name: x}]
+`,
+		"horizon reward window too wide": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, horizon: {congestedRewardBlocks: 65}}
+solvers: [{name: x}]
+`,
+		"horizon fallback headroom below next-block headroom": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, horizon: {gasHeadroomBps: 800, fallbackGasHeadroomBps: 600}}
+solvers: [{name: x}]
+`,
+		"horizon headroom above cap": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, horizon: {fallbackGasHeadroomBps: 6000}}
+solvers: [{name: x}]
+`,
+		"unknown horizon field": `
+chain: {rpcUrl: http://x, chainId: 1}
+signer: {keyEnv: K}
+txManager: {maxFeeGwei: 100, horizon: {bogus: 1}}
 solvers: [{name: x}]
 `,
 	}

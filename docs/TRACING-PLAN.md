@@ -178,7 +178,7 @@ context — go-ethereum reconnects a dropped socket internally and replays the s
 provider can tie the connection back to the dial but **never to an individual call**, and IPC has no
 handshake at all. Each call is then spanned locally: `internal/chain/calls.go` shadows exactly the
 backend methods this repo calls (`CallContract`, `HeaderByNumber`, `HeaderByHash`, `FeeHistory`,
-`SuggestGasTipCap`, `EstimateGas`, `TransactionReceipt`, `BalanceAt`, `CodeAt`, `BlockNumber`,
+`EstimateGas` and its next-block variant `EstimateGasNextBlock`, `TransactionReceipt`, `BalanceAt`, `CodeAt`, `BlockNumber`,
 `SendTransaction`, `SendCancellationTransaction`, `NonceAt`, `PendingNonceAt`, `TransactionSenderBalanceAt`) and starts a client span
 named by the JSON-RPC method with `rpc.system=jsonrpc`, `rpc.method`, `chain.rpc.role` and
 `chain.rpc.transport`, so dashboards see one series across transports. A cancelled call and an
@@ -204,8 +204,9 @@ contexts with `trace.ContextWithSpan`, legal even after the caller's context is 
 survives the manager's deliberate detachment and covers admission → broadcast → terminal outcome.
 
 Children: `txmanager.broadcast` (fee quote, gas estimate, nonce, sign, send — each RPC call becomes a
-grandchild automatically) and one `txmanager.replace` per replacement carrying `tx.attempt` and
-`tx.cancellation`. Receipt polls are ordinary RPC child spans. Attributes: `solver` (from
+grandchild automatically) and one `txmanager.replace` per replacement carrying `tx.attempt`,
+`tx.cancellation` and `tx.replace_reason` (the `replacements_total{reason}` value that triggered it).
+Receipt polls are ordinary RPC child spans. Attributes: `solver` (from
 `Request.Solver`), `tx.label`, `tx.hash` and `tx.nonce` once known, and terminal `tx.outcome`; status
 is Error for `reverted`, `cancelled`, `cancelled_unconfirmed`, `submission_error` and `tracking_stopped`, and unset for
 `confirmed` and `included_unconfirmed`. The send span **ends before the result is delivered** to the
@@ -321,7 +322,7 @@ through the context.
 | `rfq.order.resolve` | `resolveExecutable` | backend fetch of the executable order |
 | `rfq.order.plan` | strategy `BuildFillPlan` | strategy stage |
 | `rfq.order.build` | `buildFillCalldata` | a terminal skip is declined on the order span, not on this stage |
-| `rfq.order.submit` | `txm.Send` | `tx.hash`/`tx.outcome` on return |
+| `rfq.order.submit` | `txm.Send` | `tx.hash`/`tx.outcome` on return; an obsolete result is a `declined` event (`decision=fill_obsolete`) on the order span |
 | `rfq.order.report` | `reconcileTerminalStatus` | backend status reconcile |
 
 There are no `rfq.quote.discounts` or `rfq.quote.sign` spans: the pipeline has no such steps.
@@ -338,7 +339,7 @@ There are no `rfq.quote.discounts` or `rfq.quote.sign` spans: the pipeline has n
 | `uniswapx.order.track` | `trackOrder` | `order.hash`, `quote.id`, link to the quote span (§6); its span context rides on `resolvedOrder` through the orders channel |
 | `uniswapx.fill` | `startFill` | continues the track span's trace; `tx.hash`/`tx.outcome` stamped on completion |
 | `uniswapx.fill.plan` / `.build` / `.submit` | fill pipeline | `.submit` wraps `SendAsync`, which returns before the transaction resolves |
-| `uniswapx.fill.complete` | `completePendingFill` | carries `tx.hash` and `tx.outcome` |
+| `uniswapx.fill.complete` | `completePendingFill` | carries `tx.hash` and `tx.outcome`; an obsolete result is a `declined` event (`decision=fill_obsolete`) and the span ends without an error |
 
 Because the send is asynchronous, `tx.hash` and `tx.outcome` live on `uniswapx.fill.complete` and
 `uniswapx.fill`, not on `uniswapx.fill.submit`. An order this filler cannot fill records a `declined`
@@ -357,7 +358,7 @@ and backoff; exclusive-obligation reconciliation remains independent.
 | `lifi.feed.connect` | `wsclient` dial | handshake carries `traceparent` |
 | `lifi.order.<event>` | `admitOrderMessage` | two names, bounded by `orderMessageSpanName`: `lifi.order.user:vm-order-submit` for the only event the feed dispatches, `lifi.order.other` for everything else. `order.id`, `order.onchain_id`, `quote.id` |
 | `lifi.order.process` | order worker | child of the message span; the span context rides on the queued `submittedOrder` |
-| `lifi.order.plan` / `.reserve` / `.deposit` / `.submit` / `.complete` | fill pipeline | `.reserve` and `.deposit` are re-entered per retry with `tx.attempt`; `.complete` carries `tx.hash` |
+| `lifi.order.plan` / `.reserve` / `.deposit` / `.submit` / `.complete` | fill pipeline | `.reserve` and `.deposit` are re-entered per retry with `tx.attempt`; `.complete` carries `tx.hash`, and an obsolete result is a `declined` event (`decision=fill_obsolete`) that ends it without an error |
 
 One `lifi.order.process` span covers an order for as long as anything in the worker still references
 it — pending fills, capacity retries, deposit retries, an inbox re-queue for the next recovery sweep —

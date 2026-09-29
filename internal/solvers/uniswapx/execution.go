@@ -256,7 +256,8 @@ func (s *Solver) startFill(
 	result, err := s.submitFill(ctx, txmanager.Request{
 		Solver: Name,
 		To:     order.Executor, Data: data, MaxFeePerGas: transactionMaxFee, CancelAt: cancelAt,
-		Label: "uniswapx-fill",
+		Obsolete: s.orderObsolete(order),
+		Label:    "uniswapx-fill",
 	})
 	if err != nil {
 		return nil, err
@@ -274,6 +275,32 @@ func (s *Solver) startFill(
 		order: order, plannedSurplus: strategies.PlannedSurplus(plan.Routes, order.AmountOut), result: result,
 		span: trace.SpanFromContext(ctx), end: end,
 	}, nil
+}
+
+// orderObsolete returns the fill's Obsolete hook: the order's status in the Uniswap order API, the
+// same lookup exclusive-obligation reconciliation uses. Once the order is filled (by another filler;
+// a receipt of ours takes precedence), cancelled, expired, errored or unfunded, the pending fill can
+// only revert. An open order, an unknown status or a failed lookup keeps the fill alive.
+func (s *Solver) orderObsolete(order *resolvedOrder) func(context.Context) (bool, error) {
+	if s.orders == nil {
+		return nil
+	}
+	hash := order.Hash
+	return func(ctx context.Context) (bool, error) {
+		terminals, err := s.orders.ordersByHash(ctx, s.chainID, []common.Hash{hash})
+		if err != nil {
+			return false, errors.Errorf("look up order %s: %w", hash.Hex(), err)
+		}
+		switch status := terminals[hash].Status; status {
+		case orderStatusOpen:
+			return false, nil
+		case orderStatusFilled, orderStatusCancelled, orderStatusExpired, orderStatusError,
+			orderStatusInsufficientFunds:
+			return true, nil
+		default:
+			return false, errors.Errorf("order %s has unknown status %q", hash.Hex(), status)
+		}
+	}
 }
 
 // declineFill records an expected skip on the fill span. The fill loop owns retry policy;
@@ -504,6 +531,19 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 		return
 	}
 	outcome := result.Outcome
+	if !outcome.Included() && errors.Is(result.Err, txmanager.ErrRequestObsolete) {
+		// Another filler took the order or the swapper cancelled it: retire it rather than retry,
+		// and keep it out of the failure breaker, since nothing of ours went wrong.
+		observability.Decline(ctx, "fill_obsolete", errorReason(result.Err))
+		s.observeFillOutcome(liquidlane.FillOutcomeObsolete)
+		s.complete(order.Hash, now)
+		observability.Log(ctx).Info(
+			"order fill obsolete: order settled elsewhere",
+			"source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
+			"tx", result.Hash.Hex(), "outcome", outcome,
+		)
+		return
+	}
 	if !outcome.Included() {
 		err = result.Err
 		if err == nil {

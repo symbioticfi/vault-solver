@@ -3,6 +3,7 @@ package chain
 import (
 	"context"
 	"math/big"
+	"time"
 
 	"github.com/go-errors/errors"
 	"go.opentelemetry.io/otel/attribute"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
@@ -75,18 +77,51 @@ func (c *Client) FeeHistory(
 	return c.Client.FeeHistory(ctx, blockCount, lastBlock, rewardPercentiles)
 }
 
-// SuggestGasTipCap reads the node's suggested priority fee through the read endpoint.
-func (c *Client) SuggestGasTipCap(ctx context.Context) (_ *big.Int, err error) {
-	ctx, end := c.readCalls.start(ctx, "eth_maxPriorityFeePerGas")
-	defer func() { end(err) }()
-	return c.Client.SuggestGasTipCap(ctx)
-}
-
 // EstimateGas estimates a call's gas through the read endpoint.
 func (c *Client) EstimateGas(ctx context.Context, msg ethereum.CallMsg) (_ uint64, err error) {
 	ctx, end := c.readCalls.start(ctx, "eth_estimateGas")
 	defer func() { end(err) }()
 	return c.Client.EstimateGas(ctx, msg)
+}
+
+// EstimateGasNextBlock estimates a call against the latest state as if it were included in the block
+// after parent: eth_estimateGas's blockOverrides set that block's number and timestamp, so
+// time-dependent work (interest accrual, deadline checks) is sized for the block the transaction
+// targets. An endpoint without blockOverrides support answers with an invalid-params error.
+func (c *Client) EstimateGasNextBlock(
+	ctx context.Context, msg ethereum.CallMsg, parent *types.Header, blockTime time.Duration,
+) (_ uint64, err error) {
+	ctx, end := c.readCalls.start(ctx, "eth_estimateGas")
+	defer func() { end(err) }()
+	if parent == nil || parent.Number == nil {
+		return 0, errors.New("chain: next-block gas estimate needs a parent header")
+	}
+	overrides := map[string]any{
+		"number": (*hexutil.Big)(new(big.Int).Add(parent.Number, big.NewInt(1))),
+		"time":   hexutil.Uint64(parent.Time + uint64(max(blockTime, time.Second)/time.Second)),
+	}
+	var gas hexutil.Uint64
+	if err = c.Client.Client().CallContext(
+		ctx, &gas, "eth_estimateGas", estimateGasArg(msg), "latest", nil, overrides,
+	); err != nil {
+		return 0, err
+	}
+	return uint64(gas), nil
+}
+
+// estimateGasArg encodes the call fields the transaction manager sets, the way ethclient does.
+func estimateGasArg(msg ethereum.CallMsg) map[string]any {
+	arg := map[string]any{"from": msg.From, "to": msg.To}
+	if len(msg.Data) > 0 {
+		arg["input"] = hexutil.Bytes(msg.Data)
+	}
+	if msg.Value != nil {
+		arg["value"] = (*hexutil.Big)(msg.Value)
+	}
+	if msg.Gas != 0 {
+		arg["gas"] = hexutil.Uint64(msg.Gas)
+	}
+	return arg
 }
 
 // TransactionReceipt reads a receipt through the read endpoint.

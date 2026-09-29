@@ -30,6 +30,7 @@ type fakeBackend struct {
 	resolveCalls int
 	listCalls    int
 	orderListErr error
+	orderErr     error
 }
 
 func (f *fakeBackend) listOpenOrders(context.Context, string, int) ([]backendOrder, error) {
@@ -38,7 +39,9 @@ func (f *fakeBackend) listOpenOrders(context.Context, string, int) ([]backendOrd
 func (f *fakeBackend) getExecutableOrder(context.Context, string, string) (*backendOrder, error) {
 	return f.executable, nil
 }
-func (f *fakeBackend) getOrder(context.Context, string) (*backendOrder, error) { return f.order, nil }
+func (f *fakeBackend) getOrder(context.Context, string) (*backendOrder, error) {
+	return f.order, f.orderErr
+}
 
 func (f *fakeBackend) resolveDiscount(context.Context, string) (*resolveDiscountResponse, error) {
 	f.resolveCalls++

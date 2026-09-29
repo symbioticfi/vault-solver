@@ -25,6 +25,9 @@ const (
 	statusExpired      orderStatus = "expired"
 	statusFailed       orderStatus = "failed"
 	statusRetryWaiting orderStatus = "retry_waiting"
+	// statusObsolete is terminal: the backend reported the order no longer fillable while our fill was
+	// being sent, so it is never re-armed, even if a stale open-order listing still returns it.
+	statusObsolete orderStatus = "obsolete"
 )
 
 func (s orderStatus) active() bool {
