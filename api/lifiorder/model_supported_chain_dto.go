@@ -25,7 +25,7 @@ type SupportedChainDto struct {
 	ChainId string `json:"chainId"`
 	// Human-readable name of the chain
 	Name string `json:"name"`
-	// Type of blockchain (EVM, SVM, TVM)
+	// Blockchain type: EVM (Ethereum-compatible), SVM (Solana), TVM (Tron), or STL (Stellar)
 	ChainType            string `json:"chainType"`
 	AdditionalProperties map[string]interface{}
 }

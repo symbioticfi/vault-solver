@@ -19,7 +19,7 @@ var _ MappedNullable = &SubmitQuotesDto{}
 
 // SubmitQuotesDto struct for SubmitQuotesDto
 type SubmitQuotesDto struct {
-	// Array of quotes to submit
+	// Quotes to submit. A request can contain at most 50,000 quotes and 100,000 ranges across all quotes.
 	Quotes               []SubmitQuotesDtoQuotesInner `json:"quotes"`
 	AdditionalProperties map[string]interface{}
 }

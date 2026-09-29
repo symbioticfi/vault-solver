@@ -20,7 +20,7 @@ var _ MappedNullable = &QuoteRequestDtoIntentMetadata{}
 // QuoteRequestDtoIntentMetadata Metadata for the order, never required, potentially contains provider specific data
 type QuoteRequestDtoIntentMetadata struct {
 	ExclusiveFor *OifQuoteRequestDtoIntentMetadataExclusiveFor `json:"exclusiveFor,omitempty"`
-	// Oracle contracts accepted for the route, identified by chain and address. When provided, returned quotes must use an accepted contract on both the source and destination chains. Contracts marked as retired are excluded. Omit or pass an empty list to use the configured oracle pairs. Ignored for same-chain swaps.
+	// Accepted oracle deployment addresses, identified by chain and address. When provided, both addresses of the oracle pair selected for the quote must appear in this list under their respective source and destination chains. For cross-chain Polymer routes with EVM or Tron on both sides, the order encodes the source oracle in both inputOracle and outputs[].oracle. The destination entry still identifies the destination deployment, which can differ from the encoded output oracle and response metadata.oracle.output. Contracts marked as retired are excluded. Omit or pass an empty list to use the configured oracle pairs. Ignored for same-chain swaps.
 	Oracle []PutSupportedContractsDtoOracleInner `json:"oracle,omitempty"`
 	// Accepted input settler contracts, each a { chain, address } object. When provided, a quote is only returned if the order is built with one of these input settlers and the winning solver supports it. Omitted or empty means any input settler is acceptable.
 	InputSettler []PutSupportedContractsDtoOracleInner `json:"inputSettler,omitempty"`

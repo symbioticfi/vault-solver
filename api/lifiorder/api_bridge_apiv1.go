@@ -176,7 +176,7 @@ func (r ApiRoutesV1ControllerGetSupportedRoutesRequest) Execute() (*GetSupported
 /*
 RoutesV1ControllerGetSupportedRoutes Get supported routes
 
-Discover which routes are currently working on the intent server. Returns all active routes, optionally filtered by source and destination chain (CAIP-2 format).
+Discover which routes are currently working on the intent server. Returns all active routes, optionally filtered by source and destination chain (CAIP-2 format). Routes on a chain that is not active are not listed.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiRoutesV1ControllerGetSupportedRoutesRequest

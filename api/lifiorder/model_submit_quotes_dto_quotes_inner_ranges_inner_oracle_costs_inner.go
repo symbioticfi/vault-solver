@@ -24,7 +24,7 @@ type SubmitQuotesDtoQuotesInnerRangesInnerOracleCostsInner struct {
 	// Oracle contract address on `toChain`. Together with `inputOracle`, it identifies the pair priced by this entry. EVM (eip155): 0x-prefixed 40-char hex. Solana: 32–44 char base58. Tron: base58check, T-prefixed, 34 chars.
 	OutputOracle string `json:"outputOracle"`
 	// Total fixed cost for this oracle pair in fromAsset raw base units
-	FixedCost            string `json:"fixedCost" validate:"regexp=^(0|[1-9][0-9]*)$"`
+	FixedCost            string `json:"fixedCost" validate:"regexp=^(0|[1-9]\\d{0\\,77})$"`
 	AdditionalProperties map[string]interface{}
 }
 

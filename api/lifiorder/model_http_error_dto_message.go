@@ -85,14 +85,9 @@ func (dst *HttpErrorDtoMessage) UnmarshalJSON(data []byte) error {
 	} else { // no match
 		if err != nil {
 			return fmt.Errorf("data failed to match schemas in oneOf(HttpErrorDtoMessage): %v", err)
-		} else {
-			return fmt.Errorf("data failed to match schemas in oneOf(HttpErrorDtoMessage)")
 		}
-		if err != nil {
-			return fmt.Errorf("data failed to match schemas in oneOf(HttpErrorDtoMessage): %v", err)
-		} else {
-			return fmt.Errorf("data failed to match schemas in oneOf(HttpErrorDtoMessage)")
-		}
+
+		return fmt.Errorf("data failed to match schemas in oneOf(HttpErrorDtoMessage)")
 	}
 }
 

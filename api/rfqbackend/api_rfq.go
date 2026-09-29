@@ -285,6 +285,127 @@ func (a *RFQAPIService) ApiV1DiscountPostExecute(r ApiApiV1DiscountPostRequest) 
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
+type ApiApiV1LiquidityBatchPostRequest struct {
+	ctx                   context.Context
+	ApiService            *RFQAPIService
+	liquidityBatchRequest *LiquidityBatchRequest
+}
+
+func (r ApiApiV1LiquidityBatchPostRequest) LiquidityBatchRequest(liquidityBatchRequest LiquidityBatchRequest) ApiApiV1LiquidityBatchPostRequest {
+	r.liquidityBatchRequest = &liquidityBatchRequest
+	return r
+}
+
+func (r ApiApiV1LiquidityBatchPostRequest) Execute() (*LiquidityBatchResponse, *http.Response, error) {
+	return r.ApiService.ApiV1LiquidityBatchPostExecute(r)
+}
+
+/*
+ApiV1LiquidityBatchPost Get solver liquidity for several tokens
+
+Reads the /liquidity snapshot for up to 20 distinct input tokens in one request and returns { tokensIn: [...] }, one snapshot per token in request order. Each snapshot has the same shape and totalLiquidity semantics as /liquidity. The solverId and solverIds filters apply to every token. Every token is checked against the deployment before any inventory is read, so one unsupported token rejects the whole request with 400 and the error details name it. Duplicate tokens, compared case-insensitively, are rejected with 400.
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@return ApiApiV1LiquidityBatchPostRequest
+*/
+func (a *RFQAPIService) ApiV1LiquidityBatchPost(ctx context.Context) ApiApiV1LiquidityBatchPostRequest {
+	return ApiApiV1LiquidityBatchPostRequest{
+		ApiService: a,
+		ctx:        ctx,
+	}
+}
+
+// Execute executes the request
+//
+//	@return LiquidityBatchResponse
+func (a *RFQAPIService) ApiV1LiquidityBatchPostExecute(r ApiApiV1LiquidityBatchPostRequest) (*LiquidityBatchResponse, *http.Response, error) {
+	var (
+		localVarHTTPMethod  = http.MethodPost
+		localVarPostBody    interface{}
+		formFiles           []formFile
+		localVarReturnValue *LiquidityBatchResponse
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "RFQAPIService.ApiV1LiquidityBatchPost")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/api/v1/liquidity-batch"
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+	if r.liquidityBatchRequest == nil {
+		return localVarReturnValue, nil, reportError("liquidityBatchRequest is required and must be specified")
+	}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{"application/json"}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	// body params
+	localVarPostBody = r.liquidityBatchRequest
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		if localVarHTTPResponse.StatusCode == 400 {
+			var v ErrorResponse
+			err = a.client.decode(&v, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+			if err != nil {
+				newErr.error = err.Error()
+				return localVarReturnValue, localVarHTTPResponse, newErr
+			}
+			newErr.error = formatErrorMessage(localVarHTTPResponse.Status, &v)
+			newErr.model = v
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
 type ApiApiV1LiquidityPostRequest struct {
 	ctx              context.Context
 	ApiService       *RFQAPIService
@@ -303,7 +424,7 @@ func (r ApiApiV1LiquidityPostRequest) Execute() (*LiquidityResponse, *http.Respo
 /*
 ApiV1LiquidityPost Get solver liquidity
 
-Returns the adapter inventory available to each eligible solver using the same authorization and live-discount limits as quote construction. Each liquidity value sums adapters[].maxAssets in tokenOut base units; totalLiquidity sums all returned solver values, including shared inventory counted for each solver. Solvers are sorted by liquidity descending. Optional solverId restricts the list and total to one solver and takes precedence over solverIds. Does not request solver quotes or persist quote records. Empty inventory returns 200 with totalLiquidity=0 and solvers=[].
+Returns the adapter inventory available to each eligible solver using the same authorization and live-discount limits as quote construction. Each liquidity value sums adapters[].maxAssets in tokenOut base units; totalLiquidity counts the shared internal quote inventory once and adds each external solver's liquidity, so it can differ from the sum of the solver values in either direction: overlapping internal adapters count once, and the unfiltered total includes eligible internal inventory no returned solver is bound to. It is never below any single solver value. Solvers are sorted by liquidity descending. Optional solverId restricts the list and total to one solver and takes precedence over solverIds. Does not request solver quotes or persist quote records. Empty inventory returns 200 with totalLiquidity=0 and solvers=[]. To read several tokens in one request, use /liquidity-batch.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiApiV1LiquidityPostRequest

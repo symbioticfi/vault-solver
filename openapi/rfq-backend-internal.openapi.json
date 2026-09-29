@@ -277,7 +277,8 @@
                 },
                 "discount": {
                   "type": "string",
-                  "pattern": "^\\d+$"
+                  "pattern": "^\\d+$",
+                  "description": "Signed discount in ppm. A discount swap pays floor(getAmountOut(tokenToRedeem, amountIn) * (1000000 - discount) / 1000000)."
                 },
                 "signer": {
                   "type": "string",
@@ -287,10 +288,6 @@
                   "type": "integer",
                   "exclusiveMinimum": 0,
                   "maximum": 9007199254740991
-                },
-                "maxRate": {
-                  "type": "string",
-                  "pattern": "^\\d+$"
                 },
                 "maxAssets": {
                   "type": "string",
@@ -311,7 +308,6 @@
                 "discount",
                 "signer",
                 "deadline",
-                "maxRate",
                 "maxAssets",
                 "blockNumber"
               ]
