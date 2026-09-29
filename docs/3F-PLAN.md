@@ -124,9 +124,14 @@ When the guard refuses a batch as unaffordable (`txmanager.ErrUnaffordable`, a `
 redeemer halves the batch (down to one request) and skips redeem sends for 1, 2, 4 and then 12 `redeemPoll`
 intervals after successive refusals (5, 10, 20, 60 minutes at the default poll; a shape over the configured
 poll that counts whole passes). Scans continue during the backoff so `redeemable` stays fresh. The episode
-ends when a lane-state signal finds the funding gate reopened after it was closed; an included redeem ends
-the wait and doubles the batch back toward `redeemBatchSize`. The first refusal of an episode is one Info
-line; later ones are V(1). Any `NotAdmitted` result is declined on `3f.redeem.submit` and logged at Info
+ends when the signer is funded: the signer balance the manager read last (`SignerBalance`, refreshed by every
+account poll) is above the one it had read when the last refusal returned, checked at the start of every
+redeem pass and on every lane-state signal, or a lane-state signal finds the funding gate reopened after it
+was closed. The balance rule is the one that works today, because 3F's `balance.referenceGasUnits` stays 0
+(below), which keeps the gate off and `Fundable` always true. A rise read from a lagging upstream can end an
+episode early; that costs one more refused (never signed) batch. An included redeem ends the wait and doubles
+the batch back toward `redeemBatchSize`. The first refusal of an episode and its end are one Info line each;
+later refusals are V(1). Any `NotAdmitted` result is declined on `3f.redeem.submit` and logged at Info
 rather than as `redeem: tx not included` at Error; a transient refusal (`stale_head`, a paused lane) does not
 back off. The backoff state is owned by the `Run` goroutine, which also handles the lane-state signals.
 
@@ -401,8 +406,8 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 - **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state.
 - **Redeem funding gate and 3F owner sign-off.** `balance.referenceGasUnits` for 3F (the gas of a full
   10-request finalize batch) is unmeasured, so it stays 0: the funding gate and its alert are off for 3F, and
-  a redeem backoff then ends only on its schedule (at most 60 minutes), never on a funding signal. Measure it
-  from `solver_bot_txmanager_attempt_gas_limit{label="redeem"}` and set it. The redeem decision above (no gate,
+  a redeem backoff ends on a signer balance rise or its schedule (at most 60 minutes), not on a base-fee drop.
+  Measure it from `solver_bot_txmanager_attempt_gas_limit{label="redeem"}` and set it. The redeem decision above (no gate,
   halve and back off) still needs the 3F owner's confirmation.
 - **WS live-log subscription** (`chain.wsUrl`) — config field present but unused; the poll-based reconcile/redeem path is sufficient for v0.
 

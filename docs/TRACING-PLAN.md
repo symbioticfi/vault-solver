@@ -218,7 +218,8 @@ no error status. The solver stage that submitted it treats any `NotAdmitted` res
 `declined` event whose `reason` is `txmanager.NotAdmittedReason` (`fill_not_admitted` on
 `rfq.order.submit`, `rfq.order`, `uniswapx.fill.complete` and `lifi.order.complete`; `redeem_not_admitted` on
 `3f.redeem.submit`) and no error status. `txmanager.account_poll` roots each account-poll tick; with the
-funding gate on it also covers the gate's balance and fee-history reads.
+funding gate on it also covers the gate's fee-history and pinned balance reads, and its error status joins
+the gate's and the telemetry snapshot's failures.
 
 The worker stores the request's `solver`-stamped logger on every context of the lifecycle, the send
 span included, so `observability.Log(ctx)` puts `solver`, `label`, `trace_id` and `span_id` on every

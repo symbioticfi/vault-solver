@@ -229,9 +229,17 @@ plain threshold. Until that first evaluation the gate is closed (quotes fail clo
 It is evaluated from two sources, each a balance and the next block's base fee:
 
 - **Account poll** (`accountPollIntervalMs`; the strategy recommends 12000 on mainnet so it tracks the base
-  fee each block): the telemetry balance at `latest`, or a separate balance read when account metrics are
-  off, plus `eth_feeHistory(1, latest, [])` for `pb`. The poll also refreshes `fee_next_base_fee_wei` and
-  `account_required_balance_wei` for `G`. A failed read keeps the previous state.
+  fee each block): `eth_feeHistory(1, latest, [])` for `pb` and its newest block, then the signer balance
+  pinned to that block by number through the guard's pinned read (not-found retried within the fee-read
+  budget), so the balance and `pb` describe one block and the head order below covers the balance too; a
+  block below the previous lifecycle's inclusion block is refused, as for a guarded send (§4.1). Only with
+  the guard off does the gate read `latest`. The gate is refreshed before and apart from the account
+  telemetry snapshot, each with its own read budget: a failed nonce read does not skip the gate, and
+  `account_refreshes_total` counts the telemetry snapshot alone. The poll also refreshes
+  `fee_next_base_fee_wei` and `account_required_balance_wei` for `G`. A failed refresh keeps the previous
+  state; the first failure of a run and its recovery are logged at Info (`funding gate refresh failed` /
+  `recovered`, with whether the gate has evaluated and what it reports), the rest at V(1), and a run lasting
+  five minutes at Error.
 - **Guarded sends**: the pinned balance and fee snapshot of every guarded broadcast (§4.1), so the send the
   guard refuses already closes the gate without waiting for the next poll.
 
@@ -239,20 +247,33 @@ Evaluations carry the fee history's newest block; an older one (a lagging upstre
 a newer poll finished) cannot override a newer one. Every change notifies `SubscribeLaneState` subscribers and
 is logged once at Info with the balance, threshold and reopening balance. The strategy asks for Warn on close;
 logr has only Info and Error, and Error would page through Sentry, while paging is the alert's job
-(`account_fundable == 0` against `account_balance_target_wei`). The gate is off, and `Fundable()` always true,
-while `referenceGasUnits` is 0 or the backend cannot read the signer balance (one startup line says so).
+(`account_fundable == 0` against `account_balance_target_wei`). `account_fundable` is exported from startup
+while the gate is on, `0` until the first evaluation, so a gate that never evaluates is visible to the alert
+and not only as declined quotes. The gate is off, and `Fundable()` always true, while `referenceGasUnits` is 0
+or the backend cannot read the signer balance (one startup line says so).
+
+`SignerBalance()` is the signer balance the manager read last: from an account poll (the gate's pinned read,
+then telemetry) or the pinned read of a guarded send or replacement. Right after an `ErrUnaffordable` result it
+is normally the balance the refusal was priced against, so a solver backing off after `ErrUnaffordable`
+compares later reads with it and notices a top-up even while `referenceGasUnits` is 0 (3F). Account polls
+refresh it while account metrics (always on in the binary) or the gate are on. A rise is deliberately not a
+`SubscribeLaneState` signal: subscribers such as LI.FI retire and republish standing quotes on every signal,
+and a `latest` read from a lagging upstream can briefly show the balance from before the last fill was paid.
+For the same reason a rise is a hint to try again, not proof of funds; the guard still decides every attempt.
 
 Goroutine model: the account-poll goroutine and the worker goroutine evaluate; `fundingGate.mu` serializes
-the evaluations, the transition log and the notification; `Fundable()` reads an atomic.
+the evaluations, the transition log and the notification; `Fundable()` reads an atomic. The poll's failure
+streak belongs to the account-poll goroutine; `balanceMu` serializes the poll, worker and lifecycle
+goroutines' updates of the last signer balance.
 
 Solver use, through the generic API only (integration plans have the detail):
 
 | Solver | Gate |
 |---|---|
-| RFQ | Quotes decline as `lane_unfundable`; a fill cancelled at its deadline is not retried while unfundable. |
+| RFQ | Quotes decline as `lane_unfundable`; a fill cancelled at its deadline is not retried while unfundable; a fill refused as unaffordable fails without being re-armed. |
 | UniswapX | Quotes decline as `lane-unfundable` (`/ready` and `uniswapx_ready` follow); won orders are deferred before any chain read or planning. |
 | LI.FI | Standing quotes are withdrawn and republished on the reopening signal. |
-| 3F | None: offers keep `LaneReady`; redeem runs regardless and backs off on `ErrUnaffordable`, ending the backoff when the gate reopens. |
+| 3F | None: offers keep `LaneReady`; redeem runs regardless and backs off on `ErrUnaffordable`, ending the backoff when `SignerBalance` rises above the refusal's or the gate reopens. |
 
 A `NotAdmitted` result (`ErrUnaffordable`, `ErrStaleHead`, a paused lane) is an expected skip: solvers record
 `observability.Decline` with `NotAdmittedReason(err)` (the `admission_rejections_total` reason) and log at
@@ -448,7 +469,7 @@ Definitions: [metrics.go](../internal/txmanager/metrics.go),
 | Txmanager | `solver_bot_txmanager_attempt_horizon_blocks` | `label` | Histogram of the blocks, from the next one, an initial attempt's fee cap stays valid at the floor tip when the guard priced it; below 3 with `balanceBound` in the `sent` log means the balance, not the policy, set it. |
 | Txmanager | `solver_bot_txmanager_fee_next_base_fee_wei` | — | Next block's base fee from the latest guarded fee snapshot, or the latest account poll while the funding gate is on. |
 | Txmanager | `solver_bot_txmanager_account_required_balance_wei` | `horizon` | Balance a reference fill (`balance.referenceGasUnits`, or the latest attempt's gas limit while that is 0) needs at that base fee and the floor tip: `min` (`fees.minHorizonBlocks`, can still send), `quote` (`fees.pricingHorizonBlocks`) and `full` (`fees.maxHorizonBlocks`). |
-| Txmanager | `solver_bot_txmanager_account_fundable` | — | `1` while the lane funding gate (§4.2) is open, `0` while closed; absent while the gate is off (`balance.referenceGasUnits` 0) or before its first evaluation. |
+| Txmanager | `solver_bot_txmanager_account_fundable` | — | `1` while the lane funding gate (§4.2) is open, `0` while closed, including from startup until its first evaluation; absent while the gate is off (`balance.referenceGasUnits` 0). |
 | Txmanager | `solver_bot_txmanager_account_balance_target_wei` | — | `balance.targetEth` in wei, exported for alerts only (page on `account_fundable == 0` below it, warn at or above it); absent when unset. |
 | Txmanager | `solver_bot_txmanager_account_info` | `address` | Constant `1` identifying the active public transaction-sender address; absent when no configured solver starts txmanager. Private key material is never exposed. |
 | Txmanager | `solver_bot_txmanager_account_balance_wei` | — | Last complete native-token balance snapshot of the sender; absent until the first successful complete refresh. Read through the read client, never the write endpoint. |
@@ -502,8 +523,8 @@ policy, next-block estimate and shadow evaluator ship in it):
   on every account poll only while the funding gate is on; with `balance.referenceGasUnits` 0 they still move
   only on guarded sends. The horizon policy's per-head fee snapshot should refresh them on every head.
 - **3F funding gate.** 3F's `referenceGasUnits` (the gas of a full 10-request finalize batch) is unmeasured, so
-  its gate and funding alert stay off and its redeem backoff ends only on its schedule; measure it from
-  `attempt_gas_limit{label="redeem"}`, then set it. The 3F owner still has to confirm the redeem decision.
+  its gate and funding alert stay off and its redeem backoff ends on a signer balance rise or its schedule, not
+  on a base-fee drop; measure it from `attempt_gas_limit{label="redeem"}`, then set it. The 3F owner still has to confirm the redeem decision.
 - **Glamsterdam (ePBS).** Before the mainnet fork, re-measure the fill gas profile, `referenceGasUnits`,
   `gas.headroomBps`, `fees.blockTimeMs` and the room/tip thresholds if the fork changes gas costs, the block gas
   limit or slot timing; revalidate on Sepolia first. The balance guard pins reads to a header hash that the

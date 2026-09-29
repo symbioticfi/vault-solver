@@ -24,7 +24,9 @@ import (
 // Goroutine model: the worker goroutine runs the initial-send guard and the lifecycle goroutine runs
 // the replacement cap; the lifecycle slot keeps them from overlapping. The only state they share is
 // Manager.lastInclusion, an atomic the lifecycle goroutine raises when a lifecycle ends in a receipt,
-// and Manager.hashPinMisses, an atomic count both update as their pinned balance reads end.
+// Manager.hashPinMisses, an atomic count both update as their pinned balance reads end, and the last
+// signer balance read (Manager.balanceMu). The account-poll goroutine reads pinned balances through the
+// same path for the funding gate.
 
 // ErrUnaffordable reports a request the signer balance cannot keep valid for fees.minHorizonBlocks
 // blocks from a fresh head. Nothing was signed and the nonce was not consumed; the Result is
@@ -258,6 +260,7 @@ func (m *Manager) pinnedBalance(ctx context.Context, pin rpc.BlockNumberOrHash) 
 		switch {
 		case err == nil && balance != nil && balance.Sign() >= 0:
 			m.hashPinFound(ctx, pin)
+			m.observeSignerBalance(balance)
 			return balance, nil
 		case err == nil:
 			return nil, errors.Errorf("%w: invalid signer balance %v at block %s", ErrStaleHead, balance, pin.String())

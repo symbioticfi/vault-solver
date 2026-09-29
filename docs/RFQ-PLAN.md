@@ -101,10 +101,16 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   backend may flag an order that still fills), and a failed read or an unrecognized status is an error, which
   keeps it too.
 - **Refusals before signing are expected skips.** A `NotAdmitted` result (the balance guard's
-  `ErrUnaffordable`, a `stale_head`, a paused nonce lane) marks the order failed without a retry loop, as
-  before, but is logged at Info (`fill not admitted`, with `txmanager.NotAdmittedReason`) and declined on the
-  `rfq.order` and `rfq.order.submit` spans rather than logged as `fill failed` at Error. An admitted
-  submission failure keeps its Error.
+  `ErrUnaffordable`, a `stale_head`, a paused nonce lane) marks the order failed and is logged at Info
+  (`fill not admitted`, with `txmanager.NotAdmittedReason`) and declined on the `rfq.order` and
+  `rfq.order.submit` spans rather than logged as `fill failed` at Error. An admitted submission failure keeps
+  its Error. A fill refused as unaffordable fails for good (the record's `Unaffordable` flag): the open-order
+  poll does not re-arm it, although nothing was signed, so an order the backend keeps listing open until its
+  deadline is not re-planned and refused every poll (strategy §2.8); the funding gate the refusal evaluated
+  stops new quotes. Fills are not gated on `Fundable` before planning: the gate sits at the pricing horizon so
+  a won order still has three blocks of base-fee growth before the guard's floor, and gating fills on it would
+  give that margin up. A transient refusal (`stale_head`, a paused lane) is re-armed by the next poll like any
+  other unsigned failure.
 - **Retries distinguish unsent work from transactions.** Failed pre-submission work with no recorded hash
   may be retried while the order is open. A successful cancellation that satisfies txmanager's confirmation
   policy may enter `retry_waiting`, retaining its hash until one `pollIntervalMs` interval elapses and a
@@ -113,7 +119,9 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   hash and runs the full executable-order lookup, chain deadline validation, strategy plan, and discount
   resolution again. A retry is scheduled only while the manager's funding gate (`Fundable`,
   [TXMANAGER-PLAN §4.2](TXMANAGER-PLAN.md#42-lane-funding-gate)) is open; otherwise the order fails and the
-  suppression is logged at Info. Retry waiting counts as an active obligation and reconciles terminal
+  suppression is logged at Info. Nor is one scheduled when the backend already reports the order filled,
+  cancelled or expired (the fill's `Obsolete` check, which is why the manager cancelled): the order adopts
+  that terminal status at once instead of spending a retry and holding its reservation for a dead order. Retry waiting counts as an active obligation and reconciles terminal
   backend status; its retained order deadline also expires it locally if backend views disappear or stay
   stale. No retry is scheduled during shutdown or when the order expires before the next attempt.
   Reverted transactions stay failed; unknown inclusion or `cancelled_unconfirmed` stays submitted for backend

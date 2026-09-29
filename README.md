@@ -74,8 +74,10 @@ is polled until eligible adapters appear. Example:
 Redeem is not gated on lane funding: when the tx manager's balance guard refuses a finalize batch as
 unaffordable, the solver halves the batch (down to one request) and skips redeem sends for 1, 2, 4 and then
 12 `redeemPoll` intervals (5, 10, 20 and 60 minutes by default), still scanning so the redeemable metric
-stays fresh. The backoff ends when the [funding gate](#txmanager-funding-gate) reopens, and each included
-redeem doubles the batch back toward `redeemBatchSize`. One Info line reports each such episode.
+stays fresh. The backoff ends as soon as the signer balance the tx manager reads rises above the balance the
+last refusal saw (fund the signer and the next redeem pass sends a full batch), or when the
+[funding gate](#txmanager-funding-gate) reopens; each included redeem doubles the batch back toward
+`redeemBatchSize`. One Info line reports the start of each such episode and one its end.
 
 ### RFQ Filler — `rfq-filler`
 
@@ -123,10 +125,12 @@ field replaces `maxRate`, so run this version with a backend that sends it. Fill
 sent one at a time on the shared nonce lane. Reservations are local to the process and are not restored
 after a restart.
 While the tx manager's [funding gate](#txmanager-funding-gate) is closed, quotes are declined (quote decision
-`lane_unfundable`) and a fill cancelled at its deadline is not retried. A fill the balance guard refuses
-fails the order without a retry and is logged at Info (`fill not admitted`), not as a failed fill. While a
-fill is pending, the backend reporting the order `filled`, `cancelled` or `expired` makes the tx manager
-cancel it at its nonce instead of holding the lane until the order deadline.
+`lane_unfundable`) and a fill cancelled at its deadline is not retried. A fill the balance guard refuses as
+unaffordable fails the order without a retry, even while the backend still lists it open, and is logged at
+Info (`fill not admitted`), not as a failed fill; a refusal for a stale RPC head is retried on the next poll.
+While a fill is pending, the backend reporting the order `filled`, `cancelled` or `expired` makes the tx
+manager cancel it at its nonce instead of holding the lane until the order deadline, and such an order is not
+retried.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).
@@ -442,8 +446,12 @@ base fee climbs still fills. The gate is re-evaluated on every account poll and 
 UniswapX defers won orders before planning them, LI.FI withdraws its standing quotes, and RFQ does not retry a
 cancelled fill; 3F offers are not gated and 3F redeem backs off as described in the 3F section. It starts closed until
 its first evaluation, is off (always fundable) while `referenceGasUnits` is 0, and is separate from `/readyz`,
-which must not flap with the base fee. Changes are logged at Info (`lane unfundable`, `lane fundable again`).
-`solver_bot_txmanager_account_fundable` (1 open, 0 closed; absent while the gate is off) and
+which must not flap with the base fee. Changes are logged at Info (`lane unfundable`, `lane fundable again`), and
+so are the start and end of a run of polls that cannot refresh it (`funding gate refresh failed` /
+`funding gate refresh recovered`; Error if it lasts five minutes). Each poll reads the balance at the block its
+base fee comes from, not at `latest`.
+`solver_bot_txmanager_account_fundable` (1 open, 0 closed, including from startup until the first evaluation;
+absent while the gate is off) and
 `solver_bot_txmanager_account_balance_target_wei` (from `balance.targetEth`; absent when unset) are meant for
 alerts: page when the lane is unfundable and its balance is below target, warn when it is unfundable at or
 above target (a base-fee spike the target does not cover). At 0.1 ETH a 4.35M-gas lane keeps quoting up to a

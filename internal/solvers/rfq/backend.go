@@ -48,7 +48,9 @@ type backendOut struct {
 }
 
 // backendClient is a thin adapter over the generated rfqbackend client for filler-facing orders plus
-// the shared private-discounts client. Used from the single execution goroutine.
+// the shared private-discounts client. It is called concurrently: by the execution poll loop and
+// submitter, and by the txmanager's worker and lifecycle goroutines through a fill's Obsolete check
+// (getOrder). It holds no mutable state of its own; any state added to it must be synchronized.
 type backendClient struct {
 	api       *rfqbackend.APIClient
 	discounts *discounts.Client

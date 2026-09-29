@@ -17,6 +17,9 @@ type readStreak struct {
 	failures    int
 	since       time.Time
 	lastAlertAt time.Time
+	// quietStart logs the start of a run at info instead of error, for reads where one failure is
+	// routine; a run that lasts readFailureReminderInterval is still raised at error.
+	quietStart bool
 }
 
 func (s *readStreak) failed(log logr.Logger, err error, msg string, fields ...any) {
@@ -24,6 +27,9 @@ func (s *readStreak) failed(log logr.Logger, err error, msg string, fields ...an
 	now := time.Now()
 	fields = append(fields, "consecutiveFailures", s.failures)
 	switch {
+	case s.failures == 1 && s.quietStart:
+		s.since, s.lastAlertAt = now, now
+		log.Info(msg, append(fields, "error", err.Error())...)
 	case s.failures == 1:
 		s.since, s.lastAlertAt = now, now
 		log.Error(err, msg, fields...)

@@ -52,16 +52,18 @@ type Solver struct {
 	strategy  types.Strategy
 	log       logr.Logger
 	laneReady func() bool // shared txmanager lane state; safe for the single Run goroutine
-	// fundable and laneStates are the shared txmanager funding gate and its change stream. Offers do not
-	// gate on funding (an unfundable lane only delays redeem); they end a redeem backoff.
-	fundable   func() bool
-	laneStates func() (<-chan struct{}, func())
-	redeem     redeemBackoff  // Run goroutine only
-	signerAddr common.Address // the solver's own signer address (diagnostics only), set in factory
-	probe      signerProbe    // one-time (hash, sig) used to validate offer-signer authorization, set in factory
-	nonceSeq   atomic.Uint64
-	offers     *offerTracker // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
-	targets    []Target      // current resolved snapshot; owned exclusively by the Run goroutine
+	// fundable, signerBalance and laneStates are the shared txmanager funding gate, last signer balance
+	// read and their change stream. Offers do not gate on funding (an unfundable lane only delays
+	// redeem); a reopened gate or a balance rise ends a redeem backoff. All are safe for concurrent use.
+	fundable      func() bool
+	signerBalance func() *big.Int
+	laneStates    func() (<-chan struct{}, func())
+	redeem        redeemBackoff  // Run goroutine only
+	signerAddr    common.Address // the solver's own signer address (diagnostics only), set in factory
+	probe         signerProbe    // one-time (hash, sig) used to validate offer-signer authorization, set in factory
+	nonceSeq      atomic.Uint64
+	offers        *offerTracker // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
+	targets       []Target      // current resolved snapshot; owned exclusively by the Run goroutine
 	// targetsAuthoritative records whether targets covers the complete configured/discovered source.
 	// A partial refresh still installs its safe subset, but derived metric freshness must stay retained.
 	targetsAuthoritative bool
@@ -114,22 +116,23 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 
 	s := &Solver{
-		cfg:        cfg,
-		deps:       deps,
-		api:        api,
-		reader:     newReader(deps.Chain, cfg.LiquidityLens),
-		txManager:  deps.TxManager,
-		strategy:   offerStrategy,
-		log:        deps.Log.WithName(Name),
-		laneReady:  deps.TxManager.LaneReady,
-		fundable:   deps.TxManager.Fundable,
-		laneStates: deps.TxManager.SubscribeLaneState,
-		signerAddr: deps.Signer.Address(),
-		probe:      probe,
-		offers:     newOfferTracker(),
-		metrics:    metrics,
-		operations: operations,
-		links:      observability.NewSpanLinks(),
+		cfg:           cfg,
+		deps:          deps,
+		api:           api,
+		reader:        newReader(deps.Chain, cfg.LiquidityLens),
+		txManager:     deps.TxManager,
+		strategy:      offerStrategy,
+		log:           deps.Log.WithName(Name),
+		laneReady:     deps.TxManager.LaneReady,
+		fundable:      deps.TxManager.Fundable,
+		signerBalance: deps.TxManager.SignerBalance,
+		laneStates:    deps.TxManager.SubscribeLaneState,
+		signerAddr:    deps.Signer.Address(),
+		probe:         probe,
+		offers:        newOfferTracker(),
+		metrics:       metrics,
+		operations:    operations,
+		links:         observability.NewSpanLinks(),
 	}
 	// Seed the offer nonce sequence from the wall clock so it stays monotonic across restarts.
 	s.nonceSeq.Store(uint64(time.Now().UnixNano()))

@@ -20,7 +20,7 @@ func (s *Solver) redeemAll(ctx context.Context) {
 	ctx, end := tracer.Start(ctx, "3f.redeem")
 	defer end(nil) // each stage records its own failure; a scan with nothing ready is a decline
 
-	if !s.redeem.beginPass() {
+	if !s.beginRedeemPass(ctx) {
 		// Scans still run, so the redeemable metric stays fresh while the backoff holds the sends.
 		observability.Log(ctx).V(1).Info("redeem: backing off after an unaffordable batch; scanning only",
 			"passesLeft", s.redeem.skipPasses, "batchLimit", s.redeem.limit(s.cfg.RedeemBatchSize))
@@ -163,7 +163,7 @@ func (s *Solver) redeemNotAdmitted(ctx context.Context, requests int, refusal er
 			"requests", requests, "reason", reason, "error", refusal)
 		return
 	}
-	first := s.redeem.refused(requests)
+	first := s.redeem.refused(requests, s.currentSignerBalance())
 	fields := []any{
 		"requests", requests, "reason", reason, "nextBatchLimit", s.redeem.batchLimit,
 		"skippedPasses", s.redeem.skipPasses, "error", refusal,

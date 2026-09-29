@@ -224,3 +224,81 @@ func TestFillRequestObsoleteFollowsBackendStatus(t *testing.T) {
 		})
 	}
 }
+
+// TestExecutionUnaffordableFillIsNotResubmitted keeps a refused fill from looping: the backend lists the
+// order open until its deadline, and an unsigned failure is normally re-armed on the next poll. A fill the
+// balance guard refused as unaffordable fails for good (strategy §2.8), whether or not the refusal closed
+// the funding gate (with balance.referenceGasUnits 0 the gate stays open); a stale head is transient and is
+// re-armed.
+func TestExecutionUnaffordableFillIsNotResubmitted(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		err       error
+		fundable  bool
+		wantSends int
+		want      orderStatus
+	}{
+		{name: "unaffordable, gate off", err: txmanager.ErrUnaffordable, fundable: true, wantSends: 1, want: statusFailed},
+		{name: "unaffordable, gate closed", err: txmanager.ErrUnaffordable, fundable: false, wantSends: 1, want: statusFailed},
+		{name: "stale head is re-armed", err: txmanager.ErrStaleHead, fundable: true, wantSends: 3, want: statusFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, be := fillFixtures(t)
+			now := time.Unix(0, 0)
+			st.now = func() time.Time { return now }
+			txm := &fakeTxm{result: txmanager.Result{
+				Outcome: txmanager.OutcomeSubmissionError, Err: errors.Errorf("send %q: %w", "rfq-fill", tc.err), NotAdmitted: true,
+			}}
+			e := newExec(t, st, be, txm)
+			e.now = st.now
+			e.laneFundable = func() bool { return tc.fundable }
+
+			for range 3 {
+				syncCycle(t.Context(), e)
+				now = now.Add(3 * time.Second)
+			}
+			if txm.calls != tc.wantSends {
+				t.Fatalf("sends = %d over three polls of an order still listed open, want %d", txm.calls, tc.wantSends)
+			}
+			if got := st.order("o1"); got.Status != tc.want {
+				t.Fatalf("order = %+v, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestExecutionObsoleteCancellationIsNotRetried covers a pending fill the manager cancelled through its
+// Obsolete check: the backend settled the order elsewhere, so no retry can fill it. The order adopts the
+// backend's terminal status at once instead of spending a cancellation retry and keeping its reservation.
+func TestExecutionObsoleteCancellationIsNotRetried(t *testing.T) {
+	for _, tc := range []struct {
+		backendStatus string
+		want          orderStatus
+	}{
+		{backendStatus: "filled", want: statusFilled},
+		{backendStatus: "cancelled", want: statusFailed},
+		{backendStatus: "expired", want: statusExpired},
+	} {
+		t.Run(tc.backendStatus, func(t *testing.T) {
+			log, lines := tracetest.CaptureLogs(t, 0)
+			st, be := fillFixtures(t)
+			be.order.OrderStatus = tc.backendStatus
+			txm := &fakeTxm{result: confirmedCancellation()}
+			e := newExec(t, st, be, txm)
+			e.log = log
+
+			syncCycle(t.Context(), e)
+
+			got := st.order("o1")
+			if got.Status != tc.want || got.CancellationRetries != 0 {
+				t.Fatalf("order = %+v, want %s without a scheduled retry", got, tc.want)
+			}
+			if st.reserved("o1") {
+				t.Fatal("a settled order kept its liquidity reservation")
+			}
+			if joined := strings.Join(lines(), "\n"); strings.Contains(joined, "retry scheduled") {
+				t.Fatalf("scheduled a retry for an order settled elsewhere:\n%s", joined)
+			}
+		})
+	}
+}

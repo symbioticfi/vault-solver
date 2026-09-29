@@ -28,7 +28,9 @@ type txSender interface {
 	Send(ctx context.Context, req txmanager.Request) txmanager.Result
 }
 
-// orderBackend is the backend order surface execution needs (satisfied by *backendClient).
+// orderBackend is the backend order surface execution needs (satisfied by *backendClient). It must be
+// safe for concurrent use: the poll loop, the submitter and, through a fill's Obsolete check, the
+// txmanager's goroutines call it at the same time.
 type orderBackend interface {
 	listOpenOrders(ctx context.Context, filler string, limit int) ([]backendOrder, error)
 	getExecutableOrder(ctx context.Context, orderID, filler string) (*backendOrder, error)
@@ -380,6 +382,16 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		retryDeadline, stillValid := liquidlane.CancellationDeadline(orderDeadline, chainTime, chainObservedAt, retryAt)
 		retry := ctx.Err() == nil && stillValid && outcome == txmanager.OutcomeCancelled &&
 			res.Receipt != nil && res.Receipt.Status == ethtypes.ReceiptStatusSuccessful
+		if retry && e.settledElsewhere(ctx, orderID) {
+			// The manager cancels a pending fill once the backend reports the order settled (the fill's
+			// Obsolete check), and no retry can fill it: adopt the backend's terminal status now instead of
+			// spending a retry and holding the reservation for a dead order until the next poll.
+			e.store.markStatus(orderID, statusSubmitted, res.Hash, sendErr.Error())
+			observability.Log(ctx).Info("fill cancelled: the order was settled elsewhere", "attempt", attempt,
+				"tx", res.Hash.Hex())
+			e.reconcileTerminalStatus(ctx, orderID)
+			return
+		}
 		if retry && !e.fundable() {
 			// Another fill would be refused (or signed without headroom) while the signer cannot fund a
 			// reference fill; the order fails instead of retrying against the balance.
@@ -393,14 +405,22 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 				"tx", res.Hash.Hex(), "retryAt", retryAt)
 			return
 		}
-		e.store.markStatus(orderID, status, res.Hash, sendErr.Error())
+		unaffordable := res.NotAdmitted && errors.Is(res.Err, txmanager.ErrUnaffordable)
+		if unaffordable {
+			// Refused against the signer balance: the order fails for good rather than being re-armed by
+			// the next poll (strategy §2.8), and the funding gate the refusal evaluated stops new quotes.
+			e.store.markUnaffordable(orderID, sendErr.Error())
+		} else {
+			e.store.markStatus(orderID, status, res.Hash, sendErr.Error())
+		}
 		if res.NotAdmitted {
 			// The manager refused the fill before signing (an unfundable balance, a stale head, a paused
-			// nonce lane): an expected skip it already logged and counted, not a failed transaction.
+			// nonce lane): an expected skip it already logged and counted, not a failed transaction. Only
+			// a transient refusal is retried, by the next poll that still lists the order open.
 			reason := txmanager.NotAdmittedReason(res.Err)
 			observability.Decline(ctx, "fill_not_admitted", reason)
 			observability.Log(ctx).Info("fill not admitted", "attempt", attempt, "reason", reason,
-				"error", sendErr.Error())
+				"retried", !unaffordable, "error", sendErr.Error())
 			return
 		}
 		observability.Log(ctx).Error(sendErr, "fill failed", "attempt", attempt, "tx", res.Hash.Hex(),
@@ -483,6 +503,13 @@ func (e *executionService) buildFillCalldata(
 	return calldata, discountValidUntil, true
 }
 
+// settledElsewhere reports whether the backend now lists the order filled, cancelled or expired, as the
+// fill's Obsolete check reads it. A failed or unrecognized read is not settled.
+func (e *executionService) settledElsewhere(ctx context.Context, orderID string) bool {
+	obsolete, err := e.orderObsolete(ctx, orderID)
+	return err == nil && obsolete
+}
+
 // fundable reports whether the lane may take on another fill; an unwired predicate fails closed.
 func (e *executionService) fundable() bool {
 	return e.laneFundable != nil && e.laneFundable()
@@ -490,7 +517,8 @@ func (e *executionService) fundable() bool {
 
 // orderObsolete is the fill request's Obsolete check: true once the backend reports the order filled,
 // cancelled or expired, so the manager drops an unsigned fill or cancels a pending one instead of holding
-// the nonce lane until CancelAt. A filled status can describe this lifecycle's own fill; the manager reads
+// the nonce lane until CancelAt. The manager calls it from its worker and lifecycle goroutines,
+// concurrently with this service's own backend calls. A filled status can describe this lifecycle's own fill; the manager reads
 // the fill's receipts before every pending check and checks the mined nonce before signing a cancellation,
 // so its own inclusion wins. Every other status keeps the fill alive, as does a failed or unrecognized
 // read (an error): the backend may mark an order errored or unfunded while the signed order still fills,

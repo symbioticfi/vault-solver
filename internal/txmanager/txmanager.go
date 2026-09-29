@@ -205,9 +205,14 @@ type Manager struct {
 	// hashPinMisses counts the balance reads pinned by header hash in a row that ended not found.
 	hashPinMisses atomic.Uint64
 	// fundingGateOn is set once in New: balance.referenceGasUnits is positive and the backend can read
-	// the signer balance on account polls. funding is the gate's state (funding.go).
+	// the signer balance on account polls. funding is the gate's state and fundingReads the account
+	// poll's failure streak refreshing it (funding.go).
 	fundingGateOn bool
 	funding       fundingGate
+	fundingReads  readStreak
+	// balanceMu guards signerBalance, the signer balance the manager read last (SignerBalance).
+	balanceMu     sync.Mutex
+	signerBalance *big.Int
 
 	queue           chan job
 	lifecycleSlot   chan struct{}
@@ -287,6 +292,7 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log log
 		lifecycleSlot:        make(chan struct{}, 1),
 		stopping:             make(chan struct{}),
 		laneStateSubscribers: make(map[uint64]chan struct{}),
+		fundingReads:         readStreak{quietStart: true},
 	}
 	if balances, ok := backend.(pinnedBalanceBackend); ok && !m.cfg.Balance.GuardDisabled {
 		m.balances = balances
@@ -446,38 +452,60 @@ func (m *Manager) supportsAccountBalance() bool {
 }
 
 // refreshAccount runs one account poll. It is periodic background work, and the manager's lifetime
-// context carries no span, so each poll is its own trace.
+// context carries no span, so each poll is its own trace. account_refreshes_total counts the telemetry
+// snapshot alone; a funding-gate failure is logged once per run of failures (fundingPollFailed).
 func (m *Manager) refreshAccount(ctx context.Context) {
 	pollCtx, end := tracer.Start(ctx, "txmanager.account_poll")
-	err := m.readAccount(pollCtx)
-	end(err)
-	if err != nil && ctx.Err() == nil {
-		m.metrics.observeAccountRefreshError()
-		observability.Log(ctx).V(1).Info("account metrics refresh failed", "error", err)
+	telemetryErr, fundingErr := m.readAccount(pollCtx)
+	end(errors.Join(fundingErr, telemetryErr))
+	if ctx.Err() != nil {
+		return
 	}
-}
-
-// readAccount reads the account telemetry snapshot when metrics are on, then evaluates the funding gate
-// from its balance when the gate is on. A failed read keeps the previous snapshot and gate state.
-func (m *Manager) readAccount(ctx context.Context) error {
-	refreshCtx, cancel := context.WithTimeout(ctx, accountRefreshTimeout)
-	defer cancel()
-	var balance *big.Int
-	if m.metrics != nil {
-		reading, err := m.readAccountTelemetry(refreshCtx)
-		if err != nil {
-			return err
-		}
-		if reading.balance == nil || reading.balance.Sign() < 0 {
-			return errors.New("txmanager: invalid account balance")
-		}
-		m.metrics.observeAccount(reading.balance, reading.latestNonce, reading.pendingNonce)
-		balance = reading.balance
+	if telemetryErr != nil {
+		m.metrics.observeAccountRefreshError()
+		observability.Log(ctx).V(1).Info("account metrics refresh failed", "error", telemetryErr)
 	}
 	if !m.fundingGateOn {
-		return nil
+		return
 	}
-	return m.refreshFunding(refreshCtx, balance)
+	if fundingErr != nil {
+		m.fundingPollFailed(ctx, fundingErr)
+		return
+	}
+	m.fundingPollRecovered(ctx)
+}
+
+// readAccount refreshes the funding gate when it is on, then reads the account telemetry snapshot when
+// metrics are on. Each has its own read budget and error, so a failure of one neither skips nor
+// miscounts the other; a failed read keeps the previous gate state or snapshot. The gate goes first: its
+// balance is pinned to the fee history's newest block, and telemetry then reads latest, so the two
+// balances are read in block order.
+func (m *Manager) readAccount(ctx context.Context) (telemetryErr, fundingErr error) {
+	if m.fundingGateOn {
+		fundingCtx, cancel := context.WithTimeout(ctx, accountRefreshTimeout)
+		fundingErr = m.refreshFunding(fundingCtx)
+		cancel()
+	}
+	if m.metrics != nil {
+		telemetryCtx, cancel := context.WithTimeout(ctx, accountRefreshTimeout)
+		telemetryErr = m.refreshTelemetry(telemetryCtx)
+		cancel()
+	}
+	return telemetryErr, fundingErr
+}
+
+// refreshTelemetry reads the account telemetry snapshot and exports it.
+func (m *Manager) refreshTelemetry(ctx context.Context) error {
+	reading, err := m.readAccountTelemetry(ctx)
+	if err != nil {
+		return err
+	}
+	if reading.balance == nil || reading.balance.Sign() < 0 {
+		return errors.New("txmanager: invalid account balance")
+	}
+	m.metrics.observeAccount(reading.balance, reading.latestNonce, reading.pendingNonce)
+	m.observeSignerBalance(reading.balance)
+	return nil
 }
 
 func (m *Manager) readAccountTelemetry(ctx context.Context) (accountReading, error) {
@@ -521,6 +549,7 @@ func (m *Manager) Start(ctx context.Context) {
 	if m.cfg.Balance.TargetEth > 0 {
 		m.metrics.setBalanceTarget(ethToWei(m.cfg.Balance.TargetEth))
 	}
+	m.exportFundingGate()
 	accountMonitorDone := make(chan struct{})
 	go func() {
 		defer close(accountMonitorDone)

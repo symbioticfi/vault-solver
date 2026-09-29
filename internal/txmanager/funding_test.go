@@ -269,7 +269,7 @@ func TestFundingGateKeepsItsStateWhenAPollFails(t *testing.T) {
 	b := newFundingBackend(eth(1e18))
 	m := New(b, mustSigner(t), big.NewInt(1),
 		Config{Balance: BalanceConfig{ReferenceGasUnits: 4_400_000}}, logr.Discard())
-	if err := m.readAccount(t.Context()); err != nil {
+	if _, err := m.readAccount(t.Context()); err != nil {
 		t.Fatalf("first poll: %v", err)
 	}
 	if !m.Fundable() {
@@ -278,7 +278,7 @@ func TestFundingGateKeepsItsStateWhenAPollFails(t *testing.T) {
 	b.guardMu.Lock()
 	b.balanceErr = errors.New("read endpoint down")
 	b.guardMu.Unlock()
-	if err := m.readAccount(t.Context()); err == nil {
+	if _, err := m.readAccount(t.Context()); err == nil {
 		t.Fatal("poll with a failed balance read succeeded")
 	}
 	if !m.Fundable() {
@@ -292,8 +292,8 @@ func TestFundingGatePollRefreshesFeeGauges(t *testing.T) {
 	metrics := newTestMetrics(t)
 	m := NewWithMetrics(b, mustSigner(t), big.NewInt(1),
 		Config{Balance: BalanceConfig{ReferenceGasUnits: 4_350_000}}, metrics, logr.Discard())
-	if err := m.readAccount(t.Context()); err != nil {
-		t.Fatalf("poll: %v", err)
+	if telemetryErr, fundingErr := m.readAccount(t.Context()); telemetryErr != nil || fundingErr != nil {
+		t.Fatalf("poll: telemetry %v, funding %v", telemetryErr, fundingErr)
 	}
 	assertMetric(t, metrics.nextBaseFee, 8e9)
 	assertMetric(t, metrics.requiredBalance.WithLabelValues(requiredBalanceQuote), 55829871093750000)

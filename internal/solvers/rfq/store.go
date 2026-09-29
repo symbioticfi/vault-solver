@@ -58,6 +58,11 @@ type orderRecord struct {
 	// IncludedAt is the block a confirmed fill landed in; zero until then. A snapshot read at or
 	// after it already reflects the fill, so the reservation is not subtracted from it.
 	IncludedAt uint64
+	// Unaffordable marks a failed order whose fill the balance guard refused before signing
+	// (txmanager.ErrUnaffordable). Unlike other unsigned failures it is not re-armed by the next poll
+	// (strategy §2.8): another attempt would repeat the whole fill path only to be refused against the
+	// same balance, every poll until the order's deadline.
+	Unaffordable bool
 }
 
 // queuedOrder is the input to upsertQueued, carrying the fields known when an order is first polled.
@@ -105,7 +110,8 @@ func (s *store) sweep() {
 /* ───────── orders ───────── */
 
 // upsertQueued re-arms unsigned failures and explicitly scheduled cancellation retries. A retry
-// requires both the backoff and another open-order poll. Other signed failures stay terminal.
+// requires both the backoff and another open-order poll. Signed failures and fills refused as
+// unaffordable stay terminal.
 func (s *store) upsertQueued(in queuedOrder) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -116,7 +122,7 @@ func (s *store) upsertQueued(in queuedOrder) bool {
 		rec = &orderRecord{OrderID: in.OrderID, Status: statusQueued, CreatedAt: now}
 		s.orders[in.OrderID] = rec
 	}
-	if rec.Status == statusFailed && rec.TxHash == (common.Hash{}) {
+	if rec.Status == statusFailed && rec.TxHash == (common.Hash{}) && !rec.Unaffordable {
 		rec.Status = statusQueued
 		rec.LastError = ""
 	}
@@ -190,6 +196,21 @@ func (s *store) activeOrderMetrics() (int, time.Duration) {
 func (s *store) markStatus(orderID string, status orderStatus, txHash common.Hash, lastErr string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.markStatusLocked(orderID, status, txHash, lastErr)
+}
+
+// markUnaffordable fails an order whose fill the balance guard refused, for good: the flag and the
+// status change under one lock, so a concurrent open-order poll cannot re-arm it in between.
+func (s *store) markUnaffordable(orderID, lastErr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rec, ok := s.orders[orderID]; ok {
+		rec.Unaffordable = true
+	}
+	s.markStatusLocked(orderID, statusFailed, common.Hash{}, lastErr)
+}
+
+func (s *store) markStatusLocked(orderID string, status orderStatus, txHash common.Hash, lastErr string) {
 	rec, ok := s.orders[orderID]
 	if !ok {
 		return

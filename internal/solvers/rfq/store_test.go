@@ -26,6 +26,25 @@ func TestUpsertQueued_RearmsFailedOrder(t *testing.T) {
 	}
 }
 
+// TestUpsertQueued_DoesNotRearmUnaffordable: a fill the balance guard refused fails for good, although no
+// transaction was signed for it; the backend listing the order open again must not re-queue it.
+func TestUpsertQueued_DoesNotRearmUnaffordable(t *testing.T) {
+	t.Parallel()
+	st := newStore(func() time.Time { return time.Unix(0, 0) })
+	st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
+	st.markUnaffordable("o1", "signer balance cannot fund the transaction")
+
+	st.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
+
+	rec := st.order("o1")
+	if rec == nil || rec.Status != statusFailed || !rec.Unaffordable {
+		t.Fatalf("order = %+v, want failed and not re-armed", rec)
+	}
+	if rec.LastError == "" {
+		t.Fatal("refusal error cleared")
+	}
+}
+
 // TestUpsertQueued_DoesNotRegressInFlightOrTerminal: re-polling must never knock an in-flight or
 // settled order back to queued — only `failed` is re-armed.
 func TestUpsertQueued_DoesNotRegressInFlightOrTerminal(t *testing.T) {

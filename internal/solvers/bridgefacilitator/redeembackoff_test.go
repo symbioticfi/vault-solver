@@ -2,6 +2,7 @@ package bridgefacilitator
 
 import (
 	"context"
+	"math/big"
 	"strings"
 	"testing"
 
@@ -29,7 +30,7 @@ func TestRedeemBackoffSchedule(t *testing.T) {
 		{sent: 1, limit: 1, skip: 11},
 		{sent: 1, limit: 1, skip: 11},
 	} {
-		if first := b.refused(want.sent); first != want.first {
+		if first := b.refused(want.sent, big.NewInt(1_000)); first != want.first {
 			t.Fatalf("refusal %d opened the episode = %v, want %v", i+1, first, want.first)
 		}
 		if b.limit(10) != want.limit || b.skipPasses != want.skip || !b.holding {
@@ -59,7 +60,7 @@ func TestRedeemBackoffSchedule(t *testing.T) {
 	if b.active() {
 		t.Fatal("episode still active at the configured batch size")
 	}
-	if !b.refused(10) {
+	if !b.refused(10, big.NewInt(1_000)) {
 		t.Fatal("a refusal after recovery did not open a new episode")
 	}
 }
@@ -68,8 +69,8 @@ func TestRedeemBackoffResetsWhenTheLaneIsFundedAgain(t *testing.T) {
 	fundable := false
 	s := &Solver{cfg: &Config{RedeemBatchSize: 10}, fundable: func() bool { return fundable }}
 	s.redeem.fundable = s.laneFundable()
-	s.redeem.refused(10)
-	s.redeem.refused(5)
+	s.redeem.refused(10, nil)
+	s.redeem.refused(5, nil)
 
 	// Signals from other lane edges (every admission, the nonce lane) do not reset the episode.
 	s.onLaneStateChange(t.Context())
@@ -81,10 +82,68 @@ func TestRedeemBackoffResetsWhenTheLaneIsFundedAgain(t *testing.T) {
 	if s.redeem.active() || s.redeem.skipPasses != 0 || s.redeem.limit(10) != 10 {
 		t.Fatalf("backoff = %+v after the gate reopened, want reset", s.redeem)
 	}
-	s.redeem.refused(10)
+	s.redeem.refused(10, nil)
 	s.onLaneStateChange(t.Context())
 	if !s.redeem.active() {
 		t.Fatal("a signal while the gate stayed open reset the backoff")
+	}
+}
+
+// TestRedeemBackoffEndsWhenTheSignerIsToppedUp covers 3F's configuration, balance.referenceGasUnits 0:
+// the funding gate is off, so Fundable never changes and cannot end an episode. The signer balance the
+// manager read rising above the one the last refusal saw ends it, whether the next redeem pass or a
+// lane-state signal from another edge notices first; a pass or signal without a rise, or with a drop, does
+// not.
+func TestRedeemBackoffEndsWhenTheSignerIsToppedUp(t *testing.T) {
+	for _, notice := range []struct {
+		name string
+		see  func(*Solver, context.Context) bool // reports whether the backoff still holds the sends
+	}{
+		{name: "lane-state signal", see: func(s *Solver, ctx context.Context) bool {
+			s.onLaneStateChange(ctx)
+			return s.redeem.active()
+		}},
+		{name: "next redeem pass", see: func(s *Solver, ctx context.Context) bool {
+			return !s.beginRedeemPass(ctx)
+		}},
+	} {
+		t.Run(notice.name, func(t *testing.T) {
+			balance := big.NewInt(1_000)
+			s := &Solver{
+				cfg:           &Config{RedeemBatchSize: 10},
+				signerBalance: func() *big.Int { return new(big.Int).Set(balance) },
+			}
+			s.redeem.fundable = s.laneFundable()
+			s.redeem.refused(10, s.currentSignerBalance())
+			s.redeem.refused(5, s.currentSignerBalance())
+			s.redeem.refused(2, s.currentSignerBalance()) // three passes to skip
+
+			for _, unchanged := range []int64{1_000, 900} {
+				balance.SetInt64(unchanged)
+				if !notice.see(s, t.Context()) {
+					t.Fatalf("balance %d ended the backoff; the last refusal saw 1000", unchanged)
+				}
+			}
+			balance.SetInt64(1_001)
+			if notice.see(s, t.Context()) {
+				t.Fatalf("backoff = %+v after the signer was topped up, want it ended", s.redeem)
+			}
+			if s.redeem.limit(10) != 10 || s.redeem.active() {
+				t.Fatalf("backoff = %+v, want a full batch next", s.redeem)
+			}
+		})
+	}
+}
+
+// TestRedeemBackoffWithoutSignerBalanceKeepsItsSchedule: before the manager has read a balance there is
+// nothing to compare, so only the schedule (or the gate reopening) ends the episode.
+func TestRedeemBackoffWithoutSignerBalanceKeepsItsSchedule(t *testing.T) {
+	s := &Solver{cfg: &Config{RedeemBatchSize: 10}, signerBalance: func() *big.Int { return nil }}
+	s.redeem.fundable = s.laneFundable()
+	s.redeem.refused(10, nil)
+	s.onLaneStateChange(t.Context())
+	if !s.redeem.active() {
+		t.Fatal("a signal without any balance read ended the backoff")
 	}
 }
 
@@ -157,6 +216,58 @@ func TestRedeemHalvesTheBatchAndBacksOffWhenUnaffordable(t *testing.T) {
 	pass()
 	if got := sent[len(sent)-1]; len(sent) != 5 || got != 10 {
 		t.Fatalf("batches sent = %v, want a full batch of 10 right after the gate reopened", sent)
+	}
+}
+
+// TestRedeemResumesAfterATopUpWithTheGateOff drives 3F's configuration end to end: with the funding gate
+// off, the backoff holds the passes after a refusal until the signer balance rises, and the pass after
+// the rise sends the configured batch instead of waiting out the schedule.
+func TestRedeemResumesAfterATopUpWithTheGateOff(t *testing.T) {
+	adapterAddr := common.HexToAddress("0x00000000000000000000000000000000000000a0")
+	ready := make([]common.Address, 10)
+	for i := range ready {
+		ready[i] = common.BigToAddress(common.Big1)
+	}
+	balance := big.NewInt(1_000)
+	refuse := true
+	var sent []int
+	s := &Solver{
+		cfg: &Config{RedeemBatchSize: 10}, links: observability.NewSpanLinks(),
+		signerBalance: func() *big.Int { return new(big.Int).Set(balance) },
+	}
+	s.redeem.fundable = s.laneFundable()
+	s.txManager = transactionSenderFunc(func(_ context.Context, req txmanager.Request) txmanager.Result {
+		sent = append(sent, finalizeCount(t, req.Data))
+		if refuse {
+			return txmanager.Result{
+				Outcome:     txmanager.OutcomeSubmissionError,
+				Err:         errors.Errorf("send %q: %w", "redeem", txmanager.ErrUnaffordable),
+				NotAdmitted: true,
+			}
+		}
+		return txmanager.Result{Outcome: txmanager.OutcomeConfirmed, Hash: common.HexToHash("0x01")}
+	})
+	pass := func() {
+		s.beginRedeemPass(t.Context())
+		s.redeemReady(t.Context(), Target{Adapter: adapterAddr}, ready)
+	}
+
+	for range 4 {
+		pass()
+	}
+	// Passes 1, 2 and 4 send 10, 5 and 2; pass 3 waits, and the next two would wait too.
+	if want := []int{10, 5, 2}; !equalInts(sent, want) {
+		t.Fatalf("batches sent = %v, want %v", sent, want)
+	}
+
+	balance.SetInt64(2_000)
+	refuse = false
+	pass()
+	if want := []int{10, 5, 2, 10}; !equalInts(sent, want) {
+		t.Fatalf("batches sent = %v, want a full batch right after the top-up", sent)
+	}
+	if s.redeem.active() {
+		t.Fatalf("backoff = %+v after a successful full batch, want none", s.redeem)
 	}
 }
 

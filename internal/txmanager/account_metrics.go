@@ -34,7 +34,7 @@ type accountMetrics struct {
 	successRefreshes uint64
 	errorRefreshes   uint64
 	now              func() time.Time
-	// fundable is the funding gate's last evaluation, exported once the gate has evaluated; targetWei is
+	// fundable is the funding gate's state, exported from startup while the gate is on; targetWei is
 	// balance.targetEth, exported when set.
 	fundable, hasFundable bool
 	targetWei             float64
@@ -81,7 +81,7 @@ func newAccountMetrics() *accountMetrics {
 		),
 		fundableDesc: newAccountMetricDesc(
 			"account_fundable",
-			"1 while the lane funding gate is open (the signer balance funds balance.referenceGasUnits at the pricing horizon), else 0; absent while the gate is off or before its first evaluation.",
+			"1 while the lane funding gate is open (the signer balance funds balance.referenceGasUnits at the pricing horizon), else 0, including from startup until its first evaluation; absent while the gate is off.",
 		),
 		targetDesc: newAccountMetricDesc(
 			"account_balance_target_wei",
@@ -218,7 +218,7 @@ func (m *Metrics) observeAccountRefreshError() {
 	}
 }
 
-// observeFundable exports the funding gate's latest evaluation.
+// observeFundable exports the funding gate's state.
 func (m *Metrics) observeFundable(fundable bool) {
 	if m != nil {
 		m.account.observeFundable(fundable)
