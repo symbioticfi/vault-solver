@@ -192,9 +192,7 @@ func TestConsumedNonceKeepsTrackingUntilOwnedReceiptArrives(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// The block that consumed the nonce and two more with room: a stall the manager answers by
-		// checking the mined nonce before rebroadcasting.
-		b.latestNonce, b.pendingNonce, b.head = 8, 8, 103
+		b.latestNonce, b.pendingNonce = 8, 8
 		m.trackUnminedTransaction(pending)
 		ctx, cancel := context.WithCancel(t.Context())
 		results := make(chan Result, 1)
@@ -204,7 +202,14 @@ func TestConsumedNonceKeepsTrackingUntilOwnedReceiptArrives(t *testing.T) {
 			results <- m.waitForPendingTransaction(ctx, pending)
 		}()
 		defer func() { cancel(); <-done }()
-		time.Sleep(31 * time.Second)
+		// The block that consumed the nonce and two more with room arrive a slot apart: a stall the
+		// manager answers by checking the mined nonce before rebroadcasting.
+		for head := uint64(101); head <= 103; head++ {
+			b.mu.Lock()
+			b.head = head
+			b.mu.Unlock()
+			time.Sleep(12 * time.Second)
+		}
 		synctest.Wait()
 		if m.Available() || len(b.attemptedTransactions()) != 1 {
 			t.Fatal("silent acceptance left consumed nonce replacements running")

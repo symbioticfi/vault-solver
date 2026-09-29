@@ -14,7 +14,11 @@ import (
 	"github.com/go-logr/logr"
 )
 
-const horizonTestGas = 4_000_000
+const (
+	horizonTestGas = 4_000_000
+	// horizonTestBlockTime is the slot time of horizonConfig and of blocks mineSlots produces.
+	horizonTestBlockTime = 20 * time.Millisecond
+)
 
 func block(number uint64, baseFeeGwei, ratio, rewardGwei float64) blockFee {
 	return blockFee{number: number, baseFee: gweiToWei(baseFeeGwei), gasUsedRatio: ratio, reward: gweiToWei(rewardGwei)}
@@ -113,6 +117,29 @@ func TestHorizonFees(t *testing.T) {
 			if err != nil || fees.tip.Cmp(tc.wantTip) != 0 || fees.maxFee.Cmp(tc.wantMax) != 0 ||
 				fees.baseFee.Cmp(gweiToWei(1)) != 0 {
 				t.Fatalf("horizonFees = %+v, %v; want tip %s max %s base 1 gwei", fees, err, tc.wantTip, tc.wantMax)
+			}
+		})
+	}
+}
+
+func TestJudgedSentHead(t *testing.T) {
+	sentAt := time.Unix(1_000, 0)
+	for name, tc := range map[string]struct {
+		sentHead, head uint64
+		elapsed        time.Duration
+		want           uint64
+	}{
+		"an accurate send head stands":                  {sentHead: 100, head: 101, elapsed: 12400 * time.Millisecond, want: 100},
+		"a stale send head is raised to the wall clock": {sentHead: 97, head: 101, elapsed: 12400 * time.Millisecond, want: 99},
+		"within the first slot one block can follow":    {sentHead: 97, head: 101, elapsed: time.Second, want: 100},
+		"enough elapsed slots keep the send head":       {sentHead: 97, head: 101, elapsed: time.Minute, want: 97},
+		"a clock step back counts as no time":           {sentHead: 97, head: 101, elapsed: -time.Minute, want: 100},
+		"a head within the bound keeps the send head":   {sentHead: 0, head: 1, elapsed: 0, want: 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got := judgedSentHead(tc.sentHead, tc.head, sentAt, sentAt.Add(tc.elapsed), 12*time.Second)
+			if got != tc.want {
+				t.Fatalf("judged send head = %d, want %d", got, tc.want)
 			}
 		})
 	}
@@ -282,7 +309,16 @@ func newHorizonChain(t *testing.T) *horizonChain {
 	return chain
 }
 
-// mine appends blocks at the current next base fee, one per gas used ratio.
+// mineSlots mines one block per slot, the way a chain produces them, so evidence the manager bounds
+// by elapsed slots accrues as it would on chain.
+func (c *horizonChain) mineSlots(rewardGwei float64, ratios ...float64) {
+	for _, ratio := range ratios {
+		time.Sleep(horizonTestBlockTime)
+		c.mine(rewardGwei, ratio)
+	}
+}
+
+// mine appends blocks at the current next base fee, one per gas used ratio, all at once.
 func (c *horizonChain) mine(rewardGwei float64, ratios ...float64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -368,7 +404,7 @@ func (c *horizonChain) waitForSends(t *testing.T, count int) []*types.Transactio
 func horizonConfig(overrides func(*Config)) Config {
 	cfg := Config{
 		MaxFeeGwei: 50, PollInterval: time.Millisecond, ReplacementInterval: time.Hour, PendingTimeout: time.Hour,
-		Horizon: HorizonConfig{BlockTime: 20 * time.Millisecond},
+		Horizon: HorizonConfig{BlockTime: horizonTestBlockTime},
 	}
 	if overrides != nil {
 		overrides(&cfg)
@@ -399,6 +435,62 @@ func TestHorizonBroadcastEstimatesForNextBlockAndCapsAtExactBound(t *testing.T) 
 	}
 	if pending.horizon.sentHead != 100 || m.lastGas.Load() != 105_000 {
 		t.Fatalf("send head = %d, last gas = %d", pending.horizon.sentHead, m.lastGas.Load())
+	}
+}
+
+func TestBroadcastSendHeadIsTheFresherOfFeeWindowAndHeader(t *testing.T) {
+	chain := newHorizonChain(t)
+	chain.head = 103 // the header is ahead of a fee window that still ends at block 100
+	m := New(chain, mustSigner(t), big.NewInt(11155111), horizonConfig(nil), logr.Discard())
+
+	pending, err := m.broadcast(managerCtx(t.Context(), m), Request{
+		To: common.HexToAddress("0xabc"), Data: []byte{0x01}, Label: "fill",
+	})
+	if err != nil {
+		t.Fatalf("broadcast: %v", err)
+	}
+	if pending.horizon.sentHead != 103 || pending.horizon.lastHead != 103 || pending.horizon.sentAt.IsZero() {
+		t.Fatalf("send head = %d, last head = %d, sent at %s; want 103, 103 and a send time",
+			pending.horizon.sentHead, pending.horizon.lastHead, pending.horizon.sentAt)
+	}
+}
+
+// A fee window that lagged when the call went out must not turn blocks mined before the send into
+// blocks the call missed: two processes on a stale read endpoint reported a stall 12 seconds after
+// sending, with one block mined in between.
+func TestStaleSendHeadDoesNotReportAStallBeforeSlotsElapse(t *testing.T) {
+	chain := newHorizonChain(t)
+	chain.set(func(c *horizonChain) {
+		c.head = 97
+		c.blocks = []blockFee{block(95, 1, 0.5, 0.001), block(96, 1, 0.5, 0.001), block(97, 1, 0.5, 0.001)}
+	})
+	m := New(chain, mustSigner(t), big.NewInt(11155111), horizonConfig(func(cfg *Config) {
+		cfg.Horizon.BlockTime = 12 * time.Second
+	}), logr.Discard())
+	ctx := managerCtx(t.Context(), m)
+	pending, err := m.broadcast(ctx, Request{To: common.HexToAddress("0xabc"), Data: []byte{0x01}, Label: "fill"})
+	if err != nil {
+		t.Fatalf("broadcast: %v", err)
+	}
+	var intents []replaceIntent
+	replace := func(intent replaceIntent) bool {
+		intents = append(intents, intent)
+		return false
+	}
+
+	// The endpoint catches up: four blocks with room, all mined before the send in fact.
+	chain.mine(0.001, 0.5, 0.5, 0.5, 0.5)
+	m.evaluateHorizon(ctx, pending, false, replace)
+	if sent := chain.sentTransactions(); len(sent) != 1 || len(intents) != 0 {
+		t.Fatalf("stale send head acted within the first slot: %d sends, intents %+v", len(sent), intents)
+	}
+
+	// Once enough slots have passed, the same evidence is a stall and the call is rebroadcast.
+	pending.horizon.sentAt = time.Now().Add(-time.Minute)
+	chain.mine(0.001, 0.5)
+	m.evaluateHorizon(ctx, pending, false, replace)
+	if sent := chain.sentTransactions(); len(sent) != 2 || sent[1].Hash() != sent[0].Hash() || len(intents) != 0 {
+		t.Fatalf("stall after elapsed slots: %d sends, intents %+v; want one exact rebroadcast", len(sent), intents)
 	}
 }
 
@@ -486,13 +578,13 @@ func TestHorizonStallRebroadcastsThenBumps(t *testing.T) {
 	original := chain.waitForSends(t, 1)[0]
 
 	for rebroadcast := 1; rebroadcast <= 2; rebroadcast++ {
-		chain.mine(0.001, 0.5, 0.5, 0.5)
+		chain.mineSlots(0.001, 0.5, 0.5, 0.5)
 		sent := chain.waitForSends(t, 1+rebroadcast)
 		if sent[rebroadcast].Hash() != original.Hash() {
 			t.Fatalf("stall %d sent %s, want an exact rebroadcast of %s", rebroadcast, sent[rebroadcast].Hash(), original.Hash())
 		}
 	}
-	chain.mine(0.001, 0.5, 0.5, 0.5)
+	chain.mineSlots(0.001, 0.5, 0.5, 0.5)
 	replacement := chain.waitForSends(t, 4)[3]
 	if replacement.Hash() == original.Hash() || replacement.GasTipCap().Cmp(bumpFee(original.GasTipCap())) < 0 {
 		t.Fatalf("third stall sent tip %s, want a bumped replacement", replacement.GasTipCap())
@@ -514,7 +606,7 @@ func TestHorizonRepricesOnBlockEvidence(t *testing.T) {
 		check     func(t *testing.T, original, replacement *types.Transaction)
 	}{
 		"a run of full blocks raises the tip to the market": {
-			evidence: func(c *horizonChain) { c.mine(1, 1, 1) },
+			evidence: func(c *horizonChain) { c.mineSlots(1, 1, 1) },
 			reason:   replaceReasonCongestion,
 			check: func(t *testing.T, _, replacement *types.Transaction) {
 				t.Helper()
@@ -540,7 +632,7 @@ func TestHorizonRepricesOnBlockEvidence(t *testing.T) {
 		"a call that outgrew its limit is re-sent with a larger one": {
 			evidence: func(c *horizonChain) {
 				c.set(func(c *horizonChain) { c.nextBlockGas = 110_000 })
-				c.mine(0.001, 0.5, 0.5, 0.5)
+				c.mineSlots(0.001, 0.5, 0.5, 0.5)
 			},
 			reason: replaceReasonGas,
 			check: func(t *testing.T, original, replacement *types.Transaction) {

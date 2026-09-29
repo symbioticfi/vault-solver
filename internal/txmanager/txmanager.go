@@ -874,7 +874,9 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 		}},
 		originalHash: hash,
 		span:         sendSpan,
-		horizon:      horizonProgress{sentHead: quote.head, lastHead: quote.head, lastEvaluation: time.Now()},
+		horizon: horizonProgress{
+			sentHead: quote.head, sentAt: time.Now(), lastHead: quote.head, lastEvaluation: time.Now(),
+		},
 	}, nil
 }
 
@@ -1256,7 +1258,8 @@ func (m *Manager) tryReplace(
 	if !cancellation {
 		pending.gas = gas
 	}
-	pending.horizon.sentHead, pending.horizon.stallRebroadcasts = pending.horizon.lastHead, 0
+	pending.horizon.sent(pending.horizon.lastHead)
+	pending.horizon.stallRebroadcasts = 0
 	pending.attempts = append(pending.attempts, txAttempt{
 		hash: hash, tx: signed, cancellation: cancellation, exactRebroadcastPending: broadcastUncertain,
 	})

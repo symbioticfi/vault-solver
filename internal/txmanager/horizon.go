@@ -361,11 +361,29 @@ func decidePending(snapshot feeSnapshot, attempt feeQuote, gas, sentHead uint64,
 // horizonProgress is the per-lifecycle state of horizon repricing. Only the lifecycle goroutine
 // reads or writes it.
 type horizonProgress struct {
-	sentHead          uint64 // latest block when the current attempt was last sent or rebroadcast
-	lastHead          uint64 // latest block the lifecycle has evaluated
-	stallRebroadcasts int    // exact rebroadcasts since the last fee change
+	sentHead          uint64    // latest block when the current attempt was last sent or rebroadcast
+	sentAt            time.Time // when that was
+	lastHead          uint64    // latest block the lifecycle has evaluated
+	stallRebroadcasts int       // exact rebroadcasts since the last fee change
 	lastEvaluation    time.Time
 	feeReads          readStreak
+}
+
+// sent records that the current attempt went out, or out again, after head.
+func (p *horizonProgress) sent(head uint64) {
+	p.sentHead, p.sentAt = head, time.Now()
+}
+
+// judgedSentHead is the block the current attempt counts evidence from. A read endpoint that lagged
+// when the attempt went out reports an older head than the one it actually followed, which would
+// count blocks mined before the send as blocks it lost. At most one block per elapsed slot, plus one
+// already in flight, can follow a send, so the wall clock bounds how far back the evidence reaches.
+func judgedSentHead(sentHead, head uint64, sentAt, now time.Time, blockTime time.Duration) uint64 {
+	followed := uint64(max(now.Sub(sentAt), 0)/blockTime) + 1
+	if head <= followed {
+		return sentHead
+	}
+	return max(sentHead, head-followed)
 }
 
 // replacementTick is the cadence of the pending-transaction replacement loop: twice per block, where
@@ -380,7 +398,8 @@ func (m *Manager) replacementCadence() time.Duration {
 	return m.horizon.blockTime
 }
 
-// callQuote is a new call's pricing: its fees, its gas limit, and the latest block it was priced at.
+// callQuote is a new call's pricing: its fees, its gas limit, and the latest block known when it was
+// priced.
 type callQuote struct {
 	fees feeQuote
 	gas  uint64
@@ -402,7 +421,9 @@ func (m *Manager) quoteCall(ctx context.Context, req Request, limit *big.Int) (c
 	if err != nil {
 		return callQuote{}, errors.Errorf("send %q: %w", req.Label, err)
 	}
-	return callQuote{fees: fees, gas: gas, head: snapshot.head}, nil
+	// The fee window can trail the latest header when the read endpoint serves them from different
+	// nodes or caches fee history; the call goes out after the fresher of the two.
+	return callQuote{fees: fees, gas: gas, head: max(snapshot.head, header.Number.Uint64())}, nil
 }
 
 // NextBlockGasEstimator estimates a call as if it were included in the block after parent. The
@@ -510,14 +531,17 @@ func (m *Manager) evaluateHorizon(
 	}
 	pending.horizon.lastHead = snapshot.head
 	if !cancelling && m.rebroadcastUncertainAttempt(ctx, pending) {
-		pending.horizon.sentHead = snapshot.head
+		pending.horizon.sent(snapshot.head)
 		return false
 	}
 	gas := pending.gas
 	if cancelling {
 		gas = cancellationGasLimit
 	}
-	decision := decidePending(snapshot, pending.fees, gas, pending.horizon.sentHead, m.horizon)
+	sentHead := judgedSentHead(
+		pending.horizon.sentHead, snapshot.head, pending.horizon.sentAt, time.Now(), m.horizon.blockTime,
+	)
+	decision := decidePending(snapshot, pending.fees, gas, sentHead, m.horizon)
 	switch decision.action {
 	case pendingReprice:
 		return replace(horizonIntent(pending, cancelling, decision.reason))
@@ -556,7 +580,7 @@ func (m *Manager) handleStall(
 	}
 	if m.rebroadcastStalledAttempt(ctx, pending) {
 		pending.horizon.stallRebroadcasts++
-		pending.horizon.sentHead = pending.horizon.lastHead
+		pending.horizon.sent(pending.horizon.lastHead)
 	}
 	return false
 }
