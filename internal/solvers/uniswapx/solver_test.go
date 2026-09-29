@@ -54,9 +54,11 @@ type startupChainReader struct {
 	executorErr  error
 	adapterErr   error
 	callerErr    error
+	permit2Err   error
 	unauthorized []common.Address
 	executor     common.Address
 	caller       common.Address
+	reactor      common.Address
 
 	authorizationCalls int
 }
@@ -80,6 +82,16 @@ func (r *startupChainReader) validateExecutorCaller(
 	r.executor = executor
 	r.caller = caller
 	return r.callerErr
+}
+
+var startupPermit2 = common.HexToAddress("0x000000000022D473030F116dDEE9F6B43aC78BA3")
+
+func (r *startupChainReader) reactorPermit2(_ context.Context, reactor common.Address) (common.Address, error) {
+	r.reactor = reactor
+	if r.permit2Err != nil {
+		return common.Address{}, r.permit2Err
+	}
+	return startupPermit2, nil
 }
 
 func (r *startupChainReader) unauthorizedAdapters(
@@ -106,6 +118,7 @@ func TestRunLogsStartupValidationFailures(t *testing.T) {
 		name         string
 		executorErr  error
 		callerErr    error
+		permit2Err   error
 		adapterErr   error
 		unauthorized []common.Address
 		wantError    string
@@ -123,6 +136,12 @@ func TestRunLogsStartupValidationFailures(t *testing.T) {
 			wantMessage: "executor caller validation failed",
 		},
 		{
+			name:        "reactor permit2",
+			permit2Err:  errors.New("reactor reports a zero permit2"),
+			wantError:   "resolve reactor permit2: reactor reports a zero permit2",
+			wantMessage: "reactor validation failed",
+		},
+		{
 			name:         "adapter",
 			unauthorized: []common.Address{adapter},
 			wantError:    "is not authorized as direct filler", wantMessage: "adapter validation failed",
@@ -134,7 +153,8 @@ func TestRunLogsStartupValidationFailures(t *testing.T) {
 			var logs []string
 			reader := &startupChainReader{
 				routes: []liquidlane.Route{{Adapter: adapter}}, executorErr: tc.executorErr,
-				callerErr: tc.callerErr, adapterErr: tc.adapterErr, unauthorized: tc.unauthorized,
+				callerErr: tc.callerErr, permit2Err: tc.permit2Err, adapterErr: tc.adapterErr,
+				unauthorized: tc.unauthorized,
 			}
 			s := &Solver{
 				cfg: &Config{
@@ -194,6 +214,10 @@ func TestRunInternalModeAllowsNoAdaptersAndSkipsDirectAuthorizationGate(t *testi
 	}
 	if reader.authorizationCalls != 0 {
 		t.Fatalf("direct authorization calls = %d, want 0 in internal mode", reader.authorizationCalls)
+	}
+	if reader.reactor != solver.cfg.Reactor || solver.permit2 != startupPermit2 {
+		t.Fatalf("startup permit2 = %s from reactor %s, want %s from %s",
+			solver.permit2, reader.reactor, startupPermit2, solver.cfg.Reactor)
 	}
 }
 

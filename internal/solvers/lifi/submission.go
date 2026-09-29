@@ -202,6 +202,18 @@ func (s *Solver) completeFill(
 		)
 		return err
 	}
+	if errors.Is(completion.result.Err, txmanager.ErrRequestObsolete) {
+		// The input settler already claimed or refunded the order: an expected skip, not a failure.
+		observability.Decline(ctx, "fill_obsolete", completion.result.Err.Error())
+		observability.Log(ctx).Info("order fill obsolete: order settled elsewhere",
+			"orderId", fill.order.OrderID,
+			"onChainOrderId", fill.orderID.Hex(),
+			"quoteId", fill.order.QuoteID,
+			"tx", completion.result.Hash.Hex(),
+			"outcome", outcome,
+		)
+		return nil
+	}
 	err = completion.result.Err
 	if err == nil {
 		err = errors.Errorf("unknown transaction outcome %q", outcome)

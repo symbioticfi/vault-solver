@@ -241,8 +241,8 @@ integration. UniswapX source preferences, fallback, and gas policy are described
 All integrations bind their static event/outcome, amount-kind, state-view, and external-operation labels
 through the generic workflow metric families. Solver packages still own those protocol-specific enums and
 unique gauges/histograms; the framework does not know them. RFQ, LI.FI, and UniswapX share the same
-`fill/success` event and token-native amount kinds; RFQ and UniswapX additionally classify `failure` and
-`not_admitted`. UniswapX records pre-submission declines separately as `fill/declined`.
+`fill/success` event and token-native amount kinds; RFQ and UniswapX additionally classify `failure`,
+`not_admitted`, and `obsolete` (the order was settled elsewhere before our fill landed). UniswapX records pre-submission declines separately as `fill/declined`.
 Unknown event/outcome, amount-kind, or state-view observations increment one bounded
 contract-drift counter instead of disappearing silently. Detailed gas, fee, and transaction lifecycle
 accounting remains in the [shared transaction manager](TXMANAGER-PLAN.md#8-observability).

@@ -33,7 +33,9 @@ func newRFQMetrics(
 	spec.Strategy = strategyName
 	spec.Operations = []string{orderPollOperation}
 	spec.Events = append(spec.Events, observability.WorkflowEventSpec{
-		Event: "fill", Outcomes: []string{liquidlane.FillOutcomeFailure, liquidlane.FillOutcomeNotAdmitted},
+		Event: "fill", Outcomes: []string{
+			liquidlane.FillOutcomeFailure, liquidlane.FillOutcomeNotAdmitted, liquidlane.FillOutcomeObsolete,
+		},
 	})
 	for _, outcome := range quoteDecisionOutcomes {
 		spec.Events = append(spec.Events, observability.WorkflowEventSpec{

@@ -101,3 +101,30 @@ func TestRequireExecutorCaller(t *testing.T) {
 		})
 	}
 }
+
+func TestPermit2NonceBit(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		nonce    *big.Int
+		wantWord *big.Int
+		wantBit  int
+	}{
+		{name: "zero", nonce: big.NewInt(0), wantWord: big.NewInt(0), wantBit: 0},
+		{name: "last bit of first word", nonce: big.NewInt(255), wantWord: big.NewInt(0), wantBit: 255},
+		{name: "first bit of second word", nonce: big.NewInt(256), wantWord: big.NewInt(1), wantBit: 0},
+		{name: "mid word", nonce: big.NewInt(0x1_2345), wantWord: big.NewInt(0x123), wantBit: 0x45},
+		{
+			name:     "uint256 max",
+			nonce:    new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1)),
+			wantWord: new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 248), big.NewInt(1)),
+			wantBit:  255,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			word, bit := permit2NonceBit(tc.nonce)
+			if word.Cmp(tc.wantWord) != 0 || bit != tc.wantBit {
+				t.Fatalf("permit2NonceBit(%s) = %s/%d, want %s/%d", tc.nonce, word, bit, tc.wantWord, tc.wantBit)
+			}
+		})
+	}
+}

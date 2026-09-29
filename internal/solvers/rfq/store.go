@@ -25,6 +25,9 @@ const (
 	statusExpired      orderStatus = "expired"
 	statusFailed       orderStatus = "failed"
 	statusRetryWaiting orderStatus = "retry_waiting"
+	// statusObsolete is terminal: the Reactor spent the order nonce before our fill could land, so the
+	// order is never re-armed, even while the backend still lists it as open.
+	statusObsolete orderStatus = "obsolete"
 )
 
 func (s orderStatus) active() bool {

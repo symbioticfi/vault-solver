@@ -493,7 +493,9 @@ The manager evaluates it before signing and after a receipt sweep finishes witho
 A receipt of our own fill takes precedence over interpreting `Claimed` as obsolescence. `Deposited` keeps normal replacements alive. `None` also preserves the lifecycle because a lagging latest-state RPC can return the older
 pre-deposit value for a fresh order. An observed `Claimed` or `Refunded` status drops an unsigned request or
 immediately switches a signed request to same-nonce cancellation without waiting for `pendingTimeoutMs`.
-Unknown statuses and read errors preserve the current lifecycle and are retried. Capacity is released
+Unknown statuses and read errors preserve the current lifecycle and are retried. A terminal result wrapping
+`txmanager.ErrRequestObsolete` is an expected skip: completion records a `fill_obsolete` decline, logs at
+Info, and ends the order trace without an error. Capacity is released
 from the terminal result, not from an isolated status read or missing receipt. Confirmation errors and
 hard shutdown outcomes follow the shared result contract; they do not prove final settlement.
 The worker-owned retry FIFO is bounded to the same 4096 entries as the order inbox and coalesces immutable

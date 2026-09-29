@@ -256,7 +256,8 @@ func (s *Solver) startFill(
 	result, err := s.submitFill(ctx, txmanager.Request{
 		Solver: Name,
 		To:     order.Executor, Data: data, MaxFeePerGas: transactionMaxFee, CancelAt: cancelAt,
-		Label: "uniswapx-fill",
+		Obsolete: s.orderObsolete(order),
+		Label:    "uniswapx-fill",
 	})
 	if err != nil {
 		return nil, err
@@ -274,6 +275,18 @@ func (s *Solver) startFill(
 		order: order, plannedSurplus: strategies.PlannedSurplus(plan.Routes, order.AmountOut), result: result,
 		span: trace.SpanFromContext(ctx), end: end,
 	}, nil
+}
+
+// orderObsolete returns the fill's Obsolete hook: once Permit2 has spent the order nonce, another
+// filler took the order or the swapper cancelled it, and the pending fill can only revert.
+func (s *Solver) orderObsolete(order *resolvedOrder) func(context.Context) (bool, error) {
+	if s.permit2 == (common.Address{}) || order.Nonce == nil {
+		return nil
+	}
+	permit2, swapper, nonce := s.permit2, order.Swapper, new(big.Int).Set(order.Nonce)
+	return func(ctx context.Context) (bool, error) {
+		return s.reader.orderNonceUsed(ctx, permit2, swapper, nonce)
+	}
 }
 
 // declineFill records an expected skip on the fill span. The fill loop owns retry policy;
@@ -504,6 +517,19 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 		return
 	}
 	outcome := result.Outcome
+	if !outcome.Included() && errors.Is(result.Err, txmanager.ErrRequestObsolete) {
+		// Another filler took the order or the swapper cancelled it: retire it rather than retry,
+		// and keep it out of the failure breaker, since nothing of ours went wrong.
+		observability.Decline(ctx, "fill_obsolete", errorReason(result.Err))
+		s.observeFillOutcome(liquidlane.FillOutcomeObsolete)
+		s.complete(order.Hash, now)
+		observability.Log(ctx).Info(
+			"order fill obsolete: order settled elsewhere",
+			"source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
+			"tx", result.Hash.Hex(), "outcome", outcome,
+		)
+		return
+	}
 	if !outcome.Included() {
 		err = result.Err
 		if err == nil {

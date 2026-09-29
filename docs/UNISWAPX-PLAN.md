@@ -174,7 +174,12 @@ a reservation revision change during planning still rejects that plan for a fres
 
 A planned fill may wait behind another transaction on the shared nonce lane. Its admission deadline
 (`CancelAt`) still applies: if the preceding transaction takes too long, admission returns `not_admitted`
-and existing retry handling applies. Continued quoting does not guarantee execution within exclusivity;
+and existing retry handling applies. Each fill also carries an `Obsolete` check that reads the order's
+Permit2 unordered nonce (`nonceBitmap(swapper, nonce >> 8)`, bit `nonce & 0xff`). The reactor spends it on
+every fill and the swapper spends it to cancel, so once another filler takes the order the manager drops
+the unsigned call or cancels the pending one early instead of holding the lane until the deadline. A
+result wrapping `txmanager.ErrRequestObsolete` retires the order without a retry or a breaker failure and
+records `fill/obsolete`. Continued quoting does not guarantee execution within exclusivity;
 the exclusive window must also cover any preceding fill's confirmation time.
 
 The current parser accepts only `Dutch_V2`. All strategies retain polling retries for declined plans and
@@ -200,7 +205,8 @@ exclusive obligations remain independently tracked through terminal reconciliati
   cache invalidation cannot lose a served quote's amounts and a permissive webhook cannot turn the
   unauthenticated endpoint into unbounded Prometheus cardinality. Successful fill receipts publish
   `fill/success`, freshness, and token-native amounts; terminal failures and admission rejection publish
-  `fill/failure` and `fill/not_admitted`; pre-submission declines use `fill/declined`.
+  `fill/failure` and `fill/not_admitted`; fills retired because the order was settled elsewhere publish
+  `fill/obsolete`; pre-submission declines use `fill/declined`.
   Txmanager remains authoritative for detailed outcomes, gas, fees, and lifecycle state.
   The generic external-operation histogram separately times fixed `quote_refresh`,
   `exclusive_order_poll`, and `public_order_poll` boundaries. A truncated order snapshot or a safe, incomplete
@@ -320,7 +326,8 @@ the solver pays that cost without passing it through to the quote. Shared pricin
 startup requirements are specified in the [transaction manager plan](TXMANAGER-PLAN.md).
 
 Startup scans the executor's indexed `callers(uint256)` entries for the framework signer and checks
-executor bytecode. In external mode it also requires every configured adapter to authorize the executor as a
+executor bytecode. It also reads the configured reactor's `permit2()` once; a failed or zero read fails
+startup, because fill obsolescence checks spend-state on that Permit2. In external mode it also requires every configured adapter to authorize the executor as a
 direct filler. The PR19 ABI has no `isCaller` helper or Reactor getter, so the configured Reactor must still
 be matched to the implementation's immutable during deployment.
 `solverMode: external` (default) forbids `discounts`, requires a non-empty `adapters` list, and requires every

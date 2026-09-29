@@ -12,7 +12,11 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 
+	"github.com/prometheus/client_golang/prometheus"
+
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -236,5 +240,101 @@ func TestExecutionRetryDeadlineDoesNotExpireUnknownInclusion(t *testing.T) {
 	syncCycle(t.Context(), e)
 	if txm.calls != 2 || st.order("o1").Status != statusSubmitted || st.order("o1").TxHash != txm.result.Hash {
 		t.Fatalf("unknown retry inclusion lost tracking: sends=%d order=%+v", txm.calls, st.order("o1"))
+	}
+}
+
+var testReactor = common.HexToAddress("0x00000000000000000000000000000000000000c0")
+
+func TestExecutionObsoleteHookReadsReactorNonce(t *testing.T) {
+	st, be := fillFixtures(t)
+	txm := &fakeTxm{result: confirmedTxResult()}
+	e := newExec(t, st, be, txm)
+	e.reactor = testReactor
+	reader := e.reader.(*fakeRecoveryReader)
+	reader.nonceUsed = true
+
+	syncCycle(t.Context(), e)
+
+	if txm.lastReq.Obsolete == nil {
+		t.Fatal("fill request has no Obsolete hook with a configured reactor")
+	}
+	used, err := txm.lastReq.Obsolete(t.Context())
+	if err != nil || !used {
+		t.Fatalf("Obsolete() = %v, %v; want the reader's spent nonce", used, err)
+	}
+	want := sampleOrder()
+	if len(reader.nonceReads) != 1 {
+		t.Fatalf("nonce reads = %d, want 1", len(reader.nonceReads))
+	}
+	got := reader.nonceReads[0]
+	if got.reactor != testReactor || got.swapper != want.Swapper || got.nonce.Cmp(want.Request.Nonce) != 0 {
+		t.Fatalf("nonce read = %+v, want reactor %s swapper %s nonce %s",
+			got, testReactor.Hex(), want.Swapper.Hex(), want.Request.Nonce)
+	}
+
+	reader.nonceErr = errors.New("rpc unavailable")
+	if _, err := txm.lastReq.Obsolete(t.Context()); err == nil {
+		t.Fatal("Obsolete() hid the read error; the txmanager must keep the lifecycle on unknown status")
+	}
+}
+
+func TestExecutionWithoutReactorLeavesObsoleteUnset(t *testing.T) {
+	st, be := fillFixtures(t)
+	txm := &fakeTxm{result: confirmedTxResult()}
+	e := newExec(t, st, be, txm)
+
+	syncCycle(t.Context(), e)
+
+	if txm.calls != 1 || txm.lastReq.Obsolete != nil {
+		t.Fatalf("sends = %d, Obsolete set = %v; want one send without a hook", txm.calls, txm.lastReq.Obsolete != nil)
+	}
+}
+
+func TestExecutionRetiresObsoleteOrderWithoutRetry(t *testing.T) {
+	obsoleteCancellation := confirmedCancellation()
+	obsoleteCancellation.Err = errors.Errorf("pending transaction cancelled: %w", txmanager.ErrRequestObsolete)
+	unconfirmed := obsoleteCancellation
+	unconfirmed.Outcome = txmanager.OutcomeCancelledUnconfirmed
+	for _, tc := range []struct {
+		name          string
+		result        txmanager.Result
+		backendStatus string
+		want          orderStatus
+	}{
+		{name: "cancelled pending fill", result: obsoleteCancellation, backendStatus: "open", want: statusObsolete},
+		{name: "cancellation confirmation failed", result: unconfirmed, backendStatus: "open", want: statusObsolete},
+		{name: "dropped before signing", result: txmanager.Result{
+			Outcome: txmanager.OutcomeSubmissionError,
+			Err:     errors.Errorf("send %q: %w", "rfq-fill", txmanager.ErrRequestObsolete),
+		}, backendStatus: "open", want: statusObsolete},
+		{name: "backend already reports the fill", result: obsoleteCancellation, backendStatus: "filled", want: statusFilled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st, be := fillFixtures(t)
+			now := time.Unix(0, 0)
+			st.now = func() time.Time { return now }
+			be.order.OrderStatus = tc.backendStatus
+			reg := prometheus.NewRegistry()
+			metrics, err := newRFQMetrics(reg, st, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			txm := &fakeTxm{result: tc.result}
+			e := newExec(t, st, be, txm)
+			e.now = st.now
+			e.metrics = metrics
+			e.reactor = testReactor
+
+			for range 5 {
+				syncCycle(t.Context(), e)
+				now = now.Add(10 * time.Second)
+			}
+
+			if txm.calls != 1 || st.order("o1").Status != tc.want {
+				t.Fatalf("sends = %d, order = %+v; want one send and %s", txm.calls, st.order("o1"), tc.want)
+			}
+			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeObsolete, 1)
+			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 0)
+		})
 	}
 }

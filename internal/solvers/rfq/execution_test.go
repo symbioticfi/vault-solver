@@ -65,6 +65,14 @@ type fakeRecoveryReader struct {
 	chainBlock uint64
 	chainTime  time.Time
 	chainErr   error
+	nonceUsed  bool
+	nonceErr   error
+	nonceReads []nonceRead
+}
+
+type nonceRead struct {
+	reactor, swapper common.Address
+	nonce            *big.Int
 }
 
 func (f *fakeRecoveryReader) latestBlock(context.Context) (uint64, time.Time, error) {
@@ -101,6 +109,13 @@ func (f *fakeRecoveryReader) validateDirectAuthorization(
 ) error {
 	f.authCalls++
 	return f.authErr
+}
+
+func (f *fakeRecoveryReader) orderNonceUsed(
+	_ context.Context, reactor, swapper common.Address, nonce *big.Int,
+) (bool, error) {
+	f.nonceReads = append(f.nonceReads, nonceRead{reactor: reactor, swapper: swapper, nonce: nonce})
+	return f.nonceUsed, f.nonceErr
 }
 
 type fakeTxm struct {

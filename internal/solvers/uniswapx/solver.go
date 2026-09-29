@@ -39,6 +39,9 @@ type Solver struct {
 	solverAddress common.Address
 	chain         contractCaller
 	reader        chainReader
+	// permit2 is the reactor's Permit2, resolved once in Run before any fill; zero leaves fills
+	// without an Obsolete check.
+	permit2       common.Address
 	strategy      types.Strategy
 	txm           transactionManager
 	confirmations uint64
@@ -84,6 +87,8 @@ type chainReader interface {
 	resolveRoutes(ctx context.Context, adapters []common.Address) ([]liquidlane.Route, error)
 	validateExecutorCode(ctx context.Context, executor common.Address) error
 	validateExecutorCaller(ctx context.Context, executor, caller common.Address) error
+	reactorPermit2(ctx context.Context, reactor common.Address) (common.Address, error)
+	orderNonceUsed(ctx context.Context, permit2, swapper common.Address, nonce *big.Int) (bool, error)
 	unauthorizedAdapters(
 		ctx context.Context,
 		executor common.Address,
@@ -223,6 +228,14 @@ func (s *Solver) Run(ctx context.Context) error {
 		)
 		return startupErr
 	}
+	permit2, err := s.reader.reactorPermit2(ctx, s.cfg.Reactor)
+	if err != nil {
+		startupErr := errors.Errorf("resolve reactor permit2: %w", err)
+		observability.Log(ctx).Error(startupErr, "reactor validation failed",
+			"reactor", s.cfg.Reactor.Hex(), "executor", s.cfg.Executor.Hex())
+		return startupErr
+	}
+	s.permit2 = permit2
 	if s.cfg.restrictsToAdapters() {
 		unauthorized, err := s.reader.unauthorizedAdapters(ctx, s.cfg.Executor, routes)
 		if err != nil {
