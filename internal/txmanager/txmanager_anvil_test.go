@@ -56,7 +56,7 @@ func testAnvilConsumedNonce(t *testing.T) {
 	rpcClient, ethClient, _ := startAnvilWithoutMining(t)
 	relay := &acceptingAnvilRelay{Client: ethClient}
 	sgnr := anvilSigner(t)
-	m := New(relay, sgnr, big.NewInt(31337), Config{MaxFeeGwei: 100, TipGwei: 1}, logr.Discard())
+	m := New(relay, sgnr, big.NewInt(31337), Config{MaxFeeGwei: 100}, logr.Discard())
 	pending, err := m.broadcast(t.Context(), Request{
 		To: common.HexToAddress("0xdead"), GasLimit: 21_000, Label: "private fill",
 	})
@@ -81,7 +81,7 @@ func testAnvilConsumedNonce(t *testing.T) {
 		t.Fatalf("external inclusion: receipt=%+v err=%v", receipt, err)
 	}
 	for range 3 {
-		if _, err := m.tryReplace(t.Context(), pending, true); err != nil {
+		if _, err := m.tryReplace(t.Context(), pending, replaceIntent{cancellation: true}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -102,10 +102,10 @@ func testAnvilReplacement(t *testing.T) {
 		big.NewInt(31337),
 		Config{
 			MaxFeeGwei:          100,
-			TipGwei:             1, // A fresh, non-mining chain has no usable fee-history rewards.
 			PollInterval:        20 * time.Millisecond,
 			ReplacementInterval: 200 * time.Millisecond,
 			PendingTimeout:      5 * time.Second,
+			Horizon:             HorizonConfig{BlockTime: 200 * time.Millisecond},
 		},
 		logr.Discard(),
 	)
@@ -118,6 +118,10 @@ func testAnvilReplacement(t *testing.T) {
 		t.Fatal("transaction was not accepted")
 	}
 	initial := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(poolTransaction) bool { return true })
+	// Mine a block at a base fee above the initial fee cap: it excludes the call, and the base fee the
+	// next block inherits is the evidence that reprices it.
+	setAnvilNextBaseFee(t, rpcClient, big.NewInt(10_000_000_000))
+	mineAnvilBlock(t, rpcClient)
 	replacement := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(tx poolTransaction) bool {
 		return tx.Hash != initial.Hash
 	})
@@ -165,7 +169,6 @@ func testAnvilCancellation(t *testing.T, dedicatedCancellationRPC bool) {
 		big.NewInt(31337),
 		Config{
 			MaxFeeGwei:          100,
-			TipGwei:             1, // A fresh, non-mining chain has no usable fee-history rewards.
 			PollInterval:        20 * time.Millisecond,
 			ReplacementInterval: 5 * time.Second,
 			PendingTimeout:      300 * time.Millisecond,
@@ -363,6 +366,13 @@ func mineAnvilBlock(t *testing.T, client *rpc.Client) {
 	t.Helper()
 	if err := client.CallContext(t.Context(), nil, "anvil_mine", 1); err != nil {
 		t.Fatalf("anvil_mine: %v", err)
+	}
+}
+
+func setAnvilNextBaseFee(t *testing.T, client *rpc.Client, fee *big.Int) {
+	t.Helper()
+	if err := client.CallContext(t.Context(), nil, "anvil_setNextBlockBaseFeePerGas", hexutil.EncodeBig(fee)); err != nil {
+		t.Fatalf("anvil_setNextBlockBaseFeePerGas: %v", err)
 	}
 }
 

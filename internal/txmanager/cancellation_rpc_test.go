@@ -41,11 +41,11 @@ func TestCancellationUsesDedicatedSenderForReplacementAndRebroadcast(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := m.tryReplace(t.Context(), pending, false); err != nil {
+			if _, err := m.tryReplace(t.Context(), pending, replaceIntent{}); err != nil {
 				t.Fatal(err)
 			}
 			for range 2 {
-				cancelling, err := m.tryReplace(t.Context(), pending, true)
+				cancelling, err := m.tryReplace(t.Context(), pending, replaceIntent{cancellation: true})
 				if !cancelling || !errors.Is(err, tc.err) {
 					t.Fatalf("cancellation = %v, error = %v; want cancellation and %v", cancelling, err, tc.err)
 				}

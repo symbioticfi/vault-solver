@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"math"
 	"os"
+	"slices"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -75,18 +76,51 @@ type TxManagerConfig struct {
 	Confirmations uint64 `yaml:"confirmations"`
 	// MaxFeeGwei is the required absolute EIP-1559 max fee per gas.
 	MaxFeeGwei float64 `yaml:"maxFeeGwei"`
-	// TipGwei is the minimum EIP-1559 priority fee; 0 derives it from recent fee history.
-	TipGwei float64 `yaml:"tipGwei"`
 	// BroadcastTimeoutMs bounds one transaction submission RPC call independently of replacement cadence.
 	BroadcastTimeoutMs int `yaml:"broadcastTimeoutMs"`
 	// AccountPollIntervalMs controls signer balance and nonce telemetry refresh cadence.
 	AccountPollIntervalMs int `yaml:"accountPollIntervalMs"`
-	// ReplacementIntervalMs is how often a pending transaction is fee-bumped.
+	// ReplacementIntervalMs paces the fallback fee bump of a pending transaction while fee history is
+	// unreadable; with readable fee history, pending transactions are repriced on block evidence.
 	ReplacementIntervalMs int `yaml:"replacementIntervalMs"`
 	// PendingTimeoutMs switches a still-pending call to a same-nonce cancellation.
 	PendingTimeoutMs int `yaml:"pendingTimeoutMs"`
 	// ShutdownTimeoutMs bounds how long shutdown drains an accepted transaction lifecycle.
 	ShutdownTimeoutMs int `yaml:"shutdownTimeoutMs"`
+	// Horizon tunes fee pricing and block-evidence repricing.
+	Horizon HorizonFeeConfig `yaml:"horizon"`
+}
+
+// HorizonFeeConfig tunes txManager fee pricing: the base-fee horizon of the fee cap, the tip rule,
+// the repricing evidence, and gas-estimate headroom. Zero values select the defaults.
+type HorizonFeeConfig struct {
+	// MaxBlocks is how many blocks the initial fee cap keeps the full tip valid at the maximum
+	// EIP-1559 base-fee increase.
+	MaxBlocks int `yaml:"maxBlocks"`
+	// BlockTimeMs is the chain slot time; it sets the evaluation cadence and the next-block estimate time.
+	BlockTimeMs int `yaml:"blockTimeMs"`
+	// TipFloorGwei is the tip while the last two blocks had room for the transaction.
+	TipFloorGwei float64 `yaml:"tipFloorGwei"`
+	// FullBlockTipGwei is the tip when one of the last two blocks had no room for it.
+	FullBlockTipGwei float64 `yaml:"fullBlockTipGwei"`
+	// CongestedTipFloorGwei and CongestedTipCapGwei clamp the reward-percentile tip used when both
+	// of the last two blocks had no room.
+	CongestedTipFloorGwei float64 `yaml:"congestedTipFloorGwei"`
+	CongestedTipCapGwei   float64 `yaml:"congestedTipCapGwei"`
+	// CongestedRewardBlocks and CongestedRewardPercentile pick that tip: the highest percentile
+	// reward over this many recent blocks.
+	CongestedRewardBlocks     int     `yaml:"congestedRewardBlocks"`
+	CongestedRewardPercentile float64 `yaml:"congestedRewardPercentile"`
+	// EscalateAfterFullBlocks is how many consecutive full blocks a valid pending transaction must
+	// lose before its tip is repriced.
+	EscalateAfterFullBlocks int `yaml:"escalateAfterFullBlocks"`
+	// StallAfterBlocks is how many blocks with room a valid pending transaction may lose before it is
+	// re-estimated and rebroadcast.
+	StallAfterBlocks int `yaml:"stallAfterBlocks"`
+	// GasHeadroomBps is the headroom over the next-block gas estimate; FallbackGasHeadroomBps applies
+	// when the read RPC cannot estimate against the next block.
+	GasHeadroomBps         int `yaml:"gasHeadroomBps"`
+	FallbackGasHeadroomBps int `yaml:"fallbackGasHeadroomBps"`
 }
 
 // SolverConfig names the solver implementation and carries its opaque, deferred config.
@@ -98,6 +132,26 @@ type SolverConfig struct {
 
 // DefaultConfirmations is used when TxManager.Confirmations is unset.
 const DefaultConfirmations = 2
+
+// Fee pricing defaults, applied to unset txManager.horizon fields.
+const (
+	DefaultHorizonMaxBlocks                 = 6
+	DefaultHorizonBlockTimeMs               = 12_000
+	DefaultHorizonTipFloorGwei              = 0.02
+	DefaultHorizonFullBlockTipGwei          = 0.1
+	DefaultHorizonCongestedTipFloorGwei     = 0.2
+	DefaultHorizonCongestedTipCapGwei       = 15
+	DefaultHorizonCongestedRewardBlocks     = 3
+	DefaultHorizonCongestedRewardPercentile = 50
+	DefaultHorizonEscalateAfterFullBlocks   = 2
+	DefaultHorizonStallAfterBlocks          = 3
+	DefaultHorizonGasHeadroomBps            = 500
+	DefaultHorizonFallbackGasHeadroomBps    = 1000
+
+	maxHorizonBlocks       = 12
+	maxHorizonWindowBlocks = 64
+	maxGasHeadroomBps      = 5000
+)
 
 const (
 	// Keep in sync with chain.defaultRPCAttemptTimeout (internal/chain/fallback.go).
@@ -166,6 +220,7 @@ func (c *Config) applyDefaults() {
 	if c.TxManager.ShutdownTimeoutMs == 0 {
 		c.TxManager.ShutdownTimeoutMs = DefaultShutdownTimeoutMs
 	}
+	c.TxManager.Horizon.applyDefaults()
 	if c.Observability.Addr == "" {
 		c.Observability.Addr = DefaultObservabilityAddr
 	}
@@ -222,9 +277,6 @@ func (c TxManagerConfig) validate(required bool) error {
 		math.IsNaN(c.MaxFeeGwei) || math.IsInf(c.MaxFeeGwei, 0) {
 		return errors.New("txManager.maxFeeGwei must be finite and positive")
 	}
-	if c.TipGwei < 0 || math.IsNaN(c.TipGwei) || math.IsInf(c.TipGwei, 0) {
-		return errors.New("txManager.tipGwei must be finite and non-negative")
-	}
 	if c.BroadcastTimeoutMs <= 0 {
 		return errors.New("txManager.broadcastTimeoutMs must be positive")
 	}
@@ -239,6 +291,86 @@ func (c TxManagerConfig) validate(required bool) error {
 	}
 	if c.ShutdownTimeoutMs <= 0 {
 		return errors.New("txManager.shutdownTimeoutMs must be positive")
+	}
+	return c.Horizon.validate()
+}
+
+func (h *HorizonFeeConfig) applyDefaults() {
+	if h.MaxBlocks == 0 {
+		h.MaxBlocks = DefaultHorizonMaxBlocks
+	}
+	if h.BlockTimeMs == 0 {
+		h.BlockTimeMs = DefaultHorizonBlockTimeMs
+	}
+	if h.TipFloorGwei == 0 {
+		h.TipFloorGwei = DefaultHorizonTipFloorGwei
+	}
+	if h.FullBlockTipGwei == 0 {
+		h.FullBlockTipGwei = DefaultHorizonFullBlockTipGwei
+	}
+	if h.CongestedTipFloorGwei == 0 {
+		h.CongestedTipFloorGwei = DefaultHorizonCongestedTipFloorGwei
+	}
+	if h.CongestedTipCapGwei == 0 {
+		h.CongestedTipCapGwei = DefaultHorizonCongestedTipCapGwei
+	}
+	if h.CongestedRewardBlocks == 0 {
+		h.CongestedRewardBlocks = DefaultHorizonCongestedRewardBlocks
+	}
+	if h.CongestedRewardPercentile == 0 {
+		h.CongestedRewardPercentile = DefaultHorizonCongestedRewardPercentile
+	}
+	if h.EscalateAfterFullBlocks == 0 {
+		h.EscalateAfterFullBlocks = DefaultHorizonEscalateAfterFullBlocks
+	}
+	if h.StallAfterBlocks == 0 {
+		h.StallAfterBlocks = DefaultHorizonStallAfterBlocks
+	}
+	if h.GasHeadroomBps == 0 {
+		h.GasHeadroomBps = DefaultHorizonGasHeadroomBps
+	}
+	if h.FallbackGasHeadroomBps == 0 {
+		h.FallbackGasHeadroomBps = DefaultHorizonFallbackGasHeadroomBps
+	}
+}
+
+func (h HorizonFeeConfig) validate() error {
+	if h.MaxBlocks < 3 || h.MaxBlocks > maxHorizonBlocks {
+		return errors.Errorf("txManager.horizon.maxBlocks must be between 3 and %d", maxHorizonBlocks)
+	}
+	if h.BlockTimeMs <= 0 || int64(h.BlockTimeMs) > math.MaxInt64/int64(time.Millisecond) {
+		return errors.New("txManager.horizon.blockTimeMs must be positive and fit in a time.Duration")
+	}
+	tips := []float64{h.TipFloorGwei, h.FullBlockTipGwei, h.CongestedTipFloorGwei, h.CongestedTipCapGwei}
+	for _, tip := range tips {
+		if tip <= 0 || math.IsNaN(tip) || math.IsInf(tip, 0) {
+			return errors.New("txManager.horizon tips must be finite and positive")
+		}
+	}
+	if !slices.IsSorted(tips) {
+		return errors.New("txManager.horizon tips must satisfy " +
+			"tipFloorGwei <= fullBlockTipGwei <= congestedTipFloorGwei <= congestedTipCapGwei")
+	}
+	if h.CongestedRewardPercentile <= 0 || h.CongestedRewardPercentile > 100 {
+		return errors.New("txManager.horizon.congestedRewardPercentile must be in (0, 100]")
+	}
+	for _, window := range []struct {
+		name   string
+		blocks int
+	}{
+		{"congestedRewardBlocks", h.CongestedRewardBlocks},
+		{"escalateAfterFullBlocks", h.EscalateAfterFullBlocks},
+		{"stallAfterBlocks", h.StallAfterBlocks},
+	} {
+		if window.blocks < 1 || window.blocks > maxHorizonWindowBlocks {
+			return errors.Errorf("txManager.horizon.%s must be between 1 and %d", window.name, maxHorizonWindowBlocks)
+		}
+	}
+	if h.GasHeadroomBps < 0 || h.FallbackGasHeadroomBps < h.GasHeadroomBps || h.FallbackGasHeadroomBps > maxGasHeadroomBps {
+		return errors.Errorf(
+			"txManager.horizon gas headroom must satisfy 0 <= gasHeadroomBps <= fallbackGasHeadroomBps <= %d",
+			maxGasHeadroomBps,
+		)
 	}
 	return nil
 }

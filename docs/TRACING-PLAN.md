@@ -178,7 +178,7 @@ context — go-ethereum reconnects a dropped socket internally and replays the s
 provider can tie the connection back to the dial but **never to an individual call**, and IPC has no
 handshake at all. Each call is then spanned locally: `internal/chain/calls.go` shadows exactly the
 backend methods this repo calls (`CallContract`, `HeaderByNumber`, `HeaderByHash`, `FeeHistory`,
-`SuggestGasTipCap`, `EstimateGas`, `TransactionReceipt`, `BalanceAt`, `CodeAt`, `BlockNumber`,
+`EstimateGas` and its next-block variant `EstimateGasNextBlock`, `TransactionReceipt`, `BalanceAt`, `CodeAt`, `BlockNumber`,
 `SendTransaction`, `SendCancellationTransaction`, `NonceAt`, `PendingNonceAt`, `TransactionSenderBalanceAt`) and starts a client span
 named by the JSON-RPC method with `rpc.system=jsonrpc`, `rpc.method`, `chain.rpc.role` and
 `chain.rpc.transport`, so dashboards see one series across transports. A cancelled call and an
@@ -204,8 +204,9 @@ contexts with `trace.ContextWithSpan`, legal even after the caller's context is 
 survives the manager's deliberate detachment and covers admission → broadcast → terminal outcome.
 
 Children: `txmanager.broadcast` (fee quote, gas estimate, nonce, sign, send — each RPC call becomes a
-grandchild automatically) and one `txmanager.replace` per replacement carrying `tx.attempt` and
-`tx.cancellation`. Receipt polls are ordinary RPC child spans. Attributes: `solver` (from
+grandchild automatically) and one `txmanager.replace` per replacement carrying `tx.attempt`,
+`tx.cancellation` and `tx.replace_reason` (the `replacements_total{reason}` value that triggered it).
+Receipt polls are ordinary RPC child spans. Attributes: `solver` (from
 `Request.Solver`), `tx.label`, `tx.hash` and `tx.nonce` once known, and terminal `tx.outcome`; status
 is Error for `reverted`, `cancelled`, `cancelled_unconfirmed`, `submission_error` and `tracking_stopped`, and unset for
 `confirmed` and `included_unconfirmed`. The send span **ends before the result is delivered** to the
