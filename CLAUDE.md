@@ -230,6 +230,15 @@ Commit titles follow [Conventional Commits](https://www.conventionalcommits.org)
 - Breaking changes: append `!` after the scope (`refactor(rfq)!: …`) and explain the break in the body.
 - Keep the title under ~72 chars; put detail, rationale, and any plan-sync note in the body.
 
+## Branches and pull requests
+
+- **Open PRs against `stage`**, the default branch. A branch stacked on another feature branch may target
+  that branch instead.
+- **`main` only receives `stage`**, through the promotion PR opened by the `sync-stage` workflow
+  (Actions → sync-stage → Run workflow). A push to `main` deploys to production.
+- **Never open a PR with `main` as the head.** Merged head branches are auto-deleted and only the
+  default branch is exempt, so merging one deletes `main`.
+
 ## Keep the docs in sync — required
 
 Two audiences, two docs, kept current **in the same change** as the code:
