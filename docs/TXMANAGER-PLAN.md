@@ -104,7 +104,10 @@ fallback below.
   without the chain client's next-block method; a reverting next-block estimate fails the send. An endpoint
   that silently ignores the parameter returns a latest-state estimate with the tighter headroom.
 - **Repricing on block evidence.** The loop evaluates each new block (older heads from another endpoint are
-  ignored) against the current attempt, counting only blocks after the one it was sent at:
+  ignored) against the current attempt, counting only blocks after the one it was sent at. That send head is
+  the fresher of the fee window's newest block and the latest header, and the wall clock bounds it: no more
+  blocks than elapsed slots, plus one in flight, can follow a send, so a read endpoint that served a stale fee
+  window when the call went out cannot turn blocks mined before the send into blocks it missed:
   - a fee cap that would lapse within two blocks at the tip floor is repriced (`validity`);
   - the last `escalateAfterFullBlocks` blocks full while the attempt was valid, with the tip rule now asking
     for at least a replacement bump, reprice the tip (`congestion`);
@@ -328,8 +331,8 @@ is not that integration proof.
 Cancellation outcome tests also distinguish a satisfied confirmation policy from an interrupted wait;
 RFQ tests consume that distinction when deciding whether another fill is safe.
 Fee tests cover the base-fee bound, the tip rule, each repricing decision, fee-window parsing, the
-next-block estimate and its fallbacks, and scripted-chain lifecycles for stall rebroadcasts, congestion,
-validity, gas growth, unreadable windows and deadline cancellation. Lifecycle tests that need a replacement
+next-block estimate and its fallbacks, a stale send head, and scripted-chain lifecycles for stall
+rebroadcasts, congestion, validity, gas growth, unreadable windows and deadline cancellation. Lifecycle tests that need a replacement
 mine a block that supplies the evidence, since no timer bumps a pending call.
 Run repository-required build, race/coverage and lint gates for implementation changes. Current reader
 validation is local; it does not establish deployment or production rollout status.
