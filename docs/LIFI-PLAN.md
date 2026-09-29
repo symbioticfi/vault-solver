@@ -407,7 +407,9 @@ type Strategy interface {
 - **`QuoteInput`** = shared `[]liquidlane.Inventory`, vault-level in-flight capacity reservations, chain
   time, server wall time, and solver-owned quote expiry. When `gas:` is configured it also carries the latest
   LiquidLane gas snapshot and current `txmanager.MaxFeePerGas` profitability ceiling, including one ordinary
-  replacement when the cap permits. With `gas:` configured the factory also requires
+  replacement when the cap permits (under `fees.policy: horizon`, `bump(fee(pricingHorizonBlocks, tip))` from a
+  cached fee snapshot, which the fill still clears after three blocks of maximum base-fee growth;
+  [TXMANAGER-PLAN §4.3](TXMANAGER-PLAN.md#43-horizon-fee-policy)). With `gas:` configured the factory also requires
   `txManager.balance.referenceGasUnits > 0` (the generic `Manager.ReferenceGasUnits()`), because that ceiling's
   tip is sized for that gas limit and the lane funding gate measures the balance against it.
   The shared LiquidLane predictor derives every adapter swap route as

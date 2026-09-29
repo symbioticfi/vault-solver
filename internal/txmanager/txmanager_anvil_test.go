@@ -38,6 +38,71 @@ func TestAnvilTxManagerPendingLifecycle(t *testing.T) {
 	t.Run("dedicated cancellation RPC unblocks later nonce", func(t *testing.T) { testAnvilCancellation(t, true) })
 	t.Run("external inclusion stops silent relay cancellations", testAnvilConsumedNonce)
 	t.Run("unaffordable fill is never broadcast", testAnvilUnaffordableFill)
+	t.Run("horizon send estimates the next block", testAnvilHorizonSend)
+}
+
+// testAnvilHorizonSend sends one estimated call under the horizon policy through the production chain
+// client: the startup probe decides whether anvil honours eth_estimateGas block overrides, the gas limit
+// carries the headroom of the mode it chose, and the fee cap is the six-block target over anvil's own next
+// base fee with the floor tip (the genesis block leaves room).
+func testAnvilHorizonSend(t *testing.T) {
+	rpcClient, ethClient, endpoint := startAnvilWithoutMining(t)
+	client, err := chain.Dial(t.Context(), []string{endpoint}, "", "", "0xcA11bde05977b3631167028862bE2a173976CA11", 20*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	manager := New(client, anvilSigner(t), big.NewInt(31337), Config{
+		MaxFeeGwei:   100,
+		PollInterval: 20 * time.Millisecond,
+		Fees:         FeeConfig{Policy: FeePolicyHorizon},
+	}, logr.Discard())
+	go manager.Start(t.Context())
+	deadline := time.Now().Add(10 * time.Second)
+	for manager.overrides.load() == blockOverridesUnknown {
+		if time.Now().After(deadline) {
+			t.Fatal("the block overrides probe reached no verdict against anvil")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Logf("anvil honours eth_estimateGas block overrides: %t", manager.overrides.load() == blockOverridesSupported)
+	wantGas := uint64(21_000 + 21_000*defaultGasHeadroomBps/basisPoints)
+	if manager.overrides.load() != blockOverridesSupported {
+		wantGas = 21_000 + 21_000*defaultFallbackGasHeadroomBps/basisPoints
+	}
+	history, err := ethClient.FeeHistory(t.Context(), 1, nil, []float64{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextBase := history.BaseFee[len(history.BaseFee)-1]
+
+	result, accepted := manager.SendAsync(t.Context(), Request{
+		To: common.HexToAddress("0x000000000000000000000000000000000000dEaD"), Label: "horizon",
+	})
+	if !accepted {
+		t.Fatal("transaction was not accepted")
+	}
+	sent := waitForPoolTransaction(t, rpcClient, anvilSigner(t).Address(), 0, func(poolTransaction) bool { return true })
+	quantity := func(name, hex string) *big.Int {
+		value, err := hexutil.DecodeBig(hex)
+		if err != nil {
+			t.Fatalf("pool transaction %s %q: %v", name, hex, err)
+		}
+		return value
+	}
+	if want := horizonFee(nextBase, defaultMaxHorizonBlocks, gweiToWei(defaultTipFloorGwei)); quantity("maxFeePerGas", sent.MaxFeePerGas).Cmp(want) != 0 {
+		t.Fatalf("max fee = %s, want fee(6, 0.02 gwei) = %s over next base fee %s", sent.MaxFeePerGas, want, nextBase)
+	}
+	if tip := quantity("maxPriorityFeePerGas", sent.MaxPriorityFeePerGas); tip.Cmp(gweiToWei(defaultTipFloorGwei)) != 0 {
+		t.Fatalf("tip = %s, want the 0.02 gwei floor", tip)
+	}
+	if gas := quantity("gas", sent.Gas); gas.Uint64() != wantGas {
+		t.Fatalf("gas limit = %s, want %d for probe verdict %d", gas, wantGas, manager.overrides.load())
+	}
+	mineAnvilBlock(t, rpcClient)
+	if got := waitForTxResult(t, result); got.Err != nil {
+		t.Fatalf("horizon result: %v", got.Err)
+	}
 }
 
 // testAnvilUnaffordableFill funds the signer below what a 21000-gas fill needs for two blocks: the

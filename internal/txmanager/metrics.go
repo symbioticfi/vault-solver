@@ -96,6 +96,8 @@ type Metrics struct {
 	attemptHorizon      *prometheus.HistogramVec
 	nextBaseFee         prometheus.Gauge
 	requiredBalance     *prometheus.GaugeVec
+	gasEstimates        *prometheus.CounterVec
+	gasEstimateDuration *prometheus.HistogramVec
 	account             *accountMetrics
 }
 
@@ -204,14 +206,14 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
 			Name:      "attempt_horizon_blocks",
-			Help:      "Blocks from the next one an initial attempt's fee cap stays valid at the floor tip, when the balance guard priced it.",
+			Help:      "Blocks from the next one an initial attempt's fee cap stays valid at the floor tip, when the horizon policy or the balance guard priced it.",
 			Buckets:   []float64{0, 1, 2, 3, 4, 5, 6, 8, 12, 32},
 		}, []string{"label"}),
 		nextBaseFee: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
 			Name:      "fee_next_base_fee_wei",
-			Help:      "Base fee of the next block from the latest fee snapshot the balance guard used.",
+			Help:      "Base fee of the next block from the latest fee snapshot a send was priced or guarded at, or the funding gate's account poll read.",
 		}),
 		requiredBalance: prometheus.NewGaugeVec(prometheus.GaugeOpts{
 			Namespace: metricsNamespace,
@@ -219,6 +221,19 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Name:      "account_required_balance_wei",
 			Help:      "Balance a reference fill needs at the latest next base fee and the floor tip: min (fees.minHorizonBlocks, can send), quote (fees.pricingHorizonBlocks, funding gate) or full (fees.maxHorizonBlocks).",
 		}, []string{"horizon"}),
+		gasEstimates: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricsNamespace,
+			Subsystem: metricsSubsystem,
+			Name:      "gas_estimates_total",
+			Help:      "Gas estimates of new attempts by mode (latest, next_block, or fallback when next-block estimates are unavailable) and outcome (ok, revert, unsupported, error).",
+		}, []string{"label", "mode", "outcome"}),
+		gasEstimateDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: metricsNamespace,
+			Subsystem: metricsSubsystem,
+			Name:      "gas_estimate_duration_seconds",
+			Help:      "Duration of one gas estimate RPC by mode, bounded by gas.estimateTimeoutMs under the horizon policy.",
+			Buckets:   []float64{0.05, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 5, 10},
+		}, []string{"mode"}),
 	}
 	for _, collector := range []prometheus.Collector{
 		m.requests,
@@ -239,6 +254,8 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 		m.attemptHorizon,
 		m.nextBaseFee,
 		m.requiredBalance,
+		m.gasEstimates,
+		m.gasEstimateDuration,
 		m.account,
 	} {
 		if err := reg.Register(collector); err != nil {
@@ -416,6 +433,15 @@ func (m *Metrics) observeFeeSnapshot(nextBase *big.Int, required laneRequirement
 	m.requiredBalance.WithLabelValues(requiredBalanceMin).Set(weiFloat(required.min))
 	m.requiredBalance.WithLabelValues(requiredBalanceQuote).Set(weiFloat(required.quote))
 	m.requiredBalance.WithLabelValues(requiredBalanceFull).Set(weiFloat(required.full))
+}
+
+// observeGasEstimate counts one gas estimate and records how long it took.
+func (m *Metrics) observeGasEstimate(label, mode, outcome string, elapsed time.Duration) {
+	if m == nil {
+		return
+	}
+	m.gasEstimates.WithLabelValues(label, mode, outcome).Inc()
+	m.gasEstimateDuration.WithLabelValues(mode).Observe(elapsed.Seconds())
 }
 
 // observePendingAge refreshes the age of the unresolved lifecycle's pending call or cancellation. Only

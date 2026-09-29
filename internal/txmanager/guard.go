@@ -69,18 +69,20 @@ type feeReading struct {
 	history *ethereum.FeeHistory // rewards the tip came from; nil with a positive tipGwei
 }
 
-// sendSnapshot is the fee reading a new attempt is priced from. Under the balance guard it also carries
-// the next block's base fee, how far the snapshot trails the real next block, and the block the signer
-// balance is read at.
+// sendSnapshot is the fee reading a new attempt is priced from. Under the balance guard, and always under
+// the horizon policy, it also carries the next block's base fee, how far the snapshot trails the real next
+// block, and the block the signer balance is read at.
 type sendSnapshot struct {
-	reading     feeReading
-	head        uint64   // header number; zero when the header carried none
-	historyHead uint64   // newest block the fee history describes, where the balance is pinned
-	nextBase    *big.Int // nil when the guard is off
+	reading     feeReading   // the legacy policy's reading; zero under the horizon policy
+	fees        *feeSnapshot // the horizon policy's snapshot; nil under the legacy policy
+	head        uint64       // header number; zero when the header carried none
+	historyHead uint64       // newest block the fee history describes, where the balance is pinned
+	nextBase    *big.Int     // nil under the legacy policy with the guard off
 	lag         uint64
 	pin         rpc.BlockNumberOrHash
 }
 
+// guarded reports whether a legacy-policy snapshot was read for the balance guard.
 func (s sendSnapshot) guarded() bool {
 	return s.nextBase != nil
 }
@@ -129,11 +131,28 @@ func (m *Manager) sendSnapshot(ctx context.Context) (sendSnapshot, error) {
 	return m.freshSnapshot(ctx)
 }
 
-// freshSnapshot reads the fee inputs until their head is fresh (see checkSnapshot). A stale head is
-// waited out for up to two block times, bounded by ctx and so by CancelAt, and then refused with
-// ErrStaleHead: an eRPC hiccup or a couple of missed slots should not become a failed order, while a
-// one-block send from a stale head is the silent drop the guard exists to prevent.
+// freshSnapshot reads the legacy fee inputs until their head is fresh (see checkSnapshot and
+// awaitFreshSnapshot).
 func (m *Manager) freshSnapshot(ctx context.Context) (sendSnapshot, error) {
+	return m.awaitFreshSnapshot(ctx, func(ctx context.Context, _ bool) (snapshot sendSnapshot, stale, err error) {
+		reading, err := m.readFees(ctx)
+		if err != nil {
+			return sendSnapshot{}, nil, err
+		}
+		snapshot, stale = m.checkSnapshot(reading, time.Now())
+		return snapshot, stale, nil
+	})
+}
+
+// snapshotRead reads one send snapshot. A stale snapshot is reported through stale and a failed read
+// through err; again is set once an earlier read in the same wait was stale, so a cached read is bypassed.
+type snapshotRead func(ctx context.Context, again bool) (snapshot sendSnapshot, stale, err error)
+
+// awaitFreshSnapshot reads until the snapshot's head is fresh. A stale head is waited out for up to two
+// block times, bounded by ctx and so by CancelAt, and then refused with ErrStaleHead: an eRPC hiccup or a
+// couple of missed slots should not become a failed order, while a one-block send from a stale head is the
+// silent drop the guard exists to prevent.
+func (m *Manager) awaitFreshSnapshot(ctx context.Context, read snapshotRead) (sendSnapshot, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, 2*m.cfg.Fees.BlockTime)
 	defer cancel()
 	poll := minPositiveDuration(m.cfg.Fees.BlockTime/4, m.cfg.PollInterval)
@@ -142,7 +161,7 @@ func (m *Manager) freshSnapshot(ctx context.Context) (sendSnapshot, error) {
 	}
 	var stale error
 	for {
-		reading, err := m.readFees(ctx)
+		snapshot, nowStale, err := read(ctx, stale != nil)
 		if err != nil {
 			// A read the deadline cut short while waiting out a stale head is still that stale head.
 			if stale != nil && waitCtx.Err() != nil {
@@ -150,8 +169,7 @@ func (m *Manager) freshSnapshot(ctx context.Context) (sendSnapshot, error) {
 			}
 			return sendSnapshot{}, err
 		}
-		var snapshot sendSnapshot
-		if snapshot, stale = m.checkSnapshot(reading, time.Now()); stale == nil {
+		if stale = nowStale; stale == nil {
 			return snapshot, nil
 		}
 		observability.Log(ctx).V(1).Info("fee snapshot is stale; waiting for a newer head", "reason", stale.Error())
@@ -181,25 +199,35 @@ func (m *Manager) checkSnapshot(reading feeReading, now time.Time) (sendSnapshot
 	if historyHead > number+1 || number > historyHead+1 {
 		return sendSnapshot{}, errors.Errorf("fee history head %d is more than one block from header %d", historyHead, number)
 	}
-	lag := headTimeLag(head.Time, now, m.cfg.Fees.BlockTime)
-	if number > historyHead {
-		lag += number - historyHead
-	}
-	if maxLag := m.maxHeadLagBlocks(); lag > maxLag {
-		return sendSnapshot{}, errors.Errorf(
-			"head %d trails the next block by %d blocks, more than fees.maxHeadLagBlocks %d", number, lag, maxLag,
-		)
-	}
-	if last := m.lastInclusion.Load(); historyHead < last {
-		return sendSnapshot{}, errors.Errorf("head %d is below the previous inclusion block %d", historyHead, last)
-	}
-	pin := rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(int64(historyHead)))
-	if historyHead == number {
-		pin = rpc.BlockNumberOrHashWithHash(head.Hash(), true)
+	lag := snapshotLag(head, historyHead, now, m.cfg.Fees.BlockTime)
+	pin, err := m.snapshotPin(head, historyHead, lag)
+	if err != nil {
+		return sendSnapshot{}, err
 	}
 	return sendSnapshot{
 		reading: reading, head: number, historyHead: historyHead, nextBase: nextBase, lag: lag, pin: pin,
 	}, nil
+}
+
+// snapshotPin reports a snapshot stale when it trails the real next block by more than
+// fees.maxHeadLagBlocks or its fee history ends below the previous lifecycle's inclusion block, and
+// otherwise returns the block its signer balance is read at: the header by hash, with requireCanonical,
+// when the fee history ends at it, and the fee history's newest block by number otherwise. head carries a
+// usable block number and historyHead is at most one block from it.
+func (m *Manager) snapshotPin(head *types.Header, historyHead, lag uint64) (rpc.BlockNumberOrHash, error) {
+	number := head.Number.Uint64()
+	if maxLag := m.maxHeadLagBlocks(); lag > maxLag {
+		return rpc.BlockNumberOrHash{}, errors.Errorf(
+			"head %d trails the next block by %d blocks, more than fees.maxHeadLagBlocks %d", number, lag, maxLag,
+		)
+	}
+	if last := m.lastInclusion.Load(); historyHead < last {
+		return rpc.BlockNumberOrHash{}, errors.Errorf("head %d is below the previous inclusion block %d", historyHead, last)
+	}
+	if historyHead == number {
+		return rpc.BlockNumberOrHashWithHash(head.Hash(), true), nil
+	}
+	return rpc.BlockNumberOrHashWithNumber(rpc.BlockNumber(int64(historyHead))), nil
 }
 
 // feeHistoryNext returns the newest block a fee history describes and the base fee it reports for the

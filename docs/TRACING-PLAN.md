@@ -219,7 +219,14 @@ no error status. The solver stage that submitted it treats any `NotAdmitted` res
 `rfq.order.submit`, `rfq.order`, `uniswapx.fill.complete` and `lifi.order.complete`; `redeem_not_admitted` on
 `3f.redeem.submit`) and no error status. `txmanager.account_poll` roots each account-poll tick; with the
 funding gate on it also covers the gate's fee-history and pinned balance reads, and its error status joins
-the gate's and the telemetry snapshot's failures.
+the gate's and the telemetry snapshot's failures. `txmanager.broadcast` records how the attempt was priced:
+`gas.estimate_mode` (`supplied`, `latest`, `next_block` or `fallback`), and when the balance guard or the
+horizon fee policy priced it `fee.next_base` (wei), `fee.horizon` (blocks the fee cap stays valid at the floor
+tip) and, with the guard, `balance.affordable` (wei per gas). Under `fees.policy: horizon`,
+`txmanager.block_overrides_probe` roots each check that the read endpoint honours `eth_estimateGas` block
+overrides (TXMANAGER-PLAN §4.3), at startup and every 10 minutes; an inconclusive probe ends with an error
+status. A quote's `MaxFeePerGas` opens no span of its own: its fee snapshot's RPC spans, when a read is needed
+at all, nest under the quoting span, and a read shared by concurrent quotes nests under the first of them.
 
 The worker stores the request's `solver`-stamped logger on every context of the lifecycle, the send
 span included, so `observability.Log(ctx)` puts `solver`, `label`, `trace_id` and `span_id` on every

@@ -237,7 +237,12 @@ exclusive obligations remain independently tracked through terminal reconciliati
   not ordinary sender occupancy; free capacity remains quotable.
 - **The request fee ceiling is protocol policy.** With gas accounting disabled, UniswapX supplies no
   request ceiling. With it enabled, `MaxFeePerGas` supplies the decision-time profitability ceiling
-  including one normal replacement. The manager owns [fee selection and headroom](TXMANAGER-PLAN.md#4-fees-replacements-and-cancellation).
+  including one normal replacement: under the legacy fee policy about `2.25·latest`, under `fees.policy: horizon`
+  `bump(fee(pricingHorizonBlocks, tip))`, about `1.80·pb + 1.125·tip` with the tip sized for
+  `balance.referenceGasUnits`, read from a cached per-poll fee snapshot so a quote costs no RPC; passed back as
+  the fill's `MaxFeePerGas`, it still fills after three blocks of maximum base-fee growth
+  ([TXMANAGER-PLAN §4.3](TXMANAGER-PLAN.md#43-horizon-fee-policy)). The manager owns
+  [fee selection and headroom](TXMANAGER-PLAN.md#4-fees-replacements-and-cancellation).
 - **Signed lifecycle ownership remains in txmanager.** UniswapX consumes its
   [nonce safety and terminal results](TXMANAGER-PLAN.md#6-rpc-routing-nonce-conflicts-and-restart),
   retaining its own quote/readiness gates while nonce ownership is uncertain.

@@ -398,6 +398,7 @@ txManager:
     congestedTipCapGwei: 15 # upper bound of the tip during runs of full blocks (horizon)
   gas:
     headroomBps: 500        # gas-limit headroom over the estimate; 800 is recommended on mainnet
+    nextBlockEstimate: true # horizon: estimate in the next block's context, falling back to latest + 10%
   balance:
     guard: true             # never sign an attempt the signer balance cannot fund
     referenceGasUnits: 0    # fill gas limit for quote pricing and the funding gate; 0 turns the gate off
@@ -435,6 +436,24 @@ then still sends up to a next base fee of about 20 gwei, and keeps the full lega
 lanes to about 0.036 ETH, topping up below half the target. `solver_bot_txmanager_account_required_balance_wei`
 exports the requirement at the latest guarded send (and on every account poll while the funding gate is on),
 and the startup `started` log line names the signer address; signers must be unique per deployment.
+
+**Horizon fee policy.** `fees.policy: horizon` (which requires `tipGwei: 0`) prices each new attempt from the
+node's next-block base fee `pb`: a max fee that stays valid for `fees.maxHorizonBlocks` (6) blocks of maximum
+base-fee growth, about `1.8·pb + tip` (the legacy price is `2·latest + tip`), clamped to the request cap and the
+balance guard, and a tip of `tipFloorGwei` (0.02) normally, `singleFullBlockTipGwei` (0.1) when one of the last
+two blocks had no room for the attempt's gas limit, and the recent median reward clamped to
+`congestedTipFloorGwei`–`congestedTipCapGwei` (0.2–15) in runs of full blocks. A request cap too low to keep the
+attempt valid for `minHorizonBlocks` fails as `fee limit reached`. Gas is estimated in the next block's context
+(`eth_estimateGas` with block overrides, plus `gas.headroomBps`), each estimate bounded by
+`gas.estimateTimeoutMs` (5000). The manager checks at startup and every 10 minutes that the read endpoints honour
+those overrides; until one check confirms it, or when an endpoint rejects or ignores them, it estimates at
+`latest` with `gas.fallbackHeadroomBps` (1000) instead, which
+`solver_bot_txmanager_gas_estimates_total{mode="fallback"}` makes visible (alert on any increase), and the `sent`
+log names the `estimateMode`. Quotes that price gas (`MaxFeePerGas`, UniswapX and LI.FI with `gas:`) are priced
+`fees.pricingHorizonBlocks` (5) blocks ahead, about `1.8·pb + 1.125·tip` against about `2.25·latest` under
+legacy, from a fee snapshot cached for the poll interval, so a quoted fill still sends after three blocks of
+maximum base-fee growth. For now a pending horizon attempt is still replaced on the `replacementIntervalMs`
+timer, as under legacy.
 
 <a id="txmanager-funding-gate"></a>**Funding gate.** With `balance.referenceGasUnits` set (RFQ 4350000,
 UniswapX and LI.FI 4400000), the tx manager also reports whether the signer balance funds a fill of that gas
