@@ -233,12 +233,9 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	if requiresTxManager {
 		solversDone = make(chan struct{})
 		drainMonitorDone = make(chan struct{})
-		// The finite shutdown budget covers solver preparation, one pending-timeout window, and one
-		// replacement interval. It bounds how long the process waits before stopping txmanager;
+		// The finite shutdown budget bounds how long the process waits before stopping txmanager;
 		// txmanager then applies its own configured lifecycle drain timeout.
-		shutdownTimeout := shutdownPreparationTimeout + time.Duration(
-			cfg.TxManager.PendingTimeoutMs+cfg.TxManager.ReplacementIntervalMs,
-		)*time.Millisecond
+		shutdownTimeout := transactionDrainBudget(cfg.TxManager, shutdownPreparationTimeout)
 		go func() {
 			defer close(drainMonitorDone)
 			monitorTransactionDrain(gctx.Done(), solversDone, shutdownTimeout, func() {
@@ -259,6 +256,18 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		}
 	}
 	return err
+}
+
+// transactionDrainBudget is how long shutdown waits for solvers to drain before it stops txmanager: solver
+// preparation, one pending-timeout window, and the time to the next pending decision after it. That is one
+// replacement interval under the legacy fee policy, and max(replacementInterval, blockTime) under the horizon
+// policy, whose pending decisions follow blocks while the replacement interval still paces its fallback.
+func transactionDrainBudget(c config.TxManagerConfig, preparation time.Duration) time.Duration {
+	next := c.ReplacementIntervalMs
+	if c.Fees.Policy == config.FeePolicyHorizon {
+		next = max(next, c.Fees.BlockTimeMs)
+	}
+	return preparation + time.Duration(c.PendingTimeoutMs+next)*time.Millisecond
 }
 
 // txManagerConfig maps the validated YAML block onto the manager's config. Every nested knob is

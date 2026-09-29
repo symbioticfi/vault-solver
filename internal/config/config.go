@@ -81,7 +81,9 @@ type TxManagerConfig struct {
 	BroadcastTimeoutMs int `yaml:"broadcastTimeoutMs"`
 	// AccountPollIntervalMs controls signer balance and nonce telemetry refresh cadence.
 	AccountPollIntervalMs int `yaml:"accountPollIntervalMs"`
-	// ReplacementIntervalMs is how often a pending transaction is fee-bumped.
+	// ReplacementIntervalMs is how often a pending transaction is fee-bumped under the legacy fee policy.
+	// Under the horizon policy pending attempts follow blocks, and it only paces the fallback bump while
+	// fee reads fail and sizes the shutdown budget.
 	ReplacementIntervalMs int `yaml:"replacementIntervalMs"`
 	// PendingTimeoutMs switches a still-pending call to a same-nonce cancellation.
 	PendingTimeoutMs int `yaml:"pendingTimeoutMs"`

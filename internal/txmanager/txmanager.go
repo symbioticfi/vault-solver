@@ -173,12 +173,18 @@ type pendingTransaction struct {
 	cancelOnce      sync.Once
 	// sendHead is the head the first attempt was priced at and sentAt when it was sent; inclusion delay
 	// and pending age are measured from them. Both are zero for a lifecycle built outside broadcast.
+	// sendSeen is the newest block the first attempt's fee snapshot knew of, the header or its fee history
+	// one block ahead: the horizon policy's pending evaluation counts only later blocks as missed.
 	sendHead uint64
+	sendSeen uint64
 	sentAt   time.Time
 	// balanceCapLogged keeps the balance-capped replacement log to once per lifecycle, and
 	// reservedCapLogged the log of a cancellation capped at the reserved balance.
 	balanceCapLogged  bool
 	reservedCapLogged bool
+	// reorged is the inclusion a reorg just removed, for the lifecycle loop to rebroadcast under the horizon
+	// policy (see pendingEvaluator.reorged); the loop clears it.
+	reorged *reorgedInclusion
 }
 
 type txAttempt struct {
@@ -1057,6 +1063,7 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 		originalHash: hash,
 		span:         sendSpan,
 		sendHead:     priced.snapshot.head,
+		sendSeen:     max(priced.snapshot.head, priced.snapshot.historyHead),
 		sentAt:       sentAt,
 	}, nil
 }
@@ -1313,29 +1320,38 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 	var receiptResults <-chan receiptRead
 	poll := time.NewTicker(m.cfg.PollInterval)
 	defer poll.Stop()
-	replace := time.NewTicker(m.cfg.ReplacementInterval)
+	replace := time.NewTicker(m.pendingTick())
 	defer replace.Stop()
 	timeout := time.NewTimer(max(time.Until(pending.cancelDeadline), 0))
 	defer timeout.Stop()
 
 	var replacementStarted time.Time
-	tryReplace := func(cancellation bool) bool {
+	replaceWith := func(cancellation bool, plan *replacementPlan) bool {
 		replacementStarted = time.Now()
-		replaceCtx, end := tracer.Start(ctx, "txmanager.replace",
-			observability.AttrTxAttempt.Int(len(pending.attempts)+1),
+		attrs := []attribute.KeyValue{
+			observability.AttrTxAttempt.Int(len(pending.attempts) + 1),
 			attribute.Bool("tx.cancellation", cancellation),
-		)
-		cancelling, err := m.tryReplace(replaceCtx, pending, cancellation)
+		}
+		if plan != nil {
+			attrs = append(attrs, attribute.String("tx.reprice_reason", plan.reason))
+		}
+		replaceCtx, end := tracer.Start(ctx, "txmanager.replace", attrs...)
+		cancelling, err := m.replace(replaceCtx, pending, cancellation, plan)
 		end(err)
 		return cancelling
 	}
+	tryReplace := func(cancellation bool) bool { return replaceWith(cancellation, nil) }
 	cancelling := false
 	var cancellationStarted time.Time
 	cancelRequested, timeoutC := pending.cancelRequested, timeout.C
+	// evaluator drives the lifecycle under the horizon policy (pending.go); nil under the legacy policy.
+	var evaluator *pendingEvaluator
 	startCancellation := func(reason string) {
 		if cancelling {
 			return
 		}
+		// A re-estimate still in flight decided about the call, which the cancellation now replaces.
+		evaluator.abandonEstimate()
 		cancellationStarted = time.Now()
 		if reason == "" {
 			select {
@@ -1357,6 +1373,20 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 			"deadline", pending.cancelDeadline.UTC().Format(time.RFC3339Nano),
 			"pendingTimeout", m.cfg.PendingTimeout.String(),
 		)
+	}
+	if m.cfg.Fees.Policy == FeePolicyHorizon {
+		evaluator = m.newPendingEvaluator(pending, pendingActions{
+			replace: func(cancellation bool, plan *replacementPlan) {
+				if replaceWith(cancellation, plan) {
+					startCancellation("")
+				}
+			},
+			cancel: func(reason string) {
+				startCancellation(reason)
+				tryReplace(true)
+			},
+		})
+		defer evaluator.abandonEstimate()
 	}
 	for {
 		// New variants arriving between sweeps also get an immediate priority read.
@@ -1387,6 +1417,12 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 				}
 				// A reorg or an untrusted receipt keeps ownership and resumes polling.
 				sweep = nil
+				if reorged := pending.reorged; reorged != nil {
+					pending.reorged = nil
+					if evaluator != nil {
+						evaluator.reorged(ctx, *reorged)
+					}
+				}
 			} else if sweep.nextIndex(pending) < 0 {
 				m.finishReceiptSweep(ctx, pending, sweep)
 				// Include superseded variants considered by the priority path.
@@ -1418,6 +1454,8 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 			} else if !pending.sentAt.IsZero() {
 				m.metrics.observePendingAge(pending.req.Label, false, time.Since(pending.sentAt))
 			}
+		case <-evaluator.estimated():
+			evaluator.finishEstimate(ctx, cancelling)
 		case tick := <-replace.C:
 			// A cancellation deadline may coincide with this tick. Do not send a
 			// second replacement for a tick already covered by that broadcast.
@@ -1426,6 +1464,9 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 			}
 			if !cancelling && pending.cancellationDue(time.Now()) {
 				startCancellation("")
+			} else if evaluator != nil {
+				evaluator.tick(ctx, cancelling)
+				continue
 			}
 			if tryReplace(cancelling) {
 				// A fee lookup can cross the deadline and promote this replacement to
@@ -1509,6 +1550,7 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 	confirmations := m.confirmations(pending.req)
 	receipt, err := m.waitForConfirmations(ctx, attempt.hash, receipt, confirmations)
 	if errors.Is(err, errReceiptReorged) {
+		pending.reorged = &reorgedInclusion{attempt: attempt, block: blockNumber(receipt.BlockNumber)}
 		pending.lifecycle.transitionPhase(lifecyclePhasePending)
 		if pending.nonceConflictHash != (common.Hash{}) {
 			m.markNonceConflict(pending.nonce, pending.nonceConflictHash)
@@ -1569,9 +1611,32 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 }
 
 // tryReplace reports whether cancellation mode was entered, even if submission fails, plus the
-// replacement failure for the calling span. Both are already logged.
+// replacement failure for the calling span. Both are already logged. It is the legacy policy's timed
+// replacement, and under either policy the first cancellation (see replace).
 func (m *Manager) tryReplace(
 	ctx context.Context, pending *pendingTransaction, cancellation bool,
+) (bool, error) {
+	return m.replace(ctx, pending, cancellation, nil)
+}
+
+// replacementPlan is a replacement the horizon policy's pending evaluation decided (strategy §2.7): the fee
+// snapshot to price it from, the gas limit of a fill replacement, and why.
+type replacementPlan struct {
+	// snapshot prices the replacement with repriceFees or cancellationFees; nil prices it with the legacy
+	// cached bump, which is the fallback after evaluation reads failed.
+	snapshot     *feeSnapshot
+	gas          uint64 // fill gas limit; 0 keeps the pending one
+	reason       string // repricings_total reason
+	cancellation bool   // planned for the cancellation rather than the call
+}
+
+// replace signs and broadcasts the next same-nonce attempt, or rebroadcasts one, and reports whether
+// cancellation mode was entered (see tryReplace). Every path first checks the mined nonce. Without a plan a
+// call is replaced with the legacy cached bump, and a cancellation under the horizon policy is priced from a
+// fresh fee snapshot (the legacy bump when that read fails); a plan fixes the snapshot, the gas limit and
+// the reason. A cancellation deadline reached meanwhile promotes a call's replacement to cancellation.
+func (m *Manager) replace(
+	ctx context.Context, pending *pendingTransaction, cancellation bool, plan *replacementPlan,
 ) (bool, error) {
 	if m.hasNonceConflict(pending.nonce) {
 		return cancellation, nil
@@ -1583,13 +1648,9 @@ func (m *Manager) tryReplace(
 	if !cancellation && m.rebroadcastUncertainAttempt(ctx, pending) {
 		return false, nil
 	}
-	limit := m.normalFeeLimit(pending.req)
-	if cancellation {
-		limit = m.globalFeeLimit()
-	}
-	fees, err := m.replacementFees(ctx, pending, cancellation, limit)
+	fees, gas, err := m.replacementPricing(ctx, pending, cancellation, plan)
 	if !cancellation && pending.cancellationDue(time.Now()) {
-		return m.tryReplace(ctx, pending, true)
+		return m.replace(ctx, pending, true, plan)
 	}
 	if err != nil {
 		if errors.Is(err, errReplacementLimitReached) &&
@@ -1606,15 +1667,13 @@ func (m *Manager) tryReplace(
 	to := pending.req.To
 	data := pending.req.Data
 	value := pending.value
-	gas := pending.gas
 	if cancellation {
 		to = m.signer.Address()
 		data = nil
 		value = new(big.Int)
-		gas = cancellationGasLimit
 	}
 	if !cancellation && pending.cancellationDue(time.Now()) {
-		return m.tryReplace(ctx, pending, true)
+		return m.replace(ctx, pending, true, plan)
 	}
 	sendCtx, cancelSend := replacementBroadcastContext(ctx, pending, cancellation)
 	signed, sendErr := m.signAndSend(sendCtx, pending.nonce, to, data, value, gas, fees, true, cancellation)
@@ -1630,10 +1689,18 @@ func (m *Manager) tryReplace(
 	hash := signed.Hash()
 	broadcastUncertain := sendErr != nil && !isKnownTransactionError(sendErr)
 	pending.fees = cloneFeeQuote(fees)
+	if !cancellation {
+		pending.gas = gas
+	}
 	pending.attempts = append(pending.attempts, txAttempt{
 		hash: hash, tx: signed, cancellation: cancellation, exactRebroadcastPending: broadcastUncertain,
 	})
 	m.metrics.observeAttempt(pending.req.Label, cancellation, fees, gas)
+	reason := ""
+	if plan != nil && plan.cancellation == cancellation {
+		reason = plan.reason
+		m.metrics.repricing(pending.req.Label, reason)
+	}
 	if isNonceConsumedError(sendErr) {
 		pending.nonceConflictHash = hash
 		m.reconcileExistingLifecycleNonce(ctx, pending)
@@ -1662,37 +1729,144 @@ func (m *Manager) tryReplace(
 		kind = replacementKindCancellation
 	}
 	m.metrics.replacement(pending.req.Label, kind)
-	observability.Log(ctx).Info("pending transaction replaced",
+	fields := []any{
 		"label", pending.req.Label,
 		"hash", hash.Hex(),
 		"nonce", pending.nonce,
 		"cancellation", cancellation,
 		"maxFeePerGas", fees.maxFee.String(),
 		"maxPriorityFeePerGas", fees.tip.String(),
-	)
+	}
+	if reason != "" {
+		fields = append(fields, "reason", reason, "gasLimit", gas)
+	}
+	observability.Log(ctx).Info("pending transaction replaced", fields...)
 	return cancellation, nil
+}
+
+// replacementPricing prices the next same-nonce attempt and returns its fees and gas limit: 21000 for a
+// cancellation, the plan's for a planned fill replacement, the pending call's otherwise. A horizon snapshot
+// (see replacementSnapshot) prices it with repriceFees or cancellationFees; without one it is the legacy
+// cached bump of replacementFees.
+func (m *Manager) replacementPricing(
+	ctx context.Context, pending *pendingTransaction, cancellation bool, plan *replacementPlan,
+) (feeQuote, uint64, error) {
+	gas := pending.gas
+	switch {
+	case cancellation:
+		gas = cancellationGasLimit
+	case plan != nil && plan.gas > 0:
+		gas = plan.gas
+	}
+	limit := m.normalFeeLimit(pending.req)
+	if cancellation {
+		limit = m.globalFeeLimit()
+	}
+	snapshot := m.replacementSnapshot(ctx, pending, cancellation, plan)
+	if snapshot == nil {
+		fees, err := m.replacementFees(ctx, pending, cancellation, limit)
+		return fees, gas, err
+	}
+	fees, err := m.horizonReplacementFees(ctx, pending, cancellation, gas, limit, snapshot)
+	return fees, gas, err
+}
+
+// replacementSnapshot is the fee snapshot a horizon-policy replacement is priced from, or nil for the legacy
+// cached bump: the plan's snapshot; for an unplanned cancellation (the deadline, shutdown or Obsolete) a
+// fresh read; and nil under the legacy policy, for the fallback's planless plan, for an unplanned call
+// replacement, or when the cancellation's read fails, so the deadline cancel still fires.
+func (m *Manager) replacementSnapshot(
+	ctx context.Context, pending *pendingTransaction, cancellation bool, plan *replacementPlan,
+) *feeSnapshot {
+	switch {
+	case m.cfg.Fees.Policy != FeePolicyHorizon:
+		return nil
+	case plan != nil:
+		return plan.snapshot
+	case !cancellation:
+		return nil
+	}
+	snapshot, err := m.snapshots.get(ctx, 0)
+	if err != nil {
+		observability.Log(ctx).Info("cancellation fee snapshot unavailable; bumping the latest fees",
+			"label", pending.req.Label, "nonce", pending.nonce, "error", err.Error())
+		return nil
+	}
+	return snapshot
+}
+
+// horizonReplacementFees prices a same-nonce replacement under the horizon policy from snapshot: repriceFees
+// for the call at gas, cancellationFees for a cancellation (strategy §2.7, §2.8). With the balance guard on,
+// the fee cap is also bounded by the signer balance pinned to the snapshot's head (replacementFundedCap, so a
+// cancellation falls back to the balance its lifecycle reserved). When the balance or limit cannot fund the
+// bump, or the balance cannot be read for a call, the error wraps errReplacementLimitReached, which leads to
+// the capped exact rebroadcast, and "replacement capped" is logged once per lifecycle.
+func (m *Manager) horizonReplacementFees(
+	ctx context.Context, pending *pendingTransaction, cancellation bool, gas uint64, limit *big.Int, snapshot *feeSnapshot,
+) (feeQuote, error) {
+	value := pending.value
+	if cancellation {
+		value = new(big.Int)
+	}
+	required := bumpFee(pending.fees.maxFee)
+	var affordable *big.Int
+	source := fundedCapBalance
+	if m.guardEnabled() {
+		var err error
+		affordable, source, err = m.replacementFundedCap(ctx, pending, cancellation, gas, value,
+			func(ctx context.Context) (*big.Int, error) { return m.snapshotBalance(ctx, snapshot) })
+		if err != nil {
+			m.logReplacementCapped(ctx, pending, cancellation, source, nil, required, err)
+			return feeQuote{}, errors.Errorf("%w: signer balance unavailable: %w", errReplacementLimitReached, err)
+		}
+	}
+	var (
+		fees    feeQuote
+		binding feeBinding
+		err     error
+	)
+	if cancellation {
+		fees, binding, err = cancellationFees(pending.fees, snapshot, affordable, limit, m.horizon)
+	} else {
+		fees, binding, err = repriceFees(pending.fees, snapshot, gas, affordable, limit, m.horizon)
+	}
+	if errors.Is(err, errReplacementLimitReached) {
+		reason, capped := string(feeBindingCap), limit
+		if binding == feeBindingBalance {
+			reason, capped = source, affordable
+		}
+		m.logReplacementCapped(ctx, pending, cancellation, reason, capped, required, nil)
+	}
+	return fees, err
+}
+
+// snapshotBalance reads the signer balance pinned to a fee snapshot's head, as a new send pins it (strategy
+// §2.4): a snapshot trailing the next block by more than fees.maxHeadLagBlocks, or ending below the previous
+// inclusion block, has no usable pin and is ErrStaleHead.
+func (m *Manager) snapshotBalance(ctx context.Context, snapshot *feeSnapshot) (*big.Int, error) {
+	pin, err := m.snapshotPin(snapshot.header, snapshot.historyHead, snapshot.lag(time.Now(), m.cfg.Fees.BlockTime))
+	if err != nil {
+		return nil, errors.Errorf("%w: %w", ErrStaleHead, err)
+	}
+	return m.pinnedBalance(ctx, pin)
 }
 
 // rebroadcastUncertainAttempt gives a transport-ambiguous normal submission one exact-byte retry
 // before escalating its fees. It never appends a duplicate attempt or changes the cached fee state.
 func (m *Manager) rebroadcastUncertainAttempt(ctx context.Context, pending *pendingTransaction) bool {
-	now := time.Now()
-	if pending.cancellationDue(now) || !m.hasExactRebroadcastSlack(pending, now) {
-		return false
-	}
-	if len(pending.attempts) == 0 {
+	if !m.uncertainRebroadcastDue(pending, time.Now()) {
 		return false
 	}
 	attempt := &pending.attempts[len(pending.attempts)-1]
-	if attempt.cancellation || attempt.tx == nil || !attempt.exactRebroadcastPending {
-		return false
-	}
 	attempt.exactRebroadcastPending = false
 	err := m.sendSigned(ctx, attempt.tx, true, false)
 	known := isKnownTransactionError(err)
 	if isNonceConsumedError(err) {
 		pending.nonceConflictHash = attempt.hash
 		m.reconcileExistingLifecycleNonce(ctx, pending)
+	}
+	if err == nil || known {
+		m.metrics.rebroadcast(pending.req.Label, rebroadcastUncertain)
 	}
 	switch {
 	case err == nil:
@@ -1721,11 +1895,29 @@ func (m *Manager) rebroadcastUncertainAttempt(ctx context.Context, pending *pend
 	return true
 }
 
+// uncertainRebroadcastDue reports whether the latest attempt is a call whose broadcast was ambiguous and
+// that still has the slack for its one exact retry before the cancellation deadline.
+func (m *Manager) uncertainRebroadcastDue(pending *pendingTransaction, now time.Time) bool {
+	if len(pending.attempts) == 0 || pending.cancellationDue(now) || !m.hasExactRebroadcastSlack(pending, now) {
+		return false
+	}
+	latest := pending.attempts[len(pending.attempts)-1]
+	return !latest.cancellation && latest.tx != nil && latest.exactRebroadcastPending
+}
+
+// hasExactRebroadcastSlack reports whether an exact rebroadcast still leaves a broadcast and the next
+// decision before the cancellation deadline: BroadcastTimeout plus replacementInterval under the legacy
+// policy, whose next bump is a replacement interval away, and plus one block time under the horizon policy,
+// whose next decision comes with the next head (strategy §2.12 derived timeouts).
 func (m *Manager) hasExactRebroadcastSlack(pending *pendingTransaction, now time.Time) bool {
 	if pending.cancelDeadline.IsZero() {
 		return true
 	}
-	return pending.cancelDeadline.Sub(now) > m.cfg.BroadcastTimeout+m.cfg.ReplacementInterval
+	next := m.cfg.ReplacementInterval
+	if m.cfg.Fees.Policy == FeePolicyHorizon {
+		next = m.cfg.Fees.BlockTime
+	}
+	return pending.cancelDeadline.Sub(now) > m.cfg.BroadcastTimeout+next
 }
 
 func (m *Manager) rebroadcastLatestAttempt(
@@ -1752,6 +1944,7 @@ func (m *Manager) rebroadcastLatestAttempt(
 				"cancellation", cancellation,
 			)
 		} else {
+			m.metrics.rebroadcast(pending.req.Label, rebroadcastCapped)
 			observability.Log(ctx).Info("capped transaction rebroadcast",
 				"label", pending.req.Label,
 				"hash", attempt.hash.Hex(),
@@ -1797,7 +1990,7 @@ func (m *Manager) replacementFees(
 		gas, value = cancellationGasLimit, new(big.Int)
 	}
 	required := bumpFee(pending.fees.maxFee)
-	affordable, source, err := m.replacementFundedCap(ctx, pending, cancellation, gas, value)
+	affordable, source, err := m.replacementFundedCap(ctx, pending, cancellation, gas, value, m.currentHeadBalance)
 	if err != nil {
 		m.logReplacementCapped(ctx, pending, cancellation, source, nil, required, err)
 		return feeQuote{}, errors.Errorf("%w: signer balance unavailable: %w", errReplacementLimitReached, err)
@@ -1831,17 +2024,20 @@ const (
 )
 
 // replacementFundedCap is the largest fee cap a replacement at gas and value can be funded to, and where
-// it came from. It is normally the signer balance read at the current head. When that read fails, a
+// it came from. It is normally the signer balance readBalance reads at the current head: pinned to the
+// latest header under the legacy policy, to the evaluation's fee snapshot under the horizon policy. When
+// that read fails, a
 // cancellation falls back to the balance the lifecycle already reserved: every attempt was checked
 // against the signer balance when it was signed, and their shared nonce is not mined (the replacement
 // nonce check ran first), so that balance still holds the costliest of them. A cancellation must not
 // wait for a read endpoint to recover: it is what settles the nonce at the request's deadline.
 func (m *Manager) replacementFundedCap(
 	ctx context.Context, pending *pendingTransaction, cancellation bool, gas uint64, value *big.Int,
+	readBalance func(context.Context) (*big.Int, error),
 ) (*big.Int, string, error) {
-	affordable, err := m.replacementBalanceCap(ctx, gas, value)
+	balance, err := readBalance(ctx)
 	if err == nil {
-		return affordable, fundedCapBalance, nil
+		return affordableMaxFee(balance, value, gas), fundedCapBalance, nil
 	}
 	if !cancellation {
 		return nil, fundedCapBalanceUnavailable, err
@@ -2680,12 +2876,25 @@ func (m *Manager) cancellationDeadline(req Request) time.Time {
 	return deadline
 }
 
-func (m *Manager) feeReadTimeout() time.Duration {
-	return minPositiveDuration(maxFeeReadTimeout, m.cfg.ReplacementInterval/2)
+// pendingTick is the cadence of a pending lifecycle's replacement ticker, which also sets the read budgets
+// below: under the horizon policy it is blockTime/2, so every new head is evaluated within half a slot
+// (strategy §2.7, §2.12 derived timeouts); under the legacy policy it is replacementInterval, the fee-bump
+// cadence.
+func (m *Manager) pendingTick() time.Duration {
+	if m.cfg.Fees.Policy == FeePolicyHorizon {
+		return max(m.cfg.Fees.BlockTime/2, time.Millisecond)
+	}
+	return m.cfg.ReplacementInterval
 }
 
+// feeReadTimeout bounds one fee read: min(1s, tick/2).
+func (m *Manager) feeReadTimeout() time.Duration {
+	return minPositiveDuration(maxFeeReadTimeout, m.pendingTick()/2)
+}
+
+// receiptReadTimeout bounds one receipt, mined-nonce or obsolescence read: min(2s, tick/2).
 func (m *Manager) receiptReadTimeout() time.Duration {
-	return minPositiveDuration(maxReceiptReadTimeout, m.cfg.ReplacementInterval/2)
+	return minPositiveDuration(maxReceiptReadTimeout, m.pendingTick()/2)
 }
 
 func (m *Manager) broadcastTimeout() time.Duration {

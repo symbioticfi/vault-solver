@@ -2,6 +2,7 @@ package txmanager
 
 import (
 	"math/big"
+	"slices"
 
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/go-errors/errors"
@@ -163,26 +164,32 @@ const (
 // horizonPolicy is the horizon fee policy's configuration resolved to wei (strategy §2.3, §2.4). New
 // builds it once; the pure helpers below take it by value.
 type horizonPolicy struct {
-	minHorizon         uint64 // fees.minHorizonBlocks: the refusal floor's horizon
-	maxHorizon         uint64 // fees.maxHorizonBlocks: the horizon a send targets
-	pricingHorizon     uint64 // fees.pricingHorizonBlocks: the horizon quotes are priced at
-	rewardBlocks       uint64 // fees.congestedRewardBlocks: latest blocks a demand-run tip follows
-	tipFloor           *big.Int
-	singleFullBlockTip *big.Int
-	congestedTipFloor  *big.Int
-	congestedTipCap    *big.Int
+	minHorizon     uint64 // fees.minHorizonBlocks: the refusal floor's horizon
+	maxHorizon     uint64 // fees.maxHorizonBlocks: the horizon a send targets
+	pricingHorizon uint64 // fees.pricingHorizonBlocks: the horizon quotes are priced at
+	rewardBlocks   uint64 // fees.congestedRewardBlocks: latest blocks a demand-run tip follows
+	// escalateAfterFullMisses and stallAfterRoomyMisses are the pending evaluation's congestion and
+	// stall thresholds (fees.escalateAfterFullMisses, fees.stallAfterRoomyMisses).
+	escalateAfterFullMisses uint64
+	stallAfterRoomyMisses   uint64
+	tipFloor                *big.Int
+	singleFullBlockTip      *big.Int
+	congestedTipFloor       *big.Int
+	congestedTipCap         *big.Int
 }
 
 func newHorizonPolicy(fees FeeConfig) horizonPolicy {
 	return horizonPolicy{
-		minHorizon:         fees.MinHorizonBlocks,
-		maxHorizon:         fees.MaxHorizonBlocks,
-		pricingHorizon:     fees.PricingHorizonBlocks,
-		rewardBlocks:       fees.CongestedRewardBlocks,
-		tipFloor:           gweiToWei(fees.TipFloorGwei),
-		singleFullBlockTip: gweiToWei(fees.SingleFullBlockTipGwei),
-		congestedTipFloor:  gweiToWei(fees.CongestedTipFloorGwei),
-		congestedTipCap:    gweiToWei(fees.CongestedTipCapGwei),
+		minHorizon:              fees.MinHorizonBlocks,
+		maxHorizon:              fees.MaxHorizonBlocks,
+		pricingHorizon:          fees.PricingHorizonBlocks,
+		rewardBlocks:            fees.CongestedRewardBlocks,
+		escalateAfterFullMisses: fees.EscalateAfterFullMisses,
+		stallAfterRoomyMisses:   fees.StallAfterRoomyMisses,
+		tipFloor:                gweiToWei(fees.TipFloorGwei),
+		singleFullBlockTip:      gweiToWei(fees.SingleFullBlockTipGwei),
+		congestedTipFloor:       gweiToWei(fees.CongestedTipFloorGwei),
+		congestedTipCap:         gweiToWei(fees.CongestedTipCapGwei),
 	}
 }
 
@@ -320,37 +327,36 @@ func pricingFee(snapshot *feeSnapshot, lag, referenceGas uint64, limit *big.Int,
 
 // repriceFees prices a fee-changing same-nonce replacement of a pending call under the horizon policy
 // (strategy §2.7): tip' = max(bump(tip), tipRule(gas)) and maxFee' = max(bump(maxFee), fee(maxHorizon,
-// tip')), capped at limit (normalFeeLimit of the request; nil is unbounded) and, with a balance, at
-// floor((balance − value) / gas). When the cap cannot fund the required 12.5% bump of both fields, or
-// the full tip over the snapshot's next base fee, nothing is signed: the error wraps
-// errReplacementLimitReached, which leads to the capped exact rebroadcast, and the binding says whether
-// the balance or the limit stopped it.
+// tip')), capped at limit (normalFeeLimit of the request; nil is unbounded) and at affordable, the fee cap
+// the signer balance funds at this gas limit and value (nil with the balance guard off). When the cap
+// cannot fund the required 12.5% bump of both fields, or the full tip over the snapshot's next base fee,
+// nothing is signed: the error wraps errReplacementLimitReached, which leads to the capped exact
+// rebroadcast, and the binding says whether the balance or the limit stopped it.
 func repriceFees(
-	previous feeQuote, snapshot *feeSnapshot, gas uint64, balance, value, limit *big.Int, policy horizonPolicy,
+	previous feeQuote, snapshot *feeSnapshot, gas uint64, affordable, limit *big.Int, policy horizonPolicy,
 ) (feeQuote, feeBinding, error) {
 	tip := maxBigCopy(bumpFee(previous.tip), tipRule(snapshot, gas, policy))
 	target := horizonFee(snapshot.nextBase, policy.maxHorizon, tip)
-	return cappedReplacement(previous, snapshot.nextBase, tip, target, gas, balance, value, limit)
+	return cappedReplacement(previous, snapshot.nextBase, tip, target, affordable, limit)
 }
 
 // cancellationFees prices a same-nonce cancellation, a 21000-gas zero-value self-transfer, under the
 // horizon policy (strategy §2.8): tipC = max(bump(tip), tipRule(21000)) and maxFeeC = max(bump(maxFee),
 // fee(minHorizon + 1, tipC)), one block beyond the refusal floor, capped at limit (the global fee limit;
-// nil is unbounded) and, with a balance, at floor(balance / 21000). It refuses as repriceFees does.
+// nil is unbounded) and at affordable, the fee cap the signer balance funds over 21000 gas (nil with the
+// balance guard off). It refuses as repriceFees does.
 func cancellationFees(
-	previous feeQuote, snapshot *feeSnapshot, balance, limit *big.Int, policy horizonPolicy,
+	previous feeQuote, snapshot *feeSnapshot, affordable, limit *big.Int, policy horizonPolicy,
 ) (feeQuote, feeBinding, error) {
 	tip := maxBigCopy(bumpFee(previous.tip), tipRule(snapshot, cancellationGasLimit, policy))
 	target := horizonFee(snapshot.nextBase, policy.minHorizon+1, tip)
-	return cappedReplacement(previous, snapshot.nextBase, tip, target, cancellationGasLimit, balance, new(big.Int), limit)
+	return cappedReplacement(previous, snapshot.nextBase, tip, target, affordable, limit)
 }
 
 // cappedReplacement completes repriceFees and cancellationFees: maxFee = max(bump(previous maxFee),
-// target) under limit and the balance, refused when the cap is below the bump or leaves less than tip over
+// target) under limit and affordable, refused when the cap is below the bump or leaves less than tip over
 // nextBase.
-func cappedReplacement(
-	previous feeQuote, nextBase, tip, target *big.Int, gas uint64, balance, value, limit *big.Int,
-) (feeQuote, feeBinding, error) {
+func cappedReplacement(previous feeQuote, nextBase, tip, target, affordable, limit *big.Int) (feeQuote, feeBinding, error) {
 	required := bumpFee(previous.maxFee)
 	maxFee := maxBigCopy(required, target)
 	binding := feeBindingTarget
@@ -358,11 +364,9 @@ func cappedReplacement(
 		maxFee.Set(limit)
 		binding = feeBindingCap
 	}
-	if balance != nil {
-		if affordable := affordableMaxFee(balance, value, gas); affordable.Cmp(maxFee) < 0 {
-			maxFee.Set(affordable)
-			binding = feeBindingBalance
-		}
+	if affordable != nil && affordable.Cmp(maxFee) < 0 {
+		maxFee.Set(affordable)
+		binding = feeBindingBalance
 	}
 	if maxFee.Cmp(required) < 0 {
 		return feeQuote{}, binding, errors.Errorf(
@@ -377,6 +381,98 @@ func cappedReplacement(
 		)
 	}
 	return feeQuote{baseFee: new(big.Int).Set(nextBase), tip: new(big.Int).Set(tip), maxFee: maxFee}, binding, nil
+}
+
+// pendingAction is what the evaluation of a pending attempt at a new head decides (strategy §2.7).
+type pendingAction int
+
+const (
+	// pendingHold waits: a pending attempt pays gasUsed × (base + tip) whenever it lands, so waiting is free.
+	pendingHold pendingAction = iota
+	// pendingReprice signs a fee-changing replacement for the decision's reason.
+	pendingReprice
+	// pendingStall answers a stall: a fill is re-estimated first (a revert cancels it, a larger estimate
+	// replaces its gas limit), and otherwise its exact bytes are rebroadcast.
+	pendingStall
+)
+
+// Reasons of a fee-changing replacement: the values of repricings_total{reason} and of the reason of the
+// "pending transaction replaced" log.
+const (
+	repriceValidity   = "validity"   // the attempt would be invalid within fees.minHorizonBlocks blocks
+	repriceCongestion = "congestion" // it missed fees.escalateAfterFullMisses full blocks and the tip rule rose
+	repriceStall      = "stall"      // it kept missing blocks with room after its exact rebroadcasts
+	repriceGas        = "gas"        // a stall re-estimate exceeds its gas limit
+	repriceFallback   = "fallback"   // evaluation reads failed for replacementIntervalMs: the legacy cached bump
+)
+
+// stallRebroadcastsBeforeReprice is how many exact rebroadcasts answer the stall trigger before the next
+// one reprices instead (strategy §2.7 rule 4): a relay may have dropped the hash while it still
+// deduplicates it, so only a new hash reaches builders again. It is part of the rule, not a tuning knob.
+const stallRebroadcastsBeforeReprice = 2
+
+// pendingInput is the latest signed attempt of a pending lifecycle, as evaluatePending judges it.
+type pendingInput struct {
+	fees         feeQuote // the attempt's fees
+	gas          uint64   // its gas limit: the fill's, or 21000 for a cancellation
+	sentAt       uint64   // head it was sent at: every later block is one it missed
+	stallBase    uint64   // head since which roomy misses count: sentAt, or its latest stall rebroadcast
+	rebroadcasts int      // stall rebroadcasts of the attempt so far
+	lag          uint64   // blocks the snapshot trails the real next block
+}
+
+// pendingDecision is the evaluation of one pending attempt against one fee snapshot.
+type pendingDecision struct {
+	action pendingAction
+	reason string // for pendingReprice: repriceValidity, repriceCongestion or repriceStall
+	// fullMisses is the run of latest blocks since the send that had no room for the attempt's gas limit
+	// while it was valid there, and roomyMisses the blocks since stallBase that had room and a base fee
+	// the attempt covered, yet did not include it.
+	fullMisses, roomyMisses uint64
+	floor                   *big.Int // fee(minHorizon + lag, tipFloor): below it the attempt is repriced
+}
+
+// evaluatePending applies the rules of strategy §2.7 to the latest attempt of a pending lifecycle at the
+// newest block of snapshot, first match wins (the deadline rule is the lifecycle loop's):
+//
+//  1. validity: maxFee < fee(minHorizon + lag, tipFloor), so it may be invalid within minHorizon blocks,
+//     reprices;
+//  2. congestion: the latest escalateAfterFullMisses blocks since the send all lacked room for its gas
+//     limit while it was valid there, and the tip rule is at least bump(tip), reprices;
+//  3. stall: at least stallAfterRoomyMisses blocks since stallBase had room and a base fee it covered: the
+//     stall response, or a reprice once stallRebroadcastsBeforeReprice rebroadcasts did not land it;
+//  4. otherwise hold.
+//
+// It is pure and stateless: every input comes from the attempt and one fee history, which also covers heads
+// the caller skipped. A block counts as valid when its base fee is at most the attempt's fee cap, and room is
+// measured, as the tip rule measures it, against the latest header's gas limit.
+func evaluatePending(in pendingInput, snapshot *feeSnapshot, policy horizonPolicy) pendingDecision {
+	decision := pendingDecision{floor: horizonFee(snapshot.nextBase, policy.minHorizon+in.lag, policy.tipFloor)}
+	gasLimit := snapshot.header.GasLimit
+	valid := func(block feeBlock) bool { return in.fees.maxFee.Cmp(block.baseFee) >= 0 }
+	for _, block := range slices.Backward(snapshot.blocks) {
+		if block.number <= in.sentAt || !valid(block) || room(gasLimit, block.gasUsedRatio, in.gas) {
+			break
+		}
+		decision.fullMisses++
+	}
+	for _, block := range snapshot.blocks {
+		if block.number > in.stallBase && valid(block) && room(gasLimit, block.gasUsedRatio, in.gas) {
+			decision.roomyMisses++
+		}
+	}
+	switch {
+	case in.fees.maxFee.Cmp(decision.floor) < 0:
+		decision.action, decision.reason = pendingReprice, repriceValidity
+	case decision.fullMisses >= policy.escalateAfterFullMisses &&
+		tipRule(snapshot, in.gas, policy).Cmp(bumpFee(in.fees.tip)) >= 0:
+		decision.action, decision.reason = pendingReprice, repriceCongestion
+	case decision.roomyMisses >= policy.stallAfterRoomyMisses && in.rebroadcasts >= stallRebroadcastsBeforeReprice:
+		decision.action, decision.reason = pendingReprice, repriceStall
+	case decision.roomyMisses >= policy.stallAfterRoomyMisses:
+		decision.action = pendingStall
+	}
+	return decision
 }
 
 // clampBig returns value limited to [low, high], as a fresh copy.

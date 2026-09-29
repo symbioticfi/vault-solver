@@ -58,7 +58,7 @@ The public YAML block is `txManager`. Values below are application defaults, aft
 | `tipGwei` | 0 | Positive mandatory priority-fee floor; zero selects fee-history pricing. |
 | `broadcastTimeoutMs` | 5000 | Independent timeout of each submission RPC. |
 | `accountPollIntervalMs` | 30000 | Complete sender balance/nonce telemetry and funding-gate (§4.2) refresh cadence; 12000 on mainnet with the gate on. |
-| `replacementIntervalMs` | 30000 | Pending replacement/rebroadcast cadence. |
+| `replacementIntervalMs` | 30000 | Pending replacement/rebroadcast cadence under `fees.policy: legacy`; under `horizon` only the fallback cadence when evaluation reads fail, and the shutdown budget (§4.4, §7). |
 | `pendingTimeoutMs` | 300000 | Switch an unresolved call to cancellation; must be at least the replacement interval. |
 | `shutdownTimeoutMs` | 60000 | Hard bound on manager drain after shutdown begins. |
 
@@ -106,8 +106,12 @@ Bounds beyond the strategy's list (fallback headroom and hysteresis at 100%, the
 (0, 100], at most 1024 reward blocks as eth_feeHistory serves) only reject nonsensical values.
 
 Polling defaults to 2 seconds in the Go manager; it is not a separate YAML field. Pending receipt reads,
-replacement nonce reads and obsolescence checks each use `min(2 seconds, replacementInterval/2)`; fee reads use
-`min(1 second, replacementInterval/2)`. These internal read budgets are separate from broadcast timeout.
+replacement nonce reads and obsolescence checks each use `min(2 seconds, tick/2)`; fee reads use
+`min(1 second, tick/2)`, where the tick is the pending lifecycle's replacement ticker: `replacementInterval`
+under the legacy policy and `fees.blockTimeMs/2` under horizon (strategy §2.12 derived timeouts; 1 s and 2 s at
+12-second blocks). These internal read budgets are separate from broadcast timeout. The exact retry of an
+ambiguous broadcast needs `broadcastTimeout + replacementInterval` (35 s on RFQ) before the cancellation deadline
+under legacy and `broadcastTimeout + blockTime` (17 s) under horizon, whose next decision is one block away.
 Account refresh uses a 5-second context. Backends must honor cancellation.
 With the balance guard on (§4.1), a new send waits out a stale fee snapshot for at most two
 `fees.blockTimeMs` (bounded by `CancelAt`), polling every `min(pollInterval, blockTime/4)`, and retries a
@@ -304,8 +308,8 @@ read among concurrent callers (`singleflight`), detached from any one caller's c
 fee-read budget. Quotes reuse a snapshot read less than `pollInterval` ago. A send always reads its own,
 joining a read already in flight (strategy §2.5 step 1): a cached snapshot can trail the head by a block inside
 the poll interval, and its next-block estimate would then run on top of a block that is already mined and miss
-that block's state, such as a same-vault fill. Goroutine model: the worker, quote goroutines and, later, the
-lifecycle goroutine and the shadow evaluator read; the goroutine running the shared read is the only writer,
+that block's state, such as a same-vault fill. Goroutine model: the worker, quote goroutines, the lifecycle
+goroutine (§4.4) and, later, the shadow evaluator read; the goroutine running the shared read is the only writer,
 under the cache mutex, and a stored snapshot is immutable.
 
 **Tip rule** (`tipRule`, per gas limit `G`). A block has room when `header.gasLimit × (1 − gasUsedRatio) ≥ G`,
@@ -365,13 +369,76 @@ startup and every 10 minutes, one minute after an inconclusive one, as the root 
 `txmanager.block_overrides_probe`; verdict changes are logged at Info, an inconclusive run like a failed read
 (Info, then Error after five minutes). A backend without the capability logs one startup line.
 
-The replacement cap functions of strategy §2.7 and §2.8 are implemented and table-tested
-(`repriceFees`: `tip' = max(bump(tip), tipRule(G))`, `maxFee' = max(bump(maxFee), fee(maxHorizonBlocks, tip'))`;
-`cancellationFees`: `max(bump(tip), tipRule(21000))` and `max(bump(maxFee), fee(minHorizonBlocks + 1, tip))`, one
-block beyond the refusal floor where the strategy writes a constant 3; both capped at the request or global limit
-and the balance, and not signed below the bump or without room for the tip over `pb`). Until the block-driven
-pending evaluation (strategy §2.7) is wired to them, a pending horizon attempt is still replaced on the legacy
-timer path of §4, with the balance cap of §4.1.
+A pending horizon attempt is not replaced on the §4 timer; §4.4 describes how it is driven.
+
+### 4.4 Horizon pending evaluation
+
+Under horizon the lifecycle loop ([pending.go](../internal/txmanager/pending.go)) replaces timed bumps with
+block evidence (strategy §2.7, §2.8). Its replacement ticker fires every `fees.blockTimeMs/2`. Each tick runs, in
+order: nothing while a re-estimate is in flight or the nonce is in conflict; the first cancellation again while
+cancellation is due and none is signed yet (rule 1: `CancelAt`, `pendingTimeout`, shutdown and `Obsolete` keep
+starting cancellation exactly as under legacy); the one exact retry of an ambiguous broadcast (§4); otherwise the
+span `txmanager.evaluate`, which reads one fee snapshot (§4.3; the shared snapshot while its six blocks cover the
+blocks since the latest send or stall rebroadcast plus 3, a longer `eth_feeHistory` otherwise) and decides only
+at a new head. Heads are monotonic: the loop keeps the newest head any read reported (`maxSeenHead`) and ignores a
+read below it (a lagging eRPC upstream) or one whose fee history did not advance; a head trailing the next block
+by more than `maxHeadLagBlocks` holds. The decision, `evaluatePending` in [fees.go](../internal/txmanager/fees.go),
+is pure and stateless: from the latest attempt's fees and gas limit, the head it was sent at, and one fee history
+it judges every block since, which also covers skipped heads. A block is valid for the attempt when its base fee
+is at most the attempt's fee cap, and has room when `header.gasLimit × (1 − gasUsedRatio) ≥ G`. First match wins,
+and at most one fee-changing send follows a head:
+
+| # | Trigger | Action |
+|---|---|---|
+| 2 | `maxFee < fee(minHorizonBlocks + lag, tipFloor)`: it may be invalid within `minHorizonBlocks` blocks | reprice, reason `validity` |
+| 3 | the latest `escalateAfterFullMisses` blocks since the send all lacked room while it was valid, and `tipRule(G) ≥ bump(tip)` | reprice, reason `congestion` |
+| 4 | at least `stallAfterRoomyMisses` valid blocks with room since the send or the latest stall rebroadcast | stall response; the stall after two stall rebroadcasts reprices instead, reason `stall` |
+| 5 | otherwise | hold: waiting is free, since an attempt pays `gasUsed × (base + tip)` whenever it lands |
+
+A reprice uses `repriceFees` (§4.3) on the evaluation's snapshot: `tip' = max(bump(tip), tipRule(G'))`,
+`maxFee' = max(bump(maxFee), fee(maxHorizonBlocks, tip'))`, capped at `normalFeeLimit(req)` and at the signer
+balance pinned to the snapshot's head (`floor((B' − value) / G')`). A cancellation uses `cancellationFees`:
+`max(bump(tip), tipRule(21000))` and `max(bump(maxFee), fee(minHorizonBlocks + 1, tip))`, one block beyond the
+refusal floor where the strategy writes a constant 3, capped at the global limit and `B'/21000`; the first
+cancellation (deadline, shutdown, `Obsolete`, simulated revert) is priced the same way from a fresh snapshot, or
+with the legacy cached bump when that read fails, so the deadline cancel always fires. When the cap cannot fund the
+12.5% bump of both fields or the tip over `pb`, nothing new is signed: the §4 capped exact rebroadcast runs and
+"replacement capped" is logged once per lifecycle with reason `cap`, `balance`, `reserved_balance` or
+`balance_unavailable` (a cancellation still falls back to the balance its lifecycle reserved, §4.1). Every send
+and rebroadcast is preceded by the mined-nonce check of §6.
+
+A reprice or stall of the call re-estimates its gas first, in the next block's context on top of the snapshot's
+header (§4.3 modes and headroom), bounded by `gas.estimateTimeoutMs` and run on its own goroutine, off the tick, so
+receipts, deadlines and shutdown are served meanwhile; no evaluation runs until it returns, and cancellation drops
+it. Then (strategy §2.2.6):
+
+- a revert (`chain.IsExecutionReverted`) runs the mined-nonce check; a free nonce starts cancellation with reason
+  `simulated_revert`, since repricing a call that cannot succeed only holds the lane (a competitor fill), while a
+  mined nonce is normally our own call landing and its receipt ends the lifecycle;
+- a stall whose raw estimate exceeds the gas limit `G` signs a balance-checked gas-limit replacement at
+  `G' = estimate + headroom` and bumped fees, reason `gas`: its whole headroom is gone, which estimate noise (at
+  most about 1%) does not explain, usually because a fill on the same vault landed first;
+- any other stall rebroadcasts the latest attempt's exact bytes to the endpoint it used ("already known" counts as
+  sent), within the ambiguous-broadcast slack above, and restarts the roomy-miss count from the current head;
+- a reprice signs at `G' = max(G, estimate + headroom)`;
+- an estimate that fails otherwise tells nothing: a stall rebroadcasts and a reprice keeps `G`.
+
+A request that supplied its gas limit, and a pending cancellation, are not re-estimated: a cancellation's stall
+rebroadcasts it and its reprices follow the same table, which keeps it live without a bump per interval.
+
+Other rules. A new attempt, by any path, restarts the counts at the newest head seen. When a reorg removes an
+included attempt's receipt (§5), the counts restart at `max(maxSeenHead, its block)`, so the blocks it was included
+in are not misses, and its exact bytes are rebroadcast at once to the endpoint it used (a private relay may have
+dropped a transaction it saw included). When evaluation reads fail for at least `replacementIntervalMs`, the §4
+cached bump (fresh fees when they can be read, balance-capped) replaces the latest attempt once per replacement
+interval, reason `fallback`, until a read succeeds; the run of failures is logged at Info when it starts and ends
+and at Error after five minutes.
+
+The strategy is inconsistent about the stall cadence: its rule table (§2.7) reprices "after 2 such
+rebroadcasts", while its cancellation summary (§2.8) says "a minimal bump after 6" roomy misses. The table is
+implemented, for calls and cancellations alike: exact rebroadcasts at 3 and 6 roomy misses, the reprice at 9
+(`stallRebroadcastsBeforeReprice`). Its "minimal reprice" is the reprice formula above; with blocks that had room
+the tip rule gives the floor, so it is the 12.5% bump unless the base fee rose.
 
 ## 5. Receipt polling and confirmation
 
@@ -397,6 +464,9 @@ Deadline and shutdown cancellation remain independent of receipt progress. This 
 receipt/status race but cannot make separate on-chain reads atomic; exact-hash reconciliation is retained.
 Invalid receipts are separately rejected: receipt/block number must exist, transaction hash must match,
 and block hash must be nonzero.
+
+Under the horizon policy a reorg that returns the lifecycle to pending also restarts its miss counts and
+rebroadcasts the included attempt's exact bytes at once (§4.4).
 
 Only the owner accepts a receipt candidate and begins confirmation; the reader is idle during that wait.
 Confirmation uses a stable head and hash-addressed parent ancestry to prove that the receipt belongs to
@@ -502,7 +572,9 @@ accepted work. Manager shutdown closes admission and requests active same-nonce 
 ownership is not conflicted. It drains for at most `shutdownTimeoutMs`, then cancels lifecycle RPCs and
 delivers the shutdown-deadline error so process teardown can proceed. This does not guarantee mining or
 confirmation before exit. Configure orchestrator grace for solver preparation/drain plus manager drain;
-see the composition in [run.go](../cmd/vault-solver/run.go).
+see the composition in [run.go](../cmd/vault-solver/run.go). The process waits for solvers for their preparation
+timeout plus `pendingTimeoutMs` plus the time to the next pending decision, `replacementIntervalMs` under legacy
+and `max(replacementIntervalMs, blockTimeMs)` under horizon (`transactionDrainBudget`), before it stops txmanager.
 
 Every lifecycle exit cancels and joins its receipt reader, including one blocked delivering a result.
 The manager hard stop can return before an uncooperative backend exits; worker teardown relies on RPC
@@ -521,7 +593,9 @@ Each request runs under a `txmanager.send <label>` span opened in `sendAsync` fr
 context, so it is a child of the submitting fill span and covers the admission wait as well as the
 broadcast. The worker carries that span on its own contexts, so it survives the manager's deliberate
 detachment from the caller, and ends it with the terminal `tx.outcome` before the result is delivered.
-Children are `txmanager.broadcast` and one `txmanager.replace` per replacement; account polls root
+Children are `txmanager.broadcast`, one `txmanager.replace` per replacement (with `tx.reprice_reason` when the
+horizon evaluation or its fallback planned it) and, under horizon, one `txmanager.evaluate` per evaluation tick
+(§4.4); account polls root
 `txmanager.account_poll`, and the horizon policy's capability probe roots `txmanager.block_overrides_probe`. The per-request logger is derived from the send span, so every lifecycle
 line carries `trace_id`. Spans, attributes, and the propagation rules are specified in
 [TRACING-PLAN](TRACING-PLAN.md) §3.4–§4.
@@ -540,6 +614,12 @@ before signing keeps what was read before the refusal (`fee.next_base`, `balance
 "started" line names the sender address, the fee policy and whether the guard runs.
 Guard refusals are declined, not failed, on the `txmanager.broadcast` and send spans
 (`decision=not_admitted`, `reason` as in `admission_rejections_total`).
+Under horizon, `pending transaction replaced` adds the `reason` and `gasLimit` of a planned replacement; a stall is
+logged at Info (`pending transaction stalled`, with the blocks since the send and the full and roomy misses), and
+so are its exact rebroadcasts and the reorg rebroadcast (`pending transaction rebroadcast`, `reason`; a failed one
+is retried by the next trigger and logged at Info), a re-estimate above the gas limit, a reverting re-estimate
+(`pending transaction re-estimate reverts; cancelling`, with the trigger), and the start and end of a run of
+failed evaluation reads; holds and repricing decisions are V(1).
 
 An active manager refreshes balance, latest nonce and pending nonce into one complete snapshot. Failed
 refreshes retain the previous snapshot; account gauges are absent before first success. A locked
@@ -569,7 +649,9 @@ Definitions: [metrics.go](../internal/txmanager/metrics.go),
 | Txmanager | `solver_bot_txmanager_attempt_tip_wei`, `_attempt_max_fee_wei`, `_attempt_gas_limit` | `label`, `kind` | Priority fee, fee cap and gas limit of the latest signed attempt, `fill` (initial send and replacements) or `cancellation`. |
 | Txmanager | `solver_bot_txmanager_attempt_horizon_blocks` | `label` | Histogram of the blocks, from the next one, an initial attempt's fee cap stays valid at the floor tip when the horizon policy or the guard priced it; below 3 with `balanceBound` in the `sent` log means the balance, not the policy, set it. |
 | Txmanager | `solver_bot_txmanager_fee_next_base_fee_wei` | — | Next block's base fee from the latest fee snapshot a send was priced or guarded at, or the latest account poll while the funding gate is on. |
-| Txmanager | `solver_bot_txmanager_gas_estimates_total` | `label`, `mode`, `outcome` | Gas estimates of new attempts: `mode` `latest` (legacy, or next-block estimates off), and under horizon `next_block`, `unconfirmed` (at latest before any conclusive capability probe: startup, or only inconclusive probes, which the probe logs itself) or `fallback` (at latest because the probe found the overrides rejected or ignored, a call rejected them, or the backend lacks the capability); `outcome` `ok`, `revert`, `unsupported` (overrides rejected, followed by a fallback), `block_not_found` (the pinned parent block never arrived within the budget; the send was refused as `stale_head`) or `error`. Any `fallback` under horizon means an upstream rejects or ignores block overrides; `unconfirmed` does not. Estimates a send abandoned before they returned (it failed first, or a newer header replaced them during the stale-head wait) are not counted. |
+| Txmanager | `solver_bot_txmanager_gas_estimates_total` | `label`, `mode`, `outcome` | Gas estimates of new attempts and of the horizon pending evaluation's re-estimates (§4.4): `mode` `latest` (legacy, or next-block estimates off), and under horizon `next_block`, `unconfirmed` (at latest before any conclusive capability probe: startup, or only inconclusive probes, which the probe logs itself) or `fallback` (at latest because the probe found the overrides rejected or ignored, a call rejected them, or the backend lacks the capability); `outcome` `ok`, `revert`, `unsupported` (overrides rejected, followed by a fallback), `block_not_found` (the pinned parent block never arrived within the budget; the send was refused as `stale_head`) or `error`. Any `fallback` under horizon means an upstream rejects or ignores block overrides; `unconfirmed` does not. Estimates a send abandoned before they returned (it failed first, or a newer header replaced them during the stale-head wait) are not counted. |
+| Txmanager | `solver_bot_txmanager_repricings_total` | `label`, `reason` | Fee-changing replacements the horizon pending evaluation signed (§4.4): `validity`, `congestion`, `stall`, `gas` (a stall re-estimate above the gas limit) or `fallback` (the timed cached bump after evaluation reads failed for `replacementIntervalMs`). Every reason starts at zero for each label that reaches the worker; repeated `stall` or any `gas` is the strategy's warning (silent drops, same-vault gas shifts). |
+| Txmanager | `solver_bot_txmanager_rebroadcasts_total` | `label`, `reason` | Exact rebroadcasts of signed bytes the endpoint accepted or already knew: `stall`, `reorg`, `uncertain` (an ambiguous broadcast's one retry, both policies) or `capped` (no fundable replacement under the cap, both policies). They sign nothing new, so a lifecycle landing on one still counts as `first_attempt_total{outcome="first"}` when on time. |
 | Txmanager | `solver_bot_txmanager_gas_estimate_duration_seconds` | `mode` | Duration of each gas estimate RPC; under horizon bounded by `gas.estimateTimeoutMs`, whose 5000 ms default is unmeasured through eRPC. |
 | Txmanager | `solver_bot_txmanager_account_required_balance_wei` | `horizon` | Balance a reference fill (`balance.referenceGasUnits`, or the latest attempt's gas limit while that is 0) needs at that base fee and the floor tip: `min` (`fees.minHorizonBlocks`, can still send), `quote` (`fees.pricingHorizonBlocks`) and `full` (`fees.maxHorizonBlocks`). |
 | Txmanager | `solver_bot_txmanager_account_fundable` | — | `1` while the lane funding gate (§4.2) is open, `0` while closed, including from startup until its first evaluation; absent while the gate is off (`balance.referenceGasUnits` 0). |
@@ -616,6 +698,11 @@ policy, next-block estimate and shadow evaluator ship in it):
 - **`Request.MaxFeeWei`.** An optional per-request ceiling on the worst-case total fee (`floor(MaxFeeWei / G)` per
   gas, refused below the floor as `fee_ceiling`), and its solver wiring: UniswapX and LI.FI from their Chainlink
   native price, RFQ from its discount margin converted to native units.
+- **Stall cadence.** The strategy's rule table (§2.7) reprices a stalled attempt after two exact rebroadcasts
+  (at 3, 6 and 9 roomy misses), which is implemented (§4.4); its cancellation summary (§2.8) says "a minimal bump
+  after 6". Confirm the intent with the strategy's owner, and revisit `stallRebroadcastsBeforeReprice` against
+  `rebroadcasts_total{reason="stall"}` and real stall outcomes; a relay that deduplicates a dropped hash is served
+  sooner by one rebroadcast.
 - **Flip the code default to `horizon`** once horizon shadow first@3 is at least legacy's and 99.5% over 7 days
   including a base fee above 3 gwei, and the pooled real lifecycles pass the success gate.
 - **Deploy charts** (vault-solver-deploy): add the new keys only after an image that knows them is live

@@ -39,6 +39,97 @@ func TestAnvilTxManagerPendingLifecycle(t *testing.T) {
 	t.Run("external inclusion stops silent relay cancellations", testAnvilConsumedNonce)
 	t.Run("unaffordable fill is never broadcast", testAnvilUnaffordableFill)
 	t.Run("horizon send estimates the next block", testAnvilHorizonSend)
+	t.Run("horizon stall rebroadcasts a dropped fill", testAnvilHorizonStall)
+	t.Run("horizon deadline cancellation settles the nonce", testAnvilHorizonCancellation)
+}
+
+// startAnvilHorizonManager starts a horizon-policy manager on one-second blocks against anvil through the
+// production chain client, and waits for the block overrides probe to reach a verdict.
+func startAnvilHorizonManager(t *testing.T, endpoint string) *Manager {
+	t.Helper()
+	client, err := chain.Dial(t.Context(), []string{endpoint}, "", "", "0xcA11bde05977b3631167028862bE2a173976CA11", 20*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	manager := New(client, anvilSigner(t), big.NewInt(31337), Config{
+		MaxFeeGwei:   100,
+		PollInterval: 20 * time.Millisecond,
+		Fees:         FeeConfig{Policy: FeePolicyHorizon, BlockTime: time.Second},
+	}, logr.Discard())
+	go manager.Start(t.Context())
+	deadline := time.Now().Add(10 * time.Second)
+	for manager.overrides.load() == blockOverridesUnknown {
+		if time.Now().After(deadline) {
+			t.Fatal("the block overrides probe reached no verdict against anvil")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return manager
+}
+
+// testAnvilHorizonStall drops a pending fill from anvil's pool, as a private relay can drop one silently, and
+// mines three empty blocks: the block-driven evaluation must see three missed blocks with room, re-estimate
+// the fill in the next block's context, and rebroadcast its exact bytes, which then land.
+func testAnvilHorizonStall(t *testing.T) {
+	rpcClient, _, endpoint := startAnvilWithoutMining(t)
+	manager := startAnvilHorizonManager(t, endpoint)
+	sgnr := anvilSigner(t)
+	mineAnvilBlock(t, rpcClient) // a fresh head for the send
+	result, accepted := manager.SendAsync(t.Context(), Request{
+		To: common.HexToAddress("0x000000000000000000000000000000000000dEaD"), Label: "stall",
+	})
+	if !accepted {
+		t.Fatal("transaction was not accepted")
+	}
+	sent := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(poolTransaction) bool { return true })
+	dropAnvilTransaction(t, rpcClient, sent.Hash)
+	for range 3 {
+		mineAnvilBlock(t, rpcClient)
+	}
+	rebroadcast := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(poolTransaction) bool { return true })
+	if !strings.EqualFold(rebroadcast.Hash, sent.Hash) {
+		t.Fatalf("stall response %s, want the exact bytes %s", rebroadcast.Hash, sent.Hash)
+	}
+	mineAnvilBlock(t, rpcClient)
+	got := waitForTxResult(t, result)
+	if got.Err != nil || !strings.EqualFold(got.Hash.Hex(), sent.Hash) {
+		t.Fatalf("stall result = %+v, want the rebroadcast fill %s", got, sent.Hash)
+	}
+}
+
+// testAnvilHorizonCancellation drops a pending fill and lets its deadline pass: the cancellation, priced from
+// a fee snapshot under the horizon policy, must settle the nonce.
+func testAnvilHorizonCancellation(t *testing.T) {
+	rpcClient, _, endpoint := startAnvilWithoutMining(t)
+	manager := startAnvilHorizonManager(t, endpoint)
+	sgnr := anvilSigner(t)
+	mineAnvilBlock(t, rpcClient)
+	result, accepted := manager.SendAsync(t.Context(), Request{
+		To:       common.HexToAddress("0x000000000000000000000000000000000000dEaD"),
+		GasLimit: 21_000,
+		CancelAt: time.Now().Add(time.Second),
+		Label:    "deadline",
+	})
+	if !accepted {
+		t.Fatal("transaction was not accepted")
+	}
+	initial := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(tx poolTransaction) bool {
+		return !strings.EqualFold(tx.To, sgnr.Address().Hex())
+	})
+	dropAnvilTransaction(t, rpcClient, initial.Hash)
+	cancellation := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(tx poolTransaction) bool {
+		return strings.EqualFold(tx.To, sgnr.Address().Hex()) && tx.Input == "0x" && tx.Value == "0x0"
+	})
+	if cancellation.Gas != "0x5208" || compareHexQuantity(cancellation.MaxFeePerGas, initial.MaxFeePerGas) <= 0 ||
+		compareHexQuantity(cancellation.MaxPriorityFeePerGas, initial.MaxPriorityFeePerGas) <= 0 {
+		t.Fatalf("cancellation gas %s max %s tip %s, want 21000 gas bumped over %s / %s", cancellation.Gas,
+			cancellation.MaxFeePerGas, cancellation.MaxPriorityFeePerGas, initial.MaxFeePerGas, initial.MaxPriorityFeePerGas)
+	}
+	mineAnvilBlock(t, rpcClient)
+	if got := waitForTxResult(t, result); got.Outcome != OutcomeCancelled {
+		t.Fatalf("deadline result = %+v, want cancelled", got)
+	}
 }
 
 // testAnvilHorizonSend sends one estimated call under the horizon policy through the production chain

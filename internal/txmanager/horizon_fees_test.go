@@ -357,7 +357,9 @@ func TestRepriceFees(t *testing.T) {
 			if blocks == nil {
 				blocks = []feeBlock{roomy(), roomy()}
 			}
-			fees, binding, err := repriceFees(previous, testSnapshot(tc.nextBase, blocks...), gas, tc.balance, new(big.Int), tc.limit, testPolicy())
+			fees, binding, err := repriceFees(
+				previous, testSnapshot(tc.nextBase, blocks...), gas, affordableOf(tc.balance, gas), tc.limit, testPolicy(),
+			)
 			if binding != tc.wantBinding {
 				t.Fatalf("binding = %q, want %q", binding, tc.wantBinding)
 			}
@@ -425,7 +427,9 @@ func TestCancellationFees(t *testing.T) {
 			if blocks == nil {
 				blocks = []feeBlock{roomy(), roomy()}
 			}
-			fees, binding, err := cancellationFees(previous, testSnapshot(tc.nextBase, blocks...), tc.balance, tc.limit, testPolicy())
+			fees, binding, err := cancellationFees(
+				previous, testSnapshot(tc.nextBase, blocks...), affordableOf(tc.balance, cancellationGasLimit), tc.limit, testPolicy(),
+			)
 			if binding != tc.wantBinding {
 				t.Fatalf("binding = %q, want %q", binding, tc.wantBinding)
 			}
@@ -443,4 +447,13 @@ func TestCancellationFees(t *testing.T) {
 			}
 		})
 	}
+}
+
+// affordableOf is the fee cap a zero-value attempt of gas gas can be funded to from balance; nil stays nil
+// (the balance guard off).
+func affordableOf(balance *big.Int, gas uint64) *big.Int {
+	if balance == nil {
+		return nil
+	}
+	return affordableMaxFee(balance, new(big.Int), gas)
 }

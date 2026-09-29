@@ -46,6 +46,12 @@ const (
 	// cancelled fills (strategy PR5, a TODO in docs/TXMANAGER-PLAN.md §10).
 	simulationUnknown = "unknown"
 
+	// Reasons of rebroadcasts_total: an exact rebroadcast of signed bytes, which signs nothing new.
+	rebroadcastStall     = "stall"     // a stalled attempt (strategy §2.7 rule 4)
+	rebroadcastReorg     = "reorg"     // an attempt whose inclusion a reorg removed
+	rebroadcastUncertain = "uncertain" // an attempt whose broadcast was ambiguous
+	rebroadcastCapped    = "capped"    // the latest attempt, when no replacement can be funded or fits the cap
+
 	requiredBalanceMin   = "min"
 	requiredBalanceQuote = "quote"
 	requiredBalanceFull  = "full"
@@ -98,6 +104,8 @@ type Metrics struct {
 	requiredBalance     *prometheus.GaugeVec
 	gasEstimates        *prometheus.CounterVec
 	gasEstimateDuration *prometheus.HistogramVec
+	repricings          *prometheus.CounterVec
+	rebroadcasts        *prometheus.CounterVec
 	account             *accountMetrics
 }
 
@@ -225,7 +233,7 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
 			Name:      "gas_estimates_total",
-			Help:      "Gas estimates of new attempts by mode (latest, next_block, or fallback when next-block estimates are unavailable) and outcome (ok, revert, unsupported, error).",
+			Help:      "Gas estimates of new attempts and horizon re-estimates of pending ones, by mode (latest, next_block, unconfirmed, or fallback when next-block estimates are unavailable) and outcome (ok, revert, unsupported, block_not_found, error).",
 		}, []string{"label", "mode", "outcome"}),
 		gasEstimateDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: metricsNamespace,
@@ -234,6 +242,18 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Help:      "Duration of one gas estimate RPC by mode, bounded by gas.estimateTimeoutMs under the horizon policy.",
 			Buckets:   []float64{0.05, 0.1, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 5, 10},
 		}, []string{"mode"}),
+		repricings: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricsNamespace,
+			Subsystem: metricsSubsystem,
+			Name:      "repricings_total",
+			Help:      "Fee-changing same-nonce replacements the horizon policy's pending evaluation signed, by reason: validity, congestion, stall, gas (a stall re-estimate above the gas limit) or fallback (the timed cached bump after evaluation reads failed).",
+		}, []string{"label", "reason"}),
+		rebroadcasts: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricsNamespace,
+			Subsystem: metricsSubsystem,
+			Name:      "rebroadcasts_total",
+			Help:      "Exact rebroadcasts of already signed attempts the endpoint accepted or already knew, by reason: stall, reorg, uncertain (an ambiguous broadcast) or capped (no fundable replacement under the cap).",
+		}, []string{"label", "reason"}),
 	}
 	for _, collector := range []prometheus.Collector{
 		m.requests,
@@ -256,6 +276,8 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 		m.requiredBalance,
 		m.gasEstimates,
 		m.gasEstimateDuration,
+		m.repricings,
+		m.rebroadcasts,
 		m.account,
 	} {
 		if err := reg.Register(collector); err != nil {
@@ -277,12 +299,25 @@ var guardRefusalReasons = [...]admissionRejectionReason{
 	admissionRejectionFeeCeiling,
 }
 
+// repricingReasons and rebroadcastReasons start at zero for every label that reaches the worker, like
+// guardRefusalReasons, so the first stall or gas repricing of a label is an increase the alerts see.
+var (
+	repricingReasons   = [...]string{repriceValidity, repriceCongestion, repriceStall, repriceGas, repriceFallback}
+	rebroadcastReasons = [...]string{rebroadcastStall, rebroadcastReorg, rebroadcastUncertain, rebroadcastCapped}
+)
+
 func (m *Metrics) beginLifecycle(label string) lifecycleObservation {
 	if m == nil {
 		return lifecycleObservation{}
 	}
 	for _, reason := range guardRefusalReasons {
 		m.admissionRejections.WithLabelValues(label, string(reason))
+	}
+	for _, reason := range repricingReasons {
+		m.repricings.WithLabelValues(label, reason)
+	}
+	for _, reason := range rebroadcastReasons {
+		m.rebroadcasts.WithLabelValues(label, reason)
 	}
 	m.inflight.WithLabelValues(label).Inc()
 	now := time.Now()
@@ -393,6 +428,20 @@ func classifyAdmissionRejection(err error) admissionRejectionReason {
 func (m *Metrics) replacement(label, kind string) {
 	if m != nil {
 		m.replacements.WithLabelValues(label, kind).Inc()
+	}
+}
+
+// repricing counts a fee-changing replacement signed for reason.
+func (m *Metrics) repricing(label, reason string) {
+	if m != nil {
+		m.repricings.WithLabelValues(label, reason).Inc()
+	}
+}
+
+// rebroadcast counts an exact rebroadcast of a signed attempt the endpoint accepted or already knew.
+func (m *Metrics) rebroadcast(label, reason string) {
+	if m != nil {
+		m.rebroadcasts.WithLabelValues(label, reason).Inc()
 	}
 }
 

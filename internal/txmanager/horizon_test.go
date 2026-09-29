@@ -31,9 +31,12 @@ type horizonBackend struct {
 	gasLimit      uint64
 	latestBase    *big.Int
 	nextBase      *big.Int
-	historyOffset []int64            // fee history's newest block minus the header's, per read; the last repeats
-	ratios        map[uint64]float64 // gas-used ratio by block; 0.5 by default
+	historyOffset []int64             // fee history's newest block minus the header's, per read; the last repeats
+	ratios        map[uint64]float64  // gas-used ratio by block; 0.5 by default
+	baseFees      map[uint64]*big.Int // base fee by block; latestBase by default
 	runRewards    map[uint64]*big.Int
+	historyErr    error    // returned by every fee history read while set
+	historyHeads  []uint64 // newest block of every fee history served
 	balance       *big.Int // nil: no pinned balance capability is exercised (reads fail)
 	balanceReads  []rpc.BlockNumberOrHash
 	historyReads  []feeHistoryRequest
@@ -62,6 +65,7 @@ func newHorizonBackend(balance *big.Int) *horizonBackend {
 		latestBase:   big.NewInt(1e9),
 		nextBase:     big.NewInt(1e9),
 		ratios:       map[uint64]float64{},
+		baseFees:     map[uint64]*big.Int{},
 		runRewards:   map[uint64]*big.Int{},
 		balance:      balance,
 		nextBlockGas: 100_000,
@@ -106,6 +110,9 @@ func (b *horizonBackend) FeeHistory(
 		request.newest = new(big.Int).Set(newest)
 	}
 	b.historyReads = append(b.historyReads, request)
+	if b.historyErr != nil {
+		return nil, b.historyErr
+	}
 	var offset int64
 	if len(b.historyOffset) > 0 {
 		offset = b.historyOffset[0]
@@ -114,13 +121,18 @@ func (b *horizonBackend) FeeHistory(
 		}
 	}
 	head := uint64(int64(b.number) + offset)
+	b.historyHeads = append(b.historyHeads, head)
 	history := &ethereum.FeeHistory{OldestBlock: new(big.Int).SetUint64(head - blockCount + 1)}
 	for number := head - blockCount + 1; number <= head; number++ {
 		ratio, ok := b.ratios[number]
 		if !ok {
 			ratio = 0.5
 		}
-		history.BaseFee = append(history.BaseFee, new(big.Int).Set(b.latestBase))
+		baseFee := b.latestBase
+		if fee, found := b.baseFees[number]; found {
+			baseFee = fee
+		}
+		history.BaseFee = append(history.BaseFee, new(big.Int).Set(baseFee))
 		history.GasUsedRatio = append(history.GasUsedRatio, ratio)
 		row := make([]*big.Int, len(percentiles))
 		for i, percentile := range percentiles {

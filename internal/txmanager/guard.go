@@ -334,10 +334,10 @@ func (m *Manager) hashPinFound(ctx context.Context, pin rpc.BlockNumberOrHash) {
 	}
 }
 
-// replacementBalanceCap is the largest fee cap the signer balance funds for a same-nonce replacement
-// with this gas limit and value, read at the current head pinned by hash as for a new send. The pending
-// attempt is not mined (the replacement nonce check ran first), so the balance still holds its funds.
-func (m *Manager) replacementBalanceCap(ctx context.Context, gas uint64, value *big.Int) (*big.Int, error) {
+// currentHeadBalance reads the signer balance at the current head, pinned by hash as for a new send, for
+// a legacy-policy same-nonce replacement. The pending attempt is not mined (the replacement nonce check ran
+// first), so the balance still holds its funds.
+func (m *Manager) currentHeadBalance(ctx context.Context) (*big.Int, error) {
 	headCtx, cancel := context.WithTimeout(ctx, m.feeReadTimeout())
 	head, err := m.backend.HeaderByNumber(headCtx, nil)
 	cancel()
@@ -350,11 +350,7 @@ func (m *Manager) replacementBalanceCap(ctx context.Context, gas uint64, value *
 	if last := m.lastInclusion.Load(); head.Number.Uint64() < last {
 		return nil, errors.Errorf("%w: head %d is below the previous inclusion block %d", ErrStaleHead, head.Number, last)
 	}
-	balance, err := m.pinnedBalance(ctx, rpc.BlockNumberOrHashWithHash(head.Hash(), true))
-	if err != nil {
-		return nil, err
-	}
-	return affordableMaxFee(balance, value, gas), nil
+	return m.pinnedBalance(ctx, rpc.BlockNumberOrHashWithHash(head.Hash(), true))
 }
 
 // noteInclusion raises the block every later balance pin must reach to a lifecycle's inclusion block.
@@ -368,10 +364,18 @@ func (m *Manager) noteInclusion(block uint64) {
 }
 
 func headerNumber(head *types.Header) uint64 {
-	if head == nil || head.Number == nil || !head.Number.IsUint64() {
+	if head == nil {
 		return 0
 	}
-	return head.Number.Uint64()
+	return blockNumber(head.Number)
+}
+
+// blockNumber is a block number as uint64, or zero when it is missing or does not fit.
+func blockNumber(number *big.Int) uint64 {
+	if number == nil || !number.IsUint64() {
+		return 0
+	}
+	return number.Uint64()
 }
 
 // sleepContext waits for d or until ctx ends, returning ctx's error in the latter case.

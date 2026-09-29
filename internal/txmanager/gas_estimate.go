@@ -105,13 +105,34 @@ func (m *Manager) callMsg(req Request) ethereum.CallMsg {
 }
 
 // estimateHorizonGas estimates a horizon-policy request's gas limit on top of head, the header its fees
-// are priced from. Only a next-block estimate the probe has confirmed is used with gas.headroomBps: until
-// the first conclusive probe (unconfirmed), and after one that found the overrides ignored (fallback), the
-// plain estimate with gas.fallbackHeadroomBps is used, since an upstream that ignores them answers with the
-// parent block's estimate. A per-call rejection of the overrides falls back the same way. A parent block
-// the node never served within the budget refuses the send with ErrStaleHead (NotAdmitted, logged by the
-// broadcast at Info); a revert or any other error fails it. Nothing is signed and the nonce is not consumed.
+// are priced from (see horizonEstimate), and adds the mode's headroom. A parent block the node never served
+// within the budget refuses the send with ErrStaleHead (NotAdmitted, logged by the broadcast at Info); a
+// revert or any other error is logged here and fails it. Nothing is signed and the nonce is not consumed.
 func (m *Manager) estimateHorizonGas(ctx context.Context, req Request, head *types.Header) (uint64, string, error) {
+	estimate, err := m.horizonEstimate(ctx, req, head)
+	switch {
+	case errors.Is(err, ErrStaleHead):
+		return 0, estimate.mode, errors.Errorf("estimate gas %q: %w", req.Label, err)
+	case err != nil:
+		return 0, estimate.mode, m.gasEstimateFailed(ctx, req, estimate.mode, err)
+	}
+	return m.gasLimit(req, estimate.gas, estimate.headroomBps, estimate.mode)
+}
+
+// horizonGasEstimate is one raw horizon-policy estimate, the headroom its mode adds, and the mode.
+type horizonGasEstimate struct {
+	gas, headroomBps uint64
+	mode             string
+}
+
+// horizonEstimate runs one horizon-policy estimate of req on top of head and returns the raw estimate, the
+// headroom its mode adds, and the mode (set on error too). Only a next-block estimate the probe has confirmed is used with
+// gas.headroomBps: until the first conclusive probe (unconfirmed), and after one that found the overrides
+// ignored (fallback), the plain estimate with gas.fallbackHeadroomBps is used, since an upstream that ignores
+// them answers with the parent block's estimate. A per-call rejection of the overrides falls back the same
+// way. A parent block the node never served within the budget is ErrStaleHead. It logs no failure: a new
+// send fails on one, while a pending lifecycle's re-estimate (strategy §2.7) decides what a revert means.
+func (m *Manager) horizonEstimate(ctx context.Context, req Request, head *types.Header) (horizonGasEstimate, error) {
 	msg := m.callMsg(req)
 	verdict := m.overrides.load()
 	if m.nextBlock != nil && verdict == blockOverridesSupported {
@@ -121,11 +142,9 @@ func (m *Manager) estimateHorizonGas(ctx context.Context, req Request, head *typ
 		})
 		switch {
 		case err == nil:
-			return m.gasLimit(req, gas, m.gasHeadroomBps(), estimateModeNextBlock)
-		case errors.Is(err, ErrStaleHead):
-			return 0, estimateModeNextBlock, errors.Errorf("estimate gas %q: %w", req.Label, err)
+			return horizonGasEstimate{gas: gas, headroomBps: m.gasHeadroomBps(), mode: estimateModeNextBlock}, nil
 		case !chain.IsBlockOverridesUnsupported(err):
-			return 0, estimateModeNextBlock, m.gasEstimateFailed(ctx, req, estimateModeNextBlock, err)
+			return horizonGasEstimate{mode: estimateModeNextBlock}, err
 		}
 		observability.Log(ctx).Info("next-block gas estimate rejected by the read endpoint; estimating at latest",
 			"label", req.Label, "error", err.Error())
@@ -141,9 +160,9 @@ func (m *Manager) estimateHorizonGas(ctx context.Context, req Request, head *typ
 		return m.backend.EstimateGas(ctx, msg)
 	})
 	if err != nil {
-		return 0, mode, m.gasEstimateFailed(ctx, req, mode, err)
+		return horizonGasEstimate{mode: mode}, err
 	}
-	return m.gasLimit(req, gas, headroom, mode)
+	return horizonGasEstimate{gas: gas, headroomBps: headroom, mode: mode}, nil
 }
 
 // nextBlockEstimate runs the next-block estimate on top of parent until ctx, the estimate's budget, ends.

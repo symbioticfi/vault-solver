@@ -20,8 +20,9 @@ import (
 // (computed by the node), and per block the gas used against the header's gas limit and the priority-fee
 // rewards the tip rule and the legacy rule follow.
 //
-// Goroutine model: the worker (initial sends), quote goroutines (MaxFeePerGas) and, later, the lifecycle
-// goroutine and the shadow evaluator read snapshots through feeSnapshotCache. The cache is the only writer:
+// Goroutine model: the worker (initial sends), quote goroutines (MaxFeePerGas), the lifecycle goroutine
+// (pending evaluation, pending.go) and, later, the shadow evaluator read snapshots through feeSnapshotCache;
+// a pending evaluation whose blocks the cached history does not cover reads a longer one of its own, uncached. The cache is the only writer:
 // the one goroutine running a shared read (singleflight) stores its result under the cache mutex. A stored
 // snapshot is immutable, so readers share it without copying and must not modify its fields.
 

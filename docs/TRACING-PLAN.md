@@ -205,7 +205,13 @@ survives the manager's deliberate detachment and covers admission → broadcast 
 
 Children: `txmanager.broadcast` (fee quote, gas estimate, nonce, sign, send — each RPC call becomes a
 grandchild automatically) and one `txmanager.replace` per replacement carrying `tx.attempt` and
-`tx.cancellation`. Receipt polls are ordinary RPC child spans. Attributes: `solver` (from
+`tx.cancellation`, plus `tx.reprice_reason` (`validity`, `congestion`, `stall`, `gas`, `fallback`) when the
+horizon policy's pending evaluation planned it. Under `fees.policy: horizon` each evaluation tick of a pending
+lifecycle (TXMANAGER-PLAN §4.4) is a `txmanager.evaluate` child carrying `tx.cancellation`, `fee.head` (the fee
+history's newest block), `pending.decision` (`hold`, `reprice`, `stall`, `no_new_head`, `stale_head` or
+`uncertain_rebroadcast`) and, once decided, `pending.reason`, `pending.full_misses` and `pending.roomy_misses`; a
+failed fee read ends it with an error status. Its snapshot read nests under it, and so does a re-estimate it starts,
+which runs past its end. Receipt polls are ordinary RPC child spans. Attributes: `solver` (from
 `Request.Solver`), `tx.label`, `tx.hash` and `tx.nonce` once known, and terminal `tx.outcome`; status
 is Error for `reverted`, `cancelled`, `cancelled_unconfirmed`, `submission_error` and `tracking_stopped`, and unset for
 `confirmed` and `included_unconfirmed`. The send span **ends before the result is delivered** to the
