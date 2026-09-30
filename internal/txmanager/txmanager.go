@@ -236,6 +236,7 @@ const (
 	defaultBroadcastTimeout    = 5 * time.Second
 	maxFeeReadTimeout          = time.Second
 	maxReceiptReadTimeout      = 2 * time.Second
+	maxGasEstimateTimeout      = 5 * time.Second
 	accountRefreshTimeout      = 5 * time.Second
 	replacementBumpNumerator   = 9
 	replacementBumpDenominator = 8
@@ -2092,6 +2093,10 @@ func (m *Manager) feeReadTimeout() time.Duration {
 
 func (m *Manager) receiptReadTimeout() time.Duration {
 	return minPositiveDuration(maxReceiptReadTimeout, m.cfg.ReplacementInterval/2)
+}
+
+func (m *Manager) gasEstimateTimeout() time.Duration {
+	return minPositiveDuration(maxGasEstimateTimeout, m.cfg.ReplacementInterval/2)
 }
 
 func (m *Manager) broadcastTimeout() time.Duration {

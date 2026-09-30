@@ -555,7 +555,8 @@ func (m *Manager) evaluateHorizon(
 
 // handleStall answers blocks the current attempt lost while valid and with room: the relay dropped
 // it, a builder it cannot reach built them, or the call outgrew its gas limit. A normal call is
-// re-estimated for the next block first and replaced with a larger limit once it no longer fits.
+// re-estimated for the next block first and replaced with a larger limit once it no longer fits;
+// cancellation that falls due during that estimate is left to the lifecycle, which sends it next.
 // Otherwise the exact bytes are rebroadcast, and after stallRebroadcastsBeforeReprice rebroadcasts a
 // minimal fee bump replaces them.
 func (m *Manager) handleStall(
@@ -566,8 +567,10 @@ func (m *Manager) handleStall(
 	replace func(replaceIntent) bool,
 ) bool {
 	if !cancelling && pending.req.GasLimit == 0 {
-		gas, headroomBps, err := m.estimateHorizonGas(ctx, pending.req, parent)
+		gas, headroomBps, err := m.reestimateStalledCall(ctx, pending, parent)
 		switch {
+		case pending.cancellationDue(time.Now()):
+			return false // no normal rebroadcast past the deadline or a shutdown request
 		case err != nil:
 			observability.Log(ctx).V(1).Info("stalled transaction re-estimate failed; rebroadcasting",
 				"label", pending.req.Label, "nonce", pending.nonce, "error", err.Error())
@@ -583,6 +586,22 @@ func (m *Manager) handleStall(
 		pending.horizon.sent(pending.horizon.lastHead)
 	}
 	return false
+}
+
+// reestimateStalledCall sizes a stalled normal call for the next block. It runs on the lifecycle
+// goroutine, which also services receipts, the cancellation deadline and shutdown, so a read endpoint
+// that never answers must not hold it: the estimate, fallback included, gets its own budget and, like
+// a normal replacement broadcast, ends at the cancellation deadline.
+func (m *Manager) reestimateStalledCall(
+	ctx context.Context, pending *pendingTransaction, parent *types.Header,
+) (gas uint64, headroomBps int, err error) {
+	deadline := time.Now().Add(m.gasEstimateTimeout())
+	if !pending.cancelDeadline.IsZero() && pending.cancelDeadline.Before(deadline) {
+		deadline = pending.cancelDeadline
+	}
+	ctx, cancel := context.WithDeadline(ctx, deadline)
+	defer cancel()
+	return m.estimateHorizonGas(ctx, pending.req, parent)
 }
 
 // rebroadcastStalledAttempt resends the latest attempt's exact bytes for a relay that dropped it,

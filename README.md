@@ -364,7 +364,10 @@ The shared `txManager` serializes transaction-sending solvers on one EOA. While 
 or active, UniswapX declines new quotes, LI.FI retires standing curves, and 3F stops new offers;
 reconciliation continues. RFQ keeps quoting and accounts for pending fills through reservations; it stops
 only while the nonce lane is conflicted. Pending calls can be replaced or cancelled with the same nonce. Each pending
-receipt RPC has its own timeout and does not block the lifecycle loop's replacement/cancellation timers.
+receipt RPC has its own timeout and does not block the lifecycle loop's replacement/cancellation timers. A stalled
+call's gas re-estimate runs on that loop, so it gives up after at most 5 seconds or at the call's cancellation
+deadline, whichever comes first: a read RPC that never answers it cannot hold the loop longer than that or delay
+deadline cancellation.
 
 Configure `maxFeeGwei` for every transaction-sending process; it also caps cancellation. `pendingTimeoutMs`,
 `broadcastTimeoutMs` and `shutdownTimeoutMs` bound cancellation, submission and shutdown.
