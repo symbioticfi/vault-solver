@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -72,6 +73,9 @@ type SignerConfig struct {
 
 // TxManagerConfig tunes the shared transaction sender.
 type TxManagerConfig struct {
+	// StateFile optionally persists the owned signed lifecycle across restarts. Its directory must
+	// be durable and writable; empty keeps the existing memory-only lifecycle.
+	StateFile string `yaml:"stateFile,omitempty"`
 	// Confirmations to wait for before treating a transaction as final.
 	Confirmations uint64 `yaml:"confirmations"`
 	// MaxFeeGwei is the required absolute EIP-1559 max fee per gas.
@@ -273,6 +277,9 @@ func (c *Config) ValidateTxManager() error {
 }
 
 func (c TxManagerConfig) validate(required bool) error {
+	if c.StateFile != "" && (strings.TrimSpace(c.StateFile) == "" || strings.ContainsRune(c.StateFile, '\x00')) {
+		return errors.New("txManager.stateFile must be a non-blank path without NUL characters")
+	}
 	if c.MaxFeeGwei < 0 || required && c.MaxFeeGwei == 0 ||
 		math.IsNaN(c.MaxFeeGwei) || math.IsInf(c.MaxFeeGwei, 0) {
 		return errors.New("txManager.maxFeeGwei must be finite and positive")

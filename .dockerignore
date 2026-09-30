@@ -3,6 +3,7 @@
 .github
 bin/
 dist/
+state/
 .tools/
 
 # Secrets / local config — never bake into an image.

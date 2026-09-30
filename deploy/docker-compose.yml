@@ -30,6 +30,9 @@ services:
     # Operator config. Defaults to the committed Sepolia template; point CONFIG_FILE at your own.
     volumes:
       - ${CONFIG_FILE:-../config/3f.example.yaml}:/etc/vault-solver/config.yaml:ro
+      # To enable durable recovery, prepare ../state for UID 65532, uncomment this mount, and set
+      # txManager.stateFile: /var/lib/vault-solver/transactions.json in your mounted YAML.
+      # - ../state:/var/lib/vault-solver
     command: ["run", "--config", "/etc/vault-solver/config.yaml"]
     ports:
       - "9090:9090" # /metrics, /healthz, /readyz

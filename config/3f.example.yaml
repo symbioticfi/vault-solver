@@ -27,6 +27,7 @@ signer:
   # passphraseEnv: SOLVER_KEYSTORE_PASS  # (required with keystorePath)
 
 txManager:
+  # stateFile: ./state/transactions.json # optional durable recovery; use a writable persistent directory
   confirmations: 2                 # blocks to wait past inclusion before treating a tx as final (default 2)
   maxFeeGwei: 50                   # global fee cap; the normal lifecycle stops one bump below it
   accountPollIntervalMs: 30000     # signer balance/latest/pending nonce metric refresh

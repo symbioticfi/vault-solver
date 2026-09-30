@@ -2,6 +2,9 @@
 bin/
 dist/
 
+# Transaction journal contains signed authorizations; keep runtime state local.
+/state/
+
 
 # Go
 *.test

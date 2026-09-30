@@ -25,7 +25,8 @@ are listed under [Solvers](#solvers).
   refreshable from upstream.
 
 State is intentionally minimal — positions, liquidity, and readiness are read from on-chain views and
-the relevant protocol API on each tick; no database.
+the relevant protocol API on each tick. An optional transaction journal preserves the sender's signed
+lifecycle across restarts; protocol inventory and quote state are still read from their sources.
 
 ## Solvers
 
@@ -363,7 +364,7 @@ This is the seam for customizing a solver without forking. Contract and trust mo
 The shared `txManager` serializes transaction-sending solvers on one EOA. While a transaction is queued
 or active, UniswapX declines new quotes, LI.FI retires standing curves, and 3F stops new offers;
 reconciliation continues. RFQ keeps quoting and accounts for pending fills through reservations; it stops
-only while the nonce lane is conflicted. Pending calls can be replaced or cancelled with the same nonce. Each pending
+while the nonce lane is conflicted or recovering a journal after restart. Pending calls can be replaced or cancelled with the same nonce. Each pending
 receipt RPC has its own timeout and does not block the lifecycle loop's replacement/cancellation timers. A stalled
 call's gas re-estimate runs on that loop, so it gives up after at most 5 seconds or at the call's cancellation
 deadline, whichever comes first: a read RPC that never answers it cannot hold the loop longer than that or delay
@@ -371,6 +372,10 @@ deadline cancellation.
 
 Configure `maxFeeGwei` for every transaction-sending process; it also caps cancellation. `pendingTimeoutMs`,
 `broadcastTimeoutMs` and `shutdownTimeoutMs` bound cancellation, submission and shutdown.
+Set `txManager.stateFile` on persistent storage to retain exact signed attempts before broadcasting them.
+After restart the manager checks their receipts and cancels an unresolved owned nonce; new commitments
+wait until the recovered lifecycle satisfies its saved confirmation policy. Recovery preserves the
+original request deadline and never submits the business call at a new nonce.
 The manager remains alive while solvers drain accepted work; orchestrator SIGTERM grace must cover both
 solver preparation/drain and manager shutdown. A timeout does not guarantee that a signed call cannot land.
 
@@ -445,7 +450,9 @@ command list (`run`, `version`). Debug logging is off by default; enable it with
 The observability listener (default `:9090`) serves `/metrics`, `/healthz`, and `/readyz`. No extra
 config is required for the collectors below. `/readyz` reports nonce safety: it fails before startup
 completes, during shutdown and while a nonce conflict pauses the shared transaction manager, but not while
-a transaction is merely pending, so quote servers stay in rotation. During graceful shutdown readiness
+a transaction is merely pending, so quote servers stay in rotation. A recovered journal lifecycle keeps
+readiness false until it resolves, because the previous process's fill reservations are unavailable.
+During graceful shutdown readiness
 drops first, while liveness and metrics remain available until the shared transaction manager finishes its
 bounded drain.
 
@@ -683,17 +690,47 @@ snapshot and retries a changed head once immediately. A second crossing fails st
 last-known-good snapshot until the next poll. Explicit write and cancellation endpoints must report the same chain ID as the
 read endpoint.
 
-For transaction-sending solvers, startup fails closed when the write endpoint's pending nonce differs
-from its latest mined nonce because `txManager` cannot recover an unknown signed lifecycle. The EOA
-must be exclusive to this process: standard nonce reads cannot reveal a future transaction queued
-beyond a gap. Before upgrading from a build that allowed several unresolved signed nonces, drain that
-EOA's write-endpoint pool. After an unclean exit, nonce equality alone cannot rule out a private
-submission hidden by its relay. The packaged Docker Compose deployment restarts automatically with
-`unless-stopped`, so it can resume and reuse that nonce before the hidden submission becomes visible. If
-the old attempt later consumes the nonce, `txManager` pauses admissions and readiness and remains
-fail-closed for operator investigation; automatic restart does not recover the lost in-memory ownership.
-For controlled maintenance, stop the service and reconcile outstanding private submissions before bringing
-the EOA back.
+`txManager.stateFile` optionally enables durable transaction recovery:
+
+```yaml
+txManager:
+  maxFeeGwei: 50
+  stateFile: /var/lib/vault-solver/transactions.json
+```
+
+The parent directory must exist on persistent storage and be writable by the process. Relative paths
+resolve from the process working directory. The file and its lock belong to one chain and sender; a
+second process, corrupted journal, or identity mismatch fails startup closed. The journal contains signed
+transactions and embedded authorizations: its files use mode `0600`; keep the directory private, exclude
+it from source control and image builds, and keep it across upgrades. Changing or removing the path
+does not establish that its outstanding transactions cannot land.
+
+For the packaged Docker Compose deployment, create the ignored `state/` directory at the repository root
+and give the container's UID 65532 ownership:
+
+```bash
+mkdir -p state
+sudo chown 65532:65532 state
+chmod 700 state
+```
+
+Uncomment the state bind mount in `deploy/docker-compose.yml` and set the absolute container path shown
+above in your mounted YAML. The example configs leave `stateFile` commented until this storage is ready.
+
+With a journal, startup resumes receipt tracking of every recorded signed variant and requests a
+same-nonce self-cancellation for unresolved recovered work. The original call may still win the race and
+its receipt remains authoritative. New quotes, offers and transaction admission remain paused until
+recovery finishes. Failed persistence or unexplained nonce consumption keeps the lane paused; investigate
+instead of deleting its record. The journal does not reconstruct solver quote records or capacity
+reservations, so solvers resume their usual on-chain/API reconciliation afterwards.
+
+Omitting `stateFile` preserves memory-only behavior. Startup then requires the write endpoint's pending
+and latest mined nonces to agree, but that equality cannot rule out a private submission hidden by its
+relay. Compose's `unless-stopped` restart cannot reconstruct lost in-memory ownership in this mode.
+Reconcile outstanding private submissions before reusing the EOA after an unclean exit. The same
+restriction applies when introducing a journal to an EOA with older unrecorded work. One EOA must remain
+exclusive to this process; standard nonce reads cannot expose future transactions queued beyond a gap.
+Before upgrading from a build allowing several unresolved signed nonces, drain its write-endpoint pool.
 
 Before replacing or rebroadcasting a pending transaction, the manager checks the latest mined nonce.
 If it has already been consumed, broadcasting stops and tracked receipts are reconciled even when the
