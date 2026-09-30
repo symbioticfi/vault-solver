@@ -15,6 +15,7 @@ signer:
   keyEnv: SOLVER_PRIVATE_KEY     # executor caller key; membership is checked at startup
 
 txManager:
+  # stateFile: ./state/transactions.json # optional durable recovery; use a writable persistent directory
   confirmations: 2               # confirmations awaited before capacity is released
   maxFeeGwei: 50                  # global fee cap; the normal lifecycle stops one bump below it
   broadcastTimeoutMs: 5000        # allow the private write RPC up to 5s per submission

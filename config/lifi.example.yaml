@@ -20,6 +20,7 @@ signer:
   keyEnv: SOLVER_PRIVATE_KEY
 
 txManager:
+  # stateFile: ./state/transactions.json # optional durable recovery; use a writable persistent directory
   confirmations: 2
   maxFeeGwei: 50               # global fee cap; the normal lifecycle stops one bump below it
   accountPollIntervalMs: 30000 # signer balance/latest/pending nonce metric refresh

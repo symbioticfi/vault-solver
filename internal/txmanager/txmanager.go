@@ -78,6 +78,7 @@ type cancellationBackend interface {
 
 // Config tunes fee selection and confirmation behavior.
 type Config struct {
+	StateFile           string        // optional durable signed-lifecycle journal
 	Confirmations       uint64        // blocks to wait past inclusion before returning
 	MaxFeeGwei          float64       // absolute max fee per gas; app config requires a positive value
 	PollInterval        time.Duration // receipt/confirmation poll cadence; 0 => 2s
@@ -170,7 +171,9 @@ type pendingTransaction struct {
 	horizon      horizonProgress
 	// obsolete records that the request's Obsolete hook started the cancellation, so its result
 	// wraps ErrRequestObsolete. Only the lifecycle goroutine reads or writes it.
-	obsolete bool
+	obsolete  bool
+	recovered bool // reconstructed work cannot safely reuse its original Obsolete callback
+	finalized bool // the receipt satisfied the request's confirmation policy
 }
 
 type txAttempt struct {
@@ -205,10 +208,15 @@ type Manager struct {
 	laneStateSubscribers map[uint64]chan struct{}
 	nextLaneStateID      uint64
 
-	mu        sync.Mutex // guards the local nonce and runtime nonce conflict
-	nonce     uint64
-	nonceInit bool
-	conflict  *nonceConflict
+	mu         sync.Mutex // guards the local nonce, nonce conflict and journal failure
+	nonce      uint64
+	nonceInit  bool
+	conflict   *nonceConflict
+	journalErr error // storage failure pauses admission without discarding signed ownership
+	recovering atomic.Bool
+	journalMu  sync.Mutex // serializes journal I/O and Close; lifecycle mutation has one owner
+	journal    *journalStore
+	recovered  *pendingTransaction // populated by Initialize, consumed by Start
 
 	unminedMu   sync.Mutex
 	unmined     *pendingTransaction
@@ -327,14 +335,16 @@ func (m *Manager) ValidateFeeHeadroom() error {
 }
 
 // Available reports nonce safety only; it does not report whether another lifecycle occupies the
-// lane. Owned execution paths use it to keep progressing during contention, while producers of new
-// external commitments use LaneReady. A nonce conflict pauses admission while exact signed hashes
-// are polled. A benign inclusion race resumes once its exact receipt is proven canonical; an
+// lane. Restart recovery and journal failures also make it unavailable, because solver reservations
+// from a previous process cannot be reconstructed. Owned execution paths use it to keep progressing
+// during ordinary contention, while producers of new external commitments use LaneReady. A nonce
+// conflict pauses admission while exact signed hashes are polled. A benign inclusion race resumes
+// once its exact receipt is proven canonical; an
 // unresolved conflict remains fail-closed instead of replaying calldata at another nonce.
 func (m *Manager) Available() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.conflict == nil
+	return m.conflict == nil && m.journalErr == nil && !m.recovering.Load()
 }
 
 // Idle reports whether no request owns or is waiting for the single signed-lifecycle lane. It is
@@ -372,13 +382,17 @@ func (m *Manager) SubscribeLaneState() (<-chan struct{}, func()) {
 	}
 }
 
-// Initialize seeds the local nonce before solvers become ready. Startup fails closed when the
-// account already has an unknown contiguous pending transaction. Standard nonce reads cannot expose
+// Initialize opens optional durable state and seeds the nonce before solvers become ready. Startup
+// fails closed when the account already has an unknown contiguous pending transaction; a valid journal
+// restores its owned lifecycle before admitting new work. Standard nonce reads cannot expose
 // a transaction queued beyond a gap, so safety also relies on exclusive EOA ownership and Start's
 // invariant that later work cannot reach admission or signing until the active lifecycle is terminal.
 func (m *Manager) Initialize(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.cfg.StateFile != "" {
+		return m.initializeJournalLocked(ctx)
+	}
 	return m.initializeNonceLocked(ctx)
 }
 
@@ -480,6 +494,7 @@ func (m *Manager) Start(ctx context.Context) {
 	observability.Log(ctx).Info("started", "from", m.signer.Address().Hex())
 	lifecycleCtx, cancelLifecycle := context.WithCancelCause(context.WithoutCancel(ctx))
 	defer cancelLifecycle(errManagerStopped)
+	m.startRecoveredLifecycle(lifecycleCtx)
 	stop := func(reason error) {
 		close(m.stopping)
 		m.requestActiveCancellation()
@@ -686,7 +701,7 @@ func (m *Manager) waitForNonceLane(ctx context.Context) error {
 			return errManagerStopped
 		default:
 		}
-		if m.nonceConflictError() == nil {
+		if m.Available() {
 			return nil
 		}
 		select {
@@ -837,8 +852,15 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	if err != nil {
 		return nil, err
 	}
+	pending = &pendingTransaction{
+		req: req, nonce: nonce, gas: gas, value: new(big.Int).Set(value), fees: cloneFeeQuote(fees),
+		span: sendSpan, cancelDeadline: m.cancellationDeadline(req),
+		horizon: horizonProgress{
+			sentHead: quote.head, sentAt: time.Now(), lastHead: quote.head, lastEvaluation: time.Now(),
+		},
+	}
 	signed, sendErr := m.signAndSend(
-		broadcastCtx, nonce, req.To, req.Data, value, gas, fees, false, false,
+		broadcastCtx, nonce, req.To, req.Data, value, gas, fees, false, false, pending,
 	)
 	if signed == nil {
 		return nil, errors.Errorf("send %q: %w", req.Label, sendErr)
@@ -864,26 +886,17 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	}
 	m.commitNonce(nonce)
 	m.lastGas.Store(gas)
-	return &pendingTransaction{
-		req:   req,
-		nonce: nonce,
-		gas:   gas,
-		value: new(big.Int).Set(value),
-		fees:  cloneFeeQuote(fees),
-		attempts: []txAttempt{{
-			hash: hash, tx: signed, exactRebroadcastPending: broadcastUncertain,
-		}},
-		originalHash: hash,
-		span:         sendSpan,
-		horizon: horizonProgress{
-			sentHead: quote.head, sentAt: time.Now(), lastHead: quote.head, lastEvaluation: time.Now(),
-		},
-	}, nil
+	pending.attempts = []txAttempt{{
+		hash: hash, tx: signed, exactRebroadcastPending: broadcastUncertain,
+	}}
+	pending.originalHash = hash
+	return pending, nil
 }
 
 func (m *Manager) complete(ctx context.Context, pending *pendingTransaction) {
 	defer m.removeUnminedTransaction(pending)
 	outcome := m.waitForPendingTransaction(ctx, pending)
+	outcome = m.finishJournal(ctx, pending, outcome)
 	pending.lifecycle.finish(outcome.Outcome, outcome.Receipt)
 	if errors.Is(outcome.Err, errShutdownTimeout) {
 		observability.Log(ctx).Error(outcome.Err, "accepted transaction lifecycle did not drain before shutdown",
@@ -1004,7 +1017,10 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 				sweep = nil
 				// A terminal protocol status may reflect our own transaction.
 				// Give receipts precedence before checking obsolescence.
-				if !cancelling && m.pendingRequestObsolete(ctx, pending) {
+				if !cancelling && pending.recovered {
+					startCancellation("recovery")
+					tryReplace(cancel())
+				} else if !cancelling && m.pendingRequestObsolete(ctx, pending) {
 					pending.obsolete = true
 					startCancellation("obsolete")
 					tryReplace(cancel())
@@ -1031,7 +1047,10 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 				continue
 			}
 			var promoted bool
-			if !cancelling && pending.cancellationDue(time.Now()) {
+			if !cancelling && pending.recovered {
+				startCancellation("recovery")
+				promoted = tryReplace(cancel())
+			} else if !cancelling && pending.cancellationDue(time.Now()) {
 				startCancellation("")
 				promoted = tryReplace(cancel())
 			} else {
@@ -1104,9 +1123,10 @@ func (m *Manager) receiptReadsRecovered(ctx context.Context, pending *pendingTra
 
 // confirmPendingReceipt runs only in the lifecycle owner, after receipt validation.
 func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTransaction, attempt txAttempt, receipt *types.Receipt) (Result, bool) {
-	if pending.nonceConflictHash != (common.Hash{}) && m.hasNonceConflict(pending.nonce) {
+	if (pending.nonceConflictHash != (common.Hash{}) && m.hasNonceConflict(pending.nonce)) ||
+		(m.cfg.StateFile != "" && m.confirmations(pending.req) == 0) {
 		if err := m.confirmCanonicalReceipt(ctx, receipt); err != nil {
-			observability.Log(ctx).Error(err, "owned receipt cannot reconcile nonce conflict",
+			observability.Log(ctx).Error(err, "owned receipt cannot establish canonical nonce consumption",
 				"label", pending.req.Label,
 				"hash", attempt.hash.Hex(),
 				"nonce", pending.nonce,
@@ -1130,6 +1150,7 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 		)
 		return Result{}, false
 	}
+	pending.finalized = err == nil
 	if receipt.Status == types.ReceiptStatusFailed {
 		revertErr := errors.Errorf("tx %s reverted on-chain", attempt.hash.Hex())
 		if err != nil {
@@ -1195,10 +1216,13 @@ func (m *Manager) tryReplace(
 	ctx context.Context, pending *pendingTransaction, intent replaceIntent,
 ) (bool, error) {
 	cancellation := intent.cancellation
+	if err := m.journalFailure(); err != nil {
+		return cancellation, err
+	}
 	if m.hasNonceConflict(pending.nonce) {
 		return cancellation, nil
 	}
-	cancellation = cancellation || pending.cancellationDue(time.Now())
+	cancellation = cancellation || pending.recovered || pending.cancellationDue(time.Now())
 	if available, err := m.replacementNonceAvailable(ctx, pending); err != nil || !available {
 		return cancellation, err
 	}
@@ -1243,7 +1267,7 @@ func (m *Manager) tryReplace(
 		return m.tryReplace(ctx, pending, promoted)
 	}
 	sendCtx, cancelSend := replacementBroadcastContext(ctx, pending, cancellation)
-	signed, sendErr := m.signAndSend(sendCtx, pending.nonce, to, data, value, gas, fees, true, cancellation)
+	signed, sendErr := m.signAndSend(sendCtx, pending.nonce, to, data, value, gas, fees, true, cancellation, pending)
 	cancelSend()
 	if signed == nil {
 		observability.Log(ctx).Error(sendErr, "pending transaction replacement rejected",
@@ -1598,7 +1622,11 @@ func (m *Manager) signAndSend(
 	fees feeQuote,
 	existingLifecycle bool,
 	cancellation bool,
+	pending *pendingTransaction,
 ) (*types.Transaction, error) {
+	if pending.recovered && !cancellation {
+		return nil, errors.New("recovery cannot sign the original business call")
+	}
 	tx := types.NewTx(&types.DynamicFeeTx{
 		ChainID:   m.chainID,
 		Nonce:     nonce,
@@ -1616,9 +1644,24 @@ func (m *Manager) signAndSend(
 	if err := ctx.Err(); err != nil {
 		return nil, errors.Errorf("sign transaction: %w", err)
 	}
+	if err := m.persistSignedAttempt(pending, signed, fees, cancellation); err != nil {
+		observability.Log(ctx).Error(err, "signed transaction journal failed; broadcast withheld", "label", pending.req.Label, "nonce", nonce)
+		return nil, err
+	}
 	sendErr := m.sendSigned(ctx, signed, existingLifecycle, cancellation)
 	if errors.Is(sendErr, errNonceLanePaused) || isDefiniteBroadcastRejection(sendErr) ||
 		(!existingLifecycle && isPendingNonceCollision(sendErr)) {
+		// A persisted collision stays owned for exact-hash recovery. A definite initial
+		// rejection can release its journal because no earlier variant was exposed.
+		if !existingLifecycle && m.journal != nil && isPendingNonceCollision(sendErr) {
+			return signed, sendErr
+		}
+		if !existingLifecycle && isDefiniteBroadcastRejection(sendErr) {
+			if err := m.clearRejectedJournal(); err != nil {
+				observability.Log(ctx).Error(err, "rejected transaction journal could not be cleared", "label", pending.req.Label, "nonce", nonce)
+				return nil, errors.Join(sendErr, err)
+			}
+		}
 		return nil, errors.Errorf("broadcast rejected before acceptance: %w", sendErr)
 	}
 	return signed, sendErr
@@ -1630,6 +1673,12 @@ func (m *Manager) sendSigned(
 	existingLifecycle bool,
 	cancellation bool,
 ) error {
+	if m.recovering.Load() && !cancellation {
+		return errors.New("recovery cannot rebroadcast the original business call")
+	}
+	if err := m.journalFailure(); err != nil {
+		return err
+	}
 	if !existingLifecycle {
 		if err := m.nonceConflictError(); err != nil {
 			return err
@@ -1796,6 +1845,9 @@ func (m *Manager) nonceConflictError() error {
 }
 
 func (m *Manager) nonceConflictErrorLocked() error {
+	if m.journalErr != nil {
+		return errors.Errorf("%w: %w", errNonceLanePaused, m.journalErr)
+	}
 	if m.conflict == nil {
 		return nil
 	}

@@ -25,8 +25,9 @@ Definitive pre-sign/submission failures can finish without a receipt; accepted a
 `Available()` reports nonce safety; `Idle()` reports absence of queued/admitted demand. `LaneReady()`
 requires both. Quote producers that cannot account for pending work use `LaneReady`; RFQ uses `Available`
 and subtracts pending fills through its own reservations. Already-owned recovery work can continue during
-contention. Process readiness (`/readyz`) follows `Available`, so a pending transaction never takes quote
-servers out of rotation; only startup, shutdown and nonce conflicts do.
+contention. Process readiness (`/readyz`) follows `Available`, so an ordinary pending transaction never
+takes quote servers out of rotation. Startup, shutdown, nonce conflicts, persistence failures and restart
+recovery do: the new process cannot account for the old process's reservations until recovery resolves.
 Subscribers receive coalesced change notifications and must re-read state and unsubscribe when done.
 
 ## 2. Request contract
@@ -49,6 +50,7 @@ The public YAML block is `txManager`. Values below are application defaults, aft
 
 | Setting | Default | Meaning |
 |---|---:|---|
+| `stateFile` | Empty | Optional durable signed-lifecycle journal on persistent storage; empty keeps memory-only processing. |
 | `confirmations` | 2 | Blocks after inclusion; a request may override. Zero in YAML is treated as unset. |
 | `maxFeeGwei` | Required for transaction senders | Finite positive global EIP-1559 ceiling, including cancellation. |
 | `broadcastTimeoutMs` | 5000 | Independent timeout of each submission RPC. |
@@ -233,13 +235,53 @@ submission relay that rate-limits reads never stalls the refresh; its pending no
 submission until the primary RPC sees it, which is acceptable for a gauge and never used for admission. General transport behavior
 remains documented in the [README configuration section](../README.md#configuration).
 
-Startup requires write-endpoint latest and pending nonces to agree. Standard nonce methods cannot reveal
-a future transaction queued beyond a gap or a private hidden submission; equality is not recovery proof.
-Exact signed attempts are kept in memory. Restart reconciliation must include any separately configured
-cancellation endpoint. Before an upgrade from a build allowing multiple unresolved
-nonces, drain the EOA's write-endpoint pool. After an unclean exit, reconcile outstanding private
-submissions before reusing the EOA. Packaged Compose uses `unless-stopped`: automatic restart can reuse
-a nonce before a hidden attempt becomes visible and does not reconstruct lost ownership.
+Without an owned journal lifecycle, startup requires write-endpoint latest and pending nonces to agree.
+Standard nonce methods cannot reveal a future transaction queued beyond a gap or a private hidden
+submission; equality is not recovery proof. An empty `stateFile` retains the original memory-only model:
+after an unclean exit, reconcile outstanding private submissions before reusing the EOA. Packaged Compose
+uses `unless-stopped`; automatic restart in memory-only mode does not reconstruct lost ownership. The
+same limitation applies when introducing a journal after older unrecorded submissions. Before an upgrade
+from a build allowing multiple unresolved nonces, drain the EOA's write-endpoint pool. Restart
+reconciliation must include any separately configured cancellation endpoint.
+
+### Durable signed lifecycle
+
+Configured `txManager.stateFile` adds persistence at the generic ownership boundary. Its directory must
+already exist on writable persistent storage. The journal belongs to the chain ID and sender and holds
+one signed lifecycle, including all signed variants, the request's fee/confirmation policy, original
+cancellation deadline and cancellation intent. Signed transactions may contain unpublished authorizations;
+files use mode `0600` and the directory is operator-private. The journal is excluded from Git and Docker
+when using the documented `state/` directory. A process lock prevents simultaneous owners of the same
+state path; the EOA exclusivity rule still applies to processes using other paths or no journal.
+
+Every initial, replacement and cancellation attempt is durably written before broadcast. Persistence
+uses a synced temporary file, atomic replacement and directory sync; a completed write is the permission
+to expose its exact bytes to the network. A write error fails closed and pauses admission when ownership
+is uncertain. Persistence happens independently of whether the RPC acknowledges the broadcast. A crash
+after the write but before broadcast conservatively leaves a recoverable owned nonce.
+
+`Initialize` validates the journal version, chain/sender identity and signed attempts. Malformed or
+mismatched state fails startup closed. An owned lifecycle sets `Available` and `LaneReady` false before
+solvers start, even when the relay's pending nonce equals latest. `Start` resumes exact-hash receipt
+tracking and requests same-nonce cancellation of unresolved recovered work, with reason `recovery`.
+An original call's later receipt still resolves that nonce; recovery never replays its business calldata,
+never moves it to a new nonce, and never extends the stored cancellation deadline.
+
+`Obsolete` is a process-local callback and is omitted on recovery. Cancellation intent already recorded
+by the old process remains in force. Saved confirmation policy and canonical receipt checks govern when
+the record can be cleared. Tracking shutdown, unconfirmed inclusion and unresolved conflicts retain the
+record; failed journal updates or clearing keep admission paused. Solvers rebuild their own upstream and
+on-chain view after the recovered lane is released; the journal is not a protocol inventory ledger.
+
+The design adopts OpenZeppelin Relayer's ordering of persisted signed state before broadcast and recovery
+of exact owned attempts. Reference revision:
+[`b790686deafed19a1b682462cf83b1fcd58e8345`](https://github.com/OpenZeppelin/openzeppelin-relayer/tree/b790686deafed19a1b682462cf83b1fcd58e8345),
+particularly [initial preparation](https://github.com/OpenZeppelin/openzeppelin-relayer/blob/b790686deafed19a1b682462cf83b1fcd58e8345/src/domain/transaction/evm/evm_transaction.rs#L651-L879)
+and [restart recovery](https://github.com/OpenZeppelin/openzeppelin-relayer/blob/b790686deafed19a1b682462cf83b1fcd58e8345/src/domain/transaction/evm/status.rs#L650-L761).
+Vault Solver retains its single unresolved lifecycle, fee horizon and protocol-specific solver boundaries.
+Recovered calls are cancelled conservatively because their process-local obsolescence checks and capacity
+reservations cannot be restored. Distributed workers and multiple pending nonces are outside this design.
+The pinned source comparison and adopted scope are recorded in [OpenZeppelin Relayer research](OZ-RELAYER-RESEARCH.md).
 
 A post-signing `nonce too low` reconciles exact owned hashes. During replacement of an already tracked
 lifecycle, an owned receipt proven canonical against a stable head can resolve the conflict immediately;
@@ -267,7 +309,9 @@ new commitments and finish their protocol preparation while the shared manager r
 accepted work. Manager shutdown closes admission and requests active same-nonce cancellation when nonce
 ownership is not conflicted. It drains for at most `shutdownTimeoutMs`, then cancels lifecycle RPCs and
 delivers the shutdown-deadline error so process teardown can proceed. This does not guarantee mining or
-confirmation before exit. Configure orchestrator grace for solver preparation/drain plus manager drain;
+confirmation before exit. A configured journal retains all unresolved or unconfirmed owned attempts for
+the next process; the state lock remains held while lifecycle work can still mutate it. Configure
+orchestrator grace for solver preparation/drain plus manager drain;
 see the composition in [run.go](../cmd/vault-solver/run.go).
 
 Every lifecycle exit cancels and joins its receipt reader, including one blocked delivering a result.
@@ -309,7 +353,7 @@ Definitions: [metrics.go](../internal/txmanager/metrics.go),
 | Txmanager | `solver_bot_txmanager_inflight` | `label` | Requests accepted by the txmanager worker and still awaiting a terminal result; sustained values expose stuck transactions or nonce congestion. |
 | Txmanager | `solver_bot_txmanager_gas_used_total` | `label`, `outcome` | Receipt gas for mined transactions, including reverts. Divide by the matching request count for average gas; this is gas units, not native-token cost. |
 | Txmanager | `solver_bot_txmanager_fee_paid_wei_total` | `label`, `outcome` | Actual native-token fee paid by mined transactions, calculated from receipt `gasUsed × effectiveGasPrice`, including reverted and mined cancellation transactions. |
-| Txmanager | `solver_bot_txmanager_replacements_total` | `label`, `kind`, `reason` | Successfully broadcast replacements, cancellations and exact rebroadcasts (`kind` = `replacement`, `cancellation`, `rebroadcast`). Replacement `reason` is `validity`, `congestion`, `stall`, `gas` or `fallback`; a cancellation reports why cancellation started (`pending_timeout`, `request_deadline`, `shutdown`, `obsolete`); a rebroadcast is `stall`, `uncertain` (ambiguous first broadcast) or `capped` (fee cap reached). Spikes expose fee-policy, relay or congestion problems that terminal outcomes alone cannot show. |
+| Txmanager | `solver_bot_txmanager_replacements_total` | `label`, `kind`, `reason` | Successfully broadcast replacements, cancellations and exact rebroadcasts (`kind` = `replacement`, `cancellation`, `rebroadcast`). Replacement `reason` is `validity`, `congestion`, `stall`, `gas` or `fallback`; a cancellation reports why cancellation started (`pending_timeout`, `request_deadline`, `shutdown`, `obsolete`, `recovery`); a rebroadcast is `stall`, `uncertain` (ambiguous first broadcast) or `capped` (fee cap reached). Spikes expose fee-policy, relay or congestion problems that terminal outcomes alone cannot show. |
 | Txmanager | `solver_bot_txmanager_admission_rejections_total` | `label`, `reason` | Requests rejected before the signed worker lifecycle. Reasons are `manager_stopped`, `nonce_conflict`, `deadline_exceeded`, `caller_cancelled`, or bounded fallback `other`; an expected busy `TrySend` probe is excluded. |
 | Txmanager | `solver_bot_txmanager_admission_wait_duration_seconds` | `label`, `outcome` | Time from a real send request until worker admission or a terminal pre-admission outcome. `outcome` is `admitted` or one of the bounded rejection reasons; expected busy `TrySend` probes are excluded. |
 | Txmanager | `solver_bot_txmanager_lifecycle_duration_seconds` | `label`, `outcome` | Time from worker admission through broadcast and terminal tracking. It excludes pre-admission nonce-lane wait, so use admission rejections alongside its latency distribution. |
@@ -335,6 +379,16 @@ Protocol order/bid nonces are not the shared sender's transaction nonce. Strateg
 returns decisions; it does not gain a signer, nonce manager or transaction-sending capability.
 
 ## 10. Verification and maintenance
+
+- [x] Persist signed attempts before broadcast and recover the owned nonce after restart with exact-hash
+  receipt tracking and conservative same-nonce cancellation.
+- [x] Keep readiness and admission paused during recovery or persistence failure, validate stored identity,
+  and hold the state lock through lifecycle teardown.
+
+Journal verification covers atomic storage, identity and signed-attempt validation, exclusive ownership,
+write-before-broadcast ordering, hidden-relay restart recovery, original/cancellation receipt races and
+retention of unresolved work. Deployment must provide durable writable storage; a successful local test
+does not establish the deployment's persistence guarantees.
 
 Receipt tests cover 52 independent budgets, timer handling during blocked reads, new/old hashes, reorg
 recovery, teardown and coincident cancellation/replacement ticks. Existing tests cover fee limits,

@@ -41,7 +41,7 @@ func newRunCmd() *cobra.Command {
 
 // runBot wires the dependency graph and runs the selected solver until ctx is cancelled. The log
 // level is resolved from config, overridden by the --debug flag when it was explicitly set.
-func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool) error {
+func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool) (runErr error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -142,6 +142,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		return err
 	}
 	txm := txmanager.NewWithMetrics(chainClient, sgnr, chainClient.ChainID(), txmanager.Config{
+		StateFile:           cfg.TxManager.StateFile,
 		Confirmations:       cfg.TxManager.Confirmations,
 		MaxFeeGwei:          cfg.TxManager.MaxFeeGwei,
 		BroadcastTimeout:    time.Duration(cfg.TxManager.BroadcastTimeoutMs) * time.Millisecond,
@@ -186,6 +187,11 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		if err := txm.Initialize(runCtx); err != nil {
 			return errors.Errorf("initialize tx manager: %w", err)
 		}
+		defer func() {
+			if err := txm.Close(); err != nil {
+				runErr = errors.Join(runErr, errors.Errorf("close tx manager: %w", err))
+			}
+		}()
 	}
 
 	var stopTx context.CancelFunc
@@ -205,7 +211,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		}()
 	}
 
-	health.SetReady(true)
+	health.SetReady(!requiresTxManager || txm.Available())
 
 	// Run all solvers concurrently. The first fatal error cancels the rest; ctx cancellation is a
 	// clean shutdown (solver.Run maps context.Canceled to nil).
@@ -222,10 +228,14 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	var background sync.WaitGroup
 	if requiresTxManager {
 		laneStateChanged, unsubscribe := txm.SubscribeLaneState()
+		// Subscribe before sampling: recovery may finish between manager startup and this watcher.
+		health.SetReady(txm.Available())
 		background.Go(func() {
 			defer unsubscribe()
 			// Readiness tracks nonce safety, not idleness: a pending transaction must not take quote
-			// servers out of rotation. Solvers apply their own lane gates to new commitments.
+			// servers out of rotation. Restart recovery remains unready until the old work resolves;
+			// solvers cannot reconstruct its process-local reservations. They apply their own gates
+			// to commitments during ordinary lifecycles.
 			watchReadiness(gctx, laneStateChanged, txm.Available, health.SetReady)
 		})
 	}
