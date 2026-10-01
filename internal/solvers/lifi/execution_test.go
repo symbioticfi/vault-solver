@@ -20,6 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/default"
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/webhook"
@@ -1258,6 +1259,63 @@ func TestCompleteFillTreatsIncludedTransactionAsSuccess(t *testing.T) {
 	if pending.len() != 0 || strings.Contains(logged, `"msg":"order fill failed"`) ||
 		!strings.Contains(logged, "order fill included but confirmation wait failed") {
 		t.Fatalf("included completion: pending=%d logs=%s", pending.len(), logged)
+	}
+}
+
+func TestOrderWorkerConsumedNonceReleasesReservationWithoutSuccess(t *testing.T) {
+	fixture := immediateTestSetup(t)
+	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	txm := &fakeLifiTxSender{result: txmanager.Result{
+		Hash: common.HexToHash("0x1234"), Outcome: txmanager.OutcomeNonceConsumed, Err: txmanager.ErrNonceConsumed,
+	}}
+	solver := newProcessTestSolver(fixture.cfg, fixture.caller, txm, strategy,
+		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited)
+	reg := prometheus.NewRegistry()
+	solver.metrics, err = newLIFIMetrics(reg, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	orders := make(chan *submittedOrder, 1)
+	orders <- testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+	close(orders)
+	if err = solver.runOrderWorker(t.Context(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), orders, nil, nil); err != nil {
+		t.Fatalf("expected nonce competition failed worker: %v", err)
+	}
+	if len(txm.reqs) != 1 || solver.capacity.Len() != 0 {
+		t.Fatalf("consumed completion: sends=%d capacity=%d", len(txm.reqs), solver.capacity.Len())
+	}
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeSuccess, 0)
+
+	// A later feed replay re-reads protocol status; it cannot use the previously signed request
+	// after another fill has already claimed the order.
+	reader := solver.reader.(fakeLifiReader)
+	reader.status = lifiOrderStatusClaimed
+	solver.reader = reader
+	solver.processOrder(t.Context(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut))
+	if len(txm.reqs) != 1 {
+		t.Fatal("replay submitted a fill for a claimed order")
+	}
+}
+
+func TestCompleteFillTreatsConsumedNonceAsExpectedSkip(t *testing.T) {
+	var logs []string
+	solver := &Solver{log: funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{Verbosity: 1})}
+	fill := &pendingFill{
+		order:   &submittedOrder{OrderID: "order-1", QuoteID: "quote-1"},
+		orderID: common.HexToHash("0x1"), reservationKey: "order-1",
+	}
+	pending := &pendingFillState{byOrder: map[string]*pendingFill{"order-1": fill}}
+	err := solver.completeFill(solverContext(t, solver), pending, fillCompletion{fill: fill, result: txmanager.Result{
+		Hash: common.HexToHash("0x1234"), Outcome: txmanager.OutcomeNonceConsumed, Err: txmanager.ErrNonceConsumed,
+	}})
+	logged := strings.Join(logs, "\n")
+	if err != nil || pending.len() != 0 || strings.Contains(logged, `"msg":"order fill failed"`) ||
+		strings.Contains(logged, `"msg":"order filled"`) || !strings.Contains(logged, "order fill nonce consumed") {
+		t.Fatalf("consumed completion: err=%v pending=%d logs=%s", err, pending.len(), logged)
 	}
 }
 

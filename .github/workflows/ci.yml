@@ -31,6 +31,23 @@ jobs:
       - name: Test
         run: make test
 
+  nonce-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pin@v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # pin@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # pin@v1
+        with:
+          version: v1.8.1
+
+      - name: Test independent nonce reconciliation
+        run: make test-txmanager-anvil
+
   lint:
     runs-on: ubuntu-latest
     steps:

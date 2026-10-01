@@ -13,8 +13,8 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
-// orderStatus is the local order lifecycle. Confirmed cancellation can enter retry_waiting before
-// another open-order poll returns it to queued; other signed failures are terminal.
+// orderStatus is the local order lifecycle. A confirmed consumed nonce can enter retry_waiting
+// before another open-order poll returns it to queued; other signed failures are terminal.
 type orderStatus string
 
 const (
@@ -25,13 +25,16 @@ const (
 	statusExpired      orderStatus = "expired"
 	statusFailed       orderStatus = "failed"
 	statusRetryWaiting orderStatus = "retry_waiting"
+	// A consumed nonce does not prove our fill landed. Reconcile the backend before fresh retry.
+	statusNonceConsumed orderStatus = "nonce_consumed"
 	// statusObsolete is terminal: the backend reported the order no longer fillable while our fill was
 	// being sent, so it is never re-armed, even if a stale open-order listing still returns it.
 	statusObsolete orderStatus = "obsolete"
 )
 
 func (s orderStatus) active() bool {
-	return s == statusQueued || s == statusSubmitting || s == statusSubmitted || s == statusRetryWaiting
+	return s == statusQueued || s == statusSubmitting || s == statusSubmitted ||
+		s == statusRetryWaiting || s == statusNonceConsumed
 }
 
 // awaitsSubmission reports a won order the submitter still has to send.
@@ -107,7 +110,7 @@ func (s *store) sweep() {
 
 /* ───────── orders ───────── */
 
-// upsertQueued re-arms unsigned failures and explicitly scheduled cancellation retries. A retry
+// upsertQueued re-arms unsigned failures and explicitly scheduled nonce retries. A retry
 // requires both the backoff and another open-order poll. Other signed failures stay terminal.
 func (s *store) upsertQueued(in queuedOrder) bool {
 	s.mu.Lock()
@@ -129,7 +132,7 @@ func (s *store) upsertQueued(in queuedOrder) bool {
 	}
 	if rec.Status == statusRetryWaiting && !now.Before(rec.RetryAt) {
 		rec.Status = statusQueued
-		rec.TxHash = common.Hash{} // the previous nonce was consumed by a confirmed cancellation
+		rec.TxHash = common.Hash{} // the previous nonce is canonically consumed
 		rec.LastError = ""
 		rec.RetryAt = time.Time{}
 	}
@@ -279,7 +282,7 @@ func (s *store) markIncluded(orderID string, block uint64) {
 }
 
 // boundUnsignedWork sets the deadline after which unsigned preparation of an order expires locally.
-// A bound already recorded (from a cancellation retry) is kept.
+// A bound already recorded for a nonce retry is kept.
 func (s *store) boundUnsignedWork(orderID string, deadline time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -296,9 +299,9 @@ func (s *store) recordAttempt(orderID string) int {
 	return s.attempts[orderID]
 }
 
-// scheduleCancellationRetry is called only after a successful, confirmed cancellation receipt.
-// The consumed nonce is safe to leave behind, but the retry budget survives re-queuing the order.
-func (s *store) scheduleCancellationRetry(
+// scheduleNonceRetry follows a confirmed cancellation or a consumed nonce whose backend order
+// remains open. Both share the configured cancellation retry budget, retained across re-queueing.
+func (s *store) scheduleNonceRetry(
 	orderID string, limit int, retryAt, deadline time.Time, txHash common.Hash, lastErr string,
 ) bool {
 	s.mu.Lock()

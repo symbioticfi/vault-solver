@@ -816,6 +816,42 @@ func TestCompletePendingFillClassifiesNotAdmittedWithoutFailure(t *testing.T) {
 	metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 0)
 }
 
+func TestCompletePendingFillReconcilesConsumedNonceWithoutFailure(t *testing.T) {
+	fixture := newDirectExecutionFixture(t)
+	fixture.order.Source = orderSourcePublicV2
+	metrics, reg := newUniswapXTestMetricsWithRegistry(t, fixture.solver)
+	fixture.solver.metrics = metrics
+	fixture.solver.cfg.Breaker = BreakerConfig{MaxFailures: 1, Window: time.Minute}
+	fixture.solver.inFlight[fixture.order.Hash] = true
+	fixture.solver.setPendingReservations(
+		t.Context(), fixture.order.Hash,
+		liquidlane.CapacityReservations{fixture.route.CapacityID: big.NewInt(100)}, fixture.solver.capacity.Revision(),
+	)
+	fixture.solver.completePendingFill(t.Context(), testPendingFill(t, fixture.order), txmanager.Result{
+		Hash: common.HexToHash("0x1234"), Outcome: txmanager.OutcomeNonceConsumed, Err: txmanager.ErrNonceConsumed,
+	})
+	if fixture.solver.capacity.Len() != 0 || fixture.solver.inFlight[fixture.order.Hash] {
+		t.Fatal("consumed nonce retained capacity or in-flight state")
+	}
+	if fixture.solver.attempts[fixture.order.Hash] != 0 || len(fixture.solver.failureTimes) != 0 ||
+		fixture.solver.localBlockUntil.Load() != 0 {
+		t.Fatal("nonce competition counted as an execution or breaker failure")
+	}
+	if _, filled := fixture.solver.filled[fixture.order.Hash]; filled {
+		t.Fatal("nonce consumption was interpreted as a successful owned fill")
+	}
+	retryAt, scheduled := fixture.solver.retryAt[fixture.order.Hash]
+	if !scheduled || fixture.solver.claim(fixture.order.Hash, retryAt.Add(-time.Nanosecond)) {
+		t.Fatal("order was not deferred until the normal fresh polling backoff")
+	}
+	if !fixture.solver.claim(fixture.order.Hash, retryAt) {
+		t.Fatal("order was unavailable for a fresh poll after consumed nonce")
+	}
+	fixture.solver.endFillPlanning()
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeSuccess, 0)
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 0)
+}
+
 func TestCompletePendingFillRecordsFailureOutcome(t *testing.T) {
 	fixture := newDirectExecutionFixture(t)
 	fixture.order.Source = orderSourcePublicV2

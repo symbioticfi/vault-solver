@@ -12,14 +12,31 @@ func TestWatchReadinessTracksLaneState(t *testing.T) {
 	changes := make(chan struct{}, 1)
 	states := make(chan bool, 3)
 	var ready atomic.Bool
-	ready.Store(true)
 	go watchReadiness(ctx, changes, ready.Load, func(state bool) { states <- state })
 
-	ready.Store(false)
-	changes <- struct{}{}
 	expectReadyState(t, states, false)
 	ready.Store(true)
 	changes <- struct{}{}
+	expectReadyState(t, states, true)
+	cancel()
+	expectReadyState(t, states, false)
+}
+
+func TestWatchReadinessReadsCompletedReconciliationWithoutSignal(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	states := make(chan bool, 2)
+	go watchReadiness(ctx, make(chan struct{}), func() bool { return true }, func(state bool) { states <- state })
+	expectReadyState(t, states, true)
+	cancel()
+	expectReadyState(t, states, false)
+}
+
+func TestWatchReadinessDropsTxlessReadiness(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	states := make(chan bool, 2)
+	go watchReadiness(ctx, nil, func() bool { return true }, func(state bool) { states <- state })
 	expectReadyState(t, states, true)
 	cancel()
 	expectReadyState(t, states, false)

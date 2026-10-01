@@ -72,6 +72,8 @@ type SignerConfig struct {
 
 // TxManagerConfig tunes the shared transaction sender.
 type TxManagerConfig struct {
+	// ReconcileNonces follows canonical account state after contention without shared storage.
+	ReconcileNonces bool `yaml:"reconcileNonces"`
 	// Confirmations to wait for before treating a transaction as final.
 	Confirmations uint64 `yaml:"confirmations"`
 	// MaxFeeGwei is the required absolute EIP-1559 max fee per gas.

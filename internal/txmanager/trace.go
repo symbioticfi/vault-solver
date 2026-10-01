@@ -65,7 +65,7 @@ func isSendFailure(outcome Outcome) bool {
 	switch outcome {
 	case OutcomeReverted, OutcomeCancelled, OutcomeCancelledUnconfirmed, OutcomeSubmissionError, OutcomeTrackingStopped:
 		return true
-	case OutcomeConfirmed, OutcomeIncludedUnconfirmed:
+	case OutcomeConfirmed, OutcomeIncludedUnconfirmed, OutcomeNonceConsumed:
 		return false
 	}
 	return false

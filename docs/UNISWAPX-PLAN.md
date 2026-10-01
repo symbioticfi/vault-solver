@@ -183,6 +183,13 @@ wrapping `txmanager.ErrRequestObsolete` retires the order without a retry or a b
 `fill/obsolete`. Continued quoting does not guarantee execution within exclusivity;
 the exclusive window must also cover any preceding fill's confirmation time.
 
+With opt-in RPC nonce reconciliation, `nonce_consumed` has no owned receipt and never counts as a successful
+fill. Completion invalidates inventory and releases the local reservation, then defers the order until the
+normal polling interval without increasing execution-failure attempts or opening the fade breaker. A later
+open-order poll and the normal fresh deadline, planning, preflight and protocol-obsolescence checks decide
+whether another fill can be submitted. Calldata from the previous nonce is never replayed. These are local
+recovery rules; they do not coordinate outstanding orders, exclusive obligations or capacity across replicas.
+
 The current parser accepts only `Dutch_V2`. All strategies retain polling retries for declined plans and
 unavailable sources. Economic declines record `fill/declined` without opening the public preflight breaker;
 exclusive obligations remain independently tracked through terminal reconciliation.

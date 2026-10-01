@@ -78,6 +78,7 @@ type cancellationBackend interface {
 
 // Config tunes fee selection and confirmation behavior.
 type Config struct {
+	ReconcileNonces     bool          // opt in to canonical account-nonce reconciliation across independent replicas
 	Confirmations       uint64        // blocks to wait past inclusion before returning
 	MaxFeeGwei          float64       // absolute max fee per gas; app config requires a positive value
 	PollInterval        time.Duration // receipt/confirmation poll cadence; 0 => 2s
@@ -118,6 +119,7 @@ const (
 	OutcomeCancelledUnconfirmed Outcome = "cancelled_unconfirmed"
 	OutcomeSubmissionError      Outcome = "submission_error"
 	OutcomeTrackingStopped      Outcome = "tracking_stopped"
+	OutcomeNonceConsumed        Outcome = "nonce_consumed"
 )
 
 // Included reports whether the request reached the chain, even if confirmation tracking stopped.
@@ -149,6 +151,7 @@ type pendingTransaction struct {
 	gas               uint64
 	value             *big.Int
 	fees              feeQuote
+	firstSignedAt     time.Time // immutable age for cross-replica conflict recovery
 	attempts          []txAttempt
 	receiptCursor     int
 	nonceConflictHash common.Hash
@@ -205,10 +208,14 @@ type Manager struct {
 	laneStateSubscribers map[uint64]chan struct{}
 	nextLaneStateID      uint64
 
-	mu        sync.Mutex // guards the local nonce and runtime nonce conflict
-	nonce     uint64
-	nonceInit bool
-	conflict  *nonceConflict
+	mu                  sync.Mutex // guards the local nonce and runtime nonce conflict
+	nonce               uint64
+	nonceInit           bool
+	conflict            *nonceConflict
+	reconcileBusy       bool                  // read-account finality or unknown write-endpoint pending work blocks fresh signing
+	reconcileMu         sync.Mutex            // serializes fresh-view probes and unsigned unknown-nonce recovery
+	unknownNonce        *unknownNonceRecovery // guarded by reconcileMu; only harmless self-cancellation bytes may be retained
+	reconciliationReads readStreak            // guarded by reconcileMu; real I/O failures are surfaced once per streak
 
 	unminedMu   sync.Mutex
 	unmined     *pendingTransaction
@@ -248,6 +255,10 @@ const (
 // replaced the pending call for that reason, so the owning solver can retire the work instead of
 // retrying it.
 var ErrRequestObsolete = errors.New("transaction request is obsolete")
+
+// ErrNonceConsumed means canonical account state proves the signed nonce can no longer execute,
+// but no owned receipt is available. The solver must reconcile current state before new work.
+var ErrNonceConsumed = errors.New("transaction nonce consumed without an owned receipt")
 
 var (
 	errFreshFeesUnavailable    = errors.New("fresh fees unavailable")
@@ -334,7 +345,7 @@ func (m *Manager) ValidateFeeHeadroom() error {
 func (m *Manager) Available() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.conflict == nil
+	return m.conflict == nil && !m.reconcileBusy && (!m.cfg.ReconcileNonces || m.nonceInit)
 }
 
 // Idle reports whether no request owns or is waiting for the single signed-lifecycle lane. It is
@@ -377,6 +388,9 @@ func (m *Manager) SubscribeLaneState() (<-chan struct{}, func()) {
 // a transaction queued beyond a gap, so safety also relies on exclusive EOA ownership and Start's
 // invariant that later work cannot reach admission or signing until the active lifecycle is terminal.
 func (m *Manager) Initialize(ctx context.Context) error {
+	if m.cfg.ReconcileNonces {
+		return m.initializeReconciledNonce(ctx)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.initializeNonceLocked(ctx)
@@ -476,6 +490,14 @@ func (m *Manager) Start(ctx context.Context) {
 		m.monitorAccount(ctx)
 	}()
 	defer func() { <-accountMonitorDone }()
+	if m.cfg.ReconcileNonces {
+		reconcileDone := make(chan struct{})
+		go func() {
+			defer close(reconcileDone)
+			m.monitorReconciledNonce(ctx)
+		}()
+		defer func() { <-reconcileDone }()
+	}
 
 	observability.Log(ctx).Info("started", "from", m.signer.Address().Hex())
 	lifecycleCtx, cancelLifecycle := context.WithCancelCause(context.WithoutCancel(ctx))
@@ -675,6 +697,12 @@ func (m *Manager) sendAsync(ctx context.Context, req Request, try bool) (<-chan 
 }
 
 func (m *Manager) waitForNonceLane(ctx context.Context) error {
+	if m.cfg.ReconcileNonces {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return m.nonceConflictError()
+	}
 	changes, unsubscribe := m.SubscribeLaneState()
 	defer unsubscribe()
 	for {
@@ -837,6 +865,7 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	if err != nil {
 		return nil, err
 	}
+	firstSignedAt := time.Now()
 	signed, sendErr := m.signAndSend(
 		broadcastCtx, nonce, req.To, req.Data, value, gas, fees, false, false,
 	)
@@ -854,8 +883,13 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	sendSpan.SetAttributes(txIdentity...)
 	broadcastUncertain := sendErr != nil && !isKnownTransactionError(sendErr)
 	if broadcastUncertain {
-		observability.Log(ctx).Error(sendErr, "transaction broadcast uncertain; tracking signed hash",
-			"label", req.Label, "hash", hash.Hex(), "nonce", nonce)
+		if m.cfg.ReconcileNonces && (isNonceConsumedError(sendErr) || isPendingNonceCollision(sendErr)) {
+			observability.Log(ctx).Info("transaction nonce contested; tracking signed candidate",
+				"label", req.Label, "hash", hash.Hex(), "nonce", nonce, "rpcResult", sendErr.Error())
+		} else {
+			observability.Log(ctx).Error(sendErr, "transaction broadcast uncertain; tracking signed hash",
+				"label", req.Label, "hash", hash.Hex(), "nonce", nonce)
+		}
 	} else if sendErr != nil {
 		observability.Log(ctx).Info("transaction already known by write RPC",
 			"label", req.Label, "hash", hash.Hex(), "nonce", nonce, "rpcResult", sendErr.Error())
@@ -864,12 +898,13 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	}
 	m.commitNonce(nonce)
 	m.lastGas.Store(gas)
-	return &pendingTransaction{
-		req:   req,
-		nonce: nonce,
-		gas:   gas,
-		value: new(big.Int).Set(value),
-		fees:  cloneFeeQuote(fees),
+	pending = &pendingTransaction{
+		req:           req,
+		nonce:         nonce,
+		gas:           gas,
+		value:         new(big.Int).Set(value),
+		fees:          cloneFeeQuote(fees),
+		firstSignedAt: firstSignedAt,
 		attempts: []txAttempt{{
 			hash: hash, tx: signed, exactRebroadcastPending: broadcastUncertain,
 		}},
@@ -878,7 +913,11 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 		horizon: horizonProgress{
 			sentHead: quote.head, sentAt: time.Now(), lastHead: quote.head, lastEvaluation: time.Now(),
 		},
-	}, nil
+	}
+	if m.cfg.ReconcileNonces && m.hasNonceConflict(nonce) {
+		pending.nonceConflictHash = hash
+	}
+	return pending, nil
 }
 
 func (m *Manager) complete(ctx context.Context, pending *pendingTransaction) {
@@ -999,6 +1038,11 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 				sweep = nil
 			} else if sweep.nextIndex(pending) < 0 {
 				m.finishReceiptSweep(ctx, pending, sweep)
+				if m.cfg.ReconcileNonces && sweep.allAttemptsMissing(pending) {
+					if result, consumed := m.confirmConsumedNonce(ctx, pending); consumed {
+						return result
+					}
+				}
 				// Include superseded variants considered by the priority path.
 				knownAttempts = sweep.knownAttempts
 				sweep = nil
@@ -1104,7 +1148,8 @@ func (m *Manager) receiptReadsRecovered(ctx context.Context, pending *pendingTra
 
 // confirmPendingReceipt runs only in the lifecycle owner, after receipt validation.
 func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTransaction, attempt txAttempt, receipt *types.Receipt) (Result, bool) {
-	if pending.nonceConflictHash != (common.Hash{}) && m.hasNonceConflict(pending.nonce) {
+	if (pending.nonceConflictHash != (common.Hash{}) && m.hasNonceConflict(pending.nonce)) ||
+		(m.cfg.ReconcileNonces && m.confirmations(pending.req) == 0) {
 		if err := m.confirmCanonicalReceipt(ctx, receipt); err != nil {
 			observability.Log(ctx).Error(err, "owned receipt cannot reconcile nonce conflict",
 				"label", pending.req.Label,
@@ -1196,6 +1241,18 @@ func (m *Manager) tryReplace(
 ) (bool, error) {
 	cancellation := intent.cancellation
 	if m.hasNonceConflict(pending.nonce) {
+		if m.cfg.ReconcileNonces && !pending.firstSignedAt.IsZero() && time.Since(pending.firstSignedAt) >= m.cfg.PendingTimeout {
+			err := m.cancelContestedNonce(ctx, pending)
+			if err != nil && !errors.Is(err, errReconciliationPending) && ctx.Err() == nil {
+				pending.nonceReads.failed(observability.Log(ctx), err, "contested nonce recovery cancellation unavailable", "nonce", pending.nonce)
+			} else if err == nil || errors.Is(err, errReconciliationPending) {
+				pending.nonceReads.recovered(observability.Log(ctx), "contested nonce recovery RPC recovered", "nonce", pending.nonce)
+			}
+			if errors.Is(err, errReconciliationPending) {
+				return true, nil
+			}
+			return true, err
+		}
 		return cancellation, nil
 	}
 	cancellation = cancellation || pending.cancellationDue(time.Now())
@@ -1617,6 +1674,9 @@ func (m *Manager) signAndSend(
 		return nil, errors.Errorf("sign transaction: %w", err)
 	}
 	sendErr := m.sendSigned(ctx, signed, existingLifecycle, cancellation)
+	if m.cfg.ReconcileNonces && !existingLifecycle && (isNonceConsumedError(sendErr) || isPendingNonceCollision(sendErr)) {
+		return signed, sendErr // The exact candidate stays tracked; another sender may have won this nonce.
+	}
 	if errors.Is(sendErr, errNonceLanePaused) || isDefiniteBroadcastRejection(sendErr) ||
 		(!existingLifecycle && isPendingNonceCollision(sendErr)) {
 		return nil, errors.Errorf("broadcast rejected before acceptance: %w", sendErr)
@@ -1630,6 +1690,9 @@ func (m *Manager) sendSigned(
 	existingLifecycle bool,
 	cancellation bool,
 ) error {
+	if m.cfg.ReconcileNonces && existingLifecycle && !cancellation && m.hasNonceConflict(signed.Nonce()) {
+		return errors.Errorf("%w: conflicted signed candidate is receipt-only", errNonceLanePaused)
+	}
 	if !existingLifecycle {
 		if err := m.nonceConflictError(); err != nil {
 			return err
@@ -1737,6 +1800,9 @@ func isPendingNonceCollision(err error) bool {
 // nextNonce returns the nonce to use, failing closed if startup discovers an unknown pending
 // transaction that the in-memory manager cannot safely replace or cancel.
 func (m *Manager) nextNonce(ctx context.Context) (uint64, error) {
+	if m.cfg.ReconcileNonces {
+		return m.freshReconciledNonce(ctx)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.nonceConflictErrorLocked(); err != nil {
@@ -1758,6 +1824,10 @@ func (m *Manager) markNonceConflict(nonce uint64, hash common.Hash) {
 	m.mu.Unlock()
 	if first {
 		m.notifyLaneStateChange()
+		if m.cfg.ReconcileNonces {
+			m.log.Info("nonce contested; waiting for canonical account reconciliation", "nonce", nonce, "hash", hash.Hex())
+			return
+		}
 		m.log.Error(errors.New("nonce ownership is uncertain"),
 			"transaction manager paused pending nonce reconciliation",
 			"nonce", nonce,
@@ -1796,6 +1866,9 @@ func (m *Manager) nonceConflictError() error {
 }
 
 func (m *Manager) nonceConflictErrorLocked() error {
+	if m.reconcileBusy {
+		return errors.Errorf("%w: waiting for confirmed account state and an empty pending nonce lane", errNonceLanePaused)
+	}
 	if m.conflict == nil {
 		return nil
 	}

@@ -101,8 +101,12 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 - **Retries distinguish unsent work from transactions.** Failed pre-submission work with no recorded hash
   may be retried while the order is open. A successful cancellation that satisfies txmanager's confirmation
   policy may enter `retry_waiting`, retaining its hash until one `pollIntervalMs` interval elapses and a
-  fresh open-order poll re-arms it. `maxCancellationRetries` defaults to three additional attempts; zero
-  disables retries. The retry budget survives re-queuing; retrying clears only the consumed cancellation
+  fresh open-order poll re-arms it. With opt-in RPC nonce reconciliation, `nonce_consumed` means the signed
+  nonce is consumed without an owned receipt. It first enters backend reconciliation: a terminal status
+  retires the order, while `open` schedules a fresh retry under the same budget and deadline. Missing,
+  unavailable or unknown backend status keeps the obligation until its recorded order deadline.
+  `maxCancellationRetries` defaults to three additional attempts shared by cancellation and consumed-nonce
+  recovery; zero disables both. The retry budget survives re-queuing; retrying clears only the consumed
   hash and runs the full executable-order lookup, chain deadline validation, strategy plan, and discount
   resolution again. Retry waiting counts as an active obligation and reconciles terminal
   backend status; its retained order deadline also expires it locally if backend views disappear or stay
@@ -111,7 +115,7 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   reconciliation without another fill. A result wrapping `txmanager.ErrRequestObsolete` is terminal instead:
   the order becomes `obsolete` (never re-armed, even while the backend still lists it open), no retry is
   scheduled, and backend status is reconciled once, which may refine it to `filled`. These protections and retry budgets are in-memory per process;
-  persistence and coordination across replicas remain outside this change.
+  an RPC nonce result does not prove an owned fill succeeded or coordinate order/capacity ownership across replicas.
 - **Shutdown joins accepted fills.** RFQ stops new polling and shuts down its quote listener, then waits for
   the poll loop and the submitter to finish. A fill already admitted by txmanager keeps its lifecycle ownership and RFQ
   records the terminal result before `Run` returns; the framework's bounded txmanager drain remains the hard
@@ -373,6 +377,9 @@ dropping features.
    confirmation wait, then allow bounded RFQ retries after one poll interval and a fresh open-order poll.
    Every retry revalidates the executable order and builds new calldata with fresh discount signatures. Regression tests
    cover the retry budget, disabled retries, expired/unavailable orders, uncertain results, and shutdown.
+7. **(done) Consumed-nonce recovery** — an opt-in canonical nonce result without an owned receipt reconciles
+   backend status before sharing the existing bounded retry budget. Regression tests cover terminal/unknown
+   backend states, fresh open polling and rebuilt calldata, backoff, local deadline expiry and exhausted budgets.
 
 **Reads are multicall-batched** end to end: amount-specific strategy evaluation uses the shared
 per-route fill-quote batch (`paused`, `getMaxAssets`, `getAmountOut`, `minDiscount`), while inventory

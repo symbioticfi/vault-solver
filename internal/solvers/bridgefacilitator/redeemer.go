@@ -115,6 +115,14 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 	})
 	txmanager.RecordResult(submitCtx, res) // the stage
 	txmanager.RecordResult(ctx, res)       // the redeem pass it belongs to
+	if res.Outcome == txmanager.OutcomeNonceConsumed {
+		observability.Decline(submitCtx, "redeem_nonce_consumed", "transaction nonce was consumed")
+		// The next poll reads canWithdraw again before rebuilding a batch. Missing owned
+		// receipts cannot prove that this batch finalized any requests.
+		observability.Log(submitCtx).V(1).Info("redeem nonce consumed; awaiting fresh request scan",
+			"requests", len(ready), "tx", res.Hash.Hex())
+		return
+	}
 	if !res.Outcome.Included() {
 		err = res.Err
 		if err == nil {

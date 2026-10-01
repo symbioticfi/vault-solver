@@ -574,6 +574,13 @@ propagation queue, reservation-blocked built-in decisions have only the bounded 
 described above. The txmanager
 may replace the same pending nonce as described above; that is fee management for one submission, not order
 retry.
+With opt-in RPC nonce reconciliation, `nonce_consumed` releases the completed fill's local reservation and
+records an expected decline. It supplies no owned receipt and never records fill success. No automatic order
+retry is introduced: a later WebSocket replay or reconnect REST recovery must re-read current order status,
+deadlines, liquidity and routing before building another request; an already claimed/refunded order is skipped.
+A healthy connected feed does not periodically poll REST after catch-up, so an order that loses nonce
+competition requires upstream redelivery or reconnect recovery to be reconsidered. These rules do not
+coordinate quote inventory or reservations across replicas.
 During process shutdown the shared txmanager outlives solver intake cancellation while accepted fills finish.
 LI.FI first keeps the feed alive while expiring active quotes, then stops accepting orders and drains admitted
 inbox work and accepted fills. The process hard stop bounds that solver preparation and the txmanager's configured
