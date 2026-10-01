@@ -133,6 +133,10 @@ business result is unknown: our own transaction
 could have landed while its receipt was unavailable, or another transaction could have consumed the
 nonce. It is neither `confirmed`, `cancelled` nor proof that our fill failed.
 
+Receipt and nonce reads can straddle inclusion: a sweep can return `NotFound` before mining, then account
+proof can succeed after mining. Even the canonical winning attempt can therefore return `nonce_consumed`;
+its receipt becoming available later does not change the already delivered unknown result.
+
 The manager never resubmits old business calldata at a new nonce automatically. An integration must
 query its authoritative protocol/backend state, retain an unresolved business item while that query is
 uncertain, and construct fresh executable work only when its own retry rules permit. Fresh plans must

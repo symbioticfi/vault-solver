@@ -310,6 +310,57 @@ func TestReconcileOwnedReceiptPrecedesNonceOnlyResult(t *testing.T) {
 	}
 }
 
+// Publishing a receipt during the account-state proof models receipt and nonce RPCs straddling
+// inclusion. The prior NotFound sweep cannot establish which transaction consumed the nonce.
+type receiptDuringNonceProofBackend struct {
+	*hashNonceTestBackend
+
+	publishReceipt *types.Transaction
+	missingReads   int
+}
+
+func (b *receiptDuringNonceProofBackend) TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
+	receipt, err := b.mockBackend.TransactionReceipt(ctx, hash)
+	if errors.Is(err, ethereum.NotFound) {
+		b.mu.Lock()
+		b.missingReads++
+		b.mu.Unlock()
+	}
+	return receipt, err
+}
+
+func (b *receiptDuringNonceProofBackend) ReadNonceAtHash(ctx context.Context, account common.Address, hash common.Hash) (uint64, error) {
+	nonce, err := b.hashNonceTestBackend.ReadNonceAtHash(ctx, account, hash)
+	b.mu.Lock()
+	if b.publishReceipt != nil {
+		b.receipts[b.publishReceipt.Hash()] = successfulReceipt(b.publishReceipt, b.head-1)
+	}
+	b.mu.Unlock()
+	return nonce, err
+}
+
+func TestReconcileOwnedReceiptAppearingDuringNonceProofRemainsUnknown(t *testing.T) {
+	b := &receiptDuringNonceProofBackend{hashNonceTestBackend: &hashNonceTestBackend{mockBackend: newMockBackend(), confirmedNonce: 7}}
+	m := sharedNonceManager(t, b, 1)
+	pending, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0x123")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.trackUnminedTransaction(pending)
+	delete(b.receipts, pending.originalHash)
+	b.latestNonce, b.pendingNonce, b.confirmedNonce, b.head = 8, 8, 8, 101
+	b.publishReceipt = pending.attempts[0].tx
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	result := m.waitForPendingTransaction(ctx, pending)
+	if result.Outcome != OutcomeNonceConsumed || result.Receipt != nil || result.Outcome.Included() || !errors.Is(result.Err, ErrNonceConsumed) || result.Hash != pending.originalHash {
+		t.Fatalf("proof-time inclusion fabricated execution: %+v", result)
+	}
+	if b.missingReads != 1 || b.receipts[pending.originalHash] == nil || !m.Available() {
+		t.Fatalf("receipt/proof boundary was not exercised: missing reads=%d, receipt=%v, available=%v", b.missingReads, b.receipts[pending.originalHash], m.Available())
+	}
+}
+
 func TestReconcileIdleMonitorHealsUnsignedAdmissionPause(t *testing.T) {
 	b := &hashNonceTestBackend{mockBackend: newMockBackend(), confirmedNonce: 7}
 	m := sharedNonceManager(t, b, 0)
