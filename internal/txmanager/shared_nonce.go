@@ -9,14 +9,14 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
-// freshPendingNonce reads before every initial signing. Other senders' pending work advances this
-// view, and simultaneous readers may race. Only an owned abandoned nonce may override this value.
-func (m *Manager) freshPendingNonce(ctx context.Context) (uint64, error) {
+// freshMinedNonce reads the first unconsumed nonce before every initial signing. Pending pools
+// cannot advance admission past an unused nonce, including after a restart without local state.
+func (m *Manager) freshMinedNonce(ctx context.Context) (uint64, error) {
 	lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
 	defer cancel()
-	nonce, err := m.backend.PendingNonceAt(lookupCtx, m.signer.Address())
+	nonce, err := m.backend.NonceAt(lookupCtx, m.signer.Address(), nil)
 	if err != nil {
-		return 0, errors.Errorf("pending nonce before signing: %w", err)
+		return 0, errors.Errorf("mined nonce before signing: %w", err)
 	}
 	if nonce == ^uint64(0) {
 		return 0, errors.New("account nonce is exhausted")
@@ -54,57 +54,52 @@ func (m *Manager) confirmConsumedNonce(ctx context.Context, pending *pendingTran
 	}, true
 }
 
-// reusableNonce remembers only process-owned abandoned work, never another replica's pending call.
-// The fee floor grows with each submitted replacement so a relay can replace the previous bytes.
+// reusableNonce remembers process-local fee hints for abandoned or initially underpriced work.
+// The nonce always comes from mined state; the floor applies only to that exact nonce.
 type reusableNonce struct {
 	nonce uint64
 	fees  feeQuote
 }
 
 func (m *Manager) selectNonce(ctx context.Context) (uint64, *feeQuote, error) {
-	pending, err := m.freshPendingNonce(ctx)
-	if err != nil {
-		return 0, nil, err
-	}
-	m.mu.Lock()
-	hasReusable := m.reusable != nil
-	m.mu.Unlock()
-	if !hasReusable {
-		return pending, nil, nil
-	}
-	remembered, err := m.unusedReusableNonce(ctx)
+	remembered := m.reusableSnapshot()
+	nonce, err := m.freshMinedNonce(ctx)
 	if err != nil {
 		return 0, nil, err
 	}
 	if remembered == nil {
-		// A mined nonce may have advanced after the first pending read. Refresh rather than
-		// signing a stale pending value after dropping an owned gap.
-		pending, err = m.freshPendingNonce(ctx)
-		return pending, nil, err
+		return nonce, nil, nil
 	}
-	return remembered.nonce, &remembered.fees, nil
+	if remembered.nonce != nonce {
+		// A consumed nonce or a lower nonce after a reorg invalidates the old fee hint.
+		m.forgetReusableIfUnchanged(remembered)
+		return nonce, nil, nil
+	}
+	return nonce, &remembered.fees, nil
+}
+
+func (m *Manager) reusableSnapshot() *reusableNonce {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.reusable == nil {
+		return nil
+	}
+	return &reusableNonce{nonce: m.reusable.nonce, fees: cloneFeeQuote(m.reusable.fees)}
 }
 
 // unusedReusableNonce also serves profitability quotes. An unavailable nonce read cannot establish
 // whether the old fee floor still applies, so preserve the hint and let the caller retry later.
 func (m *Manager) unusedReusableNonce(ctx context.Context) (*reusableNonce, error) {
-	m.mu.Lock()
-	var remembered *reusableNonce
-	if m.reusable != nil {
-		remembered = &reusableNonce{nonce: m.reusable.nonce, fees: cloneFeeQuote(m.reusable.fees)}
-	}
-	m.mu.Unlock()
+	remembered := m.reusableSnapshot()
 	if remembered == nil {
 		return nil, nil
 	}
-	lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
-	latest, err := m.backend.NonceAt(lookupCtx, m.signer.Address(), nil)
-	cancel()
+	latest, err := m.freshMinedNonce(ctx)
 	if err != nil {
-		return nil, errors.Errorf("mined nonce before reusing abandoned nonce: %w", err)
+		return nil, errors.Errorf("mined nonce before applying replacement fee hint: %w", err)
 	}
-	if latest > remembered.nonce {
-		m.forgetReusable(remembered.nonce)
+	if latest != remembered.nonce {
+		m.forgetReusableIfUnchanged(remembered)
 		return nil, nil
 	}
 	return remembered, nil
@@ -128,13 +123,25 @@ func (m *Manager) forgetReusable(nonce uint64) {
 	}
 }
 
+// Quote and admission reads may complete after a newer underpriced candidate updates the hint.
+// A stale observation may clear only the exact fee snapshot it checked, never newer fee progress.
+func (m *Manager) forgetReusableIfUnchanged(remembered *reusableNonce) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.reusable != nil && m.reusable.nonce == remembered.nonce &&
+		m.reusable.fees.maxFee.Cmp(remembered.fees.maxFee) == 0 &&
+		m.reusable.fees.tip.Cmp(remembered.fees.tip) == 0 {
+		m.reusable = nil
+	}
+}
+
 // replacementFloor applies old fees only; all transaction fields and the current market quote
 // originate in the new request. A request/global ceiling is never raised to repair a nonce gap.
 func replacementFloor(current, previous feeQuote, limit *big.Int) (feeQuote, error) {
 	current.tip = maxBigCopy(current.tip, bumpFee(previous.tip))
 	current.maxFee = maxBigCopy(current.maxFee, bumpFee(previous.maxFee))
 	if current.tip.Cmp(current.maxFee) > 0 || (limit != nil && current.maxFee.Cmp(limit) > 0) {
-		return feeQuote{}, errors.Errorf("%w: abandoned nonce replacement requires fee %s tip %s under limit %s", errReplacementLimitReached, current.maxFee, current.tip, feeLimitString(limit))
+		return feeQuote{}, errors.Errorf("%w: same-nonce replacement requires fee %s tip %s under limit %s", errReplacementLimitReached, current.maxFee, current.tip, feeLimitString(limit))
 	}
 	return current, nil
 }

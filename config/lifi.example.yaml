@@ -12,7 +12,7 @@ chain:
   chainId: 11155111
   # rpcFallbackUrls:               # optional read-only fallbacks, tried in order
   #   - ${ETH_RPC_URL_SEPOLIA_BACKUP}
-  # writeRpcUrl: ${WRITE_RPC_URL}  # broadcasts plus latest/pending nonce reads; defaults to rpcUrl
+  # writeRpcUrl: ${WRITE_RPC_URL}  # broadcasts plus latest mined nonce reads; defaults to rpcUrl
 
 signer:
   # Runtime caller and tx sender. The executor owner adds it through setCallers(); startup checks isCaller().

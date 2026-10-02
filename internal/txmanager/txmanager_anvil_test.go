@@ -239,7 +239,7 @@ func assertAnvilReplacementFeeFloors(t *testing.T, original, replacement poolTra
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Ethereum's replacement floor is 112.5 percent of each fee, rounded up to a whole wei.
+		// The manager's replacement policy raises both fees by 12.5 percent, rounded up to a whole wei.
 		required := new(big.Int).Mul(previous, big.NewInt(9))
 		required.Add(required, big.NewInt(7)).Div(required, big.NewInt(8))
 		if next.Cmp(required) < 0 {

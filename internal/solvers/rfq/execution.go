@@ -367,7 +367,7 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		// Abandoning a signed fill or a nonce race leaves our own execution unknown. The backend
 		// decides whether the order is terminal or eligible for a freshly built bounded retry.
 		observability.Decline(ctx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
-		e.store.markStatus(orderID, statusNonceUncertain, res.Hash, errString(res.Err))
+		e.store.markNonceUncertain(orderID, res.Hash, errString(res.Err), outcome == txmanager.OutcomeNonceConflict)
 		observability.Log(ctx).V(1).Info("fill nonce uncertain; reconciling order", "attempt", attempt,
 			"tx", res.Hash.Hex())
 		e.reconcileTerminalStatus(ctx, orderID)

@@ -14,7 +14,7 @@ chain:
   rpcUrl: ${ETH_RPC_URL_MAINNET}   # primary RPC for gas, receipts, and contract reads
   # rpcAttemptTimeoutMs: 20000 # per HTTP(S) endpoint attempt; shorter caller deadlines still apply
   chainId: 1                       # must match the RPC's chain id (asserted at startup)
-  # writeRpcUrl carries broadcasts and latest/pending nonce reads; other reads stay on rpcUrl.
+  # writeRpcUrl carries broadcasts and latest mined nonce reads; other reads stay on rpcUrl.
   writeRpcUrl: ${WRITE_RPC_URL}    # e.g. https://rpc.mevblocker.io/fullprivacy
   # rpcFallbackUrls:               # optional read-only fallbacks, tried in order
   #   - ${ETH_RPC_URL_MAINNET_BACKUP}
@@ -52,7 +52,7 @@ solvers:
       listenAddr: ":42073"             # bind address for the quote HTTP server (POST /quote, /health, /docs)
       pollIntervalMs: 3000             # open-order polling interval and minimum nonce retry delay
       orderLimit: 20                   # max open orders fetched per poll
-      maxNonceRetries: 3               # additional attempts after abandonment or nonce races; 0 disables
+      maxNonceRetries: 3               # accepted uncertain outcomes; 0 disables; initial collisions use deadline
 
       # RFQ contract deployment (mainnet):
       executor: "0x031f569DA822A6b8D1500D74733986a9aE4cBda3"   # Executor — the bot calls Executor.fill to settle

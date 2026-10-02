@@ -39,7 +39,7 @@ by its own solver. Adding a solver touches **no** framework code — see the rec
 Sharing is deliberately process-scoped. Deploy solvers that use a different signer, read-RPC set, or private
 write endpoint as a separate process with its own config subset and txmanager. Assign each scrape target a
 unique Prometheus `instance` (and optionally a stable `lane` target label). The transaction manager always
-reads a fresh pending nonce before every new send, including when
+reads the latest mined account nonce before every new send, including when
 [independent processes use the same EOA](#independent-processes-with-the-same-eoa). They can compete at
 the same nonce; nonce handling does not coordinate their liquidity or off-chain commitments.
 
@@ -416,18 +416,20 @@ txManager:
   # retain the existing timeout and horizon settings
 ```
 
-Each process reads `eth_getTransactionCount(address, "pending")` from the write endpoint immediately
-before signing each new request. When this process has abandoned a call, it also checks the latest mined
-nonce and reuses that call's nonce while it remains unused, even if pending still counts the old call.
-Use a write RPC whose pending view includes transactions accepted from
-all three replicas, including private submissions. One replica's pending transactions do not block
-startup or new sends by the others: later orders can use later nonces before earlier orders confirm.
+Each process reads `eth_getTransactionCount(address, "latest")` from the write endpoint immediately
+before signing each new request. Fresh business work always uses the next unconsumed nonce, even after
+a restart and even when a private relay counts an expired call as pending. The account advances to the
+next nonce after a transaction is mined; fresh requests do not queue higher nonces behind unmined work.
+Use a write RPC that serves current mined account state. Private pending visibility is not required
+for nonce selection.
 Sends remain serialized locally. There is no database, shared file, leader election, replica identity,
 or feature flag.
 
 Two replicas can still select the same nonce. An initial `nonce too low` or
 `replacement transaction underpriced` response returns `nonce_conflict` and releases the local lane
-immediately. The next request reads the pending nonce again. The manager does not cancel the competing
+immediately. An underpriced attempt records its own fee caps; the next fresh request at that nonce raises
+both by at least 12.5%, within that request's profitability ceiling and the global fee ceiling. Profitability
+quotes include this floor. The next request reads the mined nonce again. The manager does not cancel the competing
 transaction or automatically replay the old calldata at a new nonce. Solvers recheck protocol/backend
 state before retrying an order. RFQ and UniswapX use their polling retries; 3F rebuilds from its next
 redemption scan; LI.FI requires upstream redelivery or reconnect recovery.
@@ -442,11 +444,12 @@ Reorg checks run while a transaction is being confirmed. Completed RFQ and Unisw
 existing terminal records and deduplication caches; there is no completed-order watcher or automatic
 reopening after a later reorg.
 
-The bot sends no cancellation transactions. Reusing an abandoned nonce requires a fresh eligible
-business request; until then the old call may remain pending. Restart loses signed attempts and nonce/fee
-hints, so an abandoned lowest nonce can still block later transactions. Hidden private submissions and
-differing RPC pending views can cause additional collisions; this setup does not guarantee ordering,
-fairness or recovery from every crash. Remove `chain.cancelRpcUrl` from existing YAML; it is no longer
+The bot sends no cancellation transactions. Recovery requires a fresh eligible business request;
+until then the old call may remain pending. Restart loses signed hashes and fee hints, but fresh work
+still targets the lowest unconsumed nonce and can rebuild a fee floor from underpriced responses.
+An unknown pending call's fees may exceed an order's budget or the global ceiling; bounded solver
+deadlines can also expire before a replacement is accepted. Replica contention can increase fees and
+does not guarantee ordering or fairness. Remove `chain.cancelRpcUrl` from existing YAML; it is no longer
 supported. Rename RFQ `maxCancellationRetries` to `maxNonceRetries`.
 
 To start three containers from one existing operator config, save it as
@@ -485,9 +488,11 @@ For liquidity commitments, the built-in strategies apply these limits:
   direct swap, whose calldata caps output. An abandoned or uncertain nonce result first queries backend
   status and can retry only when the backend reports the order open. Each retry builds a fresh fill plan
   and resolves current discount signatures. `solvers[].config.maxNonceRetries` defaults to `3` additional
-  attempts (`0` disables retries); at least one `pollIntervalMs` interval and a fresh open-order poll
+  attempts after accepted uncertain outcomes (`0` disables those retries); at least one `pollIntervalMs` interval and a fresh open-order poll
   precede another attempt. Reverted transactions are not retried, and uncertain inclusion is reconciled
-  through the backend. Retry counts are local to each process and reset on restart.
+  through the backend. Initial nonce collisions retry after the poll delay within the order deadline,
+  without spending this budget; uncertain outcomes after accepted submission remain budgeted.
+  Retry counts are local to each process and reset on restart.
 - LI.FI and UniswapX split shared vault capacity across token pairs before quoting. A pair can therefore
   quote less than the vault's total free liquidity. This does not reserve every repeated quote request.
 - The default OEV strategy permits one pending bundle per adapter. New auction frames arriving during a
@@ -744,7 +749,7 @@ total fallback-chain budget: a shorter caller deadline is divided across the rem
 The txmanager's shorter fee/receipt budgets and `broadcastTimeoutMs` still apply; WebSocket/IPC calls
 are unaffected. When using eRPC, this bounds the solver's wait for eRPC, including eRPC's internal
 retries; upstream timeouts and retries inside eRPC must be configured separately.
-Normal signed broadcasts and latest/pending admission nonce reads
+Normal signed broadcasts and latest mined admission nonce reads
 are pinned to `writeRpcUrl`, or the primary `rpcUrl` when it is omitted, and never fall over across
 endpoints. Every business transaction and its fee replacements use that write route.
 Sender balance and nonce telemetry (the periodic account snapshot behind the `solver_bot_txmanager_account_*`
@@ -759,7 +764,7 @@ multi-read snapshots retry on a later poll; OEV compares both number and hash ar
 snapshot and retries a changed head once immediately. A second crossing fails startup or retains the runtime's
 last-known-good snapshot until the next poll. An explicit write endpoint must report the same chain ID as the read endpoint.
 
-Every transaction-sending process verifies the write endpoint's pending nonce at startup and reads it
+Every transaction-sending process verifies the write endpoint's latest mined nonce at startup and reads it
 again before each new send. Foreign pending transactions do not keep `/readyz` false. A nonce RPC failure
 rejects that send before signing; a later request can retry the RPC. Receipt confirmation still follows
 the configured confirmation depth and canonicality checks.

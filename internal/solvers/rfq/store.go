@@ -51,14 +51,17 @@ const (
 // orderRecord is the local tracking state for one order. The executable payload is fetched fresh
 // from the backend at fill time; only a translated deadline is retained to bound unsigned retries.
 type orderRecord struct {
-	OrderID       string
-	QuoteID       string
-	Status        orderStatus
-	TxHash        common.Hash
-	LastError     string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	NonceRetries  int
+	OrderID      string
+	QuoteID      string
+	Status       orderStatus
+	TxHash       common.Hash
+	LastError    string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	NonceRetries int
+	// NonceConflict identifies a rejected initial send. It needs fresh protocol reconciliation,
+	// but retrying it does not spend the accepted unknown-execution retry budget.
+	NonceConflict bool
 	RetryAt       time.Time
 	RetryDeadline time.Time
 	// IncludedAt is the block a confirmed fill landed in; zero until then. A snapshot read at or
@@ -132,6 +135,7 @@ func (s *store) upsertQueued(in queuedOrder) bool {
 	}
 	if rec.Status == statusRetryWaiting && !now.Before(rec.RetryAt) {
 		rec.Status = statusQueued
+		rec.NonceConflict = false
 		rec.TxHash = common.Hash{} // protocol reconciliation authorized a fresh attempt
 		rec.LastError = ""
 		rec.RetryAt = time.Time{}
@@ -201,6 +205,7 @@ func (s *store) markStatus(orderID string, status orderStatus, txHash common.Has
 		return
 	}
 	rec.Status = status
+	rec.NonceConflict = false
 	if !status.active() && rec.IncludedAt == 0 {
 		// Nothing was spent. A confirmed spend stays until sweep for older snapshots.
 		s.reservations.Delete(orderID)
@@ -210,6 +215,20 @@ func (s *store) markStatus(orderID string, status orderStatus, txHash common.Has
 	}
 	rec.LastError = lastErr
 	rec.UpdatedAt = s.now()
+}
+
+// markNonceUncertain retains the result category while fresh backend state is unavailable.
+// The caller holds per-order execution ownership, and this state remains guarded by the store mutex.
+func (s *store) markNonceUncertain(orderID string, txHash common.Hash, lastErr string, conflict bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rec := s.orders[orderID]; rec != nil {
+		rec.Status = statusNonceUncertain
+		rec.NonceConflict = conflict
+		rec.TxHash = txHash
+		rec.LastError = lastErr
+		rec.UpdatedAt = s.now()
+	}
 }
 
 // reserve replaces an active order's reservation. It refuses an order that has already left the
@@ -300,17 +319,20 @@ func (s *store) recordAttempt(orderID string) int {
 }
 
 // scheduleNonceRetry follows an abandoned fill or uncertain nonce result whose backend
-// order remains open. The configured nonce retry budget is retained across re-queueing.
+// order remains open. Initial conflicts do not consume the configured accepted-execution retry
+// budget; other unknown outcomes retain that budget across re-queueing.
 func (s *store) scheduleNonceRetry(
 	orderID string, limit int, retryAt, deadline time.Time, txHash common.Hash, lastErr string,
 ) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec := s.orders[orderID]
-	if rec == nil || rec.NonceRetries >= limit {
+	if rec == nil || (!rec.NonceConflict && rec.NonceRetries >= limit) {
 		return false
 	}
-	rec.NonceRetries++
+	if !rec.NonceConflict {
+		rec.NonceRetries++
+	}
 	rec.Status = statusRetryWaiting
 	rec.TxHash = txHash
 	rec.LastError = lastErr

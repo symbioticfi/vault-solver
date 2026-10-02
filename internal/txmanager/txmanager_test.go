@@ -292,7 +292,7 @@ func TestSend_HappyPath(t *testing.T) {
 		t.Fatal("no transaction sent")
 	}
 	if tx.Nonce() != 7 {
-		t.Fatalf("expected nonce 7 (seeded from pending), got %d", tx.Nonce())
+		t.Fatalf("expected nonce 7 (read from mined state), got %d", tx.Nonce())
 	}
 	if tx.Type() != types.DynamicFeeTxType {
 		t.Fatalf("expected EIP-1559 tx, got type %d", tx.Type())

@@ -27,8 +27,8 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/signer"
 )
 
-// Backend is the EVM client surface the manager needs. PendingNonceAt must include the sending
-// endpoint's pending transactions, including transactions submitted by another process.
+// Backend is the EVM client surface the manager needs. NonceAt must read the sending endpoint
+// when selecting the first unconsumed nonce; pending state is used only by account telemetry.
 type Backend interface {
 	NonceAt(ctx context.Context, account common.Address, blockNumber *big.Int) (uint64, error)
 	PendingNonceAt(ctx context.Context, account common.Address) (uint64, error)
@@ -323,8 +323,8 @@ func (m *Manager) ValidateFeeHeadroom() error {
 	return nil
 }
 
-// Available reports whether the sending endpoint has supplied an initial pending nonce. Foreign
-// pending transactions and nonce races do not pause admission. Use LaneReady to also check local work.
+// Available reports whether the sending endpoint has supplied an initial mined nonce. Pending
+// transactions and nonce races do not pause admission. Use LaneReady to also check local work.
 func (m *Manager) Available() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -364,10 +364,10 @@ func (m *Manager) SubscribeLaneState() (<-chan struct{}, func()) {
 	}
 }
 
-// Initialize verifies that the sending endpoint exposes pending nonce state. Every new send reads
-// it again; other replicas' pending transactions do not delay initialization.
+// Initialize verifies that the sending endpoint exposes mined nonce state. Every new send reads
+// it again; pending transactions never move a fresh request past the first unused nonce.
 func (m *Manager) Initialize(ctx context.Context) error {
-	_, err := m.freshPendingNonce(ctx)
+	_, err := m.freshMinedNonce(ctx)
 	return err
 }
 
@@ -811,7 +811,7 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	if signed == nil {
 		return nil, errors.Errorf("send %q: %w", req.Label, sendErr)
 	}
-	if floor != nil {
+	if floor != nil || isPendingNonceCollision(sendErr) {
 		m.rememberReusable(nonce, fees)
 	}
 	hash := signed.Hash()

@@ -10,9 +10,10 @@ entry point. Configuration is defined by [config.go](../internal/config/config.g
 ## 1. Ownership and admission
 
 One process has one chain client, signer and transaction manager shared by its transaction-sending
-solvers. Only one signed lifecycle is actively tracked **per process**. Each initial send reads a fresh
-pending nonce from the sending endpoint; an abandoned local nonce takes precedence while mined state
-shows it remains unused. Independent processes can share the EOA without a database,
+solvers. Only one signed lifecycle is actively tracked **per process**. Each initial send reads the latest
+mined account nonce from the sending endpoint and uses that lowest unconsumed nonce. Fresh work can replace
+an unmined call, including after restart; it never queues a higher nonce just because pending counts the
+old call. Independent processes can share the EOA without a database,
 shared file, leader, coordinator or peer discovery. They may race on a nonce; an initial collision ends
 that request promptly and leaves later work eligible. The [replica plan](REPLICA-PLAN.md) records the
 account and integration limits.
@@ -26,7 +27,7 @@ when admitted, it waits for the result. Caller context and `Deadline` bound pre-
 Once enqueued, the manager owns execution: caller cancellation is not proof the signed call cannot land.
 Definitive pre-sign/submission failures can finish without a receipt; accepted ambiguous sends stay tracked.
 
-`Available()` reports initial pending-RPC readiness; `Idle()` reports absence of queued/admitted demand. `LaneReady()`
+`Available()` reports initial mined-nonce RPC readiness; `Idle()` reports absence of queued/admitted demand. `LaneReady()`
 requires both. Quote producers that cannot account for pending work use `LaneReady`; RFQ uses `Available`
 and subtracts pending fills through its own reservations. Already-owned recovery work can continue during
 contention. Process readiness (`/readyz`) follows `Available`, so an owned pending transaction does not
@@ -53,7 +54,7 @@ The public YAML block is `txManager`. Values below are application defaults, aft
 
 | Setting | Default | Meaning |
 |---|---:|---|
-| `confirmations` | 2 | Blocks after inclusion; a request may override. Zero in YAML is treated as unset. Unknown work after restart uses this configured depth because the old request override is not retained. |
+| `confirmations` | 2 | Blocks after inclusion; a request may override. Zero in YAML is treated as unset. |
 | `maxFeeGwei` | Required for transaction senders | Finite positive global EIP-1559 ceiling for every broadcast. |
 | `broadcastTimeoutMs` | 5000 | Independent timeout of each submission RPC. |
 | `accountPollIntervalMs` | 30000 | Complete sender balance/nonce telemetry refresh cadence. |
@@ -79,7 +80,7 @@ budget of its own: the request's `Deadline` and manager shutdown bound it, so a 
 (3F `redeem`) can hold the worker and the nonce lane while a read endpoint withholds its estimate
 ([3F plan §10](3F-PLAN.md#10-pending--deferred-items-post-phase-3)).
 
-Each initial pending nonce read and mined-nonce check has its own
+Each initial mined nonce read and replacement/fee-hint nonce check has its own
 `min(2 seconds, replacementInterval/2)` timeout, bounded by the caller or lifecycle context. Receipt
 confirmation retains bounded header and ancestry reads; no account-confirmation proof runs before signing.
 
@@ -144,9 +145,10 @@ fallback below.
   cached-bump replacement per interval (`fallback`), so it cannot freeze. Unreadable windows use the same
   read-streak logging as receipt reads.
 - **Quote pricing.** `MaxFeePerGas` prices the size of the latest signed call and includes the retained
-  replacement floor while an abandoned nonce remains unused. A bounded mined-nonce check discards a
-  consumed hint or fails pricing closed if unavailable. The returned ceiling includes one ordinary bump
-  when the global cap permits it, so fresh planning accounts for the cost of replacing abandoned work.
+  replacement floor retained after abandonment or an initial underpriced response. A bounded mined-nonce
+  check uses the hint only at exactly that nonce and fails pricing closed if unavailable. The returned
+  ceiling includes one ordinary bump when the global cap permits it, so fresh planning accounts for
+  the cost of replacing pending work.
   Startup (`ValidateFeeHeadroom`) rejects a congested tip cap that cannot fit under the initial fee limit.
 
 Ordinary initial sends reserve one 12.5% bump under the request and global ceilings for a replacement.
@@ -248,7 +250,7 @@ endpoint such as eRPC, not eRPC's own upstream retry policy; WebSocket/IPC behav
 Both `chain.Dial` and `chain.DialWithMetrics` accept the attempt timeout explicitly and use the
 same transport path; enabling metrics does not change how the timeout is selected.
 
-Normal broadcasts and latest/pending admission account nonce reads use one non-fallback write endpoint:
+Normal broadcasts and latest mined admission account nonce reads use one non-fallback write endpoint:
 `chain.writeRpcUrl`, or primary `chain.rpcUrl` when omitted. An explicit write endpoint is chain-ID checked.
 Fee, receipt and state reads use the ordinary read client/fallbacks. Signed bytes are never automatically
 replayed across read endpoints. Account telemetry (balance plus mined and pending nonce gauges) reads only
@@ -257,24 +259,30 @@ submission relay that rate-limits reads never stalls the refresh; its pending no
 submission until the primary RPC sees it, which is acceptable for a gauge and never used for admission. General transport behavior
 remains documented in the [README configuration section](../README.md#configuration).
 
-### Fresh pending nonce and initial collisions
+### Fresh mined nonce and initial collisions
 
-`Initialize` verifies one bounded pending nonce read. Every new broadcast reads pending again immediately
-before signing, without a cached counter, empty-pool requirement or account-confirmation proof. If the
-manager remembers an abandoned nonce, it also reads latest mined state: it reuses that nonce while unused,
-even if pending counts the old call. Mined advancement discards the hint; a failed nonce read defers signing
-and retains it. Failed preparation, signing or definitive submission of the next request also retains
-the hint, including any higher signed fee floor. The
-sending endpoint must include accepted public/private submissions from the other replicas in that view.
+`Initialize` verifies one bounded latest mined nonce read. Every new broadcast reads
+`eth_getTransactionCount(address, "latest")` again immediately before signing, without a cached counter,
+empty-pool requirement or account-confirmation proof. Pending state never advances this selection, so
+fresh requests do not queue higher nonces behind unmined work. All replicas can replace the lowest
+unconsumed nonce after a restart, without remembering or querying the pending call.
+If the manager retains a fee hint, it applies only when its nonce equals that mined count. Advancement
+or a lower nonce after a reorg discards an inapplicable hint; a failed nonce read defers signing and
+retains it. Failed preparation, signing or definitive submission also retains the applicable hint.
+The sending endpoint must serve current mined state; private pending visibility is not required.
 The local lifecycle slot serializes this process's work only. Two processes can read the same nonce.
 
 An initial nonce-too-low or replacement-underpriced response yields `OutcomeNonceConflict`, an error
 wrapping `ErrNonceConflict`, and the exact attempted hash with no receipt. The worker ends that request
-and releases the slot immediately. It does not track the competing transaction and does not
+and releases the slot immediately. An initial underpriced candidate records its own attempted fee caps,
+even when no earlier local hint exists. The next fresh request at that nonce increases both fields by
+at least 12.5%; profitability quoting includes the floor, and request/global ceilings still apply.
+This progressively discovers a usable bid without retrieving foreign private transaction fees.
+The manager does not track the competing transaction and does not
 re-sign business calldata at another nonce. An `already known` response and transport ambiguity retain
 normal ownership and receipt tracking: they may describe an accepted transaction.
 
-The next request can read pending again. A failed pending read produces a submission error before
+The next request reads mined state again. A failed nonce read produces a submission error before
 signing and does not create a persistent account pause. `Available` reports initial RPC readiness;
 `Idle` and `LaneReady` continue to reflect local admission demand. No idle account recovery monitor runs.
 
@@ -293,20 +301,25 @@ not claim inclusion, cancellation, failed execution or a winning peer; the accou
 receipt publication or a reorg. Neither uncertain nonce outcome authorizes automatic calldata replay.
 Each solver queries authoritative business state and rebuilds any retry under its existing bounds.
 
-The reuse hint concerns only this process's abandoned signed lifecycle. There is no unknown-nonce watchdog,
+The fee hint concerns only this process's abandoned lifecycle or underpriced initial attempt. There is no unknown-nonce watchdog,
 startup gap-clearing transaction or peer ownership lookup. It contains a nonce and fee floor, not old
 calldata or an instruction to retry an order. If different relays accepted competing transactions at the
 same nonce, a fresh replacement may still compete with another replica's candidate; the account count
 provides no exclusive ownership.
 
-### Restart limits
+### Restart and fee limits
 
-Signed attempts exist only in memory. Restart reads pending and can submit later nonces without
-recovering another process's calldata, fees or deadline. An abandoned lowest nonce can block all later
-transactions until a valid transaction consumes that nonce. Queued transactions beyond a
-gap and hidden private submissions can evade standard pending reads. Consistent pending visibility,
-sender funds and eventual inclusion remain provider/operational assumptions, not coordination guarantees.
-The local reuse hint is lost on restart; it is not durable crash recovery. For controlled maintenance,
+Signed attempts and fee hints exist only in memory. Restart loses old hashes, calldata, fees and
+deadlines, but still selects the lowest unconsumed nonce from mined state. A fresh eligible business call
+can replace unknown pending work there; underpriced responses rebuild a fee floor over subsequent
+fresh requests. No later nonce is newly queued behind that unknown call. This policy deliberately
+trades pending-transaction pipelining for recovery without durable state or replica coordination.
+
+Replacement remains conditional on eligible fresh work, sender funds, current mined state and eventual
+inclusion. A foreign transaction's unknown fee floor may exceed the new request's profitability ceiling
+or the global ceiling; a particular solver order can also exhaust its retry/deadline budget before
+reaching that floor. Replica contention can replace still-valid work and increase fees. No ordering,
+fairness or recovery of old receipts is promised. For controlled maintenance,
 reconcile outstanding write-route submissions before reusing the EOA. Confirmation of owned receipts does not make later deep reorgs impossible.
 
 ## 7. Shutdown
@@ -394,7 +407,8 @@ fresh business nonce reuse despite a pending count above it, mined-nonce advance
 RPC/preparation/submission failures, replacement fee floors, request/global ceilings and bounded shutdown.
 Solver tests verify current business-state reconciliation, fresh retries and obsolete-result precedence.
 The local Anvil target verifies real fee replacement after a base-fee spike, abandonment followed by a
-different business call at the same nonce, and three independent managers executing distinct orders.
+different business call at the same nonce, restarted recovery without old hints through underpriced
+fresh requests, and three independent managers executing distinct orders as mined nonces advance.
 These public-pool tests do not establish private-provider retention or consistency guarantees.
 
 Fee tests cover the base-fee bound, tip rule, repricing decisions, fee-window parsing, next-block estimate

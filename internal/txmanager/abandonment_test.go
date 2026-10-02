@@ -99,7 +99,7 @@ func TestAbandonmentNeverSendsAdditionalTransaction(t *testing.T) {
 }
 
 func TestReusableNonceRetainsHintAcrossPreparationFailures(t *testing.T) {
-	for _, failure := range []string{"fee feeLimit", "obsolete", "signer", "rejected", "nonce conflict", "nonce RPC error", "nonce RPC deadline"} {
+	for _, failure := range []string{"fee cap", "obsolete", "signer", "rejected", "nonce conflict", "nonce RPC error", "nonce RPC deadline"} {
 		t.Run(failure, func(t *testing.T) {
 			b := &silentAcceptanceBackend{mockBackend: newMockBackend()}
 			m := New(b, mustSigner(t), big.NewInt(1), Config{MaxFeeGwei: 100, ReplacementInterval: 40 * time.Millisecond}, logr.Discard())
@@ -112,7 +112,7 @@ func TestReusableNonceRetainsHintAcrossPreparationFailures(t *testing.T) {
 			request := Request{To: common.HexToAddress("0xbbb"), Data: []byte{4}, GasLimit: 55_000}
 			originalSigner := m.signer
 			switch failure {
-			case "fee feeLimit":
+			case "fee cap":
 				request.MaxFeePerGas = big.NewInt(22_000_000_000)
 			case "obsolete":
 				request.Obsolete = func(context.Context) (bool, error) { return true, nil }
@@ -169,7 +169,7 @@ func (*alwaysFailSigner) SignTx(context.Context, *types.Transaction, *big.Int) (
 	return nil, io.ErrUnexpectedEOF
 }
 
-func TestConsumedAbandonedNonceUsesFreshPendingNonce(t *testing.T) {
+func TestConsumedAbandonedNonceUsesFreshMinedNonce(t *testing.T) {
 	b := &silentAcceptanceBackend{mockBackend: newMockBackend()}
 	m := New(b, mustSigner(t), big.NewInt(1), Config{}, logr.Discard())
 	first, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0xaaa"), GasLimit: 50_000})
@@ -179,7 +179,7 @@ func TestConsumedAbandonedNonceUsesFreshPendingNonce(t *testing.T) {
 	m.abandonPending(t.Context(), first, "pending_timeout", nil)
 	b.latestNonce, b.pendingNonce = 8, 11
 	next, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0xbbb"), GasLimit: 60_000})
-	if err != nil || next == nil || next.nonce != 11 || m.reusable != nil {
+	if err != nil || next == nil || next.nonce != 8 || m.reusable != nil {
 		t.Fatalf("consumed hint was reused: next=%+v err=%v hint=%+v", next, err, m.reusable)
 	}
 }

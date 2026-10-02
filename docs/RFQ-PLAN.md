@@ -101,10 +101,14 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 - **Retries distinguish unsent work from transactions.** Failed pre-submission work with no recorded hash
   may be retried while the order is open. `abandoned`, `nonce_conflict` and `nonce_consumed` mean signed
   execution is uncertain without an owned receipt. It first enters backend reconciliation: a terminal status
-  retires the order, while `open` schedules a fresh retry under the same budget and deadline. Missing,
+  retires the order, while `open` schedules a fresh retry under the order deadline and polling backoff. Missing,
   unavailable or unknown backend status keeps the obligation until its recorded order deadline.
-  `maxNonceRetries` defaults to three additional attempts shared by abandonment and nonce-race
-  recovery; zero disables retries. The retry budget survives re-queuing; retrying clears only the attempted
+  `maxNonceRetries` defaults to three additional attempts after accepted abandonment or nonce
+  consumption; zero disables those retries. Rejected initial `nonce_conflict` results do not spend this
+  budget and cannot permanently retire an open order merely because other replicas race its EOA nonce.
+  They still require fresh backend-open reconciliation, a poll delay and a fresh open-order listing,
+  and stop at the order deadline. The accepted-execution retry budget survives these conflicts and
+  re-queuing; retrying clears only the attempted
   hash and runs the full executable-order lookup, chain deadline validation, strategy plan, and discount
   resolution again. Retry waiting counts as an active obligation and reconciles terminal
   backend status; its retained order deadline also expires it locally if backend views disappear or stay
@@ -380,8 +384,10 @@ dropping features.
    cancellation transaction is sent. Regression tests cover fresh retries, budgets, expiry, unknown
    statuses, obsolete-result precedence, reservations and shutdown.
 7. **(done) Nonce-race recovery** — either uncertain nonce result without an owned receipt reconciles
-   backend status before sharing the existing bounded retry budget. Regression tests cover terminal/unknown
-   backend states, fresh open polling and rebuilt calldata, backoff, local deadline expiry and exhausted budgets.
+   backend status before retrying. Initial conflicts use polling/deadline bounds without spending
+   `maxNonceRetries`; accepted unknown results retain that budget. Regression tests cover more than four
+   initial conflicts, terminal/unknown backend states, fresh open polling and rebuilt calldata, backoff,
+   local deadline expiry and preservation/exhaustion of the accepted-execution retry budget.
 
 **Reads are multicall-batched** end to end: amount-specific strategy evaluation uses the shared
 per-route fill-quote batch (`paused`, `getMaxAssets`, `getAmountOut`, `minDiscount`), while inventory
