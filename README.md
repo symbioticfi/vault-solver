@@ -365,7 +365,7 @@ The shared `txManager` serializes transaction-sending solvers on one EOA. While 
 or active, UniswapX declines new quotes, LI.FI retires standing curves, and 3F stops new offers;
 reconciliation continues. RFQ keeps quoting and accounts for pending fills through reservations; it stops
 only while the nonce lane is unavailable. Pending calls receive ordinary fee bumps at the same nonce.
-At the request deadline, pending timeout or a terminal business-status check, the manager abandons active tracking
+At the request deadline, pending timeout or a terminal business-status check, the manager abandons tracking
 and releases the local lane. It remembers the unused nonce and last signed fees so the next freshly planned
 order can replace that call, with both fee fields increased by at least 12.5% under the configured ceilings.
 Each pending receipt RPC has its own timeout and does not block lifecycle timers. A stalled call's gas
@@ -375,15 +375,6 @@ Configure `maxFeeGwei` for every transaction-sending process. `pendingTimeoutMs`
 `broadcastTimeoutMs` and `shutdownTimeoutMs` bound pending tracking, submission and shutdown.
 The manager remains alive while solvers drain accepted work; orchestrator SIGTERM grace must cover both
 solver preparation/drain and manager shutdown. A timeout does not guarantee that a signed call cannot land.
-
-After `abandoned` or `nonce_consumed`, a separate passive observer checks known signed hashes without
-occupying the nonce lane or sending transactions. A canonical receipt at the configured confirmation depth
-updates successful fill amounts/counts, 3F redemption counts, and actual gas/fees. Reverted late receipts
-update costs only. The original request outcome and order retry/state handling stay unchanged.
-`lateReceiptTimeoutMs` defaults to 600000 (ten minutes) after lane release; `lateReceiptMaxHashes` defaults
-to 1024. Both are positive, with zero selecting the default. The hash cap also separately bounds local
-receipt deduplication and ancestry caching. Observation expiry, capacity eviction, shutdown or restart can still miss late metrics;
-there is no durable or cross-process deduplication. Late-receipt and dropped-hash metrics expose this coverage.
 
 Every call is priced for inclusion in the next block at the lowest spend:
 - The fee cap is the exact EIP-1559 base-fee bound over the next `horizon.maxBlocks` blocks (default 6,
@@ -626,10 +617,7 @@ Sentry groups these diagnosed errors by `(solver, message, reason_code)`; other 
 ### Metrics
 
 The [txmanager metric reference](docs/TXMANAGER-PLAN.md#metrics) covers transaction outcomes, admission,
-replacements, late receipts, phase timing and account snapshots, including labels and units.
-The runtime dashboard shows late confirmed/reverted receipts, retained hashes and observation drops.
-Transaction request counts describe the original tracking outcome; late receipts add execution and cost
-observations without adding another request completion.
+replacements, phase timing and account snapshots, including labels and units.
 
 The registry also includes standard Go/process collectors,
 `solver_bot_build_info{version,commit}`, and `solver_bot_solver_info{solver}`. The first identifies the exact

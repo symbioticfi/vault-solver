@@ -516,7 +516,7 @@ func TestOrderWorkerRecoveryBarrierFollowsCapacityReservation(t *testing.T) {
 	if len(txm.results) != 1 {
 		t.Fatalf("pending transactions = %d, want 1", len(txm.results))
 	}
-	txm.complete(txm.results[0], txm.fillResult())
+	txm.results[0] <- txm.fillResult()
 	select {
 	case err := <-done:
 		if err != nil {

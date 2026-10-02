@@ -577,18 +577,12 @@ described above. The txmanager
 may replace the same pending nonce as described above; that is fee management for one submission, not order
 retry.
 `abandoned`, `nonce_conflict` and `nonce_consumed` release the fill's local reservation and
-record an expected decline. Their terminal result supplies no owned receipt and does not record fill success. No automatic order
+record an expected decline. It supplies no owned receipt and never records fill success. No automatic order
 retry is introduced: a later WebSocket replay or reconnect REST recovery must re-read current order status,
 deadlines, liquidity and routing before building another request; an already claimed/refunded order is skipped.
 A healthy connected feed does not periodically poll REST after catch-up, so an order that loses nonce
 competition requires upstream redelivery or reconnect recovery to be reconsidered. These rules do not
 coordinate quote inventory or reservations across replicas.
-
-Each submitted fill snapshots only its metric pointer, token addresses, input/output amounts and gross
-planned surplus into `Request.ObserveReceipt`. The manager's bounded process-local hash deduplication
-covers normal inclusion and late canonical owned receipts at the configured confirmation depth. A
-successful late observation records `fill/success`, freshness and amounts after the worker has released
-the order, without changing capacity, queue state or protocol reconciliation and without submitting a retry.
 During process shutdown the shared txmanager outlives solver intake cancellation while accepted fills finish.
 LI.FI first keeps the feed alive while expiring active quotes, then stops accepting orders and drains admitted
 inbox work and accepted fills. The process hard stop bounds that solver preparation and the txmanager's configured

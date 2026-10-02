@@ -24,8 +24,9 @@ var (
 )
 
 type pendingUniswapFill struct {
-	order  *resolvedOrder
-	result <-chan txmanager.Result
+	order          *resolvedOrder
+	plannedSurplus *big.Int
+	result         <-chan txmanager.Result
 	// span and end keep the uniswapx.fill span open from submission until the transaction result
 	// arrives: span carries the outcome attributes, end closes it. startFill sets both, and end is
 	// idempotent, so the span is never ended twice.
@@ -252,19 +253,11 @@ func (s *Solver) startFill(
 		"deadlineRemaining", deadline.Sub(now),
 		"submissionDeadline", submissionDeadline.Unix(),
 	)
-	plannedSurplus := strategies.PlannedSurplus(plan.Routes, order.AmountOut)
-	var observeReceipt func(context.Context, txmanager.Result)
-	if s.metrics != nil {
-		observeReceipt = s.metrics.fillAmounts.ReceiptObserver(
-			order.TokenIn, order.AmountIn, order.TokenOut, order.AmountOut, plannedSurplus,
-		)
-	}
 	result, err := s.submitFill(ctx, txmanager.Request{
 		Solver: Name,
 		To:     order.Executor, Data: data, MaxFeePerGas: transactionMaxFee, Deadline: submissionDeadline,
-		Obsolete:       s.orderObsolete(order),
-		Label:          "uniswapx-fill",
-		ObserveReceipt: observeReceipt,
+		Obsolete: s.orderObsolete(order),
+		Label:    "uniswapx-fill",
 	})
 	if err != nil {
 		return nil, err
@@ -279,7 +272,7 @@ func (s *Solver) startFill(
 		"pricingMaxFeePerGas", pricingMaxFee.String(),
 	)
 	return &pendingUniswapFill{
-		order: order, result: result,
+		order: order, plannedSurplus: strategies.PlannedSurplus(plan.Routes, order.AmountOut), result: result,
 		span: trace.SpanFromContext(ctx), end: end,
 	}, nil
 }
@@ -589,6 +582,16 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 	}
 	s.recordFillSuccess()
 	s.complete(order.Hash, now)
+	if s.metrics != nil {
+		s.metrics.fillAmounts.Observe(
+			result.Receipt,
+			order.TokenIn,
+			order.AmountIn,
+			order.TokenOut,
+			order.AmountOut,
+			fill.plannedSurplus,
+		)
+	}
 }
 
 // errorReason renders an error for a span event attribute, naming its absence rather than "".

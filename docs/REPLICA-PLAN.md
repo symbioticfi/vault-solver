@@ -44,10 +44,7 @@ fresh eligible request, the old call can remain pending and still land if valid.
 
 None of these outcomes proves a successful fill, a failure or which peer won. The generic
 layer does not know business orders. It never fabricates receipts, gas/paid-fee accounting or a winning
-hash; solvers own current business-state reconciliation and any freshly built retry. A bounded passive
-observer can subsequently account a known owned hash after canonical inclusion and the configured depth,
-without changing the unknown terminal result, nonce lane, fees or solver business state. Its callback
-updates execution telemetry only; initial rejected nonce conflicts are not retained.
+hash; solvers own current business-state reconciliation and any freshly built retry.
 
 ## 2. Provider and restart limits
 
@@ -70,10 +67,7 @@ mined state and eventual inclusion. A foreign fee floor may exceed a fresh order
 or the global ceiling, and an individual order's retry/deadline policy may stop before that floor is reached.
 The design does not promise ordering, fairness, recovery of old hashes/receipts, or protection
 against reorgs beyond the chosen receipt confirmation depth. Controlled maintenance reconciles outstanding
-private write-route submissions before reusing the EOA. Late metric observation defaults to ten minutes
-and 1024 hashes; the local receipt deduplication ledger is independently bounded the same way. Expiry,
-capacity eviction, shutdown and restart can miss late metrics. Deduplication applies only to retained
-local hashes, not globally across replicas or restarts.
+private write-route submissions before reusing the EOA.
 
 ## 3. Solver reconciliation
 
@@ -102,7 +96,5 @@ at nonces 1 and 2 after mined state advances. It verifies all three distinct tra
 Another scenario abandons a pending business call, verifies no
 self-transfer was sent, and mines a fresh different business call replacing its unused nonce. A manager
 recreated with no hints replaces unknown higher-fee pending work at nonce 0 through fresh priced requests.
-A late-winner scenario abandons A, admits B at the same nonce, then mines A and verifies its canonical
-success/cost metrics once without changing either terminal result or blocking fresh C at the next nonce.
 These public-pool tests do not
 establish retention or consistency guarantees for a private submission provider.

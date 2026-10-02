@@ -3,6 +3,7 @@ package lifi
 import (
 	"context"
 	"encoding/json"
+	"math/big"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,7 @@ type pendingFill struct {
 	order          *submittedOrder
 	orderID        common.Hash
 	reservationKey string
+	plannedSurplus *big.Int
 	result         <-chan txmanager.Result
 }
 

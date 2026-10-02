@@ -196,7 +196,7 @@ handling is described per solver in §5.
 
 ### 3.4 txmanager
 
-`sendAsync` starts the transaction span
+`Request` did not change and no submission site changed. `sendAsync` starts the transaction span
 `"txmanager.send <label>"` from the caller's context, so it is an ordinary child of the submitting
 fill span, and hands the span to the worker on the internal job. Starting it in `sendAsync` means the
 span **covers the admission wait** as well as the broadcast. The worker continues that span on its own
@@ -219,14 +219,6 @@ The send span **ends before the result is delivered** to the
 caller, so a caller resuming its own trace never races the span it nests under. A send declined because
 the lane is busy gets a `declined` event with `decision=not_admitted`, `reason=lane_busy`, and ends
 without a `tx.outcome` (§10). `txmanager.account_poll` roots each account-poll tick.
-
-After `abandoned` or `nonce_consumed`, passive polls use short `txmanager.late_receipt` spans linked
-to the ended send span through its immutable `SpanContext`. They carry `solver`, `tx.label` and
-`tx.hash` and `tx.nonce`; a qualified receipt adds its `tx.outcome`. The original lifecycle stays ended.
-Expected absent receipts decline with
-`receipt_unavailable`; depth waiting uses `confirmation_depth_pending`. Invalid/RPC/canonical-proof
-errors end that individual poll span as Error and defer observation. Late receipt metrics and callbacks
-do not change the original send span outcome or solver completion trace.
 
 The worker stores the request's `solver`-stamped logger on every context of the lifecycle, the send
 span included, so `observability.Log(ctx)` puts `solver`, `label`, `trace_id` and `span_id` on every

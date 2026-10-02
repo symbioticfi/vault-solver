@@ -1,7 +1,6 @@
 package liquidlane
 
 import (
-	"context"
 	"math/big"
 	"time"
 
@@ -9,7 +8,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 const (
@@ -49,24 +47,6 @@ type FillMetrics struct {
 // NewFillMetrics binds the shared fill path to its owning solver's workflow metrics.
 func NewFillMetrics(workflow *observability.WorkflowMetrics) *FillMetrics {
 	return &FillMetrics{workflow: workflow, now: time.Now}
-}
-
-// ReceiptObserver snapshots planned amounts for the manager's normal and late receipt telemetry.
-// The callback only updates metrics; it retains no order or solver state and performs no I/O.
-func (m *FillMetrics) ReceiptObserver(
-	tokenIn common.Address,
-	amountIn *big.Int,
-	tokenOut common.Address,
-	amountOut *big.Int,
-	plannedSurplus *big.Int,
-) func(context.Context, txmanager.Result) {
-	if m == nil {
-		return nil
-	}
-	input, output, surplus := CloneBig(amountIn), CloneBig(amountOut), CloneBig(plannedSurplus)
-	return func(_ context.Context, result txmanager.Result) {
-		m.Observe(result.Receipt, tokenIn, input, tokenOut, output, surplus)
-	}
 }
 
 func (m *FillMetrics) Observe(

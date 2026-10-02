@@ -1,17 +1,14 @@
 package bridgefacilitator
 
 import (
-	"context"
 	"math/big"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 const (
@@ -112,24 +109,11 @@ func (s *Solver) observeSubmittedOffer(token common.Address, principal, expected
 	s.metrics.workflow.AddAmount(threeFEventOffer, token.Hex(), threeFOfferExpectedYield, expectedYield)
 }
 
-func (m *threeFMetrics) observeRedeemedRequests(count int) {
-	if m != nil && count > 0 {
-		m.workflow.ObserveEventAt(
-			threeFEventRedeem, "success", float64(count), m.now(),
+func (s *Solver) observeRedeemedRequests(count int) {
+	if s.metrics != nil && count > 0 {
+		s.metrics.workflow.ObserveEventAt(
+			threeFEventRedeem, "success", float64(count), s.metrics.now(),
 		)
-	}
-}
-
-// redeemReceiptObserver retains only metrics and the submitted batch size. Late telemetry never
-// repeats redemption scanning, changes backlog state, or sends another transaction.
-func (m *threeFMetrics) redeemReceiptObserver(count int) func(context.Context, txmanager.Result) {
-	if m == nil {
-		return nil
-	}
-	return func(_ context.Context, result txmanager.Result) {
-		if result.Receipt != nil && result.Receipt.Status == types.ReceiptStatusSuccessful {
-			m.observeRedeemedRequests(count)
-		}
 	}
 }
 
