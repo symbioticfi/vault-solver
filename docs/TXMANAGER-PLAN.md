@@ -203,6 +203,9 @@ snapshots are retried; two consecutive missing receipts or a proven fork change 
 tracking. A read error breaks the consecutive-miss streak. A receipt for an older signed variant remains
 valid evidence for the same nonce.
 
+After delivering a terminal result, the manager stops watching that lifecycle. It does not detect later
+reorgs of completed transactions or reopen integration orders.
+
 | Outcome | Meaning |
 |---|---|
 | `confirmed` | Normal call succeeded and satisfied confirmation policy. |
@@ -279,15 +282,6 @@ The result wraps `ErrNonceConsumed`, retains the original attempted hash, and ha
 not claim inclusion, cancellation, failed execution or a winning peer; the account read may race mining,
 receipt publication or a reorg. Neither uncertain nonce outcome authorizes automatic calldata replay.
 Each solver queries authoritative business state and rebuilds any retry under its existing bounds.
-
-RFQ and UniswapX also reconcile completed orders that reappear in their open feeds. They retain minimal
-successful inclusion evidence in their existing bounded local records/caches. The shared chain helper
-checks the canonical inclusion block and, after a block replacement, the exact transaction's receipt to
-adopt a successful re-inclusion. A rolled-back completion plus fresh protocol `open` status authorizes a
-newly prepared request under each solver's retry and deadline policy. Backend-only completions require
-fresh point status confirmation. This adds no completed lifecycle to txmanager and no account-wide
-watchdog: retries still enter ordinary admission and fresh pending nonce selection. Inconclusive reads
-preserve completion suppression; a later reorg is not prevented by the configured confirmation depth.
 
 Normal cancellation is limited to this process's accepted or uncertain signed lifecycle, at the same
 nonce and under the existing fee cap/deadline policy. There is no unknown-nonce watchdog or startup

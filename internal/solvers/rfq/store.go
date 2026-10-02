@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/parse"
@@ -60,16 +59,11 @@ type orderRecord struct {
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 	CancellationRetries int
-	// NonceRetriesExhausted also suppresses a reopened backend completion that never had a local
-	// signed hash; it must not be mistaken for an ordinary, retryable unsigned preparation failure.
-	NonceRetriesExhausted bool
-	RetryAt               time.Time
-	RetryDeadline         time.Time
-	// IncludedAt is the block a successful fill landed in; zero until then. A snapshot read at or
+	RetryAt             time.Time
+	RetryDeadline       time.Time
+	// IncludedAt is the block a confirmed fill landed in; zero until then. A snapshot read at or
 	// after it already reflects the fill, so the reservation is not subtracted from it.
-	IncludedAt     uint64
-	IncludedHash   common.Hash
-	IncludedTxHash common.Hash
+	IncludedAt uint64
 }
 
 // queuedOrder is the input to upsertQueued, carrying the fields known when an order is first polled.
@@ -128,7 +122,7 @@ func (s *store) upsertQueued(in queuedOrder) bool {
 		rec = &orderRecord{OrderID: in.OrderID, Status: statusQueued, CreatedAt: now}
 		s.orders[in.OrderID] = rec
 	}
-	if rec.Status == statusFailed && rec.TxHash == (common.Hash{}) && !rec.NonceRetriesExhausted {
+	if rec.Status == statusFailed && rec.TxHash == (common.Hash{}) {
 		rec.Status = statusQueued
 		rec.LastError = ""
 	}
@@ -287,31 +281,6 @@ func (s *store) markIncluded(orderID string, block uint64) {
 	}
 }
 
-// markFillInclusion retains receipt evidence for every successful inclusion, including a fill whose
-// confirmation wait stopped. A later open backend view alone cannot undo this evidence.
-func (s *store) markFillInclusion(orderID string, receipt *ethtypes.Receipt) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if rec := s.orders[orderID]; rec != nil {
-		rec.IncludedAt = receipt.BlockNumber.Uint64()
-		rec.IncludedHash = receipt.BlockHash
-		rec.IncludedTxHash = receipt.TxHash
-	}
-}
-
-// clearFillInclusion stops treating an orphaned completion as settled spend. Its ledger entry becomes
-// the reopened order's pending commitment until a fresh plan replaces it. The caller owns the order
-// through the in-flight set and reconciles fresh backend state before scheduling another fill.
-func (s *store) clearFillInclusion(orderID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if rec := s.orders[orderID]; rec != nil {
-		rec.IncludedAt = 0
-		rec.IncludedHash = common.Hash{}
-		rec.IncludedTxHash = common.Hash{}
-	}
-}
-
 // boundUnsignedWork sets the deadline after which unsigned preparation of an order expires locally.
 // A bound already recorded for a nonce retry is kept.
 func (s *store) boundUnsignedWork(orderID string, deadline time.Time) {
@@ -338,11 +307,7 @@ func (s *store) scheduleNonceRetry(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec := s.orders[orderID]
-	if rec == nil {
-		return false
-	}
-	if rec.CancellationRetries >= limit {
-		rec.NonceRetriesExhausted = true
+	if rec == nil || rec.CancellationRetries >= limit {
 		return false
 	}
 	rec.CancellationRetries++

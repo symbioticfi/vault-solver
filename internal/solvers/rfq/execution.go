@@ -90,7 +90,6 @@ type executionService struct {
 type fillReader interface {
 	quoteCandidateReader
 	latestBlock(ctx context.Context) (uint64, time.Time, error)
-	reconcileInclusion(ctx context.Context, receipt *ethtypes.Receipt) (bool, *ethtypes.Receipt, error)
 	readPermissionedVaultInventories(
 		ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,
 	) ([]solverInventory, error)
@@ -251,12 +250,6 @@ func (e *executionService) pollOpenOrders(ctx context.Context) (err error) {
 	}
 	for i := range orders {
 		o := &orders[i]
-		if reopenErr := e.reconcileReopenedCompletion(ctx, o.OrderID); reopenErr != nil {
-			if err == nil {
-				err = reopenErr
-			}
-			continue
-		}
 		if e.store.upsertQueued(queuedOrder{OrderID: o.OrderID, QuoteID: o.QuoteID}) {
 			e.metrics.observeWin()
 		}
@@ -267,107 +260,7 @@ func (e *executionService) pollOpenOrders(ctx context.Context) (err error) {
 	if e.metrics != nil {
 		e.metrics.observeOrderPoll(e.now())
 	}
-	return err
-}
-
-// reconcileReopenedCompletion handles a fresh open listing for a previously completed order. Our
-// own successful inclusion requires a proven block replacement; a completion learned solely from
-// the backend requires a fresh point lookup confirming it reopened. Poll and submitter share the
-// in-flight guard, so a stale listing can never interrupt an unresolved Send lifecycle.
-func (e *executionService) reconcileReopenedCompletion(ctx context.Context, orderID string) error {
-	local := e.store.order(orderID)
-	if !completedOrderCanReopen(local) {
-		return nil
-	}
-	if !e.acquire(orderID) {
-		return nil
-	}
-	defer e.release(orderID)
-	local = e.store.order(orderID)
-	if !completedOrderCanReopen(local) {
-		return nil
-	}
-	if local.IncludedAt != 0 || local.IncludedHash != (common.Hash{}) {
-		reorged, canonical, err := e.reader.reconcileInclusion(ctx, &ethtypes.Receipt{
-			TxHash: local.IncludedTxHash, BlockNumber: new(big.Int).SetUint64(local.IncludedAt),
-			BlockHash: local.IncludedHash, Status: ethtypes.ReceiptStatusSuccessful,
-		})
-		if err != nil {
-			return errors.Errorf("check completed order %s inclusion: %w", orderID, err)
-		}
-		if !reorged {
-			if canonical != nil {
-				e.store.markFillInclusion(orderID, canonical)
-			}
-			return nil
-		}
-	}
-	bo, err := e.backend.getOrder(ctx, orderID)
-	if err != nil {
-		return errors.Errorf("reconcile reopened order %s: %w", orderID, err)
-	}
-	if bo == nil || ctx.Err() != nil {
-		return nil
-	}
-	terminal, known := backendOrderTerminal(bo.OrderStatus)
-	if !known {
-		return errors.Errorf("reconcile reopened order %s: %w %q", orderID, errUnknownOrderStatus, bo.OrderStatus)
-	}
-	if terminal {
-		return nil
-	}
-	deadline, err := e.reopenedOrderDeadline(ctx, local)
-	if err != nil {
-		return err
-	}
-	e.store.clearFillInclusion(orderID)
-	retryAt := e.now().Add(e.pollInterval)
-	if deadline.IsZero() || !retryAt.Before(deadline) {
-		e.store.markStatus(orderID, statusExpired, local.TxHash, "reopened order deadline has passed")
-		return nil
-	}
-	if !e.store.scheduleNonceRetry(orderID, e.maxCancellationRetries, retryAt,
-		deadline, local.TxHash, "completed order reopened") {
-		e.store.markStatus(orderID, statusFailed, local.TxHash, "nonce retry budget exhausted")
-		return nil
-	}
-	observability.Log(ctx).V(1).Info("completed order reopened; fresh retry scheduled",
-		"orderId", orderID, "retryAt", retryAt, "tx", local.TxHash.Hex())
 	return nil
-}
-
-func completedOrderCanReopen(local *orderRecord) bool {
-	return local != nil && (local.Status == statusFilled ||
-		(local.Status == statusSubmitted && local.IncludedAt != 0))
-}
-
-// reopenedOrderDeadline preserves an existing retry bound. A completion learned before executable
-// resolution has none, so validate fresh signed terms and chain time before authorizing its retry.
-func (e *executionService) reopenedOrderDeadline(ctx context.Context, local *orderRecord) (time.Time, error) {
-	if !local.RetryDeadline.IsZero() {
-		return local.RetryDeadline, nil
-	}
-	exec, err := e.resolveExecutable(ctx, local)
-	if err != nil {
-		return time.Time{}, errors.Errorf("resolve reopened order %s: %w", local.OrderID, err)
-	}
-	if exec == nil {
-		return time.Time{}, errors.Errorf("reopened order %s is not executable", local.OrderID)
-	}
-	order, err := decodeOrder(exec.encodedOrder)
-	if err != nil {
-		return time.Time{}, errors.Errorf("decode reopened order %s: %w", local.OrderID, err)
-	}
-	if _, _, err := executableOrderTerms(exec, order, e.executor); err != nil {
-		return time.Time{}, errors.Errorf("validate reopened order %s: %w", local.OrderID, err)
-	}
-	observedAt := e.now()
-	_, chainTime, err := e.reader.latestBlock(ctx)
-	if err != nil {
-		return time.Time{}, errors.Errorf("read reopened order %s chain time: %w", local.OrderID, err)
-	}
-	deadline, _ := liquidlane.CancellationDeadline(time.Unix(order.Request.Deadline.Int64(), 0), chainTime, observedAt, e.now())
-	return deadline, nil
 }
 
 func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
@@ -509,11 +402,11 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 			"outcome", outcome)
 		return
 	}
-	if res.Receipt != nil && res.Receipt.BlockNumber != nil {
-		e.store.markFillInclusion(orderID, res.Receipt)
-	}
 	if outcome == txmanager.OutcomeConfirmed {
 		observability.Log(ctx).Info("filled order", "tx", res.Hash.Hex())
+		if res.Receipt != nil && res.Receipt.BlockNumber != nil {
+			e.store.markIncluded(orderID, res.Receipt.BlockNumber.Uint64())
+		}
 	} else {
 		observability.Log(ctx).Error(res.Err, "fill included but confirmation wait failed",
 			"attempt", attempt, "tx", res.Hash.Hex())

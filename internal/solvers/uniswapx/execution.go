@@ -581,7 +581,7 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", result.Hash.Hex())
 	}
 	s.recordFillSuccess()
-	s.completeIncluded(order.Hash, now, result.Hash, result.Receipt)
+	s.complete(order.Hash, now)
 	if s.metrics != nil {
 		s.metrics.fillAmounts.Observe(
 			result.Receipt,

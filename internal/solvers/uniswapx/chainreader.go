@@ -151,10 +151,6 @@ func (r *reader) latestBlockTime(ctx context.Context) (time.Time, error) {
 	return time.Unix(int64(header.Time), 0), nil
 }
 
-func (r *reader) reconcileFillInclusion(ctx context.Context, receipt *types.Receipt) (bool, *types.Receipt, error) {
-	return chain.ReconcileInclusion(ctx, r.chain, receipt)
-}
-
 func (r *reader) transactionBlockTimeConfirmed(
 	ctx context.Context,
 	txHash common.Hash,

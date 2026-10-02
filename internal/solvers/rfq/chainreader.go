@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
@@ -36,10 +35,6 @@ func (r *reader) latestBlock(ctx context.Context) (uint64, time.Time, error) {
 		return 0, time.Time{}, errors.Errorf("latest block header: %w", err)
 	}
 	return header.Number.Uint64(), time.Unix(int64(header.Time), 0), nil
-}
-
-func (r *reader) reconcileInclusion(ctx context.Context, receipt *ethtypes.Receipt) (bool, *ethtypes.Receipt, error) {
-	return chain.ReconcileInclusion(ctx, r.chain, receipt)
 }
 
 // recoveryVault is one configured LiquidLane adapter plus the Vault and Asset derived from it. Config

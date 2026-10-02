@@ -13,7 +13,6 @@ import (
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"golang.org/x/sync/errgroup"
@@ -67,12 +66,9 @@ type Solver struct {
 	lastExclusivePoll     atomic.Int64
 	refreshCh             chan struct{}
 	// stateMu guards order retry/dedup, single-source selections and breaker history.
-	stateMu    sync.Mutex
-	selections map[string]quoteSelection
-	filled     map[common.Hash]time.Time
-	// completedBlocks retains only owned fill inclusion evidence, guarded by stateMu. A fresh
-	// open listing must prove that block orphaned before removing completed suppression.
-	completedBlocks   map[common.Hash]*ethtypes.Receipt
+	stateMu           sync.Mutex
+	selections        map[string]quoteSelection
+	filled            map[common.Hash]time.Time
 	retryAt           map[common.Hash]time.Time
 	inFlight          map[common.Hash]bool
 	attempts          map[common.Hash]int
@@ -110,7 +106,6 @@ type chainReader interface {
 		amountIn *big.Int,
 	) ([]liquidlane.FillQuote, error)
 	latestBlockTime(ctx context.Context) (time.Time, error)
-	reconcileFillInclusion(ctx context.Context, receipt *ethtypes.Receipt) (bool, *ethtypes.Receipt, error)
 	transactionBlockTimeConfirmed(
 		ctx context.Context,
 		txHash common.Hash,

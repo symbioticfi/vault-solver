@@ -119,12 +119,8 @@ field replaces `maxRate`, so run this version with a backend that sends it. Fill
 sent one at a time on the shared nonce lane. While a fill is pending, the solver checks the order's backend
 status: once the backend reports it no longer open (filled, cancelled, expired, unfunded or failed), the fill
 is replaced by a same-nonce cancellation instead of holding the lane until the fill deadline, and the order
-is retired without a retry and counted as `fill/obsolete`. If a completed order appears open again, RFQ
-checks its known fill inclusion and fetches the order's current status. A replaced inclusion block permits
-a fresh retry; a canonical fill, including the same transaction re-included in another block, remains
-completed. Completion learned only from the backend requires a fresh per-order `open` response.
-Reopening shares `maxCancellationRetries` and the existing backoff/deadline, then rebuilds the fill from
-current terms and liquidity. Reservations are local to the process and are not restored after a restart.
+is retired without a retry and counted as `fill/obsolete`. Reservations are local to the process and are not restored
+after a restart.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).
@@ -318,13 +314,6 @@ the inventory and the signed discount (or the adapter minimum for direct routes)
 order. The discount listing carries no rate. With `priceBufferBps: 0`, an exact-input quote equals the
 payout, and the fill reserves and resolves exactly it.
 
-UniswapX also rechecks completed orders that return in a fresh open-order poll. A known fill stays
-suppressed while its inclusion is canonical, including re-inclusion of the same transaction in another
-block. When completion is undone and a per-order lookup confirms `open`, the solver clears its completed
-cache entry, refreshes inventory, and prepares a fresh fill through the usual deadline and simulation
-checks. An obsolete order without a successful owned fill requires that same fresh status lookup.
-Unavailable or inconclusive reads defer that order while polling continues for other orders.
-
 The order API key is required and read indirectly through `orderServer.apiKeyEnv`. Uniswap's public quote
 contract specifies source-IP allowlisting rather than an application header, so restrict the quote endpoint
 to the published Beta/production source IPs at the ingress. The order API URL must use HTTPS except for
@@ -444,6 +433,10 @@ Accepted or transport-uncertain broadcasts keep their exact signed hashes and or
 confirmation, replacement and cancellation policy. Before replacement, a higher mined account nonce
 stops further broadcasts. If all owned hashes are absent, the manager can return `nonce_consumed` without
 a receipt. Neither nonce outcome proves that our order executed or that another replica won.
+
+Reorg checks run while a transaction is being confirmed. Completed RFQ and UniswapX orders use their
+existing terminal records and deduplication caches; there is no completed-order watcher or automatic
+reopening after a later reorg.
 
 A replica never starts recovery cancellation merely because another transaction is pending. Restart
 loses its signed attempts: an abandoned lowest nonce can block later transactions until the original
