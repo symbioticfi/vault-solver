@@ -105,8 +105,8 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   execution is uncertain without an owned receipt. It first enters backend reconciliation: a terminal status
   retires the order, while `open` schedules a fresh retry under the same budget and deadline. Missing,
   unavailable or unknown backend status keeps the obligation until its recorded order deadline.
-  `maxCancellationRetries` defaults to three additional attempts shared by cancellation and nonce-race
-  recovery; zero disables both. The retry budget survives re-queuing; retrying clears only the attempted
+  `maxCancellationRetries` defaults to three additional attempts shared by cancellation, nonce-race
+  recovery and reopening rolled-back completions; zero disables all three. The retry budget survives re-queuing; retrying clears only the attempted
   hash and runs the full executable-order lookup, chain deadline validation, strategy plan, and discount
   resolution again. Retry waiting counts as an active obligation and reconciles terminal
   backend status; its retained order deadline also expires it locally if backend views disappear or stay
@@ -116,6 +116,20 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   the order becomes `obsolete` (never re-armed, even while the backend still lists it open), no retry is
   scheduled, and backend status is reconciled once, which may refine it to `filled`. These protections and retry budgets are in-memory per process;
   an RPC nonce result does not prove an owned fill succeeded or coordinate order/capacity ownership across replicas.
+- **Completed fills can reopen after a reorg.** A fresh open-order listing reconciles local `filled`
+  records and successful included-but-not-yet-backend-completed records under the same per-order in-flight
+  guard as submission. Successful receipts retain transaction hash, block number and block hash separately
+  from a backend transaction reference. `chain.ReconcileInclusion` requires a replaced canonical inclusion
+  block before declaring an owned completion rolled back. It re-reads that exact transaction to retain a
+  successful canonical re-inclusion at its new height; missing headers, RPC errors and invalid receipts
+  preserve suppression. A backend-only completion without owned inclusion proof instead requires a fresh
+  point lookup confirming `open`. All reopenings require that lookup and the existing deadline, retry
+  budget, backoff and another open poll. Clearing inclusion turns the retained spend ledger back into an
+  active commitment until a fresh plan replaces it. The retry resolves signed terms, liquidity, discounts
+  and calldata again; txmanager reads pending nonce again before signing. Other terminal failures and
+  unresolved signed lifecycles are not re-armed by an open listing. Reconciliation is triggered by open
+  polling while the record is retained, not by a continuous completed-transaction watcher or a finality
+  guarantee. Read errors for one completed order do not prevent unrelated orders from being polled.
 - **Shutdown joins accepted fills.** RFQ stops new polling and shuts down its quote listener, then waits for
   the poll loop and the submitter to finish. A fill already admitted by txmanager keeps its lifecycle ownership and RFQ
   records the terminal result before `Run` returns; the framework's bounded txmanager drain remains the hard
@@ -352,7 +366,9 @@ dropping features.
    envelope consistency checks,
    and on-chain **fresh fill planning via a single multicall** over the configured per-vault adapters
    (adapter views + `marketMaker`/`owner`/`isFiller` authorization filter). Direct legs only.
-   Unit-tested (state machine with fakes, backend httptest).
+   Completed-order rollback recovery retains canonical inclusion evidence and rebuilds bounded retries
+   from fresh backend terms. Unit-tested (state machine with fakes, backend httptest, completion rollback,
+   stale-open suppression, re-inclusion and retry-budget regressions).
 3. **(done) Discount legs** — backend `/discounts` (`resolveDiscount` + `listDiscounts`),
    discount-swap encoding (`IReactorDiscountSwapInput` from the resolved signed discount) wired into
    `Executor.fill`, discount-aware strategy selection (legs price off the adapter quote at their discount), and

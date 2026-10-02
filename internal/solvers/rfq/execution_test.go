@@ -10,6 +10,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
@@ -59,15 +60,26 @@ func (f *fakeBackend) listDiscounts(context.Context) (*discountsResponse, error)
 // fakeRecoveryReader is the solver-owned on-chain surface used to assemble fill-time inputs.
 // readPermissionedVaultInventories is only invoked when vaults are configured.
 type fakeRecoveryReader struct {
-	permInv    []solverInventory
-	permErr    error
-	authErr    error
-	authCalls  int
-	setCalls   int
-	quoteOut   map[common.Address]*big.Int
-	chainBlock uint64
-	chainTime  time.Time
-	chainErr   error
+	permInv       []solverInventory
+	permErr       error
+	authErr       error
+	authCalls     int
+	setCalls      int
+	quoteOut      map[common.Address]*big.Int
+	chainBlock    uint64
+	chainTime     time.Time
+	chainErr      error
+	reorged       bool
+	canonical     *ethtypes.Receipt
+	reorgErr      error
+	reorgCalls    int
+	lastInclusion *ethtypes.Receipt
+}
+
+func (f *fakeRecoveryReader) reconcileInclusion(_ context.Context, receipt *ethtypes.Receipt) (bool, *ethtypes.Receipt, error) {
+	f.reorgCalls++
+	f.lastInclusion = receipt
+	return f.reorged, f.canonical, f.reorgErr
 }
 
 func (f *fakeRecoveryReader) latestBlock(context.Context) (uint64, time.Time, error) {

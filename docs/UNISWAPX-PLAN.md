@@ -190,6 +190,18 @@ open-order poll and the normal fresh deadline, planning, preflight and protocol-
 whether another fill can be submitted. Calldata from the previous nonce is never replayed. These are local
 recovery rules; they do not coordinate outstanding orders, exclusive obligations or capacity across replicas.
 
+Completed-order suppression is provisional while the one-hour cache entry is retained. When a completed
+hash reappears in a fresh open listing, the solver checks its saved successful inclusion through
+`chain.ReconcileInclusion`. A canonical block suppresses stale API views. A replaced block triggers an
+exact receipt lookup, so successful re-inclusion of the same transaction is adopted rather than retried.
+Unavailable headers, malformed receipts and RPC failures retain the entry. Proven removed completion
+also requires a fresh per-hash API `open` status; obsolete completions without a successful owned receipt
+require that status without treating a cancellation receipt as fill evidence. Reopening clears completed
+and exclusive-terminal caches and retry bookkeeping, invalidates quote inventory, then uses the normal
+claim, current terms, discount resolution, planning, simulation and admission path. In-flight ownership
+prevents duplicate queueing. A reconciliation error does not stop other orders in the poll batch. This
+uses existing open polling and cache retention; it is not continuous monitoring until consensus finality.
+
 The current parser accepts only `Dutch_V2`. All strategies retain polling retries for declined plans and
 unavailable sources. Economic declines record `fill/declined` without opening the public preflight breaker;
 exclusive obligations remain independently tracked through terminal reconciliation.
@@ -836,6 +848,8 @@ in the owning repository and the integration harness pins the resulting revision
   async txmanager submission, receipts, pending-fill reservations, breaker, retries, and signed-discount
   discovery/resolution/calldata exist. Deadline, fee, nonce, exact-hash, readiness, and shutdown semantics are
   implemented as described in §2.2 and §6. Released capacity stays unavailable until a post-fill snapshot.
+  Completed fills rediscovered open are reconciled against canonical inclusion and current per-hash status,
+  allowing rolled-back fills to re-enter fresh execution without treating API lag as a reorg.
   Exclusive obligations are tracked through `decayStartTime` from admission (including execution-invalid
   awarded orders), recent terminal history is recovered after
   startup/poll gaps, and confirmed terminal receipts are batch-reconciled before clearing obligations,

@@ -2,9 +2,11 @@ package uniswapx
 
 import (
 	"context"
+	"math/big"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"go.opentelemetry.io/otel/trace"
@@ -146,6 +148,7 @@ func (s *Solver) pollSource(
 	if nowErr != nil {
 		return time.Time{}, errors.Errorf("read chain time for %s orders: %w", source, nowErr)
 	}
+	var reconcileErrs []error
 	for _, entry := range entries {
 		order, parseErr := parseAndResolveOrder(entry, source, s.cfg, s.chainID, now)
 		if parseErr != nil {
@@ -168,6 +171,10 @@ func (s *Solver) pollSource(
 				"orderHash", entry.OrderHash, "quoteId", entry.QuoteID)
 			continue
 		}
+		if reconcileErr := s.reconcileCompletedOrder(ctx, order.Hash); reconcileErr != nil {
+			reconcileErrs = append(reconcileErrs, errors.Errorf("reconcile completed order %s: %w", order.Hash.Hex(), reconcileErr))
+			continue
+		}
 		if s.trackExclusive(order, now) {
 			s.observeExclusiveWin()
 		}
@@ -187,9 +194,9 @@ func (s *Solver) pollSource(
 		}
 	}
 	if err != nil {
-		return now, errors.Errorf("poll %s orders: %w", source, err)
+		reconcileErrs = append(reconcileErrs, errors.Errorf("poll %s orders: %w", source, err))
 	}
-	return now, nil
+	return now, errors.Join(reconcileErrs...)
 }
 
 // trackOrder spans an accepted order from claim to enqueue, links it back to the quote that won it
@@ -252,6 +259,7 @@ func (s *Solver) claim(hash common.Hash, now time.Time) bool {
 	for key, filledAt := range s.filled {
 		if now.Sub(filledAt) > time.Hour {
 			delete(s.filled, key)
+			delete(s.completedBlocks, key)
 		}
 	}
 	for key, retryAt := range s.retryAt {
@@ -301,10 +309,39 @@ func (s *Solver) retry(hash common.Hash, now time.Time, failed bool) {
 }
 
 func (s *Solver) complete(hash common.Hash, now time.Time) {
+	s.completeOrder(hash, now, common.Hash{}, nil, false)
+}
+
+func (s *Solver) completeIncluded(hash common.Hash, now time.Time, txHash common.Hash, receipt *types.Receipt) {
+	s.completeOrder(hash, now, txHash, receipt, true)
+}
+
+func (s *Solver) completeOrder(hash common.Hash, now time.Time, txHash common.Hash, receipt *types.Receipt, included bool) {
 	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
 	delete(s.retryAt, hash)
 	delete(s.inFlight, hash)
 	delete(s.attempts, hash)
 	s.filled[hash] = now
-	s.stateMu.Unlock()
+	delete(s.completedBlocks, hash)
+	if included {
+		if s.completedBlocks == nil {
+			s.completedBlocks = make(map[common.Hash]*types.Receipt)
+		}
+		block := copyFillReceipt(receipt)
+		block.TxHash = txHash
+		s.completedBlocks[hash] = block
+	}
+}
+
+// Retain private minimal copies: result receipts also belong to the manager/metrics caller.
+func copyFillReceipt(receipt *types.Receipt) *types.Receipt {
+	block := &types.Receipt{}
+	if receipt != nil {
+		block.TxHash, block.BlockHash, block.Status = receipt.TxHash, receipt.BlockHash, receipt.Status
+		if receipt.BlockNumber != nil {
+			block.BlockNumber = new(big.Int).Set(receipt.BlockNumber)
+		}
+	}
+	return block
 }

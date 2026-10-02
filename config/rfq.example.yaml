@@ -54,7 +54,7 @@ solvers:
       listenAddr: ":42073"             # bind address for the quote HTTP server (POST /quote, /health, /docs)
       pollIntervalMs: 3000             # open-order polling interval and minimum cancellation retry delay
       orderLimit: 20                   # max open orders fetched per poll
-      maxCancellationRetries: 3        # additional attempts after confirmed cancellation; 0 disables
+      maxCancellationRetries: 3        # shared retries after cancellation, nonce races or completion rollback; 0 disables
 
       # RFQ contract deployment (mainnet):
       executor: "0x031f569DA822A6b8D1500D74733986a9aE4cBda3"   # Executor — the bot calls Executor.fill to settle
