@@ -33,7 +33,7 @@ func TestExecutionNonceRetryRequiresSafeOutcome(t *testing.T) {
 		mutate func(*executionService, *fakeTxm)
 		want   orderStatus
 	}{
-		{name: "disabled", mutate: func(e *executionService, _ *fakeTxm) { e.maxNonceRetries = 0 }, want: statusFailed},
+		{name: "disabled", mutate: func(e *executionService, _ *fakeTxm) { e.maxNonceRetries = 0 }, want: statusNonceUncertain},
 		{name: "tracking stopped", mutate: func(_ *executionService, txm *fakeTxm) { txm.result.Outcome = txmanager.OutcomeTrackingStopped }, want: statusSubmitted},
 		{name: "order expires before next poll", mutate: func(e *executionService, _ *fakeTxm) {
 			e.reader.(*fakeRecoveryReader).chainTime = time.Unix(4_102_444_797, 0)

@@ -513,6 +513,12 @@ For liquidity commitments, the built-in strategies apply these limits:
   retry eligible open orders after the poll delay; these unsigned races are Info events and do not
   consume the signed retry budget. Transport failures remain errors. Uncertain outcomes after
   accepted submission remain budgeted.
+  When that budget is exhausted, RFQ stops resubmitting and continues backend reconciliation until
+  terminal status or the existing order deadline. A later peer fill retires the order at Info;
+  expiry after exhaustion has its own bounded workflow counter.
+  An unsigned fee-ceiling rejection follows backend reconciliation and polling/deadline bounds at
+  Info, without recording a failed fill or spending the signed retry budget. RPC failures retain
+  Error reporting.
   A Reactor `NonceUsed()` estimate retires sending at Info immediately; backend reconciliation
   distinguishes an actual fill from explicit nonce invalidation before counting a successful peer fill.
   Retry counts are local to each process and reset on restart.
@@ -652,6 +658,7 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | LI.FI | `solver_bot_workflow_events_total{event="order_parse"}` | `solver`, `strategy`, `event`, `outcome` | Rejected feed observations: `invalid`, `unsupported` (including Dutch auctions), or `other_chain`. REST recovery replays count again; this is not a unique-order count. Uses the existing workflow event family and its last-event timestamp. |
 | Framework | `solver_bot_service_ready` | — | `1` exactly when the shared `/readyz` gate reports ready, otherwise `0`. This is process and nonce-safety readiness; a pending transaction does not clear it. It is not a claim that every solver upstream is healthy; combine it with solver freshness and connectivity. |
 | Framework | `solver_bot_solver_info` | `solver` | Constant `1` for each solver configured in this process. Prometheus target labels such as `instance`/`lane` make process membership explicit without adding deployment-specific labels in application code. |
+| Txmanager | `solver_bot_txmanager_fee_limit_reached_total` | `label`, `phase` | Submitted request preparation or replacement decisions stopped by a configured fee ceiling (`initial` or `replacement`); profitability quote reads and transport errors are excluded. |
 | Framework | `solver_bot_external_operation_duration_seconds` | `solver`, `strategy`, `operation`, `outcome` | Count and latency of allowlisted recurring solver operations such as polls and authoritative refreshes. Outcomes are bounded to `success`, `degraded`, `skipped`, or `error`; errors and request-derived values never become labels. |
 | RPC | `solver_bot_rpc_requests_total` | `role`, `method`, `outcome` | Logical HTTP JSON-RPC calls. Roles are `read`, `write`, or `shared`; methods and outcomes are bounded, with transport, HTTP 3xx/4xx/5xx, rate-limit, decode, context, and JSON-RPC errors separated. Redirects are not followed; 3xx responses fall through to the next read endpoint. |
 | RPC | `solver_bot_rpc_attempts_total` | `role`, `endpoint`, `method`, `outcome` | Per-endpoint attempts, including failed primary and successful fallback attempts. `endpoint` is only a role-local ordinal (`0`, `1`, …); configured URLs and error text are never labels. |
@@ -697,7 +704,7 @@ Bounded workflow dimensions:
 
 | Solver | Events and outcomes | Amount/state dimensions |
 |---|---|---|
-| RFQ | `quote/<decision>`, `order/won`, `order_poll/success`, `fill/{success,failure,not_admitted,obsolete,peer}` | `quote/{input,output}` and successful local `fill/{input,output,planned_surplus}` by asset; `peer` counts only |
+| RFQ | `quote/<decision>`, `order/{won,nonce_retry_exhausted,expired_after_nonce_retries}`, `order_poll/success`, `fill/{success,failure,not_admitted,obsolete,peer}` | `quote/{input,output}` and successful local `fill/{input,output,planned_surplus}` by asset; `peer` counts only |
 | LI.FI | `order_processing/<result>`, `queue_drop/<stage>`, `fill/success` | Fill amounts by asset and kind |
 | UniswapX | `quote/<decision>`, `{exclusive,public}_order_poll/{ok,failed}`, `exclusive_obligation/{won,settled_in_time,missed}`, `fill/{success,failure,not_admitted,obsolete,declined}` | Quote and successful-fill amounts by asset and kind; quote amount assets are restricted to the immutable route snapshot used for that decision |
 | OEV | `auction/<decision>`, `bid/{enqueued,won,settled_success,settled_failed,would_bid,unresolved}`, `breaker/failure`, `state_refresh/success` | Native bid amounts use `asset="native"`; `kind` is the bid stage, including dry-run `would_bid` |
@@ -749,6 +756,16 @@ UID is embedded in the template. Grafana resolves the empty `${datasource}` sele
 Discovery uses the scrape labels `namespace` and `kubernetes_pod`; adapt these labels to your
 collector if needed. Runtime RPC queries normalize `exported_role` to `role` when the scraper has
 renamed the exporter's role label, and otherwise retain the native `role` label.
+
+### RFQ rate alerts
+
+[`alerts/rfq.rules.yaml`](alerts/rfq.rules.yaml) contains central Prometheus rules for sustained
+nonce consumption without peer fills, order expirations after nonce retry exhaustion, and repeated
+fee ceilings. They group sibling pods by sender EOA and separate other senders in the same namespace.
+Their windows, thresholds and pending durations are file-driven monitoring policy; tune them before
+loading. The repository ships tests and operator instructions in [`alerts/README.md`](alerts/README.md),
+and CI runs `make test-alerts`. The rules still need provisioning through the existing monitoring
+stack; shipping the file does not activate notifications.
 
 ## Configuration
 

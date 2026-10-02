@@ -113,6 +113,13 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   resolution again. Retry waiting counts as an active obligation and reconciles terminal
   backend status; its retained order deadline also expires it locally if backend views disappear or stay
   stale. No retry is scheduled during shutdown or when the order expires before the next attempt.
+  If the next retry would fall at or beyond the deadline, keep observing until the actual deadline
+  without spending a retry. The final poll checks backend settlement before local expiry.
+  Exhausting the signed retry budget stops resubmission but retains bounded backend observation:
+  the order remains `nonce_uncertain` with an exhausted flag until terminal backend state or its
+  existing deadline. A later indexed peer fill retires it at Info rather than turning it into a
+  failed order. `order/nonce_retry_exhausted` counts the first exhausted transition; only subsequent
+  evidenced backend or local deadline expiry advances `order/expired_after_nonce_retries`, once.
   Execution-reverted gas estimates follow the same backend reconciliation and polling/deadline
   bounds as rejected initial work, without spending the signed retry budget or recording a failed
   fill. Typed estimate reverts are expected Info events; transport failures remain errors. A terminal
@@ -405,6 +412,9 @@ dropping features.
    revalidates the executable order and builds new calldata with fresh discount signatures. No EOA
    cancellation transaction is sent. Regression tests cover fresh retries, budgets, expiry, unknown
    statuses, obsolete-result precedence, reservations and shutdown.
+   Exhausted retries retain backend reconciliation without resubmitting, so later peer fills and
+   evidenced expirations remain observable until the existing deadline. Rate alert rules and their
+   tests live under `alerts/`; central monitoring groups sibling observations by sender EOA.
 7. **(done) Nonce-race recovery** — either uncertain nonce result without an owned receipt reconciles
    backend status before retrying. Initial conflicts use polling/deadline bounds without spending
    `maxNonceRetries`; accepted unknown results retain that budget. Regression tests cover more than four

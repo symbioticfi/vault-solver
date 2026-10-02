@@ -62,6 +62,9 @@ type orderRecord struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	NonceRetries int
+	// NonceRetryExhausted stops further sends while retaining bounded backend observation. The
+	// flag also distinguishes a later evidenced expiry from an ordinary order deadline.
+	NonceRetryExhausted bool
 	// NonceConflict identifies rejected initial work, including an execution-reverted estimate.
 	// It needs fresh protocol reconciliation but does not spend the signed retry budget.
 	NonceConflict bool
@@ -245,6 +248,35 @@ func (s *store) markStatusLocked(rec *orderRecord, status orderStatus, txHash co
 	rec.UpdatedAt = s.now()
 }
 
+// markExpired reports the first active-to-expired transition after retry exhaustion. The shared
+// store lock makes the event gate atomic with the status update; repeated polls cannot count it twice.
+func (s *store) markExpired(orderID string, txHash common.Hash, lastErr string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec := s.orders[orderID]
+	if rec == nil || !rec.Status.active() {
+		return false
+	}
+	exhausted := rec.NonceRetryExhausted
+	s.markStatusLocked(rec, statusExpired, txHash, lastErr)
+	return exhausted
+}
+
+// markNonceRetryExhausted retires resubmission, while keeping backend settlement observation until
+// the order's existing deadline. It reports the first transition for one bounded workflow event.
+func (s *store) markNonceRetryExhausted(orderID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec := s.orders[orderID]
+	if rec == nil || rec.Status != statusNonceUncertain || rec.NonceRetryExhausted {
+		return false
+	}
+	rec.NonceRetryExhausted = true
+	rec.LastError = "nonce retry budget exhausted"
+	rec.UpdatedAt = s.now()
+	return true
+}
+
 // markNonceUncertain retains the result category while fresh backend state is unavailable.
 // The caller holds per-order execution ownership, and this state remains guarded by the store mutex.
 func (s *store) markNonceUncertain(orderID string, txHash common.Hash, lastErr string, conflict bool) {
@@ -376,7 +408,7 @@ func (s *store) scheduleNonceRetry(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec := s.orders[orderID]
-	if rec == nil || (!rec.NonceConflict && rec.NonceRetries >= limit) {
+	if rec == nil || rec.NonceRetryExhausted || (!rec.NonceConflict && rec.NonceRetries >= limit) {
 		return false
 	}
 	if !rec.NonceConflict {

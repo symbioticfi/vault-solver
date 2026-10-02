@@ -123,3 +123,12 @@ self-transfer was sent, and mines a fresh different business call replacing its 
 recreated with no hints replaces unknown higher-fee pending work at nonce 0 through fresh priced requests.
 These public-pool tests do not
 establish retention or consistency guarantees for a private submission provider.
+
+Central rate alerts under [`alerts/`](../alerts/README.md) join each pod's counters to the shared
+sender identity before aggregating by namespace and EOA. Sustained nonce consumption without peer
+fills, expirations after exhausted nonce retries and repeated fee-ceiling decisions are separate
+signals. Thresholds, windows and pending duration belong to the rule YAML, not the process. Local
+exhaustion stops resubmission but keeps backend reconciliation until terminal state or the order
+deadline; only an evidenced later expiry advances the expiry counter. Expected single races and
+cap decisions stay Info, while real transport faults retain Error reporting. Rule provisioning and
+notification routing remain the monitoring operator's responsibility.

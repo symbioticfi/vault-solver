@@ -46,7 +46,9 @@ func newRFQMetrics(
 		})
 	}
 	spec.Events = append(spec.Events,
-		observability.WorkflowEventSpec{Event: "order", Outcomes: []string{"won"}},
+		observability.WorkflowEventSpec{Event: "order", Outcomes: []string{
+			"won", "nonce_retry_exhausted", "expired_after_nonce_retries",
+		}},
 		observability.WorkflowEventSpec{Event: "order_poll", Outcomes: []string{"success"}},
 	)
 	spec.Amounts = append(spec.Amounts, observability.WorkflowAmountSpec{
@@ -128,6 +130,18 @@ func (m *rfqMetrics) addQuotedAmount(token common.Address, side string, amount *
 func (m *rfqMetrics) observeWin() {
 	if m != nil {
 		m.workflow.ObserveEventAt("order", "won", 1, m.now())
+	}
+}
+
+func (m *rfqMetrics) observeNonceRetryExhausted() {
+	if m != nil {
+		m.workflow.ObserveEventAt("order", "nonce_retry_exhausted", 1, m.now())
+	}
+}
+
+func (m *rfqMetrics) observeExpiredAfterNonceRetries() {
+	if m != nil {
+		m.workflow.ObserveEventAt("order", "expired_after_nonce_retries", 1, m.now())
 	}
 }
 

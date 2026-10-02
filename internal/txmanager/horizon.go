@@ -299,7 +299,7 @@ func horizonFees(snapshot feeSnapshot, gas uint64, limit *big.Int, policy horizo
 	}
 	if maxFee.Cmp(snapshot.nextBaseFee) < 0 {
 		return feeQuote{}, errors.Errorf(
-			"fee limit reached: next base fee %s exceeds tx manager max fee %s", snapshot.nextBaseFee, maxFee,
+			"%w: next base fee %s exceeds tx manager max fee %s", ErrFeeLimitReached, snapshot.nextBaseFee, maxFee,
 		)
 	}
 	if room := new(big.Int).Sub(maxFee, snapshot.nextBaseFee); tip.Cmp(room) > 0 {

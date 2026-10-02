@@ -259,9 +259,13 @@ var ErrNonceConsumed = errors.New("transaction nonce consumed without an owned r
 // replica may have sent this order, so retry requires fresh protocol state rather than calldata replay.
 var ErrNonceConflict = errors.New("transaction nonce raced with another sender")
 
+// ErrFeeLimitReached means current fees or a required same-nonce bump exceed a configured ceiling.
+// This is an expected policy decision; integrations can reconcile without paging for one event.
+var ErrFeeLimitReached = errors.New("transaction fee limit reached")
+
 var (
 	errFreshFeesUnavailable    = errors.New("fresh fees unavailable")
-	errReplacementLimitReached = errors.New("replacement fee limit reached")
+	errReplacementLimitReached = errors.Errorf("replacement fee limit reached: %w", ErrFeeLimitReached)
 	errReceiptReorged          = errors.New("transaction receipt reorged")
 	errManagerStopped          = errors.New("transaction manager stopped")
 	errShutdownTimeout         = errors.Errorf("transaction manager shutdown drain timed out: %w", context.DeadlineExceeded)
@@ -767,7 +771,14 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	}
 	defer cancel()
 	broadcastCtx, end := tracer.Start(broadcastCtx, "txmanager.broadcast")
-	defer func() { end(err) }()
+	defer func() {
+		if errors.Is(err, ErrFeeLimitReached) {
+			m.metrics.feeLimitReached(req.Label, feeLimitPhaseInitial)
+			observability.Log(ctx).Info("transaction fee limit reached", "label", req.Label,
+				"reason", err.Error(), "limit", feeLimitString(m.normalFeeLimit(req)))
+		}
+		end(err)
+	}()
 	if err := broadcastCtx.Err(); err != nil {
 		return nil, errors.Errorf("send %q before broadcast: %w", req.Label, err)
 	}
@@ -1228,8 +1239,14 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, i
 		return true, nil
 	}
 	if err != nil {
-		if errors.Is(err, errReplacementLimitReached) && m.rebroadcastLatestAttempt(ctx, pending) {
-			return false, nil
+		if errors.Is(err, ErrFeeLimitReached) {
+			m.metrics.feeLimitReached(pending.req.Label, feeLimitPhaseReplacement)
+			observability.Log(ctx).Info("replacement fee limit reached", "label", pending.req.Label,
+				"nonce", pending.nonce, "reason", err.Error())
+			if m.rebroadcastLatestAttempt(ctx, pending) {
+				return false, nil
+			}
+			return false, err
 		}
 		observability.Log(ctx).Error(err, "cannot replace pending transaction", "label", pending.req.Label, "nonce", pending.nonce)
 		return false, err
@@ -1335,11 +1352,18 @@ func (m *Manager) rebroadcastLatestAttempt(
 		if err == nil || isKnownTransactionError(err) {
 			m.metrics.replacement(pending.req.Label, replacementKindRebroadcast, rebroadcastReasonCapped)
 		}
-		if err != nil {
+		if err != nil && !isKnownTransactionError(err) {
 			observability.Log(ctx).Error(err, "capped transaction rebroadcast failed",
 				"label", pending.req.Label,
 				"hash", attempt.hash.Hex(),
 				"nonce", pending.nonce,
+			)
+		} else if err != nil {
+			observability.Log(ctx).Info("capped transaction already known by write RPC",
+				"label", pending.req.Label,
+				"hash", attempt.hash.Hex(),
+				"nonce", pending.nonce,
+				"rpcResult", err.Error(),
 			)
 		} else {
 			observability.Log(ctx).Info("capped transaction rebroadcast",
@@ -1400,7 +1424,7 @@ func (m *Manager) nextReplacementFees(
 	effectiveTipLimit := new(big.Int).Sub(next.maxFee, next.baseFee)
 	if effectiveTipLimit.Sign() < 0 {
 		return feeQuote{}, errors.Errorf(
-			"replacement base fee %s exceeds fee limit %s", next.baseFee, next.maxFee,
+			"%w: replacement base fee %s exceeds fee limit %s", ErrFeeLimitReached, next.baseFee, next.maxFee,
 		)
 	}
 	if err == nil {

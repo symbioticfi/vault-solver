@@ -385,6 +385,11 @@ collector exports a scrape-consistent view. An external-only process exposes no 
 Operation labels are stable names such as `redeem`, `rfq-fill`, `lifi-fill`, `uniswapx-fill`.
 `nonce_conflict` and `nonce_consumed` are expected results with unknown business execution. Each records a terminal request
 and lifecycle outcome without synthesizing receipt gas or paid-fee accounting.
+Configured initial-send and replacement fee ceilings return `ErrFeeLimitReached`, preserving
+`errors.Is` through contextual wrapping. Expected ceiling decisions log Info and increment the
+bounded phase counter below; fee-quote reads do not increment it. RPC transport failures retain
+their existing Error reporting. RFQ reconciles an unsigned capped request using polling/deadline
+bounds rather than recording a failed fill or spending its signed retry budget.
 
 ### Metrics
 
@@ -396,6 +401,7 @@ Definitions: [metrics.go](../internal/txmanager/metrics.go),
 |---|---|---|---|
 | Txmanager | `solver_bot_txmanager_requests_total` | `label`, `outcome` | Terminal results of logical on-chain operations, including the uncertain nonce outcomes. This is the request funnel for every solver, not proof of mined execution. |
 | Txmanager | `solver_bot_txmanager_inflight` | `label` | Requests accepted by the txmanager worker and still awaiting a terminal result; sustained values expose stuck transactions or nonce congestion. |
+| Txmanager | `solver_bot_txmanager_fee_limit_reached_total` | `label`, `phase` | Initial-send preparation (`initial`) or replacement decisions (`replacement`) stopped by configured fee ceilings. Repeated capped decisions can refer to one pending transaction; profitability quote reads and transport errors are excluded. |
 | Txmanager | `solver_bot_txmanager_gas_used_total` | `label`, `outcome` | Receipt gas for mined transactions, including reverts. Divide by the matching request count for average gas; this is gas units, not native-token cost. |
 | Txmanager | `solver_bot_txmanager_fee_paid_wei_total` | `label`, `outcome` | Actual native-token fee paid by mined transactions, calculated from receipt `gasUsed × effectiveGasPrice`, including reverted transactions. |
 | Txmanager | `solver_bot_txmanager_replacements_total` | `label`, `kind`, `reason` | Successfully broadcast replacements and exact rebroadcasts (`kind` = `replacement`, `rebroadcast`). Replacement `reason` is `validity`, `congestion`, `stall`, `gas` or `fallback`; a rebroadcast is `stall`, `uncertain` (ambiguous first broadcast) or `capped` (fee cap reached). Spikes expose fee-policy, relay or congestion problems that terminal outcomes alone cannot show. |

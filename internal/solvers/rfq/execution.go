@@ -184,8 +184,15 @@ func (e *executionService) expireUnsigned(o *orderRecord) bool {
 	if !unsignedRetry || o.RetryDeadline.IsZero() || e.now().Before(o.RetryDeadline) {
 		return false
 	}
-	e.store.markStatus(o.OrderID, statusExpired, common.Hash{}, "order deadline has passed")
+	e.markExpired(o.OrderID, common.Hash{}, "order deadline has passed")
 	return true
+}
+
+// markExpired observes the bounded order outcome only once, when expiry follows retry exhaustion.
+func (e *executionService) markExpired(orderID string, txHash common.Hash, reason string) {
+	if e.store.markExpired(orderID, txHash, reason) {
+		e.metrics.observeExpiredAfterNonceRetries()
+	}
 }
 
 // expireQueued applies the deadline bound from the poll loop, so a queued order does not keep its
@@ -371,6 +378,15 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	outcome := res.Outcome
 	if !outcome.Included() && errors.Is(res.Err, txmanager.ErrRequestObsolete) {
 		e.retireObsoleteOrder(ctx, orderID, res, res.Err)
+		return
+	}
+	if !res.NotAdmitted && errors.Is(res.Err, txmanager.ErrFeeLimitReached) {
+		// A ceiling stops this unsigned request, not the order's business execution. Retain
+		// backend reconciliation and the ordinary polling/deadline bounds without a failure alert.
+		observability.Decline(ctx, "fill_fee_limit", "transaction fee ceiling reached")
+		e.store.markNonceUncertain(orderID, common.Hash{}, errString(res.Err), true)
+		observability.Log(ctx).Info("fill fee ceiling reached; reconciling order", "attempt", attempt)
+		e.reconcileTerminalStatus(ctx, orderID)
 		return
 	}
 	if reactorNonceUsed(res.Err) {
@@ -561,6 +577,10 @@ func (e *executionService) sendFill(
 		observability.Decline(submitCtx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
 		return res, nil
 	}
+	if !res.NotAdmitted && errors.Is(res.Err, txmanager.ErrFeeLimitReached) {
+		observability.Decline(submitCtx, "fill_fee_limit", "transaction fee ceiling reached")
+		return res, nil
+	}
 	if estimateExecutionReverted(res.Err) {
 		observability.Decline(submitCtx, "fill_estimate_reverted", "execution changed before signing")
 		return res, nil
@@ -634,23 +654,33 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 			}
 		}
 	case "expired":
-		e.store.markStatus(orderID, statusExpired, txHash, "")
+		e.markExpired(orderID, txHash, "")
 	case backendOrderStatusOpen:
 		local := e.store.order(orderID)
 		if local == nil || local.Status != statusNonceUncertain || ctx.Err() != nil {
 			return
 		}
-		retryAt := e.now().Add(e.pollInterval)
-		if local.RetryDeadline.IsZero() || !retryAt.Before(local.RetryDeadline) {
-			e.store.markStatus(orderID, statusExpired, local.TxHash, "order deadline has passed")
+		exhausted := local.NonceRetryExhausted || (!local.NonceConflict && local.NonceRetries >= e.maxNonceRetries)
+		if exhausted && e.store.markNonceRetryExhausted(orderID) {
+			e.metrics.observeNonceRetryExhausted()
+			observability.Log(ctx).Info("nonce retry budget exhausted; observing backend until order deadline",
+				"retries", local.NonceRetries, "deadline", local.RetryDeadline)
+		}
+		now := e.now()
+		if local.RetryDeadline.IsZero() || !now.Before(local.RetryDeadline) {
+			e.markExpired(orderID, local.TxHash, "order deadline has passed")
+			return
+		}
+		retryAt := now.Add(e.pollInterval)
+		if exhausted || !retryAt.Before(local.RetryDeadline) {
+			// A retry needs room for another poll, but settlement remains observable until the
+			// actual deadline. In particular, a sibling fill may only reach the backend then.
 			return
 		}
 		if e.store.scheduleNonceRetry(orderID, e.maxNonceRetries, retryAt,
 			local.RetryDeadline, local.TxHash, local.LastError) {
 			observability.Log(ctx).V(1).Info("order remains open after uncertain nonce result; fresh retry scheduled",
 				"retryAt", retryAt, "tx", local.TxHash.Hex())
-		} else {
-			e.store.markStatus(orderID, statusFailed, local.TxHash, "nonce retry budget exhausted")
 		}
 	case "error", "cancelled", "unverified", "insufficient-funds":
 		observability.Decline(ctx, "fill_failed", "backend terminal status "+bo.OrderStatus)

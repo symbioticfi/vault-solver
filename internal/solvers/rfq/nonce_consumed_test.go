@@ -128,7 +128,7 @@ func executionConsumedNonceRebuildsOnlyAfterFreshOpenPoll(t *testing.T, outcome 
 }
 
 func TestExecutionConsumedNonceRetryBudgetIsBounded(t *testing.T) {
-	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeAbandoned} {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeAbandoned, txmanager.OutcomeReverted} {
 		t.Run(string(outcome), func(t *testing.T) { executionConsumedNonceRetryBudgetIsBounded(t, outcome) })
 	}
 }
@@ -148,7 +148,8 @@ func executionConsumedNonceRetryBudgetIsBounded(t *testing.T, outcome txmanager.
 				syncCycle(t.Context(), e)
 				now = now.Add(3 * time.Second)
 			}
-			if txm.calls != limit+1 || st.order("o1").Status != statusFailed || st.order("o1").NonceRetries != limit {
+			if rec := st.order("o1"); txm.calls != limit+1 || rec.Status != statusNonceUncertain ||
+				rec.NonceRetries != limit || !rec.NonceRetryExhausted {
 				t.Fatalf("consumed nonce exceeded retry budget: sends=%d order=%+v", txm.calls, st.order("o1"))
 			}
 		})
@@ -281,7 +282,7 @@ func TestExecutionInitialNonceConflictsPreserveAcceptedRetryBudget(t *testing.T)
 	now = now.Add(3 * time.Second)
 	txm.result = uncertainNonceResult(txmanager.OutcomeNonceConsumed)
 	syncCycle(t.Context(), e)
-	if rec := st.order("o1"); rec.Status != statusFailed || rec.NonceRetries != 1 {
+	if rec := st.order("o1"); rec.Status != statusNonceUncertain || rec.NonceRetries != 1 || !rec.NonceRetryExhausted {
 		t.Fatalf("accepted unknown outcome bypassed its exhausted budget: %+v", rec)
 	}
 }

@@ -12,6 +12,7 @@ GOLANGCI_LINT_VERSION    ?= v2.13.2
 GENQLIENT_VERSION        ?= v0.8.1
 GQLFETCH_VERSION         ?= v0.7.0
 GENQLIENT_X_TOOLS_VERSION ?= v0.50.0
+PROMTOOL                 ?= promtool
 # Java openapi-generator (downloaded on demand by hack/openapi-generator-cli.sh). 7.12.0 is the floor:
 # it ingests OpenAPI 3.1 (the RFQ backend spec); 5.4.0/7.0.1 fail on it.
 OPENAPI_GENERATOR_VERSION ?= 7.25.0
@@ -285,6 +286,11 @@ format: ## Run golangci-lint with autofix
 .PHONY: lint
 lint: ## Run golangci-lint (no autofix; must report 0 issues)
 	golangci-lint run
+
+.PHONY: test-alerts
+test-alerts: ## Validate and unit-test Prometheus alert rules
+	$(PROMTOOL) check rules alerts/rfq.rules.yaml
+	$(PROMTOOL) test rules alerts/rfq.rules.test.yaml
 
 .PHONY: tidy
 tidy: ## Tidy and verify go.mod / go.sum

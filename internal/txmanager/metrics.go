@@ -16,6 +16,8 @@ const (
 
 	replacementKindReplacement = "replacement"
 	replacementKindRebroadcast = "rebroadcast"
+	feeLimitPhaseInitial       = "initial"
+	feeLimitPhaseReplacement   = "replacement"
 
 	admissionOutcomeAdmitted admissionOutcome = "admitted"
 
@@ -53,6 +55,7 @@ type Metrics struct {
 	gasUsed             *prometheus.CounterVec
 	feePaidWei          *prometheus.CounterVec
 	replacements        *prometheus.CounterVec
+	feeLimits           *prometheus.CounterVec
 	admissionRejections *prometheus.CounterVec
 	admissionWait       *prometheus.HistogramVec
 	lifecycleDuration   *prometheus.HistogramVec
@@ -97,6 +100,12 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Name:      "replacements_total",
 			Help:      "Successfully broadcast transaction replacements and exact rebroadcasts, by why they were sent.",
 		}, []string{"label", "kind", "reason"}),
+		feeLimits: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricsNamespace,
+			Subsystem: metricsSubsystem,
+			Name:      "fee_limit_reached_total",
+			Help:      "Initial-send and replacement decisions stopped by configured fee ceilings; excludes profitability quote reads.",
+		}, []string{"label", "phase"}),
 		admissionRejections: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
@@ -131,6 +140,7 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 		m.gasUsed,
 		m.feePaidWei,
 		m.replacements,
+		m.feeLimits,
 		m.admissionRejections,
 		m.admissionWait,
 		m.lifecycleDuration,
@@ -142,6 +152,12 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 		}
 	}
 	return m, nil
+}
+
+func (m *Metrics) feeLimitReached(label, phase string) {
+	if m != nil {
+		m.feeLimits.WithLabelValues(label, phase).Inc()
+	}
 }
 
 func (m *Metrics) beginLifecycle(label string) lifecycleObservation {
