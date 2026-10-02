@@ -526,16 +526,17 @@ func (s *Solver) processOrder(ctx context.Context, routes []route, order *submit
 }
 
 type fakeLifiTxSender struct {
-	reqs    []txmanager.Request
-	results []chan txmanager.Result
-	result  txmanager.Result
-	reject  bool
-	hold    bool
-	onSend  func(int, chan<- txmanager.Result)
+	reqs      []txmanager.Request
+	results   []chan txmanager.Result
+	result    txmanager.Result
+	reject    bool
+	hold      bool
+	onSend    func(int, chan<- txmanager.Result)
+	observers sync.Map // result channels own their immutable request callbacks
 }
 
 func (f *fakeLifiTxSender) SendAsync(
-	_ context.Context,
+	ctx context.Context,
 	req txmanager.Request,
 ) (<-chan txmanager.Result, bool) {
 	if f.reject {
@@ -544,13 +545,25 @@ func (f *fakeLifiTxSender) SendAsync(
 	f.reqs = append(f.reqs, req)
 	result := make(chan txmanager.Result, 1)
 	f.results = append(f.results, result)
+	f.observers.Store((chan<- txmanager.Result)(result), func(value txmanager.Result) {
+		if req.ObserveReceipt != nil && value.Receipt != nil {
+			req.ObserveReceipt(ctx, value)
+		}
+	})
 	if f.onSend != nil {
 		f.onSend(len(f.reqs), result)
 	}
 	if !f.hold {
-		result <- f.fillResult()
+		f.complete(result, f.fillResult())
 	}
 	return result, true
+}
+
+func (f *fakeLifiTxSender) complete(result chan<- txmanager.Result, value txmanager.Result) {
+	if observer, ok := f.observers.LoadAndDelete(result); ok {
+		observer.(func(txmanager.Result))(value)
+	}
+	result <- value
 }
 
 func (f *fakeLifiTxSender) fillResult() txmanager.Result {
@@ -1512,7 +1525,7 @@ func TestOrderWorkerSubmitsAllFillsWithoutWaitingForReceipts(t *testing.T) {
 		results = append(results, receiveFillSubmission(t, submitted))
 	}
 	for _, result := range results {
-		result <- txm.fillResult()
+		txm.complete(result, txm.fillResult())
 	}
 	select {
 	case err := <-done:
@@ -1834,15 +1847,15 @@ func TestOrderWorkerRequeuesReroutedOrderWithoutBlockingNewOrders(t *testing.T) 
 	expectRetryEvent(t, events, "blocked-capacity-a")
 	expectRetryEvent(t, events, "probe-capacity-a")
 
-	results[0] <- txm.fillResult()
+	txm.complete(results[0], txm.fillResult())
 	expectRetryEvent(t, events, "blocked-capacity-b")
 	expectRetryEvent(t, events, "probe-capacity-b")
-	results[1] <- txm.fillResult()
+	txm.complete(results[1], txm.fillResult())
 	results = append(results, receiveFillSubmission(t, submitted))
 	expectRetryEvent(t, events, "fill-capacity-b")
 
-	results[2] <- txm.fillResult()
-	results[3] <- txm.fillResult()
+	txm.complete(results[2], txm.fillResult())
+	txm.complete(results[3], txm.fillResult())
 	select {
 	case err := <-done:
 		if err != nil {
@@ -1892,7 +1905,7 @@ func TestOrderWorkerDrainsAcceptedFillAfterCancellation(t *testing.T) {
 		t.Fatalf("worker returned before accepted fill completed: %v", err)
 	case <-time.After(100 * time.Millisecond):
 	}
-	result <- txm.fillResult()
+	txm.complete(result, txm.fillResult())
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.Canceled) {

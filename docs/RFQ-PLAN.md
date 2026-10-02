@@ -118,6 +118,12 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   the order becomes `obsolete` (never re-armed, even while the backend still lists it open), no retry is
   scheduled, and backend status is reconciled once, which may refine it to `filled`. These protections and retry budgets are in-memory per process;
   an RPC nonce result does not prove an owned fill succeeded or coordinate order/capacity ownership across replicas.
+- **Receipt observations update metrics only.** Each fill snapshots its metric pointer, token addresses,
+  input/output amounts and gross planned surplus into `Request.ObserveReceipt`. The manager invokes that
+  hook once per locally retained owned hash for normal inclusion or a late canonical receipt at the
+  configured confirmation depth. A successful late receipt records `fill/success`, freshness and amounts,
+  including when backend reconciliation already retired the order. It does not change store status,
+  reservations, retries or order ownership. Backend `filled` alone never records these local fill metrics.
 - **Completed orders have no later-reorg recovery.** A `filled` record stays terminal in the local store.
   Open-order polling does not recheck its old inclusion or reopen it after a later reorg. The backend's
   terminal order status remains authoritative; txmanager's existing reorg checks run during confirmation.
@@ -388,6 +394,9 @@ dropping features.
    `maxNonceRetries`; accepted unknown results retain that budget. Regression tests cover more than four
    initial conflicts, terminal/unknown backend states, fresh open polling and rebuilt calldata, backoff,
    local deadline expiry and preservation/exhaustion of the accepted-execution retry budget.
+8. **(done) Late receipt metrics** — immutable receipt observers record successful owned fill metrics
+   without reopening backend-terminal orders or changing reservations/retries. Normal and late observations
+   share the manager's bounded process-local hash deduplication; reverted receipts record no fill amounts.
 
 **Reads are multicall-batched** end to end: amount-specific strategy evaluation uses the shared
 per-route fill-quote batch (`paused`, `getMaxAssets`, `getAmountOut`, `minDiscount`), while inventory

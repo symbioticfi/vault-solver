@@ -10,6 +10,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
@@ -113,9 +114,12 @@ type fakeTxm struct {
 	onResult func()
 }
 
-func (f *fakeTxm) Send(_ context.Context, req txmanager.Request) txmanager.Result {
+func (f *fakeTxm) Send(ctx context.Context, req txmanager.Request) txmanager.Result {
 	f.calls++
 	f.lastReq = req
+	if req.ObserveReceipt != nil && f.result.Receipt != nil {
+		req.ObserveReceipt(ctx, f.result)
+	}
 	if f.onResult != nil {
 		f.onResult()
 	}
@@ -126,6 +130,7 @@ func confirmedTxResult() txmanager.Result {
 	return txmanager.Result{
 		Hash:    common.HexToHash("0xdead"),
 		Outcome: txmanager.OutcomeConfirmed,
+		Receipt: &gethtypes.Receipt{Status: gethtypes.ReceiptStatusSuccessful},
 	}
 }
 

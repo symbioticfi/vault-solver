@@ -45,6 +45,7 @@ Subscribers receive coalesced change notifications and must re-read state and un
 | `Obsolete` | Context-aware protocol status check before signing and after a receipt sweep finishes without a valid receipt. True drops an unsigned call or abandons pending tracking; errors preserve ownership. Either way the result's `Err` wraps the exported `ErrRequestObsolete`, so the integration can retire the work instead of retrying it. It is not an authorization mechanism. |
 | `Confirmations` | Optional override of the manager confirmation depth; an explicit zero skips depth waiting. |
 | `Label`, `Solver` | Stable operation name and owning integration for logs/metrics/Sentry. |
+| `ObserveReceipt` | Optional telemetry callback for an owned mined receipt, shared by ordinary and late accounting. Capture immutable metric inputs; no I/O or business-state changes. Invocation may occur after the caller resumes. Suppression is once per hash while retained in the bounded process-local ledger. |
 
 The generic manager must not interpret protocol order IDs, statuses, adapters or economic policy.
 
@@ -61,6 +62,8 @@ The public YAML block is `txManager`. Values below are application defaults, aft
 | `replacementIntervalMs` | 30000 | Fallback bump cadence while fee history is unreadable; also bounds the internal read budgets below. |
 | `pendingTimeoutMs` | 300000 | Abandon an unresolved owned call and remember its nonce/fee floor for a fresh business request. Must be at least the replacement interval. |
 | `shutdownTimeoutMs` | 60000 | Hard bound on manager drain after shutdown begins. |
+| `lateReceiptTimeoutMs` | 600000 | Passive observation retention after an accepted uncertain lifecycle releases its lane; also the receipt deduplication retention. Positive duration; zero selects the default. |
+| `lateReceiptMaxHashes` | 1024 | Cap on retained passive hashes, and separately on the locally accounted receipt-hash ledger and passive ancestry-header cache. Positive count; zero selects the default. |
 | `horizon.maxBlocks` | 6 | Blocks (3–12) the initial fee cap keeps the full tip valid at the maximum base-fee increase. |
 | `horizon.blockTimeMs` | 12000 | Slot time: sets the twice-per-block evaluation tick and the next-block estimate timestamp. |
 | `horizon.tipFloorGwei` | 0.02 | Tip while the last two blocks had room for the call. |
@@ -208,7 +211,7 @@ incomplete or unavailable sweeps then return execution-unknown abandonment and r
 the manager follows confirmation policy rather than abandoning included work at the pending deadline.
 This ordering reduces the receipt/status race but cannot make separate on-chain reads atomic.
 Invalid receipts are separately rejected: receipt/block number must exist, transaction hash must match,
-and block hash must be nonzero.
+block hash must be nonzero, and status must be successful or failed.
 
 Only the owner accepts a receipt candidate and begins confirmation; the reader is idle during that wait.
 Before waiting for depth, a canonical preflight uses a stable head and hash-addressed parent ancestry
@@ -219,8 +222,43 @@ snapshots are retried; two consecutive missing receipts or a proven fork change 
 tracking. A read error breaks the consecutive-miss streak. A receipt for an older signed variant remains
 valid evidence for the same nonce.
 
-After delivering a terminal result, the manager stops watching that lifecycle. It does not detect later
+After delivering a terminal result, the manager stops the active lifecycle. It does not detect later
 reorgs of completed transactions or reopen integration orders.
+
+### Passive accounting after uncertain execution
+
+`abandoned` and `nonce_consumed` hand their accepted/transport-uncertain signed hashes to one manager-owned
+passive observer. Initial rejected nonce conflicts are excluded. Retained metadata contains the exact hash,
+nonce, operation/solver labels, confirmation depth, original send span context and telemetry callback; it
+contains no signed bytes, calldata, obsolescence callback or mutable order state. A mutex protects the
+observer queue and a separate accounted-hash ledger shared with ordinary receipt accounting. Neither
+participates in admission, nonce ownership, fee hints, business retries or result delivery.
+
+The observer uses the existing poll cadence and advances its round-robin cursor before I/O. A whole pass
+is bounded by one receipt-read budget; receipt/header/ancestry reads retain their own timeouts within it.
+It never waits synchronously for depth. Missing, malformed, lagging, orphaned or insufficient-depth
+receipts remain uncounted and are retried until retention ends. Canonical ancestry and confirmation
+depth must be proven against a stable head. A separately bounded cache of validated hash-addressed parent
+headers retains immutable proof links across polls, so an old receipt can make progress without extending
+the pass budget. The cache uses the same configured cap and retention and never substitutes a
+height-only canonicality check. An advanced account nonce alone cannot discard an owned hash:
+our old call might have consumed it while receipt publication lagged.
+
+A qualifying receipt updates gas and actual fees, the dedicated late-receipt counter, and its telemetry
+callback through the common once-per-retained-hash gate. Successful RFQ, UniswapX and LI.FI callbacks
+record fill counts, freshness, cloned planned input/output amounts and gross planned surplus; 3F records
+redeemed request counts and freshness. Reverts contribute costs only. This does not reconstruct realized
+PnL, complete an order, adjust caches/capacity/breakers, reopen a span, or deliver another `Result`.
+Original request/inflight/duration observations remain unchanged. A confirmed nonce winner also retires
+its other same-nonce candidates. Normal `included_unconfirmed` receipt accounting keeps its existing
+semantics and does not gain a completed-transaction reorg watcher.
+
+Retention starts at lane release and never extends on retries. On capacity pressure the oldest retained
+hash is dropped. The separate accounted-hash ledger also evicts its oldest entry at the configured cap.
+Expiry/eviction limit duplicate suppression; replicas, restarts and observations outside retained history
+can count independently. Restart loses pending hashes, callback snapshots and the deduplication ledger.
+Dropped-hash counters report expiry, capacity and shutdown; they count observation drops, not known
+missed executions. This bounded process-local telemetry is not a canonical accounting ledger.
 
 | Outcome | Meaning |
 |---|---|
@@ -333,6 +371,9 @@ It sends no shutdown transaction. This does not guarantee mining or
 confirmation before exit. Configure orchestrator grace for solver preparation/drain plus manager drain;
 see the composition in [run.go](../cmd/vault-solver/run.go).
 
+The passive observer stops on manager cancellation, drops remaining observations with reason `shutdown`,
+and does not extend the lifecycle drain or send shutdown transactions.
+
 Every lifecycle exit cancels and joins its receipt reader, including one blocked delivering a result.
 The manager hard stop can return before an uncooperative backend exits; worker teardown relies on RPC
 context compliance, and process teardown remains the ultimate bound.
@@ -360,7 +401,8 @@ refreshes retain the previous snapshot; account gauges are absent before first s
 collector exports a scrape-consistent view. An external-only process exposes no txmanager account series.
 Operation labels are stable names such as `redeem`, `rfq-fill`, `lifi-fill`, `uniswapx-fill`.
 `nonce_conflict` and `nonce_consumed` are expected results with unknown business execution. Each records a terminal request
-and lifecycle outcome without synthesizing receipt gas or paid-fee accounting.
+and lifecycle outcome without synthesizing receipt gas or paid-fee accounting. A later independently
+qualified owned receipt adds execution costs and telemetry, while the original uncertain lifecycle stays terminal.
 
 ### Metrics
 
@@ -372,8 +414,11 @@ Definitions: [metrics.go](../internal/txmanager/metrics.go),
 |---|---|---|---|
 | Txmanager | `solver_bot_txmanager_requests_total` | `label`, `outcome` | Terminal results of logical on-chain operations, including the uncertain nonce outcomes. This is the request funnel for every solver, not proof of mined execution. |
 | Txmanager | `solver_bot_txmanager_inflight` | `label` | Requests accepted by the txmanager worker and still awaiting a terminal result; sustained values expose stuck transactions or nonce congestion. |
-| Txmanager | `solver_bot_txmanager_gas_used_total` | `label`, `outcome` | Receipt gas for mined transactions, including reverts. Divide by the matching request count for average gas; this is gas units, not native-token cost. |
-| Txmanager | `solver_bot_txmanager_fee_paid_wei_total` | `label`, `outcome` | Actual native-token fee paid by mined transactions, calculated from receipt `gasUsed × effectiveGasPrice`, including reverted transactions. |
+| Txmanager | `solver_bot_txmanager_gas_used_total` | `label`, `outcome` | Owned receipt gas, including reverts and qualified late receipts. Late receipts do not add request completions, so request-count ratios do not measure mean execution gas. This is gas units, not native-token cost. |
+| Txmanager | `solver_bot_txmanager_fee_paid_wei_total` | `label`, `outcome` | Actual native-token fee from owned receipt `gasUsed × effectiveGasPrice`, including reverts and qualified late receipts. |
+| Txmanager | `solver_bot_txmanager_late_receipts_total` | `label`, `outcome` | Qualified owned receipts after uncertain lane release; outcome is `confirmed` or `reverted`. |
+| Txmanager | `solver_bot_txmanager_late_receipt_pending` | `label` | Hashes retained for passive observation; does not represent occupied nonce lanes or unique orders. |
+| Txmanager | `solver_bot_txmanager_late_receipt_dropped_total` | `label`, `reason` | Unobserved hashes dropped for `expired`, `capacity` or `shutdown`; not proof those transactions executed. |
 | Txmanager | `solver_bot_txmanager_replacements_total` | `label`, `kind`, `reason` | Successfully broadcast replacements and exact rebroadcasts (`kind` = `replacement`, `rebroadcast`). Replacement `reason` is `validity`, `congestion`, `stall`, `gas` or `fallback`; a rebroadcast is `stall`, `uncertain` (ambiguous first broadcast) or `capped` (fee cap reached). Spikes expose fee-policy, relay or congestion problems that terminal outcomes alone cannot show. |
 | Txmanager | `solver_bot_txmanager_admission_rejections_total` | `label`, `reason` | Requests rejected before the signed worker lifecycle. Reasons are `manager_stopped`, `deadline_exceeded`, `caller_cancelled`, or bounded fallback `other`; an expected busy `TrySend` probe is excluded. |
 | Txmanager | `solver_bot_txmanager_admission_wait_duration_seconds` | `label`, `outcome` | Time from a real send request until worker admission or a terminal pre-admission outcome. `outcome` is `admitted` or one of the bounded rejection reasons; expected busy `TrySend` probes are excluded. |
@@ -409,6 +454,10 @@ Solver tests verify current business-state reconciliation, fresh retries and obs
 The local Anvil target verifies real fee replacement after a base-fee spike, abandonment followed by a
 different business call at the same nonce, restarted recovery without old hints through underpriced
 fresh requests, and three independent managers executing distinct orders as mined nonces advance.
+A late-winner Anvil regression abandons A, admits fresh B at the same nonce, mines A, and verifies
+its canonical success and actual costs are observed once without another lifecycle result, while C
+can subsequently execute at the next mined nonce. Unit coverage includes ordinary/late deduplication,
+reverts, depth/canonicality checks, bounded fairness, expiry/capacity and blocked-observer shutdown.
 These public-pool tests do not establish private-provider retention or consistency guarantees.
 
 Fee tests cover the base-fee bound, tip rule, repricing decisions, fee-window parsing, next-block estimate

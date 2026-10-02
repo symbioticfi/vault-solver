@@ -52,6 +52,9 @@ type Metrics struct {
 	inflight            *prometheus.GaugeVec
 	gasUsed             *prometheus.CounterVec
 	feePaidWei          *prometheus.CounterVec
+	lateReceipts        *prometheus.CounterVec
+	lateReceiptDropped  *prometheus.CounterVec
+	lateReceiptPending  *prometheus.GaugeVec
 	replacements        *prometheus.CounterVec
 	admissionRejections *prometheus.CounterVec
 	admissionWait       *prometheus.HistogramVec
@@ -91,6 +94,18 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Name:      "fee_paid_wei_total",
 			Help:      "Actual transaction fees paid from mined receipt gas usage and effective gas price.",
 		}, []string{"label", "outcome"}),
+		lateReceipts: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: "late_receipts_total",
+			Help: "Owned receipts observed after an execution-unknown lifecycle result, by confirmed or reverted outcome.",
+		}, []string{"label", "outcome"}),
+		lateReceiptDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: "late_receipt_dropped_total",
+			Help: "Passive receipt hashes removed without observing an owned receipt, by expired, capacity, or shutdown reason.",
+		}, []string{"label", "reason"}),
+		lateReceiptPending: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: "late_receipt_pending",
+			Help: "Owned transaction hashes retained for passive receipt observation after an uncertain result.",
+		}, []string{"label"}),
 		replacements: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
@@ -130,6 +145,9 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 		m.inflight,
 		m.gasUsed,
 		m.feePaidWei,
+		m.lateReceipts,
+		m.lateReceiptDropped,
+		m.lateReceiptPending,
 		m.replacements,
 		m.admissionRejections,
 		m.admissionWait,
@@ -172,7 +190,7 @@ func (observation *lifecycleObservation) transitionPhase(next lifecyclePhase) {
 	observation.phaseObserved[next] = true
 }
 
-func (observation *lifecycleObservation) finish(outcome Outcome, receipt *types.Receipt) {
+func (observation *lifecycleObservation) finish(outcome Outcome) {
 	if observation.metrics == nil {
 		return
 	}
@@ -192,12 +210,36 @@ func (observation *lifecycleObservation) finish(outcome Outcome, receipt *types.
 			).Observe(observation.phaseDurations[phase].Seconds())
 		}
 	}
-	if receipt != nil {
-		observation.metrics.gasUsed.WithLabelValues(observation.label, outcomeLabel).
-			Add(float64(receipt.GasUsed))
-		if fee, ok := receiptFeePaidWei(receipt); ok {
-			observation.metrics.feePaidWei.WithLabelValues(observation.label, outcomeLabel).Add(fee)
-		}
+}
+
+// observeReceipt accounts mined costs independently of the already finished request lifecycle.
+func (m *Metrics) observeReceipt(label string, result Result, late bool) {
+	if m == nil || result.Receipt == nil {
+		return
+	}
+	outcome := string(result.Outcome)
+	m.gasUsed.WithLabelValues(label, outcome).Add(float64(result.Receipt.GasUsed))
+	if fee, ok := receiptFeePaidWei(result.Receipt); ok {
+		m.feePaidWei.WithLabelValues(label, outcome).Add(fee)
+	}
+	if late {
+		m.lateReceipts.WithLabelValues(label, outcome).Inc()
+	}
+}
+
+func (m *Metrics) retainLateReceipt(label string) {
+	if m != nil {
+		m.lateReceiptPending.WithLabelValues(label).Inc()
+	}
+}
+
+func (m *Metrics) removeLateReceipt(label, reason string) {
+	if m == nil {
+		return
+	}
+	m.lateReceiptPending.WithLabelValues(label).Dec()
+	if reason != "" {
+		m.lateReceiptDropped.WithLabelValues(label, reason).Inc()
 	}
 }
 
