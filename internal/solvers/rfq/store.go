@@ -59,8 +59,8 @@ type orderRecord struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	NonceRetries int
-	// NonceConflict identifies a rejected initial send. It needs fresh protocol reconciliation,
-	// but retrying it does not spend the accepted unknown-execution retry budget.
+	// NonceConflict identifies rejected initial work, including an execution-reverted estimate.
+	// It needs fresh protocol reconciliation but does not spend the signed retry budget.
 	NonceConflict bool
 	RetryAt       time.Time
 	RetryDeadline time.Time

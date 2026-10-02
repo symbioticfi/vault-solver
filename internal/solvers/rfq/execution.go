@@ -363,6 +363,15 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		e.retireObsoleteOrder(ctx, orderID, res, res.Err)
 		return
 	}
+	if estimateExecutionReverted(res.Err) {
+		// Simulation can race a sibling's fill or changing business state. No transaction was
+		// signed, so retain the order for reconciliation without spending the signed retry budget.
+		observability.Decline(ctx, "fill_estimate_reverted", "execution changed before signing")
+		e.store.markNonceUncertain(orderID, common.Hash{}, errString(res.Err), true)
+		observability.Log(ctx).Info("fill estimate reverted; reconciling order", "attempt", attempt)
+		e.reconcileTerminalStatus(ctx, orderID)
+		return
+	}
 	if outcome.NonceUncertain() {
 		// Abandoning a signed fill or a nonce race leaves our own execution unknown. The backend
 		// decides whether the order is terminal or eligible for a freshly built bounded retry.
@@ -536,11 +545,20 @@ func (e *executionService) sendFill(
 		observability.Decline(submitCtx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
 		return res, nil
 	}
+	if estimateExecutionReverted(res.Err) {
+		observability.Decline(submitCtx, "fill_estimate_reverted", "execution changed before signing")
+		return res, nil
+	}
 	err = res.Err // included-but-unconfirmed still carries the wait failure
 	if err == nil && !res.Outcome.Included() {
 		err = errors.Errorf("unknown transaction outcome %q", res.Outcome)
 	}
 	return res, err
+}
+
+func estimateExecutionReverted(err error) bool {
+	var revert *txmanager.ExecutionRevertError
+	return errors.As(err, &revert)
 }
 
 // resolveExecutable returns the executable payload for a polled order from the backend.
@@ -602,7 +620,12 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 		}
 	case "error", "cancelled", "unverified", "insufficient-funds":
 		observability.Decline(ctx, "fill_failed", "backend terminal status "+bo.OrderStatus)
-		e.store.markStatus(orderID, statusFailed, txHash, "backend terminal status "+bo.OrderStatus)
+		status := statusFailed
+		if local := e.store.order(orderID); local != nil && local.TxHash == (common.Hash{}) {
+			// Unsigned preparation failures can be re-armed; a terminal backend decision cannot.
+			status = statusObsolete
+		}
+		e.store.markStatus(orderID, status, txHash, "backend terminal status "+bo.OrderStatus)
 	default:
 		// The client tolerates a dropped or renamed field, so "" or a new value reaches here. Marking
 		// it failed would re-arm the order and re-submit a fill the backend may still consider live.

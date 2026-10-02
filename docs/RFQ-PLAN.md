@@ -113,6 +113,10 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   resolution again. Retry waiting counts as an active obligation and reconciles terminal
   backend status; its retained order deadline also expires it locally if backend views disappear or stay
   stale. No retry is scheduled during shutdown or when the order expires before the next attempt.
+  Execution-reverted gas estimates follow the same backend reconciliation and polling/deadline
+  bounds as rejected initial work, without spending the signed retry budget or recording a failed
+  fill. Typed estimate reverts are expected Info events; transport failures remain errors. A terminal
+  backend decision on unsigned work is never re-armed by a stale open-order listing.
   Reverted transactions stay failed; unknown inclusion stays submitted for backend reconciliation
   without another fill. A result wrapping `txmanager.ErrRequestObsolete` is terminal instead:
   the order becomes `obsolete` (never re-armed, even while the backend still lists it open), no retry is
@@ -388,6 +392,10 @@ dropping features.
    `maxNonceRetries`; accepted unknown results retain that budget. Regression tests cover more than four
    initial conflicts, terminal/unknown backend states, fresh open polling and rebuilt calldata, backoff,
    local deadline expiry and preservation/exhaustion of the accepted-execution retry budget.
+8. **(done) Estimate-revert reconciliation** — reconcile business state when unsigned simulation
+   reverts, retire backend terminal orders, and rebuild eligible open orders after polling backoff
+   without consuming the accepted-execution retry budget. Tested with terminal, stale-open and
+   missing backend views, deadline expiry and log/metric severity.
 
 **Reads are multicall-batched** end to end: amount-specific strategy evaluation uses the shared
 per-route fill-quote batch (`paused`, `getMaxAssets`, `getAmountOut`, `minDiscount`), while inventory

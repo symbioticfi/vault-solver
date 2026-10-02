@@ -493,7 +493,10 @@ For liquidity commitments, the built-in strategies apply these limits:
   attempts after accepted uncertain outcomes (`0` disables those retries); at least one `pollIntervalMs` interval and a fresh open-order poll
   precede another attempt. Reverted transactions are not retried, and uncertain inclusion is reconciled
   through the backend. Initial nonce collisions retry after the poll delay within the order deadline,
-  without spending this budget; uncertain outcomes after accepted submission remain budgeted.
+  without spending this budget. Execution-reverted gas estimates also reconcile backend status and
+  retry eligible open orders after the poll delay; these unsigned races are Info events and do not
+  consume the signed retry budget. Transport failures remain errors. Uncertain outcomes after
+  accepted submission remain budgeted.
   Retry counts are local to each process and reset on restart.
 - LI.FI and UniswapX split shared vault capacity across token pairs before quoting. A pair can therefore
   quote less than the vault's total free liquidity. This does not reserve every repeated quote request.
