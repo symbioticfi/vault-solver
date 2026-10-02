@@ -87,6 +87,10 @@ budget of its own: the request's `Deadline` and manager shutdown bound it, so a 
 Each initial mined nonce read and replacement/fee-hint nonce check has its own
 `min(2 seconds, replacementInterval/2)` timeout, bounded by the caller or lifecycle context. Receipt
 confirmation retains bounded header and ancestry reads; no account-confirmation proof runs before signing.
+Initial broadcast captures that mined nonce before fee reads, gas simulation and the final `Obsolete`
+check, then keeps it through signing. A sibling mining during preparation causes an execution revert
+or a consumed-nonce race instead of advancing stale calldata to the next account nonce. Inconsistent
+chain views between RPC endpoints can still let simulation miss already completed work.
 
 Account refresh uses a 5-second context. Backends must honor cancellation. The replacement loop ticks
 every `blockTimeMs/2` and acts only on a new block; `replacementIntervalMs` only paces the fallback bump

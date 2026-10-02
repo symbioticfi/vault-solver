@@ -416,8 +416,10 @@ txManager:
   # retain the existing timeout and horizon settings
 ```
 
-Each process reads `eth_getTransactionCount(address, "latest")` from the write endpoint immediately
-before signing each new request. Fresh business work always uses the next unconsumed nonce, even after
+Each process reads `eth_getTransactionCount(address, "latest")` from the write endpoint before preparing
+each new request, then keeps that nonce through estimation, the final status check and signing. A sibling
+fill mined during preparation cannot move this request's calldata to the next nonce. Fresh business work
+uses the next unconsumed nonce, even after
 a restart and even when a private relay counts an expired call as pending. The account advances to the
 next nonce after a transaction is mined; fresh requests do not queue higher nonces behind unmined work.
 Use a write RPC that serves current mined account state. Private pending visibility is not required

@@ -763,6 +763,12 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	if req.MaxFeePerGas != nil && req.MaxFeePerGas.Sign() <= 0 {
 		return nil, errors.Errorf("send %q: request max fee per gas must be positive", req.Label)
 	}
+	// Capture the nonce before simulation. If a sibling mines during preparation, this request
+	// keeps the consumed nonce instead of moving stale business calldata to the next nonce.
+	nonce, floor, err := m.selectNonce(broadcastCtx)
+	if err != nil {
+		return nil, err
+	}
 	quote, err := m.quoteCall(broadcastCtx, req, reserveFeeBump(m.normalFeeLimit(req)))
 	if err != nil {
 		return nil, err
@@ -795,10 +801,6 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 		"requestMaxFeePerGas", optionalBigString(req.MaxFeePerGas),
 	)
 
-	nonce, floor, err := m.selectNonce(broadcastCtx)
-	if err != nil {
-		return nil, err
-	}
 	if floor != nil {
 		fees, err = replacementFloor(fees, *floor, m.normalFeeLimit(req))
 		if err != nil {
