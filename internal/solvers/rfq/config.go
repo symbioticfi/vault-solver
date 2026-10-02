@@ -61,7 +61,7 @@ type Config struct {
 	PollInterval time.Duration
 	// OrderLimit caps how many open orders are fetched per poll.
 	OrderLimit int
-	// MaxCancellationRetries bounds additional fills after confirmed cancellations or consumed nonces.
+	// MaxCancellationRetries bounds additional fills after confirmed cancellations or uncertain nonce results.
 	// Zero disables retries. Each retry re-fetches the executable order and discount signatures.
 	MaxCancellationRetries int
 	// SolverMode is the deployment profile operators set: "external" (default) or "internal". It drives

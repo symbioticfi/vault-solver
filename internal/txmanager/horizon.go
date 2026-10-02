@@ -607,9 +607,6 @@ func (m *Manager) reestimateStalledCall(
 // rebroadcastStalledAttempt resends the latest attempt's exact bytes for a relay that dropped it,
 // after the same nonce checks a replacement makes. It reports whether it sent.
 func (m *Manager) rebroadcastStalledAttempt(ctx context.Context, pending *pendingTransaction) bool {
-	if m.hasNonceConflict(pending.nonce) {
-		return false
-	}
 	if available, err := m.replacementNonceAvailable(ctx, pending); err != nil || !available {
 		return false
 	}
@@ -618,12 +615,8 @@ func (m *Manager) rebroadcastStalledAttempt(ctx context.Context, pending *pendin
 		return false
 	}
 	sendCtx, cancelSend := replacementBroadcastContext(ctx, pending, attempt.cancellation)
-	err := m.sendSigned(sendCtx, attempt.tx, true, attempt.cancellation)
+	err := m.sendSigned(sendCtx, attempt.tx, attempt.cancellation)
 	cancelSend()
-	if isNonceConsumedError(err) {
-		pending.nonceConflictHash = attempt.hash
-		m.reconcileExistingLifecycleNonce(ctx, pending)
-	}
 	fields := []any{
 		"label", pending.req.Label, "hash", attempt.hash.Hex(), "nonce", pending.nonce,
 		"cancellation", attempt.cancellation, "reason", replaceReasonStall,

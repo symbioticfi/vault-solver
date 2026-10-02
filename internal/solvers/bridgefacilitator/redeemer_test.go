@@ -119,6 +119,13 @@ func TestRedeemAllMalformedCanWithdrawRetainsFreshnessAndRedeemsValidSubset(t *t
 }
 
 func TestRedeemConsumedNonceRechecksRequestsWithoutReportingSuccess(t *testing.T) {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict} {
+		t.Run(string(outcome), func(t *testing.T) { redeemConsumedNonceRechecksRequestsWithoutReportingSuccess(t, outcome) })
+	}
+}
+
+func redeemConsumedNonceRechecksRequestsWithoutReportingSuccess(t *testing.T, outcome txmanager.Outcome) {
+	t.Helper()
 	rec := tracetest.Install(t)
 	adapter := common.HexToAddress("0xa0")
 	request := common.HexToAddress("0xb0")
@@ -140,8 +147,8 @@ func TestRedeemConsumedNonceRechecksRequestsWithoutReportingSuccess(t *testing.T
 	}
 	s.txManager = transactionSenderFunc(func(context.Context, txmanager.Request) txmanager.Result {
 		sent++
-		return txmanager.Result{Outcome: txmanager.OutcomeNonceConsumed,
-			Hash: common.HexToHash("0xfeed"), Err: txmanager.ErrNonceConsumed}
+		return txmanager.Result{Outcome: outcome,
+			Hash: common.HexToHash("0xfeed"), Err: nonceOutcomeError(outcome)}
 	})
 	s.redeemAll(t.Context())
 	s.redeemAll(t.Context())
@@ -150,9 +157,16 @@ func TestRedeemConsumedNonceRechecksRequestsWithoutReportingSuccess(t *testing.T
 	}
 	metricstest.RequireWorkflowEventCount(t, reg, Name, threeFEventRedeem, "success", 0)
 	submit := tracetest.Ended(t, rec, "3f.redeem.submit")
-	tracetest.RequireAttr(t, submit, "tx.outcome", string(txmanager.OutcomeNonceConsumed))
+	tracetest.RequireAttr(t, submit, "tx.outcome", string(outcome))
 	if !tracetest.HasEvent(submit, "declined") {
 		t.Fatal("consumed nonce did not record an expected decline")
 	}
 	tracetest.RequireNoErrorSpans(t, rec)
+}
+
+func nonceOutcomeError(outcome txmanager.Outcome) error {
+	if outcome == txmanager.OutcomeNonceConflict {
+		return txmanager.ErrNonceConflict
+	}
+	return txmanager.ErrNonceConsumed
 }

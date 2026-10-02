@@ -227,7 +227,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	}
 	background.Go(func() {
 		defer unsubscribe()
-		// Subscribe before reading current safety, so reconciliation cannot complete between a
+		// Subscribe before reading current availability, so initialization cannot complete between a
 		// stale snapshot and subscription. Cancellation drops readiness for every solver.
 		watchReadiness(gctx, laneStateChanged, laneAvailable, health.SetReady)
 	})

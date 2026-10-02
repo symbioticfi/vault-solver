@@ -89,11 +89,8 @@ func testAnvilConsumedNonce(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if relay.sends != 1 || len(pending.attempts) != 1 || m.Available() {
+	if relay.sends != 1 || len(pending.attempts) != 1 || !m.Available() {
 		t.Fatalf("consumed nonce was not paused: sends=%d attempts=%d available=%v", relay.sends, len(pending.attempts), m.Available())
-	}
-	if result, done := m.receiptResult(t.Context(), pending); done {
-		t.Fatalf("unrelated receipt completed our lifecycle: %+v", result)
 	}
 	mineAnvilBlock(t, rpcClient)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -103,7 +100,7 @@ func testAnvilConsumedNonce(t *testing.T) {
 		t.Fatalf("canonical consumption did not recover silent relay: %+v", result)
 	}
 	assertAnvilReconciliationOutcome(t, result, pending.originalHash)
-	assertAnvilCanonicalTransaction(t, ethClient, external.Hash(), 0, 1)
+	assertAnvilCanonicalTransaction(t, ethClient, external.Hash(), 0)
 }
 
 func testAnvilReplacement(t *testing.T) {
@@ -158,7 +155,7 @@ func testAnvilReplacement(t *testing.T) {
 	mineAnvilBlock(t, rpcClient)
 	mineAnvilBlock(t, rpcClient)
 	got := waitForTxResult(t, result)
-	assertAnvilCanonicalTransaction(t, ethClient, common.HexToHash(replacement.Hash), 0, 1)
+	assertAnvilCanonicalTransaction(t, ethClient, common.HexToHash(replacement.Hash), 0)
 	expected := replacement.Hash
 	if got.Outcome == OutcomeNonceConsumed {
 		expected = initial.Hash // Without an owned receipt the manager retains the original identity.
@@ -260,7 +257,7 @@ func testAnvilCancellation(t *testing.T, dedicatedCancellationRPC bool) {
 	mineAnvilBlock(t, rpcClient)
 	mineAnvilBlock(t, rpcClient)
 	firstResult := waitForTxResult(t, first)
-	assertAnvilCanonicalTransaction(t, ethClient, common.HexToHash(cancellation.Hash), 0, 1)
+	assertAnvilCanonicalTransaction(t, ethClient, common.HexToHash(cancellation.Hash), 0)
 	if firstResult.Outcome == OutcomeNonceConsumed {
 		assertAnvilReconciliationOutcome(t, firstResult, common.HexToHash(initial.Hash))
 	} else if firstResult.Outcome != OutcomeCancelled || firstResult.Receipt == nil ||
@@ -281,7 +278,7 @@ func testAnvilCancellation(t *testing.T, dedicatedCancellationRPC bool) {
 	mineAnvilBlock(t, rpcClient)
 	mineAnvilBlock(t, rpcClient)
 	assertAnvilReconciliationOutcome(t, waitForTxResult(t, second.result), common.HexToHash(later.Hash))
-	assertAnvilCanonicalTransaction(t, ethClient, common.HexToHash(later.Hash), 1, 1)
+	assertAnvilCanonicalTransaction(t, ethClient, common.HexToHash(later.Hash), 1)
 	if dedicatedCancellationRPC && (writeSends.Load() != 2 || cancelSends.Load() != 1) {
 		t.Fatalf("broadcast routing: write=%d cancel=%d, want two normal calls and one cancellation", writeSends.Load(), cancelSends.Load())
 	}

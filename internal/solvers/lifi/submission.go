@@ -184,11 +184,11 @@ func (s *Solver) completeFill(
 	defer func() { end(err) }()
 
 	outcome := completion.result.Outcome
-	if outcome == txmanager.OutcomeNonceConsumed {
-		observability.Decline(ctx, "fill_nonce_consumed", "transaction nonce was consumed")
+	if outcome.NonceUncertain() {
+		observability.Decline(ctx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
 		// A feed/REST replay must re-read current on-chain order status and build fresh calldata.
 		// This outcome carries no owned receipt and is never counted as a successful fill.
-		observability.Log(ctx).V(1).Info("order fill nonce consumed; awaiting protocol reconciliation",
+		observability.Log(ctx).V(1).Info("order fill nonce uncertain; awaiting protocol reconciliation",
 			"orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
 			"quoteId", fill.order.QuoteID, "tx", completion.result.Hash.Hex())
 		return nil

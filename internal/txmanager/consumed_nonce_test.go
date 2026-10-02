@@ -8,7 +8,6 @@ import (
 	"testing/synctest"
 	"time"
 
-	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
@@ -42,31 +41,6 @@ func (b *silentAcceptanceBackend) NonceAt(ctx context.Context, account common.Ad
 		return 0, b.nonceErr
 	}
 	return b.mockBackend.NonceAt(ctx, account, block)
-}
-
-// The latest RPC sees consumption before its block reaches the confirmation ancestor. Receipt
-// publication remains independent, so account state cannot imply an owned hash's inclusion.
-type delayedReceiptNonceBackend struct {
-	*silentAcceptanceBackend
-
-	consumedBlock uint64
-	nonceBefore   uint64
-}
-
-func (b *delayedReceiptNonceBackend) ReadNonceAtHash(_ context.Context, _ common.Address, hash common.Hash) (uint64, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for block := b.head; ; block-- {
-		if b.headerLocked(block).Hash() == hash {
-			if block < b.consumedBlock {
-				return b.nonceBefore, nil
-			}
-			return b.nonceBefore + 1, nil
-		}
-		if block == 0 {
-			return 0, ethereum.NotFound
-		}
-	}
 }
 
 func TestReplacementsStopWhenMinedNonceAdvances(t *testing.T) {
@@ -114,8 +88,8 @@ func TestReplacementsStopWhenMinedNonceAdvances(t *testing.T) {
 			if pending.fees.maxFee.Cmp(fees.maxFee) != 0 || pending.fees.tip.Cmp(fees.tip) != 0 {
 				t.Fatal("fees escalated after the nonce was consumed")
 			}
-			if m.Available() {
-				t.Fatal("unexplained mined nonce advancement left admission/readiness available")
+			if !m.Available() {
+				t.Fatal("external nonce consumption paused fresh admission")
 			}
 			fresh, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0xdef"), GasLimit: 21_000})
 			if err != nil || fresh == nil || fresh.nonce != 8 {
@@ -164,7 +138,7 @@ func TestConsumedNonceRequiresCanonicalOwnedReceipt(t *testing.T) {
 			}
 			result, done := m.receiptResult(t.Context(), pending)
 			if orphaned {
-				if done || m.Available() {
+				if done || !m.Available() {
 					t.Fatalf("orphaned owned receipt resolved nonce conflict: %+v", result)
 				}
 			} else if !done || !m.Available() || result.Outcome != OutcomeConfirmed || result.Hash != pending.originalHash {
@@ -209,66 +183,4 @@ func TestReplacementNonceReadFailureDefersBroadcastAndRecovers(t *testing.T) {
 			})
 		})
 	}
-}
-
-func TestConsumedNonceKeepsTrackingUntilOwnedReceiptArrives(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		b := &delayedReceiptNonceBackend{
-			silentAcceptanceBackend: &silentAcceptanceBackend{mockBackend: newMockBackend()},
-			consumedBlock:           101,
-			nonceBefore:             7,
-		}
-		m := New(b, mustSigner(t), big.NewInt(1), Config{
-			MaxFeeGwei: 100, PollInterval: time.Second, ReplacementInterval: 10 * time.Second,
-			Confirmations: 2,
-		}, logr.Discard())
-		pending, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000})
-		if err != nil {
-			t.Fatal(err)
-		}
-		b.latestNonce, b.pendingNonce, b.head = 8, 8, 101
-		m.trackUnminedTransaction(pending)
-		ctx, cancel := context.WithCancel(t.Context())
-		results := make(chan Result, 1)
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			results <- m.waitForPendingTransaction(ctx, pending)
-		}()
-		defer func() { cancel(); <-done }()
-		// The mined nonce advances before its block has the configured confirmation depth. The
-		// manager must stop same-nonce rebroadcasts without inventing an owned inclusion result.
-		for head := uint64(101); head <= 102; head++ {
-			b.mu.Lock()
-			b.head = head
-			b.mu.Unlock()
-			time.Sleep(12 * time.Second)
-		}
-		synctest.Wait()
-		if m.Available() || len(b.attemptedTransactions()) != 1 {
-			t.Fatal("silent acceptance left consumed nonce replacements running")
-		}
-		select {
-		case result := <-results:
-			t.Fatalf("nonce advancement invented a terminal result: %+v", result)
-		default:
-		}
-		b.mu.Lock()
-		b.receipts[pending.originalHash] = successfulReceipt(pending.attempts[0].tx, 101)
-		b.head = 103
-		b.mu.Unlock()
-		time.Sleep(time.Second)
-		synctest.Wait()
-		select {
-		case result := <-results:
-			if result.Outcome != OutcomeConfirmed || result.Hash != pending.originalHash || result.Err != nil {
-				t.Fatalf("delayed owned receipt = %+v", result)
-			}
-		default:
-			t.Fatal("owned canonical receipt did not complete the lifecycle")
-		}
-		if !m.Available() {
-			t.Fatal("owned canonical receipt did not resume admission/readiness")
-		}
-	})
 }

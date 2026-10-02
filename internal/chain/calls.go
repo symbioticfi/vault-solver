@@ -13,7 +13,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/rpc"
 )
 
 // callTracing describes how one dialed endpoint's JSON-RPC calls are traced. Only a non-HTTP
@@ -173,25 +172,14 @@ func (c *Client) SendCancellationTransaction(ctx context.Context, tx *types.Tran
 	return c.cancelClient.SendTransaction(ctx, tx)
 }
 
-// NonceAt reads the mined nonce through the write client so startup compares one endpoint's mined
-// and pending views instead of failing on harmless head skew between independent RPC nodes.
+// NonceAt reads mined state through the sending endpoint to stop replacements after the nonce
+// was consumed, including by another replica.
 func (c *Client) NonceAt(
 	ctx context.Context, account common.Address, blockNumber *big.Int,
 ) (_ uint64, err error) {
 	ctx, end := c.writeCalls.start(ctx, rpcMethodGetTransactionCount)
 	defer func() { end(err) }()
 	return c.writeClient.NonceAt(ctx, account, blockNumber)
-}
-
-// ReadNonceAtHash reads account state at an exact canonical block through the read endpoints.
-// Reconciliation pairs this with canonical headers from the same read path; write endpoint
-// pending state remains an admission observation, never evidence of confirmed nonce consumption.
-func (c *Client) ReadNonceAtHash(ctx context.Context, account common.Address, hash common.Hash) (_ uint64, err error) {
-	ctx, end := c.readCalls.start(ctx, rpcMethodGetTransactionCount)
-	defer func() { end(err) }()
-	var nonce hexutil.Uint64
-	err = c.Client.Client().CallContext(ctx, &nonce, rpcMethodGetTransactionCount, account, rpc.BlockNumberOrHashWithHash(hash, true))
-	return uint64(nonce), err
 }
 
 // PendingNonceAt reads the pending nonce through the write client so a private write endpoint can

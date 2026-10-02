@@ -183,7 +183,7 @@ wrapping `txmanager.ErrRequestObsolete` retires the order without a retry or a b
 `fill/obsolete`. Continued quoting does not guarantee execution within exclusivity;
 the exclusive window must also cover any preceding fill's confirmation time.
 
-With canonical RPC nonce reconciliation, `nonce_consumed` has no owned receipt and never counts as a successful
+With fresh pending nonce selection, `nonce_conflict` and `nonce_consumed` have no owned receipt and never count as a successful
 fill. Completion invalidates inventory and releases the local reservation, then defers the order until the
 normal polling interval without increasing execution-failure attempts or opening the fade breaker. A later
 open-order poll and the normal fresh deadline, planning, preflight and protocol-obsolescence checks decide
@@ -231,7 +231,7 @@ exclusive obligations remain independently tracked through terminal reconciliati
   earliest order, signed-discount or protocol-signature deadline. Its wall-clock observation anchor is
   captured before the chain-time RPC, so lookup/planning latency consumes rather than extends validity.
   Capacity reservations protect the selected source before preflight and transaction admission.
-  With every strategy (`default`, `single`, and `webhook`), quote readiness depends on nonce safety,
+  With every strategy (`default`, `single`, and `webhook`), quote readiness depends on sender initialization,
   not ordinary sender occupancy; free capacity remains quotable.
 - **The request fee ceiling is protocol policy.** With gas accounting disabled, UniswapX supplies no
   request ceiling. With it enabled, `MaxFeePerGas` supplies the decision-time profitability ceiling
@@ -239,8 +239,8 @@ exclusive obligations remain independently tracked through terminal reconciliati
   still leaves the fill its full fee horizon. The manager owns
   [fee selection and headroom](TXMANAGER-PLAN.md#4-fees-replacements-and-cancellation).
 - **Signed lifecycle ownership remains in txmanager.** UniswapX consumes its
-  [nonce safety and terminal results](TXMANAGER-PLAN.md#6-rpc-routing-nonce-conflicts-and-restart),
-  retaining its own quote/readiness gates while nonce ownership is uncertain.
+  [nonce handling and terminal results](TXMANAGER-PLAN.md#6-rpc-routing-nonce-conflicts-and-restart),
+  retaining its own quote/readiness gates during startup and shutdown.
 - **Pending capacity stays reserved through transaction completion.** A fallback replaces its own
   reservation. Transaction completion invalidates the quote cache before releasing capacity and requests
   a latest-state refresh. Unsubmitted attempts release their reservations without invalidating inventory;
@@ -683,11 +683,10 @@ is economic, not just gas:
 - **Honor trusted `blockUntilTimestamp` notifications** from Uniswap and expose the block/readiness state;
   readiness also fails when the latest published snapshot has no quotable inventory, while health remains
   liveness-only.
-- **Gate quotes on nonce safety:** unresolved nonce ownership blocks quote responses,
-  the solver `/ready` endpoint, its readiness metric, and framework readiness. A busy sender alone does not.
-  While a nonce conflict pauses the lane, claimed orders return to retry before chain reads, strategy or signed-discount resolution,
-  calldata construction, and preflight. Exact-hash reconciliation and the fail-closed recovery rule are
-  described in §2.2.
+- **Gate quotes on sender readiness:** startup and shutdown gate quote responses, the solver `/ready`
+  endpoint, its readiness metric and framework readiness. A busy sender alone does not. Initial nonce
+  collisions return promptly and do not create a persistent readiness pause; order execution reconciles
+  current protocol state before a fresh polling retry (§2.2).
 - **Track exclusive obligations locally:** every decodable order assigned to our executor is tracked until
   `decayStartTime`, even when later execution validation rejects it. After startup or an interrupted exclusive
   poll, the solver also reads the newest filler snapshot across all statuses and filters it locally so an order

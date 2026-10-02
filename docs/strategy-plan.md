@@ -256,7 +256,7 @@ signer/RPC tuples run as separate processes with disjoint solver subsets and uni
 (or deployment-supplied `lane`) target labels. Committed dashboards use the standard Kubernetes `pod` target
 label and query namespace/pod options from Prometheus rather than embedding deployment names. Application metrics do not carry URLs or deployment names.
 The [shared manager ownership contract](TXMANAGER-PLAN.md#1-ownership-and-admission) serializes local
-signed lifecycles and always reconciles canonical account nonce evidence. Several processes can share
+signed lifecycles and reads a fresh pending nonce before every new send. Several processes can share
 the EOA, but nonces and off-chain commitments are not allocated atomically across processes; see the
 [replica plan](REPLICA-PLAN.md).
 

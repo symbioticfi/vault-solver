@@ -179,7 +179,7 @@ provider can tie the connection back to the dial but **never to an individual ca
 handshake at all. Each call is then spanned locally: `internal/chain/calls.go` shadows exactly the
 backend methods this repo calls (`CallContract`, `HeaderByNumber`, `HeaderByHash`, `FeeHistory`,
 `EstimateGas` and its next-block variant `EstimateGasNextBlock`, `TransactionReceipt`, `BalanceAt`, `CodeAt`, `BlockNumber`,
-`SendTransaction`, `SendCancellationTransaction`, `NonceAt`, `PendingNonceAt`, `ReadNonceAtHash`, `TransactionSenderBalanceAt`) and starts a client span
+`SendTransaction`, `SendCancellationTransaction`, `NonceAt`, `PendingNonceAt`, `TransactionSenderBalanceAt`) and starts a client span
 named by the JSON-RPC method with `rpc.system=jsonrpc`, `rpc.method`, `chain.rpc.role` and
 `chain.rpc.transport`, so dashboards see one series across transports. A cancelled call and an
 `ethereum.NotFound` (the null result a node returns for an unmined transaction or an unknown block)
@@ -209,8 +209,8 @@ grandchild automatically) and one `txmanager.replace` per replacement carrying `
 Receipt polls are ordinary RPC child spans. Attributes: `solver` (from
 `Request.Solver`), `tx.label`, `tx.hash` and `tx.nonce` once known, and terminal `tx.outcome`; status
 is Error for `reverted`, `cancelled`, `cancelled_unconfirmed`, `submission_error` and `tracking_stopped`, and unset for
-`confirmed`, `included_unconfirmed` and the expected `nonce_consumed` outcome. `nonce_consumed` records
-confirmed account nonce consumption with an unknown business result; it must not be presented as our
+`confirmed`, `included_unconfirmed` and the expected `nonce_conflict` / `nonce_consumed` outcomes. These record
+nonce contention or observed mined nonce advancement with an unknown business result; they must not be presented as our
 transaction's inclusion, a winning peer, a confirmed cancellation or a fill failure. An attached
 `tx.hash` remains the process's attempted hash. Account evidence never manufactures a receipt, so this
 outcome adds no receipt gas/fee accounting. Solver completion stages record the same outcome and reconcile

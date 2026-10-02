@@ -13,8 +13,8 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
-// orderStatus is the local order lifecycle. A confirmed consumed nonce can enter retry_waiting
-// before another open-order poll returns it to queued; other signed failures are terminal.
+// orderStatus is the local order lifecycle. Confirmed cancellation and uncertain nonce outcomes
+// can enter retry_waiting before a fresh open-order poll re-arms them; other signed failures are terminal.
 type orderStatus string
 
 const (
@@ -25,8 +25,8 @@ const (
 	statusExpired      orderStatus = "expired"
 	statusFailed       orderStatus = "failed"
 	statusRetryWaiting orderStatus = "retry_waiting"
-	// A consumed nonce does not prove our fill landed. Reconcile the backend before fresh retry.
-	statusNonceConsumed orderStatus = "nonce_consumed"
+	// A nonce race does not prove our fill landed. Reconcile the backend before fresh retry.
+	statusNonceUncertain orderStatus = "nonce_uncertain"
 	// statusObsolete is terminal: the backend reported the order no longer fillable while our fill was
 	// being sent, so it is never re-armed, even if a stale open-order listing still returns it.
 	statusObsolete orderStatus = "obsolete"
@@ -34,7 +34,7 @@ const (
 
 func (s orderStatus) active() bool {
 	return s == statusQueued || s == statusSubmitting || s == statusSubmitted ||
-		s == statusRetryWaiting || s == statusNonceConsumed
+		s == statusRetryWaiting || s == statusNonceUncertain
 }
 
 // awaitsSubmission reports a won order the submitter still has to send.
@@ -132,7 +132,7 @@ func (s *store) upsertQueued(in queuedOrder) bool {
 	}
 	if rec.Status == statusRetryWaiting && !now.Before(rec.RetryAt) {
 		rec.Status = statusQueued
-		rec.TxHash = common.Hash{} // the previous nonce is canonically consumed
+		rec.TxHash = common.Hash{} // protocol reconciliation authorized a fresh attempt
 		rec.LastError = ""
 		rec.RetryAt = time.Time{}
 	}
@@ -299,8 +299,8 @@ func (s *store) recordAttempt(orderID string) int {
 	return s.attempts[orderID]
 }
 
-// scheduleNonceRetry follows a confirmed cancellation or a consumed nonce whose backend order
-// remains open. Both share the configured cancellation retry budget, retained across re-queueing.
+// scheduleNonceRetry follows a confirmed cancellation or an uncertain nonce result whose backend
+// order remains open. Both share the configured cancellation retry budget, retained across re-queueing.
 func (s *store) scheduleNonceRetry(
 	orderID string, limit int, retryAt, deadline time.Time, txHash common.Hash, lastErr string,
 ) bool {

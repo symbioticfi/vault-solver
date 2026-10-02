@@ -282,8 +282,6 @@ func TestUntrustedReconciliationReceiptKeepsPendingPhase(t *testing.T) {
 	}
 	pending.lifecycle = metrics.beginLifecycle(pending.req.Label)
 	pending.lifecycle.transitionPhase(lifecyclePhasePending)
-	pending.nonceConflictHash = pending.attempts[0].hash
-	manager.markNonceConflict(pending.nonce, pending.nonceConflictHash)
 	backend.errorMu.Lock()
 	backend.blockFailures = 1
 	backend.errorMu.Unlock()
@@ -373,7 +371,6 @@ func TestAdmissionRejectionMetrics(t *testing.T) {
 			want admissionRejectionReason
 		}{
 			{"manager stopped", errManagerStopped, admissionRejectionManagerStopped},
-			{"nonce conflict", errNonceLanePaused, admissionRejectionNonceConflict},
 			{"deadline", context.DeadlineExceeded, admissionRejectionDeadline},
 			{"caller cancelled", context.Canceled, admissionRejectionCallerCancelled},
 			{"other", errors.New("unexpected"), admissionRejectionOther},

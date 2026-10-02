@@ -531,12 +531,12 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 		return
 	}
 	outcome := result.Outcome
-	if outcome == txmanager.OutcomeNonceConsumed {
-		observability.Decline(ctx, "fill_nonce_consumed", "transaction nonce was consumed")
+	if outcome.NonceUncertain() {
+		observability.Decline(ctx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
 		// Fresh polling rechecks order status, terms and execution-time state. The missing owned
 		// receipt neither proves this order filled nor counts as a local execution failure.
 		s.retry(order.Hash, now, false)
-		observability.Log(ctx).V(1).Info("order fill nonce consumed; awaiting fresh order poll",
+		observability.Log(ctx).V(1).Info("order fill nonce uncertain; awaiting fresh order poll",
 			"source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
 			"tx", result.Hash.Hex())
 		return

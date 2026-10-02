@@ -817,6 +817,13 @@ func TestCompletePendingFillClassifiesNotAdmittedWithoutFailure(t *testing.T) {
 }
 
 func TestCompletePendingFillReconcilesConsumedNonceWithoutFailure(t *testing.T) {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict} {
+		t.Run(string(outcome), func(t *testing.T) { completePendingFillReconcilesConsumedNonceWithoutFailure(t, outcome) })
+	}
+}
+
+func completePendingFillReconcilesConsumedNonceWithoutFailure(t *testing.T, outcome txmanager.Outcome) {
+	t.Helper()
 	fixture := newDirectExecutionFixture(t)
 	fixture.order.Source = orderSourcePublicV2
 	metrics, reg := newUniswapXTestMetricsWithRegistry(t, fixture.solver)
@@ -828,7 +835,7 @@ func TestCompletePendingFillReconcilesConsumedNonceWithoutFailure(t *testing.T) 
 		liquidlane.CapacityReservations{fixture.route.CapacityID: big.NewInt(100)}, fixture.solver.capacity.Revision(),
 	)
 	fixture.solver.completePendingFill(t.Context(), testPendingFill(t, fixture.order), txmanager.Result{
-		Hash: common.HexToHash("0x1234"), Outcome: txmanager.OutcomeNonceConsumed, Err: txmanager.ErrNonceConsumed,
+		Hash: common.HexToHash("0x1234"), Outcome: outcome, Err: nonceOutcomeError(outcome),
 	})
 	if fixture.solver.capacity.Len() != 0 || fixture.solver.inFlight[fixture.order.Hash] {
 		t.Fatal("consumed nonce retained capacity or in-flight state")
@@ -1039,4 +1046,11 @@ func testPendingFill(t *testing.T, order *resolvedOrder) *pendingUniswapFill {
 	t.Helper()
 	_, span := noop.NewTracerProvider().Tracer("test").Start(t.Context(), "uniswapx.fill")
 	return &pendingUniswapFill{order: order, span: span, end: func(error) { span.End() }}
+}
+
+func nonceOutcomeError(outcome txmanager.Outcome) error {
+	if outcome == txmanager.OutcomeNonceConflict {
+		return txmanager.ErrNonceConflict
+	}
+	return txmanager.ErrNonceConsumed
 }

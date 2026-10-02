@@ -174,12 +174,12 @@ func (e *executionService) wakeSubmitter() {
 }
 
 // expireUnsigned expires an order whose recorded deadline has passed while no transaction was signed
-// for it. A confirmed cancellation or consumed nonce leaves no executable transaction at that nonce,
-// so retry preparation and backend reconciliation expire locally when backend views disappear.
+// for it. Retry preparation and uncertain nonce reconciliation expire locally at the recorded order
+// deadline when backend views disappear; a nonce race itself is not proof of failed execution.
 // Submitted/unknown inclusion keeps tracking.
 // The caller owns the order through the in-flight set, so a fill in Send is never expired.
 func (e *executionService) expireUnsigned(o *orderRecord) bool {
-	unsignedRetry := o.Status == statusRetryWaiting || o.Status == statusNonceConsumed ||
+	unsignedRetry := o.Status == statusRetryWaiting || o.Status == statusNonceUncertain ||
 		o.Status == statusQueued || o.Status == statusSubmitting
 	if !unsignedRetry || o.RetryDeadline.IsZero() || e.now().Before(o.RetryDeadline) {
 		return false
@@ -287,7 +287,7 @@ func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
 	switch o.Status {
 	case statusQueued, statusSubmitting:
 		e.submitOrder(ctx, o.OrderID)
-	case statusSubmitted, statusRetryWaiting, statusNonceConsumed:
+	case statusSubmitted, statusRetryWaiting, statusNonceUncertain:
 		e.reconcileTerminalStatus(ctx, o.OrderID)
 	case statusFilled, statusExpired, statusFailed, statusObsolete:
 		// terminal — nothing to do
@@ -364,12 +364,12 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		e.retireObsoleteOrder(ctx, orderID, res, sendErr)
 		return
 	}
-	if outcome == txmanager.OutcomeNonceConsumed {
-		// The nonce cannot execute again, but our own inclusion is still unknown. The backend
+	if outcome.NonceUncertain() {
+		// A nonce race or consumed nonce leaves our own execution unknown. The backend
 		// decides whether the order is terminal or eligible for a freshly built bounded retry.
-		observability.Decline(ctx, "fill_nonce_consumed", "transaction nonce was consumed")
-		e.store.markStatus(orderID, statusNonceConsumed, res.Hash, errString(res.Err))
-		observability.Log(ctx).V(1).Info("fill nonce consumed; reconciling order", "attempt", attempt,
+		observability.Decline(ctx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
+		e.store.markStatus(orderID, statusNonceUncertain, res.Hash, errString(res.Err))
+		observability.Log(ctx).V(1).Info("fill nonce uncertain; reconciling order", "attempt", attempt,
 			"tx", res.Hash.Hex())
 		e.reconcileTerminalStatus(ctx, orderID)
 		return
@@ -539,8 +539,8 @@ func (e *executionService) sendFill(
 	res = e.txm.Send(submitCtx, req)
 	txmanager.RecordResult(submitCtx, res) // the stage
 	txmanager.RecordResult(ctx, res)       // the order span it belongs to
-	if res.Outcome == txmanager.OutcomeNonceConsumed {
-		observability.Decline(submitCtx, "fill_nonce_consumed", "transaction nonce was consumed")
+	if res.Outcome.NonceUncertain() {
+		observability.Decline(submitCtx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
 		return res, nil
 	}
 	err = res.Err // included-but-unconfirmed still carries the wait failure
@@ -592,7 +592,7 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 		e.store.markStatus(orderID, statusExpired, txHash, "")
 	case backendOrderStatusOpen:
 		local := e.store.order(orderID)
-		if local == nil || local.Status != statusNonceConsumed || ctx.Err() != nil {
+		if local == nil || local.Status != statusNonceUncertain || ctx.Err() != nil {
 			return
 		}
 		retryAt := e.now().Add(e.pollInterval)
@@ -602,10 +602,10 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 		}
 		if e.store.scheduleNonceRetry(orderID, e.maxCancellationRetries, retryAt,
 			local.RetryDeadline, local.TxHash, local.LastError) {
-			observability.Log(ctx).V(1).Info("order remains open after nonce consumption; fresh retry scheduled",
+			observability.Log(ctx).V(1).Info("order remains open after uncertain nonce result; fresh retry scheduled",
 				"retryAt", retryAt, "tx", local.TxHash.Hex())
 		} else {
-			e.store.markStatus(orderID, statusFailed, local.TxHash, "nonce consumption retry budget exhausted")
+			e.store.markStatus(orderID, statusFailed, local.TxHash, "nonce retry budget exhausted")
 		}
 	case "error", "cancelled", "unverified", "insufficient-funds":
 		observability.Decline(ctx, "fill_failed", "backend terminal status "+bo.OrderStatus)

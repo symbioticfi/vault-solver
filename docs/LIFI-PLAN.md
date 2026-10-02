@@ -304,9 +304,9 @@ for retry.
 
 Standing curves also follow the shared transaction lane. On any coalesced lane-state change, LI.FI first
 expires its known active curves; if the lane is ready again, it rebuilds and republishes from fresh state.
-While the lane is occupied or nonce ownership is unresolved, both periodic refresh and final publication
+While the local lane is occupied or the sender is not initialized, both periodic refresh and final publication
 checks fail closed. An immutable matched order that has already entered transaction admission remains retained
-and waits without signing through a nonce conflict until the lane recovers, its cancellation deadline expires,
+and waits without signing until the local lane is free, its cancellation deadline expires,
 or shutdown begins. This prevents new exclusive matches from being advertised without abandoning
 already-accepted work.
 
@@ -574,7 +574,7 @@ propagation queue, reservation-blocked built-in decisions have only the bounded 
 described above. The txmanager
 may replace the same pending nonce as described above; that is fee management for one submission, not order
 retry.
-With canonical RPC nonce reconciliation, `nonce_consumed` releases the completed fill's local reservation and
+With fresh pending nonce selection, `nonce_conflict` and `nonce_consumed` release the completed fill's local reservation and
 records an expected decline. It supplies no owned receipt and never records fill success. No automatic order
 retry is introduced: a later WebSocket replay or reconnect REST recovery must re-read current order status,
 deadlines, liquidity and routing before building another request; an already claimed/refunded order is skipped.

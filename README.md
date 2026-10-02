@@ -39,9 +39,9 @@ by its own solver. Adding a solver touches **no** framework code — see the rec
 Sharing is deliberately process-scoped. Deploy solvers that use a different signer, read-RPC set, or private
 write endpoint as a separate process with its own config subset and txmanager. Assign each scrape target a
 unique Prometheus `instance` (and optionally a stable `lane` target label). The transaction manager always
-reconciles canonical account nonce evidence, including when
+reads a fresh pending nonce before every new send, including when
 [independent processes use the same EOA](#independent-processes-with-the-same-eoa). They can compete at
-the same nonce; reconciliation does not coordinate their liquidity or off-chain commitments.
+the same nonce; nonce handling does not coordinate their liquidity or off-chain commitments.
 
 | `solver.name` | Integration | Docs | Example config |
 |---|---|---|---|
@@ -281,7 +281,7 @@ after a latest-state refresh. Unsubmitted attempts release capacity without inva
 A quote is returned only if inventory, reservations, and blocking conditions remain unchanged during
 calculation. Quoting fails closed during startup warmup, stale or unknown exclusive-order delivery,
 an unavailable nonce lane, an active Uniswap `blockUntilTimestamp`, or the configured local fade breaker. A claimed order is requeued before chain reads,
-signed-discount resolution, calldata construction, or preflight while the nonce lane is paused. A txmanager
+signed-discount resolution, calldata construction, or preflight before the transaction sender is ready. A txmanager
 result rejected before the worker lifecycle does not count toward the local fill breaker and is reported as
 `solver_bot_txmanager_admission_rejections_total{label="uniswapx-fill"}` rather than a terminal fill
 failure. `GET /ready` exposes that state and
@@ -415,38 +415,31 @@ txManager:
   # retain the existing timeout and horizon settings
 ```
 
-Use a write RPC that includes accepted private transactions in its pending nonce response, and a read
-RPC that supports nonce reads at an exact block hash (EIP-1898) for both its current head and the
-confirmation ancestor. Startup and each new admission require those two nonces, read under one stable
-canonical head, to equal the write endpoint's latest and pending nonces. A stale write view cannot hide
-mined but insufficiently confirmed activity at the read head.
-Recovery uses `chain.cancelRpcUrl` when configured, otherwise the ordinary write RPC. If the write RPC is
-private, configure a cancellation endpoint that accepts same-nonce self-cancellations. This uses the
-existing routing API and does not require a public mempool route. All endpoints must be on the configured
-chain. Startup waits while unknown pending work exists or mined
-account activity lacks the configured confirmations, keeping `/readyz` false. After observing one unknown
-contiguous nonce for `pendingTimeoutMs`, it may send a zero-value self-cancellation at that nonce with
-both fee cap and tip set to the full `maxFeeGwei` ceiling. It retains the observed nonce even if the
-provider later drops it from pending. A mined nonce waits for confirmation instead of being cancelled;
-multiple unknown nonces and unresolved RPC/fee evidence keep the process unready. Each new transaction
-admission refreshes nonce evidence. Requests this process already owns retain their normal deadlines and
-replacement/cancellation policy. A candidate rejected in a same-nonce collision can use capped recovery
-only after the full `pendingTimeoutMs` age from its original send; an earlier request deadline or shutdown
-does not authorize cancellation of unknown competing work.
+Each process reads `eth_getTransactionCount(address, "pending")` from the write endpoint immediately
+before signing each new request. Use a write RPC whose pending view includes transactions accepted from
+all three replicas, including private submissions. One replica's pending transactions do not block
+startup or new sends by the others: later orders can use later nonces before earlier orders confirm.
+Sends remain serialized locally. There is no database, shared file, leader election, replica identity,
+or feature flag.
 
-Unknown-nonce recovery can cancel a healthy process's pending work; processes have no ownership signal
-for each other. The original transaction can still win. Recovery fields are identical for the same
-chain, EOA, nonce and cap, and the local signer produces identical bytes; the generic signer interface
-does not guarantee deterministic signatures. Recovery never exceeds the cap, so lowering it or an
-incompatible relay replacement policy can prevent recovery. At full-cap tip, a mined self-cancellation
-can spend `21,000 × maxFeePerGas` in gas fees.
+Two replicas can still select the same nonce. An initial `nonce too low` or
+`replacement transaction underpriced` response returns `nonce_conflict` and releases the local lane
+immediately. The next request reads the pending nonce again. The manager does not cancel the competing
+transaction or automatically replay the old calldata at a new nonce. Solvers recheck protocol/backend
+state before retrying an order. RFQ and UniswapX use their polling retries; 3F rebuilds from its next
+redemption scan; LI.FI requires upstream redelivery or reconnect recovery.
 
-When confirmed account state proves an owned nonce was consumed but no owned receipt establishes the
-result, the manager returns `nonce_consumed`. This says neither that our fill failed nor that another
-process won. Solvers reconcile their protocol/backend state before retrying; the manager never replays
-the old calldata at a new nonce automatically. Restart loses signed attempts and any per-request
-confirmation override, so unknown work is checked using `txManager.confirmations`. Private attempts
-hidden or dropped by the RPC can still escape these reads and land later.
+Accepted or transport-uncertain broadcasts keep their exact signed hashes and ordinary receipt,
+confirmation, replacement and cancellation policy. Before replacement, a higher mined account nonce
+stops further broadcasts. If all owned hashes are absent, the manager can return `nonce_consumed` without
+a receipt. Neither nonce outcome proves that our order executed or that another replica won.
+
+A replica never starts recovery cancellation merely because another transaction is pending. Restart
+loses its signed attempts: an abandoned lowest nonce can block later transactions until the original
+sender or an operator clears it. Hidden private submissions and differing RPC pending views can cause
+additional collisions; this setup does not guarantee ordering, fairness or recovery from every crash.
+Use the existing `chain.cancelRpcUrl` for normal cancellation of this process's own accepted or uncertain
+broadcasts when the write route requires a separate cancellation endpoint.
 
 To start three containers from one existing operator config, save it as
 `config/replicas.local.yaml` and supply its secret env vars in the existing
@@ -469,7 +462,7 @@ Increase the stop timeout if the existing config needs a longer solver/transacti
 quote-server and upstream routing remain operator configuration; this example exposes each process's
 observability listener and adds no leader or request router. Assign distinct scrape target labels.
 
-Transaction reconciliation applies to 3F, RFQ, LI.FI and UniswapX. It does not make their
+This nonce handling applies to 3F, RFQ, LI.FI and UniswapX. It does not make their
 quote caches, reservations, offer budgets or exclusive-order obligations global. Concurrent off-chain
 commitments can exceed the assumptions of a single process; a globally coordinated liquidity book is
 unsupported. OEV settlement is submitted externally and receives no new replication guarantee from this
@@ -483,7 +476,7 @@ For liquidity commitments, the built-in strategies apply these limits:
 - RFQ external mode excludes discount inventory at quote time. Excess input can be absorbed only by a
   direct swap, whose calldata caps output. After a successful cancellation reaches the configured
   confirmations, a still-open, unexpired order can be retried with a fresh fill plan and newly resolved
-  discount signatures. An unknown consumed-nonce result first queries
+  discount signatures. An uncertain nonce result first queries
   backend status and can retry only when the backend reports the order open. Both paths share
   `solvers[].config.maxCancellationRetries`, default `3` additional attempts
   (`0` disables both); retries wait at least one `pollIntervalMs` interval before a fresh open-order poll
@@ -524,9 +517,8 @@ command list (`run`, `version`). Debug logging is off by default; enable it with
 ## Observability
 
 The observability listener (default `:9090`) serves `/metrics`, `/healthz`, and `/readyz`. No extra
-config is required for the collectors below. `/readyz` reports nonce safety: it fails before startup
-completes, during shutdown and while unresolved nonce evidence pauses the shared transaction manager, but not while
-a transaction is merely pending, so quote servers stay in rotation. During graceful shutdown readiness
+config is required for the collectors below. `/readyz` fails before startup completes and during
+shutdown. Pending transactions and nonce collisions do not take quote servers out of rotation. During graceful shutdown readiness
 drops first, while liveness and metrics remain available until the shared transaction manager finishes its
 bounded drain.
 
@@ -755,7 +747,7 @@ write RPC. A configured cancellation RPC failure is returned without broadcastin
 Sender balance and nonce telemetry (the periodic account snapshot behind the `solver_bot_txmanager_account_*`
 metrics) always uses the read RPC, never `writeRpcUrl`, so a submission relay that rate-limits reads cannot
 stall it; broadcasts, admission nonce reads and replacement nonce checks reach the write endpoint.
-Exact-block-hash account confirmation reads use the read RPC. Receipt confirmation uses the
+Receipt confirmation uses the
 [canonicality checks](docs/TXMANAGER-PLAN.md#5-receipt-polling-and-confirmation) independently of endpoint
 affinity, while retaining normal read fallbacks. An HTTP 3xx response is not followed and falls through to the next read
 endpoint. A non-final endpoint's JSON-RPC `null` receipt or header result falls through
@@ -765,27 +757,19 @@ snapshot and retries a changed head once immediately. A second crossing fails st
 last-known-good snapshot until the next poll. Explicit write and cancellation endpoints must report the same chain ID as the
 read endpoint.
 
-Every transaction-sending process waits at startup until the write endpoint's latest/pending nonces
-agree with the nonce at both the current canonical read head and its configured confirmation ancestor,
-verified by exact-hash reads under one stable head. One observed unknown contiguous nonce may receive capped
-timeout recovery as described [above](#independent-processes-with-the-same-eoa); multiple unknown nonces
-remain unavailable. Before upgrading from a build that allowed several unresolved signed nonces, drain
-the EOA's write-endpoint pool. Standard nonce reads cannot reveal a future transaction queued beyond a
-gap, and equality cannot rule out a private submission hidden by its relay. Packaged Compose restarts
-automatically with `unless-stopped`, but restart loses signed attempts and their business result. A hidden
-old attempt can later consume a nonce this process reused; confirmed account evidence can resolve the
-nonce with `nonce_consumed`, requiring the solver to reconcile business state. For controlled maintenance,
-reconcile outstanding private submissions, including the cancellation route, before reusing the EOA.
+Every transaction-sending process verifies the write endpoint's pending nonce at startup and reads it
+again before each new send. Foreign pending transactions do not keep `/readyz` false. A nonce RPC failure
+rejects that send before signing; a later request can retry the RPC. Receipt confirmation still follows
+the configured confirmation depth and canonicality checks.
 
-Before replacing or rebroadcasting a pending transaction, the manager checks the latest mined nonce.
-If it has already been consumed, broadcasting stops and tracked receipts are reconciled even when the
-submission RPC previously returned success. A failed nonce read defers the replacement until a later
-attempt. Owned receipts retain priority, then account evidence at the confirmation ancestor
-can end the owned lifecycle with an unknown business result (`nonce_consumed`). Fresh admission still
-requires the stricter current-head agreement. See
-[nonce conflict and restart behavior](docs/TXMANAGER-PLAN.md#6-rpc-routing-nonce-conflicts-and-restart)
-for exact-hash reconciliation and reorg handling. LiquidLane state reads always use RPC `latest`; an archive node
-is not required.
+Before replacing or rebroadcasting a tracked transaction, the manager checks the latest mined nonce.
+If it has advanced beyond the tracked nonce, broadcasting stops. Owned receipts retain priority; when
+every owned hash returns `NotFound`, a higher mined nonce can end tracking with `nonce_consumed`, an
+unknown business result requiring protocol reconciliation. Pending nonce advancement alone does not
+stop replacement of this process's own pending transaction. See
+[nonce conflict and restart behavior](docs/TXMANAGER-PLAN.md#6-rpc-routing-nonce-conflicts-and-restart).
+For controlled maintenance, reconcile outstanding private submissions, including the cancellation route,
+before reusing the EOA. LiquidLane state reads always use RPC `latest`; an archive node is not required.
 
 **Never commit a real key or live config** — keys are supplied via env/file behind the `Signer`
 interface; `*.local.*` and `.env` are gitignored.

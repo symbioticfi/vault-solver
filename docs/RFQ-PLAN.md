@@ -101,12 +101,12 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 - **Retries distinguish unsent work from transactions.** Failed pre-submission work with no recorded hash
   may be retried while the order is open. A successful cancellation that satisfies txmanager's confirmation
   policy may enter `retry_waiting`, retaining its hash until one `pollIntervalMs` interval elapses and a
-  fresh open-order poll re-arms it. With canonical RPC nonce reconciliation, `nonce_consumed` means the signed
-  nonce is consumed without an owned receipt. It first enters backend reconciliation: a terminal status
+  fresh open-order poll re-arms it. With fresh pending nonce selection, `nonce_conflict` or `nonce_consumed` means the signed
+  execution is uncertain without an owned receipt. It first enters backend reconciliation: a terminal status
   retires the order, while `open` schedules a fresh retry under the same budget and deadline. Missing,
   unavailable or unknown backend status keeps the obligation until its recorded order deadline.
-  `maxCancellationRetries` defaults to three additional attempts shared by cancellation and consumed-nonce
-  recovery; zero disables both. The retry budget survives re-queuing; retrying clears only the consumed
+  `maxCancellationRetries` defaults to three additional attempts shared by cancellation and nonce-race
+  recovery; zero disables both. The retry budget survives re-queuing; retrying clears only the attempted
   hash and runs the full executable-order lookup, chain deadline validation, strategy plan, and discount
   resolution again. Retry waiting counts as an active obligation and reconciles terminal
   backend status; its retained order deadline also expires it locally if backend views disappear or stay
@@ -120,11 +120,11 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   the poll loop and the submitter to finish. A fill already admitted by txmanager keeps its lifecycle ownership and RFQ
   records the terminal result before `Run` returns; the framework's bounded txmanager drain remains the hard
   stop for an unresolved lifecycle.
-- **Quotes follow nonce safety, not lane idleness.** `/quote` preserves pure request validation, then returns
-  the normal no-quote `204` before chain reads or strategy work only while the nonce lane is conflicted
+- **Quotes follow sender readiness, not lane idleness.** `/quote` preserves pure request validation, then returns
+  the normal no-quote `204` before chain reads or strategy work until the sender is initialized
   (`txmanager.Available`). A queued or pending fill does not block quoting; its liquidity is subtracted
-  through reservations instead. Nonce safety is checked again after strategy planning so a pass that observes
-  a mid-plan conflict is discarded before its response.
+  through reservations instead. Sender availability is checked again after strategy planning so a pass that observes
+  a readiness change is discarded before its response.
 - **Won orders reserve liquidity until they finish.** The store owns a `liquidlane.CapacityLedger` keyed by
   order ID. A newly won order is reserved on the poll cycle that first sees it: by the submitter's own plan
   when the submitter is idle, or by the poll loop when the submitter is busy with another fill, so an
@@ -377,7 +377,7 @@ dropping features.
    confirmation wait, then allow bounded RFQ retries after one poll interval and a fresh open-order poll.
    Every retry revalidates the executable order and builds new calldata with fresh discount signatures. Regression tests
    cover the retry budget, disabled retries, expired/unavailable orders, uncertain results, and shutdown.
-7. **(done) Consumed-nonce recovery** — a canonical nonce result without an owned receipt reconciles
+7. **(done) Nonce-race recovery** — either uncertain nonce result without an owned receipt reconciles
    backend status before sharing the existing bounded retry budget. Regression tests cover terminal/unknown
    backend states, fresh open polling and rebuilt calldata, backoff, local deadline expiry and exhausted budgets.
 

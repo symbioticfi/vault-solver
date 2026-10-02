@@ -24,6 +24,13 @@ func nonceConsumedResult() txmanager.Result {
 }
 
 func TestExecutionConsumedNonceReconcilesTerminalBackendStatus(t *testing.T) {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict} {
+		t.Run(string(outcome), func(t *testing.T) { executionConsumedNonceReconcilesTerminalBackendStatus(t, outcome) })
+	}
+}
+
+func executionConsumedNonceReconcilesTerminalBackendStatus(t *testing.T, outcome txmanager.Outcome) {
+	t.Helper()
 	for _, tc := range []struct {
 		backend string
 		want    orderStatus
@@ -35,7 +42,7 @@ func TestExecutionConsumedNonceReconcilesTerminalBackendStatus(t *testing.T) {
 		t.Run(tc.backend, func(t *testing.T) {
 			st, be := fillFixtures(t)
 			be.order.OrderStatus = tc.backend
-			txm := &fakeTxm{result: nonceConsumedResult()}
+			txm := &fakeTxm{result: uncertainNonceResult(outcome)}
 			e := newExec(t, st, be, txm)
 			reg := prometheus.NewRegistry()
 			metrics, err := newRFQMetrics(reg, st, "")
@@ -57,11 +64,18 @@ func TestExecutionConsumedNonceReconcilesTerminalBackendStatus(t *testing.T) {
 }
 
 func TestExecutionConsumedNonceRebuildsOnlyAfterFreshOpenPoll(t *testing.T) {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict} {
+		t.Run(string(outcome), func(t *testing.T) { executionConsumedNonceRebuildsOnlyAfterFreshOpenPoll(t, outcome) })
+	}
+}
+
+func executionConsumedNonceRebuildsOnlyAfterFreshOpenPoll(t *testing.T, outcome txmanager.Outcome) {
+	t.Helper()
 	st, be := fillFixtures(t)
 	now := time.Unix(0, 0)
 	st.now = func() time.Time { return now }
 	be.order.OrderStatus = "open"
-	txm := &fakeTxm{result: nonceConsumedResult()}
+	txm := &fakeTxm{result: uncertainNonceResult(outcome)}
 	e := newExec(t, st, be, txm)
 	e.now = st.now
 	builds := 0
@@ -105,13 +119,20 @@ func TestExecutionConsumedNonceRebuildsOnlyAfterFreshOpenPoll(t *testing.T) {
 }
 
 func TestExecutionConsumedNonceRetryBudgetIsBounded(t *testing.T) {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict} {
+		t.Run(string(outcome), func(t *testing.T) { executionConsumedNonceRetryBudgetIsBounded(t, outcome) })
+	}
+}
+
+func executionConsumedNonceRetryBudgetIsBounded(t *testing.T, outcome txmanager.Outcome) {
+	t.Helper()
 	for _, limit := range []int{0, 2} {
 		t.Run(strconv.Itoa(limit), func(t *testing.T) {
 			st, be := fillFixtures(t)
 			now := time.Unix(0, 0)
 			st.now = func() time.Time { return now }
 			be.order.OrderStatus = "open"
-			txm := &fakeTxm{result: nonceConsumedResult()}
+			txm := &fakeTxm{result: uncertainNonceResult(outcome)}
 			e := newExec(t, st, be, txm)
 			e.now, e.maxCancellationRetries = st.now, limit
 			for range 6 {
@@ -143,7 +164,7 @@ func TestExecutionConsumedNonceUnknownBackendRemainsBounded(t *testing.T) {
 			e := newExec(t, st, be, txm)
 			e.now = st.now
 			syncCycle(t.Context(), e)
-			if rec := st.order("o1"); rec.Status != statusNonceConsumed || rec.CancellationRetries != 0 {
+			if rec := st.order("o1"); rec.Status != statusNonceUncertain || rec.CancellationRetries != 0 {
 				t.Fatalf("unknown backend prematurely scheduled a retry: %+v", rec)
 			}
 			now = time.Unix(4_102_444_800, 0)
@@ -164,7 +185,16 @@ func TestExecutionConsumedNonceDoesNotScheduleDuringShutdown(t *testing.T) {
 	defer cancel()
 	txm.onResult = cancel
 	syncCycle(ctx, e)
-	if rec := st.order("o1"); rec.Status != statusNonceConsumed || rec.CancellationRetries != 0 {
+	if rec := st.order("o1"); rec.Status != statusNonceUncertain || rec.CancellationRetries != 0 {
 		t.Fatalf("shutdown scheduled a consumed nonce retry: %+v", rec)
 	}
+}
+
+func uncertainNonceResult(outcome txmanager.Outcome) txmanager.Result {
+	result := nonceConsumedResult()
+	result.Outcome = outcome
+	if outcome == txmanager.OutcomeNonceConflict {
+		result.Err = txmanager.ErrNonceConflict
+	}
+	return result
 }

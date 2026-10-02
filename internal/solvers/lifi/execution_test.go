@@ -1302,6 +1302,13 @@ func TestOrderWorkerConsumedNonceReleasesReservationWithoutSuccess(t *testing.T)
 }
 
 func TestCompleteFillTreatsConsumedNonceAsExpectedSkip(t *testing.T) {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict} {
+		t.Run(string(outcome), func(t *testing.T) { completeFillTreatsConsumedNonceAsExpectedSkip(t, outcome) })
+	}
+}
+
+func completeFillTreatsConsumedNonceAsExpectedSkip(t *testing.T, outcome txmanager.Outcome) {
+	t.Helper()
 	var logs []string
 	solver := &Solver{log: funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{Verbosity: 1})}
 	fill := &pendingFill{
@@ -1310,11 +1317,11 @@ func TestCompleteFillTreatsConsumedNonceAsExpectedSkip(t *testing.T) {
 	}
 	pending := &pendingFillState{byOrder: map[string]*pendingFill{"order-1": fill}}
 	err := solver.completeFill(solverContext(t, solver), pending, fillCompletion{fill: fill, result: txmanager.Result{
-		Hash: common.HexToHash("0x1234"), Outcome: txmanager.OutcomeNonceConsumed, Err: txmanager.ErrNonceConsumed,
+		Hash: common.HexToHash("0x1234"), Outcome: outcome, Err: nonceOutcomeError(outcome),
 	}})
 	logged := strings.Join(logs, "\n")
 	if err != nil || pending.len() != 0 || strings.Contains(logged, `"msg":"order fill failed"`) ||
-		strings.Contains(logged, `"msg":"order filled"`) || !strings.Contains(logged, "order fill nonce consumed") {
+		strings.Contains(logged, `"msg":"order filled"`) || !strings.Contains(logged, "order fill nonce uncertain") {
 		t.Fatalf("consumed completion: err=%v pending=%d logs=%s", err, pending.len(), logged)
 	}
 }
@@ -1411,4 +1418,11 @@ func TestOrderRecoverySkipsUndecodableOrder(t *testing.T) {
 	// converging sweep.
 	metricstest.RequireWorkflowEventCount(t, registry, Name, "order_parse", "invalid", 2)
 	metricstest.RequireExternalOperationCount(t, registry, Name, orderRecoveryOperation, "success", 1)
+}
+
+func nonceOutcomeError(outcome txmanager.Outcome) error {
+	if outcome == txmanager.OutcomeNonceConflict {
+		return txmanager.ErrNonceConflict
+	}
+	return txmanager.ErrNonceConsumed
 }

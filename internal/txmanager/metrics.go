@@ -21,7 +21,6 @@ const (
 	admissionOutcomeAdmitted admissionOutcome = "admitted"
 
 	admissionRejectionManagerStopped  admissionRejectionReason = "manager_stopped"
-	admissionRejectionNonceConflict   admissionRejectionReason = "nonce_conflict"
 	admissionRejectionDeadline        admissionRejectionReason = "deadline_exceeded"
 	admissionRejectionCallerCancelled admissionRejectionReason = "caller_cancelled"
 	admissionRejectionOther           admissionRejectionReason = "other"
@@ -245,8 +244,6 @@ func classifyAdmissionRejection(err error) admissionRejectionReason {
 	switch {
 	case errors.Is(err, errManagerStopped):
 		return admissionRejectionManagerStopped
-	case errors.Is(err, errNonceLanePaused):
-		return admissionRejectionNonceConflict
 	case errors.Is(err, context.DeadlineExceeded):
 		return admissionRejectionDeadline
 	case errors.Is(err, context.Canceled):
