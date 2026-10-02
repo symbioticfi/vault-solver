@@ -134,7 +134,7 @@ func TestInitialUnderpricedCandidatesAdvanceFreshReplacementFeeFloor(t *testing.
 	b := newMockBackend()
 	b.pendingNonce = 9
 	b.sendErrs = []error{errors.New("replacement transaction underpriced"), errors.New("replacement transaction underpriced")}
-	m := New(b, mustSigner(t), big.NewInt(1), Config{MaxFeeGwei: 100}, logr.Discard())
+	m := New(b, mustSigner(t), big.NewInt(1), Config{MaxFeeGwei: 100, PollInterval: time.Millisecond, Horizon: HorizonConfig{BlockTime: time.Millisecond}}, logr.Discard())
 	first, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0xaaa"), Data: []byte{1}, GasLimit: 50_000})
 	if err != nil || first == nil || first.broadcastErr == nil {
 		t.Fatalf("first collision=%+v err=%v", first, err)
@@ -209,7 +209,7 @@ func TestInitialUnderpricedFeeEscalationStopsAtConfiguredCap(t *testing.T) {
 			for range 20 {
 				b.sendErrs = append(b.sendErrs, errors.New("replacement transaction underpriced"))
 			}
-			m := New(b, mustSigner(t), big.NewInt(1), Config{MaxFeeGwei: 60}, logr.Discard())
+			m := New(b, mustSigner(t), big.NewInt(1), Config{MaxFeeGwei: 60, PollInterval: time.Millisecond, Horizon: HorizonConfig{BlockTime: time.Millisecond}}, logr.Discard())
 			request := Request{To: common.HexToAddress("0xabc"), Data: []byte{1}, GasLimit: 50_000}
 			limit := gweiToWei(60)
 			if ceiling == "request" {
@@ -302,7 +302,7 @@ func TestRepeatedInitialConflictsExecuteFreshWorkThenAdvanceMinedNonce(t *testin
 	for range 6 {
 		b.sendErrs = append(b.sendErrs, errors.New("replacement transaction underpriced"))
 	}
-	m := New(b, mustSigner(t), big.NewInt(1), Config{MaxFeeGwei: 150, PollInterval: time.Millisecond}, logr.Discard())
+	m := New(b, mustSigner(t), big.NewInt(1), Config{MaxFeeGwei: 150, PollInterval: time.Millisecond, Horizon: HorizonConfig{BlockTime: time.Millisecond}}, logr.Discard())
 	startManagerForTest(t, m)
 	var previousFee, previousTip *big.Int
 	for i := range 7 {

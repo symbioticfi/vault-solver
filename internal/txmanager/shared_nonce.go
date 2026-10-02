@@ -3,6 +3,7 @@ package txmanager
 import (
 	"context"
 	"math/big"
+	"time"
 
 	"github.com/go-errors/errors"
 
@@ -77,7 +78,7 @@ type reusableNonce struct {
 
 func (m *Manager) selectNonce(ctx context.Context) (uint64, *feeQuote, error) {
 	remembered := m.reusableSnapshot()
-	nonce, err := m.freshMinedNonce(ctx)
+	nonce, err := m.waitNonceCooldown(ctx)
 	if err != nil {
 		return 0, nil, err
 	}
@@ -90,6 +91,78 @@ func (m *Manager) selectNonce(ctx context.Context) (uint64, *feeQuote, error) {
 		return nonce, nil, nil
 	}
 	return nonce, &remembered.fees, nil
+}
+
+// nonceCooldown gives a competing sender one configured block interval to mine before any new
+// local request can bid at this nonce. mu protects it across the worker and lifecycle owner.
+type nonceCooldown struct {
+	nonce uint64
+	until time.Time
+}
+
+func (m *Manager) startNonceCooldown(nonce uint64) {
+	m.mu.Lock()
+	m.nonceCooldown = &nonceCooldown{nonce: nonce, until: time.Now().Add(m.horizon.blockTime)}
+	m.mu.Unlock()
+}
+
+func (m *Manager) cooldownSnapshot() *nonceCooldown {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.nonceCooldown == nil {
+		return nil
+	}
+	cooldown := *m.nonceCooldown
+	return &cooldown
+}
+
+func (m *Manager) clearNonceCooldown(snapshot *nonceCooldown) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.nonceCooldown != nil && *m.nonceCooldown == *snapshot {
+		m.nonceCooldown = nil
+	}
+}
+
+func (m *Manager) waitNonceCooldown(ctx context.Context) (uint64, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return 0, errors.Errorf("nonce contention cooldown: %w", err)
+		}
+		cooldown := m.cooldownSnapshot()
+		nonce, err := m.freshMinedNonce(ctx)
+		if err != nil {
+			return 0, err
+		}
+		if cooldown == nil {
+			return nonce, nil
+		}
+		remaining := time.Until(cooldown.until)
+		if nonce != cooldown.nonce || remaining <= 0 {
+			m.clearNonceCooldown(cooldown)
+			return nonce, nil
+		}
+		timer := time.NewTimer(min(m.cfg.PollInterval, remaining))
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return 0, errors.Errorf("nonce contention cooldown: %w", ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+// replacementContention ends local bidding while retaining the accepted fee hint and every signed
+// candidate hash for integration reconciliation. Only the lifecycle owner mutates contentionErr.
+func (m *Manager) replacementContention(ctx context.Context, pending *pendingTransaction, err error) bool {
+	if !isPendingNonceCollision(err) {
+		return false
+	}
+	pending.contentionErr = err
+	m.startNonceCooldown(pending.nonce)
+	observability.Log(ctx).Info("pending transaction outbid; yielding for reconciliation",
+		"label", pending.req.Label, "nonce", pending.nonce, "hash", pending.originalHash.Hex(), "rpcResult", err.Error())
+	return true
 }
 
 func (m *Manager) reusableSnapshot() *reusableNonce {

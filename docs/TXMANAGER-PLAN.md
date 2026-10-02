@@ -73,7 +73,7 @@ The public YAML block is `txManager`. Values below are application defaults, aft
 | `pendingTimeoutMs` | 300000 | Abandon an unresolved owned call and remember its nonce/fee floor for a fresh business request. Must be at least the replacement interval. |
 | `shutdownTimeoutMs` | 60000 | Hard bound on manager drain after shutdown begins. |
 | `horizon.maxBlocks` | 6 | Blocks (3–12) the initial fee cap keeps the full tip valid at the maximum base-fee increase. |
-| `horizon.blockTimeMs` | 12000 | Slot time: sets the twice-per-block evaluation tick and the next-block estimate timestamp. |
+| `horizon.blockTimeMs` | 12000 | Slot time: sets the twice-per-block evaluation tick, next-block estimate timestamp and nonce-contention cooldown. |
 | `horizon.tipFloorGwei` | 0.02 | Tip while the last two blocks had room for the call. |
 | `horizon.fullBlockTipGwei` | 0.1 | Tip when one of the last two blocks had no room. |
 | `horizon.congestedTipFloorGwei` / `congestedTipCapGwei` | 0.2 / 15 | Clamp on the market tip used when both had no room. |
@@ -156,6 +156,15 @@ fallback below.
   without broadcasting. The result is `abandoned`, with the attempted hash and an unknown execution result.
   The manager remembers the nonce and highest signed fees; the next eligible business request can replace
   it while a bounded latest-state nonce check still shows it unused.
+- **Replica contention.** An underpriced owned replacement or exact rebroadcast immediately returns
+  `abandoned` for integration reconciliation at Info. Keep all signed candidate hashes and the last
+  accepted or transport-uncertain fee hint; rejected replacement fees never ratchet that hint. Initial
+  underpriced sends still return `nonce_conflict` promptly and retain their known proposed fee floor.
+  Either underpriced path starts one configured `horizon.blockTimeMs` cooldown for the nonce. Every
+  fresh request at that nonce waits before fee reads, estimation or signing, including unrelated queued
+  orders. Poll mined state at the manager poll interval, resume when the nonce changes or the cooldown
+  expires, and honor the request deadline and manager context. The cooldown is local, bounded and
+  process-only; no coordination or new configuration is introduced. Transport errors retain Error logs.
 - **Fallback.** If fee windows stay unreadable for `replacementIntervalMs`, the pending attempt gets one
   cached-bump replacement per interval (`fallback`), so it cannot freeze. Unreadable windows use the same
   read-streak logging as receipt reads.

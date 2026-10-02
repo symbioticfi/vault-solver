@@ -10,11 +10,15 @@ There is no feature flag. Operator setup lives in the
 
 Each process has one signer and one manager shared by its local transaction-sending solvers. The local
 slot admits one actively tracked signed lifecycle at a time. `Initialize` checks a bounded mined nonce read;
-foreign pending transactions do not delay startup. Before every new signing, the manager reads
+foreign pending transactions do not delay startup. Before preparing every new request, the manager reads
 `eth_getTransactionCount(address, "latest")` from the sending endpoint again. Fresh work always uses the
 lowest unconsumed nonce; pending counts never advance initial signing. This deliberately gives up
 queuing higher nonces before lower ones are mined, so an expired private call cannot create a new gap
-after every process restarts. There is no cached increment or account-confirmation gate.
+after every process restarts. The chosen nonce is captured before estimation and the final protocol
+status check, then kept through signing. A canonical owned receipt at the requested confirmation depth
+sets a process-local floor to its nonce plus one, including reverts. Selection uses the maximum of this
+floor and the current mined nonce; unconfirmed/orphaned receipts and sibling outcomes do not advance it.
+There is no unchecked cached increment or extra account-confirmation gate before signing.
 A process-local fee hint applies only when its nonce equals the current mined nonce. Mined advancement
 or a lower nonce after a reorg discards an inapplicable hint; unavailable state fails the next request
 before signing and retains it.
@@ -29,8 +33,19 @@ mined state again. It neither cancels the competing transaction nor silently ret
 new nonce. `already known` and transport uncertainty continue normal tracking, because acceptance remains
 possible. A mined nonce RPC failure prevents signing that request; it does not permanently pause later work.
 
+Any underpriced response starts a local nonce cooldown of one configured `horizon.blockTimeMs`. Every
+fresh request at that nonce waits, including a different queued order, so another order cannot bypass
+the delay and keep bidding. The worker polls current mined state at the manager polling cadence and
+resumes if the nonce changes; request deadlines and the manager context bound the wait. Expiry permits
+one fresh attempt even if no transaction mined, so a lost private transaction cannot stall indefinitely.
+The cooldown requires no peer discovery, storage or extra configuration and resets on restart.
+
 Accepted or uncertain broadcasts retain exact signed variants and ordinary same-nonce fee replacement.
 Each replacement first checks latest mined state. If it has advanced, broadcasting stops.
+An underpriced owned replacement or exact rebroadcast yields immediately as `abandoned` at Info for
+protocol reconciliation. Retain every signed hash and the previous accepted or transport-uncertain fee
+hint; a rejected replacement never ratchets fees toward the cap. It starts the same nonce cooldown for
+fresh work. Transport-ambiguous failures retain their existing tracking and Error reporting.
 Owned receipts keep priority, canonicality validation and the configured confirmation depth. After every
 owned hash returned `NotFound`, a higher mined nonce can end tracking with `nonce_consumed` and
 `ErrNonceConsumed`, the original attempted hash, and no receipt. Account reads and receipt publication

@@ -444,6 +444,13 @@ transaction or automatically replay the old calldata at a new nonce. Solvers rec
 state before retrying an order. RFQ and UniswapX use their polling retries; 3F rebuilds from its next
 redemption scan; LI.FI requires upstream redelivery or reconnect recovery.
 
+An underpriced response starts a cooldown for that nonce across all fresh local requests, including
+other queued orders. The manager waits up to `horizon.blockTimeMs` (12 seconds by default), checking mined
+state at its polling cadence, and resumes immediately when the account nonce changes. The request
+deadline and manager context bound this wait. An underpriced replacement of an owned transaction
+abandons tracking at Info for protocol reconciliation. It retains signed hashes and the previous
+accepted or transport-uncertain fee hint, without escalating from the rejected replacement's fees.
+
 Accepted or transport-uncertain broadcasts keep their exact signed hashes and ordinary receipt,
 confirmation and fee-replacement policy. Abandonment returns an unknown execution result; solvers
 reconcile business state before retrying. Before replacement, a higher mined account nonce

@@ -102,7 +102,7 @@ func TestReusableNonceRetainsHintAcrossPreparationFailures(t *testing.T) {
 	for _, failure := range []string{"fee cap", "obsolete", "signer", "rejected", "nonce conflict", "nonce RPC error", "nonce RPC deadline"} {
 		t.Run(failure, func(t *testing.T) {
 			b := &silentAcceptanceBackend{mockBackend: newMockBackend()}
-			m := New(b, mustSigner(t), big.NewInt(1), Config{MaxFeeGwei: 100, ReplacementInterval: 40 * time.Millisecond}, logr.Discard())
+			m := New(b, mustSigner(t), big.NewInt(1), Config{MaxFeeGwei: 100, ReplacementInterval: 40 * time.Millisecond, PollInterval: time.Millisecond, Horizon: HorizonConfig{BlockTime: time.Millisecond}}, logr.Discard())
 			first, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0xaaa"), GasLimit: 50_000})
 			if err != nil {
 				t.Fatal(err)
@@ -253,7 +253,7 @@ func TestMaxFeePerGasChecksWhetherRememberedNonceIsUnused(t *testing.T) {
 	for _, state := range []string{"consumed", "RPC error", "RPC deadline", "global feeLimit"} {
 		t.Run(state, func(t *testing.T) {
 			b := &silentAcceptanceBackend{mockBackend: newMockBackend()}
-			m := New(b, mustSigner(t), big.NewInt(1), Config{MaxFeeGwei: 100, ReplacementInterval: 40 * time.Millisecond}, logr.Discard())
+			m := New(b, mustSigner(t), big.NewInt(1), Config{MaxFeeGwei: 100, ReplacementInterval: 40 * time.Millisecond, PollInterval: time.Millisecond, Horizon: HorizonConfig{BlockTime: time.Millisecond}}, logr.Discard())
 			m.rememberReusable(7, feeQuote{baseFee: gweiToWei(20), tip: gweiToWei(4), maxFee: gweiToWei(60)})
 			var want error
 			switch state {

@@ -148,14 +148,15 @@ type feeQuote struct {
 }
 
 type pendingTransaction struct {
-	req          Request
-	lifecycle    lifecycleObservation
-	nonce        uint64
-	gas          uint64
-	value        *big.Int
-	fees         feeQuote
-	broadcastErr error // initial nonce race; returned immediately without owning the competing transaction
-	attempts     []txAttempt
+	req           Request
+	lifecycle     lifecycleObservation
+	nonce         uint64
+	gas           uint64
+	value         *big.Int
+	fees          feeQuote
+	broadcastErr  error // initial nonce race; returned immediately without owning the competing transaction
+	contentionErr error // an underpriced owned replacement yields for protocol reconciliation
+	attempts      []txAttempt
 	// attemptHashes is published by the lifecycle goroutine and copied under attemptHashesMu for
 	// forced shutdown delivery. Receipt/signing state in attempts remains lifecycle-owned.
 	attemptHashesMu   sync.Mutex
@@ -205,13 +206,14 @@ type Manager struct {
 	laneStateSubscribers map[uint64]chan struct{}
 	nextLaneStateID      uint64
 
-	// mu guards initialization, the reusable fee hint and the confirmed owned-nonce floor. The
+	// mu guards initialization, the reusable fee hint, confirmed owned-nonce floor and cooldown. The
 	// worker reads them before signing; the lifecycle owner advances the floor only after canonical
 	// confirmation, or remembers abandonment before releasing the serialized lane.
 	mu                  sync.Mutex
 	initialized         bool
 	reusable            *reusableNonce
 	confirmedNonceFloor uint64
+	nonceCooldown       *nonceCooldown
 
 	unminedMu   sync.Mutex
 	unmined     *pendingTransaction
@@ -826,6 +828,9 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 	if floor != nil || isPendingNonceCollision(sendErr) {
 		m.rememberReusable(nonce, fees)
 	}
+	if isPendingNonceCollision(sendErr) {
+		m.startNonceCooldown(nonce)
+	}
 	hash := signed.Hash()
 	// Both spans: the broadcast span is short-lived, the send span keeps the identity for the whole
 	// lifecycle (endSendSpan later overwrites tx.hash with the attempt that actually landed).
@@ -965,6 +970,9 @@ func (m *Manager) waitForPendingTransaction(ctx context.Context, pending *pendin
 		return m.confirmPendingReceipt(ctx, pending, read.attempt, read.receipt)
 	}
 	for {
+		if pending.contentionErr != nil {
+			return m.abandonPending(ctx, pending, "nonce-contention", pending.contentionErr)
+		}
 		// New variants arriving between sweeps also get an immediate priority read.
 		if sweep == nil && knownAttempts != len(pending.attempts) {
 			sweep = newReceiptSweep(pending, knownAttempts)
@@ -1199,6 +1207,9 @@ type replaceIntent struct {
 // tryReplace reports whether the deadline was reached while preparing a replacement. It never
 // changes the business call; a later request owns any fresh calldata at the reusable nonce.
 func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, intent replaceIntent) (bool, error) {
+	if pending.contentionErr != nil {
+		return false, pending.contentionErr
+	}
 	if pending.abandonmentDue(time.Now()) {
 		return true, nil
 	}
@@ -1232,12 +1243,15 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, i
 	}
 	hash := signed.Hash()
 	broadcastUncertain := sendErr != nil && !isKnownTransactionError(sendErr)
+	pending.attempts = append(pending.attempts, txAttempt{hash: hash, tx: signed, exactRebroadcastPending: broadcastUncertain})
+	pending.publishAttemptHashes()
+	if m.replacementContention(ctx, pending, sendErr) {
+		return false, sendErr
+	}
 	pending.fees = cloneFeeQuote(fees)
 	pending.gas = gas
 	pending.horizon.sent(pending.horizon.lastHead)
 	pending.horizon.stallRebroadcasts = 0
-	pending.attempts = append(pending.attempts, txAttempt{hash: hash, tx: signed, exactRebroadcastPending: broadcastUncertain})
-	pending.publishAttemptHashes()
 	if broadcastUncertain {
 		observability.Log(ctx).Error(sendErr, "replacement broadcast uncertain; tracking signed hash", "label", pending.req.Label, "hash", hash.Hex(), "nonce", pending.nonce)
 		return false, sendErr
@@ -1263,6 +1277,9 @@ func (m *Manager) rebroadcastUncertainAttempt(ctx context.Context, pending *pend
 	}
 	attempt.exactRebroadcastPending = false
 	err := m.sendSigned(ctx, attempt.tx)
+	if m.replacementContention(ctx, pending, err) {
+		return true
+	}
 	known := isKnownTransactionError(err)
 	if err == nil || known {
 		m.metrics.replacement(pending.req.Label, replacementKindRebroadcast, rebroadcastReasonUncertain)
@@ -1312,6 +1329,9 @@ func (m *Manager) rebroadcastLatestAttempt(
 		sendCtx, cancelSend := replacementBroadcastContext(ctx, pending)
 		err := m.sendSigned(sendCtx, attempt.tx)
 		cancelSend()
+		if m.replacementContention(ctx, pending, err) {
+			return true
+		}
 		if err == nil || isKnownTransactionError(err) {
 			m.metrics.replacement(pending.req.Label, replacementKindRebroadcast, rebroadcastReasonCapped)
 		}

@@ -79,6 +79,7 @@ func anvilReconciliationConfig() Config {
 		Confirmations: 1, MaxFeeGwei: 100,
 		PollInterval: 10 * time.Millisecond, ReplacementInterval: time.Second,
 		PendingTimeout: time.Minute, ShutdownTimeout: time.Second,
+		Horizon: HorizonConfig{BlockTime: 200 * time.Millisecond},
 	}
 }
 

@@ -603,6 +603,9 @@ func (m *Manager) rebroadcastStalledAttempt(ctx context.Context, pending *pendin
 	sendCtx, cancelSend := replacementBroadcastContext(ctx, pending)
 	err := m.sendSigned(sendCtx, attempt.tx)
 	cancelSend()
+	if m.replacementContention(ctx, pending, err) {
+		return true
+	}
 	fields := []any{
 		"label", pending.req.Label, "hash", attempt.hash.Hex(), "nonce", pending.nonce,
 		"reason", replaceReasonStall,

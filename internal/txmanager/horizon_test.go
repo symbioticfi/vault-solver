@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -613,35 +614,41 @@ func TestHorizonMaxFeePerGasAndHeadroom(t *testing.T) {
 }
 
 func TestHorizonStallRebroadcastsThenBumps(t *testing.T) {
-	chain := newHorizonChain(t)
-	metrics := newTestMetrics(t)
-	m := NewWithMetrics(chain, mustSigner(t), big.NewInt(11155111), horizonConfig(nil), metrics, logr.Discard())
-	startManagerForTest(t, m)
-	result, accepted := m.SendAsync(t.Context(), Request{To: common.HexToAddress("0xabc"), Data: []byte{1}, Label: "fill"})
-	if !accepted {
-		t.Fatal("request was not accepted")
-	}
-	original := chain.waitForSends(t, 1)[0]
-
-	for rebroadcast := 1; rebroadcast <= 2; rebroadcast++ {
-		chain.mineSlots(0.001, 0.5, 0.5, 0.5)
-		sent := chain.waitForSends(t, 1+rebroadcast)
-		if sent[rebroadcast].Hash() != original.Hash() {
-			t.Fatalf("stall %d sent %s, want an exact rebroadcast of %s", rebroadcast, sent[rebroadcast].Hash(), original.Hash())
+	synctest.Test(t, func(t *testing.T) {
+		chain := newHorizonChain(t)
+		metrics := newTestMetrics(t)
+		m := NewWithMetrics(chain, mustSigner(t), big.NewInt(11155111), horizonConfig(nil), metrics, logr.Discard())
+		startManagerForTest(t, m)
+		result, accepted := m.SendAsync(t.Context(), Request{To: common.HexToAddress("0xabc"), Data: []byte{1}, Label: "fill"})
+		if !accepted {
+			t.Fatal("request was not accepted")
 		}
-	}
-	chain.mineSlots(0.001, 0.5, 0.5, 0.5)
-	replacement := chain.waitForSends(t, 4)[3]
-	if replacement.Hash() == original.Hash() || replacement.GasTipCap().Cmp(bumpFee(original.GasTipCap())) < 0 {
-		t.Fatalf("third stall sent tip %s, want a bumped replacement", replacement.GasTipCap())
-	}
-	assertMetric(t, metrics.replacements.WithLabelValues("fill", replacementKindRebroadcast, replaceReasonStall), 2)
-	assertMetric(t, metrics.replacements.WithLabelValues("fill", replacementKindReplacement, replaceReasonStall), 1)
+		original := chain.waitForSends(t, 1)[0]
 
-	chain.include(replacement)
-	if got := <-result; got.Outcome != OutcomeConfirmed || got.Hash != replacement.Hash() {
-		t.Fatalf("result = %+v, want the replacement confirmed", got)
-	}
+		for rebroadcast := 1; rebroadcast <= 2; rebroadcast++ {
+			chain.mineSlots(0.001, 0.5, 0.5, 0.5)
+			sent := chain.waitForSends(t, 1+rebroadcast)
+			if sent[rebroadcast].Hash() != original.Hash() {
+				t.Fatalf("stall %d sent %s, want an exact rebroadcast of %s", rebroadcast, sent[rebroadcast].Hash(), original.Hash())
+			}
+		}
+		chain.mineSlots(0.001, 0.5, 0.5, 0.5)
+		replacement := chain.waitForSends(t, 4)[3]
+		if replacement.Hash() == original.Hash() || replacement.GasTipCap().Cmp(bumpFee(original.GasTipCap())) < 0 {
+			t.Fatalf("third stall sent tip %s, want a bumped replacement", replacement.GasTipCap())
+		}
+		assertMetric(t, metrics.replacements.WithLabelValues("fill", replacementKindRebroadcast, replaceReasonStall), 2)
+		assertMetric(t, metrics.replacements.WithLabelValues("fill", replacementKindReplacement, replaceReasonStall), 1)
+
+		// Finish any missing-receipt sweep before publishing inclusion. Otherwise the
+		// nonce read can see the new block after that sweep and legitimately yield
+		// nonce_consumed; this test specifically verifies receipt confirmation.
+		synctest.Wait()
+		chain.include(replacement)
+		if got := <-result; got.Outcome != OutcomeConfirmed || got.Hash != replacement.Hash() {
+			t.Fatalf("result = %+v, want the replacement confirmed", got)
+		}
+	})
 }
 
 // A read endpoint that never answers a stalled call's re-estimate must not hold the lifecycle, which
