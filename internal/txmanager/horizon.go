@@ -442,6 +442,9 @@ func (m *Manager) callGas(ctx context.Context, req Request, parent *types.Header
 	}
 	gas, headroomBps, err := m.estimateHorizonGas(ctx, req, parent)
 	if err != nil {
+		if revert := executionRevert(err); revert != nil {
+			return 0, errors.Errorf("estimate gas %q: %w", req.Label, revert)
+		}
 		// Calldata can contain unpublished authorizations. Keep it out of error logs and Sentry.
 		observability.Log(ctx).Error(err, "gas estimation failed", "label", req.Label)
 		return 0, errors.Errorf("estimate gas %q: %w", req.Label, err)

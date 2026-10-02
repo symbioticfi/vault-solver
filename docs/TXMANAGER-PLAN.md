@@ -47,6 +47,10 @@ Subscribers receive coalesced change notifications and must re-read state and un
 | `Label`, `Solver` | Stable operation name and owning integration for logs/metrics/Sentry. |
 
 The generic manager must not interpret protocol order IDs, statuses, adapters or economic policy.
+Gas estimation execution failures wrap `ExecutionRevertError`, preserving the original error and
+decoded RPC revert bytes when supplied. The integration decodes protocol errors, reconciles current
+business state and chooses log severity. The manager logs estimate transport/RPC availability failures
+at Error, but does not page on execution reverts before integration reconciliation.
 
 ## 3. Configuration and time budgets
 
