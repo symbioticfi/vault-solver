@@ -17,6 +17,13 @@ old call. Independent processes can share the EOA without a database,
 shared file, leader, coordinator or peer discovery. They may race on a nonce; an initial collision ends
 that request promptly and leaves later work eligible. The [replica plan](REPLICA-PLAN.md) records the
 account and integration limits.
+
+An owned receipt that passes canonical ancestry and its requested confirmation depth advances a
+process-local floor to its nonce plus one, including a reverted receipt. New selection uses the maximum
+of this floor and the latest mined nonce, so a lagging write RPC cannot reuse a nonce confirmed by this
+process. Unconfirmed/orphaned receipts and sibling nonce outcomes do not advance the floor. It is not
+persisted and does not rewind after a later reorg beyond the completed confirmation policy.
+
 An integration submitted externally can return false from `RequiresTxManager`; an external-only process
 does not initialize/start the manager or require `txManager.maxFeeGwei`.
 

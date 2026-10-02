@@ -198,11 +198,13 @@ type Manager struct {
 	laneStateSubscribers map[uint64]chan struct{}
 	nextLaneStateID      uint64
 
-	// mu guards initialization and the reusable nonce hint. The worker selects and updates the hint;
-	// the one lifecycle owner remembers abandonment before releasing the serialized lane.
-	mu          sync.Mutex
-	initialized bool
-	reusable    *reusableNonce
+	// mu guards initialization, the reusable fee hint and the confirmed owned-nonce floor. The
+	// worker reads them before signing; the lifecycle owner advances the floor only after canonical
+	// confirmation, or remembers abandonment before releasing the serialized lane.
+	mu                  sync.Mutex
+	initialized         bool
+	reusable            *reusableNonce
+	confirmedNonceFloor uint64
 
 	unminedMu   sync.Mutex
 	unmined     *pendingTransaction
@@ -1139,6 +1141,10 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 			"nonce", pending.nonce,
 		)
 		return Result{}, false
+	}
+	if err == nil {
+		// Both successful and reverted canonical receipts consume the owned account nonce.
+		m.rememberConfirmedNonce(pending.nonce)
 	}
 	if receipt.Status == types.ReceiptStatusFailed {
 		revertErr := errors.Errorf("tx %s reverted on-chain", attempt.hash.Hex())

@@ -424,6 +424,9 @@ a restart and even when a private relay counts an expired call as pending. The a
 next nonce after a transaction is mined; fresh requests do not queue higher nonces behind unmined work.
 Use a write RPC that serves current mined account state. Private pending visibility is not required
 for nonce selection.
+After an owned receipt reaches its requested canonical confirmation depth, the process remembers the
+next nonce as a local minimum. A temporarily lagging write RPC cannot make it reuse that confirmed nonce;
+successful and reverted receipts both consume it. The minimum resets on process restart.
 Sends remain serialized locally. There is no database, shared file, leader election, replica identity,
 or feature flag.
 

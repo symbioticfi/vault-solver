@@ -18,10 +18,12 @@ func (m *Manager) freshMinedNonce(ctx context.Context) (uint64, error) {
 	if err != nil {
 		return 0, errors.Errorf("mined nonce before signing: %w", err)
 	}
+	m.mu.Lock()
+	nonce = max(nonce, m.confirmedNonceFloor)
 	if nonce == ^uint64(0) {
+		m.mu.Unlock()
 		return 0, errors.New("account nonce is exhausted")
 	}
-	m.mu.Lock()
 	changed := !m.initialized
 	m.initialized = true
 	m.mu.Unlock()
@@ -29,6 +31,18 @@ func (m *Manager) freshMinedNonce(ctx context.Context) (uint64, error) {
 		m.notifyLaneStateChange()
 	}
 	return nonce, nil
+}
+
+// rememberConfirmedNonce is called only by the lifecycle owner after an owned receipt has passed
+// canonical ancestry and the requested confirmation depth. A lagging write RPC cannot move this
+// process back to a nonce it already proved consumed. No unconfirmed or peer outcome advances it.
+func (m *Manager) rememberConfirmedNonce(nonce uint64) {
+	if nonce != ^uint64(0) {
+		nonce++
+	}
+	m.mu.Lock()
+	m.confirmedNonceFloor = max(m.confirmedNonceFloor, nonce)
+	m.mu.Unlock()
 }
 
 // confirmConsumedNonce runs only after every owned attempt returned NotFound. A higher mined nonce
