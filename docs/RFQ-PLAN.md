@@ -117,6 +117,11 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   bounds as rejected initial work, without spending the signed retry budget or recording a failed
   fill. Typed estimate reverts are expected Info events; transport failures remain errors. A terminal
   backend decision on unsigned work is never re-armed by a stale open-order listing.
+  The generated Reactor binding decodes exact `NonceUsed()` revert data before generic estimate
+  handling. It retires sending at Info immediately, releases the unused reservation, and never retries
+  the order even when the backend still says `open`. The local `nonce_used` state observes the backend
+  only until the order deadline to distinguish an indexed fill from explicit nonce invalidation.
+  `NonceUsed()` alone is neither successful-fill nor peer-fill evidence.
   Reverted transactions stay failed; unknown inclusion stays submitted for backend reconciliation
   without another fill. A result wrapping `txmanager.ErrRequestObsolete` is terminal instead:
   the order becomes `obsolete` (never re-armed, even while the backend still lists it open), no retry is
@@ -396,6 +401,9 @@ dropping features.
    reverts, retire backend terminal orders, and rebuild eligible open orders after polling backoff
    without consuming the accepted-execution retry budget. Tested with terminal, stale-open and
    missing backend views, deadline expiry and log/metric severity.
+9. **(done) Reactor nonce-used decoding** — retire known consumed order nonces without waiting for
+   backend indexing, release reservations and observe terminal backend evidence without resubmission.
+   Tests cover exact/short/unknown payloads, stale and missing views, invalidation and deadline bounds.
 
 **Reads are multicall-batched** end to end: amount-specific strategy evaluation uses the shared
 per-route fill-quote batch (`paused`, `getMaxAssets`, `getAmountOut`, `minDiscount`), while inventory

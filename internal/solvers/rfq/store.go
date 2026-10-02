@@ -27,6 +27,9 @@ const (
 	statusRetryWaiting orderStatus = "retry_waiting"
 	// A nonce race does not prove our fill landed. Reconcile the backend before fresh retry.
 	statusNonceUncertain orderStatus = "nonce_uncertain"
+	// The Reactor consumed/inactivated the order nonce. Sending is retired immediately;
+	// backend observation only refines fill versus invalidation until the order deadline.
+	statusNonceUsed orderStatus = "nonce_used"
 	// statusObsolete is terminal: the backend reported the order no longer fillable while our fill was
 	// being sent, so it is never re-armed, even if a stale open-order listing still returns it.
 	statusObsolete orderStatus = "obsolete"
@@ -34,7 +37,7 @@ const (
 
 func (s orderStatus) active() bool {
 	return s == statusQueued || s == statusSubmitting || s == statusSubmitted ||
-		s == statusRetryWaiting || s == statusNonceUncertain
+		s == statusRetryWaiting || s == statusNonceUncertain || s == statusNonceUsed
 }
 
 // awaitsSubmission reports a won order the submitter still has to send.
@@ -231,13 +234,27 @@ func (s *store) markNonceUncertain(orderID string, txHash common.Hash, lastErr s
 	}
 }
 
+// markNonceUsed retires sending and releases unused capacity immediately. Backend observation
+// remains active only to distinguish a fill from explicit invalidation; it never re-arms this order.
+func (s *store) markNonceUsed(orderID string, lastErr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rec := s.orders[orderID]; rec != nil {
+		rec.Status = statusNonceUsed
+		rec.NonceConflict = false
+		rec.LastError = lastErr
+		rec.UpdatedAt = s.now()
+		s.reservations.Delete(orderID)
+	}
+}
+
 // reserve replaces an active order's reservation. It refuses an order that has already left the
 // active set, so a plan finishing after a terminal transition cannot leak capacity.
 func (s *store) reserve(orderID string, reservations liquidlane.CapacityReservations) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec, ok := s.orders[orderID]
-	if !ok || !rec.Status.active() {
+	if !ok || !rec.Status.active() || rec.Status == statusNonceUsed {
 		return false
 	}
 	return s.reservations.Set(orderID, reservations)

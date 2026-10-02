@@ -500,6 +500,8 @@ For liquidity commitments, the built-in strategies apply these limits:
   retry eligible open orders after the poll delay; these unsigned races are Info events and do not
   consume the signed retry budget. Transport failures remain errors. Uncertain outcomes after
   accepted submission remain budgeted.
+  A Reactor `NonceUsed()` estimate retires sending at Info immediately; backend reconciliation
+  distinguishes an actual fill from explicit nonce invalidation before counting a successful peer fill.
   Retry counts are local to each process and reset on restart.
 - LI.FI and UniswapX split shared vault capacity across token pairs before quoting. A pair can therefore
   quote less than the vault's total free liquidity. This does not reserve every repeated quote request.

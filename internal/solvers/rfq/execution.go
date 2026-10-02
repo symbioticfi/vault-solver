@@ -19,6 +19,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
+	"github.com/symbioticfi/vault-solver/api/bindings/rfq/reactor"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -179,7 +180,7 @@ func (e *executionService) wakeSubmitter() {
 // The caller owns the order through the in-flight set, so a fill in Send is never expired.
 func (e *executionService) expireUnsigned(o *orderRecord) bool {
 	unsignedRetry := o.Status == statusRetryWaiting || o.Status == statusNonceUncertain ||
-		o.Status == statusQueued || o.Status == statusSubmitting
+		o.Status == statusQueued || o.Status == statusSubmitting || o.Status == statusNonceUsed
 	if !unsignedRetry || o.RetryDeadline.IsZero() || e.now().Before(o.RetryDeadline) {
 		return false
 	}
@@ -286,7 +287,7 @@ func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
 	switch o.Status {
 	case statusQueued, statusSubmitting:
 		e.submitOrder(ctx, o.OrderID)
-	case statusSubmitted, statusRetryWaiting, statusNonceUncertain:
+	case statusSubmitted, statusRetryWaiting, statusNonceUncertain, statusNonceUsed:
 		e.reconcileTerminalStatus(ctx, o.OrderID)
 	case statusFilled, statusExpired, statusFailed, statusObsolete:
 		// terminal — nothing to do
@@ -362,6 +363,12 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	if !outcome.Included() && errors.Is(res.Err, txmanager.ErrRequestObsolete) {
 		e.retireObsoleteOrder(ctx, orderID, res, res.Err)
 		return
+	}
+	if reactorNonceUsed(res.Err) {
+		observability.Decline(ctx, "fill_nonce_used", "Reactor order nonce is already used")
+		e.store.markNonceUsed(orderID, errString(res.Err))
+		observability.Log(ctx).Info("fill retired: Reactor order nonce already used", "attempt", attempt)
+		return // Sending stops now; subsequent polling refines fill versus nonce invalidation.
 	}
 	if estimateExecutionReverted(res.Err) {
 		// Simulation can race a sibling's fill or changing business state. No transaction was
@@ -559,6 +566,19 @@ func (e *executionService) sendFill(
 func estimateExecutionReverted(err error) bool {
 	var revert *txmanager.ExecutionRevertError
 	return errors.As(err, &revert)
+}
+
+func reactorNonceUsed(err error) bool {
+	var revert *txmanager.ExecutionRevertError
+	if !errors.As(err, &revert) || len(revert.Data) != 4 {
+		return false // Generated UnpackError slices the selector; zero-argument NonceUsed has no payload.
+	}
+	decoded, decodeErr := reactor.NewReactor().UnpackError(revert.Data)
+	if decodeErr != nil {
+		return false
+	}
+	_, used := decoded.(*reactor.ReactorNonceUsed)
+	return used
 }
 
 // resolveExecutable returns the executable payload for a polled order from the backend.
