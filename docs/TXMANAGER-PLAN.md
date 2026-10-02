@@ -241,7 +241,7 @@ reorgs of completed transactions or reopen integration orders.
 |---|---|
 | `confirmed` | Normal call succeeded and satisfied confirmation policy. |
 | `included_unconfirmed` | Successful inclusion observed, but confirmation waiting ended with an error. |
-| `reverted` | Receipt reports execution failure; an error during confirmation is retained in the result. |
+| `reverted` | Receipt reports execution failure; an error during confirmation is retained in the result. Manager logs at Info; the integration reconciles business state before choosing alert severity. |
 | `abandoned` | Pending timeout, request deadline or `Obsolete` ended tracking without another broadcast. `Err` wraps `ErrAbandoned`, and also `ErrRequestObsolete` for an obsolete call. The attempted hash is retained without a receipt; execution remains unknown. |
 | `submission_error` | Submission/pre-sign path failed without a retained pending lifecycle, including an unsigned call `Obsolete` dropped (`Err` wraps `ErrRequestObsolete`). |
 | `tracking_stopped` | Lifecycle tracking stopped before a terminal receipt was established. |

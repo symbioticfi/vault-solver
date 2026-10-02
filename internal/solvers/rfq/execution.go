@@ -281,6 +281,14 @@ func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
 	)
 	defer end(nil) // each stage records its own failure; terminal skips are declined events here
 
+	if o.Status.active() && !o.Status.awaitsSubmission() {
+		// An indexed completion wins over local deadline expiry, including on the last poll.
+		e.reconcileTerminalStatus(ctx, o.OrderID)
+		if latest := e.store.order(o.OrderID); latest != nil {
+			e.expireUnsigned(latest)
+		}
+		return
+	}
 	if e.expireUnsigned(o) {
 		return
 	}
@@ -288,7 +296,7 @@ func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
 	case statusQueued, statusSubmitting:
 		e.submitOrder(ctx, o.OrderID)
 	case statusSubmitted, statusRetryWaiting, statusNonceUncertain, statusNonceUsed:
-		e.reconcileTerminalStatus(ctx, o.OrderID)
+		// Backend observation is handled before local expiry above.
 	case statusFilled, statusExpired, statusFailed, statusObsolete:
 		// terminal — nothing to do
 	}
@@ -380,13 +388,13 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		e.reconcileTerminalStatus(ctx, orderID)
 		return
 	}
-	if outcome.NonceUncertain() {
-		// Abandoning a signed fill or a nonce race leaves our own execution unknown. The backend
-		// decides whether the order is terminal or eligible for a freshly built bounded retry.
+	if outcome.NonceUncertain() || outcome == txmanager.OutcomeReverted {
+		// A reverted transaction does not establish the business outcome: a sibling may have
+		// filled it first. Backend evidence decides terminal state or a bounded, rebuilt retry.
 		observability.Decline(ctx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
 		e.store.markNonceUncertain(orderID, res.Hash, errString(res.Err), outcome == txmanager.OutcomeNonceConflict)
-		observability.Log(ctx).V(1).Info("fill nonce uncertain; reconciling order", "attempt", attempt,
-			"tx", res.Hash.Hex())
+		observability.Log(ctx).Info("fill result requires order reconciliation", "attempt", attempt,
+			"tx", res.Hash.Hex(), "outcome", outcome)
 		e.reconcileTerminalStatus(ctx, orderID)
 		return
 	}
@@ -549,7 +557,7 @@ func (e *executionService) sendFill(
 		observability.Decline(submitCtx, "fill_obsolete", res.Err.Error())
 		return res, nil
 	}
-	if res.Outcome.NonceUncertain() {
+	if res.Outcome.NonceUncertain() || res.Outcome == txmanager.OutcomeReverted {
 		observability.Decline(submitCtx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
 		return res, nil
 	}

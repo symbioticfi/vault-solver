@@ -337,7 +337,7 @@ func TestExecution_RejectsBackendOutputMismatch(t *testing.T) {
 	}
 }
 
-func TestExecution_RevertMarksFailed(t *testing.T) {
+func TestExecution_RevertReconcilesFilled(t *testing.T) {
 	st, be := fillFixtures(t)
 	txm := &fakeTxm{result: txmanager.Result{
 		Hash:    common.HexToHash("0xdead"),
@@ -348,8 +348,8 @@ func TestExecution_RevertMarksFailed(t *testing.T) {
 
 	syncCycle(context.Background(), e)
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
-		t.Fatalf("status = %v, want failed", rec)
+	if rec := st.order("o1"); rec == nil || rec.Status != statusFilled {
+		t.Fatalf("status = %v, want filled", rec)
 	}
 }
 
@@ -360,10 +360,10 @@ func TestExecution_FailedFillOutcomesAreMetered(t *testing.T) {
 		outcome string
 	}{
 		{
-			name: "reverted",
+			name: "submission error",
 			result: txmanager.Result{
-				Outcome: txmanager.OutcomeReverted,
-				Err:     errors.New("tx reverted on-chain"),
+				Outcome: txmanager.OutcomeSubmissionError,
+				Err:     errors.New("signing failed"),
 			},
 			outcome: liquidlane.FillOutcomeFailure,
 		},

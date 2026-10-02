@@ -122,8 +122,12 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   the order even when the backend still says `open`. The local `nonce_used` state observes the backend
   only until the order deadline to distinguish an indexed fill from explicit nonce invalidation.
   `NonceUsed()` alone is neither successful-fill nor peer-fill evidence.
-  Reverted transactions stay failed; unknown inclusion stays submitted for backend reconciliation
-  without another fill. A result wrapping `txmanager.ErrRequestObsolete` is terminal instead:
+  Mined reverts also reconcile backend status before choosing the order outcome. Indexed sibling
+  completion is recorded as `fill/peer` at Info, while a still-open order can rebuild under the signed
+  retry budget. A missing view retains reconciliation; backend completion takes precedence over local
+  expiry on the final poll. Reverts themselves do not emit failed-fill metrics or Error alerts.
+  Unknown inclusion stays submitted for backend reconciliation without another fill.
+  A result wrapping `txmanager.ErrRequestObsolete` is terminal instead:
   the order becomes `obsolete` (never re-armed, even while the backend still lists it open), no retry is
   scheduled, and backend status is reconciled once, which may refine it to `filled`. These protections and retry budgets are in-memory per process;
   an RPC nonce result does not prove an owned fill succeeded or coordinate order/capacity ownership across replicas.
@@ -417,6 +421,10 @@ dropping features.
    and count a backend-confirmed non-local fill once as `fill/peer` at Info, without local success
    amounts. Regression tests cover older local attempts, repeated reconciliation, malformed hashes,
    initial nonce-conflict identity and replacement hashes at ordinary/forced-shutdown delivery.
+11. **(done) Mined-revert reconciliation** — reconcile RFQ business state before classifying a reverted
+    fill; retain backend observation or eligible bounded retries without expected-race Error alerts.
+    Tests cover peer/older-own fills, terminal and missing status, reservation retention, severity and
+    backend completion on the deadline poll.
 
 **Reads are multicall-batched** end to end: amount-specific strategy evaluation uses the shared
 per-route fill-quote batch (`paused`, `getMaxAssets`, `getAmountOut`, `minDiscount`), while inventory

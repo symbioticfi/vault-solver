@@ -499,8 +499,9 @@ For liquidity commitments, the built-in strategies apply these limits:
   status and can retry only when the backend reports the order open. Each retry builds a fresh fill plan
   and resolves current discount signatures. `solvers[].config.maxNonceRetries` defaults to `3` additional
   attempts after accepted uncertain outcomes (`0` disables those retries); at least one `pollIntervalMs` interval and a fresh open-order poll
-  precede another attempt. Reverted transactions are not retried, and uncertain inclusion is reconciled
-  through the backend. Initial nonce collisions retry after the poll delay within the order deadline,
+  precede another attempt. Mined reverts first reconcile backend status: peer fills are Info outcomes,
+  and still-open orders can retry within this budget. Uncertain inclusion is reconciled through the
+  backend. Initial nonce collisions retry after the poll delay within the order deadline,
   without spending this budget. Execution-reverted gas estimates also reconcile backend status and
   retry eligible open orders after the poll delay; these unsigned races are Info events and do not
   consume the signed retry budget. Transport failures remain errors. Uncertain outcomes after

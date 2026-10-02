@@ -1161,10 +1161,11 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 		if err != nil {
 			revertErr = errors.Errorf("tx %s reverted on-chain; confirmation wait: %w", attempt.hash.Hex(), err)
 		}
-		observability.Log(ctx).Error(revertErr, "transaction reverted",
+		observability.Log(ctx).Info("transaction reverted",
 			"label", pending.req.Label,
 			"hash", attempt.hash.Hex(),
 			"nonce", pending.nonce,
+			"err", revertErr.Error(),
 		)
 		return Result{
 			Hash:    attempt.hash,

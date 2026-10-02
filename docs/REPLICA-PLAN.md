@@ -82,11 +82,21 @@ global. All remain process-local. Protocol order/bid nonces are separate from th
 | [LI.FI](LIFI-PLAN.md) | Release local capacity. A later WebSocket redelivery or reconnect REST recovery rechecks on-chain order status and rebuilds the request. A healthy connected feed does not periodically replay REST after catch-up. |
 | [OEV](OEV-PLAN.md) | Settlement is submitted externally and does not use this manager. |
 
+RFQ also reconciles typed estimate execution reverts and mined reverts before assigning business
+failure. Unsigned estimate races use polling/deadline bounds without spending the signed retry budget;
+mined reverts use that budget when fresh backend state remains open. Exact Reactor `NonceUsed()` data
+retires sending immediately and releases capacity; bounded backend observation distinguishes a filled
+order from explicit invalidation. Only a valid backend fill hash absent from every local signed attempt
+is credited once as `fill/peer`, with no local success amounts. Known backend completion wins over local
+expiry on the final reconciliation poll.
+
 ## 4. Validation and observability
 
 `abandoned`, `nonce_conflict` and `nonce_consumed` are expected request/lifecycle outcomes, with attempted hashes and
 no synthetic receipts. Solver completion spans record an expected decline; subsequent business retries
-use fresh protocol state. Real RPC failures and on-chain reverts retain ordinary error reporting.
+use fresh protocol state. Real RPC failures retain Error reporting. Generic on-chain reverts are Info
+outcomes whose owning integration chooses severity after business reconciliation; expected RFQ races
+and peer fills do not page or become failed-fill metrics.
 
 Unit tests cover fresh mined reads with foreign pending work, immediate local release after nonce collisions,
 bounded/recoverable RPC failures, receipt priority, mined-nonce replacement suppression and solver retry

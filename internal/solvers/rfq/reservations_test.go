@@ -143,9 +143,9 @@ func TestReservationLifecycleFollowsOrderOutcome(t *testing.T) {
 		reserved bool
 	}{
 		{name: "filled releases", result: confirmedTxResult(), settled: "filled", status: statusFilled},
-		{name: "revert releases", result: txmanager.Result{
+		{name: "revert retry keeps", result: txmanager.Result{
 			Hash: common.HexToHash("0xbad"), Outcome: txmanager.OutcomeReverted, Err: errors.New("reverted"),
-		}, settled: "open", status: statusFailed},
+		}, settled: "open", status: statusRetryWaiting, reserved: true},
 		{name: "abandonment retry keeps", result: abandonedTxResult(), settled: "open",
 			status: statusRetryWaiting, reserved: true},
 	} {
