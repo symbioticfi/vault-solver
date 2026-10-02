@@ -119,7 +119,12 @@ field replaces `maxRate`, so run this version with a backend that sends it. Fill
 sent one at a time on the shared nonce lane. While a fill is pending, the solver checks the order's backend
 status: once the backend reports it no longer open (filled, cancelled, expired, unfunded or failed), the fill
 stops being tracked without sending another transaction, and the order is retired without a retry and
-counted as `fill/obsolete`. The next fresh request can reuse its unused nonce. Reservations are local to the process and are not restored
+counted as `fill/obsolete`. When the backend confirms a fill with a transaction hash outside this
+process's initial, replacement and retry attempts, RFQ records `fill/peer` once and logs at Info.
+This means a fill completed outside local tracking; it does not attribute the transaction's sender.
+Peer outcomes add no local successful-fill amounts. Missing or invalid backend hashes still retire
+filled orders without claiming a peer fill. Attempt history is local and is lost on restart.
+The next fresh request can reuse its unused nonce. Reservations are local to the process and are not restored
 after a restart.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
@@ -684,7 +689,7 @@ Bounded workflow dimensions:
 
 | Solver | Events and outcomes | Amount/state dimensions |
 |---|---|---|
-| RFQ | `quote/<decision>`, `order/won`, `order_poll/success`, `fill/{success,failure,not_admitted,obsolete}` | `quote/{input,output}` and successful `fill/{input,output,planned_surplus}` by asset |
+| RFQ | `quote/<decision>`, `order/won`, `order_poll/success`, `fill/{success,failure,not_admitted,obsolete,peer}` | `quote/{input,output}` and successful local `fill/{input,output,planned_surplus}` by asset; `peer` counts only |
 | LI.FI | `order_processing/<result>`, `queue_drop/<stage>`, `fill/success` | Fill amounts by asset and kind |
 | UniswapX | `quote/<decision>`, `{exclusive,public}_order_poll/{ok,failed}`, `exclusive_obligation/{won,settled_in_time,missed}`, `fill/{success,failure,not_admitted,obsolete,declined}` | Quote and successful-fill amounts by asset and kind; quote amount assets are restricted to the immutable route snapshot used for that decision |
 | OEV | `auction/<decision>`, `bid/{enqueued,won,settled_success,settled_failed,would_bid,unresolved}`, `breaker/failure`, `state_refresh/success` | Native bid amounts use `asset="native"`; `kind` is the bid stage, including dry-run `would_bid` |

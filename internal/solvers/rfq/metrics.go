@@ -13,6 +13,8 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
+const fillOutcomePeer = "peer"
+
 type rfqMetrics struct {
 	workflow          *observability.WorkflowMetrics
 	orderPollObserver *observability.OperationObserver
@@ -35,6 +37,7 @@ func newRFQMetrics(
 	spec.Events = append(spec.Events, observability.WorkflowEventSpec{
 		Event: "fill", Outcomes: []string{
 			liquidlane.FillOutcomeFailure, liquidlane.FillOutcomeNotAdmitted, liquidlane.FillOutcomeObsolete,
+			fillOutcomePeer,
 		},
 	})
 	for _, outcome := range quoteDecisionOutcomes {

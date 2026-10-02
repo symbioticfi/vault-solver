@@ -358,7 +358,8 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		To:     e.executor, Data: calldata, Deadline: submissionDeadline, Label: "rfq-fill",
 		Obsolete: e.orderObsolete(orderID),
 	})
-	attempt := e.store.recordAttempt(orderID)
+	attemptHashes := append([]common.Hash{res.Hash}, res.Attempts...)
+	attempt := e.store.recordAttempt(orderID, attemptHashes...)
 	outcome := res.Outcome
 	if !outcome.Included() && errors.Is(res.Err, txmanager.ErrRequestObsolete) {
 		e.retireObsoleteOrder(ctx, orderID, res, res.Err)
@@ -618,7 +619,12 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 	}
 	switch bo.OrderStatus {
 	case "filled":
-		e.store.markStatus(orderID, statusFilled, txHash, "")
+		if e.store.markFilled(orderID, txHash) {
+			observability.Log(ctx).Info("order filled by peer", "tx", txHash.Hex())
+			if e.metrics != nil {
+				e.metrics.fillAmounts.ObserveOutcome(fillOutcomePeer)
+			}
+		}
 	case "expired":
 		e.store.markStatus(orderID, statusExpired, txHash, "")
 	case backendOrderStatusOpen:

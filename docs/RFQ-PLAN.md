@@ -127,6 +127,15 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   the order becomes `obsolete` (never re-armed, even while the backend still lists it open), no retry is
   scheduled, and backend status is reconciled once, which may refine it to `filled`. These protections and retry budgets are in-memory per process;
   an RPC nonce result does not prove an owned fill succeeded or coordinate order/capacity ownership across replicas.
+- **Peer fills are terminal completion, with separate telemetry.** `txmanager.Result.Attempts` exposes
+  a detached snapshot of every signed initial/replacement hash owned by one lifecycle, including
+  rejected initial nonce conflicts. RFQ retains these hashes across fresh retries under the store mutex
+  until terminal-order eviction. A backend `filled` response carrying a valid nonzero hash absent from
+  that process-local history records one `fill/peer` outcome and an Info log. It adds no successful-fill
+  amounts and requires no sender RPC: `peer` means indexed completion outside local tracking, rather
+  than proof of a particular sibling or EOA. Missing/malformed/zero hashes still mark the order filled
+  without peer attribution. Reconciliation deduplication and attempt ownership are process-local and
+  reset on restart; a previous local attempt is never called peer while its history is retained.
 - **Completed orders have no later-reorg recovery.** A `filled` record stays terminal in the local store.
   Open-order polling does not recheck its old inclusion or reopen it after a later reorg. The backend's
   terminal order status remains authoritative; txmanager's existing reorg checks run during confirmation.
@@ -404,6 +413,10 @@ dropping features.
 9. **(done) Reactor nonce-used decoding** — retire known consumed order nonces without waiting for
    backend indexing, release reservations and observe terminal backend evidence without resubmission.
    Tests cover exact/short/unknown payloads, stale and missing views, invalidation and deadline bounds.
+10. **(done) Peer-fill reconciliation** — retain every locally signed initial/replacement/retry hash
+   and count a backend-confirmed non-local fill once as `fill/peer` at Info, without local success
+   amounts. Regression tests cover older local attempts, repeated reconciliation, malformed hashes,
+   initial nonce-conflict identity and replacement hashes at ordinary/forced-shutdown delivery.
 
 **Reads are multicall-batched** end to end: amount-specific strategy evaluation uses the shared
 per-route fill-quote batch (`paused`, `getMaxAssets`, `getAmountOut`, `minDiscount`), while inventory

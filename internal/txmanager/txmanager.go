@@ -131,7 +131,10 @@ func (o Outcome) NonceUncertain() bool {
 // admission failures; ordinary fee, gas, signing, and definite broadcast failures remain submission
 // failures even though they do not produce a tracked hash.
 type Result struct {
-	Hash        common.Hash
+	Hash common.Hash
+	// Attempts contains every signed variant owned by this request, including replacements and
+	// rejected initial nonce races. It is a detached snapshot and does not prove inclusion.
+	Attempts    []common.Hash
 	Receipt     *types.Receipt
 	Outcome     Outcome
 	Err         error
@@ -145,14 +148,18 @@ type feeQuote struct {
 }
 
 type pendingTransaction struct {
-	req               Request
-	lifecycle         lifecycleObservation
-	nonce             uint64
-	gas               uint64
-	value             *big.Int
-	fees              feeQuote
-	broadcastErr      error // initial nonce race; returned immediately without owning the competing transaction
-	attempts          []txAttempt
+	req          Request
+	lifecycle    lifecycleObservation
+	nonce        uint64
+	gas          uint64
+	value        *big.Int
+	fees         feeQuote
+	broadcastErr error // initial nonce race; returned immediately without owning the competing transaction
+	attempts     []txAttempt
+	// attemptHashes is published by the lifecycle goroutine and copied under attemptHashesMu for
+	// forced shutdown delivery. Receipt/signing state in attempts remains lifecycle-owned.
+	attemptHashesMu   sync.Mutex
+	attemptHashes     []common.Hash
 	receiptCursor     int
 	originalHash      common.Hash
 	receiptReads      readStreak
@@ -528,6 +535,7 @@ func (m *Manager) Start(ctx context.Context) {
 			if pending.broadcastErr != nil {
 				result := Result{Hash: pending.originalHash, Outcome: OutcomeNonceConflict,
 					Err: errors.Errorf("send %q at nonce %d: %w: %w", j.req.Label, pending.nonce, ErrNonceConflict, pending.broadcastErr)}
+				result.Attempts = pending.attemptHashSnapshot()
 				lifecycle.finish(result.Outcome, nil)
 				deliverJobResult(j, result)
 				m.releaseLifecycleSlot()
@@ -858,6 +866,7 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 			sentHead: quote.head, sentAt: time.Now(), lastHead: quote.head, lastEvaluation: time.Now(),
 		},
 	}
+	pending.publishAttemptHashes()
 	if isNonceConsumedError(sendErr) || isPendingNonceCollision(sendErr) {
 		pending.broadcastErr = sendErr
 	}
@@ -892,6 +901,7 @@ func (pending *pendingTransaction) deliver(result Result) bool {
 	}
 	delivered := false
 	pending.resultOnce.Do(func() {
+		result.Attempts = pending.attemptHashSnapshot()
 		pending.result <- result
 		delivered = true
 	})
@@ -1226,6 +1236,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, i
 	pending.horizon.sent(pending.horizon.lastHead)
 	pending.horizon.stallRebroadcasts = 0
 	pending.attempts = append(pending.attempts, txAttempt{hash: hash, tx: signed, exactRebroadcastPending: broadcastUncertain})
+	pending.publishAttemptHashes()
 	if broadcastUncertain {
 		observability.Log(ctx).Error(sendErr, "replacement broadcast uncertain; tracking signed hash", "label", pending.req.Label, "hash", hash.Hex(), "nonce", pending.nonce)
 		return false, sendErr
@@ -1446,6 +1457,24 @@ func (m *Manager) deliverActiveShutdownTimeout() {
 // latestAttempt is the most recently signed variant of the pending nonce.
 func (pending *pendingTransaction) latestAttempt() txAttempt {
 	return pending.attempts[len(pending.attempts)-1]
+}
+
+// publishAttemptHashes runs only on the goroutine that owns signing and receipt tracking.
+func (pending *pendingTransaction) publishAttemptHashes() {
+	hashes := make([]common.Hash, len(pending.attempts))
+	for i, attempt := range pending.attempts {
+		hashes[i] = attempt.hash
+	}
+	pending.attemptHashesMu.Lock()
+	pending.attemptHashes = hashes
+	pending.attemptHashesMu.Unlock()
+}
+
+// attemptHashSnapshot is safe for the shutdown goroutine and never exposes manager-owned memory.
+func (pending *pendingTransaction) attemptHashSnapshot() []common.Hash {
+	pending.attemptHashesMu.Lock()
+	defer pending.attemptHashesMu.Unlock()
+	return slices.Clone(pending.attemptHashes)
 }
 
 func (pending *pendingTransaction) abandonmentDue(now time.Time) bool {

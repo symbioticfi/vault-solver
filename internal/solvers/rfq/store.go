@@ -70,6 +70,11 @@ type orderRecord struct {
 	// IncludedAt is the block a confirmed fill landed in; zero until then. A snapshot read at or
 	// after it already reflects the fill, so the reservation is not subtracted from it.
 	IncludedAt uint64
+	// PeerFillObserved prevents repeated backend reconciliation from crediting the same order.
+	PeerFillObserved bool
+	// AttemptHashes retains this process's signed transactions across replacements and retries.
+	// It is guarded by store.mu and retained until the order is swept.
+	AttemptHashes []common.Hash
 }
 
 // queuedOrder is the input to upsertQueued, carrying the fields known when an order is first polled.
@@ -207,11 +212,31 @@ func (s *store) markStatus(orderID string, status orderStatus, txHash common.Has
 	if !ok {
 		return
 	}
+	s.markStatusLocked(rec, status, txHash, lastErr)
+}
+
+// markFilled records terminal backend completion and reports its first non-local transaction.
+func (s *store) markFilled(orderID string, txHash common.Hash) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec := s.orders[orderID]
+	if rec == nil {
+		return false
+	}
+	peer := txHash != (common.Hash{}) && !slices.Contains(rec.AttemptHashes, txHash) && !rec.PeerFillObserved
+	if peer {
+		rec.PeerFillObserved = true
+	}
+	s.markStatusLocked(rec, statusFilled, txHash, "")
+	return peer
+}
+
+func (s *store) markStatusLocked(rec *orderRecord, status orderStatus, txHash common.Hash, lastErr string) {
 	rec.Status = status
 	rec.NonceConflict = false
 	if !status.active() && rec.IncludedAt == 0 {
 		// Nothing was spent. A confirmed spend stays until sweep for older snapshots.
-		s.reservations.Delete(orderID)
+		s.reservations.Delete(rec.OrderID)
 	}
 	if txHash != (common.Hash{}) {
 		rec.TxHash = txHash
@@ -328,9 +353,16 @@ func (s *store) boundUnsignedWork(orderID string, deadline time.Time) {
 }
 
 // recordAttempt increments and returns the attempt count for an order.
-func (s *store) recordAttempt(orderID string) int {
+func (s *store) recordAttempt(orderID string, hashes ...common.Hash) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if rec := s.orders[orderID]; rec != nil {
+		for _, hash := range hashes {
+			if hash != (common.Hash{}) && !slices.Contains(rec.AttemptHashes, hash) {
+				rec.AttemptHashes = append(rec.AttemptHashes, hash)
+			}
+		}
+	}
 	s.attempts[orderID]++
 	return s.attempts[orderID]
 }
@@ -364,5 +396,6 @@ func cloneOrder(rec *orderRecord) *orderRecord {
 		return nil
 	}
 	cp := *rec
+	cp.AttemptHashes = slices.Clone(rec.AttemptHashes)
 	return &cp
 }
