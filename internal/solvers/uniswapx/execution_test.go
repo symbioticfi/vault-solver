@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -401,6 +402,9 @@ func (s *executionTestStrategy) DecideFill(
 }
 
 type executionTestTxManager struct {
+	mu          sync.Mutex
+	contexts    []context.Context
+	completed   int
 	result      chan txmanager.Result
 	maxFeeReads int
 	reqs        []txmanager.Request
@@ -418,10 +422,13 @@ func (m *executionTestTxManager) Available() bool { return !m.unavailable }
 func (m *executionTestTxManager) LaneReady() bool { return !m.unavailable && !m.busy }
 
 func (m *executionTestTxManager) SendAsync(
-	_ context.Context,
+	ctx context.Context,
 	request txmanager.Request,
 ) (<-chan txmanager.Result, bool) {
+	m.mu.Lock()
 	m.reqs = append(m.reqs, request)
+	m.contexts = append(m.contexts, ctx)
+	m.mu.Unlock()
 	if m.accepted != nil {
 		select {
 		case m.accepted <- struct{}{}:
@@ -432,8 +439,15 @@ func (m *executionTestTxManager) SendAsync(
 }
 
 func (m *executionTestTxManager) complete(result txmanager.Result) {
-	m.result <- result
+	m.mu.Lock()
+	request, ctx := m.reqs[m.completed], m.contexts[m.completed]
+	m.completed++
+	m.mu.Unlock()
+	if request.ObserveReceipt != nil && result.Receipt != nil {
+		request.ObserveReceipt(ctx, result)
+	}
 	m.busy = false
+	m.result <- result
 }
 
 type contractCallerFunc func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error)
@@ -548,10 +562,10 @@ func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 	if reservations := fixture.strategy.input.Reservations; len(reservations) != 0 {
 		t.Fatalf("unexpected pre-existing reservations: %v", reservations)
 	}
-	fixture.txm.result <- txmanager.Result{
+	fixture.txm.complete(txmanager.Result{
 		Hash:    common.HexToHash("0x2"),
 		Outcome: txmanager.OutcomeConfirmed,
-	}
+	})
 	result := <-pending.result
 	fixture.solver.completePendingFill(t.Context(), pending, result)
 	if fixture.solver.capacity.Len() != 0 {
@@ -644,7 +658,7 @@ func TestFillLoopCompletesWhileNextFillPlans(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("second fill did not reach planning")
 			}
-			fixture.txm.result <- txmanager.Result{Outcome: outcome}
+			fixture.txm.complete(txmanager.Result{Outcome: outcome})
 			waitForExecutionCondition(t, func() bool {
 				fixture.solver.stateMu.Lock()
 				defer fixture.solver.stateMu.Unlock()
@@ -705,10 +719,10 @@ func TestFillLoopDrainsAcceptedFillAfterQuoteServerFailure(t *testing.T) {
 		t.Fatalf("fill loop returned before accepted lifecycle completed: %v", err)
 	case <-time.After(20 * time.Millisecond):
 	}
-	fixture.txm.result <- txmanager.Result{
+	fixture.txm.complete(txmanager.Result{
 		Hash:    common.HexToHash("0x2"),
 		Outcome: txmanager.OutcomeConfirmed,
-	}
+	})
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.Canceled) {
@@ -1067,8 +1081,8 @@ func TestAbandonedFillAllowsFreshDifferentOrder(t *testing.T) {
 		t.Fatalf("start original fill: pending=%v err=%v", pending, err)
 	}
 	original := append([]byte(nil), fixture.txm.reqs[0].Data...)
-	fixture.txm.result <- txmanager.Result{Outcome: txmanager.OutcomeAbandoned,
-		Hash: common.HexToHash("0x1234"), Err: txmanager.ErrAbandoned}
+	fixture.txm.complete(txmanager.Result{Outcome: txmanager.OutcomeAbandoned,
+		Hash: common.HexToHash("0x1234"), Err: txmanager.ErrAbandoned})
 	fixture.solver.completePendingFill(t.Context(), pending, <-pending.result)
 	if fixture.solver.capacity.Len() != 0 || len(fixture.solver.filled) != 0 ||
 		fixture.solver.attempts[fixture.order.Hash] != 0 {
@@ -1099,7 +1113,7 @@ func TestAbandonedFillAllowsFreshDifferentOrder(t *testing.T) {
 	if !bytes.Equal(signed.Order, []byte{3}) || !bytes.Equal(signed.Sig, []byte{4}) {
 		t.Fatalf("fresh signed order = %+v, want encoded 03 and signature 04", signed)
 	}
-	fixture.txm.result <- txmanager.Result{Outcome: txmanager.OutcomeConfirmed, Hash: common.HexToHash("0x2345")}
+	fixture.txm.complete(txmanager.Result{Outcome: txmanager.OutcomeConfirmed, Hash: common.HexToHash("0x2345")})
 	fixture.solver.completePendingFill(t.Context(), pending, <-pending.result)
 	if _, ok := fixture.solver.filled[fresh.Hash]; !ok {
 		t.Fatal("fresh different order was not completed")

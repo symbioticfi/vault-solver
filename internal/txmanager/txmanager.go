@@ -73,15 +73,17 @@ type accountReading struct {
 
 // Config tunes fee selection and confirmation behavior.
 type Config struct {
-	Confirmations       uint64        // blocks to wait past inclusion before returning
-	MaxFeeGwei          float64       // absolute max fee per gas; app config requires a positive value
-	PollInterval        time.Duration // receipt/confirmation poll cadence; 0 => 2s
-	BroadcastTimeout    time.Duration // maximum duration of one transaction submission RPC; 0 => 5s
-	AccountPollInterval time.Duration // signer balance/nonce metric refresh cadence; 0 => 30s
-	ReplacementInterval time.Duration // fallback fee-bump cadence while fee windows are unreadable; 0 => 30s
-	PendingTimeout      time.Duration // unresolved-call tracking and abandoned fee-hint lifetime; 0 => 5m
-	ShutdownTimeout     time.Duration // maximum graceful drain after manager cancellation; 0 => 1m
-	Horizon             HorizonConfig // fee horizon, tip and gas-estimate tuning; zero values select defaults
+	Confirmations        uint64        // blocks to wait past inclusion before returning
+	MaxFeeGwei           float64       // absolute max fee per gas; app config requires a positive value
+	PollInterval         time.Duration // receipt/confirmation poll cadence; 0 => 2s
+	BroadcastTimeout     time.Duration // maximum duration of one transaction submission RPC; 0 => 5s
+	AccountPollInterval  time.Duration // signer balance/nonce metric refresh cadence; 0 => 30s
+	ReplacementInterval  time.Duration // fallback fee-bump cadence while fee windows are unreadable; 0 => 30s
+	PendingTimeout       time.Duration // unresolved-call tracking and abandoned fee-hint lifetime; 0 => 5m
+	ShutdownTimeout      time.Duration // maximum graceful drain after manager cancellation; 0 => 1m
+	LateReceiptTimeout   time.Duration // passive receipt observation after uncertain release; 0 => 10m
+	LateReceiptMaxHashes int           // bound on passive hashes and receipt deduplication; 0 => 1024
+	Horizon              HorizonConfig // fee horizon, tip and gas-estimate tuning; zero values select defaults
 }
 
 // Request is a transaction to send. Value nil means 0. Stateful solver calls leave GasLimit at 0 so
@@ -100,6 +102,10 @@ type Request struct {
 	Confirmations *uint64 // optional wait override; nil uses Config.Confirmations
 	Label         string  // stable operation name for logs and metrics
 	Solver        string  // owning solver, so a shared manager's logs and Sentry events attribute to it
+	// ObserveReceipt is telemetry-only: it observes an owned mined receipt once per locally retained
+	// hash, including receipts found after an uncertain result. It must not perform I/O or mutate
+	// business state; the manager may invoke it after the request's caller has resumed.
+	ObserveReceipt func(context.Context, Result)
 }
 
 // Outcome is the terminal transaction state observed by the manager.
@@ -132,8 +138,9 @@ func (o Outcome) NonceUncertain() bool {
 // failures even though they do not produce a tracked hash.
 type Result struct {
 	Hash common.Hash
-	// Attempts contains every signed variant owned by this request, including replacements and
-	// rejected initial nonce races. It is a detached snapshot and does not prove inclusion.
+	// Attempts is a detached ownership snapshot, including rejected initial nonce races. Terminal
+	// request results contain every known signed variant; late telemetry contains its observed hash.
+	// Ownership alone does not prove inclusion.
 	Attempts    []common.Hash
 	Receipt     *types.Receipt
 	Outcome     Outcome
@@ -218,6 +225,17 @@ type Manager struct {
 	unminedMu   sync.Mutex
 	unmined     *pendingTransaction
 	lifecycleWG sync.WaitGroup
+
+	// receiptMu guards passive hash observations and the bounded accounted-hash ledger. The
+	// lifecycle owners register work or account ordinary receipts; one passive observer does only
+	// reads. No passive operation can acquire or alter the nonce lane or its fee hint.
+	receiptMu          sync.Mutex
+	lateReceiptQueue   []lateReceiptObservation
+	lateReceiptCursor  int
+	accountedReceipts  map[common.Hash]time.Time
+	lateReceiptWake    chan struct{}
+	lateReceiptStopped bool
+	lateReceiptHeaders map[common.Hash]lateReceiptHeader
 }
 
 type job struct {
@@ -228,18 +246,20 @@ type job struct {
 }
 
 const (
-	defaultPollInterval        = 2 * time.Second
-	defaultAccountPollInterval = 30 * time.Second
-	defaultReplacementInterval = 30 * time.Second
-	defaultPendingTimeout      = 5 * time.Minute
-	defaultShutdownTimeout     = time.Minute
-	defaultBroadcastTimeout    = 5 * time.Second
-	maxFeeReadTimeout          = time.Second
-	maxReceiptReadTimeout      = 2 * time.Second
-	maxGasEstimateTimeout      = 5 * time.Second
-	accountRefreshTimeout      = 5 * time.Second
-	replacementBumpNumerator   = 9
-	replacementBumpDenominator = 8
+	defaultPollInterval         = 2 * time.Second
+	defaultAccountPollInterval  = 30 * time.Second
+	defaultReplacementInterval  = 30 * time.Second
+	defaultPendingTimeout       = 5 * time.Minute
+	defaultShutdownTimeout      = time.Minute
+	defaultBroadcastTimeout     = 5 * time.Second
+	defaultLateReceiptTimeout   = 10 * time.Minute
+	defaultLateReceiptMaxHashes = 1024
+	maxFeeReadTimeout           = time.Second
+	maxReceiptReadTimeout       = 2 * time.Second
+	maxGasEstimateTimeout       = 5 * time.Second
+	accountRefreshTimeout       = 5 * time.Second
+	replacementBumpNumerator    = 9
+	replacementBumpDenominator  = 8
 )
 
 // ErrRequestObsolete marks a request whose Obsolete hook reported that it can no longer succeed. A
@@ -291,6 +311,12 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log log
 	if cfg.ShutdownTimeout <= 0 {
 		cfg.ShutdownTimeout = defaultShutdownTimeout
 	}
+	if cfg.LateReceiptTimeout <= 0 {
+		cfg.LateReceiptTimeout = defaultLateReceiptTimeout
+	}
+	if cfg.LateReceiptMaxHashes <= 0 {
+		cfg.LateReceiptMaxHashes = defaultLateReceiptMaxHashes
+	}
 	cfg.Horizon = cfg.Horizon.withDefaults()
 	return &Manager{
 		backend:              backend,
@@ -303,6 +329,9 @@ func New(backend Backend, s signer.Signer, chainID *big.Int, cfg Config, log log
 		lifecycleSlot:        make(chan struct{}, 1),
 		stopping:             make(chan struct{}),
 		laneStateSubscribers: make(map[uint64]chan struct{}),
+		accountedReceipts:    make(map[common.Hash]time.Time),
+		lateReceiptWake:      make(chan struct{}, 1),
+		lateReceiptHeaders:   make(map[common.Hash]lateReceiptHeader),
 	}
 }
 
@@ -480,6 +509,12 @@ func (m *Manager) Start(ctx context.Context) {
 		m.monitorAccount(ctx)
 	}()
 	defer func() { <-accountMonitorDone }()
+	lateObserverDone := make(chan struct{})
+	go func() {
+		defer close(lateObserverDone)
+		m.monitorLateReceipts(ctx)
+	}()
+	defer func() { <-lateObserverDone }()
 
 	observability.Log(ctx).Info("started", "from", m.signer.Address().Hex())
 	lifecycleCtx, cancelLifecycle := context.WithCancelCause(context.WithoutCancel(ctx))
@@ -529,7 +564,7 @@ func (m *Manager) Start(ctx context.Context) {
 				if ctx.Err() != nil {
 					outcome = OutcomeTrackingStopped
 				}
-				lifecycle.finish(outcome, nil)
+				lifecycle.finish(outcome)
 				deliverJobResult(j, Result{
 					Outcome:     outcome,
 					Err:         err,
@@ -542,7 +577,7 @@ func (m *Manager) Start(ctx context.Context) {
 				result := Result{Hash: pending.originalHash, Outcome: OutcomeNonceConflict,
 					Err: errors.Errorf("send %q at nonce %d: %w: %w", j.req.Label, pending.nonce, ErrNonceConflict, pending.broadcastErr)}
 				result.Attempts = pending.attemptHashSnapshot()
-				lifecycle.finish(result.Outcome, nil)
+				lifecycle.finish(result.Outcome)
 				deliverJobResult(j, result)
 				m.releaseLifecycleSlot()
 				continue
@@ -882,10 +917,15 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 func (m *Manager) complete(ctx context.Context, pending *pendingTransaction) {
 	defer m.removeUnminedTransaction(pending)
 	outcome := m.waitForPendingTransaction(ctx, pending)
+	outcome.Attempts = pending.attemptHashSnapshot()
 	if outcome.Outcome.Included() || outcome.Outcome == OutcomeReverted || outcome.Outcome == OutcomeNonceConsumed {
 		m.forgetReusable(pending.nonce)
 	}
-	pending.lifecycle.finish(outcome.Outcome, outcome.Receipt)
+	pending.lifecycle.finish(outcome.Outcome)
+	m.recordReceipt(ctx, m.receiptMetadata(pending.req, pending.nonce), outcome, false)
+	if outcome.Outcome == OutcomeAbandoned || outcome.Outcome == OutcomeNonceConsumed {
+		m.retainLateReceipts(ctx, pending)
+	}
 	if errors.Is(outcome.Err, errShutdownTimeout) {
 		observability.Log(ctx).Error(outcome.Err, "accepted transaction lifecycle did not drain before shutdown",
 			"label", pending.req.Label,
@@ -1744,6 +1784,15 @@ func (m *Manager) confirmReceiptAncestry(
 	head *types.Header,
 	receipt *types.Receipt,
 ) error {
+	return m.confirmReceiptAncestryUsing(ctx, head, receipt, m.backend.HeaderByHash)
+}
+
+func (m *Manager) confirmReceiptAncestryUsing(
+	ctx context.Context,
+	head *types.Header,
+	receipt *types.Receipt,
+	parentHeader func(context.Context, common.Hash) (*types.Header, error),
+) error {
 	if head == nil || head.Number == nil || receipt == nil || receipt.BlockNumber == nil {
 		return errors.New("confirmation ancestry requires head and receipt block numbers")
 	}
@@ -1754,7 +1803,7 @@ func (m *Manager) confirmReceiptAncestry(
 	current := head
 	for current.Number.Uint64() > included {
 		lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
-		parent, err := m.backend.HeaderByHash(lookupCtx, current.ParentHash)
+		parent, err := parentHeader(lookupCtx, current.ParentHash)
 		cancel()
 		if err != nil {
 			return errors.Errorf("parent header %s: %w", current.ParentHash.Hex(), err)

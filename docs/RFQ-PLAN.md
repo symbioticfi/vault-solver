@@ -165,6 +165,12 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   than proof of a particular sibling or EOA. Missing/malformed/zero hashes still mark the order filled
   without peer attribution. Reconciliation deduplication and attempt ownership are process-local and
   reset on restart; a previous local attempt is never called peer while its history is retained.
+- **Receipt observations update metrics only.** Each fill snapshots its metric pointer, token addresses,
+  input/output amounts and gross planned surplus into `Request.ObserveReceipt`. The manager invokes that
+  hook once per locally retained owned hash for normal inclusion or a late canonical receipt at the
+  configured confirmation depth. A successful late receipt records `fill/success`, freshness and amounts,
+  including when backend reconciliation already retired the order. It does not change store status,
+  reservations, retries or order ownership. Backend `filled` alone never records these local fill metrics.
 - **Completed orders have no later-reorg recovery.** A `filled` record stays terminal in the local store.
   Open-order polling does not recheck its old inclusion or reopen it after a later reorg. The backend's
   terminal order status remains authoritative; txmanager's existing reorg checks run during confirmation.
@@ -456,6 +462,9 @@ dropping features.
     fill; retain backend observation or eligible bounded retries without expected-race Error alerts.
     Tests cover peer/older-own fills, terminal and missing status, reservation retention, severity and
     backend completion on the deadline poll.
+12. **(done) Late receipt metrics** — immutable receipt observers record successful owned fill metrics
+   without reopening backend-terminal orders or changing reservations/retries. Normal and late observations
+   share the manager's bounded process-local hash deduplication; reverted receipts record no fill amounts.
 
 **Reads are multicall-batched** end to end: amount-specific strategy evaluation uses the shared
 per-route fill-quote batch (`paused`, `getMaxAssets`, `getAmountOut`, `minDiscount`), while inventory

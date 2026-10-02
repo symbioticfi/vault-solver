@@ -108,10 +108,11 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 	}
 
 	res := s.txManager.Send(submitCtx, txmanager.Request{
-		Solver: Name,
-		To:     target.Adapter,
-		Data:   data,
-		Label:  "redeem",
+		Solver:         Name,
+		To:             target.Adapter,
+		Data:           data,
+		Label:          "redeem",
+		ObserveReceipt: s.metrics.redeemReceiptObserver(len(ready)),
 	})
 	txmanager.RecordResult(submitCtx, res) // the stage
 	txmanager.RecordResult(ctx, res)       // the redeem pass it belongs to
@@ -131,7 +132,6 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 		observability.Log(submitCtx).Error(err, "redeem: tx not included", "requests", len(ready), "outcome", res.Outcome)
 		return
 	}
-	s.observeRedeemedRequests(len(ready))
 	if res.Outcome == txmanager.OutcomeIncludedUnconfirmed {
 		if res.Err != nil {
 			err = res.Err
