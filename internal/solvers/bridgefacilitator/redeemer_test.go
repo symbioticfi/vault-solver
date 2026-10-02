@@ -119,7 +119,7 @@ func TestRedeemAllMalformedCanWithdrawRetainsFreshnessAndRedeemsValidSubset(t *t
 }
 
 func TestRedeemConsumedNonceRechecksRequestsWithoutReportingSuccess(t *testing.T) {
-	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict} {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict, txmanager.OutcomeAbandoned} {
 		t.Run(string(outcome), func(t *testing.T) { redeemConsumedNonceRechecksRequestsWithoutReportingSuccess(t, outcome) })
 	}
 }
@@ -165,6 +165,9 @@ func redeemConsumedNonceRechecksRequestsWithoutReportingSuccess(t *testing.T, ou
 }
 
 func nonceOutcomeError(outcome txmanager.Outcome) error {
+	if outcome == txmanager.OutcomeAbandoned {
+		return txmanager.ErrAbandoned
+	}
 	if outcome == txmanager.OutcomeNonceConflict {
 		return txmanager.ErrNonceConflict
 	}

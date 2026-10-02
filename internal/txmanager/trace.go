@@ -63,16 +63,16 @@ func endSendSpan(span trace.Span, res Result) {
 
 func isSendFailure(outcome Outcome) bool {
 	switch outcome {
-	case OutcomeReverted, OutcomeCancelled, OutcomeCancelledUnconfirmed, OutcomeSubmissionError, OutcomeTrackingStopped:
+	case OutcomeReverted, OutcomeSubmissionError, OutcomeTrackingStopped:
 		return true
-	case OutcomeConfirmed, OutcomeIncludedUnconfirmed, OutcomeNonceConsumed, OutcomeNonceConflict:
+	case OutcomeConfirmed, OutcomeIncludedUnconfirmed, OutcomeNonceConsumed, OutcomeNonceConflict, OutcomeAbandoned:
 		return false
 	}
 	return false
 }
 
 // withdrawnBeforeResult reports whether the request never got its answer because it was withdrawn
-// rather than rejected: the caller cancelled or reached its CancelAt deadline, or the manager stopped
+// rather than rejected: the caller cancelled or reached its request deadline, or the manager stopped
 // or ran out of drain time (errShutdownTimeout wraps the deadline).
 // Every other span records these as a cancelled event, so a send span does too.
 func withdrawnBeforeResult(res Result) bool {

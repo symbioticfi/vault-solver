@@ -24,7 +24,7 @@ func nonceConsumedResult() txmanager.Result {
 }
 
 func TestExecutionConsumedNonceReconcilesTerminalBackendStatus(t *testing.T) {
-	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict} {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict, txmanager.OutcomeAbandoned} {
 		t.Run(string(outcome), func(t *testing.T) { executionConsumedNonceReconcilesTerminalBackendStatus(t, outcome) })
 	}
 }
@@ -54,7 +54,7 @@ func executionConsumedNonceReconcilesTerminalBackendStatus(t *testing.T, outcome
 				syncCycle(t.Context(), e)
 			}
 			rec := st.order("o1")
-			if rec.Status != tc.want || rec.CancellationRetries != 0 || txm.calls != 1 {
+			if rec.Status != tc.want || rec.NonceRetries != 0 || txm.calls != 1 {
 				t.Fatalf("terminal reconciliation: order=%+v sends=%d", rec, txm.calls)
 			}
 			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeSuccess, 0)
@@ -64,7 +64,7 @@ func executionConsumedNonceReconcilesTerminalBackendStatus(t *testing.T, outcome
 }
 
 func TestExecutionConsumedNonceRebuildsOnlyAfterFreshOpenPoll(t *testing.T) {
-	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict} {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict, txmanager.OutcomeAbandoned} {
 		t.Run(string(outcome), func(t *testing.T) { executionConsumedNonceRebuildsOnlyAfterFreshOpenPoll(t, outcome) })
 	}
 }
@@ -82,7 +82,7 @@ func executionConsumedNonceRebuildsOnlyAfterFreshOpenPoll(t *testing.T, outcome 
 	e.strategy = fixedFillStrategy{plan: baseFillPlan(), onBuild: func() { builds++ }}
 	syncCycle(t.Context(), e)
 	first := append([]byte(nil), txm.lastReq.Data...)
-	if rec := st.order("o1"); rec.Status != statusRetryWaiting || rec.TxHash != txm.result.Hash || rec.CancellationRetries != 1 {
+	if rec := st.order("o1"); rec.Status != statusRetryWaiting || rec.TxHash != txm.result.Hash || rec.NonceRetries != 1 {
 		t.Fatalf("consumed nonce did not retain identity and schedule retry: %+v", rec)
 	}
 	if txm.lastReq.GasLimit != 0 || txm.lastReq.Obsolete == nil {
@@ -119,7 +119,7 @@ func executionConsumedNonceRebuildsOnlyAfterFreshOpenPoll(t *testing.T, outcome 
 }
 
 func TestExecutionConsumedNonceRetryBudgetIsBounded(t *testing.T) {
-	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict} {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict, txmanager.OutcomeAbandoned} {
 		t.Run(string(outcome), func(t *testing.T) { executionConsumedNonceRetryBudgetIsBounded(t, outcome) })
 	}
 }
@@ -134,12 +134,12 @@ func executionConsumedNonceRetryBudgetIsBounded(t *testing.T, outcome txmanager.
 			be.order.OrderStatus = "open"
 			txm := &fakeTxm{result: uncertainNonceResult(outcome)}
 			e := newExec(t, st, be, txm)
-			e.now, e.maxCancellationRetries = st.now, limit
+			e.now, e.maxNonceRetries = st.now, limit
 			for range 6 {
 				syncCycle(t.Context(), e)
 				now = now.Add(3 * time.Second)
 			}
-			if txm.calls != limit+1 || st.order("o1").Status != statusFailed || st.order("o1").CancellationRetries != limit {
+			if txm.calls != limit+1 || st.order("o1").Status != statusFailed || st.order("o1").NonceRetries != limit {
 				t.Fatalf("consumed nonce exceeded retry budget: sends=%d order=%+v", txm.calls, st.order("o1"))
 			}
 		})
@@ -164,7 +164,7 @@ func TestExecutionConsumedNonceUnknownBackendRemainsBounded(t *testing.T) {
 			e := newExec(t, st, be, txm)
 			e.now = st.now
 			syncCycle(t.Context(), e)
-			if rec := st.order("o1"); rec.Status != statusNonceUncertain || rec.CancellationRetries != 0 {
+			if rec := st.order("o1"); rec.Status != statusNonceUncertain || rec.NonceRetries != 0 {
 				t.Fatalf("unknown backend prematurely scheduled a retry: %+v", rec)
 			}
 			now = time.Unix(4_102_444_800, 0)
@@ -185,7 +185,7 @@ func TestExecutionConsumedNonceDoesNotScheduleDuringShutdown(t *testing.T) {
 	defer cancel()
 	txm.onResult = cancel
 	syncCycle(ctx, e)
-	if rec := st.order("o1"); rec.Status != statusNonceUncertain || rec.CancellationRetries != 0 {
+	if rec := st.order("o1"); rec.Status != statusNonceUncertain || rec.NonceRetries != 0 {
 		t.Fatalf("shutdown scheduled a consumed nonce retry: %+v", rec)
 	}
 }
@@ -193,6 +193,9 @@ func TestExecutionConsumedNonceDoesNotScheduleDuringShutdown(t *testing.T) {
 func uncertainNonceResult(outcome txmanager.Outcome) txmanager.Result {
 	result := nonceConsumedResult()
 	result.Outcome = outcome
+	if outcome == txmanager.OutcomeAbandoned {
+		result.Err = txmanager.ErrAbandoned
+	}
 	if outcome == txmanager.OutcomeNonceConflict {
 		result.Err = txmanager.ErrNonceConflict
 	}

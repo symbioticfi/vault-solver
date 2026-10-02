@@ -5,26 +5,21 @@ package txmanager
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"io"
 	"math/big"
 	"net"
-	"net/http"
-	"net/http/httptest"
-	"net/http/httputil"
-	"net/url"
 	"os/exec"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/chain"
@@ -33,9 +28,8 @@ import (
 
 func TestAnvilTxManagerPendingLifecycle(t *testing.T) {
 	t.Run("fee bump replacement", testAnvilReplacement)
-	t.Run("timeout cancellation unblocks later nonce", func(t *testing.T) { testAnvilCancellation(t, false) })
-	t.Run("dedicated cancellation RPC unblocks later nonce", func(t *testing.T) { testAnvilCancellation(t, true) })
-	t.Run("external inclusion stops silent relay cancellations", testAnvilConsumedNonce)
+	t.Run("timeout replaces old call with fresh business payload", testAnvilAbandonment)
+	t.Run("external inclusion stops silent relay replacements", testAnvilConsumedNonce)
 }
 
 // Reads use a real chain; sends model a private relay that acknowledges the
@@ -67,6 +61,7 @@ func testAnvilConsumedNonce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	m.trackUnminedTransaction(pending)
 	// A different instance uses the same key and nonce with different calldata.
 	to := common.HexToAddress("0xbeef")
 	external, err := sgnr.SignTx(t.Context(), types.NewTx(&types.DynamicFeeTx{
@@ -85,12 +80,12 @@ func testAnvilConsumedNonce(t *testing.T) {
 		t.Fatalf("external inclusion: receipt=%+v err=%v", receipt, err)
 	}
 	for range 3 {
-		if _, err := m.tryReplace(t.Context(), pending, replaceIntent{cancellation: true}); err != nil {
+		if _, err := m.tryReplace(t.Context(), pending, replaceIntent{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if relay.sends != 1 || len(pending.attempts) != 1 || !m.Available() {
-		t.Fatalf("consumed nonce was not paused: sends=%d attempts=%d available=%v", relay.sends, len(pending.attempts), m.Available())
+		t.Fatalf("consumed nonce was replaced: sends=%d attempts=%d available=%v", relay.sends, len(pending.attempts), m.Available())
 	}
 	mineAnvilBlock(t, rpcClient)
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -141,16 +136,7 @@ func testAnvilReplacement(t *testing.T) {
 	replacement := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(tx poolTransaction) bool {
 		return tx.Hash != initial.Hash
 	})
-	if compareHexQuantity(replacement.MaxFeePerGas, initial.MaxFeePerGas) <= 0 ||
-		compareHexQuantity(replacement.MaxPriorityFeePerGas, initial.MaxPriorityFeePerGas) <= 0 {
-		t.Fatalf(
-			"replacement fees did not increase: first=%s/%s replacement=%s/%s",
-			initial.MaxFeePerGas,
-			initial.MaxPriorityFeePerGas,
-			replacement.MaxFeePerGas,
-			replacement.MaxPriorityFeePerGas,
-		)
-	}
+	assertAnvilReplacementFeeFloors(t, initial, replacement)
 
 	mineAnvilBlock(t, rpcClient)
 	mineAnvilBlock(t, rpcClient)
@@ -163,36 +149,18 @@ func testAnvilReplacement(t *testing.T) {
 	assertAnvilReconciliationOutcome(t, got, common.HexToHash(expected))
 }
 
-func testAnvilCancellation(t *testing.T, dedicatedCancellationRPC bool) {
+func testAnvilAbandonment(t *testing.T) {
 	t.Helper()
 	rpcClient, ethClient, endpoint := startAnvilWithoutMining(t)
 	mineAnvilBlock(t, rpcClient)
-	var backend Backend = anvilManagerBackend(t, endpoint)
-	var writeSends, cancelSends atomic.Int64
-	if dedicatedCancellationRPC {
-		writeURL := anvilBroadcastProxy(t, endpoint, &writeSends)
-		cancelURL := anvilBroadcastProxy(t, endpoint, &cancelSends)
-		client, err := chain.Dial(t.Context(), []string{endpoint}, writeURL, cancelURL,
-			"0xcA11bde05977b3631167028862bE2a173976CA11", 20*time.Second)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(client.Close)
-		backend = client
-	}
 	sgnr := anvilSigner(t)
 	manager := New(
-		backend,
-		sgnr,
-		big.NewInt(31337),
+		anvilManagerBackend(t, endpoint), sgnr, big.NewInt(31337),
 		Config{
-			Confirmations:       1,
-			MaxFeeGwei:          100,
-			PollInterval:        20 * time.Millisecond,
-			ReplacementInterval: 5 * time.Second,
-			PendingTimeout:      300 * time.Millisecond,
-		},
-		logr.Discard(),
+			Confirmations: 1, MaxFeeGwei: 100,
+			PollInterval: 20 * time.Millisecond, ReplacementInterval: 5 * time.Second,
+			PendingTimeout: time.Second,
+		}, logr.Discard(),
 	)
 	if err := manager.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
@@ -200,132 +168,94 @@ func testAnvilCancellation(t *testing.T, dedicatedCancellationRPC bool) {
 	startManagerForTest(t, manager)
 
 	first, accepted := manager.SendAsync(t.Context(), Request{
-		To:           common.HexToAddress("0x000000000000000000000000000000000000dEaD"),
-		GasLimit:     21_000,
-		MaxFeePerGas: big.NewInt(3_000_000_000),
-		Label:        "blocked",
+		To: common.HexToAddress("0xdead"), Data: []byte{0x11, 0x22},
+		GasLimit: 50_000, MaxFeePerGas: big.NewInt(3_000_000_000), Label: "old business call",
 	})
 	if !accepted {
-		t.Fatal("first transaction was not accepted")
+		t.Fatal("first business call was not accepted")
 	}
-	type submission struct {
-		result   <-chan Result
-		accepted bool
+	initial := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(poolTransaction) bool { return true })
+	firstResult := waitForTxResult(t, first)
+	if firstResult.Outcome != OutcomeAbandoned || !errors.Is(firstResult.Err, ErrAbandoned) ||
+		firstResult.Receipt != nil || firstResult.Outcome.Included() || firstResult.Hash != common.HexToHash(initial.Hash) {
+		t.Fatalf("first result = %+v, want abandoned original identity without inclusion", firstResult)
 	}
-	secondSubmission := make(chan submission, 1)
-	go func() {
-		second, secondAccepted := manager.SendAsync(t.Context(), Request{
-			To:       common.HexToAddress("0x000000000000000000000000000000000000bEEF"),
-			GasLimit: 21_000,
-			Label:    "later",
-		})
-		secondSubmission <- submission{result: second, accepted: secondAccepted}
-	}()
-
-	initial := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(tx poolTransaction) bool {
-		return !strings.EqualFold(tx.To, sgnr.Address().Hex())
-	})
-	dropAnvilTransaction(t, rpcClient, initial.Hash)
+	unchanged := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(poolTransaction) bool { return true })
+	if unchanged.Hash != initial.Hash || common.HexToAddress(unchanged.To) != common.HexToAddress("0xdead") || unchanged.Input != "0x1122" {
+		t.Fatalf("timeout changed the pending business transaction: %+v", unchanged)
+	}
+	if _, err := ethClient.TransactionReceipt(t.Context(), common.HexToHash(initial.Hash)); !errors.Is(err, ethereum.NotFound) {
+		t.Fatalf("abandoned call receipt error = %v, want not found", err)
+	}
 	latest, err := ethClient.NonceAt(t.Context(), sgnr.Address(), nil)
 	if err != nil {
-		t.Fatalf("latest nonce: %v", err)
+		t.Fatal(err)
 	}
 	pending, err := ethClient.PendingNonceAt(t.Context(), sgnr.Address())
 	if err != nil {
-		t.Fatalf("pending nonce: %v", err)
+		t.Fatal(err)
 	}
-	if latest != 0 || pending != 0 {
-		t.Fatalf("nonce after dropping blocker = latest %d pending %d, want 0/0", latest, pending)
-	}
-	if _, exists, err := poolTransactionAt(t.Context(), rpcClient, sgnr.Address(), 1); err != nil {
-		t.Fatalf("inspect future nonce: %v", err)
-	} else if exists {
-		t.Fatal("future nonce was signed and queued behind the dropped blocker")
-	}
-	select {
-	case got := <-secondSubmission:
-		t.Fatalf("future request was admitted before nonce 0 completed: %+v", got)
-	default:
-	}
-	cancellation := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(tx poolTransaction) bool {
-		return strings.EqualFold(tx.To, sgnr.Address().Hex()) && tx.Input == "0x" && tx.Value == "0x0"
-	})
-	if cancellation.Gas != "0x5208" {
-		t.Fatalf("cancellation gas = %s, want 0x5208", cancellation.Gas)
+	if latest != 0 || pending != 1 {
+		t.Fatalf("abandoned nonce state = latest %d pending %d, want 0/1", latest, pending)
 	}
 
-	mineAnvilBlock(t, rpcClient)
-	mineAnvilBlock(t, rpcClient)
-	firstResult := waitForTxResult(t, first)
-	assertAnvilCanonicalTransaction(t, ethClient, common.HexToHash(cancellation.Hash), 0)
-	if firstResult.Outcome == OutcomeNonceConsumed {
-		assertAnvilReconciliationOutcome(t, firstResult, common.HexToHash(initial.Hash))
-	} else if firstResult.Outcome != OutcomeCancelled || firstResult.Receipt == nil ||
-		!strings.EqualFold(firstResult.Hash.Hex(), cancellation.Hash) || firstResult.Err == nil ||
-		!strings.Contains(firstResult.Err.Error(), "cancelled at nonce 0") {
-		t.Fatalf("first result = %+v, want the canonical cancellation or nonce uncertainty", firstResult)
+	// A fresh decision supplies a different target, calldata, value and gas limit. Even though the
+	// write RPC advertises pending nonce 1, this process remembers its unused nonce 0.
+	second, accepted := manager.SendAsync(t.Context(), Request{
+		To: common.HexToAddress("0xbeef"), Data: []byte{0x33, 0x44, 0x55},
+		Value: big.NewInt(17), GasLimit: 55_000, Label: "fresh business call",
+	})
+	if !accepted {
+		t.Fatal("fresh business call was not accepted")
 	}
-	var second submission
-	select {
-	case second = <-secondSubmission:
-		if !second.accepted {
-			t.Fatal("second transaction was not accepted after nonce 0 completed")
+	replacement := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(tx poolTransaction) bool {
+		return tx.Hash != initial.Hash
+	})
+	if common.HexToAddress(replacement.To) != common.HexToAddress("0xbeef") || replacement.Input != "0x334455" ||
+		replacement.Value != "0x11" || replacement.Gas != "0xd6d8" {
+		t.Fatalf("fresh transaction did not use the fresh business payload: %+v", replacement)
+	}
+	assertAnvilReplacementFeeFloors(t, initial, replacement)
+	if queued, exists, err := poolTransactionAt(t.Context(), rpcClient, sgnr.Address(), 1); err != nil || exists {
+		t.Fatalf("fresh call queued a later nonce: tx=%+v exists=%v err=%v", queued, exists, err)
+	}
+	mineAnvilBlock(t, rpcClient)
+	mineAnvilBlock(t, rpcClient)
+	assertAnvilReconciliationOutcome(t, waitForTxResult(t, second), common.HexToHash(replacement.Hash))
+	assertAnvilCanonicalTransaction(t, ethClient, common.HexToHash(replacement.Hash), 0)
+}
+
+func assertAnvilReplacementFeeFloors(t *testing.T, original, replacement poolTransaction) {
+	t.Helper()
+	for name, fees := range map[string][2]string{
+		"fee cap": {original.MaxFeePerGas, replacement.MaxFeePerGas},
+		"tip cap": {original.MaxPriorityFeePerGas, replacement.MaxPriorityFeePerGas},
+	} {
+		previous, err := hexutil.DecodeBig(fees[0])
+		if err != nil {
+			t.Fatal(err)
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("second transaction remained blocked after nonce 0 completed")
-	}
-	later := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 1, func(poolTransaction) bool { return true })
-	mineAnvilBlock(t, rpcClient)
-	mineAnvilBlock(t, rpcClient)
-	assertAnvilReconciliationOutcome(t, waitForTxResult(t, second.result), common.HexToHash(later.Hash))
-	assertAnvilCanonicalTransaction(t, ethClient, common.HexToHash(later.Hash), 1)
-	if dedicatedCancellationRPC && (writeSends.Load() != 2 || cancelSends.Load() != 1) {
-		t.Fatalf("broadcast routing: write=%d cancel=%d, want two normal calls and one cancellation", writeSends.Load(), cancelSends.Load())
+		next, err := hexutil.DecodeBig(fees[1])
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Ethereum's replacement floor is 112.5 percent of each fee, rounded up to a whole wei.
+		required := new(big.Int).Mul(previous, big.NewInt(9))
+		required.Add(required, big.NewInt(7)).Div(required, big.NewInt(8))
+		if next.Cmp(required) < 0 {
+			t.Fatalf("%s = %s, want at least %s after %s", name, next, required, previous)
+		}
 	}
 }
 
 func anvilManagerBackend(t *testing.T, endpoint string) *chain.Client {
 	t.Helper()
-	client, err := chain.Dial(t.Context(), []string{endpoint}, "", "", common.Address{}.Hex(), time.Second)
+	client, err := chain.Dial(t.Context(), []string{endpoint}, "", common.Address{}.Hex(), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(client.Close)
 	return client
-}
-
-func anvilBroadcastProxy(t *testing.T, endpoint string, broadcasts *atomic.Int64) string {
-	t.Helper()
-	target, err := url.Parse(endpoint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	proxy := httputil.NewSingleHostReverseProxy(target)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if err := r.Body.Close(); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		var request struct {
-			Method string `json:"method"`
-		}
-		if err := json.Unmarshal(body, &request); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if request.Method == "eth_sendRawTransaction" {
-			broadcasts.Add(1)
-		}
-		r.Body = io.NopCloser(bytes.NewReader(body))
-		proxy.ServeHTTP(w, r)
-	}))
-	t.Cleanup(server.Close)
-	return server.URL
 }
 
 type poolTransaction struct {
@@ -391,15 +321,6 @@ func poolTransactionAt(
 	return poolTransaction{}, false, nil
 }
 
-func compareHexQuantity(left, right string) int {
-	leftValue, leftErr := hexutil.DecodeBig(left)
-	rightValue, rightErr := hexutil.DecodeBig(right)
-	if leftErr != nil || rightErr != nil {
-		return 0
-	}
-	return leftValue.Cmp(rightValue)
-}
-
 func mineAnvilBlock(t *testing.T, client *rpc.Client) {
 	t.Helper()
 	if err := client.CallContext(t.Context(), nil, "anvil_mine", 1); err != nil {
@@ -411,17 +332,6 @@ func setAnvilNextBaseFee(t *testing.T, client *rpc.Client, fee *big.Int) {
 	t.Helper()
 	if err := client.CallContext(t.Context(), nil, "anvil_setNextBlockBaseFeePerGas", hexutil.EncodeBig(fee)); err != nil {
 		t.Fatalf("anvil_setNextBlockBaseFeePerGas: %v", err)
-	}
-}
-
-func dropAnvilTransaction(t *testing.T, client *rpc.Client, hash string) {
-	t.Helper()
-	var dropped string
-	if err := client.CallContext(t.Context(), &dropped, "anvil_dropTransaction", hash); err != nil {
-		t.Fatalf("anvil_dropTransaction: %v", err)
-	}
-	if !strings.EqualFold(dropped, hash) {
-		t.Fatalf("anvil dropped %s, want %s", dropped, hash)
 	}
 }
 

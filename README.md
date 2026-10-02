@@ -118,8 +118,8 @@ the adapter pays it at the order amount, `floor(getAmountOut(amountIn) * (1e6 - 
 field replaces `maxRate`, so run this version with a backend that sends it. Fills are still
 sent one at a time on the shared nonce lane. While a fill is pending, the solver checks the order's backend
 status: once the backend reports it no longer open (filled, cancelled, expired, unfunded or failed), the fill
-is replaced by a same-nonce cancellation instead of holding the lane until the fill deadline, and the order
-is retired without a retry and counted as `fill/obsolete`. Reservations are local to the process and are not restored
+stops being tracked without sending another transaction, and the order is retired without a retry and
+counted as `fill/obsolete`. The next fresh request can reuse its unused nonce. Reservations are local to the process and are not restored
 after a restart.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
@@ -163,9 +163,9 @@ and immediately refreshes every affected quote. The reservation remains until th
 terminal result under the [shared confirmation policy](docs/TXMANAGER-PLAN.md#5-receipt-polling-and-confirmation).
 Pre-sign or definitive broadcast failures release the reservation without a receipt. Before
 signing and after a receipt sweep without a valid receipt, the tx manager rechecks the LI.FI order status.
-An observed `Claimed` or `Refunded` then switches the owned nonce to cancellation instead of
-retaining liquidity until `pendingTimeoutMs`. `None`, an unrecognized status, or an unavailable status read
-leaves the current lifecycle unchanged and is retried, so a lagging latest-state RPC cannot cancel a fresh fill.
+An observed `Claimed` or `Refunded` then abandons tracking instead of retaining liquidity until
+`pendingTimeoutMs`; the next fresh request can reuse the unused nonce. `None`, an unrecognized status, or an unavailable status read
+leaves the current lifecycle unchanged and is retried, so a lagging latest-state RPC does not abandon a fresh fill.
 Orders
 that the built-in strategy proves fillable without, but blocked by, pending reservations enter a bounded FIFO
 without blocking later deliveries. The worker retries them after every reservation release and returns a still-
@@ -235,8 +235,8 @@ their Dutch amounts from current chain time, and fills executable orders through
 remains the Reactor-facing filler. Before serving traffic, the solver validates executor bytecode, finds the
 tx-sending EOA in the executor's indexed `callers` list, and, in external mode, checks every configured
 route's direct authorization. While a fill is pending, the solver checks the order's status in the Uniswap
-order API: once another filler takes the order, or it is cancelled, expires or loses its funding, the fill
-is replaced by a same-nonce cancellation and the order is retired as `fill/obsolete`, without a retry or a
+order API: once the order is filled, cancelled, expired or unfunded, tracking is abandoned and the order
+is retired as `fill/obsolete`, without a retry or a
 breaker failure. Failures log the relevant executor, caller, or adapters and the underlying
 reason before startup returns. The executor ABI has no Reactor getter, so matching the configured Reactor to
 the deployed immutable remains a deployment assertion. `solverMode: external` is the default, requires a
@@ -364,14 +364,15 @@ This is the seam for customizing a solver without forking. Contract and trust mo
 The shared `txManager` serializes transaction-sending solvers on one EOA. While a transaction is queued
 or active, UniswapX declines new quotes, LI.FI retires standing curves, and 3F stops new offers;
 reconciliation continues. RFQ keeps quoting and accounts for pending fills through reservations; it stops
-only while the nonce lane is unavailable. Pending calls can be replaced or cancelled with the same nonce. Each pending
-receipt RPC has its own timeout and does not block the lifecycle loop's replacement/cancellation timers. A stalled
-call's gas re-estimate runs on that loop, so it gives up after at most 5 seconds or at the call's cancellation
-deadline, whichever comes first: a read RPC that never answers it cannot hold the loop longer than that or delay
-deadline cancellation.
+only while the nonce lane is unavailable. Pending calls receive ordinary fee bumps at the same nonce.
+At the request deadline, pending timeout or a terminal business-status check, the manager abandons tracking
+and releases the local lane. It remembers the unused nonce and last signed fees so the next freshly planned
+order can replace that call, with both fee fields increased by at least 12.5% under the configured ceilings.
+Each pending receipt RPC has its own timeout and does not block lifecycle timers. A stalled call's gas
+re-estimate takes at most 5 seconds and is bounded by the request deadline.
 
-Configure `maxFeeGwei` for every transaction-sending process; it also caps cancellation. `pendingTimeoutMs`,
-`broadcastTimeoutMs` and `shutdownTimeoutMs` bound cancellation, submission and shutdown.
+Configure `maxFeeGwei` for every transaction-sending process. `pendingTimeoutMs`,
+`broadcastTimeoutMs` and `shutdownTimeoutMs` bound pending tracking, submission and shutdown.
 The manager remains alive while solvers drain accepted work; orchestrator SIGTERM grace must cover both
 solver preparation/drain and manager shutdown. A timeout does not guarantee that a signed call cannot land.
 
@@ -391,7 +392,7 @@ Every call is priced for inclusion in the next block at the lowest spend:
   history is unreadable.
 
 `tipGwei` was removed; a config that still sets it fails to load. Every `horizon.*` knob and default is
-listed in the [transaction manager plan](docs/TXMANAGER-PLAN.md#4-fees-replacements-and-cancellation).
+listed in the [transaction manager plan](docs/TXMANAGER-PLAN.md#4-fees-replacements-and-abandonment).
 
 Defaults, fee headroom, request/result semantics, nonce recovery and internal ownership are documented
 in the [transaction manager plan](docs/TXMANAGER-PLAN.md). Integration-specific deadline and capacity
@@ -402,9 +403,9 @@ rules remain in each solver's plan.
 Run, for example, three independent processes with the same existing signer and solver config.
 Canonical nonce reconciliation is always active for transaction-manager users, including a single
 process. The processes do not know each other's identities or count and require no database, shared
-writable file, leader or coordinator. Each keeps one unresolved signed lifecycle locally. The chain
+writable file, leader or coordinator. Each actively tracks one signed lifecycle locally. The chain
 determines which transaction consumed a nonce; it does
-not reserve a nonce for a process, so concurrent sends, fee replacements and cancellations can compete.
+not reserve a nonce for a process, so concurrent sends and fee replacements can compete.
 
 Keep the existing full YAML config and select its confirmation depth and fee ceiling:
 
@@ -416,7 +417,9 @@ txManager:
 ```
 
 Each process reads `eth_getTransactionCount(address, "pending")` from the write endpoint immediately
-before signing each new request. Use a write RPC whose pending view includes transactions accepted from
+before signing each new request. When this process has abandoned a call, it also checks the latest mined
+nonce and reuses that call's nonce while it remains unused, even if pending still counts the old call.
+Use a write RPC whose pending view includes transactions accepted from
 all three replicas, including private submissions. One replica's pending transactions do not block
 startup or new sends by the others: later orders can use later nonces before earlier orders confirm.
 Sends remain serialized locally. There is no database, shared file, leader election, replica identity,
@@ -430,7 +433,8 @@ state before retrying an order. RFQ and UniswapX use their polling retries; 3F r
 redemption scan; LI.FI requires upstream redelivery or reconnect recovery.
 
 Accepted or transport-uncertain broadcasts keep their exact signed hashes and ordinary receipt,
-confirmation, replacement and cancellation policy. Before replacement, a higher mined account nonce
+confirmation and fee-replacement policy. Abandonment returns an unknown execution result; solvers
+reconcile business state before retrying. Before replacement, a higher mined account nonce
 stops further broadcasts. If all owned hashes are absent, the manager can return `nonce_consumed` without
 a receipt. Neither nonce outcome proves that our order executed or that another replica won.
 
@@ -438,12 +442,12 @@ Reorg checks run while a transaction is being confirmed. Completed RFQ and Unisw
 existing terminal records and deduplication caches; there is no completed-order watcher or automatic
 reopening after a later reorg.
 
-A replica never starts recovery cancellation merely because another transaction is pending. Restart
-loses its signed attempts: an abandoned lowest nonce can block later transactions until the original
-sender or an operator clears it. Hidden private submissions and differing RPC pending views can cause
-additional collisions; this setup does not guarantee ordering, fairness or recovery from every crash.
-Use the existing `chain.cancelRpcUrl` for normal cancellation of this process's own accepted or uncertain
-broadcasts when the write route requires a separate cancellation endpoint.
+The bot sends no cancellation transactions. Reusing an abandoned nonce requires a fresh eligible
+business request; until then the old call may remain pending. Restart loses signed attempts and nonce/fee
+hints, so an abandoned lowest nonce can still block later transactions. Hidden private submissions and
+differing RPC pending views can cause additional collisions; this setup does not guarantee ordering,
+fairness or recovery from every crash. Remove `chain.cancelRpcUrl` from existing YAML; it is no longer
+supported. Rename RFQ `maxCancellationRetries` to `maxNonceRetries`.
 
 To start three containers from one existing operator config, save it as
 `config/replicas.local.yaml` and supply its secret env vars in the existing
@@ -478,14 +482,12 @@ For liquidity commitments, the built-in strategies apply these limits:
   Expiration is at least `now + offerExpiryBuffer`. Webhook `liveOffers[]` now includes decimal-string
   `principal`; remote strategies must reserve it as well as the live request slot.
 - RFQ external mode excludes discount inventory at quote time. Excess input can be absorbed only by a
-  direct swap, whose calldata caps output. After a successful cancellation reaches the configured
-  confirmations, a still-open, unexpired order can be retried with a fresh fill plan and newly resolved
-  discount signatures. An uncertain nonce result first queries
-  backend status and can retry only when the backend reports the order open. Both paths share
-  `solvers[].config.maxCancellationRetries`, default `3` additional attempts
-  (`0` disables both); retries wait at least one `pollIntervalMs` interval before a fresh open-order poll
-  can re-arm the order. Reverted transactions are not retried, and uncertain fill or cancellation
-  inclusion is reconciled through the backend. Retry counts are local to each process and reset on restart.
+  direct swap, whose calldata caps output. An abandoned or uncertain nonce result first queries backend
+  status and can retry only when the backend reports the order open. Each retry builds a fresh fill plan
+  and resolves current discount signatures. `solvers[].config.maxNonceRetries` defaults to `3` additional
+  attempts (`0` disables retries); at least one `pollIntervalMs` interval and a fresh open-order poll
+  precede another attempt. Reverted transactions are not retried, and uncertain inclusion is reconciled
+  through the backend. Retry counts are local to each process and reset on restart.
 - LI.FI and UniswapX split shared vault capacity across token pairs before quoting. A pair can therefore
   quote less than the vault's total free liquidity. This does not reserve every repeated quote request.
 - The default OEV strategy permits one pending bundle per adapter. New auction frames arriving during a
@@ -505,7 +507,7 @@ For liquidity commitments, the built-in strategies apply these limits:
 make build            # build ./bin/vault-solver
 ./bin/vault-solver version
 make test             # go test -race -cover ./...
-make test-txmanager-anvil # real replacement/cancellation and independent nonce contention against Anvil
+make test-txmanager-anvil # real fee replacement, nonce reuse and independent nonce contention against Anvil
 make lint             # golangci-lint
 ./bin/vault-solver run --config config/3f.example.yaml
 ```
@@ -623,7 +625,7 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | Framework | `solver_bot_service_ready` | — | `1` exactly when the shared `/readyz` gate reports ready, otherwise `0`. This is process and nonce-safety readiness; a pending transaction does not clear it. It is not a claim that every solver upstream is healthy; combine it with solver freshness and connectivity. |
 | Framework | `solver_bot_solver_info` | `solver` | Constant `1` for each solver configured in this process. Prometheus target labels such as `instance`/`lane` make process membership explicit without adding deployment-specific labels in application code. |
 | Framework | `solver_bot_external_operation_duration_seconds` | `solver`, `strategy`, `operation`, `outcome` | Count and latency of allowlisted recurring solver operations such as polls and authoritative refreshes. Outcomes are bounded to `success`, `degraded`, `skipped`, or `error`; errors and request-derived values never become labels. |
-| RPC | `solver_bot_rpc_requests_total` | `role`, `method`, `outcome` | Logical HTTP JSON-RPC calls. Roles are `read`, `write`, `cancel`, or `shared`; methods and outcomes are bounded, with transport, HTTP 3xx/4xx/5xx, rate-limit, decode, context, and JSON-RPC errors separated. Redirects are not followed; 3xx responses fall through to the next read endpoint. |
+| RPC | `solver_bot_rpc_requests_total` | `role`, `method`, `outcome` | Logical HTTP JSON-RPC calls. Roles are `read`, `write`, or `shared`; methods and outcomes are bounded, with transport, HTTP 3xx/4xx/5xx, rate-limit, decode, context, and JSON-RPC errors separated. Redirects are not followed; 3xx responses fall through to the next read endpoint. |
 | RPC | `solver_bot_rpc_attempts_total` | `role`, `endpoint`, `method`, `outcome` | Per-endpoint attempts, including failed primary and successful fallback attempts. `endpoint` is only a role-local ordinal (`0`, `1`, …); configured URLs and error text are never labels. |
 | RPC | `solver_bot_rpc_inflight` | `role` | Calls whose response bodies have not completed; a sustained value exposes a hung endpoint or consumer. |
 | RPC | `solver_bot_rpc_request_duration_seconds` | `role`, `method`, `outcome` | End-to-end HTTP JSON-RPC latency through response-body consumption. |
@@ -637,7 +639,7 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | Workflow | `solver_bot_workflow_last_observation_timestamp` | `solver`, `strategy`, `view` | Freshness paired with each retained workflow state count. |
 | RFQ | `rfq_filler_http_request_duration_seconds` | `method`, `route`, `status` | Quote-server request count (`_count`), status funnel, and latency. Routes are allowlisted and methods are normalized to `GET`, `POST`, or `other` to bound cardinality. |
 | RFQ | `rfq_filler_http_requests_total` | `method`, `route`, `status` | Deprecated one-release compatibility counter for existing alerts; migrate to `rfq_filler_http_request_duration_seconds_count`. |
-| RFQ | `rfq_active_orders` | — | Current queued, submitting, submitted, cancellation-retry or nonce-reconciliation obligations awaiting terminal backend state. |
+| RFQ | `rfq_active_orders` | — | Current queued, submitting, submitted, nonce-retry or nonce-reconciliation obligations awaiting terminal backend state. |
 | RFQ | `rfq_oldest_active_order_age_seconds` | — | Age of the oldest active obligation; catches a single stuck order that a count-only alert can miss. |
 | LI.FI | `lifi_active_quotes` | — | Process-local quote count from the last successful publication or suspension reconciliation. It can remain nonzero after the remote quotes expire at `quoteTtl`, so use it with refresh freshness rather than as backend state. |
 | LI.FI | `lifi_active_quote_ranges` | — | Number of currently active standing-quote ranges from the last successful reconciliation. |
@@ -735,7 +737,7 @@ inline there.
 
 The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S) endpoints tried
 in order for reads when the primary is unavailable. `chain.rpcAttemptTimeoutMs` bounds each HTTP(S)
-endpoint attempt, including reading its response body, for read, write and cancellation RPCs.
+endpoint attempt, including reading its response body, for read and write RPCs.
 It defaults to `20000` (20 seconds) when omitted or zero; negative or overflowing values are rejected.
 For example, `rpcAttemptTimeoutMs: 5000` allows up to 5 seconds per endpoint attempt. This is not a
 total fallback-chain budget: a shorter caller deadline is divided across the remaining endpoints.
@@ -744,10 +746,7 @@ are unaffected. When using eRPC, this bounds the solver's wait for eRPC, includi
 retries; upstream timeouts and retries inside eRPC must be configured separately.
 Normal signed broadcasts and latest/pending admission nonce reads
 are pinned to `writeRpcUrl`, or the primary `rpcUrl` when it is omitted, and never fall over across
-endpoints. Optional `cancelRpcUrl` routes only same-nonce self-cancellations, including their fee replacements
-and exact rebroadcasts, to a separate endpoint. Set `cancelRpcUrl: ${CANCEL_RPC_URL}` and, for mainnet,
-`CANCEL_RPC_URL=https://boost.rpc.mevblocker.io/fast`. When omitted or empty, cancellation uses the ordinary
-write RPC. A configured cancellation RPC failure is returned without broadcasting to another endpoint.
+endpoints. Every business transaction and its fee replacements use that write route.
 Sender balance and nonce telemetry (the periodic account snapshot behind the `solver_bot_txmanager_account_*`
 metrics) always uses the read RPC, never `writeRpcUrl`, so a submission relay that rate-limits reads cannot
 stall it; broadcasts, admission nonce reads and replacement nonce checks reach the write endpoint.
@@ -758,8 +757,7 @@ endpoint. A non-final endpoint's JSON-RPC `null` receipt or header result falls 
 to the next read endpoint; the final endpoint's `null` remains the ordinary not-found result. Unavailable
 multi-read snapshots retry on a later poll; OEV compares both number and hash around each latest-state
 snapshot and retries a changed head once immediately. A second crossing fails startup or retains the runtime's
-last-known-good snapshot until the next poll. Explicit write and cancellation endpoints must report the same chain ID as the
-read endpoint.
+last-known-good snapshot until the next poll. An explicit write endpoint must report the same chain ID as the read endpoint.
 
 Every transaction-sending process verifies the write endpoint's pending nonce at startup and reads it
 again before each new send. Foreign pending transactions do not keep `/readyz` false. A nonce RPC failure
@@ -772,8 +770,7 @@ every owned hash returns `NotFound`, a higher mined nonce can end tracking with 
 unknown business result requiring protocol reconciliation. Pending nonce advancement alone does not
 stop replacement of this process's own pending transaction. See
 [nonce conflict and restart behavior](docs/TXMANAGER-PLAN.md#6-rpc-routing-nonce-conflicts-and-restart).
-For controlled maintenance, reconcile outstanding private submissions, including the cancellation route,
-before reusing the EOA. LiquidLane state reads always use RPC `latest`; an archive node is not required.
+For controlled maintenance, reconcile outstanding private submissions before reusing the EOA. LiquidLane state reads always use RPC `latest`; an archive node is not required.
 
 **Never commit a real key or live config** — keys are supplied via env/file behind the `Signer`
 interface; `*.local.*` and `.env` are gitignored.

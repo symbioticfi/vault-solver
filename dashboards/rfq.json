@@ -347,6 +347,7 @@
                             "reverted": {"text": "Reverted"},
                             "included_unconfirmed": {"text": "Included without final confirmation"},
                             "submission_error": {"text": "Submission failed"},
+                            "abandoned": {"text": "Tracking abandoned; execution unknown"},
                             "tracking_stopped": {"text": "Tracking stopped"},
                             "settled_in_time": {"text": "Delivered on time"},
                             "missed": {"text": "Deadline missed"},
@@ -807,6 +808,7 @@
                             "reverted": {"text": "Reverted"},
                             "included_unconfirmed": {"text": "Included without final confirmation"},
                             "submission_error": {"text": "Submission failed"},
+                            "abandoned": {"text": "Tracking abandoned; execution unknown"},
                             "tracking_stopped": {"text": "Tracking stopped"},
                             "settled_in_time": {"text": "Delivered on time"},
                             "missed": {"text": "Deadline missed"},
@@ -919,7 +921,7 @@
       "spec": {
         "id": 20,
         "title": "Transaction fee increases · selected period",
-        "description": "Observed increases in the selected period. The first exported nonzero value may be missed, so zero here does not prove that no fee was paid. Fees recorded from transaction receipts, grouped by terminal outcome. Reverted and cancelled transactions consumed fees without a successful execution. Included-unconfirmed means final confirmation was not established. Missing receipt prices can undercount costs.",
+        "description": "Observed increases in the selected period. The first exported nonzero value may be missed, so zero here does not prove that no fee was paid. Fees recorded from transaction receipts, grouped by terminal outcome. Reverted transactions consumed fees without a successful execution. Included-unconfirmed means final confirmation was not established. Missing receipt prices can undercount costs.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1009,6 +1011,7 @@
                             "reverted": {"text": "Reverted"},
                             "included_unconfirmed": {"text": "Included without final confirmation"},
                             "submission_error": {"text": "Submission failed"},
+                            "abandoned": {"text": "Tracking abandoned; execution unknown"},
                             "tracking_stopped": {"text": "Tracking stopped"},
                             "settled_in_time": {"text": "Delivered on time"},
                             "missed": {"text": "Deadline missed"},
@@ -1701,6 +1704,7 @@
                             "reverted": {"text": "Reverted"},
                             "included_unconfirmed": {"text": "Included without final confirmation"},
                             "submission_error": {"text": "Submission failed"},
+                            "abandoned": {"text": "Tracking abandoned; execution unknown"},
                             "tracking_stopped": {"text": "Tracking stopped"},
                             "settled_in_time": {"text": "Delivered on time"},
                             "missed": {"text": "Deadline missed"},
@@ -1849,7 +1853,7 @@
       "spec": {
         "id": 86,
         "title": "Transaction fees · since process starts",
-        "description": "Current reporting services only, since their process starts. Includes preperiod fees and the first nonzero sample; excludes vanished services. Fees recorded from transaction receipts, grouped by terminal outcome. Reverted and cancelled transactions consumed fees without a successful execution. Included-unconfirmed means final confirmation was not established. Missing receipt prices can undercount costs.",
+        "description": "Current reporting services only, since their process starts. Includes preperiod fees and the first nonzero sample; excludes vanished services. Fees recorded from transaction receipts, grouped by terminal outcome. Reverted transactions consumed fees without a successful execution. Included-unconfirmed means final confirmation was not established. Missing receipt prices can undercount costs.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -1939,6 +1943,7 @@
                             "reverted": {"text": "Reverted"},
                             "included_unconfirmed": {"text": "Included without final confirmation"},
                             "submission_error": {"text": "Submission failed"},
+                            "abandoned": {"text": "Tracking abandoned; execution unknown"},
                             "tracking_stopped": {"text": "Tracking stopped"},
                             "settled_in_time": {"text": "Delivered on time"},
                             "missed": {"text": "Deadline missed"},

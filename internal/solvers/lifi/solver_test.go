@@ -849,8 +849,8 @@ func TestProcessOrderSubmitsImmediateFill(t *testing.T) {
 	if txm.reqs[0].MaxFeePerGas == nil || txm.reqs[0].MaxFeePerGas.Cmp(big.NewInt(1)) != 0 {
 		t.Fatalf("fill max fee per gas = %v, want 1", txm.reqs[0].MaxFeePerGas)
 	}
-	if want := time.Unix(1_800_000_000, 0); !txm.reqs[0].CancelAt.Equal(want) {
-		t.Fatalf("fill CancelAt = %v, want order deadline %v", txm.reqs[0].CancelAt, want)
+	if want := time.Unix(1_800_000_000, 0); !txm.reqs[0].Deadline.Equal(want) {
+		t.Fatalf("fill Deadline = %v, want order deadline %v", txm.reqs[0].Deadline, want)
 	}
 	logged := strings.Join(logs, "\n")
 	for _, want := range []string{
@@ -1012,12 +1012,12 @@ func TestProcessOrderWithoutDeadlineUsesPendingTimeout(t *testing.T) {
 	if len(txm.reqs) != 1 {
 		t.Fatalf("submitted fills = %d, want 1", len(txm.reqs))
 	}
-	if !txm.reqs[0].CancelAt.IsZero() {
-		t.Fatalf("fill CancelAt = %v, want global pending timeout", txm.reqs[0].CancelAt)
+	if !txm.reqs[0].Deadline.IsZero() {
+		t.Fatalf("fill Deadline = %v, want global pending timeout", txm.reqs[0].Deadline)
 	}
 }
 
-func TestProcessOrderCancellationDeadlineIncludesPreAdmissionLatency(t *testing.T) {
+func TestProcessOrderSubmissionDeadlineIncludesPreAdmissionLatency(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
 	if err != nil {
@@ -1059,8 +1059,8 @@ func TestProcessOrderCancellationDeadlineIncludesPreAdmissionLatency(t *testing.
 	if len(txm.reqs) != 1 {
 		t.Fatalf("submitted fills = %d, want 1", len(txm.reqs))
 	}
-	if want := time.Unix(1_799_999_990, 0); !txm.reqs[0].CancelAt.Equal(want) {
-		t.Fatalf("fill CancelAt = %v, want skew-preserving %v", txm.reqs[0].CancelAt, want)
+	if want := time.Unix(1_799_999_990, 0); !txm.reqs[0].Deadline.Equal(want) {
+		t.Fatalf("fill Deadline = %v, want skew-preserving %v", txm.reqs[0].Deadline, want)
 	}
 }
 

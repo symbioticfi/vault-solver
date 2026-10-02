@@ -1262,14 +1262,21 @@ func TestCompleteFillTreatsIncludedTransactionAsSuccess(t *testing.T) {
 	}
 }
 
-func TestOrderWorkerConsumedNonceReleasesReservationWithoutSuccess(t *testing.T) {
+func TestOrderWorkerUncertainNonceReleasesReservationWithoutSuccess(t *testing.T) {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeAbandoned} {
+		t.Run(string(outcome), func(t *testing.T) { orderWorkerUncertainNonceReleasesReservationWithoutSuccess(t, outcome) })
+	}
+}
+
+func orderWorkerUncertainNonceReleasesReservationWithoutSuccess(t *testing.T, outcome txmanager.Outcome) {
+	t.Helper()
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	txm := &fakeLifiTxSender{result: txmanager.Result{
-		Hash: common.HexToHash("0x1234"), Outcome: txmanager.OutcomeNonceConsumed, Err: txmanager.ErrNonceConsumed,
+		Hash: common.HexToHash("0x1234"), Outcome: outcome, Err: nonceOutcomeError(outcome),
 	}}
 	solver := newProcessTestSolver(fixture.cfg, fixture.caller, txm, strategy,
 		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited)
@@ -1302,7 +1309,7 @@ func TestOrderWorkerConsumedNonceReleasesReservationWithoutSuccess(t *testing.T)
 }
 
 func TestCompleteFillTreatsConsumedNonceAsExpectedSkip(t *testing.T) {
-	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict} {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict, txmanager.OutcomeAbandoned} {
 		t.Run(string(outcome), func(t *testing.T) { completeFillTreatsConsumedNonceAsExpectedSkip(t, outcome) })
 	}
 }
@@ -1340,8 +1347,8 @@ func TestCompleteFillTreatsObsoleteOrderAsExpectedSkip(t *testing.T) {
 
 	err := solver.completeFill(solverContext(t, solver), pending, fillCompletion{fill: fill, result: txmanager.Result{
 		Hash:    common.HexToHash("0xc"),
-		Outcome: txmanager.OutcomeCancelled,
-		Err:     errors.Errorf("pending transaction cancelled at nonce 3: %w", txmanager.ErrRequestObsolete),
+		Outcome: txmanager.OutcomeAbandoned,
+		Err:     errors.Errorf("pending transaction abandoned at nonce 3: %w", txmanager.ErrRequestObsolete),
 	}})
 
 	logged := strings.Join(logs, "\n")
@@ -1421,6 +1428,9 @@ func TestOrderRecoverySkipsUndecodableOrder(t *testing.T) {
 }
 
 func nonceOutcomeError(outcome txmanager.Outcome) error {
+	if outcome == txmanager.OutcomeAbandoned {
+		return txmanager.ErrAbandoned
+	}
 	if outcome == txmanager.OutcomeNonceConflict {
 		return txmanager.ErrNonceConflict
 	}

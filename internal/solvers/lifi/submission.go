@@ -53,10 +53,10 @@ func (s *Solver) submitFill(
 			"quoteId", order.QuoteID, "status", status)
 		return nil, errOrderNotFillable
 	}
-	var cancelAt time.Time
+	var submissionDeadline time.Time
 	if !calldata.Deadline.IsZero() {
 		var deadlineValid bool
-		cancelAt, deadlineValid = liquidlane.CancellationDeadline(
+		submissionDeadline, deadlineValid = liquidlane.SubmissionDeadline(
 			calldata.Deadline,
 			chainTime,
 			chainObservedAt,
@@ -73,11 +73,11 @@ func (s *Solver) submitFill(
 	reservationKey := calldata.OrderID.Hex()
 	deadline := int64(0)
 	deadlineRemaining := time.Duration(0)
-	cancelAtUnix := int64(0)
+	submissionDeadlineUnix := int64(0)
 	if !calldata.Deadline.IsZero() {
 		deadline = calldata.Deadline.Unix()
 		deadlineRemaining = calldata.Deadline.Sub(chainTime)
-		cancelAtUnix = cancelAt.Unix()
+		submissionDeadlineUnix = submissionDeadline.Unix()
 	}
 	observability.Log(ctx).V(1).Info(
 		"order fill ready for submission",
@@ -91,12 +91,12 @@ func (s *Solver) submitFill(
 		"requestMaxFeePerGas", bigString(maxFeePerGas),
 		"deadline", deadline,
 		"deadlineRemaining", deadlineRemaining,
-		"cancelAt", cancelAtUnix,
+		"submissionDeadline", submissionDeadlineUnix,
 	)
 	result, accepted := s.sendFill(ctx, txmanager.Request{
 		Solver: Name,
 		To:     s.cfg.Executor, Data: calldata.Finalise, MaxFeePerGas: liquidlane.CloneBig(maxFeePerGas),
-		CancelAt: cancelAt,
+		Deadline: submissionDeadline,
 		Obsolete: func(checkCtx context.Context) (bool, error) {
 			return s.fillRequestObsolete(checkCtx, calldata.OrderID)
 		},
@@ -184,6 +184,18 @@ func (s *Solver) completeFill(
 	defer func() { end(err) }()
 
 	outcome := completion.result.Outcome
+	if !outcome.Included() && errors.Is(completion.result.Err, txmanager.ErrRequestObsolete) {
+		// The input settler already claimed or refunded the order: an expected skip, not a failure.
+		observability.Decline(ctx, "fill_obsolete", completion.result.Err.Error())
+		observability.Log(ctx).Info("order fill obsolete: order settled elsewhere",
+			"orderId", fill.order.OrderID,
+			"onChainOrderId", fill.orderID.Hex(),
+			"quoteId", fill.order.QuoteID,
+			"tx", completion.result.Hash.Hex(),
+			"outcome", outcome,
+		)
+		return nil
+	}
 	if outcome.NonceUncertain() {
 		observability.Decline(ctx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
 		// A feed/REST replay must re-read current on-chain order status and build fresh calldata.
@@ -210,18 +222,6 @@ func (s *Solver) completeFill(
 			"tx", completion.result.Hash.Hex(),
 		)
 		return err
-	}
-	if errors.Is(completion.result.Err, txmanager.ErrRequestObsolete) {
-		// The input settler already claimed or refunded the order: an expected skip, not a failure.
-		observability.Decline(ctx, "fill_obsolete", completion.result.Err.Error())
-		observability.Log(ctx).Info("order fill obsolete: order settled elsewhere",
-			"orderId", fill.order.OrderID,
-			"onChainOrderId", fill.orderID.Hex(),
-			"quoteId", fill.order.QuoteID,
-			"tx", completion.result.Hash.Hex(),
-			"outcome", outcome,
-		)
-		return nil
 	}
 	err = completion.result.Err
 	if err == nil {

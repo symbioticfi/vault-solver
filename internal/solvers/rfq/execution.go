@@ -9,7 +9,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
@@ -52,23 +51,23 @@ type executable struct {
 // in award order, because the shared nonce lane admits one at a time. Per-order work is guarded by an
 // in-flight set so the two goroutines never handle the same order at once.
 type executionService struct {
-	chainID                int64
-	executor               common.Address
-	orderLimit             int
-	maxCancellationRetries int
-	pollInterval           time.Duration
-	vaults                 []recoveryVault
-	whitelist              adapterWhitelist // nil disables adapter filtering
-	tokenPolicy            tokenpolicy.Policy
-	discountsEnabled       bool // false (external solver) skips the backend discounts API entirely
-	backend                orderBackend
-	store                  *store
-	reader                 fillReader
-	strategy               types.Strategy
-	strategyName           string // registry key, reported as the strategy.name span attribute
-	txm                    txSender
-	metrics                *rfqMetrics
-	orderPollObserver      *observability.OperationObserver
+	chainID           int64
+	executor          common.Address
+	orderLimit        int
+	maxNonceRetries   int
+	pollInterval      time.Duration
+	vaults            []recoveryVault
+	whitelist         adapterWhitelist // nil disables adapter filtering
+	tokenPolicy       tokenpolicy.Policy
+	discountsEnabled  bool // false (external solver) skips the backend discounts API entirely
+	backend           orderBackend
+	store             *store
+	reader            fillReader
+	strategy          types.Strategy
+	strategyName      string // registry key, reported as the strategy.name span attribute
+	txm               txSender
+	metrics           *rfqMetrics
+	orderPollObserver *observability.OperationObserver
 	// links is shared with the server: it holds the span context of each quote this process served,
 	// so a fill can link back to it (spec §12). nil disables linking.
 	links *observability.SpanLinks
@@ -347,7 +346,7 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		return
 	}
 	deadline := rfqFillDeadline(orderDeadline, discountValidUntil)
-	cancelAt, ok := liquidlane.CancellationDeadline(deadline, chainTime, chainObservedAt, e.now())
+	submissionDeadline, ok := liquidlane.SubmissionDeadline(deadline, chainTime, chainObservedAt, e.now())
 	if !ok {
 		e.fail(ctx, orderID, "fill execution deadline elapsed before submission")
 		return
@@ -355,17 +354,17 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 
 	res, sendErr := e.sendFill(ctx, txmanager.Request{
 		Solver: Name,
-		To:     e.executor, Data: calldata, CancelAt: cancelAt, Label: "rfq-fill",
+		To:     e.executor, Data: calldata, Deadline: submissionDeadline, Label: "rfq-fill",
 		Obsolete: e.orderObsolete(orderID),
 	})
 	attempt := e.store.recordAttempt(orderID)
 	outcome := res.Outcome
-	if !outcome.Included() && errors.Is(sendErr, txmanager.ErrRequestObsolete) {
-		e.retireObsoleteOrder(ctx, orderID, res, sendErr)
+	if !outcome.Included() && errors.Is(res.Err, txmanager.ErrRequestObsolete) {
+		e.retireObsoleteOrder(ctx, orderID, res, res.Err)
 		return
 	}
 	if outcome.NonceUncertain() {
-		// A nonce race or consumed nonce leaves our own execution unknown. The backend
+		// Abandoning a signed fill or a nonce race leaves our own execution unknown. The backend
 		// decides whether the order is terminal or eligible for a freshly built bounded retry.
 		observability.Decline(ctx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
 		e.store.markStatus(orderID, statusNonceUncertain, res.Hash, errString(res.Err))
@@ -383,19 +382,9 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 			e.metrics.fillAmounts.ObserveOutcome(fillOutcome)
 		}
 		status := statusFailed
-		if outcome == txmanager.OutcomeTrackingStopped || outcome == txmanager.OutcomeCancelledUnconfirmed {
+		if outcome == txmanager.OutcomeTrackingStopped {
 			// Inclusion is unknown; reconcile the backend without sending another transaction.
 			status = statusSubmitted
-		}
-		retryAt := e.now().Add(e.pollInterval)
-		retryDeadline, stillValid := liquidlane.CancellationDeadline(orderDeadline, chainTime, chainObservedAt, retryAt)
-		// Scheduled before any terminal status so a retrying order keeps its reservation.
-		if ctx.Err() == nil && stillValid && outcome == txmanager.OutcomeCancelled &&
-			res.Receipt != nil && res.Receipt.Status == ethtypes.ReceiptStatusSuccessful &&
-			e.store.scheduleNonceRetry(orderID, e.maxCancellationRetries, retryAt, retryDeadline, res.Hash, sendErr.Error()) {
-			observability.Log(ctx).Info("fill cancelled; retry scheduled", "attempt", attempt,
-				"tx", res.Hash.Hex(), "retryAt", retryAt)
-			return
 		}
 		e.store.markStatus(orderID, status, res.Hash, sendErr.Error())
 		observability.Log(ctx).Error(sendErr, "fill failed", "attempt", attempt, "tx", res.Hash.Hex(),
@@ -480,7 +469,7 @@ func (e *executionService) boundByOrderDeadline(
 	orderID string, order executor.IReactorOrder, chainTime, chainObservedAt time.Time,
 ) {
 	orderDeadline := time.Unix(order.Request.Deadline.Int64(), 0)
-	if deadline, ok := liquidlane.CancellationDeadline(orderDeadline, chainTime, chainObservedAt, e.now()); ok {
+	if deadline, ok := liquidlane.SubmissionDeadline(orderDeadline, chainTime, chainObservedAt, e.now()); ok {
 		e.store.boundUnsignedWork(orderID, deadline)
 	}
 }
@@ -539,6 +528,10 @@ func (e *executionService) sendFill(
 	res = e.txm.Send(submitCtx, req)
 	txmanager.RecordResult(submitCtx, res) // the stage
 	txmanager.RecordResult(ctx, res)       // the order span it belongs to
+	if !res.Outcome.Included() && errors.Is(res.Err, txmanager.ErrRequestObsolete) {
+		observability.Decline(submitCtx, "fill_obsolete", res.Err.Error())
+		return res, nil
+	}
 	if res.Outcome.NonceUncertain() {
 		observability.Decline(submitCtx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
 		return res, nil
@@ -600,7 +593,7 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 			e.store.markStatus(orderID, statusExpired, local.TxHash, "order deadline has passed")
 			return
 		}
-		if e.store.scheduleNonceRetry(orderID, e.maxCancellationRetries, retryAt,
+		if e.store.scheduleNonceRetry(orderID, e.maxNonceRetries, retryAt,
 			local.RetryDeadline, local.TxHash, local.LastError) {
 			observability.Log(ctx).V(1).Info("order remains open after uncertain nonce result; fresh retry scheduled",
 				"retryAt", retryAt, "tx", local.TxHash.Hex())

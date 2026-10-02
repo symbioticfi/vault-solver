@@ -306,7 +306,7 @@ Standing curves also follow the shared transaction lane. On any coalesced lane-s
 expires its known active curves; if the lane is ready again, it rebuilds and republishes from fresh state.
 While the local lane is occupied or the sender is not initialized, both periodic refresh and final publication
 checks fail closed. An immutable matched order that has already entered transaction admission remains retained
-and waits without signing until the local lane is free, its cancellation deadline expires,
+and waits without signing until the local lane is free, its submission deadline expires,
 or shutdown begins. This prevents new exclusive matches from being advertised without abandoning
 already-accepted work.
 
@@ -492,7 +492,8 @@ Each fill request supplies the generic tx-manager obsolescence check with a fres
 The manager evaluates it before signing and after a receipt sweep finishes without a valid receipt.
 A receipt of our own fill takes precedence over interpreting `Claimed` as obsolescence. `Deposited` keeps normal replacements alive. `None` also preserves the lifecycle because a lagging latest-state RPC can return the older
 pre-deposit value for a fresh order. An observed `Claimed` or `Refunded` status drops an unsigned request or
-immediately switches a signed request to same-nonce cancellation without waiting for `pendingTimeoutMs`.
+immediately abandons signed tracking without waiting for `pendingTimeoutMs` or sending another
+transaction. The next fresh business request can reuse the unused nonce.
 Unknown statuses and read errors preserve the current lifecycle and are retried. A terminal result wrapping
 `txmanager.ErrRequestObsolete` is an expected skip: completion records a `fill_obsolete` decline, logs at
 Info, and ends the order trace without an error. Capacity is released
@@ -559,8 +560,8 @@ order tokens. For private candidates it resolves the
 signatures under one order-server timeout, then re-reads latest-state LiquidLane inventory and current block
 time before each strategy decision. With `gas:` configured, that decision-time max fee is a hard per-request
 cap; without it, the request cap is nil. The shared manager applies
-[fee selection and headroom](TXMANAGER-PLAN.md#4-fees-replacements-and-cancellation). LI.FI verifies
-`Deposited` again immediately before `SendAsync`. `CancelAt` is the earliest non-zero order expiry, fill
+[fee selection and headroom](TXMANAGER-PLAN.md#4-fees-replacements-and-abandonment). LI.FI verifies
+`Deposited` again immediately before `SendAsync`. `Deadline` is the earliest non-zero order expiry, fill
 deadline, selected signer deadline, or protocol-signature deadline. It is translated from the final observed
 chain time to wall time immediately before admission, so RPC/planning latency and positive chain-clock skew
 cannot extend validity; it also bounds a wait behind another active lifecycle. LI.FI releases capacity
@@ -574,8 +575,8 @@ propagation queue, reservation-blocked built-in decisions have only the bounded 
 described above. The txmanager
 may replace the same pending nonce as described above; that is fee management for one submission, not order
 retry.
-With fresh pending nonce selection, `nonce_conflict` and `nonce_consumed` release the completed fill's local reservation and
-records an expected decline. It supplies no owned receipt and never records fill success. No automatic order
+`abandoned`, `nonce_conflict` and `nonce_consumed` release the fill's local reservation and
+record an expected decline. It supplies no owned receipt and never records fill success. No automatic order
 retry is introduced: a later WebSocket replay or reconnect REST recovery must re-read current order status,
 deadlines, liquidity and routing before building another request; an already claimed/refunded order is skipped.
 A healthy connected feed does not periodically poll REST after catch-up, so an order that loses nonce
@@ -686,7 +687,8 @@ LI.FI order server ──(WS: opened/funded StandardOrder)──▶ lifi solver
 - **Competition** — same-chain fills are winner-take-all on-chain; `exclusiveFor` on our quotes routes
   matched orders to us, but a competitor may still claim an order first after on-chain exclusivity ends. Pending
   fills recheck canonical `orderStatus`; once `Claimed` or `Refunded` is observed, the tx manager stops
-  fee-bumping the stale calldata and cancels its nonce, retaining capacity until that lifecycle is confirmed.
+  fee-bumping the stale calldata and abandons tracking without another transaction. The terminal
+  result releases local capacity; it does not prove which transaction executed.
   `None` and unknown statuses preserve the pending lifecycle because they are not reliable terminal evidence.
 - **Private discounts** — internal mode uses shared `internal/liquidlane/discounts` discovery, physical-route
   matching, cap/rate clipping, and fresh signed-term validation. Advertised terms
@@ -968,7 +970,7 @@ still requires the redeploy in phase 0.
   claiming crash-safe operation, persist/reconcile the order-to-transaction identity and reservation
   against mined, reverted, replaced, or dropped attempts. Graceful shutdown already stops quote renewal,
   keeps the feed alive through bounded curve expiry, and gives accepted fills the shared transaction-manager
-  completion/cancellation window before a finite local hard stop; an abrupt process crash cannot do even that.
+  completion/tracking window before a finite local hard stop; an abrupt process crash cannot do even that.
 - **Adapter filler registration** — our executor must be granted filler rights on each LiquidLane
   adapter (`setFiller(executor, true)` / equivalent owner path), by the adapter's vault creator.
   Onboarding prereq.

@@ -284,18 +284,16 @@ func TestWithGasHeadroom(t *testing.T) {
 }
 
 // horizonChain scripts mined blocks for horizon tests. Nothing it receives is included unless a test
-// includes it, except cancellations when includeCancellations is set.
+// includes it unless a test explicitly publishes a receipt.
 type horizonChain struct {
 	*mockBackend
 
-	blocks               []blockFee
-	nextBaseFee          *big.Int
-	feeErr               error
-	nextBlockGas         uint64
-	nextBlockErr         error
-	nextBlockParents     []uint64
-	cancellationTo       common.Address
-	includeCancellations bool
+	blocks           []blockFee
+	nextBaseFee      *big.Int
+	feeErr           error
+	nextBlockGas     uint64
+	nextBlockErr     error
+	nextBlockParents []uint64
 	// hangEstimates leaves every estimate that would succeed unanswered until its context ends, the way
 	// a read endpoint that keeps the connection open but never replies does.
 	hangEstimates bool
@@ -308,7 +306,6 @@ func newHorizonChain(t *testing.T) *horizonChain {
 		chain.blocks = append(chain.blocks, block(number, 1, 0.5, 0.001))
 	}
 	chain.head = 100
-	chain.cancellationTo = mustSigner(t).Address()
 	return chain
 }
 
@@ -422,9 +419,6 @@ func (c *horizonChain) SendTransaction(_ context.Context, tx *types.Transaction)
 	c.sendCalls++
 	c.attempted = append(c.attempted, tx)
 	c.sent = append(c.sent, tx)
-	if c.includeCancellations && tx.To() != nil && *tx.To() == c.cancellationTo {
-		c.receipts[tx.Hash()] = successfulReceipt(tx, c.head)
-	}
 	return nil
 }
 
@@ -455,7 +449,7 @@ func (c *horizonChain) waitForSends(t *testing.T, count int) []*types.Transactio
 
 func horizonConfig(overrides func(*Config)) Config {
 	cfg := Config{
-		MaxFeeGwei: 50, PollInterval: time.Millisecond, ReplacementInterval: time.Hour, PendingTimeout: time.Hour,
+		MaxFeeGwei: 50, PollInterval: time.Millisecond, ReplacementInterval: time.Hour, PendingTimeout: time.Hour, ShutdownTimeout: 20 * time.Millisecond,
 		Horizon: HorizonConfig{BlockTime: horizonTestBlockTime},
 	}
 	if overrides != nil {
@@ -532,7 +526,7 @@ func TestStaleSendHeadDoesNotReportAStallBeforeSlotsElapse(t *testing.T) {
 
 	// The endpoint catches up: four blocks with room, all mined before the send in fact.
 	chain.mine(0.001, 0.5, 0.5, 0.5, 0.5)
-	m.evaluateHorizon(ctx, pending, false, replace)
+	m.evaluateHorizon(ctx, pending, replace)
 	if sent := chain.sentTransactions(); len(sent) != 1 || len(intents) != 0 {
 		t.Fatalf("stale send head acted within the first slot: %d sends, intents %+v", len(sent), intents)
 	}
@@ -540,7 +534,7 @@ func TestStaleSendHeadDoesNotReportAStallBeforeSlotsElapse(t *testing.T) {
 	// Once enough slots have passed, the same evidence is a stall and the call is rebroadcast.
 	pending.horizon.sentAt = time.Now().Add(-time.Minute)
 	chain.mine(0.001, 0.5)
-	m.evaluateHorizon(ctx, pending, false, replace)
+	m.evaluateHorizon(ctx, pending, replace)
 	if sent := chain.sentTransactions(); len(sent) != 2 || sent[1].Hash() != sent[0].Hash() || len(intents) != 0 {
 		t.Fatalf("stall after elapsed slots: %d sends, intents %+v; want one exact rebroadcast", len(sent), intents)
 	}
@@ -693,20 +687,18 @@ func TestHungStallEstimateDoesNotHoldTheLifecycle(t *testing.T) {
 	}
 }
 
-// A stalled call whose re-estimate hangs is cancelled at its deadline, not after the estimate budget:
-// the estimate ends at the deadline, like a normal replacement broadcast, and the call goes straight to
-// cancellation instead of being rebroadcast past it.
+// A stalled call whose re-estimate hangs yields to its absolute deadline. No stale calldata is
+// rebroadcast after expiry, and the owned nonce is retained for fresh business work.
 func TestHungStallEstimateYieldsToTheDeadline(t *testing.T) {
 	for name, hung := range hungEstimates {
 		t.Run(name, func(t *testing.T) {
 			chain := newHorizonChain(t)
-			chain.includeCancellations = true
 			chain.nextBlockErr = hung.nextBlockErr
 			m := New(chain, mustSigner(t), big.NewInt(11155111), horizonConfig(nil), logr.Discard())
 			startManagerForTest(t, m)
-			cancelAt := time.Now().Add(500 * time.Millisecond)
+			submissionDeadline := time.Now().Add(500 * time.Millisecond)
 			result, accepted := m.SendAsync(t.Context(), Request{
-				To: common.HexToAddress("0xabc"), Data: []byte{1}, Label: "fill", CancelAt: cancelAt,
+				To: common.HexToAddress("0xabc"), Data: []byte{1}, Label: "fill", Deadline: submissionDeadline,
 			})
 			if !accepted {
 				t.Fatal("request was not accepted")
@@ -718,66 +710,20 @@ func TestHungStallEstimateYieldsToTheDeadline(t *testing.T) {
 			chain.waitForEstimates(t, 2) // the stall re-estimate is in flight
 			select {
 			case got := <-result:
-				if got.Outcome != OutcomeCancelled {
-					t.Fatalf("outcome = %s, want cancelled", got.Outcome)
+				if got.Outcome != OutcomeAbandoned {
+					t.Fatalf("outcome = %s, want abandoned", got.Outcome)
 				}
-			case <-time.After(time.Until(cancelAt) + time.Second):
-				t.Fatal("a hung stall re-estimate delayed cancellation past the deadline")
+			case <-time.After(time.Until(submissionDeadline) + time.Second):
+				t.Fatal("a hung stall re-estimate delayed abandonment past the deadline")
 			}
 			sent := chain.sentTransactions()
-			if len(sent) != 2 || sent[1].To() == nil || *sent[1].To() != chain.cancellationTo {
-				t.Fatalf("sent %d transactions, want the call and its cancellation only", len(sent))
+			if len(sent) != 1 {
+				t.Fatalf("sent %d transactions, want only the original call", len(sent))
 			}
 			if got := chain.estimateCalls.Load(); got != hung.latestEstimates {
 				t.Fatalf("latest-state estimates = %d, want %d", got, hung.latestEstimates)
 			}
 		})
-	}
-}
-
-// Shutdown requested while a stalled call's re-estimate hangs still cancels the call: once the
-// estimate's budget runs out, the lifecycle sends the cancellation next, not a rebroadcast of the call,
-// and drains long before the shutdown deadline would abandon it.
-func TestHungStallEstimateYieldsToShutdown(t *testing.T) {
-	chain := newHorizonChain(t)
-	chain.includeCancellations = true
-	m := New(chain, mustSigner(t), big.NewInt(11155111), horizonConfig(func(cfg *Config) {
-		cfg.ReplacementInterval = 100 * time.Millisecond // a 50ms estimate budget
-		cfg.ShutdownTimeout = time.Minute
-	}), logr.Discard())
-	managerCtx, cancelManager := context.WithCancel(t.Context())
-	defer cancelManager()
-	startDone := make(chan struct{})
-	go func() {
-		m.Start(managerCtx)
-		close(startDone)
-	}()
-	result, accepted := m.SendAsync(t.Context(), Request{To: common.HexToAddress("0xabc"), Data: []byte{1}, Label: "fill"})
-	if !accepted {
-		t.Fatal("request was not accepted")
-	}
-	chain.waitForSends(t, 1)
-
-	chain.set(func(c *horizonChain) { c.hangEstimates = true })
-	chain.mineSlots(0.001, 0.5, 0.5, 0.5)
-	chain.waitForEstimates(t, 2) // the stall re-estimate is in flight
-	cancelManager()
-	select {
-	case got := <-result:
-		if got.Outcome != OutcomeCancelled {
-			t.Fatalf("outcome = %s (%v), want cancelled", got.Outcome, got.Err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("a hung stall re-estimate kept shutdown from cancelling the call")
-	}
-	sent := chain.sentTransactions()
-	if len(sent) != 2 || sent[1].To() == nil || *sent[1].To() != chain.cancellationTo {
-		t.Fatalf("sent %d transactions, want the call and its cancellation only", len(sent))
-	}
-	select {
-	case <-startDone:
-	case <-time.After(time.Second):
-		t.Fatal("transaction manager did not finish draining")
 	}
 }
 
@@ -841,7 +787,6 @@ func TestHorizonRepricesOnBlockEvidence(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			chain := newHorizonChain(t)
-			chain.includeCancellations = true // lets the shutdown cancellation drain the pending lifecycle
 			metrics := newTestMetrics(t)
 			m := NewWithMetrics(chain, mustSigner(t), big.NewInt(11155111), horizonConfig(tc.configure), metrics, logr.Discard())
 			startManagerForTest(t, m)
@@ -867,26 +812,25 @@ func TestHorizonRepricesOnBlockEvidence(t *testing.T) {
 	}
 }
 
-func TestHorizonCancelsAtDeadlineWithoutTimerBumps(t *testing.T) {
+func TestHorizonAbandonsAtDeadlineWithoutTimerBumps(t *testing.T) {
 	chain := newHorizonChain(t)
-	chain.includeCancellations = true
 	metrics := newTestMetrics(t)
 	m := NewWithMetrics(chain, mustSigner(t), big.NewInt(11155111), horizonConfig(nil), metrics, logr.Discard())
 	startManagerForTest(t, m)
 
 	result, accepted := m.SendAsync(t.Context(), Request{
-		To: common.HexToAddress("0xabc"), Data: []byte{1}, Label: "fill", CancelAt: time.Now().Add(60 * time.Millisecond),
+		To: common.HexToAddress("0xabc"), Data: []byte{1}, Label: "fill", Deadline: time.Now().Add(60 * time.Millisecond),
 	})
 	if !accepted {
 		t.Fatal("request was not accepted")
 	}
 	got := <-result
-	if got.Outcome != OutcomeCancelled {
-		t.Fatalf("outcome = %s, want cancelled", got.Outcome)
+	if got.Outcome != OutcomeAbandoned {
+		t.Fatalf("outcome = %s, want abandoned", got.Outcome)
 	}
 	sent := chain.sentTransactions()
-	if len(sent) != 2 || sent[1].To() == nil || *sent[1].To() != chain.cancellationTo || sent[1].Gas() != cancellationGasLimit {
-		t.Fatalf("sent %d transactions, want the fill and one cancellation", len(sent))
+	if len(sent) != 1 {
+		t.Fatalf("sent %d transactions, want only the original fill", len(sent))
 	}
-	assertMetric(t, metrics.replacements.WithLabelValues("fill", replacementKindCancellation, "request_deadline"), 1)
+	assertMetric(t, metrics.replacements.WithLabelValues("fill", replacementKindReplacement, "request_deadline"), 0)
 }

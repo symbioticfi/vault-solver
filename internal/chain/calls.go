@@ -164,14 +164,6 @@ func (c *Client) SendTransaction(ctx context.Context, tx *types.Transaction) (er
 	return c.writeClient.SendTransaction(ctx, tx)
 }
 
-// SendCancellationTransaction broadcasts a same-nonce self-cancellation through the cancellation
-// client, or the ordinary write client when no cancellation endpoint is configured.
-func (c *Client) SendCancellationTransaction(ctx context.Context, tx *types.Transaction) (err error) {
-	ctx, end := c.cancelCalls.start(ctx, rpcMethodSendRawTransaction)
-	defer func() { end(err) }()
-	return c.cancelClient.SendTransaction(ctx, tx)
-}
-
 // NonceAt reads mined state through the sending endpoint to stop replacements after the nonce
 // was consumed, including by another replica.
 func (c *Client) NonceAt(

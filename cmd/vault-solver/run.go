@@ -111,14 +111,13 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 
 	// Chain client. rpcUrl is primary; rpcFallbackUrls (if any) are tried in order on failure.
 	// writeRpcUrl (if set) broadcasts transactions and supplies both startup nonce reads.
-	// cancelRpcUrl (if set) overrides only same-nonce self-cancellation broadcasts.
 	rpcMetrics, err := chain.NewRPCMetrics(metrics.Registerer())
 	if err != nil {
 		return err
 	}
 	rpcURLs := append([]string{cfg.Chain.RPCURL}, cfg.Chain.RPCFallbackURLs...)
 	chainClient, err := chain.DialWithMetrics(
-		ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.CancelRPCURL, cfg.Chain.MulticallAddress,
+		ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.MulticallAddress,
 		time.Duration(cfg.Chain.RPCAttemptTimeoutMs)*time.Millisecond, rpcMetrics,
 	)
 	if err != nil {

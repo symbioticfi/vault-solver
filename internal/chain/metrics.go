@@ -28,7 +28,6 @@ const (
 const (
 	rpcRoleRead   = "read"
 	rpcRoleWrite  = "write"
-	rpcRoleCancel = "cancel"
 	rpcRoleShared = "shared"
 )
 

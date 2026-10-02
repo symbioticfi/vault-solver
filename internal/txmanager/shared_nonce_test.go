@@ -63,7 +63,7 @@ func TestInitialNonceRaceReleasesLaneForFreshOrder(t *testing.T) {
 			}
 			waitForAdmissionDemand(t, m, 0)
 			if !m.LaneReady() || b.sendCalls != 1 {
-				t.Fatal("nonce race held the lane or attempted a cancellation/replay")
+				t.Fatal("nonce race held the lane or attempted an obsolete replay")
 			}
 			b.mu.Lock()
 			b.pendingNonce = 9
@@ -111,8 +111,8 @@ func TestPendingNonceReadFailureIsBoundedAndRetryable(t *testing.T) {
 }
 
 func TestNonceUncertainNeverMeansIncluded(t *testing.T) {
-	for _, outcome := range []Outcome{OutcomeConfirmed, OutcomeIncludedUnconfirmed, OutcomeReverted, OutcomeCancelled, OutcomeSubmissionError, OutcomeNonceConflict, OutcomeNonceConsumed} {
-		want := outcome == OutcomeNonceConflict || outcome == OutcomeNonceConsumed
+	for _, outcome := range []Outcome{OutcomeConfirmed, OutcomeIncludedUnconfirmed, OutcomeReverted, OutcomeAbandoned, OutcomeSubmissionError, OutcomeNonceConflict, OutcomeNonceConsumed} {
+		want := outcome == OutcomeNonceConflict || outcome == OutcomeNonceConsumed || outcome == OutcomeAbandoned
 		if outcome.NonceUncertain() != want || (want && outcome.Included()) {
 			t.Fatalf("outcome %s: uncertain=%v included=%v", outcome, outcome.NonceUncertain(), outcome.Included())
 		}

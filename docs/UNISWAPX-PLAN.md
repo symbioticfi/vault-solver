@@ -173,21 +173,22 @@ planning or admission. The fill loop counts outstanding result handlers and drai
 a reservation revision change during planning still rejects that plan for a fresh retry.
 
 A planned fill may wait behind another transaction on the shared nonce lane. Its admission deadline
-(`CancelAt`) still applies: if the preceding transaction takes too long, admission returns `not_admitted`
+(`Deadline`) still applies: if the preceding transaction takes too long, admission returns `not_admitted`
 and existing retry handling applies. Each fill also carries an `Obsolete` check that looks the order up in
 the Uniswap order API (`ordersByHash`, the lookup exclusive-obligation reconciliation uses, inside the same
 request rate limit). `open` keeps the fill alive; `filled`, `cancelled`, `expired`, `error` and
-`insufficient-funds` make the manager drop the unsigned call or cancel the pending one early instead of
+`insufficient-funds` make the manager drop the unsigned call or abandon pending tracking early instead of
 holding the lane until the deadline. A lookup error or an unknown status preserves the lifecycle. A result
 wrapping `txmanager.ErrRequestObsolete` retires the order without a retry or a breaker failure and records
 `fill/obsolete`. Continued quoting does not guarantee execution within exclusivity;
 the exclusive window must also cover any preceding fill's confirmation time.
 
-With fresh pending nonce selection, `nonce_conflict` and `nonce_consumed` have no owned receipt and never count as a successful
+`abandoned`, `nonce_conflict` and `nonce_consumed` have no owned receipt and never count as a successful
 fill. Completion invalidates inventory and releases the local reservation, then defers the order until the
 normal polling interval without increasing execution-failure attempts or opening the fade breaker. A later
 open-order poll and the normal fresh deadline, planning, preflight and protocol-obsolescence checks decide
-whether another fill can be submitted. Calldata from the previous nonce is never replayed. These are local
+whether another fill can be submitted. The manager may reuse an abandoned unused nonce for that fresh
+request; calldata from the previous request is never replayed. These are local
 recovery rules; they do not coordinate outstanding orders, exclusive obligations or capacity across replicas.
 
 Completed orders retain the existing one-hour local deduplication cache. The poller does not retain a
@@ -232,7 +233,7 @@ exclusive obligations remain independently tracked through terminal reconciliati
   later runtime recovery records each terminal outcome so a breaker-opening miss always has a matching metric.
   Exact names and labels are in the
   [README metrics table](../README.md#metrics).
-- **Fills use the [shared transaction manager](TXMANAGER-PLAN.md)** asynchronously. `CancelAt` is the
+- **Fills use the [shared transaction manager](TXMANAGER-PLAN.md)** asynchronously. `Deadline` is the
   earliest order, signed-discount or protocol-signature deadline. Its wall-clock observation anchor is
   captured before the chain-time RPC, so lookup/planning latency consumes rather than extends validity.
   Capacity reservations protect the selected source before preflight and transaction admission.
@@ -242,7 +243,7 @@ exclusive obligations remain independently tracked through terminal reconciliati
   request ceiling. With it enabled, `MaxFeePerGas` supplies the decision-time profitability ceiling
   including one normal replacement: one bump over the exact base-fee bound, so a quote-time ceiling
   still leaves the fill its full fee horizon. The manager owns
-  [fee selection and headroom](TXMANAGER-PLAN.md#4-fees-replacements-and-cancellation).
+  [fee selection and headroom](TXMANAGER-PLAN.md#4-fees-replacements-and-abandonment).
 - **Signed lifecycle ownership remains in txmanager.** UniswapX consumes its
   [nonce handling and terminal results](TXMANAGER-PLAN.md#6-rpc-routing-nonce-conflicts-and-restart),
   retaining its own quote/readiness gates during startup and shutdown.

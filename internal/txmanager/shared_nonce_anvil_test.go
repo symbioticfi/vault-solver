@@ -30,7 +30,7 @@ type sharedAnvilNonceBackend struct {
 
 func newSharedAnvilBackend(t *testing.T, endpoint string) *sharedAnvilNonceBackend {
 	t.Helper()
-	client, err := chain.Dial(t.Context(), []string{endpoint}, "", "", common.Address{}.Hex(), time.Second)
+	client, err := chain.Dial(t.Context(), []string{endpoint}, "", common.Address{}.Hex(), time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,12 +161,17 @@ func TestAnvilThreeSameKeyReplicasExecuteDistinctPendingOrders(t *testing.T) {
 		hashes[i], nonces[i] = common.HexToHash(fresh.Hash), nextNonce
 		nextNonce++
 	}
-	// All three business transactions coexist before the first inclusion. No manager replaces a
-	// foreign nonce with a self-transfer while it owns a later pending transaction.
+	// All three distinct business transactions coexist before the first inclusion.
 	for nonce := uint64(0); nonce < 3; nonce++ {
 		tx := waitForPoolTransaction(t, rpcClient, sgnr.Address(), nonce, func(poolTransaction) bool { return true })
-		if common.HexToAddress(tx.To) == sgnr.Address() {
-			t.Fatal("replica cancelled foreign pending work")
+		matched := false
+		for _, req := range requests {
+			if common.HexToAddress(tx.To) == req.To {
+				matched = true
+			}
+		}
+		if !matched {
+			t.Fatalf("nonce %d does not contain a submitted business order: %+v", nonce, tx)
 		}
 	}
 	mineAnvilBlock(t, rpcClient)
@@ -178,7 +183,7 @@ func TestAnvilThreeSameKeyReplicasExecuteDistinctPendingOrders(t *testing.T) {
 	}
 }
 
-func TestAnvilForeignPendingTransactionNeverTriggersCancellation(t *testing.T) {
+func TestAnvilForeignPendingTransactionPreservesIndependentBusinessWork(t *testing.T) {
 	rpcClient, ethClient, endpoint := startAnvilWithoutMining(t)
 	sgnr := anvilSigner(t)
 	to := common.HexToAddress("0xdead")
@@ -200,10 +205,10 @@ func TestAnvilForeignPendingTransactionNeverTriggersCancellation(t *testing.T) {
 		t.Fatalf("foreign pending startup: %v", err)
 	}
 	startManagerForTest(t, m)
-	time.Sleep(600 * time.Millisecond) // Well beyond the removed unknown-nonce watchdog's timeout.
+	time.Sleep(600 * time.Millisecond) // Beyond this replica's local pending timeout.
 	unchanged := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(poolTransaction) bool { return true })
 	if unchanged.Hash != foreign.Hash().Hex() {
-		t.Fatal("replica cancelled a transaction it did not send")
+		t.Fatal("replica changed a transaction it did not send")
 	}
 	// Admit this replica's own new request behind the foreign transaction.
 	result, admitted := m.SendAsync(t.Context(), Request{To: common.HexToAddress("0xbeef"), GasLimit: 21_000})

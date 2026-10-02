@@ -12,15 +12,15 @@ import (
 // write endpoint only ever sees the dial-time chain-id check.
 func TestAccountSnapshotUsesOnlyReadEndpoint(t *testing.T) {
 	var readMethods, writeMethods []string
-	read := rpcRecorder(&readMethods, cancellationRPCResult)
+	read := rpcRecorder(&readMethods, accountSnapshotRPCResult)
 	defer read.Close()
-	write := rpcRecorder(&writeMethods, cancellationRPCResult)
+	write := rpcRecorder(&writeMethods, accountSnapshotRPCResult)
 	defer write.Close()
 	metrics, err := NewRPCMetrics(prometheus.NewRegistry())
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := DialWithMetrics(t.Context(), []string{read.URL}, write.URL, "", testMulticall, 0, metrics)
+	client, err := DialWithMetrics(t.Context(), []string{read.URL}, write.URL, testMulticall, 0, metrics)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,4 +46,11 @@ func TestAccountSnapshotUsesOnlyReadEndpoint(t *testing.T) {
 			t.Fatalf("write endpoint served %s: %v", method, writeMethods)
 		}
 	}
+}
+
+func accountSnapshotRPCResult(method string) string {
+	if method == rpcMethodChainID {
+		return `"0x7a69"`
+	}
+	return `"0x1"`
 }

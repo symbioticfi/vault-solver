@@ -58,7 +58,7 @@ func TestLiveSepoliaDumpForkPayload(t *testing.T) {
 		t.Fatalf("expected single %s solver in %s", Name, cfgPath)
 	}
 	chainClient, err := chain.Dial(
-		ctx, []string{cfg.Chain.RPCURL}, "", "", cfg.Chain.MulticallAddress,
+		ctx, []string{cfg.Chain.RPCURL}, "", cfg.Chain.MulticallAddress,
 		time.Duration(cfg.Chain.RPCAttemptTimeoutMs)*time.Millisecond,
 	)
 	if err != nil {

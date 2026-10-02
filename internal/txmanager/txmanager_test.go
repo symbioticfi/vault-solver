@@ -362,9 +362,9 @@ func TestValidateFeeHeadroom(t *testing.T) {
 		wantErr bool
 	}{
 		{name: "default congested tip cap", maxFee: 50},
-		{name: "cap one wei below reserved cap", maxFee: 50, tipCap: 39.506172838},
-		{name: "cap equals reserved cap", maxFee: 50, tipCap: 39.506172839, wantErr: true},
-		{name: "cap one wei above reserved cap", maxFee: 50, tipCap: 39.506172840, wantErr: true},
+		{name: "cap one wei below reserved cap", maxFee: 50, tipCap: 44.444444443},
+		{name: "cap equals reserved cap", maxFee: 50, tipCap: 44.444444444, wantErr: true},
+		{name: "cap one wei above reserved cap", maxFee: 50, tipCap: 44.444444445, wantErr: true},
 		{name: "cap above the global fee cap", maxFee: 50, tipCap: 60, wantErr: true},
 	}
 	for _, test := range tests {
@@ -429,7 +429,7 @@ func TestBroadcastRejectsExpiredRequest(t *testing.T) {
 	m := New(b, mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
 	_, err := m.broadcast(t.Context(), Request{
 		To: common.HexToAddress("0xabc"), GasLimit: 21_000,
-		CancelAt: time.Now().Add(-time.Second), Label: "expired",
+		Deadline: time.Now().Add(-time.Second), Label: "expired",
 	})
 	if err == nil || b.sendCalls != 0 {
 		t.Fatalf("expired broadcast = %v, send calls = %d", err, b.sendCalls)
@@ -734,7 +734,7 @@ func TestResultMarksManagerAdmissionFailures(t *testing.T) {
 				return New(newMockBackend(), mustSigner(t), big.NewInt(11155111), Config{}, logr.Discard())
 			},
 			request: Request{
-				To: common.HexToAddress("0xabc"), CancelAt: time.Now().Add(-time.Second), Label: "expired",
+				To: common.HexToAddress("0xabc"), Deadline: time.Now().Add(-time.Second), Label: "expired",
 			},
 			wantErr: context.DeadlineExceeded,
 		},
@@ -900,65 +900,6 @@ func TestAmbiguousReplacementGetsOneExactRebroadcast(t *testing.T) {
 	}
 }
 
-func TestCancellationRequestBypassesAmbiguousExactRebroadcast(t *testing.T) {
-	b := newMockBackend()
-	b.sendErrs = []error{io.ErrUnexpectedEOF}
-	s := mustSigner(t)
-	m := New(b, s, big.NewInt(11155111), Config{MaxFeeGwei: 100}, logr.Discard())
-	pending, err := m.broadcast(t.Context(), Request{
-		To: common.HexToAddress("0xabc"), Data: []byte{0x01}, GasLimit: 21_000, Label: "shutdown",
-	})
-	if err != nil {
-		t.Fatalf("broadcast: %v", err)
-	}
-	pending.cancelDeadline = time.Now().Add(time.Hour)
-	pending.cancelRequested = make(chan struct{})
-	requestCancellation(pending)
-
-	m.tryReplace(t.Context(), pending, replaceIntent{})
-	attempted := b.attemptedTransactions()
-	if len(attempted) != 2 || attempted[1].Hash() == attempted[0].Hash() {
-		t.Fatalf("cancellation attempts = %v, want a new same-nonce transaction", transactionHashes(attempted))
-	}
-	cancellation := attempted[1]
-	if cancellation.To() == nil || *cancellation.To() != s.Address() || len(cancellation.Data()) != 0 ||
-		cancellation.Gas() != cancellationGasLimit || !pending.attempts[1].cancellation {
-		t.Fatalf("shutdown retry was not a self-cancellation: tx=%+v attempt=%+v", cancellation, pending.attempts[1])
-	}
-}
-
-func TestCancellationSignalDoesNotSendBackToBackReplacements(t *testing.T) {
-	b := &replacementBackend{mockBackend: newMockBackend()}
-	m := New(b, mustSigner(t), big.NewInt(11155111), Config{
-		MaxFeeGwei: 100, PollInterval: time.Second, ReplacementInterval: time.Second,
-	}, logr.Discard())
-	pending, err := m.broadcast(t.Context(), Request{
-		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "simultaneous cancellation",
-	})
-	if err != nil {
-		t.Fatalf("broadcast: %v", err)
-	}
-	pending.cancelDeadline = time.Now().Add(-time.Second)
-	pending.cancelRequested = make(chan struct{})
-	requestCancellation(pending)
-
-	ctx, cancel := context.WithCancel(t.Context())
-	result := make(chan Result, 1)
-	go func() { result <- m.waitForPendingTransaction(ctx, pending) }()
-	waitForSentTransactions(t, b.mockBackend, 2)
-	cancel()
-	select {
-	case <-result:
-	case <-time.After(time.Second):
-		t.Fatal("pending lifecycle did not stop")
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if len(b.sent) != 2 {
-		t.Fatalf("sent transactions = %d, want initial plus one cancellation", len(b.sent))
-	}
-}
-
 func TestExactRebroadcastNonceTooLowReconcilesOriginalReceipt(t *testing.T) {
 	b := &replacementNonceRaceBackend{
 		mockBackend: newMockBackend(), publishOwnedReceipt: true, firstSendErr: io.ErrUnexpectedEOF,
@@ -999,14 +940,14 @@ func TestExactRebroadcastSlack(t *testing.T) {
 		"after safety bound": {deadline: now.Add(11 * time.Second), want: true},
 	} {
 		if got := m.hasExactRebroadcastSlack(
-			&pendingTransaction{cancelDeadline: test.deadline}, now,
+			&pendingTransaction{deadline: test.deadline}, now,
 		); got != test.want {
 			t.Errorf("%s: slack = %v, want %v", name, got, test.want)
 		}
 	}
 }
 
-func TestCappedNormalRebroadcastStopsAtCancellationDeadline(t *testing.T) {
+func TestCappedNormalRebroadcastStopsAtDeadline(t *testing.T) {
 	b := &cappedRebroadcastDeadlineBackend{mockBackend: newMockBackend()}
 	m := New(b, mustSigner(t), big.NewInt(11155111), Config{MaxFeeGwei: 50}, logr.Discard())
 	pending, err := m.broadcast(t.Context(), Request{
@@ -1015,77 +956,10 @@ func TestCappedNormalRebroadcastStopsAtCancellationDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("broadcast: %v", err)
 	}
-	pending.cancelDeadline = time.Now().Add(time.Second)
-	if !m.rebroadcastLatestAttempt(t.Context(), pending, false) ||
-		!b.deadlineOK || !b.deadline.Equal(pending.cancelDeadline) {
-		t.Fatalf("capped rebroadcast deadline = (%s, %v), want %s", b.deadline, b.deadlineOK, pending.cancelDeadline)
-	}
-}
-
-func TestCappedAmbiguousCancellationRebroadcastsExactSignedTransaction(t *testing.T) {
-	b := newMockBackend()
-	s := mustSigner(t)
-	m := New(
-		b, s, big.NewInt(11155111), Config{MaxFeeGwei: 50}, logr.Discard(),
-	)
-	unsigned := types.NewTx(&types.DynamicFeeTx{
-		ChainID: big.NewInt(11155111), Nonce: 7,
-		GasTipCap: big.NewInt(1_000_000_000), GasFeeCap: gweiToWei(50),
-		Gas: cancellationGasLimit, To: ptr(s.Address()), Value: new(big.Int),
-	})
-	signed, err := s.SignTx(t.Context(), unsigned, big.NewInt(11155111))
-	if err != nil {
-		t.Fatalf("sign cancellation: %v", err)
-	}
-	pending := &pendingTransaction{
-		req:   Request{To: common.HexToAddress("0xabc"), Label: "cancel"},
-		nonce: 7,
-		fees: feeQuote{
-			baseFee: big.NewInt(20_000_000_000),
-			tip:     big.NewInt(1_000_000_000),
-			maxFee:  gweiToWei(50),
-		},
-		attempts: []txAttempt{{hash: signed.Hash(), tx: signed, cancellation: true}},
-	}
-
-	m.tryReplace(t.Context(), pending, replaceIntent{cancellation: true})
-	if b.sendCalls != 1 || len(b.sent) != 1 {
-		t.Fatalf("exact rebroadcast calls/sent = %d/%d, want 1/1", b.sendCalls, len(b.sent))
-	}
-	if b.sent[0].Hash() != signed.Hash() || len(pending.attempts) != 1 {
-		t.Fatalf("rebroadcast changed signed attempt: sent=%s attempts=%+v", b.sent[0].Hash(), pending.attempts)
-	}
-}
-
-func TestNormalFeeLimitReservesOneCancellationBump(t *testing.T) {
-	b := newMockBackend()
-	b.baseFee = big.NewInt(30_000_000_000)
-	m := New(
-		b, mustSigner(t), big.NewInt(11155111),
-		Config{MaxFeeGwei: 50, PollInterval: time.Millisecond},
-		logr.Discard(),
-	)
-
-	quote, err := m.quoteCall(t.Context(), Request{GasLimit: 21_000, Label: "fees"}, m.normalFeeLimit(Request{}))
-	if err != nil {
-		t.Fatalf("fees: %v", err)
-	}
-	fees := quote.fees
-	normalLimit := reserveFeeBump(gweiToWei(50))
-	if fees.maxFee.Cmp(normalLimit) != 0 {
-		t.Fatalf("normal max fee = %s, want reserved limit %s", fees.maxFee, normalLimit)
-	}
-	cancellationFees, err := m.nextReplacementFees(
-		t.Context(),
-		feeQuote{baseFee: fees.baseFee, tip: fees.tip, maxFee: normalLimit},
-		m.globalFeeLimit(),
-		cancellationGasLimit,
-	)
-	if err != nil {
-		t.Fatalf("cancellation fees: %v", err)
-	}
-	if cancellationFees.maxFee.Cmp(gweiToWei(50)) != 0 {
-		t.Fatalf("cancellation max fee = %s, want global cap %s", cancellationFees.maxFee, gweiToWei(50))
+	pending.deadline = time.Now().Add(time.Second)
+	if !m.rebroadcastLatestAttempt(t.Context(), pending) ||
+		!b.deadlineOK || !b.deadline.Equal(pending.deadline) {
+		t.Fatalf("capped rebroadcast deadline = (%s, %v), want %s", b.deadline, b.deadlineOK, pending.deadline)
 	}
 }
 
@@ -1143,153 +1017,6 @@ func TestReplacementFeesRespectCapAndFullBump(t *testing.T) {
 	}
 }
 
-func TestPendingTimeoutCancelsBlockedNonceAndUnblocksLaterTransaction(t *testing.T) {
-	sgnr := mustSigner(t)
-	b := &replacementBackend{
-		mockBackend: newMockBackend(), cancellationTo: sgnr.Address(),
-	}
-	m := New(
-		b, sgnr, big.NewInt(11155111),
-		Config{
-			MaxFeeGwei:          50,
-			PollInterval:        time.Millisecond,
-			ReplacementInterval: 2 * time.Millisecond,
-			PendingTimeout:      200 * time.Millisecond,
-			Horizon:             HorizonConfig{BlockTime: 4 * time.Millisecond},
-		},
-		logr.Discard(),
-	)
-	startManagerForTest(t, m)
-
-	first, accepted := m.SendAsync(t.Context(), Request{
-		To:           common.HexToAddress("0xabc"),
-		Data:         []byte{0x01},
-		GasLimit:     21_000,
-		MaxFeePerGas: big.NewInt(42_000_000_000),
-		Label:        "blocked",
-	})
-	if !accepted {
-		t.Fatal("first SendAsync was not accepted")
-	}
-	// A base-fee rise reprices the blocked call up to its 42 gwei profitability cap before the
-	// pending timeout cancels it.
-	waitForSentTransactions(t, b.mockBackend, 1)
-	b.mine(gweiToWei(33))
-	waitForSentTransactions(t, b.mockBackend, 2)
-	second, accepted := m.SendAsync(t.Context(), Request{
-		To: common.HexToAddress("0xdef"), Data: []byte{0x02}, GasLimit: 21_000, Label: "later",
-	})
-	if !accepted {
-		t.Fatal("second SendAsync was not accepted")
-	}
-
-	select {
-	case got := <-first:
-		if got.Err == nil || !strings.Contains(got.Err.Error(), "cancelled at nonce 7") {
-			t.Fatalf("first result = %+v", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("blocked transaction was not cancelled")
-	}
-	select {
-	case got := <-second:
-		if got.Err != nil {
-			t.Fatalf("later transaction result: %v", got.Err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("later nonce remained wedged")
-	}
-	cancellation := b.cancellationTransaction()
-	if cancellation == nil {
-		t.Fatal("same-nonce cancellation was not sent")
-	}
-	if cancellation.GasFeeCap().Cmp(big.NewInt(42_000_000_000)) <= 0 {
-		t.Fatalf("cancellation fee %s did not escape the fill profitability cap", cancellation.GasFeeCap())
-	}
-	later := b.lastSent()
-	if later == nil || later.Nonce() != 8 || b.isCancellation(later) {
-		t.Fatalf("later transaction = %v, want non-cancellation nonce 8", later)
-	}
-}
-
-func TestPendingObsolescenceCancelsNonceAndUnblocksLaterTransaction(t *testing.T) {
-	sgnr := mustSigner(t)
-	b := &replacementBackend{
-		mockBackend: newMockBackend(), cancellationTo: sgnr.Address(),
-	}
-	m := New(
-		b, sgnr, big.NewInt(11155111),
-		Config{
-			MaxFeeGwei:          50,
-			PollInterval:        time.Millisecond,
-			ReplacementInterval: time.Hour,
-			PendingTimeout:      time.Hour,
-		},
-		logr.Discard(),
-	)
-	startManagerForTest(t, m)
-
-	var mode atomic.Int32
-	unknownChecked := make(chan struct{})
-	var unknownOnce sync.Once
-	result, accepted := m.SendAsync(t.Context(), Request{
-		To: common.HexToAddress("0xabc"), Data: []byte{0x01}, GasLimit: 21_000, Label: "fillable-order",
-		Obsolete: func(context.Context) (bool, error) {
-			switch mode.Load() {
-			case 1:
-				unknownOnce.Do(func() { close(unknownChecked) })
-				return false, errors.New("status RPC unavailable")
-			case 2:
-				return true, nil
-			default:
-				return false, nil
-			}
-		},
-	})
-	if !accepted {
-		t.Fatal("SendAsync was not accepted")
-	}
-	waitForSentTransactions(t, b.mockBackend, 1)
-
-	mode.Store(1)
-	select {
-	case <-unknownChecked:
-	case <-time.After(time.Second):
-		t.Fatal("pending obsolescence error was not observed")
-	}
-	if cancellation := b.cancellationTransaction(); cancellation != nil {
-		t.Fatalf("unknown order status cancelled transaction %s", cancellation.Hash())
-	}
-
-	mode.Store(2)
-	select {
-	case got := <-result:
-		if got.Err == nil || !strings.Contains(got.Err.Error(), "cancelled at nonce 7") {
-			t.Fatalf("obsolete request result = %+v", got)
-		}
-		if got.Outcome != OutcomeCancelled || !errors.Is(got.Err, ErrRequestObsolete) {
-			t.Fatalf("obsolete cancellation = %s %v, want cancelled wrapping ErrRequestObsolete", got.Outcome, got.Err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("obsolete request did not cancel promptly")
-	}
-	cancellation := b.cancellationTransaction()
-	if cancellation == nil || cancellation.Nonce() != 7 {
-		t.Fatalf("same-nonce cancellation = %v", cancellation)
-	}
-
-	later := m.Send(t.Context(), Request{
-		To: common.HexToAddress("0xdef"), Data: []byte{0x02}, GasLimit: 21_000, Label: "later",
-	})
-	if later.Err != nil {
-		t.Fatalf("later transaction: %v", later.Err)
-	}
-	last := b.lastSent()
-	if last == nil || last.Nonce() != 8 || b.isCancellation(last) {
-		t.Fatalf("later transaction = %v, want non-cancellation nonce 8", last)
-	}
-}
-
 func TestValidRequestReceiptWinsBeforePendingObsolescenceCheck(t *testing.T) {
 	b := newMockBackend()
 	m := newTestManager(t, b)
@@ -1309,112 +1036,6 @@ func TestValidRequestReceiptWinsBeforePendingObsolescenceCheck(t *testing.T) {
 	}
 	if attempted := b.attemptedTransactions(); len(attempted) != 1 {
 		t.Fatalf("valid request attempts = %d, want 1", len(attempted))
-	}
-}
-
-func TestWaitingRequestKeepsAbsoluteCancelAtBeforeBroadcast(t *testing.T) {
-	sgnr := mustSigner(t)
-	b := &replacementBackend{
-		mockBackend: newMockBackend(), cancellationTo: sgnr.Address(),
-	}
-	m := New(
-		b, sgnr, big.NewInt(11155111),
-		Config{
-			PollInterval:        time.Millisecond,
-			ReplacementInterval: time.Second,
-			PendingTimeout:      30 * time.Millisecond,
-		},
-		logr.Discard(),
-	)
-	startManagerForTest(t, m)
-
-	first, accepted := m.SendAsync(t.Context(), Request{
-		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "lower nonce",
-	})
-	if !accepted {
-		t.Fatal("lower nonce was not accepted")
-	}
-	cancelAt := time.Now().Add(10 * time.Millisecond)
-	second, accepted := m.SendAsync(t.Context(), Request{
-		To: common.HexToAddress("0xdef"), GasLimit: 21_000,
-		CancelAt: cancelAt, Label: "expired while waiting",
-	})
-	if !accepted {
-		t.Fatal("deadline failure did not return a result")
-	}
-
-	if got := <-first; got.Err == nil || !strings.Contains(got.Err.Error(), "cancelled at nonce 7") ||
-		errors.Is(got.Err, ErrRequestObsolete) {
-		t.Fatalf("lower nonce result = %+v, want a timeout cancellation that is not obsolete", got)
-	}
-	select {
-	case got := <-second:
-		if got.Err == nil || !strings.Contains(got.Err.Error(), "context deadline exceeded") || !got.NotAdmitted {
-			t.Fatalf("expired waiting result = %+v", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("expired waiting request did not fail")
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for _, tx := range b.sent {
-		if tx.Nonce() > 7 {
-			t.Fatalf("expired waiting request was signed at nonce %d", tx.Nonce())
-		}
-	}
-}
-
-func TestCancelAtUsesCachedFeesWhenFeeRPCBlocks(t *testing.T) {
-	sgnr := mustSigner(t)
-	b := &blockedFeeBackend{replacementBackend: &replacementBackend{
-		mockBackend: newMockBackend(), cancellationTo: sgnr.Address(),
-	}}
-	m := New(
-		b, sgnr, big.NewInt(11155111),
-		Config{
-			MaxFeeGwei:          50,
-			PollInterval:        time.Millisecond,
-			ReplacementInterval: 10 * time.Millisecond,
-			PendingTimeout:      time.Second,
-		},
-		logr.Discard(),
-	)
-	startManagerForTest(t, m)
-
-	result, accepted := m.SendAsync(t.Context(), Request{
-		To: common.HexToAddress("0xabc"), GasLimit: 21_000,
-		CancelAt: time.Now().Add(30 * time.Millisecond), Label: "expiring",
-	})
-	if !accepted {
-		t.Fatal("transaction was not accepted")
-	}
-	waitForSentTransactions(t, b.mockBackend, 1)
-	b.block.Store(true)
-	deadline := time.NewTimer(300 * time.Millisecond)
-	defer deadline.Stop()
-	for b.cancellationTransaction() == nil {
-		select {
-		case <-deadline.C:
-			t.Fatal("CancelAt did not promptly send a cancellation")
-		case <-time.After(time.Millisecond):
-		}
-	}
-	// Receipt finality still needs ordinary chain reads after the fee outage clears.
-	b.block.Store(false)
-	select {
-	case got := <-result:
-		if got.Err == nil || !strings.Contains(got.Err.Error(), "cancelled at nonce 7") {
-			t.Fatalf("cancellation result = %+v", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("cancellation did not confirm after chain reads recovered")
-	}
-	cancellation := b.cancellationTransaction()
-	if cancellation == nil || cancellation.Nonce() != 7 {
-		t.Fatalf("same-nonce cancellation = %v", cancellation)
-	}
-	if cancellation.GasFeeCap().Cmp(gweiToWei(50)) > 0 {
-		t.Fatalf("cancellation fee %s exceeded global cap", cancellation.GasFeeCap())
 	}
 }
 
@@ -1679,12 +1300,6 @@ type blockedReceiptHashBackend struct {
 	hash common.Hash
 }
 
-type blockedFeeBackend struct {
-	*replacementBackend
-
-	block atomic.Bool
-}
-
 type disappearingReceiptBackend struct {
 	*mockBackend
 
@@ -1736,14 +1351,6 @@ func forkedReceiptHeader(number uint64, fork string) *types.Header {
 	return types.CopyHeader(actual.(*types.Header))
 }
 
-func (b *blockedFeeBackend) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {
-	if b.block.Load() {
-		<-ctx.Done()
-		return nil, ctx.Err()
-	}
-	return b.mockBackend.HeaderByNumber(ctx, number)
-}
-
 func (b *disappearingReceiptBackend) TransactionReceipt(
 	ctx context.Context,
 	hash common.Hash,
@@ -1759,13 +1366,6 @@ type replacementNonceRaceBackend struct {
 
 	publishOwnedReceipt bool
 	firstSendErr        error
-}
-
-type shutdownWriteOutageBackend struct {
-	*mockBackend
-
-	cancellationStarted chan struct{}
-	cancellationOnce    sync.Once
 }
 
 type cappedRebroadcastDeadlineBackend struct {
@@ -1804,39 +1404,12 @@ func (b *replacementNonceRaceBackend) SendTransaction(
 	return errors.New("nonce too low")
 }
 
-func (b *shutdownWriteOutageBackend) SendTransaction(
-	ctx context.Context,
-	tx *types.Transaction,
-) error {
-	b.mu.Lock()
-	b.sendCalls++
-	call := b.sendCalls
-	b.sent = append(b.sent, tx)
-	b.mu.Unlock()
-	if call == 1 {
-		return nil
-	}
-	b.cancellationOnce.Do(func() { close(b.cancellationStarted) })
-	<-ctx.Done()
-	return ctx.Err()
-}
-
 type blockingTxSigner struct {
 	signer.Signer
 
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
-}
-
-type shutdownBlockingSigner struct {
-	signer.Signer
-
-	mu                 sync.Mutex
-	calls              int
-	replacementStarted chan struct{}
-	release            <-chan struct{}
-	once               sync.Once
 }
 
 func (s *blockingTxSigner) SignTx(
@@ -1849,26 +1422,6 @@ func (s *blockingTxSigner) SignTx(
 	case <-s.release:
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	}
-	return s.Signer.SignTx(ctx, tx, chainID)
-}
-
-func (s *shutdownBlockingSigner) SignTx(
-	ctx context.Context,
-	tx *types.Transaction,
-	chainID *big.Int,
-) (*types.Transaction, error) {
-	s.mu.Lock()
-	s.calls++
-	call := s.calls
-	s.mu.Unlock()
-	if call > 1 {
-		s.once.Do(func() { close(s.replacementStarted) })
-		select {
-		case <-s.release:
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
 	}
 	return s.Signer.SignTx(ctx, tx, chainID)
 }
@@ -1910,7 +1463,6 @@ type replacementBackend struct {
 	*mockBackend
 
 	receiptOnSameNonce int
-	cancellationTo     common.Address
 	sameNonceSends     int
 }
 
@@ -1920,10 +1472,6 @@ func (b *replacementBackend) SendTransaction(_ context.Context, tx *types.Transa
 	b.sendCalls++
 	b.sent = append(b.sent, tx)
 
-	if b.isCancellation(tx) {
-		b.receipts[tx.Hash()] = successfulReceipt(tx, b.head)
-		return nil
-	}
 	if tx.Nonce() == b.pendingNonce {
 		b.sameNonceSends++
 		if b.receiptOnSameNonce > 0 && b.sameNonceSends >= b.receiptOnSameNonce {
@@ -1933,26 +1481,6 @@ func (b *replacementBackend) SendTransaction(_ context.Context, tx *types.Transa
 	}
 	b.receipts[tx.Hash()] = successfulReceipt(tx, b.head)
 	return nil
-}
-
-func (b *replacementBackend) cancellationTransaction() *types.Transaction {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for _, tx := range b.sent {
-		if b.isCancellation(tx) {
-			return tx
-		}
-	}
-	return nil
-}
-
-func (b *replacementBackend) isCancellation(tx *types.Transaction) bool {
-	return b.cancellationTo != (common.Address{}) &&
-		tx.To() != nil &&
-		*tx.To() == b.cancellationTo &&
-		len(tx.Data()) == 0 &&
-		tx.Value().Sign() == 0 &&
-		tx.Gas() == cancellationGasLimit
 }
 
 func successfulReceipt(tx *types.Transaction, block uint64) *types.Receipt {
@@ -2152,11 +1680,9 @@ func (b *cancelOnConfirmationHeadBackend) HeaderByNumber(
 
 func TestReceiptResultFailedReceiptWinsOverInterruptedConfirmation(t *testing.T) {
 	for _, test := range []struct {
-		name         string
-		cancellation bool
+		name string
 	}{
 		{name: "normal transaction"},
-		{name: "cancellation transaction", cancellation: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			logs, logger := newLogCapture(1)
@@ -2187,7 +1713,7 @@ func TestReceiptResultFailedReceiptWinsOverInterruptedConfirmation(t *testing.T)
 				req:   Request{To: to, Data: []byte("request-authorization"), Label: "failed receipt"},
 				nonce: 7,
 				attempts: []txAttempt{{
-					hash: tx.Hash(), tx: tx, cancellation: test.cancellation,
+					hash: tx.Hash(), tx: tx,
 				}},
 			}
 
@@ -2226,8 +1752,7 @@ func TestOutcomeIncluded(t *testing.T) {
 		{outcome: OutcomeConfirmed, want: true},
 		{outcome: OutcomeIncludedUnconfirmed, want: true},
 		{outcome: OutcomeReverted},
-		{outcome: OutcomeCancelled},
-		{outcome: OutcomeCancelledUnconfirmed},
+		{outcome: OutcomeAbandoned},
 		{outcome: OutcomeSubmissionError},
 		{outcome: OutcomeTrackingStopped},
 		{outcome: ""},
@@ -2400,218 +1925,6 @@ func TestStartCancelInterruptsInitialSigner(t *testing.T) {
 	}
 	if b.sendCalls != 0 {
 		t.Fatalf("broadcast calls = %d, want none after cancelled signing", b.sendCalls)
-	}
-}
-
-func TestStartCancelKeepsAcceptedLifecycleOwned(t *testing.T) {
-	sgnr := mustSigner(t)
-	b := &replacementBackend{mockBackend: newMockBackend(), cancellationTo: sgnr.Address()}
-	m := New(
-		b, sgnr, big.NewInt(11155111),
-		Config{
-			PollInterval:        time.Millisecond,
-			ReplacementInterval: time.Hour,
-			PendingTimeout:      time.Hour,
-			ShutdownTimeout:     time.Second,
-		},
-		logr.Discard(),
-	)
-	managerCtx, cancelManager := context.WithCancel(t.Context())
-	startDone := make(chan struct{})
-	go func() {
-		m.Start(managerCtx)
-		close(startDone)
-	}()
-
-	result, accepted := m.SendAsync(t.Context(), Request{
-		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "shutdown drain",
-	})
-	if !accepted {
-		t.Fatal("transaction was not accepted")
-	}
-	waitForSentTransactions(t, b.mockBackend, 1)
-	type submission struct {
-		result   <-chan Result
-		accepted bool
-	}
-	waiterReady := make(chan struct{})
-	waiter := make(chan submission, 1)
-	go func() {
-		close(waiterReady)
-		waitingResult, waiterAccepted := m.SendAsync(context.Background(), Request{
-			To: common.HexToAddress("0xdef"), GasLimit: 21_000, Label: "shutdown waiter",
-		})
-		waiter <- submission{result: waitingResult, accepted: waiterAccepted}
-	}()
-	<-waiterReady
-	cancelManager()
-
-	select {
-	case got := <-result:
-		if got.Receipt == nil || got.Err == nil ||
-			!strings.Contains(got.Err.Error(), "cancelled at nonce 7") {
-			t.Fatalf("drained result = %+v", got)
-		}
-		if errors.Is(got.Err, context.Canceled) {
-			t.Fatalf("accepted lifecycle was abandoned: %v", got.Err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("accepted lifecycle was not cancelled and drained")
-	}
-	select {
-	case waiting := <-waiter:
-		if !waiting.accepted {
-			t.Fatal("shutdown waiter returned without a terminal result")
-		}
-		if got := <-waiting.result; !errors.Is(got.Err, errManagerStopped) || !got.NotAdmitted {
-			t.Fatalf("shutdown waiter result = %+v, want not-admitted manager stop", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("shutdown waiter remained blocked after manager cancellation")
-	}
-	select {
-	case <-startDone:
-	case <-time.After(time.Second):
-		t.Fatal("transaction manager did not finish draining")
-	}
-}
-
-func TestStartCancelBoundsCancellationWriteOutage(t *testing.T) {
-	b := &shutdownWriteOutageBackend{
-		mockBackend:         newMockBackend(),
-		cancellationStarted: make(chan struct{}),
-	}
-	sgnr := mustSigner(t)
-	m := New(
-		b, sgnr, big.NewInt(11155111),
-		Config{
-			PollInterval:        time.Millisecond,
-			ReplacementInterval: time.Hour,
-			PendingTimeout:      time.Hour,
-			ShutdownTimeout:     20 * time.Millisecond,
-		},
-		logr.Discard(),
-	)
-	managerCtx, cancelManager := context.WithCancel(t.Context())
-	startDone := make(chan struct{})
-	go func() {
-		m.Start(managerCtx)
-		close(startDone)
-	}()
-
-	result, accepted := m.SendAsync(t.Context(), Request{
-		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "shutdown write outage",
-	})
-	if !accepted {
-		t.Fatal("transaction was not accepted")
-	}
-	waitForSentTransactions(t, b.mockBackend, 1)
-	cancelManager()
-	select {
-	case <-b.cancellationStarted:
-	case <-time.After(time.Second):
-		t.Fatal("shutdown did not attempt same-nonce cancellation")
-	}
-
-	select {
-	case got := <-result:
-		if !errors.Is(got.Err, context.DeadlineExceeded) || got.Hash == (common.Hash{}) || got.NotAdmitted {
-			t.Fatalf("bounded write-outage result = %+v, want shutdown deadline with tracked hash", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("write outage exceeded the shutdown bound")
-	}
-	select {
-	case <-startDone:
-	case <-time.After(time.Second):
-		t.Fatal("manager did not return after cancelling the blocked write RPC")
-	}
-
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.sendCalls != 2 {
-		t.Fatalf("broadcast calls = %d, want initial fill plus one cancellation", b.sendCalls)
-	}
-	cancellation := b.sent[1]
-	if cancellation.To() == nil || *cancellation.To() != sgnr.Address() ||
-		len(cancellation.Data()) != 0 || cancellation.Value().Sign() != 0 {
-		t.Fatalf("shutdown replacement is not a self-cancellation: %+v", cancellation)
-	}
-}
-
-func TestStartCancelReturnsWhenCancellationSignerBlocks(t *testing.T) {
-	release := make(chan struct{})
-	var releaseOnce sync.Once
-	releaseSigner := func() { releaseOnce.Do(func() { close(release) }) }
-	t.Cleanup(releaseSigner)
-
-	baseSigner := mustSigner(t)
-	s := &shutdownBlockingSigner{
-		Signer:             baseSigner,
-		replacementStarted: make(chan struct{}),
-		release:            release,
-	}
-	b := &replacementBackend{mockBackend: newMockBackend(), cancellationTo: baseSigner.Address()}
-	m := New(
-		b, s, big.NewInt(11155111),
-		Config{
-			PollInterval:        time.Millisecond,
-			ReplacementInterval: time.Hour,
-			PendingTimeout:      time.Hour,
-			ShutdownTimeout:     20 * time.Millisecond,
-		},
-		logr.Discard(),
-	)
-	managerCtx, cancelManager := context.WithCancel(t.Context())
-	startDone := make(chan struct{})
-	go func() {
-		m.Start(managerCtx)
-		close(startDone)
-	}()
-
-	result, accepted := m.SendAsync(t.Context(), Request{
-		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "blocked shutdown signer",
-	})
-	if !accepted {
-		t.Fatal("transaction was not accepted")
-	}
-	waitForSentTransactions(t, b.mockBackend, 1)
-	cancelManager()
-	select {
-	case <-s.replacementStarted:
-	case <-time.After(time.Second):
-		t.Fatal("shutdown cancellation did not reach the signer")
-	}
-
-	select {
-	case got := <-result:
-		if !errors.Is(got.Err, errShutdownTimeout) || got.Hash == (common.Hash{}) || got.NotAdmitted {
-			t.Fatalf("blocked-signer result = %+v, want tracked shutdown timeout", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("blocked signer prevented the accepted caller from completing")
-	}
-	select {
-	case <-startDone:
-	case <-time.After(time.Second):
-		t.Fatal("blocked signer kept the transaction manager alive past its shutdown bound")
-	}
-
-	releaseSigner()
-	lifecycleDone := make(chan struct{})
-	go func() {
-		m.lifecycleWG.Wait()
-		close(lifecycleDone)
-	}()
-	select {
-	case <-lifecycleDone:
-	case <-time.After(time.Second):
-		t.Fatal("released signer did not let the detached lifecycle finish")
-	}
-	select {
-	case extra := <-result:
-		t.Fatalf("accepted caller received a second terminal result: %+v", extra)
-	default:
 	}
 }
 
@@ -2849,9 +2162,9 @@ func TestSendSpanRecordsManagerStopAsCancellation(t *testing.T) {
 	}
 }
 
-// A CancelAt deadline reached while the request waits for the nonce lane is the caller withdrawing
+// A Deadline deadline reached while the request waits for the nonce lane is the caller withdrawing
 // it, not the manager failing it.
-func TestSendSpanRecordsCancelAtDeadlineAsCancellation(t *testing.T) {
+func TestSendSpanRecordsRequestDeadlineAsCancellation(t *testing.T) {
 	rec := tracetest.Install(t)
 	bb := &blockingBackend{mockBackend: newMockBackend(), entered: make(chan struct{}), release: make(chan struct{})}
 	m := New(bb, mustSigner(t), big.NewInt(11155111), Config{PollInterval: time.Millisecond}, logr.Discard())
@@ -2867,10 +2180,10 @@ func TestSendSpanRecordsCancelAtDeadlineAsCancellation(t *testing.T) {
 
 	res := m.Send(t.Context(), Request{
 		To: common.HexToAddress("0xdef"), GasLimit: 21_000, Label: "expiring",
-		CancelAt: time.Now().Add(50 * time.Millisecond),
+		Deadline: time.Now().Add(50 * time.Millisecond),
 	})
 	if !errors.Is(res.Err, context.DeadlineExceeded) {
-		t.Fatalf("expiring send = %+v, want its CancelAt deadline", res)
+		t.Fatalf("expiring send = %+v, want its Deadline deadline", res)
 	}
 	close(bb.release)
 	if got := <-first; got.Err != nil {

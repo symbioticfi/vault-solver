@@ -72,70 +72,6 @@ func (b *controlledReceiptBackend) TransactionReceipt(ctx context.Context, hash 
 	return b.mockBackend.TransactionReceipt(ctx, hash)
 }
 
-func TestPendingReceiptDoesNotBlockLifecycleEvents(t *testing.T) {
-	for _, event := range []string{"request deadline", "shutdown cancellation", "replacement"} {
-		t.Run(event, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				backend := &controlledReceiptBackend{mockBackend: newMockBackend(), release: make(chan struct{})}
-				cfg := Config{MaxFeeGwei: 100, PollInterval: 700 * time.Millisecond, ReplacementInterval: 10 * time.Second, PendingTimeout: time.Minute}
-				req := Request{To: common.HexToAddress("0xabc"), GasLimit: 21000, Data: []byte{1}, Label: "async receipts"}
-				if event == "request deadline" {
-					req.CancelAt = time.Now().Add(100 * time.Millisecond)
-				}
-				if event == "replacement" {
-					cfg.Horizon.BlockTime = 2 * time.Second
-				}
-				m := New(backend, mustSigner(t), big.NewInt(1), cfg, logr.Discard())
-				pending, err := m.broadcast(t.Context(), req)
-				if err != nil {
-					t.Fatal(err)
-				}
-				backend.blocked = pending.originalHash
-				delete(backend.receipts, pending.originalHash) // The blocked read belongs to an unmined original.
-				m.trackUnminedTransaction(pending)
-				results := make(chan Result, 1)
-				go func() { results <- m.waitForPendingTransaction(t.Context(), pending) }()
-				synctest.Wait()
-				switch event {
-				case "shutdown cancellation":
-					close(pending.cancelRequested)
-				case "replacement":
-					backend.mine(gweiToWei(40)) // outgrows the fee cap; the 1s tick reprices it
-				}
-				delay := 110 * time.Millisecond
-				if event == "replacement" {
-					delay = 1010 * time.Millisecond
-				}
-				time.Sleep(delay)
-				synctest.Wait()
-				sent := backend.attemptedTransactions()
-				if len(sent) != 2 {
-					t.Fatalf("sent %d transactions while receipt blocked, want 2", len(sent))
-				}
-				if backend.active.Load() != 1 {
-					t.Fatal("expected a receipt read still in flight at lifecycle event")
-				}
-				isCancellation := sent[1].To() != nil && *sent[1].To() == m.signer.Address() && len(sent[1].Data()) == 0
-				if isCancellation != (event != "replacement") || sent[1].Nonce() != sent[0].Nonce() {
-					t.Fatalf("unexpected replacement: cancellation=%v nonce=%d", isCancellation, sent[1].Nonce())
-				}
-				close(backend.release)
-				got := <-results
-				want := OutcomeCancelled
-				if event == "replacement" {
-					want = OutcomeConfirmed
-				}
-				if got.Outcome != want || got.Hash != sent[1].Hash() {
-					t.Fatalf("result %+v, want %s for new hash", got, want)
-				}
-				if backend.active.Load() != 0 {
-					t.Fatal("receipt worker outlived lifecycle")
-				}
-			})
-		})
-	}
-}
-
 type slowReceiptBackend struct {
 	*mockBackend
 
@@ -158,7 +94,7 @@ func TestReceiptSweepGivesEveryHashFullTimeout(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		backend := &slowReceiptBackend{mockBackend: newMockBackend(), delay: 70 * time.Millisecond}
 		m := New(backend, mustSigner(t), big.NewInt(1), Config{PollInterval: time.Second, ReplacementInterval: 30 * time.Second}, logr.Discard())
-		pending := &pendingTransaction{req: Request{Label: "52 hashes"}, nonce: 7, cancelDeadline: time.Now().Add(time.Hour)}
+		pending := &pendingTransaction{req: Request{Label: "52 hashes"}, nonce: 7, deadline: time.Now().Add(time.Hour)}
 		for i := range 52 {
 			tx := types.NewTx(&types.DynamicFeeTx{Nonce: 7, Gas: 21000, GasFeeCap: big.NewInt(int64(i + 1))})
 			pending.attempts = append(pending.attempts, txAttempt{hash: tx.Hash()})
@@ -227,7 +163,7 @@ func TestReceiptReaderResumesAfterReorg(t *testing.T) {
 		reorgCtx := managerCtx(t.Context(), m)
 		go func() { result <- m.waitForPendingTransaction(reorgCtx, pending) }()
 		synctest.Wait()
-		if _, info := countLogs(*logs, "transaction inclusion reorged; resuming pending lifecycle"); info != 1 {
+		if failures, _ := countLogs(*logs, "owned receipt is not canonical"); failures != 1 {
 			t.Fatalf("reorg logs: %v", *logs)
 		}
 		select {
@@ -245,23 +181,6 @@ func TestReceiptReaderResumesAfterReorg(t *testing.T) {
 	})
 }
 
-func TestCoincidentCancellationAndReplacementSendOnce(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		s := mustSigner(t)
-		backend := &replacementBackend{mockBackend: newMockBackend(), cancellationTo: s.Address()}
-		m := New(backend, s, big.NewInt(1), Config{MaxFeeGwei: 100, PollInterval: time.Millisecond, ReplacementInterval: 100 * time.Millisecond, PendingTimeout: 100 * time.Millisecond}, logr.Discard())
-		pending, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0xabc"), GasLimit: 21000, Data: []byte{1}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		m.trackUnminedTransaction(pending)
-		got := m.waitForPendingTransaction(t.Context(), pending)
-		if got.Outcome != OutcomeCancelled || len(backend.sent) != 2 {
-			t.Fatalf("result=%+v sends=%d", got, len(backend.sent))
-		}
-	})
-}
-
 func TestReceiptReaderStopUnblocksUndeliveredResult(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m := New(newMockBackend(), mustSigner(t), big.NewInt(1), Config{}, logr.Discard())
@@ -269,49 +188,6 @@ func TestReceiptReaderStopUnblocksUndeliveredResult(t *testing.T) {
 		reader.requests <- txAttempt{}
 		synctest.Wait() // RPC is complete; the reader is blocked delivering its result.
 		reader.stop()
-	})
-}
-
-// Old variants time out, while a newly broadcast cancellation has a receipt.
-type slowMissingReceiptBackend struct{ *mockBackend }
-
-func (b *slowMissingReceiptBackend) TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
-	receipt, err := b.mockBackend.TransactionReceipt(ctx, hash)
-	if err == nil {
-		return receipt, nil
-	}
-	<-ctx.Done()
-	return nil, ctx.Err()
-}
-
-func TestCancellationReceiptDoesNotWaitForOldHashes(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		backend := &slowMissingReceiptBackend{newMockBackend()}
-		m := New(backend, mustSigner(t), big.NewInt(1), Config{
-			MaxFeeGwei: 100, PollInterval: time.Second, ReplacementInterval: 30 * time.Second,
-		}, logr.Discard())
-		started := time.Now()
-		pending, err := m.broadcast(t.Context(), Request{
-			To: common.HexToAddress("0xabc"), GasLimit: 21000, CancelAt: started.Add(100 * time.Millisecond),
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		delete(backend.receipts, pending.originalHash)
-		for i := range 51 {
-			pending.attempts = append(pending.attempts, txAttempt{hash: common.BigToHash(big.NewInt(int64(i + 100)))})
-		}
-		m.trackUnminedTransaction(pending)
-		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-		defer cancel()
-		got := m.waitForPendingTransaction(ctx, pending)
-		sent := backend.attemptedTransactions()
-		if len(sent) != 2 || got.Outcome != OutcomeCancelled || got.Hash != sent[1].Hash() {
-			t.Fatalf("result=%+v, sends=%d; cancellation receipt was available behind slow old hashes", got, len(sent))
-		}
-		if elapsed := time.Since(started); elapsed != 2*time.Second {
-			t.Fatalf("discovered cancellation after %s, want only the current RPC's 2s timeout", elapsed)
-		}
 	})
 }
 
@@ -399,8 +275,8 @@ func TestObsolescenceWaitsForReceiptSweep(t *testing.T) {
 						t.Fatalf("own receipt lost precedence: result=%+v sends=%d checks=%d", got, len(sent), checks)
 					}
 				} else {
-					if got.Outcome != OutcomeCancelled || len(sent) != 2 || got.Hash != sent[1].Hash() || checks != 2 {
-						t.Fatalf("missing obsolete cancellation: result=%+v sends=%d checks=%d", got, len(sent), checks)
+					if got.Outcome != OutcomeAbandoned || len(sent) != 1 || got.Hash != sent[0].Hash() || checks != 2 {
+						t.Fatalf("missing obsolete abandonment: result=%+v sends=%d checks=%d", got, len(sent), checks)
 					}
 					if elapsed := checkedAt.Sub(started); elapsed != 900*time.Millisecond {
 						t.Fatalf("checked obsolescence after %s, want all three receipt reads first", elapsed)

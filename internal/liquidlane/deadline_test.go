@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func TestCancellationDeadline(t *testing.T) {
+func TestSubmissionDeadline(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -46,7 +46,7 @@ func TestCancellationDeadline(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, ok := CancellationDeadline(
+			got, ok := SubmissionDeadline(
 				time.Unix(tt.deadline, 0),
 				time.Unix(tt.chainNow, 0),
 				time.Unix(tt.chainObservedAt, 0),

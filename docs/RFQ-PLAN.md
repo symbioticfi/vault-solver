@@ -91,28 +91,26 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 - **Fills use the [shared transaction manager](TXMANAGER-PLAN.md).** RFQ builds `Executor.fill` calldata
   and consumes the manager result. Each request uses the earliest signed-order or selected
   discount/protocol deadline, translated from an observed chain timestamp to wall time after planning, so it
-  expires while waiting for admission and switches to same-nonce cancellation before dead calldata can hold
-  the shared nonce lane. The request also carries an `Obsolete` check that reads the order's backend view
+  expires while waiting for admission and abandons pending tracking at the deadline without sending
+  another transaction. The next fresh business request can reuse its unused nonce. The request also carries an `Obsolete` check that reads the order's backend view
   (`getOrder`, the source `reconcileTerminalStatus` already uses). `open` keeps the fill alive; `filled`,
   `expired`, `cancelled`, `error`, `unverified` and `insufficient-funds` mean it can no longer succeed, so the
-  manager drops the unsigned call or cancels the pending one early instead of holding the lane until the
+  manager drops the unsigned call or abandons pending tracking early instead of holding the lane until the
   deadline. The backend status covers what an on-chain nonce read cannot (an unfunded swapper, backend-side
   cancellation); a read error or an unknown status preserves the lifecycle.
 - **Retries distinguish unsent work from transactions.** Failed pre-submission work with no recorded hash
-  may be retried while the order is open. A successful cancellation that satisfies txmanager's confirmation
-  policy may enter `retry_waiting`, retaining its hash until one `pollIntervalMs` interval elapses and a
-  fresh open-order poll re-arms it. With fresh pending nonce selection, `nonce_conflict` or `nonce_consumed` means the signed
+  may be retried while the order is open. `abandoned`, `nonce_conflict` and `nonce_consumed` mean signed
   execution is uncertain without an owned receipt. It first enters backend reconciliation: a terminal status
   retires the order, while `open` schedules a fresh retry under the same budget and deadline. Missing,
   unavailable or unknown backend status keeps the obligation until its recorded order deadline.
-  `maxCancellationRetries` defaults to three additional attempts shared by cancellation and nonce-race
-  recovery; zero disables both. The retry budget survives re-queuing; retrying clears only the attempted
+  `maxNonceRetries` defaults to three additional attempts shared by abandonment and nonce-race
+  recovery; zero disables retries. The retry budget survives re-queuing; retrying clears only the attempted
   hash and runs the full executable-order lookup, chain deadline validation, strategy plan, and discount
   resolution again. Retry waiting counts as an active obligation and reconciles terminal
   backend status; its retained order deadline also expires it locally if backend views disappear or stay
   stale. No retry is scheduled during shutdown or when the order expires before the next attempt.
-  Reverted transactions stay failed; unknown inclusion or `cancelled_unconfirmed` stays submitted for backend
-  reconciliation without another fill. A result wrapping `txmanager.ErrRequestObsolete` is terminal instead:
+  Reverted transactions stay failed; unknown inclusion stays submitted for backend reconciliation
+  without another fill. A result wrapping `txmanager.ErrRequestObsolete` is terminal instead:
   the order becomes `obsolete` (never re-armed, even while the backend still lists it open), no retry is
   scheduled, and backend status is reconciled once, which may refine it to `filled`. These protections and retry budgets are in-memory per process;
   an RPC nonce result does not prove an owned fill succeeded or coordinate order/capacity ownership across replicas.
@@ -138,7 +136,7 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   the leg is direct or discounted. Discounts themselves are not held: `LiquidLaneAdapter` checks but never
   consumes a discount's nonce, so one discount can back any number of fills until it is revoked or expires.
   A reservation is released only when the order leaves the active set (filled, expired or failed); a
-  cancellation retry keeps it, and a failure without a recorded hash that the backend still lists open is
+  nonce retry keeps it, and a failure without a recorded hash that the backend still lists open is
   reserved again when re-armed. Quotes pass every reservation, and fill planning every reservation except the
   order's own, to `AllocateInventoryCapacity`. A confirmed fill records its inclusion block on the order, and
   its spend then outlives the order's terminal status: it is only dropped when the terminal record is swept.
@@ -287,7 +285,7 @@ solvers:
       reactor:              "0x…"
       pollIntervalMs: 3000
       orderLimit: 20
-      maxCancellationRetries: 3                         # additional attempts; 0 disables
+      maxNonceRetries: 3                         # additional attempts; 0 disables
       solverMode: external                              # "external" (default) | "internal" — see below
       minAmountsIn:                                     # optional per-input-token floor (base units)
         "0x…tokenIn": "1000000000000000000"             # below ⇒ no quote (204); equal ⇒ still quotes
@@ -376,10 +374,11 @@ dropping features.
    output capacity is absorbed as price impact, matching the other exact-input scopes. Cold fill
    planning applies the same constraint. Unit-tested across scope gating, permissionless aggregation,
    single-route capped output, webhook rejection, and fresh planning.
-6. **(done) Confirmed-cancellation recovery** — distinguish confirmed cancellation from an interrupted
-   confirmation wait, then allow bounded RFQ retries after one poll interval and a fresh open-order poll.
-   Every retry revalidates the executable order and builds new calldata with fresh discount signatures. Regression tests
-   cover the retry budget, disabled retries, expired/unavailable orders, uncertain results, and shutdown.
+6. **(done) Abandoned-transaction recovery** — reconcile backend status after tracking is abandoned,
+   then allow bounded RFQ retries after one poll interval and a fresh open-order poll. Every retry
+   revalidates the executable order and builds new calldata with fresh discount signatures. No EOA
+   cancellation transaction is sent. Regression tests cover fresh retries, budgets, expiry, unknown
+   statuses, obsolete-result precedence, reservations and shutdown.
 7. **(done) Nonce-race recovery** — either uncertain nonce result without an owned receipt reconciles
    backend status before sharing the existing bounded retry budget. Regression tests cover terminal/unknown
    backend states, fresh open polling and rebuilt calldata, backoff, local deadline expiry and exhausted budgets.

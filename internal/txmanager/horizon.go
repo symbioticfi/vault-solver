@@ -492,24 +492,11 @@ func isBlockOverrideUnsupported(err error) bool {
 }
 
 // horizonIntent is the replacement a horizon decision asks for: a fee change of the normal call, or a
-// fee change of the cancellation once cancellation has started.
-func horizonIntent(pending *pendingTransaction, cancelling bool, reason string) replaceIntent {
-	if cancelling {
-		return replaceIntent{cancellation: true, reason: pending.cancellationReason()}
-	}
-	return replaceIntent{reason: reason}
-}
-
 // evaluateHorizon applies the horizon repricing rules to the pending lifecycle once per new block.
-// It reports whether the lifecycle entered cancellation mode, which a replacement's fee lookup does
-// when the deadline passes during it.
+// It reports whether the deadline passed during replacement preparation.
 func (m *Manager) evaluateHorizon(
-	ctx context.Context, pending *pendingTransaction, cancelling bool, replace func(replaceIntent) bool,
+	ctx context.Context, pending *pendingTransaction, replace func(replaceIntent) bool,
 ) bool {
-	if cancelling && !pending.latestAttempt().cancellation {
-		// Cancellation started but its broadcast did not go out; retry it on every tick.
-		return replace(horizonIntent(pending, true, ""))
-	}
 	log := observability.Log(ctx)
 	snapshot, parent, err := m.readFeeSnapshot(ctx)
 	if err != nil {
@@ -521,7 +508,7 @@ func (m *Manager) evaluateHorizon(
 		// Without block evidence for a whole replacement interval, bump once per interval so the
 		// attempt cannot freeze.
 		pending.horizon.lastEvaluation = time.Now()
-		return replace(horizonIntent(pending, cancelling, replaceReasonFallback))
+		return replace(replaceIntent{reason: replaceReasonFallback})
 	}
 	pending.horizon.feeReads.recovered(log, "pending transaction fee window recovered",
 		"label", pending.req.Label, "nonce", pending.nonce)
@@ -530,23 +517,20 @@ func (m *Manager) evaluateHorizon(
 		return false // no new block, or an endpoint behind one we already saw
 	}
 	pending.horizon.lastHead = snapshot.head
-	if !cancelling && m.rebroadcastUncertainAttempt(ctx, pending) {
+	if m.rebroadcastUncertainAttempt(ctx, pending) {
 		pending.horizon.sent(snapshot.head)
 		return false
 	}
 	gas := pending.gas
-	if cancelling {
-		gas = cancellationGasLimit
-	}
 	sentHead := judgedSentHead(
 		pending.horizon.sentHead, snapshot.head, pending.horizon.sentAt, time.Now(), m.horizon.blockTime,
 	)
 	decision := decidePending(snapshot, pending.fees, gas, sentHead, m.horizon)
 	switch decision.action {
 	case pendingReprice:
-		return replace(horizonIntent(pending, cancelling, decision.reason))
+		return replace(replaceIntent{reason: decision.reason})
 	case pendingStall:
-		return m.handleStall(ctx, pending, cancelling, parent, replace)
+		return m.handleStall(ctx, pending, parent, replace)
 	case pendingHold:
 		// Waiting is free: the attempt is valid and nothing shows it being outbid or dropped.
 	}
@@ -556,20 +540,19 @@ func (m *Manager) evaluateHorizon(
 // handleStall answers blocks the current attempt lost while valid and with room: the relay dropped
 // it, a builder it cannot reach built them, or the call outgrew its gas limit. A normal call is
 // re-estimated for the next block first and replaced with a larger limit once it no longer fits;
-// cancellation that falls due during that estimate is left to the lifecycle, which sends it next.
+// a deadline reached during that estimate is left to the lifecycle, which abandons tracking.
 // Otherwise the exact bytes are rebroadcast, and after stallRebroadcastsBeforeReprice rebroadcasts a
 // minimal fee bump replaces them.
 func (m *Manager) handleStall(
 	ctx context.Context,
 	pending *pendingTransaction,
-	cancelling bool,
 	parent *types.Header,
 	replace func(replaceIntent) bool,
 ) bool {
-	if !cancelling && pending.req.GasLimit == 0 {
+	if pending.req.GasLimit == 0 {
 		gas, headroomBps, err := m.reestimateStalledCall(ctx, pending, parent)
 		switch {
-		case pending.cancellationDue(time.Now()):
+		case pending.abandonmentDue(time.Now()):
 			return false // no normal rebroadcast past the deadline or a shutdown request
 		case err != nil:
 			observability.Log(ctx).V(1).Info("stalled transaction re-estimate failed; rebroadcasting",
@@ -579,7 +562,7 @@ func (m *Manager) handleStall(
 		}
 	}
 	if pending.horizon.stallRebroadcasts >= stallRebroadcastsBeforeReprice {
-		return replace(horizonIntent(pending, cancelling, replaceReasonStall))
+		return replace(replaceIntent{reason: replaceReasonStall})
 	}
 	if m.rebroadcastStalledAttempt(ctx, pending) {
 		pending.horizon.stallRebroadcasts++
@@ -589,15 +572,15 @@ func (m *Manager) handleStall(
 }
 
 // reestimateStalledCall sizes a stalled normal call for the next block. It runs on the lifecycle
-// goroutine, which also services receipts, the cancellation deadline and shutdown, so a read endpoint
+// goroutine, which also services receipts, the request deadline and shutdown, so a read endpoint
 // that never answers must not hold it: the estimate, fallback included, gets its own budget and, like
-// a normal replacement broadcast, ends at the cancellation deadline.
+// a normal replacement broadcast, ends at the request deadline.
 func (m *Manager) reestimateStalledCall(
 	ctx context.Context, pending *pendingTransaction, parent *types.Header,
 ) (gas uint64, headroomBps int, err error) {
 	deadline := time.Now().Add(m.gasEstimateTimeout())
-	if !pending.cancelDeadline.IsZero() && pending.cancelDeadline.Before(deadline) {
-		deadline = pending.cancelDeadline
+	if !pending.deadline.IsZero() && pending.deadline.Before(deadline) {
+		deadline = pending.deadline
 	}
 	ctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
@@ -614,12 +597,12 @@ func (m *Manager) rebroadcastStalledAttempt(ctx context.Context, pending *pendin
 	if attempt.tx == nil {
 		return false
 	}
-	sendCtx, cancelSend := replacementBroadcastContext(ctx, pending, attempt.cancellation)
-	err := m.sendSigned(sendCtx, attempt.tx, attempt.cancellation)
+	sendCtx, cancelSend := replacementBroadcastContext(ctx, pending)
+	err := m.sendSigned(sendCtx, attempt.tx)
 	cancelSend()
 	fields := []any{
 		"label", pending.req.Label, "hash", attempt.hash.Hex(), "nonce", pending.nonce,
-		"cancellation", attempt.cancellation, "reason", replaceReasonStall,
+		"reason", replaceReasonStall,
 	}
 	if err != nil && !isKnownTransactionError(err) {
 		observability.Log(ctx).Error(err, "stalled transaction rebroadcast failed", fields...)

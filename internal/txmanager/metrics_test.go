@@ -136,7 +136,7 @@ func TestMetrics(t *testing.T) {
 	t.Run("replacement lifecycle", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			sgnr := mustSigner(t)
-			backend := &replacementBackend{mockBackend: newMockBackend(), cancellationTo: sgnr.Address()}
+			backend := &replacementBackend{mockBackend: newMockBackend()}
 			metrics := newTestMetrics(t)
 			manager := NewWithMetrics(
 				backend, sgnr, big.NewInt(11155111),
@@ -169,22 +169,14 @@ func TestMetrics(t *testing.T) {
 			assertMetric(t, metrics.replacements.WithLabelValues(
 				"lifi-fill", replacementKindReplacement, replaceReasonValidity,
 			), 1)
-			assertMetric(t, metrics.replacements.WithLabelValues(
-				"lifi-fill", replacementKindCancellation, "pending_timeout",
-			), 0)
 
-			if completed := <-result; completed.Outcome != OutcomeCancelled {
-				t.Fatalf("outcome = %q, want %q", completed.Outcome, OutcomeCancelled)
+			if completed := <-result; completed.Outcome != OutcomeAbandoned {
+				t.Fatalf("outcome = %q, want %q", completed.Outcome, OutcomeAbandoned)
 			}
 			assertMetric(t, metrics.replacements.WithLabelValues(
 				"lifi-fill",
 				replacementKindReplacement,
 				replaceReasonValidity,
-			), 1)
-			assertMetric(t, metrics.replacements.WithLabelValues(
-				"lifi-fill",
-				replacementKindCancellation,
-				"pending_timeout",
 			), 1)
 		})
 	})
@@ -391,7 +383,7 @@ func TestAdmissionRejectionMetrics(t *testing.T) {
 		)
 		result, accepted := manager.SendAsync(t.Context(), Request{
 			To:       common.HexToAddress("0xabc"),
-			CancelAt: time.Now().Add(-time.Second),
+			Deadline: time.Now().Add(-time.Second),
 			Label:    "expired",
 		})
 		if !accepted {

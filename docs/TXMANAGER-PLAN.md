@@ -10,8 +10,9 @@ entry point. Configuration is defined by [config.go](../internal/config/config.g
 ## 1. Ownership and admission
 
 One process has one chain client, signer and transaction manager shared by its transaction-sending
-solvers. Only one signed lifecycle may be unresolved **per process**. Each initial send reads a fresh
-pending nonce from the sending endpoint. Independent processes can share the EOA without a database,
+solvers. Only one signed lifecycle is actively tracked **per process**. Each initial send reads a fresh
+pending nonce from the sending endpoint; an abandoned local nonce takes precedence while mined state
+shows it remains unused. Independent processes can share the EOA without a database,
 shared file, leader, coordinator or peer discovery. They may race on a nonce; an initial collision ends
 that request promptly and leaves later work eligible. The [replica plan](REPLICA-PLAN.md) records the
 account and integration limits.
@@ -21,7 +22,7 @@ does not initialize/start the manager or require `txManager.maxFeeGwei`.
 Solvers build calldata and submit a `Request`; they never sign or broadcast transactions directly.
 `Send` waits for the terminal result. `SendAsync` waits for admission and returns a result channel;
 its name does not mean admission is non-blocking. `TrySend` declines an occupied lane without signing;
-when admitted, it waits for the result. Caller context and `CancelAt` bound pre-admission waiting.
+when admitted, it waits for the result. Caller context and `Deadline` bound pre-admission waiting.
 Once enqueued, the manager owns execution: caller cancellation is not proof the signed call cannot land.
 Definitive pre-sign/submission failures can finish without a receipt; accepted ambiguous sends stay tracked.
 
@@ -38,9 +39,9 @@ Subscribers receive coalesced change notifications and must re-read state and un
 |---|---|
 | `To`, `Data`, `Value` | Integration supplies the destination, generated calldata and native value; nil value means zero. |
 | `GasLimit` | Zero requests exact-call estimation after admission and before signing, with 5% headroom. A supplied limit is reused for normal replacements. |
-| `MaxFeePerGas` | Optional profitability ceiling for the normal call and its replacements; cancellation may exceed it within the global ceiling. |
-| `CancelAt` | Optional wall-clock cancellation deadline. Integrations derive it from the earliest applicable protocol deadline without extending validity during RPC/planning. |
-| `Obsolete` | Context-aware protocol status check before signing and after a receipt sweep finishes without a valid receipt. True drops an unsigned call or starts same-nonce cancellation; errors preserve ownership. Either way the result's `Err` wraps the exported `ErrRequestObsolete`, so the integration can retire the work instead of retrying it. It is not an authorization mechanism. |
+| `MaxFeePerGas` | Optional profitability ceiling for every attempt of this business call, including reuse of an abandoned nonce. |
+| `Deadline` | Optional wall-clock submission and pending-tracking deadline. Integrations derive it from the earliest applicable protocol deadline without extending validity during RPC/planning. |
+| `Obsolete` | Context-aware protocol status check before signing and after a receipt sweep finishes without a valid receipt. True drops an unsigned call or abandons pending tracking; errors preserve ownership. Either way the result's `Err` wraps the exported `ErrRequestObsolete`, so the integration can retire the work instead of retrying it. It is not an authorization mechanism. |
 | `Confirmations` | Optional override of the manager confirmation depth; an explicit zero skips depth waiting. |
 | `Label`, `Solver` | Stable operation name and owning integration for logs/metrics/Sentry. |
 
@@ -53,11 +54,11 @@ The public YAML block is `txManager`. Values below are application defaults, aft
 | Setting | Default | Meaning |
 |---|---:|---|
 | `confirmations` | 2 | Blocks after inclusion; a request may override. Zero in YAML is treated as unset. Unknown work after restart uses this configured depth because the old request override is not retained. |
-| `maxFeeGwei` | Required for transaction senders | Finite positive global EIP-1559 ceiling, including cancellation. |
+| `maxFeeGwei` | Required for transaction senders | Finite positive global EIP-1559 ceiling for every broadcast. |
 | `broadcastTimeoutMs` | 5000 | Independent timeout of each submission RPC. |
 | `accountPollIntervalMs` | 30000 | Complete sender balance/nonce telemetry refresh cadence. |
 | `replacementIntervalMs` | 30000 | Fallback bump cadence while fee history is unreadable; also bounds the internal read budgets below. |
-| `pendingTimeoutMs` | 300000 | Switch an unresolved owned call to cancellation. Must be at least the replacement interval. |
+| `pendingTimeoutMs` | 300000 | Abandon an unresolved owned call and remember its nonce/fee floor for a fresh business request. Must be at least the replacement interval. |
 | `shutdownTimeoutMs` | 60000 | Hard bound on manager drain after shutdown begins. |
 | `horizon.maxBlocks` | 6 | Blocks (3–12) the initial fee cap keeps the full tip valid at the maximum base-fee increase. |
 | `horizon.blockTimeMs` | 12000 | Slot time: sets the twice-per-block evaluation tick and the next-block estimate timestamp. |
@@ -72,9 +73,9 @@ The public YAML block is `txManager`. Values below are application defaults, aft
 Polling defaults to 2 seconds in the Go manager; it is not a separate YAML field. Pending receipt reads,
 replacement nonce reads and obsolescence checks each use `min(2 seconds, replacementInterval/2)`; fee reads use
 `min(1 second, replacementInterval/2)`; a stalled call's gas re-estimate, fallback included, uses
-`min(5 seconds, replacementInterval/2)` and ends no later than the call's cancellation deadline. These
+`min(5 seconds, replacementInterval/2)` and ends no later than the call's submission deadline. These
 internal read budgets are separate from broadcast timeout. The initial estimate, before signing, has no
-budget of its own: the request's `CancelAt` and manager shutdown bound it, so a request without `CancelAt`
+budget of its own: the request's `Deadline` and manager shutdown bound it, so a request without `Deadline`
 (3F `redeem`) can hold the worker and the nonce lane while a read endpoint withholds its estimate
 ([3F plan §10](3F-PLAN.md#10-pending--deferred-items-post-phase-3)).
 
@@ -87,7 +88,7 @@ every `blockTimeMs/2` and acts only on a new block; `replacementIntervalMs` only
 when fee windows stay unreadable, and an ambiguous broadcast may still be rebroadcast while more than
 `broadcastTimeoutMs + blockTimeMs` remains before its deadline.
 
-## 4. Fees, replacements and cancellation
+## 4. Fees, replacements and abandonment
 
 Every call is priced for inclusion in the next block at the lowest spend. Spend is
 `gasUsed × (baseFee + tip)`; the fee cap only decides validity, so the manager spends headroom on the cap
@@ -129,38 +130,45 @@ fallback below.
     and replaced with a larger gas limit once the raw estimate exceeds its limit (`gas`); otherwise its exact
     bytes are rebroadcast, and after two such rebroadcasts a minimal bump replaces them (`stall`). The
     re-estimate runs on the lifecycle goroutine under its own budget (§3), so a read endpoint that never
-    answers it holds up receipts and shutdown cancellation for at most that budget, and deadline
-    cancellation not at all; cancellation that falls due during it is sent next, never a rebroadcast of
-    the call;
+    answers it holds up receipts for at most that budget. If the request deadline or pending timeout
+    passes during it, tracking is abandoned without rebroadcasting expired work;
   - anything else holds, because waiting is free.
 
   A reprice uses the ordinary replacement rule below (at least a 12.5% bump of both fields, the fresh fees
   when higher, capped at the request or global limit, capped-rebroadcast at the cap).
-- **Cancellation of an uncontested owned nonce** starts at the deadline, shutdown or `Obsolete` triggers and is sent at once. Its fees come
-  from the same rule for 21,000 gas, and it is then repriced by the same block evidence; a cancellation whose
-  broadcast failed is retried every tick.
+- **Abandonment** at the request deadline, pending timeout or `Obsolete` releases the local lifecycle
+  without broadcasting. The result is `abandoned`, with the attempted hash and an unknown execution result.
+  The manager remembers the nonce and highest signed fees; the next eligible business request can replace
+  it while a bounded latest-state nonce check still shows it unused.
 - **Fallback.** If fee windows stay unreadable for `replacementIntervalMs`, the pending attempt gets one
   cached-bump replacement per interval (`fallback`), so it cannot freeze. Unreadable windows use the same
   read-streak logging as receipt reads.
-- **Quote pricing.** `MaxFeePerGas` returns one replacement bump over the fee cap for the size of the latest
-  signed call, so a request ceiling taken from it at quote time still leaves the fill a full horizon.
+- **Quote pricing.** `MaxFeePerGas` prices the size of the latest signed call and includes the retained
+  replacement floor while an abandoned nonce remains unused. A bounded mined-nonce check discards a
+  consumed hint or fails pricing closed if unavailable. The returned ceiling includes one ordinary bump
+  when the global cap permits it, so fresh planning accounts for the cost of replacing abandoned work.
   Startup (`ValidateFeeHeadroom`) rejects a congested tip cap that cannot fit under the initial fee limit.
 
-Normal calls reserve one 12.5% bump below the global ceiling for cancellation. Initial sends reserve
-another bump inside their normal ceiling for a replacement. Request profitability limits also bound
-normal attempts. Replacements choose at least a 12.5% bump and fresh fees when available; unavailable
-fresh fees fall back to bumping the last signed fees. Cancellation is a 21,000-gas, zero-value self-transfer
-with the same nonce and may exceed the request cap, but never the global cap.
+Ordinary initial sends reserve one 12.5% bump under the request and global ceilings for a replacement.
+Reusing an abandoned nonce may consume that headroom when its required floor is higher, but still obeys
+the full request and global ceilings.
+Replacements choose at least a 12.5% bump and fresh fees when available; unavailable fresh fees fall back
+to bumping the last signed fees. A fresh request reusing an abandoned nonce has new destination, calldata,
+value and gas; both fee fields must exceed the remembered floors by at least 12.5%. Its own profitability
+ceiling and the global ceiling remain authoritative. If the fresh call cannot fit, it fails before signing
+and retains the hint for later eligible work. The bot never sends zero-value self-transfers to clear nonces.
 
 All signed variants are retained by exact hash. An ambiguous send does not prove absence from the
 network. The next evaluated block rebroadcasts the uncertain attempt's exact bytes once, without adding a
-duplicate hash or changing fees; later evidence can reprice it. A cancellation deadline or shutdown
-bypasses that grace retry. At the fee cap, the latest applicable attempt can be rebroadcast unchanged.
+duplicate hash or changing fees; later evidence can reprice it. A request deadline or pending timeout
+bypasses that grace retry and abandons tracking. At the fee cap, the latest applicable attempt can be rebroadcast unchanged.
 A `nonce too low` response never by itself authorizes re-signing the calldata at a different nonce.
 
-The cancellation bound is the earlier of the pending timeout and a supplied `CancelAt`. A cancellation
-check may become due during fee lookup and promote the replacement. A deadline coinciding with a
-replacement tick must not produce a second broadcast for the same tick.
+The tracking bound is the earlier of the pending timeout and a supplied `Deadline`. It is checked again
+after fee or gas lookup, so a deadline coinciding with a replacement tick produces no late broadcast.
+Abandonment does not prove the old call cannot land: a timeout can end tracking of still-valid work, and
+a protocol status/deadline check is separate from inclusion. Solvers reconcile current business state
+before rebuilding a retry.
 
 
 The base-fee bound holds only on chains using the Ethereum base-fee rule (mainnet, Hoodi, Sepolia).
@@ -169,7 +177,7 @@ judges only the most recent blocks.
 
 ## 5. Receipt polling and confirmation
 
-The lifecycle goroutine owns mutable attempts, sweep progress, fee/cancellation state, failure streaks
+The lifecycle goroutine owns mutable attempts, sweep progress, fee/deadline state, failure streaks
 and outcomes. One reader goroutine performs pending receipt RPC I/O only. The owner sends a copied
 attempt over an unbuffered channel and receives its receipt/error alongside lifecycle timers. At most
 one pending receipt read is outstanding; the reader neither changes ownership nor logs lifecycle events.
@@ -181,7 +189,7 @@ delay discovery of a later receipt, but cannot hold up the owner's timer handlin
 on the owner itself, so each call carries its own bound: while one runs, the owner services no receipt,
 timer or shutdown request, and the lifecycle context is detached from manager cancellation until the
 shutdown drain expires. New owner I/O must add a bound of its own. Signing is local CPU work today; a
-remote signer must bound `SignTx` itself, because a cancellation signs on that deadline-free context.
+remote signer must bound `SignTx` itself and honor the request/lifecycle context.
 
 An ordinary sweep covers a fixed number of tracked variants in round-robin order. Between RPCs, the
 newest appended variant gets a priority read without resetting the ordinary cursor. Priority and ordinary
@@ -191,14 +199,20 @@ never queue overlapping sweeps; every attempt remains tracked. `NotFound` is a s
 without a receipt. RPC failure streaks are judged per sweep, not cleared by one hash while another fails.
 Only after such a sweep completes without a valid receipt does the owner evaluate `Obsolete`: a protocol
 terminal status may describe our own successful fill. The callback is not run on intervening poll ticks.
-Deadline and shutdown cancellation remain independent of receipt progress. This ordering reduces the
-receipt/status race but cannot make separate on-chain reads atomic; exact-hash reconciliation is retained.
+Pending deadline and timeout timers are handled independently of receipt RPC progress. Once due, a final
+receipt grace of at most one pending receipt-read budget gives an available owned receipt precedence;
+incomplete or unavailable sweeps then return execution-unknown abandonment and release the lane.
+`Obsolete` remains evaluated after a complete ordinary sweep. Once a valid receipt begins confirmation,
+the manager follows confirmation policy rather than abandoning included work at the pending deadline.
+This ordering reduces the receipt/status race but cannot make separate on-chain reads atomic.
 Invalid receipts are separately rejected: receipt/block number must exist, transaction hash must match,
 and block hash must be nonzero.
 
 Only the owner accepts a receipt candidate and begins confirmation; the reader is idle during that wait.
-Confirmation uses a stable head and hash-addressed parent ancestry to prove that the receipt belongs to
-that head, without relying on endpoint affinity. Read fallbacks remain available. Incoherent/unavailable
+Before waiting for depth, a canonical preflight uses a stable head and hash-addressed parent ancestry
+under one overall receipt-read budget, capped by any final receipt grace. An unproven receipt resumes
+pending tracking; only a proven inclusion continues confirmation beyond the pending deadline.
+Confirmation repeats the stable-head ancestry proof at the configured depth without endpoint affinity. Read fallbacks remain available. Incoherent/unavailable
 snapshots are retried; two consecutive missing receipts or a proven fork change can resume pending
 tracking. A read error breaks the consecutive-miss streak. A receipt for an older signed variant remains
 valid evidence for the same nonce.
@@ -211,25 +225,23 @@ reorgs of completed transactions or reopen integration orders.
 | `confirmed` | Normal call succeeded and satisfied confirmation policy. |
 | `included_unconfirmed` | Successful inclusion observed, but confirmation waiting ended with an error. |
 | `reverted` | Receipt reports execution failure; an error during confirmation is retained in the result. |
-| `cancelled` | Successful cancellation receipt satisfied confirmation policy; `Err` explains that the requested call was cancelled and wraps `ErrRequestObsolete` when `Obsolete` started the cancellation. |
-| `cancelled_unconfirmed` | Successful cancellation inclusion observed, but confirmation waiting ended with an error. This is not proof that it is safe to retry the call. `Err` also wraps `ErrRequestObsolete` when `Obsolete` started the cancellation. |
+| `abandoned` | Pending timeout, request deadline or `Obsolete` ended tracking without another broadcast. `Err` wraps `ErrAbandoned`, and also `ErrRequestObsolete` for an obsolete call. The attempted hash is retained without a receipt; execution remains unknown. |
 | `submission_error` | Submission/pre-sign path failed without a retained pending lifecycle, including an unsigned call `Obsolete` dropped (`Err` wraps `ErrRequestObsolete`). |
 | `tracking_stopped` | Lifecycle tracking stopped before a terminal receipt was established. |
 | `nonce_conflict` | Initial broadcast returned nonce-too-low or replacement-underpriced. The attempted hash is retained in the result, with no receipt. The lane is released immediately; execution is unknown. |
 | `nonce_consumed` | The sending endpoint reports a higher mined nonce after every tracked hash returned `NotFound`. No receipt is synthesized; execution is unknown and account observation is subject to lag/reorgs. |
 
 `Result.NotAdmitted` distinguishes admission rejection from an admitted operation failure. `Err`, receipt
-and outcome must be interpreted together; cancellation is a terminal result but not a successful fill.
+and outcome must be interpreted together; abandonment is a terminal tracking result with unknown execution.
 Operational counters are not a canonical accounting ledger.
-Both `nonce_conflict` and `nonce_consumed` require protocol/backend reconciliation before an integration decides whether to retry;
+`abandoned`, `nonce_conflict` and `nonce_consumed` require protocol/backend reconciliation before an integration decides whether to retry;
 the manager never moves the original calldata to a new nonce automatically. The result's hash identifies
-an owned attempt, not a discovered winning transaction. It is neither a successful inclusion nor a
-confirmed cancellation.
+an owned attempt, not a discovered winning transaction or proof of successful inclusion.
 
 ## 6. RPC routing, nonce conflicts and restart
 
 `chain.rpcAttemptTimeoutMs` configures the HTTP(S) transport's per-endpoint attempt cap (default
-20,000 ms), including response-body reads, on all read/write/cancellation clients. Shorter caller
+20,000 ms), including response-body reads, on all read/write clients. Shorter caller
 deadlines remain authoritative and are shared across remaining fallback endpoints. Fee/receipt read
 budgets and `txManager.broadcastTimeoutMs` are unchanged. This controls the solver's wait for an
 endpoint such as eRPC, not eRPC's own upstream retry policy; WebSocket/IPC behavior is unchanged.
@@ -238,12 +250,6 @@ same transport path; enabling metrics does not change how the timeout is selecte
 
 Normal broadcasts and latest/pending admission account nonce reads use one non-fallback write endpoint:
 `chain.writeRpcUrl`, or primary `chain.rpcUrl` when omitted. An explicit write endpoint is chain-ID checked.
-Optional `chain.cancelRpcUrl` routes same-nonce zero-value self-cancellations to a dedicated, chain-ID-checked
-endpoint. Initial cancellation, later cancellation fee bumps, and exact cancellation rebroadcasts all use
-that route. Normal fill replacements and nonce reads continue through the ordinary write endpoint.
-An empty cancellation URL preserves the ordinary write route; a configured endpoint's error never triggers
-cross-endpoint fallback. `txmanager` selects the optional `SendCancellationTransaction` backend capability
-only for cancellation attempts; plain EVM backends without that capability keep using `SendTransaction`.
 Fee, receipt and state reads use the ordinary read client/fallbacks. Signed bytes are never automatically
 replayed across read endpoints. Account telemetry (balance plus mined and pending nonce gauges) reads only
 through the read client, via the optional `accountTelemetryBackend` capability `chain.Client` provides, so a
@@ -254,13 +260,17 @@ remains documented in the [README configuration section](../README.md#configurat
 ### Fresh pending nonce and initial collisions
 
 `Initialize` verifies one bounded pending nonce read. Every new broadcast reads pending again immediately
-before signing, without a cached counter, empty-pool requirement or account-confirmation proof. The
+before signing, without a cached counter, empty-pool requirement or account-confirmation proof. If the
+manager remembers an abandoned nonce, it also reads latest mined state: it reuses that nonce while unused,
+even if pending counts the old call. Mined advancement discards the hint; a failed nonce read defers signing
+and retains it. Failed preparation, signing or definitive submission of the next request also retains
+the hint, including any higher signed fee floor. The
 sending endpoint must include accepted public/private submissions from the other replicas in that view.
 The local lifecycle slot serializes this process's work only. Two processes can read the same nonce.
 
 An initial nonce-too-low or replacement-underpriced response yields `OutcomeNonceConflict`, an error
 wrapping `ErrNonceConflict`, and the exact attempted hash with no receipt. The worker ends that request
-and releases the slot immediately. It does not track or cancel the competing transaction and does not
+and releases the slot immediately. It does not track the competing transaction and does not
 re-sign business calldata at another nonce. An `already known` response and transport ambiguity retain
 normal ownership and receipt tracking: they may describe an accepted transaction.
 
@@ -271,7 +281,7 @@ signing and does not create a persistent account pause. `Available` reports init
 ### Owned replacements and uncertain execution
 
 Every replacement path checks the sending endpoint's latest mined nonce with its own bounded RPC,
-including cancellations and exact rebroadcasts. If it has advanced beyond the owned nonce, no more
+including exact rebroadcasts. If it has advanced beyond the owned nonce, no more
 replacement bytes are signed/broadcast. A nonce RPC error defers replacement; pending advancement alone
 cannot suppress it because this process's own unmined submission can advance pending.
 
@@ -283,29 +293,30 @@ not claim inclusion, cancellation, failed execution or a winning peer; the accou
 receipt publication or a reorg. Neither uncertain nonce outcome authorizes automatic calldata replay.
 Each solver queries authoritative business state and rebuilds any retry under its existing bounds.
 
-Normal cancellation is limited to this process's accepted or uncertain signed lifecycle, at the same
-nonce and under the existing fee cap/deadline policy. There is no unknown-nonce watchdog or startup
-self-cancellation. If different relays accepted competing transactions at the same nonce, an owned
-replacement/cancellation may still compete with another replica's candidate; no peer ownership can be
-inferred from the nonce count.
+The reuse hint concerns only this process's abandoned signed lifecycle. There is no unknown-nonce watchdog,
+startup gap-clearing transaction or peer ownership lookup. It contains a nonce and fee floor, not old
+calldata or an instruction to retry an order. If different relays accepted competing transactions at the
+same nonce, a fresh replacement may still compete with another replica's candidate; the account count
+provides no exclusive ownership.
 
 ### Restart limits
 
 Signed attempts exist only in memory. Restart reads pending and can submit later nonces without
 recovering another process's calldata, fees or deadline. An abandoned lowest nonce can block all later
-transactions until its original sender or an operator replaces/cancels it. Queued transactions beyond a
+transactions until a valid transaction consumes that nonce. Queued transactions beyond a
 gap and hidden private submissions can evade standard pending reads. Consistent pending visibility,
 sender funds and eventual inclusion remain provider/operational assumptions, not coordination guarantees.
-For controlled maintenance, reconcile outstanding submissions on both write and cancellation routes
-before reusing the EOA. Confirmation of owned receipts does not make later deep reorgs impossible.
+The local reuse hint is lost on restart; it is not durable crash recovery. For controlled maintenance,
+reconcile outstanding write-route submissions before reusing the EOA. Confirmation of owned receipts does not make later deep reorgs impossible.
 
 ## 7. Shutdown
 
 Accepted tracking uses a manager lifecycle context detached from caller/intake cancellation. Solvers stop
 new commitments and finish their protocol preparation while the shared manager remains available to
-accepted work. Manager shutdown closes admission and requests active same-nonce cancellation when nonce
-ownership is not conflicted. It drains for at most `shutdownTimeoutMs`, then cancels lifecycle RPCs and
-delivers the shutdown-deadline error so process teardown can proceed. This does not guarantee mining or
+accepted work. Manager shutdown closes admission and drains ordinary receipt tracking and fee
+replacements for at most `shutdownTimeoutMs`, then cancels lifecycle RPCs and delivers a
+`tracking_stopped` result with the shutdown-deadline error so process teardown can proceed.
+It sends no shutdown transaction. This does not guarantee mining or
 confirmation before exit. Configure orchestrator grace for solver preparation/drain plus manager drain;
 see the composition in [run.go](../cmd/vault-solver/run.go).
 
@@ -349,8 +360,8 @@ Definitions: [metrics.go](../internal/txmanager/metrics.go),
 | Txmanager | `solver_bot_txmanager_requests_total` | `label`, `outcome` | Terminal results of logical on-chain operations, including the uncertain nonce outcomes. This is the request funnel for every solver, not proof of mined execution. |
 | Txmanager | `solver_bot_txmanager_inflight` | `label` | Requests accepted by the txmanager worker and still awaiting a terminal result; sustained values expose stuck transactions or nonce congestion. |
 | Txmanager | `solver_bot_txmanager_gas_used_total` | `label`, `outcome` | Receipt gas for mined transactions, including reverts. Divide by the matching request count for average gas; this is gas units, not native-token cost. |
-| Txmanager | `solver_bot_txmanager_fee_paid_wei_total` | `label`, `outcome` | Actual native-token fee paid by mined transactions, calculated from receipt `gasUsed × effectiveGasPrice`, including reverted and mined cancellation transactions. |
-| Txmanager | `solver_bot_txmanager_replacements_total` | `label`, `kind`, `reason` | Successfully broadcast replacements, cancellations and exact rebroadcasts (`kind` = `replacement`, `cancellation`, `rebroadcast`). Replacement `reason` is `validity`, `congestion`, `stall`, `gas` or `fallback`; a cancellation reports why cancellation started (`pending_timeout`, `request_deadline`, `shutdown`, `obsolete`); a rebroadcast is `stall`, `uncertain` (ambiguous first broadcast) or `capped` (fee cap reached). Spikes expose fee-policy, relay or congestion problems that terminal outcomes alone cannot show. |
+| Txmanager | `solver_bot_txmanager_fee_paid_wei_total` | `label`, `outcome` | Actual native-token fee paid by mined transactions, calculated from receipt `gasUsed × effectiveGasPrice`, including reverted transactions. |
+| Txmanager | `solver_bot_txmanager_replacements_total` | `label`, `kind`, `reason` | Successfully broadcast replacements and exact rebroadcasts (`kind` = `replacement`, `rebroadcast`). Replacement `reason` is `validity`, `congestion`, `stall`, `gas` or `fallback`; a rebroadcast is `stall`, `uncertain` (ambiguous first broadcast) or `capped` (fee cap reached). Spikes expose fee-policy, relay or congestion problems that terminal outcomes alone cannot show. |
 | Txmanager | `solver_bot_txmanager_admission_rejections_total` | `label`, `reason` | Requests rejected before the signed worker lifecycle. Reasons are `manager_stopped`, `deadline_exceeded`, `caller_cancelled`, or bounded fallback `other`; an expected busy `TrySend` probe is excluded. |
 | Txmanager | `solver_bot_txmanager_admission_wait_duration_seconds` | `label`, `outcome` | Time from a real send request until worker admission or a terminal pre-admission outcome. `outcome` is `admitted` or one of the bounded rejection reasons; expected busy `TrySend` probes are excluded. |
 | Txmanager | `solver_bot_txmanager_lifecycle_duration_seconds` | `label`, `outcome` | Time from worker admission through broadcast and terminal tracking. It excludes pre-admission nonce-lane wait, so use admission rejections alongside its latency distribution. |
@@ -377,22 +388,20 @@ returns decisions; it does not gain a signer, nonce manager or transaction-sendi
 
 ## 10. Verification and maintenance
 
-Receipt tests cover 52 independent budgets, timer handling during blocked reads, new/old hashes, reorg
-recovery, teardown and coincident cancellation/replacement ticks. Existing tests cover fee limits,
-ambiguous broadcasts, nonce conflicts, admission, result semantics and logging. The local Anvil target
-covers a real pending call repriced after a base-fee spike and real cancellations; unit test success alone
-is not that integration proof.
-Cancellation outcome tests also distinguish a satisfied confirmation policy from an interrupted wait;
-RFQ tests consume that distinction when deciding whether another fill is safe.
-Fee tests cover the base-fee bound, the tip rule, each repricing decision, fee-window parsing, the
-next-block estimate and its fallbacks, a stale send head, and scripted-chain lifecycles for stall
-rebroadcasts, congestion, validity, gas growth, unreadable windows and deadline cancellation. A stall
-re-estimate the read endpoint never answers, next-block or fallback, still lets a mined receipt resolve
-the call and the deadline cancel it on time, and a shutdown request cancels it once the estimate budget
-runs out; neither cancellation is preceded by a rebroadcast of the call. Lifecycle tests that need a replacement
-mine a block that supplies the evidence, since no timer bumps a pending call.
-Run repository-required build, race/coverage and lint gates for implementation changes. Current reader
-validation is local; it does not establish deployment or production rollout status.
+Receipt tests cover independent RPC budgets, timer handling during blocked reads, new/old hashes,
+confirmation-time reorg recovery and teardown. Unit tests verify abandonment without a self-transfer,
+fresh business nonce reuse despite a pending count above it, mined-nonce advancement, retained hints on
+RPC/preparation/submission failures, replacement fee floors, request/global ceilings and bounded shutdown.
+Solver tests verify current business-state reconciliation, fresh retries and obsolete-result precedence.
+The local Anvil target verifies real fee replacement after a base-fee spike, abandonment followed by a
+different business call at the same nonce, and three independent managers executing distinct orders.
+These public-pool tests do not establish private-provider retention or consistency guarantees.
+
+Fee tests cover the base-fee bound, tip rule, repricing decisions, fee-window parsing, next-block estimate
+and fallbacks, stale send heads, stall rebroadcasts, congestion, validity and gas growth. A stalled gas
+estimate remains bounded and cannot cause a broadcast after the request tracking deadline.
+Run repository-required build, race/coverage and lint gates for implementation changes. Local and hosted
+checks do not establish deployment or production rollout status.
 
 For each deployment, check that its read RPC honours `eth_estimateGas` block overrides (the
 "next-block gas estimate unsupported" Info line says it does not) and watch `replacements_total{reason}`: sustained `stall` rebroadcasts point at the relay, `gas` at contention on

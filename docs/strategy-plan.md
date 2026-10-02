@@ -246,12 +246,11 @@ unique gauges/histograms; the framework does not know them. RFQ, LI.FI, and Unis
 Unknown event/outcome, amount-kind, or state-view observations increment one bounded
 contract-drift counter instead of disappearing silently. Detailed gas, fee, and transaction lifecycle
 accounting remains in the [shared transaction manager](TXMANAGER-PLAN.md#8-observability).
-The generic HTTP chain transport records bounded logical requests and endpoint attempts by read/write/cancel/shared
+The generic HTTP chain transport records bounded logical requests and endpoint attempts by read/write/shared
 role, method, ordinal endpoint, and outcome; configured URLs and error strings never become labels.
 `solver_bot_solver_info{solver}` exposes bounded config-time membership for fleet joins.
 
-A process is one execution lane: one chain client (primary/fallback reads, optional private write endpoint,
-and optional cancellation broadcast endpoint), one signer, and one nonce-serialized txmanager shared by its configured solvers. Different
+A process is one execution lane: one chain client (primary/fallback reads and optional private write endpoint), one signer, and one nonce-serialized txmanager shared by its configured solvers. Different
 signer/RPC tuples run as separate processes with disjoint solver subsets and unique Prometheus `instance`
 (or deployment-supplied `lane`) target labels. Committed dashboards use the standard Kubernetes `pod` target
 label and query namespace/pod options from Prometheus rather than embedding deployment names. Application metrics do not carry URLs or deployment names.
@@ -260,9 +259,10 @@ signed lifecycles and reads a fresh pending nonce before every new send. Several
 the EOA, but nonces and off-chain commitments are not allocated atomically across processes; see the
 [replica plan](REPLICA-PLAN.md).
 
-The manager distinguishes confirmed cancellation from cancellation inclusion with an interrupted
-confirmation wait. RFQ owns the retry policy: a confirmed cancellation can re-enter fill planning after
-one configured poll interval and a fresh open-order poll. Each retry resolves the executable order,
+The manager abandons tracking at the pending timeout, request deadline or terminal business-status check
+without sending a cancellation transaction. Execution remains unknown. RFQ owns the retry policy: backend
+reconciliation followed by one configured poll interval and a fresh open-order poll can re-enter fill planning.
+Abandonment and nonce races share its `maxNonceRetries` budget. Each retry resolves the executable order,
 chain inputs, strategy plan, and discount signatures again. Retry budgets remain process-local; neither strategy code
 nor the generic manager decides whether to replay a protocol order.
 

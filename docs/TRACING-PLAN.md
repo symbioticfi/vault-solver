@@ -161,7 +161,7 @@ that triggered it, and the operator's receiver gets `traceparent`.
 through `otelhttp`, so there is exactly one span per logical JSON-RPC request no matter how many
 endpoints are attempted. The span is named by the bounded method (`batch` for batches), is a client
 span, and carries `rpc.system=jsonrpc`, `rpc.method`, `rpc.jsonrpc.request_id`, `chain.rpc.role`
-(`read`/`write`/`cancel`/`shared`) and `chain.rpc.batch`. Each endpoint attempt adds an `attempt` event with
+(`read`/`write`/`shared`) and `chain.rpc.batch`. Each endpoint attempt adds an `attempt` event with
 the role-local **ordinal** and its classified outcome — never the URL, the same rule the metrics
 follow. Every attempt's request gets `traceparent` injected, so the RPC provider can continue the
 trace. The span ends exactly where the metrics observation finishes: on response-body close, or
@@ -179,13 +179,13 @@ provider can tie the connection back to the dial but **never to an individual ca
 handshake at all. Each call is then spanned locally: `internal/chain/calls.go` shadows exactly the
 backend methods this repo calls (`CallContract`, `HeaderByNumber`, `HeaderByHash`, `FeeHistory`,
 `EstimateGas` and its next-block variant `EstimateGasNextBlock`, `TransactionReceipt`, `BalanceAt`, `CodeAt`, `BlockNumber`,
-`SendTransaction`, `SendCancellationTransaction`, `NonceAt`, `PendingNonceAt`, `TransactionSenderBalanceAt`) and starts a client span
+`SendTransaction`, `NonceAt`, `PendingNonceAt`, `TransactionSenderBalanceAt`) and starts a client span
 named by the JSON-RPC method with `rpc.system=jsonrpc`, `rpc.method`, `chain.rpc.role` and
 `chain.rpc.transport`, so dashboards see one series across transports. A cancelled call and an
 `ethereum.NotFound` (the null result a node returns for an unmined transaction or an unknown block)
 end the span with an event and no Error status: over HTTP the same response classifies as a success,
 and an unmined transaction is the txmanager's steady state, not a fault. `Multicall` is not spanned: it
-reaches the chain through `CallContract`, which is where its `eth_call` span belongs. Read, write, and cancellation
+reaches the chain through `CallContract`, which is where its `eth_call` span belongs. Read and write
 endpoints are labelled separately, since their transports may differ. On the HTTP path the
 shadowed methods are plain passthroughs and the transport's spans are the only RPC spans — a new call
 site through the client needs a new shadow or it goes untraced on websocket and IPC.
@@ -204,14 +204,14 @@ contexts with `trace.ContextWithSpan`, legal even after the caller's context is 
 survives the manager's deliberate detachment and covers admission → broadcast → terminal outcome.
 
 Children: `txmanager.broadcast` (fee quote, gas estimate, nonce, sign, send — each RPC call becomes a
-grandchild automatically) and one `txmanager.replace` per replacement carrying `tx.attempt`,
-`tx.cancellation` and `tx.replace_reason` (the `replacements_total{reason}` value that triggered it).
+grandchild automatically) and one `txmanager.replace` per replacement carrying `tx.attempt`
+and `tx.replace_reason` (the `replacements_total{reason}` value that triggered it).
 Receipt polls are ordinary RPC child spans. Attributes: `solver` (from
 `Request.Solver`), `tx.label`, `tx.hash` and `tx.nonce` once known, and terminal `tx.outcome`; status
-is Error for `reverted`, `cancelled`, `cancelled_unconfirmed`, `submission_error` and `tracking_stopped`, and unset for
-`confirmed`, `included_unconfirmed` and the expected `nonce_conflict` / `nonce_consumed` outcomes. These record
+is Error for `reverted`, `submission_error` and `tracking_stopped`, and unset for
+`confirmed`, `included_unconfirmed` and the expected `abandoned`, `nonce_conflict` / `nonce_consumed` outcomes. These record
 nonce contention or observed mined nonce advancement with an unknown business result; they must not be presented as our
-transaction's inclusion, a winning peer, a confirmed cancellation or a fill failure. An attached
+transaction's inclusion, a winning peer or a fill failure. An attached
 `tx.hash` remains the process's attempted hash. Account evidence never manufactures a receipt, so this
 outcome adds no receipt gas/fee accounting. Solver completion stages record the same outcome and reconcile
 authoritative protocol/backend state before considering a retry; see [REPLICA-PLAN](REPLICA-PLAN.md).
@@ -279,7 +279,7 @@ need to know the solver's prefix. Log lines keep their existing camelCase keys (
 | `auction.id`, `request.address` | 3F auction spans, RedStone auction and result spans | 3F auction id and Request address, RedStone auction id |
 | `adapter.address` | quote, order and 3F auction/redeem spans | resolved adapter (3F: the offer's maker) |
 | `strategy.name` | strategy stage spans | strategy registry key |
-| `tx.label`, `tx.hash`, `tx.nonce`, `tx.outcome`, `tx.attempt`, `tx.cancellation` | txmanager spans; `tx.hash`/`tx.outcome` also on the solver's completion span | txmanager |
+| `tx.label`, `tx.hash`, `tx.nonce`, `tx.outcome`, `tx.attempt` | txmanager spans; `tx.hash`/`tx.outcome` also on the solver's completion span | txmanager |
 | `rpc.method`, `rpc.jsonrpc.request_id`, `chain.rpc.role`, `chain.rpc.batch`, attempt `endpoint` ordinal | RPC spans | fallback transport |
 | `peer.service` | outbound HTTP client spans | the wiring's peer name |
 | `reason_code` | any span ended with a classified error | the error's `ReasonCode()` |

@@ -274,7 +274,7 @@ test-oev-live: ## OEV live checks — Morpho API discovery plus optional Sepolia
 	go test -tags live -run TestLive -v ./internal/solvers/redstoneoev/...
 
 .PHONY: test-txmanager-anvil
-test-txmanager-anvil: ## Exercise replacement/cancellation and independent replica contention against Anvil
+test-txmanager-anvil: ## Exercise fee replacement, nonce reuse and independent replica contention against Anvil
 	@command -v anvil >/dev/null
 	go test -race -tags integration -run TestAnvil -v ./internal/txmanager
 

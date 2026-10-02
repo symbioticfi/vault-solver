@@ -146,7 +146,7 @@ func TestReservationLifecycleFollowsOrderOutcome(t *testing.T) {
 		{name: "revert releases", result: txmanager.Result{
 			Hash: common.HexToHash("0xbad"), Outcome: txmanager.OutcomeReverted, Err: errors.New("reverted"),
 		}, settled: "open", status: statusFailed},
-		{name: "cancellation retry keeps", result: confirmedCancellation(), settled: "open",
+		{name: "abandonment retry keeps", result: abandonedTxResult(), settled: "open",
 			status: statusRetryWaiting, reserved: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -13,7 +13,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
-// orderStatus is the local order lifecycle. Confirmed cancellation and uncertain nonce outcomes
+// orderStatus is the local order lifecycle. Abandonment and uncertain nonce outcomes
 // can enter retry_waiting before a fresh open-order poll re-arms them; other signed failures are terminal.
 type orderStatus string
 
@@ -51,16 +51,16 @@ const (
 // orderRecord is the local tracking state for one order. The executable payload is fetched fresh
 // from the backend at fill time; only a translated deadline is retained to bound unsigned retries.
 type orderRecord struct {
-	OrderID             string
-	QuoteID             string
-	Status              orderStatus
-	TxHash              common.Hash
-	LastError           string
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
-	CancellationRetries int
-	RetryAt             time.Time
-	RetryDeadline       time.Time
+	OrderID       string
+	QuoteID       string
+	Status        orderStatus
+	TxHash        common.Hash
+	LastError     string
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	NonceRetries  int
+	RetryAt       time.Time
+	RetryDeadline time.Time
 	// IncludedAt is the block a confirmed fill landed in; zero until then. A snapshot read at or
 	// after it already reflects the fill, so the reservation is not subtracted from it.
 	IncludedAt uint64
@@ -299,18 +299,18 @@ func (s *store) recordAttempt(orderID string) int {
 	return s.attempts[orderID]
 }
 
-// scheduleNonceRetry follows a confirmed cancellation or an uncertain nonce result whose backend
-// order remains open. Both share the configured cancellation retry budget, retained across re-queueing.
+// scheduleNonceRetry follows an abandoned fill or uncertain nonce result whose backend
+// order remains open. The configured nonce retry budget is retained across re-queueing.
 func (s *store) scheduleNonceRetry(
 	orderID string, limit int, retryAt, deadline time.Time, txHash common.Hash, lastErr string,
 ) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec := s.orders[orderID]
-	if rec == nil || rec.CancellationRetries >= limit {
+	if rec == nil || rec.NonceRetries >= limit {
 		return false
 	}
-	rec.CancellationRetries++
+	rec.NonceRetries++
 	rec.Status = statusRetryWaiting
 	rec.TxHash = txHash
 	rec.LastError = lastErr
