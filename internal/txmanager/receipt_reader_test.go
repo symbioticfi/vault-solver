@@ -91,6 +91,7 @@ func TestPendingReceiptDoesNotBlockLifecycleEvents(t *testing.T) {
 					t.Fatal(err)
 				}
 				backend.blocked = pending.originalHash
+				delete(backend.receipts, pending.originalHash) // The blocked read belongs to an unmined original.
 				m.trackUnminedTransaction(pending)
 				results := make(chan Result, 1)
 				go func() { results <- m.waitForPendingTransaction(t.Context(), pending) }()

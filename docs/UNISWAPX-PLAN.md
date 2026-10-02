@@ -183,7 +183,7 @@ wrapping `txmanager.ErrRequestObsolete` retires the order without a retry or a b
 `fill/obsolete`. Continued quoting does not guarantee execution within exclusivity;
 the exclusive window must also cover any preceding fill's confirmation time.
 
-With opt-in RPC nonce reconciliation, `nonce_consumed` has no owned receipt and never counts as a successful
+With canonical RPC nonce reconciliation, `nonce_consumed` has no owned receipt and never counts as a successful
 fill. Completion invalidates inventory and releases the local reservation, then defers the order until the
 normal polling interval without increasing execution-failure attempts or opening the fade breaker. A later
 open-order poll and the normal fresh deadline, planning, preflight and protocol-obsolescence checks decide

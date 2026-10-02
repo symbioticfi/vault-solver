@@ -141,6 +141,45 @@ func TestReconcileContestedDroppedCandidateWaitsFullTimeout(t *testing.T) {
 	}
 }
 
+func TestReconcileContestedCancellationRequiresCurrentCanonicalNonce(t *testing.T) {
+	for _, scenario := range []string{"mined unconfirmed", "lower nonce reorg", "current state unavailable", "head changes"} {
+		t.Run(scenario, func(t *testing.T) {
+			b := newCappedRecoveryBackend()
+			b.sendErrs = []error{errors.New("replacement transaction underpriced")}
+			m := sharedNonceManager(t, b, 2)
+			pending, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0x123")})
+			if err != nil {
+				t.Fatal(err)
+			}
+			pending.firstSignedAt = time.Now().Add(-m.cfg.PendingTimeout)
+			b.pendingNonce = 8 // The write endpoint still reports the rejected candidate's nonce.
+			current := uint64(8)
+			b.currentNonce = &current
+			switch scenario {
+			case "lower nonce reorg":
+				current = 6
+			case "current state unavailable":
+				current, b.currentHashErr = 7, errors.New("canonical account state unavailable")
+			case "head changes":
+				current, b.latestHeads = 7, []uint64{100, 101}
+			}
+			_, _ = m.tryReplace(t.Context(), pending, replaceIntent{cancellation: true})
+			if len(b.cancellations) != 0 || len(pending.attempts) != 1 || m.Available() {
+				t.Fatal("stale or unproved canonical nonce authorized a contested cancellation")
+			}
+			current, b.currentHashErr, b.latestHeads = 7, nil, nil
+			if _, err := m.tryReplace(t.Context(), pending, replaceIntent{cancellation: true}); err != nil || len(b.cancellations) != 1 {
+				t.Fatalf("canonical nonce agreement did not restore capped recovery: %v", err)
+			}
+			current = 8
+			_, _ = m.tryReplace(t.Context(), pending, replaceIntent{cancellation: true})
+			if len(b.cancellations) != 1 || len(pending.attempts) != 2 {
+				t.Fatal("known unconfirmed inclusion authorized signed cancellation rebroadcast")
+			}
+		})
+	}
+}
+
 func TestReconcileNormalReplacementCannotResetOriginalConflictAge(t *testing.T) {
 	b := newCappedRecoveryBackend()
 	m := sharedNonceManager(t, b, 0)
@@ -148,6 +187,7 @@ func TestReconcileNormalReplacementCannotResetOriginalConflictAge(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	delete(b.receipts, pending.originalHash) // The original remains pending while its fee is replaced.
 	pending.firstSignedAt = time.Now().Add(-m.cfg.PendingTimeout)
 	before := pending.firstSignedAt
 	if _, err := m.tryReplace(t.Context(), pending, replaceIntent{}); err != nil {
@@ -156,6 +196,7 @@ func TestReconcileNormalReplacementCannotResetOriginalConflictAge(t *testing.T) 
 	if !pending.firstSignedAt.Equal(before) || time.Since(pending.horizon.sentAt) >= m.cfg.PendingTimeout {
 		t.Fatal("replacement altered the immutable original age")
 	}
+	delete(b.receipts, pending.attempts[len(pending.attempts)-1].hash)
 	m.markNonceConflict(pending.nonce, pending.originalHash)
 	if _, err := m.tryReplace(t.Context(), pending, replaceIntent{cancellation: true}); err != nil || len(b.cancellations) != 1 {
 		t.Fatal("fresh replacement reset an already-expired conflict recovery timeout")

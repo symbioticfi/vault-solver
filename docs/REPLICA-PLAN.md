@@ -1,7 +1,8 @@
 # Independent processes sharing a transaction sender
 
-This plan describes opt-in `txManager.reconcileNonces`. It keeps the existing EOA, signer interface,
-solver configuration and per-process transaction manager. The [README](../README.md#independent-processes-with-the-same-eoa)
+This plan describes canonical nonce reconciliation, which always runs for transaction-manager users.
+It keeps the existing EOA, signer interface, solver configuration and per-process transaction manager.
+The [README](../README.md#independent-processes-with-the-same-eoa)
 contains the operator configuration and three-container example; the [transaction manager plan](TXMANAGER-PLAN.md)
 defines request, receipt, fee and shutdown semantics.
 
@@ -13,7 +14,7 @@ one signer and one transaction manager shared by its local solvers. Neither repl
 identity is passed into transaction execution. One unresolved signed lifecycle per process remains the
 local concurrency bound.
 
-The mode does not assign separate transaction nonce sequences. The ordinary EOA has one sequential
+Reconciliation does not assign separate transaction nonce sequences. The ordinary EOA has one sequential
 nonce on-chain, and concurrent processes can read the same available nonce before either sends. The
 chain decides whether a nonce was consumed. It does not allocate a nonce to a process or promise ordering,
 fairness or inclusion. Same-nonce transactions, replacements and cancellations can compete on fees and
@@ -26,16 +27,17 @@ nonce. No solver receives a cross-process lock or a global quote/reservation boo
 
 ## 2. Configuration and provider contract
 
-`txManager.reconcileNonces` defaults to `false`, preserving exclusive-account startup and conflict
-behavior. Every process sharing the EOA must explicitly enable it. The mode requires:
+Canonical nonce reconciliation is always active for every transaction-manager user, whether one process
+or several use the EOA. It requires:
 
 - The same configured chain, sender and intended read/write routes in each process; keep the current
   signer and solver config. Distinct scrape target labels identify operational instances.
 - A write endpoint whose `eth_getTransactionCount(address, "pending")` includes accepted private
   transactions as well as public transactions. Broadcasts and admission latest/pending nonce reads
   stay on this non-fallback endpoint.
-- Read endpoints that serve coherent headers and account nonce state at a specific recent block hash
-  through EIP-1898 (`ReadNonceAtHash`, `requireCanonical: true`), including the account state needed at the confirmation depth.
+- Read endpoints that serve coherent headers and account nonce state at specific recent block hashes
+  through EIP-1898 (`ReadNonceAtHash`, `requireCanonical: true`), for both the current head and its
+  confirmation ancestor.
   Canonicality is checked independently of endpoint affinity; a numeric block read is not substituted
   when exact-hash reads fail.
 - A cancellation route that accepts same-nonce self-cancellations: existing `chain.cancelRpcUrl` when
@@ -55,14 +57,22 @@ unsupported exact-hash state reads preserve the wait rather than authorize a gue
 
 ## 3. Startup and fresh admission
 
-Startup keeps readiness false while the write endpoint reports unknown contiguous pending activity or
-mined account activity that has not reached `txManager.confirmations`. It cannot infer an old attempt's
-hash, deadline, request confirmation override or fee cap after restart because all signed state was in memory.
+Startup keeps readiness false while unknown contiguous pending activity exists or canonical read
+account activity has not reached `txManager.confirmations`, even if the write endpoint lags. It cannot
+infer an old attempt's hash, deadline, request confirmation override or fee cap after restart because
+all signed state was in memory.
 
-Account confirmation evidence is derived from a stable canonical head and its hash-addressed ancestry.
-The sender nonce is read at the exact hash at the required depth; incoherent or unavailable evidence is
-retried. A latest nonce increase alone does not release a nonce. Unknown work uses the configured manager
-confirmation depth; per-request overrides lost on restart are not reconstructed.
+Fresh admission reads the sender nonce at both the current canonical head and its confirmation ancestor
+by exact hash, validates their ancestry and verifies that the head remains stable across the proof.
+Both account nonces must equal the write endpoint's latest and pending nonces before signing. Thus a
+stale write endpoint cannot hide a read-head nonce advance that has not reached the required depth.
+Incoherent or unavailable evidence is retried. Unknown work uses the configured manager confirmation
+depth; per-request overrides lost on restart are not reconstructed.
+
+Each nonce/header RPC in an admission, account-consumption or contested-cancellation proof has its own
+`min(2 seconds, replacementInterval/2)` timeout. The entire proof follows its caller/lifecycle context
+and still requires the final stable-head check. It does not share one short aggregate budget across
+sequential ancestry reads, so a larger confirmation depth can complete on a healthy but slower endpoint.
 
 Each new admission refreshes nonce evidence instead of trusting a local increment from a previous
 request. Pending or insufficiently confirmed account activity, or unavailable proof, rejects the attempt
@@ -92,9 +102,13 @@ Recovery handles one unknown nonce at a time and does not guess how to drain mul
 
 An owned candidate rejected in a same-nonce collision keeps its original hashes. Only after the full
 `PendingTimeout` age from immutable `firstSignedAt`, set immediately before the initial sign/send,
-may it use the same capped cancellation after fresh
-latest/pending checks. An earlier `Request.CancelAt` or shutdown does not shorten this wait. Its
-known original/cancellation receipts retain the ordinary receipt-result path; no business calldata is
+may it use the same capped cancellation. Before signing or rebroadcasting it, fresh latest/pending
+checks and a stable zero-depth, exact-hash canonical-head proof must show that the current account nonce
+equals both write latest and the tracked nonce. A lagging write endpoint cannot authorize cancellation
+of mined but unconfirmed work, nor a future nonce after a reorg. Unknown startup cancellation already
+passes the stricter fresh-admission head/ancestor proof. An earlier `Request.CancelAt` or shutdown does
+not shorten this wait. Its known original/cancellation receipts retain the ordinary receipt-result path;
+no business calldata is
 moved to a new nonce by recovery.
 
 Preexisting unknown work has no request result to deliver. The manager retains/rebroadcasts its exact
@@ -124,9 +138,11 @@ Older signed variants can win, and cancellation can lose to the original call. O
 where every known hash returns `NotFound` enables the account-consumption path. RPC errors, malformed
 receipts and unresolved owned receipt evidence keep tracking active rather than being treated as absence.
 
-When no owned receipt settles the lifecycle, confirmed account state can prove that the tracked nonce
-has been consumed. The manager then returns `OutcomeNonceConsumed` (`nonce_consumed`) with an error
-wrapping `ErrNonceConsumed` and ends its local lifecycle. Admission is refreshed separately; newer
+When no owned receipt settles the lifecycle, the nonce at the canonical confirmation ancestor can prove
+that the tracked nonce has been consumed. This runtime proof does not require current-head nonce
+equality: later account activity must not prevent resolving an older consumed nonce. The manager then
+returns `OutcomeNonceConsumed` (`nonce_consumed`) with an error wrapping `ErrNonceConsumed` and ends its
+local lifecycle. Admission is refreshed separately; newer
 unknown account activity can still keep the lane paused. The result does not synthesize a receipt or
 discover a canonical winning hash. Its attempted hash is not proof of inclusion. The outcome means the
 business result is unknown: our own transaction
@@ -144,7 +160,7 @@ revalidate deadline, current status, liquidity, fees and any time-sensitive sign
 
 ## 5. Integration behavior and limits
 
-Account reconciliation is available to all transaction-manager users. Business reconciliation stays
+Account reconciliation always applies to transaction-manager users. Business reconciliation stays
 inside each integration; its plan records the detailed policy.
 
 | Integration | Response to unknown execution |
@@ -153,7 +169,7 @@ inside each integration; its plan records the detailed policy.
 | [UniswapX](UNISWAPX-PLAN.md) | Release local capacity and invalidate quotes; retry through fresh order polling and revalidation. Nonce consumption is neither a successful fill nor a failed-attempt/breaker event. |
 | [LI.FI](LIFI-PLAN.md) | Release the local reservation. No automatic retry is scheduled; further attempts require upstream WebSocket redelivery or REST recovery after reconnect, which checks on-chain status and validity and rebuilds the plan. A healthy feed does not periodically REST-poll an order lost through contention. |
 | [3F](3F-PLAN.md) | Treat nonce consumption as an expected decline without a redemption-success metric. The next `canWithdraw` poll reads request state again and excludes finalized requests. Offers and capacity remain uncoordinated across processes. |
-| [OEV](OEV-PLAN.md) | Settlement is submitted externally and does not use this transaction manager. This option provides no new OEV replication guarantee. |
+| [OEV](OEV-PLAN.md) | Settlement is submitted externally and does not use this transaction manager. Account reconciliation provides no new OEV replication guarantee. |
 
 Local quote caches, in-flight sets, liquidity reservations, cancellation retry budgets and offer counters
 are not shared. Simultaneous quotes/offers can observe the same liquidity and produce duplicate or
@@ -194,10 +210,12 @@ execution and adds no synthetic receipt, gas or fee accounting. An attempted `tx
 displayed as the canonical winner. Solver business reconciliation and later successful retries have
 their own observations; [TRACING-PLAN](TRACING-PLAN.md) defines the span contract.
 
-Required verification covers pending and insufficiently confirmed startup, fresh admission across independent
-managers, exact-hash canonical account evidence, own-receipt priority, nonce consumption without an owned
+Required verification covers pending and insufficiently confirmed startup, a stale write endpoint while
+the canonical read-head nonce has advanced, fresh admission across independent managers, exact-hash
+canonical account evidence, own-receipt priority, nonce consumption without an owned
 receipt, timeout recovery after a pending entry disappears, deterministic local recovery candidates,
-multiple unknown nonces, capped recovery rejection, RPC failures, reorgs and shutdown. Solver tests must prove an uncertain result is reconciled
+multiple unknown nonces, capped recovery rejection, delayed reads at larger confirmation depths,
+per-call timeouts, RPC failures, reorgs and shutdown. Solver tests must prove an uncertain result is reconciled
 before any fresh business request is built. `make test-txmanager-anvil` runs the race-enabled real Anvil
 suite, including independent-manager contention; CI runs the same target. It complements scripted RPC
 tests and does not prove private-relay retention or a production deployment. Build, race/coverage and lint gates

@@ -574,7 +574,7 @@ propagation queue, reservation-blocked built-in decisions have only the bounded 
 described above. The txmanager
 may replace the same pending nonce as described above; that is fee management for one submission, not order
 retry.
-With opt-in RPC nonce reconciliation, `nonce_consumed` releases the completed fill's local reservation and
+With canonical RPC nonce reconciliation, `nonce_consumed` releases the completed fill's local reservation and
 records an expected decline. It supplies no owned receipt and never records fill success. No automatic order
 retry is introduced: a later WebSocket replay or reconnect REST recovery must re-read current order status,
 deadlines, liquidity and routing before building another request; an already claimed/refunded order is skipped.

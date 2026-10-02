@@ -17,7 +17,9 @@ type hashNonceTestBackend struct {
 	*mockBackend
 
 	confirmedNonce uint64
+	currentNonce   *uint64
 	hashNonceErr   error
+	currentHashErr error
 	queriedHash    common.Hash
 	orphanAncestor bool
 	blockHashRead  bool
@@ -28,6 +30,12 @@ func (b *hashNonceTestBackend) ReadNonceAtHash(ctx context.Context, _ common.Add
 	b.mu.Lock()
 	b.queriedHash = hash
 	nonce, err, blocked := b.confirmedNonce, b.hashNonceErr, b.blockHashRead
+	if b.currentNonce != nil && hash == b.headerLocked(b.head).Hash() {
+		nonce = *b.currentNonce
+	}
+	if hash == b.headerLocked(b.head).Hash() && b.currentHashErr != nil {
+		err = b.currentHashErr
+	}
 	entered := b.enteredHash
 	b.mu.Unlock()
 	if entered != nil {
@@ -57,7 +65,7 @@ func (b *hashNonceTestBackend) HeaderByNumber(ctx context.Context, number *big.I
 func sharedNonceManager(t *testing.T, b Backend, confirmations uint64) *Manager {
 	t.Helper()
 	return New(b, mustSigner(t), big.NewInt(1), Config{
-		ReconcileNonces: true, Confirmations: confirmations, MaxFeeGwei: 100,
+		Confirmations: confirmations, MaxFeeGwei: 100,
 		PollInterval: time.Millisecond, ReplacementInterval: time.Second,
 	}, logr.Discard())
 }
@@ -87,6 +95,64 @@ func TestReconcileStartupWaitsForPendingAndUnconfirmedNonce(t *testing.T) {
 				t.Fatalf("confirmed nonce did not restore initialization: %v", err)
 			}
 		})
+	}
+}
+
+func TestReconcileStaleWriteNonceCannotHideUnconfirmedCanonicalInclusion(t *testing.T) {
+	current := uint64(8)
+	b := &hashNonceTestBackend{mockBackend: newMockBackend(), confirmedNonce: 7, currentNonce: &current}
+	m := sharedNonceManager(t, b, 2)
+	if m.Available() {
+		t.Fatal("uninitialized manager reported a safe nonce lane")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if err := m.Initialize(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("unconfirmed canonical inclusion bypassed startup: %v", err)
+	}
+	if pending, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0x123")}); pending != nil || !errors.Is(err, errNonceLanePaused) || len(b.attemptedTransactions()) != 0 {
+		t.Fatalf("stale write RPC admitted unconfirmed work: pending=%v err=%v", pending, err)
+	}
+	b.latestNonce, b.pendingNonce = 8, 8
+	if _, err := m.freshReconciledNonce(t.Context()); err == nil || m.Available() {
+		t.Fatal("caught-up write RPC bypassed canonical confirmation depth")
+	}
+	b.confirmedNonce = 8
+	if err := m.Initialize(t.Context()); err != nil || !m.Available() {
+		t.Fatalf("confirmed canonical inclusion did not restore admission: %v", err)
+	}
+	pending, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0x123")})
+	if err != nil || pending.nonce != 8 {
+		t.Fatalf("reconciled request reused stale nonce: pending=%v err=%v", pending, err)
+	}
+}
+
+func TestReconcileCurrentHeadStateFailureRetainsGate(t *testing.T) {
+	b := &hashNonceTestBackend{mockBackend: newMockBackend(), confirmedNonce: 7, currentHashErr: errors.New("current account state unavailable")}
+	m := sharedNonceManager(t, b, 2)
+	if _, err := m.freshReconciledNonce(t.Context()); err == nil || m.Available() || len(b.attemptedTransactions()) != 0 {
+		t.Fatal("successful ancestor read bypassed failed current-head state read")
+	}
+	b.currentHashErr = nil
+	if err := m.Initialize(t.Context()); err != nil || !m.Available() {
+		t.Fatalf("current account state recovery did not restore readiness: %v", err)
+	}
+}
+
+func TestReconcileFreshAdmissionWaitsForPreviousInclusionConfirmations(t *testing.T) {
+	b := newMockBackend()
+	m := sharedNonceManager(t, b, 2)
+	first, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0x123")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if next, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0x456")}); next != nil || !errors.Is(err, errNonceLanePaused) || len(b.attemptedTransactions()) != 1 {
+		t.Fatalf("recent inclusion bypassed admission finality: next=%v err=%v", next, err)
+	}
+	b.head += 2
+	next, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0x456")})
+	if err != nil || next.nonce != first.nonce+1 {
+		t.Fatalf("confirmed inclusion did not admit the next fresh nonce: next=%v err=%v", next, err)
 	}
 }
 
@@ -182,14 +248,16 @@ func TestReconcileCanonicalProofRejectsUnstableOrUnavailableState(t *testing.T) 
 	}
 }
 
-func TestReconcileMissingCapabilityFailsClosed(t *testing.T) {
-	b := newMockBackend()
+func TestReconcileUnavailableHashPinnedStateFailsClosed(t *testing.T) {
+	b := &hashNonceTestBackend{mockBackend: newMockBackend(), hashNonceErr: errors.New("historical account state unavailable")}
 	m := sharedNonceManager(t, b, 0)
-	if err := m.Initialize(t.Context()); err == nil || m.Available() {
-		t.Fatal("unsupported backend admitted reconciliation mode")
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	if err := m.Initialize(ctx); !errors.Is(err, context.DeadlineExceeded) || m.Available() {
+		t.Fatal("unavailable hash-pinned state admitted reconciliation")
 	}
 	if _, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0x123")}); err == nil || len(b.attemptedTransactions()) != 0 {
-		t.Fatal("unsupported backend signed work")
+		t.Fatal("unavailable hash-pinned state signed work")
 	}
 }
 

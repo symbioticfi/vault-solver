@@ -101,7 +101,7 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
 - **Retries distinguish unsent work from transactions.** Failed pre-submission work with no recorded hash
   may be retried while the order is open. A successful cancellation that satisfies txmanager's confirmation
   policy may enter `retry_waiting`, retaining its hash until one `pollIntervalMs` interval elapses and a
-  fresh open-order poll re-arms it. With opt-in RPC nonce reconciliation, `nonce_consumed` means the signed
+  fresh open-order poll re-arms it. With canonical RPC nonce reconciliation, `nonce_consumed` means the signed
   nonce is consumed without an owned receipt. It first enters backend reconciliation: a terminal status
   retires the order, while `open` schedules a fresh retry under the same budget and deadline. Missing,
   unavailable or unknown backend status keeps the obligation until its recorded order deadline.
@@ -377,7 +377,7 @@ dropping features.
    confirmation wait, then allow bounded RFQ retries after one poll interval and a fresh open-order poll.
    Every retry revalidates the executable order and builds new calldata with fresh discount signatures. Regression tests
    cover the retry budget, disabled retries, expired/unavailable orders, uncertain results, and shutdown.
-7. **(done) Consumed-nonce recovery** — an opt-in canonical nonce result without an owned receipt reconciles
+7. **(done) Consumed-nonce recovery** — a canonical nonce result without an owned receipt reconciles
    backend status before sharing the existing bounded retry budget. Regression tests cover terminal/unknown
    backend states, fresh open polling and rebuilt calldata, backoff, local deadline expiry and exhausted budgets.
 

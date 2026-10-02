@@ -41,7 +41,7 @@ func TestAnvilTxManagerPendingLifecycle(t *testing.T) {
 // Reads use a real chain; sends model a private relay that acknowledges the
 // signed bytes without forwarding them or checking the mined nonce.
 type acceptingAnvilRelay struct {
-	*ethclient.Client
+	*chain.Client
 
 	sends int
 }
@@ -53,10 +53,14 @@ func (b *acceptingAnvilRelay) SendTransaction(context.Context, *types.Transactio
 
 func testAnvilConsumedNonce(t *testing.T) {
 	t.Helper()
-	rpcClient, ethClient, _ := startAnvilWithoutMining(t)
-	relay := &acceptingAnvilRelay{Client: ethClient}
+	rpcClient, ethClient, endpoint := startAnvilWithoutMining(t)
+	mineAnvilBlock(t, rpcClient)
+	relay := &acceptingAnvilRelay{Client: anvilManagerBackend(t, endpoint)}
 	sgnr := anvilSigner(t)
-	m := New(relay, sgnr, big.NewInt(31337), Config{MaxFeeGwei: 100}, logr.Discard())
+	m := New(relay, sgnr, big.NewInt(31337), Config{Confirmations: 1, MaxFeeGwei: 100}, logr.Discard())
+	if err := m.Initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	pending, err := m.broadcast(t.Context(), Request{
 		To: common.HexToAddress("0xdead"), GasLimit: 21_000, Label: "private fill",
 	})
@@ -91,16 +95,28 @@ func testAnvilConsumedNonce(t *testing.T) {
 	if result, done := m.receiptResult(t.Context(), pending); done {
 		t.Fatalf("unrelated receipt completed our lifecycle: %+v", result)
 	}
+	mineAnvilBlock(t, rpcClient)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	result := m.waitForPendingTransaction(ctx, pending)
+	if result.Outcome != OutcomeNonceConsumed || !m.Available() {
+		t.Fatalf("canonical consumption did not recover silent relay: %+v", result)
+	}
+	assertAnvilReconciliationOutcome(t, result, pending.originalHash)
+	assertAnvilCanonicalTransaction(t, ethClient, external.Hash(), 0, 1)
 }
 
 func testAnvilReplacement(t *testing.T) {
-	rpcClient, ethClient, _ := startAnvilWithoutMining(t)
+	t.Helper()
+	rpcClient, ethClient, endpoint := startAnvilWithoutMining(t)
+	mineAnvilBlock(t, rpcClient)
 	sgnr := anvilSigner(t)
 	manager := New(
-		ethClient,
+		anvilManagerBackend(t, endpoint),
 		sgnr,
 		big.NewInt(31337),
 		Config{
+			Confirmations:       1,
 			MaxFeeGwei:          100,
 			PollInterval:        20 * time.Millisecond,
 			ReplacementInterval: 200 * time.Millisecond,
@@ -109,7 +125,10 @@ func testAnvilReplacement(t *testing.T) {
 		},
 		logr.Discard(),
 	)
-	go manager.Start(t.Context())
+	if err := manager.Initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	startManagerForTest(t, manager)
 
 	result, accepted := manager.SendAsync(t.Context(), Request{
 		To: common.HexToAddress("0x000000000000000000000000000000000000dEaD"), GasLimit: 21_000, Label: "replace",
@@ -137,19 +156,21 @@ func testAnvilReplacement(t *testing.T) {
 	}
 
 	mineAnvilBlock(t, rpcClient)
+	mineAnvilBlock(t, rpcClient)
 	got := waitForTxResult(t, result)
-	if got.Err != nil {
-		t.Fatalf("replacement result: %v", got.Err)
+	assertAnvilCanonicalTransaction(t, ethClient, common.HexToHash(replacement.Hash), 0, 1)
+	expected := replacement.Hash
+	if got.Outcome == OutcomeNonceConsumed {
+		expected = initial.Hash // Without an owned receipt the manager retains the original identity.
 	}
-	if !strings.EqualFold(got.Hash.Hex(), replacement.Hash) {
-		t.Fatalf("mined hash = %s, want replacement %s", got.Hash.Hex(), replacement.Hash)
-	}
+	assertAnvilReconciliationOutcome(t, got, common.HexToHash(expected))
 }
 
 func testAnvilCancellation(t *testing.T, dedicatedCancellationRPC bool) {
 	t.Helper()
 	rpcClient, ethClient, endpoint := startAnvilWithoutMining(t)
-	var backend Backend = ethClient
+	mineAnvilBlock(t, rpcClient)
+	var backend Backend = anvilManagerBackend(t, endpoint)
 	var writeSends, cancelSends atomic.Int64
 	if dedicatedCancellationRPC {
 		writeURL := anvilBroadcastProxy(t, endpoint, &writeSends)
@@ -168,6 +189,7 @@ func testAnvilCancellation(t *testing.T, dedicatedCancellationRPC bool) {
 		sgnr,
 		big.NewInt(31337),
 		Config{
+			Confirmations:       1,
 			MaxFeeGwei:          100,
 			PollInterval:        20 * time.Millisecond,
 			ReplacementInterval: 5 * time.Second,
@@ -175,7 +197,10 @@ func testAnvilCancellation(t *testing.T, dedicatedCancellationRPC bool) {
 		},
 		logr.Discard(),
 	)
-	go manager.Start(t.Context())
+	if err := manager.Initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	startManagerForTest(t, manager)
 
 	first, accepted := manager.SendAsync(t.Context(), Request{
 		To:           common.HexToAddress("0x000000000000000000000000000000000000dEaD"),
@@ -233,9 +258,15 @@ func testAnvilCancellation(t *testing.T, dedicatedCancellationRPC bool) {
 	}
 
 	mineAnvilBlock(t, rpcClient)
+	mineAnvilBlock(t, rpcClient)
 	firstResult := waitForTxResult(t, first)
-	if firstResult.Err == nil || !strings.Contains(firstResult.Err.Error(), "cancelled at nonce 0") {
-		t.Fatalf("first result = %+v, want cancellation", firstResult)
+	assertAnvilCanonicalTransaction(t, ethClient, common.HexToHash(cancellation.Hash), 0, 1)
+	if firstResult.Outcome == OutcomeNonceConsumed {
+		assertAnvilReconciliationOutcome(t, firstResult, common.HexToHash(initial.Hash))
+	} else if firstResult.Outcome != OutcomeCancelled || firstResult.Receipt == nil ||
+		!strings.EqualFold(firstResult.Hash.Hex(), cancellation.Hash) || firstResult.Err == nil ||
+		!strings.Contains(firstResult.Err.Error(), "cancelled at nonce 0") {
+		t.Fatalf("first result = %+v, want the canonical cancellation or nonce uncertainty", firstResult)
 	}
 	var second submission
 	select {
@@ -246,14 +277,24 @@ func testAnvilCancellation(t *testing.T, dedicatedCancellationRPC bool) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("second transaction remained blocked after nonce 0 completed")
 	}
-	waitForPoolTransaction(t, rpcClient, sgnr.Address(), 1, func(poolTransaction) bool { return true })
+	later := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 1, func(poolTransaction) bool { return true })
 	mineAnvilBlock(t, rpcClient)
-	if secondResult := waitForTxResult(t, second.result); secondResult.Err != nil {
-		t.Fatalf("later transaction remained blocked: %v", secondResult.Err)
-	}
+	mineAnvilBlock(t, rpcClient)
+	assertAnvilReconciliationOutcome(t, waitForTxResult(t, second.result), common.HexToHash(later.Hash))
+	assertAnvilCanonicalTransaction(t, ethClient, common.HexToHash(later.Hash), 1, 1)
 	if dedicatedCancellationRPC && (writeSends.Load() != 2 || cancelSends.Load() != 1) {
 		t.Fatalf("broadcast routing: write=%d cancel=%d, want two normal calls and one cancellation", writeSends.Load(), cancelSends.Load())
 	}
+}
+
+func anvilManagerBackend(t *testing.T, endpoint string) *chain.Client {
+	t.Helper()
+	client, err := chain.Dial(t.Context(), []string{endpoint}, "", "", common.Address{}.Hex(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	return client
 }
 
 func anvilBroadcastProxy(t *testing.T, endpoint string, broadcasts *atomic.Int64) string {

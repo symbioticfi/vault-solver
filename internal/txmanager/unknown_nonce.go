@@ -71,21 +71,29 @@ func (m *Manager) signCappedCancellation(ctx context.Context, nonce uint64) (*ty
 // cancelContestedNonce is the timeout path for a signed candidate rejected by another replica's
 // same-nonce submission. It keeps all candidate hashes and signs only the fixed recovery cancellation.
 func (m *Manager) cancelContestedNonce(ctx context.Context, pending *pendingTransaction) error {
-	lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
-	defer cancel()
-	latest, err := m.backend.NonceAt(lookupCtx, m.signer.Address(), nil)
+	latest, err := m.readLatestNonce(ctx)
 	if err != nil {
 		return errors.Errorf("latest nonce before contested cancellation: %w", err)
 	}
 	if latest > pending.nonce {
 		return nil // Receipt/account proof will finish this nonce; never cancel a later one.
 	}
-	poolNonce, err := m.backend.PendingNonceAt(lookupCtx, m.signer.Address())
+	poolNonce, err := m.readPendingNonce(ctx)
 	if err != nil {
 		return errors.Errorf("pending nonce before contested cancellation: %w", err)
 	}
 	if poolNonce < latest || poolNonce-latest > 1 || latest < pending.nonce {
 		return nil // Multi-nonce or inconsistent views cannot authorize unknown-work cancellation.
+	}
+	// A stale submission endpoint cannot authorize cancelling work already mined on the ordinary
+	// chain, even before that inclusion has the request's confirmation depth. Pin current state to
+	// one stable canonical head; a lower nonce after a reorg also forbids signing ahead of a gap.
+	current, err := m.canonicalAccountNonce(ctx, 0)
+	if err != nil {
+		return errors.Errorf("canonical current nonce before contested cancellation: %w", err)
+	}
+	if current != pending.nonce {
+		return errors.Errorf("%w: contested nonce %d differs from canonical current nonce %d", errReconciliationPending, pending.nonce, current)
 	}
 	limit := m.globalFeeLimit()
 	for _, attempt := range pending.attempts {

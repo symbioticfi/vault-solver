@@ -10,12 +10,12 @@ entry point. Configuration is defined by [config.go](../internal/config/config.g
 ## 1. Ownership and admission
 
 One process has one chain client, signer and transaction manager shared by its transaction-sending
-solvers. Only one signed nonce lifecycle may be unresolved **per process**. By default, the EOA is
-exclusive to that process. Opt-in `txManager.reconcileNonces` lets independent processes use the same EOA
-and recover from canonically confirmed nonce consumption without a database, shared file, leader,
+solvers. Only one signed nonce lifecycle may be unresolved **per process**. Every transaction manager
+reconciles canonical account nonce evidence, including when independent processes use the same EOA.
+It recovers from canonically confirmed nonce consumption without a database, shared file, leader,
 coordinator or peer discovery. It does not allocate nonces atomically or establish exclusive ownership:
 processes can sign competing transactions at the same nonce. The [replica plan](REPLICA-PLAN.md) records
-the account and integration limits of this mode.
+the account and integration limits of processes using one sender.
 An integration submitted externally can return false from `RequiresTxManager`; an external-only process
 does not initialize/start the manager or require `txManager.maxFeeGwei`.
 
@@ -54,7 +54,6 @@ The public YAML block is `txManager`. Values below are application defaults, aft
 | Setting | Default | Meaning |
 |---|---:|---|
 | `confirmations` | 2 | Blocks after inclusion; a request may override. Zero in YAML is treated as unset. Unknown work after restart uses this configured depth because the old request override is not retained. |
-| `reconcileNonces` | false | Refresh admission nonces and reconcile confirmed account nonce consumption. Wait for unknown activity; one observed contiguous unconsumed nonce can be cancelled at the full global cap after `pendingTimeoutMs`. |
 | `maxFeeGwei` | Required for transaction senders | Finite positive global EIP-1559 ceiling, including cancellation. |
 | `broadcastTimeoutMs` | 5000 | Independent timeout of each submission RPC. |
 | `accountPollIntervalMs` | 30000 | Complete sender balance/nonce telemetry refresh cadence. |
@@ -79,6 +78,13 @@ internal read budgets are separate from broadcast timeout. The initial estimate,
 budget of its own: the request's `CancelAt` and manager shutdown bound it, so a request without `CancelAt`
 (3F `redeem`) can hold the worker and the nonce lane while a read endpoint withholds its estimate
 ([3F plan §10](3F-PLAN.md#10-pending--deferred-items-post-phase-3)).
+
+Startup/admission, account-consumption and contested-cancellation proofs give each latest/pending nonce,
+header/ancestry and exact-hash account RPC its own `min(2 seconds, replacementInterval/2)` timeout.
+The whole proof obeys its caller or lifecycle context and rechecks head stability, without sharing one
+short aggregate RPC budget. Sequential reads at larger confirmation depths can therefore finish even
+when their total latency exceeds one call's budget; any timed-out call or changed head withholds proof.
+
 Account refresh uses a 5-second context. Backends must honor cancellation. The replacement loop ticks
 every `blockTimeMs/2` and acts only on a new block; `replacementIntervalMs` only paces the fallback bump
 when fee windows stay unreadable, and an ambiguous broadcast may still be rebroadcast while more than
@@ -158,7 +164,7 @@ A `nonce too low` response never by itself authorizes re-signing the calldata at
 The cancellation bound is the earlier of the pending timeout and a supplied `CancelAt`. A cancellation
 check may become due during fee lookup and promote the replacement. A deadline coinciding with a
 replacement tick must not produce a second broadcast for the same tick.
-With reconciliation enabled, an initial same-nonce collision is an exception: capped cancellation of
+An initial same-nonce collision is an exception: capped cancellation of
 unknown competing work waits the full `PendingTimeout` age even if `CancelAt` or shutdown is earlier
 ([§6](#6-rpc-routing-nonce-conflicts-and-restart)).
 
@@ -211,7 +217,7 @@ valid evidence for the same nonce.
 | `cancelled_unconfirmed` | Successful cancellation inclusion observed, but confirmation waiting ended with an error. This is not proof that it is safe to retry the call. `Err` also wraps `ErrRequestObsolete` when `Obsolete` started the cancellation. |
 | `submission_error` | Submission/pre-sign path failed without a retained pending lifecycle, including an unsigned call `Obsolete` dropped (`Err` wraps `ErrRequestObsolete`). |
 | `tracking_stopped` | Lifecycle tracking stopped before a terminal receipt was established. |
-| `nonce_consumed` | With reconciliation enabled, canonical account state at the required confirmation depth proves the tracked nonce was consumed, but no owned receipt established its business result. No receipt is synthesized. This does not establish that our call failed or that another process won. |
+| `nonce_consumed` | Canonical account state at the required confirmation depth proves the tracked nonce was consumed, but no owned receipt established its business result. No receipt is synthesized. This does not establish that our call failed or that another process won. |
 
 `Result.NotAdmitted` distinguishes admission rejection from an admitted operation failure. `Err`, receipt
 and outcome must be interpreted together; cancellation is a terminal result but not a successful fill.
@@ -246,28 +252,20 @@ submission relay that rate-limits reads never stalls the refresh; its pending no
 submission until the primary RPC sees it, which is acceptable for a gauge and never used for admission. General transport behavior
 remains documented in the [README configuration section](../README.md#configuration).
 
-### Default exclusive-account mode
+### Replacement nonce checks and restart
 
-With `reconcileNonces: false`, startup requires write-endpoint latest and pending nonces to agree. Standard nonce methods cannot reveal
-a future transaction queued beyond a gap or a private hidden submission; equality is not recovery proof.
-Exact signed attempts are kept in memory. Restart reconciliation must include any separately configured
-cancellation endpoint. Before an upgrade from a build allowing multiple unresolved
-nonces, drain the EOA's write-endpoint pool. After an unclean exit, reconcile outstanding private
-submissions before reusing the EOA. Packaged Compose uses `unless-stopped`: automatic restart can reuse
-a nonce before a hidden attempt becomes visible and does not reconstruct lost ownership.
-
-A post-signing `nonce too low` reconciles exact owned hashes. During replacement of an already tracked
-lifecycle, an owned receipt proven canonical against a stable head can resolve the conflict immediately;
-the lane stays occupied until confirmation completes. An initial-broadcast collision, or replacement
-without owned canonical evidence, pauses admission/readiness until reconciliation or operator action.
-A later receipt reorg restores the conflict pause. Recovery never relies on guessing that the old call
-cannot land or automatically moving its calldata to a different nonce.
+Standard nonce methods cannot reveal a future transaction queued beyond a gap or a private hidden
+submission; equality is not recovery proof. Exact signed attempts are kept in memory. Before an upgrade
+from a build allowing multiple unresolved nonces, drain the EOA's write-endpoint pool. Controlled restart
+reconciliation must include any separately configured cancellation endpoint. Packaged Compose uses
+`unless-stopped`: automatic restart can reuse a nonce before a hidden attempt becomes visible and does
+not reconstruct lost signed attempts or business execution.
 
 Every replacement attempt first checks the write endpoint's latest **mined** nonce with a bounded RPC.
 This covers ordinary fee bumps, initial and subsequent cancellations, uncertain exact rebroadcasts and
 rebroadcasts at the fee cap. A successful send response from a private relay does not prove the nonce
 is still usable. If the mined nonce has advanced beyond the tracked nonce, no replacement is signed or
-broadcast: the same exact-hash reconciliation above runs and unexplained consumption pauses admission
+broadcast: receipt and canonical account reconciliation runs and unexplained consumption pauses admission
 and readiness. Receipt polling continues, and a delayed canonical owned receipt can recover normally.
 Nonce advancement alone never synthesizes a success/cancellation result, discards tracked attempts or
 replays the request at a new nonce. A nonce RPC error defers that replacement until a later tick; it does
@@ -275,10 +273,10 @@ not permanently mark a conflict. Pending nonce advancement alone does not suppre
 This check cannot make inclusion and submission atomic; broadcast errors and receipt tracking remain
 necessary to reconcile an inclusion racing the subsequent send.
 
-### Opt-in account reconciliation
+### Account reconciliation
 
-With `reconcileNonces: true`, startup waits for both unknown pending work and mined account activity that
-has not reached `txManager.confirmations`. It does not reconstruct an unknown transaction's calldata,
+Every manager waits at startup for both unknown pending work and mined account activity that has not
+reached `txManager.confirmations`. It does not reconstruct an unknown transaction's calldata,
 fees, deadline or hash. The write endpoint must expose its private pending transactions through
 `eth_getTransactionCount(address, "pending")`. Each new admission refreshes account nonce evidence rather
 than trusting a process-local increment; a pending gap, insufficiently confirmed activity or unavailable
@@ -286,20 +284,25 @@ proof keeps the lane unavailable and rejects that attempt before signing (`NotAd
 monitor retries the account check so later evidence can restore admission. Acquisition of a nonce is still a read followed by a
 send, so concurrent processes can select the same nonce.
 
-Confirmation evidence comes from the read RPC: select the account state at the required depth through
-hash-addressed ancestry of a stable canonical head, read the sender nonce at that exact block hash using
-`ReadNonceAtHash` / EIP-1898 with `requireCanonical: true`, and validate canonicality. A latest nonce response alone, a numbered-block
-read crossing a reorg, or a submission error is insufficient. An unsupported hash-addressed account read,
-unavailable state or incoherent header evidence keeps admission/tracking unresolved; there is no fallback
-to an unverified nonce guess. The configured read endpoints must support these recent historical account
-reads. Existing read fallback behavior applies to RPC availability, not to weakening the proof.
+Fresh admission requires the sender nonce at both the current canonical read head and its confirmation
+ancestor to equal the write endpoint's latest and pending nonces. The two account reads use exact block
+hashes under one stable head, with hash-addressed ancestry and canonicality validation, through
+`ReadNonceAtHash` / EIP-1898 with `requireCanonical: true`. If the read-head nonce has advanced but the
+ancestor nonce has not, a stale write view matching that ancestor cannot admit another transaction.
+A latest nonce response alone, a numbered-block read crossing a reorg, or a submission error is
+insufficient. An unsupported hash-addressed account read, unavailable state or incoherent header
+evidence keeps admission/tracking unresolved; there is no fallback to an unverified nonce guess. The
+configured read endpoints must support account reads at both the current head and recent confirmation
+ancestors. Existing read fallback behavior applies to RPC availability, not to weakening the proof.
 
 Owned receipts retain priority. The manager checks its exact signed variants and preserves the ordinary
 receipt/canonicality/confirmation path when an owned receipt is established. Only a complete receipt sweep
 in which every known hash returns `NotFound` permits account consumption proof; a failed RPC, malformed
-receipt or unresolved owned receipt withholds that path. Account nonce advancement at the required
-confirmation depth can then return `nonce_consumed` and end this process's lifecycle. Newer unknown
-account activity can still keep admission paused. An owned request uses its confirmation policy; unknown work after restart
+receipt or unresolved owned receipt withholds that path. Account nonce advancement at the exact-hash
+confirmation ancestor can then return `nonce_consumed` and end this process's lifecycle. This runtime
+proof does not require current-head nonce equality; newer activity must not block resolution of an older
+consumed nonce. Newer unknown account activity can still keep admission paused. An owned request uses
+its confirmation policy; unknown work after restart
 uses the configured manager depth because per-request overrides were in memory. The result reports
 unknown business execution: our attempt may have landed while its receipt is unavailable, or another
 transaction may have consumed the nonce. Solvers must query their own authoritative protocol/backend
@@ -323,11 +326,14 @@ replacement rejected under the available cap preserve the pause.
 
 A signed lifecycle conflicted by an initial nonce/underpriced collision retains all owned hashes. Only
 after the full `PendingTimeout` age from immutable `firstSignedAt` (set immediately before the original
-sign/send) can it use the same fixed full-cap
-self-cancellation after checking latest/pending state; an earlier `CancelAt` or shutdown cancellation
-intent does not shorten the observation of unknown competing work. It does not move the business
-request to a different nonce. The
-ordinary owned receipt path still applies if that cancellation or an original owned attempt wins.
+sign/send) can it use the same fixed full-cap self-cancellation. Before signing or rebroadcasting, it
+checks latest/pending state and proves the current canonical-head account nonce at zero confirmation
+depth by exact hash under a stable head. That nonce must equal both write latest and the tracked nonce;
+a lagging write RPC cannot authorize cancellation of mined but unconfirmed work or a future nonce after
+a reorg. Unknown startup recovery is already guarded by fresh admission's current-head/ancestor proof.
+An earlier `CancelAt` or shutdown cancellation intent does not shorten the observation of unknown
+competing work. It does not move the business request to a different nonce. The ordinary owned receipt
+path still applies if that cancellation or an original owned attempt wins.
 
 Preexisting unknown-work recovery delivers no request `Result`: it repeatedly submits its exact recovery
 candidate and waits for canonical account proof before reopening admission. Its timer is cleared only

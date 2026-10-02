@@ -674,14 +674,17 @@ func TestHungStallEstimateDoesNotHoldTheLifecycle(t *testing.T) {
 			chain.include(original)
 			select {
 			case got := <-result:
-				if got.Outcome != OutcomeConfirmed || got.Hash != original.Hash() {
-					t.Fatalf("result = %+v, want the original call confirmed", got)
+				if got.Hash != original.Hash() || (got.Outcome != OutcomeConfirmed && got.Outcome != OutcomeNonceConsumed) {
+					t.Fatalf("result = %+v, want the original receipt or confirmed nonce consumption", got)
+				}
+				if got.Outcome == OutcomeNonceConsumed && (got.Receipt != nil || got.Outcome.Included() || !errors.Is(got.Err, ErrNonceConsumed)) {
+					t.Fatalf("proof-time inclusion fabricated execution: %+v", got)
 				}
 			case <-time.After(2 * time.Second):
 				t.Fatal("a hung stall re-estimate kept the lifecycle from reading a mined receipt")
 			}
-			if sent := chain.sentTransactions(); len(sent) != 2 || sent[1].Hash() != original.Hash() {
-				t.Fatalf("sent %d transactions, want the call and one exact rebroadcast", len(sent))
+			if sent := chain.sentTransactions(); len(sent) > 2 || (len(sent) == 2 && sent[1].Hash() != original.Hash()) {
+				t.Fatalf("sent %d transactions, want at most one exact rebroadcast before inclusion", len(sent))
 			}
 			if got := chain.estimateCalls.Load(); got != hung.latestEstimates {
 				t.Fatalf("latest-state estimates = %d, want %d", got, hung.latestEstimates)

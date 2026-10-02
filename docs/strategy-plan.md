@@ -255,7 +255,10 @@ and optional cancellation broadcast endpoint), one signer, and one nonce-seriali
 signer/RPC tuples run as separate processes with disjoint solver subsets and unique Prometheus `instance`
 (or deployment-supplied `lane`) target labels. Committed dashboards use the standard Kubernetes `pod` target
 label and query namespace/pod options from Prometheus rather than embedding deployment names. Application metrics do not carry URLs or deployment names.
-The [shared manager ownership contract](TXMANAGER-PLAN.md#1-ownership-and-admission) requires an exclusive EOA per process.
+The [shared manager ownership contract](TXMANAGER-PLAN.md#1-ownership-and-admission) serializes local
+signed lifecycles and always reconciles canonical account nonce evidence. Several processes can share
+the EOA, but nonces and off-chain commitments are not allocated atomically across processes; see the
+[replica plan](REPLICA-PLAN.md).
 
 The manager distinguishes confirmed cancellation from cancellation inclusion with an interrupted
 confirmation wait. RFQ owns the retry policy: a confirmed cancellation can re-enter fill planning after

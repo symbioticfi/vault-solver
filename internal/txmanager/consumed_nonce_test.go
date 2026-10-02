@@ -8,6 +8,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
@@ -41,6 +42,31 @@ func (b *silentAcceptanceBackend) NonceAt(ctx context.Context, account common.Ad
 		return 0, b.nonceErr
 	}
 	return b.mockBackend.NonceAt(ctx, account, block)
+}
+
+// The latest RPC sees consumption before its block reaches the confirmation ancestor. Receipt
+// publication remains independent, so account state cannot imply an owned hash's inclusion.
+type delayedReceiptNonceBackend struct {
+	*silentAcceptanceBackend
+
+	consumedBlock uint64
+	nonceBefore   uint64
+}
+
+func (b *delayedReceiptNonceBackend) ReadNonceAtHash(_ context.Context, _ common.Address, hash common.Hash) (uint64, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for block := b.head; ; block-- {
+		if b.headerLocked(block).Hash() == hash {
+			if block < b.consumedBlock {
+				return b.nonceBefore, nil
+			}
+			return b.nonceBefore + 1, nil
+		}
+		if block == 0 {
+			return 0, ethereum.NotFound
+		}
+	}
 }
 
 func TestReplacementsStopWhenMinedNonceAdvances(t *testing.T) {
@@ -91,8 +117,12 @@ func TestReplacementsStopWhenMinedNonceAdvances(t *testing.T) {
 			if m.Available() {
 				t.Fatal("unexplained mined nonce advancement left admission/readiness available")
 			}
-			if _, err := m.broadcast(t.Context(), pending.req); !errors.Is(err, errNonceLanePaused) {
-				t.Fatalf("new request after external consumption = %v, want paused lane", err)
+			fresh, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0xdef"), GasLimit: 21_000})
+			if err != nil || fresh == nil || fresh.nonce != 8 {
+				t.Fatalf("fresh request after confirmed external consumption = %+v, %v, want nonce 8", fresh, err)
+			}
+			if len(b.attemptedTransactions()) != before+1 || len(pending.attempts) != before || !m.Available() {
+				t.Fatal("fresh admission did not recover independently of the consumed lifecycle")
 			}
 		})
 	}
@@ -183,7 +213,11 @@ func TestReplacementNonceReadFailureDefersBroadcastAndRecovers(t *testing.T) {
 
 func TestConsumedNonceKeepsTrackingUntilOwnedReceiptArrives(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		b := &silentAcceptanceBackend{mockBackend: newMockBackend()}
+		b := &delayedReceiptNonceBackend{
+			silentAcceptanceBackend: &silentAcceptanceBackend{mockBackend: newMockBackend()},
+			consumedBlock:           101,
+			nonceBefore:             7,
+		}
 		m := New(b, mustSigner(t), big.NewInt(1), Config{
 			MaxFeeGwei: 100, PollInterval: time.Second, ReplacementInterval: 10 * time.Second,
 			Confirmations: 2,
@@ -192,7 +226,7 @@ func TestConsumedNonceKeepsTrackingUntilOwnedReceiptArrives(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		b.latestNonce, b.pendingNonce = 8, 8
+		b.latestNonce, b.pendingNonce, b.head = 8, 8, 101
 		m.trackUnminedTransaction(pending)
 		ctx, cancel := context.WithCancel(t.Context())
 		results := make(chan Result, 1)
@@ -202,9 +236,9 @@ func TestConsumedNonceKeepsTrackingUntilOwnedReceiptArrives(t *testing.T) {
 			results <- m.waitForPendingTransaction(ctx, pending)
 		}()
 		defer func() { cancel(); <-done }()
-		// The block that consumed the nonce and two more with room arrive a slot apart: a stall the
-		// manager answers by checking the mined nonce before rebroadcasting.
-		for head := uint64(101); head <= 103; head++ {
+		// The mined nonce advances before its block has the configured confirmation depth. The
+		// manager must stop same-nonce rebroadcasts without inventing an owned inclusion result.
+		for head := uint64(101); head <= 102; head++ {
 			b.mu.Lock()
 			b.head = head
 			b.mu.Unlock()
@@ -221,6 +255,7 @@ func TestConsumedNonceKeepsTrackingUntilOwnedReceiptArrives(t *testing.T) {
 		}
 		b.mu.Lock()
 		b.receipts[pending.originalHash] = successfulReceipt(pending.attempts[0].tx, 101)
+		b.head = 103
 		b.mu.Unlock()
 		time.Sleep(time.Second)
 		synctest.Wait()

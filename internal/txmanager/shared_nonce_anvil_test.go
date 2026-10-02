@@ -58,7 +58,7 @@ func (b *sharedAnvilNonceBackend) SendTransaction(ctx context.Context, tx *types
 
 func anvilReconciliationConfig() Config {
 	return Config{
-		ReconcileNonces: true, Confirmations: 1, MaxFeeGwei: 100,
+		Confirmations: 1, MaxFeeGwei: 100,
 		PollInterval: 10 * time.Millisecond, ReplacementInterval: time.Second,
 		PendingTimeout: time.Minute, ShutdownTimeout: time.Second,
 	}

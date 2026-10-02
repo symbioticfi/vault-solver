@@ -142,7 +142,6 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		return err
 	}
 	txm := txmanager.NewWithMetrics(chainClient, sgnr, chainClient.ChainID(), txmanager.Config{
-		ReconcileNonces:     cfg.TxManager.ReconcileNonces,
 		Confirmations:       cfg.TxManager.Confirmations,
 		MaxFeeGwei:          cfg.TxManager.MaxFeeGwei,
 		BroadcastTimeout:    time.Duration(cfg.TxManager.BroadcastTimeoutMs) * time.Millisecond,

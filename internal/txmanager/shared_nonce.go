@@ -12,57 +12,64 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
-// HashNonceBackend reads ordinary on-chain account state at exactly the supplied block hash.
-// ReconcileNonces requires this capability; a private relay's pending view is not canonical proof.
-type HashNonceBackend interface {
-	ReadNonceAtHash(ctx context.Context, account common.Address, blockHash common.Hash) (uint64, error)
-}
-
 var errReconciliationPending = errors.New("account nonce reconciliation is pending")
 
 // canonicalAccountNonce pins a nonce to an ancestor of one stable canonical head. Every RPC has a
 // bounded context, and disagreement or unavailable historical state withholds proof rather than
 // falling back to a nonce at an unrelated block height.
 func (m *Manager) canonicalAccountNonce(ctx context.Context, confirmations uint64) (uint64, error) {
-	backend, ok := m.backend.(HashNonceBackend)
-	if !ok {
-		return 0, errors.New("nonce reconciliation requires hash-pinned account state reads")
-	}
-	lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
-	defer cancel()
-	head, err := m.confirmationHead(lookupCtx)
+	state, err := m.canonicalNonceState(ctx, confirmations, false)
+	return state.confirmed, err
+}
+
+type canonicalNonceState struct {
+	confirmed uint64
+	current   uint64
+}
+
+// Admission additionally compares current-head account state with the confirmation ancestor. Both
+// reads belong to the same stable head, preventing a stale write RPC from hiding recent inclusion.
+func (m *Manager) canonicalNonceState(ctx context.Context, confirmations uint64, readCurrent bool) (canonicalNonceState, error) {
+	head, err := m.confirmationHead(ctx)
 	if err != nil {
-		return 0, errors.Errorf("nonce reconciliation head: %w", err)
+		return canonicalNonceState{}, errors.Errorf("nonce reconciliation head: %w", err)
 	}
 	if !head.Number.IsUint64() || head.Number.Uint64() < confirmations {
-		return 0, errors.Errorf("%w: head has insufficient confirmation history", errReconciliationPending)
+		return canonicalNonceState{}, errors.Errorf("%w: head has insufficient confirmation history", errReconciliationPending)
 	}
 	anchorNumber := new(big.Int).SetUint64(head.Number.Uint64() - confirmations)
-	anchor, err := m.backend.HeaderByNumber(lookupCtx, anchorNumber)
+	anchor, err := m.readHeaderAtNumber(ctx, anchorNumber)
 	if err != nil {
-		return 0, errors.Errorf("nonce reconciliation ancestor: %w", err)
+		return canonicalNonceState{}, errors.Errorf("nonce reconciliation ancestor: %w", err)
 	}
 	if anchor == nil || anchor.Number == nil || anchor.Number.Cmp(anchorNumber) != 0 {
-		return 0, errors.New("nonce reconciliation ancestor has an invalid block number")
+		return canonicalNonceState{}, errors.New("nonce reconciliation ancestor has an invalid block number")
 	}
-	if err := m.confirmReceiptAncestry(lookupCtx, head, &types.Receipt{BlockNumber: anchor.Number, BlockHash: anchor.Hash()}); err != nil {
+	if err := m.confirmReceiptAncestry(ctx, head, &types.Receipt{BlockNumber: anchor.Number, BlockHash: anchor.Hash()}); err != nil {
 		if errors.Is(err, errReceiptReorged) {
-			return 0, errors.Errorf("%w: %w", errReconciliationPending, err)
+			return canonicalNonceState{}, errors.Errorf("%w: %w", errReconciliationPending, err)
 		}
-		return 0, errors.Errorf("nonce reconciliation ancestor is not canonical: %w", err)
+		return canonicalNonceState{}, errors.Errorf("nonce reconciliation ancestor is not canonical: %w", err)
 	}
-	nonce, err := backend.ReadNonceAtHash(lookupCtx, m.signer.Address(), anchor.Hash())
+	nonce, err := m.readNonceAtHash(ctx, anchor.Hash())
 	if err != nil {
-		return 0, errors.Errorf("hash-pinned account nonce: %w", err)
+		return canonicalNonceState{}, errors.Errorf("hash-pinned account nonce: %w", err)
 	}
-	headAfter, err := m.confirmationHead(lookupCtx)
+	state := canonicalNonceState{confirmed: nonce, current: nonce}
+	if readCurrent && anchor.Hash() != head.Hash() {
+		state.current, err = m.readNonceAtHash(ctx, head.Hash())
+		if err != nil {
+			return canonicalNonceState{}, errors.Errorf("hash-pinned current account nonce: %w", err)
+		}
+	}
+	headAfter, err := m.confirmationHead(ctx)
 	if err != nil {
-		return 0, errors.Errorf("nonce reconciliation head after state read: %w", err)
+		return canonicalNonceState{}, errors.Errorf("nonce reconciliation head after state read: %w", err)
 	}
 	if head.Hash() != headAfter.Hash() {
-		return 0, errors.Errorf("%w: head changed during proof", errReconciliationPending)
+		return canonicalNonceState{}, errors.Errorf("%w: head changed during proof", errReconciliationPending)
 	}
-	return nonce, nil
+	return state, nil
 }
 
 func (m *Manager) setReconciliationBusy(busy bool) {
@@ -80,9 +87,7 @@ func (m *Manager) setReconciliationBusy(busy bool) {
 func (m *Manager) freshReconciledNonce(ctx context.Context) (uint64, error) {
 	m.reconcileMu.Lock()
 	defer m.reconcileMu.Unlock()
-	lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
-	defer cancel()
-	nonce, err := m.readFreshReconciledNonce(lookupCtx)
+	nonce, err := m.readFreshReconciledNonce(ctx)
 	m.setReconciliationBusy(err != nil)
 	if err != nil && !errors.Is(err, errReconciliationPending) && ctx.Err() == nil {
 		m.reconciliationReads.failed(observability.Log(ctx), err, "account nonce reconciliation RPC unavailable; retaining readiness gate")
@@ -93,8 +98,8 @@ func (m *Manager) freshReconciledNonce(ctx context.Context) (uint64, error) {
 		return 0, errors.Errorf("%w: %w", errNonceLanePaused, err)
 	}
 	m.mu.Lock()
-	changed := !m.nonceInit
-	m.nonce, m.nonceInit = nonce, true
+	changed := !m.initialized
+	m.initialized = true
 	m.mu.Unlock()
 	if changed {
 		m.notifyLaneStateChange()
@@ -103,20 +108,21 @@ func (m *Manager) freshReconciledNonce(ctx context.Context) (uint64, error) {
 }
 
 func (m *Manager) readFreshReconciledNonce(ctx context.Context) (uint64, error) {
-	latest, err := m.backend.NonceAt(ctx, m.signer.Address(), nil)
+	latest, err := m.readLatestNonce(ctx)
 	if err != nil {
 		return 0, errors.Errorf("latest mined nonce before signing: %w", err)
 	}
-	pending, err := m.backend.PendingNonceAt(ctx, m.signer.Address())
+	pending, err := m.readPendingNonce(ctx)
 	if err != nil {
 		return 0, errors.Errorf("pending nonce before signing: %w", err)
 	}
-	confirmed, err := m.canonicalAccountNonce(ctx, m.cfg.Confirmations)
+	state, err := m.canonicalNonceState(ctx, m.cfg.Confirmations, true)
 	if err != nil {
 		return 0, err
 	}
-	if confirmed != latest {
-		return 0, errors.Errorf("%w: latest %d, confirmed %d", errReconciliationPending, latest, confirmed)
+	confirmed := state.confirmed
+	if state.current != confirmed || confirmed != latest {
+		return 0, errors.Errorf("%w: latest %d, current %d, confirmed %d", errReconciliationPending, latest, state.current, confirmed)
 	}
 	if m.unknownNonce != nil && confirmed > m.unknownNonce.nonce {
 		m.unknownNonce = nil
@@ -155,9 +161,6 @@ func (m *Manager) readFreshReconciledNonce(ctx context.Context) (uint64, error) 
 }
 
 func (m *Manager) initializeReconciledNonce(ctx context.Context) error {
-	if _, ok := m.backend.(HashNonceBackend); !ok {
-		return errors.New("nonce reconciliation requires hash-pinned account state reads")
-	}
 	ticker := time.NewTicker(m.cfg.PollInterval)
 	defer ticker.Stop()
 	waiting := false
@@ -199,9 +202,7 @@ func (m *Manager) monitorReconciledNonce(ctx context.Context) {
 // confirmConsumedNonce is only considered after every known hash returned NotFound. The outcome
 // deliberately cannot distinguish another replica's transaction from an owned but lagging receipt.
 func (m *Manager) confirmConsumedNonce(ctx context.Context, pending *pendingTransaction) (Result, bool) {
-	lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
-	defer cancel()
-	latest, err := m.backend.NonceAt(lookupCtx, m.signer.Address(), nil)
+	latest, err := m.readLatestNonce(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
 			pending.nonceReads.failed(observability.Log(ctx), err, "mined nonce reconciliation RPC unavailable", "nonce", pending.nonce)
@@ -214,7 +215,7 @@ func (m *Manager) confirmConsumedNonce(ctx context.Context, pending *pendingTran
 	}
 	pending.nonceConflictHash = pending.originalHash
 	m.markNonceConflict(pending.nonce, pending.originalHash)
-	nonce, err := m.canonicalAccountNonce(lookupCtx, m.confirmations(pending.req))
+	nonce, err := m.canonicalAccountNonce(ctx, m.confirmations(pending.req))
 	if err != nil {
 		if !errors.Is(err, errReconciliationPending) && ctx.Err() == nil {
 			pending.nonceReads.failed(observability.Log(ctx), err, "canonical nonce proof RPC unavailable", "nonce", pending.nonce)
@@ -232,4 +233,30 @@ func (m *Manager) confirmConsumedNonce(ctx context.Context, pending *pendingTran
 		Hash: pending.originalHash, Outcome: OutcomeNonceConsumed,
 		Err: errors.Errorf("send %q at nonce %d: %w", pending.req.Label, pending.nonce, ErrNonceConsumed),
 	}, true
+}
+
+// Each reconciliation RPC gets a fresh budget. The complete proof retains its caller's context,
+// allowing healthy deeper ancestry walks while bounding a single stalled dependency.
+func (m *Manager) readLatestNonce(ctx context.Context) (uint64, error) {
+	lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
+	defer cancel()
+	return m.backend.NonceAt(lookupCtx, m.signer.Address(), nil)
+}
+
+func (m *Manager) readPendingNonce(ctx context.Context) (uint64, error) {
+	lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
+	defer cancel()
+	return m.backend.PendingNonceAt(lookupCtx, m.signer.Address())
+}
+
+func (m *Manager) readNonceAtHash(ctx context.Context, hash common.Hash) (uint64, error) {
+	lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
+	defer cancel()
+	return m.backend.ReadNonceAtHash(lookupCtx, m.signer.Address(), hash)
+}
+
+func (m *Manager) readHeaderAtNumber(ctx context.Context, number *big.Int) (*types.Header, error) {
+	lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
+	defer cancel()
+	return m.backend.HeaderByNumber(lookupCtx, number)
 }

@@ -110,7 +110,7 @@ vault-solver/
 manager and consumes `txmanager.Result`. Admission, nonce ownership, fee policy, replacements,
 confirmation and shutdown are defined in the [transaction manager plan](TXMANAGER-PLAN.md).
 
-With optional nonce reconciliation, `nonce_consumed` is an expected unknown-execution result, never
+`nonce_consumed` is an expected unknown-execution result, never
 a successful redemption. The next normal redemption poll reads `canWithdraw` again and constructs a
 fresh batch; completed requests are excluded. This account-level recovery does not coordinate signed
 offers, offer counters or capacity promises across independent processes; see the [replica plan](REPLICA-PLAN.md).
