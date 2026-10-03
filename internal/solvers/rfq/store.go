@@ -67,7 +67,7 @@ type orderRecord struct {
 	// NonceRetryExhausted stops further sends while retaining bounded backend observation. The
 	// flag also distinguishes a later evidenced expiry from an ordinary order deadline.
 	NonceRetryExhausted bool
-	// EstimateRetries counts unsigned, undecoded estimate retries independently of signed retries.
+	// EstimateRetries counts unsigned transient/undecoded retries independently of signed retries.
 	EstimateRetries   int
 	EstimateKind      estimateRevertKind
 	EstimateErrorName string
@@ -356,7 +356,7 @@ func (s *store) expireFatalEstimate(orderID string) (revertName, cause string, e
 	return rec.EstimateErrorName, rec.LastError, true
 }
 
-// scheduleEstimateRetry bounds undecoded simulation failures without spending the signed retry
+// scheduleEstimateRetry bounds transient or undecoded simulation failures without spending the signed retry
 // budget. Like a nonce retry, another open-order poll must re-arm it after this backoff.
 func (s *store) scheduleEstimateRetry(orderID string, limit int, retryAt time.Time) bool {
 	s.mu.Lock()

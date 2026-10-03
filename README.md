@@ -524,13 +524,14 @@ For liquidity commitments, the built-in strategies apply these limits:
   backend. Initial nonce collisions retry after the poll delay within the order deadline,
   without spending this budget. Execution-reverted gas estimates reconcile backend status first, so
   indexed peer fills remain Info outcomes. `ExpiredRequest` expires the order; known Reactor or
-  Executor setup/transfer errors fail the order and log Error once. Undecoded or malformed reverts
-  can rebuild an open order after the poll delay, with a separate `maxNonceRetries` allowance for
-  unsigned estimates; exhaustion fails with Error once. These permanent unsigned failures are never
-  re-armed by a stale open-order listing. Missing backend state retains observation until the order
-  deadline, without another estimate. At that deadline, an unresolved known fatal estimate keeps its
-  original cause and logs Error once; local expiry adds no failed-fill metric without backend evidence.
-  Transport failures remain errors. Uncertain outcomes after
+  Executor setup errors fail the order and log Error once. `FailedCall` and
+  `SafeERC20FailedOperation` can be transient; they follow the same bounded retries as undecoded or
+  malformed reverts. These errors can rebuild an open order after the poll delay, with a separate
+  `maxNonceRetries` allowance for unsigned estimates; exhaustion fails with Error once. These permanent
+  unsigned failures are never re-armed by a stale open-order listing. Missing backend state retains
+  observation until the order deadline, without another estimate. At that deadline, an unresolved
+  known fatal estimate keeps its original cause and logs Error once; local expiry adds no failed-fill
+  metric without backend evidence. Transport failures remain errors. Uncertain outcomes after
   accepted submission remain budgeted.
   When the signed retry budget is exhausted, RFQ stops resubmitting and continues backend reconciliation until
   terminal status or the existing order deadline. A later peer fill retires the order at Info;

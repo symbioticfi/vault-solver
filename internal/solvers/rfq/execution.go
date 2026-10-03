@@ -407,7 +407,7 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	}
 	if kind != estimateNotReverted {
 		// Backend terminal evidence takes precedence over simulation: a sibling may have filled
-		// this order. Known setup errors stop, while undecoded races have their own retry budget.
+		// this order. Setup errors stop; transient operations and undecoded races have a retry budget.
 		observability.Decline(ctx, "fill_estimate_reverted", "execution changed before signing")
 		e.store.markEstimateReverted(orderID, kind, revertName, errString(res.Err))
 		observability.Log(ctx).Info("fill estimate reverted; reconciling order", "attempt", attempt, "revert", revertName)

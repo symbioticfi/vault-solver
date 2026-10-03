@@ -123,9 +123,14 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   Execution-reverted gas estimates enter `estimate_reverted` for backend reconciliation before
   severity or retry decisions. Indexed peer completion takes precedence over every estimate error.
   The generated Reactor and Executor bindings decode canonical error payloads: `ExpiredRequest`
-  expires the order, while known setup, authorization, input-validation or token-transfer errors
-  fail with an Error and failed-fill outcome once. Undecoded and malformed reverts can rebuild an
-  eligible open order after polling backoff, using an independent unsigned `EstimateRetries` counter
+  expires the order, while known setup, authorization and input-validation errors
+  fail with an Error and failed-fill outcome once. Generic `FailedCall` and
+  `SafeERC20FailedOperation` errors are retryable because they do not prove a permanent order defect.
+  The decoded names remain in reconciliation and exhaustion diagnostics. `InsufficientBalance`
+  remains fatal: this OpenZeppelin selector means native ETH shortage, distinct from ERC20 or vault
+  inventory errors; the solver sends no arbitrary executor calls and accepts only ERC20 outputs.
+  Transient, undecoded and malformed reverts can rebuild an eligible open order after polling backoff,
+  using an independent unsigned `EstimateRetries` counter
   bounded by the same configured `maxNonceRetries` (default three additional estimates, zero disables).
   Exhaustion fails with Error once; it never spends or resets the accepted-execution retry budget.
   A permanent unsigned failure sets a retired flag so stale open-order listings cannot re-arm it;
@@ -331,7 +336,7 @@ solvers:
       reactor:              "0x…"
       pollIntervalMs: 3000
       orderLimit: 20
-      maxNonceRetries: 3                         # separate signed/unknown-estimate retry budgets; 0 disables
+      maxNonceRetries: 3                         # separate signed/transient-estimate retry budgets; 0 disables
       solverMode: external                              # "external" (default) | "internal" — see below
       minAmountsIn:                                     # optional per-input-token floor (base units)
         "0x…tokenIn": "1000000000000000000"             # below ⇒ no quote (204); equal ⇒ still quotes
@@ -433,11 +438,13 @@ dropping features.
    initial conflicts, terminal/unknown backend states, fresh open polling and rebuilt calldata, backoff,
    local deadline expiry and preservation/exhaustion of the accepted-execution retry budget.
 8. **(done) Estimate-revert reconciliation** — reconcile business state before choosing severity.
-   Generated Reactor/Executor error decoding expires `ExpiredRequest` and fails known setup/transfer
-   errors with Error once. Unknown or malformed reverts get a separate bounded `maxNonceRetries`
-   estimate budget; permanent unsigned failures cannot re-arm from stale open listings. Tests cover
-   canonical/malformed payloads, peer precedence, missing-view recovery, independent retry budgets,
-   deadline expiry and log/metric severity; normal preparation failures still re-arm.
+   Generated Reactor/Executor error decoding expires `ExpiredRequest` and fails known setup
+   errors with Error once. `FailedCall`, `SafeERC20FailedOperation`, unknown and malformed reverts get
+   a separate bounded `maxNonceRetries` estimate budget; permanent unsigned failures cannot re-arm
+   from stale open listings. Tests cover canonical/malformed payloads, peer precedence, missing-view
+   recovery, independent retry budgets,
+   deadline expiry, fresh external-operation recovery and log/metric severity; normal preparation
+   failures still re-arm.
 9. **(done) Reactor nonce-used decoding** — retire known consumed order nonces without waiting for
    backend indexing, release reservations and observe terminal backend evidence without resubmission.
    Tests cover exact/short/unknown payloads, stale and missing views, invalidation and deadline bounds.

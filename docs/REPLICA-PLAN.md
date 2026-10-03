@@ -107,10 +107,11 @@ global. All remain process-local. Protocol order/bid nonces are separate from th
 | [OEV](OEV-PLAN.md) | Settlement is submitted externally and does not use this manager. |
 
 RFQ also reconciles typed estimate execution reverts and mined reverts before assigning business
-failure. Unknown or malformed estimate reverts have a separate unsigned retry count bounded by
-`maxNonceRetries`, with polling/deadline bounds; exhaustion fails with Error once. Known Reactor or
-Executor setup/transfer errors fail with Error once after backend reconciliation, and `ExpiredRequest`
-expires the order. Stale open listings cannot re-arm these permanent unsigned failures. Missing backend
+failure. Generic `FailedCall` or `SafeERC20FailedOperation` errors, unknown and malformed estimate
+reverts have a separate unsigned retry count bounded by `maxNonceRetries`, with polling/deadline bounds;
+exhaustion fails with Error once. Known Reactor or Executor setup errors, including native ETH
+`InsufficientBalance`, fail with Error once after backend reconciliation, and `ExpiredRequest` expires
+the order. Stale open listings cannot re-arm these permanent unsigned failures. Missing backend
 views wait for reconciliation without another estimate until the deadline. Mined reverts use the signed
 retry budget when fresh backend state remains open. Exact Reactor `NonceUsed()` data
 retires sending immediately and releases capacity; bounded backend observation distinguishes a filled

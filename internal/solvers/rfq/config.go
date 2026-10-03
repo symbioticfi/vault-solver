@@ -62,7 +62,7 @@ type Config struct {
 	// OrderLimit caps how many open orders are fetched per poll.
 	OrderLimit int
 	// MaxNonceRetries independently bounds additional fresh fills after accepted uncertain execution
-	// and additional unsigned attempts after undecoded estimate reverts. Zero disables both retries.
+	// and additional unsigned attempts after transient or undecoded estimate reverts. Zero disables both retries.
 	// Rejected initial nonce conflicts retry within the poll/deadline bounds
 	// without spending this budget. Every retry re-fetches the executable order and discount signatures.
 	MaxNonceRetries int

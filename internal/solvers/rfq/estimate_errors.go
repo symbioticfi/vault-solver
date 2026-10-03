@@ -20,6 +20,7 @@ const (
 	estimateRevertUnknown   estimateRevertKind = "unknown"
 	estimateRevertNonceUsed estimateRevertKind = "nonce_used"
 	estimateRevertExpired   estimateRevertKind = "expired"
+	estimateRevertRetryable estimateRevertKind = "retryable"
 	estimateRevertFatal     estimateRevertKind = "fatal"
 )
 
@@ -43,9 +44,9 @@ func classifyEstimateRevert(err error) (estimateRevertKind, string) {
 	}
 	decoded, decodeErr = executor.NewExecutor().UnpackError(revert.Data)
 	if decodeErr == nil {
-		name, size := executorEstimateError(decoded)
+		kind, name, size := executorEstimateError(decoded)
 		if size == len(revert.Data) && canonicalErrorArguments(revert.Data, decoded) {
-			return estimateRevertFatal, name
+			return kind, name
 		}
 	}
 	return estimateRevertUnknown, "unknown"
@@ -64,7 +65,7 @@ func reactorEstimateError(decoded any) (estimateRevertKind, string, int) {
 	case *reactor.ReactorInsufficientBalance:
 		return estimateRevertFatal, "InsufficientBalance", 68
 	case *reactor.ReactorSafeERC20FailedOperation:
-		return estimateRevertFatal, "SafeERC20FailedOperation", 36
+		return estimateRevertRetryable, "SafeERC20FailedOperation", 36
 	case *reactor.ReactorInvalidAmountIn:
 		return estimateRevertFatal, "InvalidAmountIn", 4
 	case *reactor.ReactorInvalidOutput:
@@ -74,7 +75,7 @@ func reactorEstimateError(decoded any) (estimateRevertKind, string, int) {
 	case *reactor.ReactorInvalidTokenIn:
 		return estimateRevertFatal, "InvalidTokenIn", 4
 	case *reactor.ReactorFailedCall:
-		return estimateRevertFatal, "FailedCall", 4
+		return estimateRevertRetryable, "FailedCall", 4
 	case *reactor.ReactorInvalidShortString:
 		return estimateRevertFatal, "InvalidShortString", 4
 	case *reactor.ReactorStringTooLong:
@@ -84,26 +85,26 @@ func reactorEstimateError(decoded any) (estimateRevertKind, string, int) {
 	}
 }
 
-func executorEstimateError(decoded any) (string, int) {
+func executorEstimateError(decoded any) (estimateRevertKind, string, int) {
 	switch decoded.(type) {
 	case *executor.ExecutorAddressEmptyCode:
-		return "AddressEmptyCode", 36
+		return estimateRevertFatal, "AddressEmptyCode", 36
 	case *executor.ExecutorNotCaller:
-		return "NotCaller", 4
+		return estimateRevertFatal, "NotCaller", 4
 	case *executor.ExecutorNotReactor:
-		return "NotReactor", 4
+		return estimateRevertFatal, "NotReactor", 4
 	case *executor.ExecutorOwnableInvalidOwner:
-		return "OwnableInvalidOwner", 36
+		return estimateRevertFatal, "OwnableInvalidOwner", 36
 	case *executor.ExecutorOwnableUnauthorizedAccount:
-		return "OwnableUnauthorizedAccount", 36
+		return estimateRevertFatal, "OwnableUnauthorizedAccount", 36
 	case *executor.ExecutorFailedCall:
-		return "FailedCall", 4
+		return estimateRevertRetryable, "FailedCall", 4
 	case *executor.ExecutorInsufficientBalance:
-		return "InsufficientBalance", 68
+		return estimateRevertFatal, "InsufficientBalance", 68
 	case *executor.ExecutorSafeERC20FailedOperation:
-		return "SafeERC20FailedOperation", 36
+		return estimateRevertRetryable, "SafeERC20FailedOperation", 36
 	default:
-		return "unknown", -1
+		return estimateRevertUnknown, "unknown", -1
 	}
 }
 
@@ -149,8 +150,8 @@ func (e *executionService) reconcileEstimateRevert(ctx context.Context, local *o
 	}
 	retryAt := now.Add(e.pollInterval)
 	if retryAt.Before(local.RetryDeadline) && e.store.scheduleEstimateRetry(local.OrderID, e.maxNonceRetries, retryAt) {
-		observability.Log(ctx).V(1).Info("undecoded estimate revert retry scheduled", "retryAt", retryAt,
-			"estimateRetries", local.EstimateRetries+1)
+		observability.Log(ctx).V(1).Info("estimate revert retry scheduled", "retryAt", retryAt,
+			"revert", local.EstimateErrorName, "estimateRetries", local.EstimateRetries+1)
 	}
 	return nil
 }
