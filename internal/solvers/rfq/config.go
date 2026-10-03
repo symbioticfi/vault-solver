@@ -61,8 +61,9 @@ type Config struct {
 	PollInterval time.Duration
 	// OrderLimit caps how many open orders are fetched per poll.
 	OrderLimit int
-	// MaxNonceRetries bounds additional fresh fills after accepted abandonment or nonce consumption.
-	// Zero disables those retries. Rejected initial nonce conflicts retry within the poll/deadline bounds
+	// MaxNonceRetries independently bounds additional fresh fills after accepted uncertain execution
+	// and additional unsigned attempts after undecoded estimate reverts. Zero disables both retries.
+	// Rejected initial nonce conflicts retry within the poll/deadline bounds
 	// without spending this budget. Every retry re-fetches the executable order and discount signatures.
 	MaxNonceRetries int
 	// SolverMode is the deployment profile operators set: "external" (default) or "internal". It drives

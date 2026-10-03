@@ -120,10 +120,19 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   existing deadline. A later indexed peer fill retires it at Info rather than turning it into a
   failed order. `order/nonce_retry_exhausted` counts the first exhausted transition; only subsequent
   evidenced backend or local deadline expiry advances `order/expired_after_nonce_retries`, once.
-  Execution-reverted gas estimates follow the same backend reconciliation and polling/deadline
-  bounds as rejected initial work, without spending the signed retry budget or recording a failed
-  fill. Typed estimate reverts are expected Info events; transport failures remain errors. A terminal
-  backend decision on unsigned work is never re-armed by a stale open-order listing.
+  Execution-reverted gas estimates enter `estimate_reverted` for backend reconciliation before
+  severity or retry decisions. Indexed peer completion takes precedence over every estimate error.
+  The generated Reactor and Executor bindings decode canonical error payloads: `ExpiredRequest`
+  expires the order, while known setup, authorization, input-validation or token-transfer errors
+  fail with an Error and failed-fill outcome once. Undecoded and malformed reverts can rebuild an
+  eligible open order after polling backoff, using an independent unsigned `EstimateRetries` counter
+  bounded by the same configured `maxNonceRetries` (default three additional estimates, zero disables).
+  Exhaustion fails with Error once; it never spends or resets the accepted-execution retry budget.
+  A permanent unsigned failure sets a retired flag so stale open-order listings cannot re-arm it;
+  ordinary transient preparation failures retain their existing re-arming behavior. Missing,
+  unavailable or unknown backend views retain observation without another estimate until a valid
+  view or the existing order deadline. Transport failures remain errors. A terminal backend decision
+  on unsigned work is never re-armed by a stale open-order listing.
   The generated Reactor binding decodes exact `NonceUsed()` revert data before generic estimate
   handling. It retires sending at Info immediately, releases the unused reservation, and never retries
   the order even when the backend still says `open`. The local `nonce_used` state observes the backend
@@ -318,7 +327,7 @@ solvers:
       reactor:              "0x…"
       pollIntervalMs: 3000
       orderLimit: 20
-      maxNonceRetries: 3                         # additional attempts; 0 disables
+      maxNonceRetries: 3                         # separate signed/unknown-estimate retry budgets; 0 disables
       solverMode: external                              # "external" (default) | "internal" — see below
       minAmountsIn:                                     # optional per-input-token floor (base units)
         "0x…tokenIn": "1000000000000000000"             # below ⇒ no quote (204); equal ⇒ still quotes
@@ -419,10 +428,12 @@ dropping features.
    `maxNonceRetries`; accepted unknown results retain that budget. Regression tests cover more than four
    initial conflicts, terminal/unknown backend states, fresh open polling and rebuilt calldata, backoff,
    local deadline expiry and preservation/exhaustion of the accepted-execution retry budget.
-8. **(done) Estimate-revert reconciliation** — reconcile business state when unsigned simulation
-   reverts, retire backend terminal orders, and rebuild eligible open orders after polling backoff
-   without consuming the accepted-execution retry budget. Tested with terminal, stale-open and
-   missing backend views, deadline expiry and log/metric severity.
+8. **(done) Estimate-revert reconciliation** — reconcile business state before choosing severity.
+   Generated Reactor/Executor error decoding expires `ExpiredRequest` and fails known setup/transfer
+   errors with Error once. Unknown or malformed reverts get a separate bounded `maxNonceRetries`
+   estimate budget; permanent unsigned failures cannot re-arm from stale open listings. Tests cover
+   canonical/malformed payloads, peer precedence, missing-view recovery, independent retry budgets,
+   deadline expiry and log/metric severity; normal preparation failures still re-arm.
 9. **(done) Reactor nonce-used decoding** — retire known consumed order nonces without waiting for
    backend indexing, release reservations and observe terminal backend evidence without resubmission.
    Tests cover exact/short/unknown payloads, stale and missing views, invalidation and deadline bounds.

@@ -52,7 +52,7 @@ solvers:
       listenAddr: ":42073"             # bind address for the quote HTTP server (POST /quote, /health, /docs)
       pollIntervalMs: 3000             # open-order polling interval and minimum nonce retry delay
       orderLimit: 20                   # max open orders fetched per poll
-      maxNonceRetries: 3               # accepted uncertain outcomes; 0 disables; initial collisions use deadline
+      maxNonceRetries: 3               # separate accepted-send/unknown-estimate budgets; 0 disables; initial collisions use deadline
 
       # RFQ contract deployment (mainnet):
       executor: "0x031f569DA822A6b8D1500D74733986a9aE4cBda3"   # Executor — the bot calls Executor.fill to settle

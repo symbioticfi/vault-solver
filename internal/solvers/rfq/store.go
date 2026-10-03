@@ -30,6 +30,8 @@ const (
 	// The Reactor consumed/inactivated the order nonce. Sending is retired immediately;
 	// backend observation only refines fill versus invalidation until the order deadline.
 	statusNonceUsed orderStatus = "nonce_used"
+	// An unsigned estimate is reconciled before protocol errors or a bounded retry are chosen.
+	statusEstimateReverted orderStatus = "estimate_reverted"
 	// statusObsolete is terminal: the backend reported the order no longer fillable while our fill was
 	// being sent, so it is never re-armed, even if a stale open-order listing still returns it.
 	statusObsolete orderStatus = "obsolete"
@@ -37,7 +39,7 @@ const (
 
 func (s orderStatus) active() bool {
 	return s == statusQueued || s == statusSubmitting || s == statusSubmitted ||
-		s == statusRetryWaiting || s == statusNonceUncertain || s == statusNonceUsed
+		s == statusRetryWaiting || s == statusNonceUncertain || s == statusNonceUsed || s == statusEstimateReverted
 }
 
 // awaitsSubmission reports a won order the submitter still has to send.
@@ -65,7 +67,13 @@ type orderRecord struct {
 	// NonceRetryExhausted stops further sends while retaining bounded backend observation. The
 	// flag also distinguishes a later evidenced expiry from an ordinary order deadline.
 	NonceRetryExhausted bool
-	// NonceConflict identifies rejected initial work, including an execution-reverted estimate.
+	// EstimateRetries counts unsigned, undecoded estimate retries independently of signed retries.
+	EstimateRetries   int
+	EstimateKind      estimateRevertKind
+	EstimateErrorName string
+	// RetryRetired prevents permanent unsigned failures from being re-armed by stale open listings.
+	RetryRetired bool
+	// NonceConflict identifies rejected initial nonce work.
 	// It needs fresh protocol reconciliation but does not spend the signed retry budget.
 	NonceConflict bool
 	RetryAt       time.Time
@@ -136,7 +144,7 @@ func (s *store) upsertQueued(in queuedOrder) bool {
 		rec = &orderRecord{OrderID: in.OrderID, Status: statusQueued, CreatedAt: now}
 		s.orders[in.OrderID] = rec
 	}
-	if rec.Status == statusFailed && rec.TxHash == (common.Hash{}) {
+	if rec.Status == statusFailed && rec.TxHash == (common.Hash{}) && !rec.RetryRetired {
 		rec.Status = statusQueued
 		rec.LastError = ""
 	}
@@ -303,6 +311,52 @@ func (s *store) markNonceUsed(orderID string, lastErr string) {
 		rec.UpdatedAt = s.now()
 		s.reservations.Delete(orderID)
 	}
+}
+
+// markEstimateReverted retains the protocol decision until backend reconciliation. The per-order
+// execution owner writes it; all polling and submission access stays under the ordinary store lock.
+func (s *store) markEstimateReverted(orderID string, kind estimateRevertKind, name, lastErr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rec := s.orders[orderID]; rec != nil {
+		rec.Status = statusEstimateReverted
+		rec.EstimateKind, rec.EstimateErrorName = kind, name
+		rec.NonceConflict = false
+		rec.LastError = lastErr
+		rec.UpdatedAt = s.now()
+		if kind == estimateRevertFatal || kind == estimateRevertExpired {
+			s.reservations.Delete(orderID)
+		}
+	}
+}
+
+// markEstimateFailed reports a permanent failure only once and prevents unsigned re-arming.
+func (s *store) markEstimateFailed(orderID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec := s.orders[orderID]
+	if rec == nil || rec.Status != statusEstimateReverted {
+		return false
+	}
+	rec.RetryRetired = true
+	s.markStatusLocked(rec, statusFailed, common.Hash{}, rec.LastError)
+	return true
+}
+
+// scheduleEstimateRetry bounds undecoded simulation failures without spending the signed retry
+// budget. Like a nonce retry, another open-order poll must re-arm it after this backoff.
+func (s *store) scheduleEstimateRetry(orderID string, limit int, retryAt time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec := s.orders[orderID]
+	if rec == nil || rec.Status != statusEstimateReverted || rec.EstimateRetries >= limit {
+		return false
+	}
+	rec.EstimateRetries++
+	rec.Status = statusRetryWaiting
+	rec.RetryAt = retryAt
+	rec.UpdatedAt = s.now()
+	return true
 }
 
 // reserve replaces an active order's reservation. It refuses an order that has already left the

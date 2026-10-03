@@ -34,7 +34,7 @@ func TestExecutionEstimateRevertReconcilesBeforeFailure(t *testing.T) {
 			be.order.OrderStatus = tc.backend
 			txm := &fakeTxm{result: estimateRevertResult()}
 			e := newExec(t, st, be, txm)
-			e.maxNonceRetries = 0 // No signed transaction exists, so this budget is not consumed.
+			e.maxNonceRetries = 1 // Unknown estimates have their own bounded retry allowance.
 			reg := prometheus.NewRegistry()
 			var err error
 			e.metrics, err = newRFQMetrics(reg, st, "")
@@ -66,7 +66,7 @@ func TestExecutionEstimateRevertRetriesFreshOpenOrderWithinDeadline(t *testing.T
 	be.order.OrderStatus = "open"
 	txm := &fakeTxm{result: estimateRevertResult()}
 	e := newExec(t, st, be, txm)
-	e.now, e.maxNonceRetries = st.now, 0
+	e.now, e.maxNonceRetries = st.now, 1
 	syncCycle(t.Context(), e)
 	if rec := st.order("o1"); rec.Status != statusRetryWaiting || !st.reserved("o1") {
 		t.Fatalf("unsigned execution race lost the order or reservation: %+v", rec)
@@ -96,7 +96,7 @@ func TestExecutionEstimateRevertWithUnavailableBackendExpiresLocally(t *testing.
 	e := newExec(t, st, be, txm)
 	e.now = st.now
 	syncCycle(t.Context(), e)
-	if st.order("o1").Status != statusNonceUncertain {
+	if st.order("o1").Status != statusEstimateReverted {
 		t.Fatalf("missing backend should retain estimate reconciliation: %+v", st.order("o1"))
 	}
 	now = time.Unix(4_102_444_800, 0)

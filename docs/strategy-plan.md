@@ -264,8 +264,13 @@ Rejected initial fees neither create nor ratchet that hint. Several processes ca
 The manager abandons tracking at the pending timeout, request deadline or terminal business-status check
 without sending a cancellation transaction. Execution remains unknown. RFQ owns the retry policy: backend
 reconciliation followed by one configured poll interval and a fresh open-order poll can re-enter fill planning.
-Accepted uncertain outcomes use its `maxNonceRetries` budget. Initial nonce collisions use the same
-backend reconciliation, poll delay and order deadline without spending that budget. Each retry resolves the executable order,
+Accepted uncertain outcomes use its `maxNonceRetries` budget. Unknown or malformed unsigned estimate
+reverts have a separate retry count bounded by the same setting; exhaustion logs Error once and retires
+the unsigned failure so stale open listings cannot re-arm it. Known Reactor/Executor setup or transfer
+errors fail with Error once after backend reconciliation, `ExpiredRequest` expires, and indexed peer
+completion takes precedence. Missing views keep bounded observation without another estimate. Initial
+nonce collisions use the same backend reconciliation, poll delay and order deadline without spending
+that budget. Each retry resolves the executable order,
 chain inputs, strategy plan, and discount signatures again. Retry budgets remain process-local; neither strategy code
 nor the generic manager decides whether to replay a protocol order.
 
