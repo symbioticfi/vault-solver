@@ -528,7 +528,9 @@ For liquidity commitments, the built-in strategies apply these limits:
   can rebuild an open order after the poll delay, with a separate `maxNonceRetries` allowance for
   unsigned estimates; exhaustion fails with Error once. These permanent unsigned failures are never
   re-armed by a stale open-order listing. Missing backend state retains observation until the order
-  deadline, without another estimate. Transport failures remain errors. Uncertain outcomes after
+  deadline, without another estimate. At that deadline, an unresolved known fatal estimate keeps its
+  original cause and logs Error once; local expiry adds no failed-fill metric without backend evidence.
+  Transport failures remain errors. Uncertain outcomes after
   accepted submission remain budgeted.
   When the signed retry budget is exhausted, RFQ stops resubmitting and continues backend reconciliation until
   terminal status or the existing order deadline. A later peer fill retires the order at Info;

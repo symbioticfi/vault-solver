@@ -343,6 +343,19 @@ func (s *store) markEstimateFailed(orderID string) bool {
 	return true
 }
 
+// expireFatalEstimate ends unresolved observation while retaining the known simulation cause.
+// The store lock gates its diagnostic once; no failed-fill outcome is inferred from backend absence.
+func (s *store) expireFatalEstimate(orderID string) (revertName, cause string, expired bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec := s.orders[orderID]
+	if rec == nil || rec.Status != statusEstimateReverted || rec.EstimateKind != estimateRevertFatal {
+		return "", "", false
+	}
+	s.markStatusLocked(rec, statusExpired, common.Hash{}, rec.LastError)
+	return rec.EstimateErrorName, rec.LastError, true
+}
+
 // scheduleEstimateRetry bounds undecoded simulation failures without spending the signed retry
 // budget. Like a nonce retry, another open-order poll must re-arm it after this backoff.
 func (s *store) scheduleEstimateRetry(orderID string, limit int, retryAt time.Time) bool {

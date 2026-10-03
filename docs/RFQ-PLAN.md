@@ -131,7 +131,11 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   A permanent unsigned failure sets a retired flag so stale open-order listings cannot re-arm it;
   ordinary transient preparation failures retain their existing re-arming behavior. Missing,
   unavailable or unknown backend views retain observation without another estimate until a valid
-  view or the existing order deadline. Transport failures remain errors. A terminal backend decision
+  view or the existing order deadline. If that deadline ends observation of a known fatal estimate,
+  its original cause is retained and logged once at Error with unresolved backend status. The order
+  expires locally without a failed-fill metric: absent backend evidence does not establish a failed
+  business execution. The final terminal or peer backend view still takes precedence over this diagnostic.
+  Transport failures remain errors. A terminal backend decision
   on unsigned work is never re-armed by a stale open-order listing.
   The generated Reactor binding decodes exact `NonceUsed()` revert data before generic estimate
   handling. It retires sending at Info immediately, releases the unused reservation, and never retries

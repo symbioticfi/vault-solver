@@ -135,7 +135,7 @@ func (e *executionService) syncOnce(ctx context.Context) {
 		switch {
 		case !o.Status.awaitsSubmission():
 			e.handleOrder(ctx, o)
-		case e.expireQueued(o):
+		case e.expireQueued(ctx, o):
 		case e.sending.Load():
 			e.reserveWon(ctx, o)
 		}
@@ -177,11 +177,21 @@ func (e *executionService) wakeSubmitter() {
 // deadline when backend views disappear; a nonce race itself is not proof of failed execution.
 // Submitted/unknown inclusion keeps tracking.
 // The caller owns the order through the in-flight set, so a fill in Send is never expired.
-func (e *executionService) expireUnsigned(o *orderRecord) bool {
+func (e *executionService) expireUnsigned(ctx context.Context, o *orderRecord) bool {
 	unsignedRetry := o.Status == statusRetryWaiting || o.Status == statusNonceUncertain ||
 		o.Status == statusQueued || o.Status == statusSubmitting || o.Status == statusNonceUsed || o.Status == statusEstimateReverted
 	if !unsignedRetry || o.RetryDeadline.IsZero() || e.now().Before(o.RetryDeadline) {
 		return false
+	}
+	if o.Status == statusEstimateReverted && o.EstimateKind == estimateRevertFatal {
+		// The backend never established this order's business outcome. Preserve the known
+		// simulation cause and report it once without claiming a failed fill.
+		revert, cause, expired := e.store.expireFatalEstimate(o.OrderID)
+		if expired {
+			observability.Log(ctx).Error(errors.New(cause), "fatal fill estimate unresolved at order deadline",
+				"revert", revert, "backendStatus", "unresolved")
+		}
+		return expired
 	}
 	e.markExpired(o.OrderID, common.Hash{}, "order deadline has passed")
 	return true
@@ -197,7 +207,7 @@ func (e *executionService) markExpired(orderID string, txHash common.Hash, reaso
 // expireQueued applies the deadline bound from the poll loop, so a queued order does not keep its
 // reservation past its deadline while the submitter is busy with another fill. An order the
 // submitter owns is left to it.
-func (e *executionService) expireQueued(o *orderRecord) bool {
+func (e *executionService) expireQueued(ctx context.Context, o *orderRecord) bool {
 	if !e.acquire(o.OrderID) {
 		return false
 	}
@@ -205,7 +215,7 @@ func (e *executionService) expireQueued(o *orderRecord) bool {
 	if o = e.store.order(o.OrderID); o == nil || !o.Status.awaitsSubmission() {
 		return false
 	}
-	return e.expireUnsigned(o)
+	return e.expireUnsigned(ctx, o)
 }
 
 // reserveWon holds a won order's liquidity as soon as it is polled, before its turn on the
@@ -291,11 +301,11 @@ func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
 		// An indexed completion wins over local deadline expiry, including on the last poll.
 		e.reconcileTerminalStatus(ctx, o.OrderID)
 		if latest := e.store.order(o.OrderID); latest != nil {
-			e.expireUnsigned(latest)
+			e.expireUnsigned(ctx, latest)
 		}
 		return
 	}
-	if e.expireUnsigned(o) {
+	if e.expireUnsigned(ctx, o) {
 		return
 	}
 	switch o.Status {
