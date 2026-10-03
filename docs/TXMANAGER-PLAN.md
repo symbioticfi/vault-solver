@@ -185,7 +185,10 @@ Replacements choose at least a 12.5% bump and fresh fees when available; unavail
 to bumping the last signed fees. A fresh request reusing an abandoned nonce has new destination, calldata,
 value and gas; an applicable hint raises both fee fields by at least 12.5%. Its own profitability
 ceiling and the global ceiling remain authoritative. An expired hint, or one whose required bump cannot
-fit either ceiling, is discarded and the new call uses the already validated fresh market quote.
+fit the global ceiling, is discarded and the new call uses the already validated fresh market quote.
+If only this request's ceiling is too low, it uses fresh capped market fees without discarding or
+renewing the hint. Later affordable requests can still price and send the known replacement floor
+before the original expiry, including after a definite underpriced rejection of the low-cap request.
 A market fee that itself cannot fit still fails before signing; active owned replacements retain their
 ordinary bump and cap policy. The bot never sends zero-value self-transfers to clear nonces.
 

@@ -458,9 +458,11 @@ deadline and manager context bound this wait. An underpriced replacement of an o
 abandons tracking at Info for protocol reconciliation. It retains signed hashes and the previous
 accepted or transport-uncertain fee hint, without escalating from the rejected replacement's fees.
 An abandoned call's fee hint lasts at most `pendingTimeoutMs` after it is remembered. Fresh sends and
-profitability quotes discard it sooner if its required bump cannot fit their request or global ceiling,
-then use fresh market fees within those ceilings. A dropped obsolete call cannot pin the process to
-stale fees until restart; a relay that still holds a higher-priced call may reject that fresh attempt.
+profitability quotes discard it sooner if its required bump cannot fit the global ceiling, then use
+fresh market fees within their ceilings. A request with a lower fee ceiling skips the hint for that
+send and preserves its original expiry, so a later affordable request can still replace the pending
+call. A dropped obsolete call cannot pin the process to stale fees until restart; a relay that still
+holds a higher-priced call may reject that fresh attempt.
 
 Accepted or transport-uncertain broadcasts keep their exact signed hashes and ordinary receipt,
 confirmation and fee-replacement policy. Abandonment returns an unknown execution result; solvers

@@ -22,8 +22,10 @@ There is no unchecked cached increment or extra account-confirmation gate before
 A process-local fee hint applies only when its nonce equals the current mined nonce and its
 `pendingTimeoutMs` lifetime has not elapsed. Mined advancement or a lower nonce after a reorg discards
 an inapplicable hint; unavailable state fails the next request before signing and retains an unexpired
-hint. A fresh request or quote discards a hint whose required bump cannot fit its fee ceilings, then
-uses its already validated fresh market fees. This does not alter active owned replacement caps.
+hint. A fresh request or quote discards a hint whose required bump cannot fit the global fee ceiling,
+then uses its already validated fresh market fees. A request-only ceiling skips the hint for that
+send without raising or renewing it; later affordable requests retain the known replacement floor
+until its original expiry. This does not alter active owned replacement caps.
 
 The RPC read and broadcast are separate operations. Two replicas can choose the same nonce. An initial
 nonce-too-low or replacement-underpriced response returns `nonce_conflict` with `ErrNonceConflict`, the
@@ -57,8 +59,9 @@ are not atomic, so even an actual winner can receive this unknown-execution outc
 `abandoned` is also an unknown execution result: the request deadline, pending timeout or `Obsolete`
 ends tracking, releases the local lane and records a nonce/fee hint for the next fresh business call.
 No cancellation transaction is sent. Replacement requires at least a 12.5% increase in both fee fields
-under the fresh request and global ceilings while the hint is unexpired and can fit. Otherwise the
-hint is discarded and current capped market fees are used. Failed preparation/submission retains an
+under the fresh request and global ceilings while the hint is unexpired and can fit. Otherwise
+current capped market fees are used: expiry or a global-cap mismatch discards the hint, while a
+request-only mismatch retains it without renewing its lifetime. Failed preparation/submission retains an
 applicable hint without extending its lifetime. Without a fresh eligible request, the old call can remain pending and still land if valid.
 
 None of these outcomes proves a successful fill, a failure or which peer won. The generic
@@ -125,7 +128,8 @@ and peer fills do not page or become failed-fill metrics.
 
 Unit tests cover fresh mined reads with foreign pending work, immediate local release after nonce collisions,
 bounded/recoverable RPC failures, receipt priority, mined-nonce replacement suppression and solver retry
-accounting, rejected-fee non-escalation, hint expiry/cap recovery, renewed snapshot safety and
+accounting, rejected-fee non-escalation, hint expiry/global-cap recovery, low-cap rejection followed
+by affordable replacement, renewed snapshot safety and
 request/global ceilings. An Anvil race test synchronizes three independent same-key managers at nonce 0, mines a winner, and rebuilds the remaining eligible orders
 at nonces 1 and 2 after mined state advances. It verifies all three distinct transactions execute canonically.
 Another scenario abandons a pending business call, verifies no

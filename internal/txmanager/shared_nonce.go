@@ -229,9 +229,10 @@ func (m *Manager) forgetReusableIfUnchanged(remembered *reusableNonce) {
 }
 
 // applyReusableFloor treats an abandoned fee hint as temporary evidence, never a new fee ceiling.
-// A relay can drop an obsolete call while its account nonce remains unchanged. Once a hint expires
-// or cannot fit the current ceilings, discard it and use the already validated fresh market quote.
-// Active owned replacements still enforce their ordinary bump instead of taking this fallback.
+// A relay can drop an obsolete call while its account nonce remains unchanged. An expired hint or
+// one whose bump exceeds the global ceiling is discarded. A request-only ceiling skips the hint for
+// this send without renewing it, so later affordable work can still replace a retained pending call.
+// Both skips use the validated fresh market quote; active owned replacements enforce their bump.
 func (m *Manager) applyReusableFloor(current feeQuote, remembered *reusableNonce, limit *big.Int) (feeQuote, bool) {
 	if remembered == nil {
 		return current, false
@@ -242,7 +243,9 @@ func (m *Manager) applyReusableFloor(current feeQuote, remembered *reusableNonce
 	}
 	fees, err := replacementFloor(current, remembered.fees, limit)
 	if err != nil {
-		m.forgetReusableIfUnchanged(remembered)
+		if _, globalErr := replacementFloor(current, remembered.fees, m.globalFeeLimit()); globalErr != nil {
+			m.forgetReusableIfUnchanged(remembered)
+		}
 		return current, false
 	}
 	return fees, true

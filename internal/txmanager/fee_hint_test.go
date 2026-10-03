@@ -48,10 +48,11 @@ func TestUnhonorableAbandonedFeeHintFallsBackWithinCeilings(t *testing.T) {
 		global     float64
 		request    *big.Int
 		quoteFirst bool
+		keepHint   bool
 	}{
 		{name: "profitability global ceiling", global: 65, quoteFirst: true},
 		{name: "broadcast global ceiling", global: 65},
-		{name: "broadcast request ceiling", global: 100, request: gweiToWei(50)},
+		{name: "broadcast request ceiling", global: 100, request: gweiToWei(50), keepHint: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := &silentAcceptanceBackend{mockBackend: newMockBackend()}
@@ -67,7 +68,7 @@ func TestUnhonorableAbandonedFeeHintFallsBackWithinCeilings(t *testing.T) {
 				request.MaxFeePerGas = ceiling
 			}
 			pending, err := m.broadcast(t.Context(), request)
-			if err != nil || pending == nil || pending.nonce != 7 || m.reusableSnapshot() != nil {
+			if err != nil || pending == nil || pending.nonce != 7 || (m.reusableSnapshot() != nil) != tc.keepHint {
 				t.Fatalf("unhonorable hint blocked fresh sending: pending=%+v err=%v hint=%+v", pending, err, m.reusableSnapshot())
 			}
 			if pending.fees.maxFee.Cmp(m.normalFeeLimit(request)) > 0 || pending.fees.tip.Cmp(pending.fees.maxFee) > 0 {
@@ -76,6 +77,64 @@ func TestUnhonorableAbandonedFeeHintFallsBackWithinCeilings(t *testing.T) {
 			assertMetric(t, metrics.feeLimits.WithLabelValues("rfq-fill", feeLimitPhaseInitial), 0)
 		})
 	}
+}
+
+func TestRequestCapRejectionPreservesFeeHintForHigherCapWork(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := newMockBackend()
+		b.sendErrs = []error{errors.New("replacement transaction underpriced"), errors.New("replacement transaction underpriced")}
+		m := New(b, mustSigner(t), big.NewInt(1), Config{
+			MaxFeeGwei: 100, PendingTimeout: time.Second, PollInterval: time.Millisecond,
+			Horizon: HorizonConfig{BlockTime: time.Millisecond},
+		}, logr.Discard())
+		m.rememberReusable(7, feeQuote{baseFee: gweiToWei(20), tip: gweiToWei(4), maxFee: gweiToWei(60)})
+		original := m.reusableSnapshot()
+		for range 2 {
+			time.Sleep(100 * time.Millisecond)
+			pending, err := m.broadcast(t.Context(), Request{To: common.Address{1}, GasLimit: 50_000, MaxFeePerGas: gweiToWei(50)})
+			if err != nil || pending == nil || !isPendingNonceCollision(pending.broadcastErr) || pending.fees.maxFee.Cmp(gweiToWei(50)) > 0 {
+				t.Fatalf("low-cap rejection exceeded its cap or lost the nonce conflict: pending=%+v err=%v", pending, err)
+			}
+			hint := m.reusableSnapshot()
+			if hint == nil || !hint.expiresAt.Equal(original.expiresAt) || hint.fees.maxFee.Cmp(gweiToWei(60)) != 0 || hint.fees.tip.Cmp(gweiToWei(4)) != 0 {
+				t.Fatalf("low-cap rejected work changed the accepted hint: original=%+v hint=%+v", original, hint)
+			}
+		}
+		ceiling, err := m.MaxFeePerGas(t.Context())
+		if err != nil || ceiling.Cmp(gweiToWei(67.5)) < 0 {
+			t.Fatalf("higher-cap work lost replacement pricing: ceiling=%v err=%v", ceiling, err)
+		}
+		if hint := m.reusableSnapshot(); hint == nil || !hint.expiresAt.Equal(original.expiresAt) {
+			t.Fatalf("profitability pricing renewed the hint lifetime: original=%+v hint=%+v", original, hint)
+		}
+		pending, err := m.broadcast(t.Context(), Request{To: common.Address{2}, GasLimit: 50_000, MaxFeePerGas: gweiToWei(100)})
+		if err != nil || pending == nil || pending.nonce != 7 || pending.broadcastErr != nil ||
+			pending.fees.maxFee.Cmp(gweiToWei(67.5)) < 0 || pending.fees.tip.Cmp(gweiToWei(4.5)) < 0 || pending.fees.maxFee.Cmp(gweiToWei(100)) > 0 {
+			t.Fatalf("higher-cap work lost the affordable replacement floor: pending=%+v err=%v", pending, err)
+		}
+		if hint := m.reusableSnapshot(); hint == nil || !hint.expiresAt.After(original.expiresAt) {
+			t.Fatalf("accepted higher-cap work did not renew its fee hint: original=%+v hint=%+v", original, hint)
+		}
+	})
+}
+
+func TestRequestCapSkipDoesNotExtendFeeHintLifetime(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b := newMockBackend()
+		b.sendErrs = []error{errors.New("replacement transaction underpriced")}
+		m := New(b, mustSigner(t), big.NewInt(1), Config{MaxFeeGwei: 100, PendingTimeout: time.Second}, logr.Discard())
+		m.rememberReusable(7, feeQuote{baseFee: gweiToWei(20), tip: gweiToWei(4), maxFee: gweiToWei(60)})
+		time.Sleep(500 * time.Millisecond)
+		pending, err := m.broadcast(t.Context(), Request{To: common.Address{1}, GasLimit: 50_000, MaxFeePerGas: gweiToWei(50)})
+		if err != nil || pending == nil || !isPendingNonceCollision(pending.broadcastErr) {
+			t.Fatalf("expected rejected low-cap attempt: pending=%+v err=%v", pending, err)
+		}
+		time.Sleep(500 * time.Millisecond)
+		ceiling, err := m.MaxFeePerGas(t.Context())
+		if err != nil || ceiling.Cmp(gweiToWei(60)) >= 0 || m.reusableSnapshot() != nil {
+			t.Fatalf("request-only skip extended stale pricing: ceiling=%v err=%v hint=%+v", ceiling, err, m.reusableSnapshot())
+		}
+	})
 }
 
 func TestRejectedFreshFeesNeverCreateOrRatchetAbandonedHint(t *testing.T) {

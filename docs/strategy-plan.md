@@ -257,7 +257,9 @@ label and query namespace/pod options from Prometheus rather than embedding depl
 The [shared manager ownership contract](TXMANAGER-PLAN.md#1-ownership-and-admission) serializes local
 signed lifecycles and reads the latest mined nonce before every new send. Fresh requests use the lowest
 unconsumed nonce, including after restart. Accepted/transport-uncertain abandonment retains a fee hint
-for at most `pendingTimeoutMs`; fresh work discards it if its required bump cannot fit the fee ceilings.
+for at most `pendingTimeoutMs`; fresh work discards it if its required bump cannot fit the global fee
+ceiling. A lower request ceiling skips the hint for that send without discarding or renewing it, so
+later affordable work retains the known replacement floor until its original expiry.
 Rejected initial fees neither create nor ratchet that hint. Several processes can share the EOA, but nonces and off-chain commitments are not allocated atomically across processes; see the
 [replica plan](REPLICA-PLAN.md).
 
