@@ -1,10 +1,13 @@
 package lifi
 
 import (
+	"context"
 	"sync"
 	"time"
 
 	"github.com/go-errors/errors"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 type reservationRetry struct {
@@ -56,10 +59,42 @@ func (q *reservationRetryQueue) enqueueWithNonceRetry(
 	}
 	// A failed handoff must not leave a tracked order without a timer or completion event.
 	// Reuse its original bound and advance its backoff instead of stranding the order.
-	if retryErr := nonceRetries.scheduleBefore(order, now, time.Time{}); retryErr != nil {
-		return errors.Join(err, retryErr)
+	return nonceRetries.scheduleBefore(order, now, time.Time{})
+}
+
+// deferOrderForCapacity reports whether the worker retained a blocked order. A full reservation
+// queue is harmless when the order's existing nonce timer can retain it instead.
+func (s *Solver) deferOrderForCapacity(
+	ctx context.Context,
+	order *submittedOrder,
+	generation uint64,
+	retries *reservationRetryQueue,
+	nonceRetries *orderDepositRetryQueue,
+	now time.Time,
+) (orderProcessingOutcome, error) {
+	err := retries.enqueueWithNonceRetry(order, generation, nonceRetries, now)
+	if errors.Is(err, errOrderNonceRetryExpired) {
+		observability.Decline(ctx, "order_skipped", "nonce reconciliation reached the order deadline")
+		observability.Log(ctx).Info("order skipped: nonce reconciliation reached the order deadline",
+			"orderId", order.OrderID, "onChainOrderId", order.OnChainOrderID,
+			"quoteId", order.QuoteID, "reason", err.Error())
+		return orderProcessingNotActionable, nil
 	}
-	return err
+	if err != nil {
+		outcome := orderProcessingCapacityDeferred
+		if errors.Is(err, errOrderRetryFull) {
+			outcome = orderProcessingCapacityDropped
+		}
+		s.metrics.observeOrderQueueDrop(orderQueueCapacityRetry, err)
+		observability.Log(ctx).Error(err, "order retry queue: dropped newest order",
+			"orderId", order.OrderID,
+			"onChainOrderId", order.OnChainOrderID,
+			"quoteId", order.QuoteID,
+			"capacity", retries.capacity,
+		)
+		return outcome, err
+	}
+	return orderProcessingCapacityDeferred, nil
 }
 
 func (q *reservationRetryQueue) popReady(generation uint64) *submittedOrder {

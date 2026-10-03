@@ -508,7 +508,11 @@ re-evaluates
 every older retry once against fresh order status, deadlines, inventory, gas, and routing. A still-blocked order,
 including one whose fresh plan moved from capacity A to capacity B, returns to the FIFO tail at the current
 generation; a full queue deterministically logs and drops the newest retry and records workflow event
-`queue_drop/capacity_retry`. That reservation queue has no timer. A separate
+`queue_drop/capacity_retry` only when no nonce-reconciliation timer can retain it. If an existing nonce
+retry cannot enter the reservation queue, its original timer deadline and backoff remain in force;
+this is `order_processing/capacity_deferred`, with no dropped-order Error, failed attempt span, or
+queue-drop metric. If the nonce deadline elapses during that handoff, it is an Info-level expiry and
+`order_processing/not_actionable`. That reservation queue has no timer. A separate
 worker-owned deposit-propagation timer handles only OIF status `None` as described in §4; it does not re-run
 reservation-blocked decisions or accepted transactions. Each retained status-`None` attempt is classified as
 workflow event `order_processing/deposit_deferred`. Queue overflow and terminal key/deadline/retry-window
@@ -942,6 +946,7 @@ still requires the redeploy in phase 0.
 - [x] **Recover uncertain transaction outcomes on a healthy feed.** Re-read on-chain settlement and
   retain eligible orders in the existing timed retry mechanism through transient RPC/planning failures,
   with replay coalescing, preserved backoff and an admission-time deadline; no feed reconnect required.
+  A full capacity-retry queue retains existing nonce timers without reporting a false drop or failure.
 
 - [ ] **Quote unreserved capacity while the sender is busy.** Deferred as a relatively small,
   solver-local follow-up using the existing shared `CapacityLedger`. Move reservation installation

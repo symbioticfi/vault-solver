@@ -299,8 +299,8 @@ func TestNonceRetryRetainsTimerWhenCapacityQueueIsFull(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := capacityRetries.enqueueWithNonceRetry(order, 0, nonceRetries, firstAt)
-	if !errors.Is(err, errOrderRetryFull) {
-		t.Fatalf("capacity admission error = %v, want full", err)
+	if err != nil {
+		t.Fatalf("retained capacity admission error = %v, want nil", err)
 	}
 	readyAt, ok := nonceRetries.nextReadyAt()
 	if !ok || readyAt.Sub(firstAt) != 500*time.Millisecond {

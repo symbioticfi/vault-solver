@@ -877,20 +877,9 @@ func (s *Solver) runOrderWorker(
 			return
 		}
 		queuedBefore := retries.len()
-		if err := retries.enqueueWithNonceRetry(order, reservationReleaseGen, nonceRetries, retryNow()); err != nil {
-			if errors.Is(err, errOrderRetryFull) {
-				outcome = orderProcessingCapacityDropped
-			}
-			attemptErr = err
-			s.metrics.observeOrderQueueDrop(orderQueueCapacityRetry, err)
-			observability.Log(orderCtx).Error(err, "order retry queue: dropped newest order",
-				"orderId", order.OrderID,
-				"onChainOrderId", order.OnChainOrderID,
-				"quoteId", order.QuoteID,
-				"capacity", orderRetryCapacity,
-			)
-			return
-		}
+		outcome, attemptErr = s.deferOrderForCapacity(
+			orderCtx, order, reservationReleaseGen, retries, nonceRetries, retryNow(),
+		)
 		if retries.len() > queuedBefore {
 			observability.Log(orderCtx).V(1).Info(
 				"order fill deferred by pending capacity",

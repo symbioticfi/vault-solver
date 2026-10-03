@@ -701,7 +701,7 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | LI.FI | `lifi_last_successful_refresh_timestamp` | — | Freshness of standing-quote publication or suspension reconciliation; distinguishes an authoritative zero from a dead reconciliation loop. |
 | LI.FI | `lifi_order_feed_connected` | — | `1` only while the order-feed loop owns an established WebSocket; `0` while disconnected, dialing, or backing off. |
 | LI.FI | `lifi_order_recovery_ready` | — | `1` only when the current established order-feed connection has completed convergent REST recovery; every disconnect or reconnect resets it to `0`. |
-| LI.FI | `lifi_order_backlog` | `stage` | Current process-local orders waiting in `inbox`, `recovery_retry`, `capacity_retry`, or `deposit_retry`. An item actively being processed is not queued. |
+| LI.FI | `lifi_order_backlog` | `stage` | Current process-local orders waiting in `inbox`, `recovery_retry`, `capacity_retry`, `deposit_retry`, or `nonce_retry`. An item actively being processed is not queued. A capacity deferral retained by the nonce retry timer does not count as a queue drop or raise an Error alert. |
 | LI.FI | `lifi_order_nearest_deadline_timestamp` | `stage` | Nearest protocol order deadline among work waiting in each stage; `0` when that stage is empty or its queued orders have no deadline. |
 | UniswapX | `uniswapx_quote_duration_seconds` | — | End-to-end quote-handler latency across all request outcomes. |
 | UniswapX | `uniswapx_exclusive_obligations_outstanding` | — | Live-observed or recovered obligations still awaiting terminal classification. |
