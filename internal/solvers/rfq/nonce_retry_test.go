@@ -290,13 +290,14 @@ func TestExecutionRetiresObsoleteOrderWithoutRetry(t *testing.T) {
 		result        txmanager.Result
 		backendStatus string
 		want          orderStatus
+		wantObsolete  float64
 	}{
 		{name: "abandoned obsolete fill", result: obsoleteAbandonment, backendStatus: "open", want: statusObsolete},
 		{name: "tracking stopped after obsolescence", result: unconfirmed, backendStatus: "open", want: statusObsolete},
 		{name: "dropped before signing", result: txmanager.Result{
 			Outcome: txmanager.OutcomeSubmissionError,
 			Err:     errors.Errorf("send %q: %w", "rfq-fill", txmanager.ErrRequestObsolete),
-		}, backendStatus: "open", want: statusObsolete},
+		}, backendStatus: "open", want: statusObsolete, wantObsolete: 1},
 		{name: "backend already reports the fill", result: obsoleteAbandonment, backendStatus: "filled", want: statusFilled},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -322,7 +323,7 @@ func TestExecutionRetiresObsoleteOrderWithoutRetry(t *testing.T) {
 			if txm.calls != 1 || st.order("o1").Status != tc.want {
 				t.Fatalf("sends = %d, order = %+v; want one send and %s", txm.calls, st.order("o1"), tc.want)
 			}
-			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeObsolete, 1)
+			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeObsolete, tc.wantObsolete)
 			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 0)
 		})
 	}

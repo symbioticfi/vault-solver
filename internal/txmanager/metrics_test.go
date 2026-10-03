@@ -288,7 +288,7 @@ func TestUntrustedReconciliationReceiptKeepsPendingPhase(t *testing.T) {
 		t.Fatal("untrusted reconciliation receipt recorded confirming phase")
 	}
 
-	pending.lifecycle.finish(OutcomeTrackingStopped, nil)
+	pending.lifecycle.finish(OutcomeTrackingStopped)
 	if got := testutil.CollectAndCount(metrics.phaseDuration); got != 2 {
 		t.Fatalf("phase duration series = %d, want prebroadcast and pending only", got)
 	}
@@ -337,7 +337,7 @@ func TestPhaseDurationAccumulatesAcrossReceiptReorg(t *testing.T) {
 		t.Fatalf("terminal phase = %q, want confirming", pending.lifecycle.phase.label())
 	}
 	time.Sleep(time.Millisecond)
-	pending.lifecycle.finish(result.Outcome, result.Receipt)
+	pending.lifecycle.finish(result.Outcome)
 
 	if got := pending.lifecycle.phaseDurations[lifecyclePhaseConfirming]; got <= firstConfirmingDuration {
 		t.Fatalf(

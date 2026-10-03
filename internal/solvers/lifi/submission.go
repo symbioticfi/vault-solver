@@ -100,6 +100,13 @@ func (s *Solver) submitFill(
 	retryDeadline, _ := liquidlane.SubmissionDeadline(
 		orderDeadline(order), chainTime, chainObservedAt, admissionNow,
 	)
+	plannedSurplus := liquidstrategies.PlannedSurplus(plan.Routes, order.OutputAmount)
+	var observeReceipt func(context.Context, txmanager.Result)
+	if s.metrics != nil {
+		observeReceipt = s.metrics.fillAmounts.ReceiptObserver(
+			order.TokenIn, order.AmountIn, order.TokenOut, order.OutputAmount, plannedSurplus,
+		)
+	}
 	result, accepted := s.sendFill(ctx, txmanager.Request{
 		Solver: Name,
 		To:     s.cfg.Executor, Data: calldata.Finalise, MaxFeePerGas: liquidlane.CloneBig(maxFeePerGas),
@@ -107,7 +114,8 @@ func (s *Solver) submitFill(
 		Obsolete: func(checkCtx context.Context) (bool, error) {
 			return s.fillRequestObsolete(checkCtx, calldata.OrderID)
 		},
-		Label: "lifi-fill",
+		Label:          "lifi-fill",
+		ObserveReceipt: observeReceipt,
 	})
 	if !accepted {
 		observability.Log(ctx).Info("order skipped: transaction submission canceled", "orderId", order.OrderID,
@@ -139,7 +147,6 @@ func (s *Solver) submitFill(
 		order:          order,
 		orderID:        calldata.OrderID,
 		reservationKey: reservationKey,
-		plannedSurplus: liquidstrategies.PlannedSurplus(plan.Routes, order.OutputAmount),
 		retryDeadline:  retryDeadline,
 		result:         result,
 	}, nil
@@ -214,14 +221,12 @@ func (s *Solver) completeFill(
 		return nil
 	}
 	if outcome == txmanager.OutcomeConfirmed {
-		s.observeFillAmounts(completion.result, fill)
 		observability.Log(ctx).Info("order filled", "orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
 			"quoteId", fill.order.QuoteID, "tx", completion.result.Hash.Hex())
 		return nil
 	}
 	if outcome == txmanager.OutcomeIncludedUnconfirmed {
 		// The fill stands; the confirmation wait is what failed, and it is the span's error.
-		s.observeFillAmounts(completion.result, fill)
 		err = completion.result.Err
 		observability.Log(ctx).Error(err, "order fill included but confirmation wait failed",
 			"orderId", fill.order.OrderID,
@@ -243,20 +248,6 @@ func (s *Solver) completeFill(
 		"notAdmitted", completion.result.NotAdmitted,
 	)
 	return err
-}
-
-func (s *Solver) observeFillAmounts(result txmanager.Result, fill *pendingFill) {
-	if s.metrics == nil {
-		return
-	}
-	s.metrics.fillAmounts.Observe(
-		result.Receipt,
-		fill.order.TokenIn,
-		fill.order.AmountIn,
-		fill.order.TokenOut,
-		fill.order.OutputAmount,
-		fill.plannedSurplus,
-	)
 }
 
 func fillPlanReservations(plan *types.FillPlan) (liquidlane.CapacityReservations, bool) {

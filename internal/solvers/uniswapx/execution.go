@@ -24,9 +24,8 @@ var (
 )
 
 type pendingUniswapFill struct {
-	order          *resolvedOrder
-	plannedSurplus *big.Int
-	result         <-chan txmanager.Result
+	order  *resolvedOrder
+	result <-chan txmanager.Result
 	// span and end keep the uniswapx.fill span open from submission until the transaction result
 	// arrives: span carries the outcome attributes, end closes it. startFill sets both, and end is
 	// idempotent, so the span is never ended twice.
@@ -253,11 +252,19 @@ func (s *Solver) startFill(
 		"deadlineRemaining", deadline.Sub(now),
 		"submissionDeadline", submissionDeadline.Unix(),
 	)
+	plannedSurplus := strategies.PlannedSurplus(plan.Routes, order.AmountOut)
+	var observeReceipt func(context.Context, txmanager.Result)
+	if s.metrics != nil {
+		observeReceipt = s.metrics.fillAmounts.ReceiptObserver(
+			order.TokenIn, order.AmountIn, order.TokenOut, order.AmountOut, plannedSurplus,
+		)
+	}
 	result, err := s.submitFill(ctx, txmanager.Request{
 		Solver: Name,
 		To:     order.Executor, Data: data, MaxFeePerGas: transactionMaxFee, Deadline: submissionDeadline,
-		Obsolete: s.orderObsolete(order),
-		Label:    "uniswapx-fill",
+		Obsolete:       s.orderObsolete(order),
+		Label:          "uniswapx-fill",
+		ObserveReceipt: observeReceipt,
 	})
 	if err != nil {
 		return nil, err
@@ -272,7 +279,7 @@ func (s *Solver) startFill(
 		"pricingMaxFeePerGas", pricingMaxFee.String(),
 	)
 	return &pendingUniswapFill{
-		order: order, plannedSurplus: strategies.PlannedSurplus(plan.Routes, order.AmountOut), result: result,
+		order: order, result: result,
 		span: trace.SpanFromContext(ctx), end: end,
 	}, nil
 }
@@ -530,15 +537,20 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 		)
 		return
 	}
+	ownedAttempt := s.recordOwnedFillAttempt(order.Hash, result)
 	outcome := result.Outcome
 	if !outcome.Included() && errors.Is(result.Err, txmanager.ErrRequestObsolete) {
 		// A terminal protocol status retires the order without a retry and stays out of the
 		// failure breaker, since this does not establish a failed execution of our fill.
 		observability.Decline(ctx, "fill_obsolete", errorReason(result.Err))
-		s.observeFillOutcome(liquidlane.FillOutcomeObsolete)
+		// An earlier owned fill may be what made this unsigned retry obsolete. Preserve its
+		// late telemetry and let receipts determine execution instead of also counting a skip.
+		if !ownedAttempt {
+			s.observeFillOutcome(liquidlane.FillOutcomeObsolete)
+		}
 		s.complete(order.Hash, now)
 		observability.Log(ctx).Info(
-			"order fill obsolete: order settled elsewhere",
+			"order fill obsolete: order no longer fillable",
 			"source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
 			"tx", result.Hash.Hex(), "outcome", outcome,
 		)
@@ -582,16 +594,24 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 	}
 	s.recordFillSuccess()
 	s.complete(order.Hash, now)
-	if s.metrics != nil {
-		s.metrics.fillAmounts.Observe(
-			result.Receipt,
-			order.TokenIn,
-			order.AmountIn,
-			order.TokenOut,
-			order.AmountOut,
-			fill.plannedSurplus,
-		)
+}
+
+// recordOwnedFillAttempt retains signed ownership across retries without changing failure budgets.
+// All order-state access is under stateMu; normal and late receipt callbacks only update metrics.
+func (s *Solver) recordOwnedFillAttempt(orderHash common.Hash, result txmanager.Result) bool {
+	owned := result.Hash != (common.Hash{})
+	for _, hash := range result.Attempts {
+		owned = owned || hash != (common.Hash{})
 	}
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if owned {
+		if s.ownedFillAttempts == nil {
+			s.ownedFillAttempts = make(map[common.Hash]bool)
+		}
+		s.ownedFillAttempts[orderHash] = true
+	}
+	return s.ownedFillAttempts[orderHash]
 }
 
 // errorReason renders an error for a span event attribute, naming its absence rather than "".

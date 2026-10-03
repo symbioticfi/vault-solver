@@ -111,10 +111,10 @@ func nonceRetryFixture(t *testing.T, outcome txmanager.Outcome) nonceRetryTestSe
 	txm := &fakeLifiTxSender{hold: true}
 	txm.onSend = func(attempt int, result chan<- txmanager.Result) {
 		if attempt == 1 {
-			result <- txmanager.Result{Hash: common.HexToHash("0x1234"), Outcome: outcome, Err: nonceOutcomeError(outcome)}
+			txm.complete(result, txmanager.Result{Hash: common.HexToHash("0x1234"), Outcome: outcome, Err: nonceOutcomeError(outcome)})
 			return
 		}
-		result <- txm.fillResult()
+		txm.complete(result, txm.fillResult())
 	}
 	solver := newProcessTestSolver(fixture.cfg, fixture.caller, txm, strategy,
 		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited)

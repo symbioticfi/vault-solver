@@ -82,6 +82,10 @@ type TxManagerConfig struct {
 	ReplacementIntervalMs int `yaml:"replacementIntervalMs"`
 	// PendingTimeoutMs bounds tracking before a fresh business call can reuse the unresolved nonce.
 	PendingTimeoutMs int `yaml:"pendingTimeoutMs"`
+	// LateReceiptTimeoutMs bounds passive receipt observation after uncertain execution releases the lane.
+	LateReceiptTimeoutMs int `yaml:"lateReceiptTimeoutMs"`
+	// LateReceiptMaxHashes separately bounds late hashes, local receipt deduplication, and ancestry headers.
+	LateReceiptMaxHashes int `yaml:"lateReceiptMaxHashes"`
 	// ShutdownTimeoutMs bounds how long shutdown drains an accepted transaction lifecycle.
 	ShutdownTimeoutMs int `yaml:"shutdownTimeoutMs"`
 	// Horizon tunes fee pricing and block-evidence repricing.
@@ -157,6 +161,8 @@ const (
 	DefaultAccountPollIntervalMs = 30_000
 	DefaultReplacementIntervalMs = 30_000
 	DefaultPendingTimeoutMs      = 300_000
+	DefaultLateReceiptTimeoutMs  = 600_000
+	DefaultLateReceiptMaxHashes  = 1024
 	DefaultShutdownTimeoutMs     = 60_000
 )
 
@@ -213,6 +219,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.TxManager.PendingTimeoutMs == 0 {
 		c.TxManager.PendingTimeoutMs = DefaultPendingTimeoutMs
+	}
+	if c.TxManager.LateReceiptTimeoutMs == 0 {
+		c.TxManager.LateReceiptTimeoutMs = DefaultLateReceiptTimeoutMs
+	}
+	if c.TxManager.LateReceiptMaxHashes == 0 {
+		c.TxManager.LateReceiptMaxHashes = DefaultLateReceiptMaxHashes
 	}
 	if c.TxManager.ShutdownTimeoutMs == 0 {
 		c.TxManager.ShutdownTimeoutMs = DefaultShutdownTimeoutMs
@@ -285,6 +297,12 @@ func (c TxManagerConfig) validate(required bool) error {
 	}
 	if c.PendingTimeoutMs < c.ReplacementIntervalMs {
 		return errors.New("txManager.pendingTimeoutMs must be at least replacementIntervalMs")
+	}
+	if c.LateReceiptTimeoutMs <= 0 || int64(c.LateReceiptTimeoutMs) > math.MaxInt64/int64(time.Millisecond) {
+		return errors.New("txManager.lateReceiptTimeoutMs must be positive and fit in a time.Duration")
+	}
+	if c.LateReceiptMaxHashes <= 0 {
+		return errors.New("txManager.lateReceiptMaxHashes must be positive")
 	}
 	if c.ShutdownTimeoutMs <= 0 {
 		return errors.New("txManager.shutdownTimeoutMs must be positive")

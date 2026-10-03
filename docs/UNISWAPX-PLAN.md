@@ -179,17 +179,27 @@ the Uniswap order API (`ordersByHash`, the lookup exclusive-obligation reconcili
 request rate limit). `open` keeps the fill alive; `filled`, `cancelled`, `expired`, `error` and
 `insufficient-funds` make the manager drop the unsigned call or abandon pending tracking early instead of
 holding the lane until the deadline. A lookup error or an unknown status preserves the lifecycle. A result
-wrapping `txmanager.ErrRequestObsolete` retires the order without a retry or a breaker failure and records
-`fill/obsolete`. Continued quoting does not guarantee execution within exclusivity;
+wrapping `txmanager.ErrRequestObsolete` retires the order without a retry or a breaker failure.
+It records `fill/obsolete` only if the order has no current or historical locally signed attempt;
+otherwise receipt observation decides owned execution metrics. The signed-attempt marker is guarded
+by `stateMu`, survives retries, and is removed on completion or the existing retry-state expiry.
+Receipt callbacks never change it. Continued quoting does not guarantee execution within exclusivity;
 the exclusive window must also cover any preceding fill's confirmation time.
 
-`abandoned`, `nonce_conflict` and `nonce_consumed` have no owned receipt and never count as a successful
-fill. Completion invalidates inventory and releases the local reservation, then defers the order until the
+`abandoned`, `nonce_conflict` and `nonce_consumed` have no owned receipt in their terminal result and do not
+count as a successful fill at that point. Completion invalidates inventory and releases the local reservation, then defers the order until the
 normal polling interval without increasing execution-failure attempts or opening the fade breaker. A later
 open-order poll and the normal fresh deadline, planning, preflight and protocol-obsolescence checks decide
 whether another fill can be submitted. The manager may reuse an abandoned unused nonce for that fresh
 request; calldata from the previous request is never replayed. These are local
 recovery rules; they do not coordinate outstanding orders, exclusive obligations or capacity across replicas.
+
+Each submitted fill snapshots only its metric pointer, token addresses, input/output amounts and gross
+planned surplus into `Request.ObserveReceipt`. Normal inclusion and a late canonical owned receipt at
+the configured confirmation depth use the manager's bounded hash deduplication. Successful observations
+record `fill/success`, freshness and amounts; late observations never repeat completion, modify the filled
+cache, clear a breaker, release reservations again or alter retries. Exclusive-obligation outcomes remain
+owned by the existing terminal API and canonical block-time reconciliation.
 
 Completed orders retain the existing one-hour local deduplication cache. The poller does not retain a
 successful receipt for a later-reorg watcher or reopen cached completions. It follows the order service's
@@ -219,8 +229,9 @@ exclusive obligations remain independently tracked through terminal reconciliati
   cache invalidation cannot lose a served quote's amounts and a permissive webhook cannot turn the
   unauthenticated endpoint into unbounded Prometheus cardinality. Successful fill receipts publish
   `fill/success`, freshness, and token-native amounts; terminal failures and admission rejection publish
-  `fill/failure` and `fill/not_admitted`; fills retired because the order was settled elsewhere publish
-  `fill/obsolete`; pre-submission declines use `fill/declined`.
+  `fill/failure` and `fill/not_admitted`; obsolete fills without local signed attempts publish
+  `fill/obsolete`; pre-submission declines use `fill/declined`. An obsolete order with signed history
+  stays terminal but emits no obsolete metric, so a normal or late owned success is not also a skip.
   Txmanager remains authoritative for detailed outcomes, gas, fees, and lifecycle state.
   The generic external-operation histogram separately times fixed `quote_refresh`,
   `exclusive_order_poll`, and `public_order_poll` boundaries. A truncated order snapshot or a safe, incomplete
