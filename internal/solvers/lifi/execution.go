@@ -43,6 +43,7 @@ type pendingFill struct {
 	orderID        common.Hash
 	reservationKey string
 	plannedSurplus *big.Int
+	retryDeadline  time.Time
 	result         <-chan txmanager.Result
 }
 
@@ -724,10 +725,13 @@ func (s *Solver) runOrderWorker(
 	completions := make(chan fillCompletion, fillCompletionCapacity)
 	retries := newReservationRetryQueue(orderRetryCapacity)
 	depositRetries := newOrderDepositRetryQueue(orderDepositRetryCapacity)
+	nonceRetries := newOrderDepositRetryQueue(orderRetryCapacity)
 	stopCapacityRetryMetrics := s.metrics.trackOrderQueue(orderQueueCapacityRetry, retries.orderQueueSnapshot)
 	defer stopCapacityRetryMetrics()
 	stopDepositRetryMetrics := s.metrics.trackOrderQueue(orderQueueDepositRetry, depositRetries.orderQueueSnapshot)
 	defer stopDepositRetryMetrics()
+	stopNonceRetryMetrics := s.metrics.trackOrderQueue(orderQueueNonceRetry, nonceRetries.orderQueueSnapshot)
+	defer stopNonceRetryMetrics()
 	var reservationReleaseGen uint64
 	ctxDone := ctx.Done()
 	var runErr error
@@ -745,6 +749,9 @@ func (s *Solver) runOrderWorker(
 	depositRetryTimer := time.NewTimer(maximumOrderDepositRetryWindow)
 	depositRetryTimer.Stop()
 	defer depositRetryTimer.Stop()
+	nonceRetryTimer := time.NewTimer(maximumOrderDepositRetryWindow)
+	nonceRetryTimer.Stop()
+	defer nonceRetryTimer.Stop()
 	releaseRecoveryBarrier := func() {
 		if recoveryBarrier == nil || retries.len() > 0 {
 			return
@@ -757,13 +764,31 @@ func (s *Solver) runOrderWorker(
 	// pass must not close the span the live copy is still writing to. Close it only once nothing in
 	// the worker still holds the order, and nothing has re-queued it through the inbox.
 	referenced := func(order *submittedOrder) bool {
-		return pending.containsOrder(order) || retries.contains(order) || depositRetries.contains(order) ||
+		return pending.containsOrder(order) || retries.contains(order) || depositRetries.contains(order) || nonceRetries.contains(order) ||
 			traces.isHeld(order)
 	}
 	finishOrderTrace := func(order *submittedOrder, err error) {
 		if !referenced(order) {
 			traces.finish(order, err)
 		}
+	}
+	scheduleNonceRetry := func(orderCtx context.Context, order *submittedOrder, deadline time.Time) error {
+		err := nonceRetries.scheduleBefore(order, retryNow(), deadline)
+		if err == nil {
+			return nil
+		}
+		s.metrics.observeOrderQueueDrop(orderQueueNonceRetry, err)
+		if errors.Is(err, errOrderDepositRetryFull) || errors.Is(err, errOrderDepositRetryKey) {
+			observability.Log(orderCtx).Error(err, "order nonce retry: dropped order",
+				"orderId", order.OrderID, "onChainOrderId", order.OnChainOrderID,
+				"quoteId", order.QuoteID, "capacity", orderRetryCapacity)
+			return err
+		}
+		observability.Decline(orderCtx, "order_skipped", "nonce reconciliation reached the order deadline")
+		observability.Log(orderCtx).Info("order skipped: nonce reconciliation reached the order deadline",
+			"orderId", order.OrderID, "onChainOrderId", order.OnChainOrderID,
+			"quoteId", order.QuoteID, "reason", err.Error())
+		return nil
 	}
 	process := func(order *submittedOrder, reservations *liquidlane.CapacityReservations, stage string) {
 		defer releaseRecoveryBarrier()
@@ -787,6 +812,25 @@ func (s *Solver) runOrderWorker(
 		// Observe after retry admission: a deferred attempt can still become a
 		// bounded-queue drop before the worker retains it.
 		defer func() { s.metrics.observeOrderProcessing(outcome) }()
+		if nonceRetries.contains(order) {
+			// Keep the timer state through an admitted fill, so another uncertain outcome keeps
+			// its backoff and original deadline. Transient status/planning errors stay recoverable
+			// without depending on a future feed reconnect.
+			if result.fill != nil {
+				pending.add(result.fill)
+				go awaitFill(result.fill, completions)
+				return
+			}
+			if result.retryable || result.depositNotVisible {
+				if retryErr := scheduleNonceRetry(orderCtx, order, time.Time{}); retryErr != nil {
+					attemptErr = retryErr
+				}
+				return
+			}
+			if len(result.blockedOn) == 0 || pending.len() == 0 {
+				nonceRetries.finish(order)
+			}
+		}
 		if result.depositNotVisible {
 			err := depositRetries.schedule(order, retryNow())
 			if err == nil {
@@ -833,7 +877,7 @@ func (s *Solver) runOrderWorker(
 			return
 		}
 		queuedBefore := retries.len()
-		if err := retries.enqueue(order, reservationReleaseGen); err != nil {
+		if err := retries.enqueueWithNonceRetry(order, reservationReleaseGen, nonceRetries, retryNow()); err != nil {
 			if errors.Is(err, errOrderRetryFull) {
 				outcome = orderProcessingCapacityDropped
 			}
@@ -865,6 +909,22 @@ func (s *Solver) runOrderWorker(
 		// logger while that span is still open rather than logging through a closed one.
 		filledLog := observability.Log(filledCtx)
 		completionErr := s.completeFill(filledCtx, &pending, completion)
+		if completion.result.Outcome.NonceUncertain() && ctx.Err() == nil &&
+			!errors.Is(completion.result.Err, txmanager.ErrRequestObsolete) {
+			retry, reconcileErr := s.reconcileUncertainFill(filledCtx, completion.fill)
+			if reconcileErr != nil {
+				completionErr = reconcileErr
+			}
+			if retry && ctx.Err() == nil && orders != nil {
+				if retryErr := scheduleNonceRetry(filledCtx, completion.fill.order, completion.fill.retryDeadline); retryErr != nil {
+					completionErr = retryErr
+				}
+			} else {
+				nonceRetries.finish(completion.fill.order)
+			}
+		} else {
+			nonceRetries.finish(completion.fill.order)
+		}
 		finishOrderTrace(completion.fill.order, completionErr)
 		reservationReleaseGen++
 		for ctx.Err() == nil {
@@ -885,6 +945,7 @@ func (s *Solver) runOrderWorker(
 		}
 		if ctx.Err() != nil {
 			retries.clear()
+			nonceRetries.clear()
 			traces.abandon(ctx, referenced, "queue_cleared", ctx.Err())
 		}
 		if s.releaseReservationWithoutRefresh(completion.fill.reservationKey) {
@@ -899,13 +960,14 @@ func (s *Solver) runOrderWorker(
 		}
 		releaseRecoveryBarrier()
 	}
-	for orders != nil || pending.len() > 0 || retries.len() > 0 || depositRetries.len() > 0 {
+	for orders != nil || pending.len() > 0 || retries.len() > 0 || depositRetries.len() > 0 || nonceRetries.len() > 0 {
 		if runErr == nil && ctx.Err() != nil {
 			runErr = ctx.Err()
 			ctxDone = nil
 			orders = nil
 			retries.clear()
 			depositRetries.clear()
+			nonceRetries.clear()
 			traces.abandon(ctx, referenced, "queue_cleared", runErr)
 		}
 		if runErr != nil && pending.len() == 0 {
@@ -923,6 +985,12 @@ func (s *Solver) runOrderWorker(
 			depositRetryTimer.Reset(max(readyAt.Sub(retryNow()), 0))
 			depositRetryC = depositRetryTimer.C
 		}
+		var nonceRetryC <-chan time.Time
+		nonceRetryTimer.Stop()
+		if readyAt, ok := nonceRetries.nextReadyAt(); ok {
+			nonceRetryTimer.Reset(max(readyAt.Sub(retryNow()), 0))
+			nonceRetryC = nonceRetryTimer.C
+		}
 		select {
 		case <-ctxDone:
 			runErr = ctx.Err()
@@ -930,12 +998,27 @@ func (s *Solver) runOrderWorker(
 			orders = nil
 			retries.clear()
 			depositRetries.clear()
+			nonceRetries.clear()
 			traces.abandon(ctx, referenced, "queue_cleared", runErr)
 		case <-recoveryResets:
 			traces.dropHolds(recovery.requeueDropped)
 			traces.abandon(ctx, referenced, "recovery_reset", nil)
 		case completion := <-completions:
 			complete(completion)
+		case <-nonceRetryC:
+			order, err := nonceRetries.popReady(retryNow())
+			if err != nil {
+				orderCtx := traces.context(ctx, order)
+				observability.Decline(orderCtx, "order_skipped", "nonce reconciliation reached the order deadline")
+				observability.Log(orderCtx).Info("order skipped: nonce reconciliation reached the order deadline",
+					"orderId", order.OrderID, "onChainOrderId", order.OnChainOrderID,
+					"quoteId", order.QuoteID, "reason", err.Error())
+				finishOrderTrace(order, nil)
+				continue
+			}
+			if order != nil {
+				process(order, nil, orderNonceStage)
+			}
 		case <-depositRetryC:
 			order, err := depositRetries.popReady(retryNow())
 			if err != nil {
@@ -962,6 +1045,7 @@ func (s *Solver) runOrderWorker(
 			if !ok {
 				orders = nil
 				depositRetries.clear()
+				nonceRetries.clear()
 				traces.abandon(ctx, referenced, "queue_cleared", nil)
 				releaseRecoveryBarrier()
 				if inputDrained != nil {
@@ -976,12 +1060,17 @@ func (s *Solver) runOrderWorker(
 				orders = nil
 				retries.clear()
 				depositRetries.clear()
+				nonceRetries.clear()
 				traces.abandon(ctx, referenced, "queue_cleared", runErr)
 				continue
 			}
 			if order.processed != nil {
 				recoveryBarrier = order.processed
 				releaseRecoveryBarrier()
+				continue
+			}
+			if nonceRetries.contains(order) {
+				observability.Decline(traces.context(ctx, order), "order_skipped", "replay of an order awaiting nonce reconciliation")
 				continue
 			}
 			if depositRetries.contains(order) {

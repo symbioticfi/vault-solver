@@ -100,7 +100,7 @@ global. All remain process-local. Protocol order/bid nonces are separate from th
 | [RFQ](RFQ-PLAN.md) | Query backend order status. A terminal status retires the item; a fresh open-order poll can rebuild its plan/signatures after the poll delay within its deadline. Initial nonce conflicts do not spend the business retry budget; accepted uncertain outcomes use `maxNonceRetries`. Missing/unknown/error status stays bounded reconciliation work. |
 | [3F](3F-PLAN.md) | The next normal redemption poll reads `canWithdraw` and builds a fresh batch, excluding finalized requests. Offers remain independently managed. |
 | [UniswapX](UNISWAPX-PLAN.md) | Release local capacity and invalidate inventory; defer to fresh open-order polling without counting a fill success or execution/breaker failure. |
-| [LI.FI](LIFI-PLAN.md) | Release local capacity. A later WebSocket redelivery or reconnect REST recovery rechecks on-chain order status and rebuilds the request. A healthy connected feed does not periodically replay REST after catch-up. |
+| [LI.FI](LIFI-PLAN.md) | Release local capacity and immediately re-read on-chain order status. Claimed/refunded orders retire; eligible orders and failed status reads enter the replay-coalescing timer queue. Every retry rebuilds from fresh state, with preserved backoff and the admission-time mapped order deadline, without requiring redelivery or reconnect. |
 | [OEV](OEV-PLAN.md) | Settlement is submitted externally and does not use this manager. |
 
 RFQ also reconciles typed estimate execution reverts and mined reverts before assigning business

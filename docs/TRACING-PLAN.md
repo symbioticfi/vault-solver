@@ -364,10 +364,11 @@ and backoff; exclusive-obligation reconciliation remains independent.
 | `lifi.feed.connect` | `wsclient` dial | handshake carries `traceparent` |
 | `lifi.order.<event>` | `admitOrderMessage` | two names, bounded by `orderMessageSpanName`: `lifi.order.user:vm-order-submit` for the only event the feed dispatches, `lifi.order.other` for everything else. `order.id`, `order.onchain_id`, `quote.id` |
 | `lifi.order.process` | order worker | child of the message span; the span context rides on the queued `submittedOrder` |
-| `lifi.order.plan` / `.reserve` / `.deposit` / `.submit` / `.complete` | fill pipeline | `.reserve` and `.deposit` are re-entered per retry with `tx.attempt`; `.complete` carries `tx.hash`, and an obsolete result is a `declined` event (`decision=fill_obsolete`) that ends it without an error |
+| `lifi.order.plan` / `.reserve` / `.deposit` / `.nonce_retry` / `.submit` / `.complete` | fill pipeline | `.reserve`, `.deposit` and `.nonce_retry` are re-entered per retry with `tx.attempt`; `.complete` carries `tx.hash`, and an obsolete result is a `declined` event (`decision=fill_obsolete`) that ends it without an error |
+| `lifi.order.reconcile` | on-chain status read after an uncertain result | known settled status declines as `fill_obsolete`; RPC/invalid-status errors retain timed recovery; shutdown cancellation declines without Error |
 
 One `lifi.order.process` span covers an order for as long as anything in the worker still references
-it — pending fills, capacity retries, deposit retries, an inbox re-queue for the next recovery sweep —
+it — pending fills, capacity retries, deposit retries, nonce retries, an inbox re-queue for the next recovery sweep —
 not just one pass. An order the worker drops without finishing is released at once with a `declined`
 event (`abandoned`, reason `queue_cleared` or `recovery_reset`): clearing a retry queue ends the
 orders nothing else references, a shutdown ending them as cancelled, and when a feed disconnect ends

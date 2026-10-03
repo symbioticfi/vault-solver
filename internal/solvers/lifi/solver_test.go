@@ -1257,15 +1257,16 @@ func TestOpenedOrderIDClassifiesOIFStatuses(t *testing.T) {
 	order := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
 	orderID := common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	tests := []struct {
-		name    string
-		status  uint8
-		wantErr error
+		name        string
+		status      uint8
+		wantErr     error
+		wantUnknown bool
 	}{
 		{name: "none", status: lifiOrderStatusNone, wantErr: errOrderDepositNotVisible},
 		{name: "deposited", status: lifiOrderStatusDeposited},
 		{name: "claimed", status: lifiOrderStatusClaimed, wantErr: errOrderNotFillable},
 		{name: "refunded", status: lifiOrderStatusRefunded, wantErr: errOrderNotFillable},
-		{name: "unknown", status: 255, wantErr: errOrderNotFillable},
+		{name: "unknown", status: 255, wantUnknown: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1278,6 +1279,12 @@ func TestOpenedOrderIDClassifiesOIFStatuses(t *testing.T) {
 				log: logr.Discard(),
 			}
 			got, err := solver.openedOrderID(t.Context(), order)
+			if test.wantUnknown {
+				if err == nil || errors.Is(err, errOrderNotFillable) {
+					t.Fatalf("unknown status error = %v, want retryable unsupported-status error", err)
+				}
+				return
+			}
 			if !errors.Is(err, test.wantErr) {
 				t.Fatalf("openedOrderID error = %v, want %v", err, test.wantErr)
 			}
@@ -1299,6 +1306,7 @@ func TestProcessOrderClassifiesSubmissionStatus(t *testing.T) {
 		status                uint8
 		wantDepositNotVisible bool
 		wantOutcome           orderProcessingOutcome
+		wantRetryable         bool
 	}{
 		{
 			name: "none", status: lifiOrderStatusNone,
@@ -1306,7 +1314,7 @@ func TestProcessOrderClassifiesSubmissionStatus(t *testing.T) {
 		},
 		{name: "claimed", status: lifiOrderStatusClaimed, wantOutcome: orderProcessingNotActionable},
 		{name: "refunded", status: lifiOrderStatusRefunded, wantOutcome: orderProcessingNotActionable},
-		{name: "unknown", status: 255, wantOutcome: orderProcessingNotActionable},
+		{name: "unknown", status: 255, wantOutcome: orderProcessingRetryableError, wantRetryable: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1344,8 +1352,8 @@ func TestProcessOrderClassifiesSubmissionStatus(t *testing.T) {
 			if result.outcome != test.wantOutcome {
 				t.Fatalf("outcome = %q, want %q", result.outcome, test.wantOutcome)
 			}
-			if result.fill != nil || result.retryable {
-				t.Fatalf("submission status result = %+v, want no fill or generic retry", result)
+			if result.fill != nil || result.retryable != test.wantRetryable {
+				t.Fatalf("submission status result = %+v, want retryable=%t", result, test.wantRetryable)
 			}
 			if statusReads != 2 || len(txm.reqs) != 0 {
 				t.Fatalf("status reads = %d submissions = %d, want 2/0", statusReads, len(txm.reqs))

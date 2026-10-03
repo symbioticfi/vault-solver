@@ -171,6 +171,13 @@ signing and after a receipt sweep without a valid receipt, the tx manager rechec
 An observed `Claimed` or `Refunded` then abandons tracking instead of retaining liquidity until
 `pendingTimeoutMs`; the next fresh request can reuse the unused nonce. `None`, an unrecognized status, or an unavailable status read
 leaves the current lifecycle unchanged and is retried, so a lagging latest-state RPC does not abandon a fresh fill.
+When a submission returns `abandoned`, `nonce_conflict`, or `nonce_consumed`, the worker immediately
+rechecks the on-chain order. Claimed or refunded orders retire without local fill-success metrics;
+still-open orders and unavailable status reads enter a bounded, replay-coalescing retry queue.
+Retries use fresh order status, liquidity, strategy decisions and calldata with exponential backoff
+from 250 milliseconds to 5 seconds, bounded by the order deadline captured at admission. They do not
+require another feed delivery or reconnect. The queue appears as `stage="nonce_retry"` in backlog metrics;
+stopping intake clears these unaccepted retries while already-admitted fills drain.
 Orders
 that the built-in strategy proves fillable without, but blocked by, pending reservations enter a bounded FIFO
 without blocking later deliveries. The worker retries them after every reservation release and returns a still-
@@ -184,8 +191,8 @@ hard stop.
 If a newly opened order reaches the feed before the RPC endpoint exposes its deposit, the worker retries the
 status-`None` read with bounded exponential backoff capped at 5 seconds until the 30-second window or earlier
 order deadline. The final scheduled read is clamped to 250 milliseconds before that boundary. Duplicate
-deliveries are coalesced during the wait; claimed, refunded, and unknown statuses remain terminal. Stopping
-intake drops these unaccepted retries immediately.
+deliveries are coalesced during the wait; claimed and refunded statuses retire the order, while unknown
+statuses report a retryable Error for recovery. Stopping intake drops these unaccepted retries immediately.
 The published quote ladder is not replayed at fill time: the
 solver greedily rebuilds the best current route plan, and redeemed output above the order requirement remains
 executor surplus. The default strategy trims an uneconomic range prefix to the first input whose conservative
@@ -441,7 +448,8 @@ immediately. Rejected initial fees do not create or raise a remembered fee floor
 cooldown, the next request reads mined state and fresh market fees again. The manager does not cancel
 the competing transaction or automatically replay the old calldata at a new nonce. Solvers recheck protocol/backend
 state before retrying an order. RFQ and UniswapX use their polling retries; 3F rebuilds from its next
-redemption scan; LI.FI requires upstream redelivery or reconnect recovery.
+redemption scan; LI.FI immediately rechecks on-chain status and retries eligible orders through its
+deadline-bounded timer queue without requiring redelivery or reconnect.
 
 An underpriced response starts a cooldown for that nonce across all fresh local requests, including
 other queued orders. The manager waits up to `horizon.blockTimeMs` (12 seconds by default), checking mined

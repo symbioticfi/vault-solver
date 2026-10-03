@@ -1,6 +1,11 @@
 package lifi
 
-import "sync"
+import (
+	"sync"
+	"time"
+
+	"github.com/go-errors/errors"
+)
 
 type reservationRetry struct {
 	order      *submittedOrder
@@ -39,6 +44,22 @@ func (q *reservationRetryQueue) enqueue(order *submittedOrder, generation uint64
 		q.queued[key] = true
 	}
 	return nil
+}
+
+// enqueueWithNonceRetry transfers a timed retry into the completion-driven capacity queue.
+func (q *reservationRetryQueue) enqueueWithNonceRetry(
+	order *submittedOrder, generation uint64, nonceRetries *orderDepositRetryQueue, now time.Time,
+) error {
+	err := q.enqueue(order, generation)
+	if err == nil || !nonceRetries.contains(order) {
+		return err
+	}
+	// A failed handoff must not leave a tracked order without a timer or completion event.
+	// Reuse its original bound and advance its backoff instead of stranding the order.
+	if retryErr := nonceRetries.scheduleBefore(order, now, time.Time{}); retryErr != nil {
+		return errors.Join(err, retryErr)
+	}
+	return err
 }
 
 func (q *reservationRetryQueue) popReady(generation uint64) *submittedOrder {

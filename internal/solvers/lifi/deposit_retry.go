@@ -18,16 +18,19 @@ var (
 	errOrderDepositRetryKey     = errors.New("order deposit retry requires a stable order key")
 	errOrderDepositRetryExpired = errors.New("order expired before deposit became visible")
 	errOrderDepositRetryWindow  = errors.New("order deposit retry window elapsed")
+	errOrderNonceRetryExpired   = errors.New("order deadline elapsed during nonce reconciliation")
 )
 
 type orderDepositRetry struct {
 	order     *submittedOrder
 	backoff   time.Duration
 	startedAt time.Time
+	deadline  time.Time
 	readyAt   time.Time
 }
 
-// orderDepositRetryQueue is mutated exclusively by the order worker; metrics may
+// orderDepositRetryQueue supplies timed retries for deposit propagation and uncertain fills.
+// It is mutated exclusively by the order worker; metrics may
 // take read-only snapshots concurrently. A state remains indexed while its order is
 // being retried, so a concurrent feed replay cannot reset the backoff/window state
 // between status reads.
@@ -48,6 +51,12 @@ func newOrderDepositRetryQueue(capacity int) *orderDepositRetryQueue {
 }
 
 func (q *orderDepositRetryQueue) schedule(order *submittedOrder, now time.Time) error {
+	return q.scheduleBefore(order, now, time.Time{})
+}
+
+// scheduleBefore reuses the replay-coalescing timer for an uncertain fill. Its bound is the
+// wall-clock order deadline captured at admission, rather than the deposit-propagation window.
+func (q *orderDepositRetryQueue) scheduleBefore(order *submittedOrder, now, deadline time.Time) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
@@ -67,7 +76,10 @@ func (q *orderDepositRetryQueue) schedule(order *submittedOrder, now time.Time) 
 		q.byKey[key] = state
 	}
 	state.order = order
-	retryEnd, boundErr := orderDepositRetryEnd(order, state.startedAt)
+	if !deadline.IsZero() {
+		state.deadline = earlierDeadline(state.deadline, deadline)
+	}
+	retryEnd, boundErr := state.retryEnd()
 	finalReadyAt := retryEnd.Add(-initialOrderDepositRetryBackoff)
 	if !now.Before(finalReadyAt) {
 		delete(q.byKey, key)
@@ -84,6 +96,13 @@ func (q *orderDepositRetryQueue) schedule(order *submittedOrder, now time.Time) 
 		state.readyAt = finalReadyAt
 	}
 	return nil
+}
+
+func (s *orderDepositRetry) retryEnd() (time.Time, error) {
+	if !s.deadline.IsZero() {
+		return s.deadline, errOrderNonceRetryExpired
+	}
+	return orderDepositRetryEnd(s.order, s.startedAt)
 }
 
 func orderDepositRetryEnd(order *submittedOrder, startedAt time.Time) (time.Time, error) {
@@ -123,7 +142,7 @@ func (q *orderDepositRetryQueue) popReady(now time.Time) (*submittedOrder, error
 		return nil, nil
 	}
 	state.readyAt = time.Time{}
-	retryEnd, boundErr := orderDepositRetryEnd(state.order, state.startedAt)
+	retryEnd, boundErr := state.retryEnd()
 	if !now.Before(retryEnd) {
 		delete(q.byKey, orderInboxKey(state.order))
 		return state.order, boundErr

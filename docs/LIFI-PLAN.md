@@ -102,7 +102,7 @@ shutdown-preparation duration used to bound process-wide transaction draining. R
 | OIF settlers | on-chain (LI.FI-owned) | Order lifecycle; **we do not deploy these**. |
 
 **Tracing:** each quote cycle roots its own trace, and each order message roots another. The message's
-span context rides on the queued `submittedOrder` through the inbox and both retry queues, so the
+span context rides on the queued `submittedOrder` through the inbox and the retry queues, so the
 worker's processing span continues the message's trace even though it runs on the detached work
 context, and one processing span covers an order until it is terminal, retries included. **There is no
 quote-to-fill link here**, unlike RFQ and UniswapX: this solver publishes standing quotes per asset
@@ -356,7 +356,8 @@ separate 128-entry delayed queue and retries after 250ms exponential backoff cap
 solver safety bounds rather than deployment-tuning knobs. The worker retries until the 30s window or the
 earlier of `expires` / `fillDeadline`, clamping the final scheduled status read to 250ms before that boundary.
 A replay with the same stable order fingerprint is coalesced while that retry is pending. `Claimed` (`2`),
-`Refunded` (`3`), and unknown non-`Deposited` statuses remain terminal. Deposit propagation retries do not hold
+`Refunded` (`3`) retire the order; unsupported status values report a retryable Error rather than proving
+settlement. Deposit propagation retries do not hold
 the recovery barrier; intake close or cancellation drops them immediately, while already-admitted fill
 transactions still drain.
 Each live message is a
@@ -514,7 +515,7 @@ workflow event `order_processing/deposit_deferred`. Queue overflow and terminal 
 expiry record `queue_drop/deposit_retry`; expiry is also `order_processing/not_actionable` whether detected
 while scheduling or when the timer pops the order.
 The feed loop registers the bounded inbox and its separate REST-recovery retry hold; the worker registers
-the capacity and deposit retry queues. The LI.FI metrics collector exposes
+the capacity, deposit and nonce-reconciliation retry queues. The LI.FI metrics collector exposes
 `lifi_order_backlog{stage}` and `lifi_order_nearest_deadline_timestamp{stage}` without adding order IDs or
 other unbounded labels. `stage="recovery_retry"` is distinct from the bounded `stage="inbox"`, so operators
 do not mistake recovery convergence work for inbox utilization. Empty stages publish zero; the inbox excludes
@@ -571,18 +572,29 @@ interpret a caller timeout as evidence that the signed fill cannot execute.
 Every later fill decision subtracts aggregate pending capacity before route allocation. At inclusion, the
 LiquidLane adapter and OutputSettler enforce the requested swap and resolved output; stale state therefore
 reverts atomically rather than being repriced by the executor.
-There is no solver-level pending plan or future-auction scheduling. Apart from the bounded status-`None`
-propagation queue, reservation-blocked built-in decisions have only the bounded completion-driven FIFO retry
-described above. The txmanager
-may replace the same pending nonce as described above; that is fee management for one submission, not order
-retry.
+There is no solver-level retained route plan or future-auction scheduling. Deposit propagation and
+reservation-blocked built-in decisions use their respective timer and completion-driven FIFO described above.
+The txmanager may replace the same pending nonce; that is fee management for one submission.
 `abandoned`, `nonce_conflict` and `nonce_consumed` release the fill's local reservation and
-record an expected decline. It supplies no owned receipt and never records fill success. No automatic order
-retry is introduced: a later WebSocket replay or reconnect REST recovery must re-read current order status,
-deadlines, liquidity and routing before building another request; an already claimed/refunded order is skipped.
-A healthy connected feed does not periodically poll REST after catch-up, so an order that loses nonce
-competition requires upstream redelivery or reconnect recovery to be reconsidered. These rules do not
-coordinate quote inventory or reservations across replicas.
+record an expected decline. They supply no owned receipt and never record fill success. The worker immediately
+re-reads the InputSettler under `lifi.order.reconcile`: `Claimed` and `Refunded` retire the order at Info;
+`None`, `Deposited`, unsupported status values and status-read failures retain recovery. RPC/invalid-status
+failures remain Error, while shutdown cancellation is an expected decline and skips further reconciliation.
+
+A separate worker-owned `nonce_retry` queue reuses the existing replay-coalescing timed retry implementation,
+bounded to 4096 entries. It re-enters full planning under `lifi.order.nonce_retry`, with 250ms exponential
+backoff capped at 5s. Every attempt reads current order status, deadlines, liquidity, discounts and routing,
+and rebuilds calldata. The deadline is the order's earliest expiry/fill deadline translated to wall time
+at initial admission from the chain-time observation; subsequent attempts cannot extend it. As in the
+deposit timer, the final retry is clamped to 250ms before this deadline. Orders without a usable mapped
+order deadline retain the existing finite deposit-retry window rather than an unbounded timer.
+The original timer state remains indexed across transient planning/status failures, capacity FIFO waits,
+and new admitted fills, so a repeated uncertain result preserves its deadline and backoff. Terminal outcomes
+clear it; incoming feed replays coalesce while it remains indexed. Intake shutdown drops unaccepted timers,
+but already-admitted fills drain under the shared lifecycle. `nonce_retry` exposes the existing backlog and
+nearest-deadline gauges, and actual overflow/invalid-key drops record `queue_drop/nonce_retry`; deadline
+expiry is an expected decline. A healthy feed needs neither redelivery nor reconnect to recover nonce
+competition. These rules do not coordinate quote inventory or reservations across replicas.
 During process shutdown the shared txmanager outlives solver intake cancellation while accepted fills finish.
 LI.FI first keeps the feed alive while expiring active quotes, then stops accepting orders and drains admitted
 inbox work and accepted fills. The process hard stop bounds that solver preparation and the txmanager's configured
@@ -926,6 +938,10 @@ still requires the redeploy in phase 0.
 ---
 
 ## 10. Open items
+
+- [x] **Recover uncertain transaction outcomes on a healthy feed.** Re-read on-chain settlement and
+  retain eligible orders in the existing timed retry mechanism through transient RPC/planning failures,
+  with replay coalescing, preserved backoff and an admission-time deadline; no feed reconnect required.
 
 - [ ] **Quote unreserved capacity while the sender is busy.** Deferred as a relatively small,
   solver-local follow-up using the existing shared `CapacityLedger`. Move reservation installation
