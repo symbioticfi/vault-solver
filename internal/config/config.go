@@ -50,10 +50,7 @@ type ChainConfig struct {
 	// Other reads stay on `rpcUrl`. Point this at the private/MEV-protected endpoint that accepts the
 	// fills so startup observes its private nonce lane. Optional; empty means `rpcUrl` serves both.
 	WriteRPCURL string `yaml:"writeRpcUrl,omitempty"`
-	// CancelRPCURL overrides only same-nonce self-cancellation broadcasts. Empty uses the ordinary
-	// transaction broadcast route; nonce, fee and receipt reads keep their existing endpoints.
-	CancelRPCURL string `yaml:"cancelRpcUrl,omitempty"`
-	ChainID      uint64 `yaml:"chainId"`
+	ChainID     uint64 `yaml:"chainId"`
 	// WSURL is optional; when set it enables live log subscriptions (a latency optimization only).
 	WSURL string `yaml:"wsUrl,omitempty"`
 	// MulticallAddress overrides the Multicall3 contract used to batch reads. Defaults to the
@@ -83,7 +80,7 @@ type TxManagerConfig struct {
 	// ReplacementIntervalMs paces the fallback fee bump of a pending transaction while fee history is
 	// unreadable; with readable fee history, pending transactions are repriced on block evidence.
 	ReplacementIntervalMs int `yaml:"replacementIntervalMs"`
-	// PendingTimeoutMs switches a still-pending call to a same-nonce cancellation.
+	// PendingTimeoutMs bounds tracking before a fresh business call can reuse the unresolved nonce.
 	PendingTimeoutMs int `yaml:"pendingTimeoutMs"`
 	// ShutdownTimeoutMs bounds how long shutdown drains an accepted transaction lifecycle.
 	ShutdownTimeoutMs int `yaml:"shutdownTimeoutMs"`

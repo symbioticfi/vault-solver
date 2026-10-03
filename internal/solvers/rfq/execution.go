@@ -9,7 +9,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
@@ -52,23 +51,23 @@ type executable struct {
 // in award order, because the shared nonce lane admits one at a time. Per-order work is guarded by an
 // in-flight set so the two goroutines never handle the same order at once.
 type executionService struct {
-	chainID                int64
-	executor               common.Address
-	orderLimit             int
-	maxCancellationRetries int
-	pollInterval           time.Duration
-	vaults                 []recoveryVault
-	whitelist              adapterWhitelist // nil disables adapter filtering
-	tokenPolicy            tokenpolicy.Policy
-	discountsEnabled       bool // false (external solver) skips the backend discounts API entirely
-	backend                orderBackend
-	store                  *store
-	reader                 fillReader
-	strategy               types.Strategy
-	strategyName           string // registry key, reported as the strategy.name span attribute
-	txm                    txSender
-	metrics                *rfqMetrics
-	orderPollObserver      *observability.OperationObserver
+	chainID           int64
+	executor          common.Address
+	orderLimit        int
+	maxNonceRetries   int
+	pollInterval      time.Duration
+	vaults            []recoveryVault
+	whitelist         adapterWhitelist // nil disables adapter filtering
+	tokenPolicy       tokenpolicy.Policy
+	discountsEnabled  bool // false (external solver) skips the backend discounts API entirely
+	backend           orderBackend
+	store             *store
+	reader            fillReader
+	strategy          types.Strategy
+	strategyName      string // registry key, reported as the strategy.name span attribute
+	txm               txSender
+	metrics           *rfqMetrics
+	orderPollObserver *observability.OperationObserver
 	// links is shared with the server: it holds the span context of each quote this process served,
 	// so a fill can link back to it (spec §12). nil disables linking.
 	links *observability.SpanLinks
@@ -136,7 +135,7 @@ func (e *executionService) syncOnce(ctx context.Context) {
 		switch {
 		case !o.Status.awaitsSubmission():
 			e.handleOrder(ctx, o)
-		case e.expireQueued(o):
+		case e.expireQueued(ctx, o):
 		case e.sending.Load():
 			e.reserveWon(ctx, o)
 		}
@@ -174,22 +173,41 @@ func (e *executionService) wakeSubmitter() {
 }
 
 // expireUnsigned expires an order whose recorded deadline has passed while no transaction was signed
-// for it. A confirmed cancellation leaves no unresolved fill, so retry waiting and subsequent unsigned
-// preparation are bounded when backend views disappear; submitted/unknown inclusion keeps tracking.
+// for it. Retry preparation and uncertain nonce reconciliation expire locally at the recorded order
+// deadline when backend views disappear; a nonce race itself is not proof of failed execution.
+// Submitted/unknown inclusion keeps tracking.
 // The caller owns the order through the in-flight set, so a fill in Send is never expired.
-func (e *executionService) expireUnsigned(o *orderRecord) bool {
-	unsignedRetry := o.Status == statusRetryWaiting || o.Status == statusQueued || o.Status == statusSubmitting
+func (e *executionService) expireUnsigned(ctx context.Context, o *orderRecord) bool {
+	unsignedRetry := o.Status == statusRetryWaiting || o.Status == statusNonceUncertain ||
+		o.Status == statusQueued || o.Status == statusSubmitting || o.Status == statusNonceUsed || o.Status == statusEstimateReverted
 	if !unsignedRetry || o.RetryDeadline.IsZero() || e.now().Before(o.RetryDeadline) {
 		return false
 	}
-	e.store.markStatus(o.OrderID, statusExpired, common.Hash{}, "order deadline has passed")
+	if o.Status == statusEstimateReverted && o.EstimateKind == estimateRevertFatal {
+		// The backend never established this order's business outcome. Preserve the known
+		// simulation cause and report it once without claiming a failed fill.
+		revert, cause, expired := e.store.expireFatalEstimate(o.OrderID)
+		if expired {
+			observability.Log(ctx).Error(errors.New(cause), "fatal fill estimate unresolved at order deadline",
+				"revert", revert, "backendStatus", "unresolved")
+		}
+		return expired
+	}
+	e.markExpired(o.OrderID, common.Hash{}, "order deadline has passed")
 	return true
+}
+
+// markExpired observes the bounded order outcome only once, when expiry follows retry exhaustion.
+func (e *executionService) markExpired(orderID string, txHash common.Hash, reason string) {
+	if e.store.markExpired(orderID, txHash, reason) {
+		e.metrics.observeExpiredAfterNonceRetries()
+	}
 }
 
 // expireQueued applies the deadline bound from the poll loop, so a queued order does not keep its
 // reservation past its deadline while the submitter is busy with another fill. An order the
 // submitter owns is left to it.
-func (e *executionService) expireQueued(o *orderRecord) bool {
+func (e *executionService) expireQueued(ctx context.Context, o *orderRecord) bool {
 	if !e.acquire(o.OrderID) {
 		return false
 	}
@@ -197,7 +215,7 @@ func (e *executionService) expireQueued(o *orderRecord) bool {
 	if o = e.store.order(o.OrderID); o == nil || !o.Status.awaitsSubmission() {
 		return false
 	}
-	return e.expireUnsigned(o)
+	return e.expireUnsigned(ctx, o)
 }
 
 // reserveWon holds a won order's liquidity as soon as it is polled, before its turn on the
@@ -279,14 +297,22 @@ func (e *executionService) handleOrder(ctx context.Context, o *orderRecord) {
 	)
 	defer end(nil) // each stage records its own failure; terminal skips are declined events here
 
-	if e.expireUnsigned(o) {
+	if o.Status.active() && !o.Status.awaitsSubmission() {
+		// An indexed completion wins over local deadline expiry, including on the last poll.
+		e.reconcileTerminalStatus(ctx, o.OrderID)
+		if latest := e.store.order(o.OrderID); latest != nil {
+			e.expireUnsigned(ctx, latest)
+		}
+		return
+	}
+	if e.expireUnsigned(ctx, o) {
 		return
 	}
 	switch o.Status {
 	case statusQueued, statusSubmitting:
 		e.submitOrder(ctx, o.OrderID)
-	case statusSubmitted, statusRetryWaiting:
-		e.reconcileTerminalStatus(ctx, o.OrderID)
+	case statusSubmitted, statusRetryWaiting, statusNonceUncertain, statusNonceUsed, statusEstimateReverted:
+		// Backend observation is handled before local expiry above.
 	case statusFilled, statusExpired, statusFailed, statusObsolete:
 		// terminal — nothing to do
 	}
@@ -345,7 +371,7 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		return
 	}
 	deadline := rfqFillDeadline(orderDeadline, discountValidUntil)
-	cancelAt, ok := liquidlane.CancellationDeadline(deadline, chainTime, chainObservedAt, e.now())
+	submissionDeadline, ok := liquidlane.SubmissionDeadline(deadline, chainTime, chainObservedAt, e.now())
 	if !ok {
 		e.fail(ctx, orderID, "fill execution deadline elapsed before submission")
 		return
@@ -353,13 +379,49 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 
 	res, sendErr := e.sendFill(ctx, txmanager.Request{
 		Solver: Name,
-		To:     e.executor, Data: calldata, CancelAt: cancelAt, Label: "rfq-fill",
+		To:     e.executor, Data: calldata, Deadline: submissionDeadline, Label: "rfq-fill",
 		Obsolete: e.orderObsolete(orderID),
 	})
-	attempt := e.store.recordAttempt(orderID)
+	attemptHashes := append([]common.Hash{res.Hash}, res.Attempts...)
+	attempt := e.store.recordAttempt(orderID, attemptHashes...)
 	outcome := res.Outcome
-	if !outcome.Included() && errors.Is(sendErr, txmanager.ErrRequestObsolete) {
-		e.retireObsoleteOrder(ctx, orderID, res, sendErr)
+	if !outcome.Included() && errors.Is(res.Err, txmanager.ErrRequestObsolete) {
+		e.retireObsoleteOrder(ctx, orderID, res, res.Err)
+		return
+	}
+	if !res.NotAdmitted && errors.Is(res.Err, txmanager.ErrFeeLimitReached) {
+		// A ceiling stops this unsigned request, not the order's business execution. Retain
+		// backend reconciliation and the ordinary polling/deadline bounds without a failure alert.
+		observability.Decline(ctx, "fill_fee_limit", "transaction fee ceiling reached")
+		e.store.markNonceUncertain(orderID, common.Hash{}, errString(res.Err), true)
+		observability.Log(ctx).Info("fill fee ceiling reached; reconciling order", "attempt", attempt)
+		e.reconcileTerminalStatus(ctx, orderID)
+		return
+	}
+	kind, revertName := classifyEstimateRevert(res.Err)
+	if kind == estimateRevertNonceUsed {
+		observability.Decline(ctx, "fill_nonce_used", "Reactor order nonce is already used")
+		e.store.markNonceUsed(orderID, errString(res.Err))
+		observability.Log(ctx).Info("fill retired: Reactor order nonce already used", "attempt", attempt)
+		return // Sending stops now; subsequent polling refines fill versus nonce invalidation.
+	}
+	if kind != estimateNotReverted {
+		// Backend terminal evidence takes precedence over simulation: a sibling may have filled
+		// this order. Setup errors stop; transient operations and undecoded races have a retry budget.
+		observability.Decline(ctx, "fill_estimate_reverted", "execution changed before signing")
+		e.store.markEstimateReverted(orderID, kind, revertName, errString(res.Err))
+		observability.Log(ctx).Info("fill estimate reverted; reconciling order", "attempt", attempt, "revert", revertName)
+		e.reconcileTerminalStatus(ctx, orderID)
+		return
+	}
+	if outcome.NonceUncertain() || outcome == txmanager.OutcomeReverted {
+		// A reverted transaction does not establish the business outcome: a sibling may have
+		// filled it first. Backend evidence decides terminal state or a bounded, rebuilt retry.
+		observability.Decline(ctx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
+		e.store.markNonceUncertain(orderID, res.Hash, errString(res.Err), outcome == txmanager.OutcomeNonceConflict)
+		observability.Log(ctx).Info("fill result requires order reconciliation", "attempt", attempt,
+			"tx", res.Hash.Hex(), "outcome", outcome)
+		e.reconcileTerminalStatus(ctx, orderID)
 		return
 	}
 	if !outcome.Included() {
@@ -371,19 +433,9 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 			e.metrics.fillAmounts.ObserveOutcome(fillOutcome)
 		}
 		status := statusFailed
-		if outcome == txmanager.OutcomeTrackingStopped || outcome == txmanager.OutcomeCancelledUnconfirmed {
+		if outcome == txmanager.OutcomeTrackingStopped {
 			// Inclusion is unknown; reconcile the backend without sending another transaction.
 			status = statusSubmitted
-		}
-		retryAt := e.now().Add(e.pollInterval)
-		retryDeadline, stillValid := liquidlane.CancellationDeadline(orderDeadline, chainTime, chainObservedAt, retryAt)
-		// Scheduled before any terminal status so a retrying order keeps its reservation.
-		if ctx.Err() == nil && stillValid && outcome == txmanager.OutcomeCancelled &&
-			res.Receipt != nil && res.Receipt.Status == ethtypes.ReceiptStatusSuccessful &&
-			e.store.scheduleCancellationRetry(orderID, e.maxCancellationRetries, retryAt, retryDeadline, res.Hash, sendErr.Error()) {
-			observability.Log(ctx).Info("fill cancelled; retry scheduled", "attempt", attempt,
-				"tx", res.Hash.Hex(), "retryAt", retryAt)
-			return
 		}
 		e.store.markStatus(orderID, status, res.Hash, sendErr.Error())
 		observability.Log(ctx).Error(sendErr, "fill failed", "attempt", attempt, "tx", res.Hash.Hex(),
@@ -468,7 +520,7 @@ func (e *executionService) boundByOrderDeadline(
 	orderID string, order executor.IReactorOrder, chainTime, chainObservedAt time.Time,
 ) {
 	orderDeadline := time.Unix(order.Request.Deadline.Int64(), 0)
-	if deadline, ok := liquidlane.CancellationDeadline(orderDeadline, chainTime, chainObservedAt, e.now()); ok {
+	if deadline, ok := liquidlane.SubmissionDeadline(orderDeadline, chainTime, chainObservedAt, e.now()); ok {
 		e.store.boundUnsignedWork(orderID, deadline)
 	}
 }
@@ -527,11 +579,32 @@ func (e *executionService) sendFill(
 	res = e.txm.Send(submitCtx, req)
 	txmanager.RecordResult(submitCtx, res) // the stage
 	txmanager.RecordResult(ctx, res)       // the order span it belongs to
-	err = res.Err                          // included-but-unconfirmed still carries the wait failure
+	if !res.Outcome.Included() && errors.Is(res.Err, txmanager.ErrRequestObsolete) {
+		observability.Decline(submitCtx, "fill_obsolete", res.Err.Error())
+		return res, nil
+	}
+	if res.Outcome.NonceUncertain() || res.Outcome == txmanager.OutcomeReverted {
+		observability.Decline(submitCtx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
+		return res, nil
+	}
+	if !res.NotAdmitted && errors.Is(res.Err, txmanager.ErrFeeLimitReached) {
+		observability.Decline(submitCtx, "fill_fee_limit", "transaction fee ceiling reached")
+		return res, nil
+	}
+	if estimateExecutionReverted(res.Err) {
+		observability.Decline(submitCtx, "fill_estimate_reverted", "execution changed before signing")
+		return res, nil
+	}
+	err = res.Err // included-but-unconfirmed still carries the wait failure
 	if err == nil && !res.Outcome.Included() {
 		err = errors.Errorf("unknown transaction outcome %q", res.Outcome)
 	}
 	return res, err
+}
+
+func estimateExecutionReverted(err error) bool {
+	var revert *txmanager.ExecutionRevertError
+	return errors.As(err, &revert)
 }
 
 // resolveExecutable returns the executable payload for a polled order from the backend.
@@ -571,14 +644,56 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 	}
 	switch bo.OrderStatus {
 	case "filled":
-		e.store.markStatus(orderID, statusFilled, txHash, "")
+		if e.store.markFilled(orderID, txHash) {
+			observability.Log(ctx).Info("order filled by peer", "tx", txHash.Hex())
+			if e.metrics != nil {
+				e.metrics.fillAmounts.ObserveOutcome(fillOutcomePeer)
+			}
+		}
 	case "expired":
-		e.store.markStatus(orderID, statusExpired, txHash, "")
+		e.markExpired(orderID, txHash, "")
 	case backendOrderStatusOpen:
-		// still open; leave as-is for the next cycle
+		local := e.store.order(orderID)
+		if local == nil || ctx.Err() != nil {
+			return
+		}
+		if local.Status == statusEstimateReverted {
+			err = e.reconcileEstimateRevert(ctx, local)
+			return
+		}
+		if local.Status != statusNonceUncertain {
+			return
+		}
+		exhausted := local.NonceRetryExhausted || (!local.NonceConflict && local.NonceRetries >= e.maxNonceRetries)
+		if exhausted && e.store.markNonceRetryExhausted(orderID) {
+			e.metrics.observeNonceRetryExhausted()
+			observability.Log(ctx).Info("nonce retry budget exhausted; observing backend until order deadline",
+				"retries", local.NonceRetries, "deadline", local.RetryDeadline)
+		}
+		now := e.now()
+		if local.RetryDeadline.IsZero() || !now.Before(local.RetryDeadline) {
+			e.markExpired(orderID, local.TxHash, "order deadline has passed")
+			return
+		}
+		retryAt := now.Add(e.pollInterval)
+		if exhausted || !retryAt.Before(local.RetryDeadline) {
+			// A retry needs room for another poll, but settlement remains observable until the
+			// actual deadline. In particular, a sibling fill may only reach the backend then.
+			return
+		}
+		if e.store.scheduleNonceRetry(orderID, e.maxNonceRetries, retryAt,
+			local.RetryDeadline, local.TxHash, local.LastError) {
+			observability.Log(ctx).V(1).Info("order remains open after uncertain nonce result; fresh retry scheduled",
+				"retryAt", retryAt, "tx", local.TxHash.Hex())
+		}
 	case "error", "cancelled", "unverified", "insufficient-funds":
 		observability.Decline(ctx, "fill_failed", "backend terminal status "+bo.OrderStatus)
-		e.store.markStatus(orderID, statusFailed, txHash, "backend terminal status "+bo.OrderStatus)
+		status := statusFailed
+		if local := e.store.order(orderID); local != nil && local.TxHash == (common.Hash{}) {
+			// Unsigned preparation failures can be re-armed; a terminal backend decision cannot.
+			status = statusObsolete
+		}
+		e.store.markStatus(orderID, status, txHash, "backend terminal status "+bo.OrderStatus)
 	default:
 		// The client tolerates a dropped or renamed field, so "" or a new value reaches here. Marking
 		// it failed would re-arm the order and re-submit a fill the backend may still consider live.

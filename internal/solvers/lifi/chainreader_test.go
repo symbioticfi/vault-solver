@@ -29,7 +29,7 @@ func TestValidateZeroGovernanceFee(t *testing.T) {
 			server := governanceFeeRPC(t, tt.fee)
 			defer server.Close()
 
-			client, err := chain.Dial(t.Context(), []string{server.URL}, "", "", common.Address{}.Hex(), 20*time.Second)
+			client, err := chain.Dial(t.Context(), []string{server.URL}, "", common.Address{}.Hex(), 20*time.Second)
 			if err != nil {
 				t.Fatalf("chain.Dial: %v", err)
 			}

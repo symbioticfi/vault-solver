@@ -23,7 +23,7 @@ import (
 type quoteService struct {
 	chainID  int64
 	executor common.Address
-	// laneAvailable is safe for concurrent use and reports nonce safety only. A busy lane does not
+	// laneAvailable is safe for concurrent use and reports sender initialization. A busy lane does not
 	// block quoting: pending fills are accounted through reservations instead. It is sampled before
 	// and after quote planning so work is declined whenever either check observes a nonce conflict.
 	laneAvailable func() bool

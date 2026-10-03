@@ -13,6 +13,8 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
+const fillOutcomePeer = "peer"
+
 type rfqMetrics struct {
 	workflow          *observability.WorkflowMetrics
 	orderPollObserver *observability.OperationObserver
@@ -35,6 +37,7 @@ func newRFQMetrics(
 	spec.Events = append(spec.Events, observability.WorkflowEventSpec{
 		Event: "fill", Outcomes: []string{
 			liquidlane.FillOutcomeFailure, liquidlane.FillOutcomeNotAdmitted, liquidlane.FillOutcomeObsolete,
+			fillOutcomePeer,
 		},
 	})
 	for _, outcome := range quoteDecisionOutcomes {
@@ -43,7 +46,9 @@ func newRFQMetrics(
 		})
 	}
 	spec.Events = append(spec.Events,
-		observability.WorkflowEventSpec{Event: "order", Outcomes: []string{"won"}},
+		observability.WorkflowEventSpec{Event: "order", Outcomes: []string{
+			"won", "nonce_retry_exhausted", "expired_after_nonce_retries",
+		}},
 		observability.WorkflowEventSpec{Event: "order_poll", Outcomes: []string{"success"}},
 	)
 	spec.Amounts = append(spec.Amounts, observability.WorkflowAmountSpec{
@@ -125,6 +130,18 @@ func (m *rfqMetrics) addQuotedAmount(token common.Address, side string, amount *
 func (m *rfqMetrics) observeWin() {
 	if m != nil {
 		m.workflow.ObserveEventAt("order", "won", 1, m.now())
+	}
+}
+
+func (m *rfqMetrics) observeNonceRetryExhausted() {
+	if m != nil {
+		m.workflow.ObserveEventAt("order", "nonce_retry_exhausted", 1, m.now())
+	}
+}
+
+func (m *rfqMetrics) observeExpiredAfterNonceRetries() {
+	if m != nil {
+		m.workflow.ObserveEventAt("order", "expired_after_nonce_retries", 1, m.now())
 	}
 }
 

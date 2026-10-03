@@ -8,6 +8,7 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -115,4 +116,60 @@ func TestRedeemAllMalformedCanWithdrawRetainsFreshnessAndRedeemsValidSubset(t *t
 	}
 	requireThreeFObservation(t, reg, threeFStateRedeemable, 7, 123)
 	metricstest.RequireWorkflowEventCount(t, reg, Name, threeFEventRedeem, "success", 1)
+}
+
+func TestRedeemConsumedNonceRechecksRequestsWithoutReportingSuccess(t *testing.T) {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict, txmanager.OutcomeAbandoned} {
+		t.Run(string(outcome), func(t *testing.T) { redeemConsumedNonceRechecksRequestsWithoutReportingSuccess(t, outcome) })
+	}
+}
+
+func redeemConsumedNonceRechecksRequestsWithoutReportingSuccess(t *testing.T, outcome txmanager.Outcome) {
+	t.Helper()
+	rec := tracetest.Install(t)
+	adapter := common.HexToAddress("0xa0")
+	request := common.HexToAddress("0xb0")
+	c, stop := newMulticallFakeClient(t,
+		abiEncodeAggregate3Results(t, abiEncodeUint256(t, 1)),
+		abiEncodeAggregate3Results(t, abiEncodeAddress(t, request)),
+		abiEncodeAggregate3Results(t, abiEncodeBool(t, true)),
+		abiEncodeAggregate3Results(t, abiEncodeUint256(t, 1)),
+		abiEncodeAggregate3Results(t, abiEncodeAddress(t, request)),
+		abiEncodeAggregate3Results(t, abiEncodeBool(t, false)),
+	)
+	defer stop()
+	metrics, reg := newThreeFTestMetrics(t)
+	sent := 0
+	s := &Solver{
+		cfg: &Config{RedeemBatchSize: 10}, reader: newReader(c, common.Address{}),
+		log: logr.Discard(), metrics: metrics, targets: []Target{{Adapter: adapter}},
+		targetsAuthoritative: true,
+	}
+	s.txManager = transactionSenderFunc(func(context.Context, txmanager.Request) txmanager.Result {
+		sent++
+		return txmanager.Result{Outcome: outcome,
+			Hash: common.HexToHash("0xfeed"), Err: nonceOutcomeError(outcome)}
+	})
+	s.redeemAll(t.Context())
+	s.redeemAll(t.Context())
+	if sent != 1 {
+		t.Fatalf("sent %d batches; consumed-nonce retry must exclude finalized requests", sent)
+	}
+	metricstest.RequireWorkflowEventCount(t, reg, Name, threeFEventRedeem, "success", 0)
+	submit := tracetest.Ended(t, rec, "3f.redeem.submit")
+	tracetest.RequireAttr(t, submit, "tx.outcome", string(outcome))
+	if !tracetest.HasEvent(submit, "declined") {
+		t.Fatal("consumed nonce did not record an expected decline")
+	}
+	tracetest.RequireNoErrorSpans(t, rec)
+}
+
+func nonceOutcomeError(outcome txmanager.Outcome) error {
+	if outcome == txmanager.OutcomeAbandoned {
+		return txmanager.ErrAbandoned
+	}
+	if outcome == txmanager.OutcomeNonceConflict {
+		return txmanager.ErrNonceConflict
+	}
+	return txmanager.ErrNonceConsumed
 }

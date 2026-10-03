@@ -111,14 +111,13 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 
 	// Chain client. rpcUrl is primary; rpcFallbackUrls (if any) are tried in order on failure.
 	// writeRpcUrl (if set) broadcasts transactions and supplies both startup nonce reads.
-	// cancelRpcUrl (if set) overrides only same-nonce self-cancellation broadcasts.
 	rpcMetrics, err := chain.NewRPCMetrics(metrics.Registerer())
 	if err != nil {
 		return err
 	}
 	rpcURLs := append([]string{cfg.Chain.RPCURL}, cfg.Chain.RPCFallbackURLs...)
 	chainClient, err := chain.DialWithMetrics(
-		ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.CancelRPCURL, cfg.Chain.MulticallAddress,
+		ctx, rpcURLs, cfg.Chain.WriteRPCURL, cfg.Chain.MulticallAddress,
 		time.Duration(cfg.Chain.RPCAttemptTimeoutMs)*time.Millisecond, rpcMetrics,
 	)
 	if err != nil {
@@ -205,8 +204,6 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		}()
 	}
 
-	health.SetReady(true)
-
 	// Run all solvers concurrently. The first fatal error cancels the rest; ctx cancellation is a
 	// clean shutdown (solver.Run maps context.Canceled to nil).
 	var shutdownPreparationTimeout time.Duration
@@ -220,15 +217,19 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	}
 	g, gctx := errgroup.WithContext(runCtx)
 	var background sync.WaitGroup
+	var laneStateChanged <-chan struct{}
+	laneAvailable := func() bool { return true }
+	unsubscribe := func() {}
 	if requiresTxManager {
-		laneStateChanged, unsubscribe := txm.SubscribeLaneState()
-		background.Go(func() {
-			defer unsubscribe()
-			// Readiness tracks nonce safety, not idleness: a pending transaction must not take quote
-			// servers out of rotation. Solvers apply their own lane gates to new commitments.
-			watchReadiness(gctx, laneStateChanged, txm.Available, health.SetReady)
-		})
+		laneStateChanged, unsubscribe = txm.SubscribeLaneState()
+		laneAvailable = txm.Available
 	}
+	background.Go(func() {
+		defer unsubscribe()
+		// Subscribe before reading current availability, so initialization cannot complete between a
+		// stale snapshot and subscription. Cancellation drops readiness for every solver.
+		watchReadiness(gctx, laneStateChanged, laneAvailable, health.SetReady)
+	})
 	for i, slv := range solvers {
 		g.Go(func() error { return solver.Run(gctx, slv, solverLogs[i]) })
 	}
@@ -275,12 +276,14 @@ func watchReadiness(
 	setReady func(bool),
 ) {
 	for {
-		select {
-		case <-laneStateChanged:
-			setReady(laneAvailable())
-		case <-ctx.Done():
+		if ctx.Err() != nil {
 			setReady(false)
 			return
+		}
+		setReady(laneAvailable())
+		select {
+		case <-laneStateChanged:
+		case <-ctx.Done():
 		}
 	}
 }

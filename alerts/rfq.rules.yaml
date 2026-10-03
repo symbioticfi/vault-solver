@@ -1,0 +1,64 @@
+# Operator policy: tune the window, threshold and duration for the deployment before loading.
+# These rules require scrape labels namespace and kubernetes_pod. Account identity binds sibling
+# pods together while keeping unrelated transaction senders in the same namespace separate.
+groups:
+  - name: vault-solver-rfq-rates
+    interval: 1m
+    rules:
+      - record: vault_solver:rfq_nonce_consumed:rate10m
+        expr: |
+          sum by (namespace, address) (
+            rate(solver_bot_txmanager_requests_total{label="rfq-fill",outcome="nonce_consumed"}[10m])
+            * on (namespace, kubernetes_pod) group_left (address)
+              max by (namespace, kubernetes_pod, address) (solver_bot_txmanager_account_info)
+          )
+      - record: vault_solver:rfq_peer_fills:rate10m
+        expr: |
+          sum by (namespace, address) (
+            rate(solver_bot_workflow_events_total{solver="rfq-filler",event="fill",outcome="peer"}[10m])
+            * on (namespace, kubernetes_pod) group_left (address)
+              max by (namespace, kubernetes_pod, address) (solver_bot_txmanager_account_info)
+          )
+      - record: vault_solver:rfq_retry_expirations:rate10m
+        expr: |
+          sum by (namespace, address) (
+            rate(solver_bot_workflow_events_total{solver="rfq-filler",event="order",outcome="expired_after_nonce_retries"}[10m])
+            * on (namespace, kubernetes_pod) group_left (address)
+              max by (namespace, kubernetes_pod, address) (solver_bot_txmanager_account_info)
+          )
+      - record: vault_solver:rfq_fee_limits:rate10m
+        expr: |
+          sum by (namespace, address) (
+            rate(solver_bot_txmanager_fee_limit_reached_total{label="rfq-fill",phase=~"initial|replacement"}[10m])
+            * on (namespace, kubernetes_pod) group_left (address)
+              max by (namespace, kubernetes_pod, address) (solver_bot_txmanager_account_info)
+          )
+      - alert: RFQNonceConsumedWithoutPeerFills
+        expr: |
+          vault_solver:rfq_nonce_consumed:rate10m >= 0.01
+          and on (namespace, address) vault_solver:rfq_peer_fills:rate10m == 0
+        for: 5m
+        labels:
+          severity: warning
+          solver: rfq-filler
+        annotations:
+          summary: RFQ nonces are consumed without observed peer fills
+          description: Nonce-consumed outcomes for this sender are at least 0.6 per minute over ten minutes and persist for five minutes while its peer-fill rate is zero. Check other EOA users, backend lag and write-RPC freshness before attributing the consumption to an unexpected sender.
+      - alert: RFQOrdersExpireAfterNonceRetries
+        expr: vault_solver:rfq_retry_expirations:rate10m >= 0.01
+        for: 5m
+        labels:
+          severity: warning
+          solver: rfq-filler
+        annotations:
+          summary: RFQ orders repeatedly expire after nonce retry exhaustion
+          description: Locally observed order expirations after exhausting the accepted-execution retry budget are at least 0.6 per minute over ten minutes and persist for five minutes. Check inclusion latency, deadlines and contention; sibling observations can represent the same order.
+      - alert: RFQTransactionFeesRepeatedlyCapped
+        expr: vault_solver:rfq_fee_limits:rate10m >= 0.01
+        for: 5m
+        labels:
+          severity: warning
+          solver: rfq-filler
+        annotations:
+          summary: RFQ transaction fees repeatedly reach configured ceilings
+          description: Initial-send and replacement fee-ceiling decisions for this sender are at least 0.6 per minute over ten minutes and persist for five minutes. Check market fees, profitability ceilings and same-nonce contention before changing any cap.

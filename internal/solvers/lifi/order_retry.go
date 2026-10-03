@@ -1,6 +1,14 @@
 package lifi
 
-import "sync"
+import (
+	"context"
+	"sync"
+	"time"
+
+	"github.com/go-errors/errors"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
+)
 
 type reservationRetry struct {
 	order      *submittedOrder
@@ -39,6 +47,54 @@ func (q *reservationRetryQueue) enqueue(order *submittedOrder, generation uint64
 		q.queued[key] = true
 	}
 	return nil
+}
+
+// enqueueWithNonceRetry transfers a timed retry into the completion-driven capacity queue.
+func (q *reservationRetryQueue) enqueueWithNonceRetry(
+	order *submittedOrder, generation uint64, nonceRetries *orderDepositRetryQueue, now time.Time,
+) error {
+	err := q.enqueue(order, generation)
+	if err == nil || !nonceRetries.contains(order) {
+		return err
+	}
+	// A failed handoff must not leave a tracked order without a timer or completion event.
+	// Reuse its original bound and advance its backoff instead of stranding the order.
+	return nonceRetries.scheduleBefore(order, now, time.Time{})
+}
+
+// deferOrderForCapacity reports whether the worker retained a blocked order. A full reservation
+// queue is harmless when the order's existing nonce timer can retain it instead.
+func (s *Solver) deferOrderForCapacity(
+	ctx context.Context,
+	order *submittedOrder,
+	generation uint64,
+	retries *reservationRetryQueue,
+	nonceRetries *orderDepositRetryQueue,
+	now time.Time,
+) (orderProcessingOutcome, error) {
+	err := retries.enqueueWithNonceRetry(order, generation, nonceRetries, now)
+	if errors.Is(err, errOrderNonceRetryExpired) {
+		observability.Decline(ctx, "order_skipped", "nonce reconciliation reached the order deadline")
+		observability.Log(ctx).Info("order skipped: nonce reconciliation reached the order deadline",
+			"orderId", order.OrderID, "onChainOrderId", order.OnChainOrderID,
+			"quoteId", order.QuoteID, "reason", err.Error())
+		return orderProcessingNotActionable, nil
+	}
+	if err != nil {
+		outcome := orderProcessingCapacityDeferred
+		if errors.Is(err, errOrderRetryFull) {
+			outcome = orderProcessingCapacityDropped
+		}
+		s.metrics.observeOrderQueueDrop(orderQueueCapacityRetry, err)
+		observability.Log(ctx).Error(err, "order retry queue: dropped newest order",
+			"orderId", order.OrderID,
+			"onChainOrderId", order.OnChainOrderID,
+			"quoteId", order.QuoteID,
+			"capacity", retries.capacity,
+		)
+		return outcome, err
+	}
+	return orderProcessingCapacityDeferred, nil
 }
 
 func (q *reservationRetryQueue) popReady(generation uint64) *submittedOrder {

@@ -14,14 +14,14 @@ const (
 	metricsNamespace = "solver_bot"
 	metricsSubsystem = "txmanager"
 
-	replacementKindReplacement  = "replacement"
-	replacementKindCancellation = "cancellation"
-	replacementKindRebroadcast  = "rebroadcast"
+	replacementKindReplacement = "replacement"
+	replacementKindRebroadcast = "rebroadcast"
+	feeLimitPhaseInitial       = "initial"
+	feeLimitPhaseReplacement   = "replacement"
 
 	admissionOutcomeAdmitted admissionOutcome = "admitted"
 
 	admissionRejectionManagerStopped  admissionRejectionReason = "manager_stopped"
-	admissionRejectionNonceConflict   admissionRejectionReason = "nonce_conflict"
 	admissionRejectionDeadline        admissionRejectionReason = "deadline_exceeded"
 	admissionRejectionCallerCancelled admissionRejectionReason = "caller_cancelled"
 	admissionRejectionOther           admissionRejectionReason = "other"
@@ -55,6 +55,7 @@ type Metrics struct {
 	gasUsed             *prometheus.CounterVec
 	feePaidWei          *prometheus.CounterVec
 	replacements        *prometheus.CounterVec
+	feeLimits           *prometheus.CounterVec
 	admissionRejections *prometheus.CounterVec
 	admissionWait       *prometheus.HistogramVec
 	lifecycleDuration   *prometheus.HistogramVec
@@ -97,8 +98,14 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
 			Name:      "replacements_total",
-			Help:      "Successfully broadcast transaction replacements, cancellations and exact rebroadcasts, by why they were sent.",
+			Help:      "Successfully broadcast transaction replacements and exact rebroadcasts, by why they were sent.",
 		}, []string{"label", "kind", "reason"}),
+		feeLimits: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricsNamespace,
+			Subsystem: metricsSubsystem,
+			Name:      "fee_limit_reached_total",
+			Help:      "Initial-send and replacement decisions stopped by configured fee ceilings; excludes profitability quote reads.",
+		}, []string{"label", "phase"}),
 		admissionRejections: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
@@ -133,6 +140,7 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 		m.gasUsed,
 		m.feePaidWei,
 		m.replacements,
+		m.feeLimits,
 		m.admissionRejections,
 		m.admissionWait,
 		m.lifecycleDuration,
@@ -144,6 +152,12 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 		}
 	}
 	return m, nil
+}
+
+func (m *Metrics) feeLimitReached(label, phase string) {
+	if m != nil {
+		m.feeLimits.WithLabelValues(label, phase).Inc()
+	}
 }
 
 func (m *Metrics) beginLifecycle(label string) lifecycleObservation {
@@ -245,8 +259,6 @@ func classifyAdmissionRejection(err error) admissionRejectionReason {
 	switch {
 	case errors.Is(err, errManagerStopped):
 		return admissionRejectionManagerStopped
-	case errors.Is(err, errNonceLanePaused):
-		return admissionRejectionNonceConflict
 	case errors.Is(err, context.DeadlineExceeded):
 		return admissionRejectionDeadline
 	case errors.Is(err, context.Canceled):

@@ -364,11 +364,17 @@ func (s *Solver) openedOrderID(ctx context.Context, order *submittedOrder) (comm
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID, "status", status)
 		return common.Hash{}, errOrderDepositNotVisible
 	}
-	if status != lifiOrderStatusDeposited {
+	if status == lifiOrderStatusClaimed || status == lifiOrderStatusRefunded {
 		observability.Decline(ctx, "order_skipped", "on-chain order is no longer fillable")
 		observability.Log(ctx).Info("order skipped: on-chain order is no longer fillable", "orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID, "status", status)
 		return common.Hash{}, errOrderNotFillable
+	}
+	if status != lifiOrderStatusDeposited {
+		err := errors.Errorf("unsupported order status %d for %s", status, orderID.Hex())
+		observability.Log(ctx).Error(err, "order fill: read initial order status",
+			"orderId", order.OrderID, "onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID)
+		return common.Hash{}, err
 	}
 	return orderID, nil
 }

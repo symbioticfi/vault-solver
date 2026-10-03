@@ -17,6 +17,7 @@ var tracer = observability.NewTracer("github.com/symbioticfi/vault-solver/intern
 const (
 	orderReserveStage = "lifi.order.reserve"
 	orderDepositStage = "lifi.order.deposit"
+	orderNonceStage   = "lifi.order.nonce_retry"
 )
 
 // orderMessageSpanName keeps the message span name bounded (spec §9.3). The feed dispatches only the

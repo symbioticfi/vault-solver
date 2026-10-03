@@ -54,7 +54,7 @@ func TestParseConfig_Defaults(t *testing.T) {
 	}
 }
 
-func TestParseConfigCancellationRetryPolicy(t *testing.T) {
+func TestParseConfigNonceRetryPolicy(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		yaml        string
@@ -62,10 +62,10 @@ func TestParseConfigCancellationRetryPolicy(t *testing.T) {
 		wantErr     bool
 	}{
 		{name: "defaults", wantRetries: 3},
-		{name: "disabled", yaml: "maxCancellationRetries: 0"},
-		{name: "custom", yaml: "maxCancellationRetries: 1", wantRetries: 1},
-		{name: "negative retries", yaml: "maxCancellationRetries: -1", wantErr: true},
-		{name: "separate delay rejected", yaml: "cancellationRetryDelayMs: 12000", wantErr: true},
+		{name: "disabled", yaml: "maxNonceRetries: 0"},
+		{name: "custom", yaml: "maxNonceRetries: 1", wantRetries: 1},
+		{name: "negative retries", yaml: "maxNonceRetries: -1", wantErr: true},
+		{name: "legacy cancellation field rejected", yaml: "maxCancellationRetries: 1", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := parseCfg(t, minimalConfig+oneAdapter+tc.yaml+"\n")
@@ -78,8 +78,8 @@ func TestParseConfigCancellationRetryPolicy(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.MaxCancellationRetries != tc.wantRetries {
-				t.Fatalf("max cancellation retries = %d, want %d", cfg.MaxCancellationRetries, tc.wantRetries)
+			if cfg.MaxNonceRetries != tc.wantRetries {
+				t.Fatalf("max nonce retries = %d, want %d", cfg.MaxNonceRetries, tc.wantRetries)
 			}
 		})
 	}

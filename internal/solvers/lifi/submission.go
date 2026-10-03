@@ -46,21 +46,25 @@ func (s *Solver) submitFill(
 			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID, "status", status)
 		return nil, errOrderDepositNotVisible
 	}
-	if status != lifiOrderStatusDeposited {
+	if status == lifiOrderStatusClaimed || status == lifiOrderStatusRefunded {
 		observability.Decline(ctx, "order_skipped", "on-chain order is no longer fillable at submission")
 		observability.Log(ctx).Info("order skipped: on-chain order is no longer fillable at submission",
 			"orderId", order.OrderID, "onChainOrderId", calldata.OrderID.Hex(),
 			"quoteId", order.QuoteID, "status", status)
 		return nil, errOrderNotFillable
 	}
-	var cancelAt time.Time
+	if status != lifiOrderStatusDeposited {
+		return nil, errors.Errorf("unsupported order status %d for %s", status, calldata.OrderID.Hex())
+	}
+	admissionNow := s.wallNow()
+	var submissionDeadline time.Time
 	if !calldata.Deadline.IsZero() {
 		var deadlineValid bool
-		cancelAt, deadlineValid = liquidlane.CancellationDeadline(
+		submissionDeadline, deadlineValid = liquidlane.SubmissionDeadline(
 			calldata.Deadline,
 			chainTime,
 			chainObservedAt,
-			s.wallNow(),
+			admissionNow,
 		)
 		if !deadlineValid {
 			observability.Decline(ctx, "fill_skipped", "execution deadline elapsed before submission")
@@ -73,11 +77,11 @@ func (s *Solver) submitFill(
 	reservationKey := calldata.OrderID.Hex()
 	deadline := int64(0)
 	deadlineRemaining := time.Duration(0)
-	cancelAtUnix := int64(0)
+	submissionDeadlineUnix := int64(0)
 	if !calldata.Deadline.IsZero() {
 		deadline = calldata.Deadline.Unix()
 		deadlineRemaining = calldata.Deadline.Sub(chainTime)
-		cancelAtUnix = cancelAt.Unix()
+		submissionDeadlineUnix = submissionDeadline.Unix()
 	}
 	observability.Log(ctx).V(1).Info(
 		"order fill ready for submission",
@@ -91,12 +95,15 @@ func (s *Solver) submitFill(
 		"requestMaxFeePerGas", bigString(maxFeePerGas),
 		"deadline", deadline,
 		"deadlineRemaining", deadlineRemaining,
-		"cancelAt", cancelAtUnix,
+		"submissionDeadline", submissionDeadlineUnix,
+	)
+	retryDeadline, _ := liquidlane.SubmissionDeadline(
+		orderDeadline(order), chainTime, chainObservedAt, admissionNow,
 	)
 	result, accepted := s.sendFill(ctx, txmanager.Request{
 		Solver: Name,
 		To:     s.cfg.Executor, Data: calldata.Finalise, MaxFeePerGas: liquidlane.CloneBig(maxFeePerGas),
-		CancelAt: cancelAt,
+		Deadline: submissionDeadline,
 		Obsolete: func(checkCtx context.Context) (bool, error) {
 			return s.fillRequestObsolete(checkCtx, calldata.OrderID)
 		},
@@ -133,6 +140,7 @@ func (s *Solver) submitFill(
 		orderID:        calldata.OrderID,
 		reservationKey: reservationKey,
 		plannedSurplus: liquidstrategies.PlannedSurplus(plan.Routes, order.OutputAmount),
+		retryDeadline:  retryDeadline,
 		result:         result,
 	}, nil
 }
@@ -184,6 +192,27 @@ func (s *Solver) completeFill(
 	defer func() { end(err) }()
 
 	outcome := completion.result.Outcome
+	if !outcome.Included() && errors.Is(completion.result.Err, txmanager.ErrRequestObsolete) {
+		// The input settler already claimed or refunded the order: an expected skip, not a failure.
+		observability.Decline(ctx, "fill_obsolete", completion.result.Err.Error())
+		observability.Log(ctx).Info("order fill obsolete: order settled elsewhere",
+			"orderId", fill.order.OrderID,
+			"onChainOrderId", fill.orderID.Hex(),
+			"quoteId", fill.order.QuoteID,
+			"tx", completion.result.Hash.Hex(),
+			"outcome", outcome,
+		)
+		return nil
+	}
+	if outcome.NonceUncertain() {
+		observability.Decline(ctx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
+		// The worker re-reads on-chain status and schedules eligible orders for fresh planning.
+		// This outcome carries no owned receipt and is never counted as a successful fill.
+		observability.Log(ctx).V(1).Info("order fill nonce uncertain; reconciling protocol status",
+			"orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
+			"quoteId", fill.order.QuoteID, "tx", completion.result.Hash.Hex())
+		return nil
+	}
 	if outcome == txmanager.OutcomeConfirmed {
 		s.observeFillAmounts(completion.result, fill)
 		observability.Log(ctx).Info("order filled", "orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
@@ -201,18 +230,6 @@ func (s *Solver) completeFill(
 			"tx", completion.result.Hash.Hex(),
 		)
 		return err
-	}
-	if errors.Is(completion.result.Err, txmanager.ErrRequestObsolete) {
-		// The input settler already claimed or refunded the order: an expected skip, not a failure.
-		observability.Decline(ctx, "fill_obsolete", completion.result.Err.Error())
-		observability.Log(ctx).Info("order fill obsolete: order settled elsewhere",
-			"orderId", fill.order.OrderID,
-			"onChainOrderId", fill.orderID.Hex(),
-			"quoteId", fill.order.QuoteID,
-			"tx", completion.result.Hash.Hex(),
-			"outcome", outcome,
-		)
-		return nil
 	}
 	err = completion.result.Err
 	if err == nil {
@@ -268,4 +285,34 @@ func (s *Solver) requestQuoteRefresh() {
 	case s.quoteRefresh <- struct{}{}:
 	default:
 	}
+}
+
+// reconcileUncertainFill checks protocol settlement before re-planning an uncertain submission.
+// A read failure retains recovery: only a known terminal status proves the order can be retired.
+func (s *Solver) reconcileUncertainFill(ctx context.Context, fill *pendingFill) (retry bool, err error) {
+	ctx, end := tracer.Start(ctx, "lifi.order.reconcile")
+	defer func() { end(err) }()
+	status, err := s.reader.orderStatus(ctx, s.cfg.InputSettler, fill.orderID)
+	if ctx.Err() != nil {
+		observability.Decline(ctx, "order_skipped", "nonce reconciliation canceled during shutdown")
+		return false, nil
+	}
+	if err == nil {
+		switch status {
+		case lifiOrderStatusNone, lifiOrderStatusDeposited:
+			return true, nil
+		case lifiOrderStatusClaimed, lifiOrderStatusRefunded:
+			observability.Decline(ctx, "fill_obsolete", "uncertain fill order settled on-chain")
+			observability.Log(ctx).Info("order fill reconciled: order settled on-chain",
+				"orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
+				"quoteId", fill.order.QuoteID, "status", status)
+			return false, nil
+		default:
+			err = errors.Errorf("unsupported order status %d for %s", status, fill.orderID.Hex())
+		}
+	}
+	err = errors.Errorf("reconcile uncertain fill for %s: %w", fill.orderID.Hex(), err)
+	observability.Log(ctx).Error(err, "order fill status reconciliation failed; retaining retry",
+		"orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(), "quoteId", fill.order.QuoteID)
+	return true, err
 }

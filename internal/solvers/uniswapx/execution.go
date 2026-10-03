@@ -235,7 +235,7 @@ func (s *Solver) startFill(
 	}
 	plan, data, discountValidUntil := prepared.plan, prepared.data, prepared.validUntil
 	deadline := fillDeadline(order, discountValidUntil)
-	cancelAt, ok := liquidlane.CancellationDeadline(deadline, now, chainObservedAt, time.Now())
+	submissionDeadline, ok := liquidlane.SubmissionDeadline(deadline, now, chainObservedAt, time.Now())
 	if !ok {
 		return nil, declineFill(ctx, "fill_skipped", "fill execution deadline elapsed before submission")
 	}
@@ -251,11 +251,11 @@ func (s *Solver) startFill(
 		"pricingMaxFeePerGas", pricingMaxFee.String(),
 		"deadline", deadline.Unix(),
 		"deadlineRemaining", deadline.Sub(now),
-		"cancelAt", cancelAt.Unix(),
+		"submissionDeadline", submissionDeadline.Unix(),
 	)
 	result, err := s.submitFill(ctx, txmanager.Request{
 		Solver: Name,
-		To:     order.Executor, Data: data, MaxFeePerGas: transactionMaxFee, CancelAt: cancelAt,
+		To:     order.Executor, Data: data, MaxFeePerGas: transactionMaxFee, Deadline: submissionDeadline,
 		Obsolete: s.orderObsolete(order),
 		Label:    "uniswapx-fill",
 	})
@@ -278,8 +278,8 @@ func (s *Solver) startFill(
 }
 
 // orderObsolete returns the fill's Obsolete hook: the order's status in the Uniswap order API, the
-// same lookup exclusive-obligation reconciliation uses. Once the order is filled (by another filler;
-// a receipt of ours takes precedence), cancelled, expired, errored or unfunded, the pending fill can
+// same lookup exclusive-obligation reconciliation uses. Once the order is filled (an owned receipt
+// takes precedence), cancelled, expired, errored or unfunded, the pending fill can
 // only revert. An open order, an unknown status or a failed lookup keeps the fill alive.
 func (s *Solver) orderObsolete(order *resolvedOrder) func(context.Context) (bool, error) {
 	if s.orders == nil {
@@ -532,8 +532,8 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 	}
 	outcome := result.Outcome
 	if !outcome.Included() && errors.Is(result.Err, txmanager.ErrRequestObsolete) {
-		// Another filler took the order or the swapper cancelled it: retire it rather than retry,
-		// and keep it out of the failure breaker, since nothing of ours went wrong.
+		// A terminal protocol status retires the order without a retry and stays out of the
+		// failure breaker, since this does not establish a failed execution of our fill.
 		observability.Decline(ctx, "fill_obsolete", errorReason(result.Err))
 		s.observeFillOutcome(liquidlane.FillOutcomeObsolete)
 		s.complete(order.Hash, now)
@@ -542,6 +542,16 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 			"source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
 			"tx", result.Hash.Hex(), "outcome", outcome,
 		)
+		return
+	}
+	if outcome.NonceUncertain() {
+		observability.Decline(ctx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
+		// Fresh polling rechecks order status, terms and execution-time state. The missing owned
+		// receipt neither proves this order filled nor counts as a local execution failure.
+		s.retry(order.Hash, now, false)
+		observability.Log(ctx).V(1).Info("order fill nonce uncertain; awaiting fresh order poll",
+			"source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
+			"tx", result.Hash.Hex())
 		return
 	}
 	if !outcome.Included() {

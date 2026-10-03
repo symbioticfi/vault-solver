@@ -2,11 +2,12 @@ package liquidlane
 
 import "time"
 
-// CancellationDeadline translates a deadline expressed in chain time into the wall-clock instant
-// expected by txmanager. chainObservedAt is the wall time immediately before chainNow was read;
-// wallNow is sampled immediately before transaction admission. Advancing chainNow by elapsed planning
-// time preserves positive chain/wall skew instead of accidentally extending the on-chain deadline.
-func CancellationDeadline(
+// SubmissionDeadline translates a deadline expressed in chain time into the wall-clock instant
+// after which txmanager must stop submitting the call. chainObservedAt is the wall time immediately
+// before chainNow was read; wallNow is sampled immediately before transaction admission. Advancing
+// chainNow by elapsed planning time preserves positive chain/wall skew instead of accidentally
+// extending the on-chain deadline.
+func SubmissionDeadline(
 	deadline time.Time,
 	chainNow time.Time,
 	chainObservedAt time.Time,

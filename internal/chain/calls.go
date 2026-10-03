@@ -164,16 +164,8 @@ func (c *Client) SendTransaction(ctx context.Context, tx *types.Transaction) (er
 	return c.writeClient.SendTransaction(ctx, tx)
 }
 
-// SendCancellationTransaction broadcasts a same-nonce self-cancellation through the cancellation
-// client, or the ordinary write client when no cancellation endpoint is configured.
-func (c *Client) SendCancellationTransaction(ctx context.Context, tx *types.Transaction) (err error) {
-	ctx, end := c.cancelCalls.start(ctx, rpcMethodSendRawTransaction)
-	defer func() { end(err) }()
-	return c.cancelClient.SendTransaction(ctx, tx)
-}
-
-// NonceAt reads the mined nonce through the write client so startup compares one endpoint's mined
-// and pending views instead of failing on harmless head skew between independent RPC nodes.
+// NonceAt reads mined state through the sending endpoint for fresh nonce selection and to stop
+// replacements after the nonce was consumed, including by another replica.
 func (c *Client) NonceAt(
 	ctx context.Context, account common.Address, blockNumber *big.Int,
 ) (_ uint64, err error) {
@@ -184,7 +176,8 @@ func (c *Client) NonceAt(
 
 // PendingNonceAt reads the pending nonce through the write client so a private write endpoint can
 // report transactions that are not visible to the primary RPC. It overrides the promoted ethclient
-// method. When no separate write endpoint is configured, it targets the primary endpoint.
+// method. When no separate write endpoint is configured, it targets the primary endpoint. Fresh
+// transaction nonce selection uses NonceAt instead.
 func (c *Client) PendingNonceAt(ctx context.Context, account common.Address) (_ uint64, err error) {
 	ctx, end := c.writeCalls.start(ctx, rpcMethodGetTransactionCount)
 	defer func() { end(err) }()

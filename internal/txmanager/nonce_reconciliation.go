@@ -3,7 +3,6 @@ package txmanager
 import (
 	"context"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
@@ -31,13 +30,6 @@ func (m *Manager) replacementNonceAvailable(ctx context.Context, pending *pendin
 	if latest <= pending.nonce {
 		return true, nil
 	}
-	if pending.nonceConflictHash == (common.Hash{}) {
-		log.Info("pending transaction nonce consumed; reconciling tracked receipts",
-			"label", pending.req.Label, "hash", pending.originalHash.Hex(),
-			"sender", m.signer.Address().Hex(), "nonce", pending.nonce, "latestNonce", latest)
-	}
-	pending.nonceConflictHash = pending.originalHash
-	m.reconcileExistingLifecycleNonce(ctx, pending)
 	// Even a canonical owned receipt means replacement must stop. The receipt
 	// reader retains ownership and applies the request's confirmation policy.
 	return false, nil
