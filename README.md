@@ -466,8 +466,7 @@ until then the old call may remain pending. Restart loses signed hashes and fee 
 still targets the lowest unconsumed nonce and can rebuild a fee floor from underpriced responses.
 An unknown pending call's fees may exceed an order's budget or the global ceiling; bounded solver
 deadlines can also expire before a replacement is accepted. Replica contention can increase fees and
-does not guarantee ordering or fairness. Remove `chain.cancelRpcUrl` from existing YAML; it is no longer
-supported. Rename RFQ `maxCancellationRetries` to `maxNonceRetries`.
+does not guarantee ordering or fairness. RFQ retry limits use `maxNonceRetries`.
 
 To start three containers from one existing operator config, save it as
 `config/replicas.local.yaml` and supply its secret env vars in the existing

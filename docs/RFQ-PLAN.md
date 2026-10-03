@@ -328,8 +328,7 @@ solvers:
 
 **`solverMode` — the single internal/external knob (default `external`).** The backend discounts API is
 available only to **internal Symbiotic** solvers, so one mode flag drives both the discount-API gate and the
-adapter whitelist (it replaces the earlier separate `adapterWhitelistEnabled` / `discountsEnabled` flags — a
-config still carrying either is rejected at startup so operators migrate):
+adapter whitelist:
 
 - **`external`** (default — the open-source filler external parties run): **never touches the discounts
   API** — filters discount inventory before quoting, skips `GET /discounts` in fill planning, never calls `POST /discounts` at fill (a surfacing discount
