@@ -437,10 +437,9 @@ or feature flag.
 
 Two replicas can still select the same nonce. An initial `nonce too low` or
 `replacement transaction underpriced` response returns `nonce_conflict` and releases the local lane
-immediately. An underpriced attempt records its own fee caps; the next fresh request at that nonce raises
-both by at least 12.5%, within that request's profitability ceiling and the global fee ceiling. Profitability
-quotes include this floor. The next request reads the mined nonce again. The manager does not cancel the competing
-transaction or automatically replay the old calldata at a new nonce. Solvers recheck protocol/backend
+immediately. Rejected initial fees do not create or raise a remembered fee floor. After the nonce
+cooldown, the next request reads mined state and fresh market fees again. The manager does not cancel
+the competing transaction or automatically replay the old calldata at a new nonce. Solvers recheck protocol/backend
 state before retrying an order. RFQ and UniswapX use their polling retries; 3F rebuilds from its next
 redemption scan; LI.FI requires upstream redelivery or reconnect recovery.
 
@@ -450,6 +449,10 @@ state at its polling cadence, and resumes immediately when the account nonce cha
 deadline and manager context bound this wait. An underpriced replacement of an owned transaction
 abandons tracking at Info for protocol reconciliation. It retains signed hashes and the previous
 accepted or transport-uncertain fee hint, without escalating from the rejected replacement's fees.
+An abandoned call's fee hint lasts at most `pendingTimeoutMs` after it is remembered. Fresh sends and
+profitability quotes discard it sooner if its required bump cannot fit their request or global ceiling,
+then use fresh market fees within those ceilings. A dropped obsolete call cannot pin the process to
+stale fees until restart; a relay that still holds a higher-priced call may reject that fresh attempt.
 
 Accepted or transport-uncertain broadcasts keep their exact signed hashes and ordinary receipt,
 confirmation and fee-replacement policy. Abandonment returns an unknown execution result; solvers
@@ -463,9 +466,10 @@ reopening after a later reorg.
 
 The bot sends no cancellation transactions. Recovery requires a fresh eligible business request;
 until then the old call may remain pending. Restart loses signed hashes and fee hints, but fresh work
-still targets the lowest unconsumed nonce and can rebuild a fee floor from underpriced responses.
-An unknown pending call's fees may exceed an order's budget or the global ceiling; bounded solver
-deadlines can also expire before a replacement is accepted. Replica contention can increase fees and
+still targets the lowest unconsumed nonce and uses fresh market fees. Rejected bids do not progressively
+discover an unknown pending call's fee floor. It can execute once fresh fees meet the relay's replacement
+policy, the old call is dropped, or the account nonce advances. An unknown pending call's fees may exceed
+an order's budget or the global ceiling; bounded solver deadlines can also expire before a replacement is accepted. Replica contention can increase fees and
 does not guarantee ordering or fairness. RFQ retry limits use `maxNonceRetries`.
 
 To start three containers from one existing operator config, save it as

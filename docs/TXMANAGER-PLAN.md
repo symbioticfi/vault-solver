@@ -70,7 +70,7 @@ The public YAML block is `txManager`. Values below are application defaults, aft
 | `broadcastTimeoutMs` | 5000 | Independent timeout of each submission RPC. |
 | `accountPollIntervalMs` | 30000 | Complete sender balance/nonce telemetry refresh cadence. |
 | `replacementIntervalMs` | 30000 | Fallback bump cadence while fee history is unreadable; also bounds the internal read budgets below. |
-| `pendingTimeoutMs` | 300000 | Abandon an unresolved owned call and remember its nonce/fee floor for a fresh business request. Must be at least the replacement interval. |
+| `pendingTimeoutMs` | 300000 | Abandon an unresolved owned call; also bound its retained fee hint after abandonment. Must be at least the replacement interval. |
 | `shutdownTimeoutMs` | 60000 | Hard bound on manager drain after shutdown begins. |
 | `horizon.maxBlocks` | 6 | Blocks (3–12) the initial fee cap keeps the full tip valid at the maximum base-fee increase. |
 | `horizon.blockTimeMs` | 12000 | Slot time: sets the twice-per-block evaluation tick, next-block estimate timestamp and nonce-contention cooldown. |
@@ -154,12 +154,14 @@ fallback below.
   when higher, capped at the request or global limit, capped-rebroadcast at the cap).
 - **Abandonment** at the request deadline, pending timeout or `Obsolete` releases the local lifecycle
   without broadcasting. The result is `abandoned`, with the attempted hash and an unknown execution result.
-  The manager remembers the nonce and highest signed fees; the next eligible business request can replace
-  it while a bounded latest-state nonce check still shows it unused.
+  The manager remembers the nonce and highest accepted/transport-uncertain fees; fresh work can replace
+  it while a bounded latest-state nonce check still shows it unused. The hint expires after one
+  `pendingTimeoutMs` from the latest accepted/uncertain fee observation or abandonment.
 - **Replica contention.** An underpriced owned replacement or exact rebroadcast immediately returns
   `abandoned` for integration reconciliation at Info. Keep all signed candidate hashes and the last
   accepted or transport-uncertain fee hint; rejected replacement fees never ratchet that hint. Initial
-  underpriced sends still return `nonce_conflict` promptly and retain their known proposed fee floor.
+  underpriced sends return `nonce_conflict` promptly without remembering rejected proposed fees or
+  renewing an existing hint.
   Either underpriced path starts one configured `horizon.blockTimeMs` cooldown for the nonce. Every
   fresh request at that nonce waits before fee reads, estimation or signing, including unrelated queued
   orders. Poll mined state at the manager poll interval, resume when the nonce changes or the cooldown
@@ -169,10 +171,11 @@ fallback below.
   cached-bump replacement per interval (`fallback`), so it cannot freeze. Unreadable windows use the same
   read-streak logging as receipt reads.
 - **Quote pricing.** `MaxFeePerGas` prices the size of the latest signed call and includes the retained
-  replacement floor retained after abandonment or an initial underpriced response. A bounded mined-nonce
-  check uses the hint only at exactly that nonce and fails pricing closed if unavailable. The returned
-  ceiling includes one ordinary bump when the global cap permits it, so fresh planning accounts for
-  the cost of replacing pending work.
+  replacement floor retained after accepted/uncertain abandonment. A bounded mined-nonce
+  check uses an unexpired hint only at exactly that nonce and fails pricing closed if unavailable.
+  A floor whose bump cannot fit the global cap is discarded; pricing then uses fresh capped fees.
+  The returned ceiling includes one ordinary bump when the global cap permits it, so fresh planning
+  accounts for the cost of replacing pending work.
   Startup (`ValidateFeeHeadroom`) rejects a congested tip cap that cannot fit under the initial fee limit.
 
 Ordinary initial sends reserve one 12.5% bump under the request and global ceilings for a replacement.
@@ -180,9 +183,11 @@ Reusing an abandoned nonce may consume that headroom when its required floor is 
 the full request and global ceilings.
 Replacements choose at least a 12.5% bump and fresh fees when available; unavailable fresh fees fall back
 to bumping the last signed fees. A fresh request reusing an abandoned nonce has new destination, calldata,
-value and gas; both fee fields must exceed the remembered floors by at least 12.5%. Its own profitability
-ceiling and the global ceiling remain authoritative. If the fresh call cannot fit, it fails before signing
-and retains the hint for later eligible work. The bot never sends zero-value self-transfers to clear nonces.
+value and gas; an applicable hint raises both fee fields by at least 12.5%. Its own profitability
+ceiling and the global ceiling remain authoritative. An expired hint, or one whose required bump cannot
+fit either ceiling, is discarded and the new call uses the already validated fresh market quote.
+A market fee that itself cannot fit still fails before signing; active owned replacements retain their
+ordinary bump and cap policy. The bot never sends zero-value self-transfers to clear nonces.
 
 All signed variants are retained by exact hash. An ambiguous send does not prove absence from the
 network. The next evaluated block rebroadcasts the uncertain attempt's exact bytes once, without adding a
@@ -290,18 +295,21 @@ remains documented in the [README configuration section](../README.md#configurat
 empty-pool requirement or account-confirmation proof. Pending state never advances this selection, so
 fresh requests do not queue higher nonces behind unmined work. All replicas can replace the lowest
 unconsumed nonce after a restart, without remembering or querying the pending call.
-If the manager retains a fee hint, it applies only when its nonce equals that mined count. Advancement
-or a lower nonce after a reorg discards an inapplicable hint; a failed nonce read defers signing and
-retains it. Failed preparation, signing or definitive submission also retains the applicable hint.
+If the manager retains a fee hint, it applies only when its nonce equals that mined count and its
+`pendingTimeoutMs` lifetime has not elapsed. Advancement or a lower nonce after a reorg discards an
+inapplicable hint; a failed nonce read defers signing and retains an unexpired hint. Failed preparation,
+signing or definitive submission retains an applicable hint without renewing its lifetime.
+Quote/admission snapshots carry the expiry as well as fees, so a stale read cannot clear a renewed
+same-fee hint. Eligibility is checked again after cooldown and preparation before fees are applied.
 The sending endpoint must serve current mined state; private pending visibility is not required.
 The local lifecycle slot serializes this process's work only. Two processes can read the same nonce.
 
 An initial nonce-too-low or replacement-underpriced response yields `OutcomeNonceConflict`, an error
 wrapping `ErrNonceConflict`, and the exact attempted hash with no receipt. The worker ends that request
-and releases the slot immediately. An initial underpriced candidate records its own attempted fee caps,
-even when no earlier local hint exists. The next fresh request at that nonce increases both fields by
-at least 12.5%; profitability quoting includes the floor, and request/global ceilings still apply.
-This progressively discovers a usable bid without retrieving foreign private transaction fees.
+and releases the slot immediately. Rejected initial candidates do not supply or ratchet a fee hint:
+they prove contention, not the accepted fee of the competing transaction. An existing accepted/uncertain
+hint retains its original lifetime. After the nonce cooldown, fresh requests use current market fees
+and any still-applicable owned hint, under request/global ceilings.
 The manager does not track the competing transaction and does not
 re-sign business calldata at another nonce. An `already known` response and transport ambiguity retain
 normal ownership and receipt tracking: they may describe an accepted transaction.
@@ -325,8 +333,8 @@ not claim inclusion, cancellation, failed execution or a winning peer; the accou
 receipt publication or a reorg. Neither uncertain nonce outcome authorizes automatic calldata replay.
 Each solver queries authoritative business state and rebuilds any retry under its existing bounds.
 
-The fee hint concerns only this process's abandoned lifecycle or underpriced initial attempt. There is no unknown-nonce watchdog,
-startup gap-clearing transaction or peer ownership lookup. It contains a nonce and fee floor, not old
+The fee hint concerns only this process's abandoned accepted/transport-uncertain lifecycle. There is no
+unknown-nonce watchdog, startup gap-clearing transaction or peer ownership lookup. It contains a nonce and fee floor, not old
 calldata or an instruction to retry an order. If different relays accepted competing transactions at the
 same nonce, a fresh replacement may still compete with another replica's candidate; the account count
 provides no exclusive ownership.
@@ -335,9 +343,10 @@ provides no exclusive ownership.
 
 Signed attempts and fee hints exist only in memory. Restart loses old hashes, calldata, fees and
 deadlines, but still selects the lowest unconsumed nonce from mined state. A fresh eligible business call
-can replace unknown pending work there; underpriced responses rebuild a fee floor over subsequent
-fresh requests. No later nonce is newly queued behind that unknown call. This policy deliberately
-trades pending-transaction pipelining for recovery without durable state or replica coordination.
+can replace unknown pending work there when fresh market fees satisfy the relay's replacement rule,
+the old call is dropped, or the mined nonce advances. Rejected bids do not rebuild an unknown fee floor.
+No later nonce is newly queued behind that unknown call. This policy deliberately trades
+pending-transaction pipelining for recovery without durable state or replica coordination.
 
 Replacement remains conditional on eligible fresh work, sender funds, current mined state and eventual
 inclusion. A foreign transaction's unknown fee floor may exceed the new request's profitability ceiling
@@ -437,12 +446,15 @@ local abandonment can still be absent from local success metrics until that foll
 
 Receipt tests cover independent RPC budgets, timer handling during blocked reads, new/old hashes,
 confirmation-time reorg recovery and teardown. Unit tests verify abandonment without a self-transfer,
-fresh business nonce reuse despite a pending count above it, mined-nonce advancement, retained hints on
-RPC/preparation/submission failures, replacement fee floors, request/global ceilings and bounded shutdown.
+fresh business nonce reuse despite a pending count above it, mined-nonce advancement, unexpired hints on
+RPC/preparation/submission failures, hint expiry during cooldown, renewed snapshot safety, recovery from
+unhonorable hints, rejected-fee non-escalation, replacement fee floors, request/global ceilings and
+bounded shutdown.
 Solver tests verify current business-state reconciliation, fresh retries and obsolete-result precedence.
 The local Anvil target verifies real fee replacement after a base-fee spike, abandonment followed by a
-different business call at the same nonce, restarted recovery without old hints through underpriced
-fresh requests, and three independent managers executing distinct orders as mined nonces advance.
+different business call at the same nonce, stable rejected fees after restart followed by same-nonce
+recovery when unknown pending work is dropped, and three independent managers executing distinct orders
+as mined nonces advance.
 These public-pool tests do not establish private-provider retention or consistency guarantees.
 
 Fee tests cover the base-fee bound, tip rule, repricing decisions, fee-window parsing, next-block estimate

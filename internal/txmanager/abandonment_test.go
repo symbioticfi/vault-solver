@@ -124,7 +124,7 @@ func TestReusableNonceRetainsHintAcrossPreparationFailures(t *testing.T) {
 				b.blockNonce = true
 			case "rejected", "nonce conflict":
 				// A definite validation rejection cannot enter the relay; an underpriced candidate
-				// may reveal competing private work and raises the next replacement fee floor.
+				// reveals contention but cannot establish accepted fees for the next floor.
 				b.sendCalls = 1
 				b.sendErrs = []error{nil, errors.New("insufficient funds")}
 				if failure == "nonce conflict" {
@@ -156,8 +156,8 @@ func TestReusableNonceRetainsHintAcrossPreparationFailures(t *testing.T) {
 			if fresh.attempts[0].tx.GasFeeCap().Cmp(bumpFee(first.fees.maxFee)) < 0 || fresh.attempts[0].tx.GasTipCap().Cmp(bumpFee(first.fees.tip)) < 0 {
 				t.Fatal("fresh candidate lost original fee floor")
 			}
-			if failure == "nonce conflict" && fresh.attempts[0].tx.GasFeeCap().Cmp(bumpFee(pending.fees.maxFee)) < 0 {
-				t.Fatal("underpriced candidate fee floor did not advance")
+			if failure == "nonce conflict" && fresh.attempts[0].tx.GasFeeCap().Cmp(pending.fees.maxFee) != 0 {
+				t.Fatal("rejected candidate ratcheted the accepted fee hint")
 			}
 		})
 	}
@@ -267,12 +267,11 @@ func TestMaxFeePerGasChecksWhetherRememberedNonceIsUnused(t *testing.T) {
 				want = context.DeadlineExceeded
 			case "global feeLimit":
 				m.cfg.MaxFeeGwei = 65
-				want = errReplacementLimitReached
 			}
 			feeLimit, err := m.MaxFeePerGas(t.Context())
-			if state == "consumed" {
+			if state == "consumed" || state == "global feeLimit" {
 				if err != nil || m.reusable != nil || feeLimit.Cmp(gweiToWei(60)) >= 0 {
-					t.Fatalf("consumed nonce retained stale fee floor: feeLimit=%v err=%v hint=%+v", feeLimit, err, m.reusable)
+					t.Fatalf("inapplicable hint blocked fresh market pricing: feeLimit=%v err=%v hint=%+v", feeLimit, err, m.reusable)
 				}
 				return
 			}

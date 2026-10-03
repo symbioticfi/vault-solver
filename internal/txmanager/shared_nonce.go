@@ -69,14 +69,16 @@ func (m *Manager) confirmConsumedNonce(ctx context.Context, pending *pendingTran
 	}, true
 }
 
-// reusableNonce remembers process-local fee hints for abandoned or initially underpriced work.
-// The nonce always comes from mined state; the floor applies only to that exact nonce.
+// reusableNonce remembers process-local fee hints for abandoned accepted/uncertain work.
+// The nonce always comes from mined state; the floor applies only to that exact nonce and expires
+// after one pending timeout. mu protects the hint across pricing reads and the lifecycle owner.
 type reusableNonce struct {
-	nonce uint64
-	fees  feeQuote
+	nonce     uint64
+	fees      feeQuote
+	expiresAt time.Time
 }
 
-func (m *Manager) selectNonce(ctx context.Context) (uint64, *feeQuote, error) {
+func (m *Manager) selectNonce(ctx context.Context) (uint64, *reusableNonce, error) {
 	remembered := m.reusableSnapshot()
 	nonce, err := m.waitNonceCooldown(ctx)
 	if err != nil {
@@ -90,7 +92,7 @@ func (m *Manager) selectNonce(ctx context.Context) (uint64, *feeQuote, error) {
 		m.forgetReusableIfUnchanged(remembered)
 		return nonce, nil, nil
 	}
-	return nonce, &remembered.fees, nil
+	return nonce, remembered, nil
 }
 
 // nonceCooldown gives a competing sender one configured block interval to mine before any new
@@ -171,7 +173,11 @@ func (m *Manager) reusableSnapshot() *reusableNonce {
 	if m.reusable == nil {
 		return nil
 	}
-	return &reusableNonce{nonce: m.reusable.nonce, fees: cloneFeeQuote(m.reusable.fees)}
+	if !time.Now().Before(m.reusable.expiresAt) {
+		m.reusable = nil
+		return nil
+	}
+	return &reusableNonce{nonce: m.reusable.nonce, fees: cloneFeeQuote(m.reusable.fees), expiresAt: m.reusable.expiresAt}
 }
 
 // unusedReusableNonce also serves profitability quotes. An unavailable nonce read cannot establish
@@ -195,11 +201,11 @@ func (m *Manager) unusedReusableNonce(ctx context.Context) (*reusableNonce, erro
 func (m *Manager) rememberReusable(nonce uint64, fees feeQuote) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.reusable != nil && m.reusable.nonce == nonce {
+	if m.reusable != nil && m.reusable.nonce == nonce && time.Now().Before(m.reusable.expiresAt) {
 		fees.tip = maxBigCopy(fees.tip, m.reusable.fees.tip)
 		fees.maxFee = maxBigCopy(fees.maxFee, m.reusable.fees.maxFee)
 	}
-	m.reusable = &reusableNonce{nonce: nonce, fees: cloneFeeQuote(fees)}
+	m.reusable = &reusableNonce{nonce: nonce, fees: cloneFeeQuote(fees), expiresAt: time.Now().Add(m.cfg.PendingTimeout)}
 }
 
 func (m *Manager) forgetReusable(nonce uint64) {
@@ -210,16 +216,36 @@ func (m *Manager) forgetReusable(nonce uint64) {
 	}
 }
 
-// Quote and admission reads may complete after a newer underpriced candidate updates the hint.
-// A stale observation may clear only the exact fee snapshot it checked, never newer fee progress.
+// Quote and admission reads may complete after another accepted/uncertain lifecycle renews the hint.
+// A stale observation may clear only the exact snapshot, including its expiry, even with equal fees.
 func (m *Manager) forgetReusableIfUnchanged(remembered *reusableNonce) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if m.reusable != nil && m.reusable.nonce == remembered.nonce &&
+	if m.reusable != nil && m.reusable.nonce == remembered.nonce && m.reusable.expiresAt.Equal(remembered.expiresAt) &&
 		m.reusable.fees.maxFee.Cmp(remembered.fees.maxFee) == 0 &&
 		m.reusable.fees.tip.Cmp(remembered.fees.tip) == 0 {
 		m.reusable = nil
 	}
+}
+
+// applyReusableFloor treats an abandoned fee hint as temporary evidence, never a new fee ceiling.
+// A relay can drop an obsolete call while its account nonce remains unchanged. Once a hint expires
+// or cannot fit the current ceilings, discard it and use the already validated fresh market quote.
+// Active owned replacements still enforce their ordinary bump instead of taking this fallback.
+func (m *Manager) applyReusableFloor(current feeQuote, remembered *reusableNonce, limit *big.Int) (feeQuote, bool) {
+	if remembered == nil {
+		return current, false
+	}
+	if !time.Now().Before(remembered.expiresAt) {
+		m.forgetReusableIfUnchanged(remembered)
+		return current, false
+	}
+	fees, err := replacementFloor(current, remembered.fees, limit)
+	if err != nil {
+		m.forgetReusableIfUnchanged(remembered)
+		return current, false
+	}
+	return fees, true
 }
 
 // replacementFloor applies old fees only; all transaction fields and the current market quote

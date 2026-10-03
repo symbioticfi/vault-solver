@@ -130,7 +130,7 @@ func TestRestartStartsAtFirstUnminedNonceDespiteOldPendingWork(t *testing.T) {
 	}
 }
 
-func TestInitialUnderpricedCandidatesAdvanceFreshReplacementFeeFloor(t *testing.T) {
+func TestInitialUnderpricedCandidatesKeepFreshMarketFees(t *testing.T) {
 	b := newMockBackend()
 	b.pendingNonce = 9
 	b.sendErrs = []error{errors.New("replacement transaction underpriced"), errors.New("replacement transaction underpriced")}
@@ -139,8 +139,8 @@ func TestInitialUnderpricedCandidatesAdvanceFreshReplacementFeeFloor(t *testing.
 	if err != nil || first == nil || first.broadcastErr == nil {
 		t.Fatalf("first collision=%+v err=%v", first, err)
 	}
-	if m.reusable == nil || m.reusable.nonce != 7 {
-		t.Fatalf("initial underpriced candidate lost floor: %+v", m.reusable)
+	if m.reusable != nil {
+		t.Fatalf("initial underpriced candidate created a fee hint: %+v", m.reusable)
 	}
 	pricedLimit, err := m.MaxFeePerGas(t.Context())
 	if err != nil {
@@ -150,15 +150,15 @@ func TestInitialUnderpricedCandidatesAdvanceFreshReplacementFeeFloor(t *testing.
 	if err != nil || second == nil || second.broadcastErr == nil || second.nonce != 7 {
 		t.Fatalf("second collision=%+v err=%v", second, err)
 	}
-	if second.fees.maxFee.Cmp(bumpFee(first.fees.maxFee)) < 0 || second.fees.tip.Cmp(bumpFee(first.fees.tip)) < 0 {
-		t.Fatal("second fresh request did not raise both fee fields")
+	if second.fees.maxFee.Cmp(first.fees.maxFee) != 0 || second.fees.tip.Cmp(first.fees.tip) != 0 {
+		t.Fatal("rejected first send raised fresh request fees")
 	}
 	third, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0xccc"), Data: []byte{3}, GasLimit: 60_000})
 	if err != nil || third == nil || third.nonce != 7 || third.broadcastErr != nil {
 		t.Fatalf("third fresh request=%+v err=%v", third, err)
 	}
-	if third.fees.maxFee.Cmp(bumpFee(second.fees.maxFee)) < 0 || third.fees.tip.Cmp(bumpFee(second.fees.tip)) < 0 {
-		t.Fatal("repeated collision failed to advance replacement floor")
+	if third.fees.maxFee.Cmp(second.fees.maxFee) != 0 || third.fees.tip.Cmp(second.fees.tip) != 0 {
+		t.Fatal("repeated rejected send raised fresh request fees")
 	}
 	if third.req.To == first.req.To || string(third.req.Data) == string(first.req.Data) {
 		t.Fatal("fresh collision retry replayed old business calldata")
@@ -202,7 +202,7 @@ func TestAdmissionDoesNotDependOnPendingNonceRPC(t *testing.T) {
 	}
 }
 
-func TestInitialUnderpricedFeeEscalationStopsAtConfiguredCap(t *testing.T) {
+func TestInitialUnderpricedResponsesDoNotClimbTowardConfiguredCap(t *testing.T) {
 	for _, ceiling := range []string{"request", "global"} {
 		t.Run(ceiling, func(t *testing.T) {
 			b := newMockBackend()
@@ -216,13 +216,8 @@ func TestInitialUnderpricedFeeEscalationStopsAtConfiguredCap(t *testing.T) {
 				request.MaxFeePerGas = gweiToWei(48)
 				limit = request.MaxFeePerGas
 			}
-			reachedCap := false
 			for range 20 {
 				pending, err := m.broadcast(t.Context(), request)
-				if errors.Is(err, errReplacementLimitReached) {
-					reachedCap = true
-					break
-				}
 				if err != nil || pending == nil || pending.broadcastErr == nil || pending.nonce != 7 {
 					t.Fatalf("collision candidate=%+v err=%v", pending, err)
 				}
@@ -231,8 +226,8 @@ func TestInitialUnderpricedFeeEscalationStopsAtConfiguredCap(t *testing.T) {
 				}
 				request.Data = append(request.Data, byte(len(request.Data)+1)) // each attempt is a freshly prepared business call.
 			}
-			if !reachedCap || m.reusable == nil || len(b.attemptedTransactions()) >= 20 {
-				t.Fatalf("fee escalation was unbounded: capped=%v hint=%+v sends=%d", reachedCap, m.reusable, len(b.attemptedTransactions()))
+			if m.reusable != nil || len(b.attemptedTransactions()) != 20 {
+				t.Fatalf("rejected fees locked out fresh sending: hint=%+v sends=%d", m.reusable, len(b.attemptedTransactions()))
 			}
 		})
 	}
@@ -261,11 +256,11 @@ func (b *oldNonceReadBackend) NonceAt(ctx context.Context, account common.Addres
 	return b.mockBackend.NonceAt(ctx, account, blockNumber)
 }
 
-func TestOlderNonceReadCannotClearNewerUnderpricedFeeHint(t *testing.T) {
+func TestOlderNonceReadCannotClearNewerUncertainFeeHint(t *testing.T) {
 	for _, operation := range []string{"profitability quote", "nonce selection"} {
 		t.Run(operation, func(t *testing.T) {
 			b := &oldNonceReadBackend{mockBackend: newMockBackend(), entered: make(chan struct{}), release: make(chan struct{})}
-			b.sendErrs = []error{errors.New("replacement transaction underpriced")}
+			b.sendErrs = []error{io.ErrUnexpectedEOF}
 			m := New(b, mustSigner(t), big.NewInt(1), Config{MaxFeeGwei: 150}, logr.Discard())
 			oldFees := feeQuote{baseFee: gweiToWei(20), tip: gweiToWei(1), maxFee: gweiToWei(40)}
 			m.rememberReusable(7, oldFees)
@@ -281,8 +276,8 @@ func TestOlderNonceReadCannotClearNewerUnderpricedFeeHint(t *testing.T) {
 			}()
 			<-b.entered // old snapshot is now parked in a nonce read from an earlier chain view.
 			pending, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0xbeef"), Data: []byte{2}, GasLimit: 50_000})
-			if err != nil || pending == nil || pending.broadcastErr == nil {
-				t.Fatalf("new underpriced candidate=%+v err=%v", pending, err)
+			if err != nil || pending == nil {
+				t.Fatalf("new uncertain candidate=%+v err=%v", pending, err)
 			}
 			close(b.release)
 			if err := <-result; err != nil {
@@ -290,7 +285,7 @@ func TestOlderNonceReadCannotClearNewerUnderpricedFeeHint(t *testing.T) {
 			}
 			hint := m.reusableSnapshot()
 			if hint == nil || hint.nonce != 7 || hint.fees.maxFee.Cmp(pending.fees.maxFee) != 0 || hint.fees.tip.Cmp(pending.fees.tip) != 0 {
-				t.Fatalf("stale read erased newer underpriced fee floor: hint=%+v candidate=%+v", hint, pending.fees)
+				t.Fatalf("stale read erased newer uncertain fee floor: hint=%+v candidate=%+v", hint, pending.fees)
 			}
 		})
 	}
@@ -316,8 +311,8 @@ func TestRepeatedInitialConflictsExecuteFreshWorkThenAdvanceMinedNonce(t *testin
 		if tx.Nonce() != 7 || len(tx.Data()) != 1 || tx.Data()[0] != byte(i+1) || tx.GasFeeCap().Cmp(pricedLimit) > 0 {
 			t.Fatalf("fresh request %d sent stale/beyond-cap work: %v", i, tx)
 		}
-		if previousFee != nil && (tx.GasFeeCap().Cmp(bumpFee(previousFee)) < 0 || tx.GasTipCap().Cmp(bumpFee(previousTip)) < 0) {
-			t.Fatalf("request %d did not advance both replacement fees", i)
+		if previousFee != nil && (tx.GasFeeCap().Cmp(previousFee) != 0 || tx.GasTipCap().Cmp(previousTip) != 0) {
+			t.Fatalf("request %d ratcheted rejected replacement fees", i)
 		}
 		previousFee, previousTip = tx.GasFeeCap(), tx.GasTipCap()
 		if i < 6 {

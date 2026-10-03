@@ -17,20 +17,15 @@ func TestInitialFeeCeilingsAreTypedAndCountedOnlyAtSubmission(t *testing.T) {
 		name    string
 		global  float64
 		request *big.Int
-		floor   bool
 	}{
 		{name: "market above global cap", global: 10},
 		{name: "market above request cap", global: 100, request: gweiToWei(10)},
-		{name: "remembered replacement floor above cap", global: 100, request: gweiToWei(45), floor: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := newMockBackend()
 			metrics := newTestMetrics(t)
 			logs, log := newLogCapture(1)
 			m := NewWithMetrics(b, mustSigner(t), big.NewInt(1), Config{MaxFeeGwei: tc.global}, metrics, log)
-			if tc.floor {
-				m.rememberReusable(b.latestNonce, feeQuote{baseFee: gweiToWei(20), tip: gweiToWei(1), maxFee: gweiToWei(50)})
-			}
 			_, _ = m.MaxFeePerGas(t.Context()) // Profitability reads are not rejected submissions.
 			assertMetric(t, metrics.feeLimits.WithLabelValues("rfq-fill", feeLimitPhaseInitial), 0)
 			pending, err := m.broadcast(managerCtx(t.Context(), m), Request{

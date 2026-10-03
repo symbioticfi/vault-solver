@@ -174,31 +174,30 @@ func TestAnvilThreeSameKeyReplicasExecuteDistinctOrdersAtMinedNonce(t *testing.T
 	if winnerIndex < 0 || len(losers) != 2 {
 		t.Fatalf("unexpected initial race: winner %d losers %v", winnerIndex, losers)
 	}
-	// A losing replica rebuilds its business decision before any transaction is mined. It replaces
-	// the same lowest unused nonce rather than queuing behind the pending transaction.
+	// A fresh losing decision before mining keeps the lowest nonce and fresh market fees. A
+	// rejected bid cannot establish the winning fee floor, so it yields without evicting the winner.
 	replacer := losers[0]
 	var admitted bool
 	results[replacer], admitted = managers[replacer].SendAsync(t.Context(), requests[replacer])
 	if !admitted {
 		t.Fatal("fresh raced order was not admitted")
 	}
-	fresh := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(tx poolTransaction) bool {
-		return common.HexToAddress(tx.To) == requests[replacer].To
-	})
-	assertAnvilReplacementFeeFloors(t, winner, fresh)
+	raced := waitForTxResult(t, results[replacer])
+	if raced.Outcome != OutcomeNonceConflict || !errors.Is(raced.Err, ErrNonceConflict) || raced.Receipt != nil {
+		t.Fatalf("fresh losing decision did not yield contention: %+v", raced)
+	}
+	stillPending := waitForPoolTransaction(t, rpcClient, sgnr.Address(), 0, func(poolTransaction) bool { return true })
+	if stillPending.Hash != winner.Hash {
+		t.Fatal("rejected fresh fees evicted the initial winner")
+	}
 	assertAnvilPoolNonceAbsent(t, rpcClient, sgnr.Address(), 1)
 	mineAnvilBlock(t, rpcClient)
 	mineAnvilBlock(t, rpcClient)
-	assertAnvilReconciliationOutcome(t, waitForTxResult(t, results[replacer]), common.HexToHash(fresh.Hash))
-	assertAnvilCanonicalTransaction(t, ethClient, common.HexToHash(fresh.Hash), 0)
-	original := waitForTxResult(t, results[winnerIndex])
-	if original.Outcome != OutcomeNonceConsumed {
-		t.Fatalf("replaced replica fabricated its order's inclusion: %+v", original)
-	}
-	assertAnvilReconciliationOutcome(t, original, common.HexToHash(winner.Hash))
+	assertAnvilReconciliationOutcome(t, waitForTxResult(t, results[winnerIndex]), common.HexToHash(winner.Hash))
+	assertAnvilCanonicalTransaction(t, ethClient, common.HexToHash(winner.Hash), 0)
 	// Fresh business-state checks omit the completed order and rebuild each remaining order. The
 	// canonical nonce advances only after mining, so all three distinct orders execute in order.
-	for offset, i := range []int{winnerIndex, losers[1]} {
+	for offset, i := range losers {
 		nonce := uint64(offset + 1)
 		waitForAdmissionDemand(t, managers[i], 0)
 		result, accepted := managers[i].SendAsync(t.Context(), requests[i])
@@ -278,7 +277,7 @@ func TestAnvilForeignPendingTransactionPreservesIndependentBusinessWork(t *testi
 	assertAnvilCanonicalTransaction(t, ethClient, common.HexToHash(fresh.Hash), 1)
 }
 
-func TestAnvilRestartReplacesUnknownPendingNonceWithFreshBusinessCalls(t *testing.T) {
+func TestAnvilRestartRetriesWithoutFeeRatchetAfterUnknownPendingCallDrops(t *testing.T) {
 	rpcClient, ethClient, endpoint := startAnvilWithoutMining(t)
 	sgnr := anvilSigner(t)
 	oldConfig := anvilReconciliationConfig()
@@ -333,7 +332,7 @@ func TestAnvilRestartReplacesUnknownPendingNonceWithFreshBusinessCalls(t *testin
 	var replacement poolTransaction
 	var previous *types.Transaction
 	conflicts := 0
-	for attempt := range 12 {
+	for attempt := range 4 {
 		ceiling, err := m.MaxFeePerGas(t.Context())
 		if err != nil {
 			t.Fatal(err)
@@ -351,7 +350,9 @@ func TestAnvilRestartReplacesUnknownPendingNonceWithFreshBusinessCalls(t *testin
 			t.Fatalf("fresh call bypassed lowest unused nonce, payload, or fee cap: nonce=%d target=%v fee=%s ceiling=%s", tx.Nonce(), tx.To(), tx.GasFeeCap(), ceiling)
 		}
 		if previous != nil {
-			assertAnvilReplacementFeeFloors(t, anvilPoolFees(previous), anvilPoolFees(tx))
+			if tx.GasFeeCap().Cmp(previous.GasFeeCap()) != 0 || tx.GasTipCap().Cmp(previous.GasTipCap()) != 0 {
+				t.Fatal("rejected fresh attempt ratcheted fees after restart")
+			}
 		}
 		previous = tx
 		// Accepted calls appear in the real pool; rejected calls return a nonce conflict immediately.
@@ -362,6 +363,13 @@ func TestAnvilRestartReplacesUnknownPendingNonceWithFreshBusinessCalls(t *testin
 			}
 			conflicts++
 			waitForAdmissionDemand(t, m, 0)
+			if conflicts == 3 {
+				// A private relay can discard an obsolete call without consuming the nonce.
+				if err := rpcClient.CallContext(t.Context(), nil, "anvil_dropTransaction", initial.Hash); err != nil {
+					t.Fatalf("drop unknown pending call: %v", err)
+				}
+				assertAnvilPoolNonceAbsent(t, rpcClient, sgnr.Address(), 0)
+			}
 			continue
 		}
 		replacement = pooled
@@ -370,19 +378,8 @@ func TestAnvilRestartReplacesUnknownPendingNonceWithFreshBusinessCalls(t *testin
 		}
 		break
 	}
-	if replacement.Hash == "" || conflicts < 1 {
-		t.Fatalf("restart did not converge through underpriced fresh retries: replacement %+v conflicts %d", replacement, conflicts)
-	}
-	t.Logf("unknown pending fee floor required %d freshly priced nonce conflicts before replacement", conflicts)
-	// The old transaction's fees were unavailable to this manager. Anvil's acceptance policy can
-	// differ from production pools; the manager's 12.5 percent rule applies to its own known proposals.
-	initialFee, err := hexutil.DecodeBig(initial.MaxFeePerGas)
-	if err != nil {
-		t.Fatal(err)
-	}
-	replacementFee, err := hexutil.DecodeBig(replacement.MaxFeePerGas)
-	if err != nil || replacementFee.Cmp(initialFee) <= 0 {
-		t.Fatalf("replacement fee %v did not exceed unknown pending fee %s: %v", replacementFee, initialFee, err)
+	if replacement.Hash == "" || conflicts != 3 {
+		t.Fatalf("restart did not recover when unknown work dropped: replacement %+v conflicts %d", replacement, conflicts)
 	}
 	assertAnvilPoolNonceAbsent(t, rpcClient, sgnr.Address(), 1)
 	mineAnvilBlock(t, rpcClient)
@@ -400,12 +397,6 @@ func TestAnvilRestartReplacesUnknownPendingNonceWithFreshBusinessCalls(t *testin
 	mineAnvilBlock(t, rpcClient)
 	assertAnvilReconciliationOutcome(t, waitForTxResult(t, next), common.HexToHash(nextTx.Hash))
 	assertAnvilCanonicalTransaction(t, ethClient, common.HexToHash(nextTx.Hash), 1)
-}
-
-func anvilPoolFees(tx *types.Transaction) poolTransaction {
-	return poolTransaction{
-		MaxFeePerGas: hexutil.EncodeBig(tx.GasFeeCap()), MaxPriorityFeePerGas: hexutil.EncodeBig(tx.GasTipCap()),
-	}
 }
 
 func waitForAnvilSubmission(

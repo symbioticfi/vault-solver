@@ -79,7 +79,7 @@ type Config struct {
 	BroadcastTimeout    time.Duration // maximum duration of one transaction submission RPC; 0 => 5s
 	AccountPollInterval time.Duration // signer balance/nonce metric refresh cadence; 0 => 30s
 	ReplacementInterval time.Duration // fallback fee-bump cadence while fee windows are unreadable; 0 => 30s
-	PendingTimeout      time.Duration // abandon unresolved calls and reuse their nonce for fresh requests; 0 => 5m
+	PendingTimeout      time.Duration // unresolved-call tracking and abandoned fee-hint lifetime; 0 => 5m
 	ShutdownTimeout     time.Duration // maximum graceful drain after manager cancellation; 0 => 1m
 	Horizon             HorizonConfig // fee horizon, tip and gas-estimate tuning; zero values select defaults
 }
@@ -731,12 +731,7 @@ func (m *Manager) MaxFeePerGas(ctx context.Context) (*big.Int, error) {
 	if err != nil {
 		return nil, err
 	}
-	if remembered != nil {
-		fees, err = replacementFloor(fees, remembered.fees, limit)
-		if err != nil {
-			return nil, err
-		}
-	}
+	fees, _ = m.applyReusableFloor(fees, remembered, limit)
 	maxFee := bumpFee(fees.maxFee)
 	if limit != nil && maxFee.Cmp(limit) > 0 {
 		maxFee.Set(limit)
@@ -824,19 +819,14 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 		"requestMaxFeePerGas", optionalBigString(req.MaxFeePerGas),
 	)
 
-	if floor != nil {
-		fees, err = replacementFloor(fees, *floor, m.normalFeeLimit(req))
-		if err != nil {
-			return nil, errors.Errorf("send %q: %w", req.Label, err)
-		}
-	}
+	fees, usedHint := m.applyReusableFloor(fees, floor, m.normalFeeLimit(req))
 	signed, sendErr := m.signAndSend(
 		broadcastCtx, nonce, req.To, req.Data, value, gas, fees, false,
 	)
 	if signed == nil {
 		return nil, errors.Errorf("send %q: %w", req.Label, sendErr)
 	}
-	if floor != nil || isPendingNonceCollision(sendErr) {
+	if usedHint && !isPendingNonceCollision(sendErr) && !isNonceConsumedError(sendErr) {
 		m.rememberReusable(nonce, fees)
 	}
 	if isPendingNonceCollision(sendErr) {

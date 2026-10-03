@@ -402,7 +402,7 @@ type Strategy interface {
 - **`QuoteInput`** = shared `[]liquidlane.Inventory`, vault-level in-flight capacity reservations, chain
   time, server wall time, and solver-owned quote expiry. When `gas:` is configured it also carries the latest
   LiquidLane gas snapshot and current `txmanager.MaxFeePerGas` profitability ceiling, including any
-  current-nonce fee floor retained after abandonment or an initial underpriced response, plus one
+  unexpired, affordable current-nonce fee floor retained after accepted/uncertain abandonment, plus one
   ordinary replacement when the cap permits.
   The shared LiquidLane predictor derives every adapter swap route as
   acquire/allocate/deallocate/unknown. The solver reads Chainlink native/USD and token/USD feeds at the

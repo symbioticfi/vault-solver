@@ -19,15 +19,18 @@ status check, then kept through signing. A canonical owned receipt at the reques
 sets a process-local floor to its nonce plus one, including reverts. Selection uses the maximum of this
 floor and the current mined nonce; unconfirmed/orphaned receipts and sibling outcomes do not advance it.
 There is no unchecked cached increment or extra account-confirmation gate before signing.
-A process-local fee hint applies only when its nonce equals the current mined nonce. Mined advancement
-or a lower nonce after a reorg discards an inapplicable hint; unavailable state fails the next request
-before signing and retains it.
+A process-local fee hint applies only when its nonce equals the current mined nonce and its
+`pendingTimeoutMs` lifetime has not elapsed. Mined advancement or a lower nonce after a reorg discards
+an inapplicable hint; unavailable state fails the next request before signing and retains an unexpired
+hint. A fresh request or quote discards a hint whose required bump cannot fit its fee ceilings, then
+uses its already validated fresh market fees. This does not alter active owned replacement caps.
 
 The RPC read and broadcast are separate operations. Two replicas can choose the same nonce. An initial
 nonce-too-low or replacement-underpriced response returns `nonce_conflict` with `ErrNonceConflict`, the
-attempted hash, and no receipt. An underpriced candidate records its own attempted fees. The next fresh
-request at that nonce raises both fee fields by at least 12.5%, and its profitability quote includes the
-required floor. Failed preparation retains the hint; ceilings are never raised to repair the nonce.
+attempted hash, and no receipt. Rejected initial fees do not create, ratchet or renew an owned hint.
+Fresh requests re-read market fees after the nonce cooldown; an applicable accepted/uncertain hint
+raises both fields by at least 12.5%. Failed preparation retains an unexpired applicable hint; ceilings
+are never raised to repair the nonce.
 The worker releases its local slot immediately. The next request reads
 mined state again. It neither cancels the competing transaction nor silently retries business calldata at a
 new nonce. `already known` and transport uncertainty continue normal tracking, because acceptance remains
@@ -54,8 +57,9 @@ are not atomic, so even an actual winner can receive this unknown-execution outc
 `abandoned` is also an unknown execution result: the request deadline, pending timeout or `Obsolete`
 ends tracking, releases the local lane and records a nonce/fee hint for the next fresh business call.
 No cancellation transaction is sent. Replacement requires at least a 12.5% increase in both fee fields
-under the fresh request and global ceilings; failed preparation/submission retains the hint. Without a
-fresh eligible request, the old call can remain pending and still land if valid.
+under the fresh request and global ceilings while the hint is unexpired and can fit. Otherwise the
+hint is discarded and current capped market fees are used. Failed preparation/submission retains an
+applicable hint without extending its lifetime. Without a fresh eligible request, the old call can remain pending and still land if valid.
 
 None of these outcomes proves a successful fill, a failure or which peer won. The generic
 layer does not know business orders. It never fabricates receipts, gas/paid-fee accounting or a winning
@@ -70,13 +74,15 @@ hidden work or queued transactions beyond a gap. Read endpoints still provide or
 canonical header checks; no EIP-1898 account-state extension is required.
 
 There is no unknown-nonce watchdog, startup gap-clearing transaction or EOA cancellation. Only an
-abandoned local lifecycle or an underpriced initial attempt supplies the fee hint; processes do not recover peers' business calldata.
+abandoned accepted/transport-uncertain local lifecycle supplies the temporary fee hint; processes do not
+recover peers' business calldata.
 If distinct relays accepted competing candidates at the same nonce, fresh replacements can still
 compete: nonce counts do not establish exclusive ownership.
 
 Signed attempts and fee hints are in memory. Restart forgets their hashes and fees, but fresh business
-work still targets the lowest unconsumed nonce. Underpriced responses rebuild a fee floor over fresh
-requests without knowing the old transaction or its sender. Different replicas may replace still-valid
+work still targets the lowest unconsumed nonce using fresh market fees. Rejected bids do not discover
+the unknown fee floor. A fresh call can execute when market fees meet the relay's replacement policy,
+the old call is dropped, or the account nonce advances. Different replicas may replace still-valid
 business calls and increase each other's fees. Recovery requires eligible work, sender funds, current
 mined state and eventual inclusion. A foreign fee floor may exceed a fresh order's profitability budget
 or the global ceiling, and an individual order's retry/deadline policy may stop before that floor is reached.
@@ -115,12 +121,13 @@ and peer fills do not page or become failed-fill metrics.
 
 Unit tests cover fresh mined reads with foreign pending work, immediate local release after nonce collisions,
 bounded/recoverable RPC failures, receipt priority, mined-nonce replacement suppression and solver retry
-accounting, underpriced fee-floor progression and request/global ceilings. An Anvil race test synchronizes
-three independent same-key managers at nonce 0, mines a winner, and rebuilds the remaining eligible orders
+accounting, rejected-fee non-escalation, hint expiry/cap recovery, renewed snapshot safety and
+request/global ceilings. An Anvil race test synchronizes three independent same-key managers at nonce 0, mines a winner, and rebuilds the remaining eligible orders
 at nonces 1 and 2 after mined state advances. It verifies all three distinct transactions execute canonically.
 Another scenario abandons a pending business call, verifies no
 self-transfer was sent, and mines a fresh different business call replacing its unused nonce. A manager
-recreated with no hints replaces unknown higher-fee pending work at nonce 0 through fresh priced requests.
+recreated with no hints preserves fresh market fees across underpriced responses and executes at
+nonce 0 once unknown pending work is dropped.
 These public-pool tests do not
 establish retention or consistency guarantees for a private submission provider.
 
