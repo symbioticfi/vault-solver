@@ -990,7 +990,11 @@ func TestCompletePendingFillRetiresObsoleteOrder(t *testing.T) {
 			if len(fixture.solver.failureTimes) != 0 || fixture.solver.localBlockUntil.Load() != 0 {
 				t.Fatal("obsolete order counted toward the failure breaker")
 			}
-			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeObsolete, 1)
+			wantObsolete := float64(0)
+			if name == "dropped before signing" {
+				wantObsolete = 1
+			}
+			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeObsolete, wantObsolete)
 			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 0)
 		})
 	}

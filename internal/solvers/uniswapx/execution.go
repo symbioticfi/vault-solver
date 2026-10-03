@@ -537,15 +537,20 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 		)
 		return
 	}
+	ownedAttempt := s.recordOwnedFillAttempt(order.Hash, result)
 	outcome := result.Outcome
 	if !outcome.Included() && errors.Is(result.Err, txmanager.ErrRequestObsolete) {
 		// A terminal protocol status retires the order without a retry and stays out of the
 		// failure breaker, since this does not establish a failed execution of our fill.
 		observability.Decline(ctx, "fill_obsolete", errorReason(result.Err))
-		s.observeFillOutcome(liquidlane.FillOutcomeObsolete)
+		// An earlier owned fill may be what made this unsigned retry obsolete. Preserve its
+		// late telemetry and let receipts determine execution instead of also counting a skip.
+		if !ownedAttempt {
+			s.observeFillOutcome(liquidlane.FillOutcomeObsolete)
+		}
 		s.complete(order.Hash, now)
 		observability.Log(ctx).Info(
-			"order fill obsolete: order settled elsewhere",
+			"order fill obsolete: order no longer fillable",
 			"source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
 			"tx", result.Hash.Hex(), "outcome", outcome,
 		)
@@ -589,6 +594,24 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 	}
 	s.recordFillSuccess()
 	s.complete(order.Hash, now)
+}
+
+// recordOwnedFillAttempt retains signed ownership across retries without changing failure budgets.
+// All order-state access is under stateMu; normal and late receipt callbacks only update metrics.
+func (s *Solver) recordOwnedFillAttempt(orderHash common.Hash, result txmanager.Result) bool {
+	owned := result.Hash != (common.Hash{})
+	for _, hash := range result.Attempts {
+		owned = owned || hash != (common.Hash{})
+	}
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if owned {
+		if s.ownedFillAttempts == nil {
+			s.ownedFillAttempts = make(map[common.Hash]bool)
+		}
+		s.ownedFillAttempts[orderHash] = true
+	}
+	return s.ownedFillAttempts[orderHash]
 }
 
 // errorReason renders an error for a span event attribute, naming its absence rather than "".

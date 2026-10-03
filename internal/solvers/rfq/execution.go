@@ -502,7 +502,10 @@ func backendOrderTerminal(status string) (terminal, known bool) {
 func (e *executionService) retireObsoleteOrder(
 	ctx context.Context, orderID string, res txmanager.Result, sendErr error,
 ) {
-	if e.metrics != nil {
+	// An owned attempt may still produce a normal or late success receipt, including an
+	// earlier request whose unsigned retry is obsolete. Only unsigned orders count as skips.
+	local := e.store.order(orderID)
+	if e.metrics != nil && local != nil && len(local.AttemptHashes) == 0 {
 		e.metrics.fillAmounts.ObserveOutcome(liquidlane.FillOutcomeObsolete)
 	}
 	observability.Decline(ctx, "fill_obsolete", sendErr.Error())

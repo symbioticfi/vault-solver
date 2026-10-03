@@ -69,7 +69,8 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   process collectors, so `/metrics` carries CPU,
   memory, goroutines, GC, and FDs. Successful receipts record `fill/success` and token-native amounts;
   transaction failures and pre-admission rejections record `fill/failure` and `fill/not_admitted` without
-  amounts, and a fill retired because the backend reported the order no longer open records `fill/obsolete`. RFQ win/fill workflow events, backlog gauges, and the txmanager lifecycle make
+  amounts. A fill retired because the backend reported the order no longer open records
+  `fill/obsolete` only when its retained order history contains no locally signed attempt. RFQ win/fill workflow events, backlog gauges, and the txmanager lifecycle make
   awarded-but-unfinished orders and the quote→fill funnel visible without inventing realized PnL. The
   canonical names, labels, and meanings are in the
   [README metrics table](../README.md#metrics).
@@ -171,6 +172,10 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   configured confirmation depth. A successful late receipt records `fill/success`, freshness and amounts,
   including when backend reconciliation already retired the order. It does not change store status,
   reservations, retries or order ownership. Backend `filled` alone never records these local fill metrics.
+  Obsolete retirement uses the existing retained signed-attempt history across retries: it counts
+  `fill/obsolete` only without owned attempts. A pending abandonment or an unsigned retry made obsolete
+  by our earlier fill therefore cannot also be counted as a skip alongside a normal or late success.
+  If no owned receipt is observed within the manager's bounds, no local execution outcome is inferred.
 - **Completed orders have no later-reorg recovery.** A `filled` record stays terminal in the local store.
   Open-order polling does not recheck its old inclusion or reopen it after a later reorg. The backend's
   terminal order status remains authoritative; txmanager's existing reorg checks run during confirmation.

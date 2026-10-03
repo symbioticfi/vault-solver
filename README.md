@@ -119,7 +119,9 @@ field replaces `maxRate`, so run this version with a backend that sends it. Fill
 sent one at a time on the shared nonce lane. While a fill is pending, the solver checks the order's backend
 status: once the backend reports it no longer open (filled, cancelled, expired, unfunded or failed), the fill
 stops being tracked without sending another transaction, and the order is retired without a retry and
-counted as `fill/obsolete`. When the backend confirms a fill with a transaction hash outside this
+counted as `fill/obsolete` only if this process has no signed attempts for the order. Otherwise,
+owned receipt observation decides whether to count success, including a late fill that made a retry
+obsolete. When the backend confirms a fill with a transaction hash outside this
 process's initial, replacement and retry attempts, RFQ records `fill/peer` once and logs at Info.
 This means a fill completed outside local tracking; it does not attribute the transaction's sender.
 Peer outcomes add no local successful-fill amounts. Missing or invalid backend hashes still retire
@@ -248,8 +250,9 @@ remains the Reactor-facing filler. Before serving traffic, the solver validates 
 tx-sending EOA in the executor's indexed `callers` list, and, in external mode, checks every configured
 route's direct authorization. While a fill is pending, the solver checks the order's status in the Uniswap
 order API: once the order is filled, cancelled, expired or unfunded, tracking is abandoned and the order
-is retired as `fill/obsolete`, without a retry or a
-breaker failure. Failures log the relevant executor, caller, or adapters and the underlying
+is retired without a retry or a breaker failure. `fill/obsolete` counts only orders with no local
+signed attempts; orders with owned attempts leave success accounting to receipt observation.
+Failures log the relevant executor, caller, or adapters and the underlying
 reason before startup returns. The executor ABI has no Reactor getter, so matching the configured Reactor to
 the deployed immutable remains a deployment assertion. `solverMode: external` is the default, requires a
 non-empty `adapters` list plus direct authorization, and forbids the discounts block. `solverMode: internal`
