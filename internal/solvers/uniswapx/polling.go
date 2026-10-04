@@ -258,6 +258,7 @@ func (s *Solver) claim(hash common.Hash, now time.Time) bool {
 		if now.Sub(retryAt) > time.Hour {
 			delete(s.retryAt, key)
 			delete(s.attempts, key)
+			delete(s.ownedFillAttempts, key)
 		}
 	}
 	if _, exists := s.filled[hash]; exists {
@@ -305,6 +306,7 @@ func (s *Solver) complete(hash common.Hash, now time.Time) {
 	delete(s.retryAt, hash)
 	delete(s.inFlight, hash)
 	delete(s.attempts, hash)
+	delete(s.ownedFillAttempts, hash)
 	s.filled[hash] = now
 	s.stateMu.Unlock()
 }

@@ -141,14 +141,16 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		return err
 	}
 	txm := txmanager.NewWithMetrics(chainClient, sgnr, chainClient.ChainID(), txmanager.Config{
-		Confirmations:       cfg.TxManager.Confirmations,
-		MaxFeeGwei:          cfg.TxManager.MaxFeeGwei,
-		BroadcastTimeout:    time.Duration(cfg.TxManager.BroadcastTimeoutMs) * time.Millisecond,
-		AccountPollInterval: time.Duration(cfg.TxManager.AccountPollIntervalMs) * time.Millisecond,
-		ReplacementInterval: time.Duration(cfg.TxManager.ReplacementIntervalMs) * time.Millisecond,
-		PendingTimeout:      time.Duration(cfg.TxManager.PendingTimeoutMs) * time.Millisecond,
-		ShutdownTimeout:     time.Duration(cfg.TxManager.ShutdownTimeoutMs) * time.Millisecond,
-		Horizon:             horizonConfig(cfg.TxManager.Horizon),
+		Confirmations:        cfg.TxManager.Confirmations,
+		MaxFeeGwei:           cfg.TxManager.MaxFeeGwei,
+		BroadcastTimeout:     time.Duration(cfg.TxManager.BroadcastTimeoutMs) * time.Millisecond,
+		AccountPollInterval:  time.Duration(cfg.TxManager.AccountPollIntervalMs) * time.Millisecond,
+		ReplacementInterval:  time.Duration(cfg.TxManager.ReplacementIntervalMs) * time.Millisecond,
+		PendingTimeout:       time.Duration(cfg.TxManager.PendingTimeoutMs) * time.Millisecond,
+		LateReceiptTimeout:   time.Duration(cfg.TxManager.LateReceiptTimeoutMs) * time.Millisecond,
+		LateReceiptMaxHashes: cfg.TxManager.LateReceiptMaxHashes,
+		ShutdownTimeout:      time.Duration(cfg.TxManager.ShutdownTimeoutMs) * time.Millisecond,
+		Horizon:              horizonConfig(cfg.TxManager.Horizon),
 	}, txMetrics, log)
 	runCtx, reportFatal := context.WithCancelCause(ctx)
 	defer reportFatal(nil)

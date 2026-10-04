@@ -119,7 +119,9 @@ field replaces `maxRate`, so run this version with a backend that sends it. Fill
 sent one at a time on the shared nonce lane. While a fill is pending, the solver checks the order's backend
 status: once the backend reports it no longer open (filled, cancelled, expired, unfunded or failed), the fill
 stops being tracked without sending another transaction, and the order is retired without a retry and
-counted as `fill/obsolete`. When the backend confirms a fill with a transaction hash outside this
+counted as `fill/obsolete` only if this process has no signed attempts for the order. Otherwise,
+owned receipt observation decides whether to count success, including a late fill that made a retry
+obsolete. When the backend confirms a fill with a transaction hash outside this
 process's initial, replacement and retry attempts, RFQ records `fill/peer` once and logs at Info.
 This means a fill completed outside local tracking; it does not attribute the transaction's sender.
 Peer outcomes add no local successful-fill amounts. Missing or invalid backend hashes still retire
@@ -248,8 +250,9 @@ remains the Reactor-facing filler. Before serving traffic, the solver validates 
 tx-sending EOA in the executor's indexed `callers` list, and, in external mode, checks every configured
 route's direct authorization. While a fill is pending, the solver checks the order's status in the Uniswap
 order API: once the order is filled, cancelled, expired or unfunded, tracking is abandoned and the order
-is retired as `fill/obsolete`, without a retry or a
-breaker failure. Failures log the relevant executor, caller, or adapters and the underlying
+is retired without a retry or a breaker failure. `fill/obsolete` counts only orders with no local
+signed attempts; orders with owned attempts leave success accounting to receipt observation.
+Failures log the relevant executor, caller, or adapters and the underlying
 reason before startup returns. The executor ABI has no Reactor getter, so matching the configured Reactor to
 the deployed immutable remains a deployment assertion. `solverMode: external` is the default, requires a
 non-empty `adapters` list plus direct authorization, and forbids the discounts block. `solverMode: internal`
@@ -377,7 +380,7 @@ The shared `txManager` serializes transaction-sending solvers on one EOA. While 
 or active, UniswapX declines new quotes, LI.FI retires standing curves, and 3F stops new offers;
 reconciliation continues. RFQ keeps quoting and accounts for pending fills through reservations; it stops
 only while the nonce lane is unavailable. Pending calls receive ordinary fee bumps at the same nonce.
-At the request deadline, pending timeout or a terminal business-status check, the manager abandons tracking
+At the request deadline, pending timeout or a terminal business-status check, the manager abandons active tracking
 and releases the local lane. It remembers the unused nonce and last signed fees so the next freshly planned
 order can replace that call, with both fee fields increased by at least 12.5% under the configured ceilings.
 Each pending receipt RPC has its own timeout and does not block lifecycle timers. A stalled call's gas
@@ -387,6 +390,15 @@ Configure `maxFeeGwei` for every transaction-sending process. `pendingTimeoutMs`
 `broadcastTimeoutMs` and `shutdownTimeoutMs` bound pending tracking, submission and shutdown.
 The manager remains alive while solvers drain accepted work; orchestrator SIGTERM grace must cover both
 solver preparation/drain and manager shutdown. A timeout does not guarantee that a signed call cannot land.
+
+After `abandoned` or `nonce_consumed`, a separate passive observer checks known signed hashes without
+occupying the nonce lane or sending transactions. A canonical receipt at the configured confirmation depth
+updates successful fill amounts/counts, 3F redemption counts, and actual gas/fees. Reverted late receipts
+update costs only. The original request outcome and order retry/state handling stay unchanged.
+`lateReceiptTimeoutMs` defaults to 600000 (ten minutes) after lane release; `lateReceiptMaxHashes` defaults
+to 1024. Both are positive, with zero selecting the default. The hash cap also separately bounds local
+receipt deduplication and ancestry caching. Observation expiry, capacity eviction, shutdown or restart can still miss late metrics;
+there is no durable or cross-process deduplication. Late-receipt and dropped-hash metrics expose this coverage.
 
 Every call is priced for inclusion in the next block at the lowest spend:
 - The fee cap is the exact EIP-1559 base-fee bound over the next `horizon.maxBlocks` blocks (default 6,
@@ -666,7 +678,10 @@ Sentry groups these diagnosed errors by `(solver, message, reason_code)`; other 
 ### Metrics
 
 The [txmanager metric reference](docs/TXMANAGER-PLAN.md#metrics) covers transaction outcomes, admission,
-replacements, phase timing and account snapshots, including labels and units.
+replacements, late receipts, phase timing and account snapshots, including labels and units.
+The runtime dashboard shows late confirmed/reverted receipts, retained hashes and observation drops.
+Transaction request counts describe the original tracking outcome; late receipts add execution and cost
+observations without adding another request completion.
 
 The registry also includes standard Go/process collectors,
 `solver_bot_build_info{version,commit}`, and `solver_bot_solver_info{solver}`. The first identifies the exact

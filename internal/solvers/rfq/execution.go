@@ -377,10 +377,18 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		return
 	}
 
+	var observeReceipt func(context.Context, txmanager.Result)
+	if e.metrics != nil {
+		observeReceipt = e.metrics.fillAmounts.ReceiptObserver(
+			order.Request.TokenIn, order.Request.AmountIn, outputToken, required,
+			liquidlane.PlannedSurplus(selected.QuotedAmountOut, required),
+		)
+	}
 	res, sendErr := e.sendFill(ctx, txmanager.Request{
 		Solver: Name,
 		To:     e.executor, Data: calldata, Deadline: submissionDeadline, Label: "rfq-fill",
-		Obsolete: e.orderObsolete(orderID),
+		Obsolete:       e.orderObsolete(orderID),
+		ObserveReceipt: observeReceipt,
 	})
 	attemptHashes := append([]common.Hash{res.Hash}, res.Attempts...)
 	attempt := e.store.recordAttempt(orderID, attemptHashes...)
@@ -451,16 +459,6 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		observability.Log(ctx).Error(res.Err, "fill included but confirmation wait failed",
 			"attempt", attempt, "tx", res.Hash.Hex())
 	}
-	if e.metrics != nil {
-		e.metrics.fillAmounts.Observe(
-			res.Receipt,
-			order.Request.TokenIn,
-			order.Request.AmountIn,
-			outputToken,
-			required,
-			liquidlane.PlannedSurplus(selected.QuotedAmountOut, required),
-		)
-	}
 	e.store.markStatus(orderID, statusSubmitted, res.Hash, "")
 	e.reconcileTerminalStatus(ctx, orderID)
 }
@@ -504,7 +502,10 @@ func backendOrderTerminal(status string) (terminal, known bool) {
 func (e *executionService) retireObsoleteOrder(
 	ctx context.Context, orderID string, res txmanager.Result, sendErr error,
 ) {
-	if e.metrics != nil {
+	// An owned attempt may still produce a normal or late success receipt, including an
+	// earlier request whose unsigned retry is obsolete. Only unsigned orders count as skips.
+	local := e.store.order(orderID)
+	if e.metrics != nil && local != nil && len(local.AttemptHashes) == 0 {
 		e.metrics.fillAmounts.ObserveOutcome(liquidlane.FillOutcomeObsolete)
 	}
 	observability.Decline(ctx, "fill_obsolete", sendErr.Error())

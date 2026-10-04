@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
 
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
@@ -17,7 +18,11 @@ import (
 type transactionSenderFunc func(context.Context, txmanager.Request) txmanager.Result
 
 func (f transactionSenderFunc) Send(ctx context.Context, req txmanager.Request) txmanager.Result {
-	return f(ctx, req)
+	result := f(ctx, req)
+	if req.ObserveReceipt != nil && result.Receipt != nil {
+		req.ObserveReceipt(ctx, result)
+	}
+	return result
 }
 
 func TestRedeemAllScansOncePerAdapterBeforeItsSend(t *testing.T) {
@@ -57,7 +62,8 @@ func TestRedeemAllScansOncePerAdapterBeforeItsSend(t *testing.T) {
 		if req.To != wantAdapter || req.Label != "redeem" || len(req.Data) == 0 {
 			t.Fatalf("unexpected redeem request: to=%s label=%q dataLen=%d", req.To.Hex(), req.Label, len(req.Data))
 		}
-		return txmanager.Result{Outcome: txmanager.OutcomeConfirmed}
+		return txmanager.Result{Outcome: txmanager.OutcomeConfirmed,
+			Receipt: &types.Receipt{Status: types.ReceiptStatusSuccessful}}
 	})
 
 	s.redeemAll(t.Context())
@@ -106,7 +112,8 @@ func TestRedeemAllMalformedCanWithdrawRetainsFreshnessAndRedeemsValidSubset(t *t
 		if req.To != adapterAddr {
 			t.Fatalf("tx target = %s, want %s", req.To.Hex(), adapterAddr.Hex())
 		}
-		return txmanager.Result{Outcome: txmanager.OutcomeIncludedUnconfirmed}
+		return txmanager.Result{Outcome: txmanager.OutcomeIncludedUnconfirmed,
+			Receipt: &types.Receipt{Status: types.ReceiptStatusSuccessful}}
 	})
 
 	s.redeemAll(t.Context())

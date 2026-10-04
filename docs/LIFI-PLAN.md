@@ -580,7 +580,7 @@ There is no solver-level retained route plan or future-auction scheduling. Depos
 reservation-blocked built-in decisions use their respective timer and completion-driven FIFO described above.
 The txmanager may replace the same pending nonce; that is fee management for one submission.
 `abandoned`, `nonce_conflict` and `nonce_consumed` release the fill's local reservation and
-record an expected decline. They supply no owned receipt and never record fill success. The worker immediately
+record an expected decline. Their terminal result supplies no owned receipt and never records fill success. The worker immediately
 re-reads the InputSettler under `lifi.order.reconcile`: `Claimed` and `Refunded` retire the order at Info;
 `None`, `Deposited`, unsupported status values and status-read failures retain recovery. RPC/invalid-status
 failures remain Error, while shutdown cancellation is an expected decline and skips further reconciliation.
@@ -599,6 +599,12 @@ but already-admitted fills drain under the shared lifecycle. `nonce_retry` expos
 nearest-deadline gauges, and actual overflow/invalid-key drops record `queue_drop/nonce_retry`; deadline
 expiry is an expected decline. A healthy feed needs neither redelivery nor reconnect to recover nonce
 competition. These rules do not coordinate quote inventory or reservations across replicas.
+
+Each submitted fill snapshots only its metric pointer, token addresses, input/output amounts and gross
+planned surplus into `Request.ObserveReceipt`. The manager's bounded process-local hash deduplication
+covers normal inclusion and late canonical owned receipts at the configured confirmation depth. A
+successful late observation records `fill/success`, freshness and amounts after the worker has released
+the order, without changing capacity, queue state or protocol reconciliation and without submitting a retry.
 During process shutdown the shared txmanager outlives solver intake cancellation while accepted fills finish.
 LI.FI first keeps the feed alive while expiring active quotes, then stops accepting orders and drains admitted
 inbox work and accepted fills. The process hard stop bounds that solver preparation and the txmanager's configured
