@@ -14,10 +14,8 @@ chain:
   rpcUrl: ${ETH_RPC_URL_MAINNET}   # primary RPC for gas, receipts, and contract reads
   # rpcAttemptTimeoutMs: 20000 # per HTTP(S) endpoint attempt; shorter caller deadlines still apply
   chainId: 1                       # must match the RPC's chain id (asserted at startup)
-  # writeRpcUrl carries broadcasts and latest/pending nonce reads; other reads stay on rpcUrl.
+  # writeRpcUrl carries broadcasts and latest mined nonce reads; other reads stay on rpcUrl.
   writeRpcUrl: ${WRITE_RPC_URL}    # e.g. https://rpc.mevblocker.io/fullprivacy
-  cancelRpcUrl: ${CANCEL_RPC_URL}  # cancellation broadcasts only; e.g. https://boost.rpc.mevblocker.io/fast
-                                  # optional; unset uses the ordinary write RPC
   # rpcFallbackUrls:               # optional read-only fallbacks, tried in order
   #   - ${ETH_RPC_URL_MAINNET_BACKUP}
 
@@ -27,11 +25,13 @@ signer:
 
 txManager:
   confirmations: 2                 # blocks to wait past inclusion before treating a fill as final (default 2)
-  maxFeeGwei: 50                   # global fee cap; the normal lifecycle stops one bump below it
+  maxFeeGwei: 50                   # global fee cap for every broadcast
   accountPollIntervalMs: 30000     # signer balance/latest/pending nonce metric refresh
   replacementIntervalMs: 30000     # fallback fee bump cadence while fee history is unreadable
-  pendingTimeoutMs: 300000         # switch the active nonce to cancellation after 5m
-  shutdownTimeoutMs: 60000         # bound SIGTERM cancellation + receipt drain to 60s
+  pendingTimeoutMs: 300000         # stop active tracking after 5m; the next fresh call may reuse the nonce
+  shutdownTimeoutMs: 60000         # bound SIGTERM receipt tracking drain to 60s
+  lateReceiptTimeoutMs: 600000    # passive receipt accounting for 10m after lane release
+  lateReceiptMaxHashes: 1024      # separate caps for retained hashes, receipt deduplication and ancestry cache
   # Fees: exact EIP-1559 cap over 6 blocks, a tip that rises only in runs of full blocks, next-block
   # gas estimates, repricing on block evidence. Defaults shown; see docs/TXMANAGER-PLAN.md section 4.
   # horizon: {maxBlocks: 6, tipFloorGwei: 0.02, fullBlockTipGwei: 0.1, congestedTipCapGwei: 15}
@@ -52,9 +52,9 @@ solvers:
       backendUrl: ${RFQ_BACKEND_URL}   # RFQ backend base URL (host root; the client adds the /api/v1 prefix)
       backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET  # env var NAME of the POST /quote shared secret
       listenAddr: ":42073"             # bind address for the quote HTTP server (POST /quote, /health, /docs)
-      pollIntervalMs: 3000             # open-order polling interval and minimum cancellation retry delay
+      pollIntervalMs: 3000             # open-order polling interval and minimum nonce retry delay
       orderLimit: 20                   # max open orders fetched per poll
-      maxCancellationRetries: 3        # additional attempts after confirmed cancellation; 0 disables
+      maxNonceRetries: 3               # separate accepted-send/transient-estimate budgets; 0 disables; initial collisions use deadline
 
       # RFQ contract deployment (mainnet):
       executor: "0x031f569DA822A6b8D1500D74733986a9aE4cBda3"   # Executor — the bot calls Executor.fill to settle

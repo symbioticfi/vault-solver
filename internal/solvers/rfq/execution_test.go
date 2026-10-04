@@ -10,6 +10,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	gethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
@@ -113,9 +114,12 @@ type fakeTxm struct {
 	onResult func()
 }
 
-func (f *fakeTxm) Send(_ context.Context, req txmanager.Request) txmanager.Result {
+func (f *fakeTxm) Send(ctx context.Context, req txmanager.Request) txmanager.Result {
 	f.calls++
 	f.lastReq = req
+	if req.ObserveReceipt != nil && f.result.Receipt != nil {
+		req.ObserveReceipt(ctx, f.result)
+	}
 	if f.onResult != nil {
 		f.onResult()
 	}
@@ -126,6 +130,7 @@ func confirmedTxResult() txmanager.Result {
 	return txmanager.Result{
 		Hash:    common.HexToHash("0xdead"),
 		Outcome: txmanager.OutcomeConfirmed,
+		Receipt: &gethtypes.Receipt{Status: gethtypes.ReceiptStatusSuccessful},
 	}
 }
 
@@ -139,7 +144,7 @@ func newExec(t *testing.T, st *store, be orderBackend, txm txSender) *executionS
 	return &executionService{
 		chainID: 1, executor: common.HexToAddress("0x0000000000000000000000000000000000000010"),
 		orderLimit: 20, backend: be, store: st, txm: txm, discountsEnabled: true,
-		maxCancellationRetries: defaultMaxCancellationRetries, pollInterval: defaultPollInterval,
+		maxNonceRetries: defaultMaxNonceRetries, pollInterval: defaultPollInterval,
 		strategy: fixedFillStrategy{plan: baseFillPlan()}, strategyName: defaultStrategyName,
 		// One configured vault whose fill-time inventory backs baseFillPlan's leg, so the plan's
 		// output is attributable to a candidate and can be reserved.
@@ -247,12 +252,12 @@ func TestExecution_DirectFillHappyPath(t *testing.T) {
 	if len(txm.lastReq.Data) < 4 {
 		t.Fatalf("no fill calldata sent")
 	}
-	if want := time.Unix(4_102_444_800, 0); !txm.lastReq.CancelAt.Equal(want) {
-		t.Fatalf("fill CancelAt = %v, want order deadline %v", txm.lastReq.CancelAt, want)
+	if want := time.Unix(4_102_444_800, 0); !txm.lastReq.Deadline.Equal(want) {
+		t.Fatalf("fill Deadline = %v, want order deadline %v", txm.lastReq.Deadline, want)
 	}
 }
 
-func TestExecution_CancellationDeadlineAccountsForPlanningLatency(t *testing.T) {
+func TestExecution_SubmissionDeadlineAccountsForPlanningLatency(t *testing.T) {
 	st, be := fillFixtures(t)
 	txm := &fakeTxm{result: confirmedTxResult()}
 	e := newExec(t, st, be, txm)
@@ -269,8 +274,8 @@ func TestExecution_CancellationDeadlineAccountsForPlanningLatency(t *testing.T) 
 	syncCycle(t.Context(), e)
 
 	want := time.Unix(4_102_444_790, 0)
-	if !txm.lastReq.CancelAt.Equal(want) {
-		t.Fatalf("fill CancelAt = %v, want skew-preserving %v", txm.lastReq.CancelAt, want)
+	if !txm.lastReq.Deadline.Equal(want) {
+		t.Fatalf("fill Deadline = %v, want skew-preserving %v", txm.lastReq.Deadline, want)
 	}
 }
 
@@ -337,7 +342,7 @@ func TestExecution_RejectsBackendOutputMismatch(t *testing.T) {
 	}
 }
 
-func TestExecution_RevertMarksFailed(t *testing.T) {
+func TestExecution_RevertReconcilesFilled(t *testing.T) {
 	st, be := fillFixtures(t)
 	txm := &fakeTxm{result: txmanager.Result{
 		Hash:    common.HexToHash("0xdead"),
@@ -348,8 +353,8 @@ func TestExecution_RevertMarksFailed(t *testing.T) {
 
 	syncCycle(context.Background(), e)
 
-	if rec := st.order("o1"); rec == nil || rec.Status != statusFailed {
-		t.Fatalf("status = %v, want failed", rec)
+	if rec := st.order("o1"); rec == nil || rec.Status != statusFilled {
+		t.Fatalf("status = %v, want filled", rec)
 	}
 }
 
@@ -360,10 +365,10 @@ func TestExecution_FailedFillOutcomesAreMetered(t *testing.T) {
 		outcome string
 	}{
 		{
-			name: "reverted",
+			name: "submission error",
 			result: txmanager.Result{
-				Outcome: txmanager.OutcomeReverted,
-				Err:     errors.New("tx reverted on-chain"),
+				Outcome: txmanager.OutcomeSubmissionError,
+				Err:     errors.New("signing failed"),
 			},
 			outcome: liquidlane.FillOutcomeFailure,
 		},
@@ -451,8 +456,8 @@ func TestExecution_DiscountFill(t *testing.T) {
 	if len(txm.lastReq.Data) < 4 {
 		t.Fatalf("no fill calldata sent")
 	}
-	if want := time.Unix(4_102_444_700, 0); !txm.lastReq.CancelAt.Equal(want) {
-		t.Fatalf("fill CancelAt = %v, want signer deadline %v", txm.lastReq.CancelAt, want)
+	if want := time.Unix(4_102_444_700, 0); !txm.lastReq.Deadline.Equal(want) {
+		t.Fatalf("fill Deadline = %v, want signer deadline %v", txm.lastReq.Deadline, want)
 	}
 }
 
@@ -502,8 +507,8 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 	if len(txm.lastReq.Data) < 4 {
 		t.Fatalf("no fill calldata sent")
 	}
-	if want := time.Unix(4_102_444_700, 0); !txm.lastReq.CancelAt.Equal(want) {
-		t.Fatalf("fill CancelAt = %v, want protocol deadline %v", txm.lastReq.CancelAt, want)
+	if want := time.Unix(4_102_444_700, 0); !txm.lastReq.Deadline.Equal(want) {
+		t.Fatalf("fill Deadline = %v, want protocol deadline %v", txm.lastReq.Deadline, want)
 	}
 }
 
@@ -720,7 +725,7 @@ func TestExecution_ReconcileUnknownStatusRetainsOrder(t *testing.T) {
 }
 
 func TestExecutionDoesNotResubmitPaidOrUncertainFailures(t *testing.T) {
-	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeReverted, txmanager.OutcomeCancelled, txmanager.OutcomeTrackingStopped} {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeReverted, txmanager.OutcomeTrackingStopped} {
 		t.Run(string(outcome), func(t *testing.T) {
 			st, be := fillFixtures(t)
 			hash := common.HexToHash("0x1234")
@@ -739,7 +744,7 @@ func TestExecutionDoesNotResubmitPaidOrUncertainFailures(t *testing.T) {
 	}
 }
 
-func TestExecutionRetriesConfirmedCancellationAfterPollInterval(t *testing.T) {
+func TestExecutionRetriesAbandonedFillAfterPollInterval(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		yaml         string
@@ -756,7 +761,7 @@ func TestExecutionRetriesConfirmedCancellationAfterPollInterval(t *testing.T) {
 			st, be := fillFixtures(t)
 			now := time.Unix(0, 0)
 			st.now = func() time.Time { return now }
-			txm := &fakeTxm{result: confirmedCancellation()}
+			txm := &fakeTxm{result: abandonedTxResult()}
 			_, e := buildServices(cfg, 1, st, nil, txm, nil,
 				fixedFillStrategy{plan: baseFillPlan()}, logr.Discard())
 			e.backend = be
@@ -778,12 +783,12 @@ func TestExecutionRetriesConfirmedCancellationAfterPollInterval(t *testing.T) {
 				t.Fatalf("sends before poll interval = %d, want 1", txm.calls)
 			}
 			if st.order("o1").TxHash != txm.result.Hash {
-				t.Fatal("cancellation tracking hash was cleared before retry admission")
+				t.Fatal("abandoned fill tracking hash was cleared before retry admission")
 			}
 			now = now.Add(time.Millisecond)
 			syncCycle(t.Context(), e)
 			if txm.calls != 2 {
-				t.Fatalf("sends after confirmed cancellation and poll interval = %d, want 2", txm.calls)
+				t.Fatalf("sends after abandonment and poll interval = %d, want 2", txm.calls)
 			}
 			for range 5 {
 				now = now.Add(tc.pollInterval)

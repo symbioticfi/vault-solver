@@ -66,12 +66,15 @@ type Solver struct {
 	lastExclusivePoll     atomic.Int64
 	refreshCh             chan struct{}
 	// stateMu guards order retry/dedup, single-source selections and breaker history.
-	stateMu           sync.Mutex
-	selections        map[string]quoteSelection
-	filled            map[common.Hash]time.Time
-	retryAt           map[common.Hash]time.Time
-	inFlight          map[common.Hash]bool
-	attempts          map[common.Hash]int
+	stateMu    sync.Mutex
+	selections map[string]quoteSelection
+	filled     map[common.Hash]time.Time
+	retryAt    map[common.Hash]time.Time
+	inFlight   map[common.Hash]bool
+	attempts   map[common.Hash]int
+	// ownedFillAttempts is guarded by stateMu, survives retries, and is retired with order
+	// state. Receipt callbacks never touch it; it only prevents ambiguous obsolete metrics.
+	ownedFillAttempts map[common.Hash]bool
 	capacity          liquidlane.CapacityLedger
 	exclusiveUntil    map[common.Hash]trackedExclusive
 	exclusiveTerminal map[common.Hash]time.Time
@@ -179,6 +182,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		retryAt:           make(map[common.Hash]time.Time),
 		inFlight:          make(map[common.Hash]bool),
 		attempts:          make(map[common.Hash]int),
+		ownedFillAttempts: make(map[common.Hash]bool),
 		exclusiveUntil:    make(map[common.Hash]trackedExclusive),
 		exclusiveTerminal: make(map[common.Hash]time.Time),
 	}

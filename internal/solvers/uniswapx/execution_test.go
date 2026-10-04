@@ -1,10 +1,12 @@
 package uniswapx
 
 import (
+	"bytes"
 	"context"
 	"math/big"
 	"net"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -189,8 +191,8 @@ func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
 	if len(packed.Routes) != 0 || len(packed.DiscountRoutes) != 1 {
 		t.Fatalf("packed fill call = %+v", packed)
 	}
-	if len(txm.reqs) != 1 || !txm.reqs[0].CancelAt.Equal(time.Unix(protocolDeadline, 0)) {
-		t.Fatalf("discount fill cancelAt = %v, want %s", txm.reqs, time.Unix(protocolDeadline, 0))
+	if len(txm.reqs) != 1 || !txm.reqs[0].Deadline.Equal(time.Unix(protocolDeadline, 0)) {
+		t.Fatalf("discount fill submissionDeadline = %v, want %s", txm.reqs, time.Unix(protocolDeadline, 0))
 	}
 	discountRoute := packed.DiscountRoutes[0]
 	if discountRoute.Adapter != route.Adapter ||
@@ -400,6 +402,9 @@ func (s *executionTestStrategy) DecideFill(
 }
 
 type executionTestTxManager struct {
+	mu          sync.Mutex
+	contexts    []context.Context
+	completed   int
 	result      chan txmanager.Result
 	maxFeeReads int
 	reqs        []txmanager.Request
@@ -417,10 +422,13 @@ func (m *executionTestTxManager) Available() bool { return !m.unavailable }
 func (m *executionTestTxManager) LaneReady() bool { return !m.unavailable && !m.busy }
 
 func (m *executionTestTxManager) SendAsync(
-	_ context.Context,
+	ctx context.Context,
 	request txmanager.Request,
 ) (<-chan txmanager.Result, bool) {
+	m.mu.Lock()
 	m.reqs = append(m.reqs, request)
+	m.contexts = append(m.contexts, ctx)
+	m.mu.Unlock()
 	if m.accepted != nil {
 		select {
 		case m.accepted <- struct{}{}:
@@ -431,8 +439,15 @@ func (m *executionTestTxManager) SendAsync(
 }
 
 func (m *executionTestTxManager) complete(result txmanager.Result) {
-	m.result <- result
+	m.mu.Lock()
+	request, ctx := m.reqs[m.completed], m.contexts[m.completed]
+	m.completed++
+	m.mu.Unlock()
+	if request.ObserveReceipt != nil && result.Receipt != nil {
+		request.ObserveReceipt(ctx, result)
+	}
 	m.busy = false
+	m.result <- result
 }
 
 type contractCallerFunc func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error)
@@ -530,9 +545,9 @@ func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 	if fixture.txm.reqs[0].MaxFeePerGas != nil {
 		t.Fatalf("gas-disabled transaction hard-capped fees at %s", fixture.txm.reqs[0].MaxFeePerGas)
 	}
-	wantCancelAt := time.Unix(int64(fixture.order.Deadline), 0).Add(-10 * time.Second)
-	if got := fixture.txm.reqs[0].CancelAt; got.Sub(wantCancelAt).Abs() > time.Millisecond {
-		t.Fatalf("transaction cancelAt = %s, want %s", got, wantCancelAt)
+	wantDeadline := time.Unix(int64(fixture.order.Deadline), 0).Add(-10 * time.Second)
+	if got := fixture.txm.reqs[0].Deadline; got.Sub(wantDeadline).Abs() > time.Millisecond {
+		t.Fatalf("transaction submissionDeadline = %s, want %s", got, wantDeadline)
 	}
 	if fixture.txm.reqs[0].Confirmations != nil {
 		t.Fatalf("fill confirmations override = %d, want global txmanager configuration", *fixture.txm.reqs[0].Confirmations)
@@ -547,10 +562,10 @@ func TestStartFillSubmitsAsynchronouslyAndReservesCapacity(t *testing.T) {
 	if reservations := fixture.strategy.input.Reservations; len(reservations) != 0 {
 		t.Fatalf("unexpected pre-existing reservations: %v", reservations)
 	}
-	fixture.txm.result <- txmanager.Result{
+	fixture.txm.complete(txmanager.Result{
 		Hash:    common.HexToHash("0x2"),
 		Outcome: txmanager.OutcomeConfirmed,
-	}
+	})
 	result := <-pending.result
 	fixture.solver.completePendingFill(t.Context(), pending, result)
 	if fixture.solver.capacity.Len() != 0 {
@@ -643,7 +658,7 @@ func TestFillLoopCompletesWhileNextFillPlans(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("second fill did not reach planning")
 			}
-			fixture.txm.result <- txmanager.Result{Outcome: outcome}
+			fixture.txm.complete(txmanager.Result{Outcome: outcome})
 			waitForExecutionCondition(t, func() bool {
 				fixture.solver.stateMu.Lock()
 				defer fixture.solver.stateMu.Unlock()
@@ -704,10 +719,10 @@ func TestFillLoopDrainsAcceptedFillAfterQuoteServerFailure(t *testing.T) {
 		t.Fatalf("fill loop returned before accepted lifecycle completed: %v", err)
 	case <-time.After(20 * time.Millisecond):
 	}
-	fixture.txm.result <- txmanager.Result{
+	fixture.txm.complete(txmanager.Result{
 		Hash:    common.HexToHash("0x2"),
 		Outcome: txmanager.OutcomeConfirmed,
-	}
+	})
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.Canceled) {
@@ -816,6 +831,49 @@ func TestCompletePendingFillClassifiesNotAdmittedWithoutFailure(t *testing.T) {
 	metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 0)
 }
 
+func TestCompletePendingFillReconcilesConsumedNonceWithoutFailure(t *testing.T) {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict, txmanager.OutcomeAbandoned} {
+		t.Run(string(outcome), func(t *testing.T) { completePendingFillReconcilesConsumedNonceWithoutFailure(t, outcome) })
+	}
+}
+
+func completePendingFillReconcilesConsumedNonceWithoutFailure(t *testing.T, outcome txmanager.Outcome) {
+	t.Helper()
+	fixture := newDirectExecutionFixture(t)
+	fixture.order.Source = orderSourcePublicV2
+	metrics, reg := newUniswapXTestMetricsWithRegistry(t, fixture.solver)
+	fixture.solver.metrics = metrics
+	fixture.solver.cfg.Breaker = BreakerConfig{MaxFailures: 1, Window: time.Minute}
+	fixture.solver.inFlight[fixture.order.Hash] = true
+	fixture.solver.setPendingReservations(
+		t.Context(), fixture.order.Hash,
+		liquidlane.CapacityReservations{fixture.route.CapacityID: big.NewInt(100)}, fixture.solver.capacity.Revision(),
+	)
+	fixture.solver.completePendingFill(t.Context(), testPendingFill(t, fixture.order), txmanager.Result{
+		Hash: common.HexToHash("0x1234"), Outcome: outcome, Err: nonceOutcomeError(outcome),
+	})
+	if fixture.solver.capacity.Len() != 0 || fixture.solver.inFlight[fixture.order.Hash] {
+		t.Fatal("consumed nonce retained capacity or in-flight state")
+	}
+	if fixture.solver.attempts[fixture.order.Hash] != 0 || len(fixture.solver.failureTimes) != 0 ||
+		fixture.solver.localBlockUntil.Load() != 0 {
+		t.Fatal("nonce competition counted as an execution or breaker failure")
+	}
+	if _, filled := fixture.solver.filled[fixture.order.Hash]; filled {
+		t.Fatal("nonce consumption was interpreted as a successful owned fill")
+	}
+	retryAt, scheduled := fixture.solver.retryAt[fixture.order.Hash]
+	if !scheduled || fixture.solver.claim(fixture.order.Hash, retryAt.Add(-time.Nanosecond)) {
+		t.Fatal("order was not deferred until the normal fresh polling backoff")
+	}
+	if !fixture.solver.claim(fixture.order.Hash, retryAt) {
+		t.Fatal("order was unavailable for a fresh poll after consumed nonce")
+	}
+	fixture.solver.endFillPlanning()
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeSuccess, 0)
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 0)
+}
+
 func TestCompletePendingFillRecordsFailureOutcome(t *testing.T) {
 	fixture := newDirectExecutionFixture(t)
 	fixture.order.Source = orderSourcePublicV2
@@ -895,10 +953,10 @@ func TestStartFillWithoutOrderClientLeavesObsoleteUnset(t *testing.T) {
 
 func TestCompletePendingFillRetiresObsoleteOrder(t *testing.T) {
 	for name, result := range map[string]txmanager.Result{
-		"cancelled pending fill": {
+		"abandoned obsolete fill": {
 			Hash:    common.HexToHash("0xc"),
-			Outcome: txmanager.OutcomeCancelled,
-			Err:     errors.Errorf("pending transaction cancelled at nonce 3: %w", txmanager.ErrRequestObsolete),
+			Outcome: txmanager.OutcomeAbandoned,
+			Err:     errors.Errorf("pending transaction abandoned at nonce 3: %w", txmanager.ErrRequestObsolete),
 		},
 		"dropped before signing": {
 			Outcome: txmanager.OutcomeSubmissionError,
@@ -932,7 +990,11 @@ func TestCompletePendingFillRetiresObsoleteOrder(t *testing.T) {
 			if len(fixture.solver.failureTimes) != 0 || fixture.solver.localBlockUntil.Load() != 0 {
 				t.Fatal("obsolete order counted toward the failure breaker")
 			}
-			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeObsolete, 1)
+			wantObsolete := float64(0)
+			if name == "dropped before signing" {
+				wantObsolete = 1
+			}
+			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeObsolete, wantObsolete)
 			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 0)
 		})
 	}
@@ -1003,4 +1065,64 @@ func testPendingFill(t *testing.T, order *resolvedOrder) *pendingUniswapFill {
 	t.Helper()
 	_, span := noop.NewTracerProvider().Tracer("test").Start(t.Context(), "uniswapx.fill")
 	return &pendingUniswapFill{order: order, span: span, end: func(error) { span.End() }}
+}
+
+func nonceOutcomeError(outcome txmanager.Outcome) error {
+	if outcome == txmanager.OutcomeAbandoned {
+		return txmanager.ErrAbandoned
+	}
+	if outcome == txmanager.OutcomeNonceConflict {
+		return txmanager.ErrNonceConflict
+	}
+	return txmanager.ErrNonceConsumed
+}
+
+func TestAbandonedFillAllowsFreshDifferentOrder(t *testing.T) {
+	fixture := newDirectExecutionFixture(t)
+	pending, err := fixture.solver.startFill(t.Context(), []liquidlane.Route{fixture.route},
+		fixture.order, fixture.now, fixture.now)
+	if err != nil || pending == nil {
+		t.Fatalf("start original fill: pending=%v err=%v", pending, err)
+	}
+	original := append([]byte(nil), fixture.txm.reqs[0].Data...)
+	fixture.txm.complete(txmanager.Result{Outcome: txmanager.OutcomeAbandoned,
+		Hash: common.HexToHash("0x1234"), Err: txmanager.ErrAbandoned})
+	fixture.solver.completePendingFill(t.Context(), pending, <-pending.result)
+	if fixture.solver.capacity.Len() != 0 || len(fixture.solver.filled) != 0 ||
+		fixture.solver.attempts[fixture.order.Hash] != 0 {
+		t.Fatal("abandonment retained capacity or recorded completed/failed execution")
+	}
+
+	fresh := *fixture.order
+	fresh.Hash, fresh.QuoteID = common.HexToHash("0x2"), "quote-2"
+	fresh.Encoded, fresh.Signature = []byte{3}, []byte{4}
+	fixture.solver.trackExclusive(&fresh, fixture.now)
+	pending, err = fixture.solver.startFill(t.Context(), []liquidlane.Route{fixture.route},
+		&fresh, fixture.now, fixture.now)
+	if err != nil || pending == nil || len(fixture.txm.reqs) != 2 {
+		t.Fatalf("start fresh different fill: pending=%v sends=%d err=%v", pending, len(fixture.txm.reqs), err)
+	}
+	if bytes.Equal(original, fixture.txm.reqs[1].Data) {
+		t.Fatal("fresh different order replayed the abandoned order's calldata")
+	}
+	parsed, err := uxexecutor.LiquidLaneUniswapXExecutorMetaData.ParseABI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	args, err := parsed.Methods["execute"].Inputs.Unpack(fixture.txm.reqs[1].Data[4:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	signed := *abi.ConvertType(args[0], new(uxexecutor.UniswapXSignedOrder)).(*uxexecutor.UniswapXSignedOrder)
+	if !bytes.Equal(signed.Order, []byte{3}) || !bytes.Equal(signed.Sig, []byte{4}) {
+		t.Fatalf("fresh signed order = %+v, want encoded 03 and signature 04", signed)
+	}
+	fixture.txm.complete(txmanager.Result{Outcome: txmanager.OutcomeConfirmed, Hash: common.HexToHash("0x2345")})
+	fixture.solver.completePendingFill(t.Context(), pending, <-pending.result)
+	if _, ok := fixture.solver.filled[fresh.Hash]; !ok {
+		t.Fatal("fresh different order was not completed")
+	}
+	if _, ok := fixture.solver.filled[fixture.order.Hash]; ok {
+		t.Fatal("abandoned original order was counted as completed")
+	}
 }

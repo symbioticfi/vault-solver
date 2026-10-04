@@ -14,14 +14,14 @@ const (
 	metricsNamespace = "solver_bot"
 	metricsSubsystem = "txmanager"
 
-	replacementKindReplacement  = "replacement"
-	replacementKindCancellation = "cancellation"
-	replacementKindRebroadcast  = "rebroadcast"
+	replacementKindReplacement = "replacement"
+	replacementKindRebroadcast = "rebroadcast"
+	feeLimitPhaseInitial       = "initial"
+	feeLimitPhaseReplacement   = "replacement"
 
 	admissionOutcomeAdmitted admissionOutcome = "admitted"
 
 	admissionRejectionManagerStopped  admissionRejectionReason = "manager_stopped"
-	admissionRejectionNonceConflict   admissionRejectionReason = "nonce_conflict"
 	admissionRejectionDeadline        admissionRejectionReason = "deadline_exceeded"
 	admissionRejectionCallerCancelled admissionRejectionReason = "caller_cancelled"
 	admissionRejectionOther           admissionRejectionReason = "other"
@@ -54,7 +54,11 @@ type Metrics struct {
 	inflight            *prometheus.GaugeVec
 	gasUsed             *prometheus.CounterVec
 	feePaidWei          *prometheus.CounterVec
+	lateReceipts        *prometheus.CounterVec
+	lateReceiptDropped  *prometheus.CounterVec
+	lateReceiptPending  *prometheus.GaugeVec
 	replacements        *prometheus.CounterVec
+	feeLimits           *prometheus.CounterVec
 	admissionRejections *prometheus.CounterVec
 	admissionWait       *prometheus.HistogramVec
 	lifecycleDuration   *prometheus.HistogramVec
@@ -93,12 +97,30 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 			Name:      "fee_paid_wei_total",
 			Help:      "Actual transaction fees paid from mined receipt gas usage and effective gas price.",
 		}, []string{"label", "outcome"}),
+		lateReceipts: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: "late_receipts_total",
+			Help: "Owned receipts observed after an execution-unknown lifecycle result, by confirmed or reverted outcome.",
+		}, []string{"label", "outcome"}),
+		lateReceiptDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: "late_receipt_dropped_total",
+			Help: "Passive receipt hashes removed without observing an owned receipt, by expired, capacity, or shutdown reason.",
+		}, []string{"label", "reason"}),
+		lateReceiptPending: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: metricsNamespace, Subsystem: metricsSubsystem, Name: "late_receipt_pending",
+			Help: "Owned transaction hashes retained for passive receipt observation after an uncertain result.",
+		}, []string{"label"}),
 		replacements: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
 			Name:      "replacements_total",
-			Help:      "Successfully broadcast transaction replacements, cancellations and exact rebroadcasts, by why they were sent.",
+			Help:      "Successfully broadcast transaction replacements and exact rebroadcasts, by why they were sent.",
 		}, []string{"label", "kind", "reason"}),
+		feeLimits: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: metricsNamespace,
+			Subsystem: metricsSubsystem,
+			Name:      "fee_limit_reached_total",
+			Help:      "Initial-send and replacement decisions stopped by configured fee ceilings; excludes profitability quote reads.",
+		}, []string{"label", "phase"}),
 		admissionRejections: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: metricsNamespace,
 			Subsystem: metricsSubsystem,
@@ -132,7 +154,11 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 		m.inflight,
 		m.gasUsed,
 		m.feePaidWei,
+		m.lateReceipts,
+		m.lateReceiptDropped,
+		m.lateReceiptPending,
 		m.replacements,
+		m.feeLimits,
 		m.admissionRejections,
 		m.admissionWait,
 		m.lifecycleDuration,
@@ -144,6 +170,12 @@ func NewMetrics(reg prometheus.Registerer) (*Metrics, error) {
 		}
 	}
 	return m, nil
+}
+
+func (m *Metrics) feeLimitReached(label, phase string) {
+	if m != nil {
+		m.feeLimits.WithLabelValues(label, phase).Inc()
+	}
 }
 
 func (m *Metrics) beginLifecycle(label string) lifecycleObservation {
@@ -174,7 +206,7 @@ func (observation *lifecycleObservation) transitionPhase(next lifecyclePhase) {
 	observation.phaseObserved[next] = true
 }
 
-func (observation *lifecycleObservation) finish(outcome Outcome, receipt *types.Receipt) {
+func (observation *lifecycleObservation) finish(outcome Outcome) {
 	if observation.metrics == nil {
 		return
 	}
@@ -194,12 +226,36 @@ func (observation *lifecycleObservation) finish(outcome Outcome, receipt *types.
 			).Observe(observation.phaseDurations[phase].Seconds())
 		}
 	}
-	if receipt != nil {
-		observation.metrics.gasUsed.WithLabelValues(observation.label, outcomeLabel).
-			Add(float64(receipt.GasUsed))
-		if fee, ok := receiptFeePaidWei(receipt); ok {
-			observation.metrics.feePaidWei.WithLabelValues(observation.label, outcomeLabel).Add(fee)
-		}
+}
+
+// observeReceipt accounts mined costs independently of the already finished request lifecycle.
+func (m *Metrics) observeReceipt(label string, result Result, late bool) {
+	if m == nil || result.Receipt == nil {
+		return
+	}
+	outcome := string(result.Outcome)
+	m.gasUsed.WithLabelValues(label, outcome).Add(float64(result.Receipt.GasUsed))
+	if fee, ok := receiptFeePaidWei(result.Receipt); ok {
+		m.feePaidWei.WithLabelValues(label, outcome).Add(fee)
+	}
+	if late {
+		m.lateReceipts.WithLabelValues(label, outcome).Inc()
+	}
+}
+
+func (m *Metrics) retainLateReceipt(label string) {
+	if m != nil {
+		m.lateReceiptPending.WithLabelValues(label).Inc()
+	}
+}
+
+func (m *Metrics) removeLateReceipt(label, reason string) {
+	if m == nil {
+		return
+	}
+	m.lateReceiptPending.WithLabelValues(label).Dec()
+	if reason != "" {
+		m.lateReceiptDropped.WithLabelValues(label, reason).Inc()
 	}
 }
 
@@ -245,8 +301,6 @@ func classifyAdmissionRejection(err error) admissionRejectionReason {
 	switch {
 	case errors.Is(err, errManagerStopped):
 		return admissionRejectionManagerStopped
-	case errors.Is(err, errNonceLanePaused):
-		return admissionRejectionNonceConflict
 	case errors.Is(err, context.DeadlineExceeded):
 		return admissionRejectionDeadline
 	case errors.Is(err, context.Canceled):

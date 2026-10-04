@@ -23,6 +23,269 @@
   "description": "Execution totals, token amounts, time trends, transaction costs and operational diagnostics for the selected environment. Counter observations include retries; they are not globally deduplicated order accounting. Period increases may miss the first exported nonzero sample. Missing data stays unknown.",
   "editable": true,
   "elements": {
+    "panel-205": {
+      "kind": "Panel",
+      "spec": {
+        "id": 205,
+        "title": "Late receipts · selected period",
+        "description": "Known owned receipts observed after an abandoned or nonce-consumed lifecycle, qualified by canonical ancestry and configured confirmation depth. Original lifecycle outcomes remain unchanged; these observations also contribute existing success and receipt-cost metrics.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(label,outcome)(increase(solver_bot_txmanager_late_receipts_total{namespace=\"${namespace}\"}[$__range]))",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {
+                      "Time": true,
+                      "__name__": true
+                    },
+                    "renameByName": {
+                      "label": "Operation",
+                      "outcome": "Outcome",
+                      "Value": "Receipts"
+                    },
+                    "indexByName": {}
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": false
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {
+                    "type": "auto"
+                  },
+                  "inspect": false
+                }
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-206": {
+      "kind": "Panel",
+      "spec": {
+        "id": 206,
+        "title": "Retained late receipt hashes",
+        "description": "Current process-local hashes awaiting passive receipt accounting. Passive observation does not occupy the nonce lane. Hashes expire, can be evicted for capacity, and disappear on shutdown or restart; zero is not proof every historical receipt was observed.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(label)(solver_bot_txmanager_late_receipt_pending{namespace=\"${namespace}\"})",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {
+                      "Time": true,
+                      "__name__": true
+                    },
+                    "renameByName": {
+                      "label": "Operation",
+                      "Value": "Hashes"
+                    },
+                    "indexByName": {}
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": false
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {
+                    "type": "auto"
+                  },
+                  "inspect": false
+                }
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-207": {
+      "kind": "Panel",
+      "spec": {
+        "id": 207,
+        "title": "Dropped late observations · selected period",
+        "description": "Unobserved known hashes removed by expiry, capacity pressure or shutdown. These are coverage drops, not known missed executions. Process death or restart can lose hashes without exporting a drop. Period increases can miss first nonzero samples.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(label,reason)(increase(solver_bot_txmanager_late_receipt_dropped_total{namespace=\"${namespace}\"}[$__range]))",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {
+                      "Time": true,
+                      "__name__": true
+                    },
+                    "renameByName": {
+                      "label": "Operation",
+                      "reason": "Reason",
+                      "Value": "Hashes"
+                    },
+                    "indexByName": {}
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": false
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {
+                    "type": "auto"
+                  },
+                  "inspect": false
+                }
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
     "panel-10": {
       "kind": "Panel",
       "spec": {
@@ -1543,6 +1806,7 @@
                             "uniswapx-filler": {"text": "UniswapX"},
                             "redstone-oev": {"text": "RedStone OEV"},
                             "cancelled": {"text": "Cancelled"},
+                            "abandoned": {"text": "Tracking abandoned; execution unknown"},
                             "tracking_stopped": {"text": "Tracking stopped"},
                             "not_actionable": {"text": "Order not currently fillable or outside scope"},
                             "deposit_deferred": {"text": "Deposit not visible yet"},
@@ -1951,6 +2215,7 @@
                             "reverted": {"text": "Reverted"},
                             "included_unconfirmed": {"text": "Included without final confirmation"},
                             "submission_error": {"text": "Submission failed"},
+                            "abandoned": {"text": "Tracking abandoned; execution unknown"},
                             "tracking_stopped": {"text": "Tracking stopped"},
                             "settled_in_time": {"text": "Delivered on time"},
                             "missed": {"text": "Deadline missed"},
@@ -2118,6 +2383,7 @@
                             "reverted": {"text": "Reverted"},
                             "included_unconfirmed": {"text": "Included without final confirmation"},
                             "submission_error": {"text": "Submission failed"},
+                            "abandoned": {"text": "Tracking abandoned; execution unknown"},
                             "tracking_stopped": {"text": "Tracking stopped"},
                             "settled_in_time": {"text": "Delivered on time"},
                             "missed": {"text": "Deadline missed"},
@@ -2267,6 +2533,7 @@
                             "reverted": {"text": "Reverted"},
                             "included_unconfirmed": {"text": "Included without final confirmation"},
                             "submission_error": {"text": "Submission failed"},
+                            "abandoned": {"text": "Tracking abandoned; execution unknown"},
                             "tracking_stopped": {"text": "Tracking stopped"},
                             "settled_in_time": {"text": "Delivered on time"},
                             "missed": {"text": "Deadline missed"},
@@ -2391,6 +2658,7 @@
                             "reverted": {"text": "Reverted"},
                             "included_unconfirmed": {"text": "Included without final confirmation"},
                             "submission_error": {"text": "Submission failed"},
+                            "abandoned": {"text": "Tracking abandoned; execution unknown"},
                             "tracking_stopped": {"text": "Tracking stopped"},
                             "settled_in_time": {"text": "Delivered on time"},
                             "missed": {"text": "Deadline missed"},
@@ -2424,8 +2692,8 @@
       "kind": "Panel",
       "spec": {
         "id": 28,
-        "title": "Replacements, cancellations and rebroadcasts",
-        "description": "Same-nonce fee replacements, cancellations and exact rebroadcasts over the selected range, by why they were sent. Replacement reasons: validity (fee cap about to lapse), congestion (run of full blocks), stall (missed blocks with room), gas (estimate outgrew the limit) or fallback (fee history unreadable). Cancellations report why cancellation started (pending_timeout, request_deadline, shutdown, obsolete). Rebroadcasts are stall, uncertain (ambiguous first broadcast) or capped (fee cap reached). Values aggregate all matching services.",
+        "title": "Replacements and rebroadcasts",
+        "description": "Same-nonce fee replacements and exact rebroadcasts over the selected range, by why they were sent. Replacement reasons: validity (fee cap about to lapse), congestion (run of full blocks), stall (missed blocks with room), gas (estimate outgrew the limit) or fallback (fee history unreadable). Rebroadcasts are stall, uncertain (ambiguous first broadcast) or capped (fee cap reached). Values aggregate all matching services.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2720,6 +2988,7 @@
                             "uniswapx-filler": {"text": "UniswapX"},
                             "redstone-oev": {"text": "RedStone OEV"},
                             "cancelled": {"text": "Cancelled"},
+                            "abandoned": {"text": "Tracking abandoned; execution unknown"},
                             "tracking_stopped": {"text": "Tracking stopped"},
                             "not_actionable": {"text": "Order not currently fillable or outside scope"},
                             "deposit_deferred": {"text": "Deposit not visible yet"},
@@ -3544,6 +3813,7 @@
                             "uniswapx-filler": {"text": "UniswapX"},
                             "redstone-oev": {"text": "RedStone OEV"},
                             "cancelled": {"text": "Cancelled"},
+                            "abandoned": {"text": "Tracking abandoned; execution unknown"},
                             "tracking_stopped": {"text": "Tracking stopped"},
                             "not_actionable": {"text": "Order not currently fillable or outside scope"},
                             "deposit_deferred": {"text": "Deposit not visible yet"},
@@ -3910,6 +4180,7 @@
                             "reverted": {"text": "Reverted"},
                             "included_unconfirmed": {"text": "Included without final confirmation"},
                             "submission_error": {"text": "Submission failed"},
+                            "abandoned": {"text": "Tracking abandoned; execution unknown"},
                             "tracking_stopped": {"text": "Tracking stopped"},
                             "settled_in_time": {"text": "Delivered on time"},
                             "missed": {"text": "Deadline missed"},
@@ -4268,6 +4539,7 @@
                             "uniswapx-filler": {"text": "UniswapX"},
                             "redstone-oev": {"text": "RedStone OEV"},
                             "cancelled": {"text": "Cancelled"},
+                            "abandoned": {"text": "Tracking abandoned; execution unknown"},
                             "tracking_stopped": {"text": "Tracking stopped"},
                             "not_actionable": {"text": "Order not currently fillable or outside scope"},
                             "deposit_deferred": {"text": "Deposit not visible yet"},
@@ -5558,6 +5830,59 @@
     "kind": "RowsLayout",
     "spec": {
       "rows": [
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Late receipt accounting",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 8,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-205"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 8,
+                      "y": 0,
+                      "width": 8,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-206"
+                      }
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 16,
+                      "y": 0,
+                      "width": 8,
+                      "height": 8,
+                      "element": {
+                        "kind": "ElementReference",
+                        "name": "panel-207"
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
         {
           "kind": "RowsLayoutRow",
           "spec": {

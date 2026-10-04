@@ -55,7 +55,7 @@ Everything the bot needs is reachable from view functions + the 3F API:
 | Redeem trigger (loan ready) | `IVaultController(request).canWithdraw()` across the enumerated `requests(i)` | on-chain view |
 | Offer won / consumed | next `requests(i)` resync | on-chain view |
 | Auction discovery + offer status | `GET /v1/auction`, `GET /v1/offer` | 3F API (off-chain) |
-| Realized loss/gain per loan | `FinalizeRequest` log parsed from the bot's **own** `multicall(finalizeRequest…)` receipt | self-emitted |
+| Redemption completion | successful owned `multicall(finalizeRequest…)` receipt; `redeem/success` counts submitted requests | self-observed |
 
 Trade-off accepted: view-only loses *latency* (learn of consume/repay on the next
 poll tick) and *historical analytics*. Neither matters for 3F — funding pull time is
@@ -110,7 +110,19 @@ vault-solver/
 manager and consumes `txmanager.Result`. Admission, nonce ownership, fee policy, replacements,
 confirmation and shutdown are defined in the [transaction manager plan](TXMANAGER-PLAN.md).
 
-An occupied transaction lane or unresolved nonce-ownership conflict pauses new 3F commitments: offer
+`abandoned`, `nonce_conflict` and `nonce_consumed` are expected unknown-execution results; their terminal
+result does not prove a successful redemption. The next normal redemption poll reads `canWithdraw` again and constructs a
+fresh batch; completed requests are excluded. This account-level recovery does not coordinate signed
+offers, offer counters or capacity promises across independent processes; see the [replica plan](REPLICA-PLAN.md).
+
+Each redemption's `Request.ObserveReceipt` captures only the metric pointer and capped submitted batch
+size. Normal successful inclusion and a late canonical successful owned receipt at the configured
+confirmation depth record the same `redeem/success` count and freshness through the manager's bounded
+process-local hash deduplication. Late observations do not rescan requests or update backlog/active-state
+gauges. The current metrics do not report realized loan gains or losses; the vendored `FinalizeRequest`
+event contains only the finalized request address.
+
+An occupied local transaction lane pauses new 3F commitments: offer
 discovery exits before chain/API planning, and lane readiness is checked again immediately before each
 `createOffer`. Existing offer tracking, auction reconciliation, and redemption continue so contention does
 not block recovery work.
@@ -385,10 +397,10 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
   return; the solver only signs and submits the returned offer.
 - **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state.
 - **WS live-log subscription** (`chain.wsUrl`) — config field present but unused; the poll-based reconcile/redeem path is sufficient for v0.
-- **Redeem has no send deadline.** `redeem` submits without `CancelAt` or a gas limit, so its pre-sign gas
+- **Redeem has no send deadline.** `redeem` submits without `Deadline` or a gas limit, so its pre-sign gas
   estimate is bounded only by manager shutdown. Over a WebSocket/IPC read RPC, an estimate the endpoint never
   answers holds the txmanager worker and the shared nonce lane until it answers or the manager stops; HTTP(S)
-  attempts are bounded by `chain.rpcAttemptTimeoutMs`. Either give `redeem` a `CancelAt` or give the manager's
+  attempts are bounded by `chain.rpcAttemptTimeoutMs`. Either give `redeem` a `Deadline` or give the manager's
   pre-sign estimate its own budget ([TXMANAGER-PLAN §3](TXMANAGER-PLAN.md#3-configuration-and-time-budgets)).
 
 **Testing and observability:**

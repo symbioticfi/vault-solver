@@ -86,6 +86,7 @@ type receiptSweep struct {
 	ordinaryDue   bool
 	firstError    *receiptRead
 	diagnostics   receiptSweepDiagnostics
+	onlyNotFound  bool // a complete missing-receipt sweep may fall back to canonical account state
 }
 
 func newReceiptSweep(pending *pendingTransaction, knownAttempts int) *receiptSweep {
@@ -95,7 +96,8 @@ func newReceiptSweep(pending *pendingTransaction, knownAttempts int) *receiptSwe
 	}
 	return &receiptSweep{
 		size: n, start: pending.receiptCursor % n, knownAttempts: knownAttempts,
-		diagnostics: receiptSweepDiagnostics{started: time.Now(), hashes: make(map[common.Hash]struct{})},
+		onlyNotFound: true,
+		diagnostics:  receiptSweepDiagnostics{started: time.Now(), hashes: make(map[common.Hash]struct{})},
 	}
 }
 
@@ -133,6 +135,7 @@ func (m *Manager) observeReceiptRead(
 	if errors.Is(read.err, ethereum.NotFound) {
 		return false
 	}
+	sweep.onlyNotFound = false
 	if read.err != nil {
 		if sweep.firstError == nil {
 			sweep.firstError = &read
@@ -155,4 +158,16 @@ func (m *Manager) finishReceiptSweep(ctx context.Context, pending *pendingTransa
 	} else {
 		m.receiptReadsRecovered(ctx, pending)
 	}
+}
+
+func (s *receiptSweep) allAttemptsMissing(pending *pendingTransaction) bool {
+	if !s.onlyNotFound {
+		return false
+	}
+	for _, attempt := range pending.attempts {
+		if _, read := s.diagnostics.hashes[attempt.hash]; !read {
+			return false // Priority reads can skip an intermediate variant until the next ordinary sweep.
+		}
+	}
+	return true
 }
