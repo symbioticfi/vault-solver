@@ -9,7 +9,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -20,40 +20,34 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
-func confirmedCancellation() txmanager.Result {
-	hash := common.HexToHash("0x1234")
+func abandonedTxResult() txmanager.Result {
 	return txmanager.Result{
-		Outcome: txmanager.OutcomeCancelled, Hash: hash,
-		Receipt: &ethtypes.Receipt{TxHash: hash, Status: ethtypes.ReceiptStatusSuccessful, BlockNumber: big.NewInt(1)},
-		Err:     errors.New("pending transaction cancelled"),
+		Outcome: txmanager.OutcomeAbandoned, Hash: common.HexToHash("0x1234"),
+		Err: txmanager.ErrAbandoned,
 	}
 }
 
-func TestExecutionCancellationRetryRequiresSafeOutcome(t *testing.T) {
+func TestExecutionNonceRetryRequiresSafeOutcome(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		mutate func(*executionService, *fakeTxm)
 		want   orderStatus
 	}{
-		{name: "disabled", mutate: func(e *executionService, _ *fakeTxm) { e.maxCancellationRetries = 0 }, want: statusFailed},
-		{name: "reverted", mutate: func(_ *executionService, txm *fakeTxm) { txm.result.Outcome = txmanager.OutcomeReverted }, want: statusFailed},
-		{name: "unconfirmed cancellation", mutate: func(_ *executionService, txm *fakeTxm) { txm.result.Outcome = txmanager.OutcomeCancelledUnconfirmed }, want: statusSubmitted},
+		{name: "disabled", mutate: func(e *executionService, _ *fakeTxm) { e.maxNonceRetries = 0 }, want: statusNonceUncertain},
 		{name: "tracking stopped", mutate: func(_ *executionService, txm *fakeTxm) { txm.result.Outcome = txmanager.OutcomeTrackingStopped }, want: statusSubmitted},
-		{name: "no receipt", mutate: func(_ *executionService, txm *fakeTxm) { txm.result.Receipt = nil }, want: statusFailed},
-		{name: "failed cancellation", mutate: func(_ *executionService, txm *fakeTxm) { txm.result.Receipt.Status = ethtypes.ReceiptStatusFailed }, want: statusFailed},
 		{name: "order expires before next poll", mutate: func(e *executionService, _ *fakeTxm) {
 			e.reader.(*fakeRecoveryReader).chainTime = time.Unix(4_102_444_797, 0)
-		}, want: statusFailed},
-		{name: "order expires while cancellation confirms", mutate: func(e *executionService, txm *fakeTxm) {
+		}, want: statusExpired},
+		{name: "order expires while abandonment returns", mutate: func(e *executionService, txm *fakeTxm) {
 			txm.onResult = func() { e.now = func() time.Time { return time.Unix(4_102_444_800, 0) } }
-		}, want: statusFailed},
+		}, want: statusExpired},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st, be := fillFixtures(t)
 			now := time.Unix(0, 0)
 			st.now = func() time.Time { return now }
 			be.order.OrderStatus = "open"
-			txm := &fakeTxm{result: confirmedCancellation()}
+			txm := &fakeTxm{result: abandonedTxResult()}
 			e := newExec(t, st, be, txm)
 			e.now = st.now
 			tc.mutate(e, txm)
@@ -68,7 +62,7 @@ func TestExecutionCancellationRetryRequiresSafeOutcome(t *testing.T) {
 	}
 }
 
-func TestExecutionCancellationRetryRevalidatesBackendAndDeadline(t *testing.T) {
+func TestExecutionNonceRetryRevalidatesBackendAndDeadline(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		change func(*fakeBackend, *executionService)
@@ -88,7 +82,7 @@ func TestExecutionCancellationRetryRevalidatesBackendAndDeadline(t *testing.T) {
 			now := time.Unix(0, 0)
 			st.now = func() time.Time { return now }
 			be.order.OrderStatus = "open"
-			txm := &fakeTxm{result: confirmedCancellation()}
+			txm := &fakeTxm{result: abandonedTxResult()}
 			e := newExec(t, st, be, txm)
 			e.now = st.now
 			syncCycle(t.Context(), e)
@@ -105,7 +99,7 @@ func TestExecutionCancellationRetryRevalidatesBackendAndDeadline(t *testing.T) {
 	}
 }
 
-func TestExecutionCancellationRetryRefreshesDiscountCalldata(t *testing.T) {
+func TestExecutionNonceRetryRefreshesDiscountCalldata(t *testing.T) {
 	st, be := fillFixtures(t)
 	now := time.Unix(0, 0)
 	st.now = func() time.Time { return now }
@@ -121,18 +115,18 @@ func TestExecutionCancellationRetryRefreshesDiscountCalldata(t *testing.T) {
 		},
 		SignerSignature: "0xaa", ProtocolDeadline: 90, ProtocolSignature: "0xbb",
 	}
-	txm := &fakeTxm{result: confirmedCancellation()}
+	txm := &fakeTxm{result: abandonedTxResult()}
 	e := newExec(t, st, be, txm)
 	e.now = st.now
 	offerDiscountCandidate(e, be, id)
 	builds := 0
 	e.strategy = fixedFillStrategy{plan: discountFillPlan(id), onBuild: func() { builds++ }}
 	syncCycle(t.Context(), e)
-	if !txm.lastReq.CancelAt.Equal(time.Unix(90, 0)) {
-		t.Fatalf("first deadline = %v, want original discount deadline", txm.lastReq.CancelAt)
+	if !txm.lastReq.Deadline.Equal(time.Unix(90, 0)) {
+		t.Fatalf("first deadline = %v, want original discount deadline", txm.lastReq.Deadline)
 	}
 
-	// The cancellation is settled and the original protocol signature is now expired.
+	// The old attempt was abandoned and its original protocol signature is now expired.
 	// A retry must resolve another one and rebuild the fill using the fresh backend order too.
 	now = time.Unix(100, 0)
 	e.reader.(*fakeRecoveryReader).chainTime = now
@@ -145,8 +139,8 @@ func TestExecutionCancellationRetryRefreshesDiscountCalldata(t *testing.T) {
 	if txm.calls != 2 || be.resolveCalls != 2 || builds != 2 || st.order("o1").Status != statusFilled {
 		t.Fatalf("retry did not rebuild and fill: sends=%d resolves=%d plans=%d order=%+v", txm.calls, be.resolveCalls, builds, st.order("o1"))
 	}
-	if !txm.lastReq.CancelAt.Equal(time.Unix(190, 0)) {
-		t.Fatalf("retry deadline = %v, want refreshed protocol deadline", txm.lastReq.CancelAt)
+	if !txm.lastReq.Deadline.Equal(time.Unix(190, 0)) {
+		t.Fatalf("retry deadline = %v, want refreshed protocol deadline", txm.lastReq.Deadline)
 	}
 	args, err := executorABI.Methods["fill"].Inputs.Unpack(txm.lastReq.Data[4:])
 	if err != nil {
@@ -161,20 +155,21 @@ func TestExecutionCancellationRetryRefreshesDiscountCalldata(t *testing.T) {
 	}
 }
 
-func TestExecutionDoesNotScheduleCancellationRetryDuringShutdown(t *testing.T) {
+func TestExecutionDoesNotScheduleNonceRetryDuringShutdown(t *testing.T) {
 	st, be := fillFixtures(t)
-	txm := &fakeTxm{result: confirmedCancellation()}
+	be.order.OrderStatus = "open"
+	txm := &fakeTxm{result: abandonedTxResult()}
 	e := newExec(t, st, be, txm)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	txm.onResult = cancel
 	syncCycle(ctx, e)
-	if st.order("o1").Status != statusFailed || st.order("o1").CancellationRetries != 0 {
+	if st.order("o1").Status != statusNonceUncertain || st.order("o1").NonceRetries != 0 {
 		t.Fatalf("shutdown scheduled a new retry: %+v", st.order("o1"))
 	}
 }
 
-func TestExecutionCancellationRetryExpiresWithoutBackendReconciliation(t *testing.T) {
+func TestExecutionNonceRetryExpiresWithoutBackendReconciliation(t *testing.T) {
 	for _, listed := range []bool{false, true} {
 		name := "backend forgets order"
 		if listed {
@@ -185,7 +180,7 @@ func TestExecutionCancellationRetryExpiresWithoutBackendReconciliation(t *testin
 			now := time.Unix(0, 0)
 			st.now = func() time.Time { return now }
 			be.order.OrderStatus = "open"
-			txm := &fakeTxm{result: confirmedCancellation()}
+			txm := &fakeTxm{result: abandonedTxResult()}
 			e := newExec(t, st, be, txm)
 			e.now = st.now
 			syncCycle(t.Context(), e)
@@ -213,7 +208,7 @@ func TestExecutionCancellationRetryExpiresWithoutBackendReconciliation(t *testin
 			now = now.Add(3*time.Hour + time.Second)
 			syncCycle(t.Context(), e)
 			if st.order("o1") != nil {
-				t.Fatal("expired cancellation retry was not evicted")
+				t.Fatal("expired nonce retry was not evicted")
 			}
 		})
 	}
@@ -224,7 +219,7 @@ func TestExecutionRetryDeadlineDoesNotExpireUnknownInclusion(t *testing.T) {
 	now := time.Unix(0, 0)
 	st.now = func() time.Time { return now }
 	be.order.OrderStatus = "open"
-	txm := &fakeTxm{result: confirmedCancellation()}
+	txm := &fakeTxm{result: abandonedTxResult()}
 	e := newExec(t, st, be, txm)
 	e.now = st.now
 	syncCycle(t.Context(), e)
@@ -286,23 +281,24 @@ func TestExecutionObsoleteHookReadsBackendOrderStatus(t *testing.T) {
 }
 
 func TestExecutionRetiresObsoleteOrderWithoutRetry(t *testing.T) {
-	obsoleteCancellation := confirmedCancellation()
-	obsoleteCancellation.Err = errors.Errorf("pending transaction cancelled: %w", txmanager.ErrRequestObsolete)
-	unconfirmed := obsoleteCancellation
-	unconfirmed.Outcome = txmanager.OutcomeCancelledUnconfirmed
+	obsoleteAbandonment := abandonedTxResult()
+	obsoleteAbandonment.Err = errors.Errorf("pending transaction abandoned: %w", txmanager.ErrRequestObsolete)
+	unconfirmed := obsoleteAbandonment
+	unconfirmed.Outcome = txmanager.OutcomeTrackingStopped
 	for _, tc := range []struct {
 		name          string
 		result        txmanager.Result
 		backendStatus string
 		want          orderStatus
+		wantObsolete  float64
 	}{
-		{name: "cancelled pending fill", result: obsoleteCancellation, backendStatus: "open", want: statusObsolete},
-		{name: "cancellation confirmation failed", result: unconfirmed, backendStatus: "open", want: statusObsolete},
+		{name: "abandoned obsolete fill", result: obsoleteAbandonment, backendStatus: "open", want: statusObsolete},
+		{name: "tracking stopped after obsolescence", result: unconfirmed, backendStatus: "open", want: statusObsolete},
 		{name: "dropped before signing", result: txmanager.Result{
 			Outcome: txmanager.OutcomeSubmissionError,
 			Err:     errors.Errorf("send %q: %w", "rfq-fill", txmanager.ErrRequestObsolete),
-		}, backendStatus: "open", want: statusObsolete},
-		{name: "backend already reports the fill", result: obsoleteCancellation, backendStatus: "filled", want: statusFilled},
+		}, backendStatus: "open", want: statusObsolete, wantObsolete: 1},
+		{name: "backend already reports the fill", result: obsoleteAbandonment, backendStatus: "filled", want: statusFilled},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st, be := fillFixtures(t)
@@ -327,8 +323,57 @@ func TestExecutionRetiresObsoleteOrderWithoutRetry(t *testing.T) {
 			if txm.calls != 1 || st.order("o1").Status != tc.want {
 				t.Fatalf("sends = %d, order = %+v; want one send and %s", txm.calls, st.order("o1"), tc.want)
 			}
-			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeObsolete, 1)
+			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeObsolete, tc.wantObsolete)
 			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 0)
 		})
+	}
+}
+
+// An expired abandoned attempt must release its business reservation so a different awarded order
+// can be freshly planned. Nonce reuse itself is exercised by txmanager's real-chain tests.
+func TestExecutionAbandonedOrderExpiryAllowsFreshDifferentOrder(t *testing.T) {
+	st, be := fillFixtures(t)
+	now := time.Unix(0, 0)
+	st.now = func() time.Time { return now }
+	be.order.OrderStatus = "open"
+	txm := &fakeTxm{result: abandonedTxResult()}
+	e := newExec(t, st, be, txm)
+	e.now = st.now
+	syncCycle(t.Context(), e)
+	original := append([]byte(nil), txm.lastReq.Data...)
+	if !st.reserved("o1") || st.order("o1").Status != statusRetryWaiting {
+		t.Fatalf("valid abandoned fill lost its commitment: %+v", st.order("o1"))
+	}
+	be.open, be.order = nil, nil
+	now = st.order("o1").RetryDeadline
+	syncCycle(t.Context(), e)
+	if st.order("o1").Status != statusExpired || st.reserved("o1") {
+		t.Fatalf("expired abandoned fill retained capacity: %+v", st.order("o1"))
+	}
+
+	fresh := sampleOrder()
+	fresh.Request.Nonce = big.NewInt(2)
+	fresh.Request.Deadline = big.NewInt(4_102_444_900)
+	encoded, err := orderTupleArgs.Pack(fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	be.executable.OrderID, be.executable.QuoteID = "o2", "q2"
+	be.executable.EncodedOrder = strPtr(hexutil.Encode(encoded))
+	be.executable.Deadline = i64Ptr(4_102_444_900)
+	be.executable.ProtocolSignature = strPtr("0x1234")
+	be.open = []backendOrder{{OrderID: "o2", QuoteID: "q2", OrderStatus: "open", Filler: be.executable.Filler}}
+	be.order = &backendOrder{OrderID: "o2", QuoteID: "q2", OrderStatus: "filled"}
+	e.reader.(*fakeRecoveryReader).chainTime = now
+	plan := baseFillPlan()
+	plan.QuoteID = "q2"
+	e.strategy = fixedFillStrategy{plan: plan}
+	txm.result = confirmedTxResult()
+	syncCycle(t.Context(), e)
+	if txm.calls != 2 || st.order("o2") == nil || st.order("o2").Status != statusFilled {
+		t.Fatalf("fresh different order did not fill: sends=%d order=%+v", txm.calls, st.order("o2"))
+	}
+	if bytes.Equal(original, txm.lastReq.Data) || st.order("o1").Status != statusExpired {
+		t.Fatal("new order replayed the abandoned fill or reopened its expired business order")
 	}
 }

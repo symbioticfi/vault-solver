@@ -59,7 +59,7 @@ func newEstimateRPC(t *testing.T, reply string) *estimateRPC {
 
 func TestEstimateGasNextBlockSendsBlockOverrides(t *testing.T) {
 	srv := newEstimateRPC(t, `"0x5208"`)
-	c, err := Dial(t.Context(), []string{srv.server.URL}, "", "", testMulticall, defaultRPCAttemptTimeout)
+	c, err := Dial(t.Context(), []string{srv.server.URL}, "", testMulticall, defaultRPCAttemptTimeout)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestEstimateGasNextBlockSendsBlockOverrides(t *testing.T) {
 
 func TestEstimateGasNextBlockSurfacesInvalidParams(t *testing.T) {
 	srv := newEstimateRPC(t, `{"code":-32602,"message":"too many arguments, want at most 3"}`)
-	c, err := Dial(t.Context(), []string{srv.server.URL}, "", "", testMulticall, defaultRPCAttemptTimeout)
+	c, err := Dial(t.Context(), []string{srv.server.URL}, "", testMulticall, defaultRPCAttemptTimeout)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}

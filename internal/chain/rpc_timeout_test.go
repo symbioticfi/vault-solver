@@ -74,14 +74,14 @@ func TestDialRPCAttemptTimeout(t *testing.T) {
 				}
 			}))
 			defer func() { close(release); server.Close() }()
-			client, err := Dial(t.Context(), []string{server.URL}, server.URL, server.URL,
+			client, err := Dial(t.Context(), []string{server.URL}, server.URL,
 				testMulticall, 100*time.Millisecond)
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer client.Close()
 			for role, rpcClient := range map[string]*ethclient.Client{
-				"read": client.Client, "write": client.writeClient, "cancel": client.cancelClient,
+				"read": client.Client, "write": client.writeClient,
 			} {
 				t.Run(role, func(t *testing.T) {
 					ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)

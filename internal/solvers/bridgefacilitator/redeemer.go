@@ -108,13 +108,22 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 	}
 
 	res := s.txManager.Send(submitCtx, txmanager.Request{
-		Solver: Name,
-		To:     target.Adapter,
-		Data:   data,
-		Label:  "redeem",
+		Solver:         Name,
+		To:             target.Adapter,
+		Data:           data,
+		Label:          "redeem",
+		ObserveReceipt: s.metrics.redeemReceiptObserver(len(ready)),
 	})
 	txmanager.RecordResult(submitCtx, res) // the stage
 	txmanager.RecordResult(ctx, res)       // the redeem pass it belongs to
+	if res.Outcome.NonceUncertain() {
+		observability.Decline(submitCtx, "redeem_nonce_uncertain", "transaction nonce result is uncertain")
+		// The next poll reads canWithdraw again before rebuilding a batch. Missing owned
+		// receipts cannot prove that this batch finalized any requests.
+		observability.Log(submitCtx).V(1).Info("redeem nonce uncertain; awaiting fresh request scan",
+			"requests", len(ready), "tx", res.Hash.Hex())
+		return
+	}
 	if !res.Outcome.Included() {
 		err = res.Err
 		if err == nil {
@@ -123,7 +132,6 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 		observability.Log(submitCtx).Error(err, "redeem: tx not included", "requests", len(ready), "outcome", res.Outcome)
 		return
 	}
-	s.observeRedeemedRequests(len(ready))
 	if res.Outcome == txmanager.OutcomeIncludedUnconfirmed {
 		if res.Err != nil {
 			err = res.Err

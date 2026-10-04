@@ -55,6 +55,7 @@ func TestLIFIOrderQueueMetricsCollectLiveOwnerState(t *testing.T) {
 		orderQueueRecoveryRetry: {backlog: 1, nearestDeadline: 1_150},
 		orderQueueCapacityRetry: {backlog: 1, nearestDeadline: 1_200},
 		orderQueueDepositRetry:  {backlog: 1, nearestDeadline: 1_020},
+		orderQueueNonceRetry:    {},
 	})
 
 	readyAt, ok := depositRetries.nextReadyAt()
@@ -184,6 +185,8 @@ func TestLIFIMetricsRecordOnlyBoundedOrderSignals(t *testing.T) {
 	metrics.observeOrderQueueDrop(orderQueueDepositRetry, errOrderDepositRetryKey)
 	metrics.observeOrderQueueDrop(orderQueueDepositRetry, errOrderDepositRetryExpired)
 	metrics.observeOrderQueueDrop(orderQueueDepositRetry, errOrderDepositRetryWindow)
+	metrics.observeOrderQueueDrop(orderQueueNonceRetry, errOrderDepositRetryFull)
+	metrics.observeOrderQueueDrop(orderQueueNonceRetry, errOrderNonceRetryExpired)
 	metrics.observeOrderQueueDrop(orderQueue("request-derived-value"), errOrderInboxFull)
 
 	for outcome, want := range map[string]float64{

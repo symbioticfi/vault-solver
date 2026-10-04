@@ -173,15 +173,38 @@ planning or admission. The fill loop counts outstanding result handlers and drai
 a reservation revision change during planning still rejects that plan for a fresh retry.
 
 A planned fill may wait behind another transaction on the shared nonce lane. Its admission deadline
-(`CancelAt`) still applies: if the preceding transaction takes too long, admission returns `not_admitted`
+(`Deadline`) still applies: if the preceding transaction takes too long, admission returns `not_admitted`
 and existing retry handling applies. Each fill also carries an `Obsolete` check that looks the order up in
 the Uniswap order API (`ordersByHash`, the lookup exclusive-obligation reconciliation uses, inside the same
 request rate limit). `open` keeps the fill alive; `filled`, `cancelled`, `expired`, `error` and
-`insufficient-funds` make the manager drop the unsigned call or cancel the pending one early instead of
+`insufficient-funds` make the manager drop the unsigned call or abandon pending tracking early instead of
 holding the lane until the deadline. A lookup error or an unknown status preserves the lifecycle. A result
-wrapping `txmanager.ErrRequestObsolete` retires the order without a retry or a breaker failure and records
-`fill/obsolete`. Continued quoting does not guarantee execution within exclusivity;
+wrapping `txmanager.ErrRequestObsolete` retires the order without a retry or a breaker failure.
+It records `fill/obsolete` only if the order has no current or historical locally signed attempt;
+otherwise receipt observation decides owned execution metrics. The signed-attempt marker is guarded
+by `stateMu`, survives retries, and is removed on completion or the existing retry-state expiry.
+Receipt callbacks never change it. Continued quoting does not guarantee execution within exclusivity;
 the exclusive window must also cover any preceding fill's confirmation time.
+
+`abandoned`, `nonce_conflict` and `nonce_consumed` have no owned receipt in their terminal result and do not
+count as a successful fill at that point. Completion invalidates inventory and releases the local reservation, then defers the order until the
+normal polling interval without increasing execution-failure attempts or opening the fade breaker. A later
+open-order poll and the normal fresh deadline, planning, preflight and protocol-obsolescence checks decide
+whether another fill can be submitted. The manager may reuse an abandoned unused nonce for that fresh
+request; calldata from the previous request is never replayed. These are local
+recovery rules; they do not coordinate outstanding orders, exclusive obligations or capacity across replicas.
+
+Each submitted fill snapshots only its metric pointer, token addresses, input/output amounts and gross
+planned surplus into `Request.ObserveReceipt`. Normal inclusion and a late canonical owned receipt at
+the configured confirmation depth use the manager's bounded hash deduplication. Successful observations
+record `fill/success`, freshness and amounts; late observations never repeat completion, modify the filled
+cache, clear a breaker, release reservations again or alter retries. Exclusive-obligation outcomes remain
+owned by the existing terminal API and canonical block-time reconciliation.
+
+Completed orders retain the existing one-hour local deduplication cache. The poller does not retain a
+successful receipt for a later-reorg watcher or reopen cached completions. It follows the order service's
+terminal-status behavior; txmanager's confirmation-time reorg checks and exclusive-obligation canonical
+receipt classification remain in place.
 
 The current parser accepts only `Dutch_V2`. All strategies retain polling retries for declined plans and
 unavailable sources. Economic declines record `fill/declined` without opening the public preflight breaker;
@@ -206,8 +229,9 @@ exclusive obligations remain independently tracked through terminal reconciliati
   cache invalidation cannot lose a served quote's amounts and a permissive webhook cannot turn the
   unauthenticated endpoint into unbounded Prometheus cardinality. Successful fill receipts publish
   `fill/success`, freshness, and token-native amounts; terminal failures and admission rejection publish
-  `fill/failure` and `fill/not_admitted`; fills retired because the order was settled elsewhere publish
-  `fill/obsolete`; pre-submission declines use `fill/declined`.
+  `fill/failure` and `fill/not_admitted`; obsolete fills without local signed attempts publish
+  `fill/obsolete`; pre-submission declines use `fill/declined`. An obsolete order with signed history
+  stays terminal but emits no obsolete metric, so a normal or late owned success is not also a skip.
   Txmanager remains authoritative for detailed outcomes, gas, fees, and lifecycle state.
   The generic external-operation histogram separately times fixed `quote_refresh`,
   `exclusive_order_poll`, and `public_order_poll` boundaries. A truncated order snapshot or a safe, incomplete
@@ -220,20 +244,20 @@ exclusive obligations remain independently tracked through terminal reconciliati
   later runtime recovery records each terminal outcome so a breaker-opening miss always has a matching metric.
   Exact names and labels are in the
   [README metrics table](../README.md#metrics).
-- **Fills use the [shared transaction manager](TXMANAGER-PLAN.md)** asynchronously. `CancelAt` is the
+- **Fills use the [shared transaction manager](TXMANAGER-PLAN.md)** asynchronously. `Deadline` is the
   earliest order, signed-discount or protocol-signature deadline. Its wall-clock observation anchor is
   captured before the chain-time RPC, so lookup/planning latency consumes rather than extends validity.
   Capacity reservations protect the selected source before preflight and transaction admission.
-  With every strategy (`default`, `single`, and `webhook`), quote readiness depends on nonce safety,
+  With every strategy (`default`, `single`, and `webhook`), quote readiness depends on sender initialization,
   not ordinary sender occupancy; free capacity remains quotable.
 - **The request fee ceiling is protocol policy.** With gas accounting disabled, UniswapX supplies no
   request ceiling. With it enabled, `MaxFeePerGas` supplies the decision-time profitability ceiling
-  including one normal replacement: one bump over the exact base-fee bound, so a quote-time ceiling
-  still leaves the fill its full fee horizon. The manager owns
-  [fee selection and headroom](TXMANAGER-PLAN.md#4-fees-replacements-and-cancellation).
+  including an unexpired, affordable fee floor retained after accepted/uncertain abandonment at the
+  current mined nonce, plus one normal replacement when the global ceiling permits. The manager owns
+  [fee selection and headroom](TXMANAGER-PLAN.md#4-fees-replacements-and-abandonment).
 - **Signed lifecycle ownership remains in txmanager.** UniswapX consumes its
-  [nonce safety and terminal results](TXMANAGER-PLAN.md#6-rpc-routing-nonce-conflicts-and-restart),
-  retaining its own quote/readiness gates while nonce ownership is uncertain.
+  [nonce handling and terminal results](TXMANAGER-PLAN.md#6-rpc-routing-nonce-conflicts-and-restart),
+  retaining its own quote/readiness gates during startup and shutdown.
 - **Pending capacity stays reserved through transaction completion.** A fallback replaces its own
   reservation. Transaction completion invalidates the quote cache before releasing capacity and requests
   a latest-state refresh. Unsubmitted attempts release their reservations without invalidating inventory;
@@ -676,11 +700,10 @@ is economic, not just gas:
 - **Honor trusted `blockUntilTimestamp` notifications** from Uniswap and expose the block/readiness state;
   readiness also fails when the latest published snapshot has no quotable inventory, while health remains
   liveness-only.
-- **Gate quotes on nonce safety:** unresolved nonce ownership blocks quote responses,
-  the solver `/ready` endpoint, its readiness metric, and framework readiness. A busy sender alone does not.
-  While a nonce conflict pauses the lane, claimed orders return to retry before chain reads, strategy or signed-discount resolution,
-  calldata construction, and preflight. Exact-hash reconciliation and the fail-closed recovery rule are
-  described in §2.2.
+- **Gate quotes on sender readiness:** startup and shutdown gate quote responses, the solver `/ready`
+  endpoint, its readiness metric and framework readiness. A busy sender alone does not. Initial nonce
+  collisions return promptly and do not create a persistent readiness pause; order execution reconciles
+  current protocol state before a fresh polling retry (§2.2).
 - **Track exclusive obligations locally:** every decodable order assigned to our executor is tracked until
   `decayStartTime`, even when later execution validation rejects it. After startup or an interrupted exclusive
   poll, the solver also reads the newest filler snapshot across all statuses and filters it locally so an order

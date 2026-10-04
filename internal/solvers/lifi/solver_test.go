@@ -526,16 +526,17 @@ func (s *Solver) processOrder(ctx context.Context, routes []route, order *submit
 }
 
 type fakeLifiTxSender struct {
-	reqs    []txmanager.Request
-	results []chan txmanager.Result
-	result  txmanager.Result
-	reject  bool
-	hold    bool
-	onSend  func(int, chan<- txmanager.Result)
+	reqs      []txmanager.Request
+	results   []chan txmanager.Result
+	result    txmanager.Result
+	reject    bool
+	hold      bool
+	onSend    func(int, chan<- txmanager.Result)
+	observers sync.Map // result channels own their immutable request callbacks
 }
 
 func (f *fakeLifiTxSender) SendAsync(
-	_ context.Context,
+	ctx context.Context,
 	req txmanager.Request,
 ) (<-chan txmanager.Result, bool) {
 	if f.reject {
@@ -544,13 +545,25 @@ func (f *fakeLifiTxSender) SendAsync(
 	f.reqs = append(f.reqs, req)
 	result := make(chan txmanager.Result, 1)
 	f.results = append(f.results, result)
+	f.observers.Store((chan<- txmanager.Result)(result), func(value txmanager.Result) {
+		if req.ObserveReceipt != nil && value.Receipt != nil {
+			req.ObserveReceipt(ctx, value)
+		}
+	})
 	if f.onSend != nil {
 		f.onSend(len(f.reqs), result)
 	}
 	if !f.hold {
-		result <- f.fillResult()
+		f.complete(result, f.fillResult())
 	}
 	return result, true
+}
+
+func (f *fakeLifiTxSender) complete(result chan<- txmanager.Result, value txmanager.Result) {
+	if observer, ok := f.observers.LoadAndDelete(result); ok {
+		observer.(func(txmanager.Result))(value)
+	}
+	result <- value
 }
 
 func (f *fakeLifiTxSender) fillResult() txmanager.Result {
@@ -849,8 +862,8 @@ func TestProcessOrderSubmitsImmediateFill(t *testing.T) {
 	if txm.reqs[0].MaxFeePerGas == nil || txm.reqs[0].MaxFeePerGas.Cmp(big.NewInt(1)) != 0 {
 		t.Fatalf("fill max fee per gas = %v, want 1", txm.reqs[0].MaxFeePerGas)
 	}
-	if want := time.Unix(1_800_000_000, 0); !txm.reqs[0].CancelAt.Equal(want) {
-		t.Fatalf("fill CancelAt = %v, want order deadline %v", txm.reqs[0].CancelAt, want)
+	if want := time.Unix(1_800_000_000, 0); !txm.reqs[0].Deadline.Equal(want) {
+		t.Fatalf("fill Deadline = %v, want order deadline %v", txm.reqs[0].Deadline, want)
 	}
 	logged := strings.Join(logs, "\n")
 	for _, want := range []string{
@@ -1012,12 +1025,12 @@ func TestProcessOrderWithoutDeadlineUsesPendingTimeout(t *testing.T) {
 	if len(txm.reqs) != 1 {
 		t.Fatalf("submitted fills = %d, want 1", len(txm.reqs))
 	}
-	if !txm.reqs[0].CancelAt.IsZero() {
-		t.Fatalf("fill CancelAt = %v, want global pending timeout", txm.reqs[0].CancelAt)
+	if !txm.reqs[0].Deadline.IsZero() {
+		t.Fatalf("fill Deadline = %v, want global pending timeout", txm.reqs[0].Deadline)
 	}
 }
 
-func TestProcessOrderCancellationDeadlineIncludesPreAdmissionLatency(t *testing.T) {
+func TestProcessOrderSubmissionDeadlineIncludesPreAdmissionLatency(t *testing.T) {
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
 	if err != nil {
@@ -1059,8 +1072,8 @@ func TestProcessOrderCancellationDeadlineIncludesPreAdmissionLatency(t *testing.
 	if len(txm.reqs) != 1 {
 		t.Fatalf("submitted fills = %d, want 1", len(txm.reqs))
 	}
-	if want := time.Unix(1_799_999_990, 0); !txm.reqs[0].CancelAt.Equal(want) {
-		t.Fatalf("fill CancelAt = %v, want skew-preserving %v", txm.reqs[0].CancelAt, want)
+	if want := time.Unix(1_799_999_990, 0); !txm.reqs[0].Deadline.Equal(want) {
+		t.Fatalf("fill Deadline = %v, want skew-preserving %v", txm.reqs[0].Deadline, want)
 	}
 }
 
@@ -1257,15 +1270,16 @@ func TestOpenedOrderIDClassifiesOIFStatuses(t *testing.T) {
 	order := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
 	orderID := common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 	tests := []struct {
-		name    string
-		status  uint8
-		wantErr error
+		name        string
+		status      uint8
+		wantErr     error
+		wantUnknown bool
 	}{
 		{name: "none", status: lifiOrderStatusNone, wantErr: errOrderDepositNotVisible},
 		{name: "deposited", status: lifiOrderStatusDeposited},
 		{name: "claimed", status: lifiOrderStatusClaimed, wantErr: errOrderNotFillable},
 		{name: "refunded", status: lifiOrderStatusRefunded, wantErr: errOrderNotFillable},
-		{name: "unknown", status: 255, wantErr: errOrderNotFillable},
+		{name: "unknown", status: 255, wantUnknown: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1278,6 +1292,12 @@ func TestOpenedOrderIDClassifiesOIFStatuses(t *testing.T) {
 				log: logr.Discard(),
 			}
 			got, err := solver.openedOrderID(t.Context(), order)
+			if test.wantUnknown {
+				if err == nil || errors.Is(err, errOrderNotFillable) {
+					t.Fatalf("unknown status error = %v, want retryable unsupported-status error", err)
+				}
+				return
+			}
 			if !errors.Is(err, test.wantErr) {
 				t.Fatalf("openedOrderID error = %v, want %v", err, test.wantErr)
 			}
@@ -1299,6 +1319,7 @@ func TestProcessOrderClassifiesSubmissionStatus(t *testing.T) {
 		status                uint8
 		wantDepositNotVisible bool
 		wantOutcome           orderProcessingOutcome
+		wantRetryable         bool
 	}{
 		{
 			name: "none", status: lifiOrderStatusNone,
@@ -1306,7 +1327,7 @@ func TestProcessOrderClassifiesSubmissionStatus(t *testing.T) {
 		},
 		{name: "claimed", status: lifiOrderStatusClaimed, wantOutcome: orderProcessingNotActionable},
 		{name: "refunded", status: lifiOrderStatusRefunded, wantOutcome: orderProcessingNotActionable},
-		{name: "unknown", status: 255, wantOutcome: orderProcessingNotActionable},
+		{name: "unknown", status: 255, wantOutcome: orderProcessingRetryableError, wantRetryable: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1344,8 +1365,8 @@ func TestProcessOrderClassifiesSubmissionStatus(t *testing.T) {
 			if result.outcome != test.wantOutcome {
 				t.Fatalf("outcome = %q, want %q", result.outcome, test.wantOutcome)
 			}
-			if result.fill != nil || result.retryable {
-				t.Fatalf("submission status result = %+v, want no fill or generic retry", result)
+			if result.fill != nil || result.retryable != test.wantRetryable {
+				t.Fatalf("submission status result = %+v, want retryable=%t", result, test.wantRetryable)
 			}
 			if statusReads != 2 || len(txm.reqs) != 0 {
 				t.Fatalf("status reads = %d submissions = %d, want 2/0", statusReads, len(txm.reqs))
@@ -1512,7 +1533,7 @@ func TestOrderWorkerSubmitsAllFillsWithoutWaitingForReceipts(t *testing.T) {
 		results = append(results, receiveFillSubmission(t, submitted))
 	}
 	for _, result := range results {
-		result <- txm.fillResult()
+		txm.complete(result, txm.fillResult())
 	}
 	select {
 	case err := <-done:
@@ -1834,15 +1855,15 @@ func TestOrderWorkerRequeuesReroutedOrderWithoutBlockingNewOrders(t *testing.T) 
 	expectRetryEvent(t, events, "blocked-capacity-a")
 	expectRetryEvent(t, events, "probe-capacity-a")
 
-	results[0] <- txm.fillResult()
+	txm.complete(results[0], txm.fillResult())
 	expectRetryEvent(t, events, "blocked-capacity-b")
 	expectRetryEvent(t, events, "probe-capacity-b")
-	results[1] <- txm.fillResult()
+	txm.complete(results[1], txm.fillResult())
 	results = append(results, receiveFillSubmission(t, submitted))
 	expectRetryEvent(t, events, "fill-capacity-b")
 
-	results[2] <- txm.fillResult()
-	results[3] <- txm.fillResult()
+	txm.complete(results[2], txm.fillResult())
+	txm.complete(results[3], txm.fillResult())
 	select {
 	case err := <-done:
 		if err != nil {
@@ -1892,7 +1913,7 @@ func TestOrderWorkerDrainsAcceptedFillAfterCancellation(t *testing.T) {
 		t.Fatalf("worker returned before accepted fill completed: %v", err)
 	case <-time.After(100 * time.Millisecond):
 	}
-	result <- txm.fillResult()
+	txm.complete(result, txm.fillResult())
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.Canceled) {

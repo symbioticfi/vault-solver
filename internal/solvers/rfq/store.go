@@ -13,8 +13,8 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
-// orderStatus is the local order lifecycle. Confirmed cancellation can enter retry_waiting before
-// another open-order poll returns it to queued; other signed failures are terminal.
+// orderStatus is the local order lifecycle. Abandonment and uncertain nonce outcomes
+// can enter retry_waiting before a fresh open-order poll re-arms them; other signed failures are terminal.
 type orderStatus string
 
 const (
@@ -25,13 +25,21 @@ const (
 	statusExpired      orderStatus = "expired"
 	statusFailed       orderStatus = "failed"
 	statusRetryWaiting orderStatus = "retry_waiting"
+	// A nonce race does not prove our fill landed. Reconcile the backend before fresh retry.
+	statusNonceUncertain orderStatus = "nonce_uncertain"
+	// The Reactor consumed/inactivated the order nonce. Sending is retired immediately;
+	// backend observation only refines fill versus invalidation until the order deadline.
+	statusNonceUsed orderStatus = "nonce_used"
+	// An unsigned estimate is reconciled before protocol errors or a bounded retry are chosen.
+	statusEstimateReverted orderStatus = "estimate_reverted"
 	// statusObsolete is terminal: the backend reported the order no longer fillable while our fill was
 	// being sent, so it is never re-armed, even if a stale open-order listing still returns it.
 	statusObsolete orderStatus = "obsolete"
 )
 
 func (s orderStatus) active() bool {
-	return s == statusQueued || s == statusSubmitting || s == statusSubmitted || s == statusRetryWaiting
+	return s == statusQueued || s == statusSubmitting || s == statusSubmitted ||
+		s == statusRetryWaiting || s == statusNonceUncertain || s == statusNonceUsed || s == statusEstimateReverted
 }
 
 // awaitsSubmission reports a won order the submitter still has to send.
@@ -48,19 +56,36 @@ const (
 // orderRecord is the local tracking state for one order. The executable payload is fetched fresh
 // from the backend at fill time; only a translated deadline is retained to bound unsigned retries.
 type orderRecord struct {
-	OrderID             string
-	QuoteID             string
-	Status              orderStatus
-	TxHash              common.Hash
-	LastError           string
-	CreatedAt           time.Time
-	UpdatedAt           time.Time
-	CancellationRetries int
-	RetryAt             time.Time
-	RetryDeadline       time.Time
+	OrderID      string
+	QuoteID      string
+	Status       orderStatus
+	TxHash       common.Hash
+	LastError    string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	NonceRetries int
+	// NonceRetryExhausted stops further sends while retaining bounded backend observation. The
+	// flag also distinguishes a later evidenced expiry from an ordinary order deadline.
+	NonceRetryExhausted bool
+	// EstimateRetries counts unsigned transient/undecoded retries independently of signed retries.
+	EstimateRetries   int
+	EstimateKind      estimateRevertKind
+	EstimateErrorName string
+	// RetryRetired prevents permanent unsigned failures from being re-armed by stale open listings.
+	RetryRetired bool
+	// NonceConflict identifies rejected initial nonce work.
+	// It needs fresh protocol reconciliation but does not spend the signed retry budget.
+	NonceConflict bool
+	RetryAt       time.Time
+	RetryDeadline time.Time
 	// IncludedAt is the block a confirmed fill landed in; zero until then. A snapshot read at or
 	// after it already reflects the fill, so the reservation is not subtracted from it.
 	IncludedAt uint64
+	// PeerFillObserved prevents repeated backend reconciliation from crediting the same order.
+	PeerFillObserved bool
+	// AttemptHashes retains this process's signed transactions across replacements and retries.
+	// It is guarded by store.mu and retained until the order is swept.
+	AttemptHashes []common.Hash
 }
 
 // queuedOrder is the input to upsertQueued, carrying the fields known when an order is first polled.
@@ -107,7 +132,7 @@ func (s *store) sweep() {
 
 /* ───────── orders ───────── */
 
-// upsertQueued re-arms unsigned failures and explicitly scheduled cancellation retries. A retry
+// upsertQueued re-arms unsigned failures and explicitly scheduled nonce retries. A retry
 // requires both the backoff and another open-order poll. Other signed failures stay terminal.
 func (s *store) upsertQueued(in queuedOrder) bool {
 	s.mu.Lock()
@@ -119,7 +144,7 @@ func (s *store) upsertQueued(in queuedOrder) bool {
 		rec = &orderRecord{OrderID: in.OrderID, Status: statusQueued, CreatedAt: now}
 		s.orders[in.OrderID] = rec
 	}
-	if rec.Status == statusFailed && rec.TxHash == (common.Hash{}) {
+	if rec.Status == statusFailed && rec.TxHash == (common.Hash{}) && !rec.RetryRetired {
 		rec.Status = statusQueued
 		rec.LastError = ""
 	}
@@ -129,7 +154,8 @@ func (s *store) upsertQueued(in queuedOrder) bool {
 	}
 	if rec.Status == statusRetryWaiting && !now.Before(rec.RetryAt) {
 		rec.Status = statusQueued
-		rec.TxHash = common.Hash{} // the previous nonce was consumed by a confirmed cancellation
+		rec.NonceConflict = false
+		rec.TxHash = common.Hash{} // protocol reconciliation authorized a fresh attempt
 		rec.LastError = ""
 		rec.RetryAt = time.Time{}
 	}
@@ -197,10 +223,31 @@ func (s *store) markStatus(orderID string, status orderStatus, txHash common.Has
 	if !ok {
 		return
 	}
+	s.markStatusLocked(rec, status, txHash, lastErr)
+}
+
+// markFilled records terminal backend completion and reports its first non-local transaction.
+func (s *store) markFilled(orderID string, txHash common.Hash) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec := s.orders[orderID]
+	if rec == nil {
+		return false
+	}
+	peer := txHash != (common.Hash{}) && !slices.Contains(rec.AttemptHashes, txHash) && !rec.PeerFillObserved
+	if peer {
+		rec.PeerFillObserved = true
+	}
+	s.markStatusLocked(rec, statusFilled, txHash, "")
+	return peer
+}
+
+func (s *store) markStatusLocked(rec *orderRecord, status orderStatus, txHash common.Hash, lastErr string) {
 	rec.Status = status
+	rec.NonceConflict = false
 	if !status.active() && rec.IncludedAt == 0 {
 		// Nothing was spent. A confirmed spend stays until sweep for older snapshots.
-		s.reservations.Delete(orderID)
+		s.reservations.Delete(rec.OrderID)
 	}
 	if txHash != (common.Hash{}) {
 		rec.TxHash = txHash
@@ -209,13 +256,129 @@ func (s *store) markStatus(orderID string, status orderStatus, txHash common.Has
 	rec.UpdatedAt = s.now()
 }
 
+// markExpired reports the first active-to-expired transition after retry exhaustion. The shared
+// store lock makes the event gate atomic with the status update; repeated polls cannot count it twice.
+func (s *store) markExpired(orderID string, txHash common.Hash, lastErr string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec := s.orders[orderID]
+	if rec == nil || !rec.Status.active() {
+		return false
+	}
+	exhausted := rec.NonceRetryExhausted
+	s.markStatusLocked(rec, statusExpired, txHash, lastErr)
+	return exhausted
+}
+
+// markNonceRetryExhausted retires resubmission, while keeping backend settlement observation until
+// the order's existing deadline. It reports the first transition for one bounded workflow event.
+func (s *store) markNonceRetryExhausted(orderID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec := s.orders[orderID]
+	if rec == nil || rec.Status != statusNonceUncertain || rec.NonceRetryExhausted {
+		return false
+	}
+	rec.NonceRetryExhausted = true
+	rec.LastError = "nonce retry budget exhausted"
+	rec.UpdatedAt = s.now()
+	return true
+}
+
+// markNonceUncertain retains the result category while fresh backend state is unavailable.
+// The caller holds per-order execution ownership, and this state remains guarded by the store mutex.
+func (s *store) markNonceUncertain(orderID string, txHash common.Hash, lastErr string, conflict bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rec := s.orders[orderID]; rec != nil {
+		rec.Status = statusNonceUncertain
+		rec.NonceConflict = conflict
+		rec.TxHash = txHash
+		rec.LastError = lastErr
+		rec.UpdatedAt = s.now()
+	}
+}
+
+// markNonceUsed retires sending and releases unused capacity immediately. Backend observation
+// remains active only to distinguish a fill from explicit invalidation; it never re-arms this order.
+func (s *store) markNonceUsed(orderID string, lastErr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rec := s.orders[orderID]; rec != nil {
+		rec.Status = statusNonceUsed
+		rec.NonceConflict = false
+		rec.LastError = lastErr
+		rec.UpdatedAt = s.now()
+		s.reservations.Delete(orderID)
+	}
+}
+
+// markEstimateReverted retains the protocol decision until backend reconciliation. The per-order
+// execution owner writes it; all polling and submission access stays under the ordinary store lock.
+func (s *store) markEstimateReverted(orderID string, kind estimateRevertKind, name, lastErr string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if rec := s.orders[orderID]; rec != nil {
+		rec.Status = statusEstimateReverted
+		rec.EstimateKind, rec.EstimateErrorName = kind, name
+		rec.NonceConflict = false
+		rec.LastError = lastErr
+		rec.UpdatedAt = s.now()
+		if kind == estimateRevertFatal || kind == estimateRevertExpired {
+			s.reservations.Delete(orderID)
+		}
+	}
+}
+
+// markEstimateFailed reports a permanent failure only once and prevents unsigned re-arming.
+func (s *store) markEstimateFailed(orderID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec := s.orders[orderID]
+	if rec == nil || rec.Status != statusEstimateReverted {
+		return false
+	}
+	rec.RetryRetired = true
+	s.markStatusLocked(rec, statusFailed, common.Hash{}, rec.LastError)
+	return true
+}
+
+// expireFatalEstimate ends unresolved observation while retaining the known simulation cause.
+// The store lock gates its diagnostic once; no failed-fill outcome is inferred from backend absence.
+func (s *store) expireFatalEstimate(orderID string) (revertName, cause string, expired bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec := s.orders[orderID]
+	if rec == nil || rec.Status != statusEstimateReverted || rec.EstimateKind != estimateRevertFatal {
+		return "", "", false
+	}
+	s.markStatusLocked(rec, statusExpired, common.Hash{}, rec.LastError)
+	return rec.EstimateErrorName, rec.LastError, true
+}
+
+// scheduleEstimateRetry bounds transient or undecoded simulation failures without spending the signed retry
+// budget. Like a nonce retry, another open-order poll must re-arm it after this backoff.
+func (s *store) scheduleEstimateRetry(orderID string, limit int, retryAt time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec := s.orders[orderID]
+	if rec == nil || rec.Status != statusEstimateReverted || rec.EstimateRetries >= limit {
+		return false
+	}
+	rec.EstimateRetries++
+	rec.Status = statusRetryWaiting
+	rec.RetryAt = retryAt
+	rec.UpdatedAt = s.now()
+	return true
+}
+
 // reserve replaces an active order's reservation. It refuses an order that has already left the
 // active set, so a plan finishing after a terminal transition cannot leak capacity.
 func (s *store) reserve(orderID string, reservations liquidlane.CapacityReservations) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec, ok := s.orders[orderID]
-	if !ok || !rec.Status.active() {
+	if !ok || !rec.Status.active() || rec.Status == statusNonceUsed {
 		return false
 	}
 	return s.reservations.Set(orderID, reservations)
@@ -279,7 +442,7 @@ func (s *store) markIncluded(orderID string, block uint64) {
 }
 
 // boundUnsignedWork sets the deadline after which unsigned preparation of an order expires locally.
-// A bound already recorded (from a cancellation retry) is kept.
+// A bound already recorded for a nonce retry is kept.
 func (s *store) boundUnsignedWork(orderID string, deadline time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -289,25 +452,35 @@ func (s *store) boundUnsignedWork(orderID string, deadline time.Time) {
 }
 
 // recordAttempt increments and returns the attempt count for an order.
-func (s *store) recordAttempt(orderID string) int {
+func (s *store) recordAttempt(orderID string, hashes ...common.Hash) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if rec := s.orders[orderID]; rec != nil {
+		for _, hash := range hashes {
+			if hash != (common.Hash{}) && !slices.Contains(rec.AttemptHashes, hash) {
+				rec.AttemptHashes = append(rec.AttemptHashes, hash)
+			}
+		}
+	}
 	s.attempts[orderID]++
 	return s.attempts[orderID]
 }
 
-// scheduleCancellationRetry is called only after a successful, confirmed cancellation receipt.
-// The consumed nonce is safe to leave behind, but the retry budget survives re-queuing the order.
-func (s *store) scheduleCancellationRetry(
+// scheduleNonceRetry follows an abandoned fill or uncertain nonce result whose backend
+// order remains open. Initial conflicts do not consume the configured accepted-execution retry
+// budget; other unknown outcomes retain that budget across re-queueing.
+func (s *store) scheduleNonceRetry(
 	orderID string, limit int, retryAt, deadline time.Time, txHash common.Hash, lastErr string,
 ) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec := s.orders[orderID]
-	if rec == nil || rec.CancellationRetries >= limit {
+	if rec == nil || rec.NonceRetryExhausted || (!rec.NonceConflict && rec.NonceRetries >= limit) {
 		return false
 	}
-	rec.CancellationRetries++
+	if !rec.NonceConflict {
+		rec.NonceRetries++
+	}
 	rec.Status = statusRetryWaiting
 	rec.TxHash = txHash
 	rec.LastError = lastErr
@@ -322,5 +495,6 @@ func cloneOrder(rec *orderRecord) *orderRecord {
 		return nil
 	}
 	cp := *rec
+	cp.AttemptHashes = slices.Clone(rec.AttemptHashes)
 	return &cp
 }

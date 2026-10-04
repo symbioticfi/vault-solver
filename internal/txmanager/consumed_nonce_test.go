@@ -45,18 +45,13 @@ func (b *silentAcceptanceBackend) NonceAt(ctx context.Context, account common.Ad
 
 func TestReplacementsStopWhenMinedNonceAdvances(t *testing.T) {
 	for _, tc := range []struct {
-		name                 string
-		cancellation         bool
-		existingCancellation bool
-		uncertain            bool
-		capped               bool
+		name      string
+		uncertain bool
+		capped    bool
 	}{
 		{name: "normal replacement"},
-		{name: "initial cancellation", cancellation: true},
-		{name: "cancellation replacement", cancellation: true, existingCancellation: true},
 		{name: "uncertain exact rebroadcast", uncertain: true},
 		{name: "capped normal rebroadcast", capped: true},
-		{name: "capped cancellation rebroadcast", cancellation: true, existingCancellation: true, capped: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b := &silentAcceptanceBackend{mockBackend: newMockBackend()}
@@ -64,11 +59,6 @@ func TestReplacementsStopWhenMinedNonceAdvances(t *testing.T) {
 			pending, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000})
 			if err != nil {
 				t.Fatal(err)
-			}
-			if tc.existingCancellation {
-				if _, err := m.tryReplace(t.Context(), pending, replaceIntent{cancellation: true}); err != nil {
-					t.Fatal(err)
-				}
 			}
 			pending.attempts[0].exactRebroadcastPending = tc.uncertain
 			if tc.capped {
@@ -78,7 +68,7 @@ func TestReplacementsStopWhenMinedNonceAdvances(t *testing.T) {
 			fees := cloneFeeQuote(pending.fees)
 			b.latestNonce, b.pendingNonce = 8, 8
 			for range 3 {
-				if _, err := m.tryReplace(t.Context(), pending, replaceIntent{cancellation: tc.cancellation}); err != nil {
+				if _, err := m.tryReplace(t.Context(), pending, replaceIntent{}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -88,11 +78,15 @@ func TestReplacementsStopWhenMinedNonceAdvances(t *testing.T) {
 			if pending.fees.maxFee.Cmp(fees.maxFee) != 0 || pending.fees.tip.Cmp(fees.tip) != 0 {
 				t.Fatal("fees escalated after the nonce was consumed")
 			}
-			if m.Available() {
-				t.Fatal("unexplained mined nonce advancement left admission/readiness available")
+			if !m.Available() {
+				t.Fatal("external nonce consumption paused fresh admission")
 			}
-			if _, err := m.broadcast(t.Context(), pending.req); !errors.Is(err, errNonceLanePaused) {
-				t.Fatalf("new request after external consumption = %v, want paused lane", err)
+			fresh, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0xdef"), GasLimit: 21_000})
+			if err != nil || fresh == nil || fresh.nonce != 8 {
+				t.Fatalf("fresh request after confirmed external consumption = %+v, %v, want nonce 8", fresh, err)
+			}
+			if len(b.attemptedTransactions()) != before+1 || len(pending.attempts) != before || !m.Available() {
+				t.Fatal("fresh admission did not recover independently of the consumed lifecycle")
 			}
 		})
 	}
@@ -126,15 +120,15 @@ func TestConsumedNonceRequiresCanonicalOwnedReceipt(t *testing.T) {
 			b.latestNonce, b.pendingNonce = 8, 8
 			b.receipts[pending.originalHash] = successfulReceipt(pending.attempts[0].tx, 100)
 			b.reorgedHeader = orphaned
-			if _, err := m.tryReplace(t.Context(), pending, replaceIntent{cancellation: true}); err != nil {
+			if _, err := m.tryReplace(t.Context(), pending, replaceIntent{}); err != nil {
 				t.Fatal(err)
 			}
 			if len(b.attemptedTransactions()) != 1 {
-				t.Fatal("sent a cancellation after observing a consumed nonce")
+				t.Fatal("sent a replacement after observing a consumed nonce")
 			}
 			result, done := m.receiptResult(t.Context(), pending)
 			if orphaned {
-				if done || m.Available() {
+				if done || !m.Available() {
 					t.Fatalf("orphaned owned receipt resolved nonce conflict: %+v", result)
 				}
 			} else if !done || !m.Available() || result.Outcome != OutcomeConfirmed || result.Hash != pending.originalHash {
@@ -160,17 +154,17 @@ func TestReplacementNonceReadFailureDefersBroadcastAndRecovers(t *testing.T) {
 					wantErr = context.DeadlineExceeded
 				}
 				started := time.Now()
-				if _, err := m.tryReplace(t.Context(), pending, replaceIntent{cancellation: true}); !errors.Is(err, wantErr) {
+				if _, err := m.tryReplace(t.Context(), pending, replaceIntent{}); !errors.Is(err, wantErr) {
 					t.Fatalf("nonce read error = %v, want %v", err, wantErr)
 				}
 				if elapsed := time.Since(started); elapsed > 2*time.Second {
 					t.Fatalf("nonce check exceeded its read budget: %s", elapsed)
 				}
 				if len(b.attemptedTransactions()) != 1 || !m.Available() {
-					t.Fatal("failed nonce read broadcast a cancellation or permanently conflicted the lane")
+					t.Fatal("failed nonce read broadcast a replacement or permanently conflicted the lane")
 				}
 				b.blockNonce, b.nonceErr = false, nil
-				if _, err := m.tryReplace(t.Context(), pending, replaceIntent{cancellation: true}); err != nil {
+				if _, err := m.tryReplace(t.Context(), pending, replaceIntent{}); err != nil {
 					t.Fatal(err)
 				}
 				if len(b.attemptedTransactions()) != 2 {
@@ -179,61 +173,4 @@ func TestReplacementNonceReadFailureDefersBroadcastAndRecovers(t *testing.T) {
 			})
 		})
 	}
-}
-
-func TestConsumedNonceKeepsTrackingUntilOwnedReceiptArrives(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		b := &silentAcceptanceBackend{mockBackend: newMockBackend()}
-		m := New(b, mustSigner(t), big.NewInt(1), Config{
-			MaxFeeGwei: 100, PollInterval: time.Second, ReplacementInterval: 10 * time.Second,
-			Confirmations: 2,
-		}, logr.Discard())
-		pending, err := m.broadcast(t.Context(), Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000})
-		if err != nil {
-			t.Fatal(err)
-		}
-		b.latestNonce, b.pendingNonce = 8, 8
-		m.trackUnminedTransaction(pending)
-		ctx, cancel := context.WithCancel(t.Context())
-		results := make(chan Result, 1)
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			results <- m.waitForPendingTransaction(ctx, pending)
-		}()
-		defer func() { cancel(); <-done }()
-		// The block that consumed the nonce and two more with room arrive a slot apart: a stall the
-		// manager answers by checking the mined nonce before rebroadcasting.
-		for head := uint64(101); head <= 103; head++ {
-			b.mu.Lock()
-			b.head = head
-			b.mu.Unlock()
-			time.Sleep(12 * time.Second)
-		}
-		synctest.Wait()
-		if m.Available() || len(b.attemptedTransactions()) != 1 {
-			t.Fatal("silent acceptance left consumed nonce replacements running")
-		}
-		select {
-		case result := <-results:
-			t.Fatalf("nonce advancement invented a terminal result: %+v", result)
-		default:
-		}
-		b.mu.Lock()
-		b.receipts[pending.originalHash] = successfulReceipt(pending.attempts[0].tx, 101)
-		b.mu.Unlock()
-		time.Sleep(time.Second)
-		synctest.Wait()
-		select {
-		case result := <-results:
-			if result.Outcome != OutcomeConfirmed || result.Hash != pending.originalHash || result.Err != nil {
-				t.Fatalf("delayed owned receipt = %+v", result)
-			}
-		default:
-			t.Fatal("owned canonical receipt did not complete the lifecycle")
-		}
-		if !m.Available() {
-			t.Fatal("owned canonical receipt did not resume admission/readiness")
-		}
-	})
 }

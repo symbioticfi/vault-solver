@@ -451,7 +451,7 @@ func TestOrderReplayKeepsProcessSpanOpenUntilFill(t *testing.T) {
 		t.Fatalf("process spans ended while the fill was pending = %d, want none (spans %v)",
 			got, tracetest.Names(rec))
 	}
-	result <- fixture.txm.fillResult()
+	fixture.txm.complete(result, fixture.txm.fillResult())
 	select {
 	case err := <-done:
 		if err != nil {

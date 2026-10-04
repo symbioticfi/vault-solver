@@ -130,6 +130,7 @@ const (
 	orderQueueRecoveryRetry orderQueue = "recovery_retry"
 	orderQueueCapacityRetry orderQueue = "capacity_retry"
 	orderQueueDepositRetry  orderQueue = "deposit_retry"
+	orderQueueNonceRetry    orderQueue = "nonce_retry"
 )
 
 var orderQueues = [...]orderQueue{
@@ -137,9 +138,10 @@ var orderQueues = [...]orderQueue{
 	orderQueueRecoveryRetry,
 	orderQueueCapacityRetry,
 	orderQueueDepositRetry,
+	orderQueueNonceRetry,
 }
 
-var orderDropQueues = [...]orderQueue{orderQueueInbox, orderQueueCapacityRetry, orderQueueDepositRetry}
+var orderDropQueues = [...]orderQueue{orderQueueInbox, orderQueueCapacityRetry, orderQueueDepositRetry, orderQueueNonceRetry}
 
 type orderQueueSnapshot struct {
 	backlog         int
@@ -349,6 +351,8 @@ func orderQueueWasDropped(queue orderQueue, err error) bool {
 		return errors.Is(err, errOrderInboxFull)
 	case orderQueueCapacityRetry:
 		return errors.Is(err, errOrderRetryFull)
+	case orderQueueNonceRetry:
+		return errors.Is(err, errOrderDepositRetryFull) || errors.Is(err, errOrderDepositRetryKey)
 	case orderQueueDepositRetry:
 		return errors.Is(err, errOrderDepositRetryFull) ||
 			errors.Is(err, errOrderDepositRetryKey) ||

@@ -77,7 +77,7 @@ func TestThreeFMetricsObserveCompleteState(t *testing.T) {
 	}
 	token := common.HexToAddress("0x00000000000000000000000000000000000000a1")
 	s.observeSubmittedOffer(token, big.NewInt(1_000), big.NewInt(25))
-	s.observeRedeemedRequests(2)
+	m.observeRedeemedRequests(2)
 
 	for view, want := range map[string]float64{
 		threeFStateOffers: 0, threeFStateActiveRequests: 2,

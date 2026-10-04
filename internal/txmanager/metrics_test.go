@@ -136,7 +136,7 @@ func TestMetrics(t *testing.T) {
 	t.Run("replacement lifecycle", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
 			sgnr := mustSigner(t)
-			backend := &replacementBackend{mockBackend: newMockBackend(), cancellationTo: sgnr.Address()}
+			backend := &replacementBackend{mockBackend: newMockBackend()}
 			metrics := newTestMetrics(t)
 			manager := NewWithMetrics(
 				backend, sgnr, big.NewInt(11155111),
@@ -169,22 +169,14 @@ func TestMetrics(t *testing.T) {
 			assertMetric(t, metrics.replacements.WithLabelValues(
 				"lifi-fill", replacementKindReplacement, replaceReasonValidity,
 			), 1)
-			assertMetric(t, metrics.replacements.WithLabelValues(
-				"lifi-fill", replacementKindCancellation, "pending_timeout",
-			), 0)
 
-			if completed := <-result; completed.Outcome != OutcomeCancelled {
-				t.Fatalf("outcome = %q, want %q", completed.Outcome, OutcomeCancelled)
+			if completed := <-result; completed.Outcome != OutcomeAbandoned {
+				t.Fatalf("outcome = %q, want %q", completed.Outcome, OutcomeAbandoned)
 			}
 			assertMetric(t, metrics.replacements.WithLabelValues(
 				"lifi-fill",
 				replacementKindReplacement,
 				replaceReasonValidity,
-			), 1)
-			assertMetric(t, metrics.replacements.WithLabelValues(
-				"lifi-fill",
-				replacementKindCancellation,
-				"pending_timeout",
 			), 1)
 		})
 	})
@@ -282,8 +274,6 @@ func TestUntrustedReconciliationReceiptKeepsPendingPhase(t *testing.T) {
 	}
 	pending.lifecycle = metrics.beginLifecycle(pending.req.Label)
 	pending.lifecycle.transitionPhase(lifecyclePhasePending)
-	pending.nonceConflictHash = pending.attempts[0].hash
-	manager.markNonceConflict(pending.nonce, pending.nonceConflictHash)
 	backend.errorMu.Lock()
 	backend.blockFailures = 1
 	backend.errorMu.Unlock()
@@ -298,7 +288,7 @@ func TestUntrustedReconciliationReceiptKeepsPendingPhase(t *testing.T) {
 		t.Fatal("untrusted reconciliation receipt recorded confirming phase")
 	}
 
-	pending.lifecycle.finish(OutcomeTrackingStopped, nil)
+	pending.lifecycle.finish(OutcomeTrackingStopped)
 	if got := testutil.CollectAndCount(metrics.phaseDuration); got != 2 {
 		t.Fatalf("phase duration series = %d, want prebroadcast and pending only", got)
 	}
@@ -347,7 +337,7 @@ func TestPhaseDurationAccumulatesAcrossReceiptReorg(t *testing.T) {
 		t.Fatalf("terminal phase = %q, want confirming", pending.lifecycle.phase.label())
 	}
 	time.Sleep(time.Millisecond)
-	pending.lifecycle.finish(result.Outcome, result.Receipt)
+	pending.lifecycle.finish(result.Outcome)
 
 	if got := pending.lifecycle.phaseDurations[lifecyclePhaseConfirming]; got <= firstConfirmingDuration {
 		t.Fatalf(
@@ -373,7 +363,6 @@ func TestAdmissionRejectionMetrics(t *testing.T) {
 			want admissionRejectionReason
 		}{
 			{"manager stopped", errManagerStopped, admissionRejectionManagerStopped},
-			{"nonce conflict", errNonceLanePaused, admissionRejectionNonceConflict},
 			{"deadline", context.DeadlineExceeded, admissionRejectionDeadline},
 			{"caller cancelled", context.Canceled, admissionRejectionCallerCancelled},
 			{"other", errors.New("unexpected"), admissionRejectionOther},
@@ -394,7 +383,7 @@ func TestAdmissionRejectionMetrics(t *testing.T) {
 		)
 		result, accepted := manager.SendAsync(t.Context(), Request{
 			To:       common.HexToAddress("0xabc"),
-			CancelAt: time.Now().Add(-time.Second),
+			Deadline: time.Now().Add(-time.Second),
 			Label:    "expired",
 		})
 		if !accepted {

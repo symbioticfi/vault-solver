@@ -13,8 +13,7 @@ chain:
   chainId: 11155111                # must match the RPC's chain id (asserted at startup)
   # rpcFallbackUrls:               # optional read-only fallbacks, tried in order
   #   - ${ETH_RPC_URL_SEPOLIA_BACKUP}
-  # writeRpcUrl: ${WRITE_RPC_URL}  # broadcasts plus latest/pending nonce reads; defaults to rpcUrl
-  # cancelRpcUrl: ${CANCEL_RPC_URL} # cancellation broadcasts only; defaults to the ordinary write RPC
+  # writeRpcUrl: ${WRITE_RPC_URL}  # broadcasts plus latest mined nonce reads; defaults to rpcUrl
   # wsUrl: wss://sepolia.example   # optional; enables live log subscriptions (latency only)
   # multicallAddress: "0x..."      # optional; override the default Multicall3 address for this chain
 
@@ -28,11 +27,13 @@ signer:
 
 txManager:
   confirmations: 2                 # blocks to wait past inclusion before treating a tx as final (default 2)
-  maxFeeGwei: 50                   # global fee cap; the normal lifecycle stops one bump below it
+  maxFeeGwei: 50                   # global fee cap for every broadcast
   accountPollIntervalMs: 30000     # signer balance/latest/pending nonce metric refresh
   replacementIntervalMs: 30000     # fallback fee bump cadence while fee history is unreadable
-  pendingTimeoutMs: 300000         # switch the active nonce to cancellation after 5m
-  shutdownTimeoutMs: 60000         # bound SIGTERM cancellation + receipt drain to 60s
+  pendingTimeoutMs: 300000         # stop active tracking after 5m; the next fresh call may reuse the nonce
+  shutdownTimeoutMs: 60000         # bound SIGTERM receipt tracking drain to 60s
+  lateReceiptTimeoutMs: 600000    # passive receipt accounting for 10m after lane release
+  lateReceiptMaxHashes: 1024      # separate caps for retained hashes, receipt deduplication and ancestry cache
   # Fees: exact EIP-1559 cap over 6 blocks, a tip that rises only in runs of full blocks, next-block
   # gas estimates, repricing on block evidence. Defaults shown; see docs/TXMANAGER-PLAN.md section 4.
   # horizon: {maxBlocks: 6, tipFloorGwei: 0.02, fullBlockTipGwei: 0.1, congestedTipCapGwei: 15}

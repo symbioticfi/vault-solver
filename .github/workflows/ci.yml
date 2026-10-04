@@ -10,6 +10,21 @@ permissions:
   contents: read
 
 jobs:
+  alert-rules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pin@v7.0.1
+
+      - name: Validate rate alerts with pinned promtool
+        run: |
+          archive="$RUNNER_TEMP/prometheus-3.5.0.linux-amd64.tar.gz"
+          curl --fail --location --retry 3 --output "$archive" \
+            https://github.com/prometheus/prometheus/releases/download/v3.5.0/prometheus-3.5.0.linux-amd64.tar.gz
+          printf '%s  %s\n' e811827af26d822afb09a4f28314f61b618b12cff5369835a67f674d8b46f39a "$archive" \
+            | sha256sum --check
+          tar -xzf "$archive" --directory="$RUNNER_TEMP" prometheus-3.5.0.linux-amd64/promtool
+          make test-alerts PROMTOOL="$RUNNER_TEMP/prometheus-3.5.0.linux-amd64/promtool"
+
   build-test:
     runs-on: ubuntu-latest
     steps:
@@ -30,6 +45,23 @@ jobs:
 
       - name: Test
         run: make test
+
+  nonce-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pin@v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # pin@v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # pin@v1
+        with:
+          version: v1.8.1
+
+      - name: Test independent nonce reconciliation
+        run: make test-txmanager-anvil
 
   lint:
     runs-on: ubuntu-latest

@@ -20,6 +20,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/default"
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/webhook"
@@ -515,7 +516,7 @@ func TestOrderWorkerRecoveryBarrierFollowsCapacityReservation(t *testing.T) {
 	if len(txm.results) != 1 {
 		t.Fatalf("pending transactions = %d, want 1", len(txm.results))
 	}
-	txm.results[0] <- txm.fillResult()
+	txm.complete(txm.results[0], txm.fillResult())
 	select {
 	case err := <-done:
 		if err != nil {
@@ -1261,6 +1262,77 @@ func TestCompleteFillTreatsIncludedTransactionAsSuccess(t *testing.T) {
 	}
 }
 
+func TestOrderWorkerUncertainNonceReleasesReservationWithoutSuccess(t *testing.T) {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeAbandoned} {
+		t.Run(string(outcome), func(t *testing.T) { orderWorkerUncertainNonceReleasesReservationWithoutSuccess(t, outcome) })
+	}
+}
+
+func orderWorkerUncertainNonceReleasesReservationWithoutSuccess(t *testing.T, outcome txmanager.Outcome) {
+	t.Helper()
+	fixture := immediateTestSetup(t)
+	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	txm := &fakeLifiTxSender{result: txmanager.Result{
+		Hash: common.HexToHash("0x1234"), Outcome: outcome, Err: nonceOutcomeError(outcome),
+	}}
+	solver := newProcessTestSolver(fixture.cfg, fixture.caller, txm, strategy,
+		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited)
+	reg := prometheus.NewRegistry()
+	solver.metrics, err = newLIFIMetrics(reg, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	orders := make(chan *submittedOrder, 1)
+	orders <- testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
+	close(orders)
+	if err = solver.runOrderWorker(t.Context(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter), orders, nil, nil); err != nil {
+		t.Fatalf("expected nonce competition failed worker: %v", err)
+	}
+	if len(txm.reqs) != 1 || solver.capacity.Len() != 0 {
+		t.Fatalf("consumed completion: sends=%d capacity=%d", len(txm.reqs), solver.capacity.Len())
+	}
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeSuccess, 0)
+
+	// A later feed replay re-reads protocol status; it cannot use the previously signed request
+	// after another fill has already claimed the order.
+	reader := solver.reader.(fakeLifiReader)
+	reader.status = lifiOrderStatusClaimed
+	solver.reader = reader
+	solver.processOrder(t.Context(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
+		testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut))
+	if len(txm.reqs) != 1 {
+		t.Fatal("replay submitted a fill for a claimed order")
+	}
+}
+
+func TestCompleteFillTreatsConsumedNonceAsExpectedSkip(t *testing.T) {
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict, txmanager.OutcomeAbandoned} {
+		t.Run(string(outcome), func(t *testing.T) { completeFillTreatsConsumedNonceAsExpectedSkip(t, outcome) })
+	}
+}
+
+func completeFillTreatsConsumedNonceAsExpectedSkip(t *testing.T, outcome txmanager.Outcome) {
+	t.Helper()
+	var logs []string
+	solver := &Solver{log: funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{Verbosity: 1})}
+	fill := &pendingFill{
+		order:   &submittedOrder{OrderID: "order-1", QuoteID: "quote-1"},
+		orderID: common.HexToHash("0x1"), reservationKey: "order-1",
+	}
+	pending := &pendingFillState{byOrder: map[string]*pendingFill{"order-1": fill}}
+	err := solver.completeFill(solverContext(t, solver), pending, fillCompletion{fill: fill, result: txmanager.Result{
+		Hash: common.HexToHash("0x1234"), Outcome: outcome, Err: nonceOutcomeError(outcome),
+	}})
+	logged := strings.Join(logs, "\n")
+	if err != nil || pending.len() != 0 || strings.Contains(logged, `"msg":"order fill failed"`) ||
+		strings.Contains(logged, `"msg":"order filled"`) || !strings.Contains(logged, "order fill nonce uncertain") {
+		t.Fatalf("consumed completion: err=%v pending=%d logs=%s", err, pending.len(), logged)
+	}
+}
+
 func TestCompleteFillTreatsObsoleteOrderAsExpectedSkip(t *testing.T) {
 	var logs []string
 	solver := &Solver{
@@ -1275,8 +1347,8 @@ func TestCompleteFillTreatsObsoleteOrderAsExpectedSkip(t *testing.T) {
 
 	err := solver.completeFill(solverContext(t, solver), pending, fillCompletion{fill: fill, result: txmanager.Result{
 		Hash:    common.HexToHash("0xc"),
-		Outcome: txmanager.OutcomeCancelled,
-		Err:     errors.Errorf("pending transaction cancelled at nonce 3: %w", txmanager.ErrRequestObsolete),
+		Outcome: txmanager.OutcomeAbandoned,
+		Err:     errors.Errorf("pending transaction abandoned at nonce 3: %w", txmanager.ErrRequestObsolete),
 	}})
 
 	logged := strings.Join(logs, "\n")
@@ -1353,4 +1425,14 @@ func TestOrderRecoverySkipsUndecodableOrder(t *testing.T) {
 	// converging sweep.
 	metricstest.RequireWorkflowEventCount(t, registry, Name, "order_parse", "invalid", 2)
 	metricstest.RequireExternalOperationCount(t, registry, Name, orderRecoveryOperation, "success", 1)
+}
+
+func nonceOutcomeError(outcome txmanager.Outcome) error {
+	if outcome == txmanager.OutcomeAbandoned {
+		return txmanager.ErrAbandoned
+	}
+	if outcome == txmanager.OutcomeNonceConflict {
+		return txmanager.ErrNonceConflict
+	}
+	return txmanager.ErrNonceConsumed
 }

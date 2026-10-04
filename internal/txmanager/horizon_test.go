@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -284,18 +285,19 @@ func TestWithGasHeadroom(t *testing.T) {
 }
 
 // horizonChain scripts mined blocks for horizon tests. Nothing it receives is included unless a test
-// includes it, except cancellations when includeCancellations is set.
+// includes it unless a test explicitly publishes a receipt.
 type horizonChain struct {
 	*mockBackend
 
-	blocks               []blockFee
-	nextBaseFee          *big.Int
-	feeErr               error
-	nextBlockGas         uint64
-	nextBlockErr         error
-	nextBlockParents     []uint64
-	cancellationTo       common.Address
-	includeCancellations bool
+	blocks           []blockFee
+	nextBaseFee      *big.Int
+	feeErr           error
+	nextBlockGas     uint64
+	nextBlockErr     error
+	nextBlockParents []uint64
+	// hangEstimates leaves every estimate that would succeed unanswered until its context ends, the way
+	// a read endpoint that keeps the connection open but never replies does.
+	hangEstimates bool
 }
 
 func newHorizonChain(t *testing.T) *horizonChain {
@@ -305,7 +307,6 @@ func newHorizonChain(t *testing.T) *horizonChain {
 		chain.blocks = append(chain.blocks, block(number, 1, 0.5, 0.001))
 	}
 	chain.head = 100
-	chain.cancellationTo = mustSigner(t).Address()
 	return chain
 }
 
@@ -356,12 +357,61 @@ func (c *horizonChain) FeeHistory(
 }
 
 func (c *horizonChain) EstimateGasNextBlock(
-	_ context.Context, _ ethereum.CallMsg, parent *types.Header, _ time.Duration,
+	ctx context.Context, _ ethereum.CallMsg, parent *types.Header, _ time.Duration,
 ) (uint64, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.nextBlockParents = append(c.nextBlockParents, parent.Number.Uint64())
-	return c.nextBlockGas, c.nextBlockErr
+	gas, err, hang := c.nextBlockGas, c.nextBlockErr, c.hangEstimates
+	c.mu.Unlock()
+	if hang && err == nil {
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	return gas, err
+}
+
+// EstimateGas is the latest-state fallback. It hangs like the next-block estimate and counts every
+// call, answered or not.
+func (c *horizonChain) EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64, error) {
+	c.mu.Lock()
+	hang := c.hangEstimates
+	c.mu.Unlock()
+	if !hang {
+		return c.mockBackend.EstimateGas(ctx, call)
+	}
+	c.estimateCalls.Add(1)
+	<-ctx.Done()
+	return 0, ctx.Err()
+}
+
+// hungEstimate is where a stalled call's re-estimate hangs: in the next-block estimate, or in the
+// latest-state fallback of a read RPC that rejects block overrides.
+type hungEstimate struct {
+	nextBlockErr    error
+	latestEstimates int64 // latest-state estimates the lifecycle makes, the initial one included
+}
+
+var hungEstimates = map[string]hungEstimate{
+	"next-block estimate": {},
+	"latest-state fallback": {
+		nextBlockErr: testRPCError{code: -32602, message: "too many arguments, want at most 3"}, latestEstimates: 2,
+	},
+}
+
+// waitForEstimates waits until count next-block estimates have been requested, answered or not.
+func (c *horizonChain) waitForEstimates(t *testing.T, count int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		c.mu.Lock()
+		requested := len(c.nextBlockParents)
+		c.mu.Unlock()
+		if requested >= count {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d next-block estimates", count)
 }
 
 func (c *horizonChain) SendTransaction(_ context.Context, tx *types.Transaction) error {
@@ -370,9 +420,6 @@ func (c *horizonChain) SendTransaction(_ context.Context, tx *types.Transaction)
 	c.sendCalls++
 	c.attempted = append(c.attempted, tx)
 	c.sent = append(c.sent, tx)
-	if c.includeCancellations && tx.To() != nil && *tx.To() == c.cancellationTo {
-		c.receipts[tx.Hash()] = successfulReceipt(tx, c.head)
-	}
 	return nil
 }
 
@@ -403,7 +450,7 @@ func (c *horizonChain) waitForSends(t *testing.T, count int) []*types.Transactio
 
 func horizonConfig(overrides func(*Config)) Config {
 	cfg := Config{
-		MaxFeeGwei: 50, PollInterval: time.Millisecond, ReplacementInterval: time.Hour, PendingTimeout: time.Hour,
+		MaxFeeGwei: 50, PollInterval: time.Millisecond, ReplacementInterval: time.Hour, PendingTimeout: time.Hour, ShutdownTimeout: 20 * time.Millisecond,
 		Horizon: HorizonConfig{BlockTime: horizonTestBlockTime},
 	}
 	if overrides != nil {
@@ -480,7 +527,7 @@ func TestStaleSendHeadDoesNotReportAStallBeforeSlotsElapse(t *testing.T) {
 
 	// The endpoint catches up: four blocks with room, all mined before the send in fact.
 	chain.mine(0.001, 0.5, 0.5, 0.5, 0.5)
-	m.evaluateHorizon(ctx, pending, false, replace)
+	m.evaluateHorizon(ctx, pending, replace)
 	if sent := chain.sentTransactions(); len(sent) != 1 || len(intents) != 0 {
 		t.Fatalf("stale send head acted within the first slot: %d sends, intents %+v", len(sent), intents)
 	}
@@ -488,7 +535,7 @@ func TestStaleSendHeadDoesNotReportAStallBeforeSlotsElapse(t *testing.T) {
 	// Once enough slots have passed, the same evidence is a stall and the call is rebroadcast.
 	pending.horizon.sentAt = time.Now().Add(-time.Minute)
 	chain.mine(0.001, 0.5)
-	m.evaluateHorizon(ctx, pending, false, replace)
+	m.evaluateHorizon(ctx, pending, replace)
 	if sent := chain.sentTransactions(); len(sent) != 2 || sent[1].Hash() != sent[0].Hash() || len(intents) != 0 {
 		t.Fatalf("stall after elapsed slots: %d sends, intents %+v; want one exact rebroadcast", len(sent), intents)
 	}
@@ -567,34 +614,123 @@ func TestHorizonMaxFeePerGasAndHeadroom(t *testing.T) {
 }
 
 func TestHorizonStallRebroadcastsThenBumps(t *testing.T) {
-	chain := newHorizonChain(t)
-	metrics := newTestMetrics(t)
-	m := NewWithMetrics(chain, mustSigner(t), big.NewInt(11155111), horizonConfig(nil), metrics, logr.Discard())
-	startManagerForTest(t, m)
-	result, accepted := m.SendAsync(t.Context(), Request{To: common.HexToAddress("0xabc"), Data: []byte{1}, Label: "fill"})
-	if !accepted {
-		t.Fatal("request was not accepted")
-	}
-	original := chain.waitForSends(t, 1)[0]
-
-	for rebroadcast := 1; rebroadcast <= 2; rebroadcast++ {
-		chain.mineSlots(0.001, 0.5, 0.5, 0.5)
-		sent := chain.waitForSends(t, 1+rebroadcast)
-		if sent[rebroadcast].Hash() != original.Hash() {
-			t.Fatalf("stall %d sent %s, want an exact rebroadcast of %s", rebroadcast, sent[rebroadcast].Hash(), original.Hash())
+	synctest.Test(t, func(t *testing.T) {
+		chain := newHorizonChain(t)
+		metrics := newTestMetrics(t)
+		m := NewWithMetrics(chain, mustSigner(t), big.NewInt(11155111), horizonConfig(nil), metrics, logr.Discard())
+		startManagerForTest(t, m)
+		result, accepted := m.SendAsync(t.Context(), Request{To: common.HexToAddress("0xabc"), Data: []byte{1}, Label: "fill"})
+		if !accepted {
+			t.Fatal("request was not accepted")
 		}
-	}
-	chain.mineSlots(0.001, 0.5, 0.5, 0.5)
-	replacement := chain.waitForSends(t, 4)[3]
-	if replacement.Hash() == original.Hash() || replacement.GasTipCap().Cmp(bumpFee(original.GasTipCap())) < 0 {
-		t.Fatalf("third stall sent tip %s, want a bumped replacement", replacement.GasTipCap())
-	}
-	assertMetric(t, metrics.replacements.WithLabelValues("fill", replacementKindRebroadcast, replaceReasonStall), 2)
-	assertMetric(t, metrics.replacements.WithLabelValues("fill", replacementKindReplacement, replaceReasonStall), 1)
+		original := chain.waitForSends(t, 1)[0]
 
-	chain.include(replacement)
-	if got := <-result; got.Outcome != OutcomeConfirmed || got.Hash != replacement.Hash() {
-		t.Fatalf("result = %+v, want the replacement confirmed", got)
+		for rebroadcast := 1; rebroadcast <= 2; rebroadcast++ {
+			chain.mineSlots(0.001, 0.5, 0.5, 0.5)
+			sent := chain.waitForSends(t, 1+rebroadcast)
+			if sent[rebroadcast].Hash() != original.Hash() {
+				t.Fatalf("stall %d sent %s, want an exact rebroadcast of %s", rebroadcast, sent[rebroadcast].Hash(), original.Hash())
+			}
+		}
+		chain.mineSlots(0.001, 0.5, 0.5, 0.5)
+		replacement := chain.waitForSends(t, 4)[3]
+		if replacement.Hash() == original.Hash() || replacement.GasTipCap().Cmp(bumpFee(original.GasTipCap())) < 0 {
+			t.Fatalf("third stall sent tip %s, want a bumped replacement", replacement.GasTipCap())
+		}
+		assertMetric(t, metrics.replacements.WithLabelValues("fill", replacementKindRebroadcast, replaceReasonStall), 2)
+		assertMetric(t, metrics.replacements.WithLabelValues("fill", replacementKindReplacement, replaceReasonStall), 1)
+
+		// Finish any missing-receipt sweep before publishing inclusion. Otherwise the
+		// nonce read can see the new block after that sweep and legitimately yield
+		// nonce_consumed; this test specifically verifies receipt confirmation.
+		synctest.Wait()
+		chain.include(replacement)
+		if got := <-result; got.Outcome != OutcomeConfirmed || got.Hash != replacement.Hash() {
+			t.Fatalf("result = %+v, want the replacement confirmed", got)
+		}
+	})
+}
+
+// A read endpoint that never answers a stalled call's re-estimate must not hold the lifecycle, which
+// also owns receipts, deadlines and shutdown: once the estimate's budget runs out, the call is
+// rebroadcast and its receipt still resolves it. The latest-state fallback gets the same budget.
+func TestHungStallEstimateDoesNotHoldTheLifecycle(t *testing.T) {
+	for name, hung := range hungEstimates {
+		t.Run(name, func(t *testing.T) {
+			chain := newHorizonChain(t)
+			chain.nextBlockErr = hung.nextBlockErr
+			m := New(chain, mustSigner(t), big.NewInt(11155111), horizonConfig(func(cfg *Config) {
+				cfg.ReplacementInterval = 100 * time.Millisecond // a 50ms estimate budget
+			}), logr.Discard())
+			startManagerForTest(t, m)
+			result, accepted := m.SendAsync(t.Context(), Request{To: common.HexToAddress("0xabc"), Data: []byte{1}, Label: "fill"})
+			if !accepted {
+				t.Fatal("request was not accepted")
+			}
+			original := chain.waitForSends(t, 1)[0]
+
+			chain.set(func(c *horizonChain) { c.hangEstimates = true })
+			chain.mineSlots(0.001, 0.5, 0.5, 0.5)
+			chain.waitForEstimates(t, 2) // the stall re-estimate is in flight
+			chain.include(original)
+			select {
+			case got := <-result:
+				if got.Hash != original.Hash() || (got.Outcome != OutcomeConfirmed && got.Outcome != OutcomeNonceConsumed) {
+					t.Fatalf("result = %+v, want the original receipt or confirmed nonce consumption", got)
+				}
+				if got.Outcome == OutcomeNonceConsumed && (got.Receipt != nil || got.Outcome.Included() || !errors.Is(got.Err, ErrNonceConsumed)) {
+					t.Fatalf("proof-time inclusion fabricated execution: %+v", got)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("a hung stall re-estimate kept the lifecycle from reading a mined receipt")
+			}
+			if sent := chain.sentTransactions(); len(sent) > 2 || (len(sent) == 2 && sent[1].Hash() != original.Hash()) {
+				t.Fatalf("sent %d transactions, want at most one exact rebroadcast before inclusion", len(sent))
+			}
+			if got := chain.estimateCalls.Load(); got != hung.latestEstimates {
+				t.Fatalf("latest-state estimates = %d, want %d", got, hung.latestEstimates)
+			}
+		})
+	}
+}
+
+// A stalled call whose re-estimate hangs yields to its absolute deadline. No stale calldata is
+// rebroadcast after expiry, and the owned nonce is retained for fresh business work.
+func TestHungStallEstimateYieldsToTheDeadline(t *testing.T) {
+	for name, hung := range hungEstimates {
+		t.Run(name, func(t *testing.T) {
+			chain := newHorizonChain(t)
+			chain.nextBlockErr = hung.nextBlockErr
+			m := New(chain, mustSigner(t), big.NewInt(11155111), horizonConfig(nil), logr.Discard())
+			startManagerForTest(t, m)
+			submissionDeadline := time.Now().Add(500 * time.Millisecond)
+			result, accepted := m.SendAsync(t.Context(), Request{
+				To: common.HexToAddress("0xabc"), Data: []byte{1}, Label: "fill", Deadline: submissionDeadline,
+			})
+			if !accepted {
+				t.Fatal("request was not accepted")
+			}
+			chain.waitForSends(t, 1)
+
+			chain.set(func(c *horizonChain) { c.hangEstimates = true })
+			chain.mineSlots(0.001, 0.5, 0.5, 0.5)
+			chain.waitForEstimates(t, 2) // the stall re-estimate is in flight
+			select {
+			case got := <-result:
+				if got.Outcome != OutcomeAbandoned {
+					t.Fatalf("outcome = %s, want abandoned", got.Outcome)
+				}
+			case <-time.After(time.Until(submissionDeadline) + time.Second):
+				t.Fatal("a hung stall re-estimate delayed abandonment past the deadline")
+			}
+			sent := chain.sentTransactions()
+			if len(sent) != 1 {
+				t.Fatalf("sent %d transactions, want only the original call", len(sent))
+			}
+			if got := chain.estimateCalls.Load(); got != hung.latestEstimates {
+				t.Fatalf("latest-state estimates = %d, want %d", got, hung.latestEstimates)
+			}
+		})
 	}
 }
 
@@ -658,7 +794,6 @@ func TestHorizonRepricesOnBlockEvidence(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			chain := newHorizonChain(t)
-			chain.includeCancellations = true // lets the shutdown cancellation drain the pending lifecycle
 			metrics := newTestMetrics(t)
 			m := NewWithMetrics(chain, mustSigner(t), big.NewInt(11155111), horizonConfig(tc.configure), metrics, logr.Discard())
 			startManagerForTest(t, m)
@@ -684,26 +819,25 @@ func TestHorizonRepricesOnBlockEvidence(t *testing.T) {
 	}
 }
 
-func TestHorizonCancelsAtDeadlineWithoutTimerBumps(t *testing.T) {
+func TestHorizonAbandonsAtDeadlineWithoutTimerBumps(t *testing.T) {
 	chain := newHorizonChain(t)
-	chain.includeCancellations = true
 	metrics := newTestMetrics(t)
 	m := NewWithMetrics(chain, mustSigner(t), big.NewInt(11155111), horizonConfig(nil), metrics, logr.Discard())
 	startManagerForTest(t, m)
 
 	result, accepted := m.SendAsync(t.Context(), Request{
-		To: common.HexToAddress("0xabc"), Data: []byte{1}, Label: "fill", CancelAt: time.Now().Add(60 * time.Millisecond),
+		To: common.HexToAddress("0xabc"), Data: []byte{1}, Label: "fill", Deadline: time.Now().Add(60 * time.Millisecond),
 	})
 	if !accepted {
 		t.Fatal("request was not accepted")
 	}
 	got := <-result
-	if got.Outcome != OutcomeCancelled {
-		t.Fatalf("outcome = %s, want cancelled", got.Outcome)
+	if got.Outcome != OutcomeAbandoned {
+		t.Fatalf("outcome = %s, want abandoned", got.Outcome)
 	}
 	sent := chain.sentTransactions()
-	if len(sent) != 2 || sent[1].To() == nil || *sent[1].To() != chain.cancellationTo || sent[1].Gas() != cancellationGasLimit {
-		t.Fatalf("sent %d transactions, want the fill and one cancellation", len(sent))
+	if len(sent) != 1 {
+		t.Fatalf("sent %d transactions, want only the original fill", len(sent))
 	}
-	assertMetric(t, metrics.replacements.WithLabelValues("fill", replacementKindCancellation, "request_deadline"), 1)
+	assertMetric(t, metrics.replacements.WithLabelValues("fill", replacementKindReplacement, "request_deadline"), 0)
 }

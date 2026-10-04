@@ -1,0 +1,285 @@
+# promtool test rules alerts/rfq.rules.test.yaml
+rule_files:
+- rfq.rules.yaml
+evaluation_interval: 1m
+tests:
+- name: one collision on each of three sibling pods does not alert
+  interval: 1m
+  input_series:
+  - series: solver_bot_txmanager_account_info{namespace="stage",kubernetes_pod="rfq-a",address="0xaaa"}
+    values: 1+0x30
+  - series: solver_bot_txmanager_requests_total{namespace="stage",kubernetes_pod="rfq-a",label="rfq-fill",outcome="nonce_consumed"}
+    values: 0 1+0x29
+  - series: solver_bot_workflow_events_total{namespace="stage",kubernetes_pod="rfq-a",solver="rfq-filler",strategy="test",event="fill",outcome="peer"}
+    values: 0+0x30
+  - series: solver_bot_txmanager_account_info{namespace="stage",kubernetes_pod="rfq-b",address="0xaaa"}
+    values: 1+0x30
+  - series: solver_bot_txmanager_requests_total{namespace="stage",kubernetes_pod="rfq-b",label="rfq-fill",outcome="nonce_consumed"}
+    values: 0 1+0x29
+  - series: solver_bot_workflow_events_total{namespace="stage",kubernetes_pod="rfq-b",solver="rfq-filler",strategy="test",event="fill",outcome="peer"}
+    values: 0+0x30
+  - series: solver_bot_txmanager_account_info{namespace="stage",kubernetes_pod="rfq-c",address="0xaaa"}
+    values: 1+0x30
+  - series: solver_bot_txmanager_requests_total{namespace="stage",kubernetes_pod="rfq-c",label="rfq-fill",outcome="nonce_consumed"}
+    values: 0 1+0x29
+  - series: solver_bot_workflow_events_total{namespace="stage",kubernetes_pod="rfq-c",solver="rfq-filler",strategy="test",event="fill",outcome="peer"}
+    values: 0+0x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: RFQNonceConsumedWithoutPeerFills
+    exp_alerts: []
+- name: sustained consumed nonce rate waits for the full pending duration
+  interval: 1m
+  input_series:
+  - series: solver_bot_txmanager_account_info{namespace="stage",kubernetes_pod="rfq-a",address="0xaaa"}
+    values: 1+0x30
+  - series: solver_bot_txmanager_requests_total{namespace="stage",kubernetes_pod="rfq-a",label="rfq-fill",outcome="nonce_consumed"}
+    values: 0+1x30
+  - series: solver_bot_workflow_events_total{namespace="stage",kubernetes_pod="rfq-a",solver="rfq-filler",strategy="test",event="fill",outcome="peer"}
+    values: 0+0x30
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: RFQNonceConsumedWithoutPeerFills
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: RFQNonceConsumedWithoutPeerFills
+    exp_alerts: []
+  - eval_time: 12m
+    alertname: RFQNonceConsumedWithoutPeerFills
+    exp_alerts: &id001
+    - exp_labels:
+        namespace: stage
+        address: '0xaaa'
+        severity: warning
+        solver: rfq-filler
+      exp_annotations:
+        summary: RFQ nonces are consumed without observed peer fills
+        description: Nonce-consumed outcomes for this sender are at least 0.6 per minute over ten minutes and persist
+          for five minutes while its peer-fill rate is zero. Check other EOA users, backend lag and write-RPC freshness
+          before attributing the consumption to an unexpected sender.
+- name: peer fills at the same sender suppress expected sibling nonce races
+  interval: 1m
+  input_series:
+  - series: solver_bot_txmanager_account_info{namespace="stage",kubernetes_pod="rfq-a",address="0xaaa"}
+    values: 1+0x30
+  - series: solver_bot_txmanager_requests_total{namespace="stage",kubernetes_pod="rfq-a",label="rfq-fill",outcome="nonce_consumed"}
+    values: 0+1x30
+  - series: solver_bot_workflow_events_total{namespace="stage",kubernetes_pod="rfq-a",solver="rfq-filler",strategy="test",event="fill",outcome="peer"}
+    values: 0+1x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: RFQNonceConsumedWithoutPeerFills
+    exp_alerts: []
+- name: peer fills at another EOA do not suppress unexpected consumption
+  interval: 1m
+  input_series:
+  - series: solver_bot_txmanager_account_info{namespace="stage",kubernetes_pod="rfq-a",address="0xaaa"}
+    values: 1+0x30
+  - series: solver_bot_txmanager_requests_total{namespace="stage",kubernetes_pod="rfq-a",label="rfq-fill",outcome="nonce_consumed"}
+    values: 0+1x30
+  - series: solver_bot_workflow_events_total{namespace="stage",kubernetes_pod="rfq-a",solver="rfq-filler",strategy="test",event="fill",outcome="peer"}
+    values: 0+0x30
+  - series: solver_bot_txmanager_account_info{namespace="stage",kubernetes_pod="rfq-b",address="0xbbb"}
+    values: 1+0x30
+  - series: solver_bot_txmanager_requests_total{namespace="stage",kubernetes_pod="rfq-b",label="rfq-fill",outcome="nonce_consumed"}
+    values: 0+0x30
+  - series: solver_bot_workflow_events_total{namespace="stage",kubernetes_pod="rfq-b",solver="rfq-filler",strategy="test",event="fill",outcome="peer"}
+    values: 0+1x30
+  alert_rule_test:
+  - eval_time: 12m
+    alertname: RFQNonceConsumedWithoutPeerFills
+    exp_alerts:
+    - exp_labels:
+        namespace: stage
+        address: '0xaaa'
+        severity: warning
+        solver: rfq-filler
+      exp_annotations:
+        summary: RFQ nonces are consumed without observed peer fills
+        description: Nonce-consumed outcomes for this sender are at least 0.6 per minute over ten minutes and persist
+          for five minutes while its peer-fill rate is zero. Check other EOA users, backend lag and write-RPC freshness
+          before attributing the consumption to an unexpected sender.
+- name: namespaces remain separate even when the EOA address is the same
+  interval: 1m
+  input_series:
+  - series: solver_bot_txmanager_account_info{namespace="stage",kubernetes_pod="rfq-a",address="0xaaa"}
+    values: 1+0x30
+  - series: solver_bot_txmanager_requests_total{namespace="stage",kubernetes_pod="rfq-a",label="rfq-fill",outcome="nonce_consumed"}
+    values: 0+1x30
+  - series: solver_bot_workflow_events_total{namespace="stage",kubernetes_pod="rfq-a",solver="rfq-filler",strategy="test",event="fill",outcome="peer"}
+    values: 0+0x30
+  - series: solver_bot_txmanager_account_info{namespace="prod",kubernetes_pod="rfq-a",address="0xaaa"}
+    values: 1+0x30
+  - series: solver_bot_txmanager_requests_total{namespace="prod",kubernetes_pod="rfq-a",label="rfq-fill",outcome="nonce_consumed"}
+    values: 0+0x30
+  - series: solver_bot_workflow_events_total{namespace="prod",kubernetes_pod="rfq-a",solver="rfq-filler",strategy="test",event="fill",outcome="peer"}
+    values: 0+1x30
+  alert_rule_test:
+  - eval_time: 12m
+    alertname: RFQNonceConsumedWithoutPeerFills
+    exp_alerts:
+    - exp_labels:
+        namespace: stage
+        address: '0xaaa'
+        severity: warning
+        solver: rfq-filler
+      exp_annotations:
+        summary: RFQ nonces are consumed without observed peer fills
+        description: Nonce-consumed outcomes for this sender are at least 0.6 per minute over ten minutes and persist
+          for five minutes while its peer-fill rate is zero. Check other EOA users, backend lag and write-RPC freshness
+          before attributing the consumption to an unexpected sender.
+- name: retry exhaustion without evidenced expiry does not alert
+  interval: 1m
+  input_series:
+  - series: solver_bot_txmanager_account_info{namespace="stage",kubernetes_pod="rfq-a",address="0xaaa"}
+    values: 1+0x30
+  - series: solver_bot_workflow_events_total{namespace="stage",kubernetes_pod="rfq-a",solver="rfq-filler",strategy="test",event="order",outcome="nonce_retry_exhausted"}
+    values: 0+1x30
+  - series: solver_bot_workflow_events_total{namespace="stage",kubernetes_pod="rfq-a",solver="rfq-filler",strategy="test",event="order",outcome="expired_after_nonce_retries"}
+    values: 0+0x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: RFQOrdersExpireAfterNonceRetries
+    exp_alerts: []
+- name: repeated evidenced expirations after retry exhaustion alert
+  interval: 1m
+  input_series:
+  - series: solver_bot_txmanager_account_info{namespace="stage",kubernetes_pod="rfq-a",address="0xaaa"}
+    values: 1+0x30
+  - series: solver_bot_workflow_events_total{namespace="stage",kubernetes_pod="rfq-a",solver="rfq-filler",strategy="test",event="order",outcome="expired_after_nonce_retries"}
+    values: 0+1x30
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: RFQOrdersExpireAfterNonceRetries
+    exp_alerts: []
+  - eval_time: 12m
+    alertname: RFQOrdersExpireAfterNonceRetries
+    exp_alerts:
+    - exp_labels:
+        namespace: stage
+        address: '0xaaa'
+        severity: warning
+        solver: rfq-filler
+      exp_annotations:
+        summary: RFQ orders repeatedly expire after nonce retry exhaustion
+        description: Locally observed order expirations after exhausting the accepted-execution retry budget are
+          at least 0.6 per minute over ten minutes and persist for five minutes. Check inclusion latency, deadlines
+          and contention; sibling observations can represent the same order.
+- name: repeated fee ceilings across initial and replacement phases alert
+  interval: 1m
+  input_series:
+  - series: solver_bot_txmanager_account_info{namespace="stage",kubernetes_pod="rfq-a",address="0xaaa"}
+    values: 1+0x30
+  - series: solver_bot_txmanager_fee_limit_reached_total{namespace="stage",kubernetes_pod="rfq-a",label="rfq-fill",phase="initial"}
+    values: 0+1x30
+  - series: solver_bot_txmanager_fee_limit_reached_total{namespace="stage",kubernetes_pod="rfq-a",label="rfq-fill",phase="replacement"}
+    values: 0+1x30
+  alert_rule_test:
+  - eval_time: 4m
+    alertname: RFQTransactionFeesRepeatedlyCapped
+    exp_alerts: []
+  - eval_time: 12m
+    alertname: RFQTransactionFeesRepeatedlyCapped
+    exp_alerts:
+    - exp_labels:
+        namespace: stage
+        address: '0xaaa'
+        severity: warning
+        solver: rfq-filler
+      exp_annotations:
+        summary: RFQ transaction fees repeatedly reach configured ceilings
+        description: Initial-send and replacement fee-ceiling decisions for this sender are at least 0.6 per minute
+          over ten minutes and persist for five minutes. Check market fees, profitability ceilings and same-nonce
+          contention before changing any cap.
+- name: one capped send on each of three sibling pods does not alert
+  interval: 1m
+  input_series:
+  - series: solver_bot_txmanager_account_info{namespace="stage",kubernetes_pod="rfq-a",address="0xaaa"}
+    values: 1+0x30
+  - series: solver_bot_txmanager_fee_limit_reached_total{namespace="stage",kubernetes_pod="rfq-a",label="rfq-fill",phase="initial"}
+    values: 0 1+0x29
+  - series: solver_bot_txmanager_account_info{namespace="stage",kubernetes_pod="rfq-b",address="0xaaa"}
+    values: 1+0x30
+  - series: solver_bot_txmanager_fee_limit_reached_total{namespace="stage",kubernetes_pod="rfq-b",label="rfq-fill",phase="initial"}
+    values: 0 1+0x29
+  - series: solver_bot_txmanager_account_info{namespace="stage",kubernetes_pod="rfq-c",address="0xaaa"}
+    values: 1+0x30
+  - series: solver_bot_txmanager_fee_limit_reached_total{namespace="stage",kubernetes_pod="rfq-c",label="rfq-fill",phase="initial"}
+    values: 0 1+0x29
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: RFQTransactionFeesRepeatedlyCapped
+    exp_alerts: []
+- name: per-process counter resets preserve the repeated nonce signal
+  interval: 1m
+  input_series:
+  - series: solver_bot_txmanager_account_info{namespace="stage",kubernetes_pod="rfq-a",address="0xaaa"}
+    values: 1+0x30
+  - series: solver_bot_txmanager_requests_total{namespace="stage",kubernetes_pod="rfq-a",label="rfq-fill",outcome="nonce_consumed"}
+    values: 0+1x6 0+1x23
+  - series: solver_bot_workflow_events_total{namespace="stage",kubernetes_pod="rfq-a",solver="rfq-filler",strategy="test",event="fill",outcome="peer"}
+    values: 0+0x30
+  alert_rule_test:
+  - eval_time: 12m
+    alertname: RFQNonceConsumedWithoutPeerFills
+    exp_alerts:
+    - exp_labels:
+        namespace: stage
+        address: '0xaaa'
+        severity: warning
+        solver: rfq-filler
+      exp_annotations:
+        summary: RFQ nonces are consumed without observed peer fills
+        description: Nonce-consumed outcomes for this sender are at least 0.6 per minute over ten minutes and persist
+          for five minutes while its peer-fill rate is zero. Check other EOA users, backend lag and write-RPC freshness
+          before attributing the consumption to an unexpected sender.
+- name: signals without account identity cannot be attributed or cross-suppressed
+  interval: 1m
+  input_series:
+  - series: solver_bot_txmanager_requests_total{namespace="stage",kubernetes_pod="rfq-a",label="rfq-fill",outcome="nonce_consumed"}
+    values: 0+1x30
+  - series: solver_bot_workflow_events_total{namespace="stage",kubernetes_pod="rfq-a",solver="rfq-filler",strategy="test",event="fill",outcome="peer"}
+    values: 0+0x30
+  - series: solver_bot_txmanager_fee_limit_reached_total{namespace="stage",kubernetes_pod="rfq-a",label="rfq-fill",phase="initial"}
+    values: 0+1x30
+  - series: solver_bot_workflow_events_total{namespace="stage",kubernetes_pod="rfq-a",solver="rfq-filler",strategy="test",event="order",outcome="expired_after_nonce_retries"}
+    values: 0+1x30
+  alert_rule_test:
+  - eval_time: 10m
+    alertname: RFQNonceConsumedWithoutPeerFills
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: RFQOrdersExpireAfterNonceRetries
+    exp_alerts: []
+  - eval_time: 10m
+    alertname: RFQTransactionFeesRepeatedlyCapped
+    exp_alerts: []
+- name: historical peer-fill counts do not suppress a currently flat rate
+  interval: 1m
+  input_series:
+  - series: solver_bot_txmanager_account_info{namespace="stage",kubernetes_pod="rfq-a",address="0xaaa"}
+    values: 1+0x30
+  - series: solver_bot_txmanager_requests_total{namespace="stage",kubernetes_pod="rfq-a",label="rfq-fill",outcome="nonce_consumed"}
+    values: 0+1x30
+  - series: solver_bot_workflow_events_total{namespace="stage",kubernetes_pod="rfq-a",solver="rfq-filler",strategy="test",event="fill",outcome="peer"}
+    values: 100+0x30
+  alert_rule_test:
+  - eval_time: 12m
+    alertname: RFQNonceConsumedWithoutPeerFills
+    exp_alerts: *id001
+- name: a peer fill suppresses contention while fresh, then a sustained flat rate can alert
+  interval: 1m
+  input_series:
+  - series: solver_bot_txmanager_account_info{namespace="stage",kubernetes_pod="rfq-a",address="0xaaa"}
+    values: 1+0x30
+  - series: solver_bot_txmanager_requests_total{namespace="stage",kubernetes_pod="rfq-a",label="rfq-fill",outcome="nonce_consumed"}
+    values: 0+1x30
+  - series: solver_bot_workflow_events_total{namespace="stage",kubernetes_pod="rfq-a",solver="rfq-filler",strategy="test",event="fill",outcome="peer"}
+    values: 0+0x6 1+0x23
+  alert_rule_test:
+  - eval_time: 12m
+    alertname: RFQNonceConsumedWithoutPeerFills
+    exp_alerts: []
+  - eval_time: 25m
+    alertname: RFQNonceConsumedWithoutPeerFills
+    exp_alerts: *id001
