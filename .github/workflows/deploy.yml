@@ -16,7 +16,7 @@ jobs:
     needs: ci
     runs-on: ubuntu-latest
     outputs:
-      digest: ${{ steps.build.outputs.digest }}
+      digest: ${{ steps.digest.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pin@v7.0.1
 
@@ -32,6 +32,9 @@ jobs:
 
       - id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # pin@v7.4.0
+        # Tags are immutable, so a re-run for an already pushed commit fails to push.
+        # The digest step below falls back to the existing image so the deploy still dispatches.
+        continue-on-error: true
         with:
           context: .
           file: deploy/Dockerfile
@@ -42,6 +45,23 @@ jobs:
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
             DATE=${{ steps.meta.outputs.date }}
+
+      - id: digest
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: symbioticfi/vault-solver:${{ github.sha }}
+        run: |
+          if [ "$BUILD_OUTCOME" = "success" ]; then
+            echo "digest=$BUILD_DIGEST" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! digest=$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' | jq -er .digest); then
+            echo "::error::build failed and $IMAGE does not exist"
+            exit 1
+          fi
+          echo "::warning::build failed; $IMAGE already exists, deploying $digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
   dispatch:
     needs: image
