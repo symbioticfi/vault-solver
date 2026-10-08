@@ -89,12 +89,18 @@ type Config struct {
 // Request is a transaction to send. Value nil means 0. Stateful solver calls leave GasLimit at 0 so
 // gas estimation re-simulates their exact calldata after lifecycle admission and immediately before signing.
 type Request struct {
-	To           common.Address
-	Data         []byte
-	Value        *big.Int
-	GasLimit     uint64
-	MaxFeePerGas *big.Int  // optional EIP-1559 fee ceiling
-	Deadline     time.Time // optional latest time to submit this call; later work may reuse its nonce
+	// Owner identifies a durable host journal reserving this signer lane. Empty
+	// requests are ordinary unreserved solver work.
+	Owner string
+	// BeforeBroadcast must persist each signed original/replacement before RPC.
+	// Failure prevents broadcasting those bytes; the owner retains its reservation.
+	BeforeBroadcast func(unsigned, signed *types.Transaction) error
+	To              common.Address
+	Data            []byte
+	Value           *big.Int
+	GasLimit        uint64
+	MaxFeePerGas    *big.Int  // optional EIP-1559 fee ceiling
+	Deadline        time.Time // optional latest time to submit this call; later work may reuse its nonce
 	// Obsolete optionally reports that the call can no longer succeed. It must honor ctx and have no
 	// authorization role: errors preserve the current lifecycle. True before signing drops the call;
 	// true after broadcast abandons tracking without proving whether it executed.
@@ -190,13 +196,17 @@ type txAttempt struct {
 
 // Manager serializes signed lifecycles and owns accepted work through its terminal result.
 type Manager struct {
-	backend Backend
-	signer  signer.Signer
-	chainID *big.Int
-	cfg     Config
-	horizon horizonPolicy
-	metrics *Metrics
-	log     logr.Logger
+	// reservationMu serializes durable ownership with admission. Existing admitted
+	// work finishes normally; no new foreign work enters while a journal holds it.
+	reservationMu sync.Mutex
+	reservation   string
+	backend       Backend
+	signer        signer.Signer
+	chainID       *big.Int
+	cfg           Config
+	horizon       horizonPolicy
+	metrics       *Metrics
+	log           logr.Logger
 
 	// lastGas is the gas limit of the latest signed call, which horizon pricing uses to judge whether
 	// recent blocks had room for a fill. overrideFallbackLogged limits the next-block estimate
@@ -367,12 +377,16 @@ func (m *Manager) ValidateFeeHeadroom() error {
 	return nil
 }
 
-// Available reports whether the sending endpoint has supplied an initial mined nonce. Pending
-// transactions and nonce races do not pause admission. Use LaneReady to also check local work.
+// Available reports readiness for ordinary solver work and external quotes.
+// Durable reservations pause other owners; ordinary pending transactions and
+// nonce races still permit queued admission. LaneReady additionally checks idle work.
 func (m *Manager) Available() bool {
+	m.reservationMu.Lock()
+	reserved := m.reservation != ""
+	m.reservationMu.Unlock()
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.initialized
+	return m.initialized && !reserved
 }
 
 // Idle reports whether no request owns or is waiting for the local signed-lifecycle lane.
@@ -683,18 +697,29 @@ func (m *Manager) sendAsync(ctx context.Context, req Request, try bool) (<-chan 
 			return failAdmission(errManagerStopped)
 		}
 	}
+	m.reservationMu.Lock()
+	allowed := m.reservation == "" && req.Owner == "" || m.reservation != "" && req.Owner == m.reservation
+	if !allowed {
+		m.reservationMu.Unlock()
+		m.releaseLifecycleSlot()
+		releaseDemandOnReturn = false
+		return failAdmission(ErrLaneReserved)
+	}
 	res := make(chan Result, 1)
 	select {
 	case m.queue <- job{
 		req: cloneRequest(req), res: res, admissionStarted: admissionStarted,
 		span: span,
 	}:
+		m.reservationMu.Unlock()
 		releaseDemandOnReturn = false
 	case <-admissionCtx.Done():
+		m.reservationMu.Unlock()
 		m.releaseLifecycleSlot()
 		releaseDemandOnReturn = false
 		return failAdmission(admissionCtx.Err())
 	case <-m.stopping:
+		m.reservationMu.Unlock()
 		m.releaseLifecycleSlot()
 		releaseDemandOnReturn = false
 		return failAdmission(errManagerStopped)
@@ -856,7 +881,7 @@ func (m *Manager) broadcast(ctx context.Context, req Request) (pending *pendingT
 
 	fees, usedHint := m.applyReusableFloor(fees, floor, m.normalFeeLimit(req))
 	signed, sendErr := m.signAndSend(
-		broadcastCtx, nonce, req.To, req.Data, value, gas, fees, false,
+		broadcastCtx, nonce, req.To, req.Data, value, gas, fees, false, req.BeforeBroadcast,
 	)
 	if signed == nil {
 		return nil, errors.Errorf("send %q: %w", req.Label, sendErr)
@@ -1282,7 +1307,7 @@ func (m *Manager) tryReplace(ctx context.Context, pending *pendingTransaction, i
 		return false, err
 	}
 	sendCtx, cancelSend := replacementBroadcastContext(ctx, pending)
-	signed, sendErr := m.signAndSend(sendCtx, pending.nonce, pending.req.To, pending.req.Data, pending.value, gas, fees, true)
+	signed, sendErr := m.signAndSend(sendCtx, pending.nonce, pending.req.To, pending.req.Data, pending.value, gas, fees, true, pending.req.BeforeBroadcast)
 	cancelSend()
 	if signed == nil {
 		observability.Log(ctx).Error(sendErr, "pending transaction replacement rejected", "label", pending.req.Label, "nonce", pending.nonce)
@@ -1579,6 +1604,7 @@ func (m *Manager) signAndSend(
 	gas uint64,
 	fees feeQuote,
 	existingLifecycle bool,
+	beforeBroadcast func(unsigned, signed *types.Transaction) error,
 ) (*types.Transaction, error) {
 	tx := types.NewTx(&types.DynamicFeeTx{
 		ChainID:   m.chainID,
@@ -1596,6 +1622,11 @@ func (m *Manager) signAndSend(
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, errors.Errorf("sign transaction: %w", err)
+	}
+	if beforeBroadcast != nil {
+		if err := beforeBroadcast(tx, signed); err != nil {
+			return nil, errors.Errorf("persist signed transaction before broadcast: %w", err)
+		}
 	}
 	sendErr := m.sendSigned(ctx, signed)
 	if !existingLifecycle && (isNonceConsumedError(sendErr) || isPendingNonceCollision(sendErr)) {

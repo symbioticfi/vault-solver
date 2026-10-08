@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+env:
+  GOPRIVATE: github.com/symbioticfi/merkle-executor
+  MERKLE_SDK_READ_TOKEN: ${{ secrets.MERKLE_SDK_READ_TOKEN }}
+
 jobs:
   alert-rules:
     runs-on: ubuntu-latest
@@ -29,6 +33,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pin@v7.0.1
+
+      - name: Configure private SDK access
+        run: bash hack/configure-private-go-modules.sh
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # pin@v7.0.0
         with:
@@ -51,6 +58,9 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pin@v7.0.1
 
+      - name: Configure private SDK access
+        run: bash hack/configure-private-go-modules.sh
+
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # pin@v7.0.0
         with:
           go-version-file: go.mod
@@ -67,6 +77,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pin@v7.0.1
+
+      - name: Configure private SDK access
+        run: bash hack/configure-private-go-modules.sh
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # pin@v7.0.0
         with:

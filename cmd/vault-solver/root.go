@@ -7,6 +7,7 @@ import (
 	// concrete solvers. Adding another solver is an import here plus a config switch.
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/lifi"
+	_ "github.com/symbioticfi/vault-solver/internal/solvers/merkle"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx"
