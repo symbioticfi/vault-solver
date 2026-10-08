@@ -299,7 +299,7 @@ tidy: ## Tidy and verify go.mod / go.sum
 
 .PHONY: docker
 docker: ## Build the container image
-	docker build -t vault-solver:$(VERSION) -f deploy/Dockerfile .
+	docker build --secret id=merkle_sdk_read_token,env=MERKLE_SDK_READ_TOKEN -t vault-solver:$(VERSION) -f deploy/Dockerfile .
 
 .PHONY: clean
 clean: ## Remove build artifacts

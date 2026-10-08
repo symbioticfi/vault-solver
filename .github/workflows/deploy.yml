@@ -10,6 +10,7 @@ permissions:
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
+    secrets: inherit
 
   image:
     environment: deploy
@@ -41,6 +42,8 @@ jobs:
           target: final
           push: true
           tags: symbioticfi/vault-solver:${{ github.sha }}
+          secrets: |
+            merkle_sdk_read_token=${{ secrets.MERKLE_SDK_READ_TOKEN }}
           build-args: |
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}

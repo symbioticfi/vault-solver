@@ -872,3 +872,5 @@ Engineering conventions — the modular framework/integration boundary, config-d
 modern Go 1.27 style, the required test/lint/format gate, and secure-coding rules — are in
 [`CLAUDE.md`](./CLAUDE.md) (`AGENTS.md` is a symlink to it). Every change must keep
 `make format && make test && make lint` green and unit-test new logic.
+
+Merkle recipes run through the shared sender using the independently versioned [Merkle SDK integration](docs/MERKLE-SDK.md).
