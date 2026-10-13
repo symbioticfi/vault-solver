@@ -129,3 +129,71 @@ func TestCuratorTransportUsesFixedEffectivePolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestExplicitStrategyRevisionRemainsStable(t *testing.T) {
+	cfg, err := parseConfig(configNode(t, validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	strategy := cfg.strategies[0].Config
+	strategy.Account = "0x0000000000000000000000000000000000000020"
+	revision, err := strategyRevision(strategy, cfg.curator, common.HexToAddress("0x03"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Captured before optional-name support at d6ab6ffa1505.
+	if revision != "0x05785a78b702963b8c5c94d28e056f167030a75517fcb475f88b97fc0003bdf1" || strategy.Fingerprint() != "0x37e6d2847e87706cb09048c6ec9f1916d44259052da72fc5513c7991539b9a0f" {
+		t.Fatal("explicit strategy identity changed")
+	}
+}
+
+func TestOptionalStrategyNames(t *testing.T) {
+	const executor = "0xaBcDeF0000000000000000000000000000000001"
+	const derived = "executor-0xabcdef0000000000000000000000000000000001"
+	const other = "0x0000000000000000000000000000000000000002"
+	const otherName = "executor-0x0000000000000000000000000000000000000002"
+	for _, tc := range []struct {
+		name, strategies string
+		want             []string
+	}{
+		{"omitted", "  - executor: '" + executor + "'\n", []string{derived}},
+		{"empty", "  - name: ''\n    executor: '" + executor + "'\n", []string{derived}},
+		{"lowercase", "  - executor: '" + strings.ToLower(executor) + "'\n", []string{derived}},
+		{"uppercase", "  - executor: '0x" + strings.ToUpper(executor[2:]) + "'\n", []string{derived}},
+		{"ordered", "  - executor: '" + executor + "'\n  - executor: '" + other + "'\n", []string{derived, otherName}},
+		{"reordered", "  - executor: '" + other + "'\n  - executor: '" + executor + "'\n", []string{otherName, derived}},
+		{"custom", "  - name: Existing_Label-1\n    executor: '" + executor + "'\n", []string{"Existing_Label-1"}},
+		{"separate named workflows", "  - name: first\n    executor: '" + executor + "'\n  - name: second\n    executor: '" + executor + "'\n", []string{"first", "second"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prefix, _, _ := strings.Cut(validConfig, "strategies:\n")
+			cfg, err := parseConfig(configNode(t, prefix+"strategies:\n"+tc.strategies))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for i, name := range tc.want {
+				if cfg.strategies[i].Config.Name != name {
+					t.Fatalf("name=%q want%q", cfg.strategies[i].Config.Name, name)
+				}
+			}
+			if tc.name == "custom" && cfg.strategies[0].Config.Executor != common.HexToAddress(executor).Hex() {
+				t.Fatal("explicit executor normalization changed")
+			}
+		})
+	}
+	for name, body := range map[string]string{
+		"duplicate omitted": "  - executor: '" + executor + "'\n  - executor: '" + strings.ToLower(executor) + "'\n",
+		"custom collision":  "  - executor: '" + executor + "'\n  - name: " + derived + "\n    executor: '" + other + "'\n",
+		"duplicate custom":  "  - name: existing\n    executor: '" + executor + "'\n  - name: existing\n    executor: '" + other + "'\n",
+		"invalid custom":    "  - name: '../escape'\n    executor: '" + executor + "'\n",
+		"invalid executor":  "  - executor: 'invalid'\n",
+		"zero executor":     "  - executor: '0x0000000000000000000000000000000000000000'\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			prefix, _, _ := strings.Cut(validConfig, "strategies:\n")
+			if _, err := parseConfig(configNode(t, prefix+"strategies:\n"+body)); err == nil {
+				t.Fatal("invalid strategy identity accepted")
+			}
+		})
+	}
+}

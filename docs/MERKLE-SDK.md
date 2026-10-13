@@ -28,10 +28,16 @@ solvers:
         url: https://curator-backend.example.invalid/api/v1
         # apiKeyEnv: CURATOR_API_TOKEN
       strategies:
-        - name: rebalance
-          executor: "0x..." # deployed RecipeExecutor
+        - executor: "0x..." # deployed RecipeExecutor
           recipeHash: "0x..." # optional expected commitment
 ```
+
+Strategy `name` is optional: omitted or empty
+values become `executor-` plus the full lowercase executor address including `0x`.
+This durable state/log identity is stable across reordering. Custom labels remain
+unchanged; keep existing labels until active jobs drain before removing them.
+Recovery rejects changed identifiers without migrating journals. Duplicate
+effective names fail; separately named workflows may share an executor.
 
 Paths resolve from the process working directory; use absolute paths for mounted
 configuration and persistent state. The regular chain/signer/txManager settings

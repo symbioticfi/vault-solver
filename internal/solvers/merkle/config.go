@@ -3,6 +3,7 @@ package merkle
 import (
 	"encoding/json"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -79,14 +80,17 @@ func parseConfig(node yaml.Node) (config, error) {
 	cfg := config{mode: raw.Mode, stateDir: raw.StateDir, curator: raw.Curator, pollInterval: poll, operationTimeout: timeout}
 	seen := make(map[string]bool)
 	for _, s := range raw.Strategies {
-		if !strategyName.MatchString(s.Name) || seen[s.Name] {
-			return config{}, errors.New("merkle unique strategy name required")
-		}
-		seen[s.Name] = true
 		executor, err := parse.NonZeroAddress(s.Executor, "merkle executor")
 		if err != nil {
 			return config{}, err
 		}
+		if s.Name == "" {
+			s.Name = "executor-" + strings.ToLower(executor.Hex())
+		}
+		if !strategyName.MatchString(s.Name) || seen[s.Name] {
+			return config{}, errors.New("merkle unique strategy name required")
+		}
+		seen[s.Name] = true
 		if s.RecipeHash != "" {
 			if _, err := parse.Hash(s.RecipeHash, "merkle recipeHash"); err != nil {
 				return config{}, err
