@@ -1,39 +1,47 @@
 package merkle
 
 import (
-	"context"
 	"encoding/json"
-	"maps"
 	"regexp"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/permissions"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	runtimePolicy                 = "recipe-derived-v2"
+	recipeCacheBytes        int64 = 16 << 20
+	defaultPollInterval           = 15 * time.Second
+	defaultOperationTimeout       = 30 * time.Second
+	defaultStrategyInterval       = time.Minute
+)
+
 type rawConfig struct {
-	Mode             string        `yaml:"mode" json:"mode"`
-	StateDir         string        `yaml:"stateDir" json:"stateDir"`
-	PollInterval     string        `yaml:"pollInterval" json:"pollInterval"`
-	OperationTimeout string        `yaml:"operationTimeout" json:"operationTimeout"`
-	Strategies       []rawStrategy `yaml:"strategies" json:"strategies"`
+	Mode             string                `yaml:"mode" json:"mode"`
+	StateDir         string                `yaml:"stateDir" json:"stateDir"`
+	Curator          protocolio.HTTPConfig `yaml:"curator" json:"curator"`
+	PollInterval     string                `yaml:"pollInterval" json:"pollInterval"`
+	OperationTimeout string                `yaml:"operationTimeout" json:"operationTimeout"`
+	Strategies       []rawStrategy         `yaml:"strategies" json:"strategies"`
 }
 type rawStrategy struct {
-	Name       string          `yaml:"name" json:"name"`
-	Executor   string          `yaml:"executor" json:"executor"`
-	Account    string          `yaml:"account" json:"account"`
-	RecipeHash string          `yaml:"recipeHash" json:"recipeHash"`
-	Tree       string          `yaml:"tree" json:"tree"`
-	Interval   string          `yaml:"interval" json:"interval"`
-	Inputs     map[uint]string `yaml:"inputs" json:"inputs"`
+	Name       string `yaml:"name" json:"name"`
+	Executor   string `yaml:"executor" json:"executor"`
+	RecipeHash string `yaml:"recipeHash" json:"recipeHash"`
+	Interval   string `yaml:"interval" json:"interval"`
 }
 type config struct {
 	mode, stateDir                 string
+	curator                        protocolio.HTTPConfig
 	pollInterval, operationTimeout time.Duration
 	strategies                     []keeper.Strategy
 }
@@ -49,29 +57,33 @@ func parseConfig(node yaml.Node) (config, error) {
 	if raw.Mode != "send" && raw.Mode != "simulate" {
 		return config{}, errors.New("merkle mode must be send or simulate")
 	}
-	if raw.StateDir == "" || len(raw.Strategies) == 0 {
-		return config{}, errors.New("merkle stateDir and strategies required")
+	if raw.StateDir == "" || len(raw.Strategies) == 0 || len(raw.Strategies) > 256 {
+		return config{}, errors.New("merkle stateDir and 1..256 strategies required")
 	}
-	poll, err := parse.Duration(raw.PollInterval, 15*time.Second, "merkle pollInterval")
+	curator, err := permissions.NormalizeHostConfig(raw.Curator)
 	if err != nil {
 		return config{}, err
 	}
-	timeout, err := parse.Duration(raw.OperationTimeout, 30*time.Second, "merkle operationTimeout")
+	raw.Curator = curator
+	poll, err := parse.Duration(raw.PollInterval, defaultPollInterval, "merkle pollInterval")
 	if err != nil {
 		return config{}, err
 	}
-	cfg := config{mode: raw.Mode, stateDir: raw.StateDir, pollInterval: poll, operationTimeout: timeout}
+	timeout, err := parse.Duration(raw.OperationTimeout, defaultOperationTimeout, "merkle operationTimeout")
+	if err != nil {
+		return config{}, err
+	}
+	if poll != defaultPollInterval || timeout != defaultOperationTimeout {
+		return config{}, errors.New("merkle polling and operation timeout are fixed; remove legacy overrides")
+	}
+	cfg := config{mode: raw.Mode, stateDir: raw.StateDir, curator: raw.Curator, pollInterval: poll, operationTimeout: timeout}
 	seen := make(map[string]bool)
 	for _, s := range raw.Strategies {
-		if !strategyName.MatchString(s.Name) || seen[s.Name] || s.Tree == "" {
-			return config{}, errors.New("merkle unique strategy name and tree required")
+		if !strategyName.MatchString(s.Name) || seen[s.Name] {
+			return config{}, errors.New("merkle unique strategy name required")
 		}
 		seen[s.Name] = true
 		executor, err := parse.NonZeroAddress(s.Executor, "merkle executor")
-		if err != nil {
-			return config{}, err
-		}
-		account, err := parse.NonZeroAddress(s.Account, "merkle account")
 		if err != nil {
 			return config{}, err
 		}
@@ -80,46 +92,28 @@ func parseConfig(node yaml.Node) (config, error) {
 				return config{}, err
 			}
 		}
-		interval, err := parse.Duration(s.Interval, time.Minute, "merkle strategy interval")
+		interval, err := parse.Duration(s.Interval, defaultStrategyInterval, "merkle strategy interval")
 		if err != nil {
 			return config{}, err
 		}
-		for index, value := range s.Inputs {
-			n, err := parse.Big(value, "merkle input")
-			if err != nil {
-				return config{}, err
-			}
-			if index > 4095 || n.Sign() < 0 || n.BitLen() > 256 {
-				return config{}, errors.New("merkle input exceeds uint256 or input index bounds")
-			}
+		if interval != defaultStrategyInterval {
+			return config{}, errors.New("merkle strategy interval is fixed; remove the legacy override")
 		}
-		s.Executor = executor.Hex()
-		s.Account = account.Hex()
-		semantic, err := json.Marshal(s)
-		if err != nil {
-			return config{}, errors.Errorf("fingerprint merkle workflow: %w", err)
-		}
-		cfg.strategies = append(cfg.strategies, keeper.Strategy{Config: keeper.Config{Name: s.Name, Executor: s.Executor, Account: s.Account, RecipeHash: s.RecipeHash, Tree: s.Tree, Interval: interval, Revision: crypto.Keccak256Hash(semantic).Hex()}, Providers: []provider.Provider{fixedInputs{inputs: s.Inputs}}})
+		cfg.strategies = append(cfg.strategies, keeper.Strategy{Config: keeper.Config{Name: s.Name, Executor: executor.Hex(), RecipeHash: s.RecipeHash, Interval: interval}, Providers: []provider.Provider{keeper.NewRecipeInputs()}})
 	}
 	return cfg, nil
 }
 
-// Fixed inputs supply configured amounts only; recipe instructions perform live
-// capacity reads and bound protocol calls. Auction providers remain host code.
-type fixedInputs struct{ inputs map[uint]string }
-
-func (p fixedInputs) Prepare(ctx context.Context, _ provider.Snapshot) (provider.Output, error) {
-	if err := ctx.Err(); err != nil {
-		return provider.Output{}, err
+// Bind derived identity and the shared source to existing recovery guards.
+func strategyRevision(strategy keeper.Config, curator protocolio.HTTPConfig, caller common.Address) (string, error) {
+	raw, err := json.Marshal(struct {
+		Policy   string                `json:"policy"`
+		Strategy keeper.Config         `json:"strategy"`
+		Curator  protocolio.HTTPConfig `json:"curator"`
+		Caller   common.Address        `json:"caller"`
+	}{runtimePolicy, strategy, curator, caller})
+	if err != nil {
+		return "", errors.Errorf("merkle strategy identity: %w", err)
 	}
-	return provider.Output{Inputs: maps.Clone(p.inputs)}, nil
-}
-func (fixedInputs) Advance(ctx context.Context, snapshot provider.Snapshot, _ provider.Output, _ json.RawMessage) (provider.Progress, error) {
-	if err := ctx.Err(); err != nil {
-		return provider.Progress{}, err
-	}
-	if err := snapshot.Execution.Validate(); err != nil {
-		return provider.Progress{}, err
-	}
-	return provider.Progress{Done: true, Outcome: "confirmed"}, nil
+	return crypto.Keccak256Hash(raw).Hex(), nil
 }

@@ -36,6 +36,8 @@ type Client struct {
 	*ethclient.Client
 
 	writeClient *ethclient.Client
+	readHTTP    *http.Client
+	readURL     string
 	chainID     *big.Int
 	multicall   common.Address
 
@@ -89,10 +91,11 @@ func DialWithMetrics(
 	if writeEndpoint == "" {
 		readRole = rpcRoleShared
 	}
-	ec, readTransport, err := dialClient(ctx, rpcURLs, readRole, attemptTimeout, rpcMetrics)
+	read, err := dialClient(ctx, rpcURLs, readRole, attemptTimeout, rpcMetrics)
 	if err != nil {
 		return nil, err
 	}
+	ec := read.client
 	id, err := ec.ChainID(ctx)
 	if err != nil {
 		ec.Close()
@@ -103,15 +106,16 @@ func DialWithMetrics(
 	// and nonce reads; all other reads stay on the primary. Even without writeRpcUrl, isolate
 	// writes from a multi-endpoint read client: replaying eth_sendRawTransaction across endpoints can
 	// hide an ambiguous acceptance behind a later nonce-too-low response.
-	readCalls := callTracing{role: readRole, transport: readTransport}
+	readCalls := callTracing{role: readRole, transport: read.transport}
 	writeClient := ec
 	writeCalls := readCalls
 	if writeEndpoint != "" {
-		wc, writeTransport, wcErr := dialClient(ctx, []string{writeEndpoint}, rpcRoleWrite, attemptTimeout, rpcMetrics)
+		write, wcErr := dialClient(ctx, []string{writeEndpoint}, rpcRoleWrite, attemptTimeout, rpcMetrics)
 		if wcErr != nil {
 			ec.Close()
 			return nil, errors.Errorf("chain: dial write rpc: %w", wcErr)
 		}
+		wc := write.client
 		// An explicitly configured endpoint is an independent trust boundary and must prove it
 		// belongs to the read chain. Probing the implicit primary here would break read-only solvers
 		// that are running through a fallback while that primary is unavailable.
@@ -131,12 +135,14 @@ func DialWithMetrics(
 			}
 		}
 		writeClient = wc
-		writeCalls = callTracing{role: rpcRoleWrite, transport: writeTransport}
+		writeCalls = callTracing{role: rpcRoleWrite, transport: write.transport}
 	}
 
 	return &Client{
 		Client:      ec,
 		writeClient: writeClient,
+		readHTTP:    read.httpClient,
+		readURL:     rpcURLs[0],
 		chainID:     id,
 		multicall:   common.HexToAddress(multicallAddr),
 		readCalls:   readCalls,
@@ -156,19 +162,26 @@ func (c *Client) Close() {
 // for HTTP(S), which fallbackTransport already spans per request, and ws/ipc otherwise. A single
 // non-HTTP endpoint keeps a plain dial under a connect span; HTTP(S) endpoints use fallbackTransport
 // so each attempt remains bounded.
+type dialedClient struct {
+	client     *ethclient.Client
+	transport  string
+	httpClient *http.Client
+}
+
 func dialClient(
 	ctx context.Context,
 	rpcURLs []string,
 	role string,
 	attemptTimeout time.Duration,
 	rpcMetrics *RPCMetrics,
-) (*ethclient.Client, string, error) {
+) (dialedClient, error) {
 	if len(rpcURLs) == 1 && !isHTTPURL(rpcURLs[0]) {
-		return dialNonHTTP(ctx, rpcURLs[0], role)
+		client, label, err := dialNonHTTP(ctx, rpcURLs[0], role)
+		return dialedClient{client: client, transport: label}, err
 	}
 	endpoints, err := parseHTTPEndpoints(rpcURLs)
 	if err != nil {
-		return nil, "", err
+		return dialedClient{}, err
 	}
 	rpcMetrics.bindTransport(role, len(endpoints))
 	httpClient := &http.Client{
@@ -183,9 +196,9 @@ func dialClient(
 	}
 	rc, err := rpc.DialOptions(ctx, rpcURLs[0], rpc.WithHTTPClient(httpClient))
 	if err != nil {
-		return nil, "", errors.Errorf("chain: dial (fallback): %w", err)
+		return dialedClient{}, errors.Errorf("chain: dial (fallback): %w", err)
 	}
-	return ethclient.NewClient(rc), "", nil
+	return dialedClient{client: ethclient.NewClient(rc), httpClient: httpClient}, nil
 }
 
 // dialNonHTTP dials a websocket or IPC endpoint under a chain.rpc.connect span. A websocket carries

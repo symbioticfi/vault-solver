@@ -3,7 +3,12 @@ package merkle
 
 import (
 	"context"
+	"net/http"
 	"time"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/symbioticfi/merkle-executor/sdk/permissions"
+	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
@@ -57,6 +62,33 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if deps.Chain == nil || deps.Signer == nil || deps.TxManager == nil {
 		return nil, errors.New("merkle requires host chain, signer and shared transaction manager")
 	}
+	// The factory interface has no context; bound the complete startup observation.
+	startup, cancel := context.WithTimeout(context.Background(), cfg.operationTimeout)
+	defer cancel()
+	targets := make([]common.Address, len(cfg.strategies))
+	for i, strategy := range cfg.strategies {
+		targets[i] = common.HexToAddress(strategy.Config.Executor)
+	}
+	identities, err := recipes.DiscoverExecutors(startup, deps.Chain, targets)
+	if err != nil {
+		return nil, errors.Errorf("merkle executor identity discovery: %w", err)
+	}
+	for i := range cfg.strategies {
+		strategy := &cfg.strategies[i]
+		identity := identities[common.HexToAddress(strategy.Config.Executor)]
+		if identity.Caller != deps.Signer.Address() {
+			return nil, errors.New("merkle executor caller differs from the shared signer")
+		}
+		strategy.Config.Account = identity.Account.Hex()
+		strategy.Config.Revision, err = strategyRevision(strategy.Config, cfg.curator, deps.Signer.Address())
+		if err != nil {
+			return nil, err
+		}
+	}
+	source, err := permissions.New(cfg.curator, &http.Client{Timeout: defaultOperationTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }})
+	if err != nil {
+		return nil, err
+	}
 	store, err := state.Open(cfg.stateDir)
 	if err != nil {
 		return nil, err
@@ -67,7 +99,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 			_ = store.Close()
 		}
 	}()
-	planner := &keeper.Planner{Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: deps.TxManager.Confirmations()}
+	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(len(cfg.strategies), recipeCacheBytes), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: deps.TxManager.Confirmations()}
 	k := &keeper.Keeper{Store: store, Planner: planner, Strategies: cfg.strategies, Mode: cfg.mode, OperationTimeout: cfg.operationTimeout, Log: deps.Log.WithName(Name)}
 	sender, err := submission.New(deps.Chain, deps.Signer.Address(), deps.Chain.ChainID(), store, submission.Config{Confirmations: deps.TxManager.Confirmations()}, transport{manager: deps.TxManager}, deps.Log)
 	if err != nil {

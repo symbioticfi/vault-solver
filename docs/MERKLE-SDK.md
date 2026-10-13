@@ -24,31 +24,57 @@ solvers:
     config:
       mode: simulate # switch to send for configured, authorized execution
       stateDir: /persistent/merkle-state
-      pollInterval: 15s
-      operationTimeout: 30s
+      curator:
+        url: https://curator-backend.example.invalid/api/v1
+        # apiKeyEnv: CURATOR_API_TOKEN
       strategies:
         - name: rebalance
           executor: "0x..." # deployed RecipeExecutor
-          account: "0x..." # its MerkleAccount
           recipeHash: "0x..." # optional expected commitment
-          tree: /config/permissions.json
-          interval: 1m
-          inputs: {0: "1000000"} # decimal uint256, token base units
 ```
 
 Paths resolve from the process working directory; use absolute paths for mounted
 configuration and persistent state. The regular chain/signer/txManager settings
 still apply. Send mode requires the shared signer to match the on-chain executor
-caller and hold the required leaf roles. Configuration and amounts fingerprint
-active work; do not remove or change a workflow while it owns unresolved work.
+caller; the executor must hold the required leaf roles. Startup reads the executor
+account and caller together at one pinned block,
+deduplicates repeated executors and checks that block again. Every caller must
+match the existing shared signer before state opens. Derived identity, curator
+source and the fixed runtime policy version fingerprint active work; do not remove
+or change a workflow while it owns unresolved work.
 Mount durable state and exclude concurrent processes with this signer, even if
 they use different state directories. A process-local lane cannot coordinate a
 second service independently using the same private key.
 
-This first host supplies configured bounded inputs; the committed recipe reads
-live liquidity and enforces its arithmetic and call bounds. SDK provider
-Prepare/Advance interfaces allow host integrations to supply fresh auction
-amounts and reconcile confirmed executions. LL/3F auction discovery, pricing,
+The host uses the SDK's recipe input provider and shared curator permission source.
+The active root determines the requested permission artifact; the SDK checks the
+chain, root, leaf hashes and every proof before preparation. Amount inputs use an
+exact read-dependent equality when present, otherwise the greatest amount allowed
+by all preceding recipe bounds, with at least one read-dependent upper bound.
+The SDK checks every lower bound and cap. Unconstrained inputs
+and the old account, tree and inputs configuration fields are rejected. Finish all
+active jobs with the previous binary and configuration before this migration.
+Polling, operation timeout, strategy cadence and the 16 MiB recipe cache use fixed
+bounded defaults.
+
+Reviewed caller-independent getters use the standard Multicall3 address at the
+pinned height. Independent calls, headers, logs and receipts share bounded JSON-RPC
+arrays through vault-solver's existing HTTP fallback and tracing transport. Safe
+aggregation and exact argument encoding come from the shared SDK implementation;
+full simulations preserve their caller and remain isolated eth_calls. Missing
+aggregate deployments and malformed batch responses fail without individual-call
+retries. This SDK host requires HTTP(S) read endpoints; ordinary solvers retain
+their existing WebSocket/IPC support.
+
+Read-dependent numeric values are resolved in one same-address code-override lens
+call. Authenticated Manage/Approve/Call instructions execute in order before later
+reads when their runtime data and input sources are already available. Prefixes
+requiring unresolved provider outputs, future input sources or self-queries against
+the overridden executor fail before external quote requests. The original executor's
+complete simulation verifies the resolved values and canonical guards still run.
+An RPC without state-override support cannot prepare a recipe requiring these
+values. SDK provider Prepare/Advance interfaces allow host integrations to supply
+fresh auction data and reconcile confirmed executions. LL/3F auction discovery, pricing,
 signed offers, RFQ domain compatibility, reservations and order reconciliation
 remain business logic in vault-solver. This extraction does not claim those
 auction integrations already execute through Merkle connectors.
