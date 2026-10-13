@@ -2,7 +2,6 @@ package merkle
 
 import (
 	"encoding/json"
-	"regexp"
 	"strings"
 	"time"
 
@@ -19,7 +18,7 @@ import (
 )
 
 const (
-	runtimePolicy                 = "recipe-derived-v2"
+	runtimePolicy                 = "address-only-v3"
 	recipeCacheBytes        int64 = 16 << 20
 	defaultPollInterval           = 15 * time.Second
 	defaultOperationTimeout       = 30 * time.Second
@@ -32,13 +31,7 @@ type rawConfig struct {
 	Curator          protocolio.HTTPConfig `yaml:"curator" json:"curator"`
 	PollInterval     string                `yaml:"pollInterval" json:"pollInterval"`
 	OperationTimeout string                `yaml:"operationTimeout" json:"operationTimeout"`
-	Strategies       []rawStrategy         `yaml:"strategies" json:"strategies"`
-}
-type rawStrategy struct {
-	Name       string `yaml:"name" json:"name"`
-	Executor   string `yaml:"executor" json:"executor"`
-	RecipeHash string `yaml:"recipeHash" json:"recipeHash"`
-	Interval   string `yaml:"interval" json:"interval"`
+	Strategies       []string              `yaml:"strategies" json:"strategies"`
 }
 type config struct {
 	mode, stateDir                 string
@@ -46,8 +39,6 @@ type config struct {
 	pollInterval, operationTimeout time.Duration
 	strategies                     []keeper.Strategy
 }
-
-var strategyName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
 
 func parseConfig(node yaml.Node) (config, error) {
 	var raw rawConfig
@@ -79,31 +70,17 @@ func parseConfig(node yaml.Node) (config, error) {
 	}
 	cfg := config{mode: raw.Mode, stateDir: raw.StateDir, curator: raw.Curator, pollInterval: poll, operationTimeout: timeout}
 	seen := make(map[string]bool)
-	for _, s := range raw.Strategies {
-		executor, err := parse.NonZeroAddress(s.Executor, "merkle executor")
+	for _, value := range raw.Strategies {
+		executor, err := parse.NonZeroAddress(value, "merkle executor")
 		if err != nil {
 			return config{}, err
 		}
-		if s.Name == "" {
-			s.Name = "executor-" + strings.ToLower(executor.Hex())
+		canonical := strings.ToLower(executor.Hex())
+		if seen[canonical] {
+			return config{}, errors.Errorf("merkle duplicate executor address %s", canonical)
 		}
-		if !strategyName.MatchString(s.Name) || seen[s.Name] {
-			return config{}, errors.New("merkle unique strategy name required")
-		}
-		seen[s.Name] = true
-		if s.RecipeHash != "" {
-			if _, err := parse.Hash(s.RecipeHash, "merkle recipeHash"); err != nil {
-				return config{}, err
-			}
-		}
-		interval, err := parse.Duration(s.Interval, defaultStrategyInterval, "merkle strategy interval")
-		if err != nil {
-			return config{}, err
-		}
-		if interval != defaultStrategyInterval {
-			return config{}, errors.New("merkle strategy interval is fixed; remove the legacy override")
-		}
-		cfg.strategies = append(cfg.strategies, keeper.Strategy{Config: keeper.Config{Name: s.Name, Executor: executor.Hex(), RecipeHash: s.RecipeHash, Interval: interval}, Providers: []provider.Provider{keeper.NewRecipeInputs()}})
+		seen[canonical] = true
+		cfg.strategies = append(cfg.strategies, keeper.Strategy{Config: keeper.Config{Name: canonical, Executor: canonical, Interval: defaultStrategyInterval}, Providers: []provider.Provider{keeper.NewRecipeInputs()}})
 	}
 	return cfg, nil
 }

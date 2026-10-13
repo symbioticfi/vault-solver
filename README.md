@@ -873,4 +873,4 @@ modern Go 1.27 style, the required test/lint/format gate, and secure-coding rule
 [`CLAUDE.md`](./CLAUDE.md) (`AGENTS.md` is a symlink to it). Every change must keep
 `make format && make test && make lint` green and unit-test new logic.
 
-Merkle recipes run through the shared sender using the independently versioned [Merkle SDK integration](docs/MERKLE-SDK.md).
+Merkle recipes run through the shared sender using the independently versioned [Merkle SDK integration](docs/MERKLE-SDK.md). Its `config.strategies` is a list of full executor addresses, for example `strategies: ["0x0000000000000000000000000000000000000010"]`. Each lowercase address is the durable identity; labels and old strategy objects are rejected.

@@ -28,16 +28,21 @@ solvers:
         url: https://curator-backend.example.invalid/api/v1
         # apiKeyEnv: CURATOR_API_TOKEN
       strategies:
-        - executor: "0x..." # deployed RecipeExecutor
-          recipeHash: "0x..." # optional expected commitment
+        - "0x0000000000000000000000000000000000000010" # deployed RecipeExecutor
 ```
 
-Strategy `name` is optional: omitted or empty
-values become `executor-` plus the full lowercase executor address including `0x`.
-This durable state/log identity is stable across reordering. Custom labels remain
-unchanged; keep existing labels until active jobs drain before removing them.
-Recovery rejects changed identifiers without migrating journals. Duplicate
-effective names fail; separately named workflows may share an executor.
+`strategies` is a list of full nonzero executor addresses. Each canonical lowercase
+address, including `0x`, is the durable state and log identifier. Order does not
+change identity; duplicate addresses and different checksum spellings of the same
+address are rejected. Old strategy objects, custom labels and per-strategy options
+are rejected before network access. The unrelated `solvers[].name` still selects
+the solver integration.
+
+The address-only policy version is `address-only-v3`. Finish active jobs with the
+previous binary and configuration before upgrading, including terminal jobs whose
+shared sender remains occupied. Old custom or prefixed keys remain in inventory
+and fence unresolved ownership. This schema never migrates or aliases old journals;
+the shared immutable SDK pin remains unchanged.
 
 Paths resolve from the process working directory; use absolute paths for mounted
 configuration and persistent state. The regular chain/signer/txManager settings
