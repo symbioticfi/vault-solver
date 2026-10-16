@@ -221,25 +221,19 @@ func (m *Manager) readLateReceipt(ctx context.Context, entry lateReceiptObservat
 	if err != nil {
 		return Result{}, err
 	}
-	if !head.Number.IsUint64() || !receipt.BlockNumber.IsUint64() {
-		return Result{}, errors.New("late receipt confirmation block number exceeds uint64")
-	}
-	included, latest := receipt.BlockNumber.Uint64(), head.Number.Uint64()
-	if latest < included || latest-included < entry.metadata.confirmations {
-		observability.Decline(ctx, "confirmation_depth_pending", "owned receipt awaits configured depth")
-		return Result{}, nil
-	}
-	// Depth and ancestry must describe the same stable head. Reading a separate, newer
-	// depth after canonical preflight could incorrectly count a receipt from a displaced fork.
-	if err := m.confirmReceiptAncestryUsing(ctx, head, receipt, m.lateReceiptParentHeader); err != nil {
-		return Result{}, err
-	}
-	headAfter, err := m.confirmationHead(ctx)
+	witnessNumber, err := confirmationWitnessNumber(receipt, entry.metadata.confirmations)
 	if err != nil {
 		return Result{}, err
 	}
-	if head.Hash() != headAfter.Hash() {
-		return Result{}, errors.New("late receipt confirmation head changed during ancestry check")
+	if head.Number.Cmp(witnessNumber) < 0 {
+		observability.Decline(ctx, "confirmation_depth_pending", "owned receipt awaits configured depth")
+		return Result{}, nil
+	}
+	// Share the active proof and its closing fence. The immutable parent cache
+	// still lets a proof spanning multiple short polls retain validated links.
+	receipt, err = m.confirmReceiptWitnessUsing(ctx, receipt, entry.metadata.confirmations, m.lateReceiptParentHeader)
+	if err != nil {
+		return Result{}, err
 	}
 	result := Result{Hash: entry.hash, Attempts: []common.Hash{entry.hash}, Receipt: receipt, Outcome: OutcomeConfirmed}
 	if receipt.Status == types.ReceiptStatusFailed {

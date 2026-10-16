@@ -498,11 +498,11 @@ func (b *delayedLateAncestryBackend) HeaderByHash(ctx context.Context, hash comm
 	}
 }
 
-func TestLateReceiptOldAncestryMakesProgressAcrossBoundedPolls(t *testing.T) {
+func TestLateReceiptDeepWitnessMakesProgressAcrossBoundedPolls(t *testing.T) {
 	backend := &delayedLateAncestryBackend{mockBackend: newMockBackend()}
 	backend.head = 160
 	manager := newLateReceiptManager(t, backend, Config{
-		ReplacementInterval: 80 * time.Millisecond, LateReceiptTimeout: 2 * time.Second,
+		Confirmations: 6, ReplacementInterval: 80 * time.Millisecond, LateReceiptTimeout: 2 * time.Second,
 	}, nil)
 	observed := make(chan Result, 1)
 	pending, err := manager.broadcast(t.Context(), Request{To: common.HexToAddress("0xaaa"), GasLimit: 21_000,
@@ -519,7 +519,7 @@ func TestLateReceiptOldAncestryMakesProgressAcrossBoundedPolls(t *testing.T) {
 	}
 	select {
 	case result := <-observed:
-		t.Fatalf("first short poll unexpectedly completed 60 delayed parent reads: %+v", result)
+		t.Fatalf("first short poll unexpectedly completed six delayed witness parents: %+v", result)
 	default:
 	}
 	deadline := time.Now().Add(1200 * time.Millisecond)
@@ -529,6 +529,12 @@ func TestLateReceiptOldAncestryMakesProgressAcrossBoundedPolls(t *testing.T) {
 		case result := <-observed:
 			if result.Hash != pending.originalHash || result.Outcome != OutcomeConfirmed {
 				t.Fatalf("old canonical receipt=%+v", result)
+			}
+			backend.mu.Lock()
+			reads := backend.headerHashReads
+			backend.mu.Unlock()
+			if reads != 6 {
+				t.Fatalf("parent RPCs=%d, want six cached witness links independent of receipt age", reads)
 			}
 			return
 		default:
