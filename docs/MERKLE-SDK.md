@@ -42,7 +42,7 @@ The address-only policy version is `address-only-v3`. Finish active jobs with th
 previous binary and configuration before upgrading, including terminal jobs whose
 shared sender remains occupied. Old custom or prefixed keys remain in inventory
 and fence unresolved ownership. This schema never migrates or aliases old journals;
-the shared immutable SDK pin remains unchanged.
+the shared SDK remains pinned to an immutable version.
 
 Paths resolve from the process working directory; use absolute paths for mounted
 configuration and persistent state. The regular chain/signer/txManager settings
@@ -67,6 +67,16 @@ and the old account, tree and inputs configuration fields are rejected. Finish a
 active jobs with the previous binary and configuration before this migration.
 Polling, operation timeout, strategy cadence and the 16 MiB recipe cache use fixed
 bounded defaults.
+
+Readiness comes from the authenticated recipe. After the complete original executor
+simulation and canonical closing checks succeed, a recipe with no active Manage
+actions and no Call or Approve steps is idle. A separate readiness read can gate a
+Manage action while its bound request ID is zero; the host assigns no protocol
+meaning to that ID. Unsigned admission rechecks readiness against current state.
+Malformed simulation results, failed recipe checks and RPC failures remain errors.
+Signed recovery continues reconciling the exact persisted transaction bytes.
+The recipe's own checks define the on-chain completion conditions; this host does
+not infer settlement from issuer selectors or off-chain status.
 
 Reviewed caller-independent getters use the standard Multicall3 address at the
 pinned height. Independent calls, headers, logs and receipts share bounded JSON-RPC
