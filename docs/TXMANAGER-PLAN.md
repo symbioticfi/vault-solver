@@ -90,12 +90,12 @@ The public YAML block is `txManager`. Values below are application defaults, aft
 
 Polling defaults to 2 seconds in the Go manager; it is not a separate YAML field. Pending receipt reads,
 replacement nonce reads and obsolescence checks each use `min(2 seconds, replacementInterval/2)`; fee reads use
-`min(1 second, replacementInterval/2)`; a stalled call's gas re-estimate, fallback included, uses
-`min(5 seconds, replacementInterval/2)` and ends no later than the call's submission deadline. These
-internal read budgets are separate from broadcast timeout. The initial estimate, before signing, has no
-budget of its own: the request's `Deadline` and manager shutdown bound it, so a request without `Deadline`
-(3F `redeem`) can hold the worker and the nonce lane while a read endpoint withholds its estimate
-([3F plan §10](3F-PLAN.md#10-pending--deferred-items-post-phase-3)).
+`min(1 second, replacementInterval/2)`; initial estimates and stalled-call gas re-estimates use
+`min(5 seconds, replacementInterval/2)` and end no later than a supplied submission deadline.
+The override and latest-state fallback share that single estimate budget, capped by their inherited
+context. A supplied gas limit still bypasses estimation. Caller cancellation after admission does not
+release the lane: an unsigned timeout must return through the worker before another request enters.
+These internal read budgets are separate from broadcast timeout.
 
 Each initial mined nonce read and replacement/fee-hint nonce check has its own
 `min(2 seconds, replacementInterval/2)` timeout, bounded by the caller or lifecycle context. Receipt
@@ -245,17 +245,23 @@ incomplete or unavailable sweeps then return execution-unknown abandonment and r
 `Obsolete` remains evaluated after a complete ordinary sweep. Once a valid receipt begins confirmation,
 the manager follows confirmation policy rather than abandoning included work at the pending deadline.
 This ordering reduces the receipt/status race but cannot make separate on-chain reads atomic.
-Invalid receipts are separately rejected: receipt/block number must exist, transaction hash must match,
-and block hash must be nonzero.
+Invalid receipts are separately rejected: the block number must fit uint64, the transaction hash must
+match, and the block hash must be nonzero. Logs must match the receipt's transaction/block identity
+and transaction index, have increasing log indexes, and be present and unremoved.
 
 Only the owner accepts a receipt candidate and begins confirmation; the reader is idle during that wait.
-Before waiting for depth, a canonical preflight uses a stable head and hash-addressed parent ancestry
-under one overall receipt-read budget, capped by any final receipt grace. An unproven receipt resumes
-pending tracking; only a proven inclusion continues confirmation beyond the pending deadline.
-Confirmation repeats the stable-head ancestry proof at the configured depth without endpoint affinity. Read fallbacks remain available. Incoherent/unavailable
-snapshots are retried; two consecutive missing receipts or a proven fork change can resume pending
-tracking. A read error breaks the consecutive-miss streak. A receipt for an older signed variant remains
-valid evidence for the same nonce.
+Before waiting for depth, a canonical preflight checks the receipt block's exact numbered header
+under one overall receipt-read budget, capped by any final receipt grace. It rereads the receipt and
+closes the same numbered header before accepting inclusion. An unproven receipt resumes pending
+tracking; only a proven inclusion continues confirmation beyond the pending deadline.
+For depth N, the witness is receipt block + N. Check its exact hash-linked parents back to inclusion,
+reread the receipt's transaction/block/status and log identity, then require the same numbered witness
+again. This takes at most N parent reads regardless of receipt age; latest-head advancement is allowed.
+Depth zero still proves canonical inclusion. Overflow, inconsistent links or a changed witness cannot
+confirm. Read fallbacks remain available without endpoint affinity. Incoherent/unavailable snapshots
+are retried; two consecutive missing receipts or a proven fork change can resume pending tracking.
+A read error breaks the consecutive-miss streak. An older signed variant remains valid evidence for
+the same nonce, and the returned receipt contains the fresh validated evidence.
 
 After delivering a terminal result, the manager stops the active lifecycle. It does not detect later
 reorgs of completed transactions or reopen integration orders.
@@ -273,8 +279,9 @@ The observer uses the existing poll cadence and advances its round-robin cursor 
 is bounded by one receipt-read budget; receipt/header/ancestry reads retain their own timeouts within it.
 It never waits synchronously for depth. Missing, malformed, lagging, orphaned or insufficient-depth
 receipts remain uncounted and are retried until retention ends. Canonical ancestry and confirmation
-depth must be proven against a stable head. Receipt telemetry accepts only successful or failed status
-values; malformed status values are excluded without changing ordinary request completion policy.
+depth use the same numbered witness proof and fresh receipt/closing-header fences as active confirmation.
+Receipt telemetry accepts only successful or failed status values; malformed status values are excluded
+without changing ordinary request completion policy.
 A separately bounded cache of validated hash-addressed parent
 headers retains immutable proof links across polls, so an old receipt can make progress without extending
 the pass budget. The cache uses the same configured cap and retention and never substitutes a
@@ -517,8 +524,10 @@ receipt callback updates successful owned amounts only.
 These public-pool tests do not establish private-provider retention or consistency guarantees.
 
 Fee tests cover the base-fee bound, tip rule, repricing decisions, fee-window parsing, next-block estimate
-and fallbacks, stale send heads, stall rebroadcasts, congestion, validity and gas growth. A stalled gas
-estimate remains bounded and cannot cause a broadcast after the request tracking deadline.
+and fallbacks, stale send heads, stall rebroadcasts, congestion, validity and gas growth. Initial and
+stalled gas estimates share their fallback budget and honor earlier deadlines. Regressions cover
+unsigned lane retention/recovery, old receipts with advancing latest heads, depth-bounded parent
+RPC counts, active/passive closing fences, changed receipt evidence and consecutive-null resets.
 Run repository-required build, race/coverage and lint gates for implementation changes. Local and hosted
 checks do not establish deployment or production rollout status.
 

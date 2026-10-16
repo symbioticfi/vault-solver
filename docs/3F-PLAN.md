@@ -397,11 +397,10 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
   return; the solver only signs and submits the returned offer.
 - **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state.
 - **WS live-log subscription** (`chain.wsUrl`) — config field present but unused; the poll-based reconcile/redeem path is sufficient for v0.
-- **Redeem has no send deadline.** `redeem` submits without `Deadline` or a gas limit, so its pre-sign gas
-  estimate is bounded only by manager shutdown. Over a WebSocket/IPC read RPC, an estimate the endpoint never
-  answers holds the txmanager worker and the shared nonce lane until it answers or the manager stops; HTTP(S)
-  attempts are bounded by `chain.rpcAttemptTimeoutMs`. Either give `redeem` a `Deadline` or give the manager's
-  pre-sign estimate its own budget ([TXMANAGER-PLAN §3](TXMANAGER-PLAN.md#3-configuration-and-time-budgets)).
+- **Resolved: pre-sign redeem estimation budget.** `redeem` still submits without a request
+  deadline or supplied gas limit. The shared manager now bounds initial estimation and its fallback
+  by one finite read budget; an unsigned timeout returns before the lane admits new work
+  ([TXMANAGER-PLAN §3](TXMANAGER-PLAN.md#3-configuration-and-time-budgets)).
 
 **Testing and observability:**
 - **Integration coverage.** `bridgefacilitator` unit coverage is ~16% — pure logic (EIP-712 golden+parity, default-strategy capacity/caps, config) is covered; the HTTP/on-chain paths (apiclient, chainreader, redeemer, Run loop) need an httptest-backed API mock + a simulated/forked chain backend.

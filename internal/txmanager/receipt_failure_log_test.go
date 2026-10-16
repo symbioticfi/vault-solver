@@ -204,8 +204,9 @@ func TestConfirmationMissCountResetsOnReadError(t *testing.T) {
 		Gas: 21_000, To: ptr(common.HexToAddress("0xabc")),
 	})
 	b.receipts[tx.Hash()] = successfulReceipt(tx, b.head-2)
-	// initial pending read, then the confirmation reads
-	b.script = []error{nil, ethereum.NotFound, errors.New("receipt rpc timeout"), ethereum.NotFound, nil}
+	// Initial sweep and canonical-inclusion reread, then the depth reads. Keep
+	// NotFound / error / NotFound consecutive to exercise the reset rule.
+	b.script = []error{nil, nil, ethereum.NotFound, errors.New("receipt rpc timeout"), ethereum.NotFound, nil}
 	pending := &pendingTransaction{
 		req: Request{Label: "scripted"}, nonce: 7,
 		attempts: []txAttempt{{hash: tx.Hash(), tx: tx}},
@@ -215,6 +216,21 @@ func TestConfirmationMissCountResetsOnReadError(t *testing.T) {
 	result, done := m.receiptResult(t.Context(), pending)
 	if !done || result.Outcome != OutcomeConfirmed {
 		t.Fatalf("result = %+v done=%v, want confirmed", result, done)
+	}
+}
+
+// A closing null counts as a miss, but a subsequent failed opening read resets
+// that count. The following null must not combine with the old closing miss.
+func TestConfirmationClosingMissCountResetsOnReadError(t *testing.T) {
+	b := &scriptedReceiptBackend{mockBackend: newMockBackend()}
+	m := New(b, mustSigner(t), big.NewInt(1), Config{PollInterval: time.Millisecond}, logr.Discard())
+	tx := types.NewTx(&types.DynamicFeeTx{Nonce: 7, To: ptr(common.Address{1})})
+	receipt := successfulReceipt(tx, b.head-2)
+	b.receipts[tx.Hash()] = receipt
+	b.script = []error{nil, ethereum.NotFound, errors.New("receipt rpc timeout"), ethereum.NotFound, nil, nil}
+	got, err := m.waitForConfirmations(t.Context(), tx.Hash(), receipt, 2)
+	if err != nil || got != receipt || b.calls.Load() != 6 {
+		t.Fatalf("closing miss survived an intervening read error: got %+v, err %v, reads %d", got, err, b.calls.Load())
 	}
 }
 
