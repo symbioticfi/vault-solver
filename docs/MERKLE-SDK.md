@@ -38,11 +38,9 @@ address are rejected. Old strategy objects, custom labels and per-strategy optio
 are rejected before network access. The unrelated `solvers[].name` still selects
 the solver integration.
 
-The address-only policy version is `address-only-v3`. Finish active jobs with the
-previous binary and configuration before upgrading, including terminal jobs whose
-shared sender remains occupied. Old custom or prefixed keys remain in inventory
-and fence unresolved ownership. This schema never migrates or aliases old journals;
-the shared SDK remains pinned to an immutable version.
+The single supported pre-production policy is `address-only-v1`, with no legacy
+policy or migration path. Unresolved journals fence ownership and retain their
+original identity and configuration. The shared SDK is pinned to an immutable version.
 
 Paths resolve from the process working directory; use absolute paths for mounted
 configuration and persistent state. The regular chain/signer/txManager settings
@@ -63,8 +61,7 @@ chain, root, leaf hashes and every proof before preparation. Amount inputs use a
 exact read-dependent equality when present, otherwise the greatest amount allowed
 by all preceding recipe bounds, with at least one read-dependent upper bound.
 The SDK checks every lower bound and cap. Unconstrained inputs
-and the old account, tree and inputs configuration fields are rejected. Finish all
-active jobs with the previous binary and configuration before this migration.
+and manual account, tree and inputs configuration fields are rejected.
 Polling, operation timeout, strategy cadence and the 16 MiB recipe cache use fixed
 bounded defaults.
 
