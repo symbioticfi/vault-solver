@@ -323,6 +323,14 @@ simulation and canonical block fences remain mandatory. The shared lens replays
 authenticated state-changing prefixes before later numerical reads; unresolved
 provider outputs, future input sources and executor self-queries fail closed.
 
+The immutable SDK also classifies successful original execution results using the
+authenticated recipe: all Manage gates closed with no Call or Approve work is idle.
+Request IDs and bound arguments do not supply readiness policy. Unsigned admission
+rechecks the gates; malformed results, reverts and closing canonical-check failures
+remain errors. The existing signed journal recovery path remains unchanged, and
+on-chain completion assertions remain part of the recipe rather than host protocol
+recognition.
+
 The host's SDK transport continues to use the existing shared transaction manager's
 owner fence and persistence callbacks; it contains no copied sender or nonce engine.
 The SDK batch engine uses the existing HTTP fallback/tracing path with strict response

@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	runtimePolicy                 = "address-only-v3"
+	runtimePolicy                 = "address-only-v1"
 	recipeCacheBytes        int64 = 16 << 20
 	defaultPollInterval           = 15 * time.Second
 	defaultOperationTimeout       = 30 * time.Second

@@ -13,11 +13,13 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	accountbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	executorbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/bindings/multicall3"
 	"github.com/symbioticfi/vault-solver/internal/chain"
@@ -124,7 +126,11 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 					value = big.NewInt(12)
 				case "execute":
 					simulations++
-					return nil
+					returned, packErr := method.Outputs.Pack([]*big.Int{})
+					if packErr != nil {
+						t.Error(packErr)
+					}
+					return returned
 				default:
 					t.Error("unexpected getter", method.Name)
 					return nil
@@ -207,7 +213,8 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 			current := built.(*Solver)
 			defer func() { _ = current.Close() }()
 			_, err = current.keeper.Planner.(*keeper.Planner).Prepare(t.Context(), current.keeper.Strategies[0])
-			if (err == nil) != (mode == "valid") || fetches != 1 {
+			valid := mode == "valid"
+			if valid && !errors.Is(err, provider.ErrNotReady) || !valid && (err == nil || errors.Is(err, provider.ErrNotReady)) || fetches != 1 {
 				t.Fatalf("curator validation: mode %s, fetches %d, error %v", mode, fetches, err)
 			}
 			if (simulations != 0) != (mode == "valid") {

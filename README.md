@@ -874,3 +874,8 @@ modern Go 1.27 style, the required test/lint/format gate, and secure-coding rule
 `make format && make test && make lint` green and unit-test new logic.
 
 Merkle recipes run through the shared sender using the independently versioned [Merkle SDK integration](docs/MERKLE-SDK.md). Its `config.strategies` is a list of full executor addresses, for example `strategies: ["0x0000000000000000000000000000000000000010"]`. Each lowercase address is the durable identity; labels and old strategy objects are rejected.
+
+The authenticated recipe supplies on-chain readiness and completion checks. Successful
+simulations with all Manage gates closed and no Call or Approve work wait without
+sending; malformed results and failed simulations remain errors. A zero request ID
+does not imply waiting when a separate recipe gate authorizes the action.
