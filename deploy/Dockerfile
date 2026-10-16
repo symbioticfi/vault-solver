@@ -14,7 +14,14 @@ WORKDIR /src
 
 # Dependency layer — cached unless go.mod/go.sum change.
 COPY go.mod go.sum ./
-RUN go mod download
+RUN apk add --no-cache git ca-certificates
+ENV GOPRIVATE=github.com/symbioticfi/merkle-executor
+# BuildKit keeps the read token out of build arguments and image layers.
+RUN --mount=type=secret,id=merkle_sdk_read_token,required=true \
+    GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0=credential.https://github.com.helper \
+    GIT_CONFIG_VALUE_0='!f() { read sdk_token < /run/secrets/merkle_sdk_read_token; printf "username=x-access-token\npassword=%s\n" "$sdk_token"; }; f' \
+    go mod download
 
 # Source + build. Version metadata is injected via build args (see docker-compose / make docker).
 COPY . .
