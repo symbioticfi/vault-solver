@@ -14,6 +14,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
+	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/threefapi"
 	"gopkg.in/yaml.v3"
 )
 
@@ -30,11 +31,25 @@ type rawConfig struct {
 	StateDir   string   `yaml:"stateDir" json:"stateDir"`
 	Curator    Curator  `yaml:"curator" json:"curator"`
 	Strategies []string `yaml:"strategies" json:"strategies"`
+	ThreeF     *ThreeF  `yaml:"threeF,omitempty" json:"threeF,omitempty"`
 }
 type config struct {
 	mode, stateDir string
 	curator        Curator
 	strategies     []keeper.Strategy
+	threeF         *ThreeF
+}
+
+// ThreeF selects one executor for a dedicated curator BF and default maker.
+type ThreeF struct {
+	Executor  string `yaml:"executor" json:"executor"`
+	URL       string `yaml:"url" json:"url"`
+	APIKeyEnv string `yaml:"apiKeyEnv" json:"apiKeyEnv"`
+	Broker    string `yaml:"broker" json:"broker"`
+}
+
+func (c ThreeF) APIConfig() threefapi.Config {
+	return threefapi.Config{URL: c.URL, APIKeyEnv: c.APIKeyEnv, Broker: common.HexToAddress(c.Broker)}
 }
 
 // Curator contains the operator-supplied permission service settings.
@@ -76,17 +91,42 @@ func parseConfig(node yaml.Node) (config, error) {
 		seen[canonical] = true
 		cfg.strategies = append(cfg.strategies, keeper.Strategy{Config: keeper.Config{Name: canonical, Executor: canonical, Interval: defaultStrategyInterval}, Providers: []provider.Provider{keeper.NewRecipeInputs()}})
 	}
+	if raw.ThreeF != nil {
+		broker, err := parse.NonZeroAddress(raw.ThreeF.Broker, "3f broker")
+		if err != nil {
+			return config{}, err
+		}
+		executor, err := parse.NonZeroAddress(raw.ThreeF.Executor, "3f executor")
+		if err != nil {
+			return config{}, err
+		}
+		raw.ThreeF.Broker = strings.ToLower(broker.Hex())
+		raw.ThreeF.Executor = strings.ToLower(executor.Hex())
+		if !seen[raw.ThreeF.Executor] {
+			return config{}, errors.New("3f executor must be a configured strategy")
+		}
+		if err := threefapi.Validate(raw.ThreeF.APIConfig()); err != nil {
+			return config{}, err
+		}
+		cfg.threeF = raw.ThreeF
+		for i := range cfg.strategies {
+			if cfg.strategies[i].Config.Executor == raw.ThreeF.Executor {
+				cfg.strategies[i].Config.Interval = defaultPollInterval
+			}
+		}
+	}
 	return cfg, nil
 }
 
 // Bind derived identity and the shared source to existing recovery guards.
-func strategyRevision(strategy keeper.Config, curator Curator, caller common.Address) (string, error) {
+func strategyRevision(strategy keeper.Config, curator Curator, caller common.Address, threeF *ThreeF) (string, error) {
 	raw, err := json.Marshal(struct {
 		Policy   string                `json:"policy"`
 		Strategy keeper.Config         `json:"strategy"`
 		Curator  protocolio.HTTPConfig `json:"curator"`
 		Caller   common.Address        `json:"caller"`
-	}{runtimePolicy, strategy, curator.HTTPConfig(), caller})
+		ThreeF   *ThreeF               `json:"threeF,omitempty"`
+	}{runtimePolicy, strategy, curator.HTTPConfig(), caller, threeF})
 	if err != nil {
 		return "", errors.Errorf("merkle strategy identity: %w", err)
 	}

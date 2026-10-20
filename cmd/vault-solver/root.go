@@ -21,6 +21,6 @@ func newRootCmd() *cobra.Command {
 			"solver strategy against them. The first implementation is the 3F Bridge Facilitator.",
 		SilenceUsage: true, // don't print usage on RunE errors (only on flag/arg misuse)
 	}
-	root.AddCommand(newRunCmd(), newVersionCmd())
+	root.AddCommand(newRunCmd(), newVersionCmd(), newThreeFKeyCmd())
 	return root
 }

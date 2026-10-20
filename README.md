@@ -883,3 +883,10 @@ The authenticated recipe supplies on-chain readiness and completion checks. Succ
 simulations with all Manage gates closed and no Call or Approve work wait without
 sending; malformed results and failed simulations remain errors. A zero request ID
 does not imply waiting when a separate recipe gate authorizes the action.
+
+The Merkle solver also supports native 3F API-key PUSH offers with a dedicated
+curator BF, a MerkleAccount maker and guarded account-side minting. Configure the
+optional `threeF` block and complete enrollment as described in
+[the Merkle host runbook](docs/MERKLE-SDK.md#3f-api-key-push-through-merkleaccount).
+Credentials are environment references; automatic offers reserve existing
+commitments and use account idle cash. Simulation never submits API offers.

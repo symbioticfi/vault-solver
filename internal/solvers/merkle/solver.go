@@ -8,7 +8,11 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	merkle3f "github.com/symbioticfi/vault-solver/internal/solvers/merkle/threef"
+	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/threefapi"
+	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/threefbot"
 
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
@@ -28,6 +32,7 @@ func init() { solver.Register(Name, factory) }
 type Solver struct {
 	keeper *keeper.Keeper
 	store  *state.Store
+	threeF *threeFWorkflow
 }
 
 func (s *Solver) Name() string            { return Name }
@@ -45,6 +50,14 @@ func (s *Solver) Run(ctx context.Context) error {
 		}
 		if err := s.keeper.Tick(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			observability.Log(ctx).Error(err, "merkle workflow iteration failed")
+		}
+		if s.threeF != nil && (s.keeper.Sender == nil || s.keeper.Sender.PendingID() == "") {
+			run, cancel := context.WithTimeout(ctx, defaultOperationTimeout)
+			err := s.threeF.Tick(run)
+			cancel()
+			if err != nil && !errors.Is(err, context.Canceled) {
+				observability.Log(ctx).Error(err, "3f offer iteration failed")
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -79,12 +92,12 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 			return nil, errors.New("merkle executor caller differs from the shared signer")
 		}
 		strategy.Config.Account = identity.Account.Hex()
-		strategy.Config.Revision, err = strategyRevision(strategy.Config, cfg.curator, deps.Signer.Address())
+		strategy.Config.Revision, err = strategyRevision(strategy.Config, cfg.curator, deps.Signer.Address(), cfg.threeF)
 		if err != nil {
 			return nil, err
 		}
 	}
-	source, err := permissions.New(cfg.curator.HTTPConfig(), &http.Client{Timeout: defaultOperationTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }})
+	source, err := permissions.New(cfg.curator.HTTPConfig(), &http.Client{Timeout: defaultOperationTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, deps.Chain)
 	if err != nil {
 		return nil, err
 	}
@@ -110,11 +123,30 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if cfg.mode == "send" {
 		k.Sender = sender
 	}
+	result := &Solver{keeper: k, store: store}
+	if cfg.threeF != nil {
+		if deps.Chain.ChainID().Cmp(common.Big1) != 0 {
+			return nil, errors.New("3f Merkle PUSH requires mainnet")
+		}
+		api, err := threefapi.New(cfg.threeF.APIConfig())
+		if err != nil {
+			return nil, err
+		}
+		runtime := &merkle3f.Provider{API: api, Chain: deps.Chain}
+		for i := range k.Strategies {
+			if k.Strategies[i].Config.Executor != cfg.threeF.Executor {
+				continue
+			}
+			k.Strategies[i].Providers = []provider.Provider{runtime}
+			result.threeF = &threeFWorkflow{planner: planner, strategy: k.Strategies[i], api: api, bot: &threefbot.Bot{Client: api, Store: store, Send: cfg.mode == "send"}}
+		}
+		k.Planner = &threeFPlanning{Planner: planner, runtime: runtime, executor: common.HexToAddress(cfg.threeF.Executor)}
+	}
 	if err := k.CheckRecovery(); err != nil {
 		return nil, err
 	}
 	complete = true
-	return &Solver{keeper: k, store: store}, nil
+	return result, nil
 }
 
 // This bridge submits through the same manager as every other solver. It owns no

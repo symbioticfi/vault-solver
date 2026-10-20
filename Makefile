@@ -23,8 +23,10 @@ FORGE_OUT ?= ../rfq/out
 # the universal delegator, and the vault/ERC4626 interfaces live there and are built standalone
 # (`cd ../rfq/lib/core-mirror && forge build`).
 CORE_MIRROR_OUT ?= ../rfq/lib/core-mirror/out
-# Live 3F OpenAPI spec (Sepolia dev).
-OPENAPI_URL ?= https://bf.dev.gcp.3f.xyz/docs/openapi.json
+# Merkle policy and recipe interfaces come from the adapters Foundry build.
+ADAPTERS_OUT ?= ../adapters/out
+# Live 3F OpenAPI spec (mainnet).
+OPENAPI_URL ?= https://bf.3f.xyz/docs/openapi.json
 # RFQ backend OpenAPI spec. The backend serves it at /api/v1/openapi.json (hono-openapi, runtime).
 # NOTE: the temp railway deployment is currently behind the repo (pre adapter/protocolSignature
 # rename); point this at a backend running current code, or regenerate in-repo (see docs/RFQ-PLAN.md).
@@ -65,6 +67,7 @@ CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IAdapterFactory IVaultV2 IER
 # at the call site, not at runtime.
 BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
             IVaultController:3f/vaultcontroller IWhitelist:3f/whitelist \
+            IRecipeCapability:merkle/recipecapability IThreeFPolicy:merkle/threefpolicy \
             LiquidLaneAdapter:liquidlane/adapter Executor:rfq/executor Reactor:rfq/reactor \
             LiquidLaneLifiExecutor:lifi/executor LiquidLaneUniswapXExecutor:uniswapx/executor \
             ILifiInputSettler:lifi/inputsettler \
@@ -122,10 +125,20 @@ refresh-abi: ## Re-vendor ABIs from the rfq + core-mirror Foundry builds (FORGE_
 		echo "vendored api/abi/$$c.json (core-mirror)"; \
 	done
 
+.PHONY: refresh-merkle-abi
+refresh-merkle-abi: ## Re-vendor Merkle recipe/policy interfaces (ADAPTERS_OUT=...)
+	@mkdir -p api/abi
+	@set -e; for c in IRecipeCapability IThreeFPolicy; do \
+		src="$(ADAPTERS_OUT)/$$c.sol/$$c.json"; \
+		if [[ ! -f "$$src" ]]; then echo "missing $$src (run forge build in $(ADAPTERS_OUT)/..)"; exit 1; fi; \
+		jq '.abi' "$$src" > "api/abi/$$c.json"; \
+		echo "vendored api/abi/$$c.json (adapters)"; \
+	done
+
 .PHONY: refresh-openapi
 refresh-openapi: ## Re-pull the live 3F OpenAPI spec
 	@mkdir -p openapi
-	curl -fsSL "$(OPENAPI_URL)" | jq . > openapi/3f-bf.openapi.json
+	curl -fsSL -A 'vault-solver' "$(OPENAPI_URL)" | jq . > openapi/3f-bf.openapi.json
 	@echo "vendored openapi/3f-bf.openapi.json"
 
 .PHONY: refresh-rfq-openapi

@@ -95,6 +95,7 @@ func newGenericRecipeHost(t *testing.T, ready, requestID uint64, simulation stri
 	t.Helper()
 	host := &genericRecipeHost{}
 	host.ready.Store(ready)
+	adapter := common.HexToAddress("0x100")
 	executor, account, caller := common.HexToAddress("0x10"), common.HexToAddress("0x20"), common.HexToAddress("0x30")
 	header := &types.Header{Number: big.NewInt(12), Difficulty: new(big.Int)}
 	recipe, leaf := genericManagedRecipe(t)
@@ -103,12 +104,13 @@ func newGenericRecipeHost(t *testing.T, ready, requestID uint64, simulation stri
 		t.Fatal(err)
 	}
 	curator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/merkle-trees/"+leaf.Hash.Hex() || r.URL.RawQuery != "chainId=1" {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/merkle/"+strings.ToLower(adapter.Hex())+"/permission-sets/"+leaf.Hash.Hex() || r.URL.RawQuery != "" {
 			t.Error("host requested another permission artifact")
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"chainId": 1, "root": leaf.Hash.Hex(), "account": account.Hex(), "leaves": []any{
+		metadata := map[string]any{"chainId": 1, "adapter": adapter.Hex(), "root": leaf.Hash.Hex(), "account": account.Hex(), "leaves": []any{
 			map[string]any{"hash": leaf.Hash.Hex(), "target": leaf.Target.Hex(), "value": "0", "data": hexutil.Encode(leaf.Data), "dataMask": hexutil.Encode(leaf.DataMask), "proof": []string{}},
-		}})
+		}}
+		_ = json.NewEncoder(w).Encode(map[string]any{"bundle": map[string]any{"chainId": 1, "adapter": adapter.Hex(), "account": account.Hex(), "root": leaf.Hash.Hex(), "leaves": []common.Hash{leaf.Hash}, "metadata": metadata}})
 	}))
 	t.Cleanup(curator.Close)
 	binding := executorbinding.NewRecipeExecutor()
@@ -135,6 +137,9 @@ func newGenericRecipeHost(t *testing.T, ready, requestID uint64, simulation stri
 			if methodErr != nil {
 				t.Error(methodErr)
 				return nil
+			}
+			if method.Name == "adapter" {
+				return genericPack(t, method.Outputs, adapter)
 			}
 			if method.Name == "hasRole" {
 				return genericPack(t, method.Outputs, true)

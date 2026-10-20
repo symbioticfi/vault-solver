@@ -66,7 +66,7 @@ func TestRevisionBindsDerivedIdentityAndPermissionSource(t *testing.T) {
 	strategy := cfg.strategies[0].Config
 	strategy.Account = "0x0000000000000000000000000000000000000020"
 	caller := common.HexToAddress("0x03")
-	original, err := strategyRevision(strategy, cfg.curator, caller)
+	original, err := strategyRevision(strategy, cfg.curator, caller, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestRevisionBindsDerivedIdentityAndPermissionSource(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s, c, owner := strategy, cfg.curator, caller
 			change(&s, &c, &owner)
-			revision, err := strategyRevision(s, c, owner)
+			revision, err := strategyRevision(s, c, owner, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -202,16 +202,54 @@ func TestAddressRevisionIgnoresCaseAndOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, s := range a.strategies {
-		first, err := strategyRevision(s.Config, a.curator, common.HexToAddress("0x03"))
+		first, err := strategyRevision(s.Config, a.curator, common.HexToAddress("0x03"), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		second, err := strategyRevision(b.strategies[1-i].Config, b.curator, common.HexToAddress("0x03"))
+		second, err := strategyRevision(b.strategies[1-i].Config, b.curator, common.HexToAddress("0x03"), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if first != second {
 			t.Fatal("case/order changed revision")
 		}
+	}
+}
+
+func TestThreeFConfigAndRecoveryIdentity(t *testing.T) {
+	const section = `threeF:
+  executor: "0x0000000000000000000000000000000000000010"
+  url: https://bf.3f.xyz
+  apiKeyEnv: THREEF_CURATOR_API_KEY
+  broker: "0x0000000000000000000000000000000000000040"
+`
+	cfg, err := parseConfig(configNode(t, validConfig+section))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.threeF == nil || cfg.threeF.Broker != "0x0000000000000000000000000000000000000040" {
+		t.Fatal("missing BF identity")
+	}
+	first, err := strategyRevision(cfg.strategies[0].Config, cfg.curator, common.HexToAddress("0x03"), cfg.threeF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := *cfg.threeF
+	changed.APIKeyEnv = "ANOTHER_CURATOR_KEY"
+	second, err := strategyRevision(cfg.strategies[0].Config, cfg.curator, common.HexToAddress("0x03"), &changed)
+	if err != nil || first == second {
+		t.Fatal("provider configuration escaped recovery fingerprint")
+	}
+	for name, raw := range map[string]string{
+		"unconfigured executor":   strings.Replace(section, "0000000000000000000000000000000000000010", "0000000000000000000000000000000000000020", 1),
+		"zero broker":             strings.Replace(section, "0000000000000000000000000000000000000040", "0000000000000000000000000000000000000000", 1),
+		"inline key":              strings.Replace(section, "apiKeyEnv:", "apiKey:", 1),
+		"manual financial amount": section + "  principal: '100'\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := parseConfig(configNode(t, validConfig+raw)); err == nil {
+				t.Fatal("invalid 3F configuration accepted")
+			}
+		})
 	}
 }

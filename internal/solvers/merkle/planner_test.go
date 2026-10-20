@@ -36,6 +36,7 @@ type plannerRPCRequest struct {
 func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 	for _, mode := range []string{"valid", "wrong chain", "wrong root", "unused invalid proof", "free input"} {
 		t.Run(mode, func(t *testing.T) {
+			adapter := common.HexToAddress("0x100")
 			executor, account, caller := common.HexToAddress("0x10"), common.HexToAddress("0x20"), common.HexToAddress("0x30")
 			root := common.HexToHash("0x40")
 			header := &types.Header{Number: big.NewInt(12), Difficulty: new(big.Int)}
@@ -58,10 +59,10 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 			simulations, fetches := 0, 0
 			curator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				fetches++
-				if r.Method != http.MethodGet || r.URL.Path != "/api/v1/merkle-trees/"+root.Hex() || r.URL.RawQuery != "chainId=1" {
+				if r.Method != http.MethodGet || r.URL.Path != "/api/v1/merkle/"+strings.ToLower(adapter.Hex())+"/permission-sets/"+root.Hex() || r.URL.RawQuery != "" {
 					t.Error("host requested a different permission artifact")
 				}
-				doc := map[string]any{"chainId": 1, "root": root.Hex(), "account": account.Hex(), "leaves": []any{}}
+				doc := map[string]any{"adapter": adapter.Hex(), "chainId": 1, "root": root.Hex(), "account": account.Hex(), "leaves": []any{}}
 				switch mode {
 				case "wrong chain":
 					doc["chainId"] = 2
@@ -76,7 +77,7 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 					}
 					doc["leaves"] = []any{map[string]any{"hash": hash.Hex(), "target": account.Hex(), "value": "0", "data": "0x01020304", "dataMask": "0x00000000", "proof": []any{}}}
 				}
-				_ = json.NewEncoder(w).Encode(doc)
+				_ = json.NewEncoder(w).Encode(map[string]any{"bundle": map[string]any{"chainId": 1, "adapter": adapter.Hex(), "account": account.Hex(), "root": root.Hex(), "leaves": []common.Hash{root}, "metadata": doc}})
 			}))
 			defer curator.Close()
 			binding := executorbinding.NewRecipeExecutor()
@@ -102,6 +103,15 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 					return raw
 				}
 				if target == account {
+					accountABI := accountbinding.NewMerkleAccount().GetABI()
+					method, err := accountABI.MethodById(data)
+					if err != nil {
+						t.Error(err)
+						return nil
+					}
+					if method.Name == "adapter" {
+						return genericPack(t, method.Outputs, adapter)
+					}
 					raw, err := accountbinding.NewMerkleAccount().GetABI().Methods["root"].Outputs.Pack(root)
 					if err != nil {
 						t.Error(err)

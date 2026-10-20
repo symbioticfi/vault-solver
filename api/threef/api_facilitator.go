@@ -21,6 +21,224 @@ import (
 // FacilitatorAPIService FacilitatorAPI service
 type FacilitatorAPIService service
 
+type ApiAdminControllerDisableMakerV1Request struct {
+	ctx             context.Context
+	ApiService      *FacilitatorAPIService
+	xApiKey         *string
+	disableMakerDto *DisableMakerDto
+}
+
+func (r ApiAdminControllerDisableMakerV1Request) XApiKey(xApiKey string) ApiAdminControllerDisableMakerV1Request {
+	r.xApiKey = &xApiKey
+	return r
+}
+
+func (r ApiAdminControllerDisableMakerV1Request) DisableMakerDto(disableMakerDto DisableMakerDto) ApiAdminControllerDisableMakerV1Request {
+	r.disableMakerDto = &disableMakerDto
+	return r
+}
+
+func (r ApiAdminControllerDisableMakerV1Request) Execute() (*http.Response, error) {
+	return r.ApiService.AdminControllerDisableMakerV1Execute(r)
+}
+
+/*
+AdminControllerDisableMakerV1 Disable new offers for an enrolled maker
+
+Keeps ownership and historical offer access; the address cannot be enrolled by another facilitator.
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@return ApiAdminControllerDisableMakerV1Request
+*/
+func (a *FacilitatorAPIService) AdminControllerDisableMakerV1(ctx context.Context) ApiAdminControllerDisableMakerV1Request {
+	return ApiAdminControllerDisableMakerV1Request{
+		ApiService: a,
+		ctx:        ctx,
+	}
+}
+
+// Execute executes the request
+func (a *FacilitatorAPIService) AdminControllerDisableMakerV1Execute(r ApiAdminControllerDisableMakerV1Request) (*http.Response, error) {
+	var (
+		localVarHTTPMethod = http.MethodPost
+		localVarPostBody   interface{}
+		formFiles          []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "FacilitatorAPIService.AdminControllerDisableMakerV1")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/facilitator/makers/disable"
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+	if r.xApiKey == nil {
+		return nil, reportError("xApiKey is required and must be specified")
+	}
+	if r.disableMakerDto == nil {
+		return nil, reportError("disableMakerDto is required and must be specified")
+	}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{"application/json"}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	parameterAddToHeaderOrQuery(localVarHeaderParams, "x-api-key", r.xApiKey, "simple", "")
+	// body params
+	localVarPostBody = r.disableMakerDto
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
+type ApiAdminControllerEnrollMakerV1Request struct {
+	ctx            context.Context
+	ApiService     *FacilitatorAPIService
+	xApiKey        *string
+	enrollMakerDto *EnrollMakerDto
+}
+
+func (r ApiAdminControllerEnrollMakerV1Request) XApiKey(xApiKey string) ApiAdminControllerEnrollMakerV1Request {
+	r.xApiKey = &xApiKey
+	return r
+}
+
+func (r ApiAdminControllerEnrollMakerV1Request) EnrollMakerDto(enrollMakerDto EnrollMakerDto) ApiAdminControllerEnrollMakerV1Request {
+	r.enrollMakerDto = &enrollMakerDto
+	return r
+}
+
+func (r ApiAdminControllerEnrollMakerV1Request) Execute() (*http.Response, error) {
+	return r.ApiService.AdminControllerEnrollMakerV1Execute(r)
+}
+
+/*
+AdminControllerEnrollMakerV1 Enroll an additional maker address
+
+Requires the facilitator API key and a maker-authorized EIP-712 signature. Domain: grunt-api v1 on chainId; EnrollMaker(broker address, maker address, deadline uint256). Enrollment never changes the default offerAddress.
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@return ApiAdminControllerEnrollMakerV1Request
+*/
+func (a *FacilitatorAPIService) AdminControllerEnrollMakerV1(ctx context.Context) ApiAdminControllerEnrollMakerV1Request {
+	return ApiAdminControllerEnrollMakerV1Request{
+		ApiService: a,
+		ctx:        ctx,
+	}
+}
+
+// Execute executes the request
+func (a *FacilitatorAPIService) AdminControllerEnrollMakerV1Execute(r ApiAdminControllerEnrollMakerV1Request) (*http.Response, error) {
+	var (
+		localVarHTTPMethod = http.MethodPost
+		localVarPostBody   interface{}
+		formFiles          []formFile
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "FacilitatorAPIService.AdminControllerEnrollMakerV1")
+	if err != nil {
+		return nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/facilitator/makers"
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+	if r.xApiKey == nil {
+		return nil, reportError("xApiKey is required and must be specified")
+	}
+	if r.enrollMakerDto == nil {
+		return nil, reportError("enrollMakerDto is required and must be specified")
+	}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{"application/json"}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	parameterAddToHeaderOrQuery(localVarHeaderParams, "x-api-key", r.xApiKey, "simple", "")
+	// body params
+	localVarPostBody = r.enrollMakerDto
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarHTTPResponse, newErr
+	}
+
+	return localVarHTTPResponse, nil
+}
+
 type ApiAdminControllerGenerateKeyV1Request struct {
 	ctx                          context.Context
 	ApiService                   *FacilitatorAPIService
@@ -278,6 +496,114 @@ func (a *FacilitatorAPIService) AdminControllerGetFacilitatorOfferAddressV1Execu
 	return localVarReturnValue, localVarHTTPResponse, nil
 }
 
+type ApiAdminControllerListMakersV1Request struct {
+	ctx        context.Context
+	ApiService *FacilitatorAPIService
+	xApiKey    *string
+}
+
+func (r ApiAdminControllerListMakersV1Request) XApiKey(xApiKey string) ApiAdminControllerListMakersV1Request {
+	r.xApiKey = &xApiKey
+	return r
+}
+
+func (r ApiAdminControllerListMakersV1Request) Execute() ([]FacilitatorMakerDto, *http.Response, error) {
+	return r.ApiService.AdminControllerListMakersV1Execute(r)
+}
+
+/*
+AdminControllerListMakersV1 List facilitator maker addresses, including disabled ones
+
+	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
+	@return ApiAdminControllerListMakersV1Request
+*/
+func (a *FacilitatorAPIService) AdminControllerListMakersV1(ctx context.Context) ApiAdminControllerListMakersV1Request {
+	return ApiAdminControllerListMakersV1Request{
+		ApiService: a,
+		ctx:        ctx,
+	}
+}
+
+// Execute executes the request
+//
+//	@return []FacilitatorMakerDto
+func (a *FacilitatorAPIService) AdminControllerListMakersV1Execute(r ApiAdminControllerListMakersV1Request) ([]FacilitatorMakerDto, *http.Response, error) {
+	var (
+		localVarHTTPMethod  = http.MethodGet
+		localVarPostBody    interface{}
+		formFiles           []formFile
+		localVarReturnValue []FacilitatorMakerDto
+	)
+
+	localBasePath, err := a.client.cfg.ServerURLWithContext(r.ctx, "FacilitatorAPIService.AdminControllerListMakersV1")
+	if err != nil {
+		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
+	}
+
+	localVarPath := localBasePath + "/v1/facilitator/makers"
+
+	localVarHeaderParams := make(map[string]string)
+	localVarQueryParams := url.Values{}
+	localVarFormParams := url.Values{}
+	if r.xApiKey == nil {
+		return localVarReturnValue, nil, reportError("xApiKey is required and must be specified")
+	}
+
+	// to determine the Content-Type header
+	localVarHTTPContentTypes := []string{}
+
+	// set Content-Type header
+	localVarHTTPContentType := selectHeaderContentType(localVarHTTPContentTypes)
+	if localVarHTTPContentType != "" {
+		localVarHeaderParams["Content-Type"] = localVarHTTPContentType
+	}
+
+	// to determine the Accept header
+	localVarHTTPHeaderAccepts := []string{"application/json"}
+
+	// set Accept header
+	localVarHTTPHeaderAccept := selectHeaderAccept(localVarHTTPHeaderAccepts)
+	if localVarHTTPHeaderAccept != "" {
+		localVarHeaderParams["Accept"] = localVarHTTPHeaderAccept
+	}
+	parameterAddToHeaderOrQuery(localVarHeaderParams, "x-api-key", r.xApiKey, "simple", "")
+	req, err := a.client.prepareRequest(r.ctx, localVarPath, localVarHTTPMethod, localVarPostBody, localVarHeaderParams, localVarQueryParams, localVarFormParams, formFiles)
+	if err != nil {
+		return localVarReturnValue, nil, err
+	}
+
+	localVarHTTPResponse, err := a.client.callAPI(req)
+	if err != nil || localVarHTTPResponse == nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	localVarBody, err := io.ReadAll(localVarHTTPResponse.Body)
+	localVarHTTPResponse.Body.Close()
+	localVarHTTPResponse.Body = io.NopCloser(bytes.NewBuffer(localVarBody))
+	if err != nil {
+		return localVarReturnValue, localVarHTTPResponse, err
+	}
+
+	if localVarHTTPResponse.StatusCode >= 300 {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: localVarHTTPResponse.Status,
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	err = a.client.decode(&localVarReturnValue, localVarBody, localVarHTTPResponse.Header.Get("Content-Type"))
+	if err != nil {
+		newErr := &GenericOpenAPIError{
+			body:  localVarBody,
+			error: err.Error(),
+		}
+		return localVarReturnValue, localVarHTTPResponse, newErr
+	}
+
+	return localVarReturnValue, localVarHTTPResponse, nil
+}
+
 type ApiAdminControllerSetFacilitatorOfferAddressV1Request struct {
 	ctx                           context.Context
 	ApiService                    *FacilitatorAPIService
@@ -303,7 +629,7 @@ func (r ApiAdminControllerSetFacilitatorOfferAddressV1Request) Execute() (*SetFa
 /*
 AdminControllerSetFacilitatorOfferAddressV1 Set facilitator offer address
 
-Updates the offer address for the facilitator associated with the provided API key. An address that has ever created an offer cannot be assigned, whatever the status of those offers.
+Selects an enabled maker already enrolled to this facilitator as its legacy default offer address. Enroll a new maker with a maker-authorized signature first.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiAdminControllerSetFacilitatorOfferAddressV1Request

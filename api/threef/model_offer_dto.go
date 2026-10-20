@@ -24,7 +24,10 @@ type OfferDto struct {
 	// ID of the auction associated with the offer
 	AuctionId float32 `json:"auctionId"`
 	// Offer status for the offer
-	Status string `json:"status"`
+	Status        string `json:"status"`
+	ExecutionMode string `json:"executionMode"`
+	// Effective UTC mint deadline for an AWAITING_MINT push offer, or null outside an active mint window.
+	MintDeadline NullableString `json:"mintDeadline"`
 	// Ethereum address of the offer maker
 	Maker string `json:"maker"`
 	// Request contract address
@@ -49,7 +52,7 @@ type OfferDto struct {
 	Nonce string `json:"nonce"`
 	// Offer expiration timestamp (uint256)
 	Expiration string `json:"expiration"`
-	// EIP-712 signature or null if unsigned
+	// Executable on-chain PULL signature, or null for PUSH. API-only PUSH authorization signatures are never returned or stored here.
 	Signature            NullableString `json:"signature"`
 	AdditionalProperties map[string]interface{}
 }
@@ -60,11 +63,13 @@ type _OfferDto OfferDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOfferDto(id float32, auctionId float32, status string, maker string, requestId string, asset NullableResolvedAssetDto, vault NullableResolvedVaultDto, amount string, expectedReturn string, filledAmount string, filledExpectedReturn string, pendingAmount string, pendingExpectedReturn string, nonce string, expiration string, signature NullableString) *OfferDto {
+func NewOfferDto(id float32, auctionId float32, status string, executionMode string, mintDeadline NullableString, maker string, requestId string, asset NullableResolvedAssetDto, vault NullableResolvedVaultDto, amount string, expectedReturn string, filledAmount string, filledExpectedReturn string, pendingAmount string, pendingExpectedReturn string, nonce string, expiration string, signature NullableString) *OfferDto {
 	this := OfferDto{}
 	this.Id = id
 	this.AuctionId = auctionId
 	this.Status = status
+	this.ExecutionMode = executionMode
+	this.MintDeadline = mintDeadline
 	this.Maker = maker
 	this.RequestId = requestId
 	this.Asset = asset
@@ -159,6 +164,56 @@ func (o *OfferDto) GetStatusOk() (*string, bool) {
 // SetStatus sets field value
 func (o *OfferDto) SetStatus(v string) {
 	o.Status = v
+}
+
+// GetExecutionMode returns the ExecutionMode field value
+func (o *OfferDto) GetExecutionMode() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.ExecutionMode
+}
+
+// GetExecutionModeOk returns a tuple with the ExecutionMode field value
+// and a boolean to check if the value has been set.
+func (o *OfferDto) GetExecutionModeOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.ExecutionMode, true
+}
+
+// SetExecutionMode sets field value
+func (o *OfferDto) SetExecutionMode(v string) {
+	o.ExecutionMode = v
+}
+
+// GetMintDeadline returns the MintDeadline field value
+// If the value is explicit nil, the zero value for string will be returned
+func (o *OfferDto) GetMintDeadline() string {
+	if o == nil || o.MintDeadline.Get() == nil {
+		var ret string
+		return ret
+	}
+
+	return *o.MintDeadline.Get()
+}
+
+// GetMintDeadlineOk returns a tuple with the MintDeadline field value
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *OfferDto) GetMintDeadlineOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.MintDeadline.Get(), o.MintDeadline.IsSet()
+}
+
+// SetMintDeadline sets field value
+func (o *OfferDto) SetMintDeadline(v string) {
+	o.MintDeadline.Set(&v)
 }
 
 // GetMaker returns the Maker field value
@@ -492,6 +547,8 @@ func (o OfferDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["id"] = o.Id
 	toSerialize["auctionId"] = o.AuctionId
 	toSerialize["status"] = o.Status
+	toSerialize["executionMode"] = o.ExecutionMode
+	toSerialize["mintDeadline"] = o.MintDeadline.Get()
 	toSerialize["maker"] = o.Maker
 	toSerialize["requestId"] = o.RequestId
 	toSerialize["asset"] = o.Asset.Get()
@@ -534,6 +591,8 @@ func (o *OfferDto) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "id")
 		delete(additionalProperties, "auctionId")
 		delete(additionalProperties, "status")
+		delete(additionalProperties, "executionMode")
+		delete(additionalProperties, "mintDeadline")
 		delete(additionalProperties, "maker")
 		delete(additionalProperties, "requestId")
 		delete(additionalProperties, "asset")
