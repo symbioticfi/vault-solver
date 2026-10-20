@@ -339,3 +339,11 @@ ordinary WebSocket/IPC support. Vault-side LL/3F pricing, discounts and auction/
 business logic stay in their existing integration packages; they are not implicitly
 wired through the Merkle host. Executor-daemon Merkl/CoW provider integration remains
 owned by merkle-executor.
+
+
+`rfq-merkle` separately consumes awarded RFQ orders through connector recipes. It
+uses no adapter inventory, economic strategy or shared capacity aggregation. The
+signed order supplies amounts; the SDK authenticates the immutable program and
+simulates the complete outer RFQ settlement. Both Merkle hosts share
+`internal/merklesender`, which forwards owner fences, signed-byte persistence and
+optional execution deadlines to the single txmanager. See [RFQ-MERKLE.md](RFQ-MERKLE.md).

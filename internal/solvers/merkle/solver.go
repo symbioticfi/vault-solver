@@ -18,9 +18,9 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 	"github.com/symbioticfi/merkle-executor/sdk/submission"
+	"github.com/symbioticfi/vault-solver/internal/merklesender"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 	"gopkg.in/yaml.v3"
 )
 
@@ -113,7 +113,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}()
 	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(len(cfg.strategies), recipeCacheBytes), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: deps.TxManager.Confirmations()}
 	k := &keeper.Keeper{Store: store, Planner: planner, Strategies: cfg.strategies, Mode: cfg.mode, OperationTimeout: defaultOperationTimeout, Log: deps.Log.WithName(Name)}
-	sender, err := submission.New(deps.Chain, deps.Signer.Address(), deps.Chain.ChainID(), store, submission.Config{Confirmations: deps.TxManager.Confirmations()}, transport{manager: deps.TxManager}, deps.Log)
+	sender, err := submission.New(deps.Chain, deps.Signer.Address(), deps.Chain.ChainID(), store, submission.Config{Confirmations: deps.TxManager.Confirmations()}, merklesender.Transport{Manager: deps.TxManager, Solver: Name}, deps.Log)
 	if err != nil {
 		return nil, err
 	}
@@ -147,26 +147,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 	complete = true
 	return result, nil
-}
-
-// This bridge submits through the same manager as every other solver. It owns no
-// key, signing engine, nonce worker, RPC broadcaster or independent fee policy.
-type transport struct{ manager *txmanager.Manager }
-
-func (t transport) Hold(id string) error               { return t.manager.Hold(id) }
-func (t transport) Release(id string) error            { return t.manager.Release(id) }
-func (t transport) RestoreConfirmedNonce(nonce uint64) { t.manager.RestoreConfirmedNonce(nonce) }
-func (t transport) SendAsync(ctx context.Context, req submission.Request, persist submission.Persist) (<-chan submission.Outcome, bool) {
-	channel, accepted := t.manager.SendAsync(ctx, txmanager.Request{Owner: req.ID, To: req.To, Data: req.Data, Label: "execute_recipe", Solver: Name, BeforeBroadcast: persist})
-	if !accepted {
-		return nil, false
-	}
-	result := make(chan submission.Outcome, 1)
-	go func() {
-		out := <-channel
-		result <- submission.Outcome{Hash: out.Hash, Attempts: out.Attempts, Rejected: out.Outcome == txmanager.OutcomeSubmissionError, Err: out.Err}
-	}()
-	return result, true
 }
 
 func validateRecoveredMode(mode, pendingID string) error {

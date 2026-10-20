@@ -1,4 +1,4 @@
-package rfq
+package rfqmerkle
 
 import (
 	"bytes"

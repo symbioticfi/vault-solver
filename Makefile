@@ -128,12 +128,12 @@ refresh-abi: ## Re-vendor ABIs from the rfq + core-mirror Foundry builds (FORGE_
 	done
 
 .PHONY: refresh-merkle-abi
-refresh-merkle-abi: ## Re-vendor Merkle recipe/policy interfaces and connector (ADAPTERS_OUT=...)
+refresh-merkle-abi: ## Project solver-used Merkle ABI entries from Foundry artifacts (ADAPTERS_OUT=...)
 	@mkdir -p api/abi
 	@set -e; for c in $(ADAPTERS_ABIS); do \
 		src="$(ADAPTERS_OUT)/$$c.sol/$$c.json"; \
 		if [[ ! -f "$$src" ]]; then echo "missing $$src (run forge build in $(ADAPTERS_OUT)/..)"; exit 1; fi; \
-		jq '.abi' "$$src" > "api/abi/$$c.json"; \
+		jq --arg contract "$$c" -f hack/merkle-abi.jq "$$src" > "api/abi/$$c.json"; \
 		echo "vendored api/abi/$$c.json (adapters)"; \
 	done
 

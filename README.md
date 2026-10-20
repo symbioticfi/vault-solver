@@ -46,6 +46,7 @@ the same nonce; nonce handling does not coordinate their liquidity or off-chain 
 | `solver.name` | Integration | Docs | Example config |
 |---|---|---|---|
 | `3f-bridge-facilitator` | 3F (Grunt) bridge-loan auctions | [plan](docs/3F-PLAN.md) | [yaml](config/3f.example.yaml) |
+| `rfq-merkle` | Awarded RFQ orders through Merkle recipes | [plan](docs/RFQ-MERKLE.md) | [yaml](config/rfq-merkle.example.yaml) |
 | `rfq-filler` | Symbiotic RFQ quoting + order filling | [plan](docs/RFQ-PLAN.md) | [yaml](config/rfq.example.yaml) |
 | `redstone-oev` | RedStone OEV liquidations | [plan](docs/OEV-PLAN.md) | [yaml](config/redstone-oev.example.yaml) |
 | `lifi-samechain` | LI.FI same-chain intents over LiquidLane | [plan](docs/LIFI-PLAN.md) | [yaml](config/lifi.example.yaml) |
@@ -93,17 +94,9 @@ External mode also fails startup unless that executor has direct `owner`/`market
 authorization on every configured adapter; the fatal startup log includes the executor, configured adapters,
 and underlying authorization error.
 
-Internal RFQ instances can also fill awarded orders through a LiquidLane connector's committed
-Merkle recipe. Configure `recipeExecutors: {"0x…connector": "0x…recipeExecutor"}` and
-`curator: {url: "https://curator.example/api/v1", apiKeyEnv: CURATOR_API_TOKEN}` in the RFQ config.
-This requires the RFQ Executor's existing `RecipeFill` deployment, a registered version-2 connector,
-and the RecipeExecutor caller set to that RFQ Executor. The host obtains the exact trade input and
-output obligation from `/orders`, gets signed terms from the backend discounts API, and builds and
-simulates the complete settlement transaction. It does not verify signatures or reprice discounts.
-The bounded fallback uses one connector for the full award and requires its exact payout to equal
-the order's output obligation. Connector quote generation, surplus payouts and splits across connectors
-are unsupported; an upstream quote source must award compatible orders. See the
-[connector runbook](docs/RFQ-PLAN.md#liquidlane-connector-awarded-order-fallback).
+Merkle connector orders run independently under `rfq-merkle`; see its
+[configuration](config/rfq-merkle.example.yaml) and [runbook](docs/RFQ-MERKLE.md).
+It consumes awarded `/orders` and signed backend terms without aggregating adapter liquidity.
 
 When `tokensToQuote: permissioned`, admitted inputs are never aggregated: the selected strategy must
 use one candidate route. Other scopes keep the existing multi-route behavior.

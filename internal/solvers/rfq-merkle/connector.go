@@ -1,10 +1,9 @@
-package rfq
+package rfqmerkle
 
 import (
 	"bytes"
 	"context"
 	"math/big"
-	"sort"
 	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -16,7 +15,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
-	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 )
@@ -42,7 +40,7 @@ type connectorState struct {
 }
 
 // Signed terms are upstream-owned; only ABI framing and selected route identity are checked here.
-func parseConnectorDiscount(r *resolveDiscountResponse, id common.Hash, venue, token common.Address) (connectorTerms, error) {
+func parseConnectorDiscount(r *discounts.Resolved, id common.Hash, venue, token common.Address) (connectorTerms, error) {
 	var out connector.ILiquidLaneConnectorDiscountSwap
 	if r == nil {
 		return connectorTerms{}, errors.New("connector discount is nil")
@@ -104,7 +102,7 @@ func assembleConnectorRoute(snapshot recipes.Snapshot, recipe recipes.Recipe, tr
 	if amountIn == nil || amountOut == nil || amountIn.Sign() <= 0 || amountOut.Sign() <= 0 || amountIn.BitLen() > 256 || amountOut.BitLen() > 256 {
 		return assembledConnector{}, errors.New("connector awarded amounts must be positive uint256")
 	}
-	data, err := connectorBinding.TryPackSwap0(signed, signature, recipient, amountIn)
+	data, err := connectorBinding.TryPackSwap(signed, signature, recipient, amountIn)
 	if err != nil {
 		return assembledConnector{}, errors.Errorf("encode connector swap: %w", err)
 	}
@@ -176,15 +174,7 @@ func (w *connectorWorkflow) state(ctx context.Context, venue, token common.Addre
 	call := func(data []byte) ([]byte, error) {
 		return w.chain.CallContract(ctx, ethereum.CallMsg{To: &venue, Data: data}, block)
 	}
-	raw, err := call(connectorBinding.PackVersion())
-	if err != nil {
-		return connectorState{}, errors.Errorf("connector version: %w", err)
-	}
-	version, err := connectorBinding.UnpackVersion(raw)
-	if err != nil || version != 2 {
-		return connectorState{}, errors.New("connector version must be 2")
-	}
-	raw, err = call(connectorBinding.PackAccount())
+	raw, err := call(connectorBinding.PackAccount())
 	if err != nil {
 		return connectorState{}, errors.Errorf("connector account: %w", err)
 	}
@@ -211,75 +201,24 @@ func (w *connectorWorkflow) state(ctx context.Context, venue, token common.Addre
 	return connectorState{account, asset, remaining}, nil
 }
 
-// An awarded order supplies both exact amounts. Candidate selection only accounts for venue budget.
-func (w *connectorWorkflow) plan(ctx context.Context, listed *discountsResponse, quoteID string, tokenIn, tokenOut common.Address, amountIn, amountOut *big.Int, block uint64, pending pendingReservations) (*fillPlan, liquidlane.CapacityReservations, error) {
-	if listed == nil {
-		return nil, nil, nil
-	}
-	items := append([]discounts.ListItem(nil), listed.Discounts...)
-	sort.Slice(items, func(i, j int) bool {
-		a, b := common.HexToAddress(items[i].Adapter), common.HexToAddress(items[j].Adapter)
-		if a != b {
-			return a.Cmp(b) < 0
-		}
-		return items[i].DiscountID < items[j].DiscountID
-	})
-	for _, item := range items {
-		venue := common.HexToAddress(item.Adapter)
-		if _, ok := w.executors[venue]; !ok || common.HexToAddress(item.TokenToRedeem) != tokenIn || common.HexToAddress(item.Collateral) != tokenOut {
-			continue
-		}
-		raw, err := hexutil.Decode(item.DiscountID)
-		if err != nil || len(raw) != 32 {
-			return nil, nil, errors.New("connector discountId must be bytes32")
-		}
-		id := common.BytesToHash(raw)
-		state, err := w.state(ctx, venue, tokenIn, new(big.Int).SetUint64(block))
-		if err != nil {
-			return nil, nil, err
-		}
-		if state.Asset != tokenOut {
-			return nil, nil, errors.New("connector outputAsset differs from awarded output")
-		}
-		budget := state.Remaining
-		advertised, err := sdkparse.Uint256(item.MaxAssets)
-		if err != nil {
-			return nil, nil, errors.Errorf("connector maxAssets: %w", err)
-		}
-		if advertised.Cmp(budget) < 0 {
-			budget = advertised
-		}
-		route := liquidlane.NewRoute(w.chainID.Int64(), venue, venue, tokenIn, tokenOut, 0, item.CollateralDecimals)
-		inventory := liquidlane.DiscountInventory(route, budget, nil, id, time.Time{})
-		inventory.BlockNumber = block
-		if pending != nil {
-			if held := pending([]solverInventory{inventory})[route.CapacityID]; held != nil {
-				budget = new(big.Int).Sub(budget, held)
-			}
-		}
-		if budget.Cmp(amountOut) < 0 {
-			continue
-		}
-		plan := &fillPlan{QuoteID: quoteID, RequestID: quoteID, TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: new(big.Int).Set(amountIn), QuotedAmountOut: new(big.Int).Set(amountOut), Legs: []fillLeg{{Adapter: venue, AmountIn: new(big.Int).Set(amountIn), AmountOut: new(big.Int).Set(amountOut), DiscountID: &id}}}
-		reservations, err := fillPlanReservations(plan, []liquidlane.QuoteCandidate{{ID: liquidlane.NewCandidateID(route, &id), Route: route, DiscountID: &id}})
-		return plan, reservations, err
-	}
-	return nil, nil, nil
+type selectedRoute struct {
+	Venue      common.Address
+	DiscountID common.Hash
+	MaxAssets  *big.Int
 }
 
-func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOrder, protocolSig []byte, selected *fillPlan, backend orderBackend) ([]byte, time.Time, error) {
-	if selected == nil || len(selected.Legs) != 1 || selected.Legs[0].AmountIn == nil || order.Request.AmountIn == nil || selected.Legs[0].AmountIn.Cmp(order.Request.AmountIn) != 0 || selected.TokenIn != order.Request.TokenIn {
-		return nil, time.Time{}, errors.New("connector fallback requires one complete awarded input")
+type discountResolver interface {
+	resolveDiscount(ctx context.Context, id string) (*discounts.Resolved, error)
+}
+
+func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOrder, protocolSig []byte, selected selectedRoute, backend discountResolver) ([]byte, time.Time, error) {
+	token, required, err := orderTerms(order, w.caller)
+	if err != nil {
+		return nil, time.Time{}, err
 	}
-	token, ok := singleOrderOutputToken(order.Outputs)
-	required, err := sumOrderOutputs(order.Outputs)
-	if !ok || err != nil || token != selected.TokenOut || selected.Legs[0].AmountOut == nil || selected.Legs[0].AmountOut.Cmp(required) != 0 {
-		return nil, time.Time{}, errors.New("connector fallback requires the exact awarded output obligation")
-	}
-	leg := selected.Legs[0]
-	recipeExecutor, ok := w.executors[leg.Adapter]
-	if !ok || leg.DiscountID == nil {
-		return nil, time.Time{}, errors.New("connector leg requires a configured executor and upstream signed discount")
+	recipeExecutor, ok := w.executors[selected.Venue]
+	if !ok || selected.DiscountID == (common.Hash{}) || selected.MaxAssets == nil || selected.MaxAssets.Sign() < 0 {
+		return nil, time.Time{}, errors.New("connector requires a configured executor and upstream discount")
 	}
 	snapshot, recipe, err := recipes.Discover(ctx, w.chain, recipeExecutor, nil)
 	if err != nil {
@@ -288,14 +227,17 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if snapshot.Caller != w.caller {
 		return nil, time.Time{}, errors.New("RecipeExecutor caller differs from RFQ Executor")
 	}
-	state, err := w.state(ctx, leg.Adapter, selected.TokenIn, new(big.Int).SetUint64(snapshot.BlockNumber))
+	state, err := w.state(ctx, selected.Venue, order.Request.TokenIn, new(big.Int).SetUint64(snapshot.BlockNumber))
 	if err != nil {
 		return nil, time.Time{}, err
+	}
+	if state.Remaining.Cmp(required) < 0 || selected.MaxAssets.Cmp(required) < 0 {
+		return nil, time.Time{}, errors.New("connector has insufficient capacity for the whole award")
 	}
 	if state.Account != snapshot.Account {
 		return nil, time.Time{}, errors.New("connector account differs from RecipeExecutor account")
 	}
-	if state.Asset != selected.TokenOut {
+	if state.Asset != token {
 		return nil, time.Time{}, errors.New("connector outputAsset differs from awarded output")
 	}
 	raw, err := w.source.PermissionTree(ctx, w.chainID, snapshot)
@@ -309,15 +251,15 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if tree.Root != snapshot.Root || tree.ChainID == nil || tree.ChainID.Cmp(w.chainID) != 0 || tree.Account == nil || *tree.Account != snapshot.Account {
 		return nil, time.Time{}, errors.New("connector permission tree scope mismatch")
 	}
-	resolved, err := backend.resolveDiscount(ctx, leg.DiscountID.Hex())
+	resolved, err := backend.resolveDiscount(ctx, selected.DiscountID.Hex())
 	if err != nil {
 		return nil, time.Time{}, errors.Errorf("resolve connector discount: %w", err)
 	}
-	terms, err := parseConnectorDiscount(resolved, *leg.DiscountID, leg.Adapter, selected.TokenIn)
+	terms, err := parseConnectorDiscount(resolved, selected.DiscountID, selected.Venue, order.Request.TokenIn)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	assembled, err := assembleConnectorRoute(snapshot, recipe, tree, leg.Adapter, selected.TokenIn, selected.TokenOut, w.caller, leg.AmountIn, leg.AmountOut, terms.Swap, terms.Signature)
+	assembled, err := assembleConnectorRoute(snapshot, recipe, tree, selected.Venue, order.Request.TokenIn, token, w.caller, order.Request.AmountIn, required, terms.Swap, terms.Signature)
 	if err != nil {
 		return nil, time.Time{}, errors.Errorf("assemble connector recipe: %w", err)
 	}

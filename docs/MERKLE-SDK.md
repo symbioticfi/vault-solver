@@ -5,14 +5,10 @@ The `merkle` solver consumes the independently versioned
 The SDK implements recipe/tree/proof/role checks,
 pinned runtime assembly, simulation, canonical receipts and durable recovery.
 
-LiquidLane connector RFQ orders use these public SDK recipe and permission APIs inside the
-`rfq-filler` integration. Their RecipeExecutor caller is the RFQ Executor contract; they are configured
-under RFQ `recipeExecutors` and must not be listed as standalone `merkle.strategies` whose caller is
-the shared EOA. RFQ owns `/orders` acquisition, exact awarded amounts, signed-discount acquisition,
-runtime assembly and complete outer `Executor.fill` simulation. The immutable program, masks,
-proofs, current roles and canonical snapshot checks still apply. The host does not verify EIP-712,
-signatures or discount economics. The current bounded route supports one exact-payout connector
-and does not advertise connector quotes; see the [RFQ runbook](RFQ-PLAN.md#liquidlane-connector-awarded-order-fallback).
+Awarded LiquidLane connector orders run in the separate [`rfq-merkle` solver](RFQ-MERKLE.md).
+Its RecipeExecutor caller is the RFQ Executor contract, so it must not be included in
+`merkle.strategies`, whose caller is the shared EOA. These integrations share the SDK
+and transaction manager; their liquidity and scheduling are independent.
 
 This solver receives the same transaction manager and signer as all other
 solvers. The SDK's transport is a thin bridge to that manager's Owner and
@@ -142,11 +138,8 @@ Do not share that BF/key with another independently allocating bot.
 One-time setup follows the [3F onboarding guide](https://docs.3f.xyz/bridge-facilitator/onboarding):
 3F approves the dedicated BF EOA; that EOA generates its API key with a private
 off-chain `GenerateFacilitatorApiKey` signature (grunt-api, version 1, chain 1).
-Generate a key explicitly with `vault-solver threef-key --key-env BF_PRIVATE_KEY
---out /private/new-api-key`; the output is a new mode-0600 file and is never printed.
-Use `--url` for the correct provider origin. This command rotates the key and
-refuses an existing output before contacting 3F. Load the result into the bot's
-`apiKeyEnv` using your secret manager and share that API key with the curator UI.
+Generate and rotate that key through the curator UI or the provider's onboarding tooling.
+Load it into the bot's `apiKeyEnv` using your secret manager.
 The account approves the `EnrollMaker(broker,maker,deadline)` digest through its
 permitted `sign` call. The frontend can submit this enrollment and set the account
 as the BF's default maker using the key. Enable maker submissions. Key rotation is
@@ -212,7 +205,9 @@ Provider list responses are capped at 2 MiB and inventories at 4096 rows. IDs mu
 be exact positive integers below 2^24 because the generated upstream client uses
 float32 IDs; monetary quantities remain integer strings and `big.Int`. Redirects
 are refused and upstream error bodies/credentials are redacted. The canonical
-OpenAPI and contract ABIs are vendored and regenerated with the Makefile.
+OpenAPI and solver-used contract ABI entries are vendored and regenerated with the Makefile.
+`make refresh-merkle-abi` projects those entries directly from the contracts build using
+`hack/merkle-abi.jq`, preserving their complete tuple definitions.
 
 NAV discovers native account PT/YT independently of API enrollment and callback
 history. Open PT uses face principal; YT uses native residual value; settled claims

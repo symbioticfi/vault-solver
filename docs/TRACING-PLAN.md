@@ -566,3 +566,9 @@ run against the no-op provider and prove there is no behaviour change when traci
 - [ ] `Log(ctx)` walks the context three times; with tracing off the stamp-slot lookup always walks to the root
 - [ ] `recoverOrders` re-enqueues a recovery retry that the inbox can still coalesce away as a queued replay, if the worker marks it before the inbox releases the delivered key
 - [ ] a ws/ipc RPC failure records its `exception.type` as the chain package's wrapper type rather than the underlying error's
+
+
+**rfq-merkle** (`internal/solvers/rfq-merkle`) uses `rfq-merkle.poll` for each
+bounded polling/recovery iteration and `rfq-merkle.fill` for signed submission or
+reconciliation, with `order.id` on the fill. HTTP spans use peer `rfq-merkle`;
+chain reads retain the shared RPC spans. It has no quote server or quote-span links.

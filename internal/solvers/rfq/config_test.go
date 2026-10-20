@@ -1,45 +1,12 @@
 package rfq
 
 import (
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"gopkg.in/yaml.v3"
 )
-
-func TestParseRecipeExecutors(t *testing.T) {
-	const mapping = `recipeExecutors:
-  "0x0000000000000000000000000000000000000042": "0x0000000000000000000000000000000000000043"
-`
-	for _, tc := range []struct{ name, extra, want string }{
-		{"valid", "curator:\n  url: https://curator.example\n" + mapping, ""},
-		{"missing curator", mapping, "curator.url"},
-		{"zero executor", "curator:\n  url: https://curator.example\nrecipeExecutors:\n  \"0x0000000000000000000000000000000000000042\": \"0x0000000000000000000000000000000000000000\"\n", "recipeExecutors"},
-		{"external signed route", "solverMode: external\ncurator:\n  url: https://curator.example\n" + mapping, "internal"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mode := "solverMode: internal\n"
-			if tc.name == "external signed route" {
-				mode = ""
-			}
-			cfg, err := parseCfg(t, minimalConfig+oneAdapter+mode+tc.extra)
-			if tc.want != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.want) {
-					t.Fatalf("error = %v, want %s", err, tc.want)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(cfg.RecipeExecutors) != 1 || cfg.RecipeExecutors[common.HexToAddress("0x42")] != common.HexToAddress("0x43") {
-				t.Fatalf("mapping = %v", cfg.RecipeExecutors)
-			}
-		})
-	}
-}
 
 func parseCfg(t *testing.T, body string) (*Config, error) {
 	t.Helper()

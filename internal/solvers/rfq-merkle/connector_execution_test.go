@@ -1,4 +1,4 @@
-package rfq
+package rfqmerkle
 
 import (
 	"bytes"
@@ -71,7 +71,7 @@ func TestConnectorBuildSimulatesCompleteAwardedOrder(t *testing.T) {
 	if len(managed) != 1 || managed[0].Target != vlt || managed[0].Value.Sign() != 0 || !bytes.Equal(managed[0].DataMask, leaf.DataMask) || len(managed[0].Proof) != 0 {
 		t.Fatalf("curator permission changed: %+v", managed)
 	}
-	swapValues, err := connectorBinding.GetABI().Methods["swap0"].Inputs.Unpack(managed[0].Data[4:])
+	swapValues, err := connectorBinding.GetABI().Methods["swap"].Inputs.Unpack(managed[0].Data[4:])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,33 +108,6 @@ func TestConnectorBuildRejectsUnauthorizedOrUnsettledExecution(t *testing.T) {
 			}
 			if len(calldata) != 0 {
 				t.Fatal("failed preparation returned transaction calldata")
-			}
-		})
-	}
-}
-
-func TestConnectorBuildRejectsIncompleteAwardsBeforeAcquisition(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		mutate func(*executor.IReactorOrder, **fillPlan)
-		want   string
-	}{
-		{"missing plan", func(_ *executor.IReactorOrder, p **fillPlan) { *p = nil }, "complete awarded input"},
-		{"split input", func(_ *executor.IReactorOrder, p **fillPlan) { (*p).Legs = append((*p).Legs, (*p).Legs[0]) }, "complete awarded input"},
-		{"partial input", func(_ *executor.IReactorOrder, p **fillPlan) { (*p).Legs[0].AmountIn = big.NewInt(122) }, "complete awarded input"},
-		{"wrong input token", func(_ *executor.IReactorOrder, p **fillPlan) { (*p).TokenIn = tOut }, "complete awarded input"},
-		{"wrong output token", func(_ *executor.IReactorOrder, p **fillPlan) { (*p).TokenOut = tIn }, "output obligation"},
-		{"wrong output amount", func(_ *executor.IReactorOrder, p **fillPlan) { (*p).Legs[0].AmountOut = big.NewInt(455) }, "output obligation"},
-		{"unknown connector", func(_ *executor.IReactorOrder, p **fillPlan) { (*p).Legs[0].Adapter = common.HexToAddress("0x88") }, "configured executor"},
-		{"missing discount", func(_ *executor.IReactorOrder, p **fillPlan) { (*p).Legs[0].DiscountID = nil }, "signed discount"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			w := &connectorWorkflow{caller: common.HexToAddress("0x10"), executors: map[common.Address]common.Address{vlt: common.HexToAddress("0x43")}}
-			order, selected, backend := connectorExecutionAward(w.caller)
-			tc.mutate(&order, &selected)
-			calldata, _, err := w.build(t.Context(), order, nil, selected, backend)
-			if err == nil || !strings.Contains(err.Error(), tc.want) || len(calldata) != 0 {
-				t.Fatalf("calldata=%x error=%v, want %q", calldata, err, tc.want)
 			}
 		})
 	}
@@ -264,7 +237,7 @@ func connectorExecutionFixture(t *testing.T) connectorExecutionFixtureData {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := connectorBinding.PackSwap0(terms.Swap, terms.Signature, rfqExecutor, big.NewInt(0))
+	data := connectorBinding.PackSwap(terms.Swap, terms.Signature, rfqExecutor, big.NewInt(0))
 	mask := bytes.Repeat([]byte{0xff}, len(data))
 	clear(mask[:4])
 	clear(mask[132:164])
@@ -298,12 +271,12 @@ func connectorExecutionFixture(t *testing.T) connectorExecutionFixtureData {
 	return connectorExecutionFixtureData{workflow, reader, recipe, leaf}
 }
 
-func connectorExecutionAward(caller common.Address) (executor.IReactorOrder, *fillPlan, *fakeBackend) {
+func connectorExecutionAward(caller common.Address) (executor.IReactorOrder, selectedRoute, *fakeBackend) {
 	outputs := []executor.IReactorOutput{{Token: tOut, Amount: big.NewInt(456), Recipient: common.HexToAddress("0x55")}}
 	order := executor.IReactorOrder{
 		Request:          executor.IReactorRequest{TokenIn: tIn, AmountIn: big.NewInt(123), Outputs: outputs, Deadline: big.NewInt(4102444800), Nonce: big.NewInt(23), Protocol: common.HexToAddress("0x45")},
 		SwapperSignature: []byte{0x81, 0x82}, Swapper: common.HexToAddress("0x51"), Filler: caller, Outputs: outputs,
 	}
-	selected := &fillPlan{TokenIn: tIn, TokenOut: tOut, AmountIn: big.NewInt(123), QuotedAmountOut: big.NewInt(456), Legs: []fillLeg{{Adapter: vlt, AmountIn: big.NewInt(123), AmountOut: big.NewInt(456), DiscountID: connectorDiscountID()}}}
+	selected := selectedRoute{Venue: vlt, DiscountID: *connectorDiscountID(), MaxAssets: big.NewInt(900)}
 	return order, selected, &fakeBackend{discount: connectorDiscountFixture()}
 }

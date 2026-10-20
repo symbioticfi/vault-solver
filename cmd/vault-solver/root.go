@@ -10,6 +10,7 @@ import (
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/merkle"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq"
+	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq-merkle"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx"
 )
 
@@ -21,6 +22,6 @@ func newRootCmd() *cobra.Command {
 			"solver strategy against them. The first implementation is the 3F Bridge Facilitator.",
 		SilenceUsage: true, // don't print usage on RunE errors (only on flag/arg misuse)
 	}
-	root.AddCommand(newRunCmd(), newVersionCmd(), newThreeFKeyCmd())
+	root.AddCommand(newRunCmd(), newVersionCmd())
 	return root
 }

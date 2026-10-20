@@ -27,40 +27,5 @@
       }
     ],
     "stateMutability": "nonpayable"
-  },
-  {
-    "type": "error",
-    "name": "CheckFailed",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "InvalidCall",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "InvalidCaller",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "InvalidOperation",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "InvalidQuery",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "InvalidReference",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "InvalidRuntime",
-    "inputs": []
   }
 ]

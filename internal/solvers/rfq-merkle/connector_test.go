@@ -1,4 +1,4 @@
-package rfq
+package rfqmerkle
 
 import (
 	"bytes"
@@ -6,37 +6,20 @@ import (
 	"math/big"
 	"strings"
 	"testing"
-	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/go-logr/logr"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 )
-
-func TestConnectorQuoteDoesNotUseAdapterEconomics(t *testing.T) {
-	cfg := &Config{SolverMode: solverModeInternal, RecipeExecutors: map[common.Address]common.Address{vlt: common.HexToAddress("0x43")}}
-	quotes, exec := buildServices(cfg, 1, newStore(time.Now), nil, nil, func() bool { return true }, newDefaultTestStrategy(), logr.Discard())
-	q := validQuoteBody()
-	q.Adapters = []quoteAdapter{{Adapter: vlt.Hex(), Asset: tOut.Hex(), AssetDecimals: 6, MaxAssets: "900", Discount: "2000000"}}
-	decision, err := quotes.quote(t.Context(), &q)
-	if err != nil || decision.response != nil {
-		t.Fatalf("connector advertised a fabricated quote: %+v, %v", decision, err)
-	}
-	if len(exec.vaults) != 0 {
-		t.Fatal("connector entered vault inventory discovery")
-	}
-}
 
 func TestAssembleConnectorRouteKeepsCommittedProgram(t *testing.T) {
 	terms, err := parseConnectorDiscount(connectorDiscountFixture(), *connectorDiscountID(), vlt, tIn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := connectorBinding.PackSwap0(terms.Swap, terms.Signature, common.HexToAddress("0x10"), big.NewInt(0))
+	data := connectorBinding.PackSwap(terms.Swap, terms.Signature, common.HexToAddress("0x10"), big.NewInt(0))
 	mask := bytes.Repeat([]byte{255}, len(data))
 	for i := 0; i < 4; i++ {
 		mask[i] = 0
@@ -109,50 +92,12 @@ func (f *connectorReadFake) CallContract(_ context.Context, m ethereum.CallMsg, 
 			return method.Outputs.Pack(tOut)
 		case "remainingAssets":
 			return method.Outputs.Pack(f.remaining)
-		case "version":
-			return method.Outputs.Pack(uint64(2))
 		}
 	}
 	return nil, nil
 }
 
-func TestConnectorPlanUsesWholeAwardAndReservations(t *testing.T) {
-	other := common.HexToAddress("0x20")
-	w := &connectorWorkflow{chain: &connectorReadFake{remaining: big.NewInt(900), account: common.HexToAddress("0x21")}, chainID: big.NewInt(1), executors: map[common.Address]common.Address{vlt: common.HexToAddress("0x43"), other: common.HexToAddress("0x44")}}
-	listing := &discounts.List{Discounts: []discounts.ListItem{
-		{Adapter: other.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: common.HexToHash("0x02").Hex(), MaxAssets: "900", Deadline: 4102444800},
-		{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: common.HexToHash("0x01").Hex(), MaxAssets: "900", Deadline: 4102444800},
-	}}
-	for _, tc := range []struct {
-		name     string
-		reserved int64
-		want     bool
-	}{{"exact award", 100, true}, {"capacity reserved", 101, false}} {
-		t.Run(tc.name, func(t *testing.T) {
-			plan, _, err := w.plan(t.Context(), listing, "quote", tIn, tOut, big.NewInt(123), big.NewInt(800), 7, func(inv []solverInventory) liquidlane.CapacityReservations {
-				r := liquidlane.CapacityReservations{}
-				for _, item := range inv {
-					r[item.CapacityID] = big.NewInt(tc.reserved)
-				}
-				return r
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !tc.want {
-				if plan != nil {
-					t.Fatal("reserved capacity reused")
-				}
-				return
-			}
-			if plan == nil || len(plan.Legs) != 1 || plan.Legs[0].Adapter != vlt || plan.Legs[0].AmountIn.Int64() != 123 || plan.Legs[0].AmountOut.Int64() != 800 || plan.AmountIn.Int64() != 123 || plan.QuotedAmountOut.Int64() != 800 {
-				t.Fatalf("award changed: %+v", plan)
-			}
-		})
-	}
-}
-
-func connectorDiscountFixture() *resolveDiscountResponse {
+func connectorDiscountFixture() *discounts.Resolved {
 	return &discounts.Resolved{
 		DiscountID:      common.HexToHash("0x42").Hex(),
 		Discount:        discounts.Terms{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "2000000", Signer: common.HexToAddress("0x44").Hex(), Protocol: common.HexToAddress("0x45").Hex(), Nonce: "17", Deadline: 4102444800},
@@ -163,14 +108,14 @@ func connectorDiscountFixture() *resolveDiscountResponse {
 func TestConnectorDiscountPreservesUpstreamTerms(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		mutate func(*resolveDiscountResponse)
+		mutate func(*discounts.Resolved)
 		want   string
 	}{
-		{"unchanged", func(*resolveDiscountResponse) {}, ""},
-		{"uint256 overflow", func(r *resolveDiscountResponse) { r.Discount.Nonce = new(big.Int).Lsh(big.NewInt(1), 256).String() }, "nonce"},
-		{"uint48 overflow", func(r *resolveDiscountResponse) { r.ProtocolDeadline = 1 << 48 }, "deadline"},
-		{"malformed signature", func(r *resolveDiscountResponse) { r.SignerSignature = "0xgg" }, "signerSignature"},
-		{"wrong route", func(r *resolveDiscountResponse) { r.Discount.Adapter = common.HexToAddress("0x55").Hex() }, "route"},
+		{"unchanged", func(*discounts.Resolved) {}, ""},
+		{"uint256 overflow", func(r *discounts.Resolved) { r.Discount.Nonce = new(big.Int).Lsh(big.NewInt(1), 256).String() }, "nonce"},
+		{"uint48 overflow", func(r *discounts.Resolved) { r.ProtocolDeadline = 1 << 48 }, "deadline"},
+		{"malformed signature", func(r *discounts.Resolved) { r.SignerSignature = "0xgg" }, "signerSignature"},
+		{"wrong route", func(r *discounts.Resolved) { r.Discount.Adapter = common.HexToAddress("0x55").Hex() }, "route"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := connectorDiscountFixture()
