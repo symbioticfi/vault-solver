@@ -1,6 +1,6 @@
 version: "2"
 run:
-  go: "1.26"
+  go: "1.27"
   build-tags:
     - integration
   tests: true
@@ -88,7 +88,7 @@ linters:
     exhaustive:
       check:
         - switch
-        - map
+        - mapliteral
     funlen:
       lines: 100
       statements: 50
