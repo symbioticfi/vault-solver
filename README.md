@@ -92,6 +92,19 @@ must be an authorized caller of the RFQ `Executor` (its `setCallers` allowlist, 
 External mode also fails startup unless that executor has direct `owner`/`marketMaker`/`isFiller`
 authorization on every configured adapter; the fatal startup log includes the executor, configured adapters,
 and underlying authorization error.
+
+Internal RFQ instances can also fill awarded orders through a LiquidLane connector's committed
+Merkle recipe. Configure `recipeExecutors: {"0x…connector": "0x…recipeExecutor"}` and
+`curator: {url: "https://curator.example/api/v1", apiKeyEnv: CURATOR_API_TOKEN}` in the RFQ config.
+This requires the RFQ Executor's existing `RecipeFill` deployment, a registered version-2 connector,
+and the RecipeExecutor caller set to that RFQ Executor. The host obtains the exact trade input and
+output obligation from `/orders`, gets signed terms from the backend discounts API, and builds and
+simulates the complete settlement transaction. It does not verify signatures or reprice discounts.
+The bounded fallback uses one connector for the full award and requires its exact payout to equal
+the order's output obligation. Connector quote generation, surplus payouts and splits across connectors
+are unsupported; an upstream quote source must award compatible orders. See the
+[connector runbook](docs/RFQ-PLAN.md#liquidlane-connector-awarded-order-fallback).
+
 When `tokensToQuote: permissioned`, admitted inputs are never aggregated: the selected strategy must
 use one candidate route. Other scopes keep the existing multi-route behavior.
 `minAmountsIn` adds an optional per-input-token floor on request size (base units, decimal strings):

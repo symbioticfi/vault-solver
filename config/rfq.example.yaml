@@ -69,6 +69,15 @@ solvers:
       #              adapter; `adapters` is optional (extra permissioned recovery inventory).
       solverMode: external
 
+      # Optional in internal mode: awarded exact-payout orders through one connector recipe.
+      # Requires the RecipeFill-capable RFQ Executor and a registered version-2 connector.
+      # RecipeExecutor.caller must be that RFQ Executor. No connector quotes are advertised here.
+      # recipeExecutors:
+      #   "0x...connector": "0x...recipeExecutor"
+      # curator:
+      #   url: https://curator.example/api/v1
+      #   apiKeyEnv: CURATOR_API_TOKEN
+
       # tokensToQuote scopes which input tokens the filler will quote, evaluated against
       # permissionedTokens. Values: "all" (default) | "permissioned" (only tokens in the list below) |
       # "permissionless" (only tokens NOT in the list). Often set per instance via env.

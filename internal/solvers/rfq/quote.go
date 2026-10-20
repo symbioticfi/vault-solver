@@ -39,6 +39,7 @@ type quoteService struct {
 	reader           quoteCandidateReader
 	strategy         types.Strategy
 	strategyName     string // registry key, reported as the strategy.name span attribute
+	recipeExecutors  map[common.Address]common.Address
 	log              logr.Logger
 	now              func() time.Time
 }
@@ -132,6 +133,14 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (decision qu
 
 // evaluate is the quote pipeline; quote wraps it in the rfq.quote span and classifies its outcome.
 func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDecision, error) {
+	if len(qs.recipeExecutors) > 0 {
+		ordinary := *q
+		ordinary.Adapters = slices.DeleteFunc(slices.Clone(q.Adapters), func(item quoteAdapter) bool {
+			_, ok := qs.recipeExecutors[common.HexToAddress(item.Adapter)]
+			return ok
+		})
+		q = &ordinary
+	}
 	parsed, err := q.toStrategy(qs.chainID)
 	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, &badRequestError{errors.Errorf("parse request: %w", err)}

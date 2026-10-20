@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"gopkg.in/yaml.v3"
@@ -56,6 +57,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	log := deps.Log.WithName(Name)
 	st := newStore(time.Now)
 	rdr := newReader(deps.Chain, log, cfg.LiquidityLens)
+	rdr.recipeExecutors = cfg.RecipeExecutors
 	quoteStrategy, err := newStrategy(cfg.Strategy)
 	if err != nil {
 		return nil, err
@@ -71,6 +73,16 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	quotes, exec := buildServices(
 		cfg, chainID, st, rdr, deps.TxManager, deps.TxManager.Available, quoteStrategy, log,
 	)
+	if len(cfg.RecipeExecutors) > 0 {
+		if deps.Signer == nil {
+			return nil, errors.New("RFQ recipe routes require shared signer")
+		}
+		source, err := permissions.New(cfg.Curator.HTTPConfig(), &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, deps.Chain)
+		if err != nil {
+			return nil, err
+		}
+		exec.connectors = &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), executors: cfg.RecipeExecutors, source: source, caller: cfg.Executor, signer: deps.Signer.Address()}
+	}
 	exec.metrics = metrics
 	if metrics != nil {
 		exec.orderPollObserver = metrics.orderPollObserver
@@ -115,6 +127,7 @@ func buildServices(
 	execWhitelist := buildAdapterWhitelist(cfg.restrictsToAdapters(), cfg.Adapters)
 
 	quotes := &quoteService{
+		recipeExecutors:  cfg.RecipeExecutors,
 		discountsEnabled: cfg.usesDiscounts(),
 		chainID:          chainID,
 		executor:         cfg.Executor,
@@ -135,7 +148,7 @@ func buildServices(
 		orderLimit:       cfg.OrderLimit,
 		maxNonceRetries:  cfg.MaxNonceRetries,
 		pollInterval:     cfg.PollInterval,
-		vaults:           cfg.Adapters,
+		vaults:           cfg.ordinaryAdapters(),
 		whitelist:        execWhitelist,
 		tokenPolicy:      cfg.TokenPolicy,
 		discountsEnabled: cfg.usesDiscounts(),
@@ -167,8 +180,8 @@ func (s *Solver) Run(ctx context.Context) error {
 	// addresses; both are fixed for the adapter's lifetime) and hand the resolved set to recovery. Runs
 	// before the poll loop and the quote server, so there's no concurrent reader of exec.vaults. A
 	// transport failure aborts startup; a per-adapter revert leaves that entry unresolved (skipped).
-	if len(s.cfg.Adapters) > 0 {
-		resolved, err := s.exec.reader.resolveVaults(ctx, s.cfg.Adapters)
+	if ordinary := s.cfg.ordinaryAdapters(); len(ordinary) > 0 {
+		resolved, err := s.exec.reader.resolveVaults(ctx, ordinary)
 		if err != nil {
 			startupErr := errors.Errorf("rfq: resolve recovery vaults: %w", err)
 			observability.Log(ctx).Error(startupErr, "adapter resolution failed",

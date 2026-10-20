@@ -378,6 +378,61 @@ facts to wire the discount gate and the two path-specific adapter scopes. Covere
 `discounts_disabled_test.go`, `config_test.go`
 (`TestParseConfig_SolverMode`), and `solver_test.go` (`TestBuildServices_WhitelistWiring`).
 
+### LiquidLane connector awarded-order fallback
+
+Internal mode accepts an optional connector-to-RecipeExecutor mapping and the current curator
+permission service. This route belongs to the RFQ order lifecycle; it does not run as an independent
+Merkle keeper strategy:
+
+```yaml
+solverMode: internal
+recipeExecutors:
+  "0x0000000000000000000000000000000000000042": "0x0000000000000000000000000000000000000043"
+curator:
+  url: https://curator.example/api/v1
+  # apiKeyEnv: CURATOR_API_TOKEN
+```
+
+`recipeExecutors` admits at most 256 nonzero connector/executor pairs, with duplicate connector
+spellings rejected. Configured connectors bypass adapter `vault()` resolution, direct-filler checks
+and the ordinary discount-pricing parser. They are excluded from `/quote`: no connector payment quote
+is fabricated from the discount listing. Awarding must come from an upstream source or another integration.
+
+If the configured strategy cannot form an ordinary fill plan, the fallback sorts advertised matching
+connectors by address and discount ID. It selects one venue whose `outputAsset` matches the order and
+whose current `remainingAssets(tokenIn)` budget, advertised capacity and existing reservations cover
+the complete output obligation. It uses exactly `/orders`' signed request `amountIn` and the sum of
+the signed order's outputs. There is no independent amount selection, binary search or price calculation.
+Multiple output tokens and splits across connectors are unsupported. The selected budget is reserved
+through the same order capacity ledger; the transaction and backend reconciliation remain unchanged.
+
+The host discovers the committed RecipeExecutor program and active account root through the SDK,
+requires its caller to equal the RFQ Executor and its account to equal `connector.account()`, and fetches
+the root-addressed curator permission bundle. Only runtime bytes permitted by the existing leaf mask
+may change; queries, steps, masks and proofs are never rewritten. The signed swap must pin the connector
+selector and RWA, bind `amountIn` to upstream input 0, and retain exact account cash, RFQ Executor cash
+and acquired-RWA delta checks. Input 1 is the awarded output obligation. The host validates current
+leaf roles and SDK metadata/canonical pins around simulation of the complete outer fill from the EOA.
+
+The backend supplies the discount, nonce, deadlines and signatures. Connector parsing checks ABI
+uint256/uint48/address/hex framing and route identity only. It performs no EIP-712 domain, signature,
+discount-scale conversion or discount-economics verification. The connector and the full outer
+simulation enforce those terms. A backend signing a different connector/domain produces a failed
+simulation, rather than locally translated terms.
+
+The current canonical `LLExecuting` program has inputs 0/1 and requires its exact connector payout
+to equal input 1. This fallback therefore supports exact-payout orders only: orders whose required
+output excludes connector surplus can remain unfillable. A different committed recipe or upstream
+exact payment quote is needed to support those orders. No runtime contract changes are part of this host.
+
+The generated bridge ABI comes from [RFQ PR 25](https://github.com/symbioticfi/rfq/pull/25), commit
+`4c85c1b76d44ec6e2ee249528d69891799c9108d`; the connector interface and `LLExecuting` semantics come
+from adapters commit `d506348870eb2d379ddae69407bc8b63422291d6`. Deploy the RecipeFill-capable RFQ
+Executor, register the version-2 connector in the Reactor's factory and configure its RecipeExecutor
+caller before enabling this mapping. The bridge funds the connector once, executes the recipe, and
+settles through the Reactor's request nonce and output transfers. A standalone connector recipe does
+not settle an RFQ order. These source versions and local tests do not establish a live deployment.
+
 The signing key is the framework `signer` (the caller EOA); `chain.rpcUrl/chainId` select the network.
 The per-quote adapter inventories arrive in the `/quote` request body (`adapters[]`); the `adapters`
 list serves two purposes:
@@ -556,6 +611,9 @@ hardenings the TS filler lacks** — an order-deadline check before fill, a stra
 batch discount-resolve shape, a conservative discount-leg rate that cannot out-predict the adapter's
 nested rounding (§5), and TTL eviction of stale terminal orders (TS maps grow unbounded).
 A few **intentional, non-fund-moving divergences** remain, by design:
+
+The optional connector awarded-order fallback above is an additional host flow, with its own
+RecipeFill ABI, recipe authorization and full settlement simulation; it is outside this adapter parity claim.
 
 - **Quote-time oracle revert** — a reverting `getAmountOut` makes the Go quote *skip that asset and
   price the rest* (multicall `allowFailure`), whereas the TS filler throws and fails the whole quote.

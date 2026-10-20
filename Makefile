@@ -50,6 +50,7 @@ REDSTONE_GUIDE_URL       ?= https://raw.githubusercontent.com/RedStone-Finance-U
 # and vault/ERC4626 interfaces) come from the core-mirror build, since they aren't in rfq/out.
 ABIS := IRequest IVaultController IWhitelist Executor Reactor LiquidLaneLifiExecutor LiquidLaneUniswapXExecutor
 CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IAdapterFactory IVaultV2 IERC4626
+ADAPTERS_ABIS := IRecipeCapability IThreeFPolicy LiquidLaneConnector
 # api/abi/UniversalDelegator.json is hand-vendored to a minimal {limitOf} ABI (the full contract has
 # an overloaded deallocateAll that abigen rejects, and the solver only reads limitOf) — like Multicall3.
 # api/abi/FrontendLiquidityLens.json is likewise hand-vendored to the two overloaded getMaxAssets views
@@ -68,7 +69,8 @@ CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IAdapterFactory IVaultV2 IER
 BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
             IVaultController:3f/vaultcontroller IWhitelist:3f/whitelist \
             IRecipeCapability:merkle/recipecapability IThreeFPolicy:merkle/threefpolicy \
-            LiquidLaneAdapter:liquidlane/adapter Executor:rfq/executor Reactor:rfq/reactor \
+            LiquidLaneAdapter:liquidlane/adapter LiquidLaneConnector:liquidlane/connector \
+            Executor:rfq/executor Reactor:rfq/reactor \
             LiquidLaneLifiExecutor:lifi/executor LiquidLaneUniswapXExecutor:uniswapx/executor \
             ILifiInputSettler:lifi/inputsettler \
             IAdapterFactory:adapterfactory UniversalDelegator:delegator IVaultV2:vaultv2 IERC4626:erc4626 \
@@ -126,9 +128,9 @@ refresh-abi: ## Re-vendor ABIs from the rfq + core-mirror Foundry builds (FORGE_
 	done
 
 .PHONY: refresh-merkle-abi
-refresh-merkle-abi: ## Re-vendor Merkle recipe/policy interfaces (ADAPTERS_OUT=...)
+refresh-merkle-abi: ## Re-vendor Merkle recipe/policy interfaces and connector (ADAPTERS_OUT=...)
 	@mkdir -p api/abi
-	@set -e; for c in IRecipeCapability IThreeFPolicy; do \
+	@set -e; for c in $(ADAPTERS_ABIS); do \
 		src="$(ADAPTERS_OUT)/$$c.sol/$$c.json"; \
 		if [[ ! -f "$$src" ]]; then echo "missing $$src (run forge build in $(ADAPTERS_OUT)/..)"; exit 1; fi; \
 		jq '.abi' "$$src" > "api/abi/$$c.json"; \

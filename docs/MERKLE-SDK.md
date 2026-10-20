@@ -5,6 +5,15 @@ The `merkle` solver consumes the independently versioned
 The SDK implements recipe/tree/proof/role checks,
 pinned runtime assembly, simulation, canonical receipts and durable recovery.
 
+LiquidLane connector RFQ orders use these public SDK recipe and permission APIs inside the
+`rfq-filler` integration. Their RecipeExecutor caller is the RFQ Executor contract; they are configured
+under RFQ `recipeExecutors` and must not be listed as standalone `merkle.strategies` whose caller is
+the shared EOA. RFQ owns `/orders` acquisition, exact awarded amounts, signed-discount acquisition,
+runtime assembly and complete outer `Executor.fill` simulation. The immutable program, masks,
+proofs, current roles and canonical snapshot checks still apply. The host does not verify EIP-712,
+signatures or discount economics. The current bounded route supports one exact-payout connector
+and does not advertise connector quotes; see the [RFQ runbook](RFQ-PLAN.md#liquidlane-connector-awarded-order-fallback).
+
 This solver receives the same transaction manager and signer as all other
 solvers. The SDK's transport is a thin bridge to that manager's Owner and
 BeforeBroadcast hooks. Every signed original and fee replacement is persisted

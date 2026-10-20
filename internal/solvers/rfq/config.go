@@ -7,6 +7,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/permissions"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/internal/parse"
@@ -31,6 +33,17 @@ type rawConfig struct {
 	MinAmountsIn           map[string]string `yaml:"minAmountsIn"`
 	Adapters               []string          `yaml:"adapters"`
 	Strategy               rawStrategyConfig `yaml:"strategy"`
+	RecipeExecutors        map[string]string `yaml:"recipeExecutors"`
+	Curator                recipeCurator     `yaml:"curator"`
+}
+
+type recipeCurator struct {
+	URL       string `yaml:"url"`
+	APIKeyEnv string `yaml:"apiKeyEnv"`
+}
+
+func (c recipeCurator) HTTPConfig() protocolio.HTTPConfig {
+	return protocolio.HTTPConfig{URL: c.URL, APIKeyEnv: c.APIKeyEnv, TimeoutSeconds: permissions.HostTimeoutSeconds, MaxResponseBytes: permissions.HostMaxResponseBytes}
 }
 
 type rawStrategyConfig struct {
@@ -86,6 +99,9 @@ type Config struct {
 	// (see reader.resolveVaults) and are fixed for the adapter's lifetime. Empty disables direct fill planning.
 	Adapters []recoveryVault
 	Strategy StrategyConfig
+	// RecipeExecutors maps connector venues to their caller-bound RecipeExecutor.
+	RecipeExecutors map[common.Address]common.Address
+	Curator         recipeCurator
 }
 
 type StrategyConfig struct {
@@ -204,6 +220,33 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if mode == solverModeExternal && len(cfg.Adapters) == 0 {
 		return nil, errors.New(`solverMode "external" requires at least one adapters entry`)
 	}
+	if len(raw.RecipeExecutors) > 0 {
+		if mode != solverModeInternal {
+			return nil, errors.New("recipeExecutors requires solverMode internal")
+		}
+		if len(raw.RecipeExecutors) > 256 {
+			return nil, errors.New("recipeExecutors exceeds 256 connectors")
+		}
+		if err := permissions.ValidateConfig(raw.Curator.HTTPConfig()); err != nil {
+			return nil, err
+		}
+		cfg.Curator = raw.Curator
+		cfg.RecipeExecutors = make(map[common.Address]common.Address, len(raw.RecipeExecutors))
+		for connector, recipeExecutor := range raw.RecipeExecutors {
+			venue, err := parse.NonZeroAddress(connector, "recipeExecutors connector")
+			if err != nil {
+				return nil, err
+			}
+			exec, err := parse.NonZeroAddress(recipeExecutor, "recipeExecutors executor")
+			if err != nil {
+				return nil, err
+			}
+			if _, exists := cfg.RecipeExecutors[venue]; exists {
+				return nil, errors.New("recipeExecutors duplicate connector")
+			}
+			cfg.RecipeExecutors[venue] = exec
+		}
+	}
 	return cfg, nil
 }
 
@@ -221,4 +264,14 @@ func (c *Config) restrictsToAdapters() bool {
 // both modes whenever Adapters is non-empty, while execution scoping stays external-only.
 func (c *Config) quoteScopesToAdapters() bool {
 	return len(c.Adapters) > 0
+}
+
+func (c *Config) ordinaryAdapters() []recoveryVault {
+	out := make([]recoveryVault, 0, len(c.Adapters))
+	for _, a := range c.Adapters {
+		if _, isConnector := c.RecipeExecutors[a.Adapter]; !isConnector {
+			out = append(out, a)
+		}
+	}
+	return out
 }

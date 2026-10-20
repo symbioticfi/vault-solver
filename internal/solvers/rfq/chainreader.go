@@ -17,10 +17,11 @@ import (
 
 // reader is the RFQ adapter over the shared LiquidLane read surface.
 type reader struct {
-	ll            *liquidlane.Reader
-	chain         *chain.Client
-	chainID       int64
-	quoteAdapters map[common.Address]recoveryVault // assigned once before the quote server starts
+	ll              *liquidlane.Reader
+	chain           *chain.Client
+	chainID         int64
+	quoteAdapters   map[common.Address]recoveryVault // assigned once before the quote server starts
+	recipeExecutors map[common.Address]common.Address
 }
 
 func newReader(c *chain.Client, log logr.Logger, liquidityLens common.Address) *reader {
@@ -70,7 +71,8 @@ func (r *reader) readQuoteCandidates(
 ) ([]liquidlane.QuoteCandidate, error) {
 	matching := make([]liquidlane.Inventory, 0, len(inventory))
 	for _, item := range inventory {
-		if item.TokenIn == tokenIn && item.TokenOut == tokenOut {
+		_, isConnector := r.recipeExecutors[item.Adapter]
+		if item.TokenIn == tokenIn && item.TokenOut == tokenOut && !isConnector {
 			matching = append(matching, item)
 		}
 	}

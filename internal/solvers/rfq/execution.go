@@ -65,6 +65,7 @@ type executionService struct {
 	reader            fillReader
 	strategy          types.Strategy
 	strategyName      string // registry key, reported as the strategy.name span attribute
+	connectors        *connectorWorkflow
 	txm               txSender
 	metrics           *rfqMetrics
 	orderPollObserver *observability.OperationObserver
@@ -541,6 +542,18 @@ func (e *executionService) buildFillCalldata(
 	buildCtx, end := tracer.Start(ctx, "rfq.order.build")
 	var err error
 	defer func() { end(err) }()
+	if e.connectors != nil {
+		for _, leg := range selected.Legs {
+			if _, configured := e.connectors.executors[leg.Adapter]; configured {
+				calldata, discountValidUntil, err = e.connectors.build(buildCtx, order, exec.signature, selected, e.backend)
+				if err != nil {
+					e.fail(ctx, orderID, "build connector fill: "+err.Error())
+					return nil, time.Time{}, false
+				}
+				return calldata, discountValidUntil, true
+			}
+		}
+	}
 
 	swaps := directSwaps(selected, order.Request.TokenIn, e.executor)
 	discountSwaps, discountValidUntil, err := e.buildDiscountSwapInputs(buildCtx, selected, chainTime)
@@ -759,6 +772,22 @@ func (e *executionService) buildFillPlan(
 	input := newFillInput(e.chainID, e.executor, req, candidates, required, requireSingleRoute, e.now())
 	plan, err = e.strategy.BuildFillPlan(ctx, input)
 	if err != nil || plan == nil {
+		if e.connectors != nil {
+			listed, listErr := e.backend.listDiscounts(ctx)
+			if listErr != nil {
+				return nil, listErr
+			}
+			fallback, reservations, fallbackErr := e.connectors.plan(ctx, listed, exec.quoteID, order.Request.TokenIn, outputToken, order.Request.AmountIn, required, snapshotBlock, pending)
+			if fallbackErr != nil {
+				return nil, fallbackErr
+			}
+			if fallback != nil {
+				if !e.store.reserve(orderID, reservations) {
+					return nil, errors.New("fill: order is no longer active")
+				}
+				return fallback, nil
+			}
+		}
 		return plan, err
 	}
 	if verr := validateSingleRoute(input.RequireSingleRoute, len(plan.Legs)); verr != nil {
@@ -848,6 +877,16 @@ func (e *executionService) discountInventories(
 	}
 	now := e.now()
 	var out []solverInventory
+	if e.connectors != nil {
+		ordinary := *resp
+		ordinary.Discounts = nil
+		for _, item := range resp.Discounts {
+			if _, ok := e.connectors.executors[common.HexToAddress(item.Adapter)]; !ok {
+				ordinary.Discounts = append(ordinary.Discounts, item)
+			}
+		}
+		resp = &ordinary
+	}
 	offers, issues := discounts.LiveOffers(resp, now)
 	for _, issue := range issues {
 		observability.Log(ctx).V(1).Info(
