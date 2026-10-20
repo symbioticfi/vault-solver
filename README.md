@@ -387,7 +387,8 @@ Each pending receipt RPC has its own timeout and does not block lifecycle timers
 estimation and stalled-call re-estimation each use one budget of at most 5 seconds, including fallback,
 and honor earlier request deadlines. Caller cancellation after admission retains the lane until the
 manager returns the actual outcome. Canonical confirmation checks a fixed numbered witness; normal
-head advancement does not restart the proof.
+head advancement does not restart the proof. Zero depth reuses the verified inclusion receipt;
+invalid receipt status or log identity cannot confirm a request.
 
 Configure `maxFeeGwei` for every transaction-sending process. `pendingTimeoutMs`,
 `broadcastTimeoutMs` and `shutdownTimeoutMs` bound pending tracking, submission and shutdown.

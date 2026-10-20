@@ -246,8 +246,9 @@ incomplete or unavailable sweeps then return execution-unknown abandonment and r
 the manager follows confirmation policy rather than abandoning included work at the pending deadline.
 This ordering reduces the receipt/status race but cannot make separate on-chain reads atomic.
 Invalid receipts are separately rejected: the block number must fit uint64, the transaction hash must
-match, and the block hash must be nonzero. Logs must match the receipt's transaction/block identity
-and transaction index, have increasing log indexes, and be present and unremoved.
+match, the block hash must be nonzero, and status must be successful (1) or failed (0). Logs must match
+the receipt's transaction/block identity and transaction index, have increasing log indexes, and be
+present and unremoved.
 
 Only the owner accepts a receipt candidate and begins confirmation; the reader is idle during that wait.
 Before waiting for depth, a canonical preflight checks the receipt block's exact numbered header
@@ -257,8 +258,9 @@ tracking; only a proven inclusion continues confirmation beyond the pending dead
 For depth N, the witness is receipt block + N. Check its exact hash-linked parents back to inclusion,
 reread the receipt's transaction/block/status and log identity, then require the same numbered witness
 again. This takes at most N parent reads regardless of receipt age; latest-head advancement is allowed.
-Depth zero still proves canonical inclusion. Overflow, inconsistent links or a changed witness cannot
-confirm. Read fallbacks remain available without endpoint affinity. Incoherent/unavailable snapshots
+Depth zero reuses the fresh canonical inclusion proof without another receipt lookup. Overflow,
+inconsistent links or a changed witness cannot confirm. Read fallbacks remain available without endpoint
+affinity. Incoherent/unavailable snapshots
 are retried; two consecutive missing receipts or a proven fork change can resume pending tracking.
 A read error breaks the consecutive-miss streak. An older signed variant remains valid evidence for
 the same nonce, and the returned receipt contains the fresh validated evidence.
@@ -280,8 +282,7 @@ is bounded by one receipt-read budget; receipt/header/ancestry reads retain thei
 It never waits synchronously for depth. Missing, malformed, lagging, orphaned or insufficient-depth
 receipts remain uncounted and are retried until retention ends. Canonical ancestry and confirmation
 depth use the same numbered witness proof and fresh receipt/closing-header fences as active confirmation.
-Receipt telemetry accepts only successful or failed status values; malformed status values are excluded
-without changing ordinary request completion policy.
+Malformed receipt statuses cannot establish inclusion, advance the confirmed nonce floor or enter receipt telemetry.
 A separately bounded cache of validated hash-addressed parent
 headers retains immutable proof links across polls, so an old receipt can make progress without extending
 the pass budget. The cache uses the same configured cap and retention and never substitutes a

@@ -109,10 +109,10 @@ func TestReceiptSweepGivesEveryHashFullTimeout(t *testing.T) {
 		if result.Outcome != OutcomeConfirmed || result.Hash != pending.attempts[51].hash {
 			t.Fatalf("result: %+v", result)
 		}
-		// Every distinct sweep read remains present. Inclusion and depth-zero
-		// confirmation add three winning-receipt proof reads, each fully budgeted.
-		if len(backend.budgets) != 55 {
-			t.Fatalf("reads=%d, want 52 sweep and 3 proof reads", len(backend.budgets))
+		// Every sweep read remains present. The inclusion proof rereads the winner
+		// once; zero depth reuses that proof without another receipt lookup.
+		if len(backend.budgets) != 53 {
+			t.Fatalf("reads=%d, want 52 sweep and 1 proof read", len(backend.budgets))
 		}
 		for i, attempt := range pending.attempts {
 			if backend.hashes[i] != attempt.hash {

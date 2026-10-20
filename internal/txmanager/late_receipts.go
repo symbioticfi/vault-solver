@@ -214,10 +214,7 @@ func (m *Manager) readLateReceipt(ctx context.Context, entry lateReceiptObservat
 	if err != nil {
 		return Result{}, err
 	}
-	if !validReceiptStatus(receipt.Status) {
-		return Result{}, errors.Errorf("late receipt %s has invalid status %d", entry.hash.Hex(), receipt.Status)
-	}
-	head, err := m.confirmationHead(ctx)
+	head, err := m.confirmationHeader(ctx, nil)
 	if err != nil {
 		return Result{}, err
 	}
@@ -231,7 +228,7 @@ func (m *Manager) readLateReceipt(ctx context.Context, entry lateReceiptObservat
 	}
 	// Share the active proof and its closing fence. The immutable parent cache
 	// still lets a proof spanning multiple short polls retain validated links.
-	receipt, err = m.confirmReceiptWitnessUsing(ctx, receipt, entry.metadata.confirmations, m.lateReceiptParentHeader)
+	receipt, err = m.confirmReceiptWitness(ctx, receipt, entry.metadata.confirmations, m.lateReceiptParentHeader)
 	if err != nil {
 		return Result{}, err
 	}

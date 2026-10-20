@@ -118,7 +118,7 @@ func TestConfirmationWitnessDepthBoundedReads(t *testing.T) {
 				ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 				defer cancel()
 				receipt := b.receipts[tx.Hash()]
-				if err := m.confirmCanonicalReceipt(ctx, receipt); err != nil {
+				if _, err := m.confirmReceiptWitness(ctx, receipt, 0, m.backend.HeaderByHash); err != nil {
 					t.Fatalf("bounded canonical inclusion: %v", err)
 				}
 				if b.parentReads != 0 {
@@ -130,6 +130,29 @@ func TestConfirmationWitnessDepthBoundedReads(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestZeroDepthConfirmationReusesFreshInclusionReceipt(t *testing.T) {
+	tx := types.NewTx(&types.DynamicFeeTx{Nonce: 7, To: ptr(common.Address{1})})
+	b := newWitnessBackend(tx, 10_000)
+	b.onReceipt = func(reads int, receipt *types.Receipt) (*types.Receipt, error) {
+		fresh := *receipt
+		fresh.GasUsed = uint64(21_000 + reads)
+		return &fresh, nil
+	}
+	m := New(b, mustSigner(t), big.NewInt(1), Config{}, logr.Discard())
+	result, done := m.confirmPendingReceipt(t.Context(), &pendingTransaction{
+		req: Request{Label: "zero-depth"}, nonce: tx.Nonce(),
+	}, txAttempt{hash: tx.Hash()}, b.receipts[tx.Hash()])
+	if !done || result.Outcome != OutcomeConfirmed || result.Receipt == nil || result.Receipt.GasUsed != 21_001 {
+		t.Fatalf("zero-depth result lost the fresh inclusion receipt: %+v", result)
+	}
+	if b.receiptReads != 1 || b.numberedReads != 2 || b.parentReads != 0 {
+		t.Fatalf("zero-depth proof repeated: receipts=%d numbered=%d parents=%d", b.receiptReads, b.numberedReads, b.parentReads)
+	}
+	if m.confirmedNonceFloor != tx.Nonce()+1 {
+		t.Fatalf("confirmed nonce floor=%d, want %d", m.confirmedNonceFloor, tx.Nonce()+1)
 	}
 }
 
