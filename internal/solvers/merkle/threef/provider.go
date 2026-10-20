@@ -45,15 +45,19 @@ func (p *mintProvider) Prepare(context.Context, provider.Snapshot) (provider.Out
 	return provider.Output{}, errors.New("3f requires authenticated recipe preparation")
 }
 func (p *mintProvider) RecipeRequirements(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) (keeper.RecipeRequirements, error) {
-	market, err := inspect(snapshot, recipe, tree)
+	markets, err := inspect(snapshot, recipe, tree)
 	if err != nil {
 		return keeper.RecipeRequirements{}, err
 	}
-	return keeper.RecipeRequirements{Inputs: []uint{market.RequestInput, market.PrincipalInput, market.YieldInput}}, nil
+	var inputs []uint
+	for _, market := range markets {
+		inputs = append(inputs, market.RequestInput, market.PrincipalInput, market.YieldInput)
+	}
+	return keeper.RecipeRequirements{Inputs: inputs}, nil
 }
 
 func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree, _ map[uint]*big.Int) (provider.Output, error) {
-	market, err := inspect(snapshot, recipe, tree)
+	markets, err := inspect(snapshot, recipe, tree)
 	if err != nil {
 		return provider.Output{}, err
 	}
@@ -98,9 +102,17 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 	if len(addresses) == 0 {
 		return provider.Output{}, provider.ErrNotReady
 	}
-	observed, err := observe(ctx, p.Chain, snapshot, recipe, tree)
-	if err != nil {
-		return provider.Output{}, err
+	observations := make([]observation, 0, len(markets))
+	inputs := map[uint]string{}
+	for _, market := range markets {
+		observed, e := observe(ctx, p.Chain, snapshot, recipe, market)
+		if e != nil {
+			return provider.Output{}, e
+		}
+		observations = append(observations, observed)
+		for _, index := range []uint{market.RequestInput, market.PrincipalInput, market.YieldInput} {
+			inputs[index] = "0"
+		}
 	}
 	for _, address := range addresses {
 		deadline := deadlines[address]
@@ -118,21 +130,27 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 		if auth.PtAmount.Sign() == 0 {
 			continue
 		}
-		if auth.PtAmount.Cmp(observed.Budget) > 0 || auth.PtAmount.Cmp(observed.MaxPrincipal) > 0 || auth.YtAmount.Cmp(minimumReturn(auth.PtAmount, observed.MinimumYield)) < 0 {
-			continue
-		}
-		if e = eligible(ctx, p.Chain, snapshot, market, address, observed.MinimumYield); e != nil {
-			if errors.Is(e, errIneligible) {
+		for _, observed := range observations {
+			market := observed.Market
+			if auth.PtAmount.Cmp(observed.Budget) > 0 || auth.PtAmount.Cmp(observed.MaxPrincipal) > 0 || auth.YtAmount.Cmp(minimumReturn(auth.PtAmount, observed.MinimumYield)) < 0 {
 				continue
 			}
-			return provider.Output{}, e
+			if e = eligible(ctx, p.Chain, snapshot, market, address, observed.MinimumYield); e != nil {
+				if errors.Is(e, errIneligible) {
+					continue
+				}
+				return provider.Output{}, e
+			}
+			record := mint{Request: address, Policy: market.Policy, Asset: market.Asset, UnderlyingAsset: market.UnderlyingAsset, Principal: auth.PtAmount.String(), Deadline: deadline}
+			data, marshalErr := json.Marshal(record)
+			if marshalErr != nil {
+				return provider.Output{}, marshalErr
+			}
+			inputs[market.RequestInput] = new(big.Int).SetBytes(address.Bytes()).String()
+			inputs[market.PrincipalInput] = auth.PtAmount.String()
+			inputs[market.YieldInput] = auth.YtAmount.String()
+			return provider.Output{Inputs: inputs, Data: data}, nil
 		}
-		record := mint{Request: address, Policy: market.Policy, Asset: market.Asset, UnderlyingAsset: market.UnderlyingAsset, Principal: auth.PtAmount.String(), Deadline: deadline}
-		data, e := json.Marshal(record)
-		if e != nil {
-			return provider.Output{}, e
-		}
-		return provider.Output{Inputs: map[uint]string{market.RequestInput: new(big.Int).SetBytes(address.Bytes()).String(), market.PrincipalInput: auth.PtAmount.String(), market.YieldInput: auth.YtAmount.String()}, Data: data}, nil
 	}
 	return provider.Output{}, provider.ErrNotReady
 }

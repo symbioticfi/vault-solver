@@ -3,6 +3,7 @@ package threef
 import (
 	"context"
 	"math/big"
+	"sort"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -61,7 +62,7 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 		return errors.New("3f permission scope mismatch")
 	}
 	pin := provider.Snapshot{ChainID: new(big.Int).Set(p.ChainID), BlockNumber: new(big.Int).SetUint64(snapshot.BlockNumber), BlockHash: snapshot.BlockHash, Timestamp: snapshot.Timestamp, Executor: snapshot.Executor, Account: snapshot.Account, Caller: snapshot.Caller, RecipeHash: snapshot.RecipeHash, Root: snapshot.Root}
-	observed, err := observe(ctx, p.Chain, pin, recipe, tree)
+	markets, err := inspect(pin, recipe, tree)
 	if err != nil {
 		return err
 	}
@@ -72,24 +73,36 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	if len(auctions) > 4096 {
 		return errors.New("3f auction inventory exceeds 4096-row bound")
 	}
-	membership := map[common.Address]bool{}
-	if observed.Budget.Sign() > 0 {
-		for _, auction := range auctions {
-			if !strings.EqualFold(auction.Status, "OPEN") && !strings.EqualFold(auction.Status, "SOLVABLE") || !common.IsHexAddress(auction.RequestId) {
-				continue
-			}
-			request := common.HexToAddress(auction.RequestId)
-			if membership[request] {
-				continue
-			}
-			if err := eligible(ctx, p.Chain, pin, observed.Market, request, observed.MinimumYield); err != nil {
-				if errors.Is(err, errIneligible) {
+	// Oldest auction ID wins across all pairs, independent of API or recipe ordering.
+	sort.SliceStable(auctions, func(i, j int) bool { return auctions[i].Id < auctions[j].Id })
+	observations := make([]observation, 0, len(markets))
+	memberships := make([]map[common.Address]bool, 0, len(markets))
+	for _, market := range markets {
+		observed, e := observe(ctx, p.Chain, pin, recipe, market)
+		if e != nil {
+			return e
+		}
+		membership := map[common.Address]bool{}
+		if observed.Budget.Sign() > 0 {
+			for _, auction := range auctions {
+				if !common.IsHexAddress(auction.RequestId) {
 					continue
 				}
-				return err
+				request := common.HexToAddress(auction.RequestId)
+				if membership[request] {
+					continue
+				}
+				if eligibilityErr := eligible(ctx, p.Chain, pin, market, request, observed.MinimumYield); eligibilityErr != nil {
+					if errors.Is(eligibilityErr, errIneligible) {
+						continue
+					}
+					return eligibilityErr
+				}
+				membership[request] = true
 			}
-			membership[request] = true
 		}
+		observations = append(observations, observed)
+		memberships = append(memberships, membership)
 	}
 	// Every managed role participates, including the recipe's funding sources.
 	inspection, err := recipes.Inspect(recipe)
@@ -106,5 +119,29 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	if err := recipes.ValidateSnapshot(ctx, p.Chain, snapshot, p.Caller); err != nil {
 		return err
 	}
-	return w.bot.Tick(ctx, offerMarket{ChainID: p.ChainID.Uint64(), Account: snapshot.Account, Executor: snapshot.Executor, RecipeHash: snapshot.RecipeHash, Asset: observed.Market.Asset, UnderlyingAsset: observed.Market.UnderlyingAsset, Budget: observed.Budget, MinimumYield1e8: observed.MinimumYield, MaxPrincipal: observed.MaxPrincipal, AvailableCash: observed.AvailableCash, EligibleRequests: membership}, auctions)
+	order := make([]int, 0, len(markets))
+	seen := map[int]bool{}
+	for _, auction := range auctions {
+		if !strings.EqualFold(auction.Status, "OPEN") && !strings.EqualFold(auction.Status, "SOLVABLE") {
+			continue
+		}
+		for i, membership := range memberships {
+			if membership[common.HexToAddress(auction.RequestId)] && !seen[i] {
+				order = append(order, i)
+				seen[i] = true
+			}
+		}
+	}
+	for i := range markets {
+		if !seen[i] {
+			order = append(order, i)
+		}
+	}
+	for _, i := range order {
+		observed := observations[i]
+		if err := w.bot.Tick(ctx, offerMarket{ChainID: p.ChainID.Uint64(), Account: snapshot.Account, Executor: snapshot.Executor, RecipeHash: snapshot.RecipeHash, Asset: observed.Market.Asset, UnderlyingAsset: observed.Market.UnderlyingAsset, Budget: observed.Budget, MinimumYield1e8: observed.MinimumYield, MaxPrincipal: observed.MaxPrincipal, AvailableCash: observed.AvailableCash, EligibleRequests: memberships[i]}, auctions); err != nil {
+			return err
+		}
+	}
+	return nil
 }

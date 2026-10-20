@@ -33,6 +33,10 @@ type connectorDelta struct {
 
 // These committed comparisons bind upstream inputs to the swap's actual transfers.
 func validateConnectorDeltas(recipe recipes.Recipe, swapStep uint, account, recipient, asset, rwa common.Address) error {
+	return validateConnectorDeltaInputs(recipe, swapStep, account, recipient, asset, rwa, 0, 1)
+}
+
+func validateConnectorDeltaInputs(recipe recipes.Recipe, swapStep uint, account, recipient, asset, rwa common.Address, amountInput, paymentInput uint64) error {
 	if _, err := recipes.Inspect(recipe); err != nil {
 		return errors.Errorf("inspect connector balance deltas: %w", err)
 	}
@@ -51,7 +55,7 @@ func validateConnectorDeltas(recipe recipes.Recipe, swapStep uint, account, reci
 			break
 		}
 	}
-	for _, delta := range []connectorDelta{{asset, account, 1, true}, {asset, recipient, 1, false}, {rwa, account, 0, false}} {
+	for _, delta := range []connectorDelta{{asset, account, paymentInput, true}, {asset, recipient, paymentInput, false}, {rwa, account, amountInput, false}} {
 		found := false
 		for i := int(swapStep) + 1; i < next; i++ {
 			if connectorMatchesDelta(recipe, i, int(swapStep), previous, delta) {

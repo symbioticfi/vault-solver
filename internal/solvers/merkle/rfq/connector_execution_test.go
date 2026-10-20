@@ -265,7 +265,7 @@ func connectorExecutionFixture(t *testing.T) connectorExecutionFixtureData {
 		header: &types.Header{Number: big.NewInt(7), Time: 7}, allowed: true,
 	}
 	workflow := &connectorWorkflow{
-		chain: reader, chainID: big.NewInt(1), executors: map[common.Address]common.Address{vlt: recipeExecutor},
+		chain: reader, chainID: big.NewInt(1), executors: map[common.Address]routeExecutors{vlt: {Swap: recipeExecutor}},
 		source: connectorExecutionPermissions{raw: permission, account: account, executor: recipeExecutor}, caller: rfqExecutor, signer: signer,
 	}
 	return connectorExecutionFixtureData{workflow, reader, recipe, leaf}

@@ -167,7 +167,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	// addresses; both are fixed for the adapter's lifetime) and hand the resolved set to recovery. Runs
 	// before the poll loop and the quote server, so there's no concurrent reader of exec.vaults. A
 	// transport failure aborts startup; a per-adapter revert leaves that entry unresolved (skipped).
-	if len(s.cfg.Adapters) > 0 {
+	if !s.cfg.QuoteOnly && len(s.cfg.Adapters) > 0 {
 		resolved, err := s.exec.reader.resolveVaults(ctx, s.cfg.Adapters)
 		if err != nil {
 			startupErr := errors.Errorf("rfq: resolve recovery vaults: %w", err)
@@ -222,7 +222,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	execDone := make(chan struct{})
 	go func() {
 		defer close(execDone)
-		s.exec.run(execCtx)
+		s.runExecution(execCtx)
 	}()
 
 	var runErr error
@@ -248,4 +248,13 @@ func (s *Solver) Run(ctx context.Context) error {
 	}
 	<-execDone
 	return runErr
+}
+
+// runExecution keeps quote-only deployments out of the order journal and transaction path.
+func (s *Solver) runExecution(ctx context.Context) {
+	if s.cfg.QuoteOnly {
+		<-ctx.Done()
+		return
+	}
+	s.exec.run(ctx)
 }

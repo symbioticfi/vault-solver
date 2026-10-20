@@ -2,7 +2,6 @@ package threef
 
 import (
 	"encoding/json"
-	"strconv"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -31,7 +30,7 @@ func (c curatorConfig) httpConfig() protocolio.HTTPConfig {
 type config struct {
 	Mode      string        `yaml:"mode"`
 	StateDir  string        `yaml:"stateDir"`
-	Executors []string      `yaml:"executors"`
+	Executor  string        `yaml:"executor"`
 	Curator   curatorConfig `yaml:"curator"`
 	URL       string        `yaml:"url"`
 	APIKeyEnv string        `yaml:"apiKeyEnv"`
@@ -53,21 +52,11 @@ func parseConfig(node yaml.Node) (config, error) {
 	if cfg.StateDir == "" {
 		return config{}, errors.New("threef-merkle stateDir is required")
 	}
-	if len(cfg.Executors) == 0 || len(cfg.Executors) > 256 {
-		return config{}, errors.New("threef-merkle requires 1..256 executors")
+	executor, err := parse.NonZeroAddress(cfg.Executor, "executor")
+	if err != nil {
+		return config{}, err
 	}
-	seen := make(map[common.Address]bool, len(cfg.Executors))
-	for i, text := range cfg.Executors {
-		value, err := parse.NonZeroAddress(text, "executors["+strconv.Itoa(i)+"]")
-		if err != nil {
-			return config{}, err
-		}
-		if seen[value] {
-			return config{}, errors.New("duplicate threef-merkle executor")
-		}
-		seen[value] = true
-		cfg.Executors[i] = value.Hex()
-	}
+	cfg.Executor = executor.Hex()
 	broker, err := parse.NonZeroAddress(cfg.Broker, "broker")
 	if err != nil {
 		return config{}, err

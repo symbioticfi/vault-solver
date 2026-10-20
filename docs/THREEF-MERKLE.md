@@ -1,7 +1,7 @@
 # 3F Merkle execution
 
 The `threef-merkle` solver runs native API-key PUSH offers for one MerkleAccount
-and executes its configured guarded mint recipes. The adapter-based `3f-bridge-facilitator`
+and executes one guarded mint recipe covering all configured funding pairs. The adapter-based `3f-bridge-facilitator`
 solver and generic `merkle` solver run independently. No liquidity is aggregated
 between their accounts. Use [the example YAML](../config/threef-merkle.example.yaml)
 with the regular chain, signer and shared transaction manager configuration.
@@ -12,9 +12,7 @@ solvers:
     config:
       mode: simulate
       stateDir: /persistent/threef-merkle
-      executors:
-        - "0x0000000000000000000000000000000000000010"
-        - "0x0000000000000000000000000000000000000011"
+      executor: "0x0000000000000000000000000000000000000010"
       curator:
         url: https://curator.example.invalid/api/v1
       url: https://bf.3f.xyz
@@ -23,12 +21,12 @@ solvers:
 ```
 
 The account is the maker. A dedicated, 3F-approved BF EOA and API key serve one
-curator/default account. Every executor's account and caller are discovered together at a
-pinned block; all accounts must be the same default maker and every caller must match the shared signer. Mainnet is required.
+curator/default account. The executor's account and caller are discovered together at a
+pinned block; its account must be the default maker and caller must match the shared signer. Mainnet is required.
 Mode defaults to `simulate`; switch to `send` to authorize offers and mint execution.
-One configuration selects 1..256 unique executors and one BF/default account; the singular `executor` field is rejected. All provider
+One configuration selects exactly one executor and one BF/default account. The executor recipe admits 1..32 distinct guarded funding/underlying pairs; each group has disjoint request/principal/yield inputs and its own committed policy. The maximum-size fixture includes 32 canonical guards, 128 policy/claim grants, their hex data/masks, eight-hash proofs and the complete bundle envelope: 1,323,418 bytes within the fixed 2-MiB permission response limit. The actual complete permission bundle remains subject to that cap, including additional funding leaves. Direct Call/Approve steps and unconditional funding preparation are rejected so inactive groups cannot produce side effects. At least one group must have positive principal. All provider
 settings participate in recovery identity. Use one exclusive durable state directory
-and one process per curator BF. Do not also list any of these executors in `merkle.strategies`
+and one process per curator BF. Do not also list this executor in `merkle.strategies`
 or share that BF/key with another independently allocating bot.
 
 `threeF` is not a field of the generic `merkle` solver. Drain any unresolved offer
@@ -38,7 +36,7 @@ fences at startup before any solver runs and persists every signed original and
 replacement before broadcast; the host drains the shared sender before closing stores.
 
 Polling and mint strategy cadence are 15 seconds, operations are bounded to 30 seconds,
-and the shared recipe cache holds the configured recipes within 16 MiB. Curator `url` and optional `apiKeyEnv` use the SDK's
+and the shared recipe cache holds the configured recipe within 16 MiB. Curator `url` and optional `apiKeyEnv` use the SDK's
 10-second/2-MiB limits. Financial amounts, account identity and manual inputs are
 not configuration fields.
 
@@ -67,10 +65,9 @@ is a read, not a live transaction or proof of signer access.
 
 Automatic offers conservatively use **idle cash already held by the account**.
 Capacity is the minimum of that cash, the policy's remaining pair budget, the
-recipe principal cap and the auction's advertised request size, less existing
-same-funding-token offers across all target assets. The bot keeps at most one
+recipe principal cap and the auction's advertised request size, with cash reserved across all live offers of the same funding token and budget reserved only across offers for the exact funding/underlying pair. The bot keeps at most one
 self-originated live offer at a time, preserving its full configuration binding
-until terminal across all configured markets. Another recipe cannot cancel, overwrite or rekey that live intent; an ambiguous POST blocks every market until its exact API row is reconciled. Each workflow may cancel only its own intent or an eligible request within its current market. Multiple UI-originated offers and aggregate mints remain supported. Supply cash to the account
+until terminal across all configured markets. Another market cannot cancel, overwrite or rekey that live intent; an ambiguous POST blocks every market until its exact API row is reconciled. The workflow may cancel only its own intent or an eligible request within its current market. Multiple UI-originated offers and aggregate mints remain supported. Supply cash to the account
 before enabling automatic bidding. The actual mint recipe can still use its
 committed funding sources; API-key offers created in the UI are reconciled by the
 same mint provider. This bot does not promise a quote against liquidity that may
@@ -98,7 +95,7 @@ or cancel offers.
 `AWAITING_MINT` is readiness, not funding completion. The provider reads the native
 aggregate `mintAuthorization(account)` at the recipe's block, allowing several
 accepted offers and later partial-fill windows. It does not derive mint amounts
-from one offer row. It uses the earliest current API mint deadline, reserves a
+from one offer row. Across every guarded group it uses the earliest eligible current API mint deadline (canonical request address breaks ties), reserves a
 30-second margin and checks current enrollment/lease again after full simulation,
 immediately before unsigned admission. Earlier requests for another funding pair
 or outside the current policy budget, yield floor or recipe cap are skipped so
@@ -131,7 +128,7 @@ separate from live-provider approval, authenticated mainnet enrollment and minti
 
 All hand-written 3F Merkle logic lives in `internal/solvers/merkle/threef`:
 API transport/JSON admission, offer sizing and journal recovery, policy snapshots,
-canonical recipe inspection and the mint provider. One Run goroutine evaluates the per-recipe offer workflows sequentially; they share one API client, planner, provider, exclusive store and submission sender. The SDK keeper owns mint progress for every configured strategy. It admits no new offer work
+canonical recipe inspection and the mint provider. One Run goroutine evaluates the guarded markets sequentially, ordered by their oldest eligible auction. One API client, planner, provider, exclusive store and submission sender serve one executor strategy. The SDK keeper owns mint progress. It admits no new offer work
 while a signed recipe is pending. `internal/merklesender.OpenKeeper` shares only
 SDK store/sender startup and recovery with the generic recipe host. There is no
 optional 3F dispatch in `merkle` and no dependency on `bridgefacilitator` strategies.
@@ -139,6 +136,6 @@ optional 3F dispatch in `merkle` and no dependency on `bridgefacilitator` strate
 Tests retain API wire/identity/bounds checks, ambiguous-POST restart recovery,
 reservations, cancellation, aggregate authorizations, lease expiry, guard mutation
 rejection and canonical receipt evidence. Dedicated startup tests cover mainnet,
-shared caller discovery, multiple recipes, cross-account rejection, reorgs, invalid accounts and failure before state creation. Cross-market tests retain live/ambiguous account intents and prevent another pair budget from cancelling a foreign UI offer.
+shared caller discovery, grouped recipes, cross-account rejection, reorgs, invalid accounts and failure before state creation. Cross-market tests retain live/ambiguous account intents and prevent another pair budget from cancelling a foreign UI offer.
 Authenticated live-provider approval, enrollment and mainnet minting require
 separate validation; local fixtures do not establish them.

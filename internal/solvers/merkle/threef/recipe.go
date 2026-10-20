@@ -60,15 +60,28 @@ func instructionType(name string) abi.Type {
 	return t
 }
 
-// inspect accepts exactly one canonical guarded mint and its complete variable bindings.
+// inspect accepts bounded distinct canonical guarded mints and disjoint variable inputs.
 // Financial amounts are observed at runtime; no API metadata can change these pins.
-func inspect(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) (mintMarket, error) {
+func inspect(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) ([]mintMarket, error) {
 	var market mintMarket
+	var markets []mintMarket
+	used := map[uint]bool{}
+	pairs := map[[2]common.Address]bool{}
+	for _, step := range recipe.Steps {
+		if len(step) == 0 {
+			continue
+		}
+		switch step[0] {
+		case recipes.Call:
+			return nil, errors.New("3f recipe contains an ungated call")
+		case recipes.Approve:
+			return nil, errors.New("3f recipe contains an ungated approval")
+		}
+	}
 	inspection, err := recipes.Inspect(recipe)
 	if err != nil {
-		return market, err
+		return nil, err
 	}
-	found := false
 	for _, slot := range inspection.Slots {
 		if slot.Operation != recipes.Manage {
 			continue
@@ -78,59 +91,70 @@ func inspect(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tr
 				if leaf.Hash != hash || leaf.Target != snapshot.Account || len(leaf.Data) < 4 || !bytes.Equal(leaf.Data[:4], capabilitySchema.Methods["execute"].ID) {
 					continue
 				}
-				if found {
-					return mintMarket{}, errors.New("3f requires one guarded mint leaf")
-				}
 				market, err = inspectGuard(snapshot.Account, leaf)
 				if err != nil {
-					return mintMarket{}, err
+					return nil, err
 				}
 				if len(slot.Bindings) != len(slot.Leaves) || len(slot.Bindings[i]) != 11 {
-					return mintMarket{}, errors.New("3f guard requires all eleven input bindings")
+					return nil, errors.New("3f guard requires all eleven input bindings")
 				}
 				var principal, yield, request *big.Int
 				// Four amount words are the first four inner inputs. All other variable words are requests.
 				inputOffset := new(big.Int).SetBytes(leaf.Data[68:100]).Uint64() + 4 + 32
 				for _, binding := range slot.Bindings[i] {
 					if binding.Value.Source != recipes.Input {
-						return mintMarket{}, errors.New("3f guard bindings must use inputs")
+						return nil, errors.New("3f guard bindings must use inputs")
 					}
 					switch uint64(binding.Offset) {
 					case inputOffset, inputOffset + 64:
 						if principal != nil && principal.Cmp(binding.Value.Value) != 0 {
-							return mintMarket{}, errors.New("3f principal bindings disagree")
+							return nil, errors.New("3f principal bindings disagree")
 						}
 						principal = binding.Value.Value
 					case inputOffset + 32, inputOffset + 96:
 						if yield != nil && yield.Cmp(binding.Value.Value) != 0 {
-							return mintMarket{}, errors.New("3f yield bindings disagree")
+							return nil, errors.New("3f yield bindings disagree")
 						}
 						yield = binding.Value.Value
 					default:
 						if request != nil && request.Cmp(binding.Value.Value) != 0 {
-							return mintMarket{}, errors.New("3f request bindings disagree")
+							return nil, errors.New("3f request bindings disagree")
 						}
 						request = binding.Value.Value
 					}
 					end := uint64(binding.Offset) + 32
 					if end > uint64(len(leaf.DataMask)) || !bytes.Equal(leaf.DataMask[binding.Offset:end], bytes.Repeat([]byte{255}, 32)) {
-						return mintMarket{}, errors.New("3f binding does not match mask")
+						return nil, errors.New("3f binding does not match mask")
 					}
 				}
 				if principal == nil || yield == nil || request == nil || principal.Cmp(yield) == 0 || request.Cmp(principal) == 0 || request.Cmp(yield) == 0 || slot.Gate.Source != recipes.Input || slot.Gate.Value.Cmp(principal) != 0 {
-					return mintMarket{}, errors.New("3f invalid mint input identities or gate")
+					return nil, errors.New("3f invalid mint input identities or gate")
 				}
 				market.PrincipalInput = uint(principal.Uint64())
 				market.YieldInput = uint(yield.Uint64())
 				market.RequestInput = uint(request.Uint64())
-				found = true
+				pair := [2]common.Address{market.Asset, market.UnderlyingAsset}
+				if pairs[pair] {
+					return nil, errors.New("3f duplicate guarded funding pair")
+				}
+				pairs[pair] = true
+				for _, index := range []uint{market.PrincipalInput, market.YieldInput, market.RequestInput} {
+					if used[index] {
+						return nil, errors.New("3f guarded market inputs overlap")
+					}
+					used[index] = true
+				}
+				markets = append(markets, market)
+				if len(markets) > 32 {
+					return nil, errors.New("3f guarded markets exceed 32-group bound")
+				}
 			}
 		}
 	}
-	if !found {
-		return mintMarket{}, errors.New("3f guarded mint leaf missing")
+	if len(markets) == 0 {
+		return nil, errors.New("3f guarded mint leaf missing")
 	}
-	return market, nil
+	return markets, nil
 }
 
 func inspectGuard(account common.Address, leaf recipes.Leaf) (mintMarket, error) {

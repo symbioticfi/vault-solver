@@ -18,20 +18,21 @@ func NewQuoteCandidate(
 		return nil
 	}
 	candidate := liquidlane.QuoteCandidate{
-		ID:           liquidlane.NewCandidateID(item.Route, item.DiscountID),
-		Route:        item.Route,
-		Rate:         liquidlane.CloneBig(item.MaxRate),
-		MaxAmountOut: liquidlane.CloneBig(maxAmountOut),
-		DiscountID:   liquidlane.CloneHash(item.DiscountID),
-		ValidUntil:   item.ValidUntil,
+		DiscountPrecision: item.DiscountPrecision,
+		ID:                liquidlane.NewCandidateID(item.Route, item.DiscountID),
+		Route:             item.Route,
+		Rate:              liquidlane.CloneBig(item.MaxRate),
+		MaxAmountOut:      liquidlane.CloneBig(maxAmountOut),
+		DiscountID:        liquidlane.CloneHash(item.DiscountID),
+		ValidUntil:        item.ValidUntil,
 	}
 	discount := item.PayoutDiscount()
-	if rate := liquidlane.DiscountedRate(item.Price, discount); rate.Sign() > 0 {
+	if rate := liquidlane.DiscountedRatePrecision(item.Price, discount, candidate.PricingPrecision()); rate.Sign() > 0 {
 		candidate.Rate = rate
 		candidate.Price = liquidlane.CloneBig(item.Price)
 		candidate.Discount = liquidlane.CloneBig(discount)
-		candidate.MaxAmountIn = liquidlane.MaxAmountInForDiscountedAmountOut(
-			maxAmountOut, item.Price, discount, item.TokenInDecimals, item.TokenOutDecimals,
+		candidate.MaxAmountIn = liquidlane.MaxAmountInForDiscountedAmountOutPrecision(
+			maxAmountOut, item.Price, discount, item.TokenInDecimals, item.TokenOutDecimals, candidate.PricingPrecision(),
 		)
 	} else {
 		if item.MaxRate == nil || item.MaxRate.Sign() <= 0 {

@@ -15,9 +15,7 @@ solvers:
     config:
       mode: simulate # send enables API offers and on-chain minting
       stateDir: /persistent/threef-merkle
-      executors: # 1..256 guarded recipes; same account and shared signer caller
-        - "0x0000000000000000000000000000000000000010"
-        - "0x0000000000000000000000000000000000000011"
+      executor: "0x0000000000000000000000000000000000000010" # one recipe with 1..32 guarded funding pairs
       curator:
         url: https://curator.example.invalid/api/v1
         # apiKeyEnv: CURATOR_API_TOKEN

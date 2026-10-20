@@ -19,11 +19,7 @@ type observation struct {
 	Budget, MinimumYield, AvailableCash, MaxPrincipal *big.Int
 }
 
-func observe(ctx context.Context, chain provider.Reader, snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) (observation, error) {
-	market, err := inspect(snapshot, recipe, tree)
-	if err != nil {
-		return observation{}, err
-	}
+func observe(ctx context.Context, chain provider.Reader, snapshot provider.Snapshot, recipe recipes.Recipe, market mintMarket) (observation, error) {
 	call := func(to common.Address, data []byte) ([]byte, error) {
 		raw, err := chain.CallContract(ctx, ethereum.CallMsg{To: &to, Data: data}, snapshot.BlockNumber)
 		if err != nil {

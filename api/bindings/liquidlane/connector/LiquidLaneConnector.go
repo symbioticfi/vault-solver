@@ -43,7 +43,7 @@ type ILiquidLaneConnectorDiscountSwap struct {
 
 // LiquidLaneConnectorMetaData contains all meta data concerning the LiquidLaneConnector contract.
 var LiquidLaneConnectorMetaData = bind.MetaData{
-	ABI: "[{\"type\":\"function\",\"name\":\"account\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"outputAsset\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"remainingAssets\",\"inputs\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"swap\",\"inputs\":[{\"name\":\"discountSwap\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneConnector.DiscountSwap\",\"components\":[{\"name\":\"discount\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneConnector.Discount\",\"components\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"discount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"signer\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"deadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"signerSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"protocolDeadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"}]",
+	ABI: "[{\"type\":\"function\",\"name\":\"account\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"eip712Domain\",\"inputs\":[],\"outputs\":[{\"name\":\"fields\",\"type\":\"bytes1\",\"internalType\":\"bytes1\"},{\"name\":\"name\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"version\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"chainId\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"verifyingContract\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"salt\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"extensions\",\"type\":\"uint256[]\",\"internalType\":\"uint256[]\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"getAmountOut\",\"inputs\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"minDiscount\",\"inputs\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"discount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"outputAsset\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"remainingAssets\",\"inputs\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"swap\",\"inputs\":[{\"name\":\"discountSwap\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneConnector.DiscountSwap\",\"components\":[{\"name\":\"discount\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneConnector.Discount\",\"components\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"discount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"signer\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"deadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"signerSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"protocolDeadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"}]",
 	ID:  "LiquidLaneConnector",
 }
 
@@ -104,6 +104,130 @@ func (liquidLaneConnector *LiquidLaneConnector) UnpackAccount(data []byte) (comm
 		return *new(common.Address), err
 	}
 	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
+	return out0, nil
+}
+
+// PackEip712Domain is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x84b0196e.  This method will panic if any
+// invalid/nil inputs are passed.
+//
+// Solidity: function eip712Domain() view returns(bytes1 fields, string name, string version, uint256 chainId, address verifyingContract, bytes32 salt, uint256[] extensions)
+func (liquidLaneConnector *LiquidLaneConnector) PackEip712Domain() []byte {
+	enc, err := liquidLaneConnector.abi.Pack("eip712Domain")
+	if err != nil {
+		panic(err)
+	}
+	return enc
+}
+
+// TryPackEip712Domain is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x84b0196e.  This method will return an error
+// if any inputs are invalid/nil.
+//
+// Solidity: function eip712Domain() view returns(bytes1 fields, string name, string version, uint256 chainId, address verifyingContract, bytes32 salt, uint256[] extensions)
+func (liquidLaneConnector *LiquidLaneConnector) TryPackEip712Domain() ([]byte, error) {
+	return liquidLaneConnector.abi.Pack("eip712Domain")
+}
+
+// Eip712DomainOutput serves as a container for the return parameters of contract
+// method Eip712Domain.
+type Eip712DomainOutput struct {
+	Fields            [1]byte
+	Name              string
+	Version           string
+	ChainId           *big.Int
+	VerifyingContract common.Address
+	Salt              [32]byte
+	Extensions        []*big.Int
+}
+
+// UnpackEip712Domain is the Go binding that unpacks the parameters returned
+// from invoking the contract method with ID 0x84b0196e.
+//
+// Solidity: function eip712Domain() view returns(bytes1 fields, string name, string version, uint256 chainId, address verifyingContract, bytes32 salt, uint256[] extensions)
+func (liquidLaneConnector *LiquidLaneConnector) UnpackEip712Domain(data []byte) (Eip712DomainOutput, error) {
+	out, err := liquidLaneConnector.abi.Unpack("eip712Domain", data)
+	outstruct := new(Eip712DomainOutput)
+	if err != nil {
+		return *outstruct, err
+	}
+	outstruct.Fields = *abi.ConvertType(out[0], new([1]byte)).(*[1]byte)
+	outstruct.Name = *abi.ConvertType(out[1], new(string)).(*string)
+	outstruct.Version = *abi.ConvertType(out[2], new(string)).(*string)
+	outstruct.ChainId = abi.ConvertType(out[3], new(big.Int)).(*big.Int)
+	outstruct.VerifyingContract = *abi.ConvertType(out[4], new(common.Address)).(*common.Address)
+	outstruct.Salt = *abi.ConvertType(out[5], new([32]byte)).(*[32]byte)
+	outstruct.Extensions = *abi.ConvertType(out[6], new([]*big.Int)).(*[]*big.Int)
+	return *outstruct, nil
+}
+
+// PackGetAmountOut is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0xca706bcf.  This method will panic if any
+// invalid/nil inputs are passed.
+//
+// Solidity: function getAmountOut(address tokenToRedeem, uint256 amountIn) view returns(uint256)
+func (liquidLaneConnector *LiquidLaneConnector) PackGetAmountOut(tokenToRedeem common.Address, amountIn *big.Int) []byte {
+	enc, err := liquidLaneConnector.abi.Pack("getAmountOut", tokenToRedeem, amountIn)
+	if err != nil {
+		panic(err)
+	}
+	return enc
+}
+
+// TryPackGetAmountOut is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0xca706bcf.  This method will return an error
+// if any inputs are invalid/nil.
+//
+// Solidity: function getAmountOut(address tokenToRedeem, uint256 amountIn) view returns(uint256)
+func (liquidLaneConnector *LiquidLaneConnector) TryPackGetAmountOut(tokenToRedeem common.Address, amountIn *big.Int) ([]byte, error) {
+	return liquidLaneConnector.abi.Pack("getAmountOut", tokenToRedeem, amountIn)
+}
+
+// UnpackGetAmountOut is the Go binding that unpacks the parameters returned
+// from invoking the contract method with ID 0xca706bcf.
+//
+// Solidity: function getAmountOut(address tokenToRedeem, uint256 amountIn) view returns(uint256)
+func (liquidLaneConnector *LiquidLaneConnector) UnpackGetAmountOut(data []byte) (*big.Int, error) {
+	out, err := liquidLaneConnector.abi.Unpack("getAmountOut", data)
+	if err != nil {
+		return new(big.Int), err
+	}
+	out0 := abi.ConvertType(out[0], new(big.Int)).(*big.Int)
+	return out0, nil
+}
+
+// PackMinDiscount is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0xd9104c14.  This method will panic if any
+// invalid/nil inputs are passed.
+//
+// Solidity: function minDiscount(address tokenToRedeem) view returns(uint256 discount)
+func (liquidLaneConnector *LiquidLaneConnector) PackMinDiscount(tokenToRedeem common.Address) []byte {
+	enc, err := liquidLaneConnector.abi.Pack("minDiscount", tokenToRedeem)
+	if err != nil {
+		panic(err)
+	}
+	return enc
+}
+
+// TryPackMinDiscount is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0xd9104c14.  This method will return an error
+// if any inputs are invalid/nil.
+//
+// Solidity: function minDiscount(address tokenToRedeem) view returns(uint256 discount)
+func (liquidLaneConnector *LiquidLaneConnector) TryPackMinDiscount(tokenToRedeem common.Address) ([]byte, error) {
+	return liquidLaneConnector.abi.Pack("minDiscount", tokenToRedeem)
+}
+
+// UnpackMinDiscount is the Go binding that unpacks the parameters returned
+// from invoking the contract method with ID 0xd9104c14.
+//
+// Solidity: function minDiscount(address tokenToRedeem) view returns(uint256 discount)
+func (liquidLaneConnector *LiquidLaneConnector) UnpackMinDiscount(data []byte) (*big.Int, error) {
+	out, err := liquidLaneConnector.abi.Unpack("minDiscount", data)
+	if err != nil {
+		return new(big.Int), err
+	}
+	out0 := abi.ConvertType(out[0], new(big.Int)).(*big.Int)
 	return out0, nil
 }
 

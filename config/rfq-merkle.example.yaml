@@ -20,5 +20,8 @@ solvers:
         url: https://curator.example.invalid/api/v1
         # apiKeyEnv: CURATOR_API_TOKEN
       recipeExecutors:
-        "0x0000000000000000000000000000000000000042": "0x0000000000000000000000000000000000000043"
-        # LiquidLaneConnector -> caller-bound RecipeExecutor
+        "0x0000000000000000000000000000000000000042":
+          swapExecutor: "0x0000000000000000000000000000000000000043"
+          redemptionExecutors:
+            "0x0000000000000000000000000000000000000050": "0x0000000000000000000000000000000000000044"
+        # LiquidLaneConnector -> shared custody swaps and asset-specific issuer routes

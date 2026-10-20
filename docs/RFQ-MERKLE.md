@@ -12,8 +12,11 @@ in the Reactor's factory. Its RecipeExecutor must name the RFQ Executor as calle
 and the connector's MerkleAccount as account.
 
 Configuration contains only the backend URL, durable state directory, RFQ executor,
-curator service and 1..256 connector-to-RecipeExecutor mappings. Duplicate connector
-addresses are rejected, including checksum variants. Polling is every three seconds;
+curator service and 1..256 connector entries. Each entry has a `swapExecutor` for
+explicit custody-only assets and `redemptionExecutors`, an asset-to-executor map for
+routes which must redeem after acquisition. An issuer mapping always takes precedence;
+it never falls back to custody-only after failure. Redemption assets require distinct
+executors. Duplicate connector and asset addresses are rejected, including case variants. Polling is every three seconds;
 each iteration has a thirty-second context and fetches at most 100 open orders.
 Curator HTTP limits are ten seconds and 2 MiB. Secret configuration contains
 environment variable names. This solver has no quote server or adapter inventory.
@@ -29,8 +32,13 @@ An upstream source must award compatible orders; this solver does not publish qu
 The SDK discovers the committed recipe and active root, authenticates the curator
 tree, verifies masks/proofs and roles, and checks the canonical snapshot around
 simulation. The host fills only permitted runtime bytes. The signed swap pins the
-connector, selector and RWA, binds amountIn to input 0, and requires the committed
-account cash, RFQ payment and RWA balance deltas. Input 1 is the exact awarded output.
+connector, selector and RWA, binds amountIn to an even input index, and requires the committed
+account cash, RFQ payment and RWA balance deltas. The following odd input is the exact awarded output.
+`LLSwapOnly` commits up to64 distinct assets in one executor, one amount/payment pair
+per asset and an on-chain exactly-one-active-route check. Assembly supplies zero for every
+unselected pair and requires each action gate to equal its own amount input.
+`LLExecuting` retains one executor per issuer-redemption asset. Its acquired RWA is consumed
+by the configured native issuer calls before the complete outer fill succeeds.
 It simulates the complete outer RFQ fill from the EOA so Reactor funding, recipe
 authorization and output settlement are checked together.
 

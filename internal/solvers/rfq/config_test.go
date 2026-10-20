@@ -1,6 +1,7 @@
 package rfq
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -266,5 +267,27 @@ executor: "not-an-address"
 				t.Fatalf("expected an error for %q", name)
 			}
 		})
+	}
+}
+
+func TestQuoteOnlyDoesNotStartExecution(t *testing.T) {
+	cfg, err := parseCfg(t, minimalConfig+"solverMode: internal\nquoteOnly: true\n")
+	if err != nil || !cfg.QuoteOnly {
+		t.Fatalf("quoteOnly config: %+v %v", cfg, err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	s := &Solver{cfg: cfg} // No executor: entering the fill path would panic.
+	go func() { defer close(done); s.runExecution(ctx) }()
+	select {
+	case <-done:
+		t.Fatal("quote-only execution returned before shutdown")
+	case <-time.After(10 * time.Millisecond):
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("quote-only shutdown blocked")
 	}
 }

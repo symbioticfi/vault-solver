@@ -49,10 +49,11 @@ func fixture(t *testing.T) (provider.Snapshot, recipes.Recipe, *recipes.Tree) {
 
 func TestCanonicalGuardAndEverySecurityBoundary(t *testing.T) {
 	snapshot, recipe, tree := fixture(t)
-	market, err := inspect(snapshot, recipe, tree)
+	markets, err := inspect(snapshot, recipe, tree)
 	if err != nil {
 		t.Fatal(err)
 	}
+	market := markets[0]
 	if market.PrincipalInput != 1 || market.YieldInput != 2 || market.RequestInput != 0 {
 		t.Fatalf("wrong derived input identities: %+v", market)
 	}
@@ -114,10 +115,11 @@ func (f readFunc) CallContract(ctx context.Context, msg ethereum.CallMsg, block 
 
 func marketReads(t *testing.T, snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree, next readFunc) readFunc {
 	t.Helper()
-	market, err := inspect(snapshot, recipe, tree)
+	markets, err := inspect(snapshot, recipe, tree)
 	if err != nil {
 		t.Fatal(err)
 	}
+	market := markets[0]
 	return func(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
 		if block.Cmp(snapshot.BlockNumber) != 0 {
 			t.Fatal("market reads lost block pin")
@@ -281,10 +283,11 @@ func TestMintSkipsIneligibleEarlierRequests(t *testing.T) {
 
 func TestConfirmedMintRequiresCanonicalReceiptAndPolicyDebit(t *testing.T) {
 	snapshot, recipe, tree := fixture(t)
-	market, err := inspect(snapshot, recipe, tree)
+	markets, err := inspect(snapshot, recipe, tree)
 	if err != nil {
 		t.Fatal(err)
 	}
+	market := markets[0]
 	record := mint{Request: common.HexToAddress("0x123"), Policy: market.Policy, Asset: market.Asset, UnderlyingAsset: market.UnderlyingAsset, Principal: "12", Deadline: time.Unix(2000, 0)}
 	data, err := json.Marshal(record)
 	if err != nil {
@@ -318,10 +321,11 @@ func TestConfirmedMintRequiresCanonicalReceiptAndPolicyDebit(t *testing.T) {
 
 func TestEligibilityUsesNativePolicyAndExactBudgetDelta(t *testing.T) {
 	snapshot, recipe, tree := fixture(t)
-	market, err := inspect(snapshot, recipe, tree)
+	markets, err := inspect(snapshot, recipe, tree)
 	if err != nil {
 		t.Fatal(err)
 	}
+	market := markets[0]
 	for _, tc := range []struct {
 		name  string
 		value int64
@@ -350,10 +354,11 @@ func TestEligibilityUsesNativePolicyAndExactBudgetDelta(t *testing.T) {
 
 func TestObserveDerivesLiveCashBudgetAndCommittedCap(t *testing.T) {
 	snapshot, recipe, tree := fixture(t)
-	market, err := inspect(snapshot, recipe, tree)
+	markets, err := inspect(snapshot, recipe, tree)
 	if err != nil {
 		t.Fatal(err)
 	}
+	market := markets[0]
 	malformed := false
 	chain := readFunc(func(_ context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
 		if block.Cmp(snapshot.BlockNumber) != 0 {
@@ -381,7 +386,7 @@ func TestObserveDerivesLiveCashBudgetAndCommittedCap(t *testing.T) {
 			return nil, nil
 		}
 	})
-	observed, err := observe(t.Context(), chain, snapshot, recipe, tree)
+	observed, err := observe(t.Context(), chain, snapshot, recipe, market)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,7 +394,7 @@ func TestObserveDerivesLiveCashBudgetAndCommittedCap(t *testing.T) {
 		t.Fatalf("wrong cash/budget/ratio/cap: %+v", observed)
 	}
 	malformed = true
-	if _, err := observe(t.Context(), chain, snapshot, recipe, tree); err == nil {
+	if _, err := observe(t.Context(), chain, snapshot, recipe, market); err == nil {
 		t.Fatal("malformed required getter accepted")
 	}
 }

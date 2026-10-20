@@ -97,7 +97,7 @@ and underlying authorization error.
 
 Merkle connector orders run independently under `rfq-merkle`; see its
 [configuration](config/rfq-merkle.example.yaml) and [runbook](docs/RFQ-MERKLE.md).
-It consumes awarded `/orders` and signed backend terms without aggregating adapter liquidity.
+It consumes awarded `/orders` and signed backend terms without aggregating adapter liquidity. Its connector routing config uses one `swapExecutor` for all admitted custody-only assets, plus explicit `redemptionExecutors` keyed by token for post-swap issuer actions. A configured issuer route takes precedence and never falls back to custody on failure.
 
 When `tokensToQuote: permissioned`, admitted inputs are never aggregated: the selected strategy must
 use one candidate route. Other scopes keep the existing multi-route behavior.
@@ -901,8 +901,8 @@ does not imply waiting when a separate recipe gate authorizes the action.
 
 The independent `threef-merkle` solver runs native 3F API-key PUSH offers with a
 dedicated curator BF, a MerkleAccount maker and guarded account-side minting.
-Configure 1..256 unique recipe `executors`, one broker and an API-key environment reference using
+Configure one recipe `executor`, one broker and an API-key environment reference using
 [the example YAML](config/threef-merkle.example.yaml), then complete enrollment as
 described in [the 3F Merkle runbook](docs/THREEF-MERKLE.md). The generic `merkle`
-solver rejects the `threeF` field. Every configured executor must use the same maker account and shared signer. One journal and sender serialize all markets; the singular `executor` field is rejected. Automatic offers reserve existing commitments
+solver rejects the `threeF` field. The executor uses the maker account and shared signer. Its recipe contains 1..32 distinct guarded funding pairs with disjoint request/principal/yield inputs; inactive groups have zero principal and no calls. One journal and sender serialize all markets. Automatic offers reserve existing commitments
 and use account idle cash; simulation never submits or cancels API offers.

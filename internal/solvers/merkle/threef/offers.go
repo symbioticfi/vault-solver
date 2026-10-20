@@ -85,7 +85,7 @@ func (b *offerBot) Tick(ctx context.Context, market offerMarket, auctions []thre
 	}
 	// Another recipe owns this account's live intent. Its workflow alone may
 	// cancel it; an unresolved POST must remain bound to the original recipe.
-	if previous != nil && previous.Executor != market.Executor {
+	if previous != nil && (previous.Executor != market.Executor || previous.Asset != market.Asset || previous.UnderlyingAsset != market.UnderlyingAsset) {
 		for _, offer := range live {
 			if offer.id == previous.OfferID {
 				return nil
@@ -93,12 +93,16 @@ func (b *offerBot) Tick(ctx context.Context, market offerMarket, auctions []thre
 		}
 	}
 	reserved := new(big.Int)
+	pairReserved := new(big.Int)
 	for _, offer := range live {
 		if offer.asset == market.Asset {
 			reserved.Add(reserved, offer.amount)
+			if market.EligibleRequests[common.HexToAddress(offer.dto.RequestId)] {
+				pairReserved.Add(pairReserved, offer.amount)
+			}
 		}
 	}
-	capacity := minInt(market.Budget, market.AvailableCash)
+	capacity := minInt(new(big.Int).Sub(market.Budget, pairReserved), new(big.Int).Sub(market.AvailableCash, reserved))
 	for _, offer := range live {
 		if offer.dto.Status != "SUBMITTED" {
 			continue
@@ -112,7 +116,7 @@ func (b *offerBot) Tick(ctx context.Context, market offerMarket, auctions []thre
 		if offer.asset != market.Asset && !cancel {
 			continue
 		}
-		cancel = cancel || (offer.asset == market.Asset && reserved.Cmp(capacity) > 0)
+		cancel = cancel || (offer.asset == market.Asset && (reserved.Cmp(market.AvailableCash) > 0 || pairReserved.Cmp(market.Budget) > 0))
 		if offer.asset == market.Asset && market.EligibleRequests[request] {
 			fits, fitErr := fitsTerms(market, offer.amount, offer.expectedReturn, byID[offer.auctionID])
 			if fitErr != nil {
@@ -144,7 +148,7 @@ func (b *offerBot) Tick(ctx context.Context, market offerMarket, auctions []thre
 			}
 		}
 	}
-	remaining := new(big.Int).Sub(capacity, reserved)
+	remaining := capacity
 	if remaining.Sign() <= 0 {
 		return nil
 	}

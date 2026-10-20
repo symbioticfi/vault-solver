@@ -289,7 +289,7 @@ func TestFitsTermsNativeAuthorizationBounds(t *testing.T) {
 	}
 }
 
-func TestTickCancelsJournaledSubmittedOfferAfterPolicyAssetChanges(t *testing.T) {
+func TestTickPreservesJournaledSubmittedOfferForAnotherFundingPair(t *testing.T) {
 	b, c, m := testBot(t)
 	if err := b.Tick(t.Context(), m, c.auctions); err != nil {
 		t.Fatal(err)
@@ -302,8 +302,8 @@ func TestTickCancelsJournaledSubmittedOfferAfterPolicyAssetChanges(t *testing.T)
 	if err := b.Tick(t.Context(), m, c.auctions); err != nil {
 		t.Fatal(err)
 	}
-	if len(c.cancelled) != 1 || len(c.created) != 1 {
-		t.Fatal("submitted intent was not cancelled after funding policy changed")
+	if len(c.cancelled) != 0 || len(c.created) != 1 {
+		t.Fatal("another funding pair mutated the durable intent")
 	}
 }
 
@@ -421,7 +421,24 @@ func TestTickDoesNotCancelAnotherMarketUIOfferAgainstCurrentPairBudget(t *testin
 	if err := b.Tick(t.Context(), m, c.auctions); err != nil {
 		t.Fatal(err)
 	}
-	if len(c.cancelled) != 0 || len(c.created) != 0 {
-		t.Fatal("current pair budget mutated a different market commitment")
+	if len(c.cancelled) != 0 || len(c.created) != 1 || c.created[0].Amount != "100000" {
+		t.Fatal("current pair budget incorrectly reserved a different market commitment")
+	}
+}
+
+func TestPairBudgetDoesNotReserveAnotherUnderlying(t *testing.T) {
+	b, c, m := testBot(t)
+	m.Budget = big.NewInt(100000)
+	m.AvailableCash = big.NewInt(900000)
+	other := common.HexToAddress("0x777")
+	c.auctions = append(c.auctions, testAuction(m, 2, other))
+	offer := testOffer(m, 2, "AWAITING_MINT", "200000")
+	offer.RequestId = other.Hex()
+	c.offers = []threef.OfferDto{offer}
+	if err := b.Tick(t.Context(), m, c.auctions); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.created) != 1 || c.created[0].Amount != "100000" {
+		t.Fatalf("foreign underlying consumed this pair budget: %+v", c.created)
 	}
 }
