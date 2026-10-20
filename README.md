@@ -46,6 +46,7 @@ the same nonce; nonce handling does not coordinate their liquidity or off-chain 
 | `solver.name` | Integration | Docs | Example config |
 |---|---|---|---|
 | `3f-bridge-facilitator` | 3F (Grunt) bridge-loan auctions | [plan](docs/3F-PLAN.md) | [yaml](config/3f.example.yaml) |
+| `threef-merkle` | Native 3F PUSH offers and guarded Merkle mints | [plan](docs/THREEF-MERKLE.md) | [yaml](config/threef-merkle.example.yaml) |
 | `rfq-merkle` | Awarded RFQ orders through Merkle recipes | [plan](docs/RFQ-MERKLE.md) | [yaml](config/rfq-merkle.example.yaml) |
 | `rfq-filler` | Symbiotic RFQ quoting + order filling | [plan](docs/RFQ-PLAN.md) | [yaml](config/rfq.example.yaml) |
 | `redstone-oev` | RedStone OEV liquidations | [plan](docs/OEV-PLAN.md) | [yaml](config/redstone-oev.example.yaml) |
@@ -898,9 +899,10 @@ simulations with all Manage gates closed and no Call or Approve work wait withou
 sending; malformed results and failed simulations remain errors. A zero request ID
 does not imply waiting when a separate recipe gate authorizes the action.
 
-The Merkle solver also supports native 3F API-key PUSH offers with a dedicated
-curator BF, a MerkleAccount maker and guarded account-side minting. Configure the
-optional `threeF` block and complete enrollment as described in
-[the Merkle host runbook](docs/MERKLE-SDK.md#3f-api-key-push-through-merkleaccount).
-Credentials are environment references; automatic offers reserve existing
-commitments and use account idle cash. Simulation never submits API offers.
+The independent `threef-merkle` solver runs native 3F API-key PUSH offers with a
+dedicated curator BF, a MerkleAccount maker and guarded account-side minting.
+Configure one executor, broker and API-key environment reference using
+[the example YAML](config/threef-merkle.example.yaml), then complete enrollment as
+described in [the 3F Merkle runbook](docs/THREEF-MERKLE.md). The generic `merkle`
+solver rejects the `threeF` field. Automatic offers reserve existing commitments
+and use account idle cash; simulation never submits or cancels API offers.

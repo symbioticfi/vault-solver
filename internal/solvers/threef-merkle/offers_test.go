@@ -1,4 +1,4 @@
-package threefbot
+package threefmerkle
 
 import (
 	"context"
@@ -26,8 +26,7 @@ func (f *fakeClient) Identity(context.Context, common.Address) error { return f.
 func (f *fakeClient) Broker() common.Address {
 	return common.HexToAddress("0x8000000000000000000000000000000000000008")
 }
-func (f *fakeClient) Auctions(context.Context) ([]threef.AuctionDto, error) { return f.auctions, nil }
-func (f *fakeClient) Offers(context.Context) ([]threef.OfferDto, error)     { return f.offers, nil }
+func (f *fakeClient) Offers(context.Context) ([]threef.OfferDto, error) { return f.offers, nil }
 func (f *fakeClient) Create(_ context.Context, offer threef.CreateOfferDto) (*threef.CreateOfferResponseDto, error) {
 	if f.beforeCreate != nil {
 		f.beforeCreate(offer)
@@ -40,22 +39,22 @@ func (f *fakeClient) Cancel(_ context.Context, id uint64) (*threef.CancelOfferRe
 	return &threef.CancelOfferResponseDto{Id: float32(id), Status: "CANCELLED"}, nil
 }
 
-func testMarket() Market {
+func testMarket() offerMarket {
 	request := common.HexToAddress("0x1000000000000000000000000000000000000001")
-	return Market{ChainID: 1, Account: common.HexToAddress("0x2000000000000000000000000000000000000002"), Executor: common.HexToAddress("0x3000000000000000000000000000000000000003"), RecipeHash: common.HexToHash("0x04"), Asset: common.HexToAddress("0x5000000000000000000000000000000000000005"), UnderlyingAsset: common.HexToAddress("0x6000000000000000000000000000000000000006"), Budget: big.NewInt(1000000), MinimumYield1e8: big.NewInt(19000), MaxPrincipal: big.NewInt(800001), AvailableCash: big.NewInt(900000), EligibleRequests: map[common.Address]bool{request: true}}
+	return offerMarket{ChainID: 1, Account: common.HexToAddress("0x2000000000000000000000000000000000000002"), Executor: common.HexToAddress("0x3000000000000000000000000000000000000003"), RecipeHash: common.HexToHash("0x04"), Asset: common.HexToAddress("0x5000000000000000000000000000000000000005"), UnderlyingAsset: common.HexToAddress("0x6000000000000000000000000000000000000006"), Budget: big.NewInt(1000000), MinimumYield1e8: big.NewInt(19000), MaxPrincipal: big.NewInt(800001), AvailableCash: big.NewInt(900000), EligibleRequests: map[common.Address]bool{request: true}}
 }
 
-func testAuction(m Market, id float32, request common.Address) threef.AuctionDto {
+func testAuction(m offerMarket, id float32, request common.Address) threef.AuctionDto {
 	amount := "10000000"
 	deposit := threef.AuctionDepositAssetDto{Address: strings.ToLower(m.Asset.Hex())}
 	return threef.AuctionDto{Id: id, RequestId: request.Hex(), Status: "OPEN", AmountRequested: *threef.NewNullableString(&amount), DepositAsset: *threef.NewNullableAuctionDepositAssetDto(&deposit), AdditionalProperties: map[string]any{"exactMaxRate": "2.0"}}
 }
 
-func testOffer(m Market, auctionID float32, status string, amount string) threef.OfferDto {
+func testOffer(m offerMarket, auctionID float32, status string, amount string) threef.OfferDto {
 	return threef.OfferDto{Id: 12, AuctionId: auctionID, Maker: strings.ToLower(m.Account.Hex()), RequestId: common.HexToAddress("0x1000000000000000000000000000000000000001").Hex(), ExecutionMode: "PUSH", Status: status, Amount: amount, ExpectedReturn: "1", FilledAmount: "0", FilledExpectedReturn: "0", PendingAmount: "0", PendingExpectedReturn: "0", Nonce: "10", Expiration: "2000000000"}
 }
 
-func testBot(t *testing.T) (*Bot, *fakeClient, Market) {
+func testBot(t *testing.T) (*offerBot, *fakeClient, offerMarket) {
 	t.Helper()
 	m := testMarket()
 	store, err := state.Open(t.TempDir())
@@ -68,7 +67,7 @@ func testBot(t *testing.T) (*Bot, *fakeClient, Market) {
 		}
 	})
 	client := &fakeClient{auctions: []threef.AuctionDto{testAuction(m, 1, common.HexToAddress("0x1000000000000000000000000000000000000001"))}}
-	return &Bot{Client: client, Store: store, Send: true, Now: func() time.Time { return time.Unix(1900000000, 0) }}, client, m
+	return &offerBot{Client: client, Store: store, Send: true, Now: func() time.Time { return time.Unix(1900000000, 0) }}, client, m
 }
 
 func TestTickSizesExactUnsignedPushAndJournalsBeforePost(t *testing.T) {
@@ -80,7 +79,7 @@ func TestTickSizesExactUnsignedPushAndJournalsBeforePost(t *testing.T) {
 			t.Fatalf("POST without durable exact intent: %v %v", found, err)
 		}
 	}
-	if err := b.Tick(t.Context(), m); err != nil {
+	if err := b.Tick(t.Context(), m, client.auctions); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.created) != 1 {
@@ -104,7 +103,7 @@ func TestTickReservesOtherRequestsAndTargetsBeforeSizing(t *testing.T) {
 			offer := testOffer(m, 2, status, "200000")
 			offer.RequestId = other.Hex()
 			client.offers = []threef.OfferDto{offer}
-			if err := b.Tick(t.Context(), m); err != nil {
+			if err := b.Tick(t.Context(), m, client.auctions); err != nil {
 				t.Fatal(err)
 			}
 			if len(client.created) != 1 || client.created[0].Amount != "700000" {
@@ -124,7 +123,7 @@ func TestTickAmbiguousPostSurvivesRestartAndExpirationWithoutRetry(t *testing.T)
 	t.Cleanup(func() { _ = store.Close() })
 	b.Store = store
 	client.createErr = errors.New("timeout after sending")
-	if err := b.Tick(t.Context(), m); err == nil {
+	if err := b.Tick(t.Context(), m, client.auctions); err == nil {
 		t.Fatal("expected uncertain POST error")
 	}
 	if err := store.Close(); err != nil {
@@ -135,8 +134,8 @@ func TestTickAmbiguousPostSurvivesRestartAndExpirationWithoutRetry(t *testing.T)
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = restored.Close() })
-	b = &Bot{Client: client, Store: restored, Send: true, Now: func() time.Time { return time.Unix(2000000000, 0) }}
-	if err := b.Tick(t.Context(), m); err == nil || !strings.Contains(err.Error(), "unresolved") {
+	b = &offerBot{Client: client, Store: restored, Send: true, Now: func() time.Time { return time.Unix(2000000000, 0) }}
+	if err := b.Tick(t.Context(), m, client.auctions); err == nil || !strings.Contains(err.Error(), "unresolved") {
 		t.Fatalf("uncertain intent not retained: %v", err)
 	}
 	if len(client.created) != 1 {
@@ -146,7 +145,7 @@ func TestTickAmbiguousPostSurvivesRestartAndExpirationWithoutRetry(t *testing.T)
 	offer := testOffer(m, 1, "AWAITING_MINT", created.Amount)
 	offer.Nonce, offer.ExpectedReturn, offer.Expiration = created.Nonce, created.ExpectedReturn, created.Expiration
 	client.offers = []threef.OfferDto{offer}
-	if err := b.Tick(t.Context(), m); err != nil {
+	if err := b.Tick(t.Context(), m, client.auctions); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.created) != 1 || len(client.cancelled) != 0 {
@@ -158,7 +157,7 @@ func TestTickSimulationAndWrongMakerCannotMutate(t *testing.T) {
 	b, client, m := testBot(t)
 	b.Send, b.Store = false, nil
 	client.offers = []threef.OfferDto{testOffer(m, 1, "SUBMITTED", "10000000")}
-	if err := b.Tick(t.Context(), m); err != nil {
+	if err := b.Tick(t.Context(), m, client.auctions); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.created)+len(client.cancelled) != 0 {
@@ -168,14 +167,14 @@ func TestTickSimulationAndWrongMakerCannotMutate(t *testing.T) {
 	foreign := testOffer(m, 1, "SUBMITTED", "10000000")
 	foreign.Maker = m.Executor.Hex()
 	client.offers = []threef.OfferDto{foreign}
-	if err := b.Tick(t.Context(), m); err != nil {
+	if err := b.Tick(t.Context(), m, client.auctions); err != nil {
 		t.Fatal(err)
 	}
 	if len(client.created) != 1 || len(client.cancelled) != 0 {
 		t.Fatal("foreign maker affected default maker")
 	}
 	client.identityErr = errors.New("default maker mismatch")
-	if err := b.Tick(t.Context(), m); err == nil {
+	if err := b.Tick(t.Context(), m, client.auctions); err == nil {
 		t.Fatal("identity failure ignored")
 	}
 }
@@ -183,19 +182,21 @@ func TestTickSimulationAndWrongMakerCannotMutate(t *testing.T) {
 func TestTickExactYieldBoundsAndMissingBinding(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
-		change    func(*fakeClient, *Market)
+		change    func(*fakeClient, *offerMarket)
 		wantError bool
 	}{
-		{"below rounded ceil", func(c *fakeClient, m *Market) { c.auctions[0].AdditionalProperties["exactMaxRate"] = "1.9" }, false},
-		{"bad decimal", func(c *fakeClient, m *Market) { c.auctions[0].AdditionalProperties["exactMaxRate"] = "NaN" }, true},
-		{"unattested request", func(c *fakeClient, m *Market) { m.EligibleRequests = nil }, false},
-		{"unknown reservation asset", func(c *fakeClient, m *Market) { c.offers = []threef.OfferDto{testOffer(*m, 2, "SUBMITTED", "200000")} }, true},
-		{"bad amount", func(c *fakeClient, m *Market) { c.offers = []threef.OfferDto{testOffer(*m, 1, "ACCEPTED", "1e6")} }, true},
+		{"below rounded ceil", func(c *fakeClient, m *offerMarket) { c.auctions[0].AdditionalProperties["exactMaxRate"] = "1.9" }, false},
+		{"bad decimal", func(c *fakeClient, m *offerMarket) { c.auctions[0].AdditionalProperties["exactMaxRate"] = "NaN" }, true},
+		{"unattested request", func(c *fakeClient, m *offerMarket) { m.EligibleRequests = nil }, false},
+		{"unknown reservation asset", func(c *fakeClient, m *offerMarket) {
+			c.offers = []threef.OfferDto{testOffer(*m, 2, "SUBMITTED", "200000")}
+		}, true},
+		{"bad amount", func(c *fakeClient, m *offerMarket) { c.offers = []threef.OfferDto{testOffer(*m, 1, "ACCEPTED", "1e6")} }, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, c, m := testBot(t)
 			tc.change(c, &m)
-			err := b.Tick(t.Context(), m)
+			err := b.Tick(t.Context(), m, c.auctions)
 			if (err != nil) != tc.wantError {
 				t.Fatalf("error = %v", err)
 			}
@@ -211,7 +212,7 @@ func TestTickCancelsSubmittedOvercommitButNeverAcceptedOrUIReplacement(t *testin
 		t.Run(status, func(t *testing.T) {
 			b, c, m := testBot(t)
 			c.offers = []threef.OfferDto{testOffer(m, 1, status, "950000")}
-			if err := b.Tick(t.Context(), m); err != nil {
+			if err := b.Tick(t.Context(), m, c.auctions); err != nil {
 				t.Fatal(err)
 			}
 			want := 0
@@ -236,7 +237,7 @@ func TestTickReservesMultiplePendingFillsWithoutHistoricalDoubleCount(t *testing
 			second := first
 			second.Id, second.PendingAmount, second.FilledAmount = 13, "200000", "300000"
 			c.offers = []threef.OfferDto{first, second}
-			if err := b.Tick(t.Context(), m); err != nil {
+			if err := b.Tick(t.Context(), m, c.auctions); err != nil {
 				t.Fatal(err)
 			}
 			if len(c.created) != 1 || c.created[0].Amount != "600000" {
@@ -259,7 +260,7 @@ func TestTickRejectsUnexecutableNativeQuantities(t *testing.T) {
 				m.MinimumYield1e8 = new(big.Int).Lsh(big.NewInt(1), 255)
 			}
 			c.auctions[0].AdditionalProperties = nil
-			if err := b.Tick(t.Context(), m); err != nil {
+			if err := b.Tick(t.Context(), m, c.auctions); err != nil {
 				t.Fatal(err)
 			}
 			if len(c.created) != 0 {
@@ -290,7 +291,7 @@ func TestFitsTermsNativeAuthorizationBounds(t *testing.T) {
 
 func TestTickCancelsJournaledSubmittedOfferAfterPolicyAssetChanges(t *testing.T) {
 	b, c, m := testBot(t)
-	if err := b.Tick(t.Context(), m); err != nil {
+	if err := b.Tick(t.Context(), m, c.auctions); err != nil {
 		t.Fatal(err)
 	}
 	created := c.created[0]
@@ -298,7 +299,7 @@ func TestTickCancelsJournaledSubmittedOfferAfterPolicyAssetChanges(t *testing.T)
 	row.Id, row.Nonce, row.ExpectedReturn, row.Expiration = 15, created.Nonce, created.ExpectedReturn, created.Expiration
 	c.offers = []threef.OfferDto{row}
 	m.Asset = common.HexToAddress("0x9000000000000000000000000000000000000009")
-	if err := b.Tick(t.Context(), m); err != nil {
+	if err := b.Tick(t.Context(), m, c.auctions); err != nil {
 		t.Fatal(err)
 	}
 	if len(c.cancelled) != 1 || len(c.created) != 1 {
@@ -315,7 +316,7 @@ func TestTickIgnoresKnownDifferentFundingAsset(t *testing.T) {
 	offer := testOffer(m, 2, "ACCEPTED", "999999999")
 	offer.RequestId = other.Hex()
 	c.offers = []threef.OfferDto{offer}
-	if err := b.Tick(t.Context(), m); err != nil {
+	if err := b.Tick(t.Context(), m, c.auctions); err != nil {
 		t.Fatal(err)
 	}
 	if len(c.created) != 1 || c.created[0].Amount != "800001" {
@@ -330,21 +331,21 @@ func TestTickRetainsOneLiveBotOriginIntentAcrossAuctions(t *testing.T) {
 			other := common.HexToAddress("0x7000000000000000000000000000000000000007")
 			m.EligibleRequests[other] = true
 			c.auctions = append(c.auctions, testAuction(m, 2, other))
-			if err := b.Tick(t.Context(), m); err != nil {
+			if err := b.Tick(t.Context(), m, c.auctions); err != nil {
 				t.Fatal(err)
 			}
 			created := c.created[0]
 			row := testOffer(m, 1, status, created.Amount)
 			row.Id, row.Nonce, row.ExpectedReturn, row.Expiration = 15, created.Nonce, created.ExpectedReturn, created.Expiration
 			c.offers = []threef.OfferDto{row}
-			if err := b.Tick(t.Context(), m); err != nil {
+			if err := b.Tick(t.Context(), m, c.auctions); err != nil {
 				t.Fatal(err)
 			}
 			if len(c.created) != 1 || len(c.cancelled) != 0 {
 				t.Fatal("live bot intent was replaced or cancelled")
 			}
 			c.offers[0].Status, c.auctions[0].Status = "SUCCEEDED", "SOLVED"
-			if err := b.Tick(t.Context(), m); err != nil {
+			if err := b.Tick(t.Context(), m, c.auctions); err != nil {
 				t.Fatal(err)
 			}
 			if len(c.created) != 2 || c.created[1].AuctionId != 2 {

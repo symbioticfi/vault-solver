@@ -1,4 +1,4 @@
-package threefbot
+package threefmerkle
 
 import (
 	"math/big"
@@ -7,7 +7,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/vault-solver/api/threef"
-	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/threefapi"
 )
 
 var uintPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
@@ -25,9 +24,8 @@ func uintAmount(text string) (*big.Int, error) {
 }
 
 func dtoID(value float32) (uint64, error) {
-	// Generated API identifiers use float32; exclude its ambiguous integer range.
-	if value <= 0 || value >= 1<<24 || float32(uint64(value)) != value {
-		return 0, errors.New("3F identifier is not an exact positive integer below 2^24")
+	if err := validateID(value); err != nil {
+		return 0, err
 	}
 	return uint64(value), nil
 }
@@ -67,13 +65,13 @@ func minimumReturn(principal, rate *big.Int) *big.Int {
 	return quotient
 }
 
-func fitsTerms(m Market, principal, yield *big.Int, auction threef.AuctionDto) (bool, error) {
+func fitsTerms(m offerMarket, principal, yield *big.Int, auction threef.AuctionDto) (bool, error) {
 	if principal.BitLen() > 128 || yield.BitLen() > 128 || principal.Cmp(m.MaxPrincipal) > 0 || yield.Cmp(minimumReturn(principal, m.MinimumYield1e8)) < 0 {
 		return false, nil
 	}
 	// The HTTP boundary preserves the original JSON number before DTO float decoding.
 	// Never reconstruct an economic limit from the generated float32 value.
-	exact, present := auction.AdditionalProperties[threefapi.ExactMaxRateKey]
+	exact, present := auction.AdditionalProperties[exactMaxRateKey]
 	if !present {
 		if value, _ := auction.GetMaxRateOk(); value != nil {
 			return false, errors.New("3F auction maxRate lacks exact decimal source")

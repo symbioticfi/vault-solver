@@ -1,4 +1,4 @@
-package threef
+package threefmerkle
 
 import (
 	"bytes"
@@ -49,7 +49,7 @@ func fixture(t *testing.T) (provider.Snapshot, recipes.Recipe, *recipes.Tree) {
 
 func TestCanonicalGuardAndEverySecurityBoundary(t *testing.T) {
 	snapshot, recipe, tree := fixture(t)
-	market, err := Inspect(snapshot, recipe, tree)
+	market, err := inspect(snapshot, recipe, tree)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,13 +70,13 @@ func TestCanonicalGuardAndEverySecurityBoundary(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s, r, tr := fixture(t)
 			mutate(&s, &r, tr)
-			if _, err := Inspect(s, r, tr); err == nil {
+			if _, err := inspect(s, r, tr); err == nil {
 				t.Fatal("unsafe program accepted")
 			}
 		})
 	}
 	// Context substitution changes only the account, funding pair and policy pins.
-	other := Market{Asset: common.HexToAddress("0x1234"), UnderlyingAsset: common.HexToAddress("0x5678"), Policy: common.HexToAddress("0x9abc")}
+	other := mintMarket{Asset: common.HexToAddress("0x1234"), UnderlyingAsset: common.HexToAddress("0x5678"), Policy: common.HexToAddress("0x9abc")}
 	data, mask, err := referenceGuard(common.HexToAddress("0xcccc"), other)
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +114,7 @@ func (f readFunc) CallContract(ctx context.Context, msg ethereum.CallMsg, block 
 
 func marketReads(t *testing.T, snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree, next readFunc) readFunc {
 	t.Helper()
-	market, err := Inspect(snapshot, recipe, tree)
+	market, err := inspect(snapshot, recipe, tree)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestAggregateAuthorizationLeaseAndPreparationAreReadOnly(t *testing.T) {
 		}
 		return requestABI.GetABI().Methods["mintAuthorization"].Outputs.Pack(big.NewInt(12), big.NewInt(5))
 	})
-	runtime := &Provider{API: api, Chain: chain, Now: func() time.Time { return now }}
+	runtime := &mintProvider{API: api, Chain: chain, Now: func() time.Time { return now }}
 	out, err := runtime.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -220,7 +220,7 @@ func TestMintRejectsMalformedLeaseAndAuthorization(t *testing.T) {
 				}
 				return requestABI.GetABI().Methods["mintAuthorization"].Outputs.Pack(tc.principal, tc.yield)
 			})
-			p := Provider{API: api, Chain: chain, Now: func() time.Time { return time.Unix(1000, 0) }}
+			p := mintProvider{API: api, Chain: chain, Now: func() time.Time { return time.Unix(1000, 0) }}
 			if _, err := p.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil); err == nil {
 				t.Fatal("invalid mint became executable")
 			}
@@ -267,7 +267,7 @@ func TestMintSkipsIneligibleEarlierRequests(t *testing.T) {
 				}
 				return chain(ctx, msg, block)
 			})
-			p := Provider{API: api, Chain: withPolicy, Now: func() time.Time { return now }}
+			p := mintProvider{API: api, Chain: withPolicy, Now: func() time.Time { return now }}
 			out, err := p.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil)
 			if err != nil {
 				t.Fatal(err)
@@ -281,17 +281,17 @@ func TestMintSkipsIneligibleEarlierRequests(t *testing.T) {
 
 func TestConfirmedMintRequiresCanonicalReceiptAndPolicyDebit(t *testing.T) {
 	snapshot, recipe, tree := fixture(t)
-	market, err := Inspect(snapshot, recipe, tree)
+	market, err := inspect(snapshot, recipe, tree)
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := mint{Request: common.HexToAddress("0x123"), Policy: market.Policy, Asset: market.Asset, UnderlyingAsset: market.UnderlyingAsset, Principal: "12", Yield: "5", Deadline: time.Unix(2000, 0)}
+	record := mint{Request: common.HexToAddress("0x123"), Policy: market.Policy, Asset: market.Asset, UnderlyingAsset: market.UnderlyingAsset, Principal: "12", Deadline: time.Unix(2000, 0)}
 	data, err := json.Marshal(record)
 	if err != nil {
 		t.Fatal(err)
 	}
 	out := provider.Output{Data: data}
-	p := Provider{}
+	p := mintProvider{}
 	if _, err := p.Advance(t.Context(), snapshot, out, nil); err == nil {
 		t.Fatal("unconfirmed mint accepted")
 	}
@@ -318,7 +318,7 @@ func TestConfirmedMintRequiresCanonicalReceiptAndPolicyDebit(t *testing.T) {
 
 func TestEligibilityUsesNativePolicyAndExactBudgetDelta(t *testing.T) {
 	snapshot, recipe, tree := fixture(t)
-	market, err := Inspect(snapshot, recipe, tree)
+	market, err := inspect(snapshot, recipe, tree)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func TestEligibilityUsesNativePolicyAndExactBudgetDelta(t *testing.T) {
 				}
 				return capabilitySchema.Methods["execute"].Outputs.Pack([]*big.Int{big.NewInt(10), new(big.Int), big.NewInt(9), big.NewInt(tc.value), new(big.Int)})
 			})
-			err := Eligible(t.Context(), chain, snapshot, market, common.HexToAddress("0x777"), big.NewInt(2_000_000))
+			err := eligible(t.Context(), chain, snapshot, market, common.HexToAddress("0x777"), big.NewInt(2_000_000))
 			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
 				t.Fatalf("unexpected eligibility: %v", err)
 			}
@@ -350,7 +350,7 @@ func TestEligibilityUsesNativePolicyAndExactBudgetDelta(t *testing.T) {
 
 func TestObserveDerivesLiveCashBudgetAndCommittedCap(t *testing.T) {
 	snapshot, recipe, tree := fixture(t)
-	market, err := Inspect(snapshot, recipe, tree)
+	market, err := inspect(snapshot, recipe, tree)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,15 +381,15 @@ func TestObserveDerivesLiveCashBudgetAndCommittedCap(t *testing.T) {
 			return nil, nil
 		}
 	})
-	observation, err := Observe(t.Context(), chain, snapshot, recipe, tree)
+	observed, err := observe(t.Context(), chain, snapshot, recipe, tree)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if observation.AvailableCash.Int64() != 123 || observation.Budget.Int64() != 45 || observation.MinimumYield.Int64() != 2_000_000 || observation.MaxPrincipal.Int64() != 100_000_000 {
-		t.Fatalf("wrong cash/budget/ratio/cap: %+v", observation)
+	if observed.AvailableCash.Int64() != 123 || observed.Budget.Int64() != 45 || observed.MinimumYield.Int64() != 2_000_000 || observed.MaxPrincipal.Int64() != 100_000_000 {
+		t.Fatalf("wrong cash/budget/ratio/cap: %+v", observed)
 	}
 	malformed = true
-	if _, err := Observe(t.Context(), chain, snapshot, recipe, tree); err == nil {
+	if _, err := observe(t.Context(), chain, snapshot, recipe, tree); err == nil {
 		t.Fatal("malformed required getter accepted")
 	}
 }

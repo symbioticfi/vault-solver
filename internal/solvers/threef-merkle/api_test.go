@@ -1,4 +1,4 @@
-package threefapi
+package threefmerkle
 
 import (
 	"context"
@@ -19,12 +19,12 @@ var (
 	testAccount = common.HexToAddress("0x2222222222222222222222222222222222222222")
 )
 
-func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
+func newTestClient(t *testing.T, handler http.HandlerFunc) *apiClient {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
 	t.Setenv("TEST_3F_KEY", "secret-one")
-	c, err := New(Config{URL: server.URL, APIKeyEnv: "TEST_3F_KEY", Broker: testBroker}) //nolint:gosec // APIKeyEnv names an environment variable, never a credential.
+	c, err := newClient(apiConfig{URL: server.URL, APIKeyEnv: "TEST_3F_KEY", Broker: testBroker}) //nolint:gosec // APIKeyEnv names an environment variable, never a credential.
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,23 +187,23 @@ func TestTransportBoundsAndRedaction(t *testing.T) {
 
 func TestExactIDValidation(t *testing.T) {
 	for _, id := range []float32{0, -1, 1.5, 1 << 24, float32(math.Inf(1)), float32(math.NaN())} {
-		if err := ValidateID(id); err == nil {
+		if err := validateID(id); err == nil {
 			t.Errorf("invalid ID %v accepted", id)
 		}
 	}
-	if err := ValidateID((1 << 24) - 1); err != nil {
+	if err := validateID((1 << 24) - 1); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestConfigAndMissingSecret(t *testing.T) {
-	for _, tc := range []Config{
+	for _, tc := range []apiConfig{
 		{URL: "https://user:secret@example.org", APIKeyEnv: "KEY", Broker: testBroker}, //nolint:gosec // Rejected fixture credentials test URL validation; no real credential.
 		{URL: "https://example.org?secret=value", APIKeyEnv: "KEY", Broker: testBroker},
 		{URL: "https://example.org", APIKeyEnv: "", Broker: testBroker},
 		{URL: "https://example.org", APIKeyEnv: "KEY"},
 	} {
-		if err := Validate(tc); err == nil {
+		if err := validateAPIConfig(tc); err == nil {
 			t.Error("invalid config accepted")
 		}
 	}
@@ -228,7 +228,7 @@ func TestAuctionsExactRate(t *testing.T) {
 			if err != nil || len(rows) != 1 {
 				t.Fatalf("auctions: %+v %v", rows, err)
 			}
-			exact, exists := rows[0].AdditionalProperties[ExactMaxRateKey]
+			exact, exists := rows[0].AdditionalProperties[exactMaxRateKey]
 			if (rate == "null" && exists) || (rate != "null" && exact != rate) {
 				t.Fatalf("incorrect exact rate: %v", exact)
 			}
@@ -249,6 +249,7 @@ func TestRejectAmbiguousOrIncompleteJSON(t *testing.T) {
 		"[" + strings.Replace(offerJSON("SUBMITTED"), `"pendingAmount":"0",`, "", 1) + "]",
 		"[" + strings.Replace(offerJSON("SUBMITTED"), `"mintDeadline":null,`, "", 1) + "]",
 		"[" + offerJSON("NEW_STATUS") + "]",
+		"[" + strings.Replace(offerJSON("SUBMITTED"), `"amount":"100"`, `"amount":"0100"`, 1) + "]",
 	} {
 		t.Run(body, func(t *testing.T) {
 			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -292,5 +293,32 @@ func TestEmptyListsAndCancelledContext(t *testing.T) {
 	cancel()
 	if _, err := c.Offers(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled request: %v", err)
+	}
+}
+
+func TestAPIRejectsOversizedInventory(t *testing.T) {
+	for _, route := range []string{"/v1/offer", "/v1/auction"} {
+		t.Run(route, func(t *testing.T) {
+			row := offerJSON("SUBMITTED")
+			if route == "/v1/auction" {
+				row = `{"id":34,"requestId":"` + testAccount.Hex() + `","amountRequested":"1","status":"OPEN","maxRate":null}`
+			}
+			c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != route {
+					t.Error("unexpected inventory route", r.URL.Path)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte("[" + strings.Repeat(row+",", 4096) + row + "]"))
+			})
+			var err error
+			if route == "/v1/offer" {
+				_, err = c.Offers(t.Context())
+			} else {
+				_, err = c.Auctions(t.Context())
+			}
+			if err == nil {
+				t.Fatal("oversized inventory accepted")
+			}
+		})
 	}
 }

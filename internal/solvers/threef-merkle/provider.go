@@ -1,4 +1,4 @@
-package threef
+package threefmerkle
 
 import (
 	"context"
@@ -20,14 +20,14 @@ import (
 
 var requestABI = request.NewIRequest()
 
-// API is read-only during preparation. Offer mutations belong to the host loop.
-type API interface {
+// mintAPI is read-only during preparation. Offer mutations belong to the host loop.
+type mintAPI interface {
 	Identity(ctx context.Context, account common.Address) error
 	Offers(context.Context) ([]threef.OfferDto, error)
 }
 
-type Provider struct {
-	API   API
+type mintProvider struct {
+	API   mintAPI
 	Chain provider.Reader
 	Now   func() time.Time
 }
@@ -38,23 +38,22 @@ type mint struct {
 	Asset           common.Address `json:"asset"`
 	UnderlyingAsset common.Address `json:"underlyingAsset"`
 	Principal       string         `json:"principal"`
-	Yield           string         `json:"yield"`
 	Deadline        time.Time      `json:"deadline"`
 }
 
-func (p *Provider) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
+func (p *mintProvider) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
 	return provider.Output{}, errors.New("3f requires authenticated recipe preparation")
 }
-func (p *Provider) RecipeRequirements(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) (keeper.RecipeRequirements, error) {
-	market, err := Inspect(snapshot, recipe, tree)
+func (p *mintProvider) RecipeRequirements(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) (keeper.RecipeRequirements, error) {
+	market, err := inspect(snapshot, recipe, tree)
 	if err != nil {
 		return keeper.RecipeRequirements{}, err
 	}
 	return keeper.RecipeRequirements{Inputs: []uint{market.RequestInput, market.PrincipalInput, market.YieldInput}}, nil
 }
 
-func (p *Provider) PrepareRecipe(ctx context.Context, snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree, _ map[uint]*big.Int) (provider.Output, error) {
-	market, err := Inspect(snapshot, recipe, tree)
+func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree, _ map[uint]*big.Int) (provider.Output, error) {
+	market, err := inspect(snapshot, recipe, tree)
 	if err != nil {
 		return provider.Output{}, err
 	}
@@ -99,7 +98,7 @@ func (p *Provider) PrepareRecipe(ctx context.Context, snapshot provider.Snapshot
 	if len(addresses) == 0 {
 		return provider.Output{}, provider.ErrNotReady
 	}
-	observed, err := Observe(ctx, p.Chain, snapshot, recipe, tree)
+	observed, err := observe(ctx, p.Chain, snapshot, recipe, tree)
 	if err != nil {
 		return provider.Output{}, err
 	}
@@ -119,16 +118,16 @@ func (p *Provider) PrepareRecipe(ctx context.Context, snapshot provider.Snapshot
 		if auth.PtAmount.Sign() == 0 {
 			continue
 		}
-		if auth.PtAmount.Cmp(observed.Budget) > 0 || auth.PtAmount.Cmp(observed.MaxPrincipal) > 0 || new(big.Int).Mul(auth.YtAmount, big.NewInt(100_000_000)).Cmp(new(big.Int).Mul(auth.PtAmount, observed.MinimumYield)) < 0 {
+		if auth.PtAmount.Cmp(observed.Budget) > 0 || auth.PtAmount.Cmp(observed.MaxPrincipal) > 0 || auth.YtAmount.Cmp(minimumReturn(auth.PtAmount, observed.MinimumYield)) < 0 {
 			continue
 		}
-		if e = Eligible(ctx, p.Chain, snapshot, market, address, observed.MinimumYield); e != nil {
-			if errors.Is(e, ErrIneligible) {
+		if e = eligible(ctx, p.Chain, snapshot, market, address, observed.MinimumYield); e != nil {
+			if errors.Is(e, errIneligible) {
 				continue
 			}
 			return provider.Output{}, e
 		}
-		record := mint{Request: address, Policy: market.Policy, Asset: market.Asset, UnderlyingAsset: market.UnderlyingAsset, Principal: auth.PtAmount.String(), Yield: auth.YtAmount.String(), Deadline: deadline}
+		record := mint{Request: address, Policy: market.Policy, Asset: market.Asset, UnderlyingAsset: market.UnderlyingAsset, Principal: auth.PtAmount.String(), Deadline: deadline}
 		data, e := json.Marshal(record)
 		if e != nil {
 			return provider.Output{}, e
@@ -140,7 +139,7 @@ func (p *Provider) PrepareRecipe(ctx context.Context, snapshot provider.Snapshot
 
 // ValidateLease runs again immediately before unsigned admission. Signed recovery
 // retains ownership and never rebuilds or resubmits an external offer.
-func (p *Provider) ValidateLease(ctx context.Context, snapshot provider.Snapshot, output provider.Output) error {
+func (p *mintProvider) ValidateLease(ctx context.Context, snapshot provider.Snapshot, output provider.Output) error {
 	record, err := decodeMint(output)
 	if err != nil {
 		return err
@@ -179,7 +178,7 @@ func (p *Provider) ValidateLease(ctx context.Context, snapshot provider.Snapshot
 	return nil
 }
 
-func (p *Provider) Advance(_ context.Context, snapshot provider.Snapshot, output provider.Output, _ json.RawMessage) (provider.Progress, error) {
+func (p *mintProvider) Advance(_ context.Context, snapshot provider.Snapshot, output provider.Output, _ json.RawMessage) (provider.Progress, error) {
 	record, err := decodeMint(output)
 	if err != nil {
 		return provider.Progress{}, err
@@ -221,7 +220,7 @@ func decodeMint(output provider.Output) (mint, error) {
 	}
 	return record, nil
 }
-func (p *Provider) time() time.Time {
+func (p *mintProvider) time() time.Time {
 	if p.Now != nil {
 		return p.Now()
 	}

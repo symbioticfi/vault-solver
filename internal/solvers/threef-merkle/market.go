@@ -1,4 +1,4 @@
-package threef
+package threefmerkle
 
 import (
 	"bytes"
@@ -13,16 +13,16 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
-// Observation contains quantities read at the recipe's canonical block.
-type Observation struct {
-	Market                                            Market
+// observation contains quantities read at the recipe's canonical block.
+type observation struct {
+	Market                                            mintMarket
 	Budget, MinimumYield, AvailableCash, MaxPrincipal *big.Int
 }
 
-func Observe(ctx context.Context, chain provider.Reader, snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) (Observation, error) {
-	market, err := Inspect(snapshot, recipe, tree)
+func observe(ctx context.Context, chain provider.Reader, snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) (observation, error) {
+	market, err := inspect(snapshot, recipe, tree)
 	if err != nil {
-		return Observation{}, err
+		return observation{}, err
 	}
 	call := func(to common.Address, data []byte) ([]byte, error) {
 		raw, err := chain.CallContract(ctx, ethereum.CallMsg{To: &to, Data: data}, snapshot.BlockNumber)
@@ -36,35 +36,35 @@ func Observe(ctx context.Context, chain provider.Reader, snapshot provider.Snaps
 	}
 	raw, err := call(market.Policy, policyABI.PackAccount())
 	if err != nil {
-		return Observation{}, errors.New("3f policy account read failed")
+		return observation{}, errors.New("3f policy account read failed")
 	}
 	owner, err := policyABI.UnpackAccount(raw)
 	if err != nil || !bytes.Equal(raw[:12], make([]byte, 12)) || owner != snapshot.Account {
-		return Observation{}, errors.New("3f policy belongs to another account")
+		return observation{}, errors.New("3f policy belongs to another account")
 	}
 	raw, err = call(market.Policy, policyABI.PackRemainingAssets(market.Asset, market.UnderlyingAsset))
 	if err != nil {
-		return Observation{}, errors.New("3f policy budget read failed")
+		return observation{}, errors.New("3f policy budget read failed")
 	}
 	budget, err := policyABI.UnpackRemainingAssets(raw)
 	if err != nil {
-		return Observation{}, err
+		return observation{}, err
 	}
 	raw, err = call(market.Policy, policyABI.PackMinYieldPerRequest(market.UnderlyingAsset))
 	if err != nil {
-		return Observation{}, errors.New("3f minimum yield read failed")
+		return observation{}, errors.New("3f minimum yield read failed")
 	}
 	minimum, err := policyABI.UnpackMinYieldPerRequest(raw)
 	if err != nil {
-		return Observation{}, err
+		return observation{}, err
 	}
 	raw, err = call(market.Asset, tokenABI.PackBalanceOf(snapshot.Account))
 	if err != nil {
-		return Observation{}, errors.New("3f funding balance read failed")
+		return observation{}, errors.New("3f funding balance read failed")
 	}
 	cash, err := tokenABI.UnpackBalanceOf(raw)
 	if err != nil {
-		return Observation{}, err
+		return observation{}, err
 	}
 	ceiling := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1))
 	// Bounds constrain offer capacity; the accepted authorization still selects mint amounts.
@@ -77,15 +77,15 @@ func Observe(ctx context.Context, chain provider.Reader, snapshot provider.Snaps
 			ceiling = value
 		}
 	}
-	return Observation{Market: market, Budget: budget, MinimumYield: minimum, AvailableCash: cash, MaxPrincipal: ceiling}, nil
+	return observation{Market: market, Budget: budget, MinimumYield: minimum, AvailableCash: cash, MaxPrincipal: ceiling}, nil
 }
 
-var ErrIneligible = errors.New("3f request is not eligible for the pinned funding pair")
+var errIneligible = errors.New("3f request is not eligible for the pinned funding pair")
 
-// Eligible performs a read-only policy charge and verifies the exact pinned pair's
+// eligible performs a read-only policy charge and verifies the exact pinned pair's
 // budget delta. The policy resolves factory membership, Facility binding and
 // collateral underlying itself. No simulated authorization or balance is invented.
-func Eligible(ctx context.Context, chain provider.Reader, snapshot provider.Snapshot, market Market, request common.Address, minimum *big.Int) error {
+func eligible(ctx context.Context, chain provider.Reader, snapshot provider.Snapshot, market mintMarket, request common.Address, minimum *big.Int) error {
 	principal := big.NewInt(1)
 	yield := new(big.Int).Quo(new(big.Int).Add(minimum, big.NewInt(99_999_999)), big.NewInt(100_000_000))
 	query, err := queryArgs.Pack(market.Policy, policyABI.PackRemainingAssets(market.Asset, market.UnderlyingAsset), []*big.Int{}, new(big.Int))
@@ -106,7 +106,7 @@ func Eligible(ctx context.Context, chain provider.Reader, snapshot provider.Snap
 	if err != nil {
 		var reverted rpc.DataError
 		if errors.As(err, &reverted) && reverted.ErrorData() != nil {
-			return ErrIneligible
+			return errIneligible
 		}
 		return errors.New("3f eligibility read failed")
 	}

@@ -1,4 +1,4 @@
-package threefbot
+package threefmerkle
 
 import (
 	"strconv"
@@ -18,35 +18,31 @@ type intent struct {
 	RecipeHash      common.Hash           `json:"recipeHash"`
 	Asset           common.Address        `json:"asset"`
 	UnderlyingAsset common.Address        `json:"underlyingAsset"`
-	Budget          string                `json:"budget"`
-	MinimumYield1e8 string                `json:"minimumYield1e8"`
-	MaxPrincipal    string                `json:"maxPrincipal"`
-	AvailableCash   string                `json:"availableCash"`
 	Request         common.Address        `json:"request"`
 	Offer           threef.CreateOfferDto `json:"offer"`
 	OfferID         uint64                `json:"offerId"`
 }
 
-func journalKey(m Market) string {
+func journalKey(m offerMarket) string {
 	return "merkle.threef.offer-intent.v1:" + strconv.FormatUint(m.ChainID, 10) + ":" + strings.ToLower(m.Account.Hex())
 }
 
-func newIntent(m Market, request common.Address, offer threef.CreateOfferDto) *intent {
-	return &intent{Version: 1, ChainID: m.ChainID, Account: m.Account, Broker: common.HexToAddress(offer.Maker), Executor: m.Executor, RecipeHash: m.RecipeHash, Asset: m.Asset, UnderlyingAsset: m.UnderlyingAsset, Budget: m.Budget.String(), MinimumYield1e8: m.MinimumYield1e8.String(), MaxPrincipal: m.MaxPrincipal.String(), AvailableCash: m.AvailableCash.String(), Request: request, Offer: offer}
+func newIntent(m offerMarket, request common.Address, offer threef.CreateOfferDto) *intent {
+	return &intent{Version: 1, ChainID: m.ChainID, Account: m.Account, Broker: common.HexToAddress(offer.Maker), Executor: m.Executor, RecipeHash: m.RecipeHash, Asset: m.Asset, UnderlyingAsset: m.UnderlyingAsset, Request: request, Offer: offer}
 }
 
-func (i *intent) matchesMarket(m Market) bool {
+func (i *intent) matchesMarket(m offerMarket) bool {
 	return i.Executor == m.Executor && i.RecipeHash == m.RecipeHash && i.Asset == m.Asset && i.UnderlyingAsset == m.UnderlyingAsset
 }
 
-func (i *intent) validate(m Market, broker common.Address) error {
+func (i *intent) validate(m offerMarket, broker common.Address) error {
 	if i.Version != 1 || i.ChainID != m.ChainID || i.Account != m.Account || i.Broker == (common.Address{}) || i.Broker != broker || i.Executor == (common.Address{}) || i.RecipeHash == (common.Hash{}) || i.Asset == (common.Address{}) || i.UnderlyingAsset == (common.Address{}) || i.Request == (common.Address{}) || i.Offer.Maker != strings.ToLower(i.Broker.Hex()) || i.Offer.ExecutionMode != nil || i.Offer.UseCallback || i.Offer.Signature != nil || i.Offer.PushAuthorizationSignature != nil || i.Offer.ChainId != nil || i.Offer.AuthorizationDeadline != nil || len(i.Offer.AdditionalProperties) > 0 {
 		return errors.New("3F offer journal identity is invalid")
 	}
 	if _, err := dtoID(i.Offer.AuctionId); err != nil {
 		return err
 	}
-	for _, value := range []string{i.Budget, i.MinimumYield1e8, i.MaxPrincipal, i.AvailableCash, i.Offer.Amount, i.Offer.ExpectedReturn, i.Offer.Nonce, i.Offer.Expiration} {
+	for _, value := range []string{i.Offer.Amount, i.Offer.ExpectedReturn, i.Offer.Nonce, i.Offer.Expiration} {
 		if _, err := uintAmount(value); err != nil {
 			return errors.Errorf("invalid 3F offer journal: %w", err)
 		}
@@ -54,7 +50,7 @@ func (i *intent) validate(m Market, broker common.Address) error {
 	return nil
 }
 
-func (b *Bot) reconcileIntent(m Market, offers []threef.OfferDto) (*intent, error) {
+func (b *offerBot) reconcileIntent(m offerMarket, offers []threef.OfferDto) (*intent, error) {
 	var previous intent
 	found, err := b.Store.Load(journalKey(m), &previous)
 	if err != nil {

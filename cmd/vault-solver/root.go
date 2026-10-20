@@ -11,6 +11,7 @@ import (
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq-merkle"
+	_ "github.com/symbioticfi/vault-solver/internal/solvers/threef-merkle"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx"
 )
 

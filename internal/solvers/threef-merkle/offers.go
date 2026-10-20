@@ -1,5 +1,4 @@
-// Package threefbot submits unsigned API-key PUSH offers for a pinned policy market.
-package threefbot
+package threefmerkle
 
 import (
 	"context"
@@ -7,7 +6,6 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -17,20 +15,16 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
-var tracer = observability.NewTracer("github.com/symbioticfi/vault-solver/internal/solvers/merkle/threefbot", "merkle")
-
-type Client interface {
+type offerClient interface {
+	mintAPI
 	Broker() common.Address
-	Identity(ctx context.Context, account common.Address) error
-	Auctions(ctx context.Context) ([]threef.AuctionDto, error)
-	Offers(ctx context.Context) ([]threef.OfferDto, error)
 	Create(ctx context.Context, offer threef.CreateOfferDto) (*threef.CreateOfferResponseDto, error)
 	Cancel(ctx context.Context, id uint64) (*threef.CancelOfferResponseDto, error)
 }
 
-// Market contains authenticated policy terms and cash at one closed canonical block.
+// offerMarket contains authenticated policy terms and cash at one closed canonical block.
 // EligibleRequests comes from native policy/underlying attestation, never API metadata alone.
-type Market struct {
+type offerMarket struct {
 	ChainID                                              uint64
 	Account, Executor, Asset, UnderlyingAsset            common.Address
 	RecipeHash                                           common.Hash
@@ -38,14 +32,13 @@ type Market struct {
 	EligibleRequests                                     map[common.Address]bool
 }
 
-// Bot serializes ticks; the SDK store must have exclusive process ownership.
+// offerBot is owned by the single solver Run goroutine and its exclusive SDK store.
 // It never signs or sends a transaction. Send=false performs no journal or API writes.
-type Bot struct {
-	Client Client
+type offerBot struct {
+	Client offerClient
 	Store  *state.Store
 	Send   bool
 	Now    func() time.Time
-	mu     sync.Mutex
 }
 
 type liveOffer struct {
@@ -55,11 +48,7 @@ type liveOffer struct {
 	amount, expectedReturn *big.Int
 }
 
-func (b *Bot) Tick(ctx context.Context, market Market) (err error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	ctx, end := tracer.Start(ctx, "merkle.3f.offers.tick", observability.AttrAdapter.String(market.Account.Hex()))
-	defer func() { end(err) }()
+func (b *offerBot) Tick(ctx context.Context, market offerMarket, auctions []threef.AuctionDto) error {
 	if err := validateMarket(market); err != nil {
 		return err
 	}
@@ -71,10 +60,6 @@ func (b *Bot) Tick(ctx context.Context, market Market) (err error) {
 	}
 	if err := b.Client.Identity(ctx, market.Account); err != nil {
 		return errors.Errorf("verify 3F default maker: %w", err)
-	}
-	auctions, err := b.Client.Auctions(ctx)
-	if err != nil {
-		return errors.Errorf("list 3F auctions: %w", err)
 	}
 	offers, err := b.Client.Offers(ctx)
 	if err != nil {
@@ -227,7 +212,7 @@ func (b *Bot) Tick(ctx context.Context, market Market) (err error) {
 	return nil
 }
 
-func validateMarket(m Market) error {
+func validateMarket(m offerMarket) error {
 	if m.ChainID == 0 || m.Account == (common.Address{}) || m.Executor == (common.Address{}) || m.Asset == (common.Address{}) || m.UnderlyingAsset == (common.Address{}) || m.RecipeHash == (common.Hash{}) {
 		return errors.New("3F market identity is incomplete")
 	}

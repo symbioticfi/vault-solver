@@ -1,5 +1,4 @@
-// Package threef binds the native PUSH workflow to an authenticated guarded mint recipe.
-package threef
+package threefmerkle
 
 import (
 	"bytes"
@@ -39,8 +38,8 @@ var bindingsType = instructionType("uint256[]")
 var queryArgs = abi.Arguments{{Type: addressType}, {Type: bytesType}, {Type: bindingsType}, {Type: uintType}}
 var callArgs = queryArgs[:3]
 
-// Market identifies the policy and funding pair committed by the guarded leaf.
-type Market struct {
+// mintMarket identifies the policy and funding pair committed by the guarded leaf.
+type mintMarket struct {
 	Asset, UnderlyingAsset, Policy           common.Address
 	PrincipalInput, YieldInput, RequestInput uint
 }
@@ -61,10 +60,10 @@ func instructionType(name string) abi.Type {
 	return t
 }
 
-// Inspect accepts exactly one canonical guarded mint and its complete variable bindings.
+// inspect accepts exactly one canonical guarded mint and its complete variable bindings.
 // Financial amounts are observed at runtime; no API metadata can change these pins.
-func Inspect(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) (Market, error) {
-	var market Market
+func inspect(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) (mintMarket, error) {
+	var market mintMarket
 	inspection, err := recipes.Inspect(recipe)
 	if err != nil {
 		return market, err
@@ -80,46 +79,46 @@ func Inspect(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tr
 					continue
 				}
 				if found {
-					return Market{}, errors.New("3f requires one guarded mint leaf")
+					return mintMarket{}, errors.New("3f requires one guarded mint leaf")
 				}
 				market, err = inspectGuard(snapshot.Account, leaf)
 				if err != nil {
-					return Market{}, err
+					return mintMarket{}, err
 				}
 				if len(slot.Bindings) != len(slot.Leaves) || len(slot.Bindings[i]) != 11 {
-					return Market{}, errors.New("3f guard requires all eleven input bindings")
+					return mintMarket{}, errors.New("3f guard requires all eleven input bindings")
 				}
 				var principal, yield, request *big.Int
 				// Four amount words are the first four inner inputs. All other variable words are requests.
 				inputOffset := new(big.Int).SetBytes(leaf.Data[68:100]).Uint64() + 4 + 32
 				for _, binding := range slot.Bindings[i] {
 					if binding.Value.Source != recipes.Input {
-						return Market{}, errors.New("3f guard bindings must use inputs")
+						return mintMarket{}, errors.New("3f guard bindings must use inputs")
 					}
 					switch uint64(binding.Offset) {
 					case inputOffset, inputOffset + 64:
 						if principal != nil && principal.Cmp(binding.Value.Value) != 0 {
-							return Market{}, errors.New("3f principal bindings disagree")
+							return mintMarket{}, errors.New("3f principal bindings disagree")
 						}
 						principal = binding.Value.Value
 					case inputOffset + 32, inputOffset + 96:
 						if yield != nil && yield.Cmp(binding.Value.Value) != 0 {
-							return Market{}, errors.New("3f yield bindings disagree")
+							return mintMarket{}, errors.New("3f yield bindings disagree")
 						}
 						yield = binding.Value.Value
 					default:
 						if request != nil && request.Cmp(binding.Value.Value) != 0 {
-							return Market{}, errors.New("3f request bindings disagree")
+							return mintMarket{}, errors.New("3f request bindings disagree")
 						}
 						request = binding.Value.Value
 					}
 					end := uint64(binding.Offset) + 32
 					if end > uint64(len(leaf.DataMask)) || !bytes.Equal(leaf.DataMask[binding.Offset:end], bytes.Repeat([]byte{255}, 32)) {
-						return Market{}, errors.New("3f binding does not match mask")
+						return mintMarket{}, errors.New("3f binding does not match mask")
 					}
 				}
 				if principal == nil || yield == nil || request == nil || principal.Cmp(yield) == 0 || request.Cmp(principal) == 0 || request.Cmp(yield) == 0 || slot.Gate.Source != recipes.Input || slot.Gate.Value.Cmp(principal) != 0 {
-					return Market{}, errors.New("3f invalid mint input identities or gate")
+					return mintMarket{}, errors.New("3f invalid mint input identities or gate")
 				}
 				market.PrincipalInput = uint(principal.Uint64())
 				market.YieldInput = uint(yield.Uint64())
@@ -129,13 +128,13 @@ func Inspect(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tr
 		}
 	}
 	if !found {
-		return Market{}, errors.New("3f guarded mint leaf missing")
+		return mintMarket{}, errors.New("3f guarded mint leaf missing")
 	}
 	return market, nil
 }
 
-func inspectGuard(account common.Address, leaf recipes.Leaf) (Market, error) {
-	var market Market
+func inspectGuard(account common.Address, leaf recipes.Leaf) (mintMarket, error) {
+	var market mintMarket
 	if leaf.Value == nil || leaf.Value.Sign() != 0 {
 		return market, errors.New("3f mint cannot transfer native value")
 	}
@@ -164,24 +163,24 @@ func inspectGuard(account common.Address, leaf recipes.Leaf) (Market, error) {
 	market.Asset = values[0].(common.Address)
 	market.UnderlyingAsset = values[1].(common.Address)
 	if market.Policy == (common.Address{}) || market.Asset == (common.Address{}) || market.UnderlyingAsset == (common.Address{}) {
-		return Market{}, errors.New("3f zero policy pair")
+		return mintMarket{}, errors.New("3f zero policy pair")
 	}
 	expected, mask, err := referenceGuard(account, market)
 	if err != nil {
-		return Market{}, err
+		return mintMarket{}, err
 	}
 	if len(expected) != len(leaf.Data) || !bytes.Equal(mask, leaf.DataMask) {
-		return Market{}, errors.New("3f guard layout or mask differs from canonical program")
+		return mintMarket{}, errors.New("3f guard layout or mask differs from canonical program")
 	}
 	for i, b := range expected {
 		if b & ^mask[i] != leaf.Data[i] & ^mask[i] {
-			return Market{}, errors.New("3f guarded program differs from canonical program")
+			return mintMarket{}, errors.New("3f guarded program differs from canonical program")
 		}
 	}
 	return market, nil
 }
 
-func referenceGuard(account common.Address, market Market) (data, mask []byte, err error) {
+func referenceGuard(account common.Address, market mintMarket) (data, mask []byte, err error) {
 	var ref struct {
 		Data hexutil.Bytes `json:"mintLeafData"`
 		Mask hexutil.Bytes `json:"mintLeafMask"`

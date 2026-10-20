@@ -344,6 +344,15 @@ owned by merkle-executor.
 `rfq-merkle` separately consumes awarded RFQ orders through connector recipes. It
 uses no adapter inventory, economic strategy or shared capacity aggregation. The
 signed order supplies amounts; the SDK authenticates the immutable program and
-simulates the complete outer RFQ settlement. Both Merkle hosts share
+simulates the complete outer RFQ settlement. The Merkle hosts share
 `internal/merklesender`, which forwards owner fences, signed-byte persistence and
 optional execution deadlines to the single txmanager. See [RFQ-MERKLE.md](RFQ-MERKLE.md).
+
+`threef-merkle` independently owns one Merkle executor and one curator BF/default
+maker. Its API-key PUSH offer loop uses authenticated recipe/policy scope and idle
+account cash; its SDK provider binds native aggregate mint authorizations. The
+generic `merkle` solver has no 3F configuration or provider dispatch. All 3F Merkle
+code lives in one package; API, reservation and durable intent checks remain inside
+that integration. Both recipe keepers share store/sender startup through
+`internal/merklesender.OpenKeeper`, including recovery validation before Run.
+See [THREEF-MERKLE.md](THREEF-MERKLE.md) for the flow and validation boundaries.

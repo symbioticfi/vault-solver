@@ -8,16 +8,11 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	merkle3f "github.com/symbioticfi/vault-solver/internal/solvers/merkle/threef"
-	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/threefapi"
-	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/threefbot"
 
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
-	"github.com/symbioticfi/merkle-executor/sdk/submission"
 	"github.com/symbioticfi/vault-solver/internal/merklesender"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
@@ -32,7 +27,6 @@ func init() { solver.Register(Name, factory) }
 type Solver struct {
 	keeper *keeper.Keeper
 	store  *state.Store
-	threeF *threeFWorkflow
 }
 
 func (s *Solver) Name() string            { return Name }
@@ -50,14 +44,6 @@ func (s *Solver) Run(ctx context.Context) error {
 		}
 		if err := s.keeper.Tick(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			observability.Log(ctx).Error(err, "merkle workflow iteration failed")
-		}
-		if s.threeF != nil && (s.keeper.Sender == nil || s.keeper.Sender.PendingID() == "") {
-			run, cancel := context.WithTimeout(ctx, defaultOperationTimeout)
-			err := s.threeF.Tick(run)
-			cancel()
-			if err != nil && !errors.Is(err, context.Canceled) {
-				observability.Log(ctx).Error(err, "3f offer iteration failed")
-			}
 		}
 		select {
 		case <-ctx.Done():
@@ -92,7 +78,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 			return nil, errors.New("merkle executor caller differs from the shared signer")
 		}
 		strategy.Config.Account = identity.Account.Hex()
-		strategy.Config.Revision, err = strategyRevision(strategy.Config, cfg.curator, deps.Signer.Address(), cfg.threeF)
+		strategy.Config.Revision, err = strategyRevision(strategy.Config, cfg.curator, deps.Signer.Address())
 		if err != nil {
 			return nil, err
 		}
@@ -101,57 +87,11 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	store, err := state.Open(cfg.stateDir)
-	if err != nil {
-		return nil, err
-	}
-	complete := false
-	defer func() {
-		if !complete {
-			_ = store.Close()
-		}
-	}()
 	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(len(cfg.strategies), recipeCacheBytes), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: deps.TxManager.Confirmations()}
-	k := &keeper.Keeper{Store: store, Planner: planner, Strategies: cfg.strategies, Mode: cfg.mode, OperationTimeout: defaultOperationTimeout, Log: deps.Log.WithName(Name)}
-	sender, err := submission.New(deps.Chain, deps.Signer.Address(), deps.Chain.ChainID(), store, submission.Config{Confirmations: deps.TxManager.Confirmations()}, merklesender.Transport{Manager: deps.TxManager, Solver: Name}, deps.Log)
+	k := &keeper.Keeper{Planner: planner, Strategies: cfg.strategies, Mode: cfg.mode, OperationTimeout: defaultOperationTimeout, Log: deps.Log.WithName(Name)}
+	store, err := merklesender.OpenKeeper(k, cfg.stateDir, deps, Name)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateRecoveredMode(cfg.mode, sender.PendingID()); err != nil {
-		return nil, err
-	}
-	if cfg.mode == "send" {
-		k.Sender = sender
-	}
-	result := &Solver{keeper: k, store: store}
-	if cfg.threeF != nil {
-		if deps.Chain.ChainID().Cmp(common.Big1) != 0 {
-			return nil, errors.New("3f Merkle PUSH requires mainnet")
-		}
-		api, err := threefapi.New(cfg.threeF.APIConfig())
-		if err != nil {
-			return nil, err
-		}
-		runtime := &merkle3f.Provider{API: api, Chain: deps.Chain}
-		for i := range k.Strategies {
-			if k.Strategies[i].Config.Executor != cfg.threeF.Executor {
-				continue
-			}
-			k.Strategies[i].Providers = []provider.Provider{runtime}
-			result.threeF = &threeFWorkflow{planner: planner, strategy: k.Strategies[i], api: api, bot: &threefbot.Bot{Client: api, Store: store, Send: cfg.mode == "send"}}
-		}
-		k.Planner = &threeFPlanning{Planner: planner, runtime: runtime, executor: common.HexToAddress(cfg.threeF.Executor)}
-	}
-	if err := k.CheckRecovery(); err != nil {
-		return nil, err
-	}
-	complete = true
-	return result, nil
-}
-
-func validateRecoveredMode(mode, pendingID string) error {
-	if mode != "send" && pendingID != "" {
-		return errors.New("merkle unresolved signed work requires send mode for recovery")
-	}
-	return nil
+	return &Solver{keeper: k, store: store}, nil
 }

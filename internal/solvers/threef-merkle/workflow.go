@@ -1,4 +1,4 @@
-package merkle
+package threefmerkle
 
 import (
 	"context"
@@ -10,42 +10,40 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	merkle3f "github.com/symbioticfi/vault-solver/internal/solvers/merkle/threef"
-	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/threefapi"
-	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/threefbot"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
-type threeFPlanning struct {
+var tracer = observability.NewTracer("github.com/symbioticfi/vault-solver/internal/solvers/threef-merkle", Name)
+
+type mintPlanning struct {
 	*keeper.Planner
 
-	runtime *merkle3f.Provider
-
-	executor common.Address
+	runtime *mintProvider
 }
 
-func (p *threeFPlanning) Validate(ctx context.Context, plan keeper.Plan) error {
+func (p *mintPlanning) Validate(ctx context.Context, plan keeper.Plan) error {
 	if err := p.Planner.Validate(ctx, plan); err != nil {
 		return err
 	}
-	if plan.Snapshot.Executor == p.executor {
-		if len(plan.Outputs) != 1 {
-			return errors.New("3f plan requires one provider")
-		}
-		if err := p.runtime.ValidateLease(ctx, plan.Snapshot, plan.Outputs[0]); err != nil {
-			return err
-		}
+	if len(plan.Outputs) != 1 {
+		return errors.New("3f plan requires one provider")
+	}
+	if err := p.runtime.ValidateLease(ctx, plan.Snapshot, plan.Outputs[0]); err != nil {
+		return err
 	}
 	return nil
 }
 
-type threeFWorkflow struct {
+type offerWorkflow struct {
 	planner  *keeper.Planner
 	strategy keeper.Strategy
-	api      *threefapi.Client
-	bot      *threefbot.Bot
+	api      *apiClient
+	bot      *offerBot
 }
 
-func (w *threeFWorkflow) Tick(ctx context.Context) error {
+func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
+	ctx, end := tracer.Start(ctx, "threef-merkle.offers.tick", observability.AttrAdapter.String(w.strategy.Config.Account))
+	defer func() { end(err) }()
 	p := w.planner
 	snapshot, recipe, err := recipes.DiscoverForAccount(ctx, p.Chain, common.HexToAddress(w.strategy.Config.Executor), common.HexToAddress(w.strategy.Config.Account), nil)
 	if err != nil {
@@ -63,7 +61,7 @@ func (w *threeFWorkflow) Tick(ctx context.Context) error {
 		return errors.New("3f permission scope mismatch")
 	}
 	pin := provider.Snapshot{ChainID: new(big.Int).Set(p.ChainID), BlockNumber: new(big.Int).SetUint64(snapshot.BlockNumber), BlockHash: snapshot.BlockHash, Timestamp: snapshot.Timestamp, Executor: snapshot.Executor, Account: snapshot.Account, Caller: snapshot.Caller, RecipeHash: snapshot.RecipeHash, Root: snapshot.Root}
-	observed, err := merkle3f.Observe(ctx, p.Chain, pin, recipe, tree)
+	observed, err := observe(ctx, p.Chain, pin, recipe, tree)
 	if err != nil {
 		return err
 	}
@@ -74,23 +72,23 @@ func (w *threeFWorkflow) Tick(ctx context.Context) error {
 	if len(auctions) > 4096 {
 		return errors.New("3f auction inventory exceeds 4096-row bound")
 	}
-	eligible := map[common.Address]bool{}
+	membership := map[common.Address]bool{}
 	if observed.Budget.Sign() > 0 {
 		for _, auction := range auctions {
 			if !strings.EqualFold(auction.Status, "OPEN") && !strings.EqualFold(auction.Status, "SOLVABLE") || !common.IsHexAddress(auction.RequestId) {
 				continue
 			}
 			request := common.HexToAddress(auction.RequestId)
-			if eligible[request] {
+			if membership[request] {
 				continue
 			}
-			if err := merkle3f.Eligible(ctx, p.Chain, pin, observed.Market, request, observed.MinimumYield); err != nil {
-				if errors.Is(err, merkle3f.ErrIneligible) {
+			if err := eligible(ctx, p.Chain, pin, observed.Market, request, observed.MinimumYield); err != nil {
+				if errors.Is(err, errIneligible) {
 					continue
 				}
 				return err
 			}
-			eligible[request] = true
+			membership[request] = true
 		}
 	}
 	// Every managed role participates, including the recipe's funding sources.
@@ -108,5 +106,5 @@ func (w *threeFWorkflow) Tick(ctx context.Context) error {
 	if err := recipes.ValidateSnapshot(ctx, p.Chain, snapshot, p.Caller); err != nil {
 		return err
 	}
-	return w.bot.Tick(ctx, threefbot.Market{ChainID: p.ChainID.Uint64(), Account: snapshot.Account, Executor: snapshot.Executor, RecipeHash: snapshot.RecipeHash, Asset: observed.Market.Asset, UnderlyingAsset: observed.Market.UnderlyingAsset, Budget: observed.Budget, MinimumYield1e8: observed.MinimumYield, MaxPrincipal: observed.MaxPrincipal, AvailableCash: observed.AvailableCash, EligibleRequests: eligible})
+	return w.bot.Tick(ctx, offerMarket{ChainID: p.ChainID.Uint64(), Account: snapshot.Account, Executor: snapshot.Executor, RecipeHash: snapshot.RecipeHash, Asset: observed.Market.Asset, UnderlyingAsset: observed.Market.UnderlyingAsset, Budget: observed.Budget, MinimumYield1e8: observed.MinimumYield, MaxPrincipal: observed.MaxPrincipal, AvailableCash: observed.AvailableCash, EligibleRequests: membership}, auctions)
 }

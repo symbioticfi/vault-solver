@@ -1,4 +1,4 @@
-package threefapi
+package threefmerkle
 
 import (
 	"bytes"
