@@ -76,6 +76,7 @@ solvers:
       # permissionedTokens:            # with tokensToQuote: permissioned, inputs must use one candidate route
       #   - "0x..."
       #   - "0xC26A6Fa2C37b38E549a4a1807543801Db684f99C"  # Pareto AA_FalconXUSDC (mainnet)
+      #   - "0x1DD91a111606382B77A917633ED90feAf25E0F76"  # mGLO (mainnet)
 
       # minAmountsIn sets a per-input-token floor on request size, in that token's BASE UNITS (decimal
       # string). A request below its token's minimum gets no quote (HTTP 204); an amount equal to the
@@ -83,6 +84,7 @@ solvers:
       # minAmountsIn:
       #   "0x238a700eD6165261Cf8b2e544ba797BC11e466Ba": "1000000000000000000"  # 1 token (18 decimals)
       #   "0xC26A6Fa2C37b38E549a4a1807543801Db684f99C": "1000000000000000000"  # 1 AA_FalconXUSDC
+      #   "0x1DD91a111606382B77A917633ED90feAf25E0F76": "1000000000000000000"  # 1 mGLO
 
       # LiquidLane adapter instances this filler serves — the concrete per-token adapters (not the
       # factory). Each adapter's vault + asset are resolved on-chain at startup. In `external` mode
