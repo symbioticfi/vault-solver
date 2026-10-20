@@ -1,4 +1,4 @@
-package rfqmerkle
+package rfq
 
 import (
 	"github.com/ethereum/go-ethereum/common"

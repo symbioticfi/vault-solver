@@ -1,5 +1,5 @@
-// Package rfqmerkle fills awarded RFQ orders through caller-bound Merkle recipes.
-package rfqmerkle
+// Package rfq fills awarded RFQ orders through caller-bound Merkle recipes.
+package rfq
 
 import (
 	"context"
@@ -29,7 +29,7 @@ const Name = "rfq-merkle"
 const intentKey = "rfq-merkle.fill.1"
 const operationTimeout = 30 * time.Second
 
-var tracer = observability.NewTracer("github.com/symbioticfi/vault-solver/internal/solvers/rfq-merkle", Name)
+var tracer = observability.NewTracer("github.com/symbioticfi/vault-solver/internal/solvers/merkle/rfq", Name)
 
 //nolint:gochecknoinits // Self-registration is the solver plugin contract.
 func init() { solver.Register(Name, factory) }

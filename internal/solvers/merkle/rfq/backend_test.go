@@ -1,4 +1,4 @@
-package rfqmerkle
+package rfq
 
 import (
 	"encoding/json"

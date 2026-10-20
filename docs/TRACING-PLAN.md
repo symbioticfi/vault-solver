@@ -568,7 +568,7 @@ run against the no-op provider and prove there is no behaviour change when traci
 - [ ] a ws/ipc RPC failure records its `exception.type` as the chain package's wrapper type rather than the underlying error's
 
 
-**rfq-merkle** (`internal/solvers/rfq-merkle`) uses `rfq-merkle.poll` for each
+**rfq-merkle** (`internal/solvers/merkle/rfq`) uses `rfq-merkle.poll` for each
 bounded polling/recovery iteration and `rfq-merkle.fill` for signed submission or
 reconciliation, with `order.id` on the fill. HTTP spans use peer `rfq-merkle`;
 chain reads retain the shared RPC spans. It has no quote server or quote-span links.

@@ -1,6 +1,6 @@
 # RFQ orders through Merkle recipes
 
-`rfq-merkle` is an independent solver in `internal/solvers/rfq-merkle`.
+`rfq-merkle` is an independent solver in `internal/solvers/merkle/rfq`.
 It polls awarded `/api/v1/orders?filler=…&orderStatus=open`, obtains signed terms
 from the backend discounts API, and builds:
 
