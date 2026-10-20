@@ -59,7 +59,7 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 			simulations, fetches := 0, 0
 			curator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				fetches++
-				if r.Method != http.MethodGet || r.URL.Path != "/api/v1/merkle/"+strings.ToLower(adapter.Hex())+"/permission-sets/"+root.Hex() || r.URL.RawQuery != "" {
+				if r.Method != http.MethodGet || r.URL.Path != "/api/v1/merkle/"+strings.ToLower(adapter.Hex())+"/"+root.Hex() || r.URL.RawQuery != "" {
 					t.Error("host requested a different permission artifact")
 				}
 				doc := map[string]any{"adapter": adapter.Hex(), "chainId": 1, "root": root.Hex(), "account": account.Hex(), "leaves": []any{}}

@@ -104,7 +104,7 @@ func newGenericRecipeHost(t *testing.T, ready, requestID uint64, simulation stri
 		t.Fatal(err)
 	}
 	curator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/merkle/"+strings.ToLower(adapter.Hex())+"/permission-sets/"+leaf.Hash.Hex() || r.URL.RawQuery != "" {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/merkle/"+strings.ToLower(adapter.Hex())+"/"+leaf.Hash.Hex() || r.URL.RawQuery != "" {
 			t.Error("host requested another permission artifact")
 		}
 		metadata := map[string]any{"chainId": 1, "adapter": adapter.Hex(), "root": leaf.Hash.Hex(), "account": account.Hex(), "leaves": []any{

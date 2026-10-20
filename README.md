@@ -875,6 +875,8 @@ modern Go 1.27 style, the required test/lint/format gate, and secure-coding rule
 
 Merkle recipes run through the shared sender using the independently versioned [Merkle SDK integration](docs/MERKLE-SDK.md). Its `config.strategies` is a list of full executor addresses, for example `strategies: ["0x0000000000000000000000000000000000000010"]`. Each lowercase address is the durable identity; labels and strategy objects are rejected.
 
+The SDK reads signed permission bundles through `GET /merkle/{adapter}/{root}` under the configured curator API URL.
+
 Polling is fixed at 15 seconds and operation timeout at 30 seconds. `pollInterval` and
 `operationTimeout` are not configuration fields. Curator settings accept only `url` and
 `apiKeyEnv`; its HTTP timeout and response limit are fixed at 10 seconds and 2 MiB.

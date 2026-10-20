@@ -54,8 +54,9 @@ they use different state directories. A process-local lane cannot coordinate a
 second service independently using the same private key.
 
 The host uses the SDK's recipe input provider and shared curator permission source.
-The active root determines the requested permission artifact; the SDK checks the
-chain, root, leaf hashes and every proof before preparation. Financial amounts
+The active root determines the requested permission artifact at
+`GET /merkle/{adapter}/{root}` under the configured curator API URL; the SDK checks
+the chain, adapter, account, root, leaf hashes and every proof before preparation. Financial amounts
 come from the recipe's read-dependent computation, bound directly as a result or
 through an exact input equality. Bounds validate the chosen amount; they do not
 choose it. For example, a recipe can compute `min(balance, liquidity)` without
