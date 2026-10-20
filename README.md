@@ -115,6 +115,12 @@ token-specific solver code. The production deployment config already includes it
 `permissionedTokens` with a one-token `minAmountsIn` floor. A solver instance can route it only after
 its configured LiquidLane adapter has onboarded the token. Execution also requires either direct
 `owner`/`marketMaker`/`isFiller` authorization or a live signed discount in internal mode.
+Mainnet mGLO (`0x1DD91a111606382B77A917633ED90feAf25E0F76`, 18 decimals) uses the same path:
+include it in `permissionedTokens` and set `minAmountsIn` to `"1000000000000000000"` (one mGLO),
+matching the RFQ backend. The corresponding mainnet RFQ, LI.FI and UniswapX profiles live in
+`vault-solver-deploy`. Routing requires the configured adapter's mGLO account to exist; issuer
+greenlisting of that account is also required for redemption. Prices and account factories remain
+on-chain configuration, with no token-specific addresses or pricing logic in the solver.
 When an exact-input request exceeds the advertised adapter capacity, the default strategy caps the
 quoted output at the available `maxAssets` instead of declining in every token scope; the excess input
 is reflected as worse execution price and price impact. Awarded orders are planned again from current

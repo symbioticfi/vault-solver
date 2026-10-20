@@ -31,7 +31,7 @@ func TestConnectorBuildSimulatesCompleteAwardedOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if until != time.Unix(4102444800, 0) {
+	if !until.Equal(time.Unix(4102444800, 0)) {
 		t.Fatalf("discount expiry = %v", until)
 	}
 	if chain.outerCalls != 1 || !bytes.Equal(calldata, chain.outerData) {
