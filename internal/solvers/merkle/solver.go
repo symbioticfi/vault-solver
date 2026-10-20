@@ -4,6 +4,7 @@ package merkle
 import (
 	"context"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -90,7 +91,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 			return nil, err
 		}
 	}
-	source, err := permissions.New(cfg.curator.HTTPConfig(), &http.Client{Timeout: defaultOperationTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, deps.Chain)
+	source, err := permissions.New(cfg.curator.HTTPConfig(), &http.Client{Timeout: defaultOperationTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, deps.Chain, os.Getenv)
 	if err != nil {
 		return nil, err
 	}

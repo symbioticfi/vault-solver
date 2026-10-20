@@ -4,6 +4,10 @@ The `merkle` solver consumes the independently versioned
 `github.com/symbioticfi/merkle-executor/sdk` module pinned in go.mod.
 The SDK implements recipe/tree/proof/role checks,
 pinned runtime assembly, simulation, canonical receipts and durable recovery.
+It also exposes opt-in off-chain providers, RPC, signing and a standalone sender;
+this host keeps its existing shared sender. Hosts explicitly supply credential
+lookup, so importing or constructing SDK components never implicitly reads the
+process environment.
 
 Awarded LiquidLane connector orders run in the separate [`rfq-merkle` solver](RFQ-MERKLE.md).
 Its RecipeExecutor caller is the RFQ Executor contract, so it must not be included in

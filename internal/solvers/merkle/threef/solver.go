@@ -4,6 +4,7 @@ package threef
 import (
 	"context"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -96,7 +97,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 	runtime := &mintProvider{API: api, Chain: deps.Chain}
 	strategy.Providers = []provider.Provider{runtime}
-	source, err := permissions.New(cfg.Curator.httpConfig(), &http.Client{Timeout: operationTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, deps.Chain)
+	source, err := permissions.New(cfg.Curator.httpConfig(), &http.Client{Timeout: operationTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, deps.Chain, os.Getenv)
 	if err != nil {
 		return nil, err
 	}

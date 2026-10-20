@@ -5,6 +5,7 @@ import (
 	"context"
 	"math/big"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -74,7 +75,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if deps.Chain == nil || deps.Signer == nil || deps.TxManager == nil {
 		return nil, errors.New("rfq-merkle requires the shared chain, signer and transaction manager")
 	}
-	source, err := permissions.New(cfg.Curator.httpConfig(), &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, deps.Chain)
+	source, err := permissions.New(cfg.Curator.httpConfig(), &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, deps.Chain, os.Getenv)
 	if err != nil {
 		return nil, err
 	}
