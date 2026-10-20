@@ -34,14 +34,14 @@ several replicas can report the same order or peer fill, and restarts forget the
 deduplication. Tune the thresholds accordingly. Passive late-receipt telemetry is a separate follow-up
 and is not required by these rules.
 
-Validate edits with a local `promtool` (the committed tests are verified with Prometheus `v3.5.0`):
+Validate edits with a local `promtool` (the committed tests are verified with Prometheus `v3.15.0`):
 
 ```sh
 make test-alerts
 ```
 
 Set `PROMTOOL=/path/to/promtool` when it is not on `PATH`. CI runs the same target with a pinned,
-checksum-verified official Prometheus `v3.5.0` binary.
+checksum-verified official Prometheus `v3.15.0` binary.
 
 The unit cases cover single sibling races/caps, sustained signals and pending time, peer-fill
 suppression, EOA and namespace isolation, actual expiry versus retry exhaustion, counter resets,
