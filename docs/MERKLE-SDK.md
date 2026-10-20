@@ -1,9 +1,8 @@
 # Merkle execution host
 
 The `merkle` solver consumes the independently versioned
-`github.com/symbioticfi/merkle-executor/sdk` module pinned in go.mod. No daemon
-package, protocol provider, transaction engine or legacy vault-solver code is
-copied from merkle-executor. The SDK implements recipe/tree/proof/role checks,
+`github.com/symbioticfi/merkle-executor/sdk` module pinned in go.mod.
+The SDK implements recipe/tree/proof/role checks,
 pinned runtime assembly, simulation, canonical receipts and durable recovery.
 
 This solver receives the same transaction manager and signer as all other
@@ -34,13 +33,12 @@ solvers:
 `strategies` is a list of full nonzero executor addresses. Each canonical lowercase
 address, including `0x`, is the durable state and log identifier. Order does not
 change identity; duplicate addresses and different checksum spellings of the same
-address are rejected. Old strategy objects, custom labels and per-strategy options
+address are rejected. Strategy objects, custom labels and per-strategy options
 are rejected before network access. The unrelated `solvers[].name` still selects
 the solver integration.
 
-The single supported pre-production policy is `address-only-v1`, with no legacy
-policy or migration path. Unresolved journals fence ownership and retain their
-original identity and configuration. The shared SDK is pinned to an immutable version.
+The supported runtime policy version is `1`. Unresolved journals fence ownership and
+retain their original identity and configuration. The shared SDK is pinned to an immutable version.
 
 Paths resolve from the process working directory; use absolute paths for mounted
 configuration and persistent state. The regular chain/signer/txManager settings
@@ -57,13 +55,19 @@ second service independently using the same private key.
 
 The host uses the SDK's recipe input provider and shared curator permission source.
 The active root determines the requested permission artifact; the SDK checks the
-chain, root, leaf hashes and every proof before preparation. Amount inputs use an
-exact read-dependent equality when present, otherwise the greatest amount allowed
-by all preceding recipe bounds, with at least one read-dependent upper bound.
-The SDK checks every lower bound and cap. Unconstrained inputs
-and manual account, tree and inputs configuration fields are rejected.
-Polling, operation timeout, strategy cadence and the 16 MiB recipe cache use fixed
-bounded defaults.
+chain, root, leaf hashes and every proof before preparation. Financial amounts
+come from the recipe's read-dependent computation, bound directly as a result or
+through an exact input equality. Bounds validate the chosen amount; they do not
+choose it. For example, a recipe can compute `min(balance, liquidity)` without
+embedding either actual amount. The SDK checks every lower bound and cap.
+Unconstrained inputs and manual account, tree and inputs configuration fields
+are rejected.
+Polling is fixed at 15 seconds, operation timeout at 30 seconds, strategy cadence at
+one minute and the recipe cache at 16 MiB. YAML fields `pollInterval` and
+`operationTimeout` are rejected, including values equal to these fixed limits.
+Curator settings accept only `url` and `apiKeyEnv`. Its HTTP timeout is fixed at
+10 seconds and response limit at 2 MiB; `timeoutSeconds` and `maxResponseBytes`
+are rejected even when set to zero or those fixed limits.
 
 Readiness comes from the authenticated recipe. After the complete original executor
 simulation and canonical closing checks succeed, a recipe with no active Manage

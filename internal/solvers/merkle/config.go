@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	runtimePolicy                 = "address-only-v1"
+	runtimePolicy                 = "1"
 	recipeCacheBytes        int64 = 16 << 20
 	defaultPollInterval           = 15 * time.Second
 	defaultOperationTimeout       = 30 * time.Second
@@ -26,18 +26,25 @@ const (
 )
 
 type rawConfig struct {
-	Mode             string                `yaml:"mode" json:"mode"`
-	StateDir         string                `yaml:"stateDir" json:"stateDir"`
-	Curator          protocolio.HTTPConfig `yaml:"curator" json:"curator"`
-	PollInterval     string                `yaml:"pollInterval" json:"pollInterval"`
-	OperationTimeout string                `yaml:"operationTimeout" json:"operationTimeout"`
-	Strategies       []string              `yaml:"strategies" json:"strategies"`
+	Mode       string   `yaml:"mode" json:"mode"`
+	StateDir   string   `yaml:"stateDir" json:"stateDir"`
+	Curator    Curator  `yaml:"curator" json:"curator"`
+	Strategies []string `yaml:"strategies" json:"strategies"`
 }
 type config struct {
-	mode, stateDir                 string
-	curator                        protocolio.HTTPConfig
-	pollInterval, operationTimeout time.Duration
-	strategies                     []keeper.Strategy
+	mode, stateDir string
+	curator        Curator
+	strategies     []keeper.Strategy
+}
+
+// Curator contains the operator-supplied permission service settings.
+type Curator struct {
+	URL       string `yaml:"url" json:"url"`
+	APIKeyEnv string `yaml:"apiKeyEnv,omitempty" json:"apiKeyEnv,omitempty"`
+}
+
+func (c Curator) HTTPConfig() protocolio.HTTPConfig {
+	return protocolio.HTTPConfig{URL: c.URL, APIKeyEnv: c.APIKeyEnv, TimeoutSeconds: permissions.HostTimeoutSeconds, MaxResponseBytes: permissions.HostMaxResponseBytes}
 }
 
 func parseConfig(node yaml.Node) (config, error) {
@@ -52,23 +59,10 @@ func parseConfig(node yaml.Node) (config, error) {
 	if raw.StateDir == "" || len(raw.Strategies) == 0 || len(raw.Strategies) > 256 {
 		return config{}, errors.New("merkle stateDir and 1..256 strategies required")
 	}
-	curator, err := permissions.NormalizeHostConfig(raw.Curator)
-	if err != nil {
+	if err := permissions.ValidateConfig(raw.Curator.HTTPConfig()); err != nil {
 		return config{}, err
 	}
-	raw.Curator = curator
-	poll, err := parse.Duration(raw.PollInterval, defaultPollInterval, "merkle pollInterval")
-	if err != nil {
-		return config{}, err
-	}
-	timeout, err := parse.Duration(raw.OperationTimeout, defaultOperationTimeout, "merkle operationTimeout")
-	if err != nil {
-		return config{}, err
-	}
-	if poll != defaultPollInterval || timeout != defaultOperationTimeout {
-		return config{}, errors.New("merkle polling and operation timeout are fixed; remove legacy overrides")
-	}
-	cfg := config{mode: raw.Mode, stateDir: raw.StateDir, curator: raw.Curator, pollInterval: poll, operationTimeout: timeout}
+	cfg := config{mode: raw.Mode, stateDir: raw.StateDir, curator: raw.Curator}
 	seen := make(map[string]bool)
 	for _, value := range raw.Strategies {
 		executor, err := parse.NonZeroAddress(value, "merkle executor")
@@ -86,13 +80,13 @@ func parseConfig(node yaml.Node) (config, error) {
 }
 
 // Bind derived identity and the shared source to existing recovery guards.
-func strategyRevision(strategy keeper.Config, curator protocolio.HTTPConfig, caller common.Address) (string, error) {
+func strategyRevision(strategy keeper.Config, curator Curator, caller common.Address) (string, error) {
 	raw, err := json.Marshal(struct {
 		Policy   string                `json:"policy"`
 		Strategy keeper.Config         `json:"strategy"`
 		Curator  protocolio.HTTPConfig `json:"curator"`
 		Caller   common.Address        `json:"caller"`
-	}{runtimePolicy, strategy, curator, caller})
+	}{runtimePolicy, strategy, curator.HTTPConfig(), caller})
 	if err != nil {
 		return "", errors.Errorf("merkle strategy identity: %w", err)
 	}

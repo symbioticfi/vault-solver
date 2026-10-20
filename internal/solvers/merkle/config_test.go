@@ -9,7 +9,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 
 	"gopkg.in/yaml.v3"
 )
@@ -71,15 +70,15 @@ func TestRevisionBindsDerivedIdentityAndPermissionSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, change := range map[string]func(*keeper.Config, *protocolio.HTTPConfig, *common.Address){
-		"account": func(s *keeper.Config, _ *protocolio.HTTPConfig, _ *common.Address) {
+	for name, change := range map[string]func(*keeper.Config, *Curator, *common.Address){
+		"account": func(s *keeper.Config, _ *Curator, _ *common.Address) {
 			s.Account = common.HexToAddress("0x04").Hex()
 		},
-		"caller": func(_ *keeper.Config, _ *protocolio.HTTPConfig, c *common.Address) { *c = common.HexToAddress("0x05") },
-		"source": func(_ *keeper.Config, c *protocolio.HTTPConfig, _ *common.Address) {
+		"caller": func(_ *keeper.Config, _ *Curator, c *common.Address) { *c = common.HexToAddress("0x05") },
+		"source": func(_ *keeper.Config, c *Curator, _ *common.Address) {
 			c.URL = "http://other.invalid/api/v1"
 		},
-		"credential": func(_ *keeper.Config, c *protocolio.HTTPConfig, _ *common.Address) { c.APIKeyEnv = "OTHER_CURATOR_KEY" },
+		"credential": func(_ *keeper.Config, c *Curator, _ *common.Address) { c.APIKeyEnv = "OTHER_CURATOR_KEY" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, c, owner := strategy, cfg.curator, caller
@@ -95,37 +94,47 @@ func TestRevisionBindsDerivedIdentityAndPermissionSource(t *testing.T) {
 	}
 }
 
+func TestConfigRejectsTimingFields(t *testing.T) {
+	for field, value := range map[string]string{
+		"pollInterval":     "15s",
+		"operationTimeout": "30s",
+	} {
+		t.Run(field, func(t *testing.T) {
+			_, err := parseConfig(configNode(t, validConfig+field+": "+value+"\n"))
+			if err == nil || !strings.Contains(err.Error(), "field "+field+" not found") {
+				t.Fatalf("timing field must be rejected as unknown: %v", err)
+			}
+		})
+	}
+}
+
 func TestCuratorTransportUsesFixedEffectivePolicy(t *testing.T) {
-	var fingerprint string
 	for _, tc := range []struct {
 		name, fields string
 		invalid      bool
 	}{
-		{"omitted", "", false}, {"zero", "  timeoutSeconds: 0\n  maxResponseBytes: 0\n", false}, {"fixed", "  timeoutSeconds: 10\n  maxResponseBytes: 2097152\n", false}, {"different timeout", "  timeoutSeconds: 11\n", true}, {"different bound", "  maxResponseBytes: 1048576\n", true},
+		{"omitted", "", false},
+		{"zero timeout", "  timeoutSeconds: 0\n", true},
+		{"zero bound", "  maxResponseBytes: 0\n", true},
+		{"fixed timeout", "  timeoutSeconds: 10\n", true},
+		{"fixed bound", "  maxResponseBytes: 2097152\n", true},
+		{"different timeout", "  timeoutSeconds: 11\n", true},
+		{"different bound", "  maxResponseBytes: 1048576\n", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := strings.Replace(validConfig, "curator:\n", "curator:\n"+tc.fields, 1)
 			cfg, err := parseConfig(configNode(t, raw))
 			if tc.invalid {
-				if err == nil {
-					t.Fatal("legacy curator transport override accepted")
+				if err == nil || !strings.Contains(err.Error(), "not found in type") {
+					t.Fatalf("curator transport fields must be rejected as unknown: %v", err)
 				}
 				return
 			}
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.curator.TimeoutSeconds != permissions.HostTimeoutSeconds || cfg.curator.MaxResponseBytes != permissions.HostMaxResponseBytes {
+			if cfg.curator.HTTPConfig().TimeoutSeconds != permissions.HostTimeoutSeconds || cfg.curator.HTTPConfig().MaxResponseBytes != permissions.HostMaxResponseBytes {
 				t.Fatalf("effective curator policy %+v", cfg.curator)
-			}
-			got, err := strategyRevision(cfg.strategies[0].Config, cfg.curator, common.HexToAddress("0x03"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if fingerprint == "" {
-				fingerprint = got
-			} else if fingerprint != got {
-				t.Fatal("equivalent curator policy changed fingerprint")
 			}
 		})
 	}

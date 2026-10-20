@@ -26,9 +26,8 @@ const Name = "merkle"
 func init() { solver.Register(Name, factory) }
 
 type Solver struct {
-	keeper   *keeper.Keeper
-	store    *state.Store
-	interval time.Duration
+	keeper *keeper.Keeper
+	store  *state.Store
 }
 
 func (s *Solver) Name() string            { return Name }
@@ -38,7 +37,7 @@ func (s *Solver) RequiresTxManager() bool { return s.keeper.Mode == "send" }
 // callbacks cannot outlive their store. It also handles partial startup failure.
 func (s *Solver) Close() error { return s.store.Close() }
 func (s *Solver) Run(ctx context.Context) error {
-	ticker := time.NewTicker(s.interval)
+	ticker := time.NewTicker(defaultPollInterval)
 	defer ticker.Stop()
 	for {
 		if err := ctx.Err(); err != nil {
@@ -63,7 +62,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, errors.New("merkle requires host chain, signer and shared transaction manager")
 	}
 	// The factory interface has no context; bound the complete startup observation.
-	startup, cancel := context.WithTimeout(context.Background(), cfg.operationTimeout)
+	startup, cancel := context.WithTimeout(context.Background(), defaultOperationTimeout)
 	defer cancel()
 	targets := make([]common.Address, len(cfg.strategies))
 	for i, strategy := range cfg.strategies {
@@ -85,7 +84,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 			return nil, err
 		}
 	}
-	source, err := permissions.New(cfg.curator, &http.Client{Timeout: defaultOperationTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }})
+	source, err := permissions.New(cfg.curator.HTTPConfig(), &http.Client{Timeout: defaultOperationTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }})
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +99,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		}
 	}()
 	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(len(cfg.strategies), recipeCacheBytes), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: deps.TxManager.Confirmations()}
-	k := &keeper.Keeper{Store: store, Planner: planner, Strategies: cfg.strategies, Mode: cfg.mode, OperationTimeout: cfg.operationTimeout, Log: deps.Log.WithName(Name)}
+	k := &keeper.Keeper{Store: store, Planner: planner, Strategies: cfg.strategies, Mode: cfg.mode, OperationTimeout: defaultOperationTimeout, Log: deps.Log.WithName(Name)}
 	sender, err := submission.New(deps.Chain, deps.Signer.Address(), deps.Chain.ChainID(), store, submission.Config{Confirmations: deps.TxManager.Confirmations()}, transport{manager: deps.TxManager}, deps.Log)
 	if err != nil {
 		return nil, err
@@ -115,7 +114,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, err
 	}
 	complete = true
-	return &Solver{keeper: k, store: store, interval: cfg.pollInterval}, nil
+	return &Solver{keeper: k, store: store}, nil
 }
 
 // This bridge submits through the same manager as every other solver. It owns no
