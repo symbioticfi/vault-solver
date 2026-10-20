@@ -19,6 +19,7 @@ import (
 	"github.com/go-logr/logr"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/providers/aave"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 	"github.com/symbioticfi/vault-solver/api/bindings/multicall3"
 	"github.com/symbioticfi/vault-solver/internal/chain"
@@ -146,6 +147,13 @@ func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
 				defer func() { _ = current.Close() }()
 				if getters != 1 || current.keeper.Planner.(*keeper.Planner).PermissionSource == nil || current.keeper.Planner.(*keeper.Planner).RecipeCache == nil || current.keeper.Strategies[0].Config.Account != account.Hex() {
 					t.Fatal("host failed shared SDK integration")
+				}
+				providers := current.keeper.Strategies[0].Providers
+				if len(providers) != 2 {
+					t.Fatal("missing shared recipe providers")
+				}
+				if _, ok := providers[0].(*aave.Provider); !ok {
+					t.Fatal("host must reuse SDK Aave capacity preparation")
 				}
 				if found, err := state.Read(directory, "txmanager.active.v1", new(any)); err != nil || found {
 					t.Fatal("factory created owned transaction", err)

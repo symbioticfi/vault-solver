@@ -58,7 +58,8 @@ Mount durable state and exclude concurrent processes with this signer, even if
 they use different state directories. A process-local lane cannot coordinate a
 second service independently using the same private key.
 
-The host uses the SDK's recipe input provider and shared curator permission source.
+The host registers the SDK's shared Aave V3 capacity provider before its generic
+recipe input provider, and uses the shared curator permission source.
 The active root determines the requested permission artifact at
 `GET /merkle/{adapter}/{root}` under the configured curator API URL; the SDK checks
 the chain, adapter, account, root, leaf hashes and every proof before preparation. Financial amounts
@@ -66,8 +67,18 @@ come from the recipe's read-dependent computation, bound directly as a result or
 through an exact input equality. Bounds validate the chosen amount; they do not
 choose it. For example, a recipe can compute `min(balance, liquidity)` without
 embedding either actual amount. The SDK checks every lower bound and cap.
+For guarded Aave borrowing, the shared provider supplies capacity after replaying
+the authenticated supply prefix at the pinned block. The recipe still selects the
+actual amount through its `Min` chain and enforces its health floor. Pool, asset,
+account and health policy come from the committed permission; vault-solver adds no
+Aave sizing implementation or configuration.
 Unconstrained inputs and manual account, tree and inputs configuration fields
-are rejected.
+are rejected. Unused `"nonzero"` payable permission markers are accepted; selecting
+a native-value leaf for recipe execution remains rejected.
+
+The Aave provider changes the host's durable provider roster. Finish or reconcile
+active Merkle jobs with their existing binary before upgrading. Incompatible
+pending journals fail closed; never clear state to bypass ownership checks.
 Polling is fixed at 15 seconds, operation timeout at 30 seconds, strategy cadence at
 one minute and the recipe cache at 16 MiB. YAML fields `pollInterval` and
 `operationTimeout` are rejected, including values equal to these fixed limits.

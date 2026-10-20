@@ -53,7 +53,7 @@ func TestConfigValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.mode != "simulate" || len(cfg.strategies) != 1 || len(cfg.strategies[0].Providers) != 1 || cfg.strategies[0].Config.Account != "" || cfg.strategies[0].Config.Tree != "" {
+	if cfg.mode != "simulate" || len(cfg.strategies) != 1 || len(cfg.strategies[0].Providers) != 0 || cfg.strategies[0].Config.Account != "" || cfg.strategies[0].Config.Tree != "" {
 		t.Fatalf("wrong SDK derivation workflow: %+v", cfg)
 	}
 }

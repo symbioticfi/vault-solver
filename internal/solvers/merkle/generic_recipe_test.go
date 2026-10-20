@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	accountbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
@@ -35,6 +36,7 @@ func TestFactoryPlannerUsesRecipeReadinessIndependentlyOfRequestID(t *testing.T)
 		wantIdle, wantError bool
 	}{
 		{name: "ready", ready: 1, requestID: 7},
+		{name: "unused payable permission", ready: 1, requestID: 7, simulation: "payable metadata"},
 		{name: "waiting", requestID: 7, wantIdle: true},
 		{name: "zero request ID remains executable", ready: 1},
 		{name: "zero request ID with closed gate waits", wantIdle: true},
@@ -103,14 +105,31 @@ func newGenericRecipeHost(t *testing.T, ready, requestID uint64, simulation stri
 	if err != nil {
 		t.Fatal(err)
 	}
+	root := leaf.Hash
+	leaves := []any{map[string]any{"hash": leaf.Hash.Hex(), "target": leaf.Target.Hex(), "value": "0", "data": hexutil.Encode(leaf.Data), "dataMask": hexutil.Encode(leaf.DataMask), "proof": []string{}}}
+	hashes := []common.Hash{leaf.Hash}
+	if simulation == "payable metadata" {
+		payable := leaf
+		payable.Value = big.NewInt(1)
+		payable.Hash, err = recipes.HashLeaf(payable)
+		if err != nil {
+			t.Fatal(err)
+		}
+		first, second := leaf.Hash, payable.Hash
+		if first.Cmp(second) > 0 {
+			first, second = second, first
+		}
+		root = crypto.Keccak256Hash(first[:], second[:])
+		leaves[0].(map[string]any)["proof"] = []string{payable.Hash.Hex()}
+		leaves = append(leaves, map[string]any{"hash": payable.Hash.Hex(), "target": payable.Target.Hex(), "value": "nonzero", "data": hexutil.Encode(payable.Data), "dataMask": hexutil.Encode(payable.DataMask), "proof": []string{leaf.Hash.Hex()}})
+		hashes = append(hashes, payable.Hash)
+	}
 	curator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/merkle/"+strings.ToLower(adapter.Hex())+"/"+leaf.Hash.Hex() || r.URL.RawQuery != "" {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/merkle/"+strings.ToLower(adapter.Hex())+"/"+root.Hex() || r.URL.RawQuery != "" {
 			t.Error("host requested another permission artifact")
 		}
-		metadata := map[string]any{"chainId": 1, "adapter": adapter.Hex(), "root": leaf.Hash.Hex(), "account": account.Hex(), "leaves": []any{
-			map[string]any{"hash": leaf.Hash.Hex(), "target": leaf.Target.Hex(), "value": "0", "data": hexutil.Encode(leaf.Data), "dataMask": hexutil.Encode(leaf.DataMask), "proof": []string{}},
-		}}
-		_ = json.NewEncoder(w).Encode(map[string]any{"bundle": map[string]any{"chainId": 1, "adapter": adapter.Hex(), "account": account.Hex(), "root": leaf.Hash.Hex(), "leaves": []common.Hash{leaf.Hash}, "metadata": metadata}})
+		metadata := map[string]any{"chainId": 1, "adapter": adapter.Hex(), "root": root.Hex(), "account": account.Hex(), "leaves": leaves}
+		_ = json.NewEncoder(w).Encode(map[string]any{"bundle": map[string]any{"chainId": 1, "adapter": adapter.Hex(), "account": account.Hex(), "root": root.Hex(), "leaves": hashes, "metadata": metadata}})
 	}))
 	t.Cleanup(curator.Close)
 	binding := executorbinding.NewRecipeExecutor()
@@ -144,7 +163,7 @@ func newGenericRecipeHost(t *testing.T, ready, requestID uint64, simulation stri
 			if method.Name == "hasRole" {
 				return genericPack(t, method.Outputs, true)
 			}
-			return genericPack(t, method.Outputs, leaf.Hash)
+			return genericPack(t, method.Outputs, root)
 		}
 		method, methodErr := executorABI.MethodById(data)
 		if methodErr != nil || target != executor {

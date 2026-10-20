@@ -322,6 +322,16 @@ curator source and runtime policy version for recovery. Complete original-code
 simulation and canonical block fences remain mandatory. The shared lens replays
 authenticated state-changing prefixes before later numerical reads; unresolved
 provider outputs, future input sources and executor self-queries fail closed.
+The host registers the SDK's `providers/aave` capacity provider before generic
+recipe input derivation. It replays authenticated supply prefixes and reads Aave
+capacity through a pinned eth_call code override; the committed recipe chooses
+the actual amount and enforces its health floor. The implementation is shared
+with the executor daemon; vault-solver contains no Aave sizing implementation.
+Adding this provider changes the durable roster. Finish or reconcile active
+Merkle jobs before upgrading; recovery rejects incompatible pending journals
+without clearing their signer ownership.
+Canonical permission bundles may include unused `"nonzero"` payable markers;
+selecting such a leaf for recipe execution remains unsupported.
 
 The immutable SDK also classifies successful original execution results using the
 authenticated recipe: all Manage gates closed with no Call or Approve work is idle.

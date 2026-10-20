@@ -11,7 +11,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"gopkg.in/yaml.v3"
@@ -74,7 +73,7 @@ func parseConfig(node yaml.Node) (config, error) {
 			return config{}, errors.Errorf("merkle duplicate executor address %s", canonical)
 		}
 		seen[canonical] = true
-		cfg.strategies = append(cfg.strategies, keeper.Strategy{Config: keeper.Config{Name: canonical, Executor: canonical, Interval: defaultStrategyInterval}, Providers: []provider.Provider{keeper.NewRecipeInputs()}})
+		cfg.strategies = append(cfg.strategies, keeper.Strategy{Config: keeper.Config{Name: canonical, Executor: canonical, Interval: defaultStrategyInterval}})
 	}
 	return cfg, nil
 }
