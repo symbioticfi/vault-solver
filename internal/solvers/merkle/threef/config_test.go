@@ -11,7 +11,7 @@ import (
 
 const validConfig = `mode: simulate
 stateDir: state/threef-merkle
-executor: "0x0000000000000000000000000000000000000010"
+executors: ["0x0000000000000000000000000000000000000010"]
 curator:
   url: http://127.0.0.1:1/api/v1
 url: https://bf.3f.xyz
@@ -64,7 +64,7 @@ func TestRecoveryIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	strategy := keeper.Config{Name: cfg.Executor, Executor: cfg.Executor, Account: common.HexToAddress("0x20").Hex(), Interval: pollInterval}
+	strategy := keeper.Config{Name: cfg.Executors[0], Executor: cfg.Executors[0], Account: common.HexToAddress("0x20").Hex(), Interval: pollInterval}
 	caller := common.HexToAddress("0x30")
 	original, err := strategyRevision(strategy, cfg, caller)
 	if err != nil {
@@ -87,5 +87,30 @@ func TestRecoveryIdentity(t *testing.T) {
 				t.Fatalf("changed configuration escaped recovery: %v", err)
 			}
 		})
+	}
+}
+
+func TestConfigExecutorsAreBoundedUniqueAndHaveNoSingularAlias(t *testing.T) {
+	const entry = `executors: ["0x0000000000000000000000000000000000000010"]`
+	for name, tc := range map[string]struct{ value, want string }{
+		"missing":        {"", "threef-merkle requires 1..256 executors"},
+		"empty":          {"executors: []", "threef-merkle requires 1..256 executors"},
+		"duplicate":      {`executors: ["0x0000000000000000000000000000000000000010", "0x0000000000000000000000000000000000000010"]`, "duplicate threef-merkle executor"},
+		"zero":           {`executors: ["0x0000000000000000000000000000000000000000"]`, "executors[0]"},
+		"malformed":      {`executors: ["invalid"]`, "executors[0]"},
+		"singular alias": {`executor: "0x0000000000000000000000000000000000000010"`, "field executor not found"},
+		"too many":       {"executors: [" + strings.Repeat(`"0x0000000000000000000000000000000000000010",`, 256) + `"0x0000000000000000000000000000000000000011"]`, "threef-merkle requires 1..256 executors"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := parseConfig(configNode(t, strings.Replace(validConfig, entry, tc.value, 1)))
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("wanted %q, got %v", tc.want, err)
+			}
+		})
+	}
+	raw := strings.Replace(validConfig, entry, `executors: ["0x00000000000000000000000000000000000000ab", "0x0000000000000000000000000000000000000011"]`, 1)
+	_, err := parseConfig(configNode(t, raw))
+	if err != nil {
+		t.Fatal(err)
 	}
 }

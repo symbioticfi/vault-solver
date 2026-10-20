@@ -34,8 +34,9 @@ func (factorySigner) SignTx(context.Context, *types.Transaction, *big.Int) (*typ
 }
 
 func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
-	for _, mode := range []string{"valid", "send", "caller mismatch", "reorg", "zero account", "wrong chain", "active recovery"} {
+	for _, mode := range []string{"valid", "send", "caller mismatch", "reorg", "zero account", "wrong chain", "active recovery", "multi valid", "multi account", "multi caller mismatch"} {
 		t.Run(mode, func(t *testing.T) {
+			second := common.HexToAddress("0x11")
 			target, account, caller := common.HexToAddress("0x10"), common.HexToAddress("0x20"), common.HexToAddress("0x30")
 			header := &types.Header{Number: big.NewInt(12), Difficulty: new(big.Int)}
 			getters := 0
@@ -85,10 +86,14 @@ func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
 							return
 						}
 						calls := *abi.ConvertType(args[0], new([]multicall3.Multicall3Call3)).(*[]multicall3.Multicall3Call3)
-						if len(calls) != 2 || calls[0].Target != target || calls[1].Target != target {
+						wantCalls := 2
+						if strings.HasPrefix(mode, "multi ") {
+							wantCalls = 4
+						}
+						if len(calls) != wantCalls || calls[0].Target != target || calls[1].Target != target || wantCalls == 4 && (calls[2].Target != second || calls[3].Target != second) {
 							t.Error("discovery lost dedup")
 						}
-						values := make([]multicall3.Multicall3Result, 2)
+						values := make([]multicall3.Multicall3Result, len(calls))
 						for j, c := range calls {
 							executorABI := executor.NewRecipeExecutor().GetABI()
 							m, err := executorABI.MethodById(c.CallData)
@@ -99,11 +104,13 @@ func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
 							a := account
 							if m.Name == "caller" {
 								a = caller
-								if mode == "caller mismatch" {
+								if mode == "caller mismatch" || mode == "multi caller mismatch" && c.Target == second {
 									a = common.HexToAddress("0x40")
 								}
 							} else if mode == "zero account" {
 								a = common.Address{}
+							} else if mode == "multi account" && c.Target == second {
+								a = common.HexToAddress("0x21")
 							}
 							data, err := m.Outputs.Pack(a)
 							if err != nil {
@@ -137,6 +144,9 @@ func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
 			defer client.Close()
 			directory := filepath.Join(t.TempDir(), "state")
 			raw := strings.Replace(validConfig, "state/threef-merkle", directory, 1)
+			if strings.HasPrefix(mode, "multi ") {
+				raw = strings.Replace(raw, `executors: ["0x0000000000000000000000000000000000000010"]`, `executors: ["0x0000000000000000000000000000000000000010", "0x0000000000000000000000000000000000000011"]`, 1)
+			}
 			if mode == "send" {
 				raw = strings.Replace(raw, "mode: simulate", "mode: send", 1)
 			}
@@ -158,14 +168,19 @@ func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
 			owner := factorySigner{address: caller}
 			manager := txmanager.New(client, owner, big.NewInt(1), txmanager.Config{}, logr.Discard())
 			built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, TxManager: manager, Log: logr.Discard()})
-			if mode == "valid" || mode == "send" {
+			if mode == "valid" || mode == "send" || mode == "multi valid" {
 				if err != nil {
 					t.Fatal(err)
 				}
 				current := built.(*Solver)
 				defer func() { _ = current.Close() }()
-				if current.Name() != Name || current.RequiresTxManager() != (mode == "send") || len(current.keeper.Strategies[0].Providers) != 1 || current.offers.bot.Send != (mode == "send") || getters != 1 || current.keeper.Planner.(*mintPlanning).PermissionSource == nil || current.keeper.Planner.(*mintPlanning).RecipeCache == nil || current.keeper.Strategies[0].Config.Account != account.Hex() {
+				if current.Name() != Name || current.RequiresTxManager() != (mode == "send") || len(current.keeper.Strategies[0].Providers) != 1 || current.offers[0].bot.Send != (mode == "send") || getters != 1 || current.keeper.Planner.(*mintPlanning).PermissionSource == nil || current.keeper.Planner.(*mintPlanning).RecipeCache == nil || current.keeper.Strategies[0].Config.Account != account.Hex() {
 					t.Fatal("host failed shared SDK integration")
+				}
+				if mode == "multi valid" {
+					if len(current.keeper.Strategies) != 2 || current.keeper.Strategies[1].Config.Executor != second.Hex() || current.keeper.Strategies[0].Providers[0] != current.keeper.Strategies[1].Providers[0] {
+						t.Fatal("multi recipe host lost shared provider or strategy scope")
+					}
 				}
 				if found, err := state.Read(directory, "txmanager.active.v1", new(any)); err != nil || found {
 					t.Fatal("factory created owned transaction", err)
@@ -174,6 +189,12 @@ func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
 				if err == nil {
 					_ = built.(*Solver).Close()
 					t.Fatal("invalid discovery accepted")
+				}
+				if mode == "multi account" && !strings.Contains(err.Error(), "3f executors must share one default maker account") {
+					t.Fatal("missing account scope guard", err)
+				}
+				if mode == "multi caller mismatch" && !strings.Contains(err.Error(), "3f executor caller differs from the shared signer") {
+					t.Fatal("missing shared caller guard", err)
 				}
 				if mode == "active recovery" {
 					reopened, err := state.Open(directory)

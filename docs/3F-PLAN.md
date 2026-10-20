@@ -11,7 +11,7 @@ architecture, and decisions. See `3F_BRIDGE_FACILITATOR_INTEGRATION.md` (sibling
 repo root) §4 for the functional blueprint of the 3F solver.
 
 The native MerkleAccount API-key PUSH workflow is a separate `threef-merkle` solver,
-with one executor and one broker/default maker. See [THREEF-MERKLE.md](THREEF-MERKLE.md).
+with 1..256 recipe executors, one shared sender and one broker/default maker. See [THREEF-MERKLE.md](THREEF-MERKLE.md).
 It does not use this adapter solver's discovery, signatures or liquidity strategies.
 
 ---

@@ -29,7 +29,7 @@ func init() { solver.Register(Name, factory) }
 type Solver struct {
 	keeper *keeper.Keeper
 	store  *state.Store
-	offers *offerWorkflow
+	offers []*offerWorkflow
 }
 
 func (s *Solver) Name() string            { return Name }
@@ -50,11 +50,13 @@ func (s *Solver) Run(ctx context.Context) error {
 		}
 
 		if s.keeper.Sender == nil || s.keeper.Sender.PendingID() == "" {
-			run, cancel := context.WithTimeout(ctx, operationTimeout)
-			err := s.offers.Tick(run)
-			cancel()
-			if err != nil && !errors.Is(err, context.Canceled) {
-				observability.Log(ctx).Error(err, "3f offer iteration failed")
+			for _, workflow := range s.offers {
+				run, cancel := context.WithTimeout(ctx, operationTimeout)
+				err := workflow.Tick(run)
+				cancel()
+				if err != nil && !errors.Is(err, context.Canceled) {
+					observability.Log(ctx).Error(err, "3f offer iteration failed", "executor", workflow.strategy.Config.Executor)
+				}
 			}
 		}
 		select {
@@ -78,34 +80,54 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if deps.Chain.ChainID().Cmp(common.Big1) != 0 {
 		return nil, errors.New("3f Merkle PUSH requires mainnet")
 	}
-	identity, err := recipes.DiscoverExecutors(startup, deps.Chain, []common.Address{common.HexToAddress(cfg.Executor)})
+	executors := make([]common.Address, len(cfg.Executors))
+	for i, text := range cfg.Executors {
+		executors[i] = common.HexToAddress(text)
+	}
+	identity, err := recipes.DiscoverExecutors(startup, deps.Chain, executors)
 	if err != nil {
 		return nil, errors.Errorf("3f executor identity discovery: %w", err)
 	}
-	target := identity[common.HexToAddress(cfg.Executor)]
-	if target.Caller != deps.Signer.Address() {
-		return nil, errors.New("3f executor caller differs from the shared signer")
-	}
-	strategy := keeper.Strategy{Config: keeper.Config{Name: cfg.Executor, Executor: cfg.Executor, Account: target.Account.Hex(), Interval: pollInterval}}
-	strategy.Config.Revision, err = strategyRevision(strategy.Config, cfg, deps.Signer.Address())
-	if err != nil {
-		return nil, err
+	strategies := make([]keeper.Strategy, 0, len(executors))
+	var account common.Address
+	for _, address := range executors {
+		target := identity[address]
+		if target.Caller != deps.Signer.Address() {
+			return nil, errors.New("3f executor caller differs from the shared signer")
+		}
+		if account != (common.Address{}) && target.Account != account {
+			return nil, errors.New("3f executors must share one default maker account")
+		}
+		account = target.Account
+		strategy := keeper.Strategy{Config: keeper.Config{Name: address.Hex(), Executor: address.Hex(), Account: target.Account.Hex(), Interval: pollInterval}}
+		strategy.Config.Revision, err = strategyRevision(strategy.Config, cfg, deps.Signer.Address())
+		if err != nil {
+			return nil, err
+		}
+		strategies = append(strategies, strategy)
 	}
 	api, err := newClient(cfg.apiConfig())
 	if err != nil {
 		return nil, err
 	}
 	runtime := &mintProvider{API: api, Chain: deps.Chain}
-	strategy.Providers = []provider.Provider{runtime}
+	for i := range strategies {
+		strategies[i].Providers = []provider.Provider{runtime}
+	}
 	source, err := permissions.New(cfg.Curator.httpConfig(), &http.Client{Timeout: operationTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, deps.Chain, os.Getenv)
 	if err != nil {
 		return nil, err
 	}
-	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(1, 16<<20), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: deps.TxManager.Confirmations()}
-	k := &keeper.Keeper{Planner: &mintPlanning{Planner: planner, runtime: runtime}, Strategies: []keeper.Strategy{strategy}, Mode: cfg.Mode, OperationTimeout: operationTimeout, Log: deps.Log.WithName(Name)}
+	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(len(strategies), 16<<20), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: deps.TxManager.Confirmations()}
+	k := &keeper.Keeper{Planner: &mintPlanning{Planner: planner, runtime: runtime}, Strategies: strategies, Mode: cfg.Mode, OperationTimeout: operationTimeout, Log: deps.Log.WithName(Name)}
 	store, err := merklesender.OpenKeeper(k, cfg.StateDir, deps, Name)
 	if err != nil {
 		return nil, err
 	}
-	return &Solver{keeper: k, store: store, offers: &offerWorkflow{planner: planner, strategy: strategy, api: api, bot: &offerBot{Client: api, Store: store, Send: cfg.Mode == "send"}}}, nil
+	bot := &offerBot{Client: api, Store: store, Send: cfg.Mode == "send"}
+	workflows := make([]*offerWorkflow, 0, len(strategies))
+	for _, strategy := range strategies {
+		workflows = append(workflows, &offerWorkflow{planner: planner, strategy: strategy, api: api, bot: bot})
+	}
+	return &Solver{keeper: k, store: store, offers: workflows}, nil
 }

@@ -83,6 +83,15 @@ func (b *offerBot) Tick(ctx context.Context, market offerMarket, auctions []thre
 	if err != nil {
 		return err
 	}
+	// Another recipe owns this account's live intent. Its workflow alone may
+	// cancel it; an unresolved POST must remain bound to the original recipe.
+	if previous != nil && previous.Executor != market.Executor {
+		for _, offer := range live {
+			if offer.id == previous.OfferID {
+				return nil
+			}
+		}
+	}
 	reserved := new(big.Int)
 	for _, offer := range live {
 		if offer.asset == market.Asset {
@@ -95,7 +104,10 @@ func (b *offerBot) Tick(ctx context.Context, market offerMarket, auctions []thre
 			continue
 		}
 		request := common.HexToAddress(offer.dto.RequestId)
-		owned := previous != nil && previous.OfferID == offer.id
+		owned := previous != nil && previous.OfferID == offer.id && previous.Executor == market.Executor
+		if !owned && !market.EligibleRequests[request] {
+			continue
+		}
 		cancel := owned && (!previous.matchesMarket(market) || !market.EligibleRequests[request])
 		if offer.asset != market.Asset && !cancel {
 			continue

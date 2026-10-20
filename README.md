@@ -901,8 +901,8 @@ does not imply waiting when a separate recipe gate authorizes the action.
 
 The independent `threef-merkle` solver runs native 3F API-key PUSH offers with a
 dedicated curator BF, a MerkleAccount maker and guarded account-side minting.
-Configure one executor, broker and API-key environment reference using
+Configure 1..256 unique recipe `executors`, one broker and an API-key environment reference using
 [the example YAML](config/threef-merkle.example.yaml), then complete enrollment as
 described in [the 3F Merkle runbook](docs/THREEF-MERKLE.md). The generic `merkle`
-solver rejects the `threeF` field. Automatic offers reserve existing commitments
+solver rejects the `threeF` field. Every configured executor must use the same maker account and shared signer. One journal and sender serialize all markets; the singular `executor` field is rejected. Automatic offers reserve existing commitments
 and use account idle cash; simulation never submits or cancels API offers.

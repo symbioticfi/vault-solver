@@ -358,8 +358,10 @@ simulates the complete outer RFQ settlement. The Merkle hosts share
 `internal/merklesender`, which forwards owner fences, signed-byte persistence and
 optional execution deadlines to the single txmanager. See [RFQ-MERKLE.md](RFQ-MERKLE.md).
 
-`threef-merkle` independently owns one Merkle executor and one curator BF/default
-maker. Its API-key PUSH offer loop uses authenticated recipe/policy scope and idle
+`threef-merkle` independently owns 1..256 Merkle recipe executors for one curator BF/default
+maker, with one API client, planner, provider, store and sender. Per-recipe offer
+workflows run sequentially while that sender is idle; the account-level durable intent
+serializes self-originated offers across markets. Its API-key PUSH offer loop uses authenticated recipe/policy scope and idle
 account cash; its SDK provider binds native aggregate mint authorizations. The
 generic `merkle` solver has no 3F configuration or provider dispatch. All 3F Merkle
 code lives in one package; API, reservation and durable intent checks remain inside

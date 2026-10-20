@@ -354,3 +354,74 @@ func TestTickRetainsOneLiveBotOriginIntentAcrossAuctions(t *testing.T) {
 		})
 	}
 }
+
+func TestTickPreservesOtherRecipeIntentUntilTerminal(t *testing.T) {
+	for _, status := range []string{"SUBMITTED", "ACCEPTED", "AWAITING_MINT", "PENDING", "unresolved", "SUCCEEDED"} {
+		t.Run(status, func(t *testing.T) {
+			b, c, first := testBot(t)
+			if err := b.Tick(t.Context(), first, c.auctions); err != nil {
+				t.Fatal(err)
+			}
+			created := c.created[0]
+			row := testOffer(first, 1, status, created.Amount)
+			row.Id, row.Nonce, row.ExpectedReturn, row.Expiration = 15, created.Nonce, created.ExpectedReturn, created.Expiration
+			if status != "unresolved" {
+				c.offers = []threef.OfferDto{row}
+			}
+			second := first
+			second.Executor = common.HexToAddress("0x11")
+			second.UnderlyingAsset = common.HexToAddress("0x12")
+			request := common.HexToAddress("0x13")
+			second.EligibleRequests = map[common.Address]bool{request: true}
+			c.auctions = append(c.auctions, testAuction(second, 2, request))
+			if status == "SUCCEEDED" {
+				c.auctions[0].Status = "SOLVED"
+			}
+			err := b.Tick(t.Context(), second, c.auctions)
+			if status == "unresolved" {
+				if err == nil || !strings.Contains(err.Error(), "POST outcome unresolved") {
+					t.Fatalf("unresolved intent escaped: %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if len(c.cancelled) != 0 {
+				t.Fatal("another recipe cancelled live intent")
+			}
+			want := 1
+			if status == "SUCCEEDED" {
+				want = 2
+			}
+			if len(c.created) != want {
+				t.Fatal("another recipe replaced unresolved intent or terminal intent blocked progress")
+			}
+			var saved intent
+			found, err := b.Store.Load(journalKey(first), &saved)
+			if err != nil || !found {
+				t.Fatal("account journal lost", err)
+			}
+			if status != "SUCCEEDED" && (saved.Executor != first.Executor || saved.Offer.Nonce != created.Nonce) {
+				t.Fatal("another recipe rewrote durable intent")
+			}
+			if status == "SUCCEEDED" && saved.Executor != second.Executor {
+				t.Fatal("terminal handoff did not retain new recipe")
+			}
+		})
+	}
+}
+
+func TestTickDoesNotCancelAnotherMarketUIOfferAgainstCurrentPairBudget(t *testing.T) {
+	b, c, m := testBot(t)
+	other := common.HexToAddress("0x13")
+	c.auctions = append(c.auctions, testAuction(m, 2, other))
+	row := testOffer(m, 2, "SUBMITTED", "700000")
+	row.RequestId = other.Hex()
+	c.offers = []threef.OfferDto{row}
+	m.Budget = big.NewInt(100000)
+	if err := b.Tick(t.Context(), m, c.auctions); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.cancelled) != 0 || len(c.created) != 0 {
+		t.Fatal("current pair budget mutated a different market commitment")
+	}
+}
