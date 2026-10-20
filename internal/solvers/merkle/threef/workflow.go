@@ -1,4 +1,4 @@
-package threefmerkle
+package threef
 
 import (
 	"context"
@@ -13,7 +13,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
-var tracer = observability.NewTracer("github.com/symbioticfi/vault-solver/internal/solvers/threef-merkle", Name)
+var tracer = observability.NewTracer("github.com/symbioticfi/vault-solver/internal/solvers/merkle/threef", Name)
 
 type mintPlanning struct {
 	*keeper.Planner

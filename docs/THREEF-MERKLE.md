@@ -127,7 +127,7 @@ separate from live-provider approval, authenticated mainnet enrollment and minti
 
 ## Implementation and validation
 
-All hand-written 3F Merkle logic lives in `internal/solvers/threef-merkle`:
+All hand-written 3F Merkle logic lives in `internal/solvers/merkle/threef`:
 API transport/JSON admission, offer sizing and journal recovery, policy snapshots,
 canonical recipe inspection and the mint provider. One Run goroutine owns offer
 maintenance; the shared SDK keeper owns mint progress. It admits no new offer work

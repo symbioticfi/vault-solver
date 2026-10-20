@@ -1,5 +1,5 @@
-// Package threefmerkle submits native 3F PUSH offers and executes guarded Merkle mints.
-package threefmerkle
+// Package threef submits native 3F PUSH offers and executes guarded Merkle mints.
+package threef
 
 import (
 	"context"

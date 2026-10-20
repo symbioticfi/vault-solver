@@ -1,4 +1,4 @@
-package threefmerkle
+package threef
 
 import (
 	"math/big"
