@@ -263,6 +263,12 @@ func (t boundedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if key == "" || strings.ContainsAny(key, "\r\n") {
 			return nil, errors.New("3f API key is missing or invalid")
 		}
+		// Generated methods may insert a noncanonical lowercase empty header.
+		for name := range clone.Header {
+			if strings.EqualFold(name, "x-api-key") {
+				delete(clone.Header, name)
+			}
+		}
 		clone.Header.Set("x-api-key", key)
 	}
 	response, err := http.DefaultTransport.RoundTrip(clone)

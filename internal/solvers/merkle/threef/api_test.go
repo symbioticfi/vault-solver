@@ -66,6 +66,32 @@ func TestIdentity(t *testing.T) {
 	}
 }
 
+func TestIdentitySendsSingleAPIKeyHeader(t *testing.T) {
+	var calls int
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		// The generated identity methods supply an empty lowercase header.
+		values := r.Header.Values("x-api-key")
+		if len(values) != 1 || values[0] != "secret-one" {
+			t.Error("identity request must send exactly one API credential")
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/v1/facilitator/offer-address" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"facilitator": testBroker.Hex(), "offerAddress": testAccount.Hex()})
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]map[string]any{{"maker": testAccount.Hex(), "submissionsEnabled": true, "isDefault": true}})
+	})
+	if err := c.Identity(t.Context(), testAccount); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("identity requests: %d", calls)
+	}
+}
+
 func TestUnsignedCreateWireAndPointOfUseKey(t *testing.T) {
 	var calls int
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
