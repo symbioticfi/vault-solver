@@ -660,4 +660,4 @@ the backend header-only contract so resolve-union decoding no longer requires th
 removed body field.
 
 
-Merkle connector acquisition is owned by `internal/solvers/merkle/rfq`, as described in [RFQ-MERKLE.md](RFQ-MERKLE.md). Its connector entry is `{swapExecutor, redemptionExecutors: {token: executor}}`. One shared custody executor can pin 1..64 distinct signed token routes; each owns a separate amount/payment input pair and unchanged route identity. The selected token pair receives the awarded amount and signed payment, every other pair is zero, and the on-chain recipe requires exactly one active route. Per-asset issuer executors take precedence, retain their original issuer grants and exact settlement checks, and never fall back to custody after a route failure.
+Merkle connector acquisition is owned by `internal/solvers/merkle/rfq`, as described in [RFQ-MERKLE.md](RFQ-MERKLE.md). Each connector maps each RWA asset to its own recipe executor. The recipe commits one signed swap with the awarded amount and payment as inputs 0 and 1. Include that asset's original issuer grants when redemption is required; route failures never fall back to custody.
