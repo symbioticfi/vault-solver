@@ -97,7 +97,7 @@ and underlying authorization error.
 
 Merkle connector orders run independently under `rfq-merkle`; see its
 [configuration](config/rfq-merkle.example.yaml) and [runbook](docs/RFQ-MERKLE.md).
-It consumes awarded `/orders` and signed backend terms without aggregating adapter liquidity. Its connector routing config uses one `swapExecutor` for all admitted custody-only assets, plus explicit `redemptionExecutors` keyed by token for post-swap issuer actions. A configured issuer route takes precedence and never falls back to custody on failure.
+It consumes awarded `/orders` and signed backend terms without aggregating adapter liquidity. Its connector routing config maps each RWA asset to a dedicated RecipeExecutor. Each recipe handles one asset and includes its issuer calls when redemption is required. There is no shared custody executor or asset fallback.
 
 When `tokensToQuote: permissioned`, admitted inputs are never aggregated: the selected strategy must
 use one candidate route. Other scopes keep the existing multi-route behavior.

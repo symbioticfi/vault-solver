@@ -105,10 +105,7 @@ func assembleConnectorRoute(snapshot recipes.Snapshot, recipe recipes.Recipe, tr
 	}
 	actions := map[string]hexutil.Bytes{}
 	owned := map[string]bool{}
-	inputs := map[uint]string{}
-	seenTokens := map[common.Address]bool{}
-	selected := 0
-	count := uint64(0)
+	inputs := map[uint]string{0: amountIn.String(), 1: amountOut.String()}
 	managed, err := recipes.ManagedActions(recipe, tree)
 	if err != nil {
 		return assembledConnector{}, err
@@ -126,45 +123,31 @@ func assembleConnectorRoute(snapshot recipes.Snapshot, recipe recipes.Recipe, tr
 		if err := action.Pinned(132, 32); err != nil {
 			return assembledConnector{}, err
 		}
-		routeToken := common.BytesToAddress(action.Leaf.Data[132:164])
-		if routeToken == (common.Address{}) || seenTokens[routeToken] {
-			return assembledConnector{}, errors.New("connector recipe repeats or omits an asset")
+		if len(owned) != 0 {
+			return assembledConnector{}, errors.New("connector recipe must contain one signed swap for one asset")
 		}
-		seenTokens[routeToken] = true
+		if common.BytesToAddress(action.Leaf.Data[132:164]) != token {
+			return assembledConnector{}, errors.New("connector recipe asset differs from award")
+		}
 		amount, err := action.Field(100)
-		if err != nil || amount.Source != recipes.Input || !amount.Value.IsUint64() || amount.Value.Uint64()%2 != 0 || amount.Value.Uint64() >= 128 {
-			return assembledConnector{}, errors.New("connector swap must bind amountIn to its upstream input pair")
+		if err != nil || amount.Source != recipes.Input || amount.Value.Sign() != 0 {
+			return assembledConnector{}, errors.New("connector swap must bind amountIn to input 0")
 		}
-		index := amount.Value.Uint64()
 		gate := action.Slot.Gate
-		if gate.Source != recipes.Input || gate.Value.Cmp(amount.Value) != 0 {
+		if gate.Source != recipes.Input || gate.Value.Sign() != 0 {
 			return assembledConnector{}, errors.New("connector swap gate must equal its amount input")
 		}
-		if _, exists := inputs[uint(index)]; exists {
-			return assembledConnector{}, errors.New("connector recipe reuses an input pair")
-		}
-		inputs[uint(index)], inputs[uint(index+1)] = "0", "0"
-		if err := validateConnectorDeltaInputs(recipe, action.Step, snapshot.Account, recipient, outputAsset, routeToken, index, index+1); err != nil {
+		if err := validateConnectorDeltas(recipe, action.Step, snapshot.Account, recipient, outputAsset, token); err != nil {
 			return assembledConnector{}, err
 		}
 		owned[action.Key] = true
-		count++
-		if routeToken == token {
-			actions[action.Key] = data
-			inputs[uint(index)], inputs[uint(index+1)] = amountIn.String(), amountOut.String()
-			selected++
-		}
+		actions[action.Key] = data
 	}
-	if selected != 1 || count == 0 || count > 64 {
-		return assembledConnector{}, errors.New("connector recipe must admit exactly one selected signed asset")
+	if len(owned) != 1 {
+		return assembledConnector{}, errors.New("connector recipe must contain one signed swap for one asset")
 	}
-	if len(inspection.Inputs) != int(count*2) {
-		return assembledConnector{}, errors.New("connector recipe requires only paired upstream inputs")
-	}
-	for i, index := range inspection.Inputs {
-		if index != uint(i) {
-			return assembledConnector{}, errors.New("connector recipe inputs must be consecutive pairs")
-		}
+	if len(inspection.Inputs) != 2 || inspection.Inputs[0] != 0 || inspection.Inputs[1] != 1 {
+		return assembledConnector{}, errors.New("connector recipe requires only amount input 0 and payment input 1")
 	}
 	if err := recipes.ValidateMutableActions(recipe, tree, owned); err != nil {
 		return assembledConnector{}, err
@@ -190,7 +173,7 @@ type permissionSource interface {
 type connectorWorkflow struct {
 	chain          recipes.Reader
 	chainID        *big.Int
-	executors      map[common.Address]routeExecutors
+	executors      map[common.Address]map[common.Address]common.Address
 	source         permissionSource
 	caller, signer common.Address
 }
@@ -244,7 +227,7 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 		return nil, time.Time{}, err
 	}
 	configured, ok := w.executors[selected.Venue]
-	recipeExecutor, admitted := configured.forToken(order.Request.TokenIn)
+	recipeExecutor, admitted := configured[order.Request.TokenIn]
 	if !ok || !admitted || selected.DiscountID == (common.Hash{}) || selected.MaxAssets == nil || selected.MaxAssets.Sign() < 0 {
 		return nil, time.Time{}, errors.New("connector requires a configured executor and upstream discount")
 	}

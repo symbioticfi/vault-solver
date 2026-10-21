@@ -57,6 +57,12 @@ func TestAssembleConnectorRouteKeepsCommittedProgram(t *testing.T) {
 	if err == nil {
 		t.Fatal("mismatched RWA permission accepted")
 	}
+	multiple := recipes.CloneRecipe(recipe)
+	multiple.Steps = append(multiple.Steps, append([]byte(nil), recipe.Steps[3]...))
+	_, err = assembleConnectorRoute(snapshot, multiple, tree, vlt, tIn, tOut, common.HexToAddress("0x10"), big.NewInt(123), big.NewInt(456), terms.Swap, terms.Signature)
+	if err == nil || !strings.Contains(err.Error(), "one signed swap for one asset") {
+		t.Fatalf("multiple connector swaps accepted: %v", err)
+	}
 	// A signed field remains fixed when the curator has not granted it a mutable mask.
 	terms.Swap.Discount.Nonce = big.NewInt(18)
 	for i := 260; i < 292; i++ {
