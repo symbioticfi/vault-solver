@@ -8,7 +8,7 @@ import (
 func TestExpectedReturn(t *testing.T) {
 	// 100,000 USDC (6 decimals) at 200 bps (2%) => 2,000 USDC.
 	principal := new(big.Int).SetUint64(100_000_000_000)
-	got := ExpectedReturn(principal, 200)
+	got := ExpectedReturn(principal, 200, 0)
 	want := new(big.Int).SetUint64(2_000_000_000)
 	if got.Cmp(want) != 0 {
 		t.Fatalf("expected %s, got %s", want, got)
@@ -26,8 +26,28 @@ func TestExpectedReturn(t *testing.T) {
 	}
 	for _, c := range exact {
 		p, _ := new(big.Int).SetString(c.principal, 10)
-		if g := ExpectedReturn(p, c.rateBps); g.String() != c.want {
+		if g := ExpectedReturn(p, c.rateBps, 0); g.String() != c.want {
 			t.Fatalf("ExpectedReturn(%s, %g) = %s, want %s", c.principal, c.rateBps, g, c.want)
+		}
+	}
+}
+
+func TestExpectedReturnRateBasis(t *testing.T) {
+	// 1,000,000 USDC at 7.3% APR: a year earns 73,000; a 1-day basis earns 200 (the old 2 bps per term);
+	// a 31-day FalconX basis earns 73,000*31/365 truncated.
+	principal := new(big.Int).SetUint64(1_000_000_000_000)
+	cases := []struct {
+		basis int64
+		want  string
+	}{
+		{0, "73000000000"},
+		{YearSeconds, "73000000000"},
+		{86_400, "200000000"},
+		{2_678_400, "6200000000"},
+	}
+	for _, c := range cases {
+		if g := ExpectedReturn(principal, 730, c.basis); g.String() != c.want {
+			t.Fatalf("ExpectedReturn(basis=%d) = %s, want %s", c.basis, g, c.want)
 		}
 	}
 }
@@ -93,23 +113,28 @@ func TestValidateYield(t *testing.T) {
 		amount  *big.Int
 		minPpm  *big.Int
 		maxBps  float64
+		basis   int64
 		wantErr bool
 	}{
-		{"at floor, under max", big.NewInt(114098544), big.NewInt(amount), big190, 3, false},
-		{"one below floor", big.NewInt(114098543), big.NewInt(amount), big190, 3, true},
-		{"above max rate", big.NewInt(200000000), big.NewInt(amount), big190, 3, true},       // ~333 ppm > 300
-		{"at exactly max rate", big.NewInt(180155594), big.NewInt(amount), big190, 3, false}, // floor(180155594*1e6/amount)=300
-		{"nil expectedReturn", nil, big.NewInt(amount), big190, 3, true},
-		{"zero expectedReturn", big.NewInt(0), big.NewInt(amount), big190, 3, true},
-		{"zero expectedReturn, no floor no max", big.NewInt(0), big.NewInt(amount), big.NewInt(0), 0, true},
-		{"nil principal", big.NewInt(1), nil, big190, 3, true},
-		{"zero principal", big.NewInt(1), big.NewInt(0), big190, 3, true},
-		{"no floor, under max", big.NewInt(1), big.NewInt(amount), big.NewInt(0), 3, false},
-		{"no maxRate (unresolved), clears floor", big.NewInt(114098544), big.NewInt(amount), big190, 0, false},
+		{"at floor, under max", big.NewInt(114098544), big.NewInt(amount), big190, 3, 0, false},
+		{"one below floor", big.NewInt(114098543), big.NewInt(amount), big190, 3, 0, true},
+		{"above max rate", big.NewInt(200000000), big.NewInt(amount), big190, 3, 0, true},       // ~333 ppm > 300
+		{"at exactly max rate", big.NewInt(180155594), big.NewInt(amount), big190, 3, 0, false}, // floor(180155594*1e6/amount)=300
+		{"nil expectedReturn", nil, big.NewInt(amount), big190, 3, 0, true},
+		{"zero expectedReturn", big.NewInt(0), big.NewInt(amount), big190, 3, 0, true},
+		{"zero expectedReturn, no floor no max", big.NewInt(0), big.NewInt(amount), big.NewInt(0), 0, 0, true},
+		{"nil principal", big.NewInt(1), nil, big190, 3, 0, true},
+		{"zero principal", big.NewInt(1), big.NewInt(0), big190, 3, 0, true},
+		{"no floor, under max", big.NewInt(1), big.NewInt(amount), big.NewInt(0), 3, 0, false},
+		{"no maxRate (unresolved), clears floor", big.NewInt(114098544), big.NewInt(amount), big190, 0, 0, false},
+		// APR auctions: 300 ppm APR over a 1-day basis caps at floor(amount*300/1e6/365) = 493576.
+		{"1-day basis, at max", big.NewInt(493576), big.NewInt(amount), big.NewInt(0), 3, 86_400, false},
+		{"1-day basis, above max", big.NewInt(493577), big.NewInt(amount), big.NewInt(0), 3, 86_400, true},
+		{"year basis equals per-term", big.NewInt(180155594), big.NewInt(amount), big190, 3, YearSeconds, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := ValidateYield(c.er, c.amount, c.minPpm, c.maxBps)
+			err := ValidateYield(c.er, c.amount, c.minPpm, c.maxBps, c.basis)
 			if (err != nil) != c.wantErr {
 				t.Fatalf("ValidateYield = %v, wantErr=%v", err, c.wantErr)
 			}

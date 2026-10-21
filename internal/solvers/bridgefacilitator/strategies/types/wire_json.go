@@ -43,9 +43,10 @@ type auctionSnapshotJSON struct {
 	Status       string         `json:"status"`
 	DepositAsset common.Address `json:"depositAsset"`
 
-	AmountRequested string  `json:"amountRequested"`
-	RemainingAmount string  `json:"remainingAmount"`
-	MaxRateBps      float64 `json:"maxRateBps"`
+	AmountRequested  string  `json:"amountRequested"`
+	RemainingAmount  string  `json:"remainingAmount"`
+	MaxRateBps       float64 `json:"maxRateBps"`
+	RateBasisSeconds int64   `json:"rateBasisSeconds"`
 }
 
 type liveOfferJSON struct {
@@ -85,9 +86,10 @@ func (in OfferInput) MarshalJSON() ([]byte, error) {
 		auctions = append(auctions, auctionSnapshotJSON{
 			ID: a.ID, AuctionID: a.AuctionID, OriginalIndex: a.OriginalIndex,
 			Request: a.Request, Status: a.Status, DepositAsset: a.DepositAsset,
-			AmountRequested: bigString(a.AmountRequested),
-			RemainingAmount: bigString(a.RemainingAmount),
-			MaxRateBps:      a.MaxRateBps,
+			AmountRequested:  bigString(a.AmountRequested),
+			RemainingAmount:  bigString(a.RemainingAmount),
+			MaxRateBps:       a.MaxRateBps,
+			RateBasisSeconds: a.RateBasisSeconds,
 		})
 	}
 	liveOffers := make([]liveOfferJSON, 0, len(in.LiveOffers))

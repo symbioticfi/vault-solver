@@ -13,19 +13,37 @@ const PpmPerBps = 100.0
 // yieldPpmScale is YIELD_PRECISION on-chain: yield is expectedReturn * 1e6 / principal (ppm).
 const yieldPpmScale = 1_000_000
 
+// YearSeconds is 3F's APR basis (365-day year, simple interest). An auction's maxRate is an APR and its
+// expectedReturn covers rateBasisSeconds, so a per-term rate is just basis == YearSeconds.
+const YearSeconds int64 = 31_536_000
+
 // Read-only big.Int constants for the yield math, hoisted out of the per-offer hot path.
 var (
 	bigYieldPpmScale = big.NewInt(yieldPpmScale)
 	bigCeilBias      = big.NewInt(yieldPpmScale - 1) // for ceil(x/1e6) = (x + 1e6-1) / 1e6
+	bigYearSeconds   = big.NewInt(YearSeconds)
+	bigPpmYear       = new(big.Int).Mul(bigYieldPpmScale, bigYearSeconds)
 )
+
+// rateBasis maps an auction's rateBasisSeconds to the factor applied to its maxRate. After the switch
+// every auction carries one (a year, or the settlement delay for auctions created before it) and maxRate
+// is an APR; API responses from before the switch carry none and quote maxRate per term, which is the
+// same as an annual rate over a full year.
+func rateBasis(basisSeconds int64) *big.Int {
+	if basisSeconds <= 0 {
+		return bigYearSeconds
+	}
+	return big.NewInt(basisSeconds)
+}
 
 // ValidateYield checks that expectedReturn on principal is acceptable to BOTH the adapter's on-chain
 // minYieldPerRequest floor and the 3F auction's max rate, in exact integer ppm — so the offer can't
 // revert on-chain (below floor) nor be rejected by the auction (above maxRate). Yield is compared the way
 // the contract computes it, floor(expectedReturn*1e6/principal), which for integer bounds is equivalent
-// to the exact integer comparisons below. A zero/absent floor or maxRate skips that bound; nil or
-// non-positive amounts are rejected.
-func ValidateYield(expectedReturn, principal, minYieldPpm *big.Int, maxRateBps float64) error {
+// to the exact integer comparisons below. The floor is checked on the raw expectedReturn, exactly as the
+// contract does; only the maxRate bound is scaled by basisSeconds/year. A zero/absent floor or maxRate
+// skips that bound; nil or non-positive amounts are rejected.
+func ValidateYield(expectedReturn, principal, minYieldPpm *big.Int, maxRateBps float64, basisSeconds int64) error {
 	// Reject a non-positive return: a 0 yield (what the pricing helpers produce when floor and maxRate are
 	// both 0, or on dust principals) is never a real offer, so the pair is skipped rather than offered.
 	if principal == nil || principal.Sign() <= 0 || expectedReturn == nil || expectedReturn.Sign() <= 0 {
@@ -37,23 +55,27 @@ func ValidateYield(expectedReturn, principal, minYieldPpm *big.Int, maxRateBps f
 	// maxRate has tenths-of-a-bps precision, so maxRateBps*100 is a whole ppm value; round off float noise.
 	if maxRatePpm := int64(math.Round(maxRateBps * PpmPerBps)); maxRatePpm > 0 {
 		scaled := new(big.Int).Mul(expectedReturn, bigYieldPpmScale)
-		if scaled.Cmp(new(big.Int).Mul(principal, big.NewInt(maxRatePpm))) > 0 {
+		scaled.Mul(scaled, bigYearSeconds)
+		bound := new(big.Int).Mul(principal, big.NewInt(maxRatePpm))
+		if scaled.Cmp(bound.Mul(bound, rateBasis(basisSeconds))) > 0 {
 			return errors.Errorf("yield above auction maxRate %g bps", maxRateBps)
 		}
 	}
 	return nil
 }
 
-// ExpectedReturn is the return for principal at rateBps, truncated down. maxRate has tenths-of-a-bps
-// precision so rateBps*100 is whole ppm; the math is exact integer floor(principal*ppm/1e6) — a big.Float
-// path drifts by 1 wei for principals above ~2^64.
-func ExpectedReturn(principal *big.Int, rateBps float64) *big.Int {
+// ExpectedReturn is the return for principal at the annual rateBps over basisSeconds, truncated down:
+// 3F's floor(amount * aprBps * rateBasisSeconds / (10_000 * 31_536_000)). maxRate has tenths-of-a-bps
+// precision so rateBps*100 is whole ppm; the math is exact integer — a big.Float path drifts by 1 wei
+// for principals above ~2^64.
+func ExpectedReturn(principal *big.Int, rateBps float64, basisSeconds int64) *big.Int {
 	ratePpm := int64(math.Round(rateBps * PpmPerBps))
 	if principal == nil || principal.Sign() <= 0 || ratePpm <= 0 {
 		return new(big.Int)
 	}
 	num := new(big.Int).Mul(principal, big.NewInt(ratePpm))
-	return num.Quo(num, bigYieldPpmScale)
+	num.Mul(num, rateBasis(basisSeconds))
+	return num.Quo(num, bigPpmYear)
 }
 
 // MinYieldReturn is the smallest expectedReturn on principal that clears the adapter's

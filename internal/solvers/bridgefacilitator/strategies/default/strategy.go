@@ -96,17 +96,17 @@ func (s *Strategy) DecideOffers(
 			if remainder.Sign() > 0 {
 				for _, next := range ranked[i+1:] {
 					floor := next.snapshot.MinAssets
-					if floor == nil || floor.Cmp(remainder) <= 0 || next.capacity().Cmp(floor) < 0 || offerReturn(floor, next.snapshot.MinYieldPpm, auction.MaxRateBps) == nil {
+					if floor == nil || floor.Cmp(remainder) <= 0 || next.capacity().Cmp(floor) < 0 || offerReturn(floor, next.snapshot.MinYieldPpm, auction) == nil {
 						continue
 					}
 					adjusted := new(big.Int).Sub(remaining, floor)
-					if adjusted.Sign() > 0 && !st.belowMinAssets(adjusted) && offerReturn(adjusted, st.snapshot.MinYieldPpm, auction.MaxRateBps) != nil {
+					if adjusted.Sign() > 0 && !st.belowMinAssets(adjusted) && offerReturn(adjusted, st.snapshot.MinYieldPpm, auction) != nil {
 						principal = adjusted
 						break
 					}
 				}
 			}
-			expectedReturn := offerReturn(principal, st.snapshot.MinYieldPpm, auction.MaxRateBps)
+			expectedReturn := offerReturn(principal, st.snapshot.MinYieldPpm, auction)
 			if expectedReturn == nil {
 				continue
 			}
@@ -226,14 +226,15 @@ var _ types.Strategy = (*Strategy)(nil)
 
 // offerReturn adds the partial-consumption margin to the on-chain floor, bounded by the auction cap.
 // With no floor it uses the auction rate; nil means this principal cannot produce a valid paid offer.
-func offerReturn(principal, floor *big.Int, maxRate float64) *big.Int {
+func offerReturn(principal, floor *big.Int, auction types.AuctionSnapshot) *big.Int {
+	maxRate, basis := auction.MaxRateBps, auction.RateBasisSeconds
 	expectedReturn := types.PartialSafeMinYieldReturn(principal, floor)
 	if expectedReturn.Sign() <= 0 {
-		expectedReturn = types.ExpectedReturn(principal, maxRate)
-	} else if maxReturn := types.ExpectedReturn(principal, maxRate); maxReturn.Sign() > 0 && expectedReturn.Cmp(maxReturn) > 0 && types.MeetsMinYield(maxReturn, principal, floor) {
+		expectedReturn = types.ExpectedReturn(principal, maxRate, basis)
+	} else if maxReturn := types.ExpectedReturn(principal, maxRate, basis); maxReturn.Sign() > 0 && expectedReturn.Cmp(maxReturn) > 0 && types.MeetsMinYield(maxReturn, principal, floor) {
 		expectedReturn = maxReturn
 	}
-	if types.ValidateYield(expectedReturn, principal, floor, maxRate) != nil {
+	if types.ValidateYield(expectedReturn, principal, floor, maxRate, basis) != nil {
 		return nil
 	}
 	return expectedReturn

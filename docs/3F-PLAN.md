@@ -287,6 +287,15 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
    (keeping the margin that fits); a pair whose floor exceeds the max rate is skipped. The submission
    loop re-checks every strategy's offers (default and webhook) against the exact `minYieldPerRequest`
    before signing, so no path posts a sub-floor offer the fill would revert.
+   From 3F's APR switch (23 Oct 2026) `maxRate` is an annual rate and every auction carries
+   `rateBasisSeconds` (a year for new auctions, the old settlement delay for ones created before);
+   `expectedReturn` covers that basis, so the max-rate cap is scaled by `basis / year`
+   (`types.ExpectedReturn`, `types.ValidateYield`). A response without the field is pre-switch and keeps
+   the per-term pricing; a field that is present but not a positive number skips the auction.
+   The on-chain `minYieldPerRequest` floor is compared to the raw `expectedReturn` exactly as the
+   contract does, so on annual auctions it is an APR floor and must be set as one. The field is read
+   from `AdditionalProperties` until the vendored spec carries it; `rateBasisSeconds` is on the webhook
+   wire too.
    Capacity is `min(min(getMaxAssets, maxAssetsPerRequest), fundable − committed)` gated by the
    concurrency and `minAssetsPerRequest` limits; `maxAssetsPerRequest` is an always-active ceiling (`0`
    means no capacity). A `webhook` strategy posts the same JSON input to an external decider; big

@@ -96,6 +96,10 @@ func buildAuctionSnapshot(
 	if !rateOk {
 		return types.AuctionSnapshot{}, false
 	}
+	basis, basisOk := av.rateBasisSeconds()
+	if !basisOk {
+		return types.AuctionSnapshot{}, false
+	}
 	depositAsset := av.depositAsset()
 	if !common.IsHexAddress(depositAsset) {
 		return types.AuctionSnapshot{}, false
@@ -109,15 +113,16 @@ func buildAuctionSnapshot(
 		remaining = new(big.Int)
 	}
 	return types.AuctionSnapshot{
-		ID:              auctionIDString(auctionID),
-		AuctionID:       auctionID,
-		OriginalIndex:   originalIndex,
-		Request:         request,
-		Status:          av.dto.Status,
-		DepositAsset:    common.HexToAddress(depositAsset),
-		AmountRequested: cloneBig(amountRequested),
-		RemainingAmount: remaining,
-		MaxRateBps:      rateBps,
+		ID:               auctionIDString(auctionID),
+		AuctionID:        auctionID,
+		OriginalIndex:    originalIndex,
+		Request:          request,
+		Status:           av.dto.Status,
+		DepositAsset:     common.HexToAddress(depositAsset),
+		AmountRequested:  cloneBig(amountRequested),
+		RemainingAmount:  remaining,
+		MaxRateBps:       rateBps,
+		RateBasisSeconds: basis,
 	}, true
 }
 
