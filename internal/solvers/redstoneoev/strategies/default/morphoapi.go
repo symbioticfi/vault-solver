@@ -198,6 +198,9 @@ type wireMarketState interface {
 }
 
 func morphoMarketFromDiscover(it morphographql.MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarket) morphoMarket {
+	if it.Oracle == nil {
+		return morphoMarket{}
+	}
 	var coll wireAsset
 	if it.CollateralAsset != nil {
 		coll = it.CollateralAsset
@@ -206,7 +209,7 @@ func morphoMarketFromDiscover(it morphographql.MorphoDiscoverMarketsMarketsPagin
 	if it.State != nil {
 		state = it.State
 	}
-	return morphoMarketFromWire(it.MarketId, it.OracleAddress, it.IrmAddress, it.Lltv.String(), &it.LoanAsset, coll, state)
+	return morphoMarketFromWire(it.MarketId, it.Oracle.Address, it.IrmAddress, it.Lltv.String(), &it.LoanAsset, coll, state)
 }
 
 func morphoMarketFromWire(id, oracle, irm, lltv string, loan wireAsset, collateral wireAsset, state wireMarketState) morphoMarket {

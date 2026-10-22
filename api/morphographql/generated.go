@@ -25,8 +25,8 @@ func (v *MorphoDiscoverMarketsMarketsPaginatedMarkets) GetItems() []MorphoDiscov
 // Morpho Blue market
 type MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarket struct {
 	// On-chain market ID
-	MarketId      string `json:"marketId"`
-	OracleAddress string `json:"oracleAddress"`
+	MarketId string                                                         `json:"marketId"`
+	Oracle   *MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarketOracle `json:"oracle"`
 	// IRM contract address
 	IrmAddress string `json:"irmAddress"`
 	// Liquidation LTV
@@ -42,9 +42,9 @@ func (v *MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarket) GetMarketId() 
 	return v.MarketId
 }
 
-// GetOracleAddress returns MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarket.OracleAddress, and is useful for accessing the field via an interface.
-func (v *MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarket) GetOracleAddress() string {
-	return v.OracleAddress
+// GetOracle returns MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarket.Oracle, and is useful for accessing the field via an interface.
+func (v *MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarket) GetOracle() *MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarketOracle {
+	return v.Oracle
 }
 
 // GetIrmAddress returns MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarket.IrmAddress, and is useful for accessing the field via an interface.
@@ -97,6 +97,20 @@ type MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarketLoanAsset struct {
 
 // GetAddress returns MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarketLoanAsset.Address, and is useful for accessing the field via an interface.
 func (v *MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarketLoanAsset) GetAddress() string {
+	return v.Address
+}
+
+// MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarketOracle includes the requested fields of the GraphQL type Oracle.
+// The GraphQL type's documentation follows.
+//
+// Oracle
+type MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarketOracle struct {
+	// Oracle contract address
+	Address string `json:"address"`
+}
+
+// GetAddress returns MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarketOracle.Address, and is useful for accessing the field via an interface.
+func (v *MorphoDiscoverMarketsMarketsPaginatedMarketsItemsMarketOracle) GetAddress() string {
 	return v.Address
 }
 
@@ -313,7 +327,9 @@ query MorphoDiscoverMarkets ($loan: [String!]!, $coll: [String!]!, $chains: [Int
 	markets(first: $first, where: {loanAssetAddress_in:$loan,collateralAssetAddress_in:$coll,chainId_in:$chains}) {
 		items {
 			marketId
-			oracleAddress
+			oracle {
+				address
+			}
 			irmAddress
 			lltv
 			loanAsset {
