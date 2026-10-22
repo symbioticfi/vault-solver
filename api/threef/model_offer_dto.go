@@ -24,32 +24,37 @@ type OfferDto struct {
 	// ID of the auction associated with the offer
 	AuctionId float32 `json:"auctionId"`
 	// Offer status for the offer
-	Status string `json:"status"`
+	Status        string `json:"status"`
+	ExecutionMode string `json:"executionMode"`
+	// Effective UTC mint deadline for an AWAITING_MINT push offer, or null outside an active mint window.
+	MintDeadline NullableString `json:"mintDeadline"`
 	// Ethereum address of the offer maker
 	Maker string `json:"maker"`
 	// Request contract address
 	RequestId string `json:"requestId"`
+	// The auction's `rateBasisSeconds` (integer > 0): the period `expectedReturn` accrues over. Offer APR bps = `expectedReturn / amount * 10000 * 31536000 / rateBasisSeconds`.
+	RateBasisSeconds float32 `json:"rateBasisSeconds"`
 	// Asset metadata resolved for the linked request or null
 	Asset NullableResolvedAssetDto `json:"asset"`
 	// Vault metadata resolved for the linked request or null
 	Vault NullableResolvedVaultDto `json:"vault"`
 	// Current pending fill amount, otherwise total successful principal, otherwise original offered amount (uint256 string).
 	Amount string `json:"amount"`
-	// Expected yield amount as a numeric string (uint256). Total repayment is `amount + expectedReturn`.
+	// Yield on `amount` over the auction `rateBasisSeconds`, as a numeric string (uint256). It is not the repaid amount: repayment after `d` seconds adds `ceil(expectedReturn * paidSeconds(d) / rateBasisSeconds)` to principal on annual auctions (`paidSeconds` counts whole days, a new day starting 6 hours into it, at least 1 day, capped at 1 year) and `floor(expectedReturn * d / rateBasisSeconds)` on auctions with another basis. To lend at `aprBps`, sign `expectedReturn = floor(amount * aprBps * rateBasisSeconds / (10000 * 31536000))`; on annual auctions (`rateBasisSeconds = 31536000`) that is `floor(amount * aprBps / 10000)`.
 	ExpectedReturn string `json:"expectedReturn"`
 	// Cumulative successfully funded principal, independent of the latest offer status (uint256 string).
 	FilledAmount string `json:"filledAmount"`
-	// Cumulative yield of successful fills, rounded per fill (uint256 string).
+	// Yield (as `expectedReturn`, over `rateBasisSeconds`) on the successfully funded principal, rounded per fill (uint256 string).
 	FilledExpectedReturn string `json:"filledExpectedReturn"`
 	// Current broadcast or authorized principal; excludes unbroadcast reservations (uint256 string).
 	PendingAmount string `json:"pendingAmount"`
-	// Yield for the current broadcast or authorized fill (uint256 string).
+	// Yield (as `expectedReturn`, over `rateBasisSeconds`) on the current broadcast or authorized fill (uint256 string).
 	PendingExpectedReturn string `json:"pendingExpectedReturn"`
 	// Nonce for replay protection (uint256)
 	Nonce string `json:"nonce"`
 	// Offer expiration timestamp (uint256)
 	Expiration string `json:"expiration"`
-	// EIP-712 signature or null if unsigned
+	// Executable on-chain PULL signature, or null for PUSH. API-only PUSH authorization signatures are never returned or stored here.
 	Signature            NullableString `json:"signature"`
 	AdditionalProperties map[string]interface{}
 }
@@ -60,13 +65,16 @@ type _OfferDto OfferDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewOfferDto(id float32, auctionId float32, status string, maker string, requestId string, asset NullableResolvedAssetDto, vault NullableResolvedVaultDto, amount string, expectedReturn string, filledAmount string, filledExpectedReturn string, pendingAmount string, pendingExpectedReturn string, nonce string, expiration string, signature NullableString) *OfferDto {
+func NewOfferDto(id float32, auctionId float32, status string, executionMode string, mintDeadline NullableString, maker string, requestId string, rateBasisSeconds float32, asset NullableResolvedAssetDto, vault NullableResolvedVaultDto, amount string, expectedReturn string, filledAmount string, filledExpectedReturn string, pendingAmount string, pendingExpectedReturn string, nonce string, expiration string, signature NullableString) *OfferDto {
 	this := OfferDto{}
 	this.Id = id
 	this.AuctionId = auctionId
 	this.Status = status
+	this.ExecutionMode = executionMode
+	this.MintDeadline = mintDeadline
 	this.Maker = maker
 	this.RequestId = requestId
+	this.RateBasisSeconds = rateBasisSeconds
 	this.Asset = asset
 	this.Vault = vault
 	this.Amount = amount
@@ -161,6 +169,56 @@ func (o *OfferDto) SetStatus(v string) {
 	o.Status = v
 }
 
+// GetExecutionMode returns the ExecutionMode field value
+func (o *OfferDto) GetExecutionMode() string {
+	if o == nil {
+		var ret string
+		return ret
+	}
+
+	return o.ExecutionMode
+}
+
+// GetExecutionModeOk returns a tuple with the ExecutionMode field value
+// and a boolean to check if the value has been set.
+func (o *OfferDto) GetExecutionModeOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.ExecutionMode, true
+}
+
+// SetExecutionMode sets field value
+func (o *OfferDto) SetExecutionMode(v string) {
+	o.ExecutionMode = v
+}
+
+// GetMintDeadline returns the MintDeadline field value
+// If the value is explicit nil, the zero value for string will be returned
+func (o *OfferDto) GetMintDeadline() string {
+	if o == nil || o.MintDeadline.Get() == nil {
+		var ret string
+		return ret
+	}
+
+	return *o.MintDeadline.Get()
+}
+
+// GetMintDeadlineOk returns a tuple with the MintDeadline field value
+// and a boolean to check if the value has been set.
+// NOTE: If the value is an explicit nil, `nil, true` will be returned
+func (o *OfferDto) GetMintDeadlineOk() (*string, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return o.MintDeadline.Get(), o.MintDeadline.IsSet()
+}
+
+// SetMintDeadline sets field value
+func (o *OfferDto) SetMintDeadline(v string) {
+	o.MintDeadline.Set(&v)
+}
+
 // GetMaker returns the Maker field value
 func (o *OfferDto) GetMaker() string {
 	if o == nil {
@@ -207,6 +265,30 @@ func (o *OfferDto) GetRequestIdOk() (*string, bool) {
 // SetRequestId sets field value
 func (o *OfferDto) SetRequestId(v string) {
 	o.RequestId = v
+}
+
+// GetRateBasisSeconds returns the RateBasisSeconds field value
+func (o *OfferDto) GetRateBasisSeconds() float32 {
+	if o == nil {
+		var ret float32
+		return ret
+	}
+
+	return o.RateBasisSeconds
+}
+
+// GetRateBasisSecondsOk returns a tuple with the RateBasisSeconds field value
+// and a boolean to check if the value has been set.
+func (o *OfferDto) GetRateBasisSecondsOk() (*float32, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.RateBasisSeconds, true
+}
+
+// SetRateBasisSeconds sets field value
+func (o *OfferDto) SetRateBasisSeconds(v float32) {
+	o.RateBasisSeconds = v
 }
 
 // GetAsset returns the Asset field value
@@ -492,8 +574,11 @@ func (o OfferDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["id"] = o.Id
 	toSerialize["auctionId"] = o.AuctionId
 	toSerialize["status"] = o.Status
+	toSerialize["executionMode"] = o.ExecutionMode
+	toSerialize["mintDeadline"] = o.MintDeadline.Get()
 	toSerialize["maker"] = o.Maker
 	toSerialize["requestId"] = o.RequestId
+	toSerialize["rateBasisSeconds"] = o.RateBasisSeconds
 	toSerialize["asset"] = o.Asset.Get()
 	toSerialize["vault"] = o.Vault.Get()
 	toSerialize["amount"] = o.Amount
@@ -534,8 +619,11 @@ func (o *OfferDto) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "id")
 		delete(additionalProperties, "auctionId")
 		delete(additionalProperties, "status")
+		delete(additionalProperties, "executionMode")
+		delete(additionalProperties, "mintDeadline")
 		delete(additionalProperties, "maker")
 		delete(additionalProperties, "requestId")
+		delete(additionalProperties, "rateBasisSeconds")
 		delete(additionalProperties, "asset")
 		delete(additionalProperties, "vault")
 		delete(additionalProperties, "amount")

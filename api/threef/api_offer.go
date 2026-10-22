@@ -195,7 +195,7 @@ func (r ApiOfferControllerCreateV1Request) CreateOfferDto(createOfferDto CreateO
 	return r
 }
 
-// Facilitator API key (required when &#x60;signature&#x60; is not provided).
+// Facilitator API key for legacy unsigned PUSH or deferred &#x60;0x&#x60; PULL. Not required for signed PUSH.
 func (r ApiOfferControllerCreateV1Request) XApiKey(xApiKey string) ApiOfferControllerCreateV1Request {
 	r.xApiKey = &xApiKey
 	return r
@@ -208,15 +208,19 @@ func (r ApiOfferControllerCreateV1Request) Execute() (*CreateOfferResponseDto, *
 /*
 OfferControllerCreateV1 Create or update an offer
 
-Creates an offer for an auction, or updates the existing mutable offer for the same `auctionId`, `maker`, and `nonce`. If a non-placeholder `signature` is provided, it is verified against the registered facilitator address or that facilitator's configured offer address. If `signature` is omitted, a valid facilitator `x-api-key` header is required; when that facilitator has a configured offer address, that offer address is used as the stored `maker`.
+Creates an offer for an auction. Omitted `executionMode` preserves legacy behavior: an on-chain `Offer` signature means PULL, and an unsigned API-key request means PUSH. Explicit PULL requires an executable `signature` (or the existing API-key-backed deferred `0x` approval). `useCallback: false` does not select PUSH.
 
-`expectedReturn` is the expected yield, not the total repayment. Total repayment is `amount + expectedReturn`.
+For explicit signed PUSH, provide `pushAuthorizationSignature` and `authorizationDeadline`, not `signature` or an API key. The selected `maker` must be an enabled address enrolled under a broker and must itself validate the EIP-712/EIP-1271 authorization. The auction request contract must expose an EIP-712 domain whose chain ID matches `chainId`. The API stores `signature = NULL`, so the auction engine routes it through maker-initiated minting, never Request.consume.
+
+The maker is the vault/adapter that supplies funds and mints. A broker's configured `offerAddress` is only the legacy default; it does not replace an explicitly selected signed maker. The bot signer is the key approved by each maker contract, not the stored maker address.
+
+Signed PUSH retries with the same `auctionId`, `maker`, and `nonce` must use identical offer terms and mode; conflicting updates are rejected.
+
+`expectedReturn` is the yield on `amount` over the auction `rateBasisSeconds` (returned by `GET /v1/auction`), not a repayment amount: repayment after `d` seconds adds `ceil(expectedReturn * paidSeconds(d) / rateBasisSeconds)` to principal on annual auctions (`paidSeconds` counts whole days, a new day starting 6 hours into it, at least 1 day, capped at 1 year) and `floor(expectedReturn * d / rateBasisSeconds)` on auctions with another basis. Sign with `expectedReturn = floor(amount * aprBps * rateBasisSeconds / (10000 * 31536000))`, where `aprBps` is the APR in basis points (365-day year, simple interest). On annual auctions (`rateBasisSeconds = 31536000`), lending 1,000 USDC at 15% APR is `amount = 1000000000`, `expectedReturn = 150000000`; on an auction with `rateBasisSeconds = 86400` the same APR is `expectedReturn = 410958`. `maxRate` is always an APR. The offer APR `expectedReturn / amount * 10000 * 31536000 / rateBasisSeconds` must be at most the current `maxRate` and at least a quarter of the lowest APR of the auction ramp, otherwise the API returns 400.
 
 `expiration` is a Unix timestamp in seconds. Offers are expired only when `expiration` is lower than the current Unix second.
 
-Signed offer requests resolve their EIP-712 domain from the auction request contract on-chain. Set `domain.verifyingContract` to the request contract address for the selected auction. If the contract exposes a `salt`, include it; otherwise omit that field.
-
-Exact typed data to sign with `viem`:
+Legacy signed PULL requests resolve their EIP-712 domain from the auction request contract on-chain. Set `domain.verifyingContract` to that request contract. If the contract exposes a `salt`, include it; otherwise omit it. PULL typed data:
 
 ```ts
 const signature = await walletClient.signTypedData(
@@ -261,7 +265,7 @@ const signature = await walletClient.signTypedData(
 	    message: {
 	      maker: '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38',
 	      amount: 1000000000n,
-	      expectedReturn: 5000000n,
+	      expectedReturn: 150000000n,
 	      nonce: 1n,
 	      expiration: 4102444800n,
 	      useCallback: false,
@@ -271,7 +275,92 @@ const signature = await walletClient.signTypedData(
 )
 ```
 
-Submit the signature bytes in the request body `signature` field. For deferred ERC-1271 approval, a matching facilitator may submit `0x` with its `x-api-key` while the contract approval transaction is pending. All `uint256` request fields stay decimal strings in the HTTP payload.
+Submit that pull signature in `signature`. For deferred ERC-1271 approval, a matching facilitator may submit `0x` with its `x-api-key` while contract approval is pending.
+
+Exact API-only signed PUSH typed data (not valid for on-chain PULL):
+
+```ts
+const signature = await walletClient.signTypedData(
+
+	{
+	    domain: {
+	      name: 'grunt-api',
+	      version: '1',
+	      chainId: 11155111,
+	    },
+	    types: {
+	      SubmitPushOffer: [
+	        {
+	          name: 'action',
+	          type: 'string',
+	        },
+	        {
+	          name: 'executionMode',
+	          type: 'string',
+	        },
+	        {
+	          name: 'maker',
+	          type: 'address',
+	        },
+	        {
+	          name: 'auctionId',
+	          type: 'uint256',
+	        },
+	        {
+	          name: 'request',
+	          type: 'address',
+	        },
+	        {
+	          name: 'chainId',
+	          type: 'uint256',
+	        },
+	        {
+	          name: 'amount',
+	          type: 'uint256',
+	        },
+	        {
+	          name: 'expectedReturn',
+	          type: 'uint256',
+	        },
+	        {
+	          name: 'nonce',
+	          type: 'uint256',
+	        },
+	        {
+	          name: 'expiration',
+	          type: 'uint256',
+	        },
+	        {
+	          name: 'useCallback',
+	          type: 'bool',
+	        },
+	        {
+	          name: 'authorizationDeadline',
+	          type: 'uint256',
+	        },
+	      ],
+	    },
+	    primaryType: 'SubmitPushOffer',
+	    message: {
+	      action: 'SUBMIT_PUSH_OFFER',
+	      executionMode: 'PUSH',
+	      maker: '0x1111111111111111111111111111111111111111',
+	      auctionId: 42n,
+	      request: '0x1234567890abcdef1234567890abcdef12345678',
+	      chainId: 11155111n,
+	      amount: 1000000000n,
+	      expectedReturn: 150000000n,
+	      nonce: 1n,
+	      expiration: 4102444800n,
+	      useCallback: false,
+	      authorizationDeadline: 4102444800n,
+	    },
+	  }
+
+)
+```
+
+Put the result in `pushAuthorizationSignature`. All `uint256` HTTP fields are decimal strings. An AWAITING_MINT response exposes `pendingAmount` (the accepted amount) and `mintDeadline` (the earliest active authorization lease). The lease starts when the auction accepts the offer, not when the bot first polls; after authorization confirms, mint before that deadline. Timeout invokes the existing revocation path.
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiOfferControllerCreateV1Request
