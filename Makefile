@@ -23,8 +23,10 @@ FORGE_OUT ?= ../rfq/out
 # the universal delegator, and the vault/ERC4626 interfaces live there and are built standalone
 # (`cd ../rfq/lib/core-mirror && forge build`).
 CORE_MIRROR_OUT ?= ../rfq/lib/core-mirror/out
-# Live 3F OpenAPI spec (Sepolia dev).
-OPENAPI_URL ?= https://bf.dev.gcp.3f.xyz/docs/openapi.json
+# Merkle policy and recipe interfaces come from the adapters Foundry build.
+ADAPTERS_OUT ?= ../adapters/out
+# Live 3F OpenAPI spec (mainnet).
+OPENAPI_URL ?= https://bf.3f.xyz/docs/openapi.json
 # RFQ backend OpenAPI spec. The backend serves it at /api/v1/openapi.json (hono-openapi, runtime).
 # NOTE: the temp railway deployment is currently behind the repo (pre adapter/protocolSignature
 # rename); point this at a backend running current code, or regenerate in-repo (see docs/RFQ-PLAN.md).
@@ -48,6 +50,7 @@ REDSTONE_GUIDE_URL       ?= https://raw.githubusercontent.com/RedStone-Finance-U
 # and vault/ERC4626 interfaces) come from the core-mirror build, since they aren't in rfq/out.
 ABIS := IRequest IVaultController IWhitelist Executor Reactor LiquidLaneLifiExecutor LiquidLaneUniswapXExecutor
 CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IAdapterFactory IVaultV2 IERC4626
+ADAPTERS_ABIS := IRecipeCapability IThreeFPolicy LiquidLaneConnector
 # api/abi/UniversalDelegator.json is hand-vendored to a minimal {limitOf} ABI (the full contract has
 # an overloaded deallocateAll that abigen rejects, and the solver only reads limitOf) — like Multicall3.
 # api/abi/FrontendLiquidityLens.json is likewise hand-vendored to the two overloaded getMaxAssets views
@@ -65,7 +68,9 @@ CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IAdapterFactory IVaultV2 IER
 # at the call site, not at runtime.
 BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
             IVaultController:3f/vaultcontroller IWhitelist:3f/whitelist \
-            LiquidLaneAdapter:liquidlane/adapter Executor:rfq/executor Reactor:rfq/reactor \
+            IRecipeCapability:merkle/recipecapability IThreeFPolicy:merkle/threefpolicy \
+            LiquidLaneAdapter:liquidlane/adapter LiquidLaneConnector:liquidlane/connector \
+            Executor:rfq/executor Reactor:rfq/reactor \
             LiquidLaneLifiExecutor:lifi/executor LiquidLaneUniswapXExecutor:uniswapx/executor \
             ILifiInputSettler:lifi/inputsettler \
             IAdapterFactory:adapterfactory UniversalDelegator:delegator IVaultV2:vaultv2 IERC4626:erc4626 \
@@ -122,10 +127,20 @@ refresh-abi: ## Re-vendor ABIs from the rfq + core-mirror Foundry builds (FORGE_
 		echo "vendored api/abi/$$c.json (core-mirror)"; \
 	done
 
+.PHONY: refresh-merkle-abi
+refresh-merkle-abi: ## Project solver-used Merkle ABI entries from Foundry artifacts (ADAPTERS_OUT=...)
+	@mkdir -p api/abi
+	@set -e; for c in $(ADAPTERS_ABIS); do \
+		src="$(ADAPTERS_OUT)/$$c.sol/$$c.json"; \
+		if [[ ! -f "$$src" ]]; then echo "missing $$src (run forge build in $(ADAPTERS_OUT)/..)"; exit 1; fi; \
+		jq --arg contract "$$c" -f hack/merkle-abi.jq "$$src" > "api/abi/$$c.json"; \
+		echo "vendored api/abi/$$c.json (adapters)"; \
+	done
+
 .PHONY: refresh-openapi
 refresh-openapi: ## Re-pull the live 3F OpenAPI spec
 	@mkdir -p openapi
-	curl -fsSL "$(OPENAPI_URL)" | jq . > openapi/3f-bf.openapi.json
+	curl -fsSL -A 'vault-solver' "$(OPENAPI_URL)" | jq . > openapi/3f-bf.openapi.json
 	@echo "vendored openapi/3f-bf.openapi.json"
 
 .PHONY: refresh-rfq-openapi

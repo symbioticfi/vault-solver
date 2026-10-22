@@ -27,7 +27,7 @@ type CancelOfferDto struct {
 	ChainId *float32 `json:"chainId,omitempty"`
 	// Signature deadline timestamp (uint256)
 	Deadline *string `json:"deadline,omitempty"`
-	// EIP-712 signature (required if chainId is provided)
+	// EIP-712 signature (required if chainId is provided): 65-byte ECDSA, or an EIP-1271 blob for contract makers
 	Signature            *string `json:"signature,omitempty"`
 	AdditionalProperties map[string]interface{}
 }

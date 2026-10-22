@@ -19,6 +19,8 @@ var _ MappedNullable = &CreateOfferDto{}
 
 // CreateOfferDto struct for CreateOfferDto
 type CreateOfferDto struct {
+	// Execution mode. Omitted: signed Offer is PULL, unsigned API-key offer is PUSH. Signed PUSH uses a separate API authorization signature.
+	ExecutionMode *string `json:"executionMode,omitempty"`
 	// Chain ID for resolving the request EIP-712 domain
 	ChainId *float32 `json:"chainId,omitempty"`
 	// ID of the auction to submit an offer for
@@ -35,9 +37,13 @@ type CreateOfferDto struct {
 	Expiration string `json:"expiration"`
 	// Whether to use callback when executing the offer
 	UseCallback bool `json:"useCallback"`
-	// EIP-712/EIP-1271 signature bytes. `0x` is accepted for deferred EIP-1271 approval only with a matching facilitator API key. Required if chainId is provided.
-	Signature            *string `json:"signature,omitempty"`
-	AdditionalProperties map[string]interface{}
+	// Executable on-chain pull Offer signature. `0x` is accepted for deferred EIP-1271 approval only with a matching facilitator API key. Never use for PUSH.
+	Signature *string `json:"signature,omitempty"`
+	// EIP-712/EIP-1271 API-only signature for explicit PUSH. Required instead of an API key when selecting an additional maker. Never stored as an executable Offer signature.
+	PushAuthorizationSignature *string `json:"pushAuthorizationSignature,omitempty"`
+	// Unix seconds after which the signed PUSH authorization cannot be submitted.
+	AuthorizationDeadline *string `json:"authorizationDeadline,omitempty"`
+	AdditionalProperties  map[string]interface{}
 }
 
 type _CreateOfferDto CreateOfferDto
@@ -64,6 +70,38 @@ func NewCreateOfferDto(auctionId float32, maker string, amount string, expectedR
 func NewCreateOfferDtoWithDefaults() *CreateOfferDto {
 	this := CreateOfferDto{}
 	return &this
+}
+
+// GetExecutionMode returns the ExecutionMode field value if set, zero value otherwise.
+func (o *CreateOfferDto) GetExecutionMode() string {
+	if o == nil || IsNil(o.ExecutionMode) {
+		var ret string
+		return ret
+	}
+	return *o.ExecutionMode
+}
+
+// GetExecutionModeOk returns a tuple with the ExecutionMode field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *CreateOfferDto) GetExecutionModeOk() (*string, bool) {
+	if o == nil || IsNil(o.ExecutionMode) {
+		return nil, false
+	}
+	return o.ExecutionMode, true
+}
+
+// HasExecutionMode returns a boolean if a field has been set.
+func (o *CreateOfferDto) HasExecutionMode() bool {
+	if o != nil && !IsNil(o.ExecutionMode) {
+		return true
+	}
+
+	return false
+}
+
+// SetExecutionMode gets a reference to the given string and assigns it to the ExecutionMode field.
+func (o *CreateOfferDto) SetExecutionMode(v string) {
+	o.ExecutionMode = &v
 }
 
 // GetChainId returns the ChainId field value if set, zero value otherwise.
@@ -298,6 +336,70 @@ func (o *CreateOfferDto) SetSignature(v string) {
 	o.Signature = &v
 }
 
+// GetPushAuthorizationSignature returns the PushAuthorizationSignature field value if set, zero value otherwise.
+func (o *CreateOfferDto) GetPushAuthorizationSignature() string {
+	if o == nil || IsNil(o.PushAuthorizationSignature) {
+		var ret string
+		return ret
+	}
+	return *o.PushAuthorizationSignature
+}
+
+// GetPushAuthorizationSignatureOk returns a tuple with the PushAuthorizationSignature field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *CreateOfferDto) GetPushAuthorizationSignatureOk() (*string, bool) {
+	if o == nil || IsNil(o.PushAuthorizationSignature) {
+		return nil, false
+	}
+	return o.PushAuthorizationSignature, true
+}
+
+// HasPushAuthorizationSignature returns a boolean if a field has been set.
+func (o *CreateOfferDto) HasPushAuthorizationSignature() bool {
+	if o != nil && !IsNil(o.PushAuthorizationSignature) {
+		return true
+	}
+
+	return false
+}
+
+// SetPushAuthorizationSignature gets a reference to the given string and assigns it to the PushAuthorizationSignature field.
+func (o *CreateOfferDto) SetPushAuthorizationSignature(v string) {
+	o.PushAuthorizationSignature = &v
+}
+
+// GetAuthorizationDeadline returns the AuthorizationDeadline field value if set, zero value otherwise.
+func (o *CreateOfferDto) GetAuthorizationDeadline() string {
+	if o == nil || IsNil(o.AuthorizationDeadline) {
+		var ret string
+		return ret
+	}
+	return *o.AuthorizationDeadline
+}
+
+// GetAuthorizationDeadlineOk returns a tuple with the AuthorizationDeadline field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *CreateOfferDto) GetAuthorizationDeadlineOk() (*string, bool) {
+	if o == nil || IsNil(o.AuthorizationDeadline) {
+		return nil, false
+	}
+	return o.AuthorizationDeadline, true
+}
+
+// HasAuthorizationDeadline returns a boolean if a field has been set.
+func (o *CreateOfferDto) HasAuthorizationDeadline() bool {
+	if o != nil && !IsNil(o.AuthorizationDeadline) {
+		return true
+	}
+
+	return false
+}
+
+// SetAuthorizationDeadline gets a reference to the given string and assigns it to the AuthorizationDeadline field.
+func (o *CreateOfferDto) SetAuthorizationDeadline(v string) {
+	o.AuthorizationDeadline = &v
+}
+
 func (o CreateOfferDto) MarshalJSON() ([]byte, error) {
 	toSerialize, err := o.ToMap()
 	if err != nil {
@@ -308,6 +410,9 @@ func (o CreateOfferDto) MarshalJSON() ([]byte, error) {
 
 func (o CreateOfferDto) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
+	if !IsNil(o.ExecutionMode) {
+		toSerialize["executionMode"] = o.ExecutionMode
+	}
 	if !IsNil(o.ChainId) {
 		toSerialize["chainId"] = o.ChainId
 	}
@@ -320,6 +425,12 @@ func (o CreateOfferDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["useCallback"] = o.UseCallback
 	if !IsNil(o.Signature) {
 		toSerialize["signature"] = o.Signature
+	}
+	if !IsNil(o.PushAuthorizationSignature) {
+		toSerialize["pushAuthorizationSignature"] = o.PushAuthorizationSignature
+	}
+	if !IsNil(o.AuthorizationDeadline) {
+		toSerialize["authorizationDeadline"] = o.AuthorizationDeadline
 	}
 
 	for key, value := range o.AdditionalProperties {
@@ -347,6 +458,7 @@ func (o *CreateOfferDto) UnmarshalJSON(data []byte) (err error) {
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
+		delete(additionalProperties, "executionMode")
 		delete(additionalProperties, "chainId")
 		delete(additionalProperties, "auctionId")
 		delete(additionalProperties, "maker")
@@ -356,6 +468,8 @@ func (o *CreateOfferDto) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "expiration")
 		delete(additionalProperties, "useCallback")
 		delete(additionalProperties, "signature")
+		delete(additionalProperties, "pushAuthorizationSignature")
+		delete(additionalProperties, "authorizationDeadline")
 		o.AdditionalProperties = additionalProperties
 	}
 

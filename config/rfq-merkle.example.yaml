@@ -1,0 +1,26 @@
+# Independent awarded-order filler. Supply deployed addresses and a persistent state mount.
+chain:
+  rpcUrl: ${ETH_RPC_URL_MAINNET}
+  writeRpcUrl: ${WRITE_RPC_URL}
+  chainId: 1
+signer:
+  keyEnv: SOLVER_PRIVATE_KEY
+txManager:
+  confirmations: 2
+  maxFeeGwei: 50
+observability:
+  addr: ":9090"
+solvers:
+  - name: rfq-merkle
+    config:
+      backendUrl: ${RFQ_BACKEND_URL}
+      stateDir: /persistent/rfq-merkle
+      executor: "0x0000000000000000000000000000000000000010" # RFQ Executor with RecipeFill
+      curator:
+        url: https://curator.example.invalid/api/v1
+        # apiKeyEnv: CURATOR_API_TOKEN
+      recipeExecutors:
+        "0x0000000000000000000000000000000000000042":
+          "0x0000000000000000000000000000000000000050": "0x0000000000000000000000000000000000000043"
+          "0x0000000000000000000000000000000000000051": "0x0000000000000000000000000000000000000044"
+        # LiquidLaneConnector -> RWA asset -> its dedicated RecipeExecutor

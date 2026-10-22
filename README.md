@@ -46,6 +46,8 @@ the same nonce; nonce handling does not coordinate their liquidity or off-chain 
 | `solver.name` | Integration | Docs | Example config |
 |---|---|---|---|
 | `3f-bridge-facilitator` | 3F (Grunt) bridge-loan auctions | [plan](docs/3F-PLAN.md) | [yaml](config/3f.example.yaml) |
+| `threef-merkle` | Native 3F PUSH offers and guarded Merkle mints | [plan](docs/THREEF-MERKLE.md) | [yaml](config/threef-merkle.example.yaml) |
+| `rfq-merkle` | Awarded RFQ orders through Merkle recipes | [plan](docs/RFQ-MERKLE.md) | [yaml](config/rfq-merkle.example.yaml) |
 | `rfq-filler` | Symbiotic RFQ quoting + order filling | [plan](docs/RFQ-PLAN.md) | [yaml](config/rfq.example.yaml) |
 | `redstone-oev` | RedStone OEV liquidations | [plan](docs/OEV-PLAN.md) | [yaml](config/redstone-oev.example.yaml) |
 | `lifi-samechain` | LI.FI same-chain intents over LiquidLane | [plan](docs/LIFI-PLAN.md) | [yaml](config/lifi.example.yaml) |
@@ -92,6 +94,11 @@ must be an authorized caller of the RFQ `Executor` (its `setCallers` allowlist, 
 External mode also fails startup unless that executor has direct `owner`/`marketMaker`/`isFiller`
 authorization on every configured adapter; the fatal startup log includes the executor, configured adapters,
 and underlying authorization error.
+
+Merkle connector orders run independently under `rfq-merkle`; see its
+[configuration](config/rfq-merkle.example.yaml) and [runbook](docs/RFQ-MERKLE.md).
+It consumes awarded `/orders` and signed backend terms without aggregating adapter liquidity. Its connector routing config maps each RWA asset to a dedicated RecipeExecutor. Each recipe handles one asset and includes its issuer calls when redemption is required. There is no shared custody executor or asset fallback.
+
 When `tokensToQuote: permissioned`, admitted inputs are never aggregated: the selected strategy must
 use one candidate route. Other scopes keep the existing multi-route behavior.
 `minAmountsIn` adds an optional per-input-token floor on request size (base units, decimal strings):
@@ -878,3 +885,27 @@ Engineering conventions — the modular framework/integration boundary, config-d
 modern Go 1.27 style, the required test/lint/format gate, and secure-coding rules — are in
 [`CLAUDE.md`](./CLAUDE.md) (`AGENTS.md` is a symlink to it). Every change must keep
 `make format && make test && make lint` green and unit-test new logic.
+
+Merkle recipes run through the shared sender using the independently versioned [Merkle SDK integration](docs/MERKLE-SDK.md). Its `config.strategies` is a list of full executor addresses, for example `strategies: ["0x0000000000000000000000000000000000000010"]`. Each lowercase address is the durable identity; labels and strategy objects are rejected.
+
+The SDK is public and pinned in `go.mod`; normal Go and Docker builds download it
+without a GitHub token or a local merkle-executor checkout.
+
+The SDK reads signed permission bundles through `GET /merkle/{adapter}/{root}` under the configured curator API URL.
+
+Polling is fixed at 15 seconds and operation timeout at 30 seconds. `pollInterval` and
+`operationTimeout` are not configuration fields. Curator settings accept only `url` and
+`apiKeyEnv`; its HTTP timeout and response limit are fixed at 10 seconds and 2 MiB.
+
+The authenticated recipe supplies on-chain readiness and completion checks. Successful
+simulations with all Manage gates closed and no Call or Approve work wait without
+sending; malformed results and failed simulations remain errors. A zero request ID
+does not imply waiting when a separate recipe gate authorizes the action.
+
+The independent `threef-merkle` solver runs native 3F API-key PUSH offers with a
+dedicated curator BF, a MerkleAccount maker and guarded account-side minting.
+Configure one recipe `executor`, one broker and an API-key environment reference using
+[the example YAML](config/threef-merkle.example.yaml), then complete enrollment as
+described in [the 3F Merkle runbook](docs/THREEF-MERKLE.md). The generic `merkle`
+solver rejects the `threeF` field. The executor uses the maker account and shared signer. Its recipe contains 1..32 distinct guarded funding pairs with disjoint request/principal/yield inputs; inactive groups have zero principal and no calls. One journal and sender serialize all markets. Automatic offers reserve existing commitments
+and use account idle cash; simulation never submits or cancels API offers.

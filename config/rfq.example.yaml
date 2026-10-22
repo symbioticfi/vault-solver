@@ -49,6 +49,8 @@ solvers:
         name: default                  #   "default" (in-process pricing/selection) | "webhook" (external decider)
         config: {}                     #   opaque to the framework; parsed by the named strategy
 
+      # Set true when a separate rfq-merkle process owns order execution.
+      quoteOnly: false
       backendUrl: ${RFQ_BACKEND_URL}   # RFQ backend base URL (host root; the client adds the /api/v1 prefix)
       backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET  # env var NAME of the POST /quote shared secret
       listenAddr: ":42073"             # bind address for the quote HTTP server (POST /quote, /health, /docs)

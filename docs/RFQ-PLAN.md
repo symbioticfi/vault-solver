@@ -658,3 +658,6 @@ Public and internal clients are regenerated from the matching backend OpenAPI
 specifications when this contract changes. Deploy these generated clients with
 the backend header-only contract so resolve-union decoding no longer requires the
 removed body field.
+
+
+Merkle connector acquisition is owned by `internal/solvers/merkle/rfq`, as described in [RFQ-MERKLE.md](RFQ-MERKLE.md). Each connector maps each RWA asset to its own recipe executor. The recipe commits one signed swap with the awarded amount and payment as inputs 0 and 1. Include that asset's original issuer grants when redemption is required; route failures never fall back to custody.

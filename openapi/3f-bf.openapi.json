@@ -51,7 +51,7 @@
     },
     "/v1/facilitator/offer-address": {
       "post": {
-        "description": "Updates the offer address for the facilitator associated with the provided API key. An address that has ever created an offer cannot be assigned, whatever the status of those offers.",
+        "description": "Selects an enabled maker already enrolled to this facilitator as its legacy default offer address. Enroll a new maker with a maker-authorized signature first.",
         "operationId": "AdminController_setFacilitatorOfferAddress_v1",
         "parameters": [
           {
@@ -144,15 +144,117 @@
         ]
       }
     },
+    "/v1/facilitator/makers": {
+      "post": {
+        "description": "Requires the facilitator API key and a maker-authorized EIP-712 signature. Domain: grunt-api v1 on chainId; EnrollMaker(broker address, maker address, deadline uint256). Enrollment never changes the default offerAddress.",
+        "operationId": "AdminController_enrollMaker_v1",
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnrollMakerDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Maker enrolled for this facilitator."
+          }
+        },
+        "summary": "Enroll an additional maker address",
+        "tags": [
+          "facilitator"
+        ]
+      },
+      "get": {
+        "operationId": "AdminController_listMakers_v1",
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FacilitatorMakerDto"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": "List facilitator maker addresses, including disabled ones",
+        "tags": [
+          "facilitator"
+        ]
+      }
+    },
+    "/v1/facilitator/makers/disable": {
+      "post": {
+        "description": "Keeps ownership and historical offer access; the address cannot be enrolled by another facilitator.",
+        "operationId": "AdminController_disableMaker_v1",
+        "parameters": [
+          {
+            "name": "x-api-key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DisableMakerDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Maker disabled for new submissions."
+          }
+        },
+        "summary": "Disable new offers for an enrolled maker",
+        "tags": [
+          "facilitator"
+        ]
+      }
+    },
     "/v1/offer": {
       "post": {
-        "description": "Creates an offer for an auction, or updates the existing mutable offer for the same `auctionId`, `maker`, and `nonce`. If a non-placeholder `signature` is provided, it is verified against the registered facilitator address or that facilitator's configured offer address. If `signature` is omitted, a valid facilitator `x-api-key` header is required; when that facilitator has a configured offer address, that offer address is used as the stored `maker`.\n\n`expectedReturn` is the expected yield, not the total repayment. Total repayment is `amount + expectedReturn`.\n\n`expiration` is a Unix timestamp in seconds. Offers are expired only when `expiration` is lower than the current Unix second.\n\nSigned offer requests resolve their EIP-712 domain from the auction request contract on-chain. Set `domain.verifyingContract` to the request contract address for the selected auction. If the contract exposes a `salt`, include it; otherwise omit that field.\n\nExact typed data to sign with `viem`:\n\n```ts\nconst signature = await walletClient.signTypedData(\n{\n    domain: {\n      name: 'SuperstateRequest',\n      version: '1',\n      chainId: 11155111,\n      verifyingContract: '0x1234567890abcdef1234567890abcdef12345678',\n      salt: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',\n    },\n    types: {\n      Offer: [\n        {\n          name: 'maker',\n          type: 'address',\n        },\n        {\n          name: 'amount',\n          type: 'uint256',\n        },\n        {\n          name: 'expectedReturn',\n          type: 'uint256',\n        },\n        {\n          name: 'nonce',\n          type: 'uint256',\n        },\n        {\n          name: 'expiration',\n          type: 'uint256',\n        },\n        {\n          name: 'useCallback',\n          type: 'bool',\n        },\n      ],\n    },\n    primaryType: 'Offer',\n    message: {\n      maker: '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38',\n      amount: 1000000000n,\n      expectedReturn: 5000000n,\n      nonce: 1n,\n      expiration: 4102444800n,\n      useCallback: false,\n    },\n  }\n)\n```\n\nSubmit the signature bytes in the request body `signature` field. For deferred ERC-1271 approval, a matching facilitator may submit `0x` with its `x-api-key` while the contract approval transaction is pending. All `uint256` request fields stay decimal strings in the HTTP payload.",
+        "description": "Creates an offer for an auction. Omitted `executionMode` preserves legacy behavior: an on-chain `Offer` signature means PULL, and an unsigned API-key request means PUSH. Explicit PULL requires an executable `signature` (or the existing API-key-backed deferred `0x` approval). `useCallback: false` does not select PUSH.\n\nFor explicit signed PUSH, provide `pushAuthorizationSignature` and `authorizationDeadline`, not `signature` or an API key. The selected `maker` must be an enabled address enrolled under a broker and must itself validate the EIP-712/EIP-1271 authorization. The auction request contract must expose an EIP-712 domain whose chain ID matches `chainId`. The API stores `signature = NULL`, so the auction engine routes it through maker-initiated minting, never Request.consume.\n\nThe maker is the vault/adapter that supplies funds and mints. A broker's configured `offerAddress` is only the legacy default; it does not replace an explicitly selected signed maker. The bot signer is the key approved by each maker contract, not the stored maker address.\n\nSigned PUSH retries with the same `auctionId`, `maker`, and `nonce` must use identical offer terms and mode; conflicting updates are rejected.\n\n`expectedReturn` is the expected yield, not the total repayment. Total repayment is `amount + expectedReturn`.\n\n`expiration` is a Unix timestamp in seconds. Offers are expired only when `expiration` is lower than the current Unix second.\n\nLegacy signed PULL requests resolve their EIP-712 domain from the auction request contract on-chain. Set `domain.verifyingContract` to that request contract. If the contract exposes a `salt`, include it; otherwise omit it. PULL typed data:\n\n```ts\nconst signature = await walletClient.signTypedData(\n{\n    domain: {\n      name: 'SuperstateRequest',\n      version: '1',\n      chainId: 11155111,\n      verifyingContract: '0x1234567890abcdef1234567890abcdef12345678',\n      salt: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',\n    },\n    types: {\n      Offer: [\n        {\n          name: 'maker',\n          type: 'address',\n        },\n        {\n          name: 'amount',\n          type: 'uint256',\n        },\n        {\n          name: 'expectedReturn',\n          type: 'uint256',\n        },\n        {\n          name: 'nonce',\n          type: 'uint256',\n        },\n        {\n          name: 'expiration',\n          type: 'uint256',\n        },\n        {\n          name: 'useCallback',\n          type: 'bool',\n        },\n      ],\n    },\n    primaryType: 'Offer',\n    message: {\n      maker: '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38',\n      amount: 1000000000n,\n      expectedReturn: 5000000n,\n      nonce: 1n,\n      expiration: 4102444800n,\n      useCallback: false,\n    },\n  }\n)\n```\n\nSubmit that pull signature in `signature`. For deferred ERC-1271 approval, a matching facilitator may submit `0x` with its `x-api-key` while contract approval is pending.\n\nExact API-only signed PUSH typed data (not valid for on-chain PULL):\n\n```ts\nconst signature = await walletClient.signTypedData(\n{\n    domain: {\n      name: 'grunt-api',\n      version: '1',\n      chainId: 11155111,\n    },\n    types: {\n      SubmitPushOffer: [\n        {\n          name: 'action',\n          type: 'string',\n        },\n        {\n          name: 'executionMode',\n          type: 'string',\n        },\n        {\n          name: 'maker',\n          type: 'address',\n        },\n        {\n          name: 'auctionId',\n          type: 'uint256',\n        },\n        {\n          name: 'request',\n          type: 'address',\n        },\n        {\n          name: 'chainId',\n          type: 'uint256',\n        },\n        {\n          name: 'amount',\n          type: 'uint256',\n        },\n        {\n          name: 'expectedReturn',\n          type: 'uint256',\n        },\n        {\n          name: 'nonce',\n          type: 'uint256',\n        },\n        {\n          name: 'expiration',\n          type: 'uint256',\n        },\n        {\n          name: 'useCallback',\n          type: 'bool',\n        },\n        {\n          name: 'authorizationDeadline',\n          type: 'uint256',\n        },\n      ],\n    },\n    primaryType: 'SubmitPushOffer',\n    message: {\n      action: 'SUBMIT_PUSH_OFFER',\n      executionMode: 'PUSH',\n      maker: '0x1111111111111111111111111111111111111111',\n      auctionId: 42n,\n      request: '0x1234567890abcdef1234567890abcdef12345678',\n      chainId: 11155111n,\n      amount: 1000000000n,\n      expectedReturn: 5000000n,\n      nonce: 1n,\n      expiration: 4102444800n,\n      useCallback: false,\n      authorizationDeadline: 4102444800n,\n    },\n  }\n)\n```\n\nPut the result in `pushAuthorizationSignature`. All `uint256` HTTP fields are decimal strings. An AWAITING_MINT response exposes `pendingAmount` (the accepted amount) and `mintDeadline` (the earliest active authorization lease). The lease starts when the auction accepts the offer, not when the bot first polls; after authorization confirms, mint before that deadline. Timeout invokes the existing revocation path.",
         "operationId": "OfferController_create_v1",
         "parameters": [
           {
             "name": "x-api-key",
             "in": "header",
-            "description": "Facilitator API key (required when `signature` is not provided).",
+            "description": "Facilitator API key for legacy unsigned PUSH or deferred `0x` PULL. Not required for signed PUSH.",
             "required": false,
             "schema": {
               "type": "string"
@@ -168,7 +270,7 @@
               },
               "examples": {
                 "signed": {
-                  "summary": "Signed request",
+                  "summary": "Legacy signed PULL",
                   "description": "Submit a signature generated from the `Offer` typed data shown in the operation description.",
                   "value": {
                     "chainId": 11155111,
@@ -183,7 +285,7 @@
                   }
                 },
                 "apiKey": {
-                  "summary": "API key request",
+                  "summary": "Legacy API-key PUSH",
                   "description": "Unsigned requests omit `chainId` and `signature` and must include `x-api-key`.",
                   "value": {
                     "auctionId": 42,
@@ -193,6 +295,23 @@
                     "nonce": "1",
                     "expiration": "4102444800",
                     "useCallback": false
+                  }
+                },
+                "signedPush": {
+                  "summary": "Signed multi-vault PUSH",
+                  "description": "The maker contract validates the bot signature. Repeat with a different enrolled maker without changing the broker default.",
+                  "value": {
+                    "executionMode": "PUSH",
+                    "chainId": 11155111,
+                    "auctionId": 42,
+                    "maker": "0x1111111111111111111111111111111111111111",
+                    "amount": "1000000000",
+                    "expectedReturn": "5000000",
+                    "nonce": "1",
+                    "expiration": "4102444800",
+                    "useCallback": false,
+                    "authorizationDeadline": "4102444800",
+                    "pushAuthorizationSignature": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
                   }
                 }
               }
@@ -290,6 +409,8 @@
                     "id": 123,
                     "auctionId": 42,
                     "status": "SUBMITTED",
+                    "executionMode": "PULL",
+                    "mintDeadline": null,
                     "maker": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38",
                     "requestId": "0x1234567890abcdef1234567890abcdef12345678",
                     "asset": {
@@ -608,7 +729,7 @@
   },
   "info": {
     "title": "BF API Reference",
-    "description": "BP subdomain API documentation for bf.dev.gcp.3f.xyz",
+    "description": "BP subdomain API documentation for bf.3f.xyz",
     "version": "0.0.1",
     "contact": {}
   },
@@ -714,9 +835,83 @@
           "offerAddress"
         ]
       },
+      "EnrollMakerDto": {
+        "type": "object",
+        "properties": {
+          "chainId": {
+            "type": "number",
+            "example": 1,
+            "description": "Chain ID for maker signature verification"
+          },
+          "maker": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "example": "0x1234567890abcdef1234567890abcdef12345678"
+          },
+          "deadline": {
+            "type": "string",
+            "example": "4102444800",
+            "description": "EIP-712 authorization deadline"
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^0x(?:[a-fA-F0-9]{2})+$",
+            "description": "Maker-authorized EIP-712/EIP-1271 signature"
+          }
+        },
+        "required": [
+          "chainId",
+          "maker",
+          "deadline",
+          "signature"
+        ]
+      },
+      "FacilitatorMakerDto": {
+        "type": "object",
+        "properties": {
+          "maker": {
+            "type": "string",
+            "example": "0x1234567890abcdef1234567890abcdef12345678"
+          },
+          "submissionsEnabled": {
+            "type": "boolean",
+            "description": "Whether this maker can submit new offers"
+          },
+          "isDefault": {
+            "type": "boolean",
+            "description": "Whether this is the legacy default offer address"
+          }
+        },
+        "required": [
+          "maker",
+          "submissionsEnabled",
+          "isDefault"
+        ]
+      },
+      "DisableMakerDto": {
+        "type": "object",
+        "properties": {
+          "maker": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$",
+            "example": "0x1234567890abcdef1234567890abcdef12345678"
+          }
+        },
+        "required": [
+          "maker"
+        ]
+      },
       "CreateOfferDto": {
         "type": "object",
         "properties": {
+          "executionMode": {
+            "enum": [
+              "PULL",
+              "PUSH"
+            ],
+            "type": "string",
+            "description": "Execution mode. Omitted: signed Offer is PULL, unsigned API-key offer is PUSH. Signed PUSH uses a separate API authorization signature."
+          },
           "chainId": {
             "type": "number",
             "description": "Chain ID for resolving the request EIP-712 domain",
@@ -760,8 +955,18 @@
           },
           "signature": {
             "type": "string",
-            "description": "EIP-712/EIP-1271 signature bytes. `0x` is accepted for deferred EIP-1271 approval only with a matching facilitator API key. Required if chainId is provided.",
+            "description": "Executable on-chain pull Offer signature. `0x` is accepted for deferred EIP-1271 approval only with a matching facilitator API key. Never use for PUSH.",
             "example": "0x"
+          },
+          "pushAuthorizationSignature": {
+            "type": "string",
+            "description": "EIP-712/EIP-1271 API-only signature for explicit PUSH. Required instead of an API key when selecting an additional maker. Never stored as an executable Offer signature.",
+            "example": "0x1234"
+          },
+          "authorizationDeadline": {
+            "type": "string",
+            "description": "Unix seconds after which the signed PUSH authorization cannot be submitted.",
+            "example": "4102444800"
           }
         },
         "required": [
@@ -813,7 +1018,7 @@
           },
           "signature": {
             "type": "string",
-            "description": "EIP-712 signature (required if chainId is provided)",
+            "description": "EIP-712 signature (required if chainId is provided): 65-byte ECDSA, or an EIP-1271 blob for contract makers",
             "example": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
           }
         },
@@ -925,6 +1130,19 @@
             "description": "Offer status for the offer",
             "example": "SUBMITTED"
           },
+          "executionMode": {
+            "enum": [
+              "PULL",
+              "PUSH"
+            ],
+            "type": "string"
+          },
+          "mintDeadline": {
+            "type": "string",
+            "nullable": true,
+            "description": "Effective UTC mint deadline for an AWAITING_MINT push offer, or null outside an active mint window.",
+            "example": "2026-09-16T12:00:00.000Z"
+          },
           "maker": {
             "type": "string",
             "description": "Ethereum address of the offer maker",
@@ -998,7 +1216,7 @@
           "signature": {
             "type": "string",
             "nullable": true,
-            "description": "EIP-712 signature or null if unsigned",
+            "description": "Executable on-chain PULL signature, or null for PUSH. API-only PUSH authorization signatures are never returned or stored here.",
             "example": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
           }
         },
@@ -1006,6 +1224,8 @@
           "id",
           "auctionId",
           "status",
+          "executionMode",
+          "mintDeadline",
           "maker",
           "requestId",
           "asset",

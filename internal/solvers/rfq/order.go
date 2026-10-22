@@ -10,9 +10,9 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 )
 
-// executorBinding (abigen --v2) packs fill() via TryPackFill; executorABI is parsed only for tuple
+// executorBinding (abigen --v2) packs fill() via TryPackFill1; executorABI is parsed only for tuple
 // reflection (decoding the backend's order tuple), which the Pack helpers don't expose. fill() is
-// overloaded 3×; PackFill is the mixed order+protocolSig+swaps+discountSwaps overload we build — the
+// overloaded; PackFill1 is the mixed order+protocolSig+swaps+discountSwaps overload we build — the
 // golden selector test pins it.
 var (
 	executorBinding = executor.NewExecutor()
@@ -36,7 +36,7 @@ var orderTupleArgs = abi.Arguments{{Type: fillOrderType()}}
 var emptyExecutorData = encodeEmptyExecutorData()
 
 func fillOrderType() abi.Type {
-	m, ok := executorABI.Methods["fill"]
+	m, ok := executorABI.Methods["fill1"]
 	if !ok || len(m.Inputs) == 0 {
 		panic("rfq: executor ABI missing fill(order, ...)")
 	}
@@ -91,7 +91,7 @@ func encodeFill(
 	discountSwaps []executor.IReactorDiscountSwapInput,
 	executorData []byte,
 ) ([]byte, error) {
-	data, err := executorBinding.TryPackFill(order, protocolSig, swaps, discountSwaps, executorData)
+	data, err := executorBinding.TryPackFill1(order, protocolSig, swaps, discountSwaps, executorData)
 	if err != nil {
 		return nil, errors.Errorf("encode fill: %w", err)
 	}

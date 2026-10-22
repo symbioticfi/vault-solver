@@ -19,6 +19,7 @@ type rawConfig struct {
 	BackendURL             string            `yaml:"backendUrl"`
 	BackendSharedSecretEnv string            `yaml:"backendSharedSecretEnv"`
 	ListenAddr             string            `yaml:"listenAddr"`
+	QuoteOnly              bool              `yaml:"quoteOnly"`
 	Executor               string            `yaml:"executor"`
 	Reactor                string            `yaml:"reactor"`
 	LiquidityLens          string            `yaml:"liquidityLens"`
@@ -40,6 +41,8 @@ type rawStrategyConfig struct {
 
 // Config is the validated, typed RFQ solver configuration.
 type Config struct {
+	// QuoteOnly serves pricing for a separately operated filler without polling or submitting orders.
+	QuoteOnly bool
 	// BackendURL is the RFQ backend base URL (orders + discounts).
 	BackendURL string
 	// BackendSharedSecretEnv is the env var NAME holding the shared secret that authenticates the
@@ -135,6 +138,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	}
 
 	cfg := &Config{
+		QuoteOnly:              raw.QuoteOnly,
 		BackendURL:             raw.BackendURL,
 		BackendSharedSecretEnv: raw.BackendSharedSecretEnv,
 		ListenAddr:             parse.OrDefault(raw.ListenAddr, defaultListenAddr),
