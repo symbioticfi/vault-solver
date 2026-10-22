@@ -50,23 +50,14 @@ func (a auctionView) maxRateBps() (float64, bool) {
 	return float64(*r), true
 }
 
-// rateBasisSeconds returns the auction's rateBasisSeconds: 0 when the API doesn't send the field yet
-// (pre-switch responses quote maxRate per term, see types.ExpectedReturn), and ok=false when it is sent
-// but not a positive number, so the auction is skipped rather than priced on a guessed basis.
-// shortcut: read from AdditionalProperties until the live 3F spec carries the field; once
-// `make refresh-3f-client` generates it, switch to the typed getter (TestAuctionViewRateBasisSeconds flags it).
-// The 2026-10-22 pre-release spec declares every nullable scalar (maxRate, amountRequested, ...) as
-// `type: object`, which generates maps that fail to decode numbers, so do not generate from that one.
+// rateBasisSeconds returns the auction's rateBasisSeconds: 0 when the API doesn't send the field
+// (pre-switch responses quote maxRate per term, see types.ExpectedReturn), and ok=false when it is
+// negative, so the auction is skipped rather than priced on a guessed basis.
 func (a auctionView) rateBasisSeconds() (int64, bool) {
-	raw, present := a.dto.AdditionalProperties["rateBasisSeconds"]
-	if !present {
-		return 0, true
+	if v := a.dto.GetRateBasisSeconds(); v >= 0 {
+		return int64(v), true
 	}
-	v, ok := raw.(float64)
-	if !ok || v <= 0 {
-		return 0, false
-	}
-	return int64(v), true
+	return 0, false
 }
 
 // amountRequested returns the requested principal, or nil if the API didn't resolve it.

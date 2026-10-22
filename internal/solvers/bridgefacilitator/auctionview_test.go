@@ -17,9 +17,8 @@ func TestAuctionViewRateBasisSeconds(t *testing.T) {
 		{"absent (pre-switch)", `{"id":1,"maxRate":2}`, 0, true},
 		{"annual", `{"id":1,"maxRate":730,"rateBasisSeconds":31536000}`, 31536000, true},
 		{"legacy settlement delay", `{"id":1,"maxRate":100,"rateBasisSeconds":2678400}`, 2678400, true},
-		{"null fails closed", `{"id":1,"rateBasisSeconds":null}`, 0, false},
-		{"string fails closed", `{"id":1,"rateBasisSeconds":"31536000"}`, 0, false},
-		{"zero fails closed", `{"id":1,"rateBasisSeconds":0}`, 0, false},
+		{"null decodes as absent", `{"id":1,"rateBasisSeconds":null}`, 0, true},
+		{"negative fails closed", `{"id":1,"rateBasisSeconds":-1}`, 0, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

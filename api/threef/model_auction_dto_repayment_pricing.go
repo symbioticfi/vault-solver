@@ -17,7 +17,7 @@ import (
 // checks if the AuctionDtoRepaymentPricing type satisfies the MappedNullable interface at compile time
 var _ MappedNullable = &AuctionDtoRepaymentPricing{}
 
-// AuctionDtoRepaymentPricing Quote horizon for APR; omitted for ordinary auctions.
+// AuctionDtoRepaymentPricing Retarget auctions only: the on-chain horizon over which repayment pro-rates the annual yield (365 days in production). Omitted for ordinary auctions.
 type AuctionDtoRepaymentPricing struct {
 	HorizonSeconds       *int32 `json:"horizonSeconds,omitempty"`
 	AdditionalProperties map[string]interface{}
