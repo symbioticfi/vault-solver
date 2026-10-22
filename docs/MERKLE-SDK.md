@@ -122,11 +122,8 @@ signed offers, RFQ domain compatibility, reservations and order reconciliation
 remain business logic in vault-solver. The independent [`threef-merkle`](THREEF-MERKLE.md) and [`rfq-merkle`](RFQ-MERKLE.md)
 solvers supply that host logic. `merkle` rejects protocol-specific configuration.
 
-The repository is private. Go builds need read access to merkle-executor;
-CI uses MERKLE_SDK_READ_TOKEN with contents:read on that repository. Docker uses
-a BuildKit secret, never a build argument or an image-layer credential. Set the
-read token in MERKLE_SDK_READ_TOKEN before `make docker`; the target passes it
-through the secret mount. Local
-users can use their normal GitHub credential helper with GOPRIVATE set to the
-Merkle module prefix. Consumers use the immutable Go module requirement, with
-no production replace or dependency on a sibling checkout.
+The SDK is a public Go module. Standard `go mod download`, CI and `make docker`
+use the immutable requirement and go.sum checksums through the public Go proxy.
+No GitHub token, private-module configuration or sibling checkout is required.
+If developing with a local `go.work`, set `GOWORK=off` to verify the pinned module.
+Docker excludes workspace files so images always use that dependency.
