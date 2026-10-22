@@ -442,11 +442,7 @@ func (m *Manager) callGas(ctx context.Context, req Request, parent *types.Header
 	}
 	// Initial estimation runs on the worker's process context. Give override and
 	// fallback one budget so an unsigned request cannot occupy the lane indefinitely.
-	deadline := time.Now().Add(m.gasEstimateTimeout())
-	if !req.Deadline.IsZero() && req.Deadline.Before(deadline) {
-		deadline = req.Deadline
-	}
-	ctx, cancel := context.WithDeadline(ctx, deadline)
+	ctx, cancel := context.WithTimeout(ctx, m.gasEstimateTimeout())
 	defer cancel()
 	gas, headroomBps, err := m.estimateHorizonGas(ctx, req, parent)
 	if err != nil {

@@ -148,6 +148,9 @@ func (b *mockBackend) HeaderByNumber(_ context.Context, number *big.Int) (*types
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if number != nil {
+		if number.Uint64() > b.head {
+			return nil, ethereum.NotFound
+		}
 		return b.headerLocked(number.Uint64()), nil
 	}
 	if b.reorgOnHeadRead {

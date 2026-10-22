@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
@@ -214,23 +215,29 @@ func (m *Manager) readLateReceipt(ctx context.Context, entry lateReceiptObservat
 	if err != nil {
 		return Result{}, err
 	}
-	head, err := m.confirmationHeader(ctx, nil)
-	if err != nil {
-		return Result{}, err
-	}
 	witnessNumber, err := confirmationWitnessNumber(receipt, entry.metadata.confirmations)
 	if err != nil {
 		return Result{}, err
 	}
-	if head.Number.Cmp(witnessNumber) < 0 {
+	witness, err := m.confirmationHeader(ctx, witnessNumber)
+	if errors.Is(err, ethereum.NotFound) {
 		observability.Decline(ctx, "confirmation_depth_pending", "owned receipt awaits configured depth")
 		return Result{}, nil
 	}
-	// Share the active proof and its closing fence. The immutable parent cache
-	// still lets a proof spanning multiple short polls retain validated links.
-	receipt, err = m.confirmReceiptWitness(ctx, receipt, entry.metadata.confirmations, m.lateReceiptParentHeader)
 	if err != nil {
 		return Result{}, err
+	}
+	// Reuse this poll's validated receipt. Its block must link to the same canonical
+	// witness before and after ancestry, without spending another receipt lookup.
+	if err := m.confirmReceiptAncestry(ctx, witness, receipt, m.lateReceiptParentHeader); err != nil {
+		return Result{}, err
+	}
+	stable, err := m.confirmationHeader(ctx, witnessNumber)
+	if err != nil {
+		return Result{}, err
+	}
+	if stable.Hash() != witness.Hash() {
+		return Result{}, errors.Errorf("%w: confirmation witness changed during proof", errReceiptReorged)
 	}
 	result := Result{Hash: entry.hash, Attempts: []common.Hash{entry.hash}, Receipt: receipt, Outcome: OutcomeConfirmed}
 	if receipt.Status == types.ReceiptStatusFailed {

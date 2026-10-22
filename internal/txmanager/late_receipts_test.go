@@ -314,40 +314,19 @@ func TestReceiptAccountingDeduplicatesSameHashAcrossNormalAndLatePaths(t *testin
 	assertMetric(t, metrics.requests.WithLabelValues("once", "confirmed"), 1)
 }
 
-type lateReceiptHeadSwitchBackend struct {
-	*mockBackend
-
-	reads int
-}
-
-func (b *lateReceiptHeadSwitchBackend) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {
-	if number != nil {
-		return b.mockBackend.HeaderByNumber(ctx, number)
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.reads++
-	if b.reads >= 3 {
-		b.head, b.reorgedHeader = 102, true
-	}
-	return b.headerLocked(b.head), nil
-}
-
-func TestLateReceiptCannotCombineOldAncestryWithNewForkDepth(t *testing.T) {
-	backend := &lateReceiptHeadSwitchBackend{mockBackend: newMockBackend()}
+func TestLateReceiptWaitsForWitnessDepth(t *testing.T) {
+	tx := types.NewTx(&types.DynamicFeeTx{Nonce: 7, To: ptr(common.Address{1})})
+	backend := newWitnessBackend(tx, 1)
 	manager := newLateReceiptManager(t, backend, Config{Confirmations: 2}, nil)
-	pending, err := manager.broadcast(t.Context(), Request{To: common.HexToAddress("0xaaa"), GasLimit: 21_000})
-	if err != nil {
-		t.Fatal(err)
+	entry := lateReceiptObservation{hash: tx.Hash(), metadata: receiptMetadata{confirmations: 2}}
+	result, err := manager.readLateReceipt(t.Context(), entry)
+	if err != nil || result.Receipt != nil {
+		t.Fatalf("receipt counted before witness block exists: %+v, err=%v", result, err)
 	}
-	backend.mu.Lock()
-	backend.reads, backend.head, backend.reorgedHeader = 0, 100, false
-	backend.mu.Unlock()
-	result, err := manager.readLateReceipt(t.Context(), lateReceiptObservation{
-		hash: pending.originalHash, metadata: manager.receiptMetadata(pending.req, pending.nonce),
-	})
-	if result.Receipt != nil {
-		t.Fatalf("old block-100 ancestry combined with another fork's block-102 depth: %+v, err=%v", result, err)
+	backend.latest = 102
+	result, err = manager.readLateReceipt(t.Context(), entry)
+	if err != nil || result.Outcome != OutcomeConfirmed {
+		t.Fatalf("receipt not counted after witness became available: %+v, err=%v", result, err)
 	}
 }
 

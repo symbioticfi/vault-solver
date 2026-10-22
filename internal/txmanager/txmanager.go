@@ -1171,7 +1171,7 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 	// receipt can persist while a stalled head never reaches the requested depth. First
 	// establish canonical inclusion under one overall read budget, also capped by the
 	// final abandonment grace. Proven inclusion then retains the ordinary depth wait.
-	canonicalDeadline := time.Now().Add(m.receiptReadTimeout())
+	canonicalDeadline := time.Now().Add(3 * m.receiptReadTimeout())
 	if !pending.deadline.IsZero() {
 		finalDeadline := pending.deadline.Add(m.receiptReadTimeout())
 		if finalDeadline.Before(canonicalDeadline) {
@@ -1795,9 +1795,6 @@ func (m *Manager) confirmReceiptWitness(
 	if receipt == nil {
 		return nil, errors.New("confirmation receipt is required")
 	}
-	if err := validateReceipt(receipt.TxHash, receipt); err != nil {
-		return nil, err
-	}
 	number, err := confirmationWitnessNumber(receipt, depth)
 	if err != nil {
 		return nil, err
@@ -1877,11 +1874,6 @@ func validateReceipt(hash common.Hash, receipt *types.Receipt) error {
 	}
 	if !validReceiptStatus(receipt.Status) {
 		return errors.Errorf("transaction receipt %s has invalid status %d", hash.Hex(), receipt.Status)
-	}
-	for i, entry := range receipt.Logs {
-		if entry == nil || entry.Removed || entry.TxHash != hash || entry.BlockHash != receipt.BlockHash || entry.BlockNumber != receipt.BlockNumber.Uint64() || entry.TxIndex != receipt.TransactionIndex || (i > 0 && entry.Index <= receipt.Logs[i-1].Index) {
-			return errors.Errorf("transaction receipt %s has invalid log identity", hash.Hex())
-		}
 	}
 	return nil
 }

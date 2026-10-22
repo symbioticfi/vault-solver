@@ -96,6 +96,8 @@ The override and latest-state fallback share that single estimate budget, capped
 context. A supplied gas limit still bypasses estimation. Caller cancellation after admission does not
 release the lane: an unsigned timeout must return through the worker before another request enters.
 These internal read budgets are separate from broadcast timeout.
+An estimate exceeding its budget returns an unsigned `submission_error`, even if the HTTP attempt
+timeout allows longer. Watch estimate timeouts on deployment before changing this bound.
 
 Each initial mined nonce read and replacement/fee-hint nonce check has its own
 `min(2 seconds, replacementInterval/2)` timeout, bounded by the caller or lifecycle context. Receipt
@@ -246,17 +248,15 @@ incomplete or unavailable sweeps then return execution-unknown abandonment and r
 the manager follows confirmation policy rather than abandoning included work at the pending deadline.
 This ordering reduces the receipt/status race but cannot make separate on-chain reads atomic.
 Invalid receipts are separately rejected: the block number must fit uint64, the transaction hash must
-match, the block hash must be nonzero, and status must be successful (1) or failed (0). Logs must match
-the receipt's transaction/block identity and transaction index, have increasing log indexes, and be
-present and unremoved.
+match, the block hash must be nonzero, and status must be successful (1) or failed (0).
 
 Only the owner accepts a receipt candidate and begins confirmation; the reader is idle during that wait.
 Before waiting for depth, a canonical preflight checks the receipt block's exact numbered header
-under one overall receipt-read budget, capped by any final receipt grace. It rereads the receipt and
+under three receipt-read budgets, capped by any final receipt grace. It rereads the receipt and
 closes the same numbered header before accepting inclusion. An unproven receipt resumes pending
 tracking; only a proven inclusion continues confirmation beyond the pending deadline.
 For depth N, the witness is receipt block + N. Check its exact hash-linked parents back to inclusion,
-reread the receipt's transaction/block/status and log identity, then require the same numbered witness
+reread the receipt's transaction/block/status identity, then require the same numbered witness
 again. This takes at most N parent reads regardless of receipt age; latest-head advancement is allowed.
 Depth zero reuses the fresh canonical inclusion proof without another receipt lookup. Overflow,
 inconsistent links or a changed witness cannot confirm. Read fallbacks remain available without endpoint
@@ -281,7 +281,9 @@ The observer uses the existing poll cadence and advances its round-robin cursor 
 is bounded by one receipt-read budget; receipt/header/ancestry reads retain their own timeouts within it.
 It never waits synchronously for depth. Missing, malformed, lagging, orphaned or insufficient-depth
 receipts remain uncounted and are retried until retention ends. Canonical ancestry and confirmation
-depth use the same numbered witness proof and fresh receipt/closing-header fences as active confirmation.
+depth link this poll's validated receipt to an exact numbered witness and require that witness to remain
+canonical after ancestry. No latest-head or second receipt lookup is needed: each poll uses three
+uncached reads plus any uncached witness parents.
 Malformed receipt statuses cannot establish inclusion, advance the confirmed nonce floor or enter receipt telemetry.
 A separately bounded cache of validated hash-addressed parent
 headers retains immutable proof links across polls, so an old receipt can make progress without extending

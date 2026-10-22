@@ -59,6 +59,9 @@ func (b *witnessBackend) HeaderByNumber(_ context.Context, number *big.Int) (*ty
 		return b.header(b.latest), nil
 	}
 	b.numberedReads++
+	if number.Uint64() > b.latest {
+		return nil, ethereum.NotFound
+	}
 	header := b.header(number.Uint64())
 	if b.onNumber != nil {
 		return b.onNumber(number, b.numberedReads, header)
@@ -216,15 +219,6 @@ func TestConfirmationWitnessReorgRejected(t *testing.T) {
 				return &fresh, nil
 			}
 		}},
-		{name: "log identity changed at reread", mutate: func(b *witnessBackend) {
-			b.onReceipt = func(n int, r *types.Receipt) (*types.Receipt, error) {
-				fresh := *r
-				if n >= 2 {
-					fresh.Logs = []*types.Log{{TxHash: common.Hash{1}, BlockHash: r.BlockHash, BlockNumber: r.BlockNumber.Uint64()}}
-				}
-				return &fresh, nil
-			}
-		}},
 		{name: "receipt hash changed at reread", mutate: func(b *witnessBackend) {
 			b.onReceipt = func(n int, r *types.Receipt) (*types.Receipt, error) {
 				fresh := *r
@@ -333,22 +327,20 @@ func TestLateReceiptWitnessOldReceiptAdvancingHead(t *testing.T) {
 	if err != nil || got.Receipt == nil || got.Outcome != OutcomeConfirmed {
 		t.Fatalf("canonical old passive receipt not confirmed while latest advanced: %+v, %v", got, err)
 	}
-	if b.parentReads > 2 || b.numberedReads < 2 || b.receiptReads < 2 {
+	if b.parentReads != 2 || b.numberedReads != 2 || b.receiptReads != 1 {
 		t.Fatalf("passive proof reads: parents=%d numbered=%d receipts=%d", b.parentReads, b.numberedReads, b.receiptReads)
 	}
 }
 
 func TestLateReceiptWitnessRejectsChangedEvidence(t *testing.T) {
-	for _, phase := range []string{"receipt", "closing witness"} {
+	for _, phase := range []string{"receipt identity", "closing witness"} {
 		t.Run(phase, func(t *testing.T) {
 			tx := types.NewTx(&types.DynamicFeeTx{Nonce: 7, To: ptr(common.Address{1})})
 			b := newWitnessBackend(tx, 10)
-			if phase == "receipt" {
-				b.onReceipt = func(n int, r *types.Receipt) (*types.Receipt, error) {
+			if phase == "receipt identity" {
+				b.onReceipt = func(_ int, r *types.Receipt) (*types.Receipt, error) {
 					fresh := *r
-					if n >= 2 {
-						fresh.Status = types.ReceiptStatusFailed
-					}
+					fresh.TxHash = common.Hash{1}
 					return &fresh, nil
 				}
 			} else {

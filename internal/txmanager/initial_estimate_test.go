@@ -128,7 +128,7 @@ func TestInitialGasEstimateRequestDeadline(t *testing.T) {
 				defer cancel()
 				started := time.Now()
 				req := Request{To: common.Address{1}, Label: "earlier_deadline", Deadline: started.Add(tc.requestTimeout)}
-				_, err := m.callGas(managerCtx(ctx, m), req, receiptTestHeader(100))
+				_, err := m.broadcast(managerCtx(ctx, m), req)
 				want := started.Add(min(tc.requestTimeout, tc.parentTimeout))
 				if !errors.Is(err, context.DeadlineExceeded) || !chain.overrideDeadline.Equal(want) || !chain.fallbackDeadline.Equal(want) {
 					t.Fatalf("estimate err %v, deadlines %s / %s, want %s", err, chain.overrideDeadline, chain.fallbackDeadline, want)
