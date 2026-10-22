@@ -21,8 +21,12 @@ import (
 )
 
 func fixture(t *testing.T) (provider.Snapshot, recipes.Recipe, *recipes.Tree) {
+	return loadFixture(t, "testdata/3f-executing.json")
+}
+
+func loadFixture(t *testing.T, path string) (provider.Snapshot, recipes.Recipe, *recipes.Tree) {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/3f-executing.json")
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,6 +49,17 @@ func fixture(t *testing.T) (provider.Snapshot, recipes.Recipe, *recipes.Tree) {
 	}
 	leaf := recipes.Leaf{Target: doc.Account, Data: doc.Data, DataMask: doc.Mask, Hash: doc.Hash, Value: new(big.Int)}
 	return provider.Snapshot{ChainID: big.NewInt(1), Account: doc.Account, Executor: common.HexToAddress("0x111"), BlockNumber: big.NewInt(10), Timestamp: 1000}, recipe, &recipes.Tree{Leaves: []recipes.Leaf{leaf}}
+}
+
+func TestLatestAdaptersRecipe(t *testing.T) {
+	snapshot, recipe, tree := loadFixture(t, "testdata/3f-executing-latest.json")
+	markets, err := inspect(snapshot, recipe, tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(markets) != 1 || markets[0].PrincipalInput != 1 || markets[0].YieldInput != 2 || markets[0].RequestInput != 0 {
+		t.Fatalf("latest adapters recipe has unexpected markets: %+v", markets)
+	}
 }
 
 func TestCanonicalGuardAndEverySecurityBoundary(t *testing.T) {
