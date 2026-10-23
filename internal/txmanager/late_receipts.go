@@ -5,6 +5,7 @@ import (
 	"slices"
 	"time"
 
+	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
@@ -214,32 +215,29 @@ func (m *Manager) readLateReceipt(ctx context.Context, entry lateReceiptObservat
 	if err != nil {
 		return Result{}, err
 	}
-	if !validReceiptStatus(receipt.Status) {
-		return Result{}, errors.Errorf("late receipt %s has invalid status %d", entry.hash.Hex(), receipt.Status)
-	}
-	head, err := m.confirmationHead(ctx)
+	witnessNumber, err := confirmationWitnessNumber(receipt, entry.metadata.confirmations)
 	if err != nil {
 		return Result{}, err
 	}
-	if !head.Number.IsUint64() || !receipt.BlockNumber.IsUint64() {
-		return Result{}, errors.New("late receipt confirmation block number exceeds uint64")
-	}
-	included, latest := receipt.BlockNumber.Uint64(), head.Number.Uint64()
-	if latest < included || latest-included < entry.metadata.confirmations {
+	witness, err := m.confirmationHeader(ctx, witnessNumber)
+	if errors.Is(err, ethereum.NotFound) {
 		observability.Decline(ctx, "confirmation_depth_pending", "owned receipt awaits configured depth")
 		return Result{}, nil
 	}
-	// Depth and ancestry must describe the same stable head. Reading a separate, newer
-	// depth after canonical preflight could incorrectly count a receipt from a displaced fork.
-	if err := m.confirmReceiptAncestryUsing(ctx, head, receipt, m.lateReceiptParentHeader); err != nil {
-		return Result{}, err
-	}
-	headAfter, err := m.confirmationHead(ctx)
 	if err != nil {
 		return Result{}, err
 	}
-	if head.Hash() != headAfter.Hash() {
-		return Result{}, errors.New("late receipt confirmation head changed during ancestry check")
+	// Reuse this poll's validated receipt. Its block must link to the same canonical
+	// witness before and after ancestry, without spending another receipt lookup.
+	if err := m.confirmReceiptAncestry(ctx, witness, receipt, m.lateReceiptParentHeader); err != nil {
+		return Result{}, err
+	}
+	stable, err := m.confirmationHeader(ctx, witnessNumber)
+	if err != nil {
+		return Result{}, err
+	}
+	if stable.Hash() != witness.Hash() {
+		return Result{}, errors.Errorf("%w: confirmation witness changed during proof", errReceiptReorged)
 	}
 	result := Result{Hash: entry.hash, Attempts: []common.Hash{entry.hash}, Receipt: receipt, Outcome: OutcomeConfirmed}
 	if receipt.Status == types.ReceiptStatusFailed {

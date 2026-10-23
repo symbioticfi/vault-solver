@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -264,24 +265,27 @@ func (b *invalidReceiptStatusBackend) SendTransaction(ctx context.Context, tx *t
 	return nil
 }
 
-func TestInvalidReceiptStatusSkipsTelemetryWithoutChangingLifecycle(t *testing.T) {
-	backend := &invalidReceiptStatusBackend{mockBackend: newMockBackend()}
-	metrics := newTestMetrics(t)
-	manager := startTestManager(t, backend, Config{
-		PendingTimeout: 10 * time.Millisecond, ReplacementInterval: time.Hour,
-		LateReceiptTimeout: 20 * time.Millisecond,
-	}, metrics)
-	observed := make(chan Result, 1)
-	result := manager.Send(t.Context(), Request{
-		To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "invalid",
-		ObserveReceipt: func(_ context.Context, receipt Result) { observed <- receipt },
+func TestInvalidReceiptStatusDoesNotConfirm(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		backend := &invalidReceiptStatusBackend{mockBackend: newMockBackend()}
+		metrics := newTestMetrics(t)
+		manager := startTestManager(t, backend, Config{
+			PendingTimeout: 10 * time.Millisecond, ReplacementInterval: time.Hour,
+			LateReceiptTimeout: 20 * time.Millisecond,
+		}, metrics)
+		observed := make(chan Result, 1)
+		result := manager.Send(t.Context(), Request{
+			To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "invalid",
+			ObserveReceipt: func(_ context.Context, receipt Result) { observed <- receipt },
+		})
+		if result.Outcome != OutcomeAbandoned || result.Receipt != nil || manager.confirmedNonceFloor != 0 {
+			t.Fatalf("invalid receipt confirmed or advanced the nonce floor: %+v", result)
+		}
+		assertMetric(t, metrics.requests.WithLabelValues("invalid", "confirmed"), 0)
+		assertNoLateReceipt(t, observed)
+		assertMetric(t, metrics.gasUsed.WithLabelValues("invalid", "confirmed"), 0)
+		assertMetric(t, metrics.lateReceipts.WithLabelValues("invalid", "confirmed"), 0)
 	})
-	if result.Outcome != OutcomeConfirmed || result.Receipt == nil || result.Receipt.Status != 2 {
-		t.Fatalf("telemetry changed the ordinary request result: %+v", result)
-	}
-	assertNoLateReceipt(t, observed)
-	assertMetric(t, metrics.gasUsed.WithLabelValues("invalid", "confirmed"), 0)
-	assertMetric(t, metrics.lateReceipts.WithLabelValues("invalid", "confirmed"), 0)
 }
 
 func TestReceiptAccountingDeduplicatesSameHashAcrossNormalAndLatePaths(t *testing.T) {
@@ -310,40 +314,19 @@ func TestReceiptAccountingDeduplicatesSameHashAcrossNormalAndLatePaths(t *testin
 	assertMetric(t, metrics.requests.WithLabelValues("once", "confirmed"), 1)
 }
 
-type lateReceiptHeadSwitchBackend struct {
-	*mockBackend
-
-	reads int
-}
-
-func (b *lateReceiptHeadSwitchBackend) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {
-	if number != nil {
-		return b.mockBackend.HeaderByNumber(ctx, number)
-	}
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.reads++
-	if b.reads >= 3 {
-		b.head, b.reorgedHeader = 102, true
-	}
-	return b.headerLocked(b.head), nil
-}
-
-func TestLateReceiptCannotCombineOldAncestryWithNewForkDepth(t *testing.T) {
-	backend := &lateReceiptHeadSwitchBackend{mockBackend: newMockBackend()}
+func TestLateReceiptWaitsForWitnessDepth(t *testing.T) {
+	tx := types.NewTx(&types.DynamicFeeTx{Nonce: 7, To: ptr(common.Address{1})})
+	backend := newWitnessBackend(tx, 1)
 	manager := newLateReceiptManager(t, backend, Config{Confirmations: 2}, nil)
-	pending, err := manager.broadcast(t.Context(), Request{To: common.HexToAddress("0xaaa"), GasLimit: 21_000})
-	if err != nil {
-		t.Fatal(err)
+	entry := lateReceiptObservation{hash: tx.Hash(), metadata: receiptMetadata{confirmations: 2}}
+	result, err := manager.readLateReceipt(t.Context(), entry)
+	if err != nil || result.Receipt != nil {
+		t.Fatalf("receipt counted before witness block exists: %+v, err=%v", result, err)
 	}
-	backend.mu.Lock()
-	backend.reads, backend.head, backend.reorgedHeader = 0, 100, false
-	backend.mu.Unlock()
-	result, err := manager.readLateReceipt(t.Context(), lateReceiptObservation{
-		hash: pending.originalHash, metadata: manager.receiptMetadata(pending.req, pending.nonce),
-	})
-	if result.Receipt != nil {
-		t.Fatalf("old block-100 ancestry combined with another fork's block-102 depth: %+v, err=%v", result, err)
+	backend.latest = 102
+	result, err = manager.readLateReceipt(t.Context(), entry)
+	if err != nil || result.Outcome != OutcomeConfirmed {
+		t.Fatalf("receipt not counted after witness became available: %+v, err=%v", result, err)
 	}
 }
 
@@ -493,48 +476,56 @@ func (b *delayedLateAncestryBackend) HeaderByHash(ctx context.Context, hash comm
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
-	case <-time.After(10 * time.Millisecond):
+	case <-time.After(11 * time.Millisecond):
 		return b.mockBackend.HeaderByHash(ctx, hash)
 	}
 }
 
-func TestLateReceiptOldAncestryMakesProgressAcrossBoundedPolls(t *testing.T) {
-	backend := &delayedLateAncestryBackend{mockBackend: newMockBackend()}
-	backend.head = 160
-	manager := newLateReceiptManager(t, backend, Config{
-		ReplacementInterval: 80 * time.Millisecond, LateReceiptTimeout: 2 * time.Second,
-	}, nil)
-	observed := make(chan Result, 1)
-	pending, err := manager.broadcast(t.Context(), Request{To: common.HexToAddress("0xaaa"), GasLimit: 21_000,
-		ObserveReceipt: func(_ context.Context, receipt Result) { observed <- receipt }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	putLateReceipt(backend.mockBackend, pending.attempts[0].tx, types.ReceiptStatusSuccessful, 100)
-	manager.retainLateReceipts(t.Context(), pending)
-	started := time.Now()
-	manager.pollLateReceipts(t.Context())
-	if elapsed := time.Since(started); elapsed > 150*time.Millisecond {
-		t.Fatalf("first observation exceeded its overall read budget: %s", elapsed)
-	}
-	select {
-	case result := <-observed:
-		t.Fatalf("first short poll unexpectedly completed 60 delayed parent reads: %+v", result)
-	default:
-	}
-	deadline := time.Now().Add(1200 * time.Millisecond)
-	for time.Now().Before(deadline) {
+func TestLateReceiptDeepWitnessMakesProgressAcrossBoundedPolls(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		backend := &delayedLateAncestryBackend{mockBackend: newMockBackend()}
+		backend.head = 160
+		manager := newLateReceiptManager(t, backend, Config{
+			Confirmations: 6, ReplacementInterval: 80 * time.Millisecond, LateReceiptTimeout: 2 * time.Second,
+		}, nil)
+		observed := make(chan Result, 1)
+		pending, err := manager.broadcast(t.Context(), Request{To: common.HexToAddress("0xaaa"), GasLimit: 21_000,
+			ObserveReceipt: func(_ context.Context, receipt Result) { observed <- receipt }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		putLateReceipt(backend.mockBackend, pending.attempts[0].tx, types.ReceiptStatusSuccessful, 100)
+		manager.retainLateReceipts(t.Context(), pending)
+		started := time.Now()
 		manager.pollLateReceipts(t.Context())
+		if elapsed := time.Since(started); elapsed > 150*time.Millisecond {
+			t.Fatalf("first observation exceeded its overall read budget: %s", elapsed)
+		}
 		select {
 		case result := <-observed:
-			if result.Hash != pending.originalHash || result.Outcome != OutcomeConfirmed {
-				t.Fatalf("old canonical receipt=%+v", result)
-			}
-			return
+			t.Fatalf("first short poll unexpectedly completed six delayed witness parents: %+v", result)
 		default:
 		}
-	}
-	t.Fatal("bounded ancestry reads restarted forever without accounting the available old receipt")
+		deadline := time.Now().Add(1200 * time.Millisecond)
+		for time.Now().Before(deadline) {
+			manager.pollLateReceipts(t.Context())
+			select {
+			case result := <-observed:
+				if result.Hash != pending.originalHash || result.Outcome != OutcomeConfirmed {
+					t.Fatalf("old canonical receipt=%+v", result)
+				}
+				backend.mu.Lock()
+				reads := backend.headerHashReads
+				backend.mu.Unlock()
+				if reads != 6 {
+					t.Fatalf("parent RPCs=%d, want six cached witness links independent of receipt age", reads)
+				}
+				return
+			default:
+			}
+		}
+		t.Fatal("bounded ancestry reads restarted forever without accounting the available old receipt")
+	})
 }
 
 func TestObserverExitPreventsRetentionBeforeAdmissionsStop(t *testing.T) {

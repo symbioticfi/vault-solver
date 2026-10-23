@@ -148,6 +148,9 @@ func (b *mockBackend) HeaderByNumber(_ context.Context, number *big.Int) (*types
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if number != nil {
+		if number.Uint64() > b.head {
+			return nil, ethereum.NotFound
+		}
 		return b.headerLocked(number.Uint64()), nil
 	}
 	if b.reorgOnHeadRead {
@@ -1084,10 +1087,10 @@ func TestReceiptReorgKeepsLifecyclePending(t *testing.T) {
 	}
 }
 
-func TestConfirmationsRequireStableHead(t *testing.T) {
+func TestConfirmationsUseNumberedWitness(t *testing.T) {
 	b := newMockBackend()
 	b.head = 102
-	b.latestHeads = []uint64{102, 100, 102, 102}
+	b.latestHeads = []uint64{102, 103, 104}
 	tx := types.NewTx(&types.DynamicFeeTx{
 		ChainID: big.NewInt(11155111), Nonce: 7, GasTipCap: big.NewInt(1), GasFeeCap: big.NewInt(2),
 		Gas: 21_000, To: ptr(common.HexToAddress("0xabc")),
@@ -1105,11 +1108,11 @@ func TestConfirmationsRequireStableHead(t *testing.T) {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if len(b.latestHeads) != 0 {
-		t.Fatalf("confirmation returned before stable head snapshot; unread heads = %v", b.latestHeads)
+	if len(b.latestHeads) != 2 {
+		t.Fatalf("confirmation chased latest instead of closing the numbered witness: unread heads = %v", b.latestHeads)
 	}
-	if b.headerHashReads != 4 {
-		t.Fatalf("ancestry reads = %d, want 4 before both final head checks", b.headerHashReads)
+	if b.headerHashReads != 2 {
+		t.Fatalf("ancestry reads = %d, want the two witness parents", b.headerHashReads)
 	}
 }
 
