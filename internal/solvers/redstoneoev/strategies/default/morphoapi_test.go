@@ -49,8 +49,8 @@ func TestMorphoClientDiscoverMarketData(t *testing.T) {
 
 	t.Run("normal response returns candidate ids", func(t *testing.T) {
 		body := `{"data":{"markets":{"items":[
-			{"marketId":"` + apiMktA.Hex() + `"},
-			{"marketId":"` + apiMktB.Hex() + `"}
+			{"marketId":"` + apiMktA.Hex() + `","oracle":{"address":"0x1234567890123456789012345678901234567890"}},
+			{"marketId":"` + apiMktB.Hex() + `","oracle":{"address":"0x1234567890123456789012345678901234567890"}}
 		]}}}`
 		srv := newJSONServer(t, http.StatusOK, body)
 		defer srv.Close()
@@ -82,9 +82,9 @@ func TestMorphoClientDiscoverMarketData(t *testing.T) {
 
 	t.Run("empty/zero marketId skipped, valid kept", func(t *testing.T) {
 		body := `{"data":{"markets":{"items":[
-			{"marketId":""},
-			{"marketId":"0x0000000000000000000000000000000000000000000000000000000000000000"},
-			{"marketId":"` + apiMktA.Hex() + `"}
+			{"marketId":"","oracle":{"address":"0x1234567890123456789012345678901234567890"}},
+			{"marketId":"0x0000000000000000000000000000000000000000000000000000000000000000","oracle":{"address":"0x1234567890123456789012345678901234567890"}},
+			{"marketId":"` + apiMktA.Hex() + `","oracle":{"address":"0x1234567890123456789012345678901234567890"}}
 		]}}}`
 		srv := newJSONServer(t, http.StatusOK, body)
 		defer srv.Close()
@@ -114,9 +114,18 @@ func TestMorphoClientDiscoverMarketData(t *testing.T) {
 		if !strings.Contains(gotBody, strings.ToLower(loan.Hex())) || !strings.Contains(gotBody, strings.ToLower(coll.Hex())) {
 			t.Fatalf("request body missing lowercased loan/collateral: %s", gotBody)
 		}
-		queryBody := strings.NewReplacer(" ", "", "\n", "", "\t", "").Replace(gotBody)
+		var request struct {
+			Query string `json:"query"`
+		}
+		if err := json.Unmarshal([]byte(gotBody), &request); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		queryBody := strings.NewReplacer(" ", "", "\n", "", "\t", "").Replace(request.Query)
 		if !strings.Contains(queryBody, "chainId_in") || !strings.Contains(gotBody, `"chains":[11155111]`) {
 			t.Fatalf("request body missing chainId_in scope: %s", gotBody)
+		}
+		if strings.Contains(queryBody, "oracleAddress") || !strings.Contains(queryBody, "oracle{address}") {
+			t.Fatalf("discovery must use supported oracle selection: %s", request.Query)
 		}
 	})
 
@@ -130,6 +139,61 @@ func TestMorphoClientDiscoverMarketData(t *testing.T) {
 			t.Fatalf("empty collateral: got=%+v err=%v", got, err)
 		}
 	})
+}
+
+func TestMorphoClientDiscoveryOracle(t *testing.T) {
+	// Public USDC/WETH market: the nested oracle must preserve the on-chain market identity.
+	marketID := common.HexToHash("0xf9acc677910cc17f650416a22e2a14d5da7ccb9626db18f1bf94efe64f92b372")
+	loan := common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
+	coll := common.HexToAddress("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
+	oracle := common.HexToAddress("0xdC6fd5831277c693b1054e19E94047cB37c77615")
+	for _, tc := range []struct {
+		name        string
+		oracleField string
+		wantMarkets int
+	}{
+		{"nested oracle", `"oracle":{"address":"` + oracle.Hex() + `"},`, 1},
+		{"null oracle", `"oracle":null,`, 0},
+		{"missing oracle", "", 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"data":{"markets":{"items":[{
+				"marketId":"` + marketID.Hex() + `",` + tc.oracleField + `
+				"irmAddress":"0x870aC11D48B15DB9a138Cf899d20F13F79Ba00BC",
+				"lltv":"915000000000000000",
+				"loanAsset":{"address":"` + loan.Hex() + `"},
+				"collateralAsset":{"address":"` + coll.Hex() + `"},
+				"state":{"blockNumber":26242359,"timestamp":1792602347,
+					"borrowAssets":15164,"borrowShares":16077813792,
+					"supplyAssets":122169,"supplyShares":112160714677,
+					"price":"2510457309924490465032091175"}
+			}]}}}`
+			srv := newJSONServer(t, http.StatusOK, body)
+			defer srv.Close()
+
+			got, err := newTestMorphoClient(srv.URL).DiscoverMarketData(t.Context(), 1, []common.Address{loan}, []common.Address{coll})
+			if err != nil {
+				t.Fatalf("DiscoverMarketData: %v", err)
+			}
+			if len(got) != tc.wantMarkets {
+				t.Fatalf("markets = %+v, want %d", got, tc.wantMarkets)
+			}
+			if tc.wantMarkets == 0 {
+				return
+			}
+			if got[0].MarketID != marketID || got[0].Oracle != oracle {
+				t.Fatalf("market identity changed: %+v", got[0])
+			}
+			view, ok := marketInfoFromAPI(got[0])
+			if !ok {
+				t.Fatal("nested oracle market must remain usable by the monitor")
+			}
+			derived, err := deriveMarketID(view.info.Params)
+			if err != nil || derived != marketID || view.info.Params.Oracle != oracle {
+				t.Fatalf("market ID/oracle parity: derived=%s oracle=%s err=%v", derived, view.info.Params.Oracle, err)
+			}
+		})
+	}
 }
 
 func TestMorphoClientPositions(t *testing.T) {

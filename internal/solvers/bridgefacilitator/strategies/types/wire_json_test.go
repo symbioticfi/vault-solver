@@ -35,15 +35,16 @@ func TestOfferInputMarshalJSONWireShape(t *testing.T) {
 			MaxConcurrent: 3,
 		}},
 		Auctions: []AuctionSnapshot{{
-			ID:              "10",
-			AuctionID:       10,
-			OriginalIndex:   0,
-			Request:         common.HexToAddress("0x0000000000000000000000000000000000000010"),
-			Status:          "open",
-			DepositAsset:    common.HexToAddress("0x0000000000000000000000000000000000000003"),
-			AmountRequested: mustBig(t, "900"),
-			RemainingAmount: mustBig(t, "700"),
-			MaxRateBps:      200,
+			ID:               "10",
+			AuctionID:        10,
+			OriginalIndex:    0,
+			Request:          common.HexToAddress("0x0000000000000000000000000000000000000010"),
+			Status:           "open",
+			DepositAsset:     common.HexToAddress("0x0000000000000000000000000000000000000003"),
+			AmountRequested:  mustBig(t, "900"),
+			RemainingAmount:  mustBig(t, "700"),
+			MaxRateBps:       200,
+			RateBasisSeconds: 86_400,
 		}},
 		LiveOffers: []LiveOffer{{AdapterID: "adapter-1", AuctionID: 10, Principal: big.NewInt(200)}},
 	}
@@ -57,6 +58,9 @@ func TestOfferInputMarshalJSONWireShape(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"minYieldPpm":"190"`) {
 		t.Fatalf("wire must carry the exact minYieldPpm floor: %s", body)
+	}
+	if !strings.Contains(string(body), `"rateBasisSeconds":86400`) {
+		t.Fatalf("wire must carry the auction rate basis: %s", body)
 	}
 	var raw map[string]any
 	if err := json.Unmarshal(body, &raw); err != nil {

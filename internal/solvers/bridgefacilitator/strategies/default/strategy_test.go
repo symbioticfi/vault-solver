@@ -221,6 +221,47 @@ func TestStrategyPricesPartialConsumeMarginAboveFloor(t *testing.T) {
 	}
 }
 
+// TestStrategyCapsReturnByRateBasis covers APR auctions: maxRate is annual and the offer's return covers
+// rateBasisSeconds of it, so a 1-day basis at 7.3% caps at the old 2 bps; the floor stays per request.
+func TestStrategyCapsReturnByRateBasis(t *testing.T) {
+	const principal = 1_000_000_000_000
+	cases := []struct {
+		name     string
+		floorPpm int64
+		want     int64
+	}{
+		{"no floor prices at the cap", 0, 200_000_000},
+		{"floor plus margin under the cap", 190, 190_000_000 + 1_000_000},
+		{"floor above the cap is skipped", 300, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			a := testAdapter(1, principal)
+			if c.floorPpm > 0 {
+				a.MinYieldPpm = big.NewInt(c.floorPpm)
+			}
+			auction := testAuction(10, principal)
+			auction.MaxRateBps = 730
+			auction.RateBasisSeconds = 86_400
+			got, err := New().DecideOffers(t.Context(), types.OfferInput{
+				Now: time.Unix(0, 0), Adapters: []types.AdapterSnapshot{a}, Auctions: []types.AuctionSnapshot{auction},
+			})
+			if err != nil {
+				t.Fatalf("DecideOffers: %v", err)
+			}
+			if c.want == 0 {
+				if len(got.Offers) != 0 {
+					t.Fatalf("offers = %+v, want none", got.Offers)
+				}
+				return
+			}
+			if len(got.Offers) != 1 || got.Offers[0].ExpectedReturn.Int64() != c.want {
+				t.Fatalf("offers = %+v, want one with expectedReturn %d", got.Offers, c.want)
+			}
+		})
+	}
+}
+
 // TestStrategySkipsZeroRatePair covers the degenerate case: no adapter floor and a zero auction max rate
 // would price the offer at 0 return — the pair must be skipped, not offered at 0 yield.
 func TestStrategySkipsZeroRatePair(t *testing.T) {
@@ -318,7 +359,7 @@ func TestStrategyLeavesRemainderAboveNextAdapterFloor(t *testing.T) {
 			got := map[common.Address]int64{}
 			for _, offer := range out.Offers {
 				got[offer.Maker] = offer.Principal.Int64()
-				if err := types.ValidateYield(offer.ExpectedReturn, offer.Principal, new(big.Int), 200); err != nil {
+				if err := types.ValidateYield(offer.ExpectedReturn, offer.Principal, new(big.Int), 200, 0); err != nil {
 					t.Fatal(err)
 				}
 			}

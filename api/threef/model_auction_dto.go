@@ -28,8 +28,10 @@ type AuctionDto struct {
 	AmountRequested NullableString `json:"amountRequested"`
 	// Solve start time (derived from deposit_deadline) or null
 	SolveStartTime NullableString `json:"solve_start_time"`
-	// Current max rate in basis points for active auctions, or the blended succeeded-offer rate for succeeded/repaid auctions, with tenths-of-a-basis-point precision, or null
+	// APR in basis points (365-day year, simple interest), with tenths-of-a-basis-point precision (floored), for every auction: the current max APR for active auctions, or the blended succeeded-offer APR for succeeded/repaid auctions, or null. Offer APR is `expectedReturn / amount * 10000 * 31536000 / rateBasisSeconds`; offers are accepted when it is at most the current max APR and at least a quarter of the lowest APR of the auction ramp.
 	MaxRate NullableFloat32 `json:"maxRate"`
+	// Seconds over which an offer's `expectedReturn` accrues (integer > 0, immutable per auction). Repayment yield after `d` seconds is `ceil(expectedReturn * paidSeconds(d) / rateBasisSeconds)` on annual auctions (`paidSeconds` counts whole days, a new day starting 6 hours into it, at least 1 day, capped at 1 year) and `floor(expectedReturn * d / rateBasisSeconds)` otherwise. 31536000 (365 days) for annual auctions, where `expectedReturn / amount` is the APR; auctions created before the annual switch carry the asset settlement delay in seconds (e.g. 86400, 2678400). To lend at `aprBps`, sign `expectedReturn = floor(amount * aprBps * rateBasisSeconds / (10000 * 31536000))`.
+	RateBasisSeconds float32 `json:"rateBasisSeconds"`
 	// Auction status
 	Status string `json:"status"`
 	// Asset metadata resolved for the auction or null
@@ -53,13 +55,14 @@ type _AuctionDto AuctionDto
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewAuctionDto(id float32, requestId string, amountRequested NullableString, solveStartTime NullableString, maxRate NullableFloat32, status string, asset NullableResolvedAssetDto, depositAsset NullableAuctionDepositAssetDto, vault NullableResolvedVaultDto, settlement NullableResolvedSettlementDto, direction NullableString) *AuctionDto {
+func NewAuctionDto(id float32, requestId string, amountRequested NullableString, solveStartTime NullableString, maxRate NullableFloat32, rateBasisSeconds float32, status string, asset NullableResolvedAssetDto, depositAsset NullableAuctionDepositAssetDto, vault NullableResolvedVaultDto, settlement NullableResolvedSettlementDto, direction NullableString) *AuctionDto {
 	this := AuctionDto{}
 	this.Id = id
 	this.RequestId = requestId
 	this.AmountRequested = amountRequested
 	this.SolveStartTime = solveStartTime
 	this.MaxRate = maxRate
+	this.RateBasisSeconds = rateBasisSeconds
 	this.Status = status
 	this.Asset = asset
 	this.DepositAsset = depositAsset
@@ -233,6 +236,30 @@ func (o *AuctionDto) GetMaxRateOk() (*float32, bool) {
 // SetMaxRate sets field value
 func (o *AuctionDto) SetMaxRate(v float32) {
 	o.MaxRate.Set(&v)
+}
+
+// GetRateBasisSeconds returns the RateBasisSeconds field value
+func (o *AuctionDto) GetRateBasisSeconds() float32 {
+	if o == nil {
+		var ret float32
+		return ret
+	}
+
+	return o.RateBasisSeconds
+}
+
+// GetRateBasisSecondsOk returns a tuple with the RateBasisSeconds field value
+// and a boolean to check if the value has been set.
+func (o *AuctionDto) GetRateBasisSecondsOk() (*float32, bool) {
+	if o == nil {
+		return nil, false
+	}
+	return &o.RateBasisSeconds, true
+}
+
+// SetRateBasisSeconds sets field value
+func (o *AuctionDto) SetRateBasisSeconds(v float32) {
+	o.RateBasisSeconds = v
 }
 
 // GetStatus returns the Status field value
@@ -450,6 +477,7 @@ func (o AuctionDto) ToMap() (map[string]interface{}, error) {
 	toSerialize["amountRequested"] = o.AmountRequested.Get()
 	toSerialize["solve_start_time"] = o.SolveStartTime.Get()
 	toSerialize["maxRate"] = o.MaxRate.Get()
+	toSerialize["rateBasisSeconds"] = o.RateBasisSeconds
 	toSerialize["status"] = o.Status
 	toSerialize["asset"] = o.Asset.Get()
 	toSerialize["depositAsset"] = o.DepositAsset.Get()
@@ -491,6 +519,7 @@ func (o *AuctionDto) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "amountRequested")
 		delete(additionalProperties, "solve_start_time")
 		delete(additionalProperties, "maxRate")
+		delete(additionalProperties, "rateBasisSeconds")
 		delete(additionalProperties, "status")
 		delete(additionalProperties, "asset")
 		delete(additionalProperties, "depositAsset")

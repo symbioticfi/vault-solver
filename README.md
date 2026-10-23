@@ -389,8 +389,12 @@ only while the nonce lane is unavailable. Pending calls receive ordinary fee bum
 At the request deadline, pending timeout or a terminal business-status check, the manager abandons active tracking
 and releases the local lane. It remembers the unused nonce and last signed fees so the next freshly planned
 order can replace that call, with both fee fields increased by at least 12.5% under the configured ceilings.
-Each pending receipt RPC has its own timeout and does not block lifecycle timers. A stalled call's gas
-re-estimate takes at most 5 seconds and is bounded by the request deadline.
+Each pending receipt RPC has its own timeout and does not block lifecycle timers. Initial gas
+estimation and stalled-call re-estimation each use one budget of at most 5 seconds, including fallback,
+and honor earlier request deadlines. Caller cancellation after admission retains the lane until the
+manager returns the actual outcome. Canonical confirmation checks a fixed numbered witness; normal
+head advancement does not restart the proof. Zero depth reuses the verified inclusion receipt;
+invalid receipt status or log identity cannot confirm a request.
 
 Configure `maxFeeGwei` for every transaction-sending process. `pendingTimeoutMs`,
 `broadcastTimeoutMs` and `shutdownTimeoutMs` bound pending tracking, submission and shutdown.
