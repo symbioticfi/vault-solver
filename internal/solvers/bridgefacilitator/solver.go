@@ -373,7 +373,7 @@ func (s *Solver) buildOfferInput(
 	input := buildStrategyInput(auctions, offerings, s.offers, now)
 	if len(input.Auctions) < len(auctions) {
 		observability.Decline(ctx, "auction_skipped",
-			"auctions closed, already covered, or missing a field the offer needs")
+			"auctions closed or missing a field the offer needs")
 	}
 	return input
 }

@@ -70,41 +70,16 @@ func (s *Strategy) DecideOffers(
 
 	var offers []types.OfferExecution
 	for _, auction := range input.Auctions {
-		remaining := cloneBig(auction.RemainingAmount)
-		if remaining == nil || remaining.Sign() <= 0 {
+		requested := auction.AmountRequested
+		if requested == nil || requested.Sign() <= 0 {
 			continue
 		}
-		ranked := rankEligibleAdapters(auction, order, live)
-		for i, st := range ranked {
-			if remaining.Sign() <= 0 {
-				break
-			}
-			capacity := st.capacity()
-			if capacity.Sign() <= 0 {
+		// Adapters are independent makers: each offers the full request within its own capacity,
+		// regardless of what other adapters bid in this pass or already hold on the auction.
+		for _, st := range rankEligibleAdapters(auction, order, live) {
+			principal := minBig(st.capacity(), requested)
+			if principal.Sign() <= 0 || st.belowMinAssets(principal) {
 				continue
-			}
-			principal := cloneBig(capacity)
-			if principal.Cmp(remaining) > 0 {
-				principal.Set(remaining)
-			}
-			if st.belowMinAssets(principal) {
-				continue
-			}
-			// Leave a usable remainder when the next adapter has a minimum request size.
-			// Otherwise 80+10 repeatedly underfills a 90-unit auction whose second floor is 20.
-			remainder := new(big.Int).Sub(remaining, principal)
-			if remainder.Sign() > 0 {
-				for _, next := range ranked[i+1:] {
-					floor := next.snapshot.MinAssets
-					if floor == nil || floor.Cmp(remainder) <= 0 || next.capacity().Cmp(floor) < 0 || offerReturn(floor, next.snapshot.MinYieldPpm, auction) == nil {
-						continue
-					}
-					adjusted := new(big.Int).Sub(remaining, floor)
-					if adjusted.Sign() > 0 && !st.belowMinAssets(adjusted) && offerReturn(adjusted, st.snapshot.MinYieldPpm, auction) != nil {
-						principal = adjusted
-						break
-					}
-				}
 			}
 			expectedReturn := offerReturn(principal, st.snapshot.MinYieldPpm, auction)
 			if expectedReturn == nil {
@@ -119,7 +94,6 @@ func (s *Strategy) DecideOffers(
 			})
 			st.committed.Add(st.committed, principal)
 			st.opened++
-			remaining.Sub(remaining, principal)
 		}
 	}
 	return types.OfferOutput{Offers: offers}, nil
