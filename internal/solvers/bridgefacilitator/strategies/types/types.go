@@ -48,6 +48,8 @@ type AuctionSnapshot struct {
 	DepositAsset common.Address
 
 	AmountRequested *big.Int
+	// RemainingAmount is AmountRequested minus this solver's live offers on the auction. It informs
+	// remote strategies; the default strategy sizes every adapter against AmountRequested.
 	RemainingAmount *big.Int
 	// MaxRateBps is an APR when RateBasisSeconds is set, and the offer's expectedReturn covers
 	// RateBasisSeconds of it (see types.ExpectedReturn); with RateBasisSeconds 0 it is a per-term rate.

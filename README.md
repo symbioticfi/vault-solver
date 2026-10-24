@@ -534,8 +534,11 @@ transaction manager. See the [replica plan](docs/REPLICA-PLAN.md) and each solve
 For liquidity commitments, the built-in strategies apply these limits:
 
 - 3F counts all live offer principals and request slots before creating offers for another auction.
+  Each adapter offers an auction's full requested amount within its own capacity; adapters bid
+  independently and never split one auction between them.
   Expiration is at least `now + offerExpiryBuffer`. Webhook `liveOffers[]` now includes decimal-string
-  `principal`; remote strategies must reserve it as well as the live request slot.
+  `principal`; remote strategies must reserve it as well as the live request slot. The auction's
+  `remainingAmount` is informational: size each adapter against `amountRequested`.
 - RFQ external mode excludes discount inventory at quote time. Excess input can be absorbed only by a
   direct swap, whose calldata caps output. An abandoned or uncertain nonce result first queries backend
   status and can retry only when the backend reports the order open. Each retry builds a fresh fill plan
