@@ -104,13 +104,14 @@ func buildAuctionSnapshot(
 	if !common.IsHexAddress(depositAsset) {
 		return types.AuctionSnapshot{}, false
 	}
-	coverage := offers.liveCoverage(auctionID, now)
-	if coverage == nil {
-		return types.AuctionSnapshot{}, false
-	}
-	remaining := new(big.Int).Sub(amountRequested, coverage)
-	if remaining.Sign() < 0 {
-		remaining = new(big.Int)
+	// Unknown live principal counts as full coverage. The auction still reaches the strategy: adapters
+	// offer independently, so one adapter's live offer never hides the auction from the others.
+	remaining := new(big.Int)
+	if coverage := offers.liveCoverage(auctionID, now); coverage != nil {
+		remaining.Sub(amountRequested, coverage)
+		if remaining.Sign() < 0 {
+			remaining.SetInt64(0)
+		}
 	}
 	return types.AuctionSnapshot{
 		ID:               auctionIDString(auctionID),

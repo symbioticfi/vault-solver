@@ -24,7 +24,7 @@ func testAdapter(id byte, fundable int64) types.AdapterSnapshot {
 	}
 }
 
-func testAuction(id int64, remaining int64) types.AuctionSnapshot {
+func testAuction(id int64, requested int64) types.AuctionSnapshot {
 	return types.AuctionSnapshot{
 		ID:              big.NewInt(id).String(),
 		AuctionID:       id,
@@ -32,15 +32,15 @@ func testAuction(id int64, remaining int64) types.AuctionSnapshot {
 		Request:         common.Address{0xbb, byte(id)},
 		Status:          "open",
 		DepositAsset:    common.Address{0xaa},
-		AmountRequested: big.NewInt(remaining),
-		RemainingAmount: big.NewInt(remaining),
+		AmountRequested: big.NewInt(requested),
+		RemainingAmount: big.NewInt(requested),
 		MaxRateBps:      200,
 	}
 }
 
-func TestStrategyLargestFirstClampsLastOffer(t *testing.T) {
-	a1 := testAdapter(1, 50_000_000) // capacity 50M
-	a2 := testAdapter(2, 80_000_000) // capacity 80M
+func TestStrategyEveryAdapterOffersFullRequest(t *testing.T) {
+	a1 := testAdapter(1, 50_000_000)  // capacity 50M, below the request
+	a2 := testAdapter(2, 180_000_000) // capacity 180M, above the request
 	input := types.OfferInput{
 		Now:      time.Unix(0, 0),
 		Adapters: []types.AdapterSnapshot{a1, a2},
@@ -54,16 +54,15 @@ func TestStrategyLargestFirstClampsLastOffer(t *testing.T) {
 	if len(got.Offers) != 2 {
 		t.Fatalf("offers = %d, want 2", len(got.Offers))
 	}
-	// Largest capacity first (a2: 80M), then a1 clamped to the remaining 20M.
-	if got.Offers[0].Maker != a2.Adapter || got.Offers[0].Principal.Int64() != 80_000_000 {
-		t.Fatalf("offer0 = %+v, want adapter 2 / 80M", got.Offers[0])
+	// Each adapter bids the full request within its own capacity; a2's bid does not shrink a1's.
+	if got.Offers[0].Maker != a2.Adapter || got.Offers[0].Principal.Int64() != 100_000_000 {
+		t.Fatalf("offer0 = %+v, want adapter 2 / 100M", got.Offers[0])
 	}
-	if got.Offers[1].Maker != a1.Adapter || got.Offers[1].Principal.Int64() != 20_000_000 {
-		t.Fatalf("offer1 = %+v, want adapter 1 / 20M", got.Offers[1])
+	if got.Offers[1].Maker != a1.Adapter || got.Offers[1].Principal.Int64() != 50_000_000 {
+		t.Fatalf("offer1 = %+v, want adapter 1 / 50M", got.Offers[1])
 	}
-	// 200 bps of each principal, both positive (a 0-return clamped offer would be skipped, not posted).
-	if got.Offers[0].ExpectedReturn.Int64() != 1_600_000 || got.Offers[1].ExpectedReturn.Int64() != 400_000 {
-		t.Fatalf("expected returns = %s/%s, want 1600000/400000", got.Offers[0].ExpectedReturn, got.Offers[1].ExpectedReturn)
+	if got.Offers[0].ExpectedReturn.Int64() != 2_000_000 || got.Offers[1].ExpectedReturn.Int64() != 1_000_000 {
+		t.Fatalf("expected returns = %s/%s, want 2000000/1000000", got.Offers[0].ExpectedReturn, got.Offers[1].ExpectedReturn)
 	}
 }
 
@@ -132,22 +131,22 @@ func TestStrategyReplaysAdapterCapacityAcrossAuctions(t *testing.T) {
 }
 
 func TestStrategySkipsClampedOfferBelowMinAssets(t *testing.T) {
-	a1 := testAdapter(1, 50)
-	a1.MinAssets = big.NewInt(20)
-	a2 := testAdapter(2, 80)
+	a1 := testAdapter(1, 5_000)
+	a1.MinAssets = big.NewInt(2_000)
+	a2 := testAdapter(2, 8_000)
 	input := types.OfferInput{
 		Now:      time.Unix(0, 0),
 		Adapters: []types.AdapterSnapshot{a1, a2},
-		Auctions: []types.AuctionSnapshot{testAuction(10, 90)},
+		Auctions: []types.AuctionSnapshot{testAuction(10, 1_000)},
 	}
 
 	got, err := New().DecideOffers(t.Context(), input)
 	if err != nil {
 		t.Fatalf("DecideOffers: %v", err)
 	}
-	// a2 (80) fills first, leaving 10 for a1 — below a1's min-request size of 20, so a1 is skipped.
-	if len(got.Offers) != 1 || got.Offers[0].Maker != a2.Adapter || got.Offers[0].Principal.Int64() != 80 {
-		t.Fatalf("offers = %+v, want only adapter 2 / 80", got.Offers)
+	// The 1,000-unit request is below a1's min-request size of 2,000, so a1 is skipped; a2 offers it in full.
+	if len(got.Offers) != 1 || got.Offers[0].Maker != a2.Adapter || got.Offers[0].Principal.Int64() != 1_000 {
+		t.Fatalf("offers = %+v, want only adapter 2 / 1000", got.Offers)
 	}
 }
 
@@ -333,38 +332,6 @@ func TestStrategyReservesLiveOffersAcrossDiscoveryPasses(t *testing.T) {
 			}
 			if total.Int64() != tc.want {
 				t.Fatalf("principal = %s, want %d", total, tc.want)
-			}
-		})
-	}
-}
-
-func TestStrategyLeavesRemainderAboveNextAdapterFloor(t *testing.T) {
-	for _, tc := range []struct {
-		name                            string
-		firstMin, wantFirst, wantSecond int64
-	}{
-		{"rebalance", 0, 70_000_000, 20_000_000},
-		{"preserve first floor", 75_000_000, 80_000_000, 0},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			a, b := testAdapter(1, 80_000_000), testAdapter(2, 50_000_000)
-			a.MinAssets = big.NewInt(tc.firstMin)
-			b.MinAssets = big.NewInt(20_000_000)
-			out, err := New().DecideOffers(t.Context(), types.OfferInput{
-				Adapters: []types.AdapterSnapshot{a, b}, Auctions: []types.AuctionSnapshot{testAuction(1, 90_000_000)},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			got := map[common.Address]int64{}
-			for _, offer := range out.Offers {
-				got[offer.Maker] = offer.Principal.Int64()
-				if err := types.ValidateYield(offer.ExpectedReturn, offer.Principal, new(big.Int), 200, 0); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if got[a.Adapter] != tc.wantFirst || got[b.Adapter] != tc.wantSecond {
-				t.Fatalf("amounts = %v", got)
 			}
 		})
 	}
