@@ -304,6 +304,24 @@ func TestStrategyOwnsEligibility(t *testing.T) {
 	}
 }
 
+func TestStrategyIgnoresOtherAdaptersLiveOffers(t *testing.T) {
+	a1, a2 := testAdapter(1, 100_000_000), testAdapter(2, 100_000_000)
+	auction := testAuction(10, 100_000_000)
+	auction.RemainingAmount = big.NewInt(40_000_000) // a1 already holds 60M on this auction
+	out, err := New().DecideOffers(t.Context(), types.OfferInput{
+		Adapters:   []types.AdapterSnapshot{a1, a2},
+		Auctions:   []types.AuctionSnapshot{auction},
+		LiveOffers: []types.LiveOffer{{AdapterID: a1.ID, AuctionID: 10, Principal: big.NewInt(60_000_000)}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// a1 is deduped on this auction; a2 offers the full request, not the 40M left after a1's live offer.
+	if len(out.Offers) != 1 || out.Offers[0].Maker != a2.Adapter || out.Offers[0].Principal.Int64() != 100_000_000 {
+		t.Fatalf("offers = %+v, want only adapter 2 / 100M", out.Offers)
+	}
+}
+
 func TestStrategyReservesLiveOffersAcrossDiscoveryPasses(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
