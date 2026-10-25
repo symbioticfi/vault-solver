@@ -21,6 +21,7 @@ import (
 )
 
 func fixture(t *testing.T) (provider.Snapshot, recipes.Recipe, *recipes.Tree) {
+	t.Helper()
 	return loadFixture(t, "testdata/3f-executing.json")
 }
 
@@ -401,15 +402,15 @@ func TestObserveDerivesLiveCashBudgetAndCommittedCap(t *testing.T) {
 			return nil, nil
 		}
 	})
-	observed, err := observe(t.Context(), chain, snapshot, recipe, market)
+	observed, err := observe(t.Context(), chain, snapshot, recipe, market, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if observed.AvailableCash.Int64() != 123 || observed.Budget.Int64() != 45 || observed.MinimumYield.Int64() != 2_000_000 || observed.MaxPrincipal.Int64() != 100_000_000 {
+	if observed.AvailableFunding.Int64() != 123 || observed.Budget.Int64() != 45 || observed.MinimumYield.Int64() != 2_000_000 || observed.MaxPrincipal.Int64() != 100_000_000 {
 		t.Fatalf("wrong cash/budget/ratio/cap: %+v", observed)
 	}
 	malformed = true
-	if _, err := observe(t.Context(), chain, snapshot, recipe, market); err == nil {
+	if _, err := observe(t.Context(), chain, snapshot, recipe, market, nil); err == nil {
 		t.Fatal("malformed required getter accepted")
 	}
 }

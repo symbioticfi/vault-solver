@@ -96,7 +96,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	runtime := &mintProvider{API: api, Chain: deps.Chain}
+	runtime := &mintProvider{API: api, Chain: deps.Chain, Funding: cfg.MerkleFunding}
 	strategy.Providers = []provider.Provider{runtime}
 	source, err := permissions.New(cfg.Curator.httpConfig(), &http.Client{Timeout: operationTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, deps.Chain, os.Getenv)
 	if err != nil {
@@ -109,6 +109,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, err
 	}
 	bot := &offerBot{Client: api, Store: store, Send: cfg.Mode == "send"}
-	workflow := &offerWorkflow{planner: planner, strategy: strategy, api: api, bot: bot}
+	workflow := &offerWorkflow{planner: planner, strategy: strategy, api: api, bot: bot, funding: cfg.MerkleFunding}
 	return &Solver{keeper: k, store: store, offers: workflow}, nil
 }

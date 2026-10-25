@@ -12,6 +12,10 @@ are listed under [Solvers](#solvers).
 > **Status:** early build. Engineering guidelines: [`CLAUDE.md`](./CLAUDE.md). Per-solver scope,
 > architecture, and roadmap live under [`docs/`](docs).
 
+Merkle LL pricing and 3F offers support optional reviewed synchronous funding
+sources through [`merkleFunding`](docs/MERKLE-FUNDING.md). Unconfigured account/asset
+pairs retain cash-only sizing; configured read failures stop the observation.
+
 ## Architecture at a glance
 
 - **`cmd/vault-solver`** — process bootstrap: flags, logging, signal-driven shutdown.

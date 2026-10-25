@@ -9,6 +9,7 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
+	"github.com/symbioticfi/vault-solver/internal/merklefunding"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
@@ -16,22 +17,23 @@ import (
 
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parseConfig.
 type rawConfig struct {
-	BackendURL             string            `yaml:"backendUrl"`
-	BackendSharedSecretEnv string            `yaml:"backendSharedSecretEnv"`
-	ListenAddr             string            `yaml:"listenAddr"`
-	QuoteOnly              bool              `yaml:"quoteOnly"`
-	Executor               string            `yaml:"executor"`
-	Reactor                string            `yaml:"reactor"`
-	LiquidityLens          string            `yaml:"liquidityLens"`
-	PollIntervalMs         int               `yaml:"pollIntervalMs"`
-	OrderLimit             int               `yaml:"orderLimit"`
-	MaxNonceRetries        *int              `yaml:"maxNonceRetries"`
-	SolverMode             string            `yaml:"solverMode"`
-	TokensToQuote          string            `yaml:"tokensToQuote"`
-	PermissionedTokens     []string          `yaml:"permissionedTokens"`
-	MinAmountsIn           map[string]string `yaml:"minAmountsIn"`
-	Adapters               []string          `yaml:"adapters"`
-	Strategy               rawStrategyConfig `yaml:"strategy"`
+	MerkleFunding          merklefunding.Config `yaml:"merkleFunding"`
+	BackendURL             string               `yaml:"backendUrl"`
+	BackendSharedSecretEnv string               `yaml:"backendSharedSecretEnv"`
+	ListenAddr             string               `yaml:"listenAddr"`
+	QuoteOnly              bool                 `yaml:"quoteOnly"`
+	Executor               string               `yaml:"executor"`
+	Reactor                string               `yaml:"reactor"`
+	LiquidityLens          string               `yaml:"liquidityLens"`
+	PollIntervalMs         int                  `yaml:"pollIntervalMs"`
+	OrderLimit             int                  `yaml:"orderLimit"`
+	MaxNonceRetries        *int                 `yaml:"maxNonceRetries"`
+	SolverMode             string               `yaml:"solverMode"`
+	TokensToQuote          string               `yaml:"tokensToQuote"`
+	PermissionedTokens     []string             `yaml:"permissionedTokens"`
+	MinAmountsIn           map[string]string    `yaml:"minAmountsIn"`
+	Adapters               []string             `yaml:"adapters"`
+	Strategy               rawStrategyConfig    `yaml:"strategy"`
 }
 
 type rawStrategyConfig struct {
@@ -41,6 +43,8 @@ type rawStrategyConfig struct {
 
 // Config is the validated, typed RFQ solver configuration.
 type Config struct {
+	// MerkleFunding contains reviewed, disjoint synchronous sources for connector account/asset pairs.
+	MerkleFunding merklefunding.Config
 	// QuoteOnly serves pricing for a separately operated filler without polling or submitting orders.
 	QuoteOnly bool
 	// BackendURL is the RFQ backend base URL (orders + discounts).
@@ -137,7 +141,11 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		return nil, err
 	}
 
+	if err := raw.MerkleFunding.Validate(); err != nil {
+		return nil, err
+	}
 	cfg := &Config{
+		MerkleFunding:          raw.MerkleFunding,
 		QuoteOnly:              raw.QuoteOnly,
 		BackendURL:             raw.BackendURL,
 		BackendSharedSecretEnv: raw.BackendSharedSecretEnv,

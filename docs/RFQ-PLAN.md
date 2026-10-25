@@ -661,3 +661,18 @@ removed body field.
 
 
 Merkle connector acquisition is owned by `internal/solvers/merkle/rfq`, as described in [RFQ-MERKLE.md](RFQ-MERKLE.md). Each connector maps each RWA asset to its own recipe executor. The recipe commits one signed swap with the awarded amount and payment as inputs 0 and 1. Include that asset's original issuer grants when redemption is required; route failures never fall back to custody.
+
+
+### Merkle connector funding capacity (2026-10-26)
+
+RFQ connector pricing and 3F offer sizing share `internal/merklefunding`, backed by
+the vendored/generated MerkleFundingLens ABI. Operator-owned account/asset source
+configuration supplies disjoint reviewed scalar queries from the approved recipes;
+all reads retain the consumer's block pin. Configured failures propagate, while
+unconfigured pairs preserve cash-only sizing. Existing budgets/reservations remain
+in their owning integrations. No generic solver-framework or native-adapter path
+changes. See MERKLE-FUNDING.md for trust boundaries and activation.
+
+- [x] Share funding reads between RFQ connector pricing and Merkle 3F offers.
+- [x] Validate source configuration and preserve execution/recovery checks.
+- [ ] Deploy the helper and review each production recipe/source configuration.

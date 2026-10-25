@@ -37,8 +37,10 @@ replacement before broadcast; the host drains the shared sender before closing s
 
 Polling and mint strategy cadence are 15 seconds, operations are bounded to 30 seconds,
 and the shared recipe cache holds the configured recipe within 16 MiB. Curator `url` and optional `apiKeyEnv` use the SDK's
-10-second/2-MiB limits. Financial amounts, account identity and manual inputs are
-not configuration fields.
+10-second/2-MiB limits. Financial amounts and manual inputs are not configuration fields. Optional
+`merkleFunding` entries bind reviewed synchronous withdrawal sources to the
+discovered account and funding asset; they do not select the executor account.
+See [shared Merkle funding capacity](MERKLE-FUNDING.md).
 
 One-time setup follows the [3F onboarding guide](https://docs.3f.xyz/bridge-facilitator/onboarding):
 3F approves the dedicated BF EOA; that EOA generates its API key with a private
@@ -63,15 +65,16 @@ membership and verifies the exact funding pair's budget debit; an API position
 manager address is never substituted for collateral underlying. This simulation
 is a read, not a live transaction or proof of signer access.
 
-Automatic offers conservatively use **idle cash already held by the account**.
-Capacity is the minimum of that cash, the policy's remaining pair budget, the
-recipe principal cap and the auction's advertised request size, with cash reserved across all live offers of the same funding token and budget reserved only across offers for the exact funding/underlying pair. The bot keeps at most one
+Automatic offers use account cash plus any reviewed synchronous sources configured
+under `merkleFunding`. Capacity is the minimum of that funding, the policy's remaining
+pair budget, the recipe principal cap and the auction's advertised request size.
+Funding is reserved across all live offers of the same funding token; budget is
+reserved only across offers for the exact funding/underlying pair. The bot keeps at most one
 self-originated live offer at a time, preserving its full configuration binding
-until terminal across all configured markets. Another market cannot cancel, overwrite or rekey that live intent; an ambiguous POST blocks every market until its exact API row is reconciled. The workflow may cancel only its own intent or an eligible request within its current market. Multiple UI-originated offers and aggregate mints remain supported. Supply cash to the account
-before enabling automatic bidding. The actual mint recipe can still use its
-committed funding sources; API-key offers created in the UI are reconciled by the
-same mint provider. This bot does not promise a quote against liquidity that may
-need a later withdrawal from another market or the adapter.
+until terminal across all configured markets. Another market cannot cancel, overwrite or rekey that live intent; an ambiguous POST blocks every market until its exact API row is reconciled. The workflow may cancel only its own intent or an eligible request within its current market. Multiple UI-originated offers and aggregate mints remain supported. Before enabling automatic bidding, supply cash or configure synchronous sources
+that the committed mint recipe can actually withdraw. API-key offers created in the
+UI are reconciled by the same mint provider. Future/asynchronous withdrawal liquidity
+is excluded.
 
 Yield is the ceiling of principal times the policy's minimum divided by 1e8;
 this is the nonannual yield/principal ratio. The auction's exact decimal maximum
@@ -81,7 +84,7 @@ stores the account as maker. A five-minute offer expiration is independent of th
 post-acceptance mint lease. Unaccepted offers reserve their full principal;
 accepted mint windows reserve their pending principal. Manual UI cancellations
 suppress automatic replacement for that auction. Unaccepted commitments exceeding
-cash/budget or the bot's changed terms are cancelled before new offers are created.
+funding/budget or the bot's changed terms are cancelled before new offers are created.
 
 Each random nonce and immutable create intent is fsynced **before** the POST.
 After an uncertain response or restart, the bot reconciles the account/auction/nonce

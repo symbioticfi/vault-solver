@@ -10,10 +10,12 @@ The backend may offer an explicitly configured LiquidLane connector with
 `kind: "connector"` and `discountPrecision: "100000000"`. This requires a signed
 `discountId`. The pricing reader checks the canonical `LiquidLaneConnector` / `1`
 domain and current account, output asset, decimals, minimum discount, remaining
-budget, cash and `getAmountOut` at a pinned block. An empty connector input-token
+budget, available funding and `getAmountOut` at a pinned block. An empty connector input-token
 balance is admissible because Reactor delivers that token in the atomic outer
-fill. Account cash admission is conservative and excludes potential additional
-recipe funding sources. Native adapter inventory keeps its existing read path
+fill. Without configuration, funding is account cash. Optional reviewed `merkleFunding`
+sources add synchronous recipe withdrawal capacity through the shared lens;
+configured failures never fall back to cash. See [Merkle funding](MERKLE-FUNDING.md).
+Native adapter inventory keeps its existing read path
 and ppm precision.
 
 Connector signed discount integers retain all digits. Exact candidates preserve

@@ -16,6 +16,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/bindings/3f/request"
 	"github.com/symbioticfi/vault-solver/api/threef"
+	"github.com/symbioticfi/vault-solver/internal/merklefunding"
 )
 
 var requestABI = request.NewIRequest()
@@ -27,9 +28,10 @@ type mintAPI interface {
 }
 
 type mintProvider struct {
-	API   mintAPI
-	Chain provider.Reader
-	Now   func() time.Time
+	Funding merklefunding.Config
+	API     mintAPI
+	Chain   provider.Reader
+	Now     func() time.Time
 }
 
 type mint struct {
@@ -105,7 +107,7 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 	observations := make([]observation, 0, len(markets))
 	inputs := map[uint]string{}
 	for _, market := range markets {
-		observed, e := observe(ctx, p.Chain, snapshot, recipe, market)
+		observed, e := observe(ctx, p.Chain, snapshot, recipe, market, p.Funding)
 		if e != nil {
 			return provider.Output{}, e
 		}

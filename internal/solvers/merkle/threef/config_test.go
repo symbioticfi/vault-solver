@@ -6,6 +6,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/vault-solver/internal/merklefunding"
 	"gopkg.in/yaml.v3"
 )
 
@@ -71,6 +72,9 @@ func TestRecoveryIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, change := range map[string]func(*config, *keeper.Config, *common.Address){
+		"funding": func(c *config, _ *keeper.Config, _ *common.Address) {
+			c.MerkleFunding = merklefunding.Config{{Account: common.HexToAddress("0x55").Hex()}}
+		},
 		"key":      func(c *config, _ *keeper.Config, _ *common.Address) { c.APIKeyEnv = "ANOTHER_CURATOR_KEY" },
 		"broker":   func(c *config, _ *keeper.Config, _ *common.Address) { c.Broker = common.HexToAddress("0x41").Hex() },
 		"API":      func(c *config, _ *keeper.Config, _ *common.Address) { c.URL = "https://other.example" },

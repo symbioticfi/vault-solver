@@ -11,6 +11,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	"github.com/symbioticfi/vault-solver/internal/merklefunding"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
@@ -36,6 +37,7 @@ func (p *mintPlanning) Validate(ctx context.Context, plan keeper.Plan) error {
 }
 
 type offerWorkflow struct {
+	funding  merklefunding.Config
 	planner  *keeper.Planner
 	strategy keeper.Strategy
 	api      *apiClient
@@ -78,7 +80,7 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	observations := make([]observation, 0, len(markets))
 	memberships := make([]map[common.Address]bool, 0, len(markets))
 	for _, market := range markets {
-		observed, e := observe(ctx, p.Chain, pin, recipe, market)
+		observed, e := observe(ctx, p.Chain, pin, recipe, market, w.funding)
 		if e != nil {
 			return e
 		}
@@ -139,7 +141,7 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	}
 	for _, i := range order {
 		observed := observations[i]
-		if err := w.bot.Tick(ctx, offerMarket{ChainID: p.ChainID.Uint64(), Account: snapshot.Account, Executor: snapshot.Executor, RecipeHash: snapshot.RecipeHash, Asset: observed.Market.Asset, UnderlyingAsset: observed.Market.UnderlyingAsset, Budget: observed.Budget, MinimumYield1e8: observed.MinimumYield, MaxPrincipal: observed.MaxPrincipal, AvailableCash: observed.AvailableCash, EligibleRequests: memberships[i]}, auctions); err != nil {
+		if err := w.bot.Tick(ctx, offerMarket{ChainID: p.ChainID.Uint64(), Account: snapshot.Account, Executor: snapshot.Executor, RecipeHash: snapshot.RecipeHash, Asset: observed.Market.Asset, UnderlyingAsset: observed.Market.UnderlyingAsset, Budget: observed.Budget, MinimumYield1e8: observed.MinimumYield, MaxPrincipal: observed.MaxPrincipal, AvailableFunding: observed.AvailableFunding, EligibleRequests: memberships[i]}, auctions); err != nil {
 			return err
 		}
 	}

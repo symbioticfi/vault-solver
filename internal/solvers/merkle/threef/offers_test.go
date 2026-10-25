@@ -41,7 +41,7 @@ func (f *fakeClient) Cancel(_ context.Context, id uint64) (*threef.CancelOfferRe
 
 func testMarket() offerMarket {
 	request := common.HexToAddress("0x1000000000000000000000000000000000000001")
-	return offerMarket{ChainID: 1, Account: common.HexToAddress("0x2000000000000000000000000000000000000002"), Executor: common.HexToAddress("0x3000000000000000000000000000000000000003"), RecipeHash: common.HexToHash("0x04"), Asset: common.HexToAddress("0x5000000000000000000000000000000000000005"), UnderlyingAsset: common.HexToAddress("0x6000000000000000000000000000000000000006"), Budget: big.NewInt(1000000), MinimumYield1e8: big.NewInt(19000), MaxPrincipal: big.NewInt(800001), AvailableCash: big.NewInt(900000), EligibleRequests: map[common.Address]bool{request: true}}
+	return offerMarket{ChainID: 1, Account: common.HexToAddress("0x2000000000000000000000000000000000000002"), Executor: common.HexToAddress("0x3000000000000000000000000000000000000003"), RecipeHash: common.HexToHash("0x04"), Asset: common.HexToAddress("0x5000000000000000000000000000000000000005"), UnderlyingAsset: common.HexToAddress("0x6000000000000000000000000000000000000006"), Budget: big.NewInt(1000000), MinimumYield1e8: big.NewInt(19000), MaxPrincipal: big.NewInt(800001), AvailableFunding: big.NewInt(900000), EligibleRequests: map[common.Address]bool{request: true}}
 }
 
 func testAuction(m offerMarket, id float32, request common.Address) threef.AuctionDto {
@@ -253,7 +253,7 @@ func TestTickRejectsUnexecutableNativeQuantities(t *testing.T) {
 			b, c, m := testBot(t)
 			tooLarge := new(big.Int).Lsh(big.NewInt(1), 128)
 			if field == "principal" {
-				m.Budget, m.AvailableCash, m.MaxPrincipal = tooLarge, tooLarge, tooLarge
+				m.Budget, m.AvailableFunding, m.MaxPrincipal = tooLarge, tooLarge, tooLarge
 				amount := tooLarge.String()
 				c.auctions[0].AmountRequested = *threef.NewNullableString(&amount)
 			} else {
@@ -429,7 +429,7 @@ func TestTickDoesNotCancelAnotherMarketUIOfferAgainstCurrentPairBudget(t *testin
 func TestPairBudgetDoesNotReserveAnotherUnderlying(t *testing.T) {
 	b, c, m := testBot(t)
 	m.Budget = big.NewInt(100000)
-	m.AvailableCash = big.NewInt(900000)
+	m.AvailableFunding = big.NewInt(900000)
 	other := common.HexToAddress("0x777")
 	c.auctions = append(c.auctions, testAuction(m, 2, other))
 	offer := testOffer(m, 2, "AWAITING_MINT", "200000")

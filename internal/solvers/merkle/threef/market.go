@@ -11,15 +11,16 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	"github.com/symbioticfi/vault-solver/internal/merklefunding"
 )
 
 // observation contains quantities read at the recipe's canonical block.
 type observation struct {
-	Market                                            mintMarket
-	Budget, MinimumYield, AvailableCash, MaxPrincipal *big.Int
+	Market                                               mintMarket
+	Budget, MinimumYield, AvailableFunding, MaxPrincipal *big.Int
 }
 
-func observe(ctx context.Context, chain provider.Reader, snapshot provider.Snapshot, recipe recipes.Recipe, market mintMarket) (observation, error) {
+func observe(ctx context.Context, chain provider.Reader, snapshot provider.Snapshot, recipe recipes.Recipe, market mintMarket, funding merklefunding.Config) (observation, error) {
 	call := func(to common.Address, data []byte) ([]byte, error) {
 		raw, err := chain.CallContract(ctx, ethereum.CallMsg{To: &to, Data: data}, snapshot.BlockNumber)
 		if err != nil {
@@ -54,13 +55,9 @@ func observe(ctx context.Context, chain provider.Reader, snapshot provider.Snaps
 	if err != nil {
 		return observation{}, err
 	}
-	raw, err = call(market.Asset, tokenABI.PackBalanceOf(snapshot.Account))
+	available, err := funding.Available(ctx, chain, snapshot.Account, market.Asset, snapshot.BlockNumber)
 	if err != nil {
-		return observation{}, errors.New("3f funding balance read failed")
-	}
-	cash, err := tokenABI.UnpackBalanceOf(raw)
-	if err != nil {
-		return observation{}, err
+		return observation{}, errors.Errorf("3f funding: %w", err)
 	}
 	ceiling := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1))
 	// Bounds constrain offer capacity; the accepted authorization still selects mint amounts.
@@ -73,7 +70,7 @@ func observe(ctx context.Context, chain provider.Reader, snapshot provider.Snaps
 			ceiling = value
 		}
 	}
-	return observation{Market: market, Budget: budget, MinimumYield: minimum, AvailableCash: cash, MaxPrincipal: ceiling}, nil
+	return observation{Market: market, Budget: budget, MinimumYield: minimum, AvailableFunding: available, MaxPrincipal: ceiling}, nil
 }
 
 var errIneligible = errors.New("3f request is not eligible for the pinned funding pair")

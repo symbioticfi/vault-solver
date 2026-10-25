@@ -13,10 +13,12 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
+	"github.com/symbioticfi/vault-solver/internal/merklefunding"
 )
 
 // reader is the RFQ adapter over the shared LiquidLane read surface.
 type reader struct {
+	funding       merklefunding.Config
 	ll            *liquidlane.Reader
 	chain         *chain.Client
 	chainID       int64

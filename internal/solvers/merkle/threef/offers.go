@@ -25,11 +25,11 @@ type offerClient interface {
 // offerMarket contains authenticated policy terms and cash at one closed canonical block.
 // EligibleRequests comes from native policy/underlying attestation, never API metadata alone.
 type offerMarket struct {
-	ChainID                                              uint64
-	Account, Executor, Asset, UnderlyingAsset            common.Address
-	RecipeHash                                           common.Hash
-	Budget, MinimumYield1e8, MaxPrincipal, AvailableCash *big.Int
-	EligibleRequests                                     map[common.Address]bool
+	ChainID                                                 uint64
+	Account, Executor, Asset, UnderlyingAsset               common.Address
+	RecipeHash                                              common.Hash
+	Budget, MinimumYield1e8, MaxPrincipal, AvailableFunding *big.Int
+	EligibleRequests                                        map[common.Address]bool
 }
 
 // offerBot is owned by the single solver Run goroutine and its exclusive SDK store.
@@ -102,7 +102,7 @@ func (b *offerBot) Tick(ctx context.Context, market offerMarket, auctions []thre
 			}
 		}
 	}
-	capacity := minInt(new(big.Int).Sub(market.Budget, pairReserved), new(big.Int).Sub(market.AvailableCash, reserved))
+	capacity := minInt(new(big.Int).Sub(market.Budget, pairReserved), new(big.Int).Sub(market.AvailableFunding, reserved))
 	for _, offer := range live {
 		if offer.dto.Status != "SUBMITTED" {
 			continue
@@ -116,7 +116,7 @@ func (b *offerBot) Tick(ctx context.Context, market offerMarket, auctions []thre
 		if offer.asset != market.Asset && !cancel {
 			continue
 		}
-		cancel = cancel || (offer.asset == market.Asset && (reserved.Cmp(market.AvailableCash) > 0 || pairReserved.Cmp(market.Budget) > 0))
+		cancel = cancel || (offer.asset == market.Asset && (reserved.Cmp(market.AvailableFunding) > 0 || pairReserved.Cmp(market.Budget) > 0))
 		if offer.asset == market.Asset && market.EligibleRequests[request] {
 			fits, fitErr := fitsTerms(market, offer.amount, offer.expectedReturn, byID[offer.auctionID])
 			if fitErr != nil {
@@ -232,7 +232,7 @@ func validateMarket(m offerMarket) error {
 	if m.ChainID == 0 || m.Account == (common.Address{}) || m.Executor == (common.Address{}) || m.Asset == (common.Address{}) || m.UnderlyingAsset == (common.Address{}) || m.RecipeHash == (common.Hash{}) {
 		return errors.New("3F market identity is incomplete")
 	}
-	for _, amount := range []*big.Int{m.Budget, m.MinimumYield1e8, m.MaxPrincipal, m.AvailableCash} {
+	for _, amount := range []*big.Int{m.Budget, m.MinimumYield1e8, m.MaxPrincipal, m.AvailableFunding} {
 		if amount == nil || amount.Sign() < 0 || amount.BitLen() > 256 {
 			return errors.New("3F market quantity must be uint256")
 		}
