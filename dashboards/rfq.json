@@ -27,8 +27,8 @@
       "kind": "Panel",
       "spec": {
         "id": 10,
-        "title": "Quote decisions · reasons",
-        "description": "Selected-period decisions show why incoming demand did or did not receive a quote. Quoted does not mean accepted or filled.",
+        "title": "Quote refusals by pair and reason",
+        "description": "Final RFQ HTTP refusals, including schema/auth errors and domain declines. Schema rejection precedes typed handler entry and uses unknown pair buckets. Exact input only; unsupported protocol/type/chain reasons do not expand support. New pair metrics have no backfill; legacy aggregates remain elsewhere.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -46,7 +46,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(sum by (outcome) (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",solver=\"rfq-filler\",event=\"quote\"}[$__range])))",
+                      "expr": "sum by(token_in,token_out,reason)(increase(solver_bot_quote_results_total{namespace=\"${namespace}\",solver=\"rfq-filler\",result=\"rejected\"}[$__range]))",
                       "instant": true,
                       "range": false,
                       "legendFormat": "",
@@ -59,12 +59,28 @@
             "transformations": [
               {
                 "kind": "Transformation",
+                "group": "merge",
+                "spec": {
+                  "options": {}
+                }
+              },
+              {
+                "kind": "Transformation",
                 "group": "organize",
                 "spec": {
                   "options": {
-                    "excludeByName": {"Time": true, "namespace": true, "job": true, "instance": true, "__name__": true},
-                    "indexByName": {"outcome": 0, "Value": 1},
-                    "renameByName": {"outcome": "Outcome", "Value": "Count"}
+                    "excludeByName": {
+                      "Time": true,
+                      "__name__": true
+                    },
+                    "renameByName": {
+                      "token_in": "Input token",
+                      "token_out": "Output token",
+                      "reason": "Reason",
+                      "Value": "Count",
+                      "Value #A": "Count"
+                    },
+                    "indexByName": {}
                   }
                 }
               }
@@ -2734,6 +2750,345 @@
         },
         "transparent": true
       }
+    },
+    "panel-300": {
+      "kind": "Panel",
+      "spec": {
+        "id": 300,
+        "title": "Quote request counts by pair · selected range",
+        "description": "One final HTTP result per request; incoming is the sum of returned and rejected outcomes. Known addresses are bounded trusted startup/config identities; other is an unresolved valid/foreign-chain bucket, unknown is unparsed or malformed. These are not known token pairs. Namespace isolates environments; storage must deduplicate HA scrapes. New metrics have no backfill; increase needs multiple samples. RFQ Huma schema failures are counted before typed handler entry as unknown pairs; validation/auth status and order are unchanged.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (token_in, token_out) (increase(solver_bot_quote_results_total{solver=\"rfq-filler\",namespace=\"${namespace}\"}[$__range]))",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (token_in, token_out) (increase(solver_bot_quote_results_total{solver=\"rfq-filler\",namespace=\"${namespace}\",result=\"returned\"}[$__range]))",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "C",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (token_in, token_out) (increase(solver_bot_quote_results_total{solver=\"rfq-filler\",namespace=\"${namespace}\",result=\"rejected\"}[$__range]))",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "merge",
+                "spec": {
+                  "options": {}
+                }
+              },
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {
+                      "Time": true,
+                      "__name__": true
+                    },
+                    "renameByName": {
+                      "token_in": "Input token",
+                      "token_out": "Output token",
+                      "Value #A": "Incoming requests",
+                      "Value #B": "Returned quotes",
+                      "Value #C": "Rejected requests"
+                    },
+                    "indexByName": {}
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—"
+              },
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Input token"
+                  },
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "other": {
+                              "text": "other (unregistered / other chain; aggregated)"
+                            },
+                            "unknown": {
+                              "text": "unknown (unparsed / invalid address; aggregated)"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Output token"
+                  },
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "other": {
+                              "text": "other (unregistered / other chain; aggregated)"
+                            },
+                            "unknown": {
+                              "text": "unknown (unparsed / invalid address; aggregated)"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "panel-301": {
+      "kind": "Panel",
+      "spec": {
+        "id": 301,
+        "title": "Quote flow by pair · requests / sec",
+        "description": "Shared HTTP quote results by pair. Incoming sums all final results; returned means a written response, not an awarded/filled order. other/unknown are unresolved aggregate buckets; raw pairs remain in logs. Namespace and per-process rate are preserved. RFQ Huma schema failures are counted before typed handler entry as unknown pairs; validation/auth status and order are unchanged.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (token_in, token_out) (rate(solver_bot_quote_results_total{solver=\"rfq-filler\",namespace=\"${namespace}\"}[$__rate_interval]))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{token_in}} → {{token_out}} · incoming"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (token_in, token_out) (rate(solver_bot_quote_results_total{solver=\"rfq-filler\",namespace=\"${namespace}\",result=\"returned\"}[$__rate_interval]))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{token_in}} → {{token_out}} · returned"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "C",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (token_in, token_out) (rate(solver_bot_quote_results_total{solver=\"rfq-filler\",namespace=\"${namespace}\",result=\"rejected\"}[$__rate_interval]))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{token_in}} → {{token_out}} · rejected"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": [
+                  "lastNotNull",
+                  "max"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ops",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": 0,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  },
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {
+                    "mode": "none",
+                    "group": "A"
+                  }
+                },
+                "decimals": 3
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
     }
   },
   "layout": {
@@ -2853,6 +3208,46 @@
           }
         },
         {
+        "kind": "RowsLayoutRow",
+        "spec": {
+          "title": "HTTP quote demand by token pair",
+          "collapse": false,
+          "layout": {
+            "kind": "GridLayout",
+            "spec": {
+              "items": [
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 0,
+                    "width": 24,
+                    "height": 7,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-300"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 7,
+                    "width": 24,
+                    "height": 8,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-301"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Orders requiring follow-up",

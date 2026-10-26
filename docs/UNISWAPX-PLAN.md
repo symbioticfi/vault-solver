@@ -662,6 +662,66 @@ On the ≤500ms path, mirroring `rfq`'s "one multicall, decimals cached" discipl
 6. Echo `requestId` and `quoteId`, and return `200` with `amountIn`, `amountOut`, and `filler` =
    `LiquidLaneUniswapXExecutor`. Do not mutate capacity on this path.
 
+### Quote rejection diagnostics
+
+The reason taxonomy does not expand protocol, chain, address, amount or execution acceptance.
+`v3` remains `unsupported_protocol`. The existing `v1`/`v2` quote wire versions are distinct from
+`Dutch_V2`, the only ingested/decoded order type. Upstream deliberately anonymizes quote swapper
+addresses to zero ([wire payload source](https://github.com/Uniswap/uniswapx-parameterization-api/blob/3b36635999b24cf0aacb26bf6aaaec92bad175d3/lib/entities/QuoteRequest.ts#L56)); zero swapper remains accepted.
+
+Precedence preserves the original pipeline and compound predicate's left-to-right order:
+
+1. Runtime `blocked`.
+2. `missing_ids` → `unsupported_type` → `invalid_outputs` (`numOutputs < 1`) →
+   `unsupported_protocol` → `unsupported_chain` (input or output chain differs from configured chain) →
+   `invalid_address` (existing hex-address checks).
+3. `pair-out-of-scope` (identical pair, native output, or input token policy).
+4. `invalid-amount` (existing decimal parse and positivity checks).
+5. `quote-state-unavailable` → strategy decision → `state-changed` on final recheck.
+
+The HTTP layer keeps existing behavior, including missing `requestId`: a nonnegative
+`blockUntilTimestamp` is a breaker notification; otherwise HTTP 400. A missing timestamp is now
+logged/counted as `missing_ids`, a negative timestamp as `invalid-breaker-notification`.
+Malformed/unknown-field/trailing JSON, read errors and oversized bodies remain HTTP 400 with their
+existing raw-body reasons and workflow outcome `invalid`. Parsed semantic declines remain empty 204.
+
+The solver captures existing local planner terminal decisions independently of debug logging:
+`no_matching_routes`, `no_candidates`, `amount_below_minimum`, `insufficient_capacity`, `no_allocation`,
+`gas_exceeds_output`, `minimum_input_cannot_cover_output`. A nil quote with no known decision,
+an unknown decision, or differing decisions across attempted candidates/subproblems remains
+`strategy-declined`; the collector never presents the last candidate's reason as a universal failure.
+Errors and invalid returned quotes remain HTTP 503 with workflow outcome `error` and log/counter
+reason `strategy_error`. Successful strategy results ignore prior candidate declines.
+
+Existing workflow outcome labels are retained: semantic reasons map to `declined_invalid_request`,
+planner reasons to `declined_strategy`, exactly once. A shared LiquidLane `QuoteMetrics` helper now
+records final HTTP results separately using `solver_bot_quote_results_total{solver,token_in,token_out,result,reason}`.
+Incoming is the sum of these results, without a separate incoming/rejection counter.
+`returned/none` requires successful encoding; write failure is `response_write_error`, panic
+`internal_error`. Legacy selected-before-write metrics keep their production meaning.
+
+### Shared pair metrics
+
+The helper is also used by Symbiotic RFQ. It owns ordinary Prometheus vectors and a small metadata
+map initialized once before HTTP starts. Known labels come from at most 16 total identities drawn
+from configured permissioned inputs and trusted startup routes/initial inventory, ordered
+deterministically with configured inputs first. Requests never
+extend identities or supply decimal metadata. `other` is valid unregistered/foreign-chain/overflow;
+`unknown` is malformed/unparsed, independently per side. These buckets are not known pairs.
+`solver_bot_quote_token_overflow{solver}` exposes omitted startup identities. Unit tests retain the
+14 configured inputs + trusted outputs, exactly-16 and overflow scenarios using inline data.
+
+`solver_bot_quote_requested_amount_tokens{solver,token,side}` records positive uint256 demand only
+with trusted decimals; EXACT_INPUT uses input and EXACT_OUTPUT uses output units. Conflicting or
+missing metadata skips amount samples without affecting route acceptance. No cross-token sums.
+Per UniswapX process the bound is 324 pairs × 30 final result/reason combinations + 416 classic
+histogram series + one overflow gauge = 10,137 new classic series, created lazily.
+
+The board shows pair counts/trends, a final refusal table and amount context.
+Queries filter solver and Namespace, calculate rate/increase
+per process, and assume HA scrape deduplication in storage. No backfill is possible from historical
+aggregate metrics. Unit tests cover transport counts, bounded labels, precedence and decimals.
+
 Same-token multi-output orders are priced by their total output and settled with one aggregate approval;
 the Reactor distributes that token among recipients. Mixed-token outputs are declined during parsing and
 rejected by the executor. Pricing is intentionally naive for v1; a competitive/win-rate controller (modeling
@@ -845,6 +905,11 @@ in the owning repository and the integration harness pins the resulting revision
   direct + signed-discount routes, actual balance-delta enforcement, same-token multi-output settlement, and
   mock-Reactor coverage. Regenerate and vendor the ABI here, pin the landed RFQ revision in `rfq-integration`,
   and add a canonical-Reactor self-cosign test. Native output remains an optional post-v1 extension (§7).
+- [x] **Pair traffic board.** Reuse shared bounded pair outcomes and requested
+  amount histograms with RFQ; simplify existing-board panels. Preserve legacy metrics and protocol support (§5).
+- [x] **Bounded quote rejection diagnostics.** Split existing semantic validation reasons; retain
+  protocol/chain acceptance, raw-body/semantic HTTP behavior and workflow aggregate labels. Capture
+  homogeneous planner failures without classifying every nil as insufficient capacity (§5).
 - [ ] **P4 — Quote webhook completion.** The bounded server, local strategy pricing, health,
   readiness, metrics, phase-agnostic `v1`/`v2` and zero-swapper handling, empty-`204` decline, ingress-owned
   source-IP authentication, native-output decline, and request tests exist. Replay a captured Beta payload

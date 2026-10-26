@@ -362,6 +362,11 @@ func TestLIFIMetricsRecordSuccessfulRefresh(t *testing.T) {
 	maxInput := metrics.quotes.pairMaxInput.WithLabelValues(
 		strings.ToLower(quoteRoute.TokenIn.Hex()), strings.ToLower(quoteRoute.TokenOut.Hex()), "6", "6",
 	)
+	pairQuotes := metrics.quotes.published.WithLabelValues(strings.ToLower(quoteRoute.TokenIn.Hex()), strings.ToLower(quoteRoute.TokenOut.Hex()), "quotes")
+	pairRanges := metrics.quotes.published.WithLabelValues(strings.ToLower(quoteRoute.TokenIn.Hex()), strings.ToLower(quoteRoute.TokenOut.Hex()), "ranges")
+	if testutil.ToFloat64(pairQuotes) != 3 || testutil.ToFloat64(pairRanges) != 3 {
+		t.Fatal("unexpected per-pair standing quote/range counts")
+	}
 	firstRefresh := testutil.ToFloat64(metrics.quotes.lastRefreshAt)
 	if testutil.ToFloat64(metrics.quotes.activeQuotes) != 3 ||
 		testutil.ToFloat64(metrics.quotes.activeRanges) != 3 ||
@@ -373,6 +378,7 @@ func TestLIFIMetricsRecordSuccessfulRefresh(t *testing.T) {
 	if testutil.ToFloat64(metrics.quotes.activeQuotes) != 0 ||
 		testutil.ToFloat64(metrics.quotes.activeRanges) != 0 ||
 		testutil.CollectAndCount(metrics.quotes.pairMaxInput) != 0 ||
+		testutil.CollectAndCount(metrics.quotes.published) != 0 ||
 		testutil.ToFloat64(metrics.quotes.lastRefreshAt) < firstRefresh {
 		t.Fatal("unexpected empty quote metrics")
 	}

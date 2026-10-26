@@ -10,6 +10,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/go-errors/errors"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
@@ -61,6 +62,7 @@ type quoteOutput struct {
 func (s *server) handler() http.Handler {
 	mux := http.NewServeMux()
 	config := huma.DefaultConfig("vault-solver RFQ filler", version1)
+	config.Transformers = append(config.Transformers, quoteValidationReason)
 	api := humago.New(mux, config)
 
 	huma.Register(api, huma.Operation{
@@ -99,7 +101,18 @@ func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput,
 		observability.AttrRequestID.String(requestID(ctx)),
 		observability.AttrQuoteID.String(in.Body.QuoteID),
 	)
+	observation, _ := ctx.Value(quoteMetricsKey).(*quoteHTTPObservation)
+	if observation != nil {
+		r := in.Body
+		observation.request = liquidlane.QuoteMetricRequest{TokenIn: r.TokenIn, TokenOut: r.TokenOut, TokenInChainID: r.TokenInChainID, TokenOutChainID: r.TokenOutChainID, Amount: r.Amount}
+		if r.Type == quoteTypeExactInput {
+			observation.request.Side = "input"
+		}
+	}
 	if !s.authorized(in.Secret) {
+		if observation != nil {
+			observation.reason = "unauthorized"
+		}
 		// Log the denial (never the attempted secret) so credential scanning is observable.
 		observability.Log(ctx).V(1).Info("rejected /quote: bad shared secret", "requestId", requestID(ctx))
 		return nil, huma.Error403Forbidden("forbidden")
@@ -108,6 +121,22 @@ func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput,
 	var bad *badRequestError
 	if errors.As(err, &bad) {
 		decision.outcome = quoteDecisionBadRequest
+	}
+	if observation != nil {
+		observation.reason = string(decision.outcome)
+		if bad != nil {
+			observation.reason = quoteBadRequestReason(&in.Body)
+		}
+		if decision.outcome == quoteDecisionNotQuotable {
+			if in.Body.TokenInChainID != s.quotes.chainID || in.Body.TokenOutChainID != s.quotes.chainID {
+				observation.reason = "unsupported_chain"
+			} else if len(in.Body.Adapters) == 0 {
+				observation.reason = "no_candidates"
+			} else {
+				observation.reason = "pair_out_of_scope"
+			}
+		}
+		observability.Log(ctx).V(1).Info("quote result", "reason", observation.reason, "tokenIn", in.Body.TokenIn, "tokenOut", in.Body.TokenOut, "tokenInChainId", in.Body.TokenInChainID, "tokenOutChainId", in.Body.TokenOutChainID, "quoteId", in.Body.QuoteID)
 	}
 	s.metrics.observeQuoteDecision(decision.outcome)
 	s.metrics.observeQuotedAmounts(decision.observation)

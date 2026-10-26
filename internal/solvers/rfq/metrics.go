@@ -1,6 +1,7 @@
 package rfq
 
 import (
+	"context"
 	"math/big"
 	"net/http"
 	"strconv"
@@ -17,6 +18,7 @@ const fillOutcomePeer = "peer"
 
 type rfqMetrics struct {
 	workflow          *observability.WorkflowMetrics
+	traffic           *liquidlane.QuoteMetrics
 	orderPollObserver *observability.OperationObserver
 	requests          *prometheus.CounterVec
 	duration          *prometheus.HistogramVec
@@ -58,8 +60,13 @@ func newRFQMetrics(
 	if err != nil {
 		return nil, err
 	}
+	traffic, err := liquidlane.NewQuoteMetrics(reg, Name, boundedQuoteReason)
+	if err != nil {
+		return nil, err
+	}
 	m := &rfqMetrics{
 		workflow:          workflow,
+		traffic:           traffic,
 		orderPollObserver: workflow.Operation(orderPollOperation),
 		requests: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "rfq_filler_http_requests_total",
@@ -157,7 +164,22 @@ func (m *rfqMetrics) instrument(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		var observation *quoteHTTPObservation
+		if r.Method == http.MethodPost && r.URL.Path == "/quote" {
+			observation = &quoteHTTPObservation{}
+			r = r.WithContext(context.WithValue(r.Context(), quoteMetricsKey, observation))
+		}
 		next.ServeHTTP(rec, r)
+		if observation != nil {
+			reason := observation.reason
+			if reason == "" {
+				reason = quoteHTTPReason(rec.status)
+			}
+			if rec.writeError {
+				reason = "response_write_error"
+			}
+			m.traffic.Observe(observation.request, rec.status == http.StatusOK && !rec.writeError, reason)
+		}
 		labels := prometheus.Labels{
 			"method": methodLabel(r.Method),
 			"route":  routeLabel(r.URL.Path),
@@ -184,6 +206,7 @@ type statusRecorder struct {
 
 	status      int
 	wroteHeader bool
+	writeError  bool
 }
 
 func (s *statusRecorder) WriteHeader(code int) {
@@ -192,6 +215,12 @@ func (s *statusRecorder) WriteHeader(code int) {
 		s.wroteHeader = true
 	}
 	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(body []byte) (int, error) {
+	n, err := s.ResponseWriter.Write(body)
+	s.writeError = s.writeError || err != nil || n != len(body)
+	return n, err
 }
 
 // routeLabel maps a path to a bounded set of route labels (known routes, else "other").

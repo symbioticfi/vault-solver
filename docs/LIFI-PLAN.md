@@ -1051,3 +1051,50 @@ The native sentinel follows upstream `catalystsystem/lifi-intent` revision
 `7e32479a48ddcc9e01e5205334a9220f323bae53`, where `InputSettlerEscrow.sol` handles zero native
 inputs and `InputSettlerEscrowLIFINative.t.sol` exercises the LIFI escrow path. This classification is
 only an unsupported-asset skip; it does not enable native execution or prove any deployment's bytecode.
+
+
+### Advertised pair dashboard diagnostics
+
+The existing atomic quote collector exports `solver_bot_quote_published` with shared
+`solver,token_in,token_out` labels and `kind=quotes|ranges`. These are last-reconciled local standing
+records, not incoming upstream quote requests, unique advertisements or refresh attempts. Pair
+counts reset/repopulate under the same lock as the unchanged production
+`lifi_active_quote_max_input_atomic_units` gauge; retired pairs disappear. Counts aggregate local
+records, while capacity remains a maximum with original decimal labels and atomic units.
+
+The board uses the same pair identity fields as UniswapX/RFQ without inventing HTTP demand. Existing
+refresh/recovery outcome metrics, matched-order counters and freshness panels remain distinct.
+Remote TTL expiry may precede reconciliation. Namespace/solver selects environment and integration;
+storage must deduplicate HA scrapes. New pair gauges have no historical backfill. Dashboard-specific
+query fixtures were removed; quote metric correctness/reset unit tests and alert tests are retained.
+
+### Standing-quote rejection diagnostics
+
+`solver_bot_quote_standing_rejections_total{solver,token_in,token_out,reason}` records local standing
+quote failures separately from the HTTP `solver_bot_quote_results_total` used by UniswapX/RFQ.
+A refresh counts each distinct startup route pair once when building cannot proceed or no quote is
+selected, regardless of physical route, discount alternative or range count. Successful/unchanged
+pairs add nothing. Early failure precedence follows the existing pipeline: `lane_unavailable`,
+`chain_time_error`, `snapshot_error`, `gas_price_error`, `strategy_error`. After a successful strategy
+call, an omitted pair is `pair_out_of_scope` when policy excludes it, otherwise `no_inventory` if no
+filtered inventory for that pair was passed to the strategy, otherwise `strategy_declined`.
+The latter deliberately does not claim insufficient liquidity, capacity, gas or expiry as a cause.
+A lane change after strategy selection counts only selected pairs, avoiding double-counting omitted
+pairs. Partial private-discount degradation retains the existing refresh degraded outcome; it is not
+invented as a cause for every pair.
+
+Reconciliation observes the actual submission batch without changing retries or conservative state
+handling: failed additions count `publish_error`, empty-range withdrawals count `withdrawal_error`,
+once per pair/action in that failed batch. These include local serialization/response validation or
+transport failures; remote acceptance may be uncertain. Suspension retries count again. This is an
+attempt/event counter, not a unique quote count, upstream request count or matched-order rejection.
+Existing operation metrics still count whole refresh/suspension attempts separately.
+
+Labels match the common token_in/token_out/reason convention. The existing trusted routes are copied
+once before loops start; no additional token registry is introduced. Only exact startup pairs get
+address labels, everything else is other/other. The bound is `11 × (distinct startup pairs + 1)` series, including the unresolved bucket,
+independent of untrusted addresses or error text. Raw pairs and bounded
+reasons are logged at debug level. The existing published-state/capacity gauges and decimals remain
+unchanged. The board adds one selected-range pair/reason table beside standing-state/refresh panels;
+no dashboard-query test harness is introduced. Unit tests cover stage reasons, duplicate routes,
+unchanged success, failed publish/withdraw batches and bounded labels.
