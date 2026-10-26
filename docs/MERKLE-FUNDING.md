@@ -9,7 +9,6 @@ A configured read failure stops that observation; there is no cash fallback.
 merkleFunding:
   - account: "0x1111111111111111111111111111111111111111"
     asset: "0x2222222222222222222222222222222222222222"
-    lens: "0x3333333333333333333333333333333333333333"
     sources:
       - id: "0x4444444444444444444444444444444444444444444444444444444444444444"
         target: "0x5555555555555555555555555555555555555555"
@@ -17,23 +16,30 @@ merkleFunding:
         offset: 0
 ```
 
-These are placeholders, not deployed contracts or usable call data. Deploy
-`MerkleFundingLens` from symbioticfi/adapters and replace every field with reviewed
+These are placeholders, not usable call data. Replace every field with reviewed
 chain-specific values. Configure matching sources in the RFQ backend deployment
 manifest. No new production funding source is enabled by this change.
 
-The lens returns account cash plus each scalar query result in funding-token base
-units. Each query must match a synchronous withdrawal supported by the approved
-recipe and account permissions, and preserve the recipe's health floor. Reuse its
+The reader batches `balanceOf(account)` and all configured source queries in one
+`Multicall3.aggregate3` call at the supplied numeric block, using the SDK's canonical
+Multicall3 address. The existing generated binding encodes and decodes the batch;
+Go selects each 32-byte source word at `offset` and sums it with cash in funding-token
+base units. Failed calls, incomplete replies and totals above uint256 stop the
+observation. Without sources, one direct `balanceOf(account)` call supplies cash.
+No funding lens deployment or address configuration is required.
+
+Each query must match a synchronous withdrawal supported by the approved recipe
+and account permissions, and preserve the recipe's health floor. Reuse its
 existing capacity helpers (for example AaveV3Liquidity.liquidityWithBorrow or
 MorphoLiquidity.liquidity), or a compatible vault's maxWithdraw(account). All calls
-use the quote or recipe snapshot block. Queries requiring preparation writes need
-an equivalent reviewed view helper.
+use the quote or recipe snapshot block. Queries must be read-only views with the
+account encoded explicitly when needed; the target sees Multicall3 as caller.
+Queries requiring preparation writes need an equivalent reviewed view helper.
 
 Source ids identify canonical liquidity venues/positions. Duplicate ids and
 identical queries are rejected. Sources must be disjoint: do not combine alternate
 exits from one position, a vault with its underlying position, overlapping pool
-cash, or cash already counted by balanceOf(account). The lens cannot infer arbitrary
+cash, or cash already counted by balanceOf(account). The reader cannot infer arbitrary
 overlap, ownership or permissions from calldata. The disjointness requirement also
 applies across accounts/routes combined into one quote. Configuration is an operator trust
 boundary, not data accepted from the RFQ request or 3F API.

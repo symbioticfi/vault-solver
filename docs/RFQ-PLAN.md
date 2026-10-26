@@ -666,13 +666,14 @@ Merkle connector acquisition is owned by `internal/solvers/merkle/rfq`, as descr
 ### Merkle connector funding capacity (2026-10-26)
 
 RFQ connector pricing and 3F offer sizing share `internal/merklefunding`, backed by
-the vendored/generated MerkleFundingLens ABI. Operator-owned account/asset source
-configuration supplies disjoint reviewed scalar queries from the approved recipes;
-all reads retain the consumer's block pin. Configured failures propagate, while
-unconfigured pairs preserve cash-only sizing. Existing budgets/reservations remain
+the existing generated Multicall3 binding and the SDK's canonical Multicall3 address.
+Operator-owned account/asset source configuration supplies disjoint reviewed scalar
+queries from the approved recipes. One pinned eth_call reads cash and every source;
+Go decodes the selected words and sums with uint256 bounds. Configured failures
+propagate, while unconfigured pairs preserve cash-only sizing. Existing budgets/reservations remain
 in their owning integrations. No generic solver-framework or native-adapter path
 changes. See MERKLE-FUNDING.md for trust boundaries and activation.
 
 - [x] Share funding reads between RFQ connector pricing and Merkle 3F offers.
 - [x] Validate source configuration and preserve execution/recovery checks.
-- [ ] Deploy the helper and review each production recipe/source configuration.
+- [ ] Review each production recipe/source configuration and configure matching RFQ backend sources.

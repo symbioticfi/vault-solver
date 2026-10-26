@@ -13,7 +13,7 @@ domain and current account, output asset, decimals, minimum discount, remaining
 budget, available funding and `getAmountOut` at a pinned block. An empty connector input-token
 balance is admissible because Reactor delivers that token in the atomic outer
 fill. Without configuration, funding is account cash. Optional reviewed `merkleFunding`
-sources add synchronous recipe withdrawal capacity through the shared lens;
+sources add synchronous recipe withdrawal capacity through one pinned Multicall3 read;
 configured failures never fall back to cash. See [Merkle funding](MERKLE-FUNDING.md).
 Native adapter inventory keeps its existing read path
 and ppm precision.

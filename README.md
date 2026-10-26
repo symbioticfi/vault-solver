@@ -14,7 +14,8 @@ are listed under [Solvers](#solvers).
 
 Merkle LL pricing and 3F offers support optional reviewed synchronous funding
 sources through [`merkleFunding`](docs/MERKLE-FUNDING.md). Unconfigured account/asset
-pairs retain cash-only sizing; configured read failures stop the observation.
+pairs retain cash-only sizing; configured read failures stop the observation. Cash
+and configured sources share one pinned Multicall3 read, with no funding lens deployment.
 
 ## Architecture at a glance
 

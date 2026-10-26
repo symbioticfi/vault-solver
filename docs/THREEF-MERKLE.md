@@ -66,7 +66,8 @@ manager address is never substituted for collateral underlying. This simulation
 is a read, not a live transaction or proof of signer access.
 
 Automatic offers use account cash plus any reviewed synchronous sources configured
-under `merkleFunding`. Capacity is the minimum of that funding, the policy's remaining
+under `merkleFunding`, read together in one pinned Multicall3 call and summed off chain.
+Capacity is the minimum of that funding, the policy's remaining
 pair budget, the recipe principal cap and the auction's advertised request size.
 Funding is reserved across all live offers of the same funding token; budget is
 reserved only across offers for the exact funding/underlying pair. The bot keeps at most one
