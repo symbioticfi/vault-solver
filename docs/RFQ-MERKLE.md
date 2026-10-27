@@ -49,8 +49,8 @@ funding reconstruction is used.
 The host preserves upstream discount integers and signature bytes. It checks ABI
 framing and route identity; signatures and discount economics are enforced by the
 contracts. It does not translate discount scales or verify EIP-712 signatures locally.
-The permission reserves a bounded buffer for the EOA/ERC-1271 discount signer and
-a fixed 65-byte slot for the backend EOA protocol countersignature. The packer
+The permission reserves a bounded buffer for an EOA or Safe discount signer with EOA owners and a
+fixed 65-byte slot for the backend EOA protocol countersignature. The packer
 keeps the actual signature bytes and ABI lengths, then the SDK verifies the leaf,
 mask and proof. The signer length mask uses low bits for a `2^n - 1` capacity;
 the current Curator profile uses 4,095 bytes. An oversized signature, malformed
