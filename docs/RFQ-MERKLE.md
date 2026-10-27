@@ -49,6 +49,12 @@ funding reconstruction is used.
 The host preserves upstream discount integers and signature bytes. It checks ABI
 framing and route identity; signatures and discount economics are enforced by the
 contracts. It does not translate discount scales or verify EIP-712 signatures locally.
+Bounded signature permissions reserve fixed buffers and keep every ABI offset pinned.
+The connector packer writes the exact EOA/ERC-1271 bytes and their lengths into those
+buffers before the SDK verifies the full leaf, mask and proof. Length masks must be
+low bits representing a capacity of `2^n - 1`, at most 65,535 bytes; the current Curator
+profile uses 4,095 bytes per signature. A larger signature, malformed offset or changed
+fixed field fails assembly. Existing fixed-length leaves retain their exact shape.
 The current canonical `LLExecuting` recipe requires an exact payout, so an order
 whose required output excludes connector surplus remains unsupported. Multiple
 output tokens and split connector routes also remain unsupported.

@@ -137,7 +137,11 @@ func assembleConnectorRoute(snapshot recipes.Snapshot, recipe recipes.Recipe, tr
 			return assembledConnector{}, err
 		}
 		owned[action.Key] = true
-		actions[action.Key] = data
+		fitted, err := fitConnectorSignatures(action.Leaf, signed, signature, recipient, amountIn)
+		if err != nil {
+			return assembledConnector{}, err
+		}
+		actions[action.Key] = fitted
 	}
 	if len(owned) != 1 {
 		return assembledConnector{}, errors.New("connector recipe must contain one signed swap for one asset")
