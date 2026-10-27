@@ -38,10 +38,14 @@ type lifiMetrics struct {
 // lifiQuoteMetrics registers as one collector and holds the read lock across all child collectors,
 // so a scrape cannot interleave with Reset plus repopulation.
 type lifiQuoteMetrics struct {
+	// routes is frozen from trusted startup discovery before quote loops start.
+	routes        []route
 	mu            sync.RWMutex
 	activeQuotes  prometheus.Gauge
 	activeRanges  prometheus.Gauge
 	pairMaxInput  *prometheus.GaugeVec
+	published     *prometheus.GaugeVec
+	rejections    *prometheus.CounterVec
 	lastRefreshAt prometheus.Gauge
 }
 
@@ -59,6 +63,8 @@ func newLIFIQuoteMetrics() *lifiQuoteMetrics {
 			Name: "lifi_active_quote_max_input_atomic_units",
 			Help: "Largest currently advertised input amount per standing quote pair; alternatives are maxed, not summed.",
 		}, []string{"token_in", "token_out", "token_in_decimals", "token_out_decimals"}),
+		published:  prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "solver_bot_quote_published", Help: "Last-reconciled local standing quote/range records, not upstream incoming requests.", ConstLabels: prometheus.Labels{"solver": Name}}, []string{"token_in", "token_out", "kind"}),
+		rejections: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "solver_bot_quote_standing_rejections_total", Help: "Local standing-quote build skips and failed publish/withdraw attempts per pair, not upstream requests.", ConstLabels: prometheus.Labels{"solver": Name}}, []string{"token_in", "token_out", "reason"}),
 		lastRefreshAt: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "lifi_last_successful_refresh_timestamp",
 			Help: "Unix timestamp of the last successful standing-quote reconciliation.",
@@ -70,6 +76,8 @@ func (m *lifiQuoteMetrics) Describe(ch chan<- *prometheus.Desc) {
 	m.activeQuotes.Describe(ch)
 	m.activeRanges.Describe(ch)
 	m.pairMaxInput.Describe(ch)
+	m.published.Describe(ch)
+	m.rejections.Describe(ch)
 	m.lastRefreshAt.Describe(ch)
 }
 
@@ -79,6 +87,8 @@ func (m *lifiQuoteMetrics) Collect(ch chan<- prometheus.Metric) {
 	m.activeQuotes.Collect(ch)
 	m.activeRanges.Collect(ch)
 	m.pairMaxInput.Collect(ch)
+	m.published.Collect(ch)
+	m.rejections.Collect(ch)
 	m.lastRefreshAt.Collect(ch)
 }
 
@@ -86,24 +96,30 @@ func (m *lifiQuoteMetrics) observe(state *quoteState) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.pairMaxInput.Reset()
+	m.published.Reset()
 	activeQuotes, activeRanges := 0, 0
 	if state != nil {
 		activeQuotes = state.activeQuoteCount()
 		for key, pair := range state.active {
 			maximum := new(big.Int)
+			pairRangeCount := 0
 			for _, quote := range pair.quotes {
-				activeRanges += len(quote.Ranges)
+				pairRangeCount += len(quote.Ranges)
 				for _, quoteRange := range quote.Ranges {
 					if quoteRange.MaxAmount != nil && quoteRange.MaxAmount.Cmp(maximum) > 0 {
 						maximum.Set(quoteRange.MaxAmount)
 					}
 				}
 			}
-			value, _ := new(big.Float).SetInt(maximum).Float64()
-			m.pairMaxInput.WithLabelValues(
+			activeRanges += pairRangeCount
+			labels := []string{
 				strings.ToLower(key.fromAsset.Hex()), strings.ToLower(key.toAsset.Hex()),
 				strconv.Itoa(key.fromDecimals), strconv.Itoa(key.toDecimals),
-			).Set(value)
+			}
+			value, _ := new(big.Float).SetInt(maximum).Float64()
+			m.published.WithLabelValues(labels[0], labels[1], "quotes").Add(float64(len(pair.quotes)))
+			m.published.WithLabelValues(labels[0], labels[1], "ranges").Add(float64(pairRangeCount))
+			m.pairMaxInput.WithLabelValues(labels...).Set(value)
 		}
 	}
 	m.activeQuotes.Set(float64(activeQuotes))

@@ -2379,10 +2379,10 @@
             ]
           }
         },
-        "description": "Refresh attempts by source operation and outcome. Zero means an initialized series with no observed increase; No data means the metric is absent.",
+        "description": "Local source refresh, quote suspension and recovery operation attempts by outcome. These are not incoming user quote requests; upstream demand is not exposed to this solver.",
         "id": 80,
         "links": [],
-        "title": "Source refresh outcomes",
+        "title": "Refresh / recovery attempts · selected range",
         "transparent": true,
         "vizConfig": {
           "group": "table",
@@ -2766,8 +2766,8 @@
       "kind": "Panel",
       "spec": {
         "id": 10,
-        "title": "Advertised capacity by token pair",
-        "description": "Current maximum advertised input per token pair, in atomic input-token units. Input decimals are provided so token units = atomic units / 10^decimals. This is the largest reported quote ceiling, not total available vault liquidity. Zero capacity is kept visible.",
+        "title": "Advertised pairs · standing quotes, ranges and capacity",
+        "description": "Last successful process-local reconciliation by advertised pair. Counts sum process-local standing records across matching replicas, without global quote-ID deduplication. Capacity is the maximum input ceiling across alternatives/replicas, not additive liquidity. Values can expire upstream; check refresh age/errors. Incoming user quote requests are served upstream and are not observable locally.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2782,10 +2782,58 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {"name": "${datasource}"},
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
                     "spec": {
                       "editorMode": "code",
                       "expr": "label_replace(label_replace(max by(token_in,token_out,token_in_decimals,token_out_decimals)(lifi_active_quote_max_input_atomic_units{namespace=\"${namespace}\"}), \"input_token\", \"token: $1\", \"token_in\", \"(.*)\"), \"output_token\", \"token: $1\", \"token_out\", \"(.*)\")",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "label_replace(label_replace(sum by(token_in,token_out)(solver_bot_quote_published{solver=\"lifi-samechain\",kind=\"quotes\",namespace=\"${namespace}\"}), \"input_token\", \"token: $1\", \"token_in\", \"(.*)\"), \"output_token\", \"token: $1\", \"token_out\", \"(.*)\")",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "C",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "label_replace(label_replace(sum by(token_in,token_out)(solver_bot_quote_published{solver=\"lifi-samechain\",kind=\"ranges\",namespace=\"${namespace}\"}), \"input_token\", \"token: $1\", \"token_in\", \"(.*)\"), \"output_token\", \"token: $1\", \"token_out\", \"(.*)\")",
                       "instant": true,
                       "range": false,
                       "format": "table",
@@ -2798,16 +2846,30 @@
             "transformations": [
               {
                 "kind": "Transformation",
+                "group": "merge",
+                "spec": {
+                  "options": {}
+                }
+              },
+              {
+                "kind": "Transformation",
                 "group": "organize",
                 "spec": {
                   "options": {
-                    "excludeByName": {"Time": true, "__name__": true, "token_in": true, "token_out": true},
+                    "excludeByName": {
+                      "Time": true,
+                      "__name__": true,
+                      "token_in": true,
+                      "token_out": true
+                    },
                     "renameByName": {
                       "input_token": "Input token",
                       "output_token": "Output token",
                       "token_in_decimals": "Input decimals",
                       "token_out_decimals": "Output decimals",
-                      "Value": "Input ceiling (atomic units)"
+                      "Value #A": "Input ceiling (atomic units)",
+                      "Value #B": "Standing quotes",
+                      "Value #C": "Advertised ranges"
                     },
                     "indexByName": {}
                   }
@@ -3289,6 +3351,378 @@
         },
         "transparent": true
       }
+    },
+    "panel-300": {
+      "kind": "Panel",
+      "spec": {
+        "id": 300,
+        "title": "Standing quotes and ranges by advertised pair",
+        "description": "Current gauges from the last successful local reconciliation, summed across process-local records; not user request counts or globally deduplicated advertisements. Retired pairs disappear; remote TTL expiry can precede local refresh.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(token_in,token_out)(solver_bot_quote_published{solver=\"lifi-samechain\",kind=\"quotes\",namespace=\"${namespace}\"})",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{token_in}} → {{token_out}} · standing quotes"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(token_in,token_out)(solver_bot_quote_published{solver=\"lifi-samechain\",kind=\"ranges\",namespace=\"${namespace}\"})",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{token_in}} → {{token_out}} · ranges"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": [
+                  "lastNotNull",
+                  "max"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": 0,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 12,
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "lineInterpolation": "smooth",
+                  "lineWidth": 2,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                }
+              },
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-301": {
+      "kind": "Panel",
+      "spec": {
+        "id": 301,
+        "title": "Quote refresh / suspension failures · / sec",
+        "description": "Local failed or degraded quote refresh/suspension attempts. These are operation errors, not upstream quote-request rejections. Namespace isolates stage/prod; storage must deduplicate HA scrapes.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(operation,outcome)(rate(solver_bot_external_operation_duration_seconds_count{namespace=\"${namespace}\",solver=\"lifi-samechain\",operation=~\"quote_refresh|quote_suspend\",outcome=~\"error|degraded\"}[$__rate_interval]))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{operation}} · {{outcome}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": [
+                  "lastNotNull",
+                  "max"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ops",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": 0,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  },
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {
+                    "mode": "none",
+                    "group": "A"
+                  }
+                },
+                "decimals": 3
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-302": {
+      "kind": "Panel",
+      "spec": {
+        "id": 302,
+        "title": "Standing quote rejections by pair and reason · selected range",
+        "description": "Local failed build evaluations and failed publish/withdraw attempts, not upstream user requests or matched-order refusals. One event per pair per failed build evaluation, and per pair/action in a failed submission batch; retries count again. A failed submission may have been accepted remotely. Pair labels use fixed trusted startup routes; other is unresolved. Namespace isolates environments; storage must deduplicate HA scrapes. New metric has no backfill.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(token_in,token_out,reason)(increase(solver_bot_quote_standing_rejections_total{namespace=\"${namespace}\",solver=\"lifi-samechain\"}[$__range]))",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "merge",
+                "spec": {
+                  "options": {}
+                }
+              },
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {
+                      "Time": true,
+                      "__name__": true
+                    },
+                    "renameByName": {
+                      "token_in": "Input token",
+                      "token_out": "Output token",
+                      "reason": "Reason",
+                      "Value": "Count",
+                      "Value #A": "Count"
+                    },
+                    "indexByName": {}
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": false,
+              "sortBy": [
+                {
+                  "displayName": "Count",
+                  "desc": true
+                }
+              ]
+            },
+            "fieldConfig": {
+              "defaults": {
+                "noValue": "—",
+                "mappings": [
+                  {
+                    "type": "special",
+                    "options": {
+                      "match": "nan",
+                      "result": {
+                        "text": "—",
+                        "color": "gray"
+                      }
+                    }
+                  }
+                ],
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {
+                    "type": "auto"
+                  },
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Count"
+                  },
+                  "properties": [
+                    {
+                      "id": "custom.width",
+                      "value": 130
+                    },
+                    {
+                      "id": "unit",
+                      "value": "none"
+                    },
+                    {
+                      "id": "decimals",
+                      "value": 0
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "transparent": true
+      }
     }
   },
   "layout": {
@@ -3422,6 +3856,59 @@
           }
         },
         {
+        "kind": "RowsLayoutRow",
+        "spec": {
+          "title": "Advertised pair state and refresh health",
+          "collapse": false,
+          "layout": {
+            "kind": "GridLayout",
+            "spec": {
+              "items": [
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 0,
+                    "width": 12,
+                    "height": 8,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-300"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 12,
+                    "y": 0,
+                    "width": 12,
+                    "height": 8,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-301"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 8,
+                    "width": 24,
+                    "height": 7,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-302"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Why orders are not executing",

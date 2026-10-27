@@ -658,3 +658,26 @@ Public and internal clients are regenerated from the matching backend OpenAPI
 specifications when this contract changes. Deploy these generated clients with
 the backend header-only contract so resolve-union decoding no longer requires the
 removed body field.
+
+### Shared quote-pair transport diagnostics
+
+RFQ means this repository's Symbiotic `rfq-filler`, not UniswapX RFQ. HTTP middleware records one
+`solver_bot_quote_results_total{solver,token_in,token_out,result,reason}` result per completed
+`POST /quote`; incoming count is its sum. Huma schema errors, unauthorized requests, domain declines,
+upstream failures, recovered panics and failed response writes are included; health/docs/internal
+quote evaluation are excluded. Existing workflow/domain and HTTP counters remain unchanged.
+
+A passive Huma transformer maps fixed validation locations to bounded reasons without changing
+responses, auth/validation order or supported type/protocol. Omitted required body keys use the
+same fixed field precedence as invalid values; missing IDs are distinct from malformed IDs. Schema failures occur before typed
+handler entry and use unknown pair labels, avoiding another body parser. Typed requests supply pair
+identities before auth; wrong chains map to other, with unsupported_chain retained as the reason.
+The original lane-before-not-quotable precedence is preserved. Unknown errors remain bounded error
+categories; arbitrary validation messages, webhook text, IDs and credentials never become labels.
+
+The same small LiquidLane helper as UniswapX initializes its bounded identity map before serving
+HTTP from configured input tokens and already-resolved on-chain vault assets. No request-provided
+inventory addresses/decimals are learned. Requested-amount samples require trusted decimals; absent
+RFQ input metadata omits normalized samples, while existing quoted atomic-unit volumes remain.
+The RFQ board adds the common pair counts/trend and exact refusal table; existing historical
+aggregates remain. New metrics do not backfill, and storage must deduplicate HA scrapes.

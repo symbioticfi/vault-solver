@@ -27,8 +27,8 @@
       "kind": "Panel",
       "spec": {
         "id": 10,
-        "title": "Quote decisions · reasons",
-        "description": "Selected-period decisions show why incoming demand did or did not receive a quote. Quoted does not mean accepted or filled.",
+        "title": "Rejected quote requests · pair and reason",
+        "description": "Final HTTP refusals during the selected range, including protocol/chain/semantic/body errors. One request, one final reason; planner attempts are not requests. Known token labels come only from the frozen trusted startup registry (max 16). other aggregates valid addresses outside it or a different chain; unknown aggregates unparsed/malformed addresses. These buckets are not known pairs. Namespace isolates the environment; counters sum per-process increases and assume storage deduplicates HA scrapes. New metrics have no backfill; range increases need multiple scrapes and can miss the first nonzero sample.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -44,7 +44,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "(sum by (outcome) (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",solver=\"uniswapx-filler\",event=\"quote\",outcome!=\"breaker-notification\"}[$__range])))",
+                      "expr": "sum by (token_in, token_out, reason) (increase(solver_bot_quote_results_total{solver=\"uniswapx-filler\",namespace=\"${namespace}\",result=\"rejected\"}[$__range]))",
                       "instant": true,
                       "legendFormat": "",
                       "range": false,
@@ -69,22 +69,16 @@
                 "group": "organize",
                 "spec": {
                   "options": {
-                    "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "namespace": true, "solver": true},
+                    "excludeByName": {
+                      "Time": true,
+                      "__name__": true
+                    },
                     "renameByName": {
-                      "address": "Signer",
-                      "view": "View",
-                      "strategy": "Strategy",
-                      "role": "Role",
-                      "endpoint": "Endpoint",
-                      "method": "Method",
-                      "outcome": "Outcome",
-                      "label": "Operation",
+                      "token_in": "Input token",
+                      "token_out": "Output token",
                       "reason": "Reason",
-                      "signal": "Signal",
-                      "kind": "Kind",
-                      "stage": "Stage",
-                      "Value": "Count",
-                      "Value #A": "Count"
+                      "Value": "Rejected requests",
+                      "Value #A": "Rejected requests"
                     },
                     "indexByName": {}
                   }
@@ -104,7 +98,10 @@
               "cellHeight": "sm",
               "enablePagination": false,
               "sortBy": [
-                {"displayName": "Count", "desc": true}
+                {
+                  "displayName": "Rejected requests",
+                  "desc": true
+                }
               ]
             },
             "fieldConfig": {
@@ -2455,7 +2452,7 @@
       "kind": "Panel",
       "spec": {
         "id": 3,
-        "title": "Quotes returned",
+        "title": "Quotes selected (legacy aggregate)",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2524,14 +2521,14 @@
           }
         },
         "transparent": true,
-        "description": "Total or ratio over the time range selected above."
+        "description": "Historical selected quote counter emitted before response write. It can include a failed response write. New pair results require successful response encoding; neither means an awarded or filled order."
       }
     },
     "panel-4": {
       "kind": "Panel",
       "spec": {
         "id": 4,
-        "title": "Quote response rate",
+        "title": "Quote selection rate (legacy)",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2608,7 +2605,7 @@
           }
         },
         "transparent": true,
-        "description": "Fraction of processed quote requests for which the solver returned a quote. This is not the fraction accepted by the requester."
+        "description": "Historical ratio of selected quotes to workflow decisions. For final written/rejected HTTP results, use the new pair panels. Legacy counters preserve earlier history and differ on write errors/panics."
       }
     },
     "panel-5": {
@@ -2870,10 +2867,10 @@
             "transformations": []
           }
         },
-        "description": "Quote webhook decisions including invalid requests, excluding breaker control notifications. Counts observations, not unique external orders.",
+        "description": "Historical aggregate workflow decisions, including malformed bodies and excluding valid breakers. Recovered handler panics were not emitted here. New pair panels count completed HTTP requests including panics; these totals can differ on error paths.",
         "id": 40,
         "links": [],
-        "title": "Quote requests",
+        "title": "Quote decisions (legacy aggregate)",
         "transparent": true,
         "vizConfig": {
           "group": "stat",
@@ -4085,6 +4082,504 @@
         },
         "transparent": true
       }
+    },
+    "panel-300": {
+      "kind": "Panel",
+      "spec": {
+        "id": 300,
+        "title": "Quote request counts by pair · selected range",
+        "description": "One final HTTP result per request; incoming is the sum of returned and rejected outcomes. Valid breakers excluded. Known addresses are bounded trusted startup/config identities; other is an unresolved valid/foreign-chain bucket, unknown is unparsed or malformed. These are not known token pairs. Namespace isolates environments; storage must deduplicate HA scrapes. New metrics have no backfill; increase needs multiple samples.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (token_in, token_out) (increase(solver_bot_quote_results_total{solver=\"uniswapx-filler\",namespace=\"${namespace}\"}[$__range]))",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (token_in, token_out) (increase(solver_bot_quote_results_total{solver=\"uniswapx-filler\",namespace=\"${namespace}\",result=\"returned\"}[$__range]))",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "C",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (token_in, token_out) (increase(solver_bot_quote_results_total{solver=\"uniswapx-filler\",namespace=\"${namespace}\",result=\"rejected\"}[$__range]))",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "merge",
+                "spec": {
+                  "options": {}
+                }
+              },
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {
+                      "Time": true,
+                      "__name__": true
+                    },
+                    "renameByName": {
+                      "token_in": "Input token",
+                      "token_out": "Output token",
+                      "Value #A": "Incoming requests",
+                      "Value #B": "Returned quotes",
+                      "Value #C": "Rejected requests"
+                    },
+                    "indexByName": {}
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—"
+              },
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Input token"
+                  },
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "other": {
+                              "text": "other (unregistered / other chain; aggregated)"
+                            },
+                            "unknown": {
+                              "text": "unknown (unparsed / invalid address; aggregated)"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Output token"
+                  },
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "other": {
+                              "text": "other (unregistered / other chain; aggregated)"
+                            },
+                            "unknown": {
+                              "text": "unknown (unparsed / invalid address; aggregated)"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "panel-301": {
+      "kind": "Panel",
+      "spec": {
+        "id": 301,
+        "title": "Quote flow by pair · requests / sec",
+        "description": "Shared HTTP quote results by pair. Incoming sums all final results; returned means a written response, not an awarded/filled order. other/unknown are unresolved aggregate buckets; raw pairs remain in logs. Namespace and per-process rate are preserved.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (token_in, token_out) (rate(solver_bot_quote_results_total{solver=\"uniswapx-filler\",namespace=\"${namespace}\"}[$__rate_interval]))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{token_in}} → {{token_out}} · incoming"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (token_in, token_out) (rate(solver_bot_quote_results_total{solver=\"uniswapx-filler\",namespace=\"${namespace}\",result=\"returned\"}[$__rate_interval]))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{token_in}} → {{token_out}} · returned"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "C",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (token_in, token_out) (rate(solver_bot_quote_results_total{solver=\"uniswapx-filler\",namespace=\"${namespace}\",result=\"rejected\"}[$__rate_interval]))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{token_in}} → {{token_out}} · rejected"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": [
+                  "lastNotNull",
+                  "max"
+                ],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "hideZeros": false,
+                "mode": "multi",
+                "sort": "desc"
+              }
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ops",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "value": 0,
+                      "color": "green"
+                    }
+                  ]
+                },
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  },
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {
+                    "mode": "none",
+                    "group": "A"
+                  }
+                },
+                "decimals": 3
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-303": {
+      "kind": "Panel",
+      "spec": {
+        "id": 303,
+        "title": "Requested amount context · token units",
+        "description": "Requested amount p50/p95 in trusted token units, separated by exact-input/output side. Unknown or conflicting decimals and malformed amounts are omitted. No cross-token sums; histogram estimates and new metrics have no backfill.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "histogram_quantile(0.5, sum by (le, token, side) (increase(solver_bot_quote_requested_amount_tokens_bucket{solver=\"uniswapx-filler\",namespace=\"${namespace}\"}[$__range])))",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "B",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "histogram_quantile(0.95, sum by (le, token, side) (increase(solver_bot_quote_requested_amount_tokens_bucket{solver=\"uniswapx-filler\",namespace=\"${namespace}\"}[$__range])))",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "C",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (token, side) (increase(solver_bot_quote_requested_amount_tokens_count{solver=\"uniswapx-filler\",namespace=\"${namespace}\"}[$__range]))",
+                      "instant": true,
+                      "range": false,
+                      "format": "table",
+                      "legendFormat": ""
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "merge",
+                "spec": {
+                  "options": {}
+                }
+              },
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {
+                      "Time": true,
+                      "__name__": true
+                    },
+                    "renameByName": {
+                      "token": "Token",
+                      "side": "Requested side",
+                      "Value #A": "p50 (token units)",
+                      "Value #B": "p95 (token units)",
+                      "Value #C": "Amount samples"
+                    },
+                    "indexByName": {}
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": true
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 3,
+                "noValue": "—"
+              },
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Token"
+                  },
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "other": {
+                              "text": "other (unregistered / other chain; aggregated)"
+                            },
+                            "unknown": {
+                              "text": "unknown (unparsed / invalid address; aggregated)"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
     }
   },
   "layout": {
@@ -4204,6 +4699,59 @@
           }
         },
         {
+        "kind": "RowsLayoutRow",
+        "spec": {
+          "title": "Quote demand by bounded token pair",
+          "collapse": false,
+          "layout": {
+            "kind": "GridLayout",
+            "spec": {
+              "items": [
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 0,
+                    "width": 24,
+                    "height": 7,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-300"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 7,
+                    "width": 24,
+                    "height": 8,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-301"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 15,
+                    "width": 24,
+                    "height": 6,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-303"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Unfulfilled commitments",

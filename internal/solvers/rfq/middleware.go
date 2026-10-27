@@ -25,7 +25,10 @@ const requestIDHeader = "X-Request-Id"
 
 type ctxKey int
 
-const requestIDKey ctxKey = iota
+const (
+	requestIDKey ctxKey = iota
+	quoteMetricsKey
+)
 
 // requestID returns the id assigned to the request by logRequests, or "" if absent.
 func requestID(ctx context.Context) string {

@@ -25,6 +25,12 @@ type quoteSubmitter interface {
 	submitQuotes(ctx context.Context, quotes []types.Quote) error
 }
 
+type quoteSubmitFunc func(context.Context, []types.Quote) error
+
+func (f quoteSubmitFunc) submitQuotes(ctx context.Context, quotes []types.Quote) error {
+	return f(ctx, quotes)
+}
+
 type quotePairKey struct {
 	fromAsset    common.Address
 	toAsset      common.Address
@@ -179,7 +185,13 @@ func (s *Solver) reconcileQuotes(
 ) (removed int, err error) {
 	ctx, end := tracer.Start(ctx, "lifi.quotes.reconcile")
 	defer func() { end(err) }()
-	return state.reconcile(ctx, s.orders, quotes, now)
+	return state.reconcile(ctx, quoteSubmitFunc(func(ctx context.Context, batch []types.Quote) error {
+		err := s.orders.submitQuotes(ctx, batch)
+		if err != nil {
+			s.observeQuoteSubmitError(ctx, batch)
+		}
+		return err
+	}), quotes, now)
 }
 
 // decideQuotes runs the strategy as the lifi.quotes.decide stage.
@@ -218,6 +230,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	defer func() { timer.Finish(ctx, outcome) }()
 
 	if !s.transactionLaneReady() {
+		s.observeQuoteBuildRejections(ctx, routes, nil, nil, "lane_unavailable")
 		outcome = observability.ExternalOperationSkipped
 		observability.Decline(ctx, "quotes_skipped", "transaction lane is unavailable")
 		observability.Log(ctx).V(1).Info(
@@ -231,11 +244,13 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	}
 	chainTime, err := s.now(ctx)
 	if err != nil {
+		s.observeQuoteBuildRejections(ctx, routes, nil, nil, "chain_time_error")
 		observability.Log(ctx).Error(err, "quote refresh: read latest block time")
 		return
 	}
 	snapshotSet, err := s.reader.quoteSnapshots(ctx, routes, s.cfg.Executor)
 	if err != nil {
+		s.observeQuoteBuildRejections(ctx, routes, nil, nil, "snapshot_error")
 		observability.Log(ctx).Error(err, "quote refresh: read routes")
 		return
 	}
@@ -243,6 +258,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	if s.cfg.Gas != nil {
 		maxFeePerGas, err = s.readMaxFeePerGas(ctx)
 		if err != nil {
+			s.observeQuoteBuildRejections(ctx, routes, nil, nil, "gas_price_error")
 			observability.Log(ctx).Error(err, "quote refresh: read max fee per gas")
 			return
 		}
@@ -267,9 +283,11 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		QuoteExpiresAt:    serverTime.Add(s.cfg.QuoteTTL),
 	})
 	if err != nil {
+		s.observeQuoteBuildRejections(ctx, routes, nil, nil, "strategy_error")
 		observability.Log(ctx).Error(err, "quote refresh: strategy")
 		return
 	}
+	s.observeQuoteBuildRejections(ctx, routes, inventory, out.Quotes, "")
 	earliestExpiry, latestExpiry := quoteExpiryBounds(out.Quotes)
 	if len(out.Quotes) == 0 {
 		observability.Log(ctx).V(1).Info(
@@ -292,6 +310,11 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		)
 	}
 	if !s.transactionLaneReady() {
+		selected := make([]route, 0, len(out.Quotes))
+		for _, q := range out.Quotes {
+			selected = append(selected, route{TokenIn: q.FromAsset, TokenOut: q.ToAsset})
+		}
+		s.observeQuoteBuildRejections(ctx, selected, nil, nil, "lane_unavailable")
 		outcome = observability.ExternalOperationSkipped
 		observability.Decline(ctx, "quotes_skipped", "transaction lane is unavailable")
 		observability.Log(ctx).V(1).Info(
