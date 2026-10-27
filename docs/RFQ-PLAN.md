@@ -668,7 +668,8 @@ upstream failures, recovered panics and failed response writes are included; hea
 quote evaluation are excluded. Existing workflow/domain and HTTP counters remain unchanged.
 
 A passive Huma transformer maps fixed validation locations to bounded reasons without changing
-responses, auth/validation order or supported type/protocol. Schema failures occur before typed
+responses, auth/validation order or supported type/protocol. Omitted required body keys use the
+same fixed field precedence as invalid values; missing IDs are distinct from malformed IDs. Schema failures occur before typed
 handler entry and use unknown pair labels, avoiding another body parser. Typed requests supply pair
 identities before auth; wrong chains map to other, with unsupported_chain retained as the reason.
 The original lane-before-not-quotable precedence is preserved. Unknown errors remain bounded error

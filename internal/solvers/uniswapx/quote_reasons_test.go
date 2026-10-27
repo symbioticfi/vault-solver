@@ -221,7 +221,7 @@ func TestQuoteHTTPReasonsKeepExistingOutcomesAndLogs(t *testing.T) {
 				t.Fatalf("status=%d want=%d", w.Code, tc.status)
 			}
 			metricstest.RequireWorkflowEventCount(t, reg, Name, "quote", string(tc.outcome), 1)
-			if got := metricstest.FamilyValue(t, reg, "solver_bot_quote_results_total", map[string]string{"reason": tc.reason}); got != 1 {
+			if got := metricstest.FamilyValue(t, reg, "solver_bot_quote_results_total", map[string]string{"reason": strings.ReplaceAll(tc.reason, "-", "_")}); got != 1 {
 				t.Fatalf("reason counter=%f", got)
 			}
 			if !strings.Contains(strings.Join(logs, "\n"), `"reason":"`+tc.reason+`"`) {
@@ -342,5 +342,19 @@ func TestQuotePlannerRejectionMetricsAndPairLogs(t *testing.T) {
 				t.Fatalf("decline=%v logs=%v", decline, logs)
 			}
 		})
+	}
+}
+
+func TestQuoteMetricReasonsNormalizeOnlyDeclaredValues(t *testing.T) {
+	for _, tc := range []struct{ raw, want string }{
+		{"strategy-declined", "strategy_declined"}, {"pair-out-of-scope", "pair_out_of_scope"},
+		{"invalid-json", "invalid_json"}, {"body-too-large", "body_too_large"},
+		{"invalid-amount", "invalid_amount"}, {"quote-state-unavailable", "quote_state_unavailable"},
+		{"unsupported_protocol", "unsupported_protocol"}, {"invalid-request", "unknown"},
+		{"arbitrary-request-text", "unknown"},
+	} {
+		if got := boundedQuoteRejectionReason(tc.raw); got != tc.want {
+			t.Fatalf("reason(%q)=%q want=%q", tc.raw, got, tc.want)
+		}
 	}
 }

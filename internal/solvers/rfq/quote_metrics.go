@@ -35,7 +35,7 @@ func quoteHTTPReason(status int) string {
 }
 
 // Observe fixed schema locations before Huma's schema-link transformer. Never inspect free-form
-// validation messages/values, log credentials, or modify the response or validation order.
+// validation messages, log credentials, or modify the response or validation order.
 func quoteValidationReason(ctx huma.Context, _ string, body any) (any, error) {
 	observation, _ := ctx.Context().Value(quoteMetricsKey).(*quoteHTTPObservation)
 	problem, ok := body.(*huma.ErrorModel)
@@ -49,10 +49,22 @@ func quoteValidationReason(ctx huma.Context, _ string, body any) (any, error) {
 	}
 	for _, field := range fields {
 		for _, detail := range problem.Errors {
-			if detail != nil && (detail.Location == "body."+field.location || strings.HasPrefix(detail.Location, "body."+field.location+"[")) {
+			if detail == nil {
+				continue
+			}
+			// Huma reports omitted required keys at body with the decoded object as Value.
+			// Inspect only key presence, using the same fixed field precedence as other errors.
+			missing := false
+			if detail.Location == "body" {
+				if object, isObject := detail.Value.(map[string]any); isObject {
+					_, present := object[field.location]
+					missing = !present
+				}
+			}
+			if missing || detail.Location == "body."+field.location || strings.HasPrefix(detail.Location, "body."+field.location+"[") {
 				observation.reason = field.reason
 				if field.reason == "invalid_ids" {
-					if detail.Value == nil {
+					if missing || detail.Value == nil {
 						observation.reason = "missing_ids"
 					}
 					if value, isString := detail.Value.(string); isString && value == "" {

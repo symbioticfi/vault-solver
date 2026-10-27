@@ -215,7 +215,7 @@ func (s *Solver) quote(ctx context.Context, request quoteRequest) (response quot
 // fault, everything else is this filler choosing not to quote.
 func quoteDeclineDecision(reason quoteDeclineReason) string {
 	switch reason {
-	case quoteDeclineInvalidRequest, quoteDeclineInvalidAmount, quoteDeclineMissingIDs,
+	case quoteDeclineInvalidAmount, quoteDeclineMissingIDs,
 		quoteDeclineUnsupportedType, quoteDeclineInvalidOutputs, quoteDeclineUnsupportedProtocol,
 		quoteDeclineUnsupportedChain, quoteDeclineInvalidAddress:
 		return "bad_request"

@@ -30,16 +30,16 @@ func TestQuoteTrafficHTTPFinalOutcome(t *testing.T) {
 		quote                             *types.Quote
 	}{
 		{name: "returned", status: 200, result: "returned", reason: "none", quote: &types.Quote{AmountIn: big.NewInt(100), AmountOut: big.NewInt(90)}},
-		{name: "nil strategy", status: 204, result: "rejected", reason: "strategy-declined"},
+		{name: "nil strategy", status: 204, result: "rejected", reason: "strategy_declined"},
 		{name: "unsupported protocol", change: func(r *quoteRequest) { r.Protocol = "v3" }, status: 204, result: "rejected", reason: "unsupported_protocol"},
 		{name: "unsupported chain", change: func(r *quoteRequest) { r.TokenInChainID = 8453 }, status: 204, result: "rejected", reason: "unsupported_chain", inLabel: "other"},
 		{name: "missing quote ID", change: func(r *quoteRequest) { r.QuoteID = "" }, status: 204, result: "rejected", reason: "missing_ids"},
 		{name: "missing request ID", change: func(r *quoteRequest) { r.RequestID = "" }, status: 400, result: "rejected", reason: "missing_ids"},
 		{name: "malformed address", change: func(r *quoteRequest) { r.TokenOut = "garbage" }, status: 204, result: "rejected", reason: "invalid_address", outLabel: "unknown"},
-		{name: "unregistered address", change: func(r *quoteRequest) { r.TokenOut = common.HexToAddress("0x03").Hex() }, status: 204, result: "rejected", reason: "strategy-declined", outLabel: "other"},
-		{name: "bad JSON", raw: `{"tokenIn":`, status: 400, result: "rejected", reason: "invalid-json", inLabel: "unknown", outLabel: "unknown"},
-		{name: "unknown field even with pair", raw: `{"tokenIn":"` + in.Hex() + `","tokenOut":"` + out.Hex() + `","extra":true}`, status: 400, result: "rejected", reason: "invalid-json", inLabel: "unknown", outLabel: "unknown"},
-		{name: "invalid amount", change: func(r *quoteRequest) { r.Amount = "bad" }, status: 204, result: "rejected", reason: "invalid-amount"},
+		{name: "unregistered address", change: func(r *quoteRequest) { r.TokenOut = common.HexToAddress("0x03").Hex() }, status: 204, result: "rejected", reason: "strategy_declined", outLabel: "other"},
+		{name: "bad JSON", raw: `{"tokenIn":`, status: 400, result: "rejected", reason: "invalid_json", inLabel: "unknown", outLabel: "unknown"},
+		{name: "unknown field even with pair", raw: `{"tokenIn":"` + in.Hex() + `","tokenOut":"` + out.Hex() + `","extra":true}`, status: 400, result: "rejected", reason: "invalid_json", inLabel: "unknown", outLabel: "unknown"},
+		{name: "invalid amount", change: func(r *quoteRequest) { r.Amount = "bad" }, status: 204, result: "rejected", reason: "invalid_amount"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newQuoteTestSolver(t, in, &quoteTestStrategy{quote: tc.quote})
@@ -88,8 +88,8 @@ func TestQuoteTrafficExcludesBreakersAndCountsErrorPaths(t *testing.T) {
 		{name: "strategy error", reason: "strategy_error", strategy: &errorQuoteStrategy{}},
 		{name: "panic", reason: "internal_error", strategy: panicQuoteStrategy{}},
 		{name: "write error", reason: "response_write_error", writeError: true},
-		{name: "read error", reason: "read-body", body: io.NopCloser(errorQuoteReader{})},
-		{name: "oversize", reason: "body-too-large", body: io.NopCloser(strings.NewReader(strings.Repeat("x", maxQuoteRequestBytes+1)))},
+		{name: "read error", reason: "read_body", body: io.NopCloser(errorQuoteReader{})},
+		{name: "oversize", reason: "body_too_large", body: io.NopCloser(strings.NewReader(strings.Repeat("x", maxQuoteRequestBytes+1)))},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			strategy := tc.strategy

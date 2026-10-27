@@ -1065,8 +1065,7 @@ records, while capacity remains a maximum with original decimal labels and atomi
 The board uses the same pair identity fields as UniswapX/RFQ without inventing HTTP demand. Existing
 refresh/recovery outcome metrics, matched-order counters and freshness panels remain distinct.
 Remote TTL expiry may precede reconciliation. Namespace/solver selects environment and integration;
-storage must deduplicate HA scrapes. New pair gauges have no historical backfill. Dashboard-specific
-query fixtures were removed; quote metric correctness/reset unit tests and alert tests are retained.
+storage must deduplicate HA scrapes. New pair gauges have no historical backfill.
 
 ### Standing-quote rejection diagnostics
 

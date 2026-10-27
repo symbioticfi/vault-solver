@@ -277,7 +277,8 @@ Quote refusals include a stable `reason` in structured debug logs and
 `missing_ids`, `invalid_outputs`, and `invalid_address`. Existing amount, pair-policy, blocker and
 snapshot reasons remain available. Local planning can report `no_matching_routes`,
 `insufficient_capacity`, or `gas_exceeds_output`; an unexplained or mixed strategy refusal remains
-`strategy-declined`. Strategy failures remain HTTP 503 / `strategy_error`, semantic declines remain
+`strategy-declined` in logs (`strategy_declined` in metrics). Metric reasons use `snake_case`;
+existing log and workflow values remain unchanged. Strategy failures remain HTTP 503 / `strategy_error`, semantic declines remain
 empty HTTP 204, and malformed bodies remain HTTP 400 / aggregate outcome `invalid`. Missing
 `requestId` retains the existing breaker-notification/400 handling. The existing workflow metrics
 and aggregate workflow outcomes are unchanged; pair/reason labels are bounded by trusted metadata and fixed reasons.
@@ -823,7 +824,7 @@ with configured permissioned inputs preferred. Requests never add addresses or d
 means a valid unregistered, later-discovered, overflow or foreign-chain identity; `unknown` means
 unparsed/malformed. Neither is a known pair. Exact typed request pairs remain in logs. The shared
 `solver_bot_quote_requested_amount_tokens` histogram uses trusted decimals and exact requested side;
-missing/conflicting metadata omits samples. In particular RFQ request-provided inventory decimals
+missing/conflicting metadata or more than 78 decimal digits omits samples. In particular RFQ request-provided inventory decimals
 are never trusted for metrics. Existing atomic-unit volume metrics remain unchanged.
 
 LI.FI uses `solver_bot_quote_published{solver,token_in,token_out,kind="quotes|ranges"}` for current

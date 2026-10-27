@@ -230,7 +230,7 @@ func metricOutcomeForDecline(reason quoteDeclineReason) quoteMetricOutcome {
 	switch reason {
 	case quoteDeclineBlocked:
 		return quoteOutcomeDeclinedBlocked
-	case quoteDeclineInvalidRequest, quoteDeclineMissingIDs, quoteDeclineUnsupportedType,
+	case quoteDeclineMissingIDs, quoteDeclineUnsupportedType,
 		quoteDeclineInvalidOutputs, quoteDeclineUnsupportedProtocol, quoteDeclineUnsupportedChain,
 		quoteDeclineInvalidAddress:
 		return quoteOutcomeDeclinedInvalidRequest

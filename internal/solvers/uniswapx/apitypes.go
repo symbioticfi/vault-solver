@@ -23,7 +23,6 @@ type quoteDeclineReason string
 
 const (
 	quoteDeclineBlocked               quoteDeclineReason = "blocked"
-	quoteDeclineInvalidRequest        quoteDeclineReason = "invalid-request"
 	quoteDeclineMissingIDs            quoteDeclineReason = "missing_ids"
 	quoteDeclineUnsupportedType       quoteDeclineReason = "unsupported_type"
 	quoteDeclineInvalidOutputs        quoteDeclineReason = "invalid_outputs"

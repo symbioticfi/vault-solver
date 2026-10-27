@@ -21,6 +21,7 @@ func TestRFQPairMetricsCountFinalHTTPResults(t *testing.T) {
 		name           string
 		change         func(*quoteRequest)
 		secret, raw    string
+		omit           string
 		status         int
 		result, reason string
 		schema         bool
@@ -32,6 +33,13 @@ func TestRFQPairMetricsCountFinalHTTPResults(t *testing.T) {
 		{name: "unsupported protocol", change: func(q *quoteRequest) { q.Protocol = "v3" }, status: 422, result: "rejected", reason: "unsupported_protocol", schema: true},
 		{name: "unsupported type precedence", change: func(q *quoteRequest) { q.Type = "EXACT_OUTPUT"; q.Protocol = "v3" }, status: 422, result: "rejected", reason: "unsupported_type", schema: true},
 		{name: "missing ID", change: func(q *quoteRequest) { q.QuoteID = "" }, status: 422, result: "rejected", reason: "missing_ids", schema: true},
+		{name: "omitted request ID", omit: "requestId", status: 422, result: "rejected", reason: "missing_ids", schema: true},
+		{name: "omitted quote ID", omit: "quoteId", status: 422, result: "rejected", reason: "missing_ids", schema: true},
+		{name: "omitted token", omit: "tokenIn", status: 422, result: "rejected", reason: "invalid_address", schema: true},
+		{name: "omitted amount", omit: "amount", status: 422, result: "rejected", reason: "invalid_amount", schema: true},
+		{name: "omitted chain", omit: "tokenInChainId", status: 422, result: "rejected", reason: "unsupported_chain", schema: true},
+		{name: "omitted ID and invalid type precedence", omit: "requestId", change: func(q *quoteRequest) { q.Type = "EXACT_OUTPUT" }, status: 422, result: "rejected", reason: "unsupported_type", schema: true},
+		{name: "unauthorized long amount", secret: "wrong", change: func(q *quoteRequest) { q.Amount = strings.Repeat("9", 100_000) }, status: 403, result: "rejected", reason: "unauthorized"},
 		{name: "invalid ID", change: func(q *quoteRequest) { q.QuoteID = "bad" }, status: 422, result: "rejected", reason: "invalid_ids", schema: true},
 		{name: "malformed address", change: func(q *quoteRequest) { q.TokenIn = "bad" }, status: 422, result: "rejected", reason: "invalid_address", schema: true},
 		{name: "malformed amount", change: func(q *quoteRequest) { q.Amount = "bad" }, status: 422, result: "rejected", reason: "invalid_amount", schema: true},
@@ -54,9 +62,26 @@ func TestRFQPairMetricsCountFinalHTTPResults(t *testing.T) {
 			if tc.secret != "" {
 				secret = tc.secret
 			}
+			if tc.omit != "" {
+				data, err := json.Marshal(body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var object map[string]any
+				if err := json.Unmarshal(data, &object); err != nil {
+					t.Fatal(err)
+				}
+				delete(object, tc.omit)
+				data, err = json.Marshal(object)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tc.raw = string(data)
+			}
 			var response *httptest.ResponseRecorder
 			if tc.raw != "" {
 				r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/quote", strings.NewReader(tc.raw))
+				r.Header.Set(sharedSecretHeader, secret)
 				response = httptest.NewRecorder()
 				srv.handler().ServeHTTP(response, r)
 			} else {
@@ -82,6 +107,13 @@ func TestRFQPairMetricsCountFinalHTTPResults(t *testing.T) {
 				if f.GetName() == "solver_bot_quote_results_total" {
 					for _, sample := range f.GetMetric() {
 						total += sample.GetCounter().GetValue()
+					}
+				}
+			}
+			if tc.name == "unauthorized long amount" {
+				for _, family := range families {
+					if family.GetName() == "solver_bot_quote_requested_amount_tokens" {
+						t.Fatal("oversized amount reached histogram")
 					}
 				}
 			}

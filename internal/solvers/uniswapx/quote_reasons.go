@@ -1,6 +1,7 @@
 package uniswapx
 
 import (
+	"strings"
 	"sync"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
@@ -71,19 +72,19 @@ func strategyQuoteDeclineReason(value string) quoteDeclineReason {
 
 func boundedQuoteRejectionReason(value string) string {
 	switch quoteDeclineReason(value) {
-	case quoteDeclineBlocked, quoteDeclineInvalidRequest, quoteDeclineMissingIDs,
+	case quoteDeclineBlocked, quoteDeclineMissingIDs,
 		quoteDeclineUnsupportedType, quoteDeclineInvalidOutputs, quoteDeclineUnsupportedProtocol,
 		quoteDeclineUnsupportedChain, quoteDeclineInvalidAddress, quoteDeclinePairOutOfScope,
 		quoteDeclineInvalidAmount, quoteDeclineQuoteStateUnavailable, quoteDeclineStrategy,
 		quoteDeclineNoMatchingRoutes, quoteDeclineNoCandidates, quoteDeclineAmountBelowMinimum,
 		quoteDeclineInsufficientCapacity, quoteDeclineNoAllocation, quoteDeclineGasExceedsOutput,
 		quoteDeclineMinimumInput, quoteDeclineStateChanged:
-		return value
+		return strings.ReplaceAll(value, "-", "_")
 	}
 	switch value {
 	case "read-body", "body-too-large", "invalid-json", "trailing-json",
 		"invalid-breaker-notification", "strategy_error", "internal_error", "response_write_error":
-		return value
+		return strings.ReplaceAll(value, "-", "_")
 	default:
 		return "unknown"
 	}

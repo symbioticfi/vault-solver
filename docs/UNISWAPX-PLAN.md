@@ -697,7 +697,8 @@ Existing workflow outcome labels are retained: semantic reasons map to `declined
 planner reasons to `declined_strategy`, exactly once. A shared LiquidLane `QuoteMetrics` helper now
 records final HTTP results separately using `solver_bot_quote_results_total{solver,token_in,token_out,result,reason}`.
 Incoming is the sum of these results, without a separate incoming/rejection counter.
-`returned/none` requires successful encoding; write failure is `response_write_error`, panic
+Metric reason labels normalize legacy hyphens to underscores; structured log reasons and existing
+workflow outcomes retain their values. `returned/none` requires successful encoding; write failure is `response_write_error`, panic
 `internal_error`. Legacy selected-before-write metrics keep their production meaning.
 
 ### Shared pair metrics
@@ -714,8 +715,8 @@ extend identities or supply decimal metadata. `other` is valid unregistered/fore
 `solver_bot_quote_requested_amount_tokens{solver,token,side}` records positive uint256 demand only
 with trusted decimals; EXACT_INPUT uses input and EXACT_OUTPUT uses output units. Conflicting or
 missing metadata skips amount samples without affecting route acceptance. No cross-token sums.
-Per UniswapX process the bound is 324 pairs × 30 final result/reason combinations + 416 classic
-histogram series + one overflow gauge = 10,137 new classic series, created lazily.
+Per UniswapX process the bound is 324 pairs × 29 final result/reason combinations + 416 classic
+histogram series + one overflow gauge = 9,813 new classic series, created lazily.
 
 The board shows pair counts/trends, a final refusal table and amount context.
 Queries filter solver and Namespace, calculate rate/increase

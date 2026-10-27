@@ -263,3 +263,42 @@ func TestQuoteMetricsShareRegistryAcrossSolvers(t *testing.T) {
 		}
 	}
 }
+
+func TestQuoteTrafficAmountParsingIsBoundedToUint256Digits(t *testing.T) {
+	maximum := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1))
+	for _, tc := range []struct {
+		name, amount string
+		want         uint64
+	}{
+		{"maximum", maximum.String(), 1},
+		{"overflow at 78 digits", new(big.Int).Add(maximum, big.NewInt(1)).String(), 0},
+		{"79 digits", strings.Repeat("9", 79), 0},
+		{"long zero prefix", strings.Repeat("0", 100_000) + "1", 0},
+		{"large unauthenticated shape", strings.Repeat("9", 100_000), 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in, out := common.HexToAddress("0x01"), common.HexToAddress("0x02")
+			m, reg := newTestQuoteMetrics(t)
+			m.Initialize(1, []Route{{TokenIn: in, TokenOut: out, TokenInDecimals: 6, TokenOutDecimals: 6}}, nil)
+			r := validQuoteMetricRequest(in, out)
+			r.Amount = tc.amount
+			m.Observe(r, false, "unsupported_protocol")
+			families, err := reg.Gather()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var count uint64
+			for _, f := range families {
+				if f.GetName() == "solver_bot_quote_requested_amount_tokens" {
+					for _, sample := range f.GetMetric() {
+						count += sample.GetHistogram().GetSampleCount()
+					}
+				}
+			}
+			if count != tc.want {
+				t.Fatalf("samples=%d want=%d", count, tc.want)
+			}
+			assertQuoteResultCount(t, reg, 1)
+		})
+	}
+}

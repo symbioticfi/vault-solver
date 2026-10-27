@@ -155,6 +155,11 @@ func (m *QuoteMetrics) observeAmount(request QuoteMetricRequest, in, out quoteMe
 	if token.decimals < 0 {
 		return
 	}
+	// uint256 has at most 78 decimal digits. Bound work before parsing untrusted input,
+	// including requests rejected by auth; amounts with excessive leading zeros are omitted.
+	if len(request.Amount) > 78 {
+		return
+	}
 	amount, ok := new(big.Int).SetString(request.Amount, 10)
 	if !ok || amount.Sign() <= 0 || amount.BitLen() > 256 {
 		return
