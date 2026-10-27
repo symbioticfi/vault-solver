@@ -7,7 +7,7 @@ toolchain go1.27.3
 require (
 	github.com/Khan/genqlient v0.8.1
 	github.com/danielgtaylor/huma/v2 v2.39.1
-	github.com/ethereum/go-ethereum v1.17.8
+	github.com/ethereum/go-ethereum v1.17.10
 	github.com/getsentry/sentry-go v0.50.0
 	github.com/go-errors/errors v1.5.1
 	github.com/go-logr/logr v1.4.4
