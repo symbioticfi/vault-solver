@@ -283,6 +283,20 @@ discount-only. Every fill is simulated again immediately before submission. The 
 a fill is captured before reading chain time, so RPC and planning latency consume the order's remaining
 validity instead of extending it.
 
+Quote refusals include a stable `reason` in structured debug logs and
+`solver_bot_quote_results_total{solver="uniswapx-filler",reason="…"}`. Examples are `unsupported_protocol` (including `v3`),
+`unsupported_chain` (either requested chain differs from the configured chain), `unsupported_type`,
+`missing_ids`, `invalid_outputs`, and `invalid_address`. Existing amount, pair-policy, blocker and
+snapshot reasons remain available. Local planning can report `no_matching_routes`,
+`insufficient_capacity`, or `gas_exceeds_output`; an unexplained or mixed strategy refusal remains
+`strategy-declined` in logs (`strategy_declined` in metrics). Metric reasons use `snake_case`;
+existing log and workflow values remain unchanged. Strategy failures remain HTTP 503 / `strategy_error`, semantic declines remain
+empty HTTP 204, and malformed bodies remain HTTP 400 / aggregate outcome `invalid`. Missing
+`requestId` retains the existing breaker-notification/400 handling. The existing workflow metrics
+and aggregate workflow outcomes are unchanged; pair/reason labels are bounded by trusted metadata and fixed reasons.
+This adds diagnostics only: quote protocols remain `v1`/`v2`, and order ingestion/settlement remains
+`Dutch_V2`.
+
 Set `strategy.name: single` to use the local UniswapX [single-source strategy](#strategies).
 It uses the same pricing config as `default` and the normal sources allowed by `solverMode`.
 The solver prefers the quoted source at fill time, then tries alternatives covering the awarded output.
@@ -401,8 +415,12 @@ only while the nonce lane is unavailable. Pending calls receive ordinary fee bum
 At the request deadline, pending timeout or a terminal business-status check, the manager abandons active tracking
 and releases the local lane. It remembers the unused nonce and last signed fees so the next freshly planned
 order can replace that call, with both fee fields increased by at least 12.5% under the configured ceilings.
-Each pending receipt RPC has its own timeout and does not block lifecycle timers. A stalled call's gas
-re-estimate takes at most 5 seconds and is bounded by the request deadline.
+Each pending receipt RPC has its own timeout and does not block lifecycle timers. Initial gas
+estimation and stalled-call re-estimation each use one budget of at most 5 seconds, including fallback,
+and honor earlier request deadlines. Caller cancellation after admission retains the lane until the
+manager returns the actual outcome. Canonical confirmation checks a fixed numbered witness; normal
+head advancement does not restart the proof. Zero depth reuses the verified inclusion receipt;
+invalid receipt status or log identity cannot confirm a request.
 
 Configure `maxFeeGwei` for every transaction-sending process. `pendingTimeoutMs`,
 `broadcastTimeoutMs` and `shutdownTimeoutMs` bound pending tracking, submission and shutdown.
@@ -542,8 +560,11 @@ transaction manager. See the [replica plan](docs/REPLICA-PLAN.md) and each solve
 For liquidity commitments, the built-in strategies apply these limits:
 
 - 3F counts all live offer principals and request slots before creating offers for another auction.
+  Each adapter offers an auction's full requested amount within its own capacity; adapters bid
+  independently and never split one auction between them.
   Expiration is at least `now + offerExpiryBuffer`. Webhook `liveOffers[]` now includes decimal-string
-  `principal`; remote strategies must reserve it as well as the live request slot.
+  `principal`; remote strategies must reserve it as well as the live request slot. The auction's
+  `remainingAmount` is informational: size each adapter against `amountRequested`.
 - RFQ external mode excludes discount inventory at quote time. Excess input can be absorbed only by a
   direct swap, whose calldata caps output. An abandoned or uncertain nonce result first queries backend
   status and can retry only when the backend reports the order open. Each retry builds a fresh fill plan
@@ -802,6 +823,36 @@ Expanded amount tables show observed increases during the selected period. Retai
 are in collapsed diagnostics: they include the first observed nonzero sample but may also include
 activity before the selected period, so they are not period volume. Token amounts are shown in atomic
 units and must not be summed across different tokens without decimal and price normalization.
+
+UniswapX and RFQ use one shared `solver_bot_quote_results_total` counter with
+`solver, token_in, token_out, result, reason` labels. Each completed HTTP call has one final result;
+sum returned/rejected results for incoming request counts. This includes raw/schema/auth failures,
+not internal strategy attempts or unique orders. RFQ schema validation runs before its typed
+handler, so those refusals have precise reasons and `unknown` pair labels. Older workflow panels
+retain their original domain/selected-before-write semantics and history.
+
+Both use the same small immutable token allowlist: at most 16 configured/trusted startup identities,
+with configured permissioned inputs preferred. Requests never add addresses or decimals. `other`
+means a valid unregistered, later-discovered, overflow or foreign-chain identity; `unknown` means
+unparsed/malformed. Neither is a known pair. Exact typed request pairs remain in logs. The shared
+`solver_bot_quote_requested_amount_tokens` histogram uses trusted decimals and exact requested side;
+missing/conflicting metadata or more than 78 decimal digits omits samples. In particular RFQ request-provided inventory decimals
+are never trusted for metrics. Existing atomic-unit volume metrics remain unchanged.
+
+LI.FI uses `solver_bot_quote_published{solver,token_in,token_out,kind="quotes|ranges"}` for current
+last-reconciled standing records. Its existing capacity gauge keeps atomic units and decimal labels;
+capacity is a maximum, not additive liquidity. Incoming upstream quote demand is not visible locally.
+Refresh failures and matched orders retain their distinct existing metrics.
+`solver_bot_quote_standing_rejections_total{solver,token_in,token_out,reason}` counts local build
+skips and failed publication/withdrawal attempts by pair. These are refresh evaluations and submission
+attempts, not upstream user requests. Retries count again; submission errors may have uncertain
+remote acceptance. Pair labels come only from fixed trusted startup routes, with other pairs
+aggregated as `other`. The LI.FI board shows counts by pair/reason for the selected range.
+
+The three boards use the same pair labels and explicit solver/Namespace filters. New metrics have
+no historical backfill; range increase/rate requires multiple scrapes and can miss the first event.
+Storage must deduplicate HA scrapes of a process before queries sum process observations. Update
+producer and board templates separately.
 
 Each JSON file contains a Dashboard Schema v2 specification. Assign its dashboard identity through
 the Dashboard resource's `metadata.name` when provisioning; neither a dashboard UID nor a datasource

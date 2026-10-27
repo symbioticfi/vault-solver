@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -263,6 +264,18 @@ func (s *Solver) Run(ctx context.Context) error {
 		startupErr := errors.Errorf("initial quote refresh: %w", err)
 		observability.Log(ctx).Error(startupErr, "initial quote refresh failed", "routes", len(routes))
 		return startupErr
+	}
+	if s.metrics != nil {
+		state := s.quoteState.Load()
+		var inventory []liquidlane.Inventory
+		if state != nil {
+			inventory = state.inventory
+		}
+		metricRoutes := slices.Clone(routes)
+		for _, item := range inventory {
+			metricRoutes = append(metricRoutes, item.Route)
+		}
+		s.metrics.traffic.Initialize(s.chainID, metricRoutes, s.cfg.TokenPolicy.SingleRouteTokens())
 	}
 	observability.Log(ctx).Info("starting", "chainId", s.chainID, "solverMode", s.cfg.SolverMode,
 		"reactor", s.cfg.Reactor.Hex(), "executor", s.cfg.Executor.Hex(),

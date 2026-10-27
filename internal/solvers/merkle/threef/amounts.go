@@ -1,6 +1,7 @@
 package threef
 
 import (
+	"math"
 	"math/big"
 	"regexp"
 
@@ -88,5 +89,15 @@ func fitsTerms(m offerMarket, principal, yield *big.Int, auction threef.AuctionD
 	}
 	left := new(big.Int).Mul(yield, new(big.Int).Mul(big.NewInt(10000), rate.Denom()))
 	right := new(big.Int).Mul(principal, rate.Num())
+	basis := float64(auction.GetRateBasisSeconds())
+	if basis < 0 || basis >= math.Exp2(63) || basis != math.Trunc(basis) {
+		return false, errors.New("3F auction rateBasisSeconds must be a nonnegative int64")
+	}
+	// The policy floor remains yield/principal; the auction ceiling is annual
+	// when its API supplies a rate period. Compare both sides with integer math.
+	if basis > 0 {
+		left.Mul(left, big.NewInt(31536000))
+		right.Mul(right, big.NewInt(int64(basis)))
+	}
 	return left.Cmp(right) <= 0, nil
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"gopkg.in/yaml.v3"
@@ -185,6 +186,14 @@ func (s *Solver) Run(ctx context.Context) error {
 				return startupErr
 			}
 		}
+	}
+
+	if s.server.metrics != nil {
+		metricRoutes := make([]liquidlane.Route, 0, len(s.exec.vaults))
+		for _, vault := range s.exec.vaults {
+			metricRoutes = append(metricRoutes, liquidlane.Route{TokenOut: vault.TokenOut, TokenOutDecimals: vault.TokenOutDecimals})
+		}
+		s.server.metrics.traffic.Initialize(s.server.quotes.chainID, metricRoutes, s.cfg.TokenPolicy.SingleRouteTokens())
 	}
 
 	observability.Log(ctx).Info("starting",

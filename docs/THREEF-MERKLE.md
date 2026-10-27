@@ -75,7 +75,9 @@ need a later withdrawal from another market or the adapter.
 
 Yield is the ceiling of principal times the policy's minimum divided by 1e8;
 this is the nonannual yield/principal ratio. The auction's exact decimal maximum
-rate bounds that offer. One unsigned PUSH POST uses the BF as wire `maker`, omits
+rate bounds that offer, scaled by its `rateBasisSeconds` over a 365-day year when
+provided. Negative, fractional and overflowing periods are rejected. The policy
+floor is not annualized. One unsigned PUSH POST uses the BF as wire `maker`, omits
 `chainId`, `executionMode` and signatures, and sets `useCallback:false`. The API
 stores the account as maker. A five-minute offer expiration is independent of the
 post-acceptance mint lease. Unaccepted offers reserve their full principal;

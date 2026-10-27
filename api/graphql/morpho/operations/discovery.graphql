@@ -5,7 +5,9 @@ query MorphoDiscoverMarkets($loan: [String!]!, $coll: [String!]!, $chains: [Int!
   ) {
     items {
       marketId
-      oracleAddress
+      oracle {
+        address
+      }
       irmAddress
       lltv
       loanAsset {

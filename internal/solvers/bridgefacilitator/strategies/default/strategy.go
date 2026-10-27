@@ -70,43 +70,18 @@ func (s *Strategy) DecideOffers(
 
 	var offers []types.OfferExecution
 	for _, auction := range input.Auctions {
-		remaining := cloneBig(auction.RemainingAmount)
-		if remaining == nil || remaining.Sign() <= 0 {
+		requested := auction.AmountRequested
+		if requested == nil || requested.Sign() <= 0 {
 			continue
 		}
-		ranked := rankEligibleAdapters(auction, order, live)
-		for i, st := range ranked {
-			if remaining.Sign() <= 0 {
-				break
-			}
-			capacity := st.capacity()
-			if capacity.Sign() <= 0 {
+		// Adapters are independent makers: each offers the full request within its own capacity,
+		// regardless of what other adapters bid in this pass or already hold on the auction.
+		for _, st := range rankEligibleAdapters(auction, order, live) {
+			principal := minBig(st.capacity(), requested)
+			if principal.Sign() <= 0 || st.belowMinAssets(principal) {
 				continue
 			}
-			principal := cloneBig(capacity)
-			if principal.Cmp(remaining) > 0 {
-				principal.Set(remaining)
-			}
-			if st.belowMinAssets(principal) {
-				continue
-			}
-			// Leave a usable remainder when the next adapter has a minimum request size.
-			// Otherwise 80+10 repeatedly underfills a 90-unit auction whose second floor is 20.
-			remainder := new(big.Int).Sub(remaining, principal)
-			if remainder.Sign() > 0 {
-				for _, next := range ranked[i+1:] {
-					floor := next.snapshot.MinAssets
-					if floor == nil || floor.Cmp(remainder) <= 0 || next.capacity().Cmp(floor) < 0 || offerReturn(floor, next.snapshot.MinYieldPpm, auction.MaxRateBps) == nil {
-						continue
-					}
-					adjusted := new(big.Int).Sub(remaining, floor)
-					if adjusted.Sign() > 0 && !st.belowMinAssets(adjusted) && offerReturn(adjusted, st.snapshot.MinYieldPpm, auction.MaxRateBps) != nil {
-						principal = adjusted
-						break
-					}
-				}
-			}
-			expectedReturn := offerReturn(principal, st.snapshot.MinYieldPpm, auction.MaxRateBps)
+			expectedReturn := offerReturn(principal, st.snapshot.MinYieldPpm, auction)
 			if expectedReturn == nil {
 				continue
 			}
@@ -119,7 +94,6 @@ func (s *Strategy) DecideOffers(
 			})
 			st.committed.Add(st.committed, principal)
 			st.opened++
-			remaining.Sub(remaining, principal)
 		}
 	}
 	return types.OfferOutput{Offers: offers}, nil
@@ -226,14 +200,15 @@ var _ types.Strategy = (*Strategy)(nil)
 
 // offerReturn adds the partial-consumption margin to the on-chain floor, bounded by the auction cap.
 // With no floor it uses the auction rate; nil means this principal cannot produce a valid paid offer.
-func offerReturn(principal, floor *big.Int, maxRate float64) *big.Int {
+func offerReturn(principal, floor *big.Int, auction types.AuctionSnapshot) *big.Int {
+	maxRate, basis := auction.MaxRateBps, auction.RateBasisSeconds
 	expectedReturn := types.PartialSafeMinYieldReturn(principal, floor)
 	if expectedReturn.Sign() <= 0 {
-		expectedReturn = types.ExpectedReturn(principal, maxRate)
-	} else if maxReturn := types.ExpectedReturn(principal, maxRate); maxReturn.Sign() > 0 && expectedReturn.Cmp(maxReturn) > 0 && types.MeetsMinYield(maxReturn, principal, floor) {
+		expectedReturn = types.ExpectedReturn(principal, maxRate, basis)
+	} else if maxReturn := types.ExpectedReturn(principal, maxRate, basis); maxReturn.Sign() > 0 && expectedReturn.Cmp(maxReturn) > 0 && types.MeetsMinYield(maxReturn, principal, floor) {
 		expectedReturn = maxReturn
 	}
-	if types.ValidateYield(expectedReturn, principal, floor, maxRate) != nil {
+	if types.ValidateYield(expectedReturn, principal, floor, maxRate, basis) != nil {
 		return nil
 	}
 	return expectedReturn

@@ -216,7 +216,7 @@ The maker is the vault/adapter that supplies funds and mints. A broker's configu
 
 Signed PUSH retries with the same `auctionId`, `maker`, and `nonce` must use identical offer terms and mode; conflicting updates are rejected.
 
-`expectedReturn` is the expected yield, not the total repayment. Total repayment is `amount + expectedReturn`.
+`expectedReturn` is the yield on `amount` over the auction `rateBasisSeconds` (returned by `GET /v1/auction`), not a repayment amount: repayment after `d` seconds adds `ceil(expectedReturn * paidSeconds(d) / rateBasisSeconds)` to principal on annual auctions (`paidSeconds` counts whole days, a new day starting 6 hours into it, at least 1 day, capped at 1 year) and `floor(expectedReturn * d / rateBasisSeconds)` on auctions with another basis. Sign with `expectedReturn = floor(amount * aprBps * rateBasisSeconds / (10000 * 31536000))`, where `aprBps` is the APR in basis points (365-day year, simple interest). On annual auctions (`rateBasisSeconds = 31536000`), lending 1,000 USDC at 15% APR is `amount = 1000000000`, `expectedReturn = 150000000`; on an auction with `rateBasisSeconds = 86400` the same APR is `expectedReturn = 410958`. `maxRate` is always an APR. The offer APR `expectedReturn / amount * 10000 * 31536000 / rateBasisSeconds` must be at most the current `maxRate` and at least a quarter of the lowest APR of the auction ramp, otherwise the API returns 400.
 
 `expiration` is a Unix timestamp in seconds. Offers are expired only when `expiration` is lower than the current Unix second.
 
@@ -265,7 +265,7 @@ const signature = await walletClient.signTypedData(
 	    message: {
 	      maker: '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38',
 	      amount: 1000000000n,
-	      expectedReturn: 5000000n,
+	      expectedReturn: 150000000n,
 	      nonce: 1n,
 	      expiration: 4102444800n,
 	      useCallback: false,
@@ -349,7 +349,7 @@ const signature = await walletClient.signTypedData(
 	      request: '0x1234567890abcdef1234567890abcdef12345678',
 	      chainId: 11155111n,
 	      amount: 1000000000n,
-	      expectedReturn: 5000000n,
+	      expectedReturn: 150000000n,
 	      nonce: 1n,
 	      expiration: 4102444800n,
 	      useCallback: false,

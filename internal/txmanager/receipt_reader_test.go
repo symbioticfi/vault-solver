@@ -77,11 +77,13 @@ type slowReceiptBackend struct {
 
 	delay   time.Duration
 	budgets []time.Duration
+	hashes  []common.Hash
 }
 
 func (b *slowReceiptBackend) TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
 	deadline, _ := ctx.Deadline()
 	b.budgets = append(b.budgets, time.Until(deadline))
+	b.hashes = append(b.hashes, hash)
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -107,8 +109,20 @@ func TestReceiptSweepGivesEveryHashFullTimeout(t *testing.T) {
 		if result.Outcome != OutcomeConfirmed || result.Hash != pending.attempts[51].hash {
 			t.Fatalf("result: %+v", result)
 		}
-		if len(backend.budgets) != 52 {
-			t.Fatalf("reads=%d, want 52", len(backend.budgets))
+		// Every sweep read remains present. The inclusion proof rereads the winner
+		// once; zero depth reuses that proof without another receipt lookup.
+		if len(backend.budgets) != 53 {
+			t.Fatalf("reads=%d, want 52 sweep and 1 proof read", len(backend.budgets))
+		}
+		for i, attempt := range pending.attempts {
+			if backend.hashes[i] != attempt.hash {
+				t.Fatalf("sweep read %d = %s, want %s", i, backend.hashes[i], attempt.hash)
+			}
+		}
+		for _, hash := range backend.hashes[52:] {
+			if hash != pending.attempts[51].hash {
+				t.Fatalf("proof read used %s instead of the winning receipt", hash)
+			}
 		}
 		for i, budget := range backend.budgets {
 			if budget != 2*time.Second {

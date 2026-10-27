@@ -199,6 +199,10 @@ func (s *Solver) Run(ctx context.Context) error {
 		return err
 	}
 
+	if s.metrics != nil {
+		s.metrics.quotes.routes = append([]route(nil), routes...)
+	}
+
 	observability.Log(ctx).Info("starting",
 		"chainId", s.chainID,
 		"strategy", s.cfg.Strategy.Name,

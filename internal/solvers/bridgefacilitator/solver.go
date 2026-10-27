@@ -373,7 +373,7 @@ func (s *Solver) buildOfferInput(
 	input := buildStrategyInput(auctions, offerings, s.offers, now)
 	if len(input.Auctions) < len(auctions) {
 		observability.Decline(ctx, "auction_skipped",
-			"auctions closed, already covered, or missing a field the offer needs")
+			"auctions closed or missing a field the offer needs")
 	}
 	return input
 }
@@ -420,14 +420,15 @@ func (s *Solver) offerOnAuction(
 		return false
 	}
 	maxRate, rateOk := av.maxRateBps()
-	if !rateOk {
-		err = errors.Errorf("auction %d has no resolved maxRate", offer.AuctionID)
+	basis, basisOk := av.rateBasisSeconds()
+	if !rateOk || !basisOk {
+		err = errors.Errorf("auction %d has no resolved maxRate or rateBasisSeconds", offer.AuctionID)
 		observability.Log(ctx).Error(err, "offer: unbiddable auction; skipping", "adapter", offer.Maker.Hex())
 		return false
 	}
 	// Backstop for all strategies: the offer must clear the on-chain floor and stay under the auction
 	// max rate, or it reverts (FAILED) / is rejected (NOT_ACCEPTED). Also guards nil/invalid amounts.
-	if err = types.ValidateYield(offer.ExpectedReturn, offer.Principal, floor, maxRate); err != nil {
+	if err = types.ValidateYield(offer.ExpectedReturn, offer.Principal, floor, maxRate, basis); err != nil {
 		observability.Log(ctx).Error(err, "offer: yield out of bounds; skipping",
 			"auctionId", offer.AuctionID, "adapter", offer.Maker.Hex())
 		return false

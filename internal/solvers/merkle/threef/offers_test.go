@@ -2,6 +2,7 @@ package threef
 
 import (
 	"context"
+	"math"
 	"math/big"
 	"strings"
 	"testing"
@@ -47,7 +48,7 @@ func testMarket() offerMarket {
 func testAuction(m offerMarket, id float32, request common.Address) threef.AuctionDto {
 	amount := "10000000"
 	deposit := threef.AuctionDepositAssetDto{Address: strings.ToLower(m.Asset.Hex())}
-	return threef.AuctionDto{Id: id, RequestId: request.Hex(), Status: "OPEN", AmountRequested: *threef.NewNullableString(&amount), DepositAsset: *threef.NewNullableAuctionDepositAssetDto(&deposit), AdditionalProperties: map[string]any{"exactMaxRate": "2.0"}}
+	return threef.AuctionDto{Id: id, RequestId: request.Hex(), Status: "OPEN", RateBasisSeconds: 31536000, AmountRequested: *threef.NewNullableString(&amount), DepositAsset: *threef.NewNullableAuctionDepositAssetDto(&deposit), AdditionalProperties: map[string]any{"exactMaxRate": "2.0"}}
 }
 
 func testOffer(m offerMarket, auctionID float32, status string, amount string) threef.OfferDto {
@@ -286,6 +287,38 @@ func TestFitsTermsNativeAuthorizationBounds(t *testing.T) {
 		if err != nil || fits {
 			t.Fatalf("unexecutable native authorization accepted: %v %v", fits, err)
 		}
+	}
+}
+
+func TestFitsTermsAuctionRateBasis(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		basis     float32
+		yield     int64
+		wantFits  bool
+		wantError bool
+	}{
+		{"annual ceiling", 31536000, 150000000, true, false},
+		{"annual above ceiling", 31536000, 150000001, false, false},
+		{"daily ceiling", 86400, 410958, true, false},
+		{"daily above ceiling", 86400, 410959, false, false},
+		{"daily cannot use annual yield", 86400, 150000000, false, false},
+		{"absent basis", 0, 150000000, true, false},
+		{"negative basis", -1, 1, false, true},
+		{"fractional basis", 0.5, 1, false, true},
+		{"nonfinite basis", float32(math.Inf(1)), 1, false, true},
+		{"NaN basis", float32(math.NaN()), 1, false, true},
+		{"overflow basis", float32(math.Exp2(63)), 1, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := testMarket()
+			m.MaxPrincipal, m.MinimumYield1e8 = big.NewInt(1000000000), new(big.Int)
+			auction := threef.AuctionDto{RateBasisSeconds: tc.basis, AdditionalProperties: map[string]any{exactMaxRateKey: "1500"}}
+			fits, err := fitsTerms(m, m.MaxPrincipal, big.NewInt(tc.yield), auction)
+			if fits != tc.wantFits || (err != nil) != tc.wantError {
+				t.Fatalf("fits=%v, err=%v", fits, err)
+			}
+		})
 	}
 }
 

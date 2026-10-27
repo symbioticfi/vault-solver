@@ -29,7 +29,7 @@ type CreateOfferDto struct {
 	Maker string `json:"maker" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	// Offer amount as a numeric string (uint256)
 	Amount string `json:"amount"`
-	// Expected yield amount as a numeric string (uint256). Total repayment is `amount + expectedReturn`.
+	// Yield on `amount` over the auction `rateBasisSeconds`, as a numeric string (uint256). It is not the repaid amount: repayment after `d` seconds adds `ceil(expectedReturn * paidSeconds(d) / rateBasisSeconds)` to principal on annual auctions (`paidSeconds` counts whole days, a new day starting 6 hours into it, at least 1 day, capped at 1 year) and `floor(expectedReturn * d / rateBasisSeconds)` on auctions with another basis. To lend at `aprBps`, sign `expectedReturn = floor(amount * aprBps * rateBasisSeconds / (10000 * 31536000))`; on annual auctions (`rateBasisSeconds = 31536000`) that is `floor(amount * aprBps / 10000)`.
 	ExpectedReturn string `json:"expectedReturn"`
 	// Nonce for replay protection (uint256)
 	Nonce string `json:"nonce"`

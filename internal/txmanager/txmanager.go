@@ -1196,7 +1196,7 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 	// receipt can persist while a stalled head never reaches the requested depth. First
 	// establish canonical inclusion under one overall read budget, also capped by the
 	// final abandonment grace. Proven inclusion then retains the ordinary depth wait.
-	canonicalDeadline := time.Now().Add(m.receiptReadTimeout())
+	canonicalDeadline := time.Now().Add(3 * m.receiptReadTimeout())
 	if !pending.deadline.IsZero() {
 		finalDeadline := pending.deadline.Add(m.receiptReadTimeout())
 		if finalDeadline.Before(canonicalDeadline) {
@@ -1206,7 +1206,7 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 	canonicalCtx, cancelCanonical := context.WithDeadline(ctx, canonicalDeadline)
 	canonicalErr := canonicalCtx.Err()
 	if canonicalErr == nil {
-		canonicalErr = m.confirmCanonicalReceipt(canonicalCtx, receipt)
+		receipt, canonicalErr = m.confirmReceiptWitness(canonicalCtx, receipt, 0, m.backend.HeaderByHash)
 	}
 	cancelCanonical()
 	if canonicalErr != nil {
@@ -1216,7 +1216,10 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 	}
 	pending.lifecycle.transitionPhase(lifecyclePhaseConfirming)
 	confirmations := m.confirmations(pending.req)
-	receipt, err := m.waitForConfirmations(ctx, attempt.hash, receipt, confirmations)
+	var err error
+	if confirmations > 0 {
+		receipt, err = m.waitForConfirmations(ctx, attempt.hash, receipt, confirmations)
+	}
 	if errors.Is(err, errReceiptReorged) {
 		pending.lifecycle.transitionPhase(lifecyclePhasePending)
 		observability.Log(ctx).Info("transaction inclusion reorged; resuming pending lifecycle",
@@ -1698,11 +1701,11 @@ func (m *Manager) waitForConfirmations(
 	receipt *types.Receipt,
 	confirmations uint64,
 ) (*types.Receipt, error) {
-	if receipt == nil || receipt.BlockNumber == nil {
-		return receipt, errors.New("receipt block number is required")
+	if err := validateReceipt(hash, receipt); err != nil {
+		return receipt, err
 	}
-	if confirmations == 0 {
-		return receipt, nil
+	if _, err := confirmationWitnessNumber(receipt, confirmations); err != nil {
+		return receipt, err
 	}
 	log := observability.Log(ctx)
 	ticker := time.NewTicker(m.cfg.PollInterval)
@@ -1711,49 +1714,48 @@ func (m *Manager) waitForConfirmations(
 	var headReads, receiptReads, ancestryReads readStreak
 	missing := 0
 	for {
-		headBefore, headErr := m.confirmationHead(ctx)
+		head, headErr := m.confirmationHeader(ctx, nil)
+		refreshed, err := m.confirmationReceipt(ctx, hash)
 		if headErr != nil {
 			headReads.failed(log, headErr, "confirmation head unavailable", "hash", hash.Hex())
 		} else {
 			headReads.recovered(log, "confirmation head reads recovered", "hash", hash.Hex())
 		}
-		refreshed, err := m.confirmationReceipt(ctx, hash)
+		if err == nil {
+			missing = 0
+			receiptReads.recovered(log, "receipt confirmation reads recovered", "hash", hash.Hex())
+			receipt = refreshed
+			witnessNumber, numberErr := confirmationWitnessNumber(receipt, confirmations)
+			if numberErr != nil {
+				return receipt, numberErr
+			}
+			if headErr == nil && head.Number.Cmp(witnessNumber) >= 0 {
+				confirmed, proofErr := m.confirmReceiptWitness(ctx, receipt, confirmations, m.backend.HeaderByHash)
+				if proofErr == nil {
+					ancestryReads.recovered(log, "receipt ancestry reads recovered", "hash", hash.Hex())
+					return confirmed, nil
+				}
+				err = proofErr
+				if !errors.Is(err, errReceiptReorged) {
+					ancestryReads.failed(log, err, "receipt ancestry check unavailable", "hash", hash.Hex())
+				}
+			}
+		} else if !errors.Is(err, errReceiptReorged) {
+			receiptReads.failed(log, err, "receipt confirmation check unavailable", "hash", hash.Hex())
+		}
 		switch {
-		case errors.Is(err, errReceiptReorged):
-			// One null can be a lagging upstream rather than a reorg; require two in a row.
+		case errors.Is(err, errConfirmationReceiptMissing):
+			// Count nulls across opening and closing receipt reads. An intervening
+			// failed read resets the sequence; a transport error proves no reorg.
 			missing++
 			if missing >= 2 {
 				return receipt, err
 			}
 			log.Info("confirmed receipt missing; rechecking before treating it as a reorg", "hash", hash.Hex())
-		case err != nil:
-			// A failed read says nothing about the receipt; only consecutive nulls count.
-			missing = 0
-			receiptReads.failed(log, err, "receipt confirmation check unavailable", "hash", hash.Hex())
+		case errors.Is(err, errReceiptReorged):
+			return receipt, err
 		default:
 			missing = 0
-			receiptReads.recovered(log, "receipt confirmation reads recovered", "hash", hash.Hex())
-			receipt = refreshed
-			if headErr == nil {
-				head := headBefore.Number.Uint64()
-				included := receipt.BlockNumber.Uint64()
-				if head >= included && head-included >= confirmations {
-					if err := m.confirmReceiptAncestry(ctx, headBefore, receipt); err != nil {
-						if errors.Is(err, errReceiptReorged) {
-							return receipt, err
-						}
-						ancestryReads.failed(log, err, "receipt ancestry check unavailable", "hash", hash.Hex())
-					} else {
-						ancestryReads.recovered(log, "receipt ancestry reads recovered", "hash", hash.Hex())
-						headAfter, afterErr := m.confirmationHead(ctx)
-						if afterErr != nil {
-							headReads.failed(log, afterErr, "confirmation head unavailable", "hash", hash.Hex())
-						} else if headBefore.Hash() == headAfter.Hash() {
-							return receipt, nil
-						}
-					}
-				}
-			}
 		}
 		select {
 		case <-ctx.Done():
@@ -1763,15 +1765,18 @@ func (m *Manager) waitForConfirmations(
 	}
 }
 
-func (m *Manager) confirmationHead(ctx context.Context) (*types.Header, error) {
+func (m *Manager) confirmationHeader(ctx context.Context, number *big.Int) (*types.Header, error) {
 	lookupCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
 	defer cancel()
-	header, err := m.backend.HeaderByNumber(lookupCtx, nil)
+	header, err := m.backend.HeaderByNumber(lookupCtx, number)
 	if err != nil {
 		return nil, err
 	}
-	if header == nil || header.Number == nil {
-		return nil, errors.New("latest header number is required")
+	if header == nil || header.Number == nil || !header.Number.IsUint64() {
+		return nil, errors.New("confirmation header number is required and must fit uint64")
+	}
+	if number != nil && header.Number.Cmp(number) != 0 {
+		return nil, errors.New("confirmation header returned a different block number")
 	}
 	return header, nil
 }
@@ -1780,8 +1785,14 @@ func (m *Manager) confirmationReceipt(ctx context.Context, hash common.Hash) (*t
 	receiptCtx, cancelReceipt := context.WithTimeout(ctx, m.receiptReadTimeout())
 	receipt, err := m.backend.TransactionReceipt(receiptCtx, hash)
 	cancelReceipt()
+	return confirmationReceiptResult(hash, receipt, err)
+}
+
+var errConfirmationReceiptMissing = errors.New("confirmation receipt missing")
+
+func confirmationReceiptResult(hash common.Hash, receipt *types.Receipt, err error) (*types.Receipt, error) {
 	if errors.Is(err, ethereum.NotFound) {
-		return nil, errors.Errorf("%w: receipt %s disappeared", errReceiptReorged, hash.Hex())
+		return nil, errors.Errorf("%w: %w: receipt %s disappeared", errReceiptReorged, errConfirmationReceiptMissing, hash.Hex())
 	}
 	if err != nil {
 		return nil, errors.Errorf("transaction receipt %s: %w", hash.Hex(), err)
@@ -1792,33 +1803,58 @@ func (m *Manager) confirmationReceipt(ctx context.Context, hash common.Hash) (*t
 	return receipt, nil
 }
 
-func (m *Manager) confirmCanonicalReceipt(ctx context.Context, receipt *types.Receipt) error {
-	headBefore, err := m.confirmationHead(ctx)
+func confirmationWitnessNumber(receipt *types.Receipt, depth uint64) (*big.Int, error) {
+	if receipt == nil || receipt.BlockNumber == nil || !receipt.BlockNumber.IsUint64() {
+		return nil, errors.New("confirmation receipt block number must fit uint64")
+	}
+	number := new(big.Int).Add(receipt.BlockNumber, new(big.Int).SetUint64(depth))
+	if !number.IsUint64() {
+		return nil, errors.New("confirmation witness block number exceeds uint64")
+	}
+	return number, nil
+}
+
+// confirmReceiptWitness proves inclusion through an exact numbered descendant.
+// The latest head may advance freely: only this witness must remain canonical
+// after the receipt is reread. Parent work is bounded by depth, even for old receipts.
+func (m *Manager) confirmReceiptWitness(
+	ctx context.Context,
+	receipt *types.Receipt,
+	depth uint64,
+	parentHeader func(context.Context, common.Hash) (*types.Header, error),
+) (*types.Receipt, error) {
+	if receipt == nil {
+		return nil, errors.New("confirmation receipt is required")
+	}
+	number, err := confirmationWitnessNumber(receipt, depth)
 	if err != nil {
-		return errors.Errorf("confirmation head before ancestry check: %w", err)
+		return nil, err
 	}
-	if err := m.confirmReceiptAncestry(ctx, headBefore, receipt); err != nil {
-		return err
-	}
-	headAfter, err := m.confirmationHead(ctx)
+	witness, err := m.confirmationHeader(ctx, number)
 	if err != nil {
-		return errors.Errorf("confirmation head after ancestry check: %w", err)
+		return nil, errors.Errorf("confirmation witness before ancestry check: %w", err)
 	}
-	if headBefore.Hash() != headAfter.Hash() {
-		return errors.New("confirmation head changed during ancestry check")
+	if err := m.confirmReceiptAncestry(ctx, witness, receipt, parentHeader); err != nil {
+		return nil, err
 	}
-	return nil
+	fresh, err := m.confirmationReceipt(ctx, receipt.TxHash)
+	if err != nil {
+		return nil, err
+	}
+	if fresh.BlockHash != receipt.BlockHash || fresh.BlockNumber.Cmp(receipt.BlockNumber) != 0 || fresh.Status != receipt.Status {
+		return nil, errors.Errorf("%w: receipt changed during confirmation proof", errReceiptReorged)
+	}
+	stable, err := m.confirmationHeader(ctx, number)
+	if err != nil {
+		return nil, errors.Errorf("confirmation witness after receipt check: %w", err)
+	}
+	if stable.Hash() != witness.Hash() {
+		return nil, errors.Errorf("%w: confirmation witness changed during proof", errReceiptReorged)
+	}
+	return fresh, nil
 }
 
 func (m *Manager) confirmReceiptAncestry(
-	ctx context.Context,
-	head *types.Header,
-	receipt *types.Receipt,
-) error {
-	return m.confirmReceiptAncestryUsing(ctx, head, receipt, m.backend.HeaderByHash)
-}
-
-func (m *Manager) confirmReceiptAncestryUsing(
 	ctx context.Context,
 	head *types.Header,
 	receipt *types.Receipt,
@@ -1856,8 +1892,8 @@ func (m *Manager) confirmReceiptAncestryUsing(
 }
 
 func validateReceipt(hash common.Hash, receipt *types.Receipt) error {
-	if receipt == nil || receipt.BlockNumber == nil {
-		return errors.Errorf("transaction receipt %s has no block number", hash.Hex())
+	if receipt == nil || receipt.BlockNumber == nil || !receipt.BlockNumber.IsUint64() {
+		return errors.Errorf("transaction receipt %s has no valid uint64 block number", hash.Hex())
 	}
 	if receipt.TxHash != hash {
 		return errors.Errorf(
@@ -1866,6 +1902,9 @@ func validateReceipt(hash common.Hash, receipt *types.Receipt) error {
 	}
 	if receipt.BlockHash == (common.Hash{}) {
 		return errors.Errorf("transaction receipt %s has no block hash", hash.Hex())
+	}
+	if !validReceiptStatus(receipt.Status) {
+		return errors.Errorf("transaction receipt %s has invalid status %d", hash.Hex(), receipt.Status)
 	}
 	return nil
 }

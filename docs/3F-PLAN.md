@@ -39,7 +39,7 @@ It does not use this adapter solver's discovery, signatures or liquidity strateg
 | License | _TBD — not yet added_ |
 | Contract bindings | **abigen over vendored ABIs** in `api/abi/` (ABIs copied from `forge build` output, not hand-curated). `make refresh-abi` re-vendors from a Foundry `out/` dir; build stays hermetic off the committed ABIs. |
 | API client | **openapi-generator (Java)** over a vendored OpenAPI snapshot in `openapi/`. `make refresh-openapi` re-pulls the live spec. |
-| Adapter scope | One solver serves adapters from exactly one source: an explicit `adapters` list when present, otherwise a dynamic set discovered from a configured on-chain `IAdapterFactory`. Factory enumeration has a hard 2,000-entity limit and returns an error above it. The snapshot is refreshed before every auction-discovery pass; either source is filtered by `offerSigner`, non-zero vault, and non-zero asset. Per auction it can cover the **full requested amount** with one or more single-adapter offers; the default strategy does this most-fundable first, stopping once covered. **1 adapter per offer, no aggregation within an offer** (a single offer is never split across adapters). |
+| Adapter scope | One solver serves adapters from exactly one source: an explicit `adapters` list when present, otherwise a dynamic set discovered from a configured on-chain `IAdapterFactory`. Factory enumeration has a hard 2,000-entity limit and returns an error above it. The snapshot is refreshed before every auction-discovery pass; either source is filtered by `offerSigner`, non-zero vault, and non-zero asset. Per auction every eligible adapter offers the **full requested amount** within its own capacity; adapters bid independently and never split an auction between them. **1 adapter per offer, no aggregation within an offer** (a single offer is never split across adapters). |
 | Persistence | **Stateless + periodic on-chain resync.** No DB. Open requests come from enumerating `adapter.requests(i)` (per adapter); redemption readiness from `canWithdraw()`; auctions/offers from the 3F API. Optional live-log subscription is a latency optimization only, never on the critical path. |
 | Key management | Env/file private key behind a pluggable **`Signer`** interface (KMS/remote-signer can be added later without touching call sites). This key is the **EIP-1271 signer every served adapter trusts** (each adapter's owner sets it on-chain): it signs offers with `maker = adapter`, and the adapter's `isValidSignature` authorizes them. The same EOA is the tx-sender for `multicall(finalizeRequest…)` (via the shared `txmanager`). |
 | Multi-solver shape | 3F logic fully encapsulated in its own package; a name→factory **registry** selects the impl from config. A **shared `txmanager`** owns on-chain sending so solvers never race on nonces. |
@@ -215,8 +215,8 @@ auction's `solve_start_time` plus a configurable `offerExpiryBuffer` (default 2h
 
 ### Per-auction adapter coverage and strategy split
 
-Each discover tick lists open auctions (public, unauthenticated), then for each auction covers its
-**full requested amount** with one or more single-adapter offers, in a single pass:
+Each discover tick lists open auctions (public, unauthenticated), then for each auction lets every
+eligible adapter offer the **full requested amount** within its own capacity, in a single pass:
 
 1. **Solver-owned snapshot** — the solver lists auctions, reconciles its live-offer cache against the
    API and reads each configured adapter's liquidity/exposure in Multicall, prunes the cache, and builds
@@ -275,11 +275,11 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
 
    The default local strategy: process auctions in API order, filter adapter eligibility (collateral
    match, no live offer for the pair, the auction max rate can reach the adapter's `minYieldPerRequest`),
-   compute each adapter's capacity from its raw caps, rank by available capacity (largest first), clamp
-   each offer to the still-uncovered remainder, and track adapter commitments across the pass. Live offer
-   principals and slots initialize those commitments, including auctions absent from the current listing.
-   When possible, sizing leaves enough remainder to clear the next adapter's minimum rather than stranding
-   a too-small final offer. Each
+   compute each adapter's capacity from its raw caps, order by available capacity (largest first), and
+   size each adapter's offer to `min(capacity, amountRequested)`. Adapters are independent makers: one
+   adapter's offer, live or new, never shrinks another's on the same auction. Commitments are tracked per
+   adapter across the pass, initialized from live offer principals and slots, including auctions absent
+   from the current listing. Each
    offer is **priced at the adapter's `minYieldPerRequest` floor plus a partial-consumption margin** of
    `max(2, ceil(principal/1e6))` base units (~1 ppm). A floor-exact offer reverts `TooLowYield` whenever
    the keeper consumes it partially, because `consume()` pro-rates the return with floor division while
@@ -291,6 +291,14 @@ Each discover tick lists open auctions (public, unauthenticated), then for each 
    (keeping the margin that fits); a pair whose floor exceeds the max rate is skipped. The submission
    loop re-checks every strategy's offers (default and webhook) against the exact `minYieldPerRequest`
    before signing, so no path posts a sub-floor offer the fill would revert.
+   From 3F's APR switch (23 Oct 2026) `maxRate` is an annual rate and every auction carries
+   `rateBasisSeconds` (a year for new auctions, the old settlement delay for ones created before);
+   `expectedReturn` covers that basis, so the max-rate cap is scaled by `basis / year`
+   (`types.ExpectedReturn`, `types.ValidateYield`). A response without the field is pre-switch and keeps
+   the per-term pricing; a negative field skips the auction.
+   The on-chain `minYieldPerRequest` floor is compared to the raw `expectedReturn` exactly as the
+   contract does, so on annual auctions it is an APR floor and must be set as one. `rateBasisSeconds`
+   is on the webhook wire too.
    Capacity is `min(min(getMaxAssets, maxAssetsPerRequest), fundable − committed)` gated by the
    concurrency and `minAssetsPerRequest` limits; `maxAssetsPerRequest` is an always-active ceiling (`0`
    means no capacity). A `webhook` strategy posts the same JSON input to an external decider; big
@@ -359,9 +367,8 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
      retains its fail-closed behavior. The live-offer cache is reconciled against the API before every
      offer pass, so out-of-band offers (manual re-offer, another instance, server-side cancellation)
      count toward coverage and are never double-offered.
-   - **Per-auction multi-adapter coverage** (§6): cover each auction's full requested amount with one or
-     more single-adapter offers through the configured trusted strategy; uncovered remainder retries
-     next pass. Offer dedup, coverage, exposure, redeem, and reconcile all run per adapter.
+   - **Per-auction multi-adapter offers** (§6): every eligible adapter offers each auction's full
+     requested amount within its own capacity through the configured trusted strategy. Offer dedup, coverage, exposure, redeem, and reconcile all run per adapter.
    - Tests: strategy registry/default selection, default strategy eligibility/sizing, webhook wire shape, per-(adapter,auction) dedup, `liveCoverage`, `reconcileAdapter` wholesale replace (API-authoritative), signed `listOffers` httptest, `resolveAdapters` (incl. the ERC-1271 `isValidSignature` offer-signer probe + unauthorized-drop)
      Multicall round-trip, EIP-712 `GetOffers` golden + apitypes cross-check. The `GetOffers` type string
      and the signer's live-API acceptance are pinned by env-guarded live tests (§9).
@@ -387,7 +394,7 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 
 **Deferred features / known gaps:**
 - **(done) Exposure / risk params are on-chain.** The per-request caps (`minYieldPerRequest` in ppm, `minAssetsPerRequest`, `maxAssetsPerRequest`) live on the `ThreeFAdapter` and are read per-adapter via Multicall each discover tick (`chainreader.go`); the bot no longer carries config exposure caps. Funding headroom is the adapter's own `getMaxAssets()` (folds in the delegator `limitOf`, vault `withdrawable`, and pending sweep), and the concurrency cap is the contract's `MAX_REQUESTS` constant — neither is a separate adapter read. Trust-minimized + curator-governed, as planned.
-- **Multi-maker offers.** An auction's ask is covered by **multiple single-adapter offers** (most-fundable first, sized to the uncovered remainder), but a **single** offer is still funded by one adapter. Splitting one offer across several makers (true aggregation) is deferred — needs multi-maker offer support on-chain.
+- **Multi-maker offers.** An auction's ask receives **one independent single-adapter offer per eligible adapter** (each sized to the full request within that adapter's capacity), but a **single** offer is still funded by one adapter. Splitting one offer across several makers (true aggregation) is deferred — needs multi-maker offer support on-chain.
 - **Re-pricing live offers on rising yield.** An auction's `maxRate` can climb over time, so an auction infeasible now (below an adapter's `minYieldPerRequest`) becomes feasible later — handled, since infeasible auctions are never negatively cached and each pass re-evaluates. But a live offer placed at an earlier, lower rate is **not** re-priced upward while it stays live (dedup by `(adapter, auction)`); capturing the higher rate would need cancel/replace (depends on `OfferControllerCancelV1`, below).
 - **(done) Dynamic adapter discovery.** When `adapters` is omitted, every entry in the configured
   `IAdapterFactory` is enumerated at startup and before each discovery pass, subject to a hard 2,000-entry
@@ -401,11 +408,10 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
   return; the solver only signs and submits the returned offer.
 - **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state.
 - **WS live-log subscription** (`chain.wsUrl`) — config field present but unused; the poll-based reconcile/redeem path is sufficient for v0.
-- **Redeem has no send deadline.** `redeem` submits without `Deadline` or a gas limit, so its pre-sign gas
-  estimate is bounded only by manager shutdown. Over a WebSocket/IPC read RPC, an estimate the endpoint never
-  answers holds the txmanager worker and the shared nonce lane until it answers or the manager stops; HTTP(S)
-  attempts are bounded by `chain.rpcAttemptTimeoutMs`. Either give `redeem` a `Deadline` or give the manager's
-  pre-sign estimate its own budget ([TXMANAGER-PLAN §3](TXMANAGER-PLAN.md#3-configuration-and-time-budgets)).
+- **Resolved: pre-sign redeem estimation budget.** `redeem` still submits without a request
+  deadline or supplied gas limit. The shared manager now bounds initial estimation and its fallback
+  by one finite read budget; an unsigned timeout returns before the lane admits new work
+  ([TXMANAGER-PLAN §3](TXMANAGER-PLAN.md#3-configuration-and-time-budgets)).
 
 **Testing and observability:**
 - **Integration coverage.** `bridgefacilitator` unit coverage is ~16% — pure logic (EIP-712 golden+parity, default-strategy capacity/caps, config) is covered; the HTTP/on-chain paths (apiclient, chainreader, redeemer, Run loop) need an httptest-backed API mock + a simulated/forked chain backend.

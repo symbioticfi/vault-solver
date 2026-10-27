@@ -248,7 +248,7 @@
     },
     "/v1/offer": {
       "post": {
-        "description": "Creates an offer for an auction. Omitted `executionMode` preserves legacy behavior: an on-chain `Offer` signature means PULL, and an unsigned API-key request means PUSH. Explicit PULL requires an executable `signature` (or the existing API-key-backed deferred `0x` approval). `useCallback: false` does not select PUSH.\n\nFor explicit signed PUSH, provide `pushAuthorizationSignature` and `authorizationDeadline`, not `signature` or an API key. The selected `maker` must be an enabled address enrolled under a broker and must itself validate the EIP-712/EIP-1271 authorization. The auction request contract must expose an EIP-712 domain whose chain ID matches `chainId`. The API stores `signature = NULL`, so the auction engine routes it through maker-initiated minting, never Request.consume.\n\nThe maker is the vault/adapter that supplies funds and mints. A broker's configured `offerAddress` is only the legacy default; it does not replace an explicitly selected signed maker. The bot signer is the key approved by each maker contract, not the stored maker address.\n\nSigned PUSH retries with the same `auctionId`, `maker`, and `nonce` must use identical offer terms and mode; conflicting updates are rejected.\n\n`expectedReturn` is the expected yield, not the total repayment. Total repayment is `amount + expectedReturn`.\n\n`expiration` is a Unix timestamp in seconds. Offers are expired only when `expiration` is lower than the current Unix second.\n\nLegacy signed PULL requests resolve their EIP-712 domain from the auction request contract on-chain. Set `domain.verifyingContract` to that request contract. If the contract exposes a `salt`, include it; otherwise omit it. PULL typed data:\n\n```ts\nconst signature = await walletClient.signTypedData(\n{\n    domain: {\n      name: 'SuperstateRequest',\n      version: '1',\n      chainId: 11155111,\n      verifyingContract: '0x1234567890abcdef1234567890abcdef12345678',\n      salt: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',\n    },\n    types: {\n      Offer: [\n        {\n          name: 'maker',\n          type: 'address',\n        },\n        {\n          name: 'amount',\n          type: 'uint256',\n        },\n        {\n          name: 'expectedReturn',\n          type: 'uint256',\n        },\n        {\n          name: 'nonce',\n          type: 'uint256',\n        },\n        {\n          name: 'expiration',\n          type: 'uint256',\n        },\n        {\n          name: 'useCallback',\n          type: 'bool',\n        },\n      ],\n    },\n    primaryType: 'Offer',\n    message: {\n      maker: '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38',\n      amount: 1000000000n,\n      expectedReturn: 5000000n,\n      nonce: 1n,\n      expiration: 4102444800n,\n      useCallback: false,\n    },\n  }\n)\n```\n\nSubmit that pull signature in `signature`. For deferred ERC-1271 approval, a matching facilitator may submit `0x` with its `x-api-key` while contract approval is pending.\n\nExact API-only signed PUSH typed data (not valid for on-chain PULL):\n\n```ts\nconst signature = await walletClient.signTypedData(\n{\n    domain: {\n      name: 'grunt-api',\n      version: '1',\n      chainId: 11155111,\n    },\n    types: {\n      SubmitPushOffer: [\n        {\n          name: 'action',\n          type: 'string',\n        },\n        {\n          name: 'executionMode',\n          type: 'string',\n        },\n        {\n          name: 'maker',\n          type: 'address',\n        },\n        {\n          name: 'auctionId',\n          type: 'uint256',\n        },\n        {\n          name: 'request',\n          type: 'address',\n        },\n        {\n          name: 'chainId',\n          type: 'uint256',\n        },\n        {\n          name: 'amount',\n          type: 'uint256',\n        },\n        {\n          name: 'expectedReturn',\n          type: 'uint256',\n        },\n        {\n          name: 'nonce',\n          type: 'uint256',\n        },\n        {\n          name: 'expiration',\n          type: 'uint256',\n        },\n        {\n          name: 'useCallback',\n          type: 'bool',\n        },\n        {\n          name: 'authorizationDeadline',\n          type: 'uint256',\n        },\n      ],\n    },\n    primaryType: 'SubmitPushOffer',\n    message: {\n      action: 'SUBMIT_PUSH_OFFER',\n      executionMode: 'PUSH',\n      maker: '0x1111111111111111111111111111111111111111',\n      auctionId: 42n,\n      request: '0x1234567890abcdef1234567890abcdef12345678',\n      chainId: 11155111n,\n      amount: 1000000000n,\n      expectedReturn: 5000000n,\n      nonce: 1n,\n      expiration: 4102444800n,\n      useCallback: false,\n      authorizationDeadline: 4102444800n,\n    },\n  }\n)\n```\n\nPut the result in `pushAuthorizationSignature`. All `uint256` HTTP fields are decimal strings. An AWAITING_MINT response exposes `pendingAmount` (the accepted amount) and `mintDeadline` (the earliest active authorization lease). The lease starts when the auction accepts the offer, not when the bot first polls; after authorization confirms, mint before that deadline. Timeout invokes the existing revocation path.",
+        "description": "Creates an offer for an auction. Omitted `executionMode` preserves legacy behavior: an on-chain `Offer` signature means PULL, and an unsigned API-key request means PUSH. Explicit PULL requires an executable `signature` (or the existing API-key-backed deferred `0x` approval). `useCallback: false` does not select PUSH.\n\nFor explicit signed PUSH, provide `pushAuthorizationSignature` and `authorizationDeadline`, not `signature` or an API key. The selected `maker` must be an enabled address enrolled under a broker and must itself validate the EIP-712/EIP-1271 authorization. The auction request contract must expose an EIP-712 domain whose chain ID matches `chainId`. The API stores `signature = NULL`, so the auction engine routes it through maker-initiated minting, never Request.consume.\n\nThe maker is the vault/adapter that supplies funds and mints. A broker's configured `offerAddress` is only the legacy default; it does not replace an explicitly selected signed maker. The bot signer is the key approved by each maker contract, not the stored maker address.\n\nSigned PUSH retries with the same `auctionId`, `maker`, and `nonce` must use identical offer terms and mode; conflicting updates are rejected.\n\n`expectedReturn` is the yield on `amount` over the auction `rateBasisSeconds` (returned by `GET /v1/auction`), not a repayment amount: repayment after `d` seconds adds `ceil(expectedReturn * paidSeconds(d) / rateBasisSeconds)` to principal on annual auctions (`paidSeconds` counts whole days, a new day starting 6 hours into it, at least 1 day, capped at 1 year) and `floor(expectedReturn * d / rateBasisSeconds)` on auctions with another basis. Sign with `expectedReturn = floor(amount * aprBps * rateBasisSeconds / (10000 * 31536000))`, where `aprBps` is the APR in basis points (365-day year, simple interest). On annual auctions (`rateBasisSeconds = 31536000`), lending 1,000 USDC at 15% APR is `amount = 1000000000`, `expectedReturn = 150000000`; on an auction with `rateBasisSeconds = 86400` the same APR is `expectedReturn = 410958`. `maxRate` is always an APR. The offer APR `expectedReturn / amount * 10000 * 31536000 / rateBasisSeconds` must be at most the current `maxRate` and at least a quarter of the lowest APR of the auction ramp, otherwise the API returns 400.\n\n`expiration` is a Unix timestamp in seconds. Offers are expired only when `expiration` is lower than the current Unix second.\n\nLegacy signed PULL requests resolve their EIP-712 domain from the auction request contract on-chain. Set `domain.verifyingContract` to that request contract. If the contract exposes a `salt`, include it; otherwise omit it. PULL typed data:\n\n```ts\nconst signature = await walletClient.signTypedData(\n{\n    domain: {\n      name: 'SuperstateRequest',\n      version: '1',\n      chainId: 11155111,\n      verifyingContract: '0x1234567890abcdef1234567890abcdef12345678',\n      salt: '0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',\n    },\n    types: {\n      Offer: [\n        {\n          name: 'maker',\n          type: 'address',\n        },\n        {\n          name: 'amount',\n          type: 'uint256',\n        },\n        {\n          name: 'expectedReturn',\n          type: 'uint256',\n        },\n        {\n          name: 'nonce',\n          type: 'uint256',\n        },\n        {\n          name: 'expiration',\n          type: 'uint256',\n        },\n        {\n          name: 'useCallback',\n          type: 'bool',\n        },\n      ],\n    },\n    primaryType: 'Offer',\n    message: {\n      maker: '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38',\n      amount: 1000000000n,\n      expectedReturn: 150000000n,\n      nonce: 1n,\n      expiration: 4102444800n,\n      useCallback: false,\n    },\n  }\n)\n```\n\nSubmit that pull signature in `signature`. For deferred ERC-1271 approval, a matching facilitator may submit `0x` with its `x-api-key` while contract approval is pending.\n\nExact API-only signed PUSH typed data (not valid for on-chain PULL):\n\n```ts\nconst signature = await walletClient.signTypedData(\n{\n    domain: {\n      name: 'grunt-api',\n      version: '1',\n      chainId: 11155111,\n    },\n    types: {\n      SubmitPushOffer: [\n        {\n          name: 'action',\n          type: 'string',\n        },\n        {\n          name: 'executionMode',\n          type: 'string',\n        },\n        {\n          name: 'maker',\n          type: 'address',\n        },\n        {\n          name: 'auctionId',\n          type: 'uint256',\n        },\n        {\n          name: 'request',\n          type: 'address',\n        },\n        {\n          name: 'chainId',\n          type: 'uint256',\n        },\n        {\n          name: 'amount',\n          type: 'uint256',\n        },\n        {\n          name: 'expectedReturn',\n          type: 'uint256',\n        },\n        {\n          name: 'nonce',\n          type: 'uint256',\n        },\n        {\n          name: 'expiration',\n          type: 'uint256',\n        },\n        {\n          name: 'useCallback',\n          type: 'bool',\n        },\n        {\n          name: 'authorizationDeadline',\n          type: 'uint256',\n        },\n      ],\n    },\n    primaryType: 'SubmitPushOffer',\n    message: {\n      action: 'SUBMIT_PUSH_OFFER',\n      executionMode: 'PUSH',\n      maker: '0x1111111111111111111111111111111111111111',\n      auctionId: 42n,\n      request: '0x1234567890abcdef1234567890abcdef12345678',\n      chainId: 11155111n,\n      amount: 1000000000n,\n      expectedReturn: 150000000n,\n      nonce: 1n,\n      expiration: 4102444800n,\n      useCallback: false,\n      authorizationDeadline: 4102444800n,\n    },\n  }\n)\n```\n\nPut the result in `pushAuthorizationSignature`. All `uint256` HTTP fields are decimal strings. An AWAITING_MINT response exposes `pendingAmount` (the accepted amount) and `mintDeadline` (the earliest active authorization lease). The lease starts when the auction accepts the offer, not when the bot first polls; after authorization confirms, mint before that deadline. Timeout invokes the existing revocation path.",
         "operationId": "OfferController_create_v1",
         "parameters": [
           {
@@ -277,7 +277,7 @@
                     "auctionId": 42,
                     "maker": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38",
                     "amount": "1000000000",
-                    "expectedReturn": "5000000",
+                    "expectedReturn": "150000000",
                     "nonce": "1",
                     "expiration": "4102444800",
                     "useCallback": false,
@@ -291,7 +291,7 @@
                     "auctionId": 42,
                     "maker": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38",
                     "amount": "1000000000",
-                    "expectedReturn": "5000000",
+                    "expectedReturn": "150000000",
                     "nonce": "1",
                     "expiration": "4102444800",
                     "useCallback": false
@@ -306,7 +306,7 @@
                     "auctionId": 42,
                     "maker": "0x1111111111111111111111111111111111111111",
                     "amount": "1000000000",
-                    "expectedReturn": "5000000",
+                    "expectedReturn": "150000000",
                     "nonce": "1",
                     "expiration": "4102444800",
                     "useCallback": false,
@@ -413,6 +413,7 @@
                     "mintDeadline": null,
                     "maker": "0x742d35Cc6634C0532925a3b844Bc9e7595f2bD38",
                     "requestId": "0x1234567890abcdef1234567890abcdef12345678",
+                    "rateBasisSeconds": 31536000,
                     "asset": {
                       "slug": "superstate-uscc",
                       "displayName": "Superstate USCC",
@@ -425,7 +426,7 @@
                       "leverage": 2
                     },
                     "amount": "1000000000",
-                    "expectedReturn": "5000000",
+                    "expectedReturn": "150000000",
                     "nonce": "1",
                     "expiration": "4102444800",
                     "signature": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
@@ -644,7 +645,8 @@
                     "requestId": "0x1234567890abcdef1234567890abcdef12345678",
                     "amountRequested": "1000000000",
                     "solve_start_time": "2026-02-16T12:00:00.000Z",
-                    "maxRate": 50.5,
+                    "maxRate": 1500.5,
+                    "rateBasisSeconds": 31536000,
                     "status": "open",
                     "asset": {
                       "slug": "superstate-uscc",
@@ -729,7 +731,7 @@
   },
   "info": {
     "title": "BF API Reference",
-    "description": "BP subdomain API documentation for bf.3f.xyz",
+    "description": "BP subdomain API documentation for bf.dev.gcp.3f.xyz",
     "version": "0.0.1",
     "contact": {}
   },
@@ -935,8 +937,8 @@
           },
           "expectedReturn": {
             "type": "string",
-            "description": "Expected yield amount as a numeric string (uint256). Total repayment is `amount + expectedReturn`.",
-            "example": "5000000"
+            "description": "Yield on `amount` over the auction `rateBasisSeconds`, as a numeric string (uint256). It is not the repaid amount: repayment after `d` seconds adds `ceil(expectedReturn * paidSeconds(d) / rateBasisSeconds)` to principal on annual auctions (`paidSeconds` counts whole days, a new day starting 6 hours into it, at least 1 day, capped at 1 year) and `floor(expectedReturn * d / rateBasisSeconds)` on auctions with another basis. To lend at `aprBps`, sign `expectedReturn = floor(amount * aprBps * rateBasisSeconds / (10000 * 31536000))`; on annual auctions (`rateBasisSeconds = 31536000`) that is `floor(amount * aprBps / 10000)`.",
+            "example": "150000000"
           },
           "nonce": {
             "type": "string",
@@ -1153,6 +1155,11 @@
             "description": "Request contract address",
             "example": "0x1234567890abcdef1234567890abcdef12345678"
           },
+          "rateBasisSeconds": {
+            "type": "number",
+            "description": "The auction's `rateBasisSeconds` (integer > 0): the period `expectedReturn` accrues over. Offer APR bps = `expectedReturn / amount * 10000 * 31536000 / rateBasisSeconds`.",
+            "example": 31536000
+          },
           "asset": {
             "nullable": true,
             "description": "Asset metadata resolved for the linked request or null",
@@ -1180,8 +1187,8 @@
           },
           "expectedReturn": {
             "type": "string",
-            "description": "Expected yield amount as a numeric string (uint256). Total repayment is `amount + expectedReturn`.",
-            "example": "5000000"
+            "description": "Yield on `amount` over the auction `rateBasisSeconds`, as a numeric string (uint256). It is not the repaid amount: repayment after `d` seconds adds `ceil(expectedReturn * paidSeconds(d) / rateBasisSeconds)` to principal on annual auctions (`paidSeconds` counts whole days, a new day starting 6 hours into it, at least 1 day, capped at 1 year) and `floor(expectedReturn * d / rateBasisSeconds)` on auctions with another basis. To lend at `aprBps`, sign `expectedReturn = floor(amount * aprBps * rateBasisSeconds / (10000 * 31536000))`; on annual auctions (`rateBasisSeconds = 31536000`) that is `floor(amount * aprBps / 10000)`.",
+            "example": "150000000"
           },
           "filledAmount": {
             "type": "string",
@@ -1190,7 +1197,7 @@
           },
           "filledExpectedReturn": {
             "type": "string",
-            "description": "Cumulative yield of successful fills, rounded per fill (uint256 string).",
+            "description": "Yield (as `expectedReturn`, over `rateBasisSeconds`) on the successfully funded principal, rounded per fill (uint256 string).",
             "example": "0"
           },
           "pendingAmount": {
@@ -1200,7 +1207,7 @@
           },
           "pendingExpectedReturn": {
             "type": "string",
-            "description": "Yield for the current broadcast or authorized fill (uint256 string).",
+            "description": "Yield (as `expectedReturn`, over `rateBasisSeconds`) on the current broadcast or authorized fill (uint256 string).",
             "example": "0"
           },
           "nonce": {
@@ -1228,6 +1235,7 @@
           "mintDeadline",
           "maker",
           "requestId",
+          "rateBasisSeconds",
           "asset",
           "vault",
           "amount",
@@ -1321,7 +1329,7 @@
         "properties": {
           "repaymentPricing": {
             "type": "object",
-            "description": "Quote horizon for APR; omitted for ordinary auctions.",
+            "description": "Retarget auctions only: the on-chain horizon over which repayment pro-rates the annual yield (365 days in production). Omitted for ordinary auctions.",
             "properties": {
               "horizonSeconds": {
                 "type": "integer"
@@ -1354,8 +1362,14 @@
           "maxRate": {
             "type": "number",
             "nullable": true,
-            "description": "Current max rate in basis points for active auctions, or the blended succeeded-offer rate for succeeded/repaid auctions, with tenths-of-a-basis-point precision, or null",
-            "example": 50.5
+            "description": "APR in basis points (365-day year, simple interest), with tenths-of-a-basis-point precision (floored), for every auction: the current max APR for active auctions, or the blended succeeded-offer APR for succeeded/repaid auctions, or null. Offer APR is `expectedReturn / amount * 10000 * 31536000 / rateBasisSeconds`; offers are accepted when it is at most the current max APR and at least a quarter of the lowest APR of the auction ramp.",
+            "example": 1500.5
+          },
+          "rateBasisSeconds": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Seconds over which an offer's `expectedReturn` accrues (integer > 0, immutable per auction). Repayment yield after `d` seconds is `ceil(expectedReturn * paidSeconds(d) / rateBasisSeconds)` on annual auctions (`paidSeconds` counts whole days, a new day starting 6 hours into it, at least 1 day, capped at 1 year) and `floor(expectedReturn * d / rateBasisSeconds)` otherwise. 31536000 (365 days) for annual auctions, where `expectedReturn / amount` is the APR; auctions created before the annual switch carry the asset settlement delay in seconds (e.g. 86400, 2678400). To lend at `aprBps`, sign `expectedReturn = floor(amount * aprBps * rateBasisSeconds / (10000 * 31536000))`.",
+            "example": 31536000
           },
           "status": {
             "type": "string",
@@ -1429,6 +1443,7 @@
           "amountRequested",
           "solve_start_time",
           "maxRate",
+          "rateBasisSeconds",
           "status",
           "asset",
           "depositAsset",

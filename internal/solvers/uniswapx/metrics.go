@@ -52,6 +52,7 @@ type uniswapXMetrics struct {
 	workflow             *observability.WorkflowMetrics
 	operations           uniswapXOperationObservers
 	quoteTime            prometheus.Histogram
+	traffic              *liquidlane.QuoteMetrics
 	exclusiveOutstanding prometheus.GaugeFunc
 	exclusiveDeadline    prometheus.GaugeFunc
 	blockUntil           prometheus.GaugeFunc
@@ -99,8 +100,13 @@ func newUniswapXMetrics(
 	if err != nil {
 		return nil, err
 	}
+	traffic, err := liquidlane.NewQuoteMetrics(reg, Name, boundedQuoteRejectionReason)
+	if err != nil {
+		return nil, err
+	}
 	m := &uniswapXMetrics{
 		workflow: workflow,
+		traffic:  traffic,
 		operations: uniswapXOperationObservers{
 			quoteRefresh:       workflow.Operation(quoteRefreshOperation),
 			exclusiveOrderPoll: workflow.Operation(exclusiveOrderPollOperation),
@@ -224,7 +230,9 @@ func metricOutcomeForDecline(reason quoteDeclineReason) quoteMetricOutcome {
 	switch reason {
 	case quoteDeclineBlocked:
 		return quoteOutcomeDeclinedBlocked
-	case quoteDeclineInvalidRequest:
+	case quoteDeclineMissingIDs, quoteDeclineUnsupportedType,
+		quoteDeclineInvalidOutputs, quoteDeclineUnsupportedProtocol, quoteDeclineUnsupportedChain,
+		quoteDeclineInvalidAddress:
 		return quoteOutcomeDeclinedInvalidRequest
 	case quoteDeclinePairOutOfScope:
 		return quoteOutcomeDeclinedPairOutOfScope
@@ -232,7 +240,9 @@ func metricOutcomeForDecline(reason quoteDeclineReason) quoteMetricOutcome {
 		return quoteOutcomeDeclinedInvalidAmount
 	case quoteDeclineQuoteStateUnavailable:
 		return quoteOutcomeDeclinedQuoteState
-	case quoteDeclineStrategy:
+	case quoteDeclineStrategy, quoteDeclineNoMatchingRoutes, quoteDeclineNoCandidates,
+		quoteDeclineAmountBelowMinimum, quoteDeclineInsufficientCapacity, quoteDeclineNoAllocation,
+		quoteDeclineGasExceedsOutput, quoteDeclineMinimumInput:
 		return quoteOutcomeDeclinedStrategy
 	case quoteDeclineStateChanged:
 		return quoteOutcomeDeclinedStateChanged
