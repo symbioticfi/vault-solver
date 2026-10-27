@@ -49,9 +49,10 @@ funding reconstruction is used.
 The host preserves upstream discount integers and signature bytes. It checks ABI
 framing and route identity; signatures and discount economics are enforced by the
 contracts. It does not translate discount scales or verify EIP-712 signatures locally.
-Both discount and protocol signers are EOAs with fixed 65-byte signatures. The host
+The host assumes EOA discount and protocol signers with fixed 65-byte signatures. It
 ABI-encodes the backend signatures unchanged; the SDK verifies the leaf, mask and proof.
-Signature lengths, offsets and other fixed fields remain committed by the leaf.
+Signature lengths, offsets and other fixed fields remain committed by the leaf. This construction
+profile does not restrict the connector or backend to EOA discount signatures.
 The current canonical `LLExecuting` recipe requires an exact payout, so an order
 whose required output excludes connector surplus remains unsupported. Multiple
 output tokens and split connector routes also remain unsupported.
