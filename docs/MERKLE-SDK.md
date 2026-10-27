@@ -13,6 +13,8 @@ Awarded LiquidLane connector orders run in the separate [`rfq-merkle` solver](RF
 Its RecipeExecutor caller is the RFQ Executor contract, so it must not be included in
 `merkle.strategies`, whose caller is the shared EOA. These integrations share the SDK
 and transaction manager; their liquidity and scheduling are independent.
+`internal/merklehost.Curator` supplies their shared permission-service settings and
+redirect-rejecting HTTP transport; each solver keeps its transport timeout.
 
 This solver receives the same transaction manager and signer as all other
 solvers. The SDK's transport is a thin bridge to that manager's Owner and

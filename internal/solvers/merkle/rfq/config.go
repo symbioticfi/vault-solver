@@ -5,25 +5,17 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/vault-solver/internal/merklehost"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"gopkg.in/yaml.v3"
 )
 
-type curatorConfig struct {
-	URL       string `yaml:"url"`
-	APIKeyEnv string `yaml:"apiKeyEnv"`
-}
-
-func (c curatorConfig) httpConfig() protocolio.HTTPConfig {
-	return protocolio.HTTPConfig{URL: c.URL, APIKeyEnv: c.APIKeyEnv, TimeoutSeconds: permissions.HostTimeoutSeconds, MaxResponseBytes: permissions.HostMaxResponseBytes}
-}
-
 type config struct {
 	BackendURL      string
 	StateDir        string
 	Executor        common.Address
-	Curator         curatorConfig
+	Curator         merklehost.Curator
 	RecipeExecutors map[common.Address]map[common.Address]common.Address
 }
 
@@ -32,7 +24,7 @@ func parseConfig(node yaml.Node) (config, error) {
 		BackendURL      string                       `yaml:"backendUrl"`
 		StateDir        string                       `yaml:"stateDir"`
 		Executor        string                       `yaml:"executor"`
-		Curator         curatorConfig                `yaml:"curator"`
+		Curator         merklehost.Curator           `yaml:"curator"`
 		RecipeExecutors map[string]map[string]string `yaml:"recipeExecutors"`
 	}
 	if err := solver.DecodeStrict(node, &raw); err != nil {
@@ -41,7 +33,7 @@ func parseConfig(node yaml.Node) (config, error) {
 	if err := permissions.ValidateConfig(protocolio.HTTPConfig{URL: raw.BackendURL, TimeoutSeconds: permissions.HostTimeoutSeconds, MaxResponseBytes: permissions.HostMaxResponseBytes}); err != nil {
 		return config{}, errors.Errorf("backendUrl: %w", err)
 	}
-	if err := permissions.ValidateConfig(raw.Curator.httpConfig()); err != nil {
+	if err := permissions.ValidateConfig(raw.Curator.HTTPConfig()); err != nil {
 		return config{}, errors.Errorf("curator: %w", err)
 	}
 	if raw.StateDir == "" || len(raw.RecipeExecutors) == 0 || len(raw.RecipeExecutors) > 256 {

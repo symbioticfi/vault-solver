@@ -3,12 +3,9 @@ package threef
 
 import (
 	"context"
-	"net/http"
-	"os"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 
@@ -98,7 +95,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 	runtime := &mintProvider{API: api, Chain: deps.Chain}
 	strategy.Providers = []provider.Provider{runtime}
-	source, err := permissions.New(cfg.Curator.httpConfig(), &http.Client{Timeout: operationTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, deps.Chain, os.Getenv)
+	source, err := cfg.Curator.PermissionSource(deps.Chain, operationTimeout)
 	if err != nil {
 		return nil, err
 	}

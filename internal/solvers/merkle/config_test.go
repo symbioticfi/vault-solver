@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
+	"github.com/symbioticfi/vault-solver/internal/merklehost"
 
 	"gopkg.in/yaml.v3"
 )
@@ -70,15 +71,15 @@ func TestRevisionBindsDerivedIdentityAndPermissionSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, change := range map[string]func(*keeper.Config, *Curator, *common.Address){
-		"account": func(s *keeper.Config, _ *Curator, _ *common.Address) {
+	for name, change := range map[string]func(*keeper.Config, *merklehost.Curator, *common.Address){
+		"account": func(s *keeper.Config, _ *merklehost.Curator, _ *common.Address) {
 			s.Account = common.HexToAddress("0x04").Hex()
 		},
-		"caller": func(_ *keeper.Config, _ *Curator, c *common.Address) { *c = common.HexToAddress("0x05") },
-		"source": func(_ *keeper.Config, c *Curator, _ *common.Address) {
+		"caller": func(_ *keeper.Config, _ *merklehost.Curator, c *common.Address) { *c = common.HexToAddress("0x05") },
+		"source": func(_ *keeper.Config, c *merklehost.Curator, _ *common.Address) {
 			c.URL = "http://other.invalid/api/v1"
 		},
-		"credential": func(_ *keeper.Config, c *Curator, _ *common.Address) { c.APIKeyEnv = "OTHER_CURATOR_KEY" },
+		"credential": func(_ *keeper.Config, c *merklehost.Curator, _ *common.Address) { c.APIKeyEnv = "OTHER_CURATOR_KEY" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, c, owner := strategy, cfg.curator, caller
