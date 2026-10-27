@@ -52,7 +52,7 @@ func TestConnectorBuildSimulatesCompleteAwardedOrder(t *testing.T) {
 		t.Fatal("discounted connector was funded as permissioned")
 	}
 	funding := *abi.ConvertType(values[3], new([]executor.IReactorDiscountSwapInput)).(*[]executor.IReactorDiscountSwapInput)
-	if len(funding) != 1 || funding[0].Adapter != vlt || funding[0].AmountIn.Int64() != 123 || funding[0].Recipient != w.caller || !bytes.Equal(funding[0].ProtocolSignature, []byte{0xcc, 0xdd}) {
+	if len(funding) != 1 || funding[0].Adapter != vlt || funding[0].AmountIn.Int64() != 123 || funding[0].Recipient != w.caller || !bytes.Equal(funding[0].ProtocolSignature, bytes.Repeat([]byte{0xcd}, 65)) {
 		t.Fatalf("connector funding changed: %+v", funding)
 	}
 	callValues, err := executorCallsArgs.Unpack(values[4].([]byte))

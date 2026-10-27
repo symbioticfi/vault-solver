@@ -109,7 +109,7 @@ func connectorDiscountFixture() *discounts.Resolved {
 	return &discounts.Resolved{
 		DiscountID:      common.HexToHash("0x42").Hex(),
 		Discount:        discounts.Terms{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "2000000", Signer: common.HexToAddress("0x44").Hex(), Protocol: common.HexToAddress("0x45").Hex(), Nonce: "17", Deadline: 4102444800},
-		SignerSignature: "0xaabb", ProtocolSignature: "0xccdd", ProtocolDeadline: 4102444801,
+		SignerSignature: "0xaabb", ProtocolSignature: "0x" + strings.Repeat("cd", 65), ProtocolDeadline: 4102444801,
 	}
 }
 
@@ -138,7 +138,7 @@ func TestConnectorDiscountPreservesUpstreamTerms(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if terms.Swap.Discount.Discount.String() != "2000000" || terms.Swap.Discount.Nonce.String() != "17" || terms.Swap.Discount.Deadline.Int64() != 4102444800 || terms.Swap.ProtocolDeadline.Int64() != 4102444801 || string(terms.Swap.SignerSignature) != "\xaa\xbb" || string(terms.Signature) != "\xcc\xdd" || terms.ValidUntil.Unix() != 4102444800 {
+			if terms.Swap.Discount.Discount.String() != "2000000" || terms.Swap.Discount.Nonce.String() != "17" || terms.Swap.Discount.Deadline.Int64() != 4102444800 || terms.Swap.ProtocolDeadline.Int64() != 4102444801 || string(terms.Swap.SignerSignature) != "\xaa\xbb" || !bytes.Equal(terms.Signature, bytes.Repeat([]byte{0xcd}, 65)) || terms.ValidUntil.Unix() != 4102444800 {
 				t.Fatalf("signed data changed: %+v", terms)
 			}
 		})

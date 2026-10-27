@@ -16,19 +16,16 @@ import (
 func connectorSignatureTemplate(terms connectorTerms, recipient common.Address, amount *big.Int) (data, mask []byte) {
 	padded := terms.Swap
 	padded.SignerSignature = common.RightPadBytes(terms.Swap.SignerSignature, 4095)
-	data = connectorBinding.PackSwap(padded, common.RightPadBytes(terms.Signature, 4095), recipient, amount)
+	data = connectorBinding.PackSwap(padded, terms.Signature, recipient, amount)
 	mask = make([]byte, len(data))
-	for index, start := range []int{388, 4516} {
-		length := len(terms.Swap.SignerSignature)
-		if index == 1 {
-			length = len(terms.Signature)
-		}
-		new(big.Int).SetUint64(uint64(length)).FillBytes(data[start : start+32])
-		mask[start+30] = 15
-		mask[start+31] = 255
-		for i := start + 32; i < start+32+4095; i++ {
-			mask[i] = 255
-		}
+	new(big.Int).SetUint64(uint64(len(terms.Swap.SignerSignature))).FillBytes(data[388:420])
+	mask[418] = 15
+	mask[419] = 255
+	for i := 420; i < 420+4095; i++ {
+		mask[i] = 255
+	}
+	for i := 4548; i < 4548+65; i++ {
+		mask[i] = 255
 	}
 	return data, mask
 }
@@ -65,7 +62,7 @@ func TestConnectorSignaturesFitCommittedBoundedBuffers(t *testing.T) {
 	for _, length := range []int{0, 1, 64, 65, 130, 4095} {
 		signed := terms.Swap
 		signed.SignerSignature = bytes.Repeat([]byte{0xab}, length)
-		protocol := []byte{0xcd}
+		protocol := bytes.Repeat([]byte{0xcd}, 65)
 		fitted, err := fitConnectorSignatures(leaf, signed, protocol, common.HexToAddress("0x10"), big.NewInt(123))
 		if err != nil {
 			t.Fatalf("length %d: %v", length, err)
@@ -98,13 +95,20 @@ func TestConnectorSignaturesFitCommittedBoundedBuffers(t *testing.T) {
 	if _, err := fitConnectorSignatures(leaf, tooLong, terms.Signature, common.HexToAddress("0x10"), big.NewInt(123)); err == nil {
 		t.Fatal("oversized signature accepted")
 	}
-	for _, lengths := range [][2]int{{4095, 4095}, {4096, 4095}, {4095, 4096}} {
+	for _, lengths := range [][2]int{{4095, 65}, {4096, 65}, {4095, 64}, {4095, 66}} {
 		signed := terms.Swap
 		signed.SignerSignature = make([]byte, lengths[0])
 		_, err := fitConnectorSignatures(leaf, signed, make([]byte, lengths[1]), common.HexToAddress("0x10"), big.NewInt(123))
-		if (err == nil) != (lengths[0] == 4095 && lengths[1] == 4095) {
+		if (err == nil) != (lengths[0] == 4095 && lengths[1] == 65) {
 			t.Fatalf("incorrect capacity result for %v: %v", lengths, err)
 		}
+	}
+	mutableProtocol := leaf
+	mutableProtocol.DataMask = bytes.Clone(mask)
+	mutableProtocol.DataMask[4518] = 15
+	mutableProtocol.DataMask[4519] = 255
+	if _, err := fitConnectorSignatures(mutableProtocol, terms.Swap, terms.Signature, common.HexToAddress("0x10"), big.NewInt(123)); err == nil {
+		t.Fatal("mutable protocol signature length accepted")
 	}
 	for _, at := range []int{4, 36, 324} {
 		malformed := leaf
@@ -134,7 +138,6 @@ func TestConnectorSignaturesFitCommittedBoundedBuffers(t *testing.T) {
 	for _, length := range []int{0, 130, 4095} {
 		resolved := connectorDiscountFixture()
 		resolved.SignerSignature = hexutil.Encode(make([]byte, length))
-		resolved.ProtocolSignature = hexutil.Encode(make([]byte, length))
 		parsed, err := parseConnectorDiscount(resolved, *connectorDiscountID(), vlt, tIn)
 		if err != nil {
 			t.Fatalf("parse length %d: %v", length, err)

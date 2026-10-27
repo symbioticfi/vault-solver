@@ -57,14 +57,14 @@ func fitConnectorSignatures(leaf recipes.Leaf, signed connector.ILiquidLaneConne
 	if err != nil {
 		return nil, err
 	}
-	secondCapacity, err := capacity(second, protocol)
-	if err != nil {
-		return nil, err
+	if len(protocol) != 65 || second+32+96 != len(leaf.Data) ||
+		new(big.Int).SetBytes(leaf.Data[second:second+32]).Cmp(big.NewInt(65)) != 0 ||
+		new(big.Int).SetBytes(leaf.DataMask[second:second+32]).Sign() != 0 {
+		return nil, errors.New("connector protocol signature must have a fixed 65-byte layout")
 	}
 	firstLength := len(signed.SignerSignature)
 	signed.SignerSignature = common.RightPadBytes(signed.SignerSignature, firstCapacity)
-	paddedProtocol := common.RightPadBytes(protocol, secondCapacity)
-	fitted, err := connectorBinding.TryPackSwap(signed, paddedProtocol, recipient, amount)
+	fitted, err := connectorBinding.TryPackSwap(signed, protocol, recipient, amount)
 	if err != nil {
 		return nil, errors.Errorf("encode bounded connector swap: %w", err)
 	}
@@ -72,6 +72,5 @@ func fitConnectorSignatures(leaf recipes.Leaf, signed connector.ILiquidLaneConne
 		return nil, errors.New("connector signature buffers do not match committed offsets")
 	}
 	new(big.Int).SetUint64(uint64(firstLength)).FillBytes(fitted[first : first+32])
-	new(big.Int).SetUint64(uint64(len(protocol))).FillBytes(fitted[second : second+32])
 	return fitted, nil
 }
