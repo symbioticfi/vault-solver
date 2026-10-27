@@ -10,9 +10,12 @@ import (
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 )
+
+var recipeBinding = recipeexecutor.NewRecipeExecutor()
 
 func TestAssembleConnectorRouteKeepsCommittedProgram(t *testing.T) {
 	terms, err := parseConnectorDiscount(connectorDiscountFixture(), *connectorDiscountID(), vlt, tIn)
@@ -45,9 +48,13 @@ func TestAssembleConnectorRouteKeepsCommittedProgram(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	route := assembled.Route
-	if route.AmountIn.Int64() != 123 || len(route.Inputs) != 2 || route.Inputs[0].Int64() != 123 || route.Inputs[1].Int64() != 456 || !bytes.Equal(route.Steps[0], recipe.Steps[0]) || len(assembled.Calldata) == 0 {
-		t.Fatalf("incorrect route: %+v", route)
+	values, err := recipeBinding.GetABI().Methods["execute"].Inputs.Unpack(assembled.Calldata[4:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := values[2].([]*big.Int)
+	if len(inputs) != 2 || inputs[0].Int64() != 123 || inputs[1].Int64() != 456 || !bytes.Equal(values[1].([][]byte)[0], recipe.Steps[0]) {
+		t.Fatal("awarded inputs or committed program changed")
 	}
 	after, _ := recipes.HashRecipe(recipe)
 	if after != hash {

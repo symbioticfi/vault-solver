@@ -21,6 +21,7 @@ import (
 )
 
 func fixture(t *testing.T) (provider.Snapshot, recipes.Recipe, *recipes.Tree) {
+	t.Helper()
 	return loadFixture(t, "testdata/3f-executing.json")
 }
 

@@ -12,7 +12,7 @@ import (
 )
 
 var executorBinding = executor.NewExecutor()
-var orderTupleArgs = abi.Arguments{{Type: executorBinding.GetABI().Methods["fill2"].Inputs[0].Type}}
+var orderTupleArgs = abi.Arguments{{Type: executorBinding.GetABI().Methods["fill1"].Inputs[0].Type}}
 
 func decodeOrder(row rfqbackend.OrdersResponseOrdersInner, filler common.Address) (executor.IReactorOrder, []byte, error) {
 	var order executor.IReactorOrder
@@ -60,4 +60,25 @@ func orderTerms(order executor.IReactorOrder, filler common.Address) (common.Add
 		return common.Address{}, nil, errors.New("order output exceeds uint256")
 	}
 	return token, total, nil
+}
+
+// executorData is the existing opaque Call[] payload, separate from Reactor funding.
+type executorCall struct {
+	Target common.Address
+	Value  *big.Int
+	Data   []byte
+}
+
+var executorCallsArgs = executorCallArguments()
+
+func executorCallArguments() abi.Arguments {
+	t, err := abi.NewType("tuple[]", "", []abi.ArgumentMarshaling{
+		{Name: "target", Type: "address"},
+		{Name: "value", Type: "uint256"},
+		{Name: "data", Type: "bytes"},
+	})
+	if err != nil {
+		panic("rfq: executorData type: " + err.Error())
+	}
+	return abi.Arguments{{Type: t}}
 }

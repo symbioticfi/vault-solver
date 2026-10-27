@@ -8,7 +8,8 @@ from the backend discounts API, and builds:
 
 Use [the example config](../config/rfq-merkle.example.yaml). The EOA must be an
 authorized caller of the RFQ Executor. Each configured connector must be registered
-in the Reactor's factory. Its RecipeExecutor must name the RFQ Executor as caller
+as version `2` in the Reactor's Liquid Lane adapter factory (version `1` is the
+native adapter). Its RecipeExecutor must name the RFQ Executor as caller
 and the connector's MerkleAccount as account.
 
 Configuration contains only the backend URL, durable state directory, RFQ executor,
@@ -40,6 +41,11 @@ otherwise its configured issuer calls execute before the complete outer fill suc
 It simulates the complete outer RFQ fill from the EOA so Reactor funding, recipe
 authorization and output settlement are checked together.
 
+The host puts the awarded connector amount and unchanged signed terms in
+`discountSwapInputs`. It forwards the SDK-assembled `RecipeExecutor.execute`
+calldata in the original `executorData` `Call[]`; no RFQ-specific recipe tuple or
+funding reconstruction is used.
+
 The host preserves upstream discount integers and signature bytes. It checks ABI
 framing and route identity; signatures and discount economics are enforced by the
 contracts. It does not translate discount scales or verify EIP-712 signatures locally.
@@ -57,7 +63,7 @@ unsigned intent is rebuilt from fresh orders on restart. Mount an exclusive dura
 directory, and never run independent processes with the same signer.
 
 The RFQ bridge ABI comes from [RFQ PR 25](https://github.com/symbioticfi/rfq/pull/25),
-commit `4c85c1b76d44ec6e2ee249528d69891799c9108d`. Connector and recipe semantics
+commit `de6dbd617bf3c1e8b4120419cbe5800efae7d410`. Connector and recipe semantics
 come from adapters commit `d506348870eb2d379ddae69407bc8b63422291d6`.
 `make refresh-merkle-abi` projects only solver-used entries from canonical Foundry
 artifacts; `make bindings` regenerates typed helpers. No runtime contract changes

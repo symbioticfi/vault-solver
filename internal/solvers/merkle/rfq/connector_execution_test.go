@@ -37,10 +37,10 @@ func TestConnectorBuildSimulatesCompleteAwardedOrder(t *testing.T) {
 	if chain.outerCalls != 1 || !bytes.Equal(calldata, chain.outerData) {
 		t.Fatalf("returned fill was not the simulated fill: calls=%d", chain.outerCalls)
 	}
-	if len(calldata) < 4 || hexutil.Encode(calldata[:4]) != "0xdd416d68" {
-		t.Fatalf("incorrect RecipeFill selector: %x", calldata)
+	if len(calldata) < 4 || !bytes.Equal(calldata[:4], executorBinding.GetABI().Methods["fill1"].ID) {
+		t.Fatalf("incorrect fill selector: %x", calldata)
 	}
-	values, err := executorBinding.GetABI().Methods["fill2"].Inputs.Unpack(calldata[4:])
+	values, err := executorBinding.GetABI().Methods["fill1"].Inputs.Unpack(calldata[4:])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,22 +48,32 @@ func TestConnectorBuildSimulatesCompleteAwardedOrder(t *testing.T) {
 	if !reflect.DeepEqual(gotOrder, order) || !bytes.Equal(values[1].([]byte), []byte{0x91, 0x92}) {
 		t.Fatal("awarded order or protocol signature changed")
 	}
-	if reflect.ValueOf(values[2]).Len() != 0 || reflect.ValueOf(values[3]).Len() != 0 {
-		t.Fatal("connector input was also funded as a direct or discount leg")
+	if reflect.ValueOf(values[2]).Len() != 0 {
+		t.Fatal("discounted connector was funded as permissioned")
 	}
-	fill := *abi.ConvertType(values[4], new(executor.IExecutorRecipeFill)).(*executor.IExecutorRecipeFill)
-	if len(fill.Routes) != 1 || len(fill.PostCalls) != 0 {
-		t.Fatalf("unexpected route composition: %+v", fill)
+	funding := *abi.ConvertType(values[3], new([]executor.IReactorDiscountSwapInput)).(*[]executor.IReactorDiscountSwapInput)
+	if len(funding) != 1 || funding[0].Adapter != vlt || funding[0].AmountIn.Int64() != 123 || funding[0].Recipient != w.caller || !bytes.Equal(funding[0].ProtocolSignature, []byte{0xcc, 0xdd}) {
+		t.Fatalf("connector funding changed: %+v", funding)
 	}
-	route := fill.Routes[0]
-	if route.Executor != chain.recipeExecutor || route.Connector != vlt || route.AmountIn.Int64() != 123 || len(route.Inputs) != 2 || route.Inputs[0].Int64() != 123 || route.Inputs[1].Int64() != 456 {
-		t.Fatalf("awarded amounts or route changed: %+v", route)
+	callValues, err := executorCallsArgs.Unpack(values[4].([]byte))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(route.Queries, recipe.Queries) || !reflect.DeepEqual(route.Steps, recipe.Steps) || len(route.Runtime) != 1 {
-		t.Fatal("committed program or runtime slots changed")
+	calls := *abi.ConvertType(callValues[0], new([]executorCall)).(*[]executorCall)
+	if len(calls) != 1 || calls[0].Target != chain.recipeExecutor || calls[0].Value.Sign() != 0 {
+		t.Fatalf("recipe call changed: %+v", calls)
+	}
+	route, err := recipeBinding.GetABI().Methods["execute"].Inputs.Unpack(calls[0].Data[4:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := route[2].([]*big.Int)
+	runtime := route[3].([][]byte)
+	if len(inputs) != 2 || inputs[0].Int64() != 123 || inputs[1].Int64() != 456 || !reflect.DeepEqual(route[0], recipe.Queries) || !reflect.DeepEqual(route[1], recipe.Steps) || len(runtime) != 1 {
+		t.Fatal("awarded inputs or committed recipe changed")
 	}
 	actionsType := merkleaccount.NewMerkleAccount().GetABI().Methods["manage"].Inputs
-	actions, err := actionsType.Unpack(route.Runtime[0])
+	actions, err := actionsType.Unpack(runtime[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +173,7 @@ func (r *connectorExecutionReader) CallContract(ctx context.Context, msg ethereu
 	if msg.To == nil || len(msg.Data) < 4 {
 		return nil, errors.New("invalid contract call")
 	}
-	if *msg.To == r.recipeCaller && bytes.Equal(msg.Data[:4], common.FromHex("0xdd416d68")) {
+	if *msg.To == r.recipeCaller && bytes.Equal(msg.Data[:4], executorBinding.GetABI().Methods["fill1"].ID) {
 		if msg.From != r.signer || block != nil {
 			return nil, errors.New("outer fill must simulate from the host signer at latest")
 		}

@@ -428,7 +428,7 @@ func (s *Solver) buildExecutorCalldata(
 			ProtocolSignature: signed.ProtocolSignature,
 		})
 	}
-	data, err = uniswapXExecutor.TryPackExecute(
+	data, err = uniswapXExecutor.TryPackExecute0(
 		uxexecutor.UniswapXSignedOrder{Order: order.Encoded, Sig: order.Signature},
 		uxexecutor.ILiquidLaneUniswapXExecutorFillCall{Routes: fillRoutes, DiscountRoutes: discountRoutes},
 	)
