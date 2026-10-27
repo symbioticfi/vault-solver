@@ -4,8 +4,6 @@ package rfq
 import (
 	"context"
 	"math/big"
-	"net/http"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -14,7 +12,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 	"github.com/symbioticfi/merkle-executor/sdk/submission"
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
@@ -75,7 +72,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if deps.Chain == nil || deps.Signer == nil || deps.TxManager == nil {
 		return nil, errors.New("rfq-merkle requires the shared chain, signer and transaction manager")
 	}
-	source, err := permissions.New(cfg.Curator.httpConfig(), &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, deps.Chain, os.Getenv)
+	source, err := cfg.Curator.PermissionSource(deps.Chain, 10*time.Second)
 	if err != nil {
 		return nil, err
 	}

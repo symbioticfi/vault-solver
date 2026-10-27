@@ -10,7 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	sdkparse "github.com/symbioticfi/merkle-executor/sdk/parse"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/connector"
@@ -20,7 +19,6 @@ import (
 )
 
 var connectorBinding = connector.NewLiquidLaneConnector()
-var recipeBinding = recipeexecutor.NewRecipeExecutor()
 
 type connectorTerms struct {
 	Swap       connector.ILiquidLaneConnectorDiscountSwap
@@ -29,7 +27,6 @@ type connectorTerms struct {
 }
 
 type assembledConnector struct {
-	Route    executor.IRecipeRouteRecipeRoute
 	Calldata []byte
 	Leaves   []common.Hash
 }
@@ -79,19 +76,18 @@ func parseConnectorDiscount(r *discounts.Resolved, id common.Hash, venue, token 
 	out.Discount.Deadline = big.NewInt(r.Discount.Deadline)
 	out.ProtocolDeadline = big.NewInt(r.ProtocolDeadline)
 	out.SignerSignature, err = hexutil.Decode(r.SignerSignature)
-	if err != nil {
-		return connectorTerms{}, errors.Errorf("signerSignature: %w", err)
+	if err != nil || len(out.SignerSignature) != 65 {
+		return connectorTerms{}, errors.New("signerSignature must be 65 bytes")
 	}
 	sig, err := hexutil.Decode(r.ProtocolSignature)
-	if err != nil {
-		return connectorTerms{}, errors.Errorf("protocolSignature: %w", err)
+	if err != nil || len(sig) != 65 {
+		return connectorTerms{}, errors.New("protocolSignature must be 65 bytes")
 	}
 	until := min(r.Discount.Deadline, r.ProtocolDeadline)
 	return connectorTerms{out, sig, time.Unix(until, 0)}, nil
 }
 
 func assembleConnectorRoute(snapshot recipes.Snapshot, recipe recipes.Recipe, tree *recipes.Tree, venue, token, outputAsset, recipient common.Address, amountIn, amountOut *big.Int, signed connector.ILiquidLaneConnectorDiscountSwap, signature []byte) (assembledConnector, error) {
-	var route executor.IRecipeRouteRecipeRoute
 	inspection, err := recipes.Inspect(recipe)
 	if err != nil {
 		return assembledConnector{}, err
@@ -157,13 +153,7 @@ func assembleConnectorRoute(snapshot recipes.Snapshot, recipe recipes.Recipe, tr
 	if err != nil {
 		return assembledConnector{}, err
 	}
-	// Input decoding preserves the SDK's assembled runtime verbatim in the typed RFQ bridge tuple.
-	values, err := recipeBinding.GetABI().Methods["execute"].Inputs.Unpack(inner[4:])
-	if err != nil {
-		return assembledConnector{}, errors.Errorf("decode assembled recipe: %w", err)
-	}
-	route = executor.IRecipeRouteRecipeRoute{Executor: snapshot.Executor, Connector: venue, AmountIn: new(big.Int).Set(amountIn), Queries: values[0].([][]byte), Steps: values[1].([][]byte), Inputs: values[2].([]*big.Int), Runtime: values[3].([][]byte)}
-	return assembledConnector{route, inner, leaves}, nil
+	return assembledConnector{inner, leaves}, nil
 }
 
 type permissionSource interface {
@@ -277,7 +267,19 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if err := recipes.VerifyRoles(ctx, w.chain, snapshot, assembled.Leaves); err != nil {
 		return nil, time.Time{}, errors.Errorf("connector recipe roles: %w", err)
 	}
-	calldata, err := executorBinding.TryPackFill2(order, protocolSig, nil, nil, executor.IExecutorRecipeFill{Routes: []executor.IRecipeRouteRecipeRoute{assembled.Route}, PostCalls: []executor.IExecutorCall{}})
+	calls, err := executorCallsArgs.Pack([]executorCall{{Target: snapshot.Executor, Value: new(big.Int), Data: assembled.Calldata}})
+	if err != nil {
+		return nil, time.Time{}, errors.Errorf("encode recipe call: %w", err)
+	}
+	discountInputs := []executor.IReactorDiscountSwapInput{{
+		Adapter: selected.Venue,
+		DiscountSwap: executor.ILiquidLaneAdapterDiscountSwap{
+			Discount:        executor.ILiquidLaneAdapterDiscount{TokenToRedeem: terms.Swap.Discount.TokenToRedeem, Discount: terms.Swap.Discount.Discount, Signer: terms.Swap.Discount.Signer, Protocol: terms.Swap.Discount.Protocol, Nonce: terms.Swap.Discount.Nonce, Deadline: terms.Swap.Discount.Deadline},
+			SignerSignature: terms.Swap.SignerSignature, ProtocolDeadline: terms.Swap.ProtocolDeadline,
+		},
+		ProtocolSignature: terms.Signature, Recipient: w.caller, AmountIn: order.Request.AmountIn,
+	}}
+	calldata, err := executorBinding.TryPackFill1(order, protocolSig, nil, discountInputs, calls)
 	if err != nil {
 		return nil, time.Time{}, errors.Errorf("encode recipe fill: %w", err)
 	}

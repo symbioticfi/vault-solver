@@ -11,6 +11,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/vault-solver/internal/merklehost"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"gopkg.in/yaml.v3"
@@ -25,25 +26,15 @@ const (
 )
 
 type rawConfig struct {
-	Mode       string   `yaml:"mode" json:"mode"`
-	StateDir   string   `yaml:"stateDir" json:"stateDir"`
-	Curator    Curator  `yaml:"curator" json:"curator"`
-	Strategies []string `yaml:"strategies" json:"strategies"`
+	Mode       string             `yaml:"mode" json:"mode"`
+	StateDir   string             `yaml:"stateDir" json:"stateDir"`
+	Curator    merklehost.Curator `yaml:"curator" json:"curator"`
+	Strategies []string           `yaml:"strategies" json:"strategies"`
 }
 type config struct {
 	mode, stateDir string
-	curator        Curator
+	curator        merklehost.Curator
 	strategies     []keeper.Strategy
-}
-
-// Curator contains the operator-supplied permission service settings.
-type Curator struct {
-	URL       string `yaml:"url" json:"url"`
-	APIKeyEnv string `yaml:"apiKeyEnv,omitempty" json:"apiKeyEnv,omitempty"`
-}
-
-func (c Curator) HTTPConfig() protocolio.HTTPConfig {
-	return protocolio.HTTPConfig{URL: c.URL, APIKeyEnv: c.APIKeyEnv, TimeoutSeconds: permissions.HostTimeoutSeconds, MaxResponseBytes: permissions.HostMaxResponseBytes}
 }
 
 func parseConfig(node yaml.Node) (config, error) {
@@ -79,7 +70,7 @@ func parseConfig(node yaml.Node) (config, error) {
 }
 
 // Bind derived identity and the shared source to existing recovery guards.
-func strategyRevision(strategy keeper.Config, curator Curator, caller common.Address) (string, error) {
+func strategyRevision(strategy keeper.Config, curator merklehost.Curator, caller common.Address) (string, error) {
 	raw, err := json.Marshal(struct {
 		Policy   string                `json:"policy"`
 		Strategy keeper.Config         `json:"strategy"`

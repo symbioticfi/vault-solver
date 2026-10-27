@@ -102,6 +102,11 @@ and underlying authorization error.
 
 Merkle connector orders run independently under `rfq-merkle`; see its
 [configuration](config/rfq-merkle.example.yaml) and [runbook](docs/RFQ-MERKLE.md).
+They preserve EOA and deployed ERC-1271 discount signatures, including empty and
+multisigner wallet bytes. Current Curator permissions admit up to 4,095 bytes for
+the discount signer and a fixed 65-byte EOA protocol countersignature. Larger
+discount signatures need a new permission profile. Connector recipes require a
+bounded signer buffer in their permission root.
 It consumes awarded `/orders` and signed backend terms without aggregating adapter liquidity. Its connector routing config maps each RWA asset to a dedicated RecipeExecutor. Each recipe handles one asset and includes its issuer calls when redemption is required. There is no shared custody executor or asset fallback.
 
 When `tokensToQuote: permissioned`, admitted inputs are never aggregated: the selected strategy must

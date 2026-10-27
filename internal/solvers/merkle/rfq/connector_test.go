@@ -10,23 +10,21 @@ import (
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 )
+
+var recipeBinding = recipeexecutor.NewRecipeExecutor()
 
 func TestAssembleConnectorRouteKeepsCommittedProgram(t *testing.T) {
 	terms, err := parseConnectorDiscount(connectorDiscountFixture(), *connectorDiscountID(), vlt, tIn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := connectorBinding.PackSwap(terms.Swap, terms.Signature, common.HexToAddress("0x10"), big.NewInt(0))
-	mask := bytes.Repeat([]byte{255}, len(data))
-	for i := 0; i < 4; i++ {
-		mask[i] = 0
-	}
-	// The RWA word is part of the permission's fixed preimage.
-	for i := 132; i < 164; i++ {
-		mask[i] = 0
+	data, mask := connectorSignatureTemplate(terms, common.HexToAddress("0x10"), big.NewInt(0))
+	for i := 100; i < 132; i++ {
+		mask[i] = 255
 	}
 	leaf := recipes.Leaf{Target: vlt, Value: new(big.Int), Data: data, DataMask: mask}
 	leaf.Hash, err = recipes.HashLeaf(leaf)
@@ -45,9 +43,13 @@ func TestAssembleConnectorRouteKeepsCommittedProgram(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	route := assembled.Route
-	if route.AmountIn.Int64() != 123 || len(route.Inputs) != 2 || route.Inputs[0].Int64() != 123 || route.Inputs[1].Int64() != 456 || !bytes.Equal(route.Steps[0], recipe.Steps[0]) || len(assembled.Calldata) == 0 {
-		t.Fatalf("incorrect route: %+v", route)
+	values, err := recipeBinding.GetABI().Methods["execute"].Inputs.Unpack(assembled.Calldata[4:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs := values[2].([]*big.Int)
+	if len(inputs) != 2 || inputs[0].Int64() != 123 || inputs[1].Int64() != 456 || !bytes.Equal(values[1].([][]byte)[0], recipe.Steps[0]) {
+		t.Fatal("awarded inputs or committed program changed")
 	}
 	after, _ := recipes.HashRecipe(recipe)
 	if after != hash {
@@ -107,7 +109,7 @@ func connectorDiscountFixture() *discounts.Resolved {
 	return &discounts.Resolved{
 		DiscountID:      common.HexToHash("0x42").Hex(),
 		Discount:        discounts.Terms{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "2000000", Signer: common.HexToAddress("0x44").Hex(), Protocol: common.HexToAddress("0x45").Hex(), Nonce: "17", Deadline: 4102444800},
-		SignerSignature: "0xaabb", ProtocolSignature: "0xccdd", ProtocolDeadline: 4102444801,
+		SignerSignature: "0x" + strings.Repeat("ab", 65), ProtocolSignature: "0x" + strings.Repeat("cd", 65), ProtocolDeadline: 4102444801,
 	}
 }
 
@@ -121,6 +123,10 @@ func TestConnectorDiscountPreservesUpstreamTerms(t *testing.T) {
 		{"uint256 overflow", func(r *discounts.Resolved) { r.Discount.Nonce = new(big.Int).Lsh(big.NewInt(1), 256).String() }, "nonce"},
 		{"uint48 overflow", func(r *discounts.Resolved) { r.ProtocolDeadline = 1 << 48 }, "deadline"},
 		{"malformed signature", func(r *discounts.Resolved) { r.SignerSignature = "0xgg" }, "signerSignature"},
+		{"short signer signature", func(r *discounts.Resolved) { r.SignerSignature = "0xaabb" }, "signerSignature"},
+		{"long signer signature", func(r *discounts.Resolved) { r.SignerSignature = "0x" + strings.Repeat("ab", 130) }, "signerSignature"},
+		{"short protocol signature", func(r *discounts.Resolved) { r.ProtocolSignature = "0xaabb" }, "protocolSignature"},
+		{"long protocol signature", func(r *discounts.Resolved) { r.ProtocolSignature = "0x" + strings.Repeat("ab", 130) }, "protocolSignature"},
 		{"wrong route", func(r *discounts.Resolved) { r.Discount.Adapter = common.HexToAddress("0x55").Hex() }, "route"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -136,7 +142,7 @@ func TestConnectorDiscountPreservesUpstreamTerms(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if terms.Swap.Discount.Discount.String() != "2000000" || terms.Swap.Discount.Nonce.String() != "17" || terms.Swap.Discount.Deadline.Int64() != 4102444800 || terms.Swap.ProtocolDeadline.Int64() != 4102444801 || string(terms.Swap.SignerSignature) != "\xaa\xbb" || string(terms.Signature) != "\xcc\xdd" || terms.ValidUntil.Unix() != 4102444800 {
+			if terms.Swap.Discount.Discount.String() != "2000000" || terms.Swap.Discount.Nonce.String() != "17" || terms.Swap.Discount.Deadline.Int64() != 4102444800 || terms.Swap.ProtocolDeadline.Int64() != 4102444801 || !bytes.Equal(terms.Swap.SignerSignature, bytes.Repeat([]byte{0xab}, 65)) || !bytes.Equal(terms.Signature, bytes.Repeat([]byte{0xcd}, 65)) || terms.ValidUntil.Unix() != 4102444800 {
 				t.Fatalf("signed data changed: %+v", terms)
 			}
 		})
@@ -144,3 +150,14 @@ func TestConnectorDiscountPreservesUpstreamTerms(t *testing.T) {
 }
 
 func connectorDiscountID() *common.Hash { v := common.HexToHash("0x42"); return &v }
+
+func connectorSignatureTemplate(terms connectorTerms, recipient common.Address, amount *big.Int) (data, mask []byte) {
+	data = connectorBinding.PackSwap(terms.Swap, terms.Signature, recipient, amount)
+	mask = make([]byte, len(data))
+	for _, start := range []int{420, 548} {
+		for i := start; i < start+65; i++ {
+			mask[i] = 255
+		}
+	}
+	return data, mask
+}

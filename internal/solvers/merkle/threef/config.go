@@ -11,6 +11,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/vault-solver/internal/merklefunding"
+	"github.com/symbioticfi/vault-solver/internal/merklehost"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"gopkg.in/yaml.v3"
@@ -19,21 +20,12 @@ import (
 const pollInterval = 15 * time.Second
 const operationTimeout = 30 * time.Second
 
-type curatorConfig struct {
-	URL       string `yaml:"url"`
-	APIKeyEnv string `yaml:"apiKeyEnv"`
-}
-
-func (c curatorConfig) httpConfig() protocolio.HTTPConfig {
-	return protocolio.HTTPConfig{URL: c.URL, APIKeyEnv: c.APIKeyEnv, TimeoutSeconds: permissions.HostTimeoutSeconds, MaxResponseBytes: permissions.HostMaxResponseBytes}
-}
-
 type config struct {
 	MerkleFunding merklefunding.Config `yaml:"merkleFunding"`
 	Mode          string               `yaml:"mode"`
 	StateDir      string               `yaml:"stateDir"`
 	Executor      string               `yaml:"executor"`
-	Curator       curatorConfig        `yaml:"curator"`
+	Curator       merklehost.Curator   `yaml:"curator"`
 	URL           string               `yaml:"url"`
 	APIKeyEnv     string               `yaml:"apiKeyEnv"`
 	Broker        string               `yaml:"broker"`
@@ -67,7 +59,7 @@ func parseConfig(node yaml.Node) (config, error) {
 		return config{}, err
 	}
 	cfg.Broker = broker.Hex()
-	if err := permissions.ValidateConfig(cfg.Curator.httpConfig()); err != nil {
+	if err := permissions.ValidateConfig(cfg.Curator.HTTPConfig()); err != nil {
 		return config{}, err
 	}
 	if err := validateAPIConfig(cfg.apiConfig()); err != nil {
@@ -83,7 +75,7 @@ func strategyRevision(strategy keeper.Config, cfg config, caller common.Address)
 		API      apiConfig             `json:"api"`
 		Caller   common.Address        `json:"caller"`
 		Funding  merklefunding.Config  `json:"merkleFunding,omitempty"`
-	}{"1", strategy, cfg.Curator.httpConfig(), cfg.apiConfig(), caller, cfg.MerkleFunding})
+	}{"1", strategy, cfg.Curator.HTTPConfig(), cfg.apiConfig(), caller, cfg.MerkleFunding})
 	if err != nil {
 		return "", errors.Errorf("threef-merkle strategy identity: %w", err)
 	}
