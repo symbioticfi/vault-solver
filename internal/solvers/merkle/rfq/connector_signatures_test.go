@@ -3,6 +3,7 @@ package rfq
 import (
 	"bytes"
 	"math/big"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -12,23 +13,50 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/connector"
 )
 
-func TestConnectorSignaturesFitCommittedBoundedBuffers(t *testing.T) {
-	terms, err := parseConnectorDiscount(connectorDiscountFixture(), *connectorDiscountID(), vlt, tIn)
-	if err != nil {
-		t.Fatal(err)
-	}
+func connectorSignatureTemplate(terms connectorTerms, recipient common.Address, amount *big.Int) (data, mask []byte) {
 	padded := terms.Swap
-	padded.SignerSignature = make([]byte, 4095)
-	data := connectorBinding.PackSwap(padded, make([]byte, 4095), common.HexToAddress("0x10"), big.NewInt(123))
-	mask := make([]byte, len(data))
-	for _, start := range []int{388, 4516} {
-		new(big.Int).FillBytes(data[start : start+32])
+	padded.SignerSignature = common.RightPadBytes(terms.Swap.SignerSignature, 4095)
+	data = connectorBinding.PackSwap(padded, common.RightPadBytes(terms.Signature, 4095), recipient, amount)
+	mask = make([]byte, len(data))
+	for index, start := range []int{388, 4516} {
+		length := len(terms.Swap.SignerSignature)
+		if index == 1 {
+			length = len(terms.Signature)
+		}
+		new(big.Int).SetUint64(uint64(length)).FillBytes(data[start : start+32])
 		mask[start+30] = 15
 		mask[start+31] = 255
 		for i := start + 32; i < start+32+4095; i++ {
 			mask[i] = 255
 		}
 	}
+	return data, mask
+}
+
+func TestConnectorSignaturesRequireBoundedLengthMasks(t *testing.T) {
+	terms, err := parseConnectorDiscount(connectorDiscountFixture(), *connectorDiscountID(), vlt, tIn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	terms.Swap.SignerSignature = make([]byte, 65)
+	terms.Signature = make([]byte, 65)
+	data := connectorBinding.PackSwap(terms.Swap, terms.Signature, common.HexToAddress("0x10"), big.NewInt(123))
+	for _, lengthMask := range [][]byte{make([]byte, 32), bytes.Repeat([]byte{255}, 32)} {
+		mask := make([]byte, len(data))
+		copy(mask[388:420], lengthMask)
+		leaf := recipes.Leaf{Target: vlt, Value: new(big.Int), Data: data, DataMask: mask}
+		if _, err := fitConnectorSignatures(leaf, terms.Swap, terms.Signature, common.HexToAddress("0x10"), big.NewInt(123)); err == nil || !strings.Contains(err.Error(), "connector signature length mask is invalid") {
+			t.Fatalf("unbounded signature length accepted: %v", err)
+		}
+	}
+}
+
+func TestConnectorSignaturesFitCommittedBoundedBuffers(t *testing.T) {
+	terms, err := parseConnectorDiscount(connectorDiscountFixture(), *connectorDiscountID(), vlt, tIn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, mask := connectorSignatureTemplate(terms, common.HexToAddress("0x10"), big.NewInt(123))
 	leaf := recipes.Leaf{Target: vlt, Value: new(big.Int), Data: data, DataMask: mask}
 	before, err := recipes.HashLeaf(leaf)
 	if err != nil {

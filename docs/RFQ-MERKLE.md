@@ -54,7 +54,8 @@ The connector packer writes the exact EOA/ERC-1271 bytes and their lengths into 
 buffers before the SDK verifies the full leaf, mask and proof. Length masks must be
 low bits representing a capacity of `2^n - 1`, at most 65,535 bytes; the current Curator
 profile uses 4,095 bytes per signature. A larger signature, malformed offset or changed
-fixed field fails assembly. Existing fixed-length leaves retain their exact shape.
+fixed field fails assembly. Both signature length words must carry bounded masks;
+fixed-length or fully mutable length words fail assembly.
 The current canonical `LLExecuting` recipe requires an exact payout, so an order
 whose required output excludes connector surplus remains unsupported. Multiple
 output tokens and split connector routes also remain unsupported.

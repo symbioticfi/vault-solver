@@ -12,18 +12,6 @@ import (
 // ABI offsets remain committed while a bounded signature occupies its reserved capacity.
 // The generic recipe assembler still verifies every fixed bit and the complete leaf hash.
 func fitConnectorSignatures(leaf recipes.Leaf, signed connector.ILiquidLaneConnectorDiscountSwap, protocol []byte, recipient common.Address, amount *big.Int) ([]byte, error) {
-	canonical, err := connectorBinding.TryPackSwap(signed, protocol, recipient, amount)
-	if err != nil {
-		return nil, errors.Errorf("encode connector swap: %w", err)
-	}
-	bounded := false
-	if len(leaf.DataMask) >= 420 {
-		mask := new(big.Int).SetBytes(leaf.DataMask[388:420])
-		bounded = mask.IsUint64() && mask.Uint64() > 0 && mask.Uint64() <= 65535
-	}
-	if len(canonical) == len(leaf.Data) && !bounded {
-		return canonical, nil
-	}
 	if len(leaf.Data) != len(leaf.DataMask) || len(leaf.Data) < 420 {
 		return nil, errors.New("connector signature layout is malformed")
 	}

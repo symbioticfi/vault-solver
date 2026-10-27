@@ -22,14 +22,9 @@ func TestAssembleConnectorRouteKeepsCommittedProgram(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := connectorBinding.PackSwap(terms.Swap, terms.Signature, common.HexToAddress("0x10"), big.NewInt(0))
-	mask := bytes.Repeat([]byte{255}, len(data))
-	for i := 0; i < 4; i++ {
-		mask[i] = 0
-	}
-	// The RWA word is part of the permission's fixed preimage.
-	for i := 132; i < 164; i++ {
-		mask[i] = 0
+	data, mask := connectorSignatureTemplate(terms, common.HexToAddress("0x10"), big.NewInt(0))
+	for i := 100; i < 132; i++ {
+		mask[i] = 255
 	}
 	leaf := recipes.Leaf{Target: vlt, Value: new(big.Int), Data: data, DataMask: mask}
 	leaf.Hash, err = recipes.HashLeaf(leaf)

@@ -247,10 +247,10 @@ func connectorExecutionFixture(t *testing.T) connectorExecutionFixtureData {
 	if err != nil {
 		t.Fatal(err)
 	}
-	data := connectorBinding.PackSwap(terms.Swap, terms.Signature, rfqExecutor, big.NewInt(0))
-	mask := bytes.Repeat([]byte{0xff}, len(data))
-	clear(mask[:4])
-	clear(mask[132:164])
+	data, mask := connectorSignatureTemplate(terms, rfqExecutor, big.NewInt(0))
+	for i := 100; i < 132; i++ {
+		mask[i] = 255
+	}
 	leaf := recipes.Leaf{Target: vlt, Value: new(big.Int), Data: data, DataMask: mask}
 	leaf.Hash, err = recipes.HashLeaf(leaf)
 	if err != nil {
