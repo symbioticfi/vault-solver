@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [main, chore/quote-pair-dashboards]
   pull_request:
   workflow_call: # reusable entrypoint: an external deploy/infra workflow can gate on build/test/lint
 
