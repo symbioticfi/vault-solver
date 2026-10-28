@@ -124,7 +124,7 @@ func TestAwardSizingOnlyUsesSignedTuple(t *testing.T) {
 }
 
 func TestPollerPersistsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
-	fixture := connectorExecutionFixture(t)
+	fixture := connectorExecutionFixture(t, connectorDiscountFixture())
 	order, _, backend := connectorExecutionAward(fixture.workflow.caller)
 	backend.rows = []rfqbackend.OrdersResponseOrdersInner{awardRow(t, order), awardRow(t, order)}
 	backend.listed = &discounts.List{Discounts: []discounts.ListItem{
@@ -174,7 +174,7 @@ func TestPollerPersistsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 func TestWholeAwardRequiresVenueAndAdvertisedCapacity(t *testing.T) {
 	for _, capacity := range []string{"advertised", "onchain"} {
 		t.Run(capacity, func(t *testing.T) {
-			f := connectorExecutionFixture(t)
+			f := connectorExecutionFixture(t, connectorDiscountFixture())
 			order, selected, backend := connectorExecutionAward(f.workflow.caller)
 			if capacity == "advertised" {
 				selected.MaxAssets = big.NewInt(455)

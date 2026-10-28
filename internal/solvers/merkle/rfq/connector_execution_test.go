@@ -19,14 +19,19 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 )
 
 // This fixture leaves discovery, permission verification and calldata assembly in the SDK;
 // only the chain and curator transports are replaced.
 func TestConnectorBuildSimulatesCompleteAwardedOrder(t *testing.T) {
-	fixture := connectorExecutionFixture(t)
+	resolved := connectorDiscountFixture()
+	resolved.SignerSignature = "0x" + strings.Repeat("ab", 130)
+	resolved.ProtocolSignature = "0x" + strings.Repeat("cd", 1)
+	fixture := connectorExecutionFixture(t, resolved)
 	w, chain, recipe, leaf := fixture.workflow, fixture.reader, fixture.recipe, fixture.leaf
 	order, selected, backend := connectorExecutionAward(w.caller)
+	backend.discount = resolved
 	calldata, until, err := w.build(t.Context(), order, []byte{0x91, 0x92}, selected, backend)
 	if err != nil {
 		t.Fatal(err)
@@ -52,7 +57,7 @@ func TestConnectorBuildSimulatesCompleteAwardedOrder(t *testing.T) {
 		t.Fatal("discounted connector was funded as permissioned")
 	}
 	funding := *abi.ConvertType(values[3], new([]executor.IReactorDiscountSwapInput)).(*[]executor.IReactorDiscountSwapInput)
-	if len(funding) != 1 || funding[0].Adapter != vlt || funding[0].AmountIn.Int64() != 123 || funding[0].Recipient != w.caller || !bytes.Equal(funding[0].ProtocolSignature, bytes.Repeat([]byte{0xcd}, 65)) {
+	if len(funding) != 1 || funding[0].Adapter != vlt || funding[0].AmountIn.Int64() != 123 || funding[0].Recipient != w.caller || !bytes.Equal(funding[0].DiscountSwap.SignerSignature, bytes.Repeat([]byte{0xab}, 130)) || !bytes.Equal(funding[0].ProtocolSignature, []byte{0xcd}) {
 		t.Fatalf("connector funding changed: %+v", funding)
 	}
 	callValues, err := executorCallsArgs.Unpack(values[4].([]byte))
@@ -93,6 +98,19 @@ func TestConnectorBuildSimulatesCompleteAwardedOrder(t *testing.T) {
 	}
 }
 
+func TestConnectorBuildRejectsIncompatibleSignaturePermission(t *testing.T) {
+	fixture := connectorExecutionFixture(t, connectorDiscountFixture())
+	order, selected, backend := connectorExecutionAward(fixture.workflow.caller)
+	backend.discount.SignerSignature = "0x" + strings.Repeat("ab", 130)
+	calldata, _, err := fixture.workflow.build(t.Context(), order, []byte{0x91, 0x92}, selected, backend)
+	if err == nil || !strings.Contains(err.Error(), "changes calldata length") {
+		t.Fatalf("error = %v, want committed calldata length rejection", err)
+	}
+	if len(calldata) != 0 || fixture.reader.outerCalls != 0 {
+		t.Fatal("incompatible permission reached simulation or returned transaction calldata")
+	}
+}
+
 func TestConnectorBuildRejectsUnauthorizedOrUnsettledExecution(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -108,10 +126,13 @@ func TestConnectorBuildRejectsUnauthorizedOrUnsettledExecution(t *testing.T) {
 		{"snapshot changes during outer fill", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.reorgDuringFill = true }, "reorganiz"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fixture := connectorExecutionFixture(t)
+			resolved := connectorDiscountFixture()
+			resolved.SignerSignature = "0x" + strings.Repeat("ab", 130)
+			fixture := connectorExecutionFixture(t, resolved)
 			w, chain := fixture.workflow, fixture.reader
 			tc.mutate(w, chain)
 			order, selected, backend := connectorExecutionAward(w.caller)
+			backend.discount = resolved
 			calldata, _, err := w.build(t.Context(), order, []byte{0x91, 0x92}, selected, backend)
 			if err == nil || !strings.Contains(strings.ToLower(err.Error()), tc.want) {
 				t.Fatalf("error = %v, want %q", err, tc.want)
@@ -237,13 +258,13 @@ type connectorExecutionFixtureData struct {
 	leaf     recipes.Leaf
 }
 
-func connectorExecutionFixture(t *testing.T) connectorExecutionFixtureData {
+func connectorExecutionFixture(t *testing.T, resolved *discounts.Resolved) connectorExecutionFixtureData {
 	t.Helper()
 	account := common.HexToAddress("0x21")
 	rfqExecutor := common.HexToAddress("0x10")
 	recipeExecutor := common.HexToAddress("0x43")
 	signer := common.HexToAddress("0x99")
-	terms, err := parseConnectorDiscount(connectorDiscountFixture(), *connectorDiscountID(), vlt, tIn)
+	terms, err := parseConnectorDiscount(resolved, *connectorDiscountID(), vlt, tIn)
 	if err != nil {
 		t.Fatal(err)
 	}

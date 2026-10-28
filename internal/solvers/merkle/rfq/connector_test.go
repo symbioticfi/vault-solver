@@ -9,6 +9,7 @@ import (
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
@@ -122,11 +123,15 @@ func TestConnectorDiscountPreservesUpstreamTerms(t *testing.T) {
 		{"unchanged", func(*discounts.Resolved) {}, ""},
 		{"uint256 overflow", func(r *discounts.Resolved) { r.Discount.Nonce = new(big.Int).Lsh(big.NewInt(1), 256).String() }, "nonce"},
 		{"uint48 overflow", func(r *discounts.Resolved) { r.ProtocolDeadline = 1 << 48 }, "deadline"},
-		{"malformed signature", func(r *discounts.Resolved) { r.SignerSignature = "0xgg" }, "signerSignature"},
-		{"short signer signature", func(r *discounts.Resolved) { r.SignerSignature = "0xaabb" }, "signerSignature"},
-		{"long signer signature", func(r *discounts.Resolved) { r.SignerSignature = "0x" + strings.Repeat("ab", 130) }, "signerSignature"},
-		{"short protocol signature", func(r *discounts.Resolved) { r.ProtocolSignature = "0xaabb" }, "protocolSignature"},
-		{"long protocol signature", func(r *discounts.Resolved) { r.ProtocolSignature = "0x" + strings.Repeat("ab", 130) }, "protocolSignature"},
+		{"malformed signer signature", func(r *discounts.Resolved) { r.SignerSignature = "0xgg" }, "signerSignature"},
+		{"odd signer signature", func(r *discounts.Resolved) { r.SignerSignature = "0xabc" }, "signerSignature"},
+		{"malformed protocol signature", func(r *discounts.Resolved) { r.ProtocolSignature = "0xgg" }, "protocolSignature"},
+		{"odd protocol signature", func(r *discounts.Resolved) { r.ProtocolSignature = "0xabc" }, "protocolSignature"},
+		{"empty signatures", func(r *discounts.Resolved) { r.SignerSignature, r.ProtocolSignature = "0x", "0x" }, ""},
+		{"short signer signature", func(r *discounts.Resolved) { r.SignerSignature = "0xaabb" }, ""},
+		{"long signer signature", func(r *discounts.Resolved) { r.SignerSignature = "0x" + strings.Repeat("ab", 130) }, ""},
+		{"short protocol signature", func(r *discounts.Resolved) { r.ProtocolSignature = "0xaabb" }, ""},
+		{"long protocol signature", func(r *discounts.Resolved) { r.ProtocolSignature = "0x" + strings.Repeat("ab", 130) }, ""},
 		{"wrong route", func(r *discounts.Resolved) { r.Discount.Adapter = common.HexToAddress("0x55").Hex() }, "route"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -142,7 +147,7 @@ func TestConnectorDiscountPreservesUpstreamTerms(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if terms.Swap.Discount.Discount.String() != "2000000" || terms.Swap.Discount.Nonce.String() != "17" || terms.Swap.Discount.Deadline.Int64() != 4102444800 || terms.Swap.ProtocolDeadline.Int64() != 4102444801 || !bytes.Equal(terms.Swap.SignerSignature, bytes.Repeat([]byte{0xab}, 65)) || !bytes.Equal(terms.Signature, bytes.Repeat([]byte{0xcd}, 65)) || terms.ValidUntil.Unix() != 4102444800 {
+			if terms.Swap.Discount.Discount.String() != "2000000" || terms.Swap.Discount.Nonce.String() != "17" || terms.Swap.Discount.Deadline.Int64() != 4102444800 || terms.Swap.ProtocolDeadline.Int64() != 4102444801 || hexutil.Encode(terms.Swap.SignerSignature) != r.SignerSignature || hexutil.Encode(terms.Signature) != r.ProtocolSignature || terms.ValidUntil.Unix() != 4102444800 {
 				t.Fatalf("signed data changed: %+v", terms)
 			}
 		})
@@ -154,8 +159,11 @@ func connectorDiscountID() *common.Hash { v := common.HexToHash("0x42"); return 
 func connectorSignatureTemplate(terms connectorTerms, recipient common.Address, amount *big.Int) (data, mask []byte) {
 	data = connectorBinding.PackSwap(terms.Swap, terms.Signature, recipient, amount)
 	mask = make([]byte, len(data))
-	for _, start := range []int{420, 548} {
-		for i := start; i < start+65; i++ {
+	for _, field := range []struct{ start, length int }{
+		{420, len(terms.Swap.SignerSignature)},
+		{452 + (len(terms.Swap.SignerSignature)+31)/32*32, len(terms.Signature)},
+	} {
+		for i := field.start; i < field.start+field.length; i++ {
 			mask[i] = 255
 		}
 	}

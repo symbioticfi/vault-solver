@@ -76,12 +76,12 @@ func parseConnectorDiscount(r *discounts.Resolved, id common.Hash, venue, token 
 	out.Discount.Deadline = big.NewInt(r.Discount.Deadline)
 	out.ProtocolDeadline = big.NewInt(r.ProtocolDeadline)
 	out.SignerSignature, err = hexutil.Decode(r.SignerSignature)
-	if err != nil || len(out.SignerSignature) != 65 {
-		return connectorTerms{}, errors.New("signerSignature must be 65 bytes")
+	if err != nil {
+		return connectorTerms{}, errors.Errorf("signerSignature: %w", err)
 	}
 	sig, err := hexutil.Decode(r.ProtocolSignature)
-	if err != nil || len(sig) != 65 {
-		return connectorTerms{}, errors.New("protocolSignature must be 65 bytes")
+	if err != nil {
+		return connectorTerms{}, errors.Errorf("protocolSignature: %w", err)
 	}
 	until := min(r.Discount.Deadline, r.ProtocolDeadline)
 	return connectorTerms{out, sig, time.Unix(until, 0)}, nil
