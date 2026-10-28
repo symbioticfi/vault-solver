@@ -102,14 +102,14 @@ The committed permission must admit the supplied calldata length and signature
 framing, and the complete outer fill must simulate successfully. Existing Curator
 templates with fixed 65-byte fields require compatible permissions for other lengths.
 It consumes awarded `/orders` and signed backend terms without aggregating adapter liquidity.
-Configuration allowlists connectors; the backend advertises the RecipeExecutor discovered from
-the unique current recipe for each connector and RWA, together with its calculated funding
-capacity. The solver uses this capacity, the current connector policy budget and shared
-reservations for admission. Recipes stay in their original format: call data and Merkle proofs
-come from the existing curator permission-tree service. Filling authenticates that recipe and
-its permissions at a pinned block, then simulates the complete outer settlement transaction.
-Missing executors or invalid capacity fail closed. Each recipe handles one asset and includes
-its issuer calls when redemption is required.
+Configuration allowlists connectors; the backend advertises its configured RecipeExecutor
+and capacity estimate from recipe reads. The solver applies current policy budgets and shared
+reservations. Recipes keep their original format: publication bytes come from the indexed-only
+backend API, while call data and Merkle proofs come from the curator permission-tree service.
+Filling verifies the current commitment and permissions, then simulates the complete outer
+settlement to check ordered funding and actual payment before admission. Missing executors or
+invalid capacity fail closed. Each recipe handles one asset and includes its issuer calls when
+redemption is required.
 
 When `tokensToQuote: permissioned`, admitted inputs are never aggregated: the selected strategy must
 use one candidate route. Other scopes keep the existing multi-route behavior.
@@ -975,6 +975,10 @@ The SDK is public and pinned in `go.mod`; normal Go and Docker builds download i
 without a GitHub token or a local merkle-executor checkout.
 
 The SDK reads signed permission bundles through `GET /merkle/{adapter}/{root}` under the configured curator API URL.
+Original recipe publications come from the indexed-only `/api/v1/recipes/{executor}?hash=…&block=…`
+endpoint. Generic and 3F Merkle configurations require its host as `indexerUrl`; RFQ Merkle
+reuses `backendUrl`. No request scans blockchain logs or falls back to scans if indexed data
+is unavailable. Recipe bytes are verified against the current on-chain commitment.
 
 Polling is fixed at 15 seconds and operation timeout at 30 seconds. `pollInterval` and
 `operationTimeout` are not configuration fields. Curator settings accept only `url` and

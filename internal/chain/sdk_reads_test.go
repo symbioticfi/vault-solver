@@ -211,3 +211,31 @@ func (s *sdkBatchAPI) Call(_ context.Context, args struct {
 	}
 	return args.Input, nil
 }
+
+func TestRequestReadersNeverSendBlockchainLogScans(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var request struct {
+			ID json.RawMessage `json:"id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": "0x1"})
+	}))
+	defer server.Close()
+	client, err := Dial(t.Context(), []string{server.URL}, "", protocolio.StandardMulticall3, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	before := calls
+	if _, err := client.FilterLogs(t.Context(), ethereum.FilterQuery{}); err == nil {
+		t.Fatal("single log scan admitted")
+	}
+	if _, err := client.BatchRead(t.Context(), []protocolio.ReadRequest{{Kind: protocolio.ReadHeader}, {Kind: protocolio.ReadLogs}}); err == nil {
+		t.Fatal("batch log scan admitted")
+	}
+	if calls != before {
+		t.Fatal("log scan reached RPC transport")
+	}
+}

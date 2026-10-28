@@ -21,4 +21,4 @@ solvers:
         # apiKeyEnv: CURATOR_API_TOKEN
       connectors:
         - "0x0000000000000000000000000000000000000042"
-        # RecipeExecutor for each RWA is read from its connector on-chain.
+        # RecipeExecutor is supplied by the backend inventory for each RWA.

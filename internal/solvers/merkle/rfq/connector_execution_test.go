@@ -197,16 +197,11 @@ func (r *connectorExecutionReader) HeaderByNumber(ctx context.Context, number *b
 	return types.CopyHeader(r.header), nil
 }
 
-func (r *connectorExecutionReader) FilterLogs(_ context.Context, query ethereum.FilterQuery) ([]types.Log, error) {
-	event := recipeBinding.GetABI().Events["SetRecipe"]
-	if query.FromBlock.Uint64() != 7 || query.ToBlock.Uint64() != 7 || len(query.Addresses) != 1 || query.Addresses[0] != r.recipeExecutor || len(query.Topics) != 1 || len(query.Topics[0]) != 1 || query.Topics[0][0] != event.ID {
-		return nil, errors.New("SetRecipe evidence escaped pinned executor")
+func (r *connectorExecutionReader) RecipePublication(_ context.Context, executor common.Address, hash common.Hash, block uint64) (recipes.Publication, error) {
+	if executor != r.recipeExecutor || hash != r.recipeHash || block != 7 {
+		return recipes.Publication{}, errors.New("indexed publication escaped pinned executor")
 	}
-	data, err := event.Inputs.NonIndexed().Pack(r.recipe.Queries, r.recipe.Steps)
-	if err != nil {
-		return nil, err
-	}
-	return []types.Log{{Address: r.recipeExecutor, Topics: []common.Hash{event.ID, r.recipeHash}, Data: data, BlockNumber: 7, BlockHash: r.header.Hash()}}, nil
+	return recipes.Publication{Executor: executor, RecipeHash: hash, BlockNumber: block, BlockHash: r.header.Hash(), TransactionHash: common.HexToHash("0x1234"), Recipe: recipes.CloneRecipe(r.recipe)}, nil
 }
 
 func (r *connectorExecutionReader) CallContract(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {

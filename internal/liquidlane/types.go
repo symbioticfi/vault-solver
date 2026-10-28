@@ -44,8 +44,7 @@ type Route struct {
 type Inventory struct {
 	Route
 
-	// Kind selects the canonical connector read surface; empty means native adapter.
-	Kind              string         `json:"kind,omitempty"`
+	// A nonzero RecipeExecutor selects the connector surface; zero means native adapter.
 	RecipeExecutor    common.Address `json:"-"`
 	DiscountPrecision int64          `json:"-"`
 

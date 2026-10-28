@@ -57,7 +57,7 @@ func TestConnectorQuoteUsesBackendCapacityAndCurrentPolicyBudget(t *testing.T) {
 			t.Cleanup(client.Close)
 			r := newReader(client, logr.Discard(), common.Address{})
 			id := common.HexToHash("0x11")
-			inventory := []solverInventory{{Route: liquidlane.NewRoute(1, connectorAddress, account, tokenIn, tokenOut, 6, 6), Kind: "connector", RecipeExecutor: common.HexToAddress("0x43"), DiscountID: &id, Discount: big.NewInt(1), DiscountPrecision: connectorDiscountPrecision, MaxAssets: big.NewInt(tc.advertised), BlockNumber: tc.observed}}
+			inventory := []solverInventory{{Route: liquidlane.NewRoute(1, connectorAddress, account, tokenIn, tokenOut, 6, 6), RecipeExecutor: common.HexToAddress("0x43"), DiscountID: &id, Discount: big.NewInt(1), DiscountPrecision: connectorDiscountPrecision, MaxAssets: big.NewInt(tc.advertised), BlockNumber: tc.observed}}
 			pending := func(rows []solverInventory) liquidlane.CapacityReservations {
 				if len(rows) != 1 || rows[0].Vault != account || rows[0].BlockNumber != tc.observed {
 					t.Fatal("capacity lost backend observation block or pinned account identity")

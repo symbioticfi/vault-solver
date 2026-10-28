@@ -22,7 +22,7 @@ type OrdersResponseOrdersInnerSettledAmountsInner struct {
 	Token                string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	Amount               string `json:"amount" validate:"regexp=^\\d+$"`
 	Recipient            string `json:"recipient" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	TxHash               string `json:"txHash" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	TxHash               string `json:"txHash" validate:"regexp=^0x(?:[a-fA-F0-9]{2})*$"`
 	AdditionalProperties map[string]interface{}
 }
 

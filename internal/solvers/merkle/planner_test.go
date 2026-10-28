@@ -174,13 +174,8 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 					case "eth_getBlockByNumber":
 						result = header
 					case "eth_getLogs":
-						event := binding.GetABI().Events["SetRecipe"]
-						data, err := event.Inputs.NonIndexed().Pack(recipe.Queries, recipe.Steps)
-						if err != nil {
-							t.Error(err)
-							return
-						}
-						result = []types.Log{{Address: executor, BlockNumber: 12, BlockHash: header.Hash(), Topics: []common.Hash{event.ID, recipeHash}, Data: data}}
+						t.Error("request-time RPC log scan is forbidden")
+						return
 					case "eth_call":
 						var call struct {
 							From  common.Address `json:"from"`
@@ -188,10 +183,10 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 							Input hexutil.Bytes  `json:"input"`
 						}
 						_ = json.Unmarshal(q.Params[0], &call)
-						if string(q.Params[1]) != `"0xc"` {
+						if string(q.Params[1]) != `"0xc"` && string(q.Params[1]) != `"latest"` {
 							t.Error("planner lost pinned block")
 						}
-						if call.To == executor && call.From != caller {
+						if call.To == executor && len(call.Input) >= 4 && string(call.Input[:4]) == string(binding.GetABI().Methods["execute"].ID) && call.From != caller {
 							t.Error("simulation lost shared caller")
 						}
 						result = hexutil.Bytes(contractCall(call.To, call.Input))
@@ -215,6 +210,8 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 			owner := factorySigner{address: caller}
 			manager := txmanager.New(client, owner, big.NewInt(1), txmanager.Config{}, logr.Discard())
 			raw := strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", curator.URL+"/api/v1", 1)
+			indexed := indexedRecipeServer(t, executor, recipeHash, header, recipe)
+			raw = strings.Replace(raw, "indexerUrl: http://127.0.0.1:1", "indexerUrl: "+indexed.URL, 1)
 			raw = strings.Replace(raw, "state/merkle", filepath.Join(t.TempDir(), "state"), 1)
 			built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, TxManager: manager, Log: logr.Discard()})
 			if err != nil {
@@ -232,4 +229,24 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 			}
 		})
 	}
+}
+
+func indexedRecipeServer(t *testing.T, executor common.Address, hash common.Hash, header *types.Header, recipe recipes.Recipe) *httptest.Server {
+	t.Helper()
+	encode := func(values [][]byte) []string {
+		out := make([]string, len(values))
+		for i, value := range values {
+			out[i] = hexutil.Encode(value)
+		}
+		return out
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/recipes/"+strings.ToLower(executor.Hex()) || r.URL.Query().Get("hash") != hash.Hex() || r.URL.Query().Get("block") != header.Number.String() {
+			t.Error("indexed lookup escaped the committed executor/hash/publication block")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"executor": executor.Hex(), "recipeHash": hash.Hex(), "blockNumber": header.Number.String(), "blockHash": header.Hash().Hex(), "transactionHash": common.HexToHash("0x1234").Hex(), "logIndex": 0, "queries": encode(recipe.Queries), "steps": encode(recipe.Steps)})
+	}))
+	t.Cleanup(server.Close)
+	return server
 }

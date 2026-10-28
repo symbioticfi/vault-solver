@@ -20,13 +20,14 @@ const pollInterval = 15 * time.Second
 const operationTimeout = 30 * time.Second
 
 type config struct {
-	Mode      string             `yaml:"mode"`
-	StateDir  string             `yaml:"stateDir"`
-	Executor  string             `yaml:"executor"`
-	Curator   merklehost.Curator `yaml:"curator"`
-	URL       string             `yaml:"url"`
-	APIKeyEnv string             `yaml:"apiKeyEnv"`
-	Broker    string             `yaml:"broker"`
+	Mode       string             `yaml:"mode"`
+	StateDir   string             `yaml:"stateDir"`
+	IndexerURL string             `yaml:"indexerUrl"`
+	Executor   string             `yaml:"executor"`
+	Curator    merklehost.Curator `yaml:"curator"`
+	URL        string             `yaml:"url"`
+	APIKeyEnv  string             `yaml:"apiKeyEnv"`
+	Broker     string             `yaml:"broker"`
 }
 
 func (c config) apiConfig() apiConfig {
@@ -57,6 +58,9 @@ func parseConfig(node yaml.Node) (config, error) {
 	if err := permissions.ValidateConfig(cfg.Curator.HTTPConfig()); err != nil {
 		return config{}, err
 	}
+	if err := merklehost.ValidateIndexerURL(cfg.IndexerURL); err != nil {
+		return config{}, err
+	}
 	if err := validateAPIConfig(cfg.apiConfig()); err != nil {
 		return config{}, err
 	}
@@ -64,12 +68,13 @@ func parseConfig(node yaml.Node) (config, error) {
 }
 func strategyRevision(strategy keeper.Config, cfg config, caller common.Address) (string, error) {
 	raw, err := json.Marshal(struct {
-		Policy   string                `json:"policy"`
-		Strategy keeper.Config         `json:"strategy"`
-		Curator  protocolio.HTTPConfig `json:"curator"`
-		API      apiConfig             `json:"api"`
-		Caller   common.Address        `json:"caller"`
-	}{"1", strategy, cfg.Curator.HTTPConfig(), cfg.apiConfig(), caller})
+		Policy     string                `json:"policy"`
+		Strategy   keeper.Config         `json:"strategy"`
+		Curator    protocolio.HTTPConfig `json:"curator"`
+		API        apiConfig             `json:"api"`
+		Caller     common.Address        `json:"caller"`
+		IndexerURL string                `json:"indexerUrl"`
+	}{"1", strategy, cfg.Curator.HTTPConfig(), cfg.apiConfig(), caller, cfg.IndexerURL})
 	if err != nil {
 		return "", errors.Errorf("threef-merkle strategy identity: %w", err)
 	}

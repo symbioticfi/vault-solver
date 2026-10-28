@@ -19,7 +19,7 @@ var _ MappedNullable = &LiquidityBatchResponse{}
 
 // LiquidityBatchResponse struct for LiquidityBatchResponse
 type LiquidityBatchResponse struct {
-	// One liquidity snapshot per requested tokensIn entry, in request order.
+	// One liquidity snapshot per supported tokensIn entry, in request order. Unsupported tokens are omitted.
 	TokensIn             []LiquidityBatchResponseTokensInInner `json:"tokensIn"`
 	AdditionalProperties map[string]interface{}
 }

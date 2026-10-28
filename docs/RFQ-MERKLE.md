@@ -9,13 +9,13 @@ from the backend discounts API, and builds:
 Use [the example config](../config/rfq-merkle.example.yaml). The EOA must be an
 authorized caller of the RFQ Executor. Each configured connector must be registered
 as version `2` in the Reactor's Liquid Lane adapter factory (version `1` is the
-native adapter). The backend discovers the unique current RecipeExecutor for each connector/RWA
-from committed `SetRecipe` events. Its caller must be the RFQ Executor and its account must be
+native adapter). The backend supplies the configured RecipeExecutor for each connector/RWA
+from its configured binding. Its caller must be the RFQ Executor and its account must be
 the connector's MerkleAccount.
 
 Configuration contains the backend URL, durable state directory, RFQ executor,
 curator service and an explicit allowlist of 1..256 connectors. Per-RWA executors and
-funding capacity are derived by the backend from committed recipes; no local executor map or source
+funding capacity are derived by the backend from the configured recipe; no local executor map or source
 list is maintained. The backend supplies optional `recipeExecutor` inventory metadata; missing
 executors fail closed. For execution, the solver discovers the original recipe and current permissions at the
 same pinned block as connector identities and the remaining policy budget. A recipe that requires issuer redemption includes those calls for
@@ -31,7 +31,9 @@ The signed order tuple supplies the entire input and sum of output payments.
 Matching advertised connectors are tried in address/discount-ID order, and one must
 cover the complete award using the backend's advertised capacity, clipped by the current
 `remainingAssets(token)` policy budget. Capacity calculation belongs to the backend: it
-resolves the current permission tree and simulates the original recipe's funding prefix.
+estimates funding from the configured recipe's reads and checks current roles with batched RPC calls.
+The advertised `maxAssets` is an estimate; ordered withdrawals and shared liquidity
+are checked by the solver's complete outer settlement simulation before admission.
 The regular RFQ quote path consumes that capacity, applies the current policy budget and
 subtracts shared account/asset reservations. The solver does not reconstruct capacity or
 require extra recipe queries. No market pricing, splits or adapter/Merkle liquidity aggregation occurs.
@@ -39,7 +41,10 @@ An upstream source must award compatible orders; this solver does not publish qu
 The wall-clock observation is sampled before the header RPC; its latency consumes the unsigned submission deadline, including
 when the chain clock is ahead of the host.
 
-The SDK discovers the committed recipe and active root, authenticates the curator
+The host retrieves the original recipe from `GET /api/v1/recipes/{executor}?hash=…&block=…`
+under `backendUrl` and checks its body against the current on-chain commitment.
+Publication evidence comes from the indexer; no request or fill scans blockchain logs.
+The SDK reads the committed recipe metadata and active root, authenticates the curator
 tree, verifies masks/proofs and roles, and checks the canonical snapshot around
 simulation. The host fills the matching connector swap's signed terms and supplies amountIn
 and awarded payment as Inputs 0 and 1. Recipe gates, additional actions and balance

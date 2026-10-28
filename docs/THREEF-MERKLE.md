@@ -13,6 +13,7 @@ solvers:
       mode: simulate
       stateDir: /persistent/threef-merkle
       executor: "0x0000000000000000000000000000000000000010"
+      indexerUrl: https://rfq-backend.example.invalid
       curator:
         url: https://curator.example.invalid/api/v1
       url: https://bf.3f.xyz
@@ -31,6 +32,8 @@ no group-count limit, canonical guard comparison, mint-gate rule, or separate
 funding-gate proof. Fixed withdrawals and additional Call/Approve steps use the
 curator-authorized program. Permission response and SDK input bounds still apply.
 Provider identity settings participate in recovery identity.
+`indexerUrl` supplies original recipe publications from the indexed-only RFQ API.
+The host verifies their current commitment and canonical block; it never scans RPC logs.
 Use one exclusive durable state directory
 and one process per curator BF. Do not also list this executor in `merkle.strategies`
 or share that BF/key with another independently allocating bot.

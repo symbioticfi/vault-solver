@@ -19,7 +19,7 @@ var _ MappedNullable = &LiquidityBatchRequest{}
 
 // LiquidityBatchRequest struct for LiquidityBatchRequest
 type LiquidityBatchRequest struct {
-	// 1 to 20 distinct input tokens to read in one request. The response holds one snapshot per token, in request order.
+	// 1 to 20 distinct input tokens to read in one request. The response holds one snapshot per supported token, in request order. Unsupported tokens are omitted; if none are supported, the request returns HTTP 400.
 	TokensIn []string `json:"tokensIn"`
 	// Restricts solvers and totalLiquidity to this configured solver. Takes precedence over solverIds. No eligible liquidity returns a zero total and an empty solvers array.
 	SolverId *string `json:"solverId,omitempty"`

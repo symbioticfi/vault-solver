@@ -69,6 +69,7 @@ func TestOneExecutorAcceptsDistinctGuardedMarkets(t *testing.T) {
 func TestSingleExecutorConfigurationHasNoArrayAlias(t *testing.T) {
 	raw := `mode: simulate
 stateDir: state/threef-merkle
+indexerUrl: http://127.0.0.1:1
 executor: "0x0000000000000000000000000000000000000010"
 curator:
   url: http://127.0.0.1:1/api/v1

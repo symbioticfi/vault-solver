@@ -24,14 +24,14 @@ type OrdersResponseOrdersInner struct {
 	OrderStatus string         `json:"orderStatus"`
 	QuoteId     string         `json:"quoteId" validate:"regexp=^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"`
 	Swapper     string         `json:"swapper" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	TxHash      NullableString `json:"txHash" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	TxHash      NullableString `json:"txHash" validate:"regexp=^0x(?:[a-fA-F0-9]{2})*$"`
 	// Base-10 uint256 string from 0 through 115792089237316195423570985008687907853269984665640564039457584007913129639935; leading zeroes are accepted.
 	Nonce                string                                         `json:"nonce" validate:"regexp=^\\d+$"`
 	Input                CreateOrderRequestQuoteAggregatedOutputsInner  `json:"input"`
 	Outputs              []OrdersResponseOrdersInnerOutputsInner        `json:"outputs"`
 	SettledAmounts       []OrdersResponseOrdersInnerSettledAmountsInner `json:"settledAmounts"`
-	EncodedOrder         *string                                        `json:"encodedOrder,omitempty" validate:"regexp=^0x[a-fA-F0-9]+$"`
-	ProtocolSignature    *string                                        `json:"protocolSignature,omitempty" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	EncodedOrder         *string                                        `json:"encodedOrder,omitempty" validate:"regexp=^0x(?:[a-fA-F0-9]{2})*$"`
+	ProtocolSignature    *string                                        `json:"protocolSignature,omitempty" validate:"regexp=^0x(?:[a-fA-F0-9]{2})*$"`
 	Deadline             *int64                                         `json:"deadline,omitempty"`
 	Filler               *string                                        `json:"filler,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	AdditionalProperties map[string]interface{}

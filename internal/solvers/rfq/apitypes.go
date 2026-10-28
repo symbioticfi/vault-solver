@@ -32,7 +32,6 @@ type quoteRequest struct {
 
 // quoteAdapter is one adapter inventory entry the backend offers for the request.
 type quoteAdapter struct {
-	Kind              string  `json:"kind,omitempty" enum:"connector"`
 	DiscountPrecision string  `json:"discountPrecision,omitempty"`
 	RecipeExecutor    string  `json:"recipeExecutor,omitempty" pattern:"^0x[a-fA-F0-9]{40}$"`
 	Account           string  `json:"account,omitempty"`
@@ -156,15 +155,15 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (
 		return solverInventory{}, err
 	}
 	precision := liquidlane.DiscountPrecision
-	if v.Kind == "connector" {
+	if v.RecipeExecutor != "" {
 		if v.DiscountPrecision != "100000000" || discountID == nil {
 			return solverInventory{}, errors.Errorf("adapters[%d]: connector requires signed discount and precision 100000000", index)
 		}
 		precision = 100_000_000
-	} else if v.Kind != "" || (v.DiscountPrecision != "" && v.DiscountPrecision != "1000000") {
-		return solverInventory{}, errors.Errorf("adapters[%d]: invalid adapter kind or precision", index)
+	} else if v.DiscountPrecision != "" && v.DiscountPrecision != "1000000" {
+		return solverInventory{}, errors.Errorf("adapters[%d]: invalid adapter discount precision", index)
 	}
-	if discount.Cmp(big.NewInt(precision)) > 0 || (v.Kind == "connector" && discount.Cmp(big.NewInt(precision)) == 0) {
+	if discount.Cmp(big.NewInt(precision)) > 0 || (v.RecipeExecutor != "" && discount.Cmp(big.NewInt(precision)) == 0) {
 		return solverInventory{}, errors.Errorf("%s: must be <= %d", idxField(index, "discount"), precision)
 	}
 	var blockNumber uint64
@@ -182,8 +181,7 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (
 		inventory = liquidlane.DiscountInventory(route, maxAssets, nil, *discountID, time.Time{})
 		inventory.Discount = discount
 	}
-	inventory.Kind = v.Kind
-	if v.Kind == "connector" {
+	if v.RecipeExecutor != "" {
 		inventory.DiscountPrecision = precision
 		inventory.RecipeExecutor, err = parse.NonZeroAddress(v.RecipeExecutor, idxField(index, "recipeExecutor"))
 		if err != nil {

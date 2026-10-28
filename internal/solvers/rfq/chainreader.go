@@ -72,7 +72,7 @@ func (r *reader) readQuoteCandidates(
 	connectorInventory := make([]liquidlane.Inventory, 0)
 	for _, item := range inventory {
 		if item.TokenIn == tokenIn && item.TokenOut == tokenOut {
-			if item.Kind == "connector" {
+			if item.RecipeExecutor != (common.Address{}) {
 				connectorInventory = append(connectorInventory, item)
 			} else {
 				matching = append(matching, item)

@@ -181,6 +181,54 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -225,7 +273,79 @@
               }
             }
           },
+          "400": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "403": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
             "description": "Error",
             "headers": {
               "X-Request-Id": {
@@ -347,7 +467,190 @@
               }
             }
           },
+          "400": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "403": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/recipes/{executor}": {
+      "get": {
+        "tags": [
+          "RFQ"
+        ],
+        "description": "Read an indexed original recipe publication. This endpoint never queries chain logs.",
+        "parameters": [
+          {
+            "name": "executor",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^0x[a-fA-F0-9]{40}$"
+            }
+          },
+          {
+            "name": "hash",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^0x[a-fA-F0-9]{64}$"
+            }
+          },
+          {
+            "name": "block",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^\\d+$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipePublication"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
             "description": "Error",
             "headers": {
               "X-Request-Id": {
@@ -461,6 +764,54 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -530,6 +881,54 @@
                 }
               }
             }
+          },
+          "413": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -540,7 +939,7 @@
           "RFQ"
         ],
         "summary": "Get solver liquidity for several tokens",
-        "description": "Reads the /liquidity snapshot for up to 20 distinct input tokens in one request and returns { tokensIn: [...] }, one snapshot per token in request order. Each snapshot has the same shape and totalLiquidity semantics as /liquidity. The solverId and solverIds filters apply to every token. Every token is checked against the deployment before any inventory is read, so one unsupported token rejects the whole request with 400 and the error details name it. Duplicate tokens, compared case-insensitively, are rejected with 400.",
+        "description": "Reads the /liquidity snapshot for up to 20 distinct input tokens in one request and returns { tokensIn: [...] }, one snapshot per supported token in request order. Each snapshot has the same shape and totalLiquidity semantics as /liquidity. The solverId and solverIds filters apply to every supported token. Unsupported tokens are omitted before any inventory is read. If all tokens are unsupported, the request returns 400. Duplicate tokens, compared case-insensitively, are rejected with 400.",
         "requestBody": {
           "required": true,
           "content": {
@@ -577,6 +976,54 @@
             }
           },
           "400": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
             "description": "Error",
             "headers": {
               "X-Request-Id": {
@@ -692,6 +1139,54 @@
               }
             }
           },
+          "413": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Error",
             "headers": {
@@ -724,6 +1219,7 @@
         "tags": [
           "RFQ"
         ],
+        "description": "Creates an order from a signed quote. New orders require the stored quote's swapper balance and allowance to the configured Reactor to cover the full input amount at one fresh block after requoting. Insufficient balance or allowance returns 400; unavailable funding reads return 500 with Order funding unavailable. This snapshot does not reserve funds or guarantee a later fill. Existing-order retries return the same order without fresh funding checks.",
         "requestBody": {
           "required": true,
           "content": {
@@ -808,6 +1304,78 @@
             }
           },
           "409": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Error",
+            "headers": {
+              "X-Request-Id": {
+                "description": "HTTP attempt ID used by request logs. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Trace-Id": {
+                "description": "Trace ID when supplied by the gateway. Exposed through CORS.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
             "description": "Error",
             "headers": {
               "X-Request-Id": {
@@ -1056,7 +1624,7 @@
                   },
                   "data": {
                     "type": "string",
-                    "pattern": "^0x[a-fA-F0-9]+$"
+                    "pattern": "^0x(?:[a-fA-F0-9]{2})*$"
                   },
                   "value": {
                     "type": "string"
@@ -1085,7 +1653,7 @@
                   },
                   "data": {
                     "type": "string",
-                    "pattern": "^0x[a-fA-F0-9]+$"
+                    "pattern": "^0x(?:[a-fA-F0-9]{2})*$"
                   },
                   "value": {
                     "type": "string"
@@ -1206,7 +1774,7 @@
           },
           "signature": {
             "type": "string",
-            "pattern": "^0x[a-fA-F0-9]+$"
+            "pattern": "^0x(?:[a-fA-F0-9]{2})*$"
           }
         },
         "required": [
@@ -1312,7 +1880,7 @@
               "type": "string",
               "pattern": "^0x[a-fA-F0-9]{40}$"
             },
-            "description": "1 to 20 distinct input tokens to read in one request. The response holds one snapshot per token, in request order."
+            "description": "1 to 20 distinct input tokens to read in one request. The response holds one snapshot per supported token, in request order. Unsupported tokens are omitted; if none are supported, the request returns HTTP 400."
           },
           "solverId": {
             "description": "Restricts solvers and totalLiquidity to this configured solver. Takes precedence over solverIds. No eligible liquidity returns a zero total and an empty solvers array.",
@@ -1444,7 +2012,7 @@
                 "solvers"
               ]
             },
-            "description": "One liquidity snapshot per requested tokensIn entry, in request order."
+            "description": "One liquidity snapshot per supported tokensIn entry, in request order. Unsupported tokens are omitted."
           }
         },
         "required": [
@@ -1788,7 +2356,7 @@
                   "anyOf": [
                     {
                       "type": "string",
-                      "pattern": "^0x[a-fA-F0-9]+$"
+                      "pattern": "^0x(?:[a-fA-F0-9]{2})*$"
                     },
                     {
                       "type": "null"
@@ -1866,7 +2434,7 @@
                       },
                       "txHash": {
                         "type": "string",
-                        "pattern": "^0x[a-fA-F0-9]+$"
+                        "pattern": "^0x(?:[a-fA-F0-9]{2})*$"
                       }
                     },
                     "required": [
@@ -1879,11 +2447,11 @@
                 },
                 "encodedOrder": {
                   "type": "string",
-                  "pattern": "^0x[a-fA-F0-9]+$"
+                  "pattern": "^0x(?:[a-fA-F0-9]{2})*$"
                 },
                 "protocolSignature": {
                   "type": "string",
-                  "pattern": "^0x[a-fA-F0-9]+$"
+                  "pattern": "^0x(?:[a-fA-F0-9]{2})*$"
                 },
                 "deadline": {
                   "type": "integer",
@@ -2270,7 +2838,7 @@
               "deadline": {
                 "type": "integer",
                 "minimum": 0,
-                "maximum": 9007199254740991
+                "maximum": 281474976710655
               }
             },
             "required": [
@@ -2285,7 +2853,7 @@
           },
           "signature": {
             "type": "string",
-            "pattern": "^0x[a-fA-F0-9]+$"
+            "pattern": "^0x(?:[a-fA-F0-9]{2})+$"
           }
         },
         "required": [
@@ -2395,6 +2963,63 @@
           "amount",
           "swapper",
           "outputs"
+        ]
+      },
+      "RecipePublication": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "properties": {
+          "executor": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{40}$"
+          },
+          "recipeHash": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{64}$"
+          },
+          "blockNumber": {
+            "type": "string",
+            "pattern": "^\\d+$"
+          },
+          "blockHash": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{64}$"
+          },
+          "transactionHash": {
+            "type": "string",
+            "pattern": "^0x[a-fA-F0-9]{64}$"
+          },
+          "logIndex": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "queries": {
+            "maxItems": 4096,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^0x(?:[a-fA-F0-9]{2})*$"
+            }
+          },
+          "steps": {
+            "maxItems": 4096,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^0x(?:[a-fA-F0-9]{2})*$"
+            }
+          }
+        },
+        "required": [
+          "executor",
+          "recipeHash",
+          "blockNumber",
+          "blockHash",
+          "transactionHash",
+          "logIndex",
+          "queries",
+          "steps"
         ]
       },
       "SolverLogo": {

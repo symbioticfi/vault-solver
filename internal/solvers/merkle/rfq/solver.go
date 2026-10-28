@@ -17,6 +17,7 @@ import (
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/merklehost"
 	"github.com/symbioticfi/vault-solver/internal/merklesender"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/parse"
@@ -87,7 +88,12 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 			_ = store.Close()
 		}
 	}()
-	s := &Solver{store: store, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), connectors: cfg.Connectors, source: source, caller: cfg.Executor, signer: deps.Signer.Address()}}
+	indexed, err := merklehost.NewRecipeSource(cfg.BackendURL)
+	if err != nil {
+		return nil, err
+	}
+	readChain := merklehost.NewIndexedReader(deps.Chain, indexed)
+	s := &Solver{store: store, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: readChain, chainID: deps.Chain.ChainID(), connectors: cfg.Connectors, source: source, caller: cfg.Executor, signer: deps.Signer.Address()}}
 	s.sender, err = submission.New(deps.Chain, deps.Signer.Address(), deps.Chain.ChainID(), store, submission.Config{Confirmations: deps.TxManager.Confirmations()}, merklesender.Transport{Manager: deps.TxManager, Solver: Name, Deadline: func() time.Time { return s.intent.Deadline }}, deps.Log)
 	if err != nil {
 		return nil, err

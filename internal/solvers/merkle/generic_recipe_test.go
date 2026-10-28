@@ -213,9 +213,8 @@ func newGenericRecipeHost(t *testing.T, ready, requestID uint64, simulation stri
 			case "eth_getBlockByNumber":
 				response["result"] = header
 			case "eth_getLogs":
-				event := binding.GetABI().Events["SetRecipe"]
-				data := genericPack(t, event.Inputs.NonIndexed(), recipe.Queries, recipe.Steps)
-				response["result"] = []types.Log{{Address: executor, BlockNumber: 12, BlockHash: header.Hash(), Topics: []common.Hash{event.ID, recipeHash}, Data: data}}
+				t.Error("request-time RPC log scan is forbidden")
+				return
 			case "eth_call":
 				var call struct {
 					From  common.Address `json:"from"`
@@ -223,7 +222,7 @@ func newGenericRecipeHost(t *testing.T, ready, requestID uint64, simulation stri
 					Input hexutil.Bytes  `json:"input"`
 				}
 				_ = json.Unmarshal(request.Params[0], &call)
-				if string(request.Params[1]) != `"0xc"` && string(request.Params[1]) != `"latest"` || call.To == executor && call.From != caller {
+				if string(request.Params[1]) != `"0xc"` && string(request.Params[1]) != `"latest"` || call.To == executor && len(call.Input) >= 4 && string(call.Input[:4]) == string(binding.GetABI().Methods["execute"].ID) && call.From != caller {
 					t.Error("host lost the pinned block or shared caller")
 				}
 				response["result"] = hexutil.Bytes(contractCall(call.To, call.Input))
@@ -255,6 +254,8 @@ func newGenericRecipeHost(t *testing.T, ready, requestID uint64, simulation stri
 	owner := factorySigner{address: caller}
 	manager := txmanager.New(client, owner, big.NewInt(1), txmanager.Config{}, logr.Discard())
 	raw := strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", curator.URL+"/api/v1", 1)
+	indexed := indexedRecipeServer(t, executor, recipeHash, header, recipe)
+	raw = strings.Replace(raw, "indexerUrl: http://127.0.0.1:1", "indexerUrl: "+indexed.URL, 1)
 	raw = strings.Replace(raw, "state/merkle", filepath.Join(t.TempDir(), "state"), 1)
 	built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, TxManager: manager, Log: logr.Discard()})
 	if err != nil {

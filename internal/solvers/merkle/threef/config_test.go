@@ -11,6 +11,7 @@ import (
 
 const validConfig = `mode: simulate
 stateDir: state/threef-merkle
+indexerUrl: http://127.0.0.1:1
 executor: "0x0000000000000000000000000000000000000010"
 curator:
   url: http://127.0.0.1:1/api/v1
@@ -43,6 +44,7 @@ func TestConfigValidation(t *testing.T) {
 		"state":          strings.Replace(validConfig, "stateDir: state/threef-merkle\n", "", 1),
 		"zero executor":  strings.Replace(validConfig, "0000000000000000000000000000000000000010", "0000000000000000000000000000000000000000", 1),
 		"zero broker":    strings.Replace(validConfig, "0000000000000000000000000000000000000040", "0000000000000000000000000000000000000000", 1),
+		"indexer":        strings.Replace(validConfig, "indexerUrl: http://127.0.0.1:1\n", "", 1),
 		"curator":        strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", "", 1),
 		"url":            strings.Replace(validConfig, "https://bf.3f.xyz", "https://bf.3f.xyz?key=private", 1),
 		"key":            strings.Replace(validConfig, "THREEF_CURATOR_API_KEY", "invalid-env-name", 1),
@@ -74,6 +76,7 @@ func TestRecoveryIdentity(t *testing.T) {
 		"key":      func(c *config, _ *keeper.Config, _ *common.Address) { c.APIKeyEnv = "ANOTHER_CURATOR_KEY" },
 		"broker":   func(c *config, _ *keeper.Config, _ *common.Address) { c.Broker = common.HexToAddress("0x41").Hex() },
 		"API":      func(c *config, _ *keeper.Config, _ *common.Address) { c.URL = "https://other.example" },
+		"indexer":  func(c *config, _ *keeper.Config, _ *common.Address) { c.IndexerURL = "https://other.example" },
 		"curator":  func(c *config, _ *keeper.Config, _ *common.Address) { c.Curator.URL = "https://other.example" },
 		"account":  func(_ *config, s *keeper.Config, _ *common.Address) { s.Account = common.HexToAddress("0x21").Hex() },
 		"executor": func(_ *config, s *keeper.Config, _ *common.Address) { s.Executor = common.HexToAddress("0x11").Hex() },
