@@ -201,11 +201,6 @@ func TestFallbackTransport_PreservesNonAvailabilityResponses(t *testing.T) {
 			response: `[{"jsonrpc":"2.0","id":7,"result":null}]`,
 		},
 		{
-			name:     "malformed request",
-			request:  `{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByHash"`,
-			response: `{"jsonrpc":"2.0","id":7,"result":null}`,
-		},
-		{
 			name:     "malformed response",
 			request:  `{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByNumber","params":[]}`,
 			response: `{"jsonrpc":"2.0","id":7,"result":`,
@@ -251,6 +246,26 @@ func TestFallbackTransport_PreservesNonAvailabilityResponses(t *testing.T) {
 				t.Fatalf("fallback hits = %d, want 0", fallbackHits)
 			}
 		})
+	}
+}
+
+func TestFallbackTransport_RejectsMalformedRequestsBeforeEndpoints(t *testing.T) {
+	endpoint := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("malformed request reached an RPC endpoint")
+	}))
+	defer endpoint.Close()
+	for _, body := range []string{
+		`{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByHash"`,
+		`{"method":"eth_getLogs"} trailing`,
+		`[{"method":"eth_getLogs"}] trailing`,
+	} {
+		resp, err := roundTrip(t, mustEndpoints(t, endpoint.URL), body)
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		if err == nil || resp != nil {
+			t.Fatalf("malformed RPC request admitted: %v", err)
+		}
 	}
 }
 

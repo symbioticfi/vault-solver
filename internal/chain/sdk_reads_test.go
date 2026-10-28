@@ -7,7 +7,9 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -237,5 +239,47 @@ func TestRequestReadersNeverSendBlockchainLogScans(t *testing.T) {
 	}
 	if calls != before {
 		t.Fatal("log scan reached RPC transport")
+	}
+}
+
+func TestRawClientsRejectLogScansBeforeHTTP(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var request struct {
+			ID json.RawMessage `json:"id"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": "0x1"})
+	}))
+	defer server.Close()
+	client, err := Dial(t.Context(), []string{server.URL}, server.URL, common.HexToAddress("0x99").Hex(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	before := calls.Load()
+	for name, raw := range map[string]*rpc.Client{"read": client.Client.Client(), "write": client.writeClient.Client()} {
+		t.Run(name, func(t *testing.T) {
+			for _, method := range []string{"eth_getLogs", "eth_newFilter", "eth_getFilterLogs", "eth_getFilterChanges"} {
+				t.Run(method, func(t *testing.T) {
+					var result any
+					if err := raw.CallContext(t.Context(), &result, method, map[string]any{}); err == nil || !strings.Contains(err.Error(), "log scans belong to indexers") {
+						t.Fatalf("raw log scan admitted: %v", err)
+					}
+					// Even a preceding unknown method must not hide a later log scan.
+					batch := []rpc.BatchElem{{Method: "custom_other", Result: &result}, {Method: method, Result: &result}}
+					if err := raw.BatchCallContext(t.Context(), batch); err == nil || !strings.Contains(err.Error(), "log scans belong to indexers") {
+						t.Fatalf("raw batch log scan admitted: %v", err)
+					}
+				})
+			}
+		})
+	}
+	if _, err := client.Client.FilterLogs(t.Context(), ethereum.FilterQuery{}); err == nil {
+		t.Fatal("embedded ethclient bypassed log scan policy")
+	}
+	if calls.Load() != before {
+		t.Fatal("raw log scans reached an RPC endpoint")
 	}
 }

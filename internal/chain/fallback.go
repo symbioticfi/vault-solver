@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
@@ -56,6 +57,9 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 			return nil, errors.Errorf("rpc fallback: read body: %w", err)
 		}
 		body = b
+	}
+	if err := protocolio.RejectLogScans(body); err != nil {
+		return nil, err
 	}
 	request := inspectRPCRequest(body)
 	method := request.boundedMethod
@@ -232,7 +236,7 @@ func boundedRPCMethodName(method string) string {
 	switch method {
 	case "eth_blockNumber", rpcMethodCall, rpcMethodChainID, "eth_estimateGas", "eth_feeHistory",
 		"eth_gasPrice", rpcMethodGetBalance, "eth_getBlockByHash", "eth_getBlockByNumber",
-		"eth_getBlockReceipts", "eth_getCode", "eth_getLogs", "eth_getStorageAt",
+		"eth_getBlockReceipts", "eth_getCode", "eth_getStorageAt",
 		"eth_getTransactionByHash", rpcMethodGetTransactionCount, rpcMethodGetTransactionReceipt,
 		"eth_maxPriorityFeePerGas", rpcMethodSendRawTransaction, "net_version", "web3_clientVersion":
 		return method

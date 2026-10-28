@@ -7,10 +7,10 @@ Set `executor` to the separately operated filler's identity. The default is fals
 which preserves the native adapter solver's combined pricing and filling service.
 
 The backend may offer an explicitly configured LiquidLane connector with
-`kind: "connector"` and `discountPrecision: "100000000"`. This requires a signed
+`recipeExecutor` and `discountPrecision: "100000000"`. This requires a signed
 `discountId`. The pricing reader checks the canonical `LiquidLaneConnector` / `1`
-domain and current account, output asset, decimals, minimum discount, canonical
-`getMaxAssets` capacity and `getAmountOut` at a pinned block. An empty connector input-token
+domain and current account, output asset, decimals, minimum discount,
+`remainingAssets` policy budget and `getAmountOut` at a pinned block. An empty connector input-token
 balance is admissible because Reactor delivers that token in the atomic outer
 fill. Funding follows the on-chain recipe rather than a separate source configuration.
 Native adapter inventory keeps its existing read path
@@ -32,8 +32,8 @@ account. Configure the backend solver's `adapters` catalog to include the connec
 only for its capable Merkle filler, and run the associated default pricing service
 with `quoteOnly: true` so both services do not race to fill the same award.
 
-Merkle Liquid Lane routes read `getMaxAssets(tokenIn)` from the connector at the
-quote block. The connector combines its budget with the linked RWA recipe's
-rollback-only funding simulation. The pricing solver does not reconstruct funding
-from balances or configured source lists. Routes still share reservations by account
-and payment asset; a quoted capacity is not a reservation or a full-fill simulation.
+Merkle Liquid Lane routes use the backend's recipe-read capacity estimate, capped
+by the connector's `remainingAssets(tokenIn)` at the quote block. The pricing solver
+does not reconstruct funding from balances or configured source lists. Routes share
+reservations by account and payment asset; `rfq-merkle` simulates the complete fill
+before admission. A quoted capacity is not a reservation or a full-fill simulation.
