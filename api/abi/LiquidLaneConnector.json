@@ -81,25 +81,6 @@
   },
   {
     "type": "function",
-    "name": "getMaxAssets",
-    "inputs": [
-      {
-        "name": "tokenToRedeem",
-        "type": "address",
-        "internalType": "address"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256",
-        "internalType": "uint256"
-      }
-    ],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
     "name": "minDiscount",
     "inputs": [
       {
@@ -132,7 +113,7 @@
   },
   {
     "type": "function",
-    "name": "recipeExecutors",
+    "name": "remainingAssets",
     "inputs": [
       {
         "name": "tokenToRedeem",
@@ -142,9 +123,9 @@
     ],
     "outputs": [
       {
-        "name": "executor",
-        "type": "address",
-        "internalType": "address"
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ],
     "stateMutability": "view"

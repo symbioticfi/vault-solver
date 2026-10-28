@@ -102,9 +102,11 @@ The committed permission must admit the supplied calldata length and signature
 framing, and the complete outer fill must simulate successfully. Existing Curator
 templates with fixed 65-byte fields require compatible permissions for other lengths.
 It consumes awarded `/orders` and signed backend terms without aggregating adapter liquidity.
-Configuration allowlists connectors; each connector supplies its per-RWA RecipeExecutor and
-funding capacity on-chain. Capacity runs the committed funding prefix with all effects rolled
-back. Publish its capacity witnesses and connector binding before enabling quotes. Each recipe
+Configuration allowlists connectors; the backend advertises the RecipeExecutor discovered from
+the unique current recipe for each connector and RWA. Both quote admission and filling authenticate
+that recipe at a pinned block and simulate its committed funding prefix with all effects rolled
+back, capped by the connector's remaining budget. Publish its unused funding-witness query as part
+of the original recipe before enabling quotes. Missing executors or invalid witnesses fail closed. Each recipe
 handles one asset and includes its issuer calls when redemption is required.
 
 When `tokensToQuote: permissioned`, admitted inputs are never aggregated: the selected strategy must

@@ -4,7 +4,7 @@
     .type == "function" and (
       .name == "account" or .name == "outputAsset" or
       .name == "eip712Domain" or .name == "getAmountOut" or .name == "minDiscount" or
-      .name == "recipeExecutors" or .name == "getMaxAssets" or
+      .name == "remainingAssets" or
       (.name == "swap" and (.inputs | length) == 4))
   elif $contract == "IThreeFPolicy" then
     (.type == "event" and .name == "Consume") or

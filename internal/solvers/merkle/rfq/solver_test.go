@@ -129,7 +129,7 @@ func TestPollerPersistsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	backend.rows = []rfqbackend.OrdersResponseOrdersInner{awardRow(t, order), awardRow(t, order)}
 	backend.listed = &discounts.List{Discounts: []discounts.ListItem{
 		{Adapter: common.HexToAddress("0x01").Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "99999"},
-		{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"},
+		{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: common.HexToAddress("0x43").Hex()},
 	}}
 	store, err := state.Open(t.TempDir())
 	if err != nil {
@@ -199,7 +199,7 @@ func TestPrepareCountsHeaderLatencyAgainstDeadline(t *testing.T) {
 	order, _, backend := connectorExecutionAward(f.workflow.caller)
 	order.Request.Deadline = big.NewInt(chainTime.Add(10 * time.Second).Unix())
 	s := Solver{workflow: f.workflow, backend: backend}
-	intent, err := s.prepare(t.Context(), awardRow(t, order), []discounts.ListItem{{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"}})
+	intent, err := s.prepare(t.Context(), awardRow(t, order), []discounts.ListItem{{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: common.HexToAddress("0x43").Hex()}})
 	if err != nil || intent == nil {
 		t.Fatalf("prepare: intent=%v err=%v", intent, err)
 	}

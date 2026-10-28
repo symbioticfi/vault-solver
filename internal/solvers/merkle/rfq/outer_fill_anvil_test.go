@@ -227,7 +227,6 @@ func newOuterFillEVM(t *testing.T) *outerFillEVM {
 	f.send(f.account, vlt, "LiquidLaneConnector", "setMinDiscount", tIn, big.NewInt(10000000))
 	recipeExecutor := f.deploy("RecipeExecutor", f.signer, f.account)
 	f.send(f.signer, recipeExecutor, "RecipeExecutor", "setCaller", caller)
-	f.send(f.account, vlt, "LiquidLaneConnector", "setRecipeExecutor", tIn, recipeExecutor)
 	f.send(f.signer, tOut, "FixtureToken", "mint", f.account, big.NewInt(90))
 	f.send(f.signer, tIn, "FixtureToken", "mint", f.signer, big.NewInt(100))
 	f.send(f.signer, tIn, "FixtureToken", "approve", reactor, big.NewInt(100))
@@ -250,19 +249,18 @@ func newOuterFillEVM(t *testing.T) *outerFillEVM {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recipe := connectorDeltaRecipe(t, leaf.Hash, f.account, caller, tOut, tIn)
-	f.send(f.signer, world, "FixtureWorld", "setRoot", f.account, leaf.Hash)
-	f.send(f.signer, f.account, "MerkleAccount", "acceptRoot", leaf.Hash)
-	f.send(f.signer, f.account, "MerkleAccount", "grantRole", leaf.Hash, recipeExecutor)
-	f.send(f.signer, recipeExecutor, "RecipeExecutor", "setRecipe", recipe.Queries, recipe.Steps)
-	f.send(f.signer, recipeExecutor, "RecipeExecutor", "setCapacity", tOut, recipe.Queries, recipe.Steps, new(big.Int), []*big.Int{big.NewInt(100), big.NewInt(90)}, [][]byte{})
-	permissions, err := json.Marshal(map[string]any{"root": leaf.Hash.Hex(), "chainId": "1", "account": f.account.Hex(), "leaves": []map[string]any{{"hash": leaf.Hash.Hex(), "target": vlt.Hex(), "value": "0", "data": hexutil.Encode(data), "dataMask": hexutil.Encode(mask), "proof": []string{}}}})
-	if err != nil {
-		t.Fatal(err)
+	recipe, tree, permissions := connectorCommittedFunding(t, leaf, f.account, caller, tOut, tIn)
+	f.send(f.signer, world, "FixtureWorld", "setRoot", f.account, tree.Root)
+	f.send(f.signer, f.account, "MerkleAccount", "acceptRoot", tree.Root)
+	for _, permission := range tree.Leaves {
+		f.send(f.signer, f.account, "MerkleAccount", "grantRole", permission.Hash, recipeExecutor)
 	}
+	f.send(f.signer, recipeExecutor, "RecipeExecutor", "setRecipe", recipe.Queries, recipe.Steps)
+
 	f.reader = &outerFillEVMReader{Client: client, caller: caller}
 	f.workflow = &connectorWorkflow{chain: f.reader, chainID: big.NewInt(1), connectors: map[common.Address]bool{vlt: true}, source: outerFillPermissions(permissions), caller: caller, signer: f.signer}
 	f.order, f.selected, f.backend = connectorExecutionAward(caller)
+	f.selected.Executor = recipeExecutor
 	f.order.Request.AmountIn = big.NewInt(100)
 	f.order.Request.Protocol, f.order.Swapper = f.signer, f.signer
 	f.order.Outputs[0].Amount, f.order.Outputs[0].Recipient = big.NewInt(90), f.recipient
@@ -449,4 +447,12 @@ func startOuterFillAnvil(t *testing.T) (*rpc.Client, *ethclient.Client) {
 	}
 	t.Fatal("anvil did not become ready")
 	return nil, nil
+}
+
+func (r *outerFillEVMReader) CallContractWithCode(ctx context.Context, msg ethereum.CallMsg, block *big.Int, code []byte) ([]byte, error) {
+	var result hexutil.Bytes
+	args := map[string]any{"from": msg.From, "to": msg.To, "data": hexutil.Bytes(msg.Data), "gas": hexutil.Uint64(msg.Gas)}
+	override := map[common.Address]any{*msg.To: map[string]any{"code": hexutil.Bytes(code)}}
+	err := r.Client.Client().CallContext(ctx, &result, "eth_call", args, hexutil.EncodeBig(block), override)
+	return result, err
 }

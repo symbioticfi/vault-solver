@@ -45,8 +45,9 @@ type Inventory struct {
 	Route
 
 	// Kind selects the canonical connector read surface; empty means native adapter.
-	Kind              string `json:"kind,omitempty"`
-	DiscountPrecision int64  `json:"-"`
+	Kind              string         `json:"kind,omitempty"`
+	RecipeExecutor    common.Address `json:"-"`
+	DiscountPrecision int64          `json:"-"`
 
 	MaxAssets *big.Int `json:"maxAssets"`
 	MaxRate   *big.Int `json:"maxRate"`

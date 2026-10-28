@@ -108,7 +108,7 @@ func TestClientListDiscounts(t *testing.T) {
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
 			`"collateral":"0x0000000000000000000000000000000000000c01","collateralDecimals":6,` +
 			`"discount":"10","signer":"0x0000000000000000000000000000000000000aaa","deadline":1900000000,` +
-			`"maxRate":"1000000","maxAssets":"5000"}]}`))
+			`"maxRate":"1000000","maxAssets":"5000","recipeExecutor":"0x0000000000000000000000000000000000000043"}]}`))
 	}))
 	defer srv.Close()
 
@@ -123,7 +123,7 @@ func TestClientListDiscounts(t *testing.T) {
 		t.Fatalf("request ID = %q, want response header", resp.RequestID)
 	}
 	if len(resp.Discounts) != 1 || resp.Discounts[0].CollateralDecimals != 6 ||
-		resp.Discounts[0].MaxAssets != "5000" || resp.Discounts[0].Deadline != 1900000000 {
+		resp.Discounts[0].MaxAssets != "5000" || resp.Discounts[0].Deadline != 1900000000 || resp.Discounts[0].RecipeExecutor != "0x0000000000000000000000000000000000000043" {
 		t.Fatalf("discounts = %+v", resp.Discounts)
 	}
 }

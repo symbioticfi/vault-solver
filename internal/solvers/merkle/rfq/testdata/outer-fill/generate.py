@@ -8,7 +8,7 @@ import subprocess
 ROOT = pathlib.Path(__file__).resolve().parent
 SOURCES = {
     'rfq': 'de6dbd617bf3c1e8b4120419cbe5800efae7d410',
-    'adapters': '9b693f34f6819f6c4e09f3751d84c2d1098a92c1',
+    'adapters': 'beaf24c50835fbbe181e3135a64285de2aca1315',
 }
 p = argparse.ArgumentParser()
 p.add_argument('--rfq-root', type=pathlib.Path, required=True)

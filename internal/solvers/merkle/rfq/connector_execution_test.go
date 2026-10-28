@@ -3,7 +3,6 @@ package rfq
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"math/big"
 	"reflect"
 	"strings"
@@ -13,7 +12,6 @@ import (
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
@@ -74,16 +72,16 @@ func TestConnectorBuildSimulatesCompleteAwardedOrder(t *testing.T) {
 	}
 	inputs := route[2].([]*big.Int)
 	runtime := route[3].([][]byte)
-	if len(inputs) != 2 || inputs[0].Int64() != 123 || inputs[1].Int64() != 456 || !reflect.DeepEqual(route[0], recipe.Queries) || !reflect.DeepEqual(route[1], recipe.Steps) || len(runtime) != 1 {
+	if len(inputs) != 2 || inputs[0].Int64() != 123 || inputs[1].Int64() != 456 || !reflect.DeepEqual(route[0], recipe.Queries) || !reflect.DeepEqual(route[1], recipe.Steps) || len(runtime) != 2 {
 		t.Fatal("awarded inputs or committed recipe changed")
 	}
 	actionsType := merkleaccount.NewMerkleAccount().GetABI().Methods["manage"].Inputs
-	actions, err := actionsType.Unpack(runtime[0])
+	actions, err := actionsType.Unpack(runtime[1])
 	if err != nil {
 		t.Fatal(err)
 	}
 	managed := *abi.ConvertType(actions[0], new([]merkleaccount.IMerkleAccountAction)).(*[]merkleaccount.IMerkleAccountAction)
-	if len(managed) != 1 || managed[0].Target != vlt || managed[0].Value.Sign() != 0 || !bytes.Equal(managed[0].DataMask, leaf.DataMask) || len(managed[0].Proof) != 0 {
+	if len(managed) != 1 || managed[0].Target != vlt || managed[0].Value.Sign() != 0 || !bytes.Equal(managed[0].DataMask, leaf.DataMask) || len(managed[0].Proof) != 1 {
 		t.Fatalf("curator permission changed: %+v", managed)
 	}
 	swapValues, err := connectorBinding.GetABI().Methods["swap"].Inputs.Unpack(managed[0].Data[4:])
@@ -117,7 +115,7 @@ func TestConnectorBuildRejectsUnauthorizedOrUnsettledExecution(t *testing.T) {
 		mutate func(*connectorWorkflow, *connectorExecutionReader)
 		want   string
 	}{
-		{"recipe binding absent", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.executor = common.Address{} }, "no recipe"},
+
 		{"connector account differs", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.account = common.HexToAddress("0x88") }, "account"},
 		{"recipe caller differs", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.recipeCaller = common.HexToAddress("0x88") }, "caller"},
 		{"permission role missing", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.allowed = false }, "role"},
@@ -163,7 +161,7 @@ type connectorExecutionReader struct {
 	*connectorReadFake
 
 	recipeExecutor, recipeAccount, recipeCaller, signer common.Address
-	recipeHash, root                                    common.Hash
+	recipeHash, root, approvalHash, swapHash            common.Hash
 	recipe                                              recipes.Recipe
 	header                                              *types.Header
 	allowed                                             bool
@@ -228,7 +226,7 @@ func (r *connectorExecutionReader) CallContract(ctx context.Context, msg ethereu
 	}
 	if *msg.To == vlt {
 		result, err := r.connectorReadFake.CallContract(ctx, msg, block)
-		if r.reorgBeforeDiscovery && bytes.Equal(msg.Data[:4], connectorBinding.PackGetMaxAssets(tIn)[:4]) {
+		if r.reorgBeforeDiscovery && bytes.Equal(msg.Data[:4], connectorBinding.PackOutputAsset()[:4]) {
 			r.header.Extra = []byte("new binding block")
 		}
 		return result, err
@@ -264,7 +262,7 @@ func (r *connectorExecutionReader) CallContract(ctx context.Context, msg ethereu
 			if err != nil {
 				return nil, err
 			}
-			if common.Hash(args[0].([32]byte)) != r.root || args[1].(common.Address) != r.recipeExecutor {
+			if !recipes.Proof(r.root, common.Hash(args[0].([32]byte)), []common.Hash{r.approvalHash}) && !recipes.Proof(r.root, common.Hash(args[0].([32]byte)), []common.Hash{r.swapHash}) || args[1].(common.Address) != r.recipeExecutor {
 				return nil, errors.New("role check used a different leaf or EOA holder")
 			}
 			return method.Outputs.Pack(r.allowed)
@@ -299,22 +297,16 @@ func connectorExecutionFixture(t *testing.T, resolved *discounts.Resolved) conne
 	if err != nil {
 		t.Fatal(err)
 	}
-	recipe := connectorDeltaRecipe(t, leaf.Hash, account, rfqExecutor, tOut, tIn)
+	recipe, tree, permission := connectorCommittedFunding(t, leaf, account, rfqExecutor, tOut, tIn)
 	hash, err := recipes.HashRecipe(recipe)
 	if err != nil {
 		t.Fatal(err)
 	}
-	permission, err := json.Marshal(map[string]any{
-		"root": leaf.Hash.Hex(), "chainId": "1", "account": account.Hex(),
-		"leaves": []map[string]any{{"hash": leaf.Hash.Hex(), "target": vlt.Hex(), "value": "0", "data": hexutil.Encode(data), "dataMask": hexutil.Encode(mask), "proof": []string{}}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+
 	reader := &connectorExecutionReader{
 		connectorReadFake: &connectorReadFake{remaining: big.NewInt(900), account: account, executor: recipeExecutor},
 		recipeExecutor:    recipeExecutor, recipeAccount: account, recipeCaller: rfqExecutor, signer: signer,
-		recipeHash: hash, root: leaf.Hash, recipe: recipe,
+		recipeHash: hash, root: tree.Root, recipe: recipe, approvalHash: tree.Leaves[0].Hash, swapHash: leaf.Hash,
 		header: &types.Header{Number: big.NewInt(7), Time: 7}, allowed: true,
 	}
 	workflow := &connectorWorkflow{
@@ -330,6 +322,24 @@ func connectorExecutionAward(caller common.Address) (executor.IReactorOrder, sel
 		Request:          executor.IReactorRequest{TokenIn: tIn, AmountIn: big.NewInt(123), Outputs: outputs, Deadline: big.NewInt(4102444800), Nonce: big.NewInt(23), Protocol: common.HexToAddress("0x45")},
 		SwapperSignature: []byte{0x81, 0x82}, Swapper: common.HexToAddress("0x51"), Filler: caller, Outputs: outputs,
 	}
-	selected := selectedRoute{Venue: vlt, DiscountID: *connectorDiscountID(), MaxAssets: big.NewInt(900)}
+	selected := selectedRoute{Venue: vlt, Executor: common.HexToAddress("0x43"), DiscountID: *connectorDiscountID(), MaxAssets: big.NewInt(900)}
 	return order, selected, &fakeBackend{discount: connectorDiscountFixture()}
+}
+
+func (r *connectorExecutionReader) CallContractWithCode(_ context.Context, msg ethereum.CallMsg, block *big.Int, code []byte) ([]byte, error) {
+	if msg.To == nil || *msg.To != r.recipeExecutor || msg.From != r.recipeCaller || block == nil || block.Uint64() != 7 || len(code) == 0 {
+		return nil, errors.New("prefix override escaped pinned scope")
+	}
+	typ, _ := abi.NewType("uint256[]", "", nil)
+	return (abi.Arguments{{Type: typ}}).Pack([]*big.Int{big.NewInt(900)})
+}
+
+func TestConnectorBuildRequiresDiscoveredExecutor(t *testing.T) {
+	fixture := connectorExecutionFixture(t, connectorDiscountFixture())
+	order, selected, backend := connectorExecutionAward(fixture.workflow.caller)
+	selected.Executor = common.Address{}
+	_, _, err := fixture.workflow.build(t.Context(), order, nil, selected, backend)
+	if err == nil || !strings.Contains(err.Error(), "no recipe executor") || fixture.reader.outerCalls != 0 {
+		t.Fatalf("missing executor did not fail closed: %v", err)
+	}
 }

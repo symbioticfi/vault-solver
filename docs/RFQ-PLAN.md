@@ -659,7 +659,7 @@ specifications when this contract changes. Deploy these generated clients with
 the backend header-only contract so resolve-union decoding no longer requires the
 removed body field.
 
-Merkle connector acquisition is owned by `internal/solvers/merkle/rfq`, as described in [RFQ-MERKLE.md](RFQ-MERKLE.md). Each connector maps each RWA asset to its own recipe executor. The recipe commits one signed swap with the awarded amount and payment as inputs 0 and 1. Include that asset's original issuer grants when redemption is required; route failures never fall back to custody.
+Merkle connector acquisition is owned by `internal/solvers/merkle/rfq`, as described in [RFQ-MERKLE.md](RFQ-MERKLE.md). The backend discovers the unique current recipe executor for each connector/RWA from on-chain SetRecipe evidence and supplies optional `recipeExecutor` inventory metadata. Missing executors fail closed. The shared `internal/liquidlane/recipecapacity` reader authenticates the original commitment and unused funding-witness Query against the current root and roles, then simulates the exact sequential funding prefix through the SDK at the pinned block and clips the final cash by `remainingAssets`. Regular connector quote admission repeats this derivation and subtracts account/asset reservations. The recipe commits one signed swap with the awarded amount and payment as inputs 0 and 1. Include that asset's original issuer grants when redemption is required; route failures never fall back to custody.
 
 ### Shared quote-pair transport diagnostics
 

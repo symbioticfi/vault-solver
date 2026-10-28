@@ -10,6 +10,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/recipecapacity"
 	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 )
 
@@ -28,6 +29,9 @@ func (r *reader) readConnectorCandidates(
 	header, err := r.chain.HeaderByNumber(ctx, nil)
 	if err != nil {
 		return nil, errors.Errorf("connector quote block: %w", err)
+	}
+	if header == nil || header.Number == nil || !header.Number.IsUint64() {
+		return nil, errors.New("invalid connector quote block")
 	}
 	block := header.Number
 	binding := connector.NewLiquidLaneConnector()
@@ -74,14 +78,14 @@ func (r *reader) readConnectorCandidates(
 		if err != nil || account == (common.Address{}) {
 			return nil, errors.New("invalid connector account")
 		}
-		capacityData, err := call(item.Adapter, binding.PackGetMaxAssets(tokenIn))
+		capacityResult, err := recipecapacity.Read(ctx, r.chain, recipecapacity.Scope{ChainID: big.NewInt(r.chainID), Executor: item.RecipeExecutor, Account: account, Caller: r.rfqCaller, Connector: item.Adapter, RWA: tokenIn, FundingAsset: output, Block: block})
 		if err != nil {
-			return nil, errors.Errorf("connector getMaxAssets: %w", err)
+			return nil, errors.Errorf("connector recipe capacity: %w", err)
 		}
-		capacity, err := binding.UnpackGetMaxAssets(capacityData)
-		if err != nil {
-			return nil, errors.Errorf("connector getMaxAssets decode: %w", err)
+		if capacityResult.Snapshot.BlockHash != header.Hash() {
+			return nil, errors.New("connector recipe capacity reorganized")
 		}
+		capacity := capacityResult.MaxAssets
 		minData, err := call(item.Adapter, binding.PackMinDiscount(tokenIn))
 		if err != nil {
 			return nil, errors.Errorf("connector minDiscount: %w", err)

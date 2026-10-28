@@ -30,7 +30,9 @@ type DiscountsResponseDiscountsInner struct {
 	Deadline  int64  `json:"deadline"`
 	MaxAssets string `json:"maxAssets" validate:"regexp=^\\d+$"`
 	// Block number used to read maxAssets, encoded as a decimal string.
-	BlockNumber          string `json:"blockNumber" validate:"regexp=^\\d+$"`
+	BlockNumber string `json:"blockNumber" validate:"regexp=^\\d+$"`
+	// RecipeExecutor discovered from the unique current recipe for a connector and RWA; omitted when unavailable.
+	RecipeExecutor       *string `json:"recipeExecutor,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -303,6 +305,38 @@ func (o *DiscountsResponseDiscountsInner) SetBlockNumber(v string) {
 	o.BlockNumber = v
 }
 
+// GetRecipeExecutor returns the RecipeExecutor field value if set, zero value otherwise.
+func (o *DiscountsResponseDiscountsInner) GetRecipeExecutor() string {
+	if o == nil || IsNil(o.RecipeExecutor) {
+		var ret string
+		return ret
+	}
+	return *o.RecipeExecutor
+}
+
+// GetRecipeExecutorOk returns a tuple with the RecipeExecutor field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *DiscountsResponseDiscountsInner) GetRecipeExecutorOk() (*string, bool) {
+	if o == nil || IsNil(o.RecipeExecutor) {
+		return nil, false
+	}
+	return o.RecipeExecutor, true
+}
+
+// HasRecipeExecutor returns a boolean if a field has been set.
+func (o *DiscountsResponseDiscountsInner) HasRecipeExecutor() bool {
+	if o != nil && !IsNil(o.RecipeExecutor) {
+		return true
+	}
+
+	return false
+}
+
+// SetRecipeExecutor gets a reference to the given string and assigns it to the RecipeExecutor field.
+func (o *DiscountsResponseDiscountsInner) SetRecipeExecutor(v string) {
+	o.RecipeExecutor = &v
+}
+
 func (o DiscountsResponseDiscountsInner) MarshalJSON() ([]byte, error) {
 	toSerialize, err := o.ToMap()
 	if err != nil {
@@ -323,6 +357,9 @@ func (o DiscountsResponseDiscountsInner) ToMap() (map[string]interface{}, error)
 	toSerialize["deadline"] = o.Deadline
 	toSerialize["maxAssets"] = o.MaxAssets
 	toSerialize["blockNumber"] = o.BlockNumber
+	if !IsNil(o.RecipeExecutor) {
+		toSerialize["recipeExecutor"] = o.RecipeExecutor
+	}
 
 	for key, value := range o.AdditionalProperties {
 		toSerialize[key] = value
@@ -359,6 +396,7 @@ func (o *DiscountsResponseDiscountsInner) UnmarshalJSON(data []byte) (err error)
 		delete(additionalProperties, "deadline")
 		delete(additionalProperties, "maxAssets")
 		delete(additionalProperties, "blockNumber")
+		delete(additionalProperties, "recipeExecutor")
 		o.AdditionalProperties = additionalProperties
 	}
 

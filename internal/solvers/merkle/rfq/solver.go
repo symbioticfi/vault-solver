@@ -19,6 +19,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/merklesender"
 	"github.com/symbioticfi/vault-solver/internal/observability"
+	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"gopkg.in/yaml.v3"
 )
@@ -208,7 +209,11 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 		if !ok || maximum.Sign() < 0 || maximum.BitLen() > 256 {
 			return nil, errors.New("invalid connector maxAssets")
 		}
-		data, until, err := s.workflow.build(ctx, order, signature, selectedRoute{venue, common.BytesToHash(id), maximum}, s.backend)
+		recipeExecutor, err := parse.NonZeroAddress(item.RecipeExecutor, "connector recipeExecutor")
+		if err != nil {
+			continue
+		}
+		data, until, err := s.workflow.build(ctx, order, signature, selectedRoute{Venue: venue, Executor: recipeExecutor, DiscountID: common.BytesToHash(id), MaxAssets: maximum}, s.backend)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()

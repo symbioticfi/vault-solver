@@ -9,13 +9,15 @@ from the backend discounts API, and builds:
 Use [the example config](../config/rfq-merkle.example.yaml). The EOA must be an
 authorized caller of the RFQ Executor. Each configured connector must be registered
 as version `2` in the Reactor's Liquid Lane adapter factory (version `1` is the
-native adapter). Each RWA's on-chain `recipeExecutors(token)` binding must name a RecipeExecutor with
-the RFQ Executor as caller and the connector's MerkleAccount as account.
+native adapter). The backend discovers the unique current RecipeExecutor for each connector/RWA
+from committed `SetRecipe` events. Its caller must be the RFQ Executor and its account must be
+the connector's MerkleAccount.
 
 Configuration contains the backend URL, durable state directory, RFQ executor,
 curator service and an explicit allowlist of 1..256 connectors. Per-RWA executors and
-funding capacity come from each connector on-chain; no local executor map or source
-list is maintained. Recipe discovery, capacity and connector bindings are read at the
+funding capacity come from committed recipes; no local executor map or source
+list is maintained. The backend supplies optional `recipeExecutor` inventory metadata; missing
+executors fail closed. Recipe discovery, capacity and connector identities are read at the
 same pinned block. A recipe that requires issuer redemption includes those calls for
 its asset. Duplicate connector addresses are rejected, including case variants.
 Polling is every three seconds;
@@ -28,9 +30,13 @@ not compete for the same awarded orders.
 The signed order tuple supplies the entire input and sum of output payments.
 Matching advertised connectors are tried in address/discount-ID order, and one must
 cover the complete award using both its advertised capacity and pinned on-chain
-`getMaxAssets(token)` result. This getter caps the connector budget by a rollback-only
-execution of the committed recipe's funding prefix, including current permissions and
-sequential source liquidity. No market pricing, splits or adapter/Merkle liquidity aggregation occurs.
+recipe funding result, clipped by `remainingAssets(token)`. The shared
+`internal/liquidlane/recipecapacity` helper authenticates the original recipe hash, active
+account root, witness proofs and executor roles before using the existing SDK code-override
+lens. It executes the exact prefix before the first payment Approve and appends a funding-asset
+balance read. Source preparation, gates and checks retain their original order, so sources
+sharing liquidity are never independently summed. The regular RFQ quote path repeats the
+same pinned derivation and subtracts shared account/asset reservations. No market pricing, splits or adapter/Merkle liquidity aggregation occurs.
 An upstream source must award compatible orders; this solver does not publish quotes.
 The wall-clock observation is sampled before the header RPC; its latency consumes the unsigned submission deadline, including
 when the chain clock is ahead of the host.
@@ -39,7 +45,15 @@ The SDK discovers the committed recipe and active root, authenticates the curato
 tree, verifies masks/proofs and roles, and checks the canonical snapshot around
 simulation. The host fills the matching connector swap's signed terms and supplies amountIn
 and awarded payment as Inputs 0 and 1. Recipe gates, additional actions and balance
-checks remain curator-owned; the host does not prove a particular guard layout.
+checks remain curator-owned. Capacity admission requires the payment Approve to use Input 1,
+the funding asset and connector spender, followed by the signed swap Manage gated by Input 0
+with amount Input 0 at byte 100 and selector/RWA fully pinned. Intervening numerical steps
+are permitted. An unused Query at the connector carries
+`recipeFundingWitness((address,uint96,bytes,bytes,bytes32[])[])` and unique Action preimages
+for every funding/payment/swap leaf. A Read of this marker, missing/stale/duplicate proofs,
+ambiguous markers or executor self-calls/queries under the override are rejected.
+The temporary probe uses Input 0 = 1 and Input 1 = maxUint256 where referenced, and does
+not execute the payment approval. The original recipe bytes remain unchanged in the actual fill.
 `LLExecuting` retains acquired inventory when its redemption leaves are empty;
 otherwise its configured issuer calls execute before the complete outer fill succeeds.
 It simulates the complete outer RFQ fill from the EOA so Reactor funding, recipe
@@ -72,13 +86,11 @@ unsigned intent is rebuilt from fresh orders on restart. Mount an exclusive dura
 directory, and never run independent processes with the same signer.
 
 The RFQ bridge ABI comes from [RFQ PR 25](https://github.com/symbioticfi/rfq/pull/25),
-commit `de6dbd617bf3c1e8b4120419cbe5800efae7d410`. Connector, recipe and capacity semantics
-come from [adapters PR 14](https://github.com/symbioticfi/adapters/pull/14),
-commit `9b693f34f6819f6c4e09f3751d84c2d1098a92c1`.
-`make refresh-merkle-abi` projects only solver-used entries from canonical Foundry
-artifacts; `make bindings` regenerates typed helpers. Deploy the matching connector and RecipeExecutor versions and publish capacity
-witnesses before enabling these routes. Missing, stale or failing capacity does not
-fall back to account cash.
+commit `de6dbd617bf3c1e8b4120419cbe5800efae7d410`. Connector and RecipeExecutor use the unchanged canonical adapters contract surface.
+`make refresh-merkle-abi` projects only solver-used entries from canonical Foundry artifacts;
+`make bindings` regenerates typed helpers. Capacity requires no connector/executor contract
+extension or separate funding configuration. Publish the recipe's authenticated witness query
+before enabling these routes. Missing, stale or failing capacity does not fall back to account cash.
 
 Tests cover signed award sizing, route capacity, unchanged recipe/permissions,
 complete outer simulation, revoked roles, reorgs, intent persistence, sequential

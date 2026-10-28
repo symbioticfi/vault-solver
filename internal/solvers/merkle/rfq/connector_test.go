@@ -116,9 +116,7 @@ func (f *connectorReadFake) CallContract(_ context.Context, m ethereum.CallMsg, 
 			return method.Outputs.Pack(f.account)
 		case "outputAsset":
 			return method.Outputs.Pack(tOut)
-		case "recipeExecutors":
-			return method.Outputs.Pack(f.executor)
-		case "getMaxAssets":
+		case "remainingAssets":
 			return method.Outputs.Pack(f.remaining)
 		}
 	}
@@ -187,4 +185,42 @@ func connectorSignatureTemplate(terms connectorTerms, recipient common.Address, 
 		}
 	}
 	return data, mask
+}
+
+func TestAssembleConnectorRouteRequiresPinnedTupleOffset(t *testing.T) {
+	terms, err := parseConnectorDiscount(connectorDiscountFixture(), *connectorDiscountID(), vlt, tIn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name    string
+		offset  int64
+		mutable bool
+		want    string
+	}{
+		{"relocated tuple", 160, false, "tuple offset"},
+		{"mutable tuple header", 128, true, "unconstrained"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			caller := common.HexToAddress("0x10")
+			data, mask := connectorSignatureTemplate(terms, caller, new(big.Int))
+			big.NewInt(tc.offset).FillBytes(data[4:36])
+			if tc.mutable {
+				for i := 4; i < 36; i++ {
+					mask[i] = 255
+				}
+			}
+			leaf := recipes.Leaf{Target: vlt, Value: new(big.Int), Data: data, DataMask: mask}
+			leaf.Hash, err = recipes.HashLeaf(leaf)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tree := &recipes.Tree{Root: leaf.Hash, Leaves: []recipes.Leaf{leaf}}
+			recipe := connectorDeltaRecipe(t, leaf.Hash, common.HexToAddress("0x21"), caller, tOut, tIn)
+			_, err = assembleConnectorRoute(recipe, tree, vlt, tIn, caller, big.NewInt(123), big.NewInt(456), terms.Swap, terms.Signature)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("route header accepted: %v", err)
+			}
+		})
+	}
 }

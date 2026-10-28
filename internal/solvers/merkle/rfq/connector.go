@@ -15,6 +15,7 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/recipecapacity"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
@@ -32,8 +33,7 @@ type assembledConnector struct {
 }
 
 type connectorState struct {
-	Account, Asset, Executor common.Address
-	MaxAssets                *big.Int
+	Account, Asset common.Address
 }
 
 // Signed terms are upstream-owned; only ABI framing and selected route identity are checked here.
@@ -102,7 +102,17 @@ func assembleConnectorRoute(recipe recipes.Recipe, tree *recipes.Tree, venue, to
 		if action.Leaf.Target != venue {
 			continue
 		}
-		if len(action.Leaf.Data) < 164 || !bytes.Equal(action.Leaf.Data[:4], data[:4]) || common.BytesToAddress(action.Leaf.Data[132:164]) != token {
+		if len(action.Leaf.Data) < 164 || !bytes.Equal(action.Leaf.Data[:4], data[:4]) {
+			continue
+		}
+
+		if !bytes.Equal(action.Leaf.Data[4:36], common.LeftPadBytes([]byte{128}, 32)) {
+			return assembledConnector{}, errors.New("connector swap tuple offset must be 128")
+		}
+		if err = action.Pinned(4, 32); err != nil {
+			return assembledConnector{}, err
+		}
+		if common.BytesToAddress(action.Leaf.Data[132:164]) != token {
 			continue
 		}
 		actions[action.Key] = data
@@ -130,9 +140,8 @@ type connectorWorkflow struct {
 	caller, signer common.Address
 }
 
-func (w *connectorWorkflow) state(ctx context.Context, venue, token common.Address, block *big.Int) (connectorState, error) {
+func (w *connectorWorkflow) state(ctx context.Context, venue common.Address, block *big.Int) (connectorState, error) {
 	var account, asset common.Address
-	var maximum *big.Int
 	call := func(data []byte) ([]byte, error) {
 		return w.chain.CallContract(ctx, ethereum.CallMsg{To: &venue, Data: data}, block)
 	}
@@ -152,27 +161,12 @@ func (w *connectorWorkflow) state(ctx context.Context, venue, token common.Addre
 	if err != nil || asset == (common.Address{}) {
 		return connectorState{}, errors.New("invalid connector outputAsset")
 	}
-	raw, err = call(connectorBinding.PackRecipeExecutors(token))
-	if err != nil {
-		return connectorState{}, errors.Errorf("connector recipeExecutors: %w", err)
-	}
-	recipeExecutor, err := connectorBinding.UnpackRecipeExecutors(raw)
-	if err != nil || recipeExecutor == (common.Address{}) {
-		return connectorState{}, errors.New("connector has no recipe for asset")
-	}
-	raw, err = call(connectorBinding.PackGetMaxAssets(token))
-	if err != nil {
-		return connectorState{}, errors.Errorf("connector getMaxAssets: %w", err)
-	}
-	maximum, err = connectorBinding.UnpackGetMaxAssets(raw)
-	if err != nil {
-		return connectorState{}, errors.Errorf("connector getMaxAssets: %w", err)
-	}
-	return connectorState{Account: account, Asset: asset, Executor: recipeExecutor, MaxAssets: maximum}, nil
+	return connectorState{Account: account, Asset: asset}, nil
 }
 
 type selectedRoute struct {
 	Venue      common.Address
+	Executor   common.Address
 	DiscountID common.Hash
 	MaxAssets  *big.Int
 }
@@ -186,6 +180,9 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if err != nil {
 		return nil, time.Time{}, err
 	}
+	if selected.Executor == (common.Address{}) {
+		return nil, time.Time{}, errors.New("connector has no recipe executor")
+	}
 	if !w.connectors[selected.Venue] || selected.DiscountID == (common.Hash{}) || selected.MaxAssets == nil || selected.MaxAssets.Sign() < 0 {
 		return nil, time.Time{}, errors.New("connector requires configured routing and upstream discount")
 	}
@@ -196,21 +193,19 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if header == nil || header.Number == nil {
 		return nil, time.Time{}, errors.New("missing connector recipe block")
 	}
-	state, err := w.state(ctx, selected.Venue, order.Request.TokenIn, header.Number)
+	state, err := w.state(ctx, selected.Venue, header.Number)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	snapshot, recipe, err := recipes.DiscoverForAccount(ctx, w.chain, state.Executor, state.Account, header.Number)
+	capacity, err := recipecapacity.Read(ctx, w.chain, recipecapacity.Scope{ChainID: w.chainID, Executor: selected.Executor, Account: state.Account, Caller: w.caller, Connector: selected.Venue, RWA: order.Request.TokenIn, FundingAsset: state.Asset, Block: header.Number})
 	if err != nil {
-		return nil, time.Time{}, errors.Errorf("discover connector recipe: %w", err)
+		return nil, time.Time{}, errors.Errorf("connector recipe capacity: %w", err)
 	}
+	snapshot, recipe := capacity.Snapshot, capacity.Recipe
 	if snapshot.BlockHash != header.Hash() {
 		return nil, time.Time{}, errors.New("connector bindings reorganized during recipe discovery")
 	}
-	if snapshot.Caller != w.caller {
-		return nil, time.Time{}, errors.New("RecipeExecutor caller differs from RFQ Executor")
-	}
-	if state.MaxAssets.Cmp(required) < 0 || selected.MaxAssets.Cmp(required) < 0 {
+	if capacity.MaxAssets.Cmp(required) < 0 || selected.MaxAssets.Cmp(required) < 0 {
 		return nil, time.Time{}, errors.New("connector has insufficient capacity for the whole award")
 	}
 	if state.Asset != token {

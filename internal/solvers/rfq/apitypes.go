@@ -34,6 +34,7 @@ type quoteRequest struct {
 type quoteAdapter struct {
 	Kind              string  `json:"kind,omitempty" enum:"connector"`
 	DiscountPrecision string  `json:"discountPrecision,omitempty"`
+	RecipeExecutor    string  `json:"recipeExecutor,omitempty" pattern:"^0x[a-fA-F0-9]{40}$"`
 	Account           string  `json:"account,omitempty"`
 	Adapter           string  `json:"adapter" pattern:"^0x[a-fA-F0-9]{40}$"`
 	Asset             string  `json:"asset" pattern:"^0x[a-fA-F0-9]{40}$"`
@@ -184,6 +185,10 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (
 	inventory.Kind = v.Kind
 	if v.Kind == "connector" {
 		inventory.DiscountPrecision = precision
+		inventory.RecipeExecutor, err = parse.NonZeroAddress(v.RecipeExecutor, idxField(index, "recipeExecutor"))
+		if err != nil {
+			return solverInventory{}, err
+		}
 	}
 	inventory.BlockNumber = blockNumber
 	return inventory, nil

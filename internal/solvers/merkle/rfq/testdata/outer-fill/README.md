@@ -9,8 +9,8 @@ The full path executes unmodified canonical implementation runtime:
 - RFQ `Reactor` and `Executor`: symbioticfi/rfq
   `de6dbd617bf3c1e8b4120419cbe5800efae7d410` (the source of the vendored RFQ ABI).
 - Adapters `RecipeExecutor`, `MerkleAccount`, and `LiquidLaneConnector`:
-  symbioticfi/adapters `9b693f34f6819f6c4e09f3751d84c2d1098a92c1` (the source of
-  the vendored connector/recipe/capacity surfaces).
+  symbioticfi/adapters `beaf24c50835fbbe181e3135a64285de2aca1315` (the source of
+  the unchanged connector and recipe contract surfaces).
 
 `artifacts.json` contains the canonical Foundry creation bytecode, complete ABIs,
 compiler settings and source Keccak hashes. The canonical implementations are
@@ -24,7 +24,9 @@ factory/root/oracle registries plus a constant-price feed. The EOA request,
 protocol order, connector discount and discount-swap signatures are real ECDSA
 EIP-712 signatures checked by the canonical contracts. The recipe commits the
 three exact balance deltas and its swap leaf has real mask/proof/role enforcement.
-The capacity witness is the empty funding prefix over existing account cash.
+The unused committed Query supplies approval/swap permission preimages. Capacity runs the
+empty funding prefix over existing account cash through the SDK code override; no contract
+capacity or executor-binding extension is deployed.
 No Solidity settlement, signature, economics, permission or capacity logic is
 mocked in Go.
 

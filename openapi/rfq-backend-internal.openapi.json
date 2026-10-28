@@ -297,6 +297,11 @@
                   "type": "string",
                   "pattern": "^\\d+$",
                   "description": "Block number used to read maxAssets, encoded as a decimal string."
+                },
+                "recipeExecutor": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{40}$",
+                  "description": "RecipeExecutor discovered from the unique current recipe for a connector and RWA; omitted when unavailable."
                 }
               },
               "required": [
