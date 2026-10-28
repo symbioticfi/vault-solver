@@ -3283,72 +3283,6 @@
     "spec": {
       "rows": [
       {
-        "kind": "RowsLayoutRow",
-        "spec": {
-          "title": "Quote requests by token pair",
-          "collapse": false,
-          "layout": {
-            "kind": "GridLayout",
-            "spec": {
-              "items": [
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 0,
-                    "width": 24,
-                    "height": 4,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-390"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 4,
-                    "width": 24,
-                    "height": 6,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-300"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 10,
-                    "width": 24,
-                    "height": 6,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-304"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 16,
-                    "width": 24,
-                    "height": 8,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-301"
-                    }
-                  }
-                }
-              ]
-            }
-          }
-        }
-      },
-      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Execution results",
@@ -3586,6 +3520,72 @@
             }
           }
         },
+      {
+        "kind": "RowsLayoutRow",
+        "spec": {
+          "title": "Quote requests by token pair",
+          "collapse": false,
+          "layout": {
+            "kind": "GridLayout",
+            "spec": {
+              "items": [
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 0,
+                    "width": 24,
+                    "height": 4,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-390"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 4,
+                    "width": 24,
+                    "height": 6,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-300"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 10,
+                    "width": 24,
+                    "height": 6,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-304"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 16,
+                    "width": 24,
+                    "height": 8,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-301"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       {
           "kind": "RowsLayoutRow",
           "spec": {

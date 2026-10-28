@@ -3701,85 +3701,6 @@
     "spec": {
       "rows": [
       {
-        "kind": "RowsLayoutRow",
-        "spec": {
-          "title": "Standing quotes by pair",
-          "collapse": false,
-          "layout": {
-            "kind": "GridLayout",
-            "spec": {
-              "items": [
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 0,
-                    "width": 24,
-                    "height": 4,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-390"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 4,
-                    "width": 24,
-                    "height": 6,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-10"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 10,
-                    "width": 12,
-                    "height": 7,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-300"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 12,
-                    "y": 10,
-                    "width": 12,
-                    "height": 7,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-302"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 17,
-                    "width": 24,
-                    "height": 7,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-301"
-                    }
-                  }
-                }
-              ]
-            }
-          }
-        }
-      },
-      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Execution results",
@@ -4017,6 +3938,85 @@
             }
           }
         },
+      {
+        "kind": "RowsLayoutRow",
+        "spec": {
+          "title": "Standing quotes by pair",
+          "collapse": false,
+          "layout": {
+            "kind": "GridLayout",
+            "spec": {
+              "items": [
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 0,
+                    "width": 24,
+                    "height": 4,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-390"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 4,
+                    "width": 24,
+                    "height": 6,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-10"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 10,
+                    "width": 12,
+                    "height": 7,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-300"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 12,
+                    "y": 10,
+                    "width": 12,
+                    "height": 7,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-302"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 17,
+                    "width": 24,
+                    "height": 7,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-301"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       {
           "kind": "RowsLayoutRow",
           "spec": {
