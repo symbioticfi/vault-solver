@@ -71,10 +71,10 @@ unsigned intent is rebuilt from fresh orders on restart. Mount an exclusive dura
 directory, and never run independent processes with the same signer.
 
 The RFQ bridge ABI comes from [RFQ PR 25](https://github.com/symbioticfi/rfq/pull/25),
-commit `de6dbd617bf3c1e8b4120419cbe5800efae7d410`. Connector and recipe semantics
-come from adapters commit `d506348870eb2d379ddae69407bc8b63422291d6`.
-The capacity and per-RWA binding surface is provided by the coordinated
-recipe-capacity contracts change. `make refresh-merkle-abi` projects only solver-used entries from canonical Foundry
+commit `de6dbd617bf3c1e8b4120419cbe5800efae7d410`. Connector, recipe and capacity semantics
+come from [adapters PR 14](https://github.com/symbioticfi/adapters/pull/14),
+commit `9b693f34f6819f6c4e09f3751d84c2d1098a92c1`.
+`make refresh-merkle-abi` projects only solver-used entries from canonical Foundry
 artifacts; `make bindings` regenerates typed helpers. Deploy the matching connector and RecipeExecutor versions and publish capacity
 witnesses before enabling these routes. Missing, stale or failing capacity does not
 fall back to account cash.
