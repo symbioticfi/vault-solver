@@ -11,7 +11,6 @@ solvers:
   - name: threef-merkle
     config:
       mode: simulate
-      maxEligibilityChecksPerTick: 256
       stateDir: /persistent/threef-merkle
       executor: "0x0000000000000000000000000000000000000010"
       curator:
@@ -25,8 +24,8 @@ The account is the maker. A dedicated, 3F-approved BF EOA and API key serve one
 curator/default account. The executor's account and caller are discovered together at a
 pinned block; its account must be the default maker and caller must match the shared signer. Mainnet is required.
 Mode defaults to `simulate`; switch to `send` to authorize offers and mint execution.
-One configuration selects exactly one executor and one BF/default account. The executor recipe admits 1..32 distinct guarded funding/underlying pairs; each group has disjoint request/principal/yield inputs and its own committed policy. The maximum-size fixture includes 32 canonical guards, 128 policy/claim grants, their hex data/masks, eight-hash proofs and the complete bundle envelope: 1,323,418 bytes within the fixed 2-MiB permission response limit. The actual complete permission bundle remains subject to that cap, including additional funding leaves. Direct Call/Approve steps are rejected. Guarded mint Manage gates must reference their own principal input. Additional committed funding Manage gates before or after a mint guard may reference a recognized principal directly or an arithmetic Result proven to be zero when that principal is zero on every successful execution. The current frontend's `min(saturatingSub(principal, cash), capacity)` gates satisfy this rule and require no migration. Literal gates, including literal zero, and gates without a proven principal dependency remain rejected. This enforces activation by an inspected market; it does not infer which arbitrary funding leaf economically belongs to a pair. At least one group must have positive principal. Provider identity settings participate in recovery identity; the nonfinancial
-optional eligibility work cap does not, so changing that cap preserves recovery. Use one exclusive durable state directory
+One configuration selects exactly one executor and one BF/default account. The executor recipe admits 1..32 distinct guarded funding/underlying pairs; each group has disjoint request/principal/yield inputs and its own committed policy. The maximum-size fixture includes 32 canonical guards, 128 policy/claim grants, their hex data/masks, eight-hash proofs and the complete bundle envelope: 1,323,418 bytes within the fixed 2-MiB permission response limit. The actual complete permission bundle remains subject to that cap, including additional funding leaves. Direct Call/Approve steps are rejected. Guarded mint Manage gates must reference their own principal input. Additional committed funding Manage gates before or after a mint guard may reference a recognized principal directly or an arithmetic Result proven to be zero when that principal is zero on every successful execution. The current frontend's `min(saturatingSub(principal, cash), capacity)` gates satisfy this rule and require no migration. Literal gates, including literal zero, and gates without a proven principal dependency remain rejected. This enforces activation by an inspected market; it does not infer which arbitrary funding leaf economically belongs to a pair. At least one group must have positive principal. Provider identity settings participate in recovery identity.
+Use one exclusive durable state directory
 and one process per curator BF. Do not also list this executor in `merkle.strategies`
 or share that BF/key with another independently allocating bot.
 
@@ -38,13 +37,14 @@ replacement before broadcast; the host drains the shared sender before closing s
 
 Polling and mint strategy cadence are 15 seconds, operations are bounded to 30 seconds,
 and the shared recipe cache holds the configured recipe within 16 MiB. Curator `url` and optional `apiKeyEnv` use the SDK's
-10-second/2-MiB limits. `maxEligibilityChecksPerTick` defaults to 256 and accepts 1..131072. It caps new
-native eligibility simulations for optional bids per tick, after existing live
-commitments have been maintained. A capped scan resumes at its next candidate on
-the following tick, so repeated rejection at the front cannot starve later
-requests. Candidates are ordered by auction ID and market order; the first
-executable offer in the current scan wins. A completed scan restarts from the
-oldest auction. The cursor is not persisted and resets on process restart.
+10-second/2-MiB limits. Existing live commitments are maintained first. Each pass then
+checks every relevant open/solvable auction without a blocking offer from this maker,
+matching its funding asset to the configured markets. Positive and negative policy
+eligibility results are reused only within the same pinned snapshot. The complete
+candidate list is checked before bidding, with no per-tick check cap or rotating cursor.
+Auctions are ordered by ID and markets by recipe order. Each eligible market gets
+one bidding pass over its complete eligible auction list. An API mutation ends
+the pass so the next pass reads fresh inventory.
 Financial amounts, account identity and manual inputs are not configuration fields.
 
 One-time setup follows the [3F onboarding guide](https://docs.3f.xyz/bridge-facilitator/onboarding):
@@ -152,7 +152,7 @@ separate from live-provider approval, authenticated mainnet enrollment and minti
 All hand-written 3F Merkle logic lives in `internal/solvers/merkle/threef`:
 API transport/JSON admission, offer sizing and journal recovery, policy snapshots,
 canonical recipe inspection and the mint provider. One Run goroutine evaluates guarded markets sequentially. Live commitment
-maintenance precedes the bounded rotating scan for optional bids. One API client, planner, provider, exclusive store and submission sender serve one executor strategy. The SDK keeper owns mint progress. It admits no new offer work
+maintenance precedes a full scan of relevant unanswered auctions. One API client, planner, provider, exclusive store and submission sender serve one executor strategy. The SDK keeper owns mint progress. It admits no new offer work
 while a signed recipe is pending. `internal/merklesender.OpenKeeper` shares only
 SDK store/sender startup and recovery with the generic recipe host. There is no
 optional 3F dispatch in `merkle` and no dependency on `bridgefacilitator` strategies.
@@ -163,7 +163,7 @@ rejection and canonical receipt evidence. Dedicated startup tests cover mainnet,
 shared caller discovery, grouped recipes, cross-account rejection, reorgs, invalid accounts and failure before state creation. Cross-market tests retain live/ambiguous account intents and prevent another pair budget from cancelling a foreign UI offer.
 Regression tests also cover all Manage activation gates and before-guard funding,
 exact raw JSON rate periods, historical filtering, negative membership memoization,
-bounded scan rotation, maintenance before optional RPC failure and zero-budget
+full auction scans before bidding, maintenance before optional RPC failure and zero-budget
 cancellation ownership.
 Authenticated live-provider approval, enrollment and mainnet minting require
 separate validation; local fixtures do not establish them.

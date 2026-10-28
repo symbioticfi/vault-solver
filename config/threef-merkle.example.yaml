@@ -14,8 +14,6 @@ solvers:
   - name: threef-merkle
     config:
       mode: simulate # send enables API offers and on-chain minting
-      # Optional native eligibility simulations per tick, after live-offer maintenance.
-      maxEligibilityChecksPerTick: 256
       stateDir: /persistent/threef-merkle
       executor: "0x0000000000000000000000000000000000000010" # one recipe with 1..32 guarded funding pairs
       curator:

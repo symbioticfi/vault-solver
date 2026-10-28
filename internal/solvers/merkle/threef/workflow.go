@@ -37,12 +37,10 @@ func (p *mintPlanning) Validate(ctx context.Context, plan keeper.Plan) error {
 }
 
 type offerWorkflow struct {
-	planner   *keeper.Planner
-	strategy  keeper.Strategy
-	api       *apiClient
-	bot       *offerBot
-	maxChecks int
-	cursor    int
+	planner  *keeper.Planner
+	strategy keeper.Strategy
+	api      *apiClient
+	bot      *offerBot
 }
 
 func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
@@ -76,7 +74,7 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	if len(auctions) > 4096 {
 		return errors.New("3f auction inventory exceeds 4096-row bound")
 	}
-	// Stable oldest-first order is resumed across bounded optional scans.
+	// Consider unanswered auctions in stable oldest-first order.
 	sort.SliceStable(auctions, func(i, j int) bool { return auctions[i].Id < auctions[j].Id })
 	// Every managed role participates, including the recipe's funding sources.
 	inspection, err := recipes.Inspect(recipe)
@@ -98,8 +96,8 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	})
 }
 
-// evaluate is owned by Run. Only the bounded optional scan cursor survives a
-// tick; every membership result, including rejection, belongs to this exact pin.
+// evaluate is owned by Run. Every membership result, including rejection,
+// belongs to this exact pin and is discarded after the pass.
 func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin provider.Snapshot, recipe recipes.Recipe, markets []mintMarket, auctions []threef.AuctionDto, validate func(context.Context) error) error {
 	offers, err := w.bot.readOffers(ctx, pin.Account)
 	if err != nil {
@@ -118,16 +116,16 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 	}
 	observations := make([]observation, len(markets))
 	memberships := make([]map[common.Address]bool, len(markets))
-	check := func(i int, request common.Address) (bool, error) {
-		if result, known := memberships[i][request]; known {
-			return result, nil
+	check := func(i int, request common.Address) error {
+		if _, known := memberships[i][request]; known {
+			return nil
 		}
 		err := eligible(ctx, chain, pin, markets[i], request, observations[i].MinimumYield)
 		if err != nil && !errors.Is(err, errIneligible) {
-			return false, err
+			return err
 		}
 		memberships[i][request] = err == nil
-		return err == nil, nil
+		return nil
 	}
 	run := func(i int, create bool) (bool, error) {
 		if validate != nil {
@@ -153,7 +151,7 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 				if offer.asset != market.Asset {
 					continue
 				}
-				if _, err := check(i, common.HexToAddress(offer.dto.RequestId)); err != nil {
+				if err := check(i, common.HexToAddress(offer.dto.RequestId)); err != nil {
 					return err
 				}
 			}
@@ -191,32 +189,22 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 			}
 		}
 	}
-	if len(candidates) == 0 {
-		w.cursor = 0
-		return nil
-	}
-	start, checks := w.cursor%len(candidates), 0
-	for visited := 0; visited < len(candidates); visited++ {
-		index := (start + visited) % len(candidates)
-		selected := candidates[index]
-		if _, known := memberships[selected.market][selected.request]; !known {
-			if checks >= w.maxChecks {
-				return nil
-			}
-			checks++
-		}
-		accepted, err := check(selected.market, selected.request)
-		if err != nil {
+	for _, selected := range candidates {
+		if err := check(selected.market, selected.request); err != nil {
 			return err
 		}
-		w.cursor = (index + 1) % len(candidates)
-		if accepted {
-			if changed, err := run(selected.market, true); err != nil || changed {
-				w.cursor = 0
-				return err
-			}
+	}
+	// Complete eligibility for every unanswered auction before creating an offer.
+	// Each market needs one bidding pass over the complete membership inventory.
+	attempted := make([]bool, len(markets))
+	for _, selected := range candidates {
+		if attempted[selected.market] || !memberships[selected.market][selected.request] {
+			continue
+		}
+		attempted[selected.market] = true
+		if changed, err := run(selected.market, true); err != nil || changed {
+			return err
 		}
 	}
-	w.cursor = 0
 	return nil
 }

@@ -997,9 +997,9 @@ amount. Unrelated gates remain rejected. Guarded mint gates still require their 
 `rateBasisSeconds` is read from the exact JSON number and must
 be a nonnegative int64 integer; omitted, null and zero values keep the legacy rate comparison.
 
-Live commitments are maintained before optional bid eligibility checks. `maxEligibilityChecksPerTick`
-defaults to `256` and accepts `1..131072`; a capped scan resumes on the next tick. The cursor resets on
-restart, and this scheduling setting does not change the durable strategy identity. At zero pair budget,
+Live commitments are maintained first. Each cycle then checks every relevant unanswered open/solvable
+auction before bidding, reusing policy eligibility results within the pinned snapshot. There is no
+per-cycle eligibility check cap. At zero pair budget,
 new bids are blocked and unjournaled UI offers require explicit UI cancellation because the canonical
 budget-consuming check cannot establish their scope. The bot can cancel its own unaccepted journaled
 intent and never cancels accepted mint windows.

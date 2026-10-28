@@ -363,8 +363,10 @@ maker. Its recipe contains 1..32 distinct guarded funding/underlying markets, wi
 one API client, planner, provider, exclusive store and sender. One Run goroutine
 maintains existing commitments before scanning open/solvable auctions for new bids
 while the sender is idle. Positive and negative membership are memoized only at the
-current pin; optional new-bid simulations are bounded by the configured
-`maxEligibilityChecksPerTick` and resume from an in-memory cursor on the next tick.
+current pin. Each pass checks every relevant unanswered open/solvable auction before
+bidding, with no eligibility count cap or persistent scan cursor. Matching requests
+are deduplicated per market, and each eligible market is considered once after the
+complete eligibility scan. Any API mutation ends the pass to refresh inventory.
 The account-level durable intent serializes self-originated offers across markets. Its API-key PUSH offer loop uses authenticated recipe/policy scope and idle
 account cash; its SDK provider binds native aggregate mint authorizations. The
 provider authenticates canonical mint principal identities before validating funding

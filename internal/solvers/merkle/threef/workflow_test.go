@@ -3,6 +3,7 @@ package threef
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math/big"
 	"testing"
 
@@ -34,7 +35,7 @@ func offerPassFixture(t *testing.T) (*offerWorkflow, *fakeClient, offerPassData)
 	m.Account, m.Executor, m.RecipeHash, m.Asset, m.UnderlyingAsset = pin.Account, pin.Executor, pin.RecipeHash, markets[0].Asset, markets[0].UnderlyingAsset
 	m.Budget, m.AvailableCash, m.MinimumYield1e8 = big.NewInt(45), big.NewInt(123), big.NewInt(2_000_000)
 	client.auctions = nil
-	return &offerWorkflow{bot: b, maxChecks: 256}, client, offerPassData{pin, recipe, tree, markets, m}
+	return &offerWorkflow{bot: b}, client, offerPassData{pin, recipe, tree, markets, m}
 }
 
 func eligibilityReads(t *testing.T, pin provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree, run func(ethereum.CallMsg) error) readFunc {
@@ -122,36 +123,74 @@ func TestOfferPassMaintainsCommitmentBeforeOptionalAuctionFailure(t *testing.T) 
 	}
 }
 
-func TestOfferPassBoundsAndRotatesOptionalChecks(t *testing.T) {
-	w, _, data := offerPassFixture(t)
-	pin, recipe, tree, markets, m := data.pin, data.recipe, data.tree, data.markets, data.market
-	w.maxChecks = 1
-	auctions := []threef.AuctionDto{}
-	for i := 1; i <= 3; i++ {
-		auctions = append(auctions, testAuction(m, float32(i), common.BigToAddress(big.NewInt(int64(100+i)))))
-	}
-	seen := map[common.Address]bool{}
-	for tick := 0; tick < 3; tick++ {
-		calls := 0
-		chain := eligibilityReads(t, pin, recipe, tree, func(msg ethereum.CallMsg) error {
-			calls++
-			for _, auction := range auctions {
-				request := common.HexToAddress(auction.RequestId)
-				if bytes.Contains(msg.Data, common.LeftPadBytes(request.Bytes(), 32)) {
-					seen[request] = true
-				}
+func TestOfferPassChecksAllUnansweredAuctions(t *testing.T) {
+	for _, count := range []int{1, 257} {
+		t.Run(fmt.Sprintf("auctions%d", count), func(t *testing.T) {
+			w, _, data := offerPassFixture(t)
+			auctions := make([]threef.AuctionDto, 0, count)
+			for i := 1; i <= count; i++ {
+				auctions = append(auctions, testAuction(data.market, float32(i), common.BigToAddress(big.NewInt(int64(100+i)))))
 			}
-			return policyRevertError{}
+			calls := 0
+			chain := eligibilityReads(t, data.pin, data.recipe, data.tree, func(ethereum.CallMsg) error {
+				calls++
+				return policyRevertError{}
+			})
+			if err := w.evaluate(t.Context(), chain, data.pin, data.recipe, data.markets, auctions, nil); err != nil {
+				t.Fatal(err)
+			}
+			if calls != count {
+				t.Fatalf("checked %d of %d unanswered auctions in one pass", calls, count)
+			}
 		})
-		if err := w.evaluate(t.Context(), chain, pin, recipe, markets, auctions, nil); err != nil {
-			t.Fatal(err)
-		}
-		if calls != 1 {
-			t.Fatalf("tick %d exceeded configured work budget: %d", tick, calls)
+	}
+}
+
+func TestOfferPassChecksAllCandidatesBeforePosting(t *testing.T) {
+	w, c, data := offerPassFixture(t)
+	auctions := make([]threef.AuctionDto, 0, 3)
+	for i := 1; i <= 3; i++ {
+		auction := testAuction(data.market, float32(i), common.BigToAddress(big.NewInt(int64(100+i))))
+		auction.AdditionalProperties[exactMaxRateKey] = "10000"
+		auctions = append(auctions, auction)
+	}
+	calls := 0
+	chain := eligibilityReads(t, data.pin, data.recipe, data.tree, func(ethereum.CallMsg) error { calls++; return nil })
+	c.beforeCreate = func(threef.CreateOfferDto) {
+		if calls != 3 {
+			t.Fatalf("posted before checking all auctions: %d eligibility checks", calls)
 		}
 	}
-	if len(seen) != 3 {
-		t.Fatalf("rejected prefix starved later requests: %v", seen)
+	if err := w.evaluate(t.Context(), chain, data.pin, data.recipe, data.markets, auctions, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.created) != 1 || c.created[0].AuctionId != 1 {
+		t.Fatalf("unexpected first offer: %+v", c.created)
+	}
+}
+
+func TestOfferPassSkipsAuctionsAlreadyAnsweredByMaker(t *testing.T) {
+	w, c, data := offerPassFixture(t)
+	answered, unanswered := common.HexToAddress("0x101"), common.HexToAddress("0x102")
+	auctions := []threef.AuctionDto{testAuction(data.market, 1, answered), testAuction(data.market, 2, unanswered)}
+	own := testOffer(data.market, 1, "CANCELLED", "1")
+	own.RequestId = answered.Hex()
+	foreign := testOffer(data.market, 2, "SUBMITTED", "1")
+	foreign.Maker, foreign.RequestId = common.HexToAddress("0x999").Hex(), unanswered.Hex()
+	c.offers = []threef.OfferDto{own, foreign}
+	calls := 0
+	chain := eligibilityReads(t, data.pin, data.recipe, data.tree, func(msg ethereum.CallMsg) error {
+		calls++
+		if !bytes.Contains(msg.Data, common.LeftPadBytes(unanswered.Bytes(), 32)) {
+			t.Fatal("rechecked an auction already answered by this maker")
+		}
+		return policyRevertError{}
+	})
+	if err := w.evaluate(t.Context(), chain, data.pin, data.recipe, data.markets, auctions, nil); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("unanswered auction affected by another maker's offer: %d checks", calls)
 	}
 }
 
