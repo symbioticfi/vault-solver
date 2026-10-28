@@ -906,8 +906,9 @@ in the owning repository and the integration harness pins the resulting revision
   direct + signed-discount routes, actual balance-delta enforcement, same-token multi-output settlement, and
   mock-Reactor coverage. Regenerate and vendor the ABI here, pin the landed RFQ revision in `rfq-integration`,
   and add a canonical-Reactor self-cosign test. Native output remains an optional post-v1 extension (§7).
-- [x] **Pair traffic board.** Reuse shared bounded pair outcomes and requested
-  amount histograms with RFQ; simplify existing-board panels. Preserve legacy metrics and protocol support (§5).
+- [x] **Quote request board.** Show bounded, sampled final request logs with pair, raw amount,
+  outcome/reason and request ID; omit added pair-count/rejection panels. Retain amount histograms,
+  legacy metrics and protocol support (§5).
 - [x] **Bounded quote rejection diagnostics.** Split existing semantic validation reasons; retain
   protocol/chain acceptance, raw-body/semantic HTTP behavior and workflow aggregate labels. Capture
   homogeneous planner failures without classifying every nil as insufficient capacity (§5).

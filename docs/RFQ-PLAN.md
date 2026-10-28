@@ -679,5 +679,6 @@ The same small LiquidLane helper as UniswapX initializes its bounded identity ma
 HTTP from configured input tokens and already-resolved on-chain vault assets. No request-provided
 inventory addresses/decimals are learned. Requested-amount samples require trusted decimals; absent
 RFQ input metadata omits normalized samples, while existing quoted atomic-unit volumes remain.
-The RFQ board adds the common pair counts/trend and exact refusal table; existing historical
-aggregates remain. New metrics do not backfill, and storage must deduplicate HA scrapes.
+The RFQ board retains historical aggregates; the added pair counts/trend/refusal panels are omitted
+by operator preference. Logs without typed request details are not enriched with invented pairs.
+New metrics do not backfill, and storage must deduplicate HA scrapes.

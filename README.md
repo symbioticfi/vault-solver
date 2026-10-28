@@ -835,9 +835,18 @@ Refresh failures and matched orders retain their distinct existing metrics.
 skips and failed publication/withdrawal attempts by pair. These are refresh evaluations and submission
 attempts, not upstream user requests. Retries count again; submission errors may have uncertain
 remote acceptance. Pair labels come only from fixed trusted startup routes, with other pairs
-aggregated as `other`. The LI.FI board shows counts by pair/reason for the selected range.
+aggregated as `other`. The LI.FI board shows standing published quotes/ranges and capacity; the
+pair rejection and refresh-failure rate panels are omitted.
 
-The three boards use the same pair labels and explicit solver/Namespace filters. New metrics have
+UniswapX also shows **Last observed quote requests** from the selected ClickHouse Logs datasource:
+timestamp, shortened pair addresses, raw atomic amount, exact-input/output type, outcome, reason and
+request ID. It reads the last hour of the selected range, at most 2,000 final-event candidates and
+50 rows, deduplicated by pod and trace/span where available. Logs may be sampled; this is not a
+complete request ledger. Missing fields remain unknown, and returned quotes are not fills. RFQ does
+not invent pair details absent from its logs. The added HTTP pair-count/rejection panels are omitted;
+existing aggregate diagnostics remain.
+
+Quote metrics use explicit solver/Namespace filters. New metrics have
 no historical backfill; range increase/rate requires multiple scrapes and can miss the first event.
 Storage must deduplicate HA scrapes of a process before queries sum process observations. Update
 producer and board templates separately.

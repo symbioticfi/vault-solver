@@ -1094,6 +1094,7 @@ once before loops start; no additional token registry is introduced. Only exact 
 address labels, everything else is other/other. The bound is `11 × (distinct startup pairs + 1)` series, including the unresolved bucket,
 independent of untrusted addresses or error text. Raw pairs and bounded
 reasons are logged at debug level. The existing published-state/capacity gauges and decimals remain
-unchanged. The board adds one selected-range pair/reason table beside standing-state/refresh panels;
-no dashboard-query test harness is introduced. Unit tests cover stage reasons, duplicate routes,
+unchanged. The board retains standing quotes/ranges and capacity; the pair/reason and refresh-failure
+rate panels are omitted by operator preference. No dashboard-query test harness is introduced.
+Unit tests cover stage reasons, duplicate routes,
 unchanged success, failed publish/withdraw batches and bounded labels.

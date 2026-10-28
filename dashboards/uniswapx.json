@@ -4086,362 +4086,6 @@
         "transparent": true
       }
     },
-    "panel-300": {
-      "kind": "Panel",
-      "spec": {
-        "id": 300,
-        "title": "Requests by pair · selected range",
-        "description": "One final HTTP result per request; incoming is the sum of returned and rejected outcomes. Valid breakers excluded. Known addresses are bounded trusted startup/config identities; other is an unresolved valid/foreign-chain bucket, unknown is unparsed or malformed. These are not known token pairs. Namespace isolates environments; storage must deduplicate HA scrapes. New metrics have no backfill; increase needs multiple samples.",
-        "links": [],
-        "data": {
-          "kind": "QueryGroup",
-          "spec": {
-            "queries": [
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "A",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "sum by (token_in, token_out) (increase(solver_bot_quote_results_total{solver=\"uniswapx-filler\",namespace=\"${namespace}\"}[$__range]))",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "B",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "sum by (token_in, token_out) (increase(solver_bot_quote_results_total{solver=\"uniswapx-filler\",namespace=\"${namespace}\",result=\"returned\"}[$__range]))",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "C",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "sum by (token_in, token_out) (increase(solver_bot_quote_results_total{solver=\"uniswapx-filler\",namespace=\"${namespace}\",result=\"rejected\"}[$__range]))",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              }
-            ],
-            "transformations": [
-              {
-                "kind": "Transformation",
-                "group": "merge",
-                "spec": {
-                  "options": {}
-                }
-              },
-              {
-                "kind": "Transformation",
-                "group": "organize",
-                "spec": {
-                  "options": {
-                    "excludeByName": {
-                      "Time": true,
-                      "__name__": true
-                    },
-                    "renameByName": {
-                      "token_in": "Input token",
-                      "token_out": "Output token",
-                      "Value #A": "Processed",
-                      "Value #B": "Returned",
-                      "Value #C": "Rejected"
-                    },
-                    "indexByName": {}
-                  }
-                }
-              }
-            ],
-            "queryOptions": {}
-          }
-        },
-        "vizConfig": {
-          "kind": "VizConfig",
-          "group": "table",
-          "version": "",
-          "spec": {
-            "options": {
-              "showHeader": true,
-              "cellHeight": "sm",
-              "enablePagination": true
-            },
-            "fieldConfig": {
-              "defaults": {
-                "unit": "none",
-                "decimals": 0,
-                "noValue": "No data"
-              },
-              "overrides": [
-                {
-                  "matcher": {
-                    "id": "byName",
-                    "options": "Input token"
-                  },
-                  "properties": [
-                    {
-                      "id": "mappings",
-                      "value": [
-                        {
-                          "type": "value",
-                          "options": {
-                            "other": {
-                              "text": "other"
-                            },
-                            "unknown": {
-                              "text": "unknown"
-                            }
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "id": "unit",
-                      "value": "string"
-                    },
-                    {
-                      "id": "custom.width",
-                      "value": 360
-                    }
-                  ]
-                },
-                {
-                  "matcher": {
-                    "id": "byName",
-                    "options": "Output token"
-                  },
-                  "properties": [
-                    {
-                      "id": "mappings",
-                      "value": [
-                        {
-                          "type": "value",
-                          "options": {
-                            "other": {
-                              "text": "other"
-                            },
-                            "unknown": {
-                              "text": "unknown"
-                            }
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "id": "unit",
-                      "value": "string"
-                    },
-                    {
-                      "id": "custom.width",
-                      "value": 360
-                    }
-                  ]
-                }
-              ]
-            }
-          }
-        }
-      }
-    },
-    "panel-301": {
-      "kind": "Panel",
-      "spec": {
-        "id": 301,
-        "title": "Quote flow by pair · requests / sec",
-        "description": "Shared HTTP quote results by pair. Incoming sums all final results; returned means a written response, not an awarded/filled order. other/unknown are unresolved aggregate buckets; raw pairs remain in logs. Namespace and per-process rate are preserved.",
-        "links": [],
-        "data": {
-          "kind": "QueryGroup",
-          "spec": {
-            "queries": [
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "A",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "sum by (token_in, token_out) (rate(solver_bot_quote_results_total{solver=\"uniswapx-filler\",namespace=\"${namespace}\"}[$__rate_interval]))",
-                      "instant": false,
-                      "range": true,
-                      "format": "time_series",
-                      "legendFormat": "{{token_in}} → {{token_out}} · incoming"
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "B",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "sum by (token_in, token_out) (rate(solver_bot_quote_results_total{solver=\"uniswapx-filler\",namespace=\"${namespace}\",result=\"returned\"}[$__rate_interval]))",
-                      "instant": false,
-                      "range": true,
-                      "format": "time_series",
-                      "legendFormat": "{{token_in}} → {{token_out}} · returned"
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "C",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "sum by (token_in, token_out) (rate(solver_bot_quote_results_total{solver=\"uniswapx-filler\",namespace=\"${namespace}\",result=\"rejected\"}[$__rate_interval]))",
-                      "instant": false,
-                      "range": true,
-                      "format": "time_series",
-                      "legendFormat": "{{token_in}} → {{token_out}} · rejected"
-                    }
-                  }
-                }
-              }
-            ],
-            "transformations": [],
-            "queryOptions": {}
-          }
-        },
-        "vizConfig": {
-          "kind": "VizConfig",
-          "group": "timeseries",
-          "version": "",
-          "spec": {
-            "options": {
-              "legend": {
-                "calcs": [
-                  "lastNotNull",
-                  "max"
-                ],
-                "displayMode": "table",
-                "placement": "bottom",
-                "showLegend": true
-              },
-              "tooltip": {
-                "hideZeros": false,
-                "mode": "multi",
-                "sort": "desc"
-              }
-            },
-            "fieldConfig": {
-              "defaults": {
-                "unit": "ops",
-                "thresholds": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "value": 0,
-                      "color": "green"
-                    }
-                  ]
-                },
-                "color": {
-                  "mode": "palette-classic"
-                },
-                "custom": {
-                  "axisColorMode": "text",
-                  "axisLabel": "",
-                  "axisPlacement": "auto",
-                  "fillOpacity": 8,
-                  "hideFrom": {
-                    "legend": false,
-                    "tooltip": false,
-                    "viz": false
-                  },
-                  "insertNulls": false,
-                  "pointSize": 5,
-                  "scaleDistribution": {
-                    "type": "linear"
-                  },
-                  "showPoints": "never",
-                  "spanNulls": false,
-                  "thresholdsStyle": {
-                    "mode": "off"
-                  },
-                  "drawStyle": "line",
-                  "lineInterpolation": "linear",
-                  "stacking": {
-                    "mode": "none",
-                    "group": "A"
-                  }
-                },
-                "decimals": 3
-              },
-              "overrides": []
-            }
-          }
-        }
-      }
-    },
     "panel-303": {
       "kind": "Panel",
       "spec": {
@@ -4642,13 +4286,14 @@
         }
       }
     },
-    "panel-304": {
+    "panel-500": {
       "kind": "Panel",
       "spec": {
-        "id": 304,
-        "title": "Rejections by pair and reason",
-        "description": "Final HTTP refusals during the selected range, including protocol/chain/semantic/body errors. One request, one final reason; planner attempts are not requests. Known token labels come only from the frozen trusted startup registry (max 16). other aggregates valid addresses outside it or a different chain; unknown aggregates unparsed/malformed addresses. These buckets are not known pairs. Namespace isolates the environment; counters sum per-process increases and assume storage deduplicates HA scrapes. New metrics have no backfill; range increases need multiple scrapes and can miss the first nonzero sample. Metric reasons use snake_case. Missing required IDs are missing_ids; malformed RFQ IDs are invalid_ids.",
+        "id": 500,
+        "title": "Last observed quote requests",
+        "description": "Latest 50 observed final request events from at most 2,000 candidates in the last hour of the selected range. Logs may be sampled; this is not a complete request ledger. Pair addresses are shortened. Amounts are raw atomic units: EXACT_INPUT requests input, EXACT_OUTPUT requests output. Returned does not mean filled. Missing fields remain unknown.",
         "links": [],
+        "transparent": true,
         "data": {
           "kind": "QueryGroup",
           "spec": {
@@ -4656,56 +4301,26 @@
               {
                 "kind": "PanelQuery",
                 "spec": {
+                  "refId": "A",
+                  "hidden": false,
                   "query": {
                     "kind": "DataQuery",
-                    "group": "prometheus",
+                    "group": "grafana-clickhouse-datasource",
                     "version": "v0",
                     "datasource": {
-                      "name": "${datasource}"
+                      "name": "${logs}"
                     },
                     "spec": {
-                      "editorMode": "code",
-                      "expr": "sum by (token_in, token_out, reason) (increase(solver_bot_quote_results_total{solver=\"uniswapx-filler\",namespace=\"${namespace}\",result=\"rejected\"}[$__range]))",
-                      "instant": true,
-                      "legendFormat": "",
-                      "range": false,
-                      "format": "table"
+                      "editorType": "sql",
+                      "format": 1,
+                      "queryType": "table",
+                      "rawSql": "SELECT\n formatDateTime(T, '%Y-%m-%d %H:%i:%S', 'UTC') AS `Timestamp UTC`,\n concat(if(JSONExtractString(B,'tokenIn')='', 'unknown', concat(substring(JSONExtractString(B,'tokenIn'),1,10),'…',right(JSONExtractString(B,'tokenIn'),4))),' → ',if(JSONExtractString(B,'tokenOut')='', 'unknown', concat(substring(JSONExtractString(B,'tokenOut'),1,10),'…',right(JSONExtractString(B,'tokenOut'),4)))) AS Pair,\n multiIf(JSONExtractString(B,'amount')!='',concat(JSONExtractString(B,'amount'),' atomic'),JSONExtractString(B,'amountIn')!='',concat(JSONExtractString(B,'amountIn'),' in / ',JSONExtractString(B,'amountOut'),' out atomic'),'—') AS `Amount raw`,\n JSONExtractString(B,'type') AS Type,\n multiIf(JSONExtractString(B,'msg')='quote returned','returned',JSONExtractString(B,'msg') IN ('quote declined','quote request rejected'),'rejected','error') AS Outcome,\n JSONExtractString(B,'reason') AS Reason,\n JSONExtractString(B,'requestId') AS `Request ID`\nFROM (\n SELECT max(Timestamp) AS T,\n argMax(Body,tuple(Timestamp,JSONExtractString(Body,'msg')='write quote response')) AS B\n FROM (\n SELECT Timestamp,PodName,TraceId,SpanId,Body\n FROM logs.otel_logs_k8s\n WHERE Timestamp >= greatest($__fromTime, $__toTime - INTERVAL 1 HOUR) AND Timestamp <= $__toTime\n AND Namespace = ${namespace:singlequote}\n AND ServiceName='vault-solver-uniswapx'\n AND JSONExtractString(Body,'solver')='uniswapx-filler'\n AND JSONExtractString(Body,'msg') IN ('quote declined','quote returned','quote failed','quote request rejected','write quote response')\n ORDER BY Timestamp DESC LIMIT 2000\n )\n GROUP BY PodName, if(TraceId!='' AND SpanId!='',concat(TraceId,':',SpanId),concat(toString(Timestamp),':',toString(cityHash64(Body))))\n)\nORDER BY T DESC LIMIT 50 SETTINGS max_execution_time=10"
                     }
-                  },
-                  "refId": "A",
-                  "hidden": false
-                }
-              }
-            ],
-            "transformations": [
-              {
-                "kind": "Transformation",
-                "group": "merge",
-                "spec": {
-                  "options": {}
-                }
-              },
-              {
-                "kind": "Transformation",
-                "group": "organize",
-                "spec": {
-                  "options": {
-                    "excludeByName": {
-                      "Time": true,
-                      "__name__": true
-                    },
-                    "renameByName": {
-                      "token_in": "Input token",
-                      "token_out": "Output token",
-                      "reason": "Reason",
-                      "Value": "Rejected",
-                      "Value #A": "Rejected"
-                    },
-                    "indexByName": {}
                   }
                 }
               }
             ],
+            "transformations": [],
             "queryOptions": {}
           }
         },
@@ -4716,124 +4331,36 @@
           "spec": {
             "options": {
               "showHeader": true,
-              "cellHeight": "sm",
-              "enablePagination": true,
-              "sortBy": [
-                {
-                  "displayName": "Rejected",
-                  "desc": true
-                }
-              ]
+              "cellHeight": "md",
+              "enablePagination": true
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "none",
-                "decimals": 0,
-                "noValue": "No data"
-              },
-              "overrides": [
-                {
-                  "matcher": {
-                    "id": "byName",
-                    "options": "Input token"
+                "unit": "string",
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "wrapText": true,
+                  "cellOptions": {
+                    "type": "auto"
                   },
-                  "properties": [
-                    {
-                      "id": "mappings",
-                      "value": [
-                        {
-                          "type": "value",
-                          "options": {
-                            "other": {
-                              "text": "other"
-                            },
-                            "unknown": {
-                              "text": "unknown"
-                            }
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "id": "unit",
-                      "value": "string"
-                    },
-                    {
-                      "id": "custom.width",
-                      "value": 360
-                    }
-                  ]
-                },
-                {
-                  "matcher": {
-                    "id": "byName",
-                    "options": "Output token"
-                  },
-                  "properties": [
-                    {
-                      "id": "mappings",
-                      "value": [
-                        {
-                          "type": "value",
-                          "options": {
-                            "other": {
-                              "text": "other"
-                            },
-                            "unknown": {
-                              "text": "unknown"
-                            }
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "id": "unit",
-                      "value": "string"
-                    },
-                    {
-                      "id": "custom.width",
-                      "value": 360
-                    }
-                  ]
-                },
-                {
-                  "matcher": {
-                    "id": "byName",
-                    "options": "Token"
-                  },
-                  "properties": [
-                    {
-                      "id": "mappings",
-                      "value": [
-                        {
-                          "type": "value",
-                          "options": {
-                            "other": {
-                              "text": "other (unregistered / other chain; aggregated)"
-                            },
-                            "unknown": {
-                              "text": "unknown (unparsed / invalid address; aggregated)"
-                            }
-                          }
-                        }
-                      ]
-                    }
-                  ]
+                  "inspect": true
                 }
-              ]
+              },
+              "overrides": []
             }
           }
-        },
-        "transparent": true
+        }
       }
     },
-    "panel-390": {
+    "panel-391": {
       "kind": "Panel",
       "spec": {
-        "id": 390,
-        "title": "Quote statistics notes",
-        "description": "How to read the quote statistics and empty cells.",
+        "id": 391,
+        "title": "Request log coverage",
+        "description": "",
         "links": [],
+        "transparent": true,
         "data": {
           "kind": "QueryGroup",
           "spec": {
@@ -4849,15 +4376,14 @@
           "spec": {
             "options": {
               "mode": "markdown",
-              "content": "Processed = returned + rejected completed HTTP requests; returned does not mean filled. Internal strategy attempts are excluded. `other` / `unknown` are unresolved buckets, not known token pairs. Empty cells mean no samples for the selected range, not a verified zero."
+              "content": "Latest 50 observed final request events from at most 2,000 candidates in the last hour of the selected range. Logs may be sampled; this is not a complete request ledger. Pair addresses are shortened. Amounts are raw atomic units: EXACT_INPUT requests input, EXACT_OUTPUT requests output. Returned does not mean filled. Missing fields remain unknown."
             },
             "fieldConfig": {
               "defaults": {},
               "overrides": []
             }
           }
-        },
-        "transparent": true
+        }
       }
     }
   },
@@ -4919,6 +4445,46 @@
             }
           }
         },
+      {
+        "kind": "RowsLayoutRow",
+        "spec": {
+          "title": "Last quote requests",
+          "collapse": false,
+          "layout": {
+            "kind": "GridLayout",
+            "spec": {
+              "items": [
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 0,
+                    "width": 24,
+                    "height": 12,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-500"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 12,
+                    "width": 24,
+                    "height": 3,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-391"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
       {
           "kind": "RowsLayoutRow",
           "spec": {
@@ -5123,72 +4689,6 @@
             }
           }
         },
-      {
-        "kind": "RowsLayoutRow",
-        "spec": {
-          "title": "Quote requests by token pair",
-          "collapse": false,
-          "layout": {
-            "kind": "GridLayout",
-            "spec": {
-              "items": [
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 0,
-                    "width": 24,
-                    "height": 8,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-300"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 8,
-                    "width": 24,
-                    "height": 10,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-304"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 18,
-                    "width": 24,
-                    "height": 7,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-301"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 25,
-                    "width": 24,
-                    "height": 3,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-390"
-                    }
-                  }
-                }
-              ]
-            }
-          }
-        }
-      },
       {
           "kind": "RowsLayoutRow",
           "spec": {
