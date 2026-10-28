@@ -18,8 +18,6 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/multicall3"
-
-	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 // multicallB is the stateless v2 aggregate3 pack/unpack binding (no backend).
@@ -40,17 +38,12 @@ type Client struct {
 	readURL     string
 	chainID     *big.Int
 	multicall   common.Address
-
-	// How each endpoint's calls are traced (see calls.go). Both are zero for HTTP(S), where the
-	// instrumented transport already spans every request.
-	readCalls  callTracing
-	writeCalls callTracing
 }
 
 // Dial connects to the EVM RPC endpoint(s), records the chain id, and pins the Multicall3 address
 // used for batched reads. rpcURLs[0] is the primary; any extra entries are HTTP(S) fallbacks tried in
-// order when the primary is unavailable (see fallbackTransport). A single non-HTTP URL preserves
-// the plain ethclient dial; HTTP(S) calls use the bounded transport even with one endpoint.
+// order when the primary is unavailable (see fallbackTransport). All endpoints must use HTTP(S);
+// calls use the bounded transport even with one endpoint.
 //
 // writeRPCURL, when non-empty, is dialed as a SEPARATE client used to broadcast transactions and
 // read account nonces (see SendTransaction, NonceAt, and PendingNonceAt). Every other read stays on
@@ -106,9 +99,7 @@ func DialWithMetrics(
 	// and nonce reads; all other reads stay on the primary. Even without writeRpcUrl, isolate
 	// writes from a multi-endpoint read client: replaying eth_sendRawTransaction across endpoints can
 	// hide an ambiguous acceptance behind a later nonce-too-low response.
-	readCalls := callTracing{role: readRole, transport: read.transport}
 	writeClient := ec
-	writeCalls := readCalls
 	if writeEndpoint != "" {
 		write, wcErr := dialClient(ctx, []string{writeEndpoint}, rpcRoleWrite, attemptTimeout, rpcMetrics)
 		if wcErr != nil {
@@ -135,7 +126,6 @@ func DialWithMetrics(
 			}
 		}
 		writeClient = wc
-		writeCalls = callTracing{role: rpcRoleWrite, transport: write.transport}
 	}
 
 	return &Client{
@@ -145,8 +135,6 @@ func DialWithMetrics(
 		readURL:     rpcURLs[0],
 		chainID:     id,
 		multicall:   common.HexToAddress(multicallAddr),
-		readCalls:   readCalls,
-		writeCalls:  writeCalls,
 	}, nil
 }
 
@@ -158,13 +146,9 @@ func (c *Client) Close() {
 	}
 }
 
-// dialClient builds the ethclient and reports the transport label its calls are traced under: empty
-// for HTTP(S), which fallbackTransport already spans per request, and ws/ipc otherwise. A single
-// non-HTTP endpoint keeps a plain dial under a connect span; HTTP(S) endpoints use fallbackTransport
-// so each attempt remains bounded.
+// dialedClient shares one HTTP transport between ethclient and SDK read batches.
 type dialedClient struct {
 	client     *ethclient.Client
-	transport  string
 	httpClient *http.Client
 }
 
@@ -175,10 +159,6 @@ func dialClient(
 	attemptTimeout time.Duration,
 	rpcMetrics *RPCMetrics,
 ) (dialedClient, error) {
-	if len(rpcURLs) == 1 && !isHTTPURL(rpcURLs[0]) {
-		client, label, err := dialNonHTTP(ctx, rpcURLs[0], role)
-		return dialedClient{client: client, transport: label}, err
-	}
 	endpoints, err := parseHTTPEndpoints(rpcURLs)
 	if err != nil {
 		return dialedClient{}, err
@@ -199,32 +179,6 @@ func dialClient(
 		return dialedClient{}, errors.Errorf("chain: dial (fallback): %w", err)
 	}
 	return dialedClient{client: ethclient.NewClient(rc), httpClient: httpClient}, nil
-}
-
-// dialNonHTTP dials a websocket or IPC endpoint under a chain.rpc.connect span. A websocket carries
-// traceparent on its handshake, which is the only header this transport has: go-ethereum reconnects
-// a dropped connection internally and replays the same headers, so the provider can tie the
-// connection back to this dial but never to an individual call. IPC has no handshake at all. Either
-// way the calls themselves are spanned locally, in calls.go.
-func dialNonHTTP(ctx context.Context, rpcURL, role string) (_ *ethclient.Client, _ string, err error) {
-	transport := rpcTransport(rpcURL)
-	ctx, end := traceConnect(ctx, role, transport)
-	defer func() { end(err) }()
-
-	if transport == rpcTransportIPC {
-		ec, dialErr := ethclient.DialContext(ctx, rpcURL)
-		if dialErr != nil {
-			return nil, "", errors.Errorf("chain: dial: %w", dialErr)
-		}
-		return ec, transport, nil
-	}
-	header := make(http.Header)
-	observability.InjectTraceHeaders(ctx, header)
-	rc, dialErr := rpc.DialOptions(ctx, rpcURL, rpc.WithHeaders(header))
-	if dialErr != nil {
-		return nil, "", errors.Errorf("chain: dial: %w", dialErr)
-	}
-	return ethclient.NewClient(rc), transport, nil
 }
 
 // ChainID returns a copy of the cached chain id.

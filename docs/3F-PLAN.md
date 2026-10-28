@@ -169,7 +169,7 @@ Two-stage decode keeps solver config encapsulated. The generic layer reads only
 the chosen solver decodes it into its own typed struct.
 
 ```yaml
-chain: { rpcUrl, writeRpcUrl?, chainId, rpcFallbackUrls?, wsUrl? }
+chain: { rpcUrl, writeRpcUrl?, chainId, rpcFallbackUrls? } # HTTP(S) endpoints
 signer: { keyEnv: SOLVER_PRIVATE_KEY }     # the EIP-1271 signer every served adapter trusts
 txManager: { confirmations: 2, maxFeeGwei, broadcastTimeoutMs, replacementIntervalMs, pendingTimeoutMs, shutdownTimeoutMs, horizon }
 
@@ -407,7 +407,7 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
   custom strategy or the built-in `webhook` strategy. The strategy returns principal and expected
   return; the solver only signs and submits the returned offer.
 - **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state.
-- **WS live-log subscription** (`chain.wsUrl`) — config field present but unused; the poll-based reconcile/redeem path is sufficient for v0.
+- **Chain transport** — HTTP(S) RPC only. The unused `chain.wsUrl` option and WebSocket/IPC RPC path were removed; reconcile/redeem remains poll-based.
 - **Resolved: pre-sign redeem estimation budget.** `redeem` still submits without a request
   deadline or supplied gas limit. The shared manager now bounds initial estimation and its fallback
   by one finite read budget; an unsigned timeout returns before the lane admits new work

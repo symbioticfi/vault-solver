@@ -11,14 +11,14 @@ capacity work. They do not promote `stage` or change production configuration.
 |---|---|---|
 | F01 | Fixed | HTTP fallback rebuilds Basic Authorization from each endpoint's own URL. Real HTTP client tests cover authenticated/unauthenticated primary and fallback combinations and immutable caller headers. |
 | F02 | Fixed | A shared zap core redacts URL userinfo, paths, queries and fragments before stdout and Sentry. Tests preserve diagnostics, bound fields, concurrent reuse, sampling, sink filtering and write error handling. This is URL redaction, not arbitrary secret detection. |
-| F03 | Fixed | SDK receipt/header batches retain whole-response evidence and use read fallbacks for ordinary all-null results. Pending batches disable eRPC empty-result retries. WebSocket/IPC batches use the existing geth connection. Batch body-read failures follow the ordinary transport fallback path, including truncated responses. |
+| F03 | Fixed | SDK receipt/header batches retain whole-response evidence and use read fallbacks for ordinary all-null results. Pending batches disable eRPC empty-result retries. Chain RPC is now HTTP(S)-only. Batch body-read failures follow the ordinary transport fallback path, including truncated responses. |
 | F04 | Withdrawn | The added funding-gate data-flow proof is removed. Additional funding Manage steps follow the trusted curator-authored recipe. The later simplification also removes canonical mint guard comparison; SDK/contract permission validation remains. |
 | F05 | Fixed | UniswapX strategy context is bounded by the quote budget, caller and remaining snapshot lifetime. Final publication checks cancellation and wall/chain expiry, including equality. Handler regressions require HTTP 204 and decline accounting for expected timeout. |
 | F06 | Fixed; simplified | The HTTP boundary preserves exact JSON rateBasisSeconds before generated float32 conversion. Added decimal length/exponent caps and the required-exact-source rejection are removed; internal DTO callers retain their original fallback and numeric constraints. |
 | F07 | Withdrawn | The original RFQ-Merkle discount handling is restored, without skipping malformed backend entries to seek another route. |
 | F08 | Fixed | RFQ-Merkle samples wall time before its header RPC. A delayed-header regression verifies that RPC latency consumes the sending deadline with a leading chain clock. |
 | F09 | Withdrawn | The original connector quote path is restored, without per-connector error isolation or fallback based on invalid contract responses. |
-| F10 | Withdrawn | Connector deduplication and batched getter changes are reverted with the connector quote path. The independently useful WebSocket/IPC SDK transport fix remains under F03. |
+| F10 | Withdrawn | Connector deduplication and batched getter changes are reverted with the connector quote path. The unused WebSocket/IPC RPC path was subsequently removed; F03 covers HTTP(S) batches. |
 | F11 | Fixed; full auction scan retained | Live commitments are maintained before bidding. Each pass checks every relevant unanswered open/solvable auction, filtering historical/foreign candidates and memoizing positive and negative eligibility results per pin. The added eligibility count cap, configuration and rotating cursor were removed to preserve full-scan behavior. Tests cover all 257 candidates in one pass, complete eligibility before POST, maker-specific duplicate filtering, maintenance ordering, memoization and final snapshot validation. |
 | F12 | Fixed; query filter only | Morpho borrower queries include the configured runtime chain. Extra returned chain/market/address cross-checks and their metadata selections are removed; the API applies the requested filters. Generated bindings were regenerated through the pinned Make target. |
 | F13 | Fixed | LI.FI has validated read-inactivity and pong-write budgets. Application/control heartbeat traffic renews the read deadline; silent recovered sockets cancel connection work and reconnect with recovery-gated readiness. Tests cover silence, recovery and heartbeat variants. |
@@ -54,8 +54,8 @@ the pinned clean contract checkouts.
 
 Anvil suites run isolated local chains without forks or upstream APIs. RED/GREEN
 regressions were run for runtime fixes; fixture tests also reject deliberate
-bypasses of their authoritative simulation. A fresh independent review found the WebSocket/IPC regression noted in F03; its
-regression test first reproduced the failure and passed after the shared reader fix.
+bypasses of their authoritative simulation. Chain RPC now uses one HTTP(S) transport;
+regressions cover endpoint scheme rejection, member-error isolation and unchanged caller/block arguments.
 Review and full gate results are recorded in the pull request. No live credentials, API mutations,
 external-chain transactions, merges or deployments form part of this verification.
 

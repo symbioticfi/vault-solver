@@ -7,7 +7,6 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 
@@ -148,18 +147,17 @@ func TestSDKCodeOverridePreservesFullCallAndNumericBlock(t *testing.T) {
 	}
 }
 
-// A supported WebSocket endpoint must keep the SDK batch capability that RFQ
-// connector quotes now use, including isolated members and pinned call context.
-func TestSDKBatchOverWebSocket(t *testing.T) {
-	service := &sdkWebSocketAPI{}
+// HTTP batches preserve member errors and pinned call context.
+func TestSDKBatchMemberIsolation(t *testing.T) {
+	service := &sdkBatchAPI{}
 	server := rpc.NewServer()
 	if err := server.RegisterName("eth", service); err != nil {
 		t.Fatal(err)
 	}
 	defer server.Stop()
-	httpServer := httptest.NewServer(server.WebsocketHandler([]string{"*"}))
+	httpServer := httptest.NewServer(server)
 	defer httpServer.Close()
-	client, err := Dial(t.Context(), []string{"ws" + strings.TrimPrefix(httpServer.URL, "http")}, "", common.HexToAddress("0x99").Hex(), 0)
+	client, err := Dial(t.Context(), []string{httpServer.URL}, "", common.HexToAddress("0x99").Hex(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +171,7 @@ func TestSDKBatchOverWebSocket(t *testing.T) {
 	}
 	results, err := client.BatchRead(t.Context(), requests)
 	if err != nil || len(results) != 3 {
-		t.Fatalf("supported WS batch failed: results=%+v err=%v", results, err)
+		t.Fatalf("HTTP batch failed: results=%+v err=%v", results, err)
 	}
 	if !bytes.Equal(results[0].Data, []byte{1}) || results[1].Err == nil || !bytes.Equal(results[2].Data, []byte{3}) {
 		t.Fatalf("member isolation lost: %+v", results)
@@ -190,23 +188,23 @@ func TestSDKBatchOverWebSocket(t *testing.T) {
 	}
 }
 
-type sdkWebSocketCall struct {
+type sdkBatchCall struct {
 	from, to common.Address
 	block    string
 }
-type sdkWebSocketAPI struct {
+type sdkBatchAPI struct {
 	mu    sync.Mutex
-	calls []sdkWebSocketCall
+	calls []sdkBatchCall
 }
 
-func (*sdkWebSocketAPI) ChainId() hexutil.Uint64 { return 1 }
-func (s *sdkWebSocketAPI) Call(_ context.Context, args struct {
+func (*sdkBatchAPI) ChainId() hexutil.Uint64 { return 1 }
+func (s *sdkBatchAPI) Call(_ context.Context, args struct {
 	From  common.Address `json:"from"`
 	To    common.Address `json:"to"`
 	Input hexutil.Bytes  `json:"input"`
 }, block string) (hexutil.Bytes, error) {
 	s.mu.Lock()
-	s.calls = append(s.calls, sdkWebSocketCall{args.From, args.To, block})
+	s.calls = append(s.calls, sdkBatchCall{args.From, args.To, block})
 	s.mu.Unlock()
 	if len(args.Input) == 1 && args.Input[0] == 255 {
 		return nil, errors.New("synthetic route failure")

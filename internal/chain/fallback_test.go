@@ -498,22 +498,6 @@ func TestParseHTTPEndpoints_RejectsNonHTTP(t *testing.T) {
 	}
 }
 
-func TestIsHTTPURL(t *testing.T) {
-	cases := map[string]bool{
-		"http://node.example":  true,
-		"https://node.example": true,
-		"ws://node.example":    false,
-		"wss://node.example":   false,
-		"/tmp/geth.ipc":        false,
-		"":                     false,
-	}
-	for raw, want := range cases {
-		if got := isHTTPURL(raw); got != want {
-			t.Errorf("isHTTPURL(%q) = %v, want %v", raw, got, want)
-		}
-	}
-}
-
 // TestDial_SingleHTTPEndpointServesChainID confirms a lone http(s) endpoint is dialed through the
 // bounded fallback transport (not the timeout-less plain dial), so its RPC calls are time-bounded.
 func TestDial_SingleHTTPEndpointServesChainID(t *testing.T) {

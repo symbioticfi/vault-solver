@@ -441,22 +441,6 @@ func endpointAttemptTimeout(ctx context.Context, endpointsLeft int, timeout time
 	return min(timeout, remaining/time.Duration(endpointsLeft))
 }
 
-// isHTTPURL reports whether raw is an http(s) URL — the schemes the fallback transport (and thus the
-// per-attempt timeout) supports.
-func isHTTPURL(raw string) bool {
-	u, err := url.Parse(raw)
-	return err == nil && (u.Scheme == "http" || u.Scheme == "https")
-}
-
-// rpcTransport labels a non-HTTP endpoint for chain.rpc.transport. Anything that is not a websocket
-// URL reaches the node over a local IPC socket.
-func rpcTransport(raw string) string {
-	if u, err := url.Parse(raw); err == nil && (u.Scheme == "ws" || u.Scheme == "wss") {
-		return rpcTransportWS
-	}
-	return rpcTransportIPC
-}
-
 // parseHTTPEndpoints validates that every URL is HTTP(S) (the only scheme the fallback transport
 // supports) and returns the parsed endpoints in order, dropping duplicates so the same endpoint is
 // never tried twice in a fallover sweep.
@@ -469,7 +453,7 @@ func parseHTTPEndpoints(urls []string) ([]*url.URL, error) {
 			return nil, errors.Errorf("chain: invalid rpc url %q: %w", raw, err)
 		}
 		if u.Scheme != "http" && u.Scheme != "https" {
-			return nil, errors.Errorf("chain: rpc fallback supports http(s) only, got %q", raw)
+			return nil, errors.Errorf("chain: rpc supports http(s) only, got %q", raw)
 		}
 		if key := u.String(); !seen[key] {
 			seen[key] = true

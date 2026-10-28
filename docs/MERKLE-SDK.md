@@ -108,9 +108,8 @@ arrays through vault-solver's existing HTTP fallback and tracing transport. Safe
 aggregation and exact argument encoding come from the shared SDK implementation;
 full simulations preserve their caller and remain isolated eth_calls. Missing
 aggregate deployments and malformed batch responses fail without individual-call
-retries. A single WebSocket or IPC endpoint delegates batches to its existing
-go-ethereum read connection; the SDK still bounds members and validates decoded
-results. HTTP envelope validation and cross-endpoint failover apply to HTTP(S).
+retries. All chain RPC endpoints use HTTP(S), so every SDK batch shares the
+same HTTP envelope validation, tracing and cross-endpoint read failover.
 
 Read batches retain null-receipt/header failover only when every such member is null and the whole
 response has valid matching IDs and no member errors. A nonnull receipt/header retains the entire
@@ -143,8 +142,3 @@ use the immutable requirement and go.sum checksums through the public Go proxy.
 No GitHub token, private-module configuration or sibling checkout is required.
 If developing with a local `go.work`, set `GOWORK=off` to verify the pinned module.
 Docker excludes workspace files so images always use that dependency.
-
-SDK batches over a single WebSocket or IPC endpoint use the existing read RPC connection,
-with the SDK's member bounds, block pins and caller isolation. HTTP batches retain their
-strict HTTP envelope validation and read fallback policy. A local WebSocket regression
-checks member-error isolation and unchanged caller/block arguments.

@@ -674,10 +674,6 @@ the quote that produced it when the process still remembers that quote (best eff
 after a restart the fill simply starts a new trace. LI.FI fills are not linked, because its standing
 quotes have no per-request quote event to link from.
 
-A websocket or IPC RPC endpoint is traced at the call level, one span per JSON-RPC call plus one for
-the dial; it receives `traceparent` only on the websocket handshake, so the provider can tie the
-connection to your trace but not an individual call.
-
 No secret is ever recorded on a span: RPC endpoints appear as ordinals rather than URLs, and an
 outbound client span records the request URL **without its query string**, so a webhook URL that
 carries a token in the query does not put it in the trace.
@@ -898,14 +894,15 @@ own fully annotated example under `config/` (see the *Example config* column abo
 including the applicable shared `chain`/`signer`/`txManager`/`observability` blocks, is documented
 inline there.
 
-The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S) endpoints tried
-in order for reads when the primary is unavailable. `chain.rpcAttemptTimeoutMs` bounds each HTTP(S)
-endpoint attempt, including reading its response body, for read and write RPCs.
+All chain RPC endpoints (`rpcUrl`, `rpcFallbackUrls`, and `writeRpcUrl`) must use HTTP(S).
+The unused `chain.wsUrl` option has been removed. LI.FI and RedStone retain their protocol feeds.
+Read fallbacks are tried in order when the primary is unavailable. `chain.rpcAttemptTimeoutMs`
+bounds each HTTP(S) endpoint attempt, including reading its response body, for read and write RPCs.
 It defaults to `20000` (20 seconds) when omitted or zero; negative or overflowing values are rejected.
 For example, `rpcAttemptTimeoutMs: 5000` allows up to 5 seconds per endpoint attempt. This is not a
 total fallback-chain budget: a shorter caller deadline is divided across the remaining endpoints.
-The txmanager's shorter fee/receipt budgets and `broadcastTimeoutMs` still apply; WebSocket/IPC calls
-are unaffected. When using eRPC, this bounds the solver's wait for eRPC, including eRPC's internal
+The txmanager's shorter fee/receipt budgets and `broadcastTimeoutMs` still apply.
+When using eRPC, this bounds the solver's wait for eRPC, including eRPC's internal
 retries; upstream timeouts and retries inside eRPC must be configured separately.
 URL Basic credentials belong to each endpoint: fallback requests use the fallback's own userinfo,
 and receive no Authorization header when that URL has none.

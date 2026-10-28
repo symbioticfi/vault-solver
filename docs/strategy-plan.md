@@ -344,9 +344,8 @@ recognition.
 The host's SDK transport continues to use the existing shared transaction manager's
 owner fence and persistence callbacks; it contains no copied sender or nonce engine.
 The SDK batch engine uses the existing HTTP fallback/tracing path with strict response
-identity validation. Merkle requires HTTP(S) read endpoints while other solvers keep
-ordinary WebSocket/IPC support. Vault-side LL/3F pricing, discounts and auction/order
-business logic stay in their existing integration packages; they are not implicitly
+identity validation. All solvers use HTTP(S) chain RPC endpoints. Vault-side LL/3F pricing,
+discounts and auction/order business logic stay in their existing integration packages; they are not implicitly
 wired through the Merkle host. Executor-daemon Merkl/CoW provider integration remains
 owned by merkle-executor.
 

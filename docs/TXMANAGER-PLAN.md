@@ -333,7 +333,7 @@ an owned attempt, not a discovered winning transaction or proof of successful in
 20,000 ms), including response-body reads, on all read/write clients. Shorter caller
 deadlines remain authoritative and are shared across remaining fallback endpoints. Fee/receipt read
 budgets and `txManager.broadcastTimeoutMs` are unchanged. This controls the solver's wait for an
-endpoint such as eRPC, not eRPC's own upstream retry policy; WebSocket/IPC behavior is unchanged.
+endpoint such as eRPC, not eRPC's own upstream retry policy. All chain RPC endpoints use HTTP(S).
 Both `chain.Dial` and `chain.DialWithMetrics` accept the attempt timeout explicitly and use the
 same transport path; enabling metrics does not change how the timeout is selected.
 
