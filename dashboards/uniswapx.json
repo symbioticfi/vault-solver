@@ -27,8 +27,8 @@
       "kind": "Panel",
       "spec": {
         "id": 10,
-        "title": "Rejected quote requests · pair and reason",
-        "description": "Final HTTP refusals during the selected range, including protocol/chain/semantic/body errors. One request, one final reason; planner attempts are not requests. Known token labels come only from the frozen trusted startup registry (max 16). other aggregates valid addresses outside it or a different chain; unknown aggregates unparsed/malformed addresses. These buckets are not known pairs. Namespace isolates the environment; counters sum per-process increases and assume storage deduplicates HA scrapes. New metrics have no backfill; range increases need multiple scrapes and can miss the first nonzero sample.",
+        "title": "Quote decisions · reasons",
+        "description": "Selected-period decisions show why incoming demand did or did not receive a quote. Quoted does not mean accepted or filled.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -44,7 +44,7 @@
                     "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
-                      "expr": "sum by (token_in, token_out, reason) (increase(solver_bot_quote_results_total{solver=\"uniswapx-filler\",namespace=\"${namespace}\",result=\"rejected\"}[$__range]))",
+                      "expr": "(sum by (outcome) (increase(solver_bot_workflow_events_total{namespace=\"${namespace}\",solver=\"uniswapx-filler\",event=\"quote\",outcome!=\"breaker-notification\"}[$__range])))",
                       "instant": true,
                       "legendFormat": "",
                       "range": false,
@@ -69,16 +69,22 @@
                 "group": "organize",
                 "spec": {
                   "options": {
-                    "excludeByName": {
-                      "Time": true,
-                      "__name__": true
-                    },
+                    "excludeByName": {"Time": true, "__name__": true, "job": true, "instance": true, "namespace": true, "solver": true},
                     "renameByName": {
-                      "token_in": "Input token",
-                      "token_out": "Output token",
+                      "address": "Signer",
+                      "view": "View",
+                      "strategy": "Strategy",
+                      "role": "Role",
+                      "endpoint": "Endpoint",
+                      "method": "Method",
+                      "outcome": "Outcome",
+                      "label": "Operation",
                       "reason": "Reason",
-                      "Value": "Rejected requests",
-                      "Value #A": "Rejected requests"
+                      "signal": "Signal",
+                      "kind": "Kind",
+                      "stage": "Stage",
+                      "Value": "Count",
+                      "Value #A": "Count"
                     },
                     "indexByName": {}
                   }
@@ -98,10 +104,7 @@
               "cellHeight": "sm",
               "enablePagination": false,
               "sortBy": [
-                {
-                  "displayName": "Rejected requests",
-                  "desc": true
-                }
+                {"displayName": "Count", "desc": true}
               ]
             },
             "fieldConfig": {
@@ -4192,7 +4195,8 @@
                   }
                 }
               }
-            ]
+            ],
+            "queryOptions": {}
           }
         },
         "vizConfig": {
@@ -4427,7 +4431,7 @@
       "spec": {
         "id": 303,
         "title": "Requested amount context · token units",
-        "description": "Requested amount p50/p95 in trusted token units, separated by exact-input/output side. Unknown or conflicting decimals and malformed amounts are omitted. No cross-token sums; histogram estimates and new metrics have no backfill.",
+        "description": "Requested amount p50/p95 in trusted token units, separated by exact-input/output side. Unknown or conflicting decimals and malformed amounts are omitted. No cross-token sums; histogram estimates and new metrics have no backfill. Amounts longer than 78 decimal digits are omitted before parsing.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -4531,7 +4535,8 @@
                   }
                 }
               }
-            ]
+            ],
+            "queryOptions": {}
           }
         },
         "vizConfig": {
@@ -4579,6 +4584,208 @@
             }
           }
         }
+      }
+    },
+    "panel-304": {
+      "kind": "Panel",
+      "spec": {
+        "id": 304,
+        "title": "Rejected quote requests · pair and reason",
+        "description": "Final HTTP refusals during the selected range, including protocol/chain/semantic/body errors. One request, one final reason; planner attempts are not requests. Known token labels come only from the frozen trusted startup registry (max 16). other aggregates valid addresses outside it or a different chain; unknown aggregates unparsed/malformed addresses. These buckets are not known pairs. Namespace isolates the environment; counters sum per-process increases and assume storage deduplicates HA scrapes. New metrics have no backfill; range increases need multiple scrapes and can miss the first nonzero sample. Metric reasons use snake_case. Missing required IDs are missing_ids; malformed RFQ IDs are invalid_ids.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {
+                      "name": "${datasource}"
+                    },
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by (token_in, token_out, reason) (increase(solver_bot_quote_results_total{solver=\"uniswapx-filler\",namespace=\"${namespace}\",result=\"rejected\"}[$__range]))",
+                      "instant": true,
+                      "legendFormat": "",
+                      "range": false,
+                      "format": "table"
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "merge",
+                "spec": {
+                  "options": {}
+                }
+              },
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {
+                      "Time": true,
+                      "__name__": true
+                    },
+                    "renameByName": {
+                      "token_in": "Input token",
+                      "token_out": "Output token",
+                      "reason": "Reason",
+                      "Value": "Rejected requests",
+                      "Value #A": "Rejected requests"
+                    },
+                    "indexByName": {}
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": true,
+              "sortBy": [
+                {
+                  "displayName": "Rejected requests",
+                  "desc": true
+                }
+              ]
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—"
+              },
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Input token"
+                  },
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "other": {
+                              "text": "other (unregistered / other chain; aggregated)"
+                            },
+                            "unknown": {
+                              "text": "unknown (unparsed / invalid address; aggregated)"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Output token"
+                  },
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "other": {
+                              "text": "other (unregistered / other chain; aggregated)"
+                            },
+                            "unknown": {
+                              "text": "unknown (unparsed / invalid address; aggregated)"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Token"
+                  },
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "other": {
+                              "text": "other (unregistered / other chain; aggregated)"
+                            },
+                            "unknown": {
+                              "text": "unknown (unparsed / invalid address; aggregated)"
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-390": {
+      "kind": "Panel",
+      "spec": {
+        "id": 390,
+        "title": "Quote-pair metric availability",
+        "description": "Requires the matching solver metrics rollout; empty panels are not a verified zero.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "text",
+          "version": "",
+          "spec": {
+            "options": {
+              "mode": "markdown",
+              "content": "### Awaiting solver rollout\n\nNew quote-pair metrics are not present in the datasource yet. Existing aggregate panels remain active. New pair history starts after the solver rollout; no backfill is available. `other` / `unknown` are unresolved buckets, not known token pairs.\n\nIncoming counts sum final returned/rejected HTTP results. A written quote does not imply an award or fill. Internal strategy attempts are excluded."
+            },
+            "fieldConfig": {
+              "defaults": {},
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
       }
     }
   },
@@ -4698,59 +4905,6 @@
             }
           }
         },
-        {
-        "kind": "RowsLayoutRow",
-        "spec": {
-          "title": "Quote demand by bounded token pair",
-          "collapse": false,
-          "layout": {
-            "kind": "GridLayout",
-            "spec": {
-              "items": [
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 0,
-                    "width": 24,
-                    "height": 7,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-300"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 7,
-                    "width": 24,
-                    "height": 8,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-301"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 15,
-                    "width": 24,
-                    "height": 6,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-303"
-                    }
-                  }
-                }
-              ]
-            }
-          }
-        }
-      },
       {
           "kind": "RowsLayoutRow",
           "spec": {
@@ -4796,6 +4950,85 @@
           }
         },
         {
+        "kind": "RowsLayoutRow",
+        "spec": {
+          "title": "Quote pairs · awaiting solver rollout",
+          "collapse": true,
+          "layout": {
+            "kind": "GridLayout",
+            "spec": {
+              "items": [
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 0,
+                    "width": 24,
+                    "height": 4,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-390"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 4,
+                    "width": 24,
+                    "height": 7,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-300"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 11,
+                    "width": 24,
+                    "height": 8,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-301"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 19,
+                    "width": 12,
+                    "height": 7,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-304"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 12,
+                    "y": 19,
+                    "width": 12,
+                    "height": 7,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-303"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Where demand stops",

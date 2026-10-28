@@ -2766,8 +2766,8 @@
       "kind": "Panel",
       "spec": {
         "id": 10,
-        "title": "Advertised pairs · standing quotes, ranges and capacity",
-        "description": "Last successful process-local reconciliation by advertised pair. Counts sum process-local standing records across matching replicas, without global quote-ID deduplication. Capacity is the maximum input ceiling across alternatives/replicas, not additive liquidity. Values can expire upstream; check refresh age/errors. Incoming user quote requests are served upstream and are not observable locally.",
+        "title": "Advertised capacity by token pair",
+        "description": "Current maximum advertised input per token pair, in atomic input-token units. Input decimals are provided so token units = atomic units / 10^decimals. This is the largest reported quote ceiling, not total available vault liquidity. Zero capacity is kept visible.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -2782,58 +2782,10 @@
                     "kind": "DataQuery",
                     "group": "prometheus",
                     "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
+                    "datasource": {"name": "${datasource}"},
                     "spec": {
                       "editorMode": "code",
                       "expr": "label_replace(label_replace(max by(token_in,token_out,token_in_decimals,token_out_decimals)(lifi_active_quote_max_input_atomic_units{namespace=\"${namespace}\"}), \"input_token\", \"token: $1\", \"token_in\", \"(.*)\"), \"output_token\", \"token: $1\", \"token_out\", \"(.*)\")",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "B",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "label_replace(label_replace(sum by(token_in,token_out)(solver_bot_quote_published{solver=\"lifi-samechain\",kind=\"quotes\",namespace=\"${namespace}\"}), \"input_token\", \"token: $1\", \"token_in\", \"(.*)\"), \"output_token\", \"token: $1\", \"token_out\", \"(.*)\")",
-                      "instant": true,
-                      "range": false,
-                      "format": "table",
-                      "legendFormat": ""
-                    }
-                  }
-                }
-              },
-              {
-                "kind": "PanelQuery",
-                "spec": {
-                  "refId": "C",
-                  "hidden": false,
-                  "query": {
-                    "kind": "DataQuery",
-                    "group": "prometheus",
-                    "version": "v0",
-                    "datasource": {
-                      "name": "${datasource}"
-                    },
-                    "spec": {
-                      "editorMode": "code",
-                      "expr": "label_replace(label_replace(sum by(token_in,token_out)(solver_bot_quote_published{solver=\"lifi-samechain\",kind=\"ranges\",namespace=\"${namespace}\"}), \"input_token\", \"token: $1\", \"token_in\", \"(.*)\"), \"output_token\", \"token: $1\", \"token_out\", \"(.*)\")",
                       "instant": true,
                       "range": false,
                       "format": "table",
@@ -2846,30 +2798,16 @@
             "transformations": [
               {
                 "kind": "Transformation",
-                "group": "merge",
-                "spec": {
-                  "options": {}
-                }
-              },
-              {
-                "kind": "Transformation",
                 "group": "organize",
                 "spec": {
                   "options": {
-                    "excludeByName": {
-                      "Time": true,
-                      "__name__": true,
-                      "token_in": true,
-                      "token_out": true
-                    },
+                    "excludeByName": {"Time": true, "__name__": true, "token_in": true, "token_out": true},
                     "renameByName": {
                       "input_token": "Input token",
                       "output_token": "Output token",
                       "token_in_decimals": "Input decimals",
                       "token_out_decimals": "Output decimals",
-                      "Value #A": "Input ceiling (atomic units)",
-                      "Value #B": "Standing quotes",
-                      "Value #C": "Advertised ranges"
+                      "Value": "Input ceiling (atomic units)"
                     },
                     "indexByName": {}
                   }
@@ -3723,6 +3661,39 @@
         },
         "transparent": true
       }
+    },
+    "panel-390": {
+      "kind": "Panel",
+      "spec": {
+        "id": 390,
+        "title": "Quote-pair metric availability",
+        "description": "Requires the matching solver metrics rollout; empty panels are not a verified zero.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "text",
+          "version": "",
+          "spec": {
+            "options": {
+              "mode": "markdown",
+              "content": "### Awaiting solver rollout\n\nNew quote-pair metrics are not present in the datasource yet. Existing aggregate panels remain active. New pair history starts after the solver rollout; no backfill is available. `other` / `unknown` are unresolved buckets, not known token pairs.\n\nLI.FI publishes standing quotes. Rejections count our build evaluations and failed publish/withdraw attempts; retries count again. These are not upstream user quote requests. Capacity is a maximum, not additive liquidity."
+            },
+            "fieldConfig": {
+              "defaults": {},
+              "overrides": []
+            }
+          }
+        },
+        "transparent": true
+      }
     }
   },
   "layout": {
@@ -3855,11 +3826,11 @@
             }
           }
         },
-        {
+      {
         "kind": "RowsLayoutRow",
         "spec": {
-          "title": "Advertised pair state and refresh health",
-          "collapse": false,
+          "title": "Quote pairs · awaiting solver rollout",
+          "collapse": true,
           "layout": {
             "kind": "GridLayout",
             "spec": {
@@ -3869,6 +3840,19 @@
                   "spec": {
                     "x": 0,
                     "y": 0,
+                    "width": 24,
+                    "height": 4,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-390"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 4,
                     "width": 12,
                     "height": 8,
                     "element": {
@@ -3881,12 +3865,12 @@
                   "kind": "GridLayoutItem",
                   "spec": {
                     "x": 12,
-                    "y": 0,
+                    "y": 4,
                     "width": 12,
                     "height": 8,
                     "element": {
                       "kind": "ElementReference",
-                      "name": "panel-301"
+                      "name": "panel-302"
                     }
                   }
                 },
@@ -3894,12 +3878,12 @@
                   "kind": "GridLayoutItem",
                   "spec": {
                     "x": 0,
-                    "y": 8,
+                    "y": 12,
                     "width": 24,
                     "height": 7,
                     "element": {
                       "kind": "ElementReference",
-                      "name": "panel-302"
+                      "name": "panel-301"
                     }
                   }
                 }
