@@ -947,15 +947,15 @@ Generated code is committed for hermetic builds; refresh from upstream on demand
 
 ```bash
 make refresh-abi FORGE_OUT=../rfq/out   # re-vendor contract ABIs from a Foundry build
-make refresh-openapi                    # re-pull the selected development 3F contract
+make refresh-openapi                    # re-pull the production 3F contract
 make refresh-rfq-openapi                # re-pull the RFQ backend OpenAPI spec
 make generate                           # regenerate bindings + API client
 make test-tooling                       # offline registration and refresh failure checks
 ```
 
 Refresh targets validate staged schema/ABI files before replacing vendored files. Fetch or extraction
-failure preserves the existing contracts. `OPENAPI_URL` defaults to the 3F development schema used by
-the drift registry; override it explicitly when reviewing a different environment. PR CI checks schema
+failure preserves the existing contracts. `OPENAPI_URL` and the drift registry both use the 3F
+production schema; override it explicitly when reviewing a different environment. PR CI checks schema
 registration offline; the scheduled drift watcher checks live upstream changes separately.
 
 ## Contributing

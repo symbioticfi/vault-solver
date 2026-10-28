@@ -63,7 +63,7 @@ func newClient(cfg apiConfig) (*apiClient, error) {
 		return nil, err
 	}
 	c := threef.NewConfiguration()
-	c.Servers = threef.ServerConfigurations{{URL: strings.TrimRight(cfg.URL, "/")}}
+	c.Servers = threef.ServerConfigurations{{URL: strings.TrimRight(cfg.URL, "/") + c.Servers[0].URL}}
 	c.HTTPClient = &http.Client{Timeout: requestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: boundedTransport{keyEnv: cfg.APIKeyEnv}}
 	return &apiClient{c: threef.NewAPIClient(c), broker: cfg.Broker}, nil
 }

@@ -25,7 +25,8 @@ It does not use this adapter solver's discovery, signatures or liquidity strateg
   bindings) **and its 3F onboarding**. In the new model each adapter is deployed and registered with 3F
   **as a facilitator by its own vault creator**, who then sets this solver's signer as the adapter's
   **EIP-1271 signer**. The bot registers nothing with 3F and holds no API key.
-- **Target networks:** 3F Sepolia dev (`chainId 11155111`) and Ethereum mainnet (`chainId 1`).
+- **Target networks:** Ethereum mainnet (`chainId 1`) by default; 3F Sepolia dev
+  (`chainId 11155111`) requires explicit API, RPC and contract configuration.
 
 ---
 
@@ -168,6 +169,10 @@ Two-stage decode keeps solver config encapsulated. The generic layer reads only
 `solver.name` to pick the impl and keeps `solver.config` as a deferred `yaml.Node`;
 the chosen solver decodes it into its own typed struct.
 
+Schema refresh, drift monitoring, the annotated example and opt-in live checks use production
+3F by default. API adapters combine the configured origin with the generated schema's default
+server path (`/v1`); the schema owns endpoint paths.
+
 ```yaml
 chain: { rpcUrl, writeRpcUrl?, chainId, rpcFallbackUrls? } # HTTP(S) endpoints
 signer: { keyEnv: SOLVER_PRIVATE_KEY }     # the EIP-1271 signer every served adapter trusts
@@ -176,7 +181,7 @@ txManager: { confirmations: 2, maxFeeGwei, broadcastTimeoutMs, replacementInterv
 solvers:
   - name: 3f-bridge-facilitator             # ← registry key: selects the impl
     config:                                  # ← opaque to framework; typed by the 3F package
-      apiBaseUrl: https://bf.dev.gcp.3f.xyz
+      apiBaseUrl: https://bf.3f.xyz
       strategy:
         name: default                        # default local strategy, or webhook
         config: {}

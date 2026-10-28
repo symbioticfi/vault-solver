@@ -29,8 +29,8 @@ ADAPTERS_OUT ?= ../adapters/out
 RFQ_FIXTURE_ROOT ?= ../rfq
 ADAPTERS_FIXTURE_ROOT ?= ../adapters
 FIXTURE_SOLC ?= solc
-# The vendored 3F contract tracks dev (rateBasisSeconds), matching schema-sources.json.
-OPENAPI_URL ?= https://bf.dev.gcp.3f.xyz/docs/openapi.json
+# Production 3F OpenAPI contract, matching schema-sources.json.
+OPENAPI_URL ?= https://bf.3f.xyz/docs/openapi.json
 # RFQ backend OpenAPI spec. The backend serves it at /api/v1/openapi.json (hono-openapi, runtime).
 # NOTE: the temp railway deployment is currently behind the repo (pre adapter/protocolSignature
 # rename); point this at a backend running current code, or regenerate in-repo (see docs/RFQ-PLAN.md).
