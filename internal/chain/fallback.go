@@ -103,16 +103,6 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		if err == nil && !unavailableHTTPStatus(resp.StatusCode) {
 			if nullFallback && i < len(t.endpoints)-1 && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				unavailable, inspectedBody, inspectErr := inspectNullRPCResult(resp, request)
-				if inspectErr != nil && request.batch != nil {
-					_ = resp.Body.Close()
-					cancel()
-					outcome := classifyRPCFailure(inspectErr, ctx.Err())
-					t.metrics.observeAttempt(t.role, endpoint, method, outcome)
-					requestTrace.attempt(endpoint, outcome)
-					requestObservation.finish(outcome)
-					requestTrace.finish(outcome)
-					return nil, inspectErr
-				}
 				if inspectErr != nil || unavailable {
 					_ = resp.Body.Close()
 					cancel()

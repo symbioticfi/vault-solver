@@ -369,11 +369,9 @@ are deduplicated per market, and each eligible market is considered once after t
 complete eligibility scan. Any API mutation ends the pass to refresh inventory.
 The account-level durable intent serializes self-originated offers across markets. Its API-key PUSH offer loop uses authenticated recipe/policy scope and idle
 account cash; its SDK provider binds native aggregate mint authorizations. The
-provider authenticates canonical mint principal identities before validating funding
-activation. Funding gates accept direct principals and arithmetic Results with a
-proven zero-principal dependency, including the frontend's bounded cash shortfall.
-The proof tracks each market separately through checked arithmetic; reads are
-unconstrained. Canonical mint gates still use their own principal input directly.
+provider authenticates canonical mint guards and their input bindings. Additional
+funding activation follows the curator-authored committed recipe; no separate host
+proof restricts the sources used by its Manage gates.
 The generic `merkle` solver has no 3F configuration or provider dispatch. All 3F Merkle
 code lives in one package; API, reservation and durable intent checks remain inside
 that integration. Both recipe keepers share store/sender startup through

@@ -159,7 +159,7 @@ An off-chain bidder for **[RedStone Atom OEV](https://docs.redstone.finance/docs
 price update makes a **[Morpho Blue](https://morpho.org)** position liquidatable, RedStone runs a
 sub-second WebSocket auction for the right to be the liquidator; this solver bids, and on winning, its
 signed payload is bundled atomically with the price update and the liquidation. Morpho borrower discovery
-queries the configured chain and validates each returned row against that chain and the requested market.
+queries the configured chain.
 
 On settlement it liquidates the position and exits the seized collateral through a single Symbiotic
 `LiquidLaneAdapter`, realizing the spread and paying its bid. It signs and bids but never submits the
@@ -923,7 +923,7 @@ to the next read endpoint; the final endpoint's `null` remains the ordinary not-
 SDK read batches preserve this policy only when all receipt/header members are null and no member
 has an RPC error. Any receipt/header evidence retains the entire primary response. Batches stay intact,
 retain their IDs, and never retry as individual calls. Pending receipt/transaction batches also disable
-eRPC empty-result retries. Malformed and oversized batches fail closed.
+eRPC empty-result retries. Body-read failures use normal read fallback; the SDK retains its response validation and size limits.
 Unavailable multi-read snapshots retry on a later poll; OEV compares both number and hash around each latest-state
 snapshot and retries a changed head once immediately. A second crossing fails startup or retains the runtime's
 last-known-good snapshot until the next poll. An explicit write endpoint must report the same chain ID as the read endpoint.
@@ -990,10 +990,7 @@ Configure one recipe `executor`, one broker and an API-key environment reference
 [the example YAML](config/threef-merkle.example.yaml), then complete enrollment as
 described in [the 3F Merkle runbook](docs/THREEF-MERKLE.md). The generic `merkle`
 solver rejects the `threeF` field. The executor uses the maker account and shared signer. Its recipe contains 1..32 distinct guarded funding pairs with disjoint request/principal/yield inputs; inactive groups have zero principal and no calls. One journal and sender serialize all markets. Automatic offers reserve existing commitments
-and use account idle cash; simulation never submits or cancels API offers. Funding Manage gates may use
-a recognized market principal input or an arithmetic Result proven to become zero when that principal
-is zero. This accepts the current frontend's `min(saturatingSub(principal, cash), capacity)` funding
-amount. Unrelated gates remain rejected. Guarded mint gates still require their own principal input.
+and use account idle cash; simulation never submits or cancels API offers.
 `rateBasisSeconds` is read from the exact JSON number and must
 be a nonnegative int64 integer; omitted, null and zero values keep the legacy rate comparison.
 
@@ -1005,11 +1002,8 @@ budget-consuming check cannot establish their scope. The bot can cancel its own 
 intent and never cancels accepted mint windows.
 
 The independent `rfq-merkle` solver executes awarded orders through the RFQ Executor and committed
-Merkle recipes. It excludes malformed matching discount entries while continuing to healthy routes,
-and samples wall time before reading the chain header so RPC latency consumes submission validity.
+Merkle recipes. It samples wall time before reading the chain header so RPC latency consumes submission validity.
 See [the RFQ Merkle runbook](docs/RFQ-MERKLE.md) and [configuration](config/rfq-merkle.example.yaml).
-The adapter RFQ solver isolates connector-specific failures, retains healthy native and connector routes,
-and shares pinned connector observations across discount alternatives.
 
 Local integration checks require Anvil on `PATH`: `make test-txmanager-anvil`,
 `make test-merklesender-anvil`, and `make test-rfq-merkle-anvil`. They exercise nonce reconciliation,

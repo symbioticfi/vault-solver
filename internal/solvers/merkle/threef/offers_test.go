@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -50,7 +49,7 @@ func testMarket() offerMarket {
 func testAuction(m offerMarket, id float32, request common.Address) threef.AuctionDto {
 	amount := "10000000"
 	deposit := threef.AuctionDepositAssetDto{Address: strings.ToLower(m.Asset.Hex())}
-	return threef.AuctionDto{Id: id, RequestId: request.Hex(), Status: "OPEN", RateBasisSeconds: 31536000, AmountRequested: *threef.NewNullableString(&amount), DepositAsset: *threef.NewNullableAuctionDepositAssetDto(&deposit), AdditionalProperties: map[string]any{exactMaxRateKey: "2.0", exactRateBasisKey: "31536000"}}
+	return threef.AuctionDto{Id: id, RequestId: request.Hex(), Status: "OPEN", RateBasisSeconds: 31536000, AmountRequested: *threef.NewNullableString(&amount), DepositAsset: *threef.NewNullableAuctionDepositAssetDto(&deposit), AdditionalProperties: map[string]any{exactMaxRateKey: "2.0"}}
 }
 
 func testOffer(m offerMarket, auctionID float32, status string, amount string) threef.OfferDto {
@@ -315,7 +314,7 @@ func TestFitsTermsAuctionRateBasis(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			m := testMarket()
 			m.MaxPrincipal, m.MinimumYield1e8 = big.NewInt(1000000000), new(big.Int)
-			auction := threef.AuctionDto{RateBasisSeconds: tc.basis, AdditionalProperties: map[string]any{exactMaxRateKey: "1500", exactRateBasisKey: strconv.FormatFloat(float64(tc.basis), 'g', -1, 64)}}
+			auction := threef.AuctionDto{RateBasisSeconds: tc.basis, AdditionalProperties: map[string]any{exactMaxRateKey: "1500"}}
 			fits, err := fitsTerms(m, m.MaxPrincipal, big.NewInt(tc.yield), auction)
 			if fits != tc.wantFits || (err != nil) != tc.wantError {
 				t.Fatalf("fits=%v, err=%v", fits, err)

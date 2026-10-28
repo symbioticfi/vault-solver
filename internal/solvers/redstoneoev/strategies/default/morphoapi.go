@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/Khan/genqlient/graphql"
@@ -134,8 +133,8 @@ func (a *morphoClient) PositionsByMarket(ctx context.Context, chainID int64, mar
 
 func (a *morphoClient) positionsChunk(ctx context.Context, chainID int64, ids []string, limit int, maxHF *float64) ([]morphoPosition, error) {
 	out := make([]morphoPosition, 0, min(limit, maxPositionsPage))
-	for skip := 0; skip < limit; {
-		first := min(maxPositionsPage, limit-skip)
+	for skip := 0; len(out) < limit; {
+		first := min(maxPositionsPage, limit-len(out))
 		data, err := morphographql.MorphoPositionsByMarket(ctx, a.gql, ids, []int{int(chainID)}, first, skip, maxHF)
 		if err != nil {
 			return nil, err
@@ -145,13 +144,6 @@ func (a *morphoClient) positionsChunk(ctx context.Context, chainID int64, ids []
 			break
 		}
 		for _, it := range items {
-			if int64(it.Market.Chain.Id) != chainID || !slices.Contains(ids, strings.ToLower(it.Market.MarketId)) ||
-				!common.IsHexAddress(it.User.Address) {
-				observability.Log(ctx).Error(errors.New("borrower identity does not match request"),
-					"reject Morpho borrower identity", "chainId", it.Market.Chain.Id, "expectedChainId", chainID,
-					"marketId", it.Market.MarketId, "borrower", it.User.Address)
-				continue
-			}
 			var state wirePositionState
 			if it.State != nil {
 				state = it.State

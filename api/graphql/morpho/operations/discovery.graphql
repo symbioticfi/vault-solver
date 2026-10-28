@@ -43,9 +43,6 @@ query MorphoPositionsByMarket($ids: [String!]!, $chains: [Int!]!, $first: Int!, 
       }
       market {
         marketId
-        chain {
-          id
-        }
       }
       state {
         borrowShares

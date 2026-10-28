@@ -270,68 +270,18 @@ func fundingManage(t *testing.T, r *recipes.Recipe, tree *recipes.Tree, gate *bi
 	}
 }
 
-func TestFundingManageRejectsUnrelatedActivation(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		source uint8
-		input  uint64
-	}{
-		{"literal true", recipes.Literal, 1}, {"literal zero", recipes.Literal, 0},
-		{"result", recipes.Result, 0}, {"request", recipes.Input, 0},
-		{"yield", recipes.Input, 2}, {"unrecognized", recipes.Input, 100},
+func TestCommittedFundingUsesRecipeGates(t *testing.T) {
+	for name, gate := range map[string]*big.Int{
+		"literal":       encodedValue(recipes.Literal, 1),
+		"read result":   encodedValue(recipes.Result, 3),
+		"request input": encodedValue(recipes.Input, 0),
 	} {
-		t.Run(tc.name, func(t *testing.T) {
+		t.Run(name, func(t *testing.T) {
 			snapshot, recipe, tree := groupedFixture(t)
-			if tc.source == recipes.Result {
-				for i, step := range recipe.Steps {
-					if step[0] <= recipes.MulDiv {
-						tc.input = uint64(i)
-						break
-					}
-				}
-			}
-			fundingManage(t, &recipe, tree, encodedValue(tc.source, tc.input), false)
-			if _, err := inspect(snapshot, recipe, tree); err == nil || !strings.Contains(err.Error(), "principal input") {
-				t.Fatalf("funding gate accepted: %v", err)
+			fundingManage(t, &recipe, tree, gate, false)
+			if _, err := inspect(snapshot, recipe, tree); err != nil {
+				t.Fatalf("committed funding gate rejected: %v", err)
 			}
 		})
-	}
-}
-
-func TestFundingManageAcceptsEveryPrincipalBeforeOrAfterGuards(t *testing.T) {
-	for _, count := range []int{1, 2, 32} {
-		for _, before := range []bool{false, true} {
-			t.Run(fmt.Sprintf("groups%d/before%v", count, before), func(t *testing.T) {
-				snapshot, recipe, tree := groupsFixture(t, count)
-				for i := 0; i < count; i++ {
-					fundingManage(t, &recipe, tree, encodedValue(recipes.Input, uint64(3*i+1)), before)
-				}
-
-				markets, err := inspect(snapshot, recipe, tree)
-				if err != nil || len(markets) != count {
-					t.Fatalf("principal-gated funding rejected: %d %v", len(markets), err)
-				}
-			})
-		}
-	}
-}
-
-func TestProviderRejectsUnconditionalFundingBeforeExternalReads(t *testing.T) {
-	snapshot, recipe, tree := groupedFixture(t)
-	fundingManage(t, &recipe, tree, encodedValue(recipes.Literal, 1), true)
-	api := &fakeAPI{}
-	p := mintProvider{API: api, Chain: readFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
-		t.Fatal("invalid funding preceded chain reads")
-		return nil, nil
-	})}
-	if _, err := p.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil); err == nil || api.calls != 0 {
-		t.Fatalf("unconditional funding reached provider: calls=%d err=%v", api.calls, err)
-	}
-}
-
-func TestCurrentResultFundingRecipeRemainsCompatible(t *testing.T) {
-	snapshot, recipe, tree := fixture(t)
-	if _, err := inspect(snapshot, recipe, tree); err != nil {
-		t.Fatalf("principal-derived Result funding rejected: %v", err)
 	}
 }

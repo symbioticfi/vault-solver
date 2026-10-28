@@ -539,16 +539,10 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   below the adapter's current minimum is dropped, since the adapter reverts it; a direct leg prices at the
   higher of its entry's discount and the current minimum. The field is required and replaces `maxRate`, so
   this solver and symbioticfi/rfq-backend#403 deploy together.
-- **Quote latency** — `/quote` is synchronous in the backend's fan-out. Native routes use one
-  amount-specific multicall, with cached token decimals. Connector routes share one pinned
-  seven-getter observation per connector across all signed discount alternatives; independent
-  `eth_call` reads use SDK batches of at most 256 members. The capacity getter retains its zero
-  caller and isolated rollback-only execution context. A maximum 256-entry catalog with one
-  connector needs seven getter calls in one batch; 256 distinct connectors need seven batches,
-  rather than 1,792 serial round trips. Decimals remain cached. A connector getter revert,
-  malformed return or route mismatch excludes only that connector; header, shared token metadata,
-  cancellation and batch transport failures remain shared errors. Failed connectors never fall
-  back to cash or suppress independently healthy native/connector routes.
+- **Quote latency** — `/quote` is synchronous in the backend's fan-out, so keep it cheap: pricing is
+  one `getAmountOut` multicall, and `tokenIn` decimals are read once and cached. A warm quote is a
+  single multicall; only the first quote for a not-yet-seen `tokenIn` adds a one-off `decimals` read.
+  Keep it that way — don't add per-quote chain reads outside that one multicall.
 
 ### Parity with the current TS filler
 

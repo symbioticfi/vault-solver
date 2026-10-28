@@ -125,7 +125,7 @@ func (c *apiClient) Auctions(ctx context.Context) ([]threef.AuctionDto, error) {
 	if err != nil {
 		return nil, apiError(ctx, "list auctions", response)
 	}
-	// The generated response keeps a fresh copy of its body. Read exact economic numbers from that copy.
+	// The generated response keeps a fresh copy of its body. Preserve exact rate numbers from it.
 	var raw []map[string]json.RawMessage
 	if rows == nil || len(rows) > 4096 || response == nil || json.NewDecoder(response.Body).Decode(&raw) != nil || len(raw) != len(rows) {
 		return nil, errors.New("3f invalid auctions response")
@@ -143,21 +143,23 @@ func (c *apiClient) Auctions(ctx context.Context) ([]threef.AuctionDto, error) {
 		if rows[i].AdditionalProperties == nil {
 			rows[i].AdditionalProperties = make(map[string]any)
 		}
-		for field, key := range map[string]string{"maxRate": exactMaxRateKey, "rateBasisSeconds": exactRateBasisKey} {
-			delete(rows[i].AdditionalProperties, key)
-			if value := raw[i][field]; len(value) > 0 && string(value) != "null" {
-				var number any
-				d := json.NewDecoder(bytes.NewReader(value))
-				d.UseNumber()
-				if d.Decode(&number) != nil {
-					return nil, errors.Errorf("3f invalid auction %s", field)
-				}
-				n, ok := number.(json.Number)
-				if !ok {
-					return nil, errors.Errorf("3f invalid auction %s", field)
-				}
-				rows[i].AdditionalProperties[key] = string(n)
+		delete(rows[i].AdditionalProperties, exactMaxRateKey)
+		if value := raw[i]["maxRate"]; len(value) > 0 && string(value) != "null" {
+			var number any
+			d := json.NewDecoder(bytes.NewReader(value))
+			d.UseNumber()
+			if d.Decode(&number) != nil {
+				return nil, errors.New("3f invalid auction rate")
 			}
+			n, ok := number.(json.Number)
+			if !ok {
+				return nil, errors.New("3f invalid auction rate")
+			}
+			rows[i].AdditionalProperties[exactMaxRateKey] = string(n)
+		}
+		delete(rows[i].AdditionalProperties, exactRateBasisKey)
+		if value := raw[i]["rateBasisSeconds"]; len(value) > 0 && string(value) != "null" {
+			rows[i].AdditionalProperties[exactRateBasisKey] = string(value)
 		}
 	}
 	return rows, nil

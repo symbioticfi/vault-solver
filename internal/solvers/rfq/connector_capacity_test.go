@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/big"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -52,12 +53,6 @@ func TestConnectorQuoteUsesRecipeCapacityWithoutCashReconstruction(t *testing.T)
 			id := common.HexToHash("0x11")
 			inventory := []solverInventory{{Route: liquidlane.NewRoute(1, connectorAddress, account, tokenIn, tokenOut, 6, 6), Kind: "connector", DiscountID: &id, Discount: big.NewInt(1), DiscountPrecision: connectorDiscountPrecision, MaxAssets: big.NewInt(tc.advertised)}}
 			pending := func(rows []solverInventory) liquidlane.CapacityReservations {
-				if tc.fail {
-					if len(rows) != 0 {
-						t.Fatal("unavailable connector retained capacity")
-					}
-					return nil
-				}
 				if len(rows) != 1 || rows[0].Vault != account || rows[0].BlockNumber != 7 {
 					t.Fatal("capacity lost pinned account identity")
 				}
@@ -65,8 +60,8 @@ func TestConnectorQuoteUsesRecipeCapacityWithoutCashReconstruction(t *testing.T)
 			}
 			candidates, err := r.readConnectorCandidates(t.Context(), inventory, tokenIn, tokenOut, big.NewInt(100), pending)
 			if tc.fail {
-				if err != nil || len(candidates) != 0 {
-					t.Fatalf("unavailable connector must decline locally: candidates=%+v err=%v", candidates, err)
+				if err == nil || !strings.Contains(err.Error(), "getMaxAssets") {
+					t.Fatalf("expected capacity failure: %v", err)
 				}
 			} else if err != nil || len(candidates) != 1 || candidates[0].MaxAmountOut.Int64() != tc.want {
 				t.Fatalf("candidates=%+v, want %d: %v", candidates, tc.want, err)

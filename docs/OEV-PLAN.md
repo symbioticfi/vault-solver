@@ -186,9 +186,8 @@ state accounting. The GraphQL wire binding is generated from the full vendored M
 `api/graphql/morpho/operations/*.graphql` into `api/morphographql`, with
 `api/graphql/morpho/operations.json` recording the exact generated query strings. The hand-written Morpho API
 adapter is OEV-local because it parses directly into the OEV monitor snapshot.
-Both market and borrower discovery queries carry the configured runtime chain. Borrower rows must
-also return that chain identity and a market ID from the requested chunk before they can enter the
-risk-sorted position cap; absent or foreign chain/market identities are discarded at the API boundary.
+Both market and borrower discovery queries carry the configured runtime chain.
+The API applies the requested chain and market filters before returning borrower rows.
 
 | File | Responsibility |
 |---|---|
@@ -732,8 +731,8 @@ conservative fallback because no cached route state means the solver cannot pric
 
 ## 10. TODO / refinements
 
-- [x] **Chain-scoped borrower discovery.** Generated query variables and returned market-chain identity
-  checks isolate borrowers by runtime chain and requested market, before risk sorting/truncation.
+- [x] **Chain-scoped borrower discovery.** Generated query variables filter borrowers
+  by runtime chain and requested market before risk sorting/truncation.
 
 - **Keep calibrating predictor constants from real settlements.** The default strategy logs predicted
   route/gas; tune constants above worst observed successful settlements.

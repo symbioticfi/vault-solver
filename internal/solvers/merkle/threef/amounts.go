@@ -3,8 +3,6 @@ package threef
 import (
 	"math/big"
 	"regexp"
-	"strconv"
-	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
@@ -12,7 +10,6 @@ import (
 )
 
 var uintPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
-var periodPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?$`)
 var ratePattern = regexp.MustCompile(`^(0|[1-9][0-9]*)(\.[0-9]+)?$`)
 
 func uintAmount(text string) (*big.Int, error) {
@@ -104,27 +101,19 @@ func fitsTerms(m offerMarket, principal, yield *big.Int, auction threef.AuctionD
 	return left.Cmp(right) <= 0, nil
 }
 
-// rateBasis rejects lossy DTO periods and bounds decimal expansion before parsing.
+// rateBasis uses the raw API period before generated float32 conversion.
 func rateBasis(auction threef.AuctionDto) (*big.Int, error) {
-	exact, present := auction.AdditionalProperties[exactRateBasisKey]
-	if !present {
-		if auction.RateBasisSeconds != 0 {
-			return nil, errors.New("3F auction rateBasisSeconds lacks exact decimal source")
+	var value *big.Rat
+	if exact, present := auction.AdditionalProperties[exactRateBasisKey]; present {
+		var ok bool
+		value, ok = new(big.Rat).SetString(exact.(string))
+		if !ok {
+			return nil, errors.New("3F invalid auction rateBasisSeconds")
 		}
-		return new(big.Int), nil
+	} else {
+		value = new(big.Rat).SetFloat64(float64(auction.GetRateBasisSeconds()))
 	}
-	text, ok := exact.(string)
-	if !ok || len(text) > 128 || !periodPattern.MatchString(text) {
-		return nil, errors.New("3F auction rateBasisSeconds must be a nonnegative int64")
-	}
-	if i := strings.IndexAny(text, "eE"); i >= 0 {
-		exponent, err := strconv.Atoi(text[i+1:])
-		if err != nil || exponent < -128 || exponent > 128 {
-			return nil, errors.New("3F auction rateBasisSeconds exponent exceeds bound")
-		}
-	}
-	value, ok := new(big.Rat).SetString(text)
-	if !ok || !value.IsInt() || value.Sign() < 0 || !value.Num().IsInt64() {
+	if value == nil || !value.IsInt() || value.Sign() < 0 || !value.Num().IsInt64() {
 		return nil, errors.New("3F auction rateBasisSeconds must be a nonnegative int64")
 	}
 	return value.Num(), nil

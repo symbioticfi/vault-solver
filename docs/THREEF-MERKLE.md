@@ -24,7 +24,7 @@ The account is the maker. A dedicated, 3F-approved BF EOA and API key serve one
 curator/default account. The executor's account and caller are discovered together at a
 pinned block; its account must be the default maker and caller must match the shared signer. Mainnet is required.
 Mode defaults to `simulate`; switch to `send` to authorize offers and mint execution.
-One configuration selects exactly one executor and one BF/default account. The executor recipe admits 1..32 distinct guarded funding/underlying pairs; each group has disjoint request/principal/yield inputs and its own committed policy. The maximum-size fixture includes 32 canonical guards, 128 policy/claim grants, their hex data/masks, eight-hash proofs and the complete bundle envelope: 1,323,418 bytes within the fixed 2-MiB permission response limit. The actual complete permission bundle remains subject to that cap, including additional funding leaves. Direct Call/Approve steps are rejected. Guarded mint Manage gates must reference their own principal input. Additional committed funding Manage gates before or after a mint guard may reference a recognized principal directly or an arithmetic Result proven to be zero when that principal is zero on every successful execution. The current frontend's `min(saturatingSub(principal, cash), capacity)` gates satisfy this rule and require no migration. Literal gates, including literal zero, and gates without a proven principal dependency remain rejected. This enforces activation by an inspected market; it does not infer which arbitrary funding leaf economically belongs to a pair. At least one group must have positive principal. Provider identity settings participate in recovery identity.
+One configuration selects exactly one executor and one BF/default account. The executor recipe admits 1..32 distinct guarded funding/underlying pairs; each group has disjoint request/principal/yield inputs and its own committed policy. The maximum-size fixture includes 32 canonical guards, 128 policy/claim grants, their hex data/masks, eight-hash proofs and the complete bundle envelope: 1,323,418 bytes within the fixed 2-MiB permission response limit. The actual complete permission bundle remains subject to that cap, including additional funding leaves. Direct Call/Approve steps are rejected. Guarded mint Manage gates must reference their own principal input. Additional funding Manage steps use the curator-authored recipe's committed gates; the host adds no separate funding-gate data-flow proof. At least one group must have positive principal. Provider identity settings participate in recovery identity.
 Use one exclusive durable state directory
 and one process per curator BF. Do not also list this executor in `merkle.strategies`
 or share that BF/key with another independently allocating bot.
@@ -161,8 +161,8 @@ Tests retain API wire/identity/bounds checks, ambiguous-POST restart recovery,
 reservations, cancellation, aggregate authorizations, lease expiry, guard mutation
 rejection and canonical receipt evidence. Dedicated startup tests cover mainnet,
 shared caller discovery, grouped recipes, cross-account rejection, reorgs, invalid accounts and failure before state creation. Cross-market tests retain live/ambiguous account intents and prevent another pair budget from cancelling a foreign UI offer.
-Regression tests also cover all Manage activation gates and before-guard funding,
-exact raw JSON rate periods, historical filtering, negative membership memoization,
+Regression tests also cover committed funding gates, exact raw JSON rate periods,
+historical filtering, negative membership memoization,
 full auction scans before bidding, maintenance before optional RPC failure and zero-budget
 cancellation ownership.
 Authenticated live-provider approval, enrollment and mainnet minting require

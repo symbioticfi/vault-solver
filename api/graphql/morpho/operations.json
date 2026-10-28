@@ -7,7 +7,7 @@
     },
     {
       "operationName": "MorphoPositionsByMarket",
-      "query": "\nquery MorphoPositionsByMarket ($ids: [String!]!, $chains: [Int!]!, $first: Int!, $skip: Int!, $maxHf: Float) {\n\tmarketPositions(first: $first, skip: $skip, orderBy: HealthFactor, orderDirection: Asc, where: {marketUniqueKey_in:$ids,chainId_in:$chains,healthFactor_lte:$maxHf}) {\n\t\titems {\n\t\t\tuser {\n\t\t\t\taddress\n\t\t\t}\n\t\t\tmarket {\n\t\t\t\tmarketId\n\t\t\t\tchain {\n\t\t\t\t\tid\n\t\t\t\t}\n\t\t\t}\n\t\t\tstate {\n\t\t\t\tborrowShares\n\t\t\t\tcollateral\n\t\t\t}\n\t\t\thealthFactor\n\t\t}\n\t}\n}\n",
+      "query": "\nquery MorphoPositionsByMarket ($ids: [String!]!, $chains: [Int!]!, $first: Int!, $skip: Int!, $maxHf: Float) {\n\tmarketPositions(first: $first, skip: $skip, orderBy: HealthFactor, orderDirection: Asc, where: {marketUniqueKey_in:$ids,chainId_in:$chains,healthFactor_lte:$maxHf}) {\n\t\titems {\n\t\t\tuser {\n\t\t\t\taddress\n\t\t\t}\n\t\t\tmarket {\n\t\t\t\tmarketId\n\t\t\t}\n\t\t\tstate {\n\t\t\t\tborrowShares\n\t\t\t\tcollateral\n\t\t\t}\n\t\t\thealthFactor\n\t\t}\n\t}\n}\n",
       "sourceLocation": "operations/discovery.graphql"
     }
   ]

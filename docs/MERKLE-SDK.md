@@ -116,7 +116,8 @@ Read batches retain null-receipt/header failover only when every such member is 
 response has valid matching IDs and no member errors. A nonnull receipt/header retains the entire
 primary response, including absent replacement attempts. Pending lookup arrays carry the same eRPC
 empty-retry opt-out as scalar lookups. Inspection preserves the SDK's 256-member/32-MiB envelope,
-independently of the smaller metrics prefix; malformed batches are never repaired by retries.
+independently of the smaller metrics prefix. Complete malformed envelopes are left to the SDK;
+response-body I/O failures follow ordinary read fallback.
 
 `make test-merklesender-anvil` composes the real SDK state store and submission manager with the
 host Transport and shared txmanager on a local chain. It checks durable bytes before every original

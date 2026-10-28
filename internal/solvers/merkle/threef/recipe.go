@@ -154,11 +154,6 @@ func inspect(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tr
 	if len(markets) == 0 {
 		return nil, errors.New("3f guarded mint leaf missing")
 	}
-	// Funding leaves may precede their guard. Authenticate principal identities
-	// first, then prove activation through the committed arithmetic data flow.
-	if err := validateFundingActivation(recipe, inspection.Slots, markets); err != nil {
-		return nil, err
-	}
 	return markets, nil
 }
 

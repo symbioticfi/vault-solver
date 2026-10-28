@@ -191,27 +191,6 @@ func TestWholeAwardRequiresVenueAndAdvertisedCapacity(t *testing.T) {
 	}
 }
 
-func TestPrepareContinuesAfterMalformedMatchingDiscount(t *testing.T) {
-	for _, field := range []string{"discountId", "maxAssets"} {
-		t.Run(field, func(t *testing.T) {
-			f := connectorExecutionFixture(t, connectorDiscountFixture())
-			order, _, backend := connectorExecutionAward(f.workflow.caller)
-			good := discounts.ListItem{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"}
-			bad := good
-			if field == "discountId" {
-				bad.DiscountID = "0x12"
-			} else {
-				bad.MaxAssets = "-1"
-			}
-			s := Solver{workflow: f.workflow, backend: backend}
-			intent, err := s.prepare(t.Context(), awardRow(t, order), []discounts.ListItem{bad, good})
-			if err != nil || intent == nil || f.reader.outerCalls != 1 {
-				t.Fatalf("healthy route after malformed %s was lost: intent=%v calls=%d err=%v", field, intent, f.reader.outerCalls, err)
-			}
-		})
-	}
-}
-
 func TestPrepareCountsHeaderLatencyAgainstDeadline(t *testing.T) {
 	f := connectorExecutionFixture(t, connectorDiscountFixture())
 	chainTime := time.Now().Add(time.Hour).Truncate(time.Second)

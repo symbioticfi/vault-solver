@@ -202,13 +202,11 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 		}
 		id, err := hexutil.Decode(item.DiscountID)
 		if err != nil || len(id) != 32 {
-			observability.Log(ctx).V(1).Info("connector route unavailable", "connector", venue.Hex(), "reason", "invalid connector discountId")
-			continue
+			return nil, errors.New("invalid connector discountId")
 		}
 		maximum, ok := new(big.Int).SetString(item.MaxAssets, 10)
 		if !ok || maximum.Sign() < 0 || maximum.BitLen() > 256 {
-			observability.Log(ctx).V(1).Info("connector route unavailable", "connector", venue.Hex(), "reason", "invalid connector maxAssets")
-			continue
+			return nil, errors.New("invalid connector maxAssets")
 		}
 		data, until, err := s.workflow.build(ctx, order, signature, selectedRoute{venue, common.BytesToHash(id), maximum}, s.backend)
 		if err != nil {

@@ -25,6 +25,7 @@ func TestSDKBatchReceiptFailover(t *testing.T) {
 		groupError, memberError, notFound bool
 	}{
 		{name: "all null retries unchanged batch", primary: "null", fallback: true},
+		{name: "truncated response retries unchanged batch", primary: "truncated", fallback: true},
 		{name: "partial receipt retained", primary: "receipt"},
 		{name: "mixed member error retained", primary: "error", memberError: true},
 		{name: "all endpoints null", primary: "all-null", fallback: true, notFound: true},
@@ -55,6 +56,11 @@ func TestSDKBatchReceiptFailover(t *testing.T) {
 					}
 				} else {
 					primaryPayload = string(body)
+				}
+				if !fallback && tc.primary == "truncated" {
+					w.Header().Set("Content-Length", "1000")
+					_, _ = io.WriteString(w, "[")
+					return
 				}
 				responses := []map[string]any{
 					{"jsonrpc": "2.0", "id": 2, "result": nil},
@@ -171,17 +177,4 @@ func TestFallbackTransportBatchInspectionEnvelope(t *testing.T) {
 			}
 		})
 	}
-	t.Run("oversized response rejected without fallback", func(t *testing.T) {
-		primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = io.WriteString(w, strings.Repeat(" ", maxRPCBatchResponseBytes+1))
-		}))
-		defer primary.Close()
-		fallback := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("oversized batch repaired by retry") }))
-		defer fallback.Close()
-		resp, err := roundTrip(t, mustEndpoints(t, primary.URL, fallback.URL), `[{"jsonrpc":"2.0","id":1,"method":"eth_getTransactionReceipt"}]`)
-		if err == nil {
-			_ = resp.Body.Close()
-			t.Fatal("oversized batch accepted")
-		}
-	})
 }

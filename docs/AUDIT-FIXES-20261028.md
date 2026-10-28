@@ -11,16 +11,16 @@ capacity work. They do not promote `stage` or change production configuration.
 |---|---|---|
 | F01 | Fixed | HTTP fallback rebuilds Basic Authorization from each endpoint's own URL. Real HTTP client tests cover authenticated/unauthenticated primary and fallback combinations and immutable caller headers. |
 | F02 | Fixed | A shared zap core redacts URL userinfo, paths, queries and fragments before stdout and Sentry. Tests preserve diagnostics, bound fields, concurrent reuse, sampling, sink filtering and write error handling. This is URL redaction, not arbitrary secret detection. |
-| F03 | Fixed | Bounded SDK read batches retain IDs and whole-response evidence. All-null receipt/header batches can use read fallbacks; partial evidence and RPC errors stay with the selected endpoint. Pending batches disable eRPC empty-result retries. Real SDK tests cover reversed/missing/duplicate IDs, mixed errors, large envelopes and write exclusion. |
-| F04 | Fixed; compatibility regression corrected | Funding Manage gates must become zero when a recognized market principal is zero, either directly or through proven arithmetic data flow. This accepts the current frontend's Result gates for `min(saturatingSub(principal, cash), capacity)`; no migration is needed. The original blanket Result rejection was a compatibility regression masked by rewriting fixture gates in the test loader. That rewrite was removed; both original recipe fixtures now pass unmodified, with table-driven acceptance/rejection cases for arithmetic and cross-market dependencies. Literal and unrelated gates remain rejected. Canonical guarded mint internals and direct principal gates remain unchanged. This validates activation, not the economic ownership of arbitrary funding leaves. |
+| F03 | Fixed | SDK receipt/header batches retain whole-response evidence and use read fallbacks for ordinary all-null results. Pending batches disable eRPC empty-result retries. WebSocket/IPC batches use the existing geth connection. Batch body-read failures follow the ordinary transport fallback path, including truncated responses. |
+| F04 | Withdrawn | The added funding-gate data-flow proof is removed. Additional funding Manage steps follow the trusted curator-authored recipe. Canonical mint guard inspection and existing SDK permissions remain as in the PR base. |
 | F05 | Fixed | UniswapX strategy context is bounded by the quote budget, caller and remaining snapshot lifetime. Final publication checks cancellation and wall/chain expiry, including equality. Handler regressions require HTTP 204 and decline accounting for expected timeout. |
-| F06 | Fixed | The HTTP boundary preserves original JSON `rateBasisSeconds`; exact integer math rejects negative, fractional and overflowing periods before economics. JSON regressions include float32 rounding, negative underflow, large int64 and annualization boundaries. Omitted/null/zero retains the legacy comparison. |
-| F07 | Fixed | RFQ-Merkle skips malformed matching discount entries and tries later healthy routes. Bad-first/good-second ID and capacity regressions require authoritative outer simulation. |
+| F06 | Fixed; simplified | The HTTP boundary preserves exact JSON rateBasisSeconds before generated float32 conversion. Added decimal length/exponent caps and the required-exact-source rejection are removed; internal DTO callers retain their original fallback and numeric constraints. |
+| F07 | Withdrawn | The original RFQ-Merkle discount handling is restored, without skipping malformed backend entries to seek another route. |
 | F08 | Fixed | RFQ-Merkle samples wall time before its header RPC. A delayed-header regression verifies that RPC latency consumes the sending deadline with a leading chain clock. |
-| F09 | Fixed | Connector-specific read, decode and domain failures exclude only that connector. Healthy connector and native routes remain. Shared header/token metadata, cancellation and batch transport/envelope failures abort the observation. |
-| F10 | Fixed | Each connector is observed once per pinned quote, shared across discount alternatives. Seven isolated getter calls per connector use bounded SDK read batches, preserving the zero caller and separate rollback-only capacity previews. A review-discovered WebSocket/IPC compatibility regression was fixed in the shared reader, with a real WebSocket regression. Tests cover 256 alternatives and 256 distinct connectors; no latency benchmark is claimed. |
+| F09 | Withdrawn | The original connector quote path is restored, without per-connector error isolation or fallback based on invalid contract responses. |
+| F10 | Withdrawn | Connector deduplication and batched getter changes are reverted with the connector quote path. The independently useful WebSocket/IPC SDK transport fix remains under F03. |
 | F11 | Fixed; full auction scan retained | Live commitments are maintained before bidding. Each pass checks every relevant unanswered open/solvable auction, filtering historical/foreign candidates and memoizing positive and negative eligibility results per pin. The added eligibility count cap, configuration and rotating cursor were removed to preserve full-scan behavior. Tests cover all 257 candidates in one pass, complete eligibility before POST, maker-specific duplicate filtering, maintenance ordering, memoization and final snapshot validation. |
-| F12 | Fixed | Morpho positions query includes configured chain identity; the adapter validates each returned chain and requested market. Raw fetched rows bound pagination even when all identities are rejected. GraphQL output was regenerated through the pinned Make target. |
+| F12 | Fixed; query filter only | Morpho borrower queries include the configured runtime chain. Extra returned chain/market/address cross-checks and their metadata selections are removed; the API applies the requested filters. Generated bindings were regenerated through the pinned Make target. |
 | F13 | Fixed | LI.FI has validated read-inactivity and pong-write budgets. Application/control heartbeat traffic renews the read deadline; silent recovered sockets cancel connection work and reconnect with recovery-gated readiness. Tests cover silence, recovery and heartbeat variants. |
 | F14 | Fixed | Schema/ABI refresh recipes fail fast, validate staged output and replace files only after successful extraction. ABI groups finish all extraction before any replacement. Offline tests preserve originals for fetch, pipeline, malformed input and generator failures. Individual replacements are atomic; multi-file rename is not a filesystem transaction. |
 | F15 | Fixed | Default 3F schema refresh selects the development contract already selected by the drift registry, retaining the intentional `rateBasisSeconds` surface. |
@@ -54,14 +54,15 @@ the pinned clean contract checkouts.
 
 Anvil suites run isolated local chains without forks or upstream APIs. RED/GREEN
 regressions were run for runtime fixes; fixture tests also reject deliberate
-bypasses of their authoritative simulation. A fresh independent review found the WebSocket/IPC regression noted in F10; its
+bypasses of their authoritative simulation. A fresh independent review found the WebSocket/IPC regression noted in F03; its
 regression test first reproduced the failure and passed after the shared reader fix.
-The reviewer found no remaining P1/P2 issues. Full gate results are recorded in the pull request. No live credentials, API mutations,
+Review and full gate results are recorded in the pull request. No live credentials, API mutations,
 external-chain transactions, merges or deployments form part of this verification.
 
-The F04 compatibility correction reran formatting, the full build, all race/coverage
-tests and lint. Before the correction, both unmodified funding fixtures and nine
-valid arithmetic Result cases failed the focused regression; all pass afterward.
+The input-hardening rollback restores the original RFQ paths and removes the
+extra 3F funding proof and Morpho response cross-checks. Correctness fixes for
+valid data, deadlines, transport, connection liveness and numeric precision remain.
+Existing baseline authorization, amount and recovery behavior is unchanged.
 
 ## Historical plans 001–014
 

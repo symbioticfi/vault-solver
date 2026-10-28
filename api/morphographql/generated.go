@@ -230,31 +230,11 @@ func (v *MorphoPositionsByMarketMarketPositionsPaginatedMarketPositionsItemsMark
 type MorphoPositionsByMarketMarketPositionsPaginatedMarketPositionsItemsMarketPositionMarket struct {
 	// On-chain market ID
 	MarketId string `json:"marketId"`
-	// The chain on which the entity is deployed.
-	Chain MorphoPositionsByMarketMarketPositionsPaginatedMarketPositionsItemsMarketPositionMarketChain `json:"chain"`
 }
 
 // GetMarketId returns MorphoPositionsByMarketMarketPositionsPaginatedMarketPositionsItemsMarketPositionMarket.MarketId, and is useful for accessing the field via an interface.
 func (v *MorphoPositionsByMarketMarketPositionsPaginatedMarketPositionsItemsMarketPositionMarket) GetMarketId() string {
 	return v.MarketId
-}
-
-// GetChain returns MorphoPositionsByMarketMarketPositionsPaginatedMarketPositionsItemsMarketPositionMarket.Chain, and is useful for accessing the field via an interface.
-func (v *MorphoPositionsByMarketMarketPositionsPaginatedMarketPositionsItemsMarketPositionMarket) GetChain() MorphoPositionsByMarketMarketPositionsPaginatedMarketPositionsItemsMarketPositionMarketChain {
-	return v.Chain
-}
-
-// MorphoPositionsByMarketMarketPositionsPaginatedMarketPositionsItemsMarketPositionMarketChain includes the requested fields of the GraphQL type Chain.
-// The GraphQL type's documentation follows.
-//
-// Chain
-type MorphoPositionsByMarketMarketPositionsPaginatedMarketPositionsItemsMarketPositionMarketChain struct {
-	Id int `json:"id"`
-}
-
-// GetId returns MorphoPositionsByMarketMarketPositionsPaginatedMarketPositionsItemsMarketPositionMarketChain.Id, and is useful for accessing the field via an interface.
-func (v *MorphoPositionsByMarketMarketPositionsPaginatedMarketPositionsItemsMarketPositionMarketChain) GetId() int {
-	return v.Id
 }
 
 // MorphoPositionsByMarketMarketPositionsPaginatedMarketPositionsItemsMarketPositionState includes the requested fields of the GraphQL type MarketPositionState.
@@ -417,9 +397,6 @@ query MorphoPositionsByMarket ($ids: [String!]!, $chains: [Int!]!, $first: Int!,
 			}
 			market {
 				marketId
-				chain {
-					id
-				}
 			}
 			state {
 				borrowShares
