@@ -12,7 +12,7 @@ capacity work. They do not promote `stage` or change production configuration.
 | F01 | Fixed | HTTP fallback rebuilds Basic Authorization from each endpoint's own URL. Real HTTP client tests cover authenticated/unauthenticated primary and fallback combinations and immutable caller headers. |
 | F02 | Fixed | A shared zap core redacts URL userinfo, paths, queries and fragments before stdout and Sentry. Tests preserve diagnostics, bound fields, concurrent reuse, sampling, sink filtering and write error handling. This is URL redaction, not arbitrary secret detection. |
 | F03 | Fixed | Bounded SDK read batches retain IDs and whole-response evidence. All-null receipt/header batches can use read fallbacks; partial evidence and RPC errors stay with the selected endpoint. Pending batches disable eRPC empty-result retries. Real SDK tests cover reversed/missing/duplicate IDs, mixed errors, large envelopes and write exclusion. |
-| F04 | Fixed; recipe migration required | Every Manage gate must use a recognized market principal input. Extra funding leaves cannot activate through Result, literal, request, yield or unrelated gates. Canonical guarded mint internals remain unchanged. The legacy test recipe's two Result-gated funding placeholders were adapted in the test loader; a separate regression rejects the raw legacy gates. Existing deployed recipes using these gates must migrate. This validates activation, not the economic ownership of arbitrary funding leaves. |
+| F04 | Fixed; compatibility regression corrected | Funding Manage gates must become zero when a recognized market principal is zero, either directly or through proven arithmetic data flow. This accepts the current frontend's Result gates for `min(saturatingSub(principal, cash), capacity)`; no migration is needed. The original blanket Result rejection was a compatibility regression masked by rewriting fixture gates in the test loader. That rewrite was removed; both original recipe fixtures now pass unmodified, with table-driven acceptance/rejection cases for arithmetic and cross-market dependencies. Literal and unrelated gates remain rejected. Canonical guarded mint internals and direct principal gates remain unchanged. This validates activation, not the economic ownership of arbitrary funding leaves. |
 | F05 | Fixed | UniswapX strategy context is bounded by the quote budget, caller and remaining snapshot lifetime. Final publication checks cancellation and wall/chain expiry, including equality. Handler regressions require HTTP 204 and decline accounting for expected timeout. |
 | F06 | Fixed | The HTTP boundary preserves original JSON `rateBasisSeconds`; exact integer math rejects negative, fractional and overflowing periods before economics. JSON regressions include float32 rounding, negative underflow, large int64 and annualization boundaries. Omitted/null/zero retains the legacy comparison. |
 | F07 | Fixed | RFQ-Merkle skips malformed matching discount entries and tries later healthy routes. Bad-first/good-second ID and capacity regressions require authoritative outer simulation. |
@@ -58,6 +58,10 @@ bypasses of their authoritative simulation. A fresh independent review found the
 regression test first reproduced the failure and passed after the shared reader fix.
 The reviewer found no remaining P1/P2 issues. Full gate results are recorded in the pull request. No live credentials, API mutations,
 external-chain transactions, merges or deployments form part of this verification.
+
+The F04 compatibility correction reran formatting, the full build, all race/coverage
+tests and lint. Before the correction, both unmodified funding fixtures and nine
+valid arithmetic Result cases failed the focused regression; all pass afterward.
 
 ## Historical plans 001–014
 

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -48,24 +47,6 @@ func loadFixture(t *testing.T, path string) (provider.Snapshot, recipes.Recipe, 
 	recipe, err := recipes.DecodeRecipe(doc.Recipe)
 	if err != nil {
 		t.Fatal(err)
-	}
-	// Historical fixtures contain two Result-gated placeholder funding slots.
-	// The host requires principal activation for every outer Manage action.
-	args := abi.Arguments{{Type: uintType}, {Type: instructionType("bytes32[]")}, {Type: instructionType("uint256[][]")}}
-	for i, step := range recipe.Steps {
-		if step[0] != recipes.Manage {
-			continue
-		}
-		values, err := args.Unpack(step[1:])
-		if err != nil {
-			t.Fatal(err)
-		}
-		values[0] = encodedValue(recipes.Input, 1)
-		packed, err := args.Pack(values...)
-		if err != nil {
-			t.Fatal(err)
-		}
-		recipe.Steps[i] = append([]byte{recipes.Manage}, packed...)
 	}
 	leaf := recipes.Leaf{Target: doc.Account, Data: doc.Data, DataMask: doc.Mask, Hash: doc.Hash, Value: new(big.Int)}
 	return provider.Snapshot{ChainID: big.NewInt(1), Account: doc.Account, Executor: common.HexToAddress("0x111"), BlockNumber: big.NewInt(10), Timestamp: 1000}, recipe, &recipes.Tree{Leaves: []recipes.Leaf{leaf}}

@@ -367,7 +367,12 @@ current pin; optional new-bid simulations are bounded by the configured
 `maxEligibilityChecksPerTick` and resume from an in-memory cursor on the next tick.
 The account-level durable intent serializes self-originated offers across markets. Its API-key PUSH offer loop uses authenticated recipe/policy scope and idle
 account cash; its SDK provider binds native aggregate mint authorizations. The
-generic `merkle` solver has no 3F configuration or provider dispatch. All 3F Merkle
+provider authenticates canonical mint principal identities before validating funding
+activation. Funding gates accept direct principals and arithmetic Results with a
+proven zero-principal dependency, including the frontend's bounded cash shortfall.
+The proof tracks each market separately through checked arithmetic; reads are
+unconstrained. Canonical mint gates still use their own principal input directly.
+The generic `merkle` solver has no 3F configuration or provider dispatch. All 3F Merkle
 code lives in one package; API, reservation and durable intent checks remain inside
 that integration. Both recipe keepers share store/sender startup through
 `internal/merklesender.OpenKeeper`, including recovery validation before Run.

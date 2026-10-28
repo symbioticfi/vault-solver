@@ -990,9 +990,11 @@ Configure one recipe `executor`, one broker and an API-key environment reference
 [the example YAML](config/threef-merkle.example.yaml), then complete enrollment as
 described in [the 3F Merkle runbook](docs/THREEF-MERKLE.md). The generic `merkle`
 solver rejects the `threeF` field. The executor uses the maker account and shared signer. Its recipe contains 1..32 distinct guarded funding pairs with disjoint request/principal/yield inputs; inactive groups have zero principal and no calls. One journal and sender serialize all markets. Automatic offers reserve existing commitments
-and use account idle cash; simulation never submits or cancels API offers. Every Manage gate must reference
-a recognized market principal input, including extra funding steps. Recipes using Result, literal, request,
-yield or unrelated gates require migration. `rateBasisSeconds` is read from the exact JSON number and must
+and use account idle cash; simulation never submits or cancels API offers. Funding Manage gates may use
+a recognized market principal input or an arithmetic Result proven to become zero when that principal
+is zero. This accepts the current frontend's `min(saturatingSub(principal, cash), capacity)` funding
+amount. Unrelated gates remain rejected. Guarded mint gates still require their own principal input.
+`rateBasisSeconds` is read from the exact JSON number and must
 be a nonnegative int64 integer; omitted, null and zero values keep the legacy rate comparison.
 
 Live commitments are maintained before optional bid eligibility checks. `maxEligibilityChecksPerTick`

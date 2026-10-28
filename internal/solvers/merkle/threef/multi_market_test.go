@@ -270,7 +270,7 @@ func fundingManage(t *testing.T, r *recipes.Recipe, tree *recipes.Tree, gate *bi
 	}
 }
 
-func TestEveryFundingManageRequiresRecognizedPrincipalGate(t *testing.T) {
+func TestFundingManageRejectsUnrelatedActivation(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		source uint8
@@ -329,13 +329,9 @@ func TestProviderRejectsUnconditionalFundingBeforeExternalReads(t *testing.T) {
 	}
 }
 
-func TestLegacyResultFundingRecipeRequiresPrincipalActivation(t *testing.T) {
+func TestCurrentResultFundingRecipeRemainsCompatible(t *testing.T) {
 	snapshot, recipe, tree := fixture(t)
-	for _, pair := range [][2]int{{6, 5}, {13, 12}} {
-		gate := encodedValue(recipes.Result, uint64(pair[1]))
-		copy(recipe.Steps[pair[0]][1:33], common.LeftPadBytes(gate.Bytes(), 32))
-	}
-	if _, err := inspect(snapshot, recipe, tree); err == nil || !strings.Contains(err.Error(), "principal input") {
-		t.Fatalf("legacy Result funding accepted: %v", err)
+	if _, err := inspect(snapshot, recipe, tree); err != nil {
+		t.Fatalf("principal-derived Result funding rejected: %v", err)
 	}
 }

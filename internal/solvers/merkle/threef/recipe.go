@@ -154,16 +154,10 @@ func inspect(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tr
 	if len(markets) == 0 {
 		return nil, errors.New("3f guarded mint leaf missing")
 	}
-	// Funding leaves may precede their guard, so enforce activation only after
-	// all canonical principal identities have been authenticated.
-	principals := make(map[uint]bool, len(markets))
-	for _, market := range markets {
-		principals[market.PrincipalInput] = true
-	}
-	for _, slot := range inspection.Slots {
-		if slot.Operation == recipes.Manage && (slot.Gate.Source != recipes.Input || !principals[uint(slot.Gate.Value.Uint64())]) {
-			return nil, errors.New("3f every Manage gate must use a recognized principal input")
-		}
+	// Funding leaves may precede their guard. Authenticate principal identities
+	// first, then prove activation through the committed arithmetic data flow.
+	if err := validateFundingActivation(recipe, inspection.Slots, markets); err != nil {
+		return nil, err
 	}
 	return markets, nil
 }
