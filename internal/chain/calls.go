@@ -6,8 +6,6 @@ import (
 	"time"
 
 	"github.com/go-errors/errors"
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/trace"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -15,84 +13,13 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-// callTracing describes how one dialed endpoint's JSON-RPC calls are traced. Only a non-HTTP
-// endpoint sets transport: an HTTP(S) endpoint already gets one span per request from
-// fallbackTransport, and an empty transport turns every method below into a plain passthrough so
-// that path's spans stay exactly as they were.
-type callTracing struct {
-	role      string
-	transport string
-}
-
-// start opens the client span for one JSON-RPC method. The returned func ends it and is meant to be
-// called once, from a defer over the caller's named error return.
-func (t callTracing) start(ctx context.Context, method string) (context.Context, func(error)) {
-	if t.transport == "" {
-		return ctx, func(error) {}
-	}
-	ctx, end := rpcTracer.StartKind(ctx, method, trace.SpanKindClient,
-		attribute.String("rpc.system", "jsonrpc"),
-		attribute.String("rpc.method", method),
-		attribute.String("chain.rpc.role", t.role),
-		attribute.String("chain.rpc.transport", t.transport),
-	)
-	return ctx, func(err error) { end(classifyRPCSpanError(ctx, err)) }
-}
-
-// The methods below shadow the promoted ethclient ones so a websocket or IPC endpoint still produces
-// one client span per JSON-RPC call, named and attributed like the HTTP transport's spans. Only the
-// methods this repo actually calls through the client are shadowed; a new call site needs a new
-// shadow here or it goes untraced on those transports. Multicall is deliberately absent: it reaches
-// the chain through CallContract, which is where its span belongs.
-
-// CallContract executes an eth_call against the read endpoint.
-func (c *Client) CallContract(
-	ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int,
-) (_ []byte, err error) {
-	ctx, end := c.readCalls.start(ctx, rpcMethodCall)
-	defer func() { end(err) }()
-	return c.Client.CallContract(ctx, msg, blockNumber)
-}
-
-// HeaderByNumber reads a block header by number through the read endpoint.
-func (c *Client) HeaderByNumber(ctx context.Context, number *big.Int) (_ *types.Header, err error) {
-	ctx, end := c.readCalls.start(ctx, "eth_getBlockByNumber")
-	defer func() { end(err) }()
-	return c.Client.HeaderByNumber(ctx, number)
-}
-
-// HeaderByHash reads a block header by hash through the read endpoint.
-func (c *Client) HeaderByHash(ctx context.Context, hash common.Hash) (_ *types.Header, err error) {
-	ctx, end := c.readCalls.start(ctx, "eth_getBlockByHash")
-	defer func() { end(err) }()
-	return c.Client.HeaderByHash(ctx, hash)
-}
-
-// FeeHistory reads recent base fees and reward percentiles through the read endpoint.
-func (c *Client) FeeHistory(
-	ctx context.Context, blockCount uint64, lastBlock *big.Int, rewardPercentiles []float64,
-) (_ *ethereum.FeeHistory, err error) {
-	ctx, end := c.readCalls.start(ctx, "eth_feeHistory")
-	defer func() { end(err) }()
-	return c.Client.FeeHistory(ctx, blockCount, lastBlock, rewardPercentiles)
-}
-
-// EstimateGas estimates a call's gas through the read endpoint.
-func (c *Client) EstimateGas(ctx context.Context, msg ethereum.CallMsg) (_ uint64, err error) {
-	ctx, end := c.readCalls.start(ctx, "eth_estimateGas")
-	defer func() { end(err) }()
-	return c.Client.EstimateGas(ctx, msg)
-}
-
 // EstimateGasNextBlock estimates a call against the latest state as if it were included in the block
 // after parent: eth_estimateGas's blockOverrides set that block's number and timestamp, so
 // time-dependent work (interest accrual, deadline checks) is sized for the block the transaction
 // targets. An endpoint without blockOverrides support answers with an invalid-params error.
 func (c *Client) EstimateGasNextBlock(
 	ctx context.Context, msg ethereum.CallMsg, parent *types.Header, blockTime time.Duration,
-) (_ uint64, err error) {
-	ctx, end := c.readCalls.start(ctx, "eth_estimateGas")
-	defer func() { end(err) }()
+) (uint64, error) {
 	if parent == nil || parent.Number == nil {
 		return 0, errors.New("chain: next-block gas estimate needs a parent header")
 	}
@@ -101,7 +28,7 @@ func (c *Client) EstimateGasNextBlock(
 		"time":   hexutil.Uint64(parent.Time + uint64(max(blockTime, time.Second)/time.Second)),
 	}
 	var gas hexutil.Uint64
-	if err = c.Client.Client().CallContext(
+	if err := c.Client.Client().CallContext(
 		ctx, &gas, "eth_estimateGas", estimateGasArg(msg), "latest", nil, overrides,
 	); err != nil {
 		return 0, err
@@ -124,43 +51,9 @@ func estimateGasArg(msg ethereum.CallMsg) map[string]any {
 	return arg
 }
 
-// TransactionReceipt reads a receipt through the read endpoint.
-func (c *Client) TransactionReceipt(ctx context.Context, txHash common.Hash) (_ *types.Receipt, err error) {
-	ctx, end := c.readCalls.start(ctx, rpcMethodGetTransactionReceipt)
-	defer func() { end(err) }()
-	return c.Client.TransactionReceipt(ctx, txHash)
-}
-
-// BalanceAt reads an account balance through the read endpoint.
-func (c *Client) BalanceAt(
-	ctx context.Context, account common.Address, blockNumber *big.Int,
-) (_ *big.Int, err error) {
-	ctx, end := c.readCalls.start(ctx, rpcMethodGetBalance)
-	defer func() { end(err) }()
-	return c.Client.BalanceAt(ctx, account, blockNumber)
-}
-
-// CodeAt reads account code through the read endpoint.
-func (c *Client) CodeAt(
-	ctx context.Context, account common.Address, blockNumber *big.Int,
-) (_ []byte, err error) {
-	ctx, end := c.readCalls.start(ctx, "eth_getCode")
-	defer func() { end(err) }()
-	return c.Client.CodeAt(ctx, account, blockNumber)
-}
-
-// BlockNumber reads the head block number through the read endpoint.
-func (c *Client) BlockNumber(ctx context.Context) (_ uint64, err error) {
-	ctx, end := c.readCalls.start(ctx, "eth_blockNumber")
-	defer func() { end(err) }()
-	return c.Client.BlockNumber(ctx)
-}
-
 // SendTransaction broadcasts a signed transaction through the write client. It overrides the
 // promoted ethclient method.
-func (c *Client) SendTransaction(ctx context.Context, tx *types.Transaction) (err error) {
-	ctx, end := c.writeCalls.start(ctx, rpcMethodSendRawTransaction)
-	defer func() { end(err) }()
+func (c *Client) SendTransaction(ctx context.Context, tx *types.Transaction) error {
 	return c.writeClient.SendTransaction(ctx, tx)
 }
 
@@ -168,9 +61,7 @@ func (c *Client) SendTransaction(ctx context.Context, tx *types.Transaction) (er
 // replacements after the nonce was consumed, including by another replica.
 func (c *Client) NonceAt(
 	ctx context.Context, account common.Address, blockNumber *big.Int,
-) (_ uint64, err error) {
-	ctx, end := c.writeCalls.start(ctx, rpcMethodGetTransactionCount)
-	defer func() { end(err) }()
+) (uint64, error) {
 	return c.writeClient.NonceAt(ctx, account, blockNumber)
 }
 
@@ -178,9 +69,7 @@ func (c *Client) NonceAt(
 // report transactions that are not visible to the primary RPC. It overrides the promoted ethclient
 // method. When no separate write endpoint is configured, it targets the primary endpoint. Fresh
 // transaction nonce selection uses NonceAt instead.
-func (c *Client) PendingNonceAt(ctx context.Context, account common.Address) (_ uint64, err error) {
-	ctx, end := c.writeCalls.start(ctx, rpcMethodGetTransactionCount)
-	defer func() { end(err) }()
+func (c *Client) PendingNonceAt(ctx context.Context, account common.Address) (uint64, error) {
 	return c.writeClient.PendingNonceAt(ctx, account)
 }
 
@@ -191,7 +80,7 @@ func (c *Client) TransactionSenderBalanceAt(
 	account common.Address,
 	blockNumber *big.Int,
 ) (*big.Int, error) {
-	balance, writeErr := c.writeBalanceAt(ctx, account, blockNumber)
+	balance, writeErr := c.writeClient.BalanceAt(ctx, account, blockNumber)
 	if writeErr == nil || c.writeClient == c.Client {
 		return balance, writeErr
 	}
@@ -210,41 +99,19 @@ func (c *Client) TransactionSenderBalanceAt(
 
 // ReadBalanceAt serves sender balance telemetry from the read endpoints only, so a submission-only
 // relay never pays for it. Admission and replacement keep their write-endpoint reads.
-func (c *Client) ReadBalanceAt(ctx context.Context, account common.Address) (_ *big.Int, err error) {
-	ctx, end := c.readCalls.start(ctx, rpcMethodGetBalance)
-	defer func() { end(err) }()
-	return c.Client.BalanceAt(ctx, account, nil)
+func (c *Client) ReadBalanceAt(ctx context.Context, account common.Address) (*big.Int, error) {
+	return c.BalanceAt(ctx, account, nil)
 }
 
 // ReadNonces serves nonce telemetry from the read endpoints only: the mined and pending nonces as the
 // primary RPC sees them. The pending nonce may lag a privately submitted transaction until the primary
 // RPC sees it, which is acceptable for a gauge and never for admission.
 func (c *Client) ReadNonces(ctx context.Context, account common.Address) (latestNonce, pendingNonce uint64, err error) {
-	if latestNonce, err = c.readNonceAt(ctx, account); err != nil {
+	if latestNonce, err = c.Client.NonceAt(ctx, account, nil); err != nil {
 		return 0, 0, err
 	}
-	if pendingNonce, err = c.readPendingNonceAt(ctx, account); err != nil {
+	if pendingNonce, err = c.Client.PendingNonceAt(ctx, account); err != nil {
 		return 0, 0, err
 	}
 	return latestNonce, pendingNonce, nil
-}
-
-func (c *Client) readNonceAt(ctx context.Context, account common.Address) (_ uint64, err error) {
-	ctx, end := c.readCalls.start(ctx, rpcMethodGetTransactionCount)
-	defer func() { end(err) }()
-	return c.Client.NonceAt(ctx, account, nil)
-}
-
-func (c *Client) readPendingNonceAt(ctx context.Context, account common.Address) (_ uint64, err error) {
-	ctx, end := c.readCalls.start(ctx, rpcMethodGetTransactionCount)
-	defer func() { end(err) }()
-	return c.Client.PendingNonceAt(ctx, account)
-}
-
-func (c *Client) writeBalanceAt(
-	ctx context.Context, account common.Address, blockNumber *big.Int,
-) (_ *big.Int, err error) {
-	ctx, end := c.writeCalls.start(ctx, rpcMethodGetBalance)
-	defer func() { end(err) }()
-	return c.writeClient.BalanceAt(ctx, account, blockNumber)
 }

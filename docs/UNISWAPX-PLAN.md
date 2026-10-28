@@ -655,7 +655,11 @@ On the ≤500ms path, mirroring `rfq`'s "one multicall, decimals cached" discipl
    enumerates route combinations; any produced
    output above the signed requirement remains executor surplus. No ladder, amount range, or allocation is published. `default` retains no quote route;
    `single` retains the selected source as a bounded preference.
-5. Before publishing the result, recheck the snapshot pointer, quote epoch, and every blocking condition.
+5. Bound decision work by `quoteServer.httpTimeout`, any earlier caller deadline, and the snapshot's
+   remaining lifetime. A leading observed chain clock shortens that lifetime. Cancellation or expiry,
+   including a cooperative strategy returning `ctx.Err()`, is an expected empty `204` decline.
+   Before publishing the result, recheck snapshot expiry (equality is expired), the snapshot pointer,
+   quote epoch, reservation revision, and every blocking condition.
    Any reservation change, breaker activation, exclusive-state change, unavailable txmanager nonce lane, or
    snapshot replacement during strategy execution turns the result into a decline. Ordinary sender
    occupancy does not block quotes.
@@ -911,6 +915,9 @@ in the owning repository and the integration harness pins the resulting revision
 - [x] **Bounded quote rejection diagnostics.** Split existing semantic validation reasons; retain
   protocol/chain acceptance, raw-body/semantic HTTP behavior and workflow aggregate labels. Capture
   homogeneous planner failures without classifying every nil as insufficient capacity (§5).
+- [x] **Decision lifetime.** Request/budget/snapshot cancellation and final expiry checks prevent a
+  slow or cancellation-ignoring strategy from publishing a stale positive quote; chain skew and exact
+  expiry boundaries have deterministic regression coverage.
 - [ ] **P4 — Quote webhook completion.** The bounded server, local strategy pricing, health,
   readiness, metrics, phase-agnostic `v1`/`v2` and zero-swapper handling, empty-`204` decline, ingress-owned
   source-IP authentication, native-output decline, and request tests exist. Replay a captured Beta payload

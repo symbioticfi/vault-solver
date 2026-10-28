@@ -32,14 +32,15 @@ cover the complete award using both its advertised capacity and pinned on-chain
 execution of the committed recipe's funding prefix, including current permissions and
 sequential source liquidity. No market pricing, splits or adapter/Merkle liquidity aggregation occurs.
 An upstream source must award compatible orders; this solver does not publish quotes.
+The wall-clock observation is sampled before the header RPC; its latency consumes the unsigned submission deadline, including
+when the chain clock is ahead of the host.
 
 The SDK discovers the committed recipe and active root, authenticates the curator
 tree, verifies masks/proofs and roles, and checks the canonical snapshot around
-simulation. The host fills only permitted runtime bytes. The signed swap pins the
-connector, selector and one RWA, binds amountIn to input 0, and requires the committed
-account cash, RFQ payment and RWA balance deltas. Input 1 is the exact awarded output.
-The recipe contains exactly one signed connector swap and only these two upstream
-inputs. `LLExecuting` retains acquired inventory when its redemption leaves are empty;
+simulation. The host fills the matching connector swap's signed terms and supplies amountIn
+and awarded payment as Inputs 0 and 1. Recipe gates, additional actions and balance
+checks remain curator-owned; the host does not prove a particular guard layout.
+`LLExecuting` retains acquired inventory when its redemption leaves are empty;
 otherwise its configured issuer calls execute before the complete outer fill succeeds.
 It simulates the complete outer RFQ fill from the EOA so Reactor funding, recipe
 authorization and output settlement are checked together.
@@ -81,5 +82,13 @@ fall back to account cash.
 
 Tests cover signed award sizing, route capacity, unchanged recipe/permissions,
 complete outer simulation, revoked roles, reorgs, intent persistence, sequential
-admission and recovery without new API terms. Local fixtures do not establish an
+admission and recovery without new API terms. `make test-rfq-merkle-anvil` executes
+the complete outer fill against pinned canonical Reactor, Executor, RecipeExecutor,
+MerkleAccount and LiquidLaneConnector bytecode with real EIP-712 signatures. It
+checks successful simulation and mined settlement, invalid signed economics,
+funding lost after the capacity observation, and an unauthorized sending EOA.
+The fixture substitutes only external ERC20s, registries and the price feed; proxy
+administration and deployment are outside its scope. Bytecode provenance and the
+offline regeneration command are in `internal/solvers/merkle/rfq/testdata/outer-fill/`.
+Local fixtures do not establish an
 authenticated live backend, deployed bridge or mainnet execution.

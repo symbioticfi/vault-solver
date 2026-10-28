@@ -107,7 +107,7 @@ func (a *morphoClient) DiscoverMarketData(ctx context.Context, chainID int64, lo
 	return out, nil
 }
 
-func (a *morphoClient) PositionsByMarket(ctx context.Context, marketIDs []common.Hash, first int, maxHF *float64) ([]morphoPosition, error) {
+func (a *morphoClient) PositionsByMarket(ctx context.Context, chainID int64, marketIDs []common.Hash, first int, maxHF *float64) ([]morphoPosition, error) {
 	if len(marketIDs) == 0 || first <= 0 {
 		return nil, nil
 	}
@@ -118,7 +118,7 @@ func (a *morphoClient) PositionsByMarket(ctx context.Context, marketIDs []common
 	out := make([]morphoPosition, 0, min(first, maxPositionsPage))
 	for start := 0; start < len(ids); start += maxPositionMarketIDs {
 		end := min(start+maxPositionMarketIDs, len(ids))
-		page, err := a.positionsChunk(ctx, ids[start:end], first, maxHF)
+		page, err := a.positionsChunk(ctx, chainID, ids[start:end], first, maxHF)
 		if err != nil {
 			return nil, err
 		}
@@ -131,11 +131,11 @@ func (a *morphoClient) PositionsByMarket(ctx context.Context, marketIDs []common
 	return out, nil
 }
 
-func (a *morphoClient) positionsChunk(ctx context.Context, ids []string, limit int, maxHF *float64) ([]morphoPosition, error) {
+func (a *morphoClient) positionsChunk(ctx context.Context, chainID int64, ids []string, limit int, maxHF *float64) ([]morphoPosition, error) {
 	out := make([]morphoPosition, 0, min(limit, maxPositionsPage))
 	for skip := 0; len(out) < limit; {
 		first := min(maxPositionsPage, limit-len(out))
-		data, err := morphographql.MorphoPositionsByMarket(ctx, a.gql, ids, first, skip, maxHF)
+		data, err := morphographql.MorphoPositionsByMarket(ctx, a.gql, ids, []int{int(chainID)}, first, skip, maxHF)
 		if err != nil {
 			return nil, err
 		}

@@ -183,6 +183,7 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	if err != nil {
 		return nil, err
 	}
+	observed := time.Now()
 	header, err := s.workflow.chain.HeaderByNumber(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -190,7 +191,7 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	if header == nil || header.Time > ^uint64(0)>>1 {
 		return nil, errors.New("invalid chain timestamp")
 	}
-	chainTime, observed := time.Unix(int64(header.Time), 0), time.Now()
+	chainTime := time.Unix(int64(header.Time), 0)
 	if order.Request.Deadline.Cmp(new(big.Int).SetUint64(header.Time)) <= 0 {
 		return nil, errors.New("order expired")
 	}

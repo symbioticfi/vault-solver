@@ -191,6 +191,23 @@ func TestWholeAwardRequiresVenueAndAdvertisedCapacity(t *testing.T) {
 	}
 }
 
+func TestPrepareCountsHeaderLatencyAgainstDeadline(t *testing.T) {
+	f := connectorExecutionFixture(t, connectorDiscountFixture())
+	chainTime := time.Now().Add(time.Hour).Truncate(time.Second)
+	f.reader.header.Time = uint64(chainTime.Unix())
+	f.reader.headerDelay = 250 * time.Millisecond
+	order, _, backend := connectorExecutionAward(f.workflow.caller)
+	order.Request.Deadline = big.NewInt(chainTime.Add(10 * time.Second).Unix())
+	s := Solver{workflow: f.workflow, backend: backend}
+	intent, err := s.prepare(t.Context(), awardRow(t, order), []discounts.ListItem{{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"}})
+	if err != nil || intent == nil {
+		t.Fatalf("prepare: intent=%v err=%v", intent, err)
+	}
+	if intent.Deadline.After(f.reader.headerStarted.Add(10*time.Second + 100*time.Millisecond)) {
+		t.Fatalf("header latency extended deadline: got %v, header started %v", intent.Deadline, f.reader.headerStarted)
+	}
+}
+
 func TestUncertainOrUnacknowledgedFillKeepsIntent(t *testing.T) {
 	for _, tc := range []struct {
 		name            string

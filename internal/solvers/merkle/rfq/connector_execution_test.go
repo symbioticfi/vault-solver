@@ -172,9 +172,24 @@ type connectorExecutionReader struct {
 	outerErr                                            error
 	reorgDuringFill                                     bool
 	reorgBeforeDiscovery                                bool
+	headerDelay                                         time.Duration
+	headerStarted                                       time.Time
 }
 
-func (r *connectorExecutionReader) HeaderByNumber(_ context.Context, number *big.Int) (*types.Header, error) {
+func (r *connectorExecutionReader) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {
+	if r.headerStarted.IsZero() {
+		r.headerStarted = time.Now()
+	}
+	if r.headerDelay > 0 {
+		timer := time.NewTimer(r.headerDelay)
+		r.headerDelay = 0
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if number != nil && number.Uint64() != 7 {
 		return nil, errors.New("unexpected unpinned header")
 	}

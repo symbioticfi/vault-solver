@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	ethereum "github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -39,8 +40,7 @@ func TestAssembleConnectorRouteKeepsCommittedProgram(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot := recipes.Snapshot{Executor: common.HexToAddress("0x43"), RecipeHash: hash, Account: account}
-	assembled, err := assembleConnectorRoute(snapshot, recipe, tree, vlt, tIn, tOut, common.HexToAddress("0x10"), big.NewInt(123), big.NewInt(456), terms.Swap, terms.Signature)
+	assembled, err := assembleConnectorRoute(recipe, tree, vlt, tIn, common.HexToAddress("0x10"), big.NewInt(123), big.NewInt(456), terms.Swap, terms.Signature)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,22 +56,38 @@ func TestAssembleConnectorRouteKeepsCommittedProgram(t *testing.T) {
 	if after != hash {
 		t.Fatal("recipe instructions changed")
 	}
-	_, err = assembleConnectorRoute(snapshot, recipe, tree, vlt, common.HexToAddress("0x99"), tOut, common.HexToAddress("0x10"), big.NewInt(123), big.NewInt(456), terms.Swap, terms.Signature)
+	_, err = assembleConnectorRoute(recipe, tree, vlt, common.HexToAddress("0x99"), common.HexToAddress("0x10"), big.NewInt(123), big.NewInt(456), terms.Swap, terms.Signature)
 	if err == nil {
 		t.Fatal("mismatched RWA permission accepted")
 	}
 	multiple := recipes.CloneRecipe(recipe)
 	multiple.Steps = append(multiple.Steps, append([]byte(nil), recipe.Steps[3]...))
-	_, err = assembleConnectorRoute(snapshot, multiple, tree, vlt, tIn, tOut, common.HexToAddress("0x10"), big.NewInt(123), big.NewInt(456), terms.Swap, terms.Signature)
-	if err == nil || !strings.Contains(err.Error(), "one signed swap for one asset") {
-		t.Fatalf("multiple connector swaps accepted: %v", err)
+	_, err = assembleConnectorRoute(multiple, tree, vlt, tIn, common.HexToAddress("0x10"), big.NewInt(123), big.NewInt(456), terms.Swap, terms.Signature)
+	if err != nil {
+		t.Fatalf("curator-authorized repeated swap rejected: %v", err)
+	}
+	for _, gate := range []*big.Int{connectorDeltaOperand(recipes.Literal, 1), connectorDeltaOperand(recipes.Result, 0)} {
+		alternative := recipes.CloneRecipe(recipe)
+		args := abi.Arguments{{Type: connectorDeltaType(t, "uint256")}, {Type: connectorDeltaType(t, "bytes32[]")}, {Type: connectorDeltaType(t, "uint256[][]")}}
+		managedArgs, err := args.Unpack(alternative.Steps[3][1:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		managedStep, err := args.Pack(gate, managedArgs[1], managedArgs[2])
+		if err != nil {
+			t.Fatal(err)
+		}
+		alternative.Steps[3] = append([]byte{recipes.Manage}, managedStep...)
+		if _, err := assembleConnectorRoute(alternative, tree, vlt, tIn, common.HexToAddress("0x10"), big.NewInt(123), big.NewInt(456), terms.Swap, terms.Signature); err != nil {
+			t.Fatalf("curator gate rejected: %v", err)
+		}
 	}
 	// A signed field remains fixed when the curator has not granted it a mutable mask.
 	terms.Swap.Discount.Nonce = big.NewInt(18)
 	for i := 260; i < 292; i++ {
 		tree.Leaves[0].DataMask[i] = 0
 	}
-	_, err = assembleConnectorRoute(snapshot, recipe, tree, vlt, tIn, tOut, common.HexToAddress("0x10"), big.NewInt(123), big.NewInt(456), terms.Swap, terms.Signature)
+	_, err = assembleConnectorRoute(recipe, tree, vlt, tIn, common.HexToAddress("0x10"), big.NewInt(123), big.NewInt(456), terms.Swap, terms.Signature)
 	if err == nil {
 		t.Fatal("pinned signed data changed")
 	}

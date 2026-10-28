@@ -2,6 +2,7 @@ package threef
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"math/big"
 	"strings"
@@ -48,7 +49,7 @@ func testMarket() offerMarket {
 func testAuction(m offerMarket, id float32, request common.Address) threef.AuctionDto {
 	amount := "10000000"
 	deposit := threef.AuctionDepositAssetDto{Address: strings.ToLower(m.Asset.Hex())}
-	return threef.AuctionDto{Id: id, RequestId: request.Hex(), Status: "OPEN", RateBasisSeconds: 31536000, AmountRequested: *threef.NewNullableString(&amount), DepositAsset: *threef.NewNullableAuctionDepositAssetDto(&deposit), AdditionalProperties: map[string]any{"exactMaxRate": "2.0"}}
+	return threef.AuctionDto{Id: id, RequestId: request.Hex(), Status: "OPEN", RateBasisSeconds: 31536000, AmountRequested: *threef.NewNullableString(&amount), DepositAsset: *threef.NewNullableAuctionDepositAssetDto(&deposit), AdditionalProperties: map[string]any{exactMaxRateKey: "2.0"}}
 }
 
 func testOffer(m offerMarket, auctionID float32, status string, amount string) threef.OfferDto {
@@ -473,5 +474,40 @@ func TestPairBudgetDoesNotReserveAnotherUnderlying(t *testing.T) {
 	}
 	if len(c.created) != 1 || c.created[0].Amount != "100000" {
 		t.Fatalf("foreign underlying consumed this pair budget: %+v", c.created)
+	}
+}
+
+// A budget-consuming native check cannot attest UI ownership at zero budget.
+// Durable ownership still authorizes cancellation; accepted rows are immutable.
+func TestZeroBudgetCancellationRequiresDurableOwnership(t *testing.T) {
+	for _, owned := range []bool{false, true} {
+		for _, status := range []string{"SUBMITTED", "AWAITING_MINT"} {
+			t.Run(fmt.Sprintf("owned%v/%s", owned, status), func(t *testing.T) {
+				b, c, m := testBot(t)
+				row := testOffer(m, 1, status, "100")
+				if owned {
+					if err := b.Tick(t.Context(), m, c.auctions); err != nil {
+						t.Fatal(err)
+					}
+					created := c.created[0]
+					row = testOffer(m, 1, status, created.Amount)
+					row.Id, row.Nonce, row.ExpectedReturn, row.Expiration = 15, created.Nonce, created.ExpectedReturn, created.Expiration
+				}
+				c.offers = []threef.OfferDto{row}
+				m.Budget = new(big.Int)
+				m.EligibleRequests = map[common.Address]bool{}
+				createdBefore := len(c.created)
+				if err := b.Tick(t.Context(), m, c.auctions); err != nil {
+					t.Fatal(err)
+				}
+				want := 0
+				if owned && status == "SUBMITTED" {
+					want = 1
+				}
+				if len(c.cancelled) != want || len(c.created) != createdBefore {
+					t.Fatalf("zero-budget ownership policy violated: cancelled=%v created=%d", c.cancelled, len(c.created))
+				}
+			})
+		}
 	}
 }

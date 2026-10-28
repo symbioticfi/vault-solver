@@ -344,9 +344,8 @@ recognition.
 The host's SDK transport continues to use the existing shared transaction manager's
 owner fence and persistence callbacks; it contains no copied sender or nonce engine.
 The SDK batch engine uses the existing HTTP fallback/tracing path with strict response
-identity validation. Merkle requires HTTP(S) read endpoints while other solvers keep
-ordinary WebSocket/IPC support. Vault-side LL/3F pricing, discounts and auction/order
-business logic stay in their existing integration packages; they are not implicitly
+identity validation. All solvers use HTTP(S) chain RPC endpoints. Vault-side LL/3F pricing,
+discounts and auction/order business logic stay in their existing integration packages; they are not implicitly
 wired through the Merkle host. Executor-daemon Merkl/CoW provider integration remains
 owned by merkle-executor.
 
@@ -358,12 +357,21 @@ simulates the complete outer RFQ settlement. The Merkle hosts share
 `internal/merklesender`, which forwards owner fences, signed-byte persistence and
 optional execution deadlines to the single txmanager. See [RFQ-MERKLE.md](RFQ-MERKLE.md).
 
-`threef-merkle` independently owns 1..256 Merkle recipe executors for one curator BF/default
-maker, with one API client, planner, provider, store and sender. Per-recipe offer
-workflows run sequentially while that sender is idle; the account-level durable intent
-serializes self-originated offers across markets. Its API-key PUSH offer loop uses authenticated recipe/policy scope and idle
+`threef-merkle` independently owns one Merkle recipe executor for one curator BF/default
+maker. Its recipe contains 1..32 distinct guarded funding/underlying markets, with
+one API client, planner, provider, exclusive store and sender. One Run goroutine
+maintains existing commitments before scanning open/solvable auctions for new bids
+while the sender is idle. Positive and negative membership are memoized only at the
+current pin. Each pass checks every relevant unanswered open/solvable auction before
+bidding, with no eligibility count cap or persistent scan cursor. Matching requests
+are deduplicated per market, and each eligible market is considered once after the
+complete eligibility scan. Any API mutation ends the pass to refresh inventory.
+The account-level durable intent serializes self-originated offers across markets. Its API-key PUSH offer loop uses authenticated recipe/policy scope and idle
 account cash; its SDK provider binds native aggregate mint authorizations. The
-generic `merkle` solver has no 3F configuration or provider dispatch. All 3F Merkle
+provider authenticates canonical mint guards and their input bindings. Additional
+funding activation follows the curator-authored committed recipe; no separate host
+proof restricts the sources used by its Manage gates.
+The generic `merkle` solver has no 3F configuration or provider dispatch. All 3F Merkle
 code lives in one package; API, reservation and durable intent checks remain inside
 that integration. Both recipe keepers share store/sender startup through
 `internal/merklesender.OpenKeeper`, including recovery validation before Run.

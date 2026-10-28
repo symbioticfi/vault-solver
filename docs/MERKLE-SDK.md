@@ -69,7 +69,7 @@ recipe input provider, and uses the shared curator permission source.
 The active root determines the requested permission artifact at
 `GET /merkle/{adapter}/{root}` under the configured curator API URL; the SDK checks
 the chain, adapter, account, root, leaf hashes and every proof before preparation. Financial amounts
-come from the recipe's read-dependent computation, bound directly as a result or
+come from the recipe's deterministic computation or fixed literal, bound directly or
 through an exact input equality. Bounds validate the chosen amount; they do not
 choose it. For example, a recipe can compute `min(balance, liquidity)` without
 embedding either actual amount. The SDK checks every lower bound and cap.
@@ -108,8 +108,21 @@ arrays through vault-solver's existing HTTP fallback and tracing transport. Safe
 aggregation and exact argument encoding come from the shared SDK implementation;
 full simulations preserve their caller and remain isolated eth_calls. Missing
 aggregate deployments and malformed batch responses fail without individual-call
-retries. This SDK host requires HTTP(S) read endpoints; ordinary solvers retain
-their existing WebSocket/IPC support.
+retries. All chain RPC endpoints use HTTP(S), so every SDK batch shares the
+same HTTP envelope validation, tracing and cross-endpoint read failover.
+
+Read batches retain null-receipt/header failover only when every such member is null and the whole
+response has valid matching IDs and no member errors. A nonnull receipt/header retains the entire
+primary response, including absent replacement attempts. Pending lookup arrays carry the same eRPC
+empty-retry opt-out as scalar lookups. Inspection preserves the SDK's 256-member/32-MiB envelope,
+independently of the smaller metrics prefix. Complete malformed envelopes are left to the SDK;
+response-body I/O failures follow ordinary read fallback.
+
+`make test-merklesender-anvil` composes the real SDK state store and submission manager with the
+host Transport and shared txmanager on a local chain. It checks durable bytes before every original
+and replacement broadcast, restart ownership restoration, canonical receipt recovery, and durable
+acknowledgement before fence release. Storage failure prevents broadcast; failed acknowledgement
+retains the journal and reservation. CI runs it in the existing Foundry-equipped integration job.
 
 Read-dependent numeric values are resolved in one same-address code-override lens
 call. Authenticated Manage/Approve/Call instructions execute in order before later

@@ -1,7 +1,6 @@
 package threef
 
 import (
-	"bytes"
 	"context"
 	"math/big"
 
@@ -30,15 +29,7 @@ func observe(ctx context.Context, chain provider.Reader, snapshot provider.Snaps
 		}
 		return raw, nil
 	}
-	raw, err := call(market.Policy, policyABI.PackAccount())
-	if err != nil {
-		return observation{}, errors.New("3f policy account read failed")
-	}
-	owner, err := policyABI.UnpackAccount(raw)
-	if err != nil || !bytes.Equal(raw[:12], make([]byte, 12)) || owner != snapshot.Account {
-		return observation{}, errors.New("3f policy belongs to another account")
-	}
-	raw, err = call(market.Policy, policyABI.PackRemainingAssets(market.Asset, market.UnderlyingAsset))
+	raw, err := call(market.Policy, policyABI.PackRemainingAssets(market.Asset, market.UnderlyingAsset))
 	if err != nil {
 		return observation{}, errors.New("3f policy budget read failed")
 	}

@@ -9,8 +9,9 @@ Generated clients tolerate added/removed fields (hack/openapi-relax-client.py), 
 check exists for the drift that tolerance cannot absorb: renamed fields, changed enums,
 new required request fields, altered semantics in descriptions.
 
-Usage: check-schema-drift.py [--report FILE] [--only NAME]
-Exit code is always 0; the outcome is reported as `status=clean|drift` on stdout and,
+Usage: check-schema-drift.py [--report FILE] [--only NAME] [--check-coverage]
+Offline --check-coverage exits nonzero for registration gaps. Live drift always exits 0;
+the outcome is reported as `status=clean|drift` on stdout and,
 when running under GitHub Actions, appended to $GITHUB_OUTPUT.
 """
 
@@ -146,13 +147,16 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--report", default="drift-report.md")
     parser.add_argument("--only", help="check a single source by (substring of) name")
+    parser.add_argument("--check-coverage", action="store_true", help="offline registration-only check; fail on gaps")
     args = parser.parse_args()
+    if args.check_coverage and args.only:
+        parser.error("--check-coverage checks the entire registry; --only is not supported")
 
     sources = json.loads(MANIFEST.read_text())["sources"]
     selected = [s for s in sources if not args.only or args.only.lower() in s["name"].lower()]
 
     report: list[str] = []
-    drifted = [check(s, report) for s in selected]
+    drifted = [] if args.check_coverage else [check(s, report) for s in selected]
     coverage_drift = check_coverage(sources, report) if not args.only else False
 
     status = "drift" if (any(drifted) or coverage_drift) else "clean"
@@ -163,7 +167,7 @@ def main() -> int:
     if out := os.environ.get("GITHUB_OUTPUT"):
         with open(out, "a") as fh:
             fh.write(f"status={status}\n")
-    return 0
+    return int(coverage_drift) if args.check_coverage else 0
 
 
 if __name__ == "__main__":

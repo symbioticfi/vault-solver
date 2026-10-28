@@ -1,7 +1,6 @@
 package threef
 
 import (
-	"math"
 	"math/big"
 	"regexp"
 
@@ -70,6 +69,10 @@ func fitsTerms(m offerMarket, principal, yield *big.Int, auction threef.AuctionD
 	if principal.BitLen() > 128 || yield.BitLen() > 128 || principal.Cmp(m.MaxPrincipal) > 0 || yield.Cmp(minimumReturn(principal, m.MinimumYield1e8)) < 0 {
 		return false, nil
 	}
+	basis, err := rateBasis(auction)
+	if err != nil {
+		return false, err
+	}
 	// The HTTP boundary preserves the original JSON number before DTO float decoding.
 	// Never reconstruct an economic limit from the generated float32 value.
 	exact, present := auction.AdditionalProperties[exactMaxRateKey]
@@ -89,15 +92,29 @@ func fitsTerms(m offerMarket, principal, yield *big.Int, auction threef.AuctionD
 	}
 	left := new(big.Int).Mul(yield, new(big.Int).Mul(big.NewInt(10000), rate.Denom()))
 	right := new(big.Int).Mul(principal, rate.Num())
-	basis := float64(auction.GetRateBasisSeconds())
-	if basis < 0 || basis >= math.Exp2(63) || basis != math.Trunc(basis) {
-		return false, errors.New("3F auction rateBasisSeconds must be a nonnegative int64")
-	}
 	// The policy floor remains yield/principal; the auction ceiling is annual
 	// when its API supplies a rate period. Compare both sides with integer math.
-	if basis > 0 {
+	if basis.Sign() > 0 {
 		left.Mul(left, big.NewInt(31536000))
-		right.Mul(right, big.NewInt(int64(basis)))
+		right.Mul(right, basis)
 	}
 	return left.Cmp(right) <= 0, nil
+}
+
+// rateBasis uses the raw API period before generated float32 conversion.
+func rateBasis(auction threef.AuctionDto) (*big.Int, error) {
+	var value *big.Rat
+	if exact, present := auction.AdditionalProperties[exactRateBasisKey]; present {
+		var ok bool
+		value, ok = new(big.Rat).SetString(exact.(string))
+		if !ok {
+			return nil, errors.New("3F invalid auction rateBasisSeconds")
+		}
+	} else {
+		value = new(big.Rat).SetFloat64(float64(auction.GetRateBasisSeconds()))
+	}
+	if value == nil || !value.IsInt() || value.Sign() < 0 || !value.Num().IsInt64() {
+		return nil, errors.New("3F auction rateBasisSeconds must be a nonnegative int64")
+	}
+	return value.Num(), nil
 }

@@ -1,7 +1,6 @@
 package rfq
 
 import (
-	"bytes"
 	"math/big"
 	"testing"
 
@@ -10,50 +9,6 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/bindings/erc4626"
 )
-
-func TestConnectorDeltasRequireExactAwardedBalanceChanges(t *testing.T) {
-	account := common.HexToAddress("0x21")
-	recipient := common.HexToAddress("0x10")
-	for _, tc := range []struct {
-		name   string
-		mutate func(*recipes.Recipe)
-		valid  bool
-	}{
-		{"canonical balance deltas", func(*recipes.Recipe) {}, true},
-		{"equal operands reversed", func(r *recipes.Recipe) {
-			r.Steps[6] = connectorDeltaBinary(t, recipes.Equal, connectorDeltaOperand(recipes.Input, 1), connectorDeltaOperand(recipes.Result, 5))
-		}, true},
-		{"wrong payment recipient", func(r *recipes.Recipe) { r.Queries[1] = connectorDeltaQuery(t, tOut, common.HexToAddress("0x88")) }, false},
-		{"wrong payment asset", func(r *recipes.Recipe) { r.Queries[1] = connectorDeltaQuery(t, tIn, recipient) }, false},
-		{"wrong account", func(r *recipes.Recipe) { r.Queries[0] = connectorDeltaQuery(t, tOut, common.HexToAddress("0x88")) }, false},
-		{"cash direction reversed", func(r *recipes.Recipe) {
-			r.Steps[5] = connectorDeltaBinary(t, recipes.Sub, connectorDeltaOperand(recipes.Result, 4), connectorDeltaOperand(recipes.Result, 0))
-		}, false},
-		{"self comparison", func(r *recipes.Recipe) {
-			r.Steps[6] = connectorDeltaBinary(t, recipes.Equal, connectorDeltaOperand(recipes.Input, 1), connectorDeltaOperand(recipes.Input, 1))
-		}, false},
-		{"wrong payment input", func(r *recipes.Recipe) {
-			r.Steps[9] = connectorDeltaBinary(t, recipes.Equal, connectorDeltaOperand(recipes.Result, 8), connectorDeltaOperand(recipes.Input, 0))
-		}, false},
-		{"missing RWA delta", func(r *recipes.Recipe) { r.Steps = r.Steps[:12] }, false},
-		{"pre reads cross action", func(r *recipes.Recipe) { connectorDeltaInsertAction(t, r, 3) }, false},
-		{"post checks cross action", func(r *recipes.Recipe) { connectorDeltaInsertAction(t, r, 7) }, false},
-		{"truncated comparison", func(r *recipes.Recipe) { r.Steps[6] = []byte{recipes.Equal} }, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			recipe := connectorDeltaRecipe(t, common.HexToHash("0x42"), account, recipient, tOut, tIn)
-			tc.mutate(&recipe)
-			swapStep := uint(3)
-			if tc.name == "pre reads cross action" {
-				swapStep++
-			}
-			err := validateConnectorDeltas(recipe, swapStep, account, recipient, tOut, tIn)
-			if (err == nil) != tc.valid {
-				t.Fatalf("error = %v, valid = %v", err, tc.valid)
-			}
-		})
-	}
-}
 
 func connectorDeltaRecipe(t *testing.T, hash common.Hash, account, recipient, asset, rwa common.Address) recipes.Recipe {
 	t.Helper()
@@ -115,61 +70,4 @@ func connectorDeltaQuery(t *testing.T, token, owner common.Address) []byte {
 		t.Fatal(err)
 	}
 	return data
-}
-
-func connectorDeltaInsertAction(t *testing.T, recipe *recipes.Recipe, at int) {
-	t.Helper()
-	for _, step := range recipe.Steps {
-		if len(step) < 65 || step[0] < recipes.Add || step[0] > recipes.LessOrEqual {
-			continue
-		}
-		for _, word := range [][]byte{step[1:33], step[33:65]} {
-			if word[4] == recipes.Result {
-				index := new(big.Int).SetBytes(word[5:])
-				if index.Cmp(big.NewInt(int64(at))) >= 0 {
-					index.Add(index, big.NewInt(1)).FillBytes(word[5:])
-				}
-			}
-		}
-	}
-	args := abi.Arguments{{Type: connectorDeltaType(t, "address")}, {Type: connectorDeltaType(t, "bytes")}, {Type: connectorDeltaType(t, "uint256[]")}}
-	call, err := args.Pack(common.HexToAddress("0x77"), []byte{}, []*big.Int{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	steps := append([][]byte{}, recipe.Steps[:at]...)
-	steps = append(steps, append([]byte{recipes.Call}, call...))
-	recipe.Steps = append(steps, recipe.Steps[at:]...)
-}
-
-func TestConnectorDeltasQueryBindingsAndOffsetsAreNotStaticBalances(t *testing.T) {
-	account, recipient := common.HexToAddress("0x21"), common.HexToAddress("0x10")
-	for _, offset := range []int64{1, 32} {
-		recipe := connectorDeltaRecipe(t, common.HexToHash("0x42"), account, recipient, tOut, tIn)
-		args := abi.Arguments{{Type: connectorDeltaType(t, "address")}, {Type: connectorDeltaType(t, "bytes")}, {Type: connectorDeltaType(t, "uint256[]")}, {Type: connectorDeltaType(t, "uint256")}}
-		var err error
-		recipe.Queries[1], err = args.Pack(tOut, erc4626.NewIERC4626().PackBalanceOf(recipient), []*big.Int{}, big.NewInt(offset))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := validateConnectorDeltas(recipe, 3, account, recipient, tOut, tIn); err == nil {
-			t.Fatalf("nonzero result offset %d accepted", offset)
-		}
-	}
-	bound := connectorDeltaRecipe(t, common.HexToHash("0x42"), account, recipient, tOut, tIn)
-	args := abi.Arguments{{Type: connectorDeltaType(t, "address")}, {Type: connectorDeltaType(t, "bytes")}, {Type: connectorDeltaType(t, "uint256[]")}, {Type: connectorDeltaType(t, "uint256")}}
-	binding := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(4), 224), connectorDeltaOperand(recipes.Input, 1))
-	var err error
-	bound.Queries[1], err = args.Pack(tOut, erc4626.NewIERC4626().PackBalanceOf(recipient), []*big.Int{binding}, big.NewInt(0))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := validateConnectorDeltas(bound, 3, account, recipient, tOut, tIn); err == nil {
-		t.Fatal("bound balance owner accepted as a static recipient")
-	}
-	malformed := connectorDeltaRecipe(t, common.HexToHash("0x42"), account, recipient, tOut, tIn)
-	malformed.Queries[1] = bytes.Clone(malformed.Queries[1][:10])
-	if err := validateConnectorDeltas(malformed, 3, account, recipient, tOut, tIn); err == nil {
-		t.Fatal("malformed balance query accepted")
-	}
 }

@@ -29,6 +29,8 @@ type orderMessage struct {
 
 type orderFeed struct {
 	url           string
+	readTimeout   time.Duration
+	writeTimeout  time.Duration
 	apiKey        string
 	connected     atomic.Bool // watchOnce writes; Prometheus scrapes read concurrently.
 	recoveryReady atomic.Bool // connection recovery writes; Prometheus scrapes read concurrently.
@@ -39,8 +41,8 @@ type orderFeedConnectionHooks struct {
 	whileConnected func(context.Context) // Concurrent with reads and joined on disconnect.
 }
 
-func newOrderFeed(url, apiKey string) *orderFeed {
-	return &orderFeed{url: url, apiKey: apiKey}
+func newOrderFeed(cfg OrderServerConfig, apiKey string) *orderFeed {
+	return &orderFeed{url: cfg.WSURL, apiKey: apiKey, readTimeout: cfg.WSReadTimeout, writeTimeout: cfg.WSWriteTimeout}
 }
 
 func (f *orderFeed) run(
@@ -117,6 +119,19 @@ func (f *orderFeed) watchOnce(
 		// leave readiness set for the next scrape or reconnect.
 		f.recoveryReady.Store(false)
 	}()
+	refreshReadDeadline := func() error { return conn.SetReadDeadline(time.Now().Add(f.readTimeout)) }
+	if err := refreshReadDeadline(); err != nil {
+		return false, errors.Errorf("set websocket read deadline: %w", err)
+	}
+	// Control handlers run in the reader goroutine. Application and control heartbeats both prove
+	// liveness; all pong writes are bounded, so a peer that stops reading cannot pin this connection.
+	conn.SetPongHandler(func(string) error { return refreshReadDeadline() })
+	conn.SetPingHandler(func(data string) error {
+		if err := refreshReadDeadline(); err != nil {
+			return err
+		}
+		return conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(f.writeTimeout))
+	})
 	if hooks.beforeRead != nil {
 		hooks.beforeRead(connectionCtx)
 	}
@@ -130,10 +145,16 @@ func (f *orderFeed) watchOnce(
 		if err != nil {
 			return false, errors.Errorf("read websocket: %w", err)
 		}
+		if err := refreshReadDeadline(); err != nil {
+			return false, errors.Errorf("refresh websocket read deadline: %w", err)
+		}
 		if messageType != websocket.TextMessage {
 			continue
 		}
 		if pong, ok := pongFor(msg); ok {
+			if err := conn.SetWriteDeadline(time.Now().Add(f.writeTimeout)); err != nil {
+				return false, errors.Errorf("set websocket pong deadline: %w", err)
+			}
 			if err := conn.WriteMessage(websocket.TextMessage, pong); err != nil {
 				return false, errors.Errorf("write websocket pong: %w", err)
 			}

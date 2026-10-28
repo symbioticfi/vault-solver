@@ -249,7 +249,7 @@ func TestGetOffersDigest_MatchesLiveAcceptedSignature(t *testing.T) {
 	}
 	maker := crypto.PubkeyToAddress(key.PublicKey)
 	deadline := big.NewInt(4_102_444_800)
-	chainID := big.NewInt(11155111) // Sepolia; the grunt-api domain + query chainId must agree
+	chainID := big.NewInt(1) // Ethereum mainnet; the grunt-api domain + query chainId must agree
 	if v := os.Getenv("SOLVER_CHAIN_ID"); v != "" {
 		chainID, _ = new(big.Int).SetString(v, 10)
 	}
@@ -262,7 +262,7 @@ func TestGetOffersDigest_MatchesLiveAcceptedSignature(t *testing.T) {
 
 	baseURL := os.Getenv("SOLVER_3F_BASE_URL")
 	if baseURL == "" {
-		baseURL = "https://bf.dev.gcp.3f.xyz"
+		baseURL = "https://bf.3f.xyz"
 	}
 
 	url := fmt.Sprintf("%s/v1/offer?maker=%s&chainId=%s&deadline=%s",

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,158 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
+
+func newTestOrderFeed(url, apiKey string) *orderFeed {
+	return newOrderFeed(OrderServerConfig{WSURL: url, WSReadTimeout: 10 * time.Second, WSWriteTimeout: time.Second}, apiKey)
+}
+
+func TestOrderFeedSilentRecoveredConnectionReconnects(t *testing.T) {
+	upgrader := websocket.Upgrader{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer conn.Close()
+		// Keep the socket open without sending application or control heartbeats.
+		_, _, _ = conn.ReadMessage()
+	}))
+	defer server.Close()
+	feed := newOrderFeed(OrderServerConfig{WSURL: "ws" + strings.TrimPrefix(server.URL, "http"), WSReadTimeout: 30 * time.Millisecond, WSWriteTimeout: time.Second}, "")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var attempts atomic.Int32
+	firstRecovered := make(chan struct{})
+	firstCanceled := make(chan struct{})
+	secondStarted := make(chan struct{})
+	releaseSecond := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- feed.run(ctx, orderFeedConnectionHooks{
+			beforeRead: func(connectionCtx context.Context) {
+				if attempts.Add(1) == 1 {
+					feed.markRecoveryReady(connectionCtx)
+					close(firstRecovered)
+					return
+				}
+				close(secondStarted)
+				select {
+				case <-releaseSecond:
+					feed.markRecoveryReady(connectionCtx)
+				case <-connectionCtx.Done():
+				}
+			},
+			whileConnected: func(connectionCtx context.Context) {
+				first := attempts.Load() == 1
+				<-connectionCtx.Done()
+				if first {
+					close(firstCanceled)
+				}
+			},
+		}, func(context.Context, orderMessage) {})
+	}()
+	expectSignal(t, firstRecovered)
+	expectSignal(t, firstCanceled)
+	expectSignal(t, secondStarted)
+	if !feed.connected.Load() || feed.recoveryReady.Load() {
+		t.Fatalf("new connection readiness = connected %v, recovered %v", feed.connected.Load(), feed.recoveryReady.Load())
+	}
+	close(releaseSecond)
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("run error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("feed did not stop")
+	}
+	if feed.connected.Load() || feed.recoveryReady.Load() {
+		t.Fatal("closed connection retained readiness")
+	}
+}
+
+func TestOrderFeedHeartbeatsRenewReadBudget(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		kind       int
+		ping, pong string
+	}{
+		{name: "plain", kind: websocket.TextMessage, ping: "ping", pong: "pong"},
+		{name: "json", kind: websocket.TextMessage, ping: `{"event":"ping"}`, pong: `{"event":"pong"}`},
+		{name: "control", kind: websocket.PingMessage, ping: "heartbeat", pong: "heartbeat"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			upgrader := websocket.Upgrader{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := upgrader.Upgrade(w, r, nil)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				defer conn.Close()
+				pongs := make(chan string, 4)
+				conn.SetPongHandler(func(data string) error { pongs <- data; return nil })
+				readerDone := make(chan struct{})
+				go func() {
+					defer close(readerDone)
+					for {
+						_, body, err := conn.ReadMessage()
+						if err != nil {
+							return
+						}
+						pongs <- string(body)
+					}
+				}()
+				defer func() { _ = conn.Close(); <-readerDone }()
+				// Four heartbeats span longer than the initial read budget. Every pong must echo
+				// its protocol's payload, and no heartbeat may enter the order handler.
+				ticker := time.NewTicker(75 * time.Millisecond)
+				defer ticker.Stop()
+				for range 4 {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+					}
+					var writeErr error
+					if tc.kind == websocket.PingMessage {
+						writeErr = conn.WriteControl(tc.kind, []byte(tc.ping), time.Now().Add(time.Second))
+					} else {
+						writeErr = conn.WriteMessage(tc.kind, []byte(tc.ping))
+					}
+					if writeErr != nil {
+						t.Error(writeErr)
+						return
+					}
+					select {
+					case pong := <-pongs:
+						if pong != tc.pong {
+							t.Errorf("pong = %q, want %q", pong, tc.pong)
+							return
+						}
+					case <-ctx.Done():
+						return
+					}
+				}
+				if err := conn.WriteMessage(websocket.TextMessage, []byte(`{"event":"`+orderSubmitEvent+`","data":{}}`)); err != nil {
+					t.Error(err)
+				}
+				<-ctx.Done()
+			}))
+			defer server.Close()
+			feed := newOrderFeed(OrderServerConfig{WSURL: "ws" + strings.TrimPrefix(server.URL, "http"), WSReadTimeout: 200 * time.Millisecond, WSWriteTimeout: time.Second}, "")
+			handled := false
+			_, _ = feed.watchOnce(ctx, orderFeedConnectionHooks{}, func(context.Context, orderMessage) { handled = true; cancel() })
+			if !handled {
+				t.Fatal("healthy heartbeats did not preserve the order feed")
+			}
+		})
+	}
+}
 
 func TestOrderFeedDisconnectLogLevel(t *testing.T) {
 	for _, tc := range []struct {
@@ -75,7 +228,7 @@ func TestOrderFeedDisconnectLogLevel(t *testing.T) {
 					cancel()
 				}
 			}, funcr.Options{})
-			feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
+			feed := newTestOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
 			_ = feed.run(observability.WithLogger(ctx, log), orderFeedConnectionHooks{beforeRead: func(connectionCtx context.Context) {
 				if tc.ready {
 					feed.markRecoveryReady(connectionCtx)
@@ -127,7 +280,7 @@ func TestOrderFeedBackoffResetsOnlyAfterRecovery(t *testing.T) {
 			cancel()
 		}
 	}, funcr.Options{})
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
+	feed := newTestOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
 	attempts := 0
 	_ = feed.run(observability.WithLogger(ctx, log), orderFeedConnectionHooks{beforeRead: func(connectionCtx context.Context) {
 		attempts++
@@ -180,7 +333,7 @@ func TestWatchOnceReportsUnrecoveredConnection(t *testing.T) {
 	}))
 	defer server.Close()
 
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
+	feed := newTestOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
 	ready, err := feed.watchOnce(context.Background(), orderFeedConnectionHooks{}, func(context.Context, orderMessage) {})
 	if ready {
 		t.Fatal("connection closed before recovery completed")
@@ -208,7 +361,7 @@ func TestWatchOnceRunsConnectionWorkAlongsideEventsAndWaitsForIt(t *testing.T) {
 	}))
 	defer server.Close()
 
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
+	feed := newTestOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
 	workStarted := make(chan struct{})
 	workCanceled := make(chan struct{})
 	liveHandled := make(chan struct{})
@@ -263,7 +416,7 @@ func TestWatchOnceRunsConnectionStartHookBeforeFirstEvent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
+	feed := newTestOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
 	hookStarted := make(chan struct{})
 	releaseHook := make(chan struct{})
 	liveHandled := make(chan struct{})
@@ -309,7 +462,7 @@ func TestOrderFeedRunsConnectionWorkAfterReconnect(t *testing.T) {
 	}))
 	defer server.Close()
 
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
+	feed := newTestOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
 	started := make(chan struct{}, 2)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -348,7 +501,7 @@ func TestOrderFeedMetricsLifecycle(t *testing.T) {
 	}))
 	defer server.Close()
 
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
+	feed := newTestOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
 	metrics, err := newLIFIMetrics(prometheus.NewRegistry(), feed, "")
 	if err != nil {
 		t.Fatal(err)
