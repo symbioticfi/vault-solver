@@ -3700,7 +3700,86 @@
     "kind": "RowsLayout",
     "spec": {
       "rows": [
-        {
+      {
+        "kind": "RowsLayoutRow",
+        "spec": {
+          "title": "Standing quotes by pair",
+          "collapse": false,
+          "layout": {
+            "kind": "GridLayout",
+            "spec": {
+              "items": [
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 0,
+                    "width": 24,
+                    "height": 4,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-390"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 4,
+                    "width": 24,
+                    "height": 6,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-10"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 10,
+                    "width": 12,
+                    "height": 7,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-300"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 12,
+                    "y": 10,
+                    "width": 12,
+                    "height": 7,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-302"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 17,
+                    "width": 24,
+                    "height": 7,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-301"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Execution results",
@@ -3744,7 +3823,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Executed token amounts",
@@ -3768,7 +3847,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Activity over time",
@@ -3802,96 +3881,6 @@
             }
           }
         },
-        {
-          "kind": "RowsLayoutRow",
-          "spec": {
-            "title": "Advertised liquidity",
-            "collapse": false,
-            "layout": {
-              "kind": "GridLayout",
-              "spec": {
-                "items": [
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 0,
-                      "y": 0,
-                      "width": 24,
-                      "height": 7,
-                      "element": {"kind": "ElementReference", "name": "panel-10"}
-                    }
-                  }
-                ]
-              }
-            }
-          }
-        },
-      {
-        "kind": "RowsLayoutRow",
-        "spec": {
-          "title": "Quote pairs · awaiting solver rollout",
-          "collapse": true,
-          "layout": {
-            "kind": "GridLayout",
-            "spec": {
-              "items": [
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 0,
-                    "width": 24,
-                    "height": 4,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-390"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 4,
-                    "width": 12,
-                    "height": 8,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-300"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 12,
-                    "y": 4,
-                    "width": 12,
-                    "height": 8,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-302"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 12,
-                    "width": 24,
-                    "height": 7,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-301"
-                    }
-                  }
-                }
-              ]
-            }
-          }
-        }
-      },
       {
           "kind": "RowsLayoutRow",
           "spec": {
@@ -3916,7 +3905,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Orders at risk of missing execution",
@@ -3950,7 +3939,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Execution costs",
@@ -3974,7 +3963,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Demand and ability to accept orders",
@@ -4028,7 +4017,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Transaction outcome details",
@@ -4052,7 +4041,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Quote publication diagnostics",
@@ -4086,7 +4075,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Service and source diagnostics",
@@ -4120,7 +4109,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Cumulative counters and sampling limits",
@@ -4154,7 +4143,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Transaction outcomes and fees over time",
@@ -4188,7 +4177,7 @@
             }
           }
         }
-      ]
+    ]
     }
   },
   "links": [

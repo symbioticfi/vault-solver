@@ -3282,7 +3282,73 @@
     "kind": "RowsLayout",
     "spec": {
       "rows": [
-        {
+      {
+        "kind": "RowsLayoutRow",
+        "spec": {
+          "title": "Quote requests by token pair",
+          "collapse": false,
+          "layout": {
+            "kind": "GridLayout",
+            "spec": {
+              "items": [
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 0,
+                    "width": 24,
+                    "height": 4,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-390"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 4,
+                    "width": 24,
+                    "height": 6,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-300"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 10,
+                    "width": 24,
+                    "height": 6,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-304"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 16,
+                    "width": 24,
+                    "height": 8,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-301"
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Execution results",
@@ -3336,7 +3402,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Executed token amounts",
@@ -3360,7 +3426,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Activity over time",
@@ -3428,72 +3494,6 @@
             }
           }
         },
-        {
-        "kind": "RowsLayoutRow",
-        "spec": {
-          "title": "Quote pairs · awaiting solver rollout",
-          "collapse": true,
-          "layout": {
-            "kind": "GridLayout",
-            "spec": {
-              "items": [
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 0,
-                    "width": 24,
-                    "height": 4,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-390"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 4,
-                    "width": 24,
-                    "height": 7,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-300"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 11,
-                    "width": 12,
-                    "height": 8,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-301"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 12,
-                    "y": 11,
-                    "width": 12,
-                    "height": 8,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-304"
-                    }
-                  }
-                }
-              ]
-            }
-          }
-        }
-      },
       {
           "kind": "RowsLayoutRow",
           "spec": {
@@ -3518,7 +3518,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Execution costs",
@@ -3542,7 +3542,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Incoming demand · selected period",
@@ -3586,7 +3586,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Transaction outcome details",
@@ -3610,7 +3610,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Service and source diagnostics",
@@ -3644,7 +3644,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Quote API diagnostics",
@@ -3688,7 +3688,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Cumulative counters and sampling limits",
@@ -3722,7 +3722,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Quote amount diagnostics",
@@ -3746,7 +3746,7 @@
             }
           }
         },
-        {
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Transaction outcomes and fees over time",
@@ -3780,7 +3780,7 @@
             }
           }
         }
-      ]
+    ]
     }
   },
   "links": [
