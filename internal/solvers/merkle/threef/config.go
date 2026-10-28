@@ -20,22 +20,26 @@ const pollInterval = 15 * time.Second
 const operationTimeout = 30 * time.Second
 
 type config struct {
-	Mode      string             `yaml:"mode"`
-	StateDir  string             `yaml:"stateDir"`
-	Executor  string             `yaml:"executor"`
-	Curator   merklehost.Curator `yaml:"curator"`
-	URL       string             `yaml:"url"`
-	APIKeyEnv string             `yaml:"apiKeyEnv"`
-	Broker    string             `yaml:"broker"`
+	MaxEligibilityChecksPerTick int                `yaml:"maxEligibilityChecksPerTick"`
+	Mode                        string             `yaml:"mode"`
+	StateDir                    string             `yaml:"stateDir"`
+	Executor                    string             `yaml:"executor"`
+	Curator                     merklehost.Curator `yaml:"curator"`
+	URL                         string             `yaml:"url"`
+	APIKeyEnv                   string             `yaml:"apiKeyEnv"`
+	Broker                      string             `yaml:"broker"`
 }
 
 func (c config) apiConfig() apiConfig {
 	return apiConfig{URL: c.URL, APIKeyEnv: c.APIKeyEnv, Broker: common.HexToAddress(c.Broker)}
 }
 func parseConfig(node yaml.Node) (config, error) {
-	var cfg config
+	cfg := config{MaxEligibilityChecksPerTick: 256}
 	if err := solver.DecodeStrict(node, &cfg); err != nil {
 		return config{}, err
+	}
+	if cfg.MaxEligibilityChecksPerTick < 1 || cfg.MaxEligibilityChecksPerTick > 32*4096 {
+		return config{}, errors.New("threef-merkle maxEligibilityChecksPerTick must be in 1..131072")
 	}
 	cfg.Mode = parse.OrDefault(cfg.Mode, "simulate")
 	if cfg.Mode != "simulate" && cfg.Mode != "send" {

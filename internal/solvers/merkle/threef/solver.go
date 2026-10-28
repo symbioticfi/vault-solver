@@ -106,6 +106,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, err
 	}
 	bot := &offerBot{Client: api, Store: store, Send: cfg.Mode == "send"}
-	workflow := &offerWorkflow{planner: planner, strategy: strategy, api: api, bot: bot}
+	workflow := &offerWorkflow{planner: planner, strategy: strategy, api: api, bot: bot, maxChecks: cfg.MaxEligibilityChecksPerTick}
 	return &Solver{keeper: k, store: store, offers: workflow}, nil
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -344,6 +345,36 @@ func TestAPIRejectsOversizedInventory(t *testing.T) {
 			}
 			if err == nil {
 				t.Fatal("oversized inventory accepted")
+			}
+		})
+	}
+}
+
+func TestAuctionRateBasisUsesExactJSONBeforeFloatRounding(t *testing.T) {
+	for _, tc := range []struct {
+		basis               string
+		yield               int64
+		wantFits, wantError bool
+	}{
+		{"16777217", 16777217, true, false}, {"31536000.1", 1, false, true},
+		{"-1e-46", 1, false, true}, {"9223372036854775807", 1, true, false},
+		{"9223372036854775808", 1, false, true}, {"3.1536e7", 31536000, true, false},
+		{"0", 31536000, true, false}, {"null", 31536000, true, false},
+	} {
+		t.Run(tc.basis, func(t *testing.T) {
+			c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`[{"id":34,"requestId":"` + testAccount.Hex() + `","amountRequested":"31536000","status":"OPEN","maxRate":10000,"rateBasisSeconds":` + tc.basis + `,"exactRateBasisSeconds":"forged"}]`))
+			})
+			rows, err := c.Auctions(t.Context())
+			if err != nil || len(rows) != 1 {
+				t.Fatalf("auctions: %v", err)
+			}
+			m := testMarket()
+			m.MaxPrincipal, m.MinimumYield1e8 = big.NewInt(31536000), new(big.Int)
+			fits, err := fitsTerms(m, m.MaxPrincipal, big.NewInt(tc.yield), rows[0])
+			if fits != tc.wantFits || (err != nil) != tc.wantError {
+				t.Fatalf("fits=%v err=%v", fits, err)
 			}
 		})
 	}

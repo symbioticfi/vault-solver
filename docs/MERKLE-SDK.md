@@ -108,8 +108,21 @@ arrays through vault-solver's existing HTTP fallback and tracing transport. Safe
 aggregation and exact argument encoding come from the shared SDK implementation;
 full simulations preserve their caller and remain isolated eth_calls. Missing
 aggregate deployments and malformed batch responses fail without individual-call
-retries. This SDK host requires HTTP(S) read endpoints; ordinary solvers retain
-their existing WebSocket/IPC support.
+retries. A single WebSocket or IPC endpoint delegates batches to its existing
+go-ethereum read connection; the SDK still bounds members and validates decoded
+results. HTTP envelope validation and cross-endpoint failover apply to HTTP(S).
+
+Read batches retain null-receipt/header failover only when every such member is null and the whole
+response has valid matching IDs and no member errors. A nonnull receipt/header retains the entire
+primary response, including absent replacement attempts. Pending lookup arrays carry the same eRPC
+empty-retry opt-out as scalar lookups. Inspection preserves the SDK's 256-member/32-MiB envelope,
+independently of the smaller metrics prefix; malformed batches are never repaired by retries.
+
+`make test-merklesender-anvil` composes the real SDK state store and submission manager with the
+host Transport and shared txmanager on a local chain. It checks durable bytes before every original
+and replacement broadcast, restart ownership restoration, canonical receipt recovery, and durable
+acknowledgement before fence release. Storage failure prevents broadcast; failed acknowledgement
+retains the journal and reservation. CI runs it in the existing Foundry-equipped integration job.
 
 Read-dependent numeric values are resolved in one same-address code-override lens
 call. Authenticated Manage/Approve/Call instructions execute in order before later
@@ -129,3 +142,8 @@ use the immutable requirement and go.sum checksums through the public Go proxy.
 No GitHub token, private-module configuration or sibling checkout is required.
 If developing with a local `go.work`, set `GOWORK=off` to verify the pinned module.
 Docker excludes workspace files so images always use that dependency.
+
+SDK batches over a single WebSocket or IPC endpoint use the existing read RPC connection,
+with the SDK's member bounds, block pins and caller isolation. HTTP batches retain their
+strict HTTP envelope validation and read fallback policy. A local WebSocket regression
+checks member-error isolation and unchanged caller/block arguments.

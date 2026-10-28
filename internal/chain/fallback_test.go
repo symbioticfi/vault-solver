@@ -196,8 +196,8 @@ func TestFallbackTransport_PreservesNonAvailabilityResponses(t *testing.T) {
 			response: `{"jsonrpc":"2.0","id":7,"result":null,"error":{"code":-32000,"message":"not found"}}`,
 		},
 		{
-			name:     "batch request",
-			request:  `[{"jsonrpc":"2.0","id":7,"method":"eth_getBlockByNumber","params":[]}]`,
+			name:     "batch without availability-sensitive reads",
+			request:  `[{"jsonrpc":"2.0","id":7,"method":"eth_chainId","params":[]}]`,
 			response: `[{"jsonrpc":"2.0","id":7,"result":null}]`,
 		},
 		{

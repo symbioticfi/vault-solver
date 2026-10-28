@@ -11,6 +11,7 @@ solvers:
   - name: threef-merkle
     config:
       mode: simulate
+      maxEligibilityChecksPerTick: 256
       stateDir: /persistent/threef-merkle
       executor: "0x0000000000000000000000000000000000000010"
       curator:
@@ -24,8 +25,8 @@ The account is the maker. A dedicated, 3F-approved BF EOA and API key serve one
 curator/default account. The executor's account and caller are discovered together at a
 pinned block; its account must be the default maker and caller must match the shared signer. Mainnet is required.
 Mode defaults to `simulate`; switch to `send` to authorize offers and mint execution.
-One configuration selects exactly one executor and one BF/default account. The executor recipe admits 1..32 distinct guarded funding/underlying pairs; each group has disjoint request/principal/yield inputs and its own committed policy. The maximum-size fixture includes 32 canonical guards, 128 policy/claim grants, their hex data/masks, eight-hash proofs and the complete bundle envelope: 1,323,418 bytes within the fixed 2-MiB permission response limit. The actual complete permission bundle remains subject to that cap, including additional funding leaves. Direct Call/Approve steps and unconditional funding preparation are rejected so inactive groups cannot produce side effects. At least one group must have positive principal. All provider
-settings participate in recovery identity. Use one exclusive durable state directory
+One configuration selects exactly one executor and one BF/default account. The executor recipe admits 1..32 distinct guarded funding/underlying pairs; each group has disjoint request/principal/yield inputs and its own committed policy. The maximum-size fixture includes 32 canonical guards, 128 policy/claim grants, their hex data/masks, eight-hash proofs and the complete bundle envelope: 1,323,418 bytes within the fixed 2-MiB permission response limit. The actual complete permission bundle remains subject to that cap, including additional funding leaves. Direct Call/Approve steps are rejected. Every Manage gate, including additional committed funding leaves before or after a mint guard, must reference a recognized market principal input. Literal, Result, request, yield and unrelated input gates are rejected, including literal zero. Existing recipes using these gates must be updated to principal activation. This enforces activation by an inspected market; it does not infer which arbitrary funding leaf economically belongs to a pair. At least one group must have positive principal. Provider identity settings participate in recovery identity; the nonfinancial
+optional eligibility work cap does not, so changing that cap preserves recovery. Use one exclusive durable state directory
 and one process per curator BF. Do not also list this executor in `merkle.strategies`
 or share that BF/key with another independently allocating bot.
 
@@ -37,8 +38,14 @@ replacement before broadcast; the host drains the shared sender before closing s
 
 Polling and mint strategy cadence are 15 seconds, operations are bounded to 30 seconds,
 and the shared recipe cache holds the configured recipe within 16 MiB. Curator `url` and optional `apiKeyEnv` use the SDK's
-10-second/2-MiB limits. Financial amounts, account identity and manual inputs are
-not configuration fields.
+10-second/2-MiB limits. `maxEligibilityChecksPerTick` defaults to 256 and accepts 1..131072. It caps new
+native eligibility simulations for optional bids per tick, after existing live
+commitments have been maintained. A capped scan resumes at its next candidate on
+the following tick, so repeated rejection at the front cannot starve later
+requests. Candidates are ordered by auction ID and market order; the first
+executable offer in the current scan wins. A completed scan restarts from the
+oldest auction. The cursor is not persisted and resets on process restart.
+Financial amounts, account identity and manual inputs are not configuration fields.
 
 One-time setup follows the [3F onboarding guide](https://docs.3f.xyz/bridge-facilitator/onboarding):
 3F approves the dedicated BF EOA; that EOA generates its API key with a private
@@ -76,19 +83,33 @@ need a later withdrawal from another market or the adapter.
 Yield is the ceiling of principal times the policy's minimum divided by 1e8;
 this is the nonannual yield/principal ratio. The auction's exact decimal maximum
 rate bounds that offer, scaled by its `rateBasisSeconds` over a 365-day year when
-provided. Negative, fractional and overflowing periods are rejected. The policy
+provided. Both the rate and period use the original JSON numbers before generated float32
+decoding. Negative, fractional and overflowing periods are rejected; an omitted,
+null or zero period retains the legacy unscaled comparison. The policy
 floor is not annualized. One unsigned PUSH POST uses the BF as wire `maker`, omits
 `chainId`, `executionMode` and signatures, and sets `useCallback:false`. The API
 stores the account as maker. A five-minute offer expiration is independent of the
 post-acceptance mint lease. Unaccepted offers reserve their full principal;
 accepted mint windows reserve their pending principal. Manual UI cancellations
-suppress automatic replacement for that auction. Unaccepted commitments exceeding
+suppress automatic replacement for that auction. Unaccepted commitments within authenticated cancellation scope that exceed
 cash/budget or the bot's changed terms are cancelled before new offers are created.
+At zero remaining pair budget, the native check cannot attest an unjournaled UI
+request: the canonical `ThreeFPolicy.consume` requires positive principal and
+`AssetRateLimits.consume` rejects disabled or exhausted budgets. The bot therefore
+leaves those UI offers for explicit UI cancellation. It may still cancel its own
+journaled unaccepted intent, and it never cancels an accepted mint window. Zero
+budget always blocks automatic bids. A separate budget-independent membership
+interface or an explicit policy change is required to broaden UI cancellation;
+API asset metadata alone does not grant that authority.
 
 Each random nonce and immutable create intent is fsynced **before** the POST.
 After an uncertain response or restart, the bot reconciles the account/auction/nonce
-and exact terms against API inventory. Offer maintenance uses the same auction response as the pinned eligibility pass;
-it never fetches a second auction list during that pass. It never blindly retries an unsigned POST.
+and exact terms against API inventory. Maintenance and bidding share one authenticated
+offer inventory and one auction response. Eligibility considers live commitments
+and open/solvable candidates with the relevant funding token, not historical
+auctions. Positive and negative results are memoized per request/market at the
+current pin. A confirmed cancellation or creation ends the pass and discards its
+inventory. Historical auctions with live commitments still participate in maintenance. It never blindly retries an unsigned POST.
 An absent ambiguous intent remains blocked even after local expiration; investigate
 provider history before manually resolving it. Never delete state to clear a
 pending signed transaction. Simulation mode does not write the journal, submit
@@ -130,7 +151,8 @@ separate from live-provider approval, authenticated mainnet enrollment and minti
 
 All hand-written 3F Merkle logic lives in `internal/solvers/merkle/threef`:
 API transport/JSON admission, offer sizing and journal recovery, policy snapshots,
-canonical recipe inspection and the mint provider. One Run goroutine evaluates the guarded markets sequentially, ordered by their oldest eligible auction. One API client, planner, provider, exclusive store and submission sender serve one executor strategy. The SDK keeper owns mint progress. It admits no new offer work
+canonical recipe inspection and the mint provider. One Run goroutine evaluates guarded markets sequentially. Live commitment
+maintenance precedes the bounded rotating scan for optional bids. One API client, planner, provider, exclusive store and submission sender serve one executor strategy. The SDK keeper owns mint progress. It admits no new offer work
 while a signed recipe is pending. `internal/merklesender.OpenKeeper` shares only
 SDK store/sender startup and recovery with the generic recipe host. There is no
 optional 3F dispatch in `merkle` and no dependency on `bridgefacilitator` strategies.
@@ -139,5 +161,9 @@ Tests retain API wire/identity/bounds checks, ambiguous-POST restart recovery,
 reservations, cancellation, aggregate authorizations, lease expiry, guard mutation
 rejection and canonical receipt evidence. Dedicated startup tests cover mainnet,
 shared caller discovery, grouped recipes, cross-account rejection, reorgs, invalid accounts and failure before state creation. Cross-market tests retain live/ambiguous account intents and prevent another pair budget from cancelling a foreign UI offer.
+Regression tests also cover all Manage activation gates and before-guard funding,
+exact raw JSON rate periods, historical filtering, negative membership memoization,
+bounded scan rotation, maintenance before optional RPC failure and zero-budget
+cancellation ownership.
 Authenticated live-provider approval, enrollment and mainnet minting require
 separate validation; local fixtures do not establish them.

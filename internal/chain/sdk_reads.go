@@ -20,9 +20,13 @@ func (c *Client) BatchRead(ctx context.Context, requests []protocolio.ReadReques
 	return reader.BatchRead(ctx, requests)
 }
 
-func (c *Client) sdkBatchCall(ctx context.Context, batch []rpc.BatchElem) error {
+func (c *Client) sdkBatchCall(ctx context.Context, batch []rpc.BatchElem) (err error) {
 	if c.readHTTP == nil {
-		return errors.New("chain: SDK read batching requires HTTP(S) read endpoints")
+		// A single WebSocket/IPC endpoint uses the existing read connection. The SDK
+		// still bounds and separates members before this transport callback.
+		spanCtx, end := c.readCalls.start(ctx, "batch")
+		defer func() { end(err) }()
+		return c.Client.Client().BatchCallContext(spanCtx, batch)
 	}
 	return protocolio.CallHTTPBatch(ctx, c.readHTTP, c.readURL, batch)
 }

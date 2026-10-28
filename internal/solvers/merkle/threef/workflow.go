@@ -11,6 +11,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	"github.com/symbioticfi/vault-solver/api/threef"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
@@ -36,10 +37,12 @@ func (p *mintPlanning) Validate(ctx context.Context, plan keeper.Plan) error {
 }
 
 type offerWorkflow struct {
-	planner  *keeper.Planner
-	strategy keeper.Strategy
-	api      *apiClient
-	bot      *offerBot
+	planner   *keeper.Planner
+	strategy  keeper.Strategy
+	api       *apiClient
+	bot       *offerBot
+	maxChecks int
+	cursor    int
 }
 
 func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
@@ -73,37 +76,8 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	if len(auctions) > 4096 {
 		return errors.New("3f auction inventory exceeds 4096-row bound")
 	}
-	// Oldest auction ID wins across all pairs, independent of API or recipe ordering.
+	// Stable oldest-first order is resumed across bounded optional scans.
 	sort.SliceStable(auctions, func(i, j int) bool { return auctions[i].Id < auctions[j].Id })
-	observations := make([]observation, 0, len(markets))
-	memberships := make([]map[common.Address]bool, 0, len(markets))
-	for _, market := range markets {
-		observed, e := observe(ctx, p.Chain, pin, recipe, market)
-		if e != nil {
-			return e
-		}
-		membership := map[common.Address]bool{}
-		if observed.Budget.Sign() > 0 {
-			for _, auction := range auctions {
-				if !common.IsHexAddress(auction.RequestId) {
-					continue
-				}
-				request := common.HexToAddress(auction.RequestId)
-				if membership[request] {
-					continue
-				}
-				if eligibilityErr := eligible(ctx, p.Chain, pin, market, request, observed.MinimumYield); eligibilityErr != nil {
-					if errors.Is(eligibilityErr, errIneligible) {
-						continue
-					}
-					return eligibilityErr
-				}
-				membership[request] = true
-			}
-		}
-		observations = append(observations, observed)
-		memberships = append(memberships, membership)
-	}
 	// Every managed role participates, including the recipe's funding sources.
 	inspection, err := recipes.Inspect(recipe)
 	if err != nil {
@@ -119,29 +93,130 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	if err := recipes.ValidateSnapshot(ctx, p.Chain, snapshot, p.Caller); err != nil {
 		return err
 	}
-	order := make([]int, 0, len(markets))
-	seen := map[int]bool{}
+	return w.evaluate(ctx, p.Chain, pin, recipe, markets, auctions, func(ctx context.Context) error {
+		return recipes.ValidateSnapshot(ctx, p.Chain, snapshot, p.Caller)
+	})
+}
+
+// evaluate is owned by Run. Only the bounded optional scan cursor survives a
+// tick; every membership result, including rejection, belongs to this exact pin.
+func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin provider.Snapshot, recipe recipes.Recipe, markets []mintMarket, auctions []threef.AuctionDto, validate func(context.Context) error) error {
+	offers, err := w.bot.readOffers(ctx, pin.Account)
+	if err != nil {
+		return err
+	}
+	if len(offers) > 4096 || len(auctions) > 4096 {
+		return errors.New("3F offer inventory exceeds 4096-row bound")
+	}
+	byID, err := indexAuctions(auctions)
+	if err != nil {
+		return err
+	}
+	live, blocked, err := inventory(pin.Account, offers, byID)
+	if err != nil {
+		return err
+	}
+	observations := make([]observation, len(markets))
+	memberships := make([]map[common.Address]bool, len(markets))
+	check := func(i int, request common.Address) (bool, error) {
+		if result, known := memberships[i][request]; known {
+			return result, nil
+		}
+		err := eligible(ctx, chain, pin, markets[i], request, observations[i].MinimumYield)
+		if err != nil && !errors.Is(err, errIneligible) {
+			return false, err
+		}
+		memberships[i][request] = err == nil
+		return err == nil, nil
+	}
+	run := func(i int, create bool) (bool, error) {
+		if validate != nil {
+			if err := validate(ctx); err != nil {
+				return false, err
+			}
+		}
+		observed := observations[i]
+		market := offerMarket{ChainID: pin.ChainID.Uint64(), Account: pin.Account, Executor: pin.Executor, RecipeHash: pin.RecipeHash, Asset: observed.Market.Asset, UnderlyingAsset: observed.Market.UnderlyingAsset, Budget: observed.Budget, MinimumYield1e8: observed.MinimumYield, MaxPrincipal: observed.MaxPrincipal, AvailableCash: observed.AvailableCash, EligibleRequests: memberships[i]}
+		return w.bot.tickInventory(ctx, market, auctions, offers, create)
+	}
+	// Existing commitments are maintained before any optional new-bid simulation.
+	// A mutation invalidates the shared inventory and ends this pass immediately.
+	for i, market := range markets {
+		observed, err := observe(ctx, chain, pin, recipe, market)
+		if err != nil {
+			return err
+		}
+		observations[i] = observed
+		memberships[i] = make(map[common.Address]bool)
+		if observed.Budget.Sign() > 0 {
+			for _, offer := range live {
+				if offer.asset != market.Asset {
+					continue
+				}
+				if _, err := check(i, common.HexToAddress(offer.dto.RequestId)); err != nil {
+					return err
+				}
+			}
+		}
+		if changed, err := run(i, false); err != nil || changed {
+			return err
+		}
+	}
+	type candidate struct {
+		market  int
+		request common.Address
+	}
+	candidates := make([]candidate, 0)
+	queued := make([]map[common.Address]bool, len(markets))
+	for i := range queued {
+		queued[i] = make(map[common.Address]bool)
+	}
 	for _, auction := range auctions {
 		if !strings.EqualFold(auction.Status, "OPEN") && !strings.EqualFold(auction.Status, "SOLVABLE") {
 			continue
 		}
-		for i, membership := range memberships {
-			if membership[common.HexToAddress(auction.RequestId)] && !seen[i] {
-				order = append(order, i)
-				seen[i] = true
+		id, _ := dtoID(auction.Id)
+		if blocked[id] {
+			continue
+		}
+		asset, err := depositAsset(auction)
+		if err != nil {
+			return err
+		}
+		for i, observed := range observations {
+			request := common.HexToAddress(auction.RequestId)
+			if observed.Budget.Sign() > 0 && observed.AvailableCash.Sign() > 0 && observed.Market.Asset == asset && !queued[i][request] {
+				queued[i][request] = true
+				candidates = append(candidates, candidate{i, request})
 			}
 		}
 	}
-	for i := range markets {
-		if !seen[i] {
-			order = append(order, i)
-		}
+	if len(candidates) == 0 {
+		w.cursor = 0
+		return nil
 	}
-	for _, i := range order {
-		observed := observations[i]
-		if err := w.bot.Tick(ctx, offerMarket{ChainID: p.ChainID.Uint64(), Account: snapshot.Account, Executor: snapshot.Executor, RecipeHash: snapshot.RecipeHash, Asset: observed.Market.Asset, UnderlyingAsset: observed.Market.UnderlyingAsset, Budget: observed.Budget, MinimumYield1e8: observed.MinimumYield, MaxPrincipal: observed.MaxPrincipal, AvailableCash: observed.AvailableCash, EligibleRequests: memberships[i]}, auctions); err != nil {
+	start, checks := w.cursor%len(candidates), 0
+	for visited := 0; visited < len(candidates); visited++ {
+		index := (start + visited) % len(candidates)
+		selected := candidates[index]
+		if _, known := memberships[selected.market][selected.request]; !known {
+			if checks >= w.maxChecks {
+				return nil
+			}
+			checks++
+		}
+		accepted, err := check(selected.market, selected.request)
+		if err != nil {
 			return err
 		}
+		w.cursor = (index + 1) % len(candidates)
+		if accepted {
+			if changed, err := run(selected.market, true); err != nil || changed {
+				w.cursor = 0
+				return err
+			}
+		}
 	}
+	w.cursor = 0
 	return nil
 }

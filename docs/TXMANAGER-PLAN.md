@@ -505,6 +505,10 @@ returns decisions; it does not gain a signer, nonce manager or transaction-sendi
 
 ## 10. Verification and maintenance
 
+HTTP fallback attempts rebuild Authorization from each endpoint's own URL userinfo. They never inherit
+the primary's Basic credentials. URL redaction happens before stdout/Sentry in observability; transport
+errors retain their original identity for cancellation, nonce and RPC classification.
+
 Receipt tests cover independent RPC budgets, timer handling during blocked reads, new/old hashes,
 confirmation-time reorg recovery and teardown. Unit tests verify abandonment without a self-transfer,
 fresh business nonce reuse despite a pending count above it, mined-nonce advancement, unexpired hints on

@@ -245,3 +245,97 @@ func TestGroupedRecipeRejectsUngatedCalls(t *testing.T) {
 		})
 	}
 }
+
+// fundingManage adds a fully pinned, permissioned ERC20 funding action. Its
+// gate remains the only variable here; generic SDK decoding must accept it.
+func fundingManage(t *testing.T, r *recipes.Recipe, tree *recipes.Tree, gate *big.Int, before bool) {
+	t.Helper()
+	leaf := recipes.Leaf{Target: common.HexToAddress("0xf00d"), Value: new(big.Int), Data: tokenABI.PackApprove(common.HexToAddress("0xbeef"), big.NewInt(1)), Hash: common.HexToHash("0xf001")}
+	leaf.DataMask = make([]byte, len(leaf.Data))
+	tree.Leaves = append(tree.Leaves, leaf)
+	args := abi.Arguments{{Type: uintType}, {Type: instructionType("bytes32[]")}, {Type: instructionType("uint256[][]")}}
+	packed, err := args.Pack(gate, []common.Hash{leaf.Hash}, [][]*big.Int{{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := append([]byte{recipes.Manage}, packed...)
+	r.Steps = append(r.Steps, step)
+	if before {
+		// Swap the trailing guard rather than shifting numerical Result identities.
+		last := len(r.Steps) - 1
+		r.Steps[last], r.Steps[last-1] = r.Steps[last-1], r.Steps[last]
+	}
+	if _, err := recipes.Inspect(*r); err != nil {
+		t.Fatalf("funding fixture must decode: %v", err)
+	}
+}
+
+func TestEveryFundingManageRequiresRecognizedPrincipalGate(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		source uint8
+		input  uint64
+	}{
+		{"literal true", recipes.Literal, 1}, {"literal zero", recipes.Literal, 0},
+		{"result", recipes.Result, 0}, {"request", recipes.Input, 0},
+		{"yield", recipes.Input, 2}, {"unrecognized", recipes.Input, 100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			snapshot, recipe, tree := groupedFixture(t)
+			if tc.source == recipes.Result {
+				for i, step := range recipe.Steps {
+					if step[0] <= recipes.MulDiv {
+						tc.input = uint64(i)
+						break
+					}
+				}
+			}
+			fundingManage(t, &recipe, tree, encodedValue(tc.source, tc.input), false)
+			if _, err := inspect(snapshot, recipe, tree); err == nil || !strings.Contains(err.Error(), "principal input") {
+				t.Fatalf("funding gate accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestFundingManageAcceptsEveryPrincipalBeforeOrAfterGuards(t *testing.T) {
+	for _, count := range []int{1, 2, 32} {
+		for _, before := range []bool{false, true} {
+			t.Run(fmt.Sprintf("groups%d/before%v", count, before), func(t *testing.T) {
+				snapshot, recipe, tree := groupsFixture(t, count)
+				for i := 0; i < count; i++ {
+					fundingManage(t, &recipe, tree, encodedValue(recipes.Input, uint64(3*i+1)), before)
+				}
+
+				markets, err := inspect(snapshot, recipe, tree)
+				if err != nil || len(markets) != count {
+					t.Fatalf("principal-gated funding rejected: %d %v", len(markets), err)
+				}
+			})
+		}
+	}
+}
+
+func TestProviderRejectsUnconditionalFundingBeforeExternalReads(t *testing.T) {
+	snapshot, recipe, tree := groupedFixture(t)
+	fundingManage(t, &recipe, tree, encodedValue(recipes.Literal, 1), true)
+	api := &fakeAPI{}
+	p := mintProvider{API: api, Chain: readFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
+		t.Fatal("invalid funding preceded chain reads")
+		return nil, nil
+	})}
+	if _, err := p.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil); err == nil || api.calls != 0 {
+		t.Fatalf("unconditional funding reached provider: calls=%d err=%v", api.calls, err)
+	}
+}
+
+func TestLegacyResultFundingRecipeRequiresPrincipalActivation(t *testing.T) {
+	snapshot, recipe, tree := fixture(t)
+	for _, pair := range [][2]int{{6, 5}, {13, 12}} {
+		gate := encodedValue(recipes.Result, uint64(pair[1]))
+		copy(recipe.Steps[pair[0]][1:33], common.LeftPadBytes(gate.Bytes(), 32))
+	}
+	if _, err := inspect(snapshot, recipe, tree); err == nil || !strings.Contains(err.Error(), "principal input") {
+		t.Fatalf("legacy Result funding accepted: %v", err)
+	}
+}

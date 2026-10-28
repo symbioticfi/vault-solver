@@ -183,6 +183,7 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	if err != nil {
 		return nil, err
 	}
+	observed := time.Now()
 	header, err := s.workflow.chain.HeaderByNumber(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -190,7 +191,7 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	if header == nil || header.Time > ^uint64(0)>>1 {
 		return nil, errors.New("invalid chain timestamp")
 	}
-	chainTime, observed := time.Unix(int64(header.Time), 0), time.Now()
+	chainTime := time.Unix(int64(header.Time), 0)
 	if order.Request.Deadline.Cmp(new(big.Int).SetUint64(header.Time)) <= 0 {
 		return nil, errors.New("order expired")
 	}
@@ -201,11 +202,13 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 		}
 		id, err := hexutil.Decode(item.DiscountID)
 		if err != nil || len(id) != 32 {
-			return nil, errors.New("invalid connector discountId")
+			observability.Log(ctx).V(1).Info("connector route unavailable", "connector", venue.Hex(), "reason", "invalid connector discountId")
+			continue
 		}
 		maximum, ok := new(big.Int).SetString(item.MaxAssets, 10)
 		if !ok || maximum.Sign() < 0 || maximum.BitLen() > 256 {
-			return nil, errors.New("invalid connector maxAssets")
+			observability.Log(ctx).V(1).Info("connector route unavailable", "connector", venue.Hex(), "reason", "invalid connector maxAssets")
+			continue
 		}
 		data, until, err := s.workflow.build(ctx, order, signature, selectedRoute{venue, common.BytesToHash(id), maximum}, s.backend)
 		if err != nil {

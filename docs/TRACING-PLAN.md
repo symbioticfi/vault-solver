@@ -244,6 +244,11 @@ nothing else is stored in those structs.
 
 ### 3.6 Logs and Sentry
 
+One core decorator outside the stdout/Sentry tee applies the same URL redaction policy as traces to
+messages, bound/dynamic string fields and error display. Error wrapping preserves diagnostic interfaces.
+The original CheckedEntry performs per-sink level checks, sampling and write-error output; its Before
+hook sanitizes a copied field slice before writes. This boundary does not identify non-URL secrets.
+
 The base logger travels in the context. The rule: **log through `observability.Log(ctx)` wherever a
 context is in hand** — it reads the context's logger and stamps the current span's `trace_id` and
 `span_id` on it, falling back to the process logger `SetDefaultLogger` installed so no line is ever

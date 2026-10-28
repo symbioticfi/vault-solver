@@ -104,3 +104,36 @@ func TestConfigRequiresOneExecutorAndRejectsArray(t *testing.T) {
 		})
 	}
 }
+
+func TestEligibilityWorkBudgetConfiguration(t *testing.T) {
+	for _, value := range []string{"1", "256", "131072"} {
+		if _, err := parseConfig(configNode(t, validConfig+"maxEligibilityChecksPerTick: "+value+"\n")); err != nil {
+			t.Fatalf("valid work budget %s: %v", value, err)
+		}
+	}
+	for _, value := range []string{"-1", "0", "131073"} {
+		if _, err := parseConfig(configNode(t, validConfig+"maxEligibilityChecksPerTick: "+value+"\n")); err == nil {
+			t.Fatalf("invalid work budget %s accepted", value)
+		}
+	}
+}
+
+func TestEligibilitySchedulingDoesNotChangeRecoveryIdentity(t *testing.T) {
+	cfg, err := parseConfig(configNode(t, validConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	strategy := keeper.Config{Name: cfg.Executor, Executor: cfg.Executor, Account: common.HexToAddress("0x20").Hex(), Interval: pollInterval}
+	caller := common.HexToAddress("0x30")
+	original, err := strategyRevision(strategy, cfg, caller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, limit := range []int{1, 131072} {
+		cfg.MaxEligibilityChecksPerTick = limit
+		changed, err := strategyRevision(strategy, cfg, caller)
+		if err != nil || changed != original {
+			t.Fatalf("scheduling-only cap changed durable recovery identity: %v", err)
+		}
+	}
+}

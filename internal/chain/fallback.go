@@ -61,7 +61,7 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	method := request.boundedMethod
 	ctx, requestTrace := t.beginTrace(req.Context(), request)
 	nullFallback := len(t.endpoints) > 1 && request.nullFallback
-	pendingLookup := isPendingLookupMethod(request.rawMethod)
+	pendingLookup := request.pendingLookup
 	requestObservation := t.metrics.beginRequest(t.role, method)
 
 	var (
@@ -83,6 +83,12 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		attempt := req.Clone(attemptCtx)
 		attempt.URL = ep
 		attempt.Host = ep.Host
+		// net/http authenticates the primary before RoundTrip; every endpoint owns its credentials.
+		attempt.Header.Del("Authorization")
+		if ep.User != nil {
+			password, _ := ep.User.Password()
+			attempt.SetBasicAuth(ep.User.Username(), password)
+		}
 		observability.InjectTraceHeaders(attemptCtx, attempt.Header)
 		if pendingLookup {
 			attempt.Header.Set(erpcRetryEmptyHeader, "false")
@@ -96,7 +102,17 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		var inspectedOutcome *rpcOutcome
 		if err == nil && !unavailableHTTPStatus(resp.StatusCode) {
 			if nullFallback && i < len(t.endpoints)-1 && resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				unavailable, inspectedBody, inspectErr := hasNullRPCResult(resp, request.requestID)
+				unavailable, inspectedBody, inspectErr := inspectNullRPCResult(resp, request)
+				if inspectErr != nil && request.batch != nil {
+					_ = resp.Body.Close()
+					cancel()
+					outcome := classifyRPCFailure(inspectErr, ctx.Err())
+					t.metrics.observeAttempt(t.role, endpoint, method, outcome)
+					requestTrace.attempt(endpoint, outcome)
+					requestObservation.finish(outcome)
+					requestTrace.finish(outcome)
+					return nil, inspectErr
+				}
 				if inspectErr != nil || unavailable {
 					_ = resp.Body.Close()
 					cancel()
@@ -114,7 +130,11 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 						"method", request.rawMethod, "err", lastErr.Error())
 					continue
 				}
-				outcome := classifyRPCResponse(method, resp.StatusCode, inspectedBody, false, nil)
+				truncated := len(inspectedBody) > rpcResponseObservationLimit
+				if truncated {
+					inspectedBody = inspectedBody[:rpcResponseObservationLimit]
+				}
+				outcome := classifyRPCResponse(method, resp.StatusCode, inspectedBody, truncated, nil)
 				inspectedOutcome = &outcome
 			}
 			// Keep the attempt context alive until the rpc layer finishes reading the body. Metrics
@@ -162,8 +182,10 @@ type rpcRequestInfo struct {
 	boundedMethod string
 	rawMethod     string
 	// requestID is the trimmed raw JSON-RPC id, empty for batches and unparsable bodies.
-	requestID    string
-	nullFallback bool
+	requestID     string
+	nullFallback  bool
+	pendingLookup bool
+	batch         map[string]bool // exact request IDs mapped to receipt/header null sensitivity
 }
 
 func inspectRPCRequest(body []byte) rpcRequestInfo {
@@ -172,7 +194,7 @@ func inspectRPCRequest(body []byte) rpcRequestInfo {
 		return rpcRequestInfo{boundedMethod: "unknown"}
 	}
 	if trimmed[0] == '[' {
-		return rpcRequestInfo{boundedMethod: "batch"}
+		return inspectRPCBatch(trimmed)
 	}
 	var request struct {
 		JSONRPC string          `json:"jsonrpc"`
@@ -186,6 +208,7 @@ func inspectRPCRequest(body []byte) rpcRequestInfo {
 		boundedMethod: boundedRPCMethodName(request.Method),
 		rawMethod:     request.Method,
 		requestID:     string(bytes.TrimSpace(request.ID)),
+		pendingLookup: isPendingLookupMethod(request.Method),
 	}
 	if request.JSONRPC != jsonRPCVersion || len(request.ID) == 0 ||
 		bytes.Equal(bytes.TrimSpace(request.ID), []byte("null")) {

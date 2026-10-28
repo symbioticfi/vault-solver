@@ -22,7 +22,8 @@ const (
 	maxResponseBytes int64 = 2 << 20
 	requestTimeout         = 30 * time.Second
 	// exactMaxRateKey preserves the upstream decimal before the generated float32 conversion.
-	exactMaxRateKey = "exactMaxRate"
+	exactMaxRateKey   = "exactMaxRate"
+	exactRateBasisKey = "exactRateBasisSeconds"
 )
 
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -124,7 +125,7 @@ func (c *apiClient) Auctions(ctx context.Context) ([]threef.AuctionDto, error) {
 	if err != nil {
 		return nil, apiError(ctx, "list auctions", response)
 	}
-	// The generated response keeps a fresh copy of its body. Read the exact rate from that copy.
+	// The generated response keeps a fresh copy of its body. Read exact economic numbers from that copy.
 	var raw []map[string]json.RawMessage
 	if rows == nil || len(rows) > 4096 || response == nil || json.NewDecoder(response.Body).Decode(&raw) != nil || len(raw) != len(rows) {
 		return nil, errors.New("3f invalid auctions response")
@@ -142,19 +143,21 @@ func (c *apiClient) Auctions(ctx context.Context) ([]threef.AuctionDto, error) {
 		if rows[i].AdditionalProperties == nil {
 			rows[i].AdditionalProperties = make(map[string]any)
 		}
-		delete(rows[i].AdditionalProperties, exactMaxRateKey)
-		if value := raw[i]["maxRate"]; len(value) > 0 && string(value) != "null" {
-			var number any
-			d := json.NewDecoder(bytes.NewReader(value))
-			d.UseNumber()
-			if d.Decode(&number) != nil {
-				return nil, errors.New("3f invalid auction rate")
+		for field, key := range map[string]string{"maxRate": exactMaxRateKey, "rateBasisSeconds": exactRateBasisKey} {
+			delete(rows[i].AdditionalProperties, key)
+			if value := raw[i][field]; len(value) > 0 && string(value) != "null" {
+				var number any
+				d := json.NewDecoder(bytes.NewReader(value))
+				d.UseNumber()
+				if d.Decode(&number) != nil {
+					return nil, errors.Errorf("3f invalid auction %s", field)
+				}
+				n, ok := number.(json.Number)
+				if !ok {
+					return nil, errors.Errorf("3f invalid auction %s", field)
+				}
+				rows[i].AdditionalProperties[key] = string(n)
 			}
-			n, ok := number.(json.Number)
-			if !ok {
-				return nil, errors.New("3f invalid auction rate")
-			}
-			rows[i].AdditionalProperties[exactMaxRateKey] = string(n)
 		}
 	}
 	return rows, nil

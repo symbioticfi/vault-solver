@@ -25,3 +25,5 @@ typed bindings are generated from explicit operation documents.
 
 Custom GraphQL scalars are bound to strings at the generated boundary (`Address`, `MarketId`, `BigInt`,
 `HexString`). Solver-local adapters parse them into addresses, hashes, or integers after validation.
+`MorphoPositionsByMarket` takes an explicit chain filter and selects the returned market's chain ID;
+callers validate both chain and requested market membership before consuming borrower state.
