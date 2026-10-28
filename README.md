@@ -103,11 +103,13 @@ framing, and the complete outer fill must simulate successfully. Existing Curato
 templates with fixed 65-byte fields require compatible permissions for other lengths.
 It consumes awarded `/orders` and signed backend terms without aggregating adapter liquidity.
 Configuration allowlists connectors; the backend advertises the RecipeExecutor discovered from
-the unique current recipe for each connector and RWA. Both quote admission and filling authenticate
-that recipe at a pinned block and simulate its committed funding prefix with all effects rolled
-back, capped by the connector's remaining budget. Publish its unused funding-witness query as part
-of the original recipe before enabling quotes. Missing executors or invalid witnesses fail closed. Each recipe
-handles one asset and includes its issuer calls when redemption is required.
+the unique current recipe for each connector and RWA, together with its calculated funding
+capacity. The solver uses this capacity, the current connector policy budget and shared
+reservations for admission. Recipes stay in their original format: call data and Merkle proofs
+come from the existing curator permission-tree service. Filling authenticates that recipe and
+its permissions at a pinned block, then simulates the complete outer settlement transaction.
+Missing executors or invalid capacity fail closed. Each recipe handles one asset and includes
+its issuer calls when redemption is required.
 
 When `tokensToQuote: permissioned`, admitted inputs are never aggregated: the selected strategy must
 use one candidate route. Other scopes keep the existing multi-route behavior.

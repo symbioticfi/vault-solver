@@ -19,7 +19,6 @@ import (
 type reader struct {
 	ll            *liquidlane.Reader
 	chain         *chain.Client
-	rfqCaller     common.Address
 	chainID       int64
 	quoteAdapters map[common.Address]recoveryVault // assigned once before the quote server starts
 }

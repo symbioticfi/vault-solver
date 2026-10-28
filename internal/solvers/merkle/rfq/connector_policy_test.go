@@ -11,7 +11,6 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	erc20binding "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
-	"github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/bindings/erc4626"
 )
@@ -110,26 +109,14 @@ func connectorCommittedFunding(t *testing.T, leaf recipes.Leaf, account, recipie
 	approve.Proof = []common.Hash{leaf.Hash}
 	tree := &recipes.Tree{Root: root, ChainID: big.NewInt(1), Account: &account, Leaves: []recipes.Leaf{approve, leaf}}
 	recipe := connectorDeltaRecipe(t, leaf.Hash, account, recipient, asset, rwa, approve.Hash)
-	actions := []merkleaccount.IMerkleAccountAction{}
 	entries := []map[string]any{}
 	for _, l := range tree.Leaves {
-		proof := make([][32]byte, len(l.Proof))
 		text := []string{}
-		for i, h := range l.Proof {
-			proof[i] = h
+		for _, h := range l.Proof {
 			text = append(text, h.Hex())
 		}
-		actions = append(actions, merkleaccount.IMerkleAccountAction{Target: l.Target, Value: l.Value, Data: l.Data, DataMask: l.DataMask, Proof: proof})
 		entries = append(entries, map[string]any{"hash": l.Hash.Hex(), "target": l.Target.Hex(), "value": "0", "data": hexutil.Encode(l.Data), "dataMask": hexutil.Encode(l.DataMask), "proof": text})
 	}
-	encoded := merkleaccount.NewMerkleAccount().PackManage(actions)
-	marker := append(crypto.Keccak256([]byte("recipeFundingWitness((address,uint96,bytes,bytes,bytes32[])[])"))[:4], encoded[4:]...)
-	args := abi.Arguments{{Type: connectorDeltaType(t, "address")}, {Type: connectorDeltaType(t, "bytes")}, {Type: connectorDeltaType(t, "uint256[]")}, {Type: connectorDeltaType(t, "uint256")}}
-	query, err := args.Pack(vlt, marker, []*big.Int{}, new(big.Int))
-	if err != nil {
-		t.Fatal(err)
-	}
-	recipe.Queries = append(recipe.Queries, query)
 	raw, err := json.Marshal(map[string]any{"root": root.Hex(), "chainId": "1", "account": account.Hex(), "leaves": entries})
 	if err != nil {
 		t.Fatal(err)

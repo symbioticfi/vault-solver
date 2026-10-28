@@ -57,7 +57,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	log := deps.Log.WithName(Name)
 	st := newStore(time.Now)
 	rdr := newReader(deps.Chain, log, cfg.LiquidityLens)
-	rdr.rfqCaller = cfg.Executor
 	quoteStrategy, err := newStrategy(cfg.Strategy)
 	if err != nil {
 		return nil, err

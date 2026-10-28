@@ -10,7 +10,6 @@ import (
 
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
-	"github.com/symbioticfi/vault-solver/internal/liquidlane/recipecapacity"
 	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 )
 
@@ -18,7 +17,8 @@ const connectorDiscountPrecision int64 = 100_000_000
 
 // readConnectorCandidates reads the explicit backend connector catalog through its canonical
 // contract surface. Reactor delivers tokenIn during the atomic fill, so an empty connector
-// balance before the quote does not constrain admission. Capacity comes from its current per-asset recipe.
+// balance before the quote does not constrain admission. The backend derives recipe funding
+// capacity; this reader clips it by the current connector policy budget and shared reservations.
 func (r *reader) readConnectorCandidates(
 	ctx context.Context, inventory []solverInventory, tokenIn, tokenOut common.Address,
 	amountIn *big.Int, pending pendingReservations,
@@ -78,14 +78,14 @@ func (r *reader) readConnectorCandidates(
 		if err != nil || account == (common.Address{}) {
 			return nil, errors.New("invalid connector account")
 		}
-		capacityResult, err := recipecapacity.Read(ctx, r.chain, recipecapacity.Scope{ChainID: big.NewInt(r.chainID), Executor: item.RecipeExecutor, Account: account, Caller: r.rfqCaller, Connector: item.Adapter, RWA: tokenIn, FundingAsset: output, Block: block})
+		capacityData, err := call(item.Adapter, binding.PackRemainingAssets(tokenIn))
 		if err != nil {
-			return nil, errors.Errorf("connector recipe capacity: %w", err)
+			return nil, errors.Errorf("connector remainingAssets: %w", err)
 		}
-		if capacityResult.Snapshot.BlockHash != header.Hash() {
-			return nil, errors.New("connector recipe capacity reorganized")
+		capacity, err := binding.UnpackRemainingAssets(capacityData)
+		if err != nil {
+			return nil, errors.Errorf("connector remainingAssets decode: %w", err)
 		}
-		capacity := capacityResult.MaxAssets
 		minData, err := call(item.Adapter, binding.PackMinDiscount(tokenIn))
 		if err != nil {
 			return nil, errors.Errorf("connector minDiscount: %w", err)
@@ -125,8 +125,15 @@ func (r *reader) readConnectorCandidates(
 		if capacity.Cmp(item.MaxAssets) < 0 {
 			item.MaxAssets = capacity
 		}
-		item.BlockNumber = block.Uint64()
+		// Backend funding remains as old as its observation, even when policy was read now.
+		if item.BlockNumber > block.Uint64() {
+			item.BlockNumber = block.Uint64()
+		}
 		current = append(current, item)
+	}
+	canonical, err := r.chain.HeaderByNumber(ctx, block)
+	if err != nil || canonical == nil || canonical.Number == nil || canonical.Number.Cmp(block) != 0 || canonical.Hash() != header.Hash() {
+		return nil, errors.New("connector quote block reorganized")
 	}
 	var reservations liquidlane.CapacityReservations
 	if pending != nil {

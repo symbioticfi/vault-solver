@@ -54,7 +54,7 @@ func TestAnvilConnectorOuterFillCanonicalBoundaries(t *testing.T) {
 				f.protocolSignature[0] ^= 1
 			}
 			if name == "insufficient funding at simulation" {
-				// Capacity is observed at the committed block, then cash disappears before
+				// Backend capacity was advertised, then cash disappears before
 				// latest-state settlement simulation. The outer transaction must still fail.
 				f.reader.beforeOuter = func() { f.send(f.signer, tOut, "FixtureToken", "burn", f.account, big.NewInt(90)) }
 			}
@@ -447,12 +447,4 @@ func startOuterFillAnvil(t *testing.T) (*rpc.Client, *ethclient.Client) {
 	}
 	t.Fatal("anvil did not become ready")
 	return nil, nil
-}
-
-func (r *outerFillEVMReader) CallContractWithCode(ctx context.Context, msg ethereum.CallMsg, block *big.Int, code []byte) ([]byte, error) {
-	var result hexutil.Bytes
-	args := map[string]any{"from": msg.From, "to": msg.To, "data": hexutil.Bytes(msg.Data), "gas": hexutil.Uint64(msg.Gas)}
-	override := map[common.Address]any{*msg.To: map[string]any{"code": hexutil.Bytes(code)}}
-	err := r.Client.Client().CallContext(ctx, &result, "eth_call", args, hexutil.EncodeBig(block), override)
-	return result, err
 }

@@ -15,10 +15,10 @@ the connector's MerkleAccount.
 
 Configuration contains the backend URL, durable state directory, RFQ executor,
 curator service and an explicit allowlist of 1..256 connectors. Per-RWA executors and
-funding capacity come from committed recipes; no local executor map or source
+funding capacity are derived by the backend from committed recipes; no local executor map or source
 list is maintained. The backend supplies optional `recipeExecutor` inventory metadata; missing
-executors fail closed. Recipe discovery, capacity and connector identities are read at the
-same pinned block. A recipe that requires issuer redemption includes those calls for
+executors fail closed. For execution, the solver discovers the original recipe and current permissions at the
+same pinned block as connector identities and the remaining policy budget. A recipe that requires issuer redemption includes those calls for
 its asset. Duplicate connector addresses are rejected, including case variants.
 Polling is every three seconds;
 each iteration has a thirty-second context and fetches at most 100 open orders.
@@ -29,14 +29,12 @@ not compete for the same awarded orders.
 
 The signed order tuple supplies the entire input and sum of output payments.
 Matching advertised connectors are tried in address/discount-ID order, and one must
-cover the complete award using both its advertised capacity and pinned on-chain
-recipe funding result, clipped by `remainingAssets(token)`. The shared
-`internal/liquidlane/recipecapacity` helper authenticates the original recipe hash, active
-account root, witness proofs and executor roles before using the existing SDK code-override
-lens. It executes the exact prefix before the first payment Approve and appends a funding-asset
-balance read. Source preparation, gates and checks retain their original order, so sources
-sharing liquidity are never independently summed. The regular RFQ quote path repeats the
-same pinned derivation and subtracts shared account/asset reservations. No market pricing, splits or adapter/Merkle liquidity aggregation occurs.
+cover the complete award using the backend's advertised capacity, clipped by the current
+`remainingAssets(token)` policy budget. Capacity calculation belongs to the backend: it
+resolves the current permission tree and simulates the original recipe's funding prefix.
+The regular RFQ quote path consumes that capacity, applies the current policy budget and
+subtracts shared account/asset reservations. The solver does not reconstruct capacity or
+require extra recipe queries. No market pricing, splits or adapter/Merkle liquidity aggregation occurs.
 An upstream source must award compatible orders; this solver does not publish quotes.
 The wall-clock observation is sampled before the header RPC; its latency consumes the unsigned submission deadline, including
 when the chain clock is ahead of the host.
@@ -45,15 +43,8 @@ The SDK discovers the committed recipe and active root, authenticates the curato
 tree, verifies masks/proofs and roles, and checks the canonical snapshot around
 simulation. The host fills the matching connector swap's signed terms and supplies amountIn
 and awarded payment as Inputs 0 and 1. Recipe gates, additional actions and balance
-checks remain curator-owned. Capacity admission requires the payment Approve to use Input 1,
-the funding asset and connector spender, followed by the signed swap Manage gated by Input 0
-with amount Input 0 at byte 100 and selector/RWA fully pinned. Intervening numerical steps
-are permitted. An unused Query at the connector carries
-`recipeFundingWitness((address,uint96,bytes,bytes,bytes32[])[])` and unique Action preimages
-for every funding/payment/swap leaf. A Read of this marker, missing/stale/duplicate proofs,
-ambiguous markers or executor self-calls/queries under the override are rejected.
-The temporary probe uses Input 0 = 1 and Input 1 = maxUint256 where referenced, and does
-not execute the payment approval. The original recipe bytes remain unchanged in the actual fill.
+checks remain curator-owned. The recipe and permission publication formats are unchanged;
+call data and proofs come from the existing curator permission-tree service.
 `LLExecuting` retains acquired inventory when its redemption leaves are empty;
 otherwise its configured issuer calls execute before the complete outer fill succeeds.
 It simulates the complete outer RFQ fill from the EOA so Reactor funding, recipe
@@ -89,8 +80,8 @@ The RFQ bridge ABI comes from [RFQ PR 25](https://github.com/symbioticfi/rfq/pul
 commit `de6dbd617bf3c1e8b4120419cbe5800efae7d410`. Connector and RecipeExecutor use the unchanged canonical adapters contract surface.
 `make refresh-merkle-abi` projects only solver-used entries from canonical Foundry artifacts;
 `make bindings` regenerates typed helpers. Capacity requires no connector/executor contract
-extension or separate funding configuration. Publish the recipe's authenticated witness query
-before enabling these routes. Missing, stale or failing capacity does not fall back to account cash.
+extension, extra recipe metadata or separate funding configuration. Missing executors and
+invalid backend capacity fail closed; execution still requires the full outer settlement simulation.
 
 Tests cover signed award sizing, route capacity, unchanged recipe/permissions,
 complete outer simulation, revoked roles, reorgs, intent persistence, sequential

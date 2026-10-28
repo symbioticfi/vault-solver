@@ -15,7 +15,6 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
-	"github.com/symbioticfi/vault-solver/internal/liquidlane/recipecapacity"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
@@ -197,21 +196,31 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	capacity, err := recipecapacity.Read(ctx, w.chain, recipecapacity.Scope{ChainID: w.chainID, Executor: selected.Executor, Account: state.Account, Caller: w.caller, Connector: selected.Venue, RWA: order.Request.TokenIn, FundingAsset: state.Asset, Block: header.Number})
+	snapshot, recipe, err := recipes.DiscoverForAccount(ctx, w.chain, selected.Executor, state.Account, header.Number)
 	if err != nil {
-		return nil, time.Time{}, errors.Errorf("connector recipe capacity: %w", err)
+		return nil, time.Time{}, errors.Errorf("discover connector recipe: %w", err)
 	}
-	snapshot, recipe := capacity.Snapshot, capacity.Recipe
+	if snapshot.Caller != w.caller {
+		return nil, time.Time{}, errors.New("connector recipe caller mismatch")
+	}
 	if snapshot.BlockHash != header.Hash() {
 		return nil, time.Time{}, errors.New("connector bindings reorganized during recipe discovery")
 	}
-	if capacity.MaxAssets.Cmp(required) < 0 || selected.MaxAssets.Cmp(required) < 0 {
+	raw, err := w.chain.CallContract(ctx, ethereum.CallMsg{To: &selected.Venue, Data: connectorBinding.PackRemainingAssets(order.Request.TokenIn)}, header.Number)
+	if err != nil {
+		return nil, time.Time{}, errors.Errorf("connector remainingAssets: %w", err)
+	}
+	remaining, err := connectorBinding.UnpackRemainingAssets(raw)
+	if err != nil {
+		return nil, time.Time{}, errors.Errorf("connector remainingAssets decode: %w", err)
+	}
+	if remaining.Cmp(required) < 0 || selected.MaxAssets.Cmp(required) < 0 {
 		return nil, time.Time{}, errors.New("connector has insufficient capacity for the whole award")
 	}
 	if state.Asset != token {
 		return nil, time.Time{}, errors.New("connector outputAsset differs from awarded output")
 	}
-	raw, err := w.source.PermissionTree(ctx, w.chainID, snapshot)
+	raw, err = w.source.PermissionTree(ctx, w.chainID, snapshot)
 	if err != nil {
 		return nil, time.Time{}, errors.Errorf("connector permission tree: %w", err)
 	}

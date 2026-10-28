@@ -28,6 +28,9 @@ func TestConnectorBuildSimulatesCompleteAwardedOrder(t *testing.T) {
 	resolved.ProtocolSignature = "0x" + strings.Repeat("cd", 1)
 	fixture := connectorExecutionFixture(t, resolved)
 	w, chain, recipe, leaf := fixture.workflow, fixture.reader, fixture.recipe, fixture.leaf
+	if len(recipe.Queries) != 3 {
+		t.Fatal("recipe contains queries beyond the original balance checks")
+	}
 	order, selected, backend := connectorExecutionAward(w.caller)
 	backend.discount = resolved
 	calldata, until, err := w.build(t.Context(), order, []byte{0x91, 0x92}, selected, backend)
@@ -324,14 +327,6 @@ func connectorExecutionAward(caller common.Address) (executor.IReactorOrder, sel
 	}
 	selected := selectedRoute{Venue: vlt, Executor: common.HexToAddress("0x43"), DiscountID: *connectorDiscountID(), MaxAssets: big.NewInt(900)}
 	return order, selected, &fakeBackend{discount: connectorDiscountFixture()}
-}
-
-func (r *connectorExecutionReader) CallContractWithCode(_ context.Context, msg ethereum.CallMsg, block *big.Int, code []byte) ([]byte, error) {
-	if msg.To == nil || *msg.To != r.recipeExecutor || msg.From != r.recipeCaller || block == nil || block.Uint64() != 7 || len(code) == 0 {
-		return nil, errors.New("prefix override escaped pinned scope")
-	}
-	typ, _ := abi.NewType("uint256[]", "", nil)
-	return (abi.Arguments{{Type: typ}}).Pack([]*big.Int{big.NewInt(900)})
 }
 
 func TestConnectorBuildRequiresDiscoveredExecutor(t *testing.T) {
