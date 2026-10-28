@@ -227,9 +227,8 @@ func TestConfigKeepsMerkleSeparateFromAdapterSolver(t *testing.T) {
 stateDir: /persistent/rfq-merkle
 executor: "0x0000000000000000000000000000000000000010"
 curator: {url: https://curator.example/api/v1}
-recipeExecutors:
-  "0x0000000000000000000000000000000000000042":
-    "0x0000000000000000000000000000000000000001": "0x0000000000000000000000000000000000000043"
+connectors:
+ - "0x0000000000000000000000000000000000000042"
 `
 	for _, tc := range []struct {
 		name, text string

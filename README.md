@@ -101,7 +101,11 @@ They preserve backend signature bytes, including ERC-1271 wallet signatures.
 The committed permission must admit the supplied calldata length and signature
 framing, and the complete outer fill must simulate successfully. Existing Curator
 templates with fixed 65-byte fields require compatible permissions for other lengths.
-It consumes awarded `/orders` and signed backend terms without aggregating adapter liquidity. Its connector routing config maps each RWA asset to a dedicated RecipeExecutor. Each recipe handles one asset and includes its issuer calls when redemption is required. There is no shared custody executor or asset fallback.
+It consumes awarded `/orders` and signed backend terms without aggregating adapter liquidity.
+Configuration allowlists connectors; each connector supplies its per-RWA RecipeExecutor and
+funding capacity on-chain. Capacity runs the committed funding prefix with all effects rolled
+back. Publish its capacity witnesses and connector binding before enabling quotes. Each recipe
+handles one asset and includes its issuer calls when redemption is required.
 
 When `tokensToQuote: permissioned`, admitted inputs are never aggregated: the selected strategy must
 use one candidate route. Other scopes keep the existing multi-route behavior.

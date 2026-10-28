@@ -19,8 +19,6 @@ solvers:
       curator:
         url: https://curator.example.invalid/api/v1
         # apiKeyEnv: CURATOR_API_TOKEN
-      recipeExecutors:
-        "0x0000000000000000000000000000000000000042":
-          "0x0000000000000000000000000000000000000050": "0x0000000000000000000000000000000000000043"
-          "0x0000000000000000000000000000000000000051": "0x0000000000000000000000000000000000000044"
-        # LiquidLaneConnector -> RWA asset -> its dedicated RecipeExecutor
+      connectors:
+        - "0x0000000000000000000000000000000000000042"
+        # RecipeExecutor for each RWA is read from its connector on-chain.

@@ -8,7 +8,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
-	"github.com/symbioticfi/vault-solver/api/bindings/erc4626"
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
@@ -18,7 +17,7 @@ const connectorDiscountPrecision int64 = 100_000_000
 
 // readConnectorCandidates reads the explicit backend connector catalog through its canonical
 // contract surface. Reactor delivers tokenIn during the atomic fill, so an empty connector
-// balance before the quote does not constrain admission. Account cash is a conservative cap.
+// balance before the quote does not constrain admission. Capacity comes from its current per-asset recipe.
 func (r *reader) readConnectorCandidates(
 	ctx context.Context, inventory []solverInventory, tokenIn, tokenOut common.Address,
 	amountIn *big.Int, pending pendingReservations,
@@ -31,7 +30,7 @@ func (r *reader) readConnectorCandidates(
 		return nil, errors.Errorf("connector quote block: %w", err)
 	}
 	block := header.Number
-	binding, token := connector.NewLiquidLaneConnector(), erc4626.NewIERC4626()
+	binding := connector.NewLiquidLaneConnector()
 	call := func(address common.Address, data []byte) ([]byte, error) {
 		return r.chain.CallContract(ctx, ethereum.CallMsg{To: &address, Data: data}, block)
 	}
@@ -75,21 +74,13 @@ func (r *reader) readConnectorCandidates(
 		if err != nil || account == (common.Address{}) {
 			return nil, errors.New("invalid connector account")
 		}
-		remainingData, err := call(item.Adapter, binding.PackRemainingAssets(tokenIn))
+		capacityData, err := call(item.Adapter, binding.PackGetMaxAssets(tokenIn))
 		if err != nil {
-			return nil, errors.Errorf("connector remainingAssets: %w", err)
+			return nil, errors.Errorf("connector getMaxAssets: %w", err)
 		}
-		remaining, err := binding.UnpackRemainingAssets(remainingData)
+		capacity, err := binding.UnpackGetMaxAssets(capacityData)
 		if err != nil {
-			return nil, errors.Errorf("connector remainingAssets decode: %w", err)
-		}
-		cashData, err := call(output, token.PackBalanceOf(account))
-		if err != nil {
-			return nil, errors.Errorf("connector account cash: %w", err)
-		}
-		cash, err := token.UnpackBalanceOf(cashData)
-		if err != nil {
-			return nil, errors.Errorf("connector account cash decode: %w", err)
+			return nil, errors.Errorf("connector getMaxAssets decode: %w", err)
 		}
 		minData, err := call(item.Adapter, binding.PackMinDiscount(tokenIn))
 		if err != nil {
@@ -127,11 +118,8 @@ func (r *reader) readConnectorCandidates(
 		item.Vault = account
 		item.CapacityID = liquidlane.NewCapacityID(r.chainID, account, output)
 		item.Price = price
-		if remaining.Cmp(item.MaxAssets) < 0 {
-			item.MaxAssets = remaining
-		}
-		if cash.Cmp(item.MaxAssets) < 0 {
-			item.MaxAssets = cash
+		if capacity.Cmp(item.MaxAssets) < 0 {
+			item.MaxAssets = capacity
 		}
 		item.BlockNumber = block.Uint64()
 		current = append(current, item)

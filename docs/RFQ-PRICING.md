@@ -9,11 +9,11 @@ which preserves the native adapter solver's combined pricing and filling service
 The backend may offer an explicitly configured LiquidLane connector with
 `kind: "connector"` and `discountPrecision: "100000000"`. This requires a signed
 `discountId`. The pricing reader checks the canonical `LiquidLaneConnector` / `1`
-domain and current account, output asset, decimals, minimum discount, remaining
-budget, cash and `getAmountOut` at a pinned block. An empty connector input-token
+domain and current account, output asset, decimals, minimum discount, canonical
+`getMaxAssets` capacity and `getAmountOut` at a pinned block. An empty connector input-token
 balance is admissible because Reactor delivers that token in the atomic outer
-fill. Account cash admission is conservative and excludes potential additional
-recipe funding sources. Native adapter inventory keeps its existing read path
+fill. Funding follows the on-chain recipe rather than a separate source configuration.
+Native adapter inventory keeps its existing read path
 and ppm precision.
 
 Connector signed discount integers retain all digits. Exact candidates preserve
@@ -31,3 +31,9 @@ and DiscountSwap protocol signatures. A native Executor cannot act as the connec
 account. Configure the backend solver's `adapters` catalog to include the connector
 only for its capable Merkle filler, and run the associated default pricing service
 with `quoteOnly: true` so both services do not race to fill the same award.
+
+Merkle Liquid Lane routes read `getMaxAssets(tokenIn)` from the connector at the
+quote block. The connector combines its budget with the linked RWA recipe's
+rollback-only funding simulation. The pricing solver does not reconstruct funding
+from balances or configured source lists. Routes still share reservations by account
+and payment asset; a quoted capacity is not a reservation or a full-fill simulation.

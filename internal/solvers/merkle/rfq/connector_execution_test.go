@@ -117,12 +117,14 @@ func TestConnectorBuildRejectsUnauthorizedOrUnsettledExecution(t *testing.T) {
 		mutate func(*connectorWorkflow, *connectorExecutionReader)
 		want   string
 	}{
+		{"recipe binding absent", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.executor = common.Address{} }, "no recipe"},
 		{"connector account differs", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.account = common.HexToAddress("0x88") }, "account"},
 		{"recipe caller differs", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.recipeCaller = common.HexToAddress("0x88") }, "caller"},
 		{"permission role missing", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.allowed = false }, "role"},
 		{"outer fill reverts", func(_ *connectorWorkflow, r *connectorExecutionReader) {
 			r.outerErr = errors.New("Reactor output shortfall")
 		}, "simulat"},
+		{"binding snapshot changes before discovery", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.reorgBeforeDiscovery = true }, "reorganiz"},
 		{"snapshot changes during outer fill", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.reorgDuringFill = true }, "reorganiz"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -169,6 +171,7 @@ type connectorExecutionReader struct {
 	outerData                                           []byte
 	outerErr                                            error
 	reorgDuringFill                                     bool
+	reorgBeforeDiscovery                                bool
 }
 
 func (r *connectorExecutionReader) HeaderByNumber(_ context.Context, number *big.Int) (*types.Header, error) {
@@ -209,7 +212,11 @@ func (r *connectorExecutionReader) CallContract(ctx context.Context, msg ethereu
 		return nil, errors.New("metadata read escaped recipe snapshot")
 	}
 	if *msg.To == vlt {
-		return r.connectorReadFake.CallContract(ctx, msg, block)
+		result, err := r.connectorReadFake.CallContract(ctx, msg, block)
+		if r.reorgBeforeDiscovery && bytes.Equal(msg.Data[:4], connectorBinding.PackGetMaxAssets(tIn)[:4]) {
+			r.header.Extra = []byte("new binding block")
+		}
+		return result, err
 	}
 	if *msg.To == r.recipeExecutor {
 		contractABI := recipeBinding.GetABI()
@@ -290,13 +297,13 @@ func connectorExecutionFixture(t *testing.T, resolved *discounts.Resolved) conne
 		t.Fatal(err)
 	}
 	reader := &connectorExecutionReader{
-		connectorReadFake: &connectorReadFake{remaining: big.NewInt(900), account: account},
+		connectorReadFake: &connectorReadFake{remaining: big.NewInt(900), account: account, executor: recipeExecutor},
 		recipeExecutor:    recipeExecutor, recipeAccount: account, recipeCaller: rfqExecutor, signer: signer,
 		recipeHash: hash, root: leaf.Hash, recipe: recipe,
 		header: &types.Header{Number: big.NewInt(7), Time: 7}, allowed: true,
 	}
 	workflow := &connectorWorkflow{
-		chain: reader, chainID: big.NewInt(1), executors: map[common.Address]map[common.Address]common.Address{vlt: {tIn: recipeExecutor}},
+		chain: reader, chainID: big.NewInt(1), connectors: map[common.Address]bool{vlt: true},
 		source: connectorExecutionPermissions{raw: permission, account: account, executor: recipeExecutor}, caller: rfqExecutor, signer: signer,
 	}
 	return connectorExecutionFixtureData{workflow, reader, recipe, leaf}

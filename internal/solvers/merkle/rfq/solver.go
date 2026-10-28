@@ -86,7 +86,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 			_ = store.Close()
 		}
 	}()
-	s := &Solver{store: store, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), executors: cfg.RecipeExecutors, source: source, caller: cfg.Executor, signer: deps.Signer.Address()}}
+	s := &Solver{store: store, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), connectors: cfg.Connectors, source: source, caller: cfg.Executor, signer: deps.Signer.Address()}}
 	s.sender, err = submission.New(deps.Chain, deps.Signer.Address(), deps.Chain.ChainID(), store, submission.Config{Confirmations: deps.TxManager.Confirmations()}, merklesender.Transport{Manager: deps.TxManager, Solver: Name, Deadline: func() time.Time { return s.intent.Deadline }}, deps.Log)
 	if err != nil {
 		return nil, err
@@ -196,7 +196,7 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	}
 	for _, item := range listed {
 		venue := common.HexToAddress(item.Adapter)
-		if _, ok := s.workflow.executors[venue]; !ok || common.HexToAddress(item.TokenToRedeem) != order.Request.TokenIn || common.HexToAddress(item.Collateral) != token {
+		if !s.workflow.connectors[venue] || common.HexToAddress(item.TokenToRedeem) != order.Request.TokenIn || common.HexToAddress(item.Collateral) != token {
 			continue
 		}
 		id, err := hexutil.Decode(item.DiscountID)

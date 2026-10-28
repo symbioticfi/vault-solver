@@ -32,8 +32,8 @@ type assembledConnector struct {
 }
 
 type connectorState struct {
-	Account, Asset common.Address
-	Remaining      *big.Int
+	Account, Asset, Executor common.Address
+	MaxAssets                *big.Int
 }
 
 // Signed terms are upstream-owned; only ABI framing and selected route identity are checked here.
@@ -163,14 +163,14 @@ type permissionSource interface {
 type connectorWorkflow struct {
 	chain          recipes.Reader
 	chainID        *big.Int
-	executors      map[common.Address]map[common.Address]common.Address
+	connectors     map[common.Address]bool
 	source         permissionSource
 	caller, signer common.Address
 }
 
 func (w *connectorWorkflow) state(ctx context.Context, venue, token common.Address, block *big.Int) (connectorState, error) {
 	var account, asset common.Address
-	var remaining *big.Int
+	var maximum *big.Int
 	call := func(data []byte) ([]byte, error) {
 		return w.chain.CallContract(ctx, ethereum.CallMsg{To: &venue, Data: data}, block)
 	}
@@ -190,15 +190,23 @@ func (w *connectorWorkflow) state(ctx context.Context, venue, token common.Addre
 	if err != nil || asset == (common.Address{}) {
 		return connectorState{}, errors.New("invalid connector outputAsset")
 	}
-	raw, err = call(connectorBinding.PackRemainingAssets(token))
+	raw, err = call(connectorBinding.PackRecipeExecutors(token))
 	if err != nil {
-		return connectorState{}, errors.Errorf("connector remainingAssets: %w", err)
+		return connectorState{}, errors.Errorf("connector recipeExecutors: %w", err)
 	}
-	remaining, err = connectorBinding.UnpackRemainingAssets(raw)
+	recipeExecutor, err := connectorBinding.UnpackRecipeExecutors(raw)
+	if err != nil || recipeExecutor == (common.Address{}) {
+		return connectorState{}, errors.New("connector has no recipe for asset")
+	}
+	raw, err = call(connectorBinding.PackGetMaxAssets(token))
 	if err != nil {
-		return connectorState{}, errors.Errorf("connector remainingAssets: %w", err)
+		return connectorState{}, errors.Errorf("connector getMaxAssets: %w", err)
 	}
-	return connectorState{account, asset, remaining}, nil
+	maximum, err = connectorBinding.UnpackGetMaxAssets(raw)
+	if err != nil {
+		return connectorState{}, errors.Errorf("connector getMaxAssets: %w", err)
+	}
+	return connectorState{Account: account, Asset: asset, Executor: recipeExecutor, MaxAssets: maximum}, nil
 }
 
 type selectedRoute struct {
@@ -216,27 +224,32 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	configured, ok := w.executors[selected.Venue]
-	recipeExecutor, admitted := configured[order.Request.TokenIn]
-	if !ok || !admitted || selected.DiscountID == (common.Hash{}) || selected.MaxAssets == nil || selected.MaxAssets.Sign() < 0 {
-		return nil, time.Time{}, errors.New("connector requires a configured executor and upstream discount")
+	if !w.connectors[selected.Venue] || selected.DiscountID == (common.Hash{}) || selected.MaxAssets == nil || selected.MaxAssets.Sign() < 0 {
+		return nil, time.Time{}, errors.New("connector requires configured routing and upstream discount")
 	}
-	snapshot, recipe, err := recipes.Discover(ctx, w.chain, recipeExecutor, nil)
+	header, err := w.chain.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return nil, time.Time{}, errors.Errorf("pin connector recipe: %w", err)
+	}
+	if header == nil || header.Number == nil {
+		return nil, time.Time{}, errors.New("missing connector recipe block")
+	}
+	state, err := w.state(ctx, selected.Venue, order.Request.TokenIn, header.Number)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	snapshot, recipe, err := recipes.DiscoverForAccount(ctx, w.chain, state.Executor, state.Account, header.Number)
 	if err != nil {
 		return nil, time.Time{}, errors.Errorf("discover connector recipe: %w", err)
+	}
+	if snapshot.BlockHash != header.Hash() {
+		return nil, time.Time{}, errors.New("connector bindings reorganized during recipe discovery")
 	}
 	if snapshot.Caller != w.caller {
 		return nil, time.Time{}, errors.New("RecipeExecutor caller differs from RFQ Executor")
 	}
-	state, err := w.state(ctx, selected.Venue, order.Request.TokenIn, new(big.Int).SetUint64(snapshot.BlockNumber))
-	if err != nil {
-		return nil, time.Time{}, err
-	}
-	if state.Remaining.Cmp(required) < 0 || selected.MaxAssets.Cmp(required) < 0 {
+	if state.MaxAssets.Cmp(required) < 0 || selected.MaxAssets.Cmp(required) < 0 {
 		return nil, time.Time{}, errors.New("connector has insufficient capacity for the whole award")
-	}
-	if state.Account != snapshot.Account {
-		return nil, time.Time{}, errors.New("connector account differs from RecipeExecutor account")
 	}
 	if state.Asset != token {
 		return nil, time.Time{}, errors.New("connector outputAsset differs from awarded output")

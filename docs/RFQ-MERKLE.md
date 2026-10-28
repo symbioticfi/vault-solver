@@ -9,15 +9,16 @@ from the backend discounts API, and builds:
 Use [the example config](../config/rfq-merkle.example.yaml). The EOA must be an
 authorized caller of the RFQ Executor. Each configured connector must be registered
 as version `2` in the Reactor's Liquid Lane adapter factory (version `1` is the
-native adapter). Its RecipeExecutor must name the RFQ Executor as caller
-and the connector's MerkleAccount as account.
+native adapter). Each RWA's on-chain `recipeExecutors(token)` binding must name a RecipeExecutor with
+the RFQ Executor as caller and the connector's MerkleAccount as account.
 
-Configuration contains only the backend URL, durable state directory, RFQ executor,
-curator service and 1..256 connector entries. Each entry maps 1..64 RWA assets
-to their dedicated RecipeExecutors. Every executor is unique across the configuration;
-there is no shared custody executor or asset fallback. A recipe that requires issuer
-redemption includes those calls for its asset. Duplicate connector and asset addresses
-are rejected, including case variants. Polling is every three seconds;
+Configuration contains the backend URL, durable state directory, RFQ executor,
+curator service and an explicit allowlist of 1..256 connectors. Per-RWA executors and
+funding capacity come from each connector on-chain; no local executor map or source
+list is maintained. Recipe discovery, capacity and connector bindings are read at the
+same pinned block. A recipe that requires issuer redemption includes those calls for
+its asset. Duplicate connector addresses are rejected, including case variants.
+Polling is every three seconds;
 each iteration has a thirty-second context and fetches at most 100 open orders.
 Curator HTTP limits are ten seconds and 2 MiB. Secret configuration contains
 environment variable names. This solver has no quote server or adapter inventory.
@@ -27,7 +28,9 @@ not compete for the same awarded orders.
 The signed order tuple supplies the entire input and sum of output payments.
 Matching advertised connectors are tried in address/discount-ID order, and one must
 cover the complete award using both its advertised capacity and pinned on-chain
-budget. No market pricing, splits or adapter/Merkle liquidity aggregation occurs.
+`getMaxAssets(token)` result. This getter caps the connector budget by a rollback-only
+execution of the committed recipe's funding prefix, including current permissions and
+sequential source liquidity. No market pricing, splits or adapter/Merkle liquidity aggregation occurs.
 An upstream source must award compatible orders; this solver does not publish quotes.
 
 The SDK discovers the committed recipe and active root, authenticates the curator
@@ -70,9 +73,11 @@ directory, and never run independent processes with the same signer.
 The RFQ bridge ABI comes from [RFQ PR 25](https://github.com/symbioticfi/rfq/pull/25),
 commit `de6dbd617bf3c1e8b4120419cbe5800efae7d410`. Connector and recipe semantics
 come from adapters commit `d506348870eb2d379ddae69407bc8b63422291d6`.
-`make refresh-merkle-abi` projects only solver-used entries from canonical Foundry
-artifacts; `make bindings` regenerates typed helpers. No runtime contract changes
-are required by this integration.
+The capacity and per-RWA binding surface is provided by the coordinated
+recipe-capacity contracts change. `make refresh-merkle-abi` projects only solver-used entries from canonical Foundry
+artifacts; `make bindings` regenerates typed helpers. Deploy the matching connector and RecipeExecutor versions and publish capacity
+witnesses before enabling these routes. Missing, stale or failing capacity does not
+fall back to account cash.
 
 Tests cover signed award sizing, route capacity, unchanged recipe/permissions,
 complete outer simulation, revoked roles, reorgs, intent persistence, sequential

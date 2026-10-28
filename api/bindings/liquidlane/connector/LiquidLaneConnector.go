@@ -43,7 +43,7 @@ type ILiquidLaneConnectorDiscountSwap struct {
 
 // LiquidLaneConnectorMetaData contains all meta data concerning the LiquidLaneConnector contract.
 var LiquidLaneConnectorMetaData = bind.MetaData{
-	ABI: "[{\"type\":\"function\",\"name\":\"account\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"eip712Domain\",\"inputs\":[],\"outputs\":[{\"name\":\"fields\",\"type\":\"bytes1\",\"internalType\":\"bytes1\"},{\"name\":\"name\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"version\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"chainId\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"verifyingContract\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"salt\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"extensions\",\"type\":\"uint256[]\",\"internalType\":\"uint256[]\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"getAmountOut\",\"inputs\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"minDiscount\",\"inputs\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"discount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"outputAsset\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"remainingAssets\",\"inputs\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"swap\",\"inputs\":[{\"name\":\"discountSwap\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneConnector.DiscountSwap\",\"components\":[{\"name\":\"discount\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneConnector.Discount\",\"components\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"discount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"signer\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"deadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"signerSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"protocolDeadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"}]",
+	ABI: "[{\"type\":\"function\",\"name\":\"account\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"eip712Domain\",\"inputs\":[],\"outputs\":[{\"name\":\"fields\",\"type\":\"bytes1\",\"internalType\":\"bytes1\"},{\"name\":\"name\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"version\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"chainId\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"verifyingContract\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"salt\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"extensions\",\"type\":\"uint256[]\",\"internalType\":\"uint256[]\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"getAmountOut\",\"inputs\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"getMaxAssets\",\"inputs\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"minDiscount\",\"inputs\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"discount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"outputAsset\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"recipeExecutors\",\"inputs\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"executor\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"swap\",\"inputs\":[{\"name\":\"discountSwap\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneConnector.DiscountSwap\",\"components\":[{\"name\":\"discount\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneConnector.Discount\",\"components\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"discount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"signer\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"deadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"signerSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"protocolDeadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"stateMutability\":\"nonpayable\"}]",
 	ID:  "LiquidLaneConnector",
 }
 
@@ -196,6 +196,41 @@ func (liquidLaneConnector *LiquidLaneConnector) UnpackGetAmountOut(data []byte) 
 	return out0, nil
 }
 
+// PackGetMaxAssets is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x22135549.  This method will panic if any
+// invalid/nil inputs are passed.
+//
+// Solidity: function getMaxAssets(address tokenToRedeem) returns(uint256)
+func (liquidLaneConnector *LiquidLaneConnector) PackGetMaxAssets(tokenToRedeem common.Address) []byte {
+	enc, err := liquidLaneConnector.abi.Pack("getMaxAssets", tokenToRedeem)
+	if err != nil {
+		panic(err)
+	}
+	return enc
+}
+
+// TryPackGetMaxAssets is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0x22135549.  This method will return an error
+// if any inputs are invalid/nil.
+//
+// Solidity: function getMaxAssets(address tokenToRedeem) returns(uint256)
+func (liquidLaneConnector *LiquidLaneConnector) TryPackGetMaxAssets(tokenToRedeem common.Address) ([]byte, error) {
+	return liquidLaneConnector.abi.Pack("getMaxAssets", tokenToRedeem)
+}
+
+// UnpackGetMaxAssets is the Go binding that unpacks the parameters returned
+// from invoking the contract method with ID 0x22135549.
+//
+// Solidity: function getMaxAssets(address tokenToRedeem) returns(uint256)
+func (liquidLaneConnector *LiquidLaneConnector) UnpackGetMaxAssets(data []byte) (*big.Int, error) {
+	out, err := liquidLaneConnector.abi.Unpack("getMaxAssets", data)
+	if err != nil {
+		return new(big.Int), err
+	}
+	out0 := abi.ConvertType(out[0], new(big.Int)).(*big.Int)
+	return out0, nil
+}
+
 // PackMinDiscount is the Go binding used to pack the parameters required for calling
 // the contract method with ID 0xd9104c14.  This method will panic if any
 // invalid/nil inputs are passed.
@@ -266,38 +301,38 @@ func (liquidLaneConnector *LiquidLaneConnector) UnpackOutputAsset(data []byte) (
 	return out0, nil
 }
 
-// PackRemainingAssets is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0xd91bbc69.  This method will panic if any
+// PackRecipeExecutors is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0xf73632aa.  This method will panic if any
 // invalid/nil inputs are passed.
 //
-// Solidity: function remainingAssets(address tokenToRedeem) view returns(uint256)
-func (liquidLaneConnector *LiquidLaneConnector) PackRemainingAssets(tokenToRedeem common.Address) []byte {
-	enc, err := liquidLaneConnector.abi.Pack("remainingAssets", tokenToRedeem)
+// Solidity: function recipeExecutors(address tokenToRedeem) view returns(address executor)
+func (liquidLaneConnector *LiquidLaneConnector) PackRecipeExecutors(tokenToRedeem common.Address) []byte {
+	enc, err := liquidLaneConnector.abi.Pack("recipeExecutors", tokenToRedeem)
 	if err != nil {
 		panic(err)
 	}
 	return enc
 }
 
-// TryPackRemainingAssets is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0xd91bbc69.  This method will return an error
+// TryPackRecipeExecutors is the Go binding used to pack the parameters required for calling
+// the contract method with ID 0xf73632aa.  This method will return an error
 // if any inputs are invalid/nil.
 //
-// Solidity: function remainingAssets(address tokenToRedeem) view returns(uint256)
-func (liquidLaneConnector *LiquidLaneConnector) TryPackRemainingAssets(tokenToRedeem common.Address) ([]byte, error) {
-	return liquidLaneConnector.abi.Pack("remainingAssets", tokenToRedeem)
+// Solidity: function recipeExecutors(address tokenToRedeem) view returns(address executor)
+func (liquidLaneConnector *LiquidLaneConnector) TryPackRecipeExecutors(tokenToRedeem common.Address) ([]byte, error) {
+	return liquidLaneConnector.abi.Pack("recipeExecutors", tokenToRedeem)
 }
 
-// UnpackRemainingAssets is the Go binding that unpacks the parameters returned
-// from invoking the contract method with ID 0xd91bbc69.
+// UnpackRecipeExecutors is the Go binding that unpacks the parameters returned
+// from invoking the contract method with ID 0xf73632aa.
 //
-// Solidity: function remainingAssets(address tokenToRedeem) view returns(uint256)
-func (liquidLaneConnector *LiquidLaneConnector) UnpackRemainingAssets(data []byte) (*big.Int, error) {
-	out, err := liquidLaneConnector.abi.Unpack("remainingAssets", data)
+// Solidity: function recipeExecutors(address tokenToRedeem) view returns(address executor)
+func (liquidLaneConnector *LiquidLaneConnector) UnpackRecipeExecutors(data []byte) (common.Address, error) {
+	out, err := liquidLaneConnector.abi.Unpack("recipeExecutors", data)
 	if err != nil {
-		return new(big.Int), err
+		return *new(common.Address), err
 	}
-	out0 := abi.ConvertType(out[0], new(big.Int)).(*big.Int)
+	out0 := *abi.ConvertType(out[0], new(common.Address)).(*common.Address)
 	return out0, nil
 }
 

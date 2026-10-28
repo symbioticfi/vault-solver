@@ -80,6 +80,7 @@ func TestAssembleConnectorRouteKeepsCommittedProgram(t *testing.T) {
 type connectorReadFake struct {
 	remaining *big.Int
 	account   common.Address
+	executor  common.Address
 }
 
 func (f *connectorReadFake) HeaderByNumber(context.Context, *big.Int) (*types.Header, error) {
@@ -99,7 +100,9 @@ func (f *connectorReadFake) CallContract(_ context.Context, m ethereum.CallMsg, 
 			return method.Outputs.Pack(f.account)
 		case "outputAsset":
 			return method.Outputs.Pack(tOut)
-		case "remainingAssets":
+		case "recipeExecutors":
+			return method.Outputs.Pack(f.executor)
+		case "getMaxAssets":
 			return method.Outputs.Pack(f.remaining)
 		}
 	}
