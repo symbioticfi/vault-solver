@@ -4090,7 +4090,7 @@
       "kind": "Panel",
       "spec": {
         "id": 300,
-        "title": "Quote request counts by pair · selected range",
+        "title": "Requests by pair · selected range",
         "description": "One final HTTP result per request; incoming is the sum of returned and rejected outcomes. Valid breakers excluded. Known addresses are bounded trusted startup/config identities; other is an unresolved valid/foreign-chain bucket, unknown is unparsed or malformed. These are not known token pairs. Namespace isolates environments; storage must deduplicate HA scrapes. New metrics have no backfill; increase needs multiple samples.",
         "links": [],
         "data": {
@@ -4187,9 +4187,9 @@
                     "renameByName": {
                       "token_in": "Input token",
                       "token_out": "Output token",
-                      "Value #A": "Incoming requests",
-                      "Value #B": "Returned quotes",
-                      "Value #C": "Rejected requests"
+                      "Value #A": "Processed",
+                      "Value #B": "Returned",
+                      "Value #C": "Rejected"
                     },
                     "indexByName": {}
                   }
@@ -4213,7 +4213,7 @@
               "defaults": {
                 "unit": "none",
                 "decimals": 0,
-                "noValue": "—"
+                "noValue": "No data"
               },
               "overrides": [
                 {
@@ -4229,14 +4229,22 @@
                           "type": "value",
                           "options": {
                             "other": {
-                              "text": "other (unregistered / other chain; aggregated)"
+                              "text": "other"
                             },
                             "unknown": {
-                              "text": "unknown (unparsed / invalid address; aggregated)"
+                              "text": "unknown"
                             }
                           }
                         }
                       ]
+                    },
+                    {
+                      "id": "unit",
+                      "value": "string"
+                    },
+                    {
+                      "id": "custom.width",
+                      "value": 360
                     }
                   ]
                 },
@@ -4253,14 +4261,22 @@
                           "type": "value",
                           "options": {
                             "other": {
-                              "text": "other (unregistered / other chain; aggregated)"
+                              "text": "other"
                             },
                             "unknown": {
-                              "text": "unknown (unparsed / invalid address; aggregated)"
+                              "text": "unknown"
                             }
                           }
                         }
                       ]
+                    },
+                    {
+                      "id": "unit",
+                      "value": "string"
+                    },
+                    {
+                      "id": "custom.width",
+                      "value": 360
                     }
                   ]
                 }
@@ -4569,14 +4585,54 @@
                           "type": "value",
                           "options": {
                             "other": {
-                              "text": "other (unregistered / other chain; aggregated)"
+                              "text": "other"
                             },
                             "unknown": {
-                              "text": "unknown (unparsed / invalid address; aggregated)"
+                              "text": "unknown"
                             }
                           }
                         }
                       ]
+                    },
+                    {
+                      "id": "unit",
+                      "value": "string"
+                    },
+                    {
+                      "id": "custom.width",
+                      "value": 360
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Input token"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "string"
+                    },
+                    {
+                      "id": "custom.width",
+                      "value": 360
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Output token"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "string"
+                    },
+                    {
+                      "id": "custom.width",
+                      "value": 360
                     }
                   ]
                 }
@@ -4590,7 +4646,7 @@
       "kind": "Panel",
       "spec": {
         "id": 304,
-        "title": "Rejected quote requests · pair and reason",
+        "title": "Rejections by pair and reason",
         "description": "Final HTTP refusals during the selected range, including protocol/chain/semantic/body errors. One request, one final reason; planner attempts are not requests. Known token labels come only from the frozen trusted startup registry (max 16). other aggregates valid addresses outside it or a different chain; unknown aggregates unparsed/malformed addresses. These buckets are not known pairs. Namespace isolates the environment; counters sum per-process increases and assume storage deduplicates HA scrapes. New metrics have no backfill; range increases need multiple scrapes and can miss the first nonzero sample. Metric reasons use snake_case. Missing required IDs are missing_ids; malformed RFQ IDs are invalid_ids.",
         "links": [],
         "data": {
@@ -4642,8 +4698,8 @@
                       "token_in": "Input token",
                       "token_out": "Output token",
                       "reason": "Reason",
-                      "Value": "Rejected requests",
-                      "Value #A": "Rejected requests"
+                      "Value": "Rejected",
+                      "Value #A": "Rejected"
                     },
                     "indexByName": {}
                   }
@@ -4664,7 +4720,7 @@
               "enablePagination": true,
               "sortBy": [
                 {
-                  "displayName": "Rejected requests",
+                  "displayName": "Rejected",
                   "desc": true
                 }
               ]
@@ -4673,7 +4729,7 @@
               "defaults": {
                 "unit": "none",
                 "decimals": 0,
-                "noValue": "—"
+                "noValue": "No data"
               },
               "overrides": [
                 {
@@ -4689,14 +4745,22 @@
                           "type": "value",
                           "options": {
                             "other": {
-                              "text": "other (unregistered / other chain; aggregated)"
+                              "text": "other"
                             },
                             "unknown": {
-                              "text": "unknown (unparsed / invalid address; aggregated)"
+                              "text": "unknown"
                             }
                           }
                         }
                       ]
+                    },
+                    {
+                      "id": "unit",
+                      "value": "string"
+                    },
+                    {
+                      "id": "custom.width",
+                      "value": 360
                     }
                   ]
                 },
@@ -4713,14 +4777,22 @@
                           "type": "value",
                           "options": {
                             "other": {
-                              "text": "other (unregistered / other chain; aggregated)"
+                              "text": "other"
                             },
                             "unknown": {
-                              "text": "unknown (unparsed / invalid address; aggregated)"
+                              "text": "unknown"
                             }
                           }
                         }
                       ]
+                    },
+                    {
+                      "id": "unit",
+                      "value": "string"
+                    },
+                    {
+                      "id": "custom.width",
+                      "value": 360
                     }
                   ]
                 },
@@ -4759,8 +4831,8 @@
       "kind": "Panel",
       "spec": {
         "id": 390,
-        "title": "Quote-pair metric availability",
-        "description": "Requires the matching solver metrics rollout; empty panels are not a verified zero.",
+        "title": "Quote statistics notes",
+        "description": "How to read the quote statistics and empty cells.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -4777,7 +4849,7 @@
           "spec": {
             "options": {
               "mode": "markdown",
-              "content": "### Awaiting solver rollout\n\nNew quote-pair metrics are not present in the datasource yet. Existing aggregate panels remain active. New pair history starts after the solver rollout; no backfill is available. `other` / `unknown` are unresolved buckets, not known token pairs.\n\nIncoming counts sum final returned/rejected HTTP results. A written quote does not imply an award or fill. Internal strategy attempts are excluded."
+              "content": "Processed = returned + rejected completed HTTP requests; returned does not mean filled. Internal strategy attempts are excluded. `other` / `unknown` are unresolved buckets, not known token pairs. Empty cells mean no samples for the selected range, not a verified zero."
             },
             "fieldConfig": {
               "defaults": {},
@@ -5066,20 +5138,7 @@
                     "x": 0,
                     "y": 0,
                     "width": 24,
-                    "height": 4,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-390"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 4,
-                    "width": 24,
-                    "height": 6,
+                    "height": 8,
                     "element": {
                       "kind": "ElementReference",
                       "name": "panel-300"
@@ -5090,9 +5149,9 @@
                   "kind": "GridLayoutItem",
                   "spec": {
                     "x": 0,
-                    "y": 10,
+                    "y": 8,
                     "width": 24,
-                    "height": 6,
+                    "height": 10,
                     "element": {
                       "kind": "ElementReference",
                       "name": "panel-304"
@@ -5103,12 +5162,25 @@
                   "kind": "GridLayoutItem",
                   "spec": {
                     "x": 0,
-                    "y": 16,
+                    "y": 18,
                     "width": 24,
-                    "height": 8,
+                    "height": 7,
                     "element": {
                       "kind": "ElementReference",
                       "name": "panel-301"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 25,
+                    "width": 24,
+                    "height": 3,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-390"
                     }
                   }
                 }

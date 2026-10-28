@@ -3294,7 +3294,7 @@
       "kind": "Panel",
       "spec": {
         "id": 300,
-        "title": "Standing quotes and ranges by advertised pair",
+        "title": "Published quotes and ranges by pair",
         "description": "Current gauges from the last successful local reconciliation, summed across process-local records; not user request counts or globally deduplicated advertisements. Retired pairs disappear; remote TTL expiry can precede local refresh.",
         "links": [],
         "data": {
@@ -3532,7 +3532,7 @@
       "kind": "Panel",
       "spec": {
         "id": 302,
-        "title": "Standing quote rejections by pair and reason · selected range",
+        "title": "Local rejection attempts by pair and reason",
         "description": "Local failed build evaluations and failed publish/withdraw attempts, not upstream user requests or matched-order refusals. One event per pair per failed build evaluation, and per pair/action in a failed submission batch; retries count again. A failed submission may have been accepted remotely. Pair labels use fixed trusted startup routes; other is unresolved. Namespace isolates environments; storage must deduplicate HA scrapes. New metric has no backfill.",
         "links": [],
         "data": {
@@ -3584,8 +3584,8 @@
                       "token_in": "Input token",
                       "token_out": "Output token",
                       "reason": "Reason",
-                      "Value": "Count",
-                      "Value #A": "Count"
+                      "Value": "Attempts",
+                      "Value #A": "Attempts"
                     },
                     "indexByName": {}
                   }
@@ -3606,14 +3606,14 @@
               "enablePagination": false,
               "sortBy": [
                 {
-                  "displayName": "Count",
+                  "displayName": "Attempts",
                   "desc": true
                 }
               ]
             },
             "fieldConfig": {
               "defaults": {
-                "noValue": "—",
+                "noValue": "No data",
                 "mappings": [
                   {
                     "type": "special",
@@ -3638,7 +3638,7 @@
                 {
                   "matcher": {
                     "id": "byName",
-                    "options": "Count"
+                    "options": "Attempts"
                   },
                   "properties": [
                     {
@@ -3654,6 +3654,38 @@
                       "value": 0
                     }
                   ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Input token"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "string"
+                    },
+                    {
+                      "id": "custom.width",
+                      "value": 360
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "Output token"
+                  },
+                  "properties": [
+                    {
+                      "id": "unit",
+                      "value": "string"
+                    },
+                    {
+                      "id": "custom.width",
+                      "value": 360
+                    }
+                  ]
                 }
               ]
             }
@@ -3666,8 +3698,8 @@
       "kind": "Panel",
       "spec": {
         "id": 390,
-        "title": "Quote-pair metric availability",
-        "description": "Requires the matching solver metrics rollout; empty panels are not a verified zero.",
+        "title": "Quote statistics notes",
+        "description": "How to read the quote statistics and empty cells.",
         "links": [],
         "data": {
           "kind": "QueryGroup",
@@ -3684,7 +3716,7 @@
           "spec": {
             "options": {
               "mode": "markdown",
-              "content": "### Awaiting solver rollout\n\nNew quote-pair metrics are not present in the datasource yet. Existing aggregate panels remain active. New pair history starts after the solver rollout; no backfill is available. `other` / `unknown` are unresolved buckets, not known token pairs.\n\nLI.FI publishes standing quotes. Rejections count our build evaluations and failed publish/withdraw attempts; retries count again. These are not upstream user quote requests. Capacity is a maximum, not additive liquidity."
+              "content": "Standing quotes/ranges show published state. Rejections are local evaluations or failed submissions; retries count again, not upstream user requests. Capacity is a maximum, not additive liquidity. `other` / `unknown` are unresolved buckets, not known token pairs. Empty cells mean no samples for the selected range, not a verified zero."
             },
             "fieldConfig": {
               "defaults": {},
@@ -3953,20 +3985,7 @@
                     "x": 0,
                     "y": 0,
                     "width": 24,
-                    "height": 4,
-                    "element": {
-                      "kind": "ElementReference",
-                      "name": "panel-390"
-                    }
-                  }
-                },
-                {
-                  "kind": "GridLayoutItem",
-                  "spec": {
-                    "x": 0,
-                    "y": 4,
-                    "width": 24,
-                    "height": 6,
+                    "height": 7,
                     "element": {
                       "kind": "ElementReference",
                       "name": "panel-10"
@@ -3977,9 +3996,9 @@
                   "kind": "GridLayoutItem",
                   "spec": {
                     "x": 0,
-                    "y": 10,
+                    "y": 7,
                     "width": 12,
-                    "height": 7,
+                    "height": 9,
                     "element": {
                       "kind": "ElementReference",
                       "name": "panel-300"
@@ -3990,9 +4009,9 @@
                   "kind": "GridLayoutItem",
                   "spec": {
                     "x": 12,
-                    "y": 10,
+                    "y": 7,
                     "width": 12,
-                    "height": 7,
+                    "height": 9,
                     "element": {
                       "kind": "ElementReference",
                       "name": "panel-302"
@@ -4003,12 +4022,25 @@
                   "kind": "GridLayoutItem",
                   "spec": {
                     "x": 0,
-                    "y": 17,
+                    "y": 16,
                     "width": 24,
                     "height": 7,
                     "element": {
                       "kind": "ElementReference",
                       "name": "panel-301"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 23,
+                    "width": 24,
+                    "height": 3,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-390"
                     }
                   }
                 }
