@@ -69,7 +69,7 @@ recipe input provider, and uses the shared curator permission source.
 The active root determines the requested permission artifact at
 `GET /merkle/{adapter}/{root}` under the configured curator API URL; the SDK checks
 the chain, adapter, account, root, leaf hashes and every proof before preparation. Financial amounts
-come from the recipe's read-dependent computation, bound directly as a result or
+come from the recipe's deterministic computation or fixed literal, bound directly or
 through an exact input equality. Bounds validate the chosen amount; they do not
 choose it. For example, a recipe can compute `min(balance, liquidity)` without
 embedding either actual amount. The SDK checks every lower bound and cap.

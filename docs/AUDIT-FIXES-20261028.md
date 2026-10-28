@@ -12,7 +12,7 @@ capacity work. They do not promote `stage` or change production configuration.
 | F01 | Fixed | HTTP fallback rebuilds Basic Authorization from each endpoint's own URL. Real HTTP client tests cover authenticated/unauthenticated primary and fallback combinations and immutable caller headers. |
 | F02 | Fixed | A shared zap core redacts URL userinfo, paths, queries and fragments before stdout and Sentry. Tests preserve diagnostics, bound fields, concurrent reuse, sampling, sink filtering and write error handling. This is URL redaction, not arbitrary secret detection. |
 | F03 | Fixed | SDK receipt/header batches retain whole-response evidence and use read fallbacks for ordinary all-null results. Pending batches disable eRPC empty-result retries. WebSocket/IPC batches use the existing geth connection. Batch body-read failures follow the ordinary transport fallback path, including truncated responses. |
-| F04 | Withdrawn | The added funding-gate data-flow proof is removed. Additional funding Manage steps follow the trusted curator-authored recipe. Canonical mint guard inspection and existing SDK permissions remain as in the PR base. |
+| F04 | Withdrawn | The added funding-gate data-flow proof is removed. Additional funding Manage steps follow the trusted curator-authored recipe. The later simplification also removes canonical mint guard comparison; SDK/contract permission validation remains. |
 | F05 | Fixed | UniswapX strategy context is bounded by the quote budget, caller and remaining snapshot lifetime. Final publication checks cancellation and wall/chain expiry, including equality. Handler regressions require HTTP 204 and decline accounting for expected timeout. |
 | F06 | Fixed; simplified | The HTTP boundary preserves exact JSON rateBasisSeconds before generated float32 conversion. Added decimal length/exponent caps and the required-exact-source rejection are removed; internal DTO callers retain their original fallback and numeric constraints. |
 | F07 | Withdrawn | The original RFQ-Merkle discount handling is restored, without skipping malformed backend entries to seek another route. |
@@ -26,7 +26,7 @@ capacity work. They do not promote `stage` or change production configuration.
 | F15 | Fixed | Default 3F schema refresh selects the development contract already selected by the drift registry, retaining the intentional `rateBasisSeconds` surface. |
 | F16 | Fixed | Offline `--check-coverage` exits nonzero for unregistered or missing schemas, and PR CI runs it with synthetic registration/refresh tests. Scheduled live drift monitoring remains separate. |
 | F17 | Fixed | Docker Dependabot selects `/deploy`, containing the image manifest. |
-| F18 | Fixed | Strategy documentation describes one executor with 1..32 guarded funding pairs, replacing the obsolete 1..256-executor model. |
+| F18 | Fixed | Strategy documentation describes one executor with recipe-defined funding pairs, replacing the obsolete 1..256-executor model. |
 | F19 | Test gap closed | Composed real SDK state store, submission manager, host Transport and shared txmanager execute against local Anvil. Tests assert signed persistence before original/replacement broadcast, restart fencing, canonical receipt, acknowledgement ordering, persistence failure and failed acknowledgement. No runtime corruption was asserted by the audit. |
 | F20 | Contract-boundary fixture added | Pinned canonical Reactor, Executor, RecipeExecutor, MerkleAccount and LiquidLaneConnector execute the complete outer RFQ fill. Real signatures and mined balance assertions cover success; invalid terms, corrupted discount/order signatures, insufficient latest-state funding and authorization must fail. Provenance, external fixture substitutions and regeneration are recorded in the fixture directory. This does not establish live deployment or issuer settlement. |
 | F21 | Investigation resolved; authority unchanged | At zero pair budget, the canonical positive-principal, budget-consuming membership check cannot attest an unjournaled UI offer. Such offers require explicit UI cancellation. Own journaled unaccepted intent remains cancellable; accepted mint windows remain immutable; automatic bids stay blocked. Tests and the runbook state this limit. Broader cancellation needs an explicit protocol/interface decision. |
@@ -88,3 +88,13 @@ are recorded here rather than silently marked fixed by F01–F21.
 
 Optional audit directions (new health metrics, LI.FI pending-capacity utilization
 and live Uniswap qualification) were not part of these finding fixes.
+
+## Curator-owned recipe simplification
+
+The solver extracts 3F market/Input identities without reconstructing the canonical
+guard or imposing mint/funding gates, group limits, mask policy or account-policy
+cross-checks. The guard reference is test data only. RFQ connector preparation fills
+signed swaps and award Inputs without proving balance-delta guards or requiring
+one particular gate/swap count. The SDK and contracts retain permission validation,
+complete simulation and journal recovery. The shared SDK also accepts explicitly
+fixed amounts and curator-supplied masked preimages without a provider ownership rule.

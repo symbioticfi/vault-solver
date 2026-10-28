@@ -87,20 +87,12 @@ func parseConnectorDiscount(r *discounts.Resolved, id common.Hash, venue, token 
 	return connectorTerms{out, sig, time.Unix(until, 0)}, nil
 }
 
-func assembleConnectorRoute(snapshot recipes.Snapshot, recipe recipes.Recipe, tree *recipes.Tree, venue, token, outputAsset, recipient common.Address, amountIn, amountOut *big.Int, signed connector.ILiquidLaneConnectorDiscountSwap, signature []byte) (assembledConnector, error) {
-	inspection, err := recipes.Inspect(recipe)
-	if err != nil {
-		return assembledConnector{}, err
-	}
-	if amountIn == nil || amountOut == nil || amountIn.Sign() <= 0 || amountOut.Sign() <= 0 || amountIn.BitLen() > 256 || amountOut.BitLen() > 256 {
-		return assembledConnector{}, errors.New("connector awarded amounts must be positive uint256")
-	}
+func assembleConnectorRoute(recipe recipes.Recipe, tree *recipes.Tree, venue, token, recipient common.Address, amountIn, amountOut *big.Int, signed connector.ILiquidLaneConnectorDiscountSwap, signature []byte) (assembledConnector, error) {
 	data, err := connectorBinding.TryPackSwap(signed, signature, recipient, amountIn)
 	if err != nil {
 		return assembledConnector{}, errors.Errorf("encode connector swap: %w", err)
 	}
 	actions := map[string]hexutil.Bytes{}
-	owned := map[string]bool{}
 	inputs := map[uint]string{0: amountIn.String(), 1: amountOut.String()}
 	managed, err := recipes.ManagedActions(recipe, tree)
 	if err != nil {
@@ -110,43 +102,13 @@ func assembleConnectorRoute(snapshot recipes.Snapshot, recipe recipes.Recipe, tr
 		if action.Leaf.Target != venue {
 			continue
 		}
-		if len(action.Leaf.Data) < 164 || !bytes.Equal(action.Leaf.Data[:4], data[:4]) {
-			return assembledConnector{}, errors.New("connector permission does not pin the signed swap and RWA")
+		if len(action.Leaf.Data) < 164 || !bytes.Equal(action.Leaf.Data[:4], data[:4]) || common.BytesToAddress(action.Leaf.Data[132:164]) != token {
+			continue
 		}
-		if err := action.Pinned(0, 4); err != nil {
-			return assembledConnector{}, err
-		}
-		if err := action.Pinned(132, 32); err != nil {
-			return assembledConnector{}, err
-		}
-		if len(owned) != 0 {
-			return assembledConnector{}, errors.New("connector recipe must contain one signed swap for one asset")
-		}
-		if common.BytesToAddress(action.Leaf.Data[132:164]) != token {
-			return assembledConnector{}, errors.New("connector recipe asset differs from award")
-		}
-		amount, err := action.Field(100)
-		if err != nil || amount.Source != recipes.Input || amount.Value.Sign() != 0 {
-			return assembledConnector{}, errors.New("connector swap must bind amountIn to input 0")
-		}
-		gate := action.Slot.Gate
-		if gate.Source != recipes.Input || gate.Value.Sign() != 0 {
-			return assembledConnector{}, errors.New("connector swap gate must equal its amount input")
-		}
-		if err := validateConnectorDeltas(recipe, action.Step, snapshot.Account, recipient, outputAsset, token); err != nil {
-			return assembledConnector{}, err
-		}
-		owned[action.Key] = true
 		actions[action.Key] = data
 	}
-	if len(owned) != 1 {
-		return assembledConnector{}, errors.New("connector recipe must contain one signed swap for one asset")
-	}
-	if len(inspection.Inputs) != 2 || inspection.Inputs[0] != 0 || inspection.Inputs[1] != 1 {
-		return assembledConnector{}, errors.New("connector recipe requires only amount input 0 and payment input 1")
-	}
-	if err := recipes.ValidateMutableActions(recipe, tree, owned); err != nil {
-		return assembledConnector{}, err
+	if len(actions) == 0 {
+		return assembledConnector{}, errors.New("connector swap action missing")
 	}
 
 	inner, leaves, err := recipes.Assemble(recipe, tree, inputs, actions, nil)
@@ -273,7 +235,7 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if err != nil {
 		return nil, time.Time{}, err
 	}
-	assembled, err := assembleConnectorRoute(snapshot, recipe, tree, selected.Venue, order.Request.TokenIn, token, w.caller, order.Request.AmountIn, required, terms.Swap, terms.Signature)
+	assembled, err := assembleConnectorRoute(recipe, tree, selected.Venue, order.Request.TokenIn, w.caller, order.Request.AmountIn, required, terms.Swap, terms.Signature)
 	if err != nil {
 		return nil, time.Time{}, errors.Errorf("assemble connector recipe: %w", err)
 	}

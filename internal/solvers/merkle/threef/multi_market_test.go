@@ -3,9 +3,7 @@ package threef
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"math/big"
-	"strings"
 	"testing"
 	"time"
 
@@ -30,7 +28,7 @@ func groupsFixture(t *testing.T, count int) (provider.Snapshot, recipes.Recipe, 
 	template := r.Steps[len(r.Steps)-1]
 	args := abi.Arguments{{Type: uintType}, {Type: instructionType("bytes32[]")}, {Type: instructionType("uint256[][]")}}
 	for index := 1; index < count; index++ {
-		market, err := inspectGuard(s.Account, tr.Leaves[0])
+		market, err := inspectGuard(tr.Leaves[0])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -83,46 +81,6 @@ broker: "0x0000000000000000000000000000000000000040"
 	}
 }
 
-func TestGroupedGuardRejectsAmbiguousPairsInputsAndGate(t *testing.T) {
-	for _, tc := range []struct {
-		name, want string
-		mutate     func(*recipes.Recipe, *recipes.Tree)
-	}{
-		{"duplicate pair", "duplicate guarded funding pair", func(_ *recipes.Recipe, tr *recipes.Tree) { tr.Leaves[1].Data = tr.Leaves[0].Data }},
-		{"aliased inputs", "inputs overlap", func(r *recipes.Recipe, _ *recipes.Tree) {
-			args := abi.Arguments{{Type: uintType}, {Type: instructionType("bytes32[]")}, {Type: instructionType("uint256[][]")}}
-			step := r.Steps[len(r.Steps)-1]
-			decoded, err := args.Unpack(step[1:])
-			if err != nil {
-				t.Fatal(err)
-			}
-			shift := big.NewInt(3)
-			gate := new(big.Int).Sub(decoded[0].(*big.Int), shift)
-			bindings := decoded[2].([][]*big.Int)
-			for i, b := range bindings[0] {
-				bindings[0][i] = new(big.Int).Sub(b, shift)
-			}
-			packed, err := args.Pack(gate, decoded[1], bindings)
-			if err != nil {
-				t.Fatal(err)
-			}
-			r.Steps[len(r.Steps)-1] = append([]byte{recipes.Manage}, packed...)
-		}},
-		{"ungated group", "input identities or gate", func(r *recipes.Recipe, _ *recipes.Tree) {
-			step := r.Steps[len(r.Steps)-1]
-			copy(step[1:33], common.LeftPadBytes(big.NewInt(1).Bytes(), 32))
-		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s, r, tr := groupedFixture(t)
-			tc.mutate(&r, tr)
-			if _, err := inspect(s, r, tr); err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("want %q, got %v", tc.want, err)
-			}
-		})
-	}
-}
-
 func TestMaximumGroupsFitCompletePermissionResponseAndInspection(t *testing.T) {
 	s, r, tr := groupsFixture(t, 32)
 	got, err := inspect(s, r, tr)
@@ -157,8 +115,8 @@ func TestMaximumGroupsFitCompletePermissionResponseAndInspection(t *testing.T) {
 	}
 	t.Logf("32 guards, 128 policy/claim grants, 160 eight-hash proofs and complete envelope: %d/%d bytes", len(response), permissions.HostMaxResponseBytes)
 	s, r, tr = groupsFixture(t, 33)
-	if _, err := inspect(s, r, tr); err == nil || !strings.Contains(err.Error(), "32-group bound") {
-		t.Fatal(fmt.Sprint("group overflow: ", err))
+	if _, err := inspect(s, r, tr); err != nil {
+		t.Fatalf("host added a group limit: %v", err)
 	}
 }
 
@@ -192,57 +150,6 @@ func TestGlobalLeaseSelectionZerosEveryInactiveMarket(t *testing.T) {
 	}
 	if out.Inputs[markets[0].RequestInput] != new(big.Int).SetBytes(first.Bytes()).String() {
 		t.Fatal("equal leases lost address tie break")
-	}
-}
-
-func TestGroupedProviderRejectsForeignSecondPolicyAccount(t *testing.T) {
-	s, r, tr := groupedFixture(t)
-	second, err := inspectGuard(s.Account, tr.Leaves[1])
-	if err != nil {
-		t.Fatal(err)
-	}
-	second.Policy = common.HexToAddress("0x9898")
-	tr.Leaves[1].Data, tr.Leaves[1].DataMask, err = referenceGuard(s.Account, second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Unix(1000, 0).Add(time.Hour).Format(time.RFC3339)
-	api := &fakeAPI{offers: []wire.OfferDto{{Maker: s.Account.Hex(), Status: "AWAITING_MINT", ExecutionMode: "PUSH", RequestId: common.HexToAddress("0x901").Hex(), MintDeadline: *wire.NewNullableString(&deadline)}}}
-	chain := marketReads(t, s, r, tr, func(_ context.Context, msg ethereum.CallMsg, _ *big.Int) ([]byte, error) {
-		if *msg.To == second.Policy {
-			return policySchema.Methods["account"].Outputs.Pack(common.HexToAddress("0xbad"))
-		}
-		t.Fatalf("unexpected chain read %s", msg.To)
-		return nil, nil
-	})
-	p := mintProvider{API: api, Chain: chain, Now: func() time.Time { return time.Unix(1000, 0) }}
-	if _, err := p.PrepareRecipe(t.Context(), s, r, tr, nil); err == nil || !strings.Contains(err.Error(), "policy belongs to another account") {
-		t.Fatalf("foreign second policy: %v", err)
-	}
-}
-
-func TestGroupedRecipeRejectsUngatedCalls(t *testing.T) {
-	call, err := callArgs.Pack(common.HexToAddress("0x456"), []byte{}, []*big.Int{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	args := abi.Arguments{{Type: uintType}, {Type: addressType}, {Type: addressType}, {Type: instructionType("bytes32")}}
-	approve, err := args.Pack(new(big.Int), common.HexToAddress("0x456"), common.HexToAddress("0x789"), common.Hash{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct {
-		opcode byte
-		data   []byte
-		want   string
-	}{{recipes.Call, call, "ungated call"}, {recipes.Approve, approve, "ungated approval"}} {
-		t.Run(tc.want, func(t *testing.T) {
-			s, r, tr := groupedFixture(t)
-			r.Steps = append(r.Steps, append([]byte{tc.opcode}, tc.data...))
-			if _, err := inspect(s, r, tr); err == nil || !strings.Contains(err.Error(), tc.want) {
-				t.Fatalf("inactive side effect accepted: %v", err)
-			}
-		})
 	}
 }
 
@@ -283,5 +190,43 @@ func TestCommittedFundingUsesRecipeGates(t *testing.T) {
 				t.Fatalf("committed funding gate rejected: %v", err)
 			}
 		})
+	}
+}
+
+func TestMarketsCanShareRequestInput(t *testing.T) {
+	snapshot, recipe, tree := groupedFixture(t)
+	args := abi.Arguments{{Type: uintType}, {Type: instructionType("bytes32[]")}, {Type: instructionType("uint256[][]")}}
+	last := len(recipe.Steps) - 1
+	values, err := args.Unpack(recipe.Steps[last][1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := values[2].([][]*big.Int)
+	for _, word := range bindings[0] {
+		// The second group's request was Input 3; share Input 0 instead.
+		var data [32]byte
+		word.FillBytes(data[:])
+		if new(big.Int).SetBytes(data[5:]).Cmp(big.NewInt(3)) == 0 {
+			word.Sub(word, big.NewInt(3))
+		}
+	}
+	packed, err := args.Pack(values[0], values[1], bindings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipe.Steps[last] = append([]byte{recipes.Manage}, packed...)
+	requirements, err := (&mintProvider{}).RecipeRequirements(snapshot, recipe, tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[uint]bool{}
+	for _, input := range requirements.Inputs {
+		if seen[input] {
+			t.Fatalf("duplicate provider ownership for input %d", input)
+		}
+		seen[input] = true
+	}
+	if len(seen) != 5 {
+		t.Fatalf("shared request requirements = %v", requirements.Inputs)
 	}
 }

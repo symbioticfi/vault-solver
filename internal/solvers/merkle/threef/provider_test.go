@@ -11,6 +11,7 @@ import (
 	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -60,50 +61,6 @@ func TestLatestAdaptersRecipe(t *testing.T) {
 	}
 	if len(markets) != 1 || markets[0].PrincipalInput != 1 || markets[0].YieldInput != 2 || markets[0].RequestInput != 0 {
 		t.Fatalf("latest adapters recipe has unexpected markets: %+v", markets)
-	}
-}
-
-func TestCanonicalGuardAndEverySecurityBoundary(t *testing.T) {
-	snapshot, recipe, tree := fixture(t)
-	markets, err := inspect(snapshot, recipe, tree)
-	if err != nil {
-		t.Fatal(err)
-	}
-	market := markets[0]
-	if market.PrincipalInput != 1 || market.YieldInput != 2 || market.RequestInput != 0 {
-		t.Fatalf("wrong derived input identities: %+v", market)
-	}
-	for name, mutate := range map[string]func(*provider.Snapshot, *recipes.Recipe, *recipes.Tree){
-		"custody": func(s *provider.Snapshot, _ *recipes.Recipe, _ *recipes.Tree) {
-			s.Account = common.HexToAddress("0x987")
-		},
-		"extra mask":       func(_ *provider.Snapshot, _ *recipes.Recipe, tr *recipes.Tree) { tr.Leaves[0].DataMask[0] = 255 },
-		"guard alteration": func(_ *provider.Snapshot, _ *recipes.Recipe, tr *recipes.Tree) { tr.Leaves[0].Data[4+32*4] ^= 1 },
-		"native value":     func(_ *provider.Snapshot, _ *recipes.Recipe, tr *recipes.Tree) { tr.Leaves[0].Value.SetInt64(1) },
-		"missing request binding": func(_ *provider.Snapshot, r *recipes.Recipe, _ *recipes.Tree) {
-			r.Steps[len(r.Steps)-1] = []byte{recipes.Manage}
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			s, r, tr := fixture(t)
-			mutate(&s, &r, tr)
-			if _, err := inspect(s, r, tr); err == nil {
-				t.Fatal("unsafe program accepted")
-			}
-		})
-	}
-	// Context substitution changes only the account, funding pair and policy pins.
-	other := mintMarket{Asset: common.HexToAddress("0x1234"), UnderlyingAsset: common.HexToAddress("0x5678"), Policy: common.HexToAddress("0x9abc")}
-	data, mask, err := referenceGuard(common.HexToAddress("0xcccc"), other)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leaf := recipes.Leaf{Data: data, DataMask: mask, Value: new(big.Int)}
-	if _, err := inspectGuard(common.HexToAddress("0xcccc"), leaf); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := inspectGuard(snapshot.Account, leaf); err == nil {
-		t.Fatal("guard from another account accepted")
 	}
 }
 
@@ -412,5 +369,49 @@ func TestObserveDerivesLiveCashBudgetAndCommittedCap(t *testing.T) {
 	malformed = true
 	if _, err := observe(t.Context(), chain, snapshot, recipe, market); err == nil {
 		t.Fatal("malformed required getter accepted")
+	}
+}
+
+func TestCuratorOwnsMintGuard(t *testing.T) {
+	snapshot, recipe, tree := fixture(t)
+	values, err := capabilitySchema.Methods["execute"].Inputs.Unpack(tree.Leaves[0].Data[4:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := values[1].([][]byte)
+	// An alternative comparison is still the curator's authorized program.
+	for _, step := range steps {
+		if step[0] == recipes.Equal {
+			step[0] = recipes.LessOrEqual
+			break
+		}
+	}
+	tree.Leaves[0].Data, err = capability.TryPackExecute(values[0].([][]byte), steps, values[2].([]*big.Int))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = inspect(snapshot, recipe, tree); err != nil {
+		t.Fatalf("curator-owned mint guard rejected: %v", err)
+	}
+}
+
+func TestCuratorOwnsAdditionalCallsAndApprovals(t *testing.T) {
+	for _, operation := range []byte{recipes.Call, recipes.Approve} {
+		snapshot, recipe, tree := fixture(t)
+		var payload []byte
+		var err error
+		if operation == recipes.Call {
+			payload, err = callArgs.Pack(snapshot.Account, []byte{}, []*big.Int{})
+		} else {
+			args := abi.Arguments{{Type: uintType}, {Type: addressType}, {Type: addressType}, {Type: instructionType("bytes32")}}
+			payload, err = args.Pack(big.NewInt(1), snapshot.Account, snapshot.Account, common.Hash{})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		recipe.Steps = append(recipe.Steps, append([]byte{operation}, payload...))
+		if _, err := inspect(snapshot, recipe, tree); err != nil {
+			t.Fatalf("curator action rejected: %v", err)
+		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"math/big"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -51,7 +52,11 @@ func (p *mintProvider) RecipeRequirements(snapshot provider.Snapshot, recipe rec
 	}
 	var inputs []uint
 	for _, market := range markets {
-		inputs = append(inputs, market.RequestInput, market.PrincipalInput, market.YieldInput)
+		for _, index := range []uint{market.RequestInput, market.PrincipalInput, market.YieldInput} {
+			if !slices.Contains(inputs, index) {
+				inputs = append(inputs, index)
+			}
+		}
 	}
 	return keeper.RecipeRequirements{Inputs: inputs}, nil
 }
@@ -124,7 +129,7 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 			return provider.Output{}, errors.New("3f read mintAuthorization failed")
 		}
 		auth, e := requestABI.UnpackMintAuthorization(raw)
-		if e != nil || len(raw) != 64 || auth.PtAmount == nil || auth.YtAmount == nil || auth.PtAmount.Sign() < 0 || auth.PtAmount.BitLen() > 128 || auth.YtAmount.Sign() < 0 || auth.YtAmount.BitLen() > 128 {
+		if e != nil {
 			return provider.Output{}, errors.New("3f invalid mintAuthorization")
 		}
 		if auth.PtAmount.Sign() == 0 {
