@@ -104,7 +104,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	feed := newOrderFeed(cfg.OrderServer.WSURL, apiKey)
+	feed := newOrderFeed(cfg.OrderServer, apiKey)
 	var metrics *lifiMetrics
 	if deps.Metrics != nil {
 		metrics, err = newLIFIMetrics(deps.Metrics.Registerer(), feed, cfg.Strategy.Name)

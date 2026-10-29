@@ -16,6 +16,13 @@ and transaction manager; their liquidity and scheduling are independent.
 `internal/merklehost.Curator` supplies their shared permission-service settings and
 redirect-rejecting HTTP transport; each solver keeps its transport timeout.
 
+The SDK reads the executor's `recipeHash` and `recipeBlock` at a pinned block,
+then retrieves `SetRecipe` only from that known publication block and executor.
+It verifies the original body against the current commitment and checks the
+canonical snapshot. It does not scan historical block ranges. Generic, RFQ and
+3F hosts use their existing shared chain reader; no recipe indexer URL is required.
+Permission data still uses the curator service.
+
 This solver receives the same transaction manager and signer as all other
 solvers. The SDK's transport is a thin bridge to that manager's Owner and
 BeforeBroadcast hooks. Every signed original and fee replacement is persisted
@@ -69,7 +76,7 @@ recipe input provider, and uses the shared curator permission source.
 The active root determines the requested permission artifact at
 `GET /merkle/{adapter}/{root}` under the configured curator API URL; the SDK checks
 the chain, adapter, account, root, leaf hashes and every proof before preparation. Financial amounts
-come from the recipe's read-dependent computation, bound directly as a result or
+come from the recipe's deterministic computation or fixed literal, bound directly or
 through an exact input equality. Bounds validate the chosen amount; they do not
 choose it. For example, a recipe can compute `min(balance, liquidity)` without
 embedding either actual amount. The SDK checks every lower bound and cap.
@@ -82,9 +89,6 @@ Unconstrained inputs and manual account, tree and inputs configuration fields
 are rejected. Unused `"nonzero"` payable permission markers are accepted; selecting
 a native-value leaf for recipe execution remains rejected.
 
-The Aave provider changes the host's durable provider roster. Finish or reconcile
-active Merkle jobs with their existing binary before upgrading. Incompatible
-pending journals fail closed; never clear state to bypass ownership checks.
 Polling is fixed at 15 seconds, operation timeout at 30 seconds, strategy cadence at
 one minute and the recipe cache at 16 MiB. YAML fields `pollInterval` and
 `operationTimeout` are rejected, including values equal to these fixed limits.
@@ -103,13 +107,26 @@ The recipe's own checks define the on-chain completion conditions; this host doe
 not infer settlement from issuer selectors or off-chain status.
 
 Reviewed caller-independent getters use the standard Multicall3 address at the
-pinned height. Independent calls, headers, logs and receipts share bounded JSON-RPC
+pinned height. Independent calls, headers, publication logs and receipts share bounded JSON-RPC
 arrays through vault-solver's existing HTTP fallback and tracing transport. Safe
 aggregation and exact argument encoding come from the shared SDK implementation;
 full simulations preserve their caller and remain isolated eth_calls. Missing
 aggregate deployments and malformed batch responses fail without individual-call
-retries. This SDK host requires HTTP(S) read endpoints; ordinary solvers retain
-their existing WebSocket/IPC support.
+retries. All chain RPC endpoints use HTTP(S), so every SDK batch shares the
+same HTTP envelope validation, tracing and cross-endpoint read failover.
+
+Read batches retain null-receipt/header failover only when every such member is null and the whole
+response has valid matching IDs and no member errors. A nonnull receipt/header retains the entire
+primary response, including absent replacement attempts. Pending lookup arrays carry the same eRPC
+empty-retry opt-out as scalar lookups. Inspection preserves the SDK's 256-member/32-MiB envelope,
+independently of the smaller metrics prefix. Complete malformed envelopes are left to the SDK;
+response-body I/O failures follow ordinary read fallback.
+
+`make test-merklesender-anvil` composes the real SDK state store and submission manager with the
+host Transport and shared txmanager on a local chain. It checks durable bytes before every original
+and replacement broadcast, restart ownership restoration, canonical receipt recovery, and durable
+acknowledgement before fence release. Storage failure prevents broadcast; failed acknowledgement
+retains the journal and reservation. CI runs it in the existing Foundry-equipped integration job.
 
 Read-dependent numeric values are resolved in one same-address code-override lens
 call. Authenticated Manage/Approve/Call instructions execute in order before later

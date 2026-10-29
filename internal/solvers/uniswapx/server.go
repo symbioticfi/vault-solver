@@ -199,6 +199,8 @@ func (s *Solver) declineQuoteRequest(
 // quote answers one quote request as the uniswapx.quote stage. A decline is an expected outcome, so
 // it is recorded as a declined event; only a real failure ends the span with an error.
 func (s *Solver) quote(ctx context.Context, request quoteRequest) (response quoteResponse, err error) {
+	ctx, cancel := context.WithTimeout(ctx, s.cfg.QuoteServer.HTTPTimeout)
+	defer cancel()
 	ctx, end := tracer.Start(ctx, "uniswapx.quote")
 	// Deferred so the span still ends when the pipeline panics; the quote server recovers that into
 	// a 500 without unwinding past here, and an unended span is never exported.
@@ -261,6 +263,11 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 	if state == nil || state.epoch != epoch || !state.expiresAt.After(time.Unix(now, 0)) {
 		return declinedQuote(response, quoteDeclineQuoteStateUnavailable), nil
 	}
+	// Wall expiry and a leading observed chain clock can each shorten the usable snapshot lifetime.
+	// Neither the handler socket timeout nor a cooperative strategy replaces the publication check.
+	lifetime := min(time.Until(state.expiresAt), state.expiresAt.Sub(time.Unix(s.currentTime(), 0)))
+	ctx, cancel := context.WithTimeout(ctx, lifetime)
+	defer cancel()
 	declines := &quoteStrategyDeclines{}
 	input := types.QuoteInput{
 		RequestID: request.RequestID, QuoteID: request.QuoteID,
@@ -282,6 +289,9 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 		input.AmountOut = requestAmount
 	}
 	quote, err := s.decideQuote(ctx, input)
+	if ctx.Err() != nil {
+		return declinedQuote(response, quoteDeclineStateChanged), nil
+	}
 	if err != nil {
 		return response, err
 	}
@@ -291,7 +301,10 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 	if err := validateStrategyQuote(input, quote); err != nil {
 		return response, err
 	}
-	if s.quoteEpoch.Load() != epoch || s.quoteState.Load() != state || s.capacity.Revision() != reservationRevision || s.quoteBlocked(s.currentTime()) {
+	now = s.currentTime()
+	if ctx.Err() != nil || s.quoteEpoch.Load() != epoch || s.quoteState.Load() != state ||
+		s.capacity.Revision() != reservationRevision || !state.expiresAt.After(time.Now()) ||
+		!state.expiresAt.After(time.Unix(now, 0)) || s.quoteBlocked(now) {
 		return declinedQuote(response, quoteDeclineStateChanged), nil
 	}
 	response.selectedCandidate = quote.CandidateID
@@ -307,7 +320,14 @@ func (s *Solver) decideQuote(
 	ctx context.Context, input types.QuoteInput,
 ) (quote *types.Quote, err error) {
 	ctx, end := tracer.Start(ctx, "uniswapx.quote.decide", observability.AttrStrategy.String(s.cfg.Strategy.Name))
-	defer func() { end(err) }()
+	defer func() {
+		if ctx.Err() != nil {
+			observability.Decline(ctx, "no_quote", string(quoteDeclineStateChanged))
+			end(nil)
+			return
+		}
+		end(err)
+	}()
 	return s.strategy.DecideQuote(ctx, input)
 }
 

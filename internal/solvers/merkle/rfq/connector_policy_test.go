@@ -1,61 +1,21 @@
 package rfq
 
 import (
-	"bytes"
 	"math/big"
 	"testing"
 
+	"encoding/json"
+
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/crypto"
+	erc20binding "github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/bindings/erc4626"
 )
 
-func TestConnectorDeltasRequireExactAwardedBalanceChanges(t *testing.T) {
-	account := common.HexToAddress("0x21")
-	recipient := common.HexToAddress("0x10")
-	for _, tc := range []struct {
-		name   string
-		mutate func(*recipes.Recipe)
-		valid  bool
-	}{
-		{"canonical balance deltas", func(*recipes.Recipe) {}, true},
-		{"equal operands reversed", func(r *recipes.Recipe) {
-			r.Steps[6] = connectorDeltaBinary(t, recipes.Equal, connectorDeltaOperand(recipes.Input, 1), connectorDeltaOperand(recipes.Result, 5))
-		}, true},
-		{"wrong payment recipient", func(r *recipes.Recipe) { r.Queries[1] = connectorDeltaQuery(t, tOut, common.HexToAddress("0x88")) }, false},
-		{"wrong payment asset", func(r *recipes.Recipe) { r.Queries[1] = connectorDeltaQuery(t, tIn, recipient) }, false},
-		{"wrong account", func(r *recipes.Recipe) { r.Queries[0] = connectorDeltaQuery(t, tOut, common.HexToAddress("0x88")) }, false},
-		{"cash direction reversed", func(r *recipes.Recipe) {
-			r.Steps[5] = connectorDeltaBinary(t, recipes.Sub, connectorDeltaOperand(recipes.Result, 4), connectorDeltaOperand(recipes.Result, 0))
-		}, false},
-		{"self comparison", func(r *recipes.Recipe) {
-			r.Steps[6] = connectorDeltaBinary(t, recipes.Equal, connectorDeltaOperand(recipes.Input, 1), connectorDeltaOperand(recipes.Input, 1))
-		}, false},
-		{"wrong payment input", func(r *recipes.Recipe) {
-			r.Steps[9] = connectorDeltaBinary(t, recipes.Equal, connectorDeltaOperand(recipes.Result, 8), connectorDeltaOperand(recipes.Input, 0))
-		}, false},
-		{"missing RWA delta", func(r *recipes.Recipe) { r.Steps = r.Steps[:12] }, false},
-		{"pre reads cross action", func(r *recipes.Recipe) { connectorDeltaInsertAction(t, r, 3) }, false},
-		{"post checks cross action", func(r *recipes.Recipe) { connectorDeltaInsertAction(t, r, 7) }, false},
-		{"truncated comparison", func(r *recipes.Recipe) { r.Steps[6] = []byte{recipes.Equal} }, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			recipe := connectorDeltaRecipe(t, common.HexToHash("0x42"), account, recipient, tOut, tIn)
-			tc.mutate(&recipe)
-			swapStep := uint(3)
-			if tc.name == "pre reads cross action" {
-				swapStep++
-			}
-			err := validateConnectorDeltas(recipe, swapStep, account, recipient, tOut, tIn)
-			if (err == nil) != tc.valid {
-				t.Fatalf("error = %v, valid = %v", err, tc.valid)
-			}
-		})
-	}
-}
-
-func connectorDeltaRecipe(t *testing.T, hash common.Hash, account, recipient, asset, rwa common.Address) recipes.Recipe {
+func connectorDeltaRecipe(t *testing.T, hash common.Hash, account, recipient, asset, rwa common.Address, approval ...common.Hash) recipes.Recipe {
 	t.Helper()
 	uintType := connectorDeltaType(t, "uint256")
 	manage, err := (abi.Arguments{{Type: uintType}, {Type: connectorDeltaType(t, "bytes32[]")}, {Type: connectorDeltaType(t, "uint256[][]")}}).Pack(
@@ -71,9 +31,10 @@ func connectorDeltaRecipe(t *testing.T, hash common.Hash, account, recipient, as
 		}
 		return append([]byte{recipes.Read}, data...)
 	}
-	result := func(index int64) *big.Int { return connectorDeltaOperand(recipes.Result, index) }
+	shift := int64(len(approval))
+	result := func(index int64) *big.Int { return connectorDeltaOperand(recipes.Result, index+shift) }
 	input := func(index int64) *big.Int { return connectorDeltaOperand(recipes.Input, index) }
-	return recipes.Recipe{
+	recipe := recipes.Recipe{
 		Queries: [][]byte{connectorDeltaQuery(t, asset, account), connectorDeltaQuery(t, asset, recipient), connectorDeltaQuery(t, rwa, account)},
 		Steps: [][]byte{
 			read(0), read(1), read(2), append([]byte{recipes.Manage}, manage...),
@@ -82,6 +43,15 @@ func connectorDeltaRecipe(t *testing.T, hash common.Hash, account, recipient, as
 			read(2), connectorDeltaBinary(t, recipes.Sub, result(10), result(2)), connectorDeltaBinary(t, recipes.Equal, result(11), input(0)),
 		},
 	}
+	if len(approval) > 0 {
+		args := abi.Arguments{{Type: uintType}, {Type: connectorDeltaType(t, "address")}, {Type: connectorDeltaType(t, "address")}, {Type: connectorDeltaType(t, "bytes32")}}
+		raw, err := args.Pack(input(1), asset, vlt, approval[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		recipe.Steps = append([][]byte{append([]byte{recipes.Approve}, raw...)}, recipe.Steps...)
+	}
+	return recipe
 }
 
 func connectorDeltaType(t *testing.T, name string) abi.Type {
@@ -117,59 +87,39 @@ func connectorDeltaQuery(t *testing.T, token, owner common.Address) []byte {
 	return data
 }
 
-func connectorDeltaInsertAction(t *testing.T, recipe *recipes.Recipe, at int) {
+func connectorCommittedFunding(t *testing.T, leaf recipes.Leaf, account, recipient, asset, rwa common.Address) (recipes.Recipe, *recipes.Tree, []byte) {
 	t.Helper()
-	for _, step := range recipe.Steps {
-		if len(step) < 65 || step[0] < recipes.Add || step[0] > recipes.LessOrEqual {
-			continue
-		}
-		for _, word := range [][]byte{step[1:33], step[33:65]} {
-			if word[4] == recipes.Result {
-				index := new(big.Int).SetBytes(word[5:])
-				if index.Cmp(big.NewInt(int64(at))) >= 0 {
-					index.Add(index, big.NewInt(1)).FillBytes(word[5:])
-				}
-			}
-		}
+	data := erc20binding.NewERC20().PackApprove(vlt, new(big.Int))
+	mask := make([]byte, len(data))
+	for i := 36; i < 68; i++ {
+		mask[i] = 255
 	}
-	args := abi.Arguments{{Type: connectorDeltaType(t, "address")}, {Type: connectorDeltaType(t, "bytes")}, {Type: connectorDeltaType(t, "uint256[]")}}
-	call, err := args.Pack(common.HexToAddress("0x77"), []byte{}, []*big.Int{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	steps := append([][]byte{}, recipe.Steps[:at]...)
-	steps = append(steps, append([]byte{recipes.Call}, call...))
-	recipe.Steps = append(steps, recipe.Steps[at:]...)
-}
-
-func TestConnectorDeltasQueryBindingsAndOffsetsAreNotStaticBalances(t *testing.T) {
-	account, recipient := common.HexToAddress("0x21"), common.HexToAddress("0x10")
-	for _, offset := range []int64{1, 32} {
-		recipe := connectorDeltaRecipe(t, common.HexToHash("0x42"), account, recipient, tOut, tIn)
-		args := abi.Arguments{{Type: connectorDeltaType(t, "address")}, {Type: connectorDeltaType(t, "bytes")}, {Type: connectorDeltaType(t, "uint256[]")}, {Type: connectorDeltaType(t, "uint256")}}
-		var err error
-		recipe.Queries[1], err = args.Pack(tOut, erc4626.NewIERC4626().PackBalanceOf(recipient), []*big.Int{}, big.NewInt(offset))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := validateConnectorDeltas(recipe, 3, account, recipient, tOut, tIn); err == nil {
-			t.Fatalf("nonzero result offset %d accepted", offset)
-		}
-	}
-	bound := connectorDeltaRecipe(t, common.HexToHash("0x42"), account, recipient, tOut, tIn)
-	args := abi.Arguments{{Type: connectorDeltaType(t, "address")}, {Type: connectorDeltaType(t, "bytes")}, {Type: connectorDeltaType(t, "uint256[]")}, {Type: connectorDeltaType(t, "uint256")}}
-	binding := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(4), 224), connectorDeltaOperand(recipes.Input, 1))
+	approve := recipes.Leaf{Target: asset, Value: new(big.Int), Data: data, DataMask: mask}
 	var err error
-	bound.Queries[1], err = args.Pack(tOut, erc4626.NewIERC4626().PackBalanceOf(recipient), []*big.Int{binding}, big.NewInt(0))
+	approve.Hash, err = recipes.HashLeaf(approve)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateConnectorDeltas(bound, 3, account, recipient, tOut, tIn); err == nil {
-		t.Fatal("bound balance owner accepted as a static recipient")
+	a, b := leaf.Hash, approve.Hash
+	if a.Cmp(b) > 0 {
+		a, b = b, a
 	}
-	malformed := connectorDeltaRecipe(t, common.HexToHash("0x42"), account, recipient, tOut, tIn)
-	malformed.Queries[1] = bytes.Clone(malformed.Queries[1][:10])
-	if err := validateConnectorDeltas(malformed, 3, account, recipient, tOut, tIn); err == nil {
-		t.Fatal("malformed balance query accepted")
+	root := crypto.Keccak256Hash(a[:], b[:])
+	leaf.Proof = []common.Hash{approve.Hash}
+	approve.Proof = []common.Hash{leaf.Hash}
+	tree := &recipes.Tree{Root: root, ChainID: big.NewInt(1), Account: &account, Leaves: []recipes.Leaf{approve, leaf}}
+	recipe := connectorDeltaRecipe(t, leaf.Hash, account, recipient, asset, rwa, approve.Hash)
+	entries := []map[string]any{}
+	for _, l := range tree.Leaves {
+		text := []string{}
+		for _, h := range l.Proof {
+			text = append(text, h.Hex())
+		}
+		entries = append(entries, map[string]any{"hash": l.Hash.Hex(), "target": l.Target.Hex(), "value": "0", "data": hexutil.Encode(l.Data), "dataMask": hexutil.Encode(l.DataMask), "proof": text})
 	}
+	raw, err := json.Marshal(map[string]any{"root": root.Hex(), "chainId": "1", "account": account.Hex(), "leaves": entries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return recipe, tree, raw
 }

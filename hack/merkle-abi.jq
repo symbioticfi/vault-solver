@@ -2,7 +2,9 @@
 .abi | map(select(
   if $contract == "LiquidLaneConnector" then
     .type == "function" and (
-      .name == "account" or .name == "outputAsset" or .name == "remainingAssets" or
+      .name == "account" or .name == "outputAsset" or
+      .name == "eip712Domain" or .name == "getAmountOut" or .name == "minDiscount" or
+      .name == "remainingAssets" or
       (.name == "swap" and (.inputs | length) == 4))
   elif $contract == "IThreeFPolicy" then
     (.type == "event" and .name == "Consume") or

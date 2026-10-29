@@ -95,13 +95,26 @@ External mode also fails startup unless that executor has direct `owner`/`market
 authorization on every configured adapter; the fatal startup log includes the executor, configured adapters,
 and underlying authorization error.
 
-Merkle connector orders run independently under `rfq-merkle`; see its
+Configure `rfq-filler` with the existing `adapters` list for native
+pricing and fills, or with `recipeExecutor` for Merkle connector pricing and fills.
+Setting both fails startup. The Merkle mode uses `stateDir` and `curator` for durable
+execution and permissions; `quoteOnly: true` needs neither. See its
 [configuration](config/rfq-merkle.example.yaml) and [runbook](docs/RFQ-MERKLE.md).
 They preserve backend signature bytes, including ERC-1271 wallet signatures.
 The committed permission must admit the supplied calldata length and signature
 framing, and the complete outer fill must simulate successfully. Existing Curator
 templates with fixed 65-byte fields require compatible permissions for other lengths.
-It consumes awarded `/orders` and signed backend terms without aggregating adapter liquidity. Its connector routing config maps each RWA asset to a dedicated RecipeExecutor. Each recipe handles one asset and includes its issuer calls when redemption is required. There is no shared custody executor or asset fallback.
+It consumes awarded `/orders` and signed backend terms without aggregating adapter liquidity.
+The solver derives the payment connector from its locally configured RecipeExecutor.
+The backend advertises its capacity estimate from recipe reads, without an executor in
+its quote request. The solver applies current policy budgets and shared reservations.
+Recipes keep their original format: the SDK retrieves publication bytes at the
+executor's single `recipeBlock`, while call data and Merkle proofs come from the
+curator permission-tree service.
+Filling verifies the current commitment and permissions, then simulates the complete outer
+settlement to check ordered funding and actual payment before admission. Missing executors or
+invalid capacity fail closed. Each recipe handles one asset and includes its issuer calls when
+redemption is required.
 
 When `tokensToQuote: permissioned`, admitted inputs are never aggregated: the selected strategy must
 use one candidate route. Other scopes keep the existing multi-route behavior.
@@ -126,13 +139,13 @@ LiquidLane state at fill time; the solver does not retain quote-time route plans
 RFQ keeps quoting while fills are queued or pending. As soon as a won order is polled, its planned output
 is reserved against the vault capacity it spends, including capacity reached through a discount. Quotes and
 later fill plans subtract every reservation until the order expires or fails; an order the backend stops
-reporting expires locally at its own deadline. When the backend reports the block an adapter's `maxAssets`
-was read at (`adapters[].blockNumber` on `/quote`), a confirmed fill is subtracted only from snapshots older
+reporting expires locally at its own deadline. The backend supplies the block an adapter's `maxAssets`
+was read at (`adapters[].blockNumber` on `/quote`); a confirmed fill is subtracted only from snapshots older
 than its inclusion block, for a few hours after the order is filled, and never from newer ones, which
 already reflect it. Every `/quote` adapter entry carries `discount` (ppm): the signed discount on
 discount-backed entries, the adapter `minDiscount` on direct ones. Quotes and fill plans price each leg as
 the adapter pays it at the order amount, `floor(getAmountOut(amountIn) * (1e6 - discount) / 1e6)`. The
-field replaces `maxRate`, so run this version with a backend that sends it. Fills are still
+required `blockNumber` also accompanies each private discount listing. Fills are still
 sent one at a time on the shared nonce lane. While a fill is pending, the solver checks the order's backend
 status: once the backend reports it no longer open (filled, cancelled, expired, unfunded or failed), the fill
 stops being tracked without sending another transaction, and the order is retired without a retry and
@@ -145,6 +158,15 @@ Peer outcomes add no local successful-fill amounts. Missing or invalid backend h
 filled orders without claiming a peer fill. Attempt history is local and is lost on restart.
 The next fresh request can reuse its unused nonce. Reservations are local to the process and are not restored
 after a restart.
+
+Discount-backed `/quote` requests use the backend's `price` (undiscounted oracle
+price scaled by `1e18`), `tokenInDecimals`, `account`, `maxAssets`, and observation
+block. The native adapter's vault and the connector's account identify shared
+reservations. Discount-only quotes make no RPC calls and preserve the contract's
+two rounding steps. Missing pricing metadata rejects the request without an RPC
+fallback. Direct adapter quotes retain their chain reads, and awarded orders still
+use current chain state and complete-fill simulation. Coordinate backend and solver
+rollout for the new fields.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).
@@ -154,7 +176,8 @@ Design, config, and roadmap:
 An off-chain bidder for **[RedStone Atom OEV](https://docs.redstone.finance/docs/oev)** auctions. When a
 price update makes a **[Morpho Blue](https://morpho.org)** position liquidatable, RedStone runs a
 sub-second WebSocket auction for the right to be the liquidator; this solver bids, and on winning, its
-signed payload is bundled atomically with the price update and the liquidation.
+signed payload is bundled atomically with the price update and the liquidation. Morpho borrower discovery
+queries the configured chain.
 
 On settlement it liquidates the position and exits the seized collateral through a single Symbiotic
 `LiquidLaneAdapter`, realizing the spread and paying its bid. It signs and bids but never submits the
@@ -176,7 +199,10 @@ from current adapter liquidity with optional gas accounting and receives matched
 LI.FI WebSocket feed. On startup and reconnect it catches up active matches through `GET /orders` before
 publishing quotes; while disconnected it suspends renewal and retries withdrawal of known curves
 until the order server acknowledges removal.
-After REST recovery completes, WebSocket closes 1000/1001/1005/1006/1012/1013 are logged at Info.
+`orderServer.wsReadTimeout` (default `60s`) bounds feed inactivity; data and ping/pong traffic
+renew the deadline. Silent connections cancel their work and reconnect, with readiness restored after
+the new connection completes recovery. `orderServer.wsWriteTimeout` (default `10s`) bounds pong writes.
+Both values must be positive. After REST recovery completes, WebSocket closes 1000/1001/1005/1006/1012/1013 are logged at Info.
 Earlier disconnects and other errors remain Error; reconnect backoff resets only after recovery. Before each fill it
 rechecks the canonical order status, adapter state, configured gas cost, and strategy decision, then atomically claims
 the input, redeems it through LiquidLane, and fills the output via
@@ -289,7 +315,10 @@ Quote refusals include a stable `reason` in structured debug logs and
 snapshot reasons remain available. Local planning can report `no_matching_routes`,
 `insufficient_capacity`, or `gas_exceeds_output`; an unexplained or mixed strategy refusal remains
 `strategy-declined` in logs (`strategy_declined` in metrics). Metric reasons use `snake_case`;
-existing log and workflow values remain unchanged. Strategy failures remain HTTP 503 / `strategy_error`, semantic declines remain
+existing log and workflow values remain unchanged. `quoteServer.httpTimeout` bounds strategy execution as well as HTTP handling; the earlier caller
+deadline or remaining snapshot lifetime can shorten it. Snapshot validity uses both wall and chain time,
+and is checked again before publishing. Expiry (including equality) and cancellation decline with HTTP 204.
+Strategy failures remain HTTP 503 / `strategy_error`, semantic declines remain
 empty HTTP 204, and malformed bodies remain HTTP 400 / aggregate outcome `invalid`. Missing
 `requestId` retains the existing breaker-notification/400 handling. The existing workflow metrics
 and aggregate workflow outcomes are unchanged; pair/reason labels are bounded by trusted metadata and fixed reasons.
@@ -626,6 +655,10 @@ command list (`run`, `version`). Debug logging is off by default; enable it with
 
 ## Observability
 
+Log messages, string fields and errors reduce URLs to `scheme://host[:port]` before stdout and
+Sentry, matching trace redaction. Paths, queries, fragments and URL userinfo are removed; this
+does not detect arbitrary secrets outside URLs.
+
 The observability listener (default `:9090`) serves `/metrics`, `/healthz`, and `/readyz`. No extra
 config is required for the collectors below. `/readyz` fails before startup completes and during
 shutdown. Pending transactions and nonce collisions do not take quote servers out of rotation. During graceful shutdown readiness
@@ -658,10 +691,6 @@ and the other identifiers listed in [docs/TRACING-PLAN.md](docs/TRACING-PLAN.md)
 the quote that produced it when the process still remembers that quote (best effort, in-memory);
 after a restart the fill simply starts a new trace. LI.FI fills are not linked, because its standing
 quotes have no per-request quote event to link from.
-
-A websocket or IPC RPC endpoint is traced at the call level, one span per JSON-RPC call plus one for
-the dial; it receives `traceparent` only on the websocket handshake, so the provider can tie the
-connection to your trace but not an individual call.
 
 No secret is ever recorded on a span: RPC endpoints appear as ordinals rather than URLs, and an
 outbound client span records the request URL **without its query string**, so a webhook URL that
@@ -746,7 +775,6 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | Workflow | `solver_bot_workflow_observed_items` | `solver`, `strategy`, `view` | Last complete authoritative item count for a bounded state view. |
 | Workflow | `solver_bot_workflow_last_observation_timestamp` | `solver`, `strategy`, `view` | Freshness paired with each retained workflow state count. |
 | RFQ | `rfq_filler_http_request_duration_seconds` | `method`, `route`, `status` | Quote-server request count (`_count`), status funnel, and latency. Routes are allowlisted and methods are normalized to `GET`, `POST`, or `other` to bound cardinality. |
-| RFQ | `rfq_filler_http_requests_total` | `method`, `route`, `status` | Deprecated one-release compatibility counter for existing alerts; migrate to `rfq_filler_http_request_duration_seconds_count`. |
 | RFQ | `rfq_active_orders` | — | Current queued, submitting, submitted, nonce-retry or nonce-reconciliation obligations awaiting terminal backend state. |
 | RFQ | `rfq_oldest_active_order_age_seconds` | — | Age of the oldest active obligation; catches a single stuck order that a count-only alert can miss. |
 | LI.FI | `lifi_active_quotes` | — | Process-local quote count from the last successful publication or suspension reconciliation. It can remain nonzero after the remote quotes expire at `quoteTtl`, so use it with refresh freshness rather than as backend state. |
@@ -883,15 +911,18 @@ own fully annotated example under `config/` (see the *Example config* column abo
 including the applicable shared `chain`/`signer`/`txManager`/`observability` blocks, is documented
 inline there.
 
-The `chain` block takes a primary `rpcUrl` plus optional `rpcFallbackUrls` — HTTP(S) endpoints tried
-in order for reads when the primary is unavailable. `chain.rpcAttemptTimeoutMs` bounds each HTTP(S)
-endpoint attempt, including reading its response body, for read and write RPCs.
+All chain RPC endpoints (`rpcUrl`, `rpcFallbackUrls`, and `writeRpcUrl`) must use HTTP(S).
+The unused `chain.wsUrl` option has been removed. LI.FI and RedStone retain their protocol feeds.
+Read fallbacks are tried in order when the primary is unavailable. `chain.rpcAttemptTimeoutMs`
+bounds each HTTP(S) endpoint attempt, including reading its response body, for read and write RPCs.
 It defaults to `20000` (20 seconds) when omitted or zero; negative or overflowing values are rejected.
 For example, `rpcAttemptTimeoutMs: 5000` allows up to 5 seconds per endpoint attempt. This is not a
 total fallback-chain budget: a shorter caller deadline is divided across the remaining endpoints.
-The txmanager's shorter fee/receipt budgets and `broadcastTimeoutMs` still apply; WebSocket/IPC calls
-are unaffected. When using eRPC, this bounds the solver's wait for eRPC, including eRPC's internal
+The txmanager's shorter fee/receipt budgets and `broadcastTimeoutMs` still apply.
+When using eRPC, this bounds the solver's wait for eRPC, including eRPC's internal
 retries; upstream timeouts and retries inside eRPC must be configured separately.
+URL Basic credentials belong to each endpoint: fallback requests use the fallback's own userinfo,
+and receive no Authorization header when that URL has none.
 Normal signed broadcasts and latest mined admission nonce reads
 are pinned to `writeRpcUrl`, or the primary `rpcUrl` when it is omitted, and never fall over across
 endpoints. Every business transaction and its fee replacements use that write route.
@@ -902,8 +933,12 @@ Receipt confirmation uses the
 [canonicality checks](docs/TXMANAGER-PLAN.md#5-receipt-polling-and-confirmation) independently of endpoint
 affinity, while retaining normal read fallbacks. An HTTP 3xx response is not followed and falls through to the next read
 endpoint. A non-final endpoint's JSON-RPC `null` receipt or header result falls through
-to the next read endpoint; the final endpoint's `null` remains the ordinary not-found result. Unavailable
-multi-read snapshots retry on a later poll; OEV compares both number and hash around each latest-state
+to the next read endpoint; the final endpoint's `null` remains the ordinary not-found result.
+SDK read batches preserve this policy only when all receipt/header members are null and no member
+has an RPC error. Any receipt/header evidence retains the entire primary response. Batches stay intact,
+retain their IDs, and never retry as individual calls. Pending receipt/transaction batches also disable
+eRPC empty-result retries. Body-read failures use normal read fallback; the SDK retains its response validation and size limits.
+Unavailable multi-read snapshots retry on a later poll; OEV compares both number and hash around each latest-state
 snapshot and retries a changed head once immediately. A second crossing fails startup or retains the runtime's
 last-known-good snapshot until the next poll. An explicit write endpoint must report the same chain ID as the read endpoint.
 
@@ -929,10 +964,16 @@ Generated code is committed for hermetic builds; refresh from upstream on demand
 
 ```bash
 make refresh-abi FORGE_OUT=../rfq/out   # re-vendor contract ABIs from a Foundry build
-make refresh-openapi                    # re-pull the live 3F OpenAPI spec
+make refresh-openapi                    # re-pull the production 3F contract
 make refresh-rfq-openapi                # re-pull the RFQ backend OpenAPI spec
 make generate                           # regenerate bindings + API client
+make test-tooling                       # offline registration and refresh failure checks
 ```
+
+Refresh targets validate staged schema/ABI files before replacing vendored files. Fetch or extraction
+failure preserves the existing contracts. `OPENAPI_URL` and the drift registry both use the 3F
+production schema; override it explicitly when reviewing a different environment. PR CI checks schema
+registration offline; the scheduled drift watcher checks live upstream changes separately.
 
 ## Contributing
 
@@ -947,6 +988,10 @@ The SDK is public and pinned in `go.mod`; normal Go and Docker builds download i
 without a GitHub token or a local merkle-executor checkout.
 
 The SDK reads signed permission bundles through `GET /merkle/{adapter}/{root}` under the configured curator API URL.
+The SDK reads `recipeHash` and `recipeBlock` at a pinned block and retrieves the original
+`SetRecipe` event only from that single publication block. It verifies the recipe bytes against
+the current commitment without scanning historical block ranges. Merkle hosts use their existing
+chain connection and require no separate recipe indexer URL.
 
 Polling is fixed at 15 seconds and operation timeout at 30 seconds. `pollInterval` and
 `operationTimeout` are not configuration fields. Curator settings accept only `url` and
@@ -962,5 +1007,22 @@ dedicated curator BF, a MerkleAccount maker and guarded account-side minting.
 Configure one recipe `executor`, one broker and an API-key environment reference using
 [the example YAML](config/threef-merkle.example.yaml), then complete enrollment as
 described in [the 3F Merkle runbook](docs/THREEF-MERKLE.md). The generic `merkle`
-solver rejects the `threeF` field. The executor uses the maker account and shared signer. Its recipe contains 1..32 distinct guarded funding pairs with disjoint request/principal/yield inputs; inactive groups have zero principal and no calls. One journal and sender serialize all markets. Automatic offers reserve existing commitments
+solver rejects the `threeF` field. The executor uses the maker account and shared signer. Its recipe supplies funding pairs and request/principal/yield inputs; inactive groups receive zero principal. Gates and fixed funding calls remain curator-owned. One journal and sender serialize all markets. Automatic offers reserve existing commitments
 and use account idle cash; simulation never submits or cancels API offers.
+`rateBasisSeconds` is read from the exact JSON number and must
+be a nonnegative int64 integer; omitted, null and zero values use the unscaled rate comparison.
+
+Live commitments are maintained first. Each cycle then checks every relevant unanswered open/solvable
+auction before bidding, reusing policy eligibility results within the pinned snapshot. There is no
+per-cycle eligibility check cap. At zero pair budget,
+new bids are blocked and unjournaled UI offers require explicit UI cancellation because the canonical
+budget-consuming check cannot establish their scope. The bot can cancel its own unaccepted journaled
+intent and never cancels accepted mint windows.
+
+The `rfq-filler` recipe mode (also available as the execution-only `rfq-merkle` plugin) executes awarded orders through the RFQ Executor and committed
+Merkle recipes. It samples wall time before reading the chain header so RPC latency consumes submission validity.
+See [the RFQ Merkle runbook](docs/RFQ-MERKLE.md) and [configuration](config/rfq-merkle.example.yaml).
+
+Local integration checks require Anvil on `PATH`: `make test-txmanager-anvil`,
+`make test-merklesender-anvil`, and `make test-rfq-merkle-anvil`. They exercise nonce reconciliation,
+durable SDK journal recovery, and canonical RFQ settlement without live services.

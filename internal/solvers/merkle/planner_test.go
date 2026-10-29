@@ -174,6 +174,7 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 					case "eth_getBlockByNumber":
 						result = header
 					case "eth_getLogs":
+						assertRecipePublicationFilter(t, q.Params, executor)
 						event := binding.GetABI().Events["SetRecipe"]
 						data, err := event.Inputs.NonIndexed().Pack(recipe.Queries, recipe.Steps)
 						if err != nil {
@@ -188,10 +189,10 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 							Input hexutil.Bytes  `json:"input"`
 						}
 						_ = json.Unmarshal(q.Params[0], &call)
-						if string(q.Params[1]) != `"0xc"` {
+						if string(q.Params[1]) != `"0xc"` && string(q.Params[1]) != `"latest"` {
 							t.Error("planner lost pinned block")
 						}
-						if call.To == executor && call.From != caller {
+						if call.To == executor && len(call.Input) >= 4 && string(call.Input[:4]) == string(binding.GetABI().Methods["execute"].ID) && call.From != caller {
 							t.Error("simulation lost shared caller")
 						}
 						result = hexutil.Bytes(contractCall(call.To, call.Input))
@@ -231,5 +232,25 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 				t.Fatalf("invalid curator or free input reached original simulation: %d", simulations)
 			}
 		})
+	}
+}
+
+func assertRecipePublicationFilter(t *testing.T, params []json.RawMessage, executor common.Address) {
+	t.Helper()
+	var filter struct {
+		FromBlock string           `json:"fromBlock"`
+		ToBlock   string           `json:"toBlock"`
+		Addresses []common.Address `json:"address"`
+	}
+	if len(params) != 1 {
+		t.Error("unexpected recipe log arguments")
+		return
+	}
+	if err := json.Unmarshal(params[0], &filter); err != nil {
+		t.Error(err)
+		return
+	}
+	if filter.FromBlock != "0xc" || filter.ToBlock != "0xc" || len(filter.Addresses) != 1 || filter.Addresses[0] != executor {
+		t.Errorf("recipe publication query escaped its single committed block: %+v", filter)
 	}
 }

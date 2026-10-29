@@ -22,7 +22,8 @@ const (
 	maxResponseBytes int64 = 2 << 20
 	requestTimeout         = 30 * time.Second
 	// exactMaxRateKey preserves the upstream decimal before the generated float32 conversion.
-	exactMaxRateKey = "exactMaxRate"
+	exactMaxRateKey   = "exactMaxRate"
+	exactRateBasisKey = "exactRateBasisSeconds"
 )
 
 var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
@@ -62,7 +63,7 @@ func newClient(cfg apiConfig) (*apiClient, error) {
 		return nil, err
 	}
 	c := threef.NewConfiguration()
-	c.Servers = threef.ServerConfigurations{{URL: strings.TrimRight(cfg.URL, "/")}}
+	c.Servers = threef.ServerConfigurations{{URL: strings.TrimRight(cfg.URL, "/") + c.Servers[0].URL}}
 	c.HTTPClient = &http.Client{Timeout: requestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: boundedTransport{keyEnv: cfg.APIKeyEnv}}
 	return &apiClient{c: threef.NewAPIClient(c), broker: cfg.Broker}, nil
 }
@@ -124,7 +125,7 @@ func (c *apiClient) Auctions(ctx context.Context) ([]threef.AuctionDto, error) {
 	if err != nil {
 		return nil, apiError(ctx, "list auctions", response)
 	}
-	// The generated response keeps a fresh copy of its body. Read the exact rate from that copy.
+	// The generated response keeps a fresh copy of its body. Preserve exact rate numbers from it.
 	var raw []map[string]json.RawMessage
 	if rows == nil || len(rows) > 4096 || response == nil || json.NewDecoder(response.Body).Decode(&raw) != nil || len(raw) != len(rows) {
 		return nil, errors.New("3f invalid auctions response")
@@ -155,6 +156,10 @@ func (c *apiClient) Auctions(ctx context.Context) ([]threef.AuctionDto, error) {
 				return nil, errors.New("3f invalid auction rate")
 			}
 			rows[i].AdditionalProperties[exactMaxRateKey] = string(n)
+		}
+		delete(rows[i].AdditionalProperties, exactRateBasisKey)
+		if value := raw[i]["rateBasisSeconds"]; len(value) > 0 && string(value) != "null" {
+			rows[i].AdditionalProperties[exactRateBasisKey] = string(value)
 		}
 	}
 	return rows, nil

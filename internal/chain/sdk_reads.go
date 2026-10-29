@@ -21,9 +21,6 @@ func (c *Client) BatchRead(ctx context.Context, requests []protocolio.ReadReques
 }
 
 func (c *Client) sdkBatchCall(ctx context.Context, batch []rpc.BatchElem) error {
-	if c.readHTTP == nil {
-		return errors.New("chain: SDK read batching requires HTTP(S) read endpoints")
-	}
 	return protocolio.CallHTTPBatch(ctx, c.readHTTP, c.readURL, batch)
 }
 
@@ -50,14 +47,12 @@ func (sdkAggregateCodec) Decode(raw []byte) ([]protocolio.AggregateResult, error
 
 // CallContractWithCode preserves the recipe lens's sender, target, block and
 // state overrides through the same read transport as ordinary eth_call.
-func (c *Client) CallContractWithCode(ctx context.Context, msg ethereum.CallMsg, block *big.Int, code []byte) (_ []byte, err error) {
-	ctx, end := c.readCalls.start(ctx, rpcMethodCall)
-	defer func() { end(err) }()
+func (c *Client) CallContractWithCode(ctx context.Context, msg ethereum.CallMsg, block *big.Int, code []byte) ([]byte, error) {
 	if msg.To == nil || *msg.To == (common.Address{}) || msg.From == (common.Address{}) || block == nil || block.Sign() < 0 || len(code) == 0 {
 		return nil, errors.New("chain: code override requires target, caller, numeric block and code")
 	}
 	overrides := map[common.Address]any{*msg.To: map[string]any{"code": hexutil.Bytes(code)}}
 	var result hexutil.Bytes
-	err = c.Client.Client().CallContext(ctx, &result, "eth_call", protocolio.CallArgument(msg), protocolio.BlockArgument(block), overrides)
+	err := c.Client.Client().CallContext(ctx, &result, "eth_call", protocolio.CallArgument(msg), protocolio.BlockArgument(block), overrides)
 	return result, err
 }

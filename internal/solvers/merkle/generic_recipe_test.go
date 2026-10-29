@@ -213,6 +213,7 @@ func newGenericRecipeHost(t *testing.T, ready, requestID uint64, simulation stri
 			case "eth_getBlockByNumber":
 				response["result"] = header
 			case "eth_getLogs":
+				assertRecipePublicationFilter(t, request.Params, executor)
 				event := binding.GetABI().Events["SetRecipe"]
 				data := genericPack(t, event.Inputs.NonIndexed(), recipe.Queries, recipe.Steps)
 				response["result"] = []types.Log{{Address: executor, BlockNumber: 12, BlockHash: header.Hash(), Topics: []common.Hash{event.ID, recipeHash}, Data: data}}
@@ -223,7 +224,7 @@ func newGenericRecipeHost(t *testing.T, ready, requestID uint64, simulation stri
 					Input hexutil.Bytes  `json:"input"`
 				}
 				_ = json.Unmarshal(request.Params[0], &call)
-				if string(request.Params[1]) != `"0xc"` && string(request.Params[1]) != `"latest"` || call.To == executor && call.From != caller {
+				if string(request.Params[1]) != `"0xc"` && string(request.Params[1]) != `"latest"` || call.To == executor && len(call.Input) >= 4 && string(call.Input[:4]) == string(binding.GetABI().Methods["execute"].ID) && call.From != caller {
 					t.Error("host lost the pinned block or shared caller")
 				}
 				response["result"] = hexutil.Bytes(contractCall(call.To, call.Input))

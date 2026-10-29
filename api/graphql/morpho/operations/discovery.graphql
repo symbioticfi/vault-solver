@@ -29,13 +29,13 @@ query MorphoDiscoverMarkets($loan: [String!]!, $coll: [String!]!, $chains: [Int!
   }
 }
 
-query MorphoPositionsByMarket($ids: [String!]!, $first: Int!, $skip: Int!, $maxHf: Float) {
+query MorphoPositionsByMarket($ids: [String!]!, $chains: [Int!]!, $first: Int!, $skip: Int!, $maxHf: Float) {
   marketPositions(
     first: $first
     skip: $skip
     orderBy: HealthFactor
     orderDirection: Asc
-    where: { marketUniqueKey_in: $ids, healthFactor_lte: $maxHf }
+    where: { marketUniqueKey_in: $ids, chainId_in: $chains, healthFactor_lte: $maxHf }
   ) {
     items {
       user {

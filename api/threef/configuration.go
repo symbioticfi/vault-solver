@@ -1,7 +1,7 @@
 /*
 BF API Reference
 
-BP subdomain API documentation for bf.dev.gcp.3f.xyz
+BP subdomain API documentation for bf.3f.xyz  ## API versions  V1 and v2 share the endpoint list below. Choose **v1** in the server selector for `/v1/...`, or choose **v2** and enter a supported chain ID for `/v2/chains/{chainId}/...`. Request examples update with your selection. The `X-3F-Chain-Id` response header identifies the backend that served the request.  Payloads and EIP-712 versions are unchanged. Use the requested chain’s contracts and credentials; example addresses and chain IDs are illustrative. Guardian HTTP signatures still use the internal `/v1/...` path, including its query string. `/v2/chains/{chainId}/v1/...` remains a compatibility alias.
 
 API version: 0.0.1
 */
@@ -90,8 +90,18 @@ func NewConfiguration() *Configuration {
 		Debug:         false,
 		Servers: ServerConfigurations{
 			{
-				URL:         "",
-				Description: "No description provided",
+				URL:         "/v1",
+				Description: "v1 — legacy chain",
+			},
+			{
+				URL:         "/v2/chains/{chainId}",
+				Description: "v2 — choose chain",
+				Variables: map[string]ServerVariable{
+					"chainId": ServerVariable{
+						Description:  "Gateway chain ID, e.g. 84532 for Base Sepolia or 8453 for Base.",
+						DefaultValue: "",
+					},
+				},
 			},
 		},
 		OperationServers: map[string]ServerConfigurations{},

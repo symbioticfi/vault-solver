@@ -11,6 +11,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
@@ -21,8 +22,9 @@ import (
 // for concurrent use (the HTTP server serves quotes in parallel): its dependencies are individually
 // synchronized, and it holds no mutable state itself.
 type quoteService struct {
-	chainID  int64
-	executor common.Address
+	recipeExecutor common.Address
+	chainID        int64
+	executor       common.Address
 	// laneAvailable is safe for concurrent use and reports sender initialization. A busy lane does not
 	// block quoting: pending fills are accounted through reservations instead. It is sampled before
 	// and after quote planning so work is declined whenever either check observes a nonce conflict.
@@ -132,7 +134,19 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (decision qu
 
 // evaluate is the quote pipeline; quote wraps it in the rfq.quote span and classifies its outcome.
 func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDecision, error) {
-	parsed, err := q.toStrategy(qs.chainID)
+	// A recipe process serves only its committed payment connector. Filter before
+	// parsing so unrelated native entries in a shared backend response stay out.
+	if qs.recipeExecutor != (common.Address{}) && qs.whitelist != nil {
+		scoped := *q
+		scoped.Adapters = nil
+		for _, item := range q.Adapters {
+			if qs.whitelist[common.HexToAddress(item.Adapter)] {
+				scoped.Adapters = append(scoped.Adapters, item)
+			}
+		}
+		q = &scoped
+	}
+	parsed, err := q.toStrategy(qs.chainID, qs.recipeExecutor)
 	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, &badRequestError{errors.Errorf("parse request: %w", err)}
 	}
@@ -217,7 +231,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDec
 	}, nil
 }
 
-// snapshotCandidates reads current on-chain pricing for the request as the rfq.quote.snapshot stage.
+// snapshotCandidates prices backend discounts or reads direct adapters as the rfq.quote.snapshot stage.
 func (qs *quoteService) snapshotCandidates(
 	ctx context.Context, inv []solverInventory, req strategyRequest,
 ) (candidates []liquidlane.QuoteCandidate, err error) {
@@ -228,6 +242,23 @@ func (qs *quoteService) snapshotCandidates(
 		pending = func(inventory []solverInventory) liquidlane.CapacityReservations {
 			return qs.reservations("", inventory)
 		}
+	}
+	// Discount quotes use the backend's complete snapshot; fill planning still reads current state.
+	if !slices.ContainsFunc(inv, func(item solverInventory) bool { return item.DiscountID == nil }) {
+		inv = slices.DeleteFunc(slices.Clone(inv), func(item solverInventory) bool {
+			return item.TokenIn != req.TokenIn || item.TokenOut != req.TokenOut
+		})
+		var reservations liquidlane.CapacityReservations
+		if pending != nil {
+			reservations = pending(inv)
+		}
+		allocated := liquidgreedy.AllocateInventoryCapacity(inv, reservations, 0)
+		for _, item := range allocated {
+			if candidate := liquidgreedy.NewQuoteCandidate(item, item.MaxAssets); candidate != nil {
+				candidates = append(candidates, *candidate)
+			}
+		}
+		return candidates, nil
 	}
 	return qs.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount, pending)
 }

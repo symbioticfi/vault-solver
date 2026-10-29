@@ -54,28 +54,47 @@ type fillIntent struct {
 }
 
 type Solver struct {
-	workflow *connectorWorkflow
-	backend  orderBackend
-	sender   journalSender
-	store    *state.Store
-	intent   fillIntent // Only Run accesses the intent; the sender reads its deadline at admission.
+	recipeExecutor common.Address
+	workflow       *connectorWorkflow
+	backend        orderBackend
+	sender         journalSender
+	store          *state.Store
+	intent         fillIntent // Only Run accesses the intent; the sender reads its deadline at admission.
 }
 
-func (*Solver) Name() string   { return Name }
-func (s *Solver) Close() error { return s.store.Close() }
+func (*Solver) Name() string { return Name }
+func (s *Solver) Close() error {
+	if s.store == nil {
+		return nil
+	}
+	return s.store.Close()
+}
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return nil, err
 	}
-	if deps.Chain == nil || deps.Signer == nil || deps.TxManager == nil {
+	return New(cfg, deps)
+}
+
+// New shares the Merkle fill path with the RFQ quote server.
+func New(cfg Config, deps solver.Deps) (*Solver, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if deps.Chain == nil || (!cfg.QuoteOnly && (deps.Signer == nil || deps.TxManager == nil)) {
 		return nil, errors.New("rfq-merkle requires the shared chain, signer and transaction manager")
+	}
+	s := &Solver{recipeExecutor: cfg.RecipeExecutor, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), caller: cfg.Executor}}
+	if cfg.QuoteOnly {
+		return s, nil
 	}
 	source, err := cfg.Curator.PermissionSource(deps.Chain, 10*time.Second)
 	if err != nil {
 		return nil, err
 	}
+	s.workflow.source, s.workflow.signer = source, deps.Signer.Address()
 	store, err := state.Open(cfg.StateDir)
 	if err != nil {
 		return nil, err
@@ -86,7 +105,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 			_ = store.Close()
 		}
 	}()
-	s := &Solver{store: store, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), executors: cfg.RecipeExecutors, source: source, caller: cfg.Executor, signer: deps.Signer.Address()}}
+	s.store = store
 	s.sender, err = submission.New(deps.Chain, deps.Signer.Address(), deps.Chain.ChainID(), store, submission.Config{Confirmations: deps.TxManager.Confirmations()}, merklesender.Transport{Manager: deps.TxManager, Solver: Name, Deadline: func() time.Time { return s.intent.Deadline }}, deps.Log)
 	if err != nil {
 		return nil, err
@@ -105,6 +124,9 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 }
 
 func (s *Solver) Run(ctx context.Context) error {
+	if _, err := s.Initialize(ctx); err != nil {
+		return err
+	}
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -183,6 +205,7 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	if err != nil {
 		return nil, err
 	}
+	observed := time.Now()
 	header, err := s.workflow.chain.HeaderByNumber(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -190,13 +213,13 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	if header == nil || header.Time > ^uint64(0)>>1 {
 		return nil, errors.New("invalid chain timestamp")
 	}
-	chainTime, observed := time.Unix(int64(header.Time), 0), time.Now()
+	chainTime := time.Unix(int64(header.Time), 0)
 	if order.Request.Deadline.Cmp(new(big.Int).SetUint64(header.Time)) <= 0 {
 		return nil, errors.New("order expired")
 	}
 	for _, item := range listed {
 		venue := common.HexToAddress(item.Adapter)
-		if _, ok := s.workflow.executors[venue]; !ok || common.HexToAddress(item.TokenToRedeem) != order.Request.TokenIn || common.HexToAddress(item.Collateral) != token {
+		if venue != s.workflow.connector || common.HexToAddress(item.TokenToRedeem) != order.Request.TokenIn || common.HexToAddress(item.Collateral) != token {
 			continue
 		}
 		id, err := hexutil.Decode(item.DiscountID)
@@ -207,7 +230,7 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 		if !ok || maximum.Sign() < 0 || maximum.BitLen() > 256 {
 			return nil, errors.New("invalid connector maxAssets")
 		}
-		data, until, err := s.workflow.build(ctx, order, signature, selectedRoute{venue, common.BytesToHash(id), maximum}, s.backend)
+		data, until, err := s.workflow.build(ctx, order, signature, selectedRoute{Venue: venue, Executor: s.recipeExecutor, DiscountID: common.BytesToHash(id), MaxAssets: maximum}, s.backend)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()

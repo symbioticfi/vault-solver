@@ -9,29 +9,34 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
+	"github.com/symbioticfi/vault-solver/internal/merklehost"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
+	merklerfq "github.com/symbioticfi/vault-solver/internal/solvers/merkle/rfq"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parseConfig.
 type rawConfig struct {
-	BackendURL             string            `yaml:"backendUrl"`
-	BackendSharedSecretEnv string            `yaml:"backendSharedSecretEnv"`
-	ListenAddr             string            `yaml:"listenAddr"`
-	QuoteOnly              bool              `yaml:"quoteOnly"`
-	Executor               string            `yaml:"executor"`
-	Reactor                string            `yaml:"reactor"`
-	LiquidityLens          string            `yaml:"liquidityLens"`
-	PollIntervalMs         int               `yaml:"pollIntervalMs"`
-	OrderLimit             int               `yaml:"orderLimit"`
-	MaxNonceRetries        *int              `yaml:"maxNonceRetries"`
-	SolverMode             string            `yaml:"solverMode"`
-	TokensToQuote          string            `yaml:"tokensToQuote"`
-	PermissionedTokens     []string          `yaml:"permissionedTokens"`
-	MinAmountsIn           map[string]string `yaml:"minAmountsIn"`
-	Adapters               []string          `yaml:"adapters"`
-	Strategy               rawStrategyConfig `yaml:"strategy"`
+	BackendURL             string             `yaml:"backendUrl"`
+	BackendSharedSecretEnv string             `yaml:"backendSharedSecretEnv"`
+	ListenAddr             string             `yaml:"listenAddr"`
+	QuoteOnly              bool               `yaml:"quoteOnly"`
+	Executor               string             `yaml:"executor"`
+	Reactor                string             `yaml:"reactor"`
+	LiquidityLens          string             `yaml:"liquidityLens"`
+	PollIntervalMs         int                `yaml:"pollIntervalMs"`
+	OrderLimit             int                `yaml:"orderLimit"`
+	MaxNonceRetries        *int               `yaml:"maxNonceRetries"`
+	SolverMode             string             `yaml:"solverMode"`
+	TokensToQuote          string             `yaml:"tokensToQuote"`
+	PermissionedTokens     []string           `yaml:"permissionedTokens"`
+	MinAmountsIn           map[string]string  `yaml:"minAmountsIn"`
+	RecipeExecutor         string             `yaml:"recipeExecutor"`
+	StateDir               string             `yaml:"stateDir"`
+	Curator                merklehost.Curator `yaml:"curator"`
+	Adapters               []string           `yaml:"adapters"`
+	Strategy               rawStrategyConfig  `yaml:"strategy"`
 }
 
 type rawStrategyConfig struct {
@@ -41,6 +46,11 @@ type rawStrategyConfig struct {
 
 // Config is the validated, typed RFQ solver configuration.
 type Config struct {
+	// RecipeExecutor selects connector pricing and Merkle fills instead of native adapters.
+	RecipeExecutor common.Address
+	// StateDir and Curator provide the Merkle journal and permission tree for full execution.
+	StateDir string
+	Curator  merklehost.Curator
 	// QuoteOnly serves pricing for a separately operated filler without polling or submitting orders.
 	QuoteOnly bool
 	// BackendURL is the RFQ backend base URL (orders + discounts).
@@ -118,6 +128,9 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err := solver.DecodeStrict(node, &raw); err != nil {
 		return nil, err
 	}
+	if raw.RecipeExecutor != "" && len(raw.Adapters) > 0 {
+		return nil, errors.New("adapters and recipeExecutor are mutually exclusive")
+	}
 	if raw.BackendURL == "" {
 		return nil, errors.New("backendUrl is required")
 	}
@@ -139,6 +152,8 @@ func parseConfig(node yaml.Node) (*Config, error) {
 
 	cfg := &Config{
 		QuoteOnly:              raw.QuoteOnly,
+		StateDir:               raw.StateDir,
+		Curator:                raw.Curator,
 		BackendURL:             raw.BackendURL,
 		BackendSharedSecretEnv: raw.BackendSharedSecretEnv,
 		ListenAddr:             parse.OrDefault(raw.ListenAddr, defaultListenAddr),
@@ -205,14 +220,25 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		}
 		cfg.Adapters = append(cfg.Adapters, recoveryVault{Adapter: adapter})
 	}
-	if mode == solverModeExternal && len(cfg.Adapters) == 0 {
+	if raw.RecipeExecutor != "" {
+		cfg.RecipeExecutor, err = parse.NonZeroAddress(raw.RecipeExecutor, "recipeExecutor")
+		if err != nil {
+			return nil, err
+		}
+		if err := cfg.merkleConfig().Validate(); err != nil {
+			return nil, err
+		}
+	}
+	if mode == solverModeExternal && len(cfg.Adapters) == 0 && cfg.RecipeExecutor == (common.Address{}) {
 		return nil, errors.New(`solverMode "external" requires at least one adapters entry`)
 	}
 	return cfg, nil
 }
 
-// usesDiscounts reports whether this solver may call the internal-only discounts API (internal mode only).
-func (c *Config) usesDiscounts() bool { return c.SolverMode == solverModeInternal }
+// usesDiscounts enables signed terms for native internal mode and Merkle connector mode.
+func (c *Config) usesDiscounts() bool {
+	return c.SolverMode == solverModeInternal || c.RecipeExecutor != (common.Address{})
+}
 
 // restrictsToAdapters reports whether the EXECUTION path (order filling, incl. discount-leg recovery) is
 // scoped to the configured Adapters: external mode with at least one adapter. parseConfig requires external
@@ -225,4 +251,8 @@ func (c *Config) restrictsToAdapters() bool {
 // both modes whenever Adapters is non-empty, while execution scoping stays external-only.
 func (c *Config) quoteScopesToAdapters() bool {
 	return len(c.Adapters) > 0
+}
+
+func (c *Config) merkleConfig() merklerfq.Config {
+	return merklerfq.Config{BackendURL: c.BackendURL, Executor: c.Executor, RecipeExecutor: c.RecipeExecutor, StateDir: c.StateDir, Curator: c.Curator, QuoteOnly: c.QuoteOnly}
 }

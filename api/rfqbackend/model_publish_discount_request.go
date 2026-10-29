@@ -20,7 +20,7 @@ var _ MappedNullable = &PublishDiscountRequest{}
 // PublishDiscountRequest struct for PublishDiscountRequest
 type PublishDiscountRequest struct {
 	Discount             PublishDiscountRequestDiscount `json:"discount"`
-	Signature            string                         `json:"signature" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	Signature            string                         `json:"signature" validate:"regexp=^0x(?:[a-fA-F0-9]{2})+$"`
 	AdditionalProperties map[string]interface{}
 }
 
