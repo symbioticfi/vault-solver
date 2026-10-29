@@ -327,9 +327,6 @@ recipe input derivation. It replays authenticated supply prefixes and reads Aave
 capacity through a pinned eth_call code override; the committed recipe chooses
 the actual amount and enforces its health floor. The implementation is shared
 with the executor daemon; vault-solver contains no Aave sizing implementation.
-Adding this provider changes the durable roster. Finish or reconcile active
-Merkle jobs before upgrading; recovery rejects incompatible pending journals
-without clearing their signer ownership.
 Canonical permission bundles may include unused `"nonzero"` payable markers;
 selecting such a leaf for recipe execution remains unsupported.
 

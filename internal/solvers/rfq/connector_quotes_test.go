@@ -8,7 +8,7 @@ import (
 
 func TestConnectorQuoteWireRequiresExplicitScaleAndSignedTerms(t *testing.T) {
 	id := "0x1111111111111111111111111111111111111111111111111111111111111111"
-	base := quoteAdapter{RecipeExecutor: "0x4444444444444444444444444444444444444444", DiscountPrecision: "100000000", Adapter: "0x1111111111111111111111111111111111111111", Asset: "0x2222222222222222222222222222222222222222", MaxAssets: "73", Discount: "1000001", DiscountID: &id, AssetDecimals: 6}
+	base := quoteAdapter{RecipeExecutor: "0x4444444444444444444444444444444444444444", DiscountPrecision: "100000000", Adapter: "0x1111111111111111111111111111111111111111", Asset: "0x2222222222222222222222222222222222222222", BlockNumber: "1", MaxAssets: "73", Discount: "1000001", DiscountID: &id, AssetDecimals: 6}
 	parsed, err := base.parse(0, 1, common.HexToAddress("0x3333333333333333333333333333333333333333"))
 	if err != nil {
 		t.Fatal(err)

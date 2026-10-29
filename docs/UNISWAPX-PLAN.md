@@ -701,9 +701,9 @@ Existing workflow outcome labels are retained: semantic reasons map to `declined
 planner reasons to `declined_strategy`, exactly once. A shared LiquidLane `QuoteMetrics` helper now
 records final HTTP results separately using `solver_bot_quote_results_total{solver,token_in,token_out,result,reason}`.
 Incoming is the sum of these results, without a separate incoming/rejection counter.
-Metric reason labels normalize legacy hyphens to underscores; structured log reasons and existing
+Metric reason labels normalize hyphens to underscores; structured log reasons and
 workflow outcomes retain their values. `returned/none` requires successful encoding; write failure is `response_write_error`, panic
-`internal_error`. Legacy selected-before-write metrics keep their production meaning.
+`internal_error`. Workflow quote decisions measure selection before the HTTP write.
 
 ### Shared pair metrics
 
@@ -911,7 +911,7 @@ in the owning repository and the integration harness pins the resulting revision
   mock-Reactor coverage. Regenerate and vendor the ABI here, pin the landed RFQ revision in `rfq-integration`,
   and add a canonical-Reactor self-cosign test. Native output remains an optional post-v1 extension (§7).
 - [x] **Pair traffic board.** Reuse shared bounded pair outcomes and requested
-  amount histograms with RFQ; simplify existing-board panels. Preserve legacy metrics and protocol support (§5).
+  amount histograms with RFQ; simplify existing-board panels. Retain current workflow metrics and protocol support (§5).
 - [x] **Bounded quote rejection diagnostics.** Split existing semantic validation reasons; retain
   protocol/chain acceptance, raw-body/semantic HTTP behavior and workflow aggregate labels. Capture
   homogeneous planner failures without classifying every nil as insufficient capacity (§5).

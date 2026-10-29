@@ -32,8 +32,6 @@ FIXTURE_SOLC ?= solc
 # Production 3F OpenAPI contract, matching schema-sources.json.
 OPENAPI_URL ?= https://bf.3f.xyz/docs/openapi.json
 # RFQ backend OpenAPI spec. The backend serves it at /api/v1/openapi.json (hono-openapi, runtime).
-# NOTE: the temp railway deployment is currently behind the repo (pre adapter/protocolSignature
-# rename); point this at a backend running current code, or regenerate in-repo (see docs/RFQ-PLAN.md).
 RFQ_OPENAPI_URL ?= https://swap.symbiotic.fi/api/v1/openapi.json
 # Discount listing/resolution lives on the backend's internal API. Its document is published from the
 # PUBLIC prefix (the endpoints stay unrouted there), so it can be vendored and drift-checked like any
