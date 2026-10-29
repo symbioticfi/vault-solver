@@ -39,6 +39,7 @@ func testServer() *server {
 }
 
 func validQuoteBody() quoteRequest {
+	decimals := 18
 	return quoteRequest{
 		RequestID: "11111111-1111-4111-8111-111111111111", TokenInChainID: 1, TokenOutChainID: 1,
 		Swapper: "0x0000000000000000000000000000000000000099",
@@ -47,6 +48,7 @@ func validQuoteBody() quoteRequest {
 		QuoteID: "22222222-2222-4222-8222-222222222222",
 		Adapters: []quoteAdapter{{
 			Adapter: vlt.Hex(), Asset: tOut.Hex(), AssetDecimals: 6,
+			Account: vlt.Hex(), Price: "1000000000000000000", TokenInDecimals: &decimals,
 			BlockNumber: "1", MaxAssets: "10000000", Discount: "0",
 		}},
 	}

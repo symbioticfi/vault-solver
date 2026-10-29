@@ -34,6 +34,16 @@ payout), and RFQ's external `asset` field is the shared `tokenOut`. Pricing leg 
 `/discounts` flow). Both are in scope for full parity — discount legs are built in **P3** (§4), after
 the direct path is solid; they are sequenced last, not dropped.
 
+Discount-only `/quote` requests are priced from the backend snapshot without RPC:
+each signed entry requires `price` (the undiscounted `1e18` oracle price),
+`tokenInDecimals`, and `account` in addition to capacity, discount and observation
+block. `account` identifies the shared vault/account capacity for reservations.
+The quote stage allocates the advertised capacity after reservations and uses the
+shared exact-pricing helpers to preserve both contract floors. Backend pricing
+failure excludes that entry; missing metadata is a malformed request, with no chain
+fallback. Direct adapter quotes keep their current chain reads. Fill planning still
+re-reads state and simulates execution.
+
 ---
 
 ## 2. How it maps onto the framework

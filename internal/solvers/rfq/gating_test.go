@@ -343,11 +343,11 @@ func TestQuoteNormalizesDiscountRateWithInputDecimals(t *testing.T) {
 		t.Fatalf("candidates = %d, want one", len(strategy.quoteInput.Candidates))
 	}
 	candidate := strategy.quoteInput.Candidates[0]
-	// The adapter quote for 1e18 at the on-chain tokenIn decimals (18, not the backend's 0) is
+	// The backend price and tokenIn decimals reproduce the adapter's two rounding steps:
 	// 1000000; the signed 200 ppm discount pays floor(1000000 * 0.9998) = 999800 for it.
 	if candidate.Route.TokenInDecimals != 18 ||
 		candidate.Rate.Cmp(mustBig(t, "999800000000000000")) != 0 ||
-		candidate.MaxAmountIn.Cmp(mustBig(t, "10002000400080016003")) != 0 {
+		candidate.MaxAmountIn.Cmp(mustBig(t, "10002001999999999999")) != 0 {
 		t.Fatalf("candidate = %+v, want the 18-decimal payout rate at the signed discount", candidate)
 	}
 }

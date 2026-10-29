@@ -11,6 +11,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
@@ -230,7 +231,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDec
 	}, nil
 }
 
-// snapshotCandidates reads current on-chain pricing for the request as the rfq.quote.snapshot stage.
+// snapshotCandidates prices backend discounts or reads direct adapters as the rfq.quote.snapshot stage.
 func (qs *quoteService) snapshotCandidates(
 	ctx context.Context, inv []solverInventory, req strategyRequest,
 ) (candidates []liquidlane.QuoteCandidate, err error) {
@@ -241,6 +242,23 @@ func (qs *quoteService) snapshotCandidates(
 		pending = func(inventory []solverInventory) liquidlane.CapacityReservations {
 			return qs.reservations("", inventory)
 		}
+	}
+	// Discount quotes use the backend's complete snapshot; fill planning still reads current state.
+	if !slices.ContainsFunc(inv, func(item solverInventory) bool { return item.DiscountID == nil }) {
+		inv = slices.DeleteFunc(slices.Clone(inv), func(item solverInventory) bool {
+			return item.TokenIn != req.TokenIn || item.TokenOut != req.TokenOut
+		})
+		var reservations liquidlane.CapacityReservations
+		if pending != nil {
+			reservations = pending(inv)
+		}
+		allocated := liquidgreedy.AllocateInventoryCapacity(inv, reservations, 0)
+		for _, item := range allocated {
+			if candidate := liquidgreedy.NewQuoteCandidate(item, item.MaxAssets); candidate != nil {
+				candidates = append(candidates, *candidate)
+			}
+		}
+		return candidates, nil
 	}
 	return qs.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount, pending)
 }
