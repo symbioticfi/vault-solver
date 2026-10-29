@@ -41,10 +41,9 @@ An upstream source must award compatible orders; this solver does not publish qu
 The wall-clock observation is sampled before the header RPC; its latency consumes the unsigned submission deadline, including
 when the chain clock is ahead of the host.
 
-The host retrieves the original recipe from `GET /api/v1/recipes/{executor}?hash=…&block=…`
-under `backendUrl` and checks its body against the current on-chain commitment.
-Publication evidence comes from the indexer; no request or fill scans blockchain logs.
-The SDK reads the committed recipe metadata and active root, authenticates the curator
+The SDK reads the committed `recipeHash` and `recipeBlock` at the pinned block,
+retrieves `SetRecipe` only from that publication block and executor, and checks its body
+against the current commitment. No historical block range is scanned. It reads the active root, authenticates the curator
 tree, verifies masks/proofs and roles, and checks the canonical snapshot around
 simulation. The host fills the matching connector swap's signed terms and supplies amountIn
 and awarded payment as Inputs 0 and 1. Recipe gates, additional actions and balance

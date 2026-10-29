@@ -12,7 +12,6 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
-	"github.com/symbioticfi/vault-solver/internal/merklehost"
 	"github.com/symbioticfi/vault-solver/internal/merklesender"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
@@ -100,12 +99,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	indexed, err := merklehost.NewRecipeSource(cfg.IndexerURL)
-	if err != nil {
-		return nil, err
-	}
-	readChain := merklehost.NewIndexedReader(deps.Chain, indexed)
-	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(1, 16<<20), Chain: readChain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: deps.TxManager.Confirmations()}
+	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(1, 16<<20), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: deps.TxManager.Confirmations()}
 	k := &keeper.Keeper{Planner: &mintPlanning{Planner: planner, runtime: runtime}, Strategies: []keeper.Strategy{strategy}, Mode: cfg.Mode, OperationTimeout: operationTimeout, Log: deps.Log.WithName(Name)}
 	store, err := merklesender.OpenKeeper(k, cfg.StateDir, deps, Name)
 	if err != nil {

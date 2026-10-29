@@ -7,7 +7,6 @@ import (
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
@@ -17,11 +16,6 @@ import (
 // BatchRead is the SDK's pinned read boundary. Ordinary solver RPC methods and
 // their latest-state Multicall helper retain their existing behavior.
 func (c *Client) BatchRead(ctx context.Context, requests []protocolio.ReadRequest) ([]protocolio.ReadResult, error) {
-	for _, request := range requests {
-		if request.Kind == protocolio.ReadLogs {
-			return nil, errors.New("blockchain log scans belong to indexers")
-		}
-	}
 	reader := protocolio.RPCBatchReader{Call: c.sdkBatchCall, Multicall: common.HexToAddress(protocolio.StandardMulticall3), Codec: sdkAggregateCodec{}}
 	return reader.BatchRead(ctx, requests)
 }
@@ -61,9 +55,4 @@ func (c *Client) CallContractWithCode(ctx context.Context, msg ethereum.CallMsg,
 	var result hexutil.Bytes
 	err := c.Client.Client().CallContext(ctx, &result, "eth_call", protocolio.CallArgument(msg), protocolio.BlockArgument(block), overrides)
 	return result, err
-}
-
-// FilterLogs rejects request-time scans; Merkle workflows use indexed publication evidence.
-func (c *Client) FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error) {
-	return nil, errors.New("blockchain log scans belong to indexers")
 }

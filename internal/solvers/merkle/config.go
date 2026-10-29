@@ -28,14 +28,13 @@ const (
 type rawConfig struct {
 	Mode       string             `yaml:"mode" json:"mode"`
 	StateDir   string             `yaml:"stateDir" json:"stateDir"`
-	IndexerURL string             `yaml:"indexerUrl" json:"indexerUrl"`
 	Curator    merklehost.Curator `yaml:"curator" json:"curator"`
 	Strategies []string           `yaml:"strategies" json:"strategies"`
 }
 type config struct {
-	mode, stateDir, indexerURL string
-	curator                    merklehost.Curator
-	strategies                 []keeper.Strategy
+	mode, stateDir string
+	curator        merklehost.Curator
+	strategies     []keeper.Strategy
 }
 
 func parseConfig(node yaml.Node) (config, error) {
@@ -53,10 +52,7 @@ func parseConfig(node yaml.Node) (config, error) {
 	if err := permissions.ValidateConfig(raw.Curator.HTTPConfig()); err != nil {
 		return config{}, err
 	}
-	if err := merklehost.ValidateIndexerURL(raw.IndexerURL); err != nil {
-		return config{}, err
-	}
-	cfg := config{mode: raw.Mode, stateDir: raw.StateDir, indexerURL: raw.IndexerURL, curator: raw.Curator}
+	cfg := config{mode: raw.Mode, stateDir: raw.StateDir, curator: raw.Curator}
 	seen := make(map[string]bool)
 	for _, value := range raw.Strategies {
 		executor, err := parse.NonZeroAddress(value, "merkle executor")
@@ -74,14 +70,13 @@ func parseConfig(node yaml.Node) (config, error) {
 }
 
 // Bind derived identity and the shared source to existing recovery guards.
-func strategyRevision(strategy keeper.Config, curator merklehost.Curator, indexerURL string, caller common.Address) (string, error) {
+func strategyRevision(strategy keeper.Config, curator merklehost.Curator, caller common.Address) (string, error) {
 	raw, err := json.Marshal(struct {
-		Policy     string                `json:"policy"`
-		Strategy   keeper.Config         `json:"strategy"`
-		Curator    protocolio.HTTPConfig `json:"curator"`
-		Caller     common.Address        `json:"caller"`
-		IndexerURL string                `json:"indexerUrl"`
-	}{runtimePolicy, strategy, curator.HTTPConfig(), caller, indexerURL})
+		Policy   string                `json:"policy"`
+		Strategy keeper.Config         `json:"strategy"`
+		Curator  protocolio.HTTPConfig `json:"curator"`
+		Caller   common.Address        `json:"caller"`
+	}{runtimePolicy, strategy, curator.HTTPConfig(), caller})
 	if err != nil {
 		return "", errors.Errorf("merkle strategy identity: %w", err)
 	}

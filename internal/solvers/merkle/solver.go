@@ -13,7 +13,6 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
-	"github.com/symbioticfi/vault-solver/internal/merklehost"
 	"github.com/symbioticfi/vault-solver/internal/merklesender"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
@@ -84,7 +83,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		}
 		strategy.Providers = []provider.Provider{capacity, keeper.NewRecipeInputs()}
 		strategy.Config.Account = identity.Account.Hex()
-		strategy.Config.Revision, err = strategyRevision(strategy.Config, cfg.curator, cfg.indexerURL, deps.Signer.Address())
+		strategy.Config.Revision, err = strategyRevision(strategy.Config, cfg.curator, deps.Signer.Address())
 		if err != nil {
 			return nil, err
 		}
@@ -93,12 +92,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	indexed, err := merklehost.NewRecipeSource(cfg.indexerURL)
-	if err != nil {
-		return nil, err
-	}
-	readChain := merklehost.NewIndexedReader(deps.Chain, indexed)
-	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(len(cfg.strategies), recipeCacheBytes), Chain: readChain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: deps.TxManager.Confirmations()}
+	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(len(cfg.strategies), recipeCacheBytes), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: deps.TxManager.Confirmations()}
 	k := &keeper.Keeper{Planner: planner, Strategies: cfg.strategies, Mode: cfg.mode, OperationTimeout: defaultOperationTimeout, Log: deps.Log.WithName(Name)}
 	store, err := merklesender.OpenKeeper(k, cfg.stateDir, deps, Name)
 	if err != nil {

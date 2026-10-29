@@ -25,7 +25,6 @@ func configNode(t *testing.T, text string) yaml.Node {
 
 const validConfig = `mode: simulate
 stateDir: state/merkle
-indexerUrl: http://127.0.0.1:1
 curator:
   url: http://127.0.0.1:1/api/v1
 strategies:
@@ -39,7 +38,6 @@ func TestConfigValidation(t *testing.T) {
 		"duration":           validConfig + "pollInterval: -1s\n",
 		"override":           validConfig + "operationTimeout: 1s\n",
 		"missing strategies": "stateDir: state/merkle\ncurator: {url: 'http://127.0.0.1:1/api/v1'}\nstrategies: []\n",
-		"missing indexer":    strings.Replace(validConfig, "indexerUrl: http://127.0.0.1:1\n", "", 1),
 		"missing curator":    strings.Replace(validConfig, "curator:\n  url: http://127.0.0.1:1/api/v1\n", "", 1),
 		"manual account":     strategyConfig("  - executor: '0x0000000000000000000000000000000000000010'\n    account: '0x0000000000000000000000000000000000000020'\n"),
 		"manual tree":        strategyConfig("  - executor: '0x0000000000000000000000000000000000000010'\n    tree: permissions.json\n"),
@@ -69,7 +67,7 @@ func TestRevisionBindsDerivedIdentityAndPermissionSource(t *testing.T) {
 	strategy := cfg.strategies[0].Config
 	strategy.Account = "0x0000000000000000000000000000000000000020"
 	caller := common.HexToAddress("0x03")
-	original, err := strategyRevision(strategy, cfg.curator, cfg.indexerURL, caller)
+	original, err := strategyRevision(strategy, cfg.curator, caller)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +84,7 @@ func TestRevisionBindsDerivedIdentityAndPermissionSource(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s, c, owner := strategy, cfg.curator, caller
 			change(&s, &c, &owner)
-			revision, err := strategyRevision(s, c, cfg.indexerURL, owner)
+			revision, err := strategyRevision(s, c, owner)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -205,11 +203,11 @@ func TestAddressRevisionIgnoresCaseAndOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i, s := range a.strategies {
-		first, err := strategyRevision(s.Config, a.curator, a.indexerURL, common.HexToAddress("0x03"))
+		first, err := strategyRevision(s.Config, a.curator, common.HexToAddress("0x03"))
 		if err != nil {
 			t.Fatal(err)
 		}
-		second, err := strategyRevision(b.strategies[1-i].Config, b.curator, b.indexerURL, common.HexToAddress("0x03"))
+		second, err := strategyRevision(b.strategies[1-i].Config, b.curator, common.HexToAddress("0x03"))
 		if err != nil {
 			t.Fatal(err)
 		}

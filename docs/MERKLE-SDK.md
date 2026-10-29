@@ -16,14 +16,12 @@ and transaction manager; their liquidity and scheduling are independent.
 `internal/merklehost.Curator` supplies their shared permission-service settings and
 redirect-rejecting HTTP transport; each solver keeps its transport timeout.
 
-Recipe bytes come only from `GET /api/v1/recipes/{executor}?hash={recipeHash}&block={recipeBlock}` at
-the configured `indexerUrl` host. The RFQ backend serves previously indexed publication
-evidence. `rfq-merkle` reuses `backendUrl`; generic and 3F hosts require `indexerUrl`.
-The host supplies the SDK's `recipes.PublicationSource`; discovery verifies the original
-body against the pinned on-chain commitment and canonical publication block. Ordinary
-RPC reads retain their shared transport and batching. Blockchain log scans are rejected
-before RPC transport; an unavailable indexer never triggers a scan. Permission data still
-uses the curator service.
+The SDK reads the executor's `recipeHash` and `recipeBlock` at a pinned block,
+then retrieves `SetRecipe` only from that known publication block and executor.
+It verifies the original body against the current commitment and checks the
+canonical snapshot. It does not scan historical block ranges. Generic, RFQ and
+3F hosts use their existing shared chain reader; no recipe indexer URL is required.
+Permission data still uses the curator service.
 
 This solver receives the same transaction manager and signer as all other
 solvers. The SDK's transport is a thin bridge to that manager's Owner and
@@ -43,7 +41,6 @@ solvers:
     config:
       mode: simulate # switch to send for configured, authorized execution
       stateDir: /persistent/merkle-state
-      indexerUrl: https://rfq-backend.example.invalid # Host serving indexed recipe publications.
       curator:
         url: https://curator-backend.example.invalid/api/v1
         # apiKeyEnv: CURATOR_API_TOKEN
@@ -113,7 +110,7 @@ The recipe's own checks define the on-chain completion conditions; this host doe
 not infer settlement from issuer selectors or off-chain status.
 
 Reviewed caller-independent getters use the standard Multicall3 address at the
-pinned height. Independent calls, headers and receipts share bounded JSON-RPC
+pinned height. Independent calls, headers, publication logs and receipts share bounded JSON-RPC
 arrays through vault-solver's existing HTTP fallback and tracing transport. Safe
 aggregation and exact argument encoding come from the shared SDK implementation;
 full simulations preserve their caller and remain isolated eth_calls. Missing

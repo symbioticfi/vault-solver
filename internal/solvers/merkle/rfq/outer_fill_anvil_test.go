@@ -27,11 +27,9 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
-	"github.com/symbioticfi/vault-solver/internal/merklehost"
 )
 
 // All five contracts on the settlement path execute their pinned canonical bytecode.
@@ -257,13 +255,10 @@ func newOuterFillEVM(t *testing.T) *outerFillEVM {
 	for _, permission := range tree.Leaves {
 		f.send(f.signer, f.account, "MerkleAccount", "grantRole", permission.Hash, recipeExecutor)
 	}
-	publication := f.send(f.signer, recipeExecutor, "RecipeExecutor", "setRecipe", recipe.Queries, recipe.Steps)
-	if len(publication.Logs) != 1 {
-		t.Fatal("missing original recipe publication")
-	}
+	f.send(f.signer, recipeExecutor, "RecipeExecutor", "setRecipe", recipe.Queries, recipe.Steps)
 
 	f.reader = &outerFillEVMReader{Client: client, caller: caller}
-	f.workflow = &connectorWorkflow{chain: merklehost.NewIndexedReader(f.reader, outerFillRecipeSource{publication: recipes.Publication{Executor: recipeExecutor, RecipeHash: publication.Logs[0].Topics[1], BlockNumber: publication.BlockNumber.Uint64(), BlockHash: publication.BlockHash, TransactionHash: publication.TxHash, LogIndex: publication.Logs[0].Index, Recipe: recipe}}), chainID: big.NewInt(1), connectors: map[common.Address]bool{vlt: true}, source: outerFillPermissions(permissions), caller: caller, signer: f.signer}
+	f.workflow = &connectorWorkflow{chain: f.reader, chainID: big.NewInt(1), connectors: map[common.Address]bool{vlt: true}, source: outerFillPermissions(permissions), caller: caller, signer: f.signer}
 	f.order, f.selected, f.backend = connectorExecutionAward(caller)
 	f.selected.Executor = recipeExecutor
 	f.order.Request.AmountIn = big.NewInt(100)
@@ -307,14 +302,14 @@ func (f *outerFillEVM) materialize(name string, address common.Address, args ...
 	f.rpcCall("anvil_setCode", address, hexutil.Encode(code))
 }
 
-func (f *outerFillEVM) send(from, to common.Address, contract, method string, args ...any) *types.Receipt {
+func (f *outerFillEVM) send(from, to common.Address, contract, method string, args ...any) {
 	f.t.Helper()
 	contractABI := f.abis[contract]
 	data, err := contractABI.Pack(method, args...)
 	if err != nil {
 		f.t.Fatalf("%s.%s: %v", contract, method, err)
 	}
-	return f.transact(from, &to, data)
+	f.transact(from, &to, data)
 }
 
 func (f *outerFillEVM) transact(from common.Address, to *common.Address, data []byte) *types.Receipt {
@@ -454,31 +449,9 @@ func startOuterFillAnvil(t *testing.T) (*rpc.Client, *ethclient.Client) {
 	return nil, nil
 }
 
-type outerFillRecipeSource struct{ publication recipes.Publication }
-
-func (s outerFillRecipeSource) RecipePublication(context.Context, common.Address, common.Hash, uint64) (recipes.Publication, error) {
-	return s.publication, nil
-}
-
-func (*outerFillEVMReader) FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error) {
-	return nil, errors.New("request-time RPC log scan is forbidden")
-}
-func (*outerFillEVMReader) CallContractWithCode(context.Context, ethereum.CallMsg, *big.Int, []byte) ([]byte, error) {
-	return nil, errors.New("outer settlement must run original contract code")
-}
-func (r *outerFillEVMReader) BatchRead(ctx context.Context, requests []protocolio.ReadRequest) ([]protocolio.ReadResult, error) {
-	for _, request := range requests {
-		if request.Kind == protocolio.ReadLogs {
-			return nil, errors.New("request-time RPC log scan is forbidden")
-		}
+func (r *outerFillEVMReader) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]types.Log, error) {
+	if query.FromBlock == nil || query.ToBlock == nil || query.FromBlock.Cmp(query.ToBlock) != 0 || len(query.Addresses) != 1 {
+		return nil, errors.New("recipe publication requires one known block and executor")
 	}
-	group, err := protocolio.ReadGroup(ctx, struct{ recipes.Reader }{r}, requests...)
-	if err != nil {
-		return nil, err
-	}
-	results := make([]protocolio.ReadResult, len(requests))
-	for i := range requests {
-		results[i] = group.At(i)
-	}
-	return results, nil
+	return r.Client.FilterLogs(ctx, query)
 }

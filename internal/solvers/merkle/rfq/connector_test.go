@@ -102,6 +102,9 @@ type connectorReadFake struct {
 func (f *connectorReadFake) HeaderByNumber(context.Context, *big.Int) (*types.Header, error) {
 	return &types.Header{Number: big.NewInt(7)}, nil
 }
+func (f *connectorReadFake) FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error) {
+	return nil, nil
+}
 func (f *connectorReadFake) CallContract(_ context.Context, m ethereum.CallMsg, _ *big.Int) ([]byte, error) {
 	a := connectorBinding.GetABI()
 	for _, method := range a.Methods {
