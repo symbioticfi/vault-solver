@@ -95,18 +95,22 @@ External mode also fails startup unless that executor has direct `owner`/`market
 authorization on every configured adapter; the fatal startup log includes the executor, configured adapters,
 and underlying authorization error.
 
-Merkle connector orders run independently under `rfq-merkle`; see its
+Configure `rfq-filler` with the existing `adapters` list for native
+pricing and fills, or with `recipeExecutor` for Merkle connector pricing and fills.
+Setting both fails startup. The Merkle mode uses `stateDir` and `curator` for durable
+execution and permissions; `quoteOnly: true` needs neither. See its
 [configuration](config/rfq-merkle.example.yaml) and [runbook](docs/RFQ-MERKLE.md).
 They preserve backend signature bytes, including ERC-1271 wallet signatures.
 The committed permission must admit the supplied calldata length and signature
 framing, and the complete outer fill must simulate successfully. Existing Curator
 templates with fixed 65-byte fields require compatible permissions for other lengths.
 It consumes awarded `/orders` and signed backend terms without aggregating adapter liquidity.
-Configuration allowlists connectors; the backend advertises its configured RecipeExecutor
-and capacity estimate from recipe reads. The solver applies current policy budgets and shared
-reservations. Recipes keep their original format: the SDK retrieves publication bytes at the
-executor's single `recipeBlock`, while call data and Merkle proofs come from the curator
-permission-tree service.
+The solver derives the payment connector from its locally configured RecipeExecutor.
+The backend advertises its capacity estimate from recipe reads, without an executor in
+its quote request. The solver applies current policy budgets and shared reservations.
+Recipes keep their original format: the SDK retrieves publication bytes at the
+executor's single `recipeBlock`, while call data and Merkle proofs come from the
+curator permission-tree service.
 Filling verifies the current commitment and permissions, then simulates the complete outer
 settlement to check ordered funding and actual payment before admission. Missing executors or
 invalid capacity fail closed. Each recipe handles one asset and includes its issuer calls when
@@ -1006,7 +1010,7 @@ new bids are blocked and unjournaled UI offers require explicit UI cancellation 
 budget-consuming check cannot establish their scope. The bot can cancel its own unaccepted journaled
 intent and never cancels accepted mint windows.
 
-The independent `rfq-merkle` solver executes awarded orders through the RFQ Executor and committed
+The `rfq-filler` recipe mode (also available as the execution-only `rfq-merkle` plugin) executes awarded orders through the RFQ Executor and committed
 Merkle recipes. It samples wall time before reading the chain header so RPC latency consumes submission validity.
 See [the RFQ Merkle runbook](docs/RFQ-MERKLE.md) and [configuration](config/rfq-merkle.example.yaml).
 

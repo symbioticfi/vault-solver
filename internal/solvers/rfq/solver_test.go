@@ -156,3 +156,16 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 		t.Fatalf("amountOut = %s, want quote through the configured adapter", decision.response.AmountOut)
 	}
 }
+
+func TestBuildServicesUsesConfiguredRecipeExecutor(t *testing.T) {
+	cfg, err := parseCfg(t, minimalConfig+`recipeExecutor: "0x0000000000000000000000000000000000000043"
+quoteOnly: true
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quotes, _ := buildServices(cfg, 1, newStore(time.Now), nil, nil, func() bool { return true }, nil, logr.Discard())
+	if quotes.recipeExecutor != cfg.RecipeExecutor || !quotes.discountsEnabled {
+		t.Fatal("local recipe configuration did not reach quote service")
+	}
+}

@@ -2,6 +2,7 @@ package rfq
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -289,5 +290,46 @@ func TestQuoteOnlyDoesNotStartExecution(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("quote-only shutdown blocked")
+	}
+}
+
+func TestLocalRecipeExecutorSelectsMode(t *testing.T) {
+	const recipe = `recipeExecutor: "0x0000000000000000000000000000000000000043"
+stateDir: /persistent/rfq-merkle
+curator: {url: https://curator.example/api/v1}
+`
+	for _, tc := range []struct {
+		name, text, want string
+		merkle           bool
+	}{
+		{name: "singular adapter is unsupported", text: `adapter: "0x0000000000000000000000000000000000000042"`, want: "field adapter not found"},
+		{name: "adapters preserve native mode", text: oneAdapter},
+		{name: "recipe selects connector mode", text: recipe, merkle: true},
+		{name: "adapters and recipe executor conflict", text: recipe + oneAdapter, want: "mutually exclusive"},
+		{name: "zero executor", text: `recipeExecutor: "0x0000000000000000000000000000000000000000"`, want: "recipeExecutor"},
+		{name: "bad executor", text: `recipeExecutor: no`, want: "recipeExecutor"},
+		{name: "no durable state", text: `recipeExecutor: "0x0000000000000000000000000000000000000043"`, want: "stateDir"},
+		{name: "quote only needs no journal", text: `recipeExecutor: "0x0000000000000000000000000000000000000043"
+quoteOnly: true
+`, merkle: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := parseCfg(t, minimalConfig+tc.text)
+			if tc.want != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("want %s, got %v", tc.want, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (cfg.RecipeExecutor != (common.Address{})) != tc.merkle {
+				t.Fatalf("wrong mode: %+v", cfg)
+			}
+			if tc.merkle && (len(cfg.Adapters) > 0 || !cfg.usesDiscounts()) {
+				t.Fatal("recipe mode must use signed connector discounts without adapters")
+			}
+		})
 	}
 }

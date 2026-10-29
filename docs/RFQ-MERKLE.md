@@ -1,34 +1,42 @@
 # RFQ orders through Merkle recipes
 
-`rfq-merkle` is an independent solver in `internal/solvers/merkle/rfq`.
+`rfq-filler` selects its path from local configuration: the existing `adapters`
+list preserves native quoting and fills; `recipeExecutor` selects Merkle
+quoting and fills. Setting both fails before startup. The execution implementation
+is shared with the execution-only `rfq-merkle` plugin in `internal/solvers/merkle/rfq`.
 It polls awarded `/api/v1/orders?filler=…&orderStatus=open`, obtains signed terms
 from the backend discounts API, and builds:
 
 `EOA → RFQ Executor → RecipeExecutor → MerkleAccount → LiquidLaneConnector`.
 
-Use [the example config](../config/rfq-merkle.example.yaml). The EOA must be an
-authorized caller of the RFQ Executor. Each configured connector must be registered
-as version `2` in the Reactor's Liquid Lane adapter factory (version `1` is the
-native adapter). The backend supplies the configured RecipeExecutor for each connector/RWA
-from its configured binding. Its caller must be the RFQ Executor and its account must be
-the connector's MerkleAccount.
+Use [the example config](../config/rfq-merkle.example.yaml). Configure the RFQ
+`executor` and a separate `recipeExecutor`; they identify different contracts.
+The EOA must be an authorized caller of the RFQ Executor. The solver derives its
+payment connector from the original recipe's output-token approval using input 1,
+checks its account and output asset, and requires the recipe caller to be the RFQ
+Executor. The connector must be registered as version `2` in the Reactor's Liquid
+Lane adapter factory (version `1` is a native adapter).
 
-Configuration contains the backend URL, durable state directory, RFQ executor,
-curator service and an explicit allowlist of 1..256 connectors. Per-RWA executors and
-funding capacity are derived by the backend from the configured recipe; no local executor map or source
-list is maintained. The backend supplies optional `recipeExecutor` inventory metadata; missing
-executors fail closed. For execution, the solver discovers the original recipe and current permissions at the
-same pinned block as connector identities and the remaining policy budget. A recipe that requires issuer redemption includes those calls for
-its asset. Duplicate connector addresses are rejected, including case variants.
+Backend quote requests carry capacity, account and discount precision, without
+`recipeExecutor`. Neither quote requests nor discount listings select the execution
+target. The backend keeps its own matching executor binding for capacity reads and
+routing; operators must configure the same executor on both sides. The SDK retrieves
+original recipe bytes at the executor's known `recipeBlock`. Execution verifies current
+permissions and the complete outer fill. Recipes remain unchanged.
+
+Merkle fills require a durable `stateDir` and curator permission service. With
+`quoteOnly: true`, `rfq-filler` opens no execution journal and needs no curator URL.
+Both plugins derive one payment connector from the configured `recipeExecutor`;
+there is no separate connector list. Use one order poller per RFQ Executor/filler
+identity; a second process for quotes must set `quoteOnly: true`.
 Polling is every three seconds;
 each iteration has a thirty-second context and fetches at most 100 open orders.
 Curator HTTP limits are ten seconds and 2 MiB. Secret configuration contains
-environment variable names. This solver has no quote server or adapter inventory.
-Use a separate RFQ Executor/filler identity for the adapter solver; two pollers must
-not compete for the same awarded orders.
+environment variable names. The execution-only plugin has no quote server. Native RFQ mode keeps its existing
+configurable polling limits.
 
 The signed order tuple supplies the entire input and sum of output payments.
-Matching advertised connectors are tried in address/discount-ID order, and one must
+Discounts for the recipe-derived connector are tried in discount-ID order, and one must
 cover the complete award using the backend's advertised capacity, clipped by the current
 `remainingAssets(token)` policy budget. Capacity calculation belongs to the backend: it
 estimates funding from the configured recipe's reads and checks current roles with batched RPC calls.

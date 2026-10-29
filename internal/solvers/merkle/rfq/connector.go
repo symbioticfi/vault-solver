@@ -134,7 +134,7 @@ type permissionSource interface {
 type connectorWorkflow struct {
 	chain          recipes.Reader
 	chainID        *big.Int
-	connectors     map[common.Address]bool
+	connector      common.Address
 	source         permissionSource
 	caller, signer common.Address
 }
@@ -182,8 +182,8 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if selected.Executor == (common.Address{}) {
 		return nil, time.Time{}, errors.New("connector has no recipe executor")
 	}
-	if !w.connectors[selected.Venue] || selected.DiscountID == (common.Hash{}) || selected.MaxAssets == nil || selected.MaxAssets.Sign() < 0 {
-		return nil, time.Time{}, errors.New("connector requires configured routing and upstream discount")
+	if w.connector == (common.Address{}) || selected.Venue != w.connector || selected.DiscountID == (common.Hash{}) || selected.MaxAssets == nil || selected.MaxAssets.Sign() < 0 {
+		return nil, time.Time{}, errors.New("connector requires recipe-derived routing and upstream discount")
 	}
 	header, err := w.chain.HeaderByNumber(ctx, nil)
 	if err != nil {

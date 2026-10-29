@@ -258,7 +258,7 @@ func newOuterFillEVM(t *testing.T) *outerFillEVM {
 	f.send(f.signer, recipeExecutor, "RecipeExecutor", "setRecipe", recipe.Queries, recipe.Steps)
 
 	f.reader = &outerFillEVMReader{Client: client, caller: caller}
-	f.workflow = &connectorWorkflow{chain: f.reader, chainID: big.NewInt(1), connectors: map[common.Address]bool{vlt: true}, source: outerFillPermissions(permissions), caller: caller, signer: f.signer}
+	f.workflow = &connectorWorkflow{chain: f.reader, chainID: big.NewInt(1), connector: vlt, source: outerFillPermissions(permissions), caller: caller, signer: f.signer}
 	f.order, f.selected, f.backend = connectorExecutionAward(caller)
 	f.selected.Executor = recipeExecutor
 	f.order.Request.AmountIn = big.NewInt(100)

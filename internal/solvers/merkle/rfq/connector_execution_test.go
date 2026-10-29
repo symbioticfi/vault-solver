@@ -119,6 +119,8 @@ func TestConnectorBuildRejectsUnauthorizedOrUnsettledExecution(t *testing.T) {
 		want   string
 	}{
 
+		{"connector not derived", func(w *connectorWorkflow, _ *connectorExecutionReader) { w.connector = common.Address{} }, "recipe-derived routing"},
+		{"different connector", func(w *connectorWorkflow, _ *connectorExecutionReader) { w.connector = common.HexToAddress("0x88") }, "recipe-derived routing"},
 		{"connector account differs", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.account = common.HexToAddress("0x88") }, "account"},
 		{"recipe caller differs", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.recipeCaller = common.HexToAddress("0x88") }, "caller"},
 		{"permission role missing", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.allowed = false }, "role"},
@@ -313,7 +315,7 @@ func connectorExecutionFixture(t *testing.T, resolved *discounts.Resolved) conne
 		header: &types.Header{Number: big.NewInt(7), Time: 7}, allowed: true,
 	}
 	workflow := &connectorWorkflow{
-		chain: reader, chainID: big.NewInt(1), connectors: map[common.Address]bool{vlt: true},
+		chain: reader, chainID: big.NewInt(1), connector: vlt,
 		source: connectorExecutionPermissions{raw: permission, account: account, executor: recipeExecutor}, caller: rfqExecutor, signer: signer,
 	}
 	return connectorExecutionFixtureData{workflow, reader, recipe, leaf}

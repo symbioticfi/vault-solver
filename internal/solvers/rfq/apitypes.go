@@ -33,7 +33,6 @@ type quoteRequest struct {
 // quoteAdapter is one adapter inventory entry the backend offers for the request.
 type quoteAdapter struct {
 	DiscountPrecision string  `json:"discountPrecision,omitempty"`
-	RecipeExecutor    string  `json:"recipeExecutor,omitempty" pattern:"^0x[a-fA-F0-9]{40}$"`
 	Account           string  `json:"account,omitempty"`
 	Adapter           string  `json:"adapter" pattern:"^0x[a-fA-F0-9]{40}$"`
 	Asset             string  `json:"asset" pattern:"^0x[a-fA-F0-9]{40}$"`
@@ -75,7 +74,7 @@ type parsedQuote struct {
 // toStrategy validates and parses the request. A non-nil error is a malformed payload (→ 400). A nil
 // result with nil error means the request is well-formed but not quotable here — wrong chain or no
 // adapters — and the caller replies 204.
-func (q *quoteRequest) toStrategy(chainID int64) (*parsedQuote, error) {
+func (q *quoteRequest) toStrategy(chainID int64, recipeExecutor common.Address) (*parsedQuote, error) {
 	// Schema-level validation (malformed → 400).
 	if q.Type != quoteTypeExactInput {
 		return nil, errors.Errorf("type must be %q", quoteTypeExactInput)
@@ -106,7 +105,7 @@ func (q *quoteRequest) toStrategy(chainID int64) (*parsedQuote, error) {
 	}
 	inv := make([]solverInventory, 0, len(q.Adapters))
 	for i := range q.Adapters {
-		entry, perr := q.Adapters[i].parse(i, q.TokenInChainID, tokenIn)
+		entry, perr := q.Adapters[i].parse(i, q.TokenInChainID, tokenIn, recipeExecutor)
 		if perr != nil {
 			return nil, perr
 		}
@@ -129,7 +128,7 @@ func (q *quoteRequest) toStrategy(chainID int64) (*parsedQuote, error) {
 	}, nil
 }
 
-func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (solverInventory, error) {
+func (v *quoteAdapter) parse(index int, chainID int64, tokenIn, recipeExecutor common.Address) (solverInventory, error) {
 	adapter, err := parse.Address(v.Adapter, idxField(index, "adapter"))
 	if err != nil {
 		return solverInventory{}, err
@@ -155,7 +154,7 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (
 		return solverInventory{}, err
 	}
 	precision := liquidlane.DiscountPrecision
-	if v.RecipeExecutor != "" {
+	if recipeExecutor != (common.Address{}) {
 		if v.DiscountPrecision != "100000000" || discountID == nil {
 			return solverInventory{}, errors.Errorf("adapters[%d]: connector requires signed discount and precision 100000000", index)
 		}
@@ -163,7 +162,7 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (
 	} else if v.DiscountPrecision != "" && v.DiscountPrecision != "1000000" {
 		return solverInventory{}, errors.Errorf("adapters[%d]: invalid adapter discount precision", index)
 	}
-	if discount.Cmp(big.NewInt(precision)) > 0 || (v.RecipeExecutor != "" && discount.Cmp(big.NewInt(precision)) == 0) {
+	if discount.Cmp(big.NewInt(precision)) > 0 || (recipeExecutor != (common.Address{}) && discount.Cmp(big.NewInt(precision)) == 0) {
 		return solverInventory{}, errors.Errorf("%s: must be <= %d", idxField(index, "discount"), precision)
 	}
 	blockNumber, err := strconv.ParseUint(v.BlockNumber, 10, 64)
@@ -178,12 +177,9 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (
 		inventory = liquidlane.DiscountInventory(route, maxAssets, nil, *discountID, time.Time{})
 		inventory.Discount = discount
 	}
-	if v.RecipeExecutor != "" {
+	if recipeExecutor != (common.Address{}) {
 		inventory.DiscountPrecision = precision
-		inventory.RecipeExecutor, err = parse.NonZeroAddress(v.RecipeExecutor, idxField(index, "recipeExecutor"))
-		if err != nil {
-			return solverInventory{}, err
-		}
+		inventory.RecipeExecutor = recipeExecutor
 	}
 	inventory.BlockNumber = blockNumber
 	return inventory, nil
