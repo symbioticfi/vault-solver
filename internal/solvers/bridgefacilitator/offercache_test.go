@@ -5,7 +5,13 @@ import (
 	"testing"
 	"time"
 
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 // seed inserts an offer straight into the tracker's map, standing in for a prior reconcile.
@@ -134,5 +140,35 @@ func TestParseUnixTime(t *testing.T) {
 	}
 	if _, err := parseUnixTime("not-a-number"); err == nil {
 		t.Fatal("expected error on non-numeric input")
+	}
+}
+
+// TestReconcileOffersSkipsFundedOffers: a SUCCEEDED offer is already funded on-chain, where getMaxAssets
+// and requestsLength account for it, so it must not reserve liquidity a second time; only the still
+// unfunded SUBMITTED offer stays live.
+func TestReconcileOffersSkipsFundedOffers(t *testing.T) {
+	adapter := common.Address{0xAA}
+	expiration := strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[` +
+			`{"id":1,"auctionId":83,"status":"SUCCEEDED","maker":"` + lowerAddr(adapter) + `","amount":"45000","expectedReturn":"1","nonce":"1","expiration":"` + expiration + `"},` +
+			`{"id":2,"auctionId":84,"status":"SUBMITTED","maker":"` + lowerAddr(adapter) + `","amount":"414000","expectedReturn":"1","nonce":"2","expiration":"` + expiration + `"}]`))
+	}))
+	defer api.Close()
+	s := &Solver{
+		api:    newAPIClient(api.URL, fakeSigner{}, big.NewInt(1), time.Second, logr.Discard()),
+		log:    logr.Discard(),
+		offers: newOfferTracker(),
+		links:  observability.NewSpanLinks(),
+	}
+	if !s.reconcileOffers(t.Context(), []Target{{Adapter: adapter}}) {
+		t.Fatal("reconcile reported incomplete")
+	}
+	if _, ok := s.offers.offers[offerKey{adapter, 83}]; ok {
+		t.Fatal("funded offer on auction 83 must not be live")
+	}
+	if got := s.offers.liveCoverage(84, time.Now()); got == nil || got.Int64() != 414000 {
+		t.Fatalf("auction 84 coverage = %v, want 414000", got)
 	}
 }

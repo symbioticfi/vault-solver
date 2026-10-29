@@ -199,7 +199,9 @@ RPC failure preserves the last-known-good snapshot; a successful refresh replace
 remove and can later re-add an adapter. Before every offer pass the solver reconciles its live-offer
 cache against the 3F API (per adapter): it re-lists each adapter's live offers and replaces that
 adapter's cache wholesale, so coverage reflects offers made out of band — a manual re-offer, a second
-instance, or a server-side cancellation — and it never double-offers an auction it already covers. The
+instance, or a server-side cancellation — and it never double-offers an auction it already covers. A
+funded (`SUCCEEDED`) offer is not live: its principal and request slot are already on-chain and reflected
+in `getMaxAssets` and `requestsLength`, so it reserves nothing a second time. The
 1-2 minute poll is authoritative and always surfaces our own just-submitted offers, so any pair not in
 the fresh listing is gone and dropped (no local record is kept between passes). Funding headroom is the adapter's own
 `getMaxAssets()` (it folds in the delegator's per-adapter `limitOf`, the vault's `withdrawable`, and

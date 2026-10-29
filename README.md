@@ -547,7 +547,8 @@ transaction manager. See the [replica plan](docs/REPLICA-PLAN.md) and each solve
 
 For liquidity commitments, the built-in strategies apply these limits:
 
-- 3F counts all live offer principals and request slots before creating offers for another auction.
+- 3F counts all unfunded live offer principals and request slots before creating offers for another
+  auction; a funded offer is already reflected in the adapter's on-chain headroom and is not counted again.
   Each adapter offers an auction's full requested amount within its own capacity; adapters bid
   independently and never split one auction between them.
   Expiration is at least `now + offerExpiryBuffer`. Webhook `liveOffers[]` now includes decimal-string
