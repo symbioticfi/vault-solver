@@ -12,8 +12,8 @@ import (
 // Initialize scopes this process to the payment connector in its configured recipe.
 // Recipe bytes are verified against the configured executor's commitment.
 func (s *Solver) Initialize(ctx context.Context) (common.Address, error) {
-	if s.venue != (common.Address{}) {
-		return s.venue, nil
+	if s.workflow.connector != (common.Address{}) {
+		return s.workflow.connector, nil
 	}
 	snapshot, recipe, err := recipes.Discover(ctx, s.workflow.chain, s.recipeExecutor, nil)
 	if err != nil {
@@ -26,9 +26,6 @@ func (s *Solver) Initialize(ctx context.Context) (common.Address, error) {
 	if err != nil {
 		return common.Address{}, err
 	}
-	if len(s.workflow.connectors) > 0 && !s.workflow.connectors[venue] {
-		return common.Address{}, errors.New("recipe payment connector outside configured connectors")
-	}
 	state, err := s.workflow.state(ctx, venue, new(big.Int).SetUint64(snapshot.BlockNumber))
 	if err != nil {
 		return common.Address{}, err
@@ -36,8 +33,7 @@ func (s *Solver) Initialize(ctx context.Context) (common.Address, error) {
 	if state.Account != snapshot.Account || state.Asset != asset {
 		return common.Address{}, errors.New("recipe payment connector account or asset mismatch")
 	}
-	s.workflow.connectors = map[common.Address]bool{venue: true}
-	s.venue = venue
+	s.workflow.connector = venue
 	return venue, nil
 }
 

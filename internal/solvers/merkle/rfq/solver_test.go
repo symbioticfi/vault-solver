@@ -245,8 +245,6 @@ stateDir: /persistent/rfq-merkle
 executor: "0x0000000000000000000000000000000000000010"
 recipeExecutor: "0x0000000000000000000000000000000000000043"
 curator: {url: https://curator.example/api/v1}
-connectors:
- - "0x0000000000000000000000000000000000000042"
 `
 	for _, tc := range []struct {
 		name, text string

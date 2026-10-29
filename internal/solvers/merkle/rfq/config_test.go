@@ -14,17 +14,11 @@ stateDir: /persistent/rfq-merkle
 executor: "0x0000000000000000000000000000000000000010"
 recipeExecutor: "0x0000000000000000000000000000000000000043"
 curator: {url: https://curator.example/api/v1}
-connectors:
- - "0x00000000000000000000000000000000000000ab"
- - "0x0000000000000000000000000000000000000042"
 `
 	for _, tc := range []struct{ name, text, want string }{
 		{"onchain recipe discovery", base, ""},
-		{"duplicate connector", base + ` - "0x00000000000000000000000000000000000000AB"` + "\n", "duplicate connector"},
-		{"zero connector", strings.ReplaceAll(base, "00000000ab", "0000000000"), "connector"},
-		{"empty connectors", strings.Replace(base, `connectors:
- - "0x00000000000000000000000000000000000000ab"
- - "0x0000000000000000000000000000000000000042"`, "connectors: []", 1), ""},
+		{"obsolete connector list", base + "connectors: []\n", "field connectors not found"},
+		{"missing recipe executor", strings.Replace(base, `recipeExecutor: "0x0000000000000000000000000000000000000043"`+"\n", "", 1), "recipeExecutor"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var node yaml.Node

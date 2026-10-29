@@ -18,7 +18,6 @@ type Config struct {
 	StateDir       string
 	Executor       common.Address
 	Curator        merklehost.Curator
-	Connectors     map[common.Address]bool
 }
 
 func parseConfig(node yaml.Node) (Config, error) {
@@ -28,13 +27,9 @@ func parseConfig(node yaml.Node) (Config, error) {
 		Executor       string             `yaml:"executor"`
 		RecipeExecutor string             `yaml:"recipeExecutor"`
 		Curator        merklehost.Curator `yaml:"curator"`
-		Connectors     []string           `yaml:"connectors"`
 	}
 	if err := solver.DecodeStrict(node, &raw); err != nil {
 		return Config{}, err
-	}
-	if len(raw.Connectors) > 256 {
-		return Config{}, errors.New("at most 256 connectors")
 	}
 	executor, err := parse.NonZeroAddress(raw.Executor, "executor")
 	if err != nil {
@@ -44,17 +39,7 @@ func parseConfig(node yaml.Node) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cfg := Config{RecipeExecutor: recipeExecutor, BackendURL: raw.BackendURL, StateDir: raw.StateDir, Executor: executor, Curator: raw.Curator, Connectors: make(map[common.Address]bool)}
-	for _, venue := range raw.Connectors {
-		connector, err := parse.NonZeroAddress(venue, "connector")
-		if err != nil {
-			return Config{}, err
-		}
-		if cfg.Connectors[connector] {
-			return Config{}, errors.New("duplicate connector")
-		}
-		cfg.Connectors[connector] = true
-	}
+	cfg := Config{RecipeExecutor: recipeExecutor, BackendURL: raw.BackendURL, StateDir: raw.StateDir, Executor: executor, Curator: raw.Curator}
 	return cfg, cfg.Validate()
 }
 

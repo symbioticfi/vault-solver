@@ -26,8 +26,8 @@ permissions and the complete outer fill. Recipes remain unchanged.
 
 Merkle fills require a durable `stateDir` and curator permission service. With
 `quoteOnly: true`, `rfq-filler` opens no execution journal and needs no curator URL.
-The execution-only plugin accepts an optional connector allowlist in addition to
-its required local `recipeExecutor`. Use one order poller per RFQ Executor/filler
+Both plugins derive one payment connector from the configured `recipeExecutor`;
+there is no separate connector list. Use one order poller per RFQ Executor/filler
 identity; a second process for quotes must set `quoteOnly: true`.
 Polling is every three seconds;
 each iteration has a thirty-second context and fetches at most 100 open orders.
@@ -36,7 +36,7 @@ environment variable names. The execution-only plugin has no quote server. Nativ
 configurable polling limits.
 
 The signed order tuple supplies the entire input and sum of output payments.
-Matching advertised connectors are tried in address/discount-ID order, and one must
+Discounts for the recipe-derived connector are tried in discount-ID order, and one must
 cover the complete award using the backend's advertised capacity, clipped by the current
 `remainingAssets(token)` policy budget. Capacity calculation belongs to the backend: it
 estimates funding from the configured recipe's reads and checks current roles with batched RPC calls.

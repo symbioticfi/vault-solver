@@ -55,7 +55,6 @@ type fillIntent struct {
 
 type Solver struct {
 	recipeExecutor common.Address
-	venue          common.Address
 	workflow       *connectorWorkflow
 	backend        orderBackend
 	sender         journalSender
@@ -87,7 +86,7 @@ func New(cfg Config, deps solver.Deps) (*Solver, error) {
 	if deps.Chain == nil || (!cfg.QuoteOnly && (deps.Signer == nil || deps.TxManager == nil)) {
 		return nil, errors.New("rfq-merkle requires the shared chain, signer and transaction manager")
 	}
-	s := &Solver{recipeExecutor: cfg.RecipeExecutor, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), connectors: cfg.Connectors, caller: cfg.Executor}}
+	s := &Solver{recipeExecutor: cfg.RecipeExecutor, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), caller: cfg.Executor}}
 	if cfg.QuoteOnly {
 		return s, nil
 	}
@@ -220,7 +219,7 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	}
 	for _, item := range listed {
 		venue := common.HexToAddress(item.Adapter)
-		if !s.workflow.connectors[venue] || common.HexToAddress(item.TokenToRedeem) != order.Request.TokenIn || common.HexToAddress(item.Collateral) != token {
+		if venue != s.workflow.connector || common.HexToAddress(item.TokenToRedeem) != order.Request.TokenIn || common.HexToAddress(item.Collateral) != token {
 			continue
 		}
 		id, err := hexutil.Decode(item.DiscountID)
