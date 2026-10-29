@@ -139,13 +139,13 @@ LiquidLane state at fill time; the solver does not retain quote-time route plans
 RFQ keeps quoting while fills are queued or pending. As soon as a won order is polled, its planned output
 is reserved against the vault capacity it spends, including capacity reached through a discount. Quotes and
 later fill plans subtract every reservation until the order expires or fails; an order the backend stops
-reporting expires locally at its own deadline. When the backend reports the block an adapter's `maxAssets`
-was read at (`adapters[].blockNumber` on `/quote`), a confirmed fill is subtracted only from snapshots older
+reporting expires locally at its own deadline. The backend supplies the block an adapter's `maxAssets`
+was read at (`adapters[].blockNumber` on `/quote`); a confirmed fill is subtracted only from snapshots older
 than its inclusion block, for a few hours after the order is filled, and never from newer ones, which
 already reflect it. Every `/quote` adapter entry carries `discount` (ppm): the signed discount on
 discount-backed entries, the adapter `minDiscount` on direct ones. Quotes and fill plans price each leg as
 the adapter pays it at the order amount, `floor(getAmountOut(amountIn) * (1e6 - discount) / 1e6)`. The
-field replaces `maxRate`, so run this version with a backend that sends it. Fills are still
+required `blockNumber` also accompanies each private discount listing. Fills are still
 sent one at a time on the shared nonce lane. While a fill is pending, the solver checks the order's backend
 status: once the backend reports it no longer open (filled, cancelled, expired, unfunded or failed), the fill
 stops being tracked without sending another transaction, and the order is retired without a retry and
@@ -766,7 +766,6 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | Workflow | `solver_bot_workflow_observed_items` | `solver`, `strategy`, `view` | Last complete authoritative item count for a bounded state view. |
 | Workflow | `solver_bot_workflow_last_observation_timestamp` | `solver`, `strategy`, `view` | Freshness paired with each retained workflow state count. |
 | RFQ | `rfq_filler_http_request_duration_seconds` | `method`, `route`, `status` | Quote-server request count (`_count`), status funnel, and latency. Routes are allowlisted and methods are normalized to `GET`, `POST`, or `other` to bound cardinality. |
-| RFQ | `rfq_filler_http_requests_total` | `method`, `route`, `status` | Deprecated one-release compatibility counter for existing alerts; migrate to `rfq_filler_http_request_duration_seconds_count`. |
 | RFQ | `rfq_active_orders` | — | Current queued, submitting, submitted, nonce-retry or nonce-reconciliation obligations awaiting terminal backend state. |
 | RFQ | `rfq_oldest_active_order_age_seconds` | — | Age of the oldest active obligation; catches a single stuck order that a count-only alert can miss. |
 | LI.FI | `lifi_active_quotes` | — | Process-local quote count from the last successful publication or suspension reconciliation. It can remain nonzero after the remote quotes expire at `quoteTtl`, so use it with refresh freshness rather than as backend state. |
@@ -1002,7 +1001,7 @@ described in [the 3F Merkle runbook](docs/THREEF-MERKLE.md). The generic `merkle
 solver rejects the `threeF` field. The executor uses the maker account and shared signer. Its recipe supplies funding pairs and request/principal/yield inputs; inactive groups receive zero principal. Gates and fixed funding calls remain curator-owned. One journal and sender serialize all markets. Automatic offers reserve existing commitments
 and use account idle cash; simulation never submits or cancels API offers.
 `rateBasisSeconds` is read from the exact JSON number and must
-be a nonnegative int64 integer; omitted, null and zero values keep the legacy rate comparison.
+be a nonnegative int64 integer; omitted, null and zero values use the unscaled rate comparison.
 
 Live commitments are maintained first. Each cycle then checks every relevant unanswered open/solvable
 auction before bidding, reusing policy eligibility results within the pinned snapshot. There is no

@@ -279,7 +279,7 @@ func TestFillPlanReservations(t *testing.T) {
 }
 
 // A snapshot read at or after a fill's confirmed inclusion already reflects it, so the order's
-// reservation is not subtracted from that snapshot. Earlier or unknown snapshot blocks still are.
+// reservation is not subtracted from that snapshot. Earlier snapshot blocks still are.
 func TestPendingReservationsHonourSnapshotBlock(t *testing.T) {
 	capacityID := vltFillCapacity()
 	item := func(block uint64) solverInventory {
@@ -297,8 +297,8 @@ func TestPendingReservationsHonourSnapshotBlock(t *testing.T) {
 		{name: "snapshot before inclusion", includedAt: 100, inventory: []solverInventory{item(99)}, subtracted: true},
 		{name: "snapshot at inclusion", includedAt: 100, inventory: []solverInventory{item(100)}},
 		{name: "snapshot after inclusion", includedAt: 100, inventory: []solverInventory{item(150)}},
-		{name: "snapshot block unknown", includedAt: 100, inventory: []solverInventory{item(0)}, subtracted: true},
-		{name: "one item of the capacity unknown", includedAt: 100, inventory: []solverInventory{item(150), item(0)}, subtracted: true},
+		{name: "genesis snapshot", includedAt: 100, inventory: []solverInventory{item(0)}, subtracted: true},
+		{name: "oldest item is genesis", includedAt: 100, inventory: []solverInventory{item(150), item(0)}, subtracted: true},
 		{name: "oldest item of the capacity decides", includedAt: 100, inventory: []solverInventory{item(150), item(99)}, subtracted: true},
 		{name: "no inventory given", includedAt: 100, subtracted: true},
 	} {
@@ -346,13 +346,13 @@ func TestQuoteUsesBackendSnapshotBlock(t *testing.T) {
 	capacityID := liquidlane.RouteCapacityID(parsed.inv[0].Route)
 	for _, tc := range []struct {
 		name  string
-		block *string
+		block string
 		want  int
 	}{
-		{name: "no block reported", want: http.StatusNoContent},
-		{name: "block before inclusion", block: strPtr("99"), want: http.StatusNoContent},
-		{name: "block at inclusion", block: strPtr("100"), want: http.StatusOK},
-		{name: "malformed block", block: strPtr("0x64"), want: http.StatusUnprocessableEntity},
+		{name: "missing block rejected", want: http.StatusUnprocessableEntity},
+		{name: "block before inclusion", block: "99", want: http.StatusNoContent},
+		{name: "block at inclusion", block: "100", want: http.StatusOK},
+		{name: "malformed block", block: "0x64", want: http.StatusUnprocessableEntity},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := newStore(func() time.Time { return time.Unix(0, 0) })
@@ -403,8 +403,8 @@ func TestConfirmedSpendSurvivesFilledStatusForOlderSnapshots(t *testing.T) {
 	}{
 		{name: "older snapshot", inventory: []solverInventory{item(99)}, subtracted: true},
 		{name: "snapshot at inclusion", inventory: []solverInventory{item(100)}},
-		{name: "unknown snapshot block", inventory: []solverInventory{item(0)}},
-		{name: "no inventory", inventory: nil},
+		{name: "genesis snapshot", inventory: []solverInventory{item(0)}, subtracted: true},
+		{name: "no inventory", inventory: nil, subtracted: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := st.pendingReservations("", tc.inventory)[capacityID]

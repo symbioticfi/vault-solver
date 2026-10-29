@@ -43,8 +43,8 @@ type quoteAdapter struct {
 	// discountId entry, otherwise the adapter's minDiscount. The adapter pays at most
 	// floor(getAmountOut(amountIn) * (1e6 - discount) / 1e6).
 	Discount string `json:"discount" pattern:"^[0-9]+$"`
-	// BlockNumber is the block maxAssets was read at. Optional until every backend reports it.
-	BlockNumber *string `json:"blockNumber,omitempty" pattern:"^[0-9]+$"`
+	// BlockNumber is the block maxAssets was read at.
+	BlockNumber string `json:"blockNumber" pattern:"^[0-9]+$"`
 }
 
 // quoteResponse is the filler → backend quote (POST /quote 200).
@@ -165,12 +165,9 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn, recipeExecutor c
 	if discount.Cmp(big.NewInt(precision)) > 0 || (recipeExecutor != (common.Address{}) && discount.Cmp(big.NewInt(precision)) == 0) {
 		return solverInventory{}, errors.Errorf("%s: must be <= %d", idxField(index, "discount"), precision)
 	}
-	var blockNumber uint64
-	if v.BlockNumber != nil && *v.BlockNumber != "" {
-		blockNumber, err = strconv.ParseUint(*v.BlockNumber, 10, 64)
-		if err != nil {
-			return solverInventory{}, errors.Errorf("%s: invalid block number %q", idxField(index, "blockNumber"), *v.BlockNumber)
-		}
+	blockNumber, err := strconv.ParseUint(v.BlockNumber, 10, 64)
+	if err != nil {
+		return solverInventory{}, errors.Errorf("%s: invalid block number %q", idxField(index, "blockNumber"), v.BlockNumber)
 	}
 	route := liquidlane.NewRoute(chainID, adapter, common.Address{}, tokenIn, asset, 0, v.AssetDecimals)
 	// Amount-specific adapter quotes price each entry; see NormalizeOracleInventory.

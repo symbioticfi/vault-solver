@@ -4,6 +4,7 @@ package discounts
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -49,8 +50,8 @@ type ListItem struct {
 	Signer             string
 	Deadline           int64
 	MaxAssets          string
-	// BlockNumber is the block maxAssets was read at; empty when the backend does not report it.
-	BlockNumber string
+	// BlockNumber is the block maxAssets was read at.
+	BlockNumber uint64
 }
 
 // List projects discount data and the X-Request-Id header into solver-owned types.
@@ -151,6 +152,10 @@ func (c *Client) ListDiscounts(ctx context.Context) (*List, error) {
 	out.Discounts = make([]ListItem, 0, len(gen))
 	for i := range gen {
 		d := &gen[i]
+		blockNumber, err := strconv.ParseUint(d.GetBlockNumber(), 10, 64)
+		if err != nil {
+			return nil, errors.Errorf("private discounts: list: blockNumber: invalid decimal %q", d.GetBlockNumber())
+		}
 		out.Discounts = append(out.Discounts, ListItem{
 			RecipeExecutor:     d.GetRecipeExecutor(),
 			DiscountID:         d.GetDiscountId(),
@@ -162,7 +167,7 @@ func (c *Client) ListDiscounts(ctx context.Context) (*List, error) {
 			Signer:             d.GetSigner(),
 			Deadline:           d.GetDeadline(),
 			MaxAssets:          d.GetMaxAssets(),
-			BlockNumber:        d.GetBlockNumber(),
+			BlockNumber:        blockNumber,
 		})
 	}
 	return out, nil

@@ -2938,7 +2938,6 @@
                   "pattern": "^0x[a-fA-F0-9]{40}$"
                 },
                 "recipient": {
-                  "description": "Defaults to swapper when omitted for backward compatibility.",
                   "type": "string",
                   "pattern": "^0x[a-fA-F0-9]{40}$"
                 },
@@ -2949,7 +2948,8 @@
                 }
               },
               "required": [
-                "token"
+                "token",
+                "recipient"
               ]
             }
           }

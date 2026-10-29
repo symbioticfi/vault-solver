@@ -92,7 +92,7 @@ this is the nonannual yield/principal ratio. The auction's exact decimal maximum
 rate bounds that offer, scaled by its `rateBasisSeconds` over a 365-day year when
 provided. Both the rate and period use the original JSON numbers before generated float32
 decoding. Negative, fractional and overflowing periods are rejected; an omitted,
-null or zero period retains the legacy unscaled comparison. The policy
+null or zero period uses the unscaled comparison. The policy
 floor is not annualized. One unsigned PUSH POST uses the BF as wire `maker`, omits
 `chainId`, `executionMode` and signatures, and sets `useCallback:false`. The API
 stores the account as maker. A five-minute offer expiration is independent of the

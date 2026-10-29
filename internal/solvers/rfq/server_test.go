@@ -47,7 +47,7 @@ func validQuoteBody() quoteRequest {
 		QuoteID: "22222222-2222-4222-8222-222222222222",
 		Adapters: []quoteAdapter{{
 			Adapter: vlt.Hex(), Asset: tOut.Hex(), AssetDecimals: 6,
-			MaxAssets: "10000000", Discount: "0",
+			BlockNumber: "1", MaxAssets: "10000000", Discount: "0",
 		}},
 	}
 }
@@ -220,7 +220,7 @@ func TestServer_QuoteWhitelist(t *testing.T) {
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
 	rogueAdapter := quoteAdapter{
 		Adapter: rogue.Hex(), Asset: tOut.Hex(), AssetDecimals: 6,
-		MaxAssets: "10000000", Discount: "0",
+		BlockNumber: "1", MaxAssets: "10000000", Discount: "0",
 	}
 	cases := map[string]struct {
 		whitelist adapterWhitelist
@@ -283,7 +283,7 @@ func TestServerConnectorUsesLocalExecutorWithoutWireField(t *testing.T) {
 	id := "0x" + strings.Repeat("ab", 32)
 	body.Adapters[0].DiscountID = &id
 	body.Adapters[0].DiscountPrecision = "100000000"
-	body.Adapters = append(body.Adapters, quoteAdapter{Adapter: common.HexToAddress("0xbad").Hex(), Asset: tOut.Hex(), MaxAssets: "1000", Discount: "0"})
+	body.Adapters = append(body.Adapters, quoteAdapter{Adapter: common.HexToAddress("0xbad").Hex(), Asset: tOut.Hex(), BlockNumber: "1", MaxAssets: "1000", Discount: "0"})
 	rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, body)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("local recipe quote = %d: %s", rr.Code, rr.Body.String())
@@ -304,5 +304,30 @@ func TestServerConnectorUsesLocalExecutorWithoutWireField(t *testing.T) {
 	spec := do(t, srv.handler(), http.MethodGet, "/openapi.json", "", nil)
 	if strings.Contains(spec.Body.String(), `"recipeExecutor"`) {
 		t.Fatal("executor leaked into quote schema")
+	}
+}
+
+func TestQuoteRequiresCapacityObservationBlock(t *testing.T) {
+	for name, block := range map[string]any{"missing": nil, "empty": "", "malformed": "0x7b"} {
+		t.Run(name, func(t *testing.T) {
+			encoded, err := json.Marshal(validQuoteBody())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(encoded, &body); err != nil {
+				t.Fatal(err)
+			}
+			adapter := body["adapters"].([]any)[0].(map[string]any)
+			if block == nil {
+				delete(adapter, "blockNumber")
+			} else {
+				adapter["blockNumber"] = block
+			}
+			rr := do(t, testServer().handler(), http.MethodPost, "/quote", testSecret, body)
+			if rr.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want 422 for %s blockNumber: %s", rr.Code, name, rr.Body.String())
+			}
+		})
 	}
 }

@@ -89,9 +89,6 @@ Unconstrained inputs and manual account, tree and inputs configuration fields
 are rejected. Unused `"nonzero"` payable permission markers are accepted; selecting
 a native-value leaf for recipe execution remains rejected.
 
-The Aave provider changes the host's durable provider roster. Finish or reconcile
-active Merkle jobs with their existing binary before upgrading. Incompatible
-pending journals fail closed; never clear state to bypass ownership checks.
 Polling is fixed at 15 seconds, operation timeout at 30 seconds, strategy cadence at
 one minute and the recipe cache at 16 MiB. YAML fields `pollInterval` and
 `operationTimeout` are rejected, including values equal to these fixed limits.
