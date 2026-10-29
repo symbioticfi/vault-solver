@@ -200,12 +200,14 @@ remove and can later re-add an adapter. Before every offer pass the solver recon
 cache against the 3F API (per adapter): it re-lists each adapter's live offers and replaces that
 adapter's cache wholesale, so coverage reflects offers made out of band — a manual re-offer, a second
 instance, or a server-side cancellation — and it never double-offers an auction it already covers. An
-adapter that already holds a live offer on an auction is re-sized every pass against the budget that
-offer would free: when capacity has grown since it was placed (another of its auctions cancelled or
-expired, more fundable liquidity) and it can now cover more of the request, the solver re-posts the
-offer at the larger principal, signed with the live offer's own nonce so `POST /v1/offer` updates that
-offer and the Request contract, which consumes at most one offer per maker nonce, can never fund both
-the old and the new signature; it never re-posts an equal or smaller one. The
+adapter's offer that 3F has not accepted yet (status `SUBMITTED`) is re-evaluated every pass against the
+budget it would free and the adapter's current parameters: when capacity has grown since it was placed
+(another of its auctions cancelled or expired, more fundable liquidity) and it can now cover more of the
+request, or its price no longer matches the adapter's `minYieldPerRequest` (a raised floor the live price
+fails, or a lowered floor that leaves it above the new target), the solver re-posts the offer with the
+new terms, signed with the live offer's own nonce so `POST /v1/offer` updates that offer and the Request
+contract, which consumes at most one offer per maker nonce, can never fund both the old and the new
+signature. It never shrinks an offer, and leaves accepted or funded offers alone. The
 1-2 minute poll is authoritative and always surfaces our own just-submitted offers, so any pair not in
 the fresh listing is gone and dropped (no local record is kept between passes). Funding headroom is the adapter's own
 `getMaxAssets()` (it folds in the delegator's per-adapter `limitOf`, the vault's `withdrawable`, and
@@ -368,8 +370,8 @@ Prerequisite (done). **`ThreeFAdapter` contract** — core-mirror's `src/contrac
      and a factory-backed deployment may validly idle with zero eligible adapters. Explicit-list startup
      retains its fail-closed behavior. The live-offer cache is reconciled against the API before every
      offer pass, so out-of-band offers (manual re-offer, another instance, server-side cancellation)
-     count toward coverage and are never double-offered. A held offer is topped up (re-posted at a
-     larger principal) when the adapter's capacity has grown since it was placed.
+     count toward coverage and are never double-offered. An open offer is re-posted when the adapter's
+     capacity has grown since it was placed or its `minYieldPerRequest` changed.
    - **Per-auction multi-adapter offers** (§6): every eligible adapter offers each auction's full
      requested amount within its own capacity through the configured trusted strategy. Offer dedup, coverage, exposure, redeem, and reconcile all run per adapter.
    - Tests: strategy registry/default selection, default strategy eligibility/sizing, webhook wire shape, per-(adapter,auction) dedup and top-up, `liveCoverage`, `reconcileAdapter` wholesale replace (API-authoritative), signed `listOffers` httptest, `resolveAdapters` (incl. the ERC-1271 `isValidSignature` offer-signer probe + unauthorized-drop)
@@ -398,7 +400,7 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 **Deferred features / known gaps:**
 - **(done) Exposure / risk params are on-chain.** The per-request caps (`minYieldPerRequest` in ppm, `minAssetsPerRequest`, `maxAssetsPerRequest`) live on the `ThreeFAdapter` and are read per-adapter via Multicall each discover tick (`chainreader.go`); the bot no longer carries config exposure caps. Funding headroom is the adapter's own `getMaxAssets()` (folds in the delegator `limitOf`, vault `withdrawable`, and pending sweep), and the concurrency cap is the contract's `MAX_REQUESTS` constant — neither is a separate adapter read. Trust-minimized + curator-governed, as planned.
 - **Multi-maker offers.** An auction's ask receives **one independent single-adapter offer per eligible adapter** (each sized to the full request within that adapter's capacity), but a **single** offer is still funded by one adapter. Splitting one offer across several makers (true aggregation) is deferred — needs multi-maker offer support on-chain.
-- **Re-pricing live offers on rising yield.** An auction's `maxRate` can climb over time, so an auction infeasible now (below an adapter's `minYieldPerRequest`) becomes feasible later — handled, since infeasible auctions are never negatively cached and each pass re-evaluates. But a live offer placed at an earlier, lower rate is **not** re-priced upward while it stays live; it is only re-posted when the adapter can cover a larger principal (the re-post is priced at the current rate). Re-pricing alone would reuse that same `POST /v1/offer` update path.
+- **Re-pricing live offers on rising yield.** An auction's `maxRate` can climb over time, so an auction infeasible now (below an adapter's `minYieldPerRequest`) becomes feasible later — handled, since infeasible auctions are never negatively cached and each pass re-evaluates. But a live offer placed at an earlier, lower rate is **not** re-priced upward while it stays live just because `maxRate` rose; an open offer is re-posted (at the current rate) only when the adapter can cover a larger principal or its `minYieldPerRequest` changed.
 - **(done) Dynamic adapter discovery.** When `adapters` is omitted, every entry in the configured
   `IAdapterFactory` is enumerated at startup and before each discovery pass, subject to a hard 2,000-entry
   limit that errors above it. When `adapters` is present, only that explicit list is used. Either source

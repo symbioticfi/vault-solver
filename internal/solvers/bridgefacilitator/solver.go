@@ -27,6 +27,10 @@ import (
 // re-offer.
 var errRequiredFieldMissing = errors.New("required field missing from API response")
 
+// offerStatusSubmitted is the only status under which 3F has not acted on an offer yet, so the solver
+// may still replace it (top-up or re-price) by re-posting with its nonce.
+const offerStatusSubmitted = "SUBMITTED"
+
 var offerStatusIgnored = map[string]bool{
 	"FAILED":       true,
 	"NOT_ACCEPTED": true,
@@ -236,6 +240,13 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 					"adapter", t.Adapter.Hex(), "offerId", o.Id)
 				principal = nil
 			}
+			expectedReturn, ok := new(big.Int).SetString(o.ExpectedReturn, 10)
+			if !ok || expectedReturn.Sign() < 0 {
+				complete = false
+				offerLog.Info("reconcile offers: malformed expectedReturn; retaining valid subset",
+					"adapter", t.Adapter.Hex(), "offerId", o.Id)
+				expectedReturn = nil
+			}
 			if o.AuctionId <= 0 {
 				complete = false
 				if stageErr == nil {
@@ -255,7 +266,10 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 			// One live offer per (adapter, auction) is assumed; if the API ever lists more, keep the latest.
 			auctionID := int64(o.AuctionId)
 			if cur, exists := live[auctionID]; !exists || exp.After(cur.expiry) {
-				live[auctionID] = offerState{expiry: exp, principal: principal, nonce: nonce}
+				live[auctionID] = offerState{
+					expiry: exp, principal: principal, expectedReturn: expectedReturn, nonce: nonce,
+					open: status == offerStatusSubmitted,
+				}
 			}
 		}
 		s.offers.reconcileAdapter(t.Adapter, live)

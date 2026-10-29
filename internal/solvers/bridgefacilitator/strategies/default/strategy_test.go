@@ -322,6 +322,50 @@ func TestStrategyIgnoresOtherAdaptersLiveOffers(t *testing.T) {
 	}
 }
 
+// TestStrategyRepricesOpenOffer covers re-posting an open offer whose price no longer matches the
+// adapter's min-yield floor: a raised floor the live price fails, or a lowered floor that makes the live
+// price sit above the new target. A rising auction rate alone, an accepted offer, or an offer of
+// unknown price is left alone.
+func TestStrategyRepricesOpenOffer(t *testing.T) {
+	const principal = 100_000_000
+	for _, tc := range []struct {
+		name       string
+		floorPpm   int64
+		liveReturn *big.Int
+		open       bool
+		want       int64 // expectedReturn of the re-post, 0 for none
+	}{
+		{"floor raised", 150, big.NewInt(10_100), true, 15_100},
+		{"floor lowered", 100, big.NewInt(15_100), true, 10_100},
+		{"rising max rate alone", 0, big.NewInt(1_500_000), true, 0},
+		{"accepted offer", 150, big.NewInt(10_100), false, 0},
+		{"unknown price", 150, nil, true, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter := testAdapter(1, principal)
+			if tc.floorPpm > 0 {
+				adapter.MinYieldPpm = big.NewInt(tc.floorPpm)
+			}
+			out, err := New().DecideOffers(t.Context(), types.OfferInput{
+				Adapters: []types.AdapterSnapshot{adapter}, Auctions: []types.AuctionSnapshot{testAuction(10, principal)},
+				LiveOffers: []types.LiveOffer{{AdapterID: adapter.ID, AuctionID: 10, Principal: big.NewInt(principal), ExpectedReturn: tc.liveReturn, Open: tc.open}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == 0 {
+				if len(out.Offers) != 0 {
+					t.Fatalf("offers = %+v, want none", out.Offers)
+				}
+				return
+			}
+			if len(out.Offers) != 1 || out.Offers[0].Principal.Int64() != principal || out.Offers[0].ExpectedReturn.Int64() != tc.want {
+				t.Fatalf("offers = %+v, want one re-post of %d at expectedReturn %d", out.Offers, principal, tc.want)
+			}
+		})
+	}
+}
+
 // TestStrategyTopsUpLiveOffer covers re-posting an adapter's own live offer: when capacity freed since
 // the original offer (another auction cancelled, more fundable liquidity) lets the adapter cover more of
 // the request, it offers the larger principal again; a held offer is never re-posted at the same or a
@@ -349,6 +393,7 @@ func TestStrategyTopsUpLiveOffer(t *testing.T) {
 			adapter.MaxConcurrent = tc.maxConcurrent
 			for i := range tc.live {
 				tc.live[i].AdapterID = adapter.ID
+				tc.live[i].Open = true
 			}
 			out, err := New().DecideOffers(t.Context(), types.OfferInput{
 				Adapters: []types.AdapterSnapshot{adapter}, Auctions: []types.AuctionSnapshot{testAuction(10, 100_000_000)},

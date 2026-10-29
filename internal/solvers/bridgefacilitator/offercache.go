@@ -15,11 +15,14 @@ type offerKey struct {
 	auction int64
 }
 
-// offerState is one outstanding offer: when it expires, the principal it covers, and its signed nonce.
+// offerState is one outstanding offer: when it expires, its signed terms, and whether 3F has yet to
+// accept it (status SUBMITTED), in which case a re-post with the same nonce replaces it.
 type offerState struct {
-	expiry    time.Time
-	principal *big.Int
-	nonce     *big.Int
+	expiry         time.Time
+	principal      *big.Int
+	expectedReturn *big.Int
+	nonce          *big.Int
+	open           bool
 }
 
 // offerTracker remembers our outstanding offers per (adapter, auction) so the strategy knows what each
@@ -57,7 +60,10 @@ func (t *offerTracker) reconcileAdapter(adapter common.Address, live map[int64]o
 		}
 	}
 	for auctionID, st := range live {
-		t.offers[offerKey{adapter, auctionID}] = offerState{expiry: st.expiry, principal: cloneBig(st.principal), nonce: cloneBig(st.nonce)}
+		t.offers[offerKey{adapter, auctionID}] = offerState{
+			expiry: st.expiry, principal: cloneBig(st.principal), expectedReturn: cloneBig(st.expectedReturn),
+			nonce: cloneBig(st.nonce), open: st.open,
+		}
 	}
 }
 
