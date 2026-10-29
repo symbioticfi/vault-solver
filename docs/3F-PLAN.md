@@ -199,15 +199,17 @@ RPC failure preserves the last-known-good snapshot; a successful refresh replace
 remove and can later re-add an adapter. Before every offer pass the solver reconciles its live-offer
 cache against the 3F API (per adapter): it re-lists each adapter's live offers and replaces that
 adapter's cache wholesale, so coverage reflects offers made out of band — a manual re-offer, a second
-instance, or a server-side cancellation — and it never double-offers an auction it already covers. An
-adapter's offer that 3F has not accepted yet (status `SUBMITTED`) is re-evaluated every pass against the
-budget it would free and the adapter's current parameters: when capacity has grown since it was placed
-(another of its auctions cancelled or expired, more fundable liquidity) and it can now cover more of the
-request, or its price no longer matches the adapter's `minYieldPerRequest` (a raised floor the live price
-fails, or a lowered floor that leaves it above the new target), the solver re-posts the offer with the
-new terms, signed with the live offer's own nonce so `POST /v1/offer` updates that offer and the Request
-contract, which consumes at most one offer per maker nonce, can never fund both the old and the new
-signature. It never shrinks an offer, and leaves accepted or funded offers alone. The
+instance, or a server-side cancellation — and it never double-offers an auction it already covers. A
+funded (`SUCCEEDED`) offer is not live: its principal and request slot are already on-chain and reflected
+in `getMaxAssets` and `requestsLength`, so it reserves nothing a second time. An adapter's offer that 3F
+has not accepted yet (status `SUBMITTED`) is re-evaluated every pass against the budget it would free and
+the adapter's current parameters: when capacity has grown since it was placed (another of its auctions
+cancelled or expired, more fundable liquidity) and it can now cover more of the request, or its price no
+longer matches the adapter's `minYieldPerRequest` (a raised floor the live price fails, or a lowered floor
+that leaves it above the new target), the solver re-posts the offer with the new terms, signed with the
+live offer's own nonce so `POST /v1/offer` updates that offer and the Request contract, which consumes at
+most one offer per maker nonce, can never fund both the old and the new signature. It never shrinks an
+offer, and leaves accepted offers alone. The
 1-2 minute poll is authoritative and always surfaces our own just-submitted offers, so any pair not in
 the fresh listing is gone and dropped (no local record is kept between passes). Funding headroom is the adapter's own
 `getMaxAssets()` (it folds in the delegator's per-adapter `limitOf`, the vault's `withdrawable`, and

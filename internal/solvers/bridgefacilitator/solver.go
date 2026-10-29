@@ -22,20 +22,23 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
 
-// offerStatusIgnored are 3F offer statuses that are not live coverage when reconciling the cache: a
-// FAILED consume, a NOT_ACCEPTED bid, or a CANCELLED offer won't cover the auction, so discovery should
-// re-offer.
 var errRequiredFieldMissing = errors.New("required field missing from API response")
 
 // offerStatusSubmitted is the only status under which 3F has not acted on an offer yet, so the solver
 // may still replace it (top-up or re-price) by re-posting with its nonce.
 const offerStatusSubmitted = "SUBMITTED"
 
+// offerStatusIgnored are 3F offer statuses that reserve no adapter liquidity when reconciling the
+// cache. A FAILED consume, a NOT_ACCEPTED bid, or a CANCELLED offer won't cover the auction, so
+// discovery should re-offer. A SUCCEEDED offer is already funded: its principal and request slot are
+// on-chain and reflected in getMaxAssets and requestsLength, so counting it again would withhold that
+// much from the adapter's next offer.
 var offerStatusIgnored = map[string]bool{
 	"FAILED":       true,
 	"NOT_ACCEPTED": true,
 	"CANCELLED":    true,
 	"CANCELED":     true,
+	"SUCCEEDED":    true,
 }
 
 // Name is the registry key that selects this solver from config.
