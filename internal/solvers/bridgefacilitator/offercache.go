@@ -15,10 +15,11 @@ type offerKey struct {
 	auction int64
 }
 
-// offerState is one outstanding offer: when it expires and the principal it covers.
+// offerState is one outstanding offer: when it expires, the principal it covers, and its signed nonce.
 type offerState struct {
 	expiry    time.Time
 	principal *big.Int
+	nonce     *big.Int
 }
 
 // offerTracker remembers our outstanding offers per (adapter, auction) so the strategy knows what each
@@ -56,7 +57,7 @@ func (t *offerTracker) reconcileAdapter(adapter common.Address, live map[int64]o
 		}
 	}
 	for auctionID, st := range live {
-		t.offers[offerKey{adapter, auctionID}] = offerState{expiry: st.expiry, principal: cloneBig(st.principal)}
+		t.offers[offerKey{adapter, auctionID}] = offerState{expiry: st.expiry, principal: cloneBig(st.principal), nonce: cloneBig(st.nonce)}
 	}
 }
 
@@ -84,6 +85,16 @@ func (t *offerTracker) liveCoverage(auctionID int64, now time.Time) *big.Int {
 		}
 	}
 	return total
+}
+
+// liveNonce is the nonce of our unexpired offer through adapter on auctionID, nil when there is none.
+// A top-up re-signs with it: the Request contract consumes at most one offer per nonce, so the old
+// and new signatures can never both fund.
+func (t *offerTracker) liveNonce(adapter common.Address, auctionID int64, now time.Time) *big.Int {
+	if st, ok := t.offers[offerKey{adapter, auctionID}]; ok && st.expiry.After(now) {
+		return cloneBig(st.nonce)
+	}
+	return nil
 }
 
 // pruneExpired drops entries whose offer has already expired, keeping the map bounded over a long run.

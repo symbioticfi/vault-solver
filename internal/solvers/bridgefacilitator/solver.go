@@ -245,10 +245,17 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 					"adapter", t.Adapter.Hex(), "offerId", o.Id)
 				continue
 			}
+			nonce, ok := new(big.Int).SetString(o.Nonce, 10)
+			if !ok {
+				complete = false // a top-up must re-sign with this nonce; without it the pass cannot offer safely
+				offerLog.Info("reconcile offers: malformed nonce; retaining valid subset",
+					"adapter", t.Adapter.Hex(), "offerId", o.Id)
+				nonce = nil
+			}
 			// One live offer per (adapter, auction) is assumed; if the API ever lists more, keep the latest.
 			auctionID := int64(o.AuctionId)
 			if cur, exists := live[auctionID]; !exists || exp.After(cur.expiry) {
-				live[auctionID] = offerState{expiry: exp, principal: principal}
+				live[auctionID] = offerState{expiry: exp, principal: principal, nonce: nonce}
 			}
 		}
 		s.offers.reconcileAdapter(t.Adapter, live)

@@ -46,8 +46,13 @@ func (s *Solver) buildSignedOffer(
 		domainVersion = *v
 	}
 
-	nonce := new(big.Int).SetUint64(s.nextNonce())
-	expiration := offerExpiration(av, s.cfg.OfferExpiryBuffer, time.Now())
+	now := time.Now()
+	// A top-up of a live offer reuses its nonce so 3F updates that offer and the chain can consume only one.
+	nonce := s.offers.liveNonce(offer.Maker, offer.AuctionID, now)
+	if nonce == nil {
+		nonce = new(big.Int).SetUint64(s.nextNonce())
+	}
+	expiration := offerExpiration(av, s.cfg.OfferExpiryBuffer, now)
 
 	signedOffer := Offer{
 		Maker:          offer.Maker,

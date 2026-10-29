@@ -203,8 +203,9 @@ instance, or a server-side cancellation — and it never double-offers an auctio
 adapter that already holds a live offer on an auction is re-sized every pass against the budget that
 offer would free: when capacity has grown since it was placed (another of its auctions cancelled or
 expired, more fundable liquidity) and it can now cover more of the request, the solver re-posts the
-offer at the larger principal (`POST /v1/offer` updates the maker's offer on that auction); it never
-re-posts an equal or smaller one. The
+offer at the larger principal, signed with the live offer's own nonce so `POST /v1/offer` updates that
+offer and the Request contract, which consumes at most one offer per maker nonce, can never fund both
+the old and the new signature; it never re-posts an equal or smaller one. The
 1-2 minute poll is authoritative and always surfaces our own just-submitted offers, so any pair not in
 the fresh listing is gone and dropped (no local record is kept between passes). Funding headroom is the adapter's own
 `getMaxAssets()` (it folds in the delegator's per-adapter `limitOf`, the vault's `withdrawable`, and

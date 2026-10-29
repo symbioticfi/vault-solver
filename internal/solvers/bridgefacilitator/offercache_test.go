@@ -90,10 +90,24 @@ func TestOfferTrackerReconcileAdapter(t *testing.T) {
 	// API for adapter A now lists only auctions 1 (new principal/expiry) and 4. Auctions 2 and 3 are gone.
 	newExp := now.Add(2 * time.Hour)
 	live := map[int64]offerState{
-		1: {expiry: newExp, principal: big.NewInt(150)},
+		1: {expiry: newExp, principal: big.NewInt(150), nonce: big.NewInt(7)},
 		4: {expiry: newExp, principal: big.NewInt(400)},
 	}
 	tr.reconcileAdapter(adapterA, live)
+
+	// A top-up re-signs with the live offer's nonce; expired or unknown offers yield none.
+	if got := tr.liveNonce(adapterA, 1, now); got == nil || got.Int64() != 7 {
+		t.Fatalf("liveNonce(A,1) = %v, want 7", got)
+	}
+	if got := tr.liveNonce(adapterA, 1, newExp); got != nil {
+		t.Fatalf("liveNonce(A,1) after expiry = %v, want nil", got)
+	}
+	if got := tr.liveNonce(adapterA, 4, now); got != nil {
+		t.Fatalf("liveNonce(A,4) with unknown nonce = %v, want nil", got)
+	}
+	if got := tr.liveNonce(adapterB, 4, now); got != nil {
+		t.Fatalf("liveNonce(B,4) = %v, want nil", got)
+	}
 
 	want := map[offerKey]*big.Int{
 		{adapterA, 1}: big.NewInt(150), // refreshed from API
