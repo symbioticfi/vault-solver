@@ -17,7 +17,7 @@ checks its account and output asset, and requires the recipe caller to be the RF
 Executor. The connector must be registered as version `2` in the Reactor's Liquid
 Lane adapter factory (version `1` is a native adapter).
 
-Backend quote requests carry capacity, account and discount precision, without
+Backend quote requests carry capacity, price, token decimals, account and discount precision, without
 `recipeExecutor`. Neither quote requests nor discount listings select the execution
 target. The backend keeps its own matching executor binding for capacity reads and
 routing; operators must configure the same executor on both sides. The SDK retrieves
@@ -42,8 +42,8 @@ cover the complete award using the backend's advertised capacity, clipped by the
 estimates funding from the configured recipe's reads and checks current roles with batched RPC calls.
 The advertised `maxAssets` is an estimate; ordered withdrawals and shared liquidity
 are checked by the solver's complete outer settlement simulation before admission.
-The regular RFQ quote path consumes that capacity, applies the current policy budget and
-subtracts shared account/asset reservations. The solver does not reconstruct capacity or
+The regular RFQ quote path consumes the backend capacity and price and subtracts shared
+account/asset reservations without RPC reads. The solver does not reconstruct capacity or
 require extra recipe queries. No market pricing, splits or adapter/Merkle liquidity aggregation occurs.
 An upstream source must award compatible orders; this solver does not publish quotes.
 The wall-clock observation is sampled before the header RPC; its latency consumes the unsigned submission deadline, including

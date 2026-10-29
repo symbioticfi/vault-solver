@@ -158,6 +158,15 @@ Peer outcomes add no local successful-fill amounts. Missing or invalid backend h
 filled orders without claiming a peer fill. Attempt history is local and is lost on restart.
 The next fresh request can reuse its unused nonce. Reservations are local to the process and are not restored
 after a restart.
+
+Discount-backed `/quote` requests use the backend's `price` (undiscounted oracle
+price scaled by `1e18`), `tokenInDecimals`, `account`, `maxAssets`, and observation
+block. The native adapter's vault and the connector's account identify shared
+reservations. Discount-only quotes make no RPC calls and preserve the contract's
+two rounding steps. Missing pricing metadata rejects the request without an RPC
+fallback. Direct adapter quotes retain their chain reads, and awarded orders still
+use current chain state and complete-fill simulation. Coordinate backend and solver
+rollout for the new fields.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).

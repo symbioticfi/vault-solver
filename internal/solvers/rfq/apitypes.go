@@ -34,6 +34,8 @@ type quoteRequest struct {
 type quoteAdapter struct {
 	DiscountPrecision string  `json:"discountPrecision,omitempty"`
 	Account           string  `json:"account,omitempty"`
+	Price             string  `json:"price,omitempty" pattern:"^[0-9]+$" doc:"Undiscounted oracle price scaled by 1e18; required for signed-discount quotes"`
+	TokenInDecimals   *int    `json:"tokenInDecimals,omitempty" minimum:"0" maximum:"255"`
 	Adapter           string  `json:"adapter" pattern:"^0x[a-fA-F0-9]{40}$"`
 	Asset             string  `json:"asset" pattern:"^0x[a-fA-F0-9]{40}$"`
 	AssetDecimals     int     `json:"assetDecimals" minimum:"0" maximum:"255"`
@@ -169,8 +171,25 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn, recipeExecutor c
 	if err != nil {
 		return solverInventory{}, errors.Errorf("%s: invalid block number %q", idxField(index, "blockNumber"), v.BlockNumber)
 	}
-	route := liquidlane.NewRoute(chainID, adapter, common.Address{}, tokenIn, asset, 0, v.AssetDecimals)
-	// Amount-specific adapter quotes price each entry; see NormalizeOracleInventory.
+	account := common.Address{}
+	inputDecimals := 0
+	var price *big.Int
+	if discountID != nil {
+		account, err = parse.Address(v.Account, idxField(index, "account"))
+		if err != nil || account == (common.Address{}) {
+			return solverInventory{}, errors.Errorf("%s: discounted quote requires a nonzero account", idxField(index, "account"))
+		}
+		if v.TokenInDecimals == nil || *v.TokenInDecimals < 0 || *v.TokenInDecimals > 255 {
+			return solverInventory{}, errors.Errorf("%s: discounted quote requires token decimals", idxField(index, "tokenInDecimals"))
+		}
+		inputDecimals = *v.TokenInDecimals
+		price, err = parseUint256(v.Price, idxField(index, "price"))
+		if err != nil || price.Sign() <= 0 || price.BitLen() > 256 {
+			return solverInventory{}, errors.Errorf("%s: discounted quote requires a positive uint256 price", idxField(index, "price"))
+		}
+	}
+	route := liquidlane.NewRoute(chainID, adapter, account, tokenIn, asset, inputDecimals, v.AssetDecimals)
+	// Backend snapshots price discounts; direct quotes are priced from the adapter.
 	inventory := liquidlane.DirectInventory(route, maxAssets, nil)
 	inventory.AdapterMinDiscount = discount
 	if discountID != nil {
@@ -182,6 +201,7 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn, recipeExecutor c
 		inventory.RecipeExecutor = recipeExecutor
 	}
 	inventory.BlockNumber = blockNumber
+	inventory.Price = price
 	return inventory, nil
 }
 
