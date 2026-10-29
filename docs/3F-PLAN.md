@@ -200,8 +200,9 @@ remove and can later re-add an adapter. Before every offer pass the solver recon
 cache against the 3F API (per adapter): it re-lists each adapter's live offers and replaces that
 adapter's cache wholesale, so coverage reflects offers made out of band — a manual re-offer, a second
 instance, or a server-side cancellation — and it never double-offers an auction it already covers. A
-funded (`SUCCEEDED`) offer is not live: its principal and request slot are already on-chain and reflected
-in `getMaxAssets` and `requestsLength`, so it reserves nothing a second time. An adapter's offer that 3F
+`SUCCEEDED` offer stops being live once the adapter's on-chain `requests[]` lists its request contract:
+the loan is funded, so `getMaxAssets` and `requestsLength` already account for its principal and slot
+and it must not reserve them a second time. A `SUCCEEDED` offer the chain does not list yet stays live. An adapter's offer that 3F
 has not accepted yet (status `SUBMITTED`) is re-evaluated every pass against the budget it would free and
 the adapter's current parameters: when capacity has grown since it was placed (another of its auctions
 cancelled or expired, more fundable liquidity) and it can now cover more of the request, or its price no

@@ -157,17 +157,21 @@ func TestParseUnixTime(t *testing.T) {
 	}
 }
 
-// TestReconcileOffersSkipsFundedOffers: a SUCCEEDED offer is already funded on-chain, where getMaxAssets
-// and requestsLength account for it, so it must not reserve liquidity a second time; only the still
-// unfunded SUBMITTED offer stays live.
-func TestReconcileOffersSkipsFundedOffers(t *testing.T) {
+// TestReconcileOffersDropsChainConfirmedFundedOffers: a SUCCEEDED offer keeps reserving liquidity until
+// the adapter's on-chain request list confirms the loan; then it is dropped, because getMaxAssets and
+// requestsLength already account for it. An open SUBMITTED offer is never dropped.
+func TestReconcileOffersDropsChainConfirmedFundedOffers(t *testing.T) {
 	adapter := common.Address{0xAA}
+	fundedReq, unconfirmedReq, openReq := common.Address{0x83}, common.Address{0x82}, common.Address{0x84}
 	expiration := strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)
+	offer := func(id, auction int, status string, req common.Address, amount string) string {
+		return `{"id":` + strconv.Itoa(id) + `,"auctionId":` + strconv.Itoa(auction) + `,"status":"` + status + `","maker":"` + lowerAddr(adapter) +
+			`","requestId":"` + req.Hex() + `","amount":"` + amount + `","expectedReturn":"1","nonce":"` + strconv.Itoa(id) + `","expiration":"` + expiration + `"}`
+	}
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[` +
-			`{"id":1,"auctionId":83,"status":"SUCCEEDED","maker":"` + lowerAddr(adapter) + `","amount":"45000","expectedReturn":"1","nonce":"1","expiration":"` + expiration + `"},` +
-			`{"id":2,"auctionId":84,"status":"SUBMITTED","maker":"` + lowerAddr(adapter) + `","amount":"414000","expectedReturn":"1","nonce":"2","expiration":"` + expiration + `"}]`))
+		_, _ = w.Write([]byte(`[` + offer(1, 83, "SUCCEEDED", fundedReq, "45000") + `,` +
+			offer(2, 82, "SUCCEEDED", unconfirmedReq, "7") + `,` + offer(3, 84, "SUBMITTED", openReq, "414000") + `]`))
 	}))
 	defer api.Close()
 	s := &Solver{
@@ -179,8 +183,17 @@ func TestReconcileOffersSkipsFundedOffers(t *testing.T) {
 	if !s.reconcileOffers(t.Context(), []Target{{Adapter: adapter}}) {
 		t.Fatal("reconcile reported incomplete")
 	}
+	if len(s.offers.liveEntries(time.Now())) != 3 {
+		t.Fatalf("live before chain confirmation = %d, want 3 (funded offers still reserve)", len(s.offers.liveEntries(time.Now())))
+	}
+
+	s.offers.dropFunded(adapter, []common.Address{fundedReq, openReq})
+
 	if _, ok := s.offers.offers[offerKey{adapter, 83}]; ok {
-		t.Fatal("funded offer on auction 83 must not be live")
+		t.Fatal("funded offer on auction 83 is on-chain and must be dropped")
+	}
+	if _, ok := s.offers.offers[offerKey{adapter, 82}]; !ok {
+		t.Fatal("SUCCEEDED offer the chain does not list must stay live")
 	}
 	if got := s.offers.liveCoverage(84, time.Now()); got == nil || got.Int64() != 414000 {
 		t.Fatalf("auction 84 coverage = %v, want 414000", got)

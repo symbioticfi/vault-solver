@@ -548,7 +548,8 @@ transaction manager. See the [replica plan](docs/REPLICA-PLAN.md) and each solve
 For liquidity commitments, the built-in strategies apply these limits:
 
 - 3F counts all unfunded live offer principals and request slots before creating offers for another
-  auction; a funded offer is already reflected in the adapter's on-chain headroom and is not counted again.
+  auction. A SUCCEEDED offer whose request the adapter lists on-chain is funded, already reflected in
+  the adapter's headroom, and not counted again.
   Each adapter offers an auction's full requested amount within its own capacity; adapters bid
   independently and never split one auction between them. An adapter's own offer, while 3F has not
   accepted it, is re-posted when capacity freed since it was placed lets it cover more of the request

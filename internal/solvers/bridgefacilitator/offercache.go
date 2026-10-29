@@ -15,14 +15,17 @@ type offerKey struct {
 	auction int64
 }
 
-// offerState is one outstanding offer: when it expires, its signed terms, and whether 3F has yet to
-// accept it (status SUBMITTED), in which case a re-post with the same nonce replaces it.
+// offerState is one outstanding offer: when it expires, its signed terms, its request contract, and
+// whether 3F has yet to accept it (status SUBMITTED, so a re-post with the same nonce replaces it) or
+// reports it funded (status SUCCEEDED, dropped once the chain confirms the loan).
 type offerState struct {
 	expiry         time.Time
 	principal      *big.Int
 	expectedReturn *big.Int
 	nonce          *big.Int
+	request        common.Address
 	open           bool
+	funded         bool
 }
 
 // offerTracker remembers our outstanding offers per (adapter, auction) so the strategy knows what each
@@ -62,7 +65,7 @@ func (t *offerTracker) reconcileAdapter(adapter common.Address, live map[int64]o
 	for auctionID, st := range live {
 		t.offers[offerKey{adapter, auctionID}] = offerState{
 			expiry: st.expiry, principal: cloneBig(st.principal), expectedReturn: cloneBig(st.expectedReturn),
-			nonce: cloneBig(st.nonce), open: st.open,
+			nonce: cloneBig(st.nonce), request: st.request, open: st.open, funded: st.funded,
 		}
 	}
 }
@@ -91,6 +94,22 @@ func (t *offerTracker) liveCoverage(auctionID int64, now time.Time) *big.Int {
 		}
 	}
 	return total
+}
+
+// dropFunded forgets the adapter's SUCCEEDED offers whose request is among the adapter's on-chain
+// requests: that loan is funded, so getMaxAssets and requestsLength already account for its principal
+// and slot, and keeping the offer live would withhold them a second time. A SUCCEEDED offer the chain
+// does not list stays live.
+func (t *offerTracker) dropFunded(adapter common.Address, requests []common.Address) {
+	onChain := make(map[common.Address]bool, len(requests))
+	for _, r := range requests {
+		onChain[r] = true
+	}
+	for k, st := range t.offers {
+		if k.adapter == adapter && st.funded && onChain[st.request] {
+			delete(t.offers, k)
+		}
+	}
 }
 
 // liveNonce is the nonce of our unexpired offer through adapter on auctionID, nil when there is none.

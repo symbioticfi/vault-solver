@@ -28,17 +28,19 @@ var errRequiredFieldMissing = errors.New("required field missing from API respon
 // may still replace it (top-up or re-price) by re-posting with its nonce.
 const offerStatusSubmitted = "SUBMITTED"
 
-// offerStatusIgnored are 3F offer statuses that reserve no adapter liquidity when reconciling the
-// cache. A FAILED consume, a NOT_ACCEPTED bid, or a CANCELLED offer won't cover the auction, so
-// discovery should re-offer. A SUCCEEDED offer is already funded: its principal and request slot are
-// on-chain and reflected in getMaxAssets and requestsLength, so counting it again would withhold that
-// much from the adapter's next offer.
+// offerStatusSucceeded marks an offer 3F reports as funded. It stops reserving liquidity once the
+// adapter's on-chain request list confirms the loan (see offerTracker.dropFunded); until then it
+// stays live, so a status the chain does not yet back never frees budget.
+const offerStatusSucceeded = "SUCCEEDED"
+
+// offerStatusIgnored are 3F offer statuses that are not live coverage when reconciling the cache: a
+// FAILED consume, a NOT_ACCEPTED bid, or a CANCELLED offer won't cover the auction, so discovery should
+// re-offer.
 var offerStatusIgnored = map[string]bool{
 	"FAILED":       true,
 	"NOT_ACCEPTED": true,
 	"CANCELLED":    true,
 	"CANCELED":     true,
-	"SUCCEEDED":    true,
 }
 
 // Name is the registry key that selects this solver from config.
@@ -271,7 +273,9 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 			if cur, exists := live[auctionID]; !exists || exp.After(cur.expiry) {
 				live[auctionID] = offerState{
 					expiry: exp, principal: principal, expectedReturn: expectedReturn, nonce: nonce,
-					open: status == offerStatusSubmitted,
+					request: common.HexToAddress(o.RequestId),
+					open:    status == offerStatusSubmitted,
+					funded:  status == offerStatusSucceeded,
 				}
 			}
 		}
@@ -337,6 +341,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 			observability.Log(ctx).Error(lerr, "offer: liquidity/exposure", "adapter", t.Adapter.Hex())
 			continue
 		}
+		s.offers.dropFunded(t.Adapter, st.requests)
 		observability.Log(ctx).V(1).Info("adapter liquidity",
 			"adapter", t.Adapter.Hex(), "fundable", st.fundable.String(), "openRequests", st.openCount,
 			"maxAssets", st.maxAssets.String(), "minAssets", st.minAssets.String(),
