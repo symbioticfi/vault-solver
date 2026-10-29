@@ -21,8 +21,9 @@ type offerState struct {
 	principal *big.Int
 }
 
-// offerTracker remembers our outstanding offers per (adapter, auction) so we don't re-offer through the
-// same adapter while one is live, and so we can tell when an auction is fully covered. It is a snapshot
+// offerTracker remembers our outstanding offers per (adapter, auction) so the strategy knows what each
+// adapter already holds on an auction (dedup or top-up), and so we can tell how much of an auction we
+// cover. It is a snapshot
 // of the 3F API's live offers, rebuilt from the API before every offer pass (reconcileAdapter); Run
 // goroutine only, no locking.
 type offerTracker struct {

@@ -55,7 +55,7 @@ type Solver struct {
 	signerAddr common.Address // the solver's own signer address (diagnostics only), set in factory
 	probe      signerProbe    // one-time (hash, sig) used to validate offer-signer authorization, set in factory
 	nonceSeq   atomic.Uint64
-	offers     *offerTracker // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
+	offers     *offerTracker // live (adapter, auction) offers and their principal (Run goroutine only)
 	targets    []Target      // current resolved snapshot; owned exclusively by the Run goroutine
 	// targetsAuthoritative records whether targets covers the complete configured/discovered source.
 	// A partial refresh still installs its safe subset, but derived metric freshness must stay retained.

@@ -549,7 +549,8 @@ For liquidity commitments, the built-in strategies apply these limits:
 
 - 3F counts all live offer principals and request slots before creating offers for another auction.
   Each adapter offers an auction's full requested amount within its own capacity; adapters bid
-  independently and never split one auction between them.
+  independently and never split one auction between them. An adapter's own live offer is re-posted
+  at a larger principal when capacity freed since it was placed lets it cover more of the request.
   Expiration is at least `now + offerExpiryBuffer`. Webhook `liveOffers[]` now includes decimal-string
   `principal`; remote strategies must reserve it as well as the live request slot. The auction's
   `remainingAmount` is informational: size each adapter against `amountRequested`.

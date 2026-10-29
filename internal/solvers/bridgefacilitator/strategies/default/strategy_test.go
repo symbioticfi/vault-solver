@@ -282,7 +282,7 @@ func TestStrategySkipsZeroRatePair(t *testing.T) {
 }
 
 func TestStrategyOwnsEligibility(t *testing.T) {
-	a1 := testAdapter(1, 100) // filtered by an existing live offer
+	a1 := testAdapter(1, 100) // filtered by a live offer of unknown size
 	a2 := testAdapter(2, 100)
 	a2.Collateral = common.Address{0xbb} // collateral mismatch
 	a3 := testAdapter(3, 100)
@@ -305,9 +305,9 @@ func TestStrategyOwnsEligibility(t *testing.T) {
 }
 
 func TestStrategyIgnoresOtherAdaptersLiveOffers(t *testing.T) {
-	a1, a2 := testAdapter(1, 100_000_000), testAdapter(2, 100_000_000)
+	a1, a2 := testAdapter(1, 60_000_000), testAdapter(2, 100_000_000)
 	auction := testAuction(10, 100_000_000)
-	auction.RemainingAmount = big.NewInt(40_000_000) // a1 already holds 60M on this auction
+	auction.RemainingAmount = big.NewInt(40_000_000) // a1 already holds all of its 60M on this auction
 	out, err := New().DecideOffers(t.Context(), types.OfferInput{
 		Adapters:   []types.AdapterSnapshot{a1, a2},
 		Auctions:   []types.AuctionSnapshot{auction},
@@ -316,9 +316,57 @@ func TestStrategyIgnoresOtherAdaptersLiveOffers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// a1 is deduped on this auction; a2 offers the full request, not the 40M left after a1's live offer.
+	// a1 has nothing to add; a2 offers the full request, not the 40M left after a1's live offer.
 	if len(out.Offers) != 1 || out.Offers[0].Maker != a2.Adapter || out.Offers[0].Principal.Int64() != 100_000_000 {
 		t.Fatalf("offers = %+v, want only adapter 2 / 100M", out.Offers)
+	}
+}
+
+// TestStrategyTopsUpLiveOffer covers re-posting an adapter's own live offer: when capacity freed since
+// the original offer (another auction cancelled, more fundable liquidity) lets the adapter cover more of
+// the request, it offers the larger principal again; a held offer is never re-posted at the same or a
+// smaller size.
+func TestStrategyTopsUpLiveOffer(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		fundable      int64
+		maxConcurrent int
+		live          []types.LiveOffer
+		want          int64 // principal re-offered on auction 10, 0 for none
+	}{
+		{"freed capacity", 100_000_000, 50, []types.LiveOffer{{AdapterID: "a", AuctionID: 10, Principal: big.NewInt(60_000_000)}}, 100_000_000},
+		{"no headroom", 60_000_000, 50, []types.LiveOffer{{AdapterID: "a", AuctionID: 10, Principal: big.NewInt(60_000_000)}}, 0},
+		{"request covered", 200_000_000, 50, []types.LiveOffer{{AdapterID: "a", AuctionID: 10, Principal: big.NewInt(100_000_000)}}, 0},
+		{"unknown principal", 100_000_000, 50, []types.LiveOffer{{AdapterID: "a", AuctionID: 10}}, 0},
+		{"replaced offer keeps its slot", 100_000_000, 1, []types.LiveOffer{{AdapterID: "a", AuctionID: 10, Principal: big.NewInt(60_000_000)}}, 100_000_000},
+		{"other live offers still reserve", 100_000_000, 50, []types.LiveOffer{
+			{AdapterID: "a", AuctionID: 10, Principal: big.NewInt(60_000_000)},
+			{AdapterID: "a", AuctionID: 11, Principal: big.NewInt(30_000_000)},
+		}, 70_000_000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter := testAdapter(1, tc.fundable)
+			adapter.MaxConcurrent = tc.maxConcurrent
+			for i := range tc.live {
+				tc.live[i].AdapterID = adapter.ID
+			}
+			out, err := New().DecideOffers(t.Context(), types.OfferInput{
+				Adapters: []types.AdapterSnapshot{adapter}, Auctions: []types.AuctionSnapshot{testAuction(10, 100_000_000)},
+				LiveOffers: tc.live,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == 0 {
+				if len(out.Offers) != 0 {
+					t.Fatalf("offers = %+v, want none", out.Offers)
+				}
+				return
+			}
+			if len(out.Offers) != 1 || out.Offers[0].AuctionID != 10 || out.Offers[0].Principal.Int64() != tc.want {
+				t.Fatalf("offers = %+v, want one on auction 10 for %d", out.Offers, tc.want)
+			}
+		})
 	}
 }
 
