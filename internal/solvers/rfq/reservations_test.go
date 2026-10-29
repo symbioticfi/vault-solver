@@ -29,7 +29,7 @@ func reservedOn(st *store, capacityID liquidlane.CapacityID) *big.Int {
 
 func TestQuoteSubtractsWonOrderReservations(t *testing.T) {
 	body := validQuoteBody()
-	parsed, err := body.toStrategy(1)
+	parsed, err := body.toStrategy(1, common.Address{})
 	if err != nil || parsed == nil {
 		t.Fatalf("parse quote body: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestConfirmedFillRecordsInclusionBlock(t *testing.T) {
 // the confirmed fill's inclusion, the quote no longer subtracts the still-open order's reservation.
 func TestQuoteUsesBackendSnapshotBlock(t *testing.T) {
 	body := validQuoteBody()
-	parsed, err := body.toStrategy(1)
+	parsed, err := body.toStrategy(1, common.Address{})
 	if err != nil || parsed == nil {
 		t.Fatalf("parse quote body: %v", err)
 	}

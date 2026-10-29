@@ -1,4 +1,4 @@
-# Independent awarded-order filler. Supply deployed addresses and a persistent state mount.
+# Merkle quote server and awarded-order filler. Supply deployed addresses and a persistent state mount.
 chain:
   rpcUrl: ${ETH_RPC_URL_MAINNET}
   writeRpcUrl: ${WRITE_RPC_URL}
@@ -11,14 +11,16 @@ txManager:
 observability:
   addr: ":9090"
 solvers:
-  - name: rfq-merkle
+  - name: rfq-filler
     config:
       backendUrl: ${RFQ_BACKEND_URL}
+      backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET
+      listenAddr: ":42073"
       stateDir: /persistent/rfq-merkle
       executor: "0x0000000000000000000000000000000000000010" # RFQ Executor with RecipeFill
       curator:
         url: https://curator.example.invalid/api/v1
         # apiKeyEnv: CURATOR_API_TOKEN
-      connectors:
-        - "0x0000000000000000000000000000000000000042"
-        # RecipeExecutor is supplied by the backend inventory for each RWA.
+      # Configure this instead of adapters. Setting both fails startup.
+      recipeExecutor: "0x0000000000000000000000000000000000000043"
+      # The payment connector is derived from this executor's committed recipe.

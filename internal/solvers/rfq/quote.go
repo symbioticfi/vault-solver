@@ -21,8 +21,9 @@ import (
 // for concurrent use (the HTTP server serves quotes in parallel): its dependencies are individually
 // synchronized, and it holds no mutable state itself.
 type quoteService struct {
-	chainID  int64
-	executor common.Address
+	recipeExecutor common.Address
+	chainID        int64
+	executor       common.Address
 	// laneAvailable is safe for concurrent use and reports sender initialization. A busy lane does not
 	// block quoting: pending fills are accounted through reservations instead. It is sampled before
 	// and after quote planning so work is declined whenever either check observes a nonce conflict.
@@ -132,7 +133,19 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (decision qu
 
 // evaluate is the quote pipeline; quote wraps it in the rfq.quote span and classifies its outcome.
 func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDecision, error) {
-	parsed, err := q.toStrategy(qs.chainID)
+	// A recipe process serves only its committed payment connector. Filter before
+	// parsing so unrelated native entries in a shared backend response stay out.
+	if qs.recipeExecutor != (common.Address{}) && qs.whitelist != nil {
+		scoped := *q
+		scoped.Adapters = nil
+		for _, item := range q.Adapters {
+			if qs.whitelist[common.HexToAddress(item.Adapter)] {
+				scoped.Adapters = append(scoped.Adapters, item)
+			}
+		}
+		q = &scoped
+	}
+	parsed, err := q.toStrategy(qs.chainID, qs.recipeExecutor)
 	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, &badRequestError{errors.Errorf("parse request: %w", err)}
 	}

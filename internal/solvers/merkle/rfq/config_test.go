@@ -12,6 +12,7 @@ func TestConnectorConfigurationUsesOnchainRecipes(t *testing.T) {
 	const base = `backendUrl: https://rfq.example
 stateDir: /persistent/rfq-merkle
 executor: "0x0000000000000000000000000000000000000010"
+recipeExecutor: "0x0000000000000000000000000000000000000043"
 curator: {url: https://curator.example/api/v1}
 connectors:
  - "0x00000000000000000000000000000000000000ab"
@@ -23,7 +24,7 @@ connectors:
 		{"zero connector", strings.ReplaceAll(base, "00000000ab", "0000000000"), "connector"},
 		{"empty connectors", strings.Replace(base, `connectors:
  - "0x00000000000000000000000000000000000000ab"
- - "0x0000000000000000000000000000000000000042"`, "connectors: []", 1), "1..256 connectors"},
+ - "0x0000000000000000000000000000000000000042"`, "connectors: []", 1), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var node yaml.Node
@@ -40,8 +41,8 @@ connectors:
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !cfg.Connectors[common.HexToAddress("0xab")] || !cfg.Connectors[common.HexToAddress("0x42")] || len(cfg.Connectors) != 2 {
-				t.Fatal("connector allowlist changed")
+			if cfg.RecipeExecutor != common.HexToAddress("0x43") {
+				t.Fatal("local recipe executor changed")
 			}
 		})
 	}

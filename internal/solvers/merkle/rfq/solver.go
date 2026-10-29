@@ -20,7 +20,6 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/merklehost"
 	"github.com/symbioticfi/vault-solver/internal/merklesender"
 	"github.com/symbioticfi/vault-solver/internal/observability"
-	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"gopkg.in/yaml.v3"
 )
@@ -56,28 +55,53 @@ type fillIntent struct {
 }
 
 type Solver struct {
-	workflow *connectorWorkflow
-	backend  orderBackend
-	sender   journalSender
-	store    *state.Store
-	intent   fillIntent // Only Run accesses the intent; the sender reads its deadline at admission.
+	recipeExecutor common.Address
+	venue          common.Address
+	workflow       *connectorWorkflow
+	backend        orderBackend
+	sender         journalSender
+	store          *state.Store
+	intent         fillIntent // Only Run accesses the intent; the sender reads its deadline at admission.
 }
 
-func (*Solver) Name() string   { return Name }
-func (s *Solver) Close() error { return s.store.Close() }
+func (*Solver) Name() string { return Name }
+func (s *Solver) Close() error {
+	if s.store == nil {
+		return nil
+	}
+	return s.store.Close()
+}
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
 		return nil, err
 	}
-	if deps.Chain == nil || deps.Signer == nil || deps.TxManager == nil {
+	return New(cfg, deps)
+}
+
+// New shares the Merkle fill path with the RFQ quote server.
+func New(cfg Config, deps solver.Deps) (*Solver, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if deps.Chain == nil || (!cfg.QuoteOnly && (deps.Signer == nil || deps.TxManager == nil)) {
 		return nil, errors.New("rfq-merkle requires the shared chain, signer and transaction manager")
+	}
+	indexed, err := merklehost.NewRecipeSource(cfg.BackendURL)
+	if err != nil {
+		return nil, err
+	}
+	readChain := merklehost.NewIndexedReader(deps.Chain, indexed)
+	s := &Solver{recipeExecutor: cfg.RecipeExecutor, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: readChain, chainID: deps.Chain.ChainID(), connectors: cfg.Connectors, caller: cfg.Executor}}
+	if cfg.QuoteOnly {
+		return s, nil
 	}
 	source, err := cfg.Curator.PermissionSource(deps.Chain, 10*time.Second)
 	if err != nil {
 		return nil, err
 	}
+	s.workflow.source, s.workflow.signer = source, deps.Signer.Address()
 	store, err := state.Open(cfg.StateDir)
 	if err != nil {
 		return nil, err
@@ -88,12 +112,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 			_ = store.Close()
 		}
 	}()
-	indexed, err := merklehost.NewRecipeSource(cfg.BackendURL)
-	if err != nil {
-		return nil, err
-	}
-	readChain := merklehost.NewIndexedReader(deps.Chain, indexed)
-	s := &Solver{store: store, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: readChain, chainID: deps.Chain.ChainID(), connectors: cfg.Connectors, source: source, caller: cfg.Executor, signer: deps.Signer.Address()}}
+	s.store = store
 	s.sender, err = submission.New(deps.Chain, deps.Signer.Address(), deps.Chain.ChainID(), store, submission.Config{Confirmations: deps.TxManager.Confirmations()}, merklesender.Transport{Manager: deps.TxManager, Solver: Name, Deadline: func() time.Time { return s.intent.Deadline }}, deps.Log)
 	if err != nil {
 		return nil, err
@@ -112,6 +131,9 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 }
 
 func (s *Solver) Run(ctx context.Context) error {
+	if _, err := s.Initialize(ctx); err != nil {
+		return err
+	}
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -215,11 +237,7 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 		if !ok || maximum.Sign() < 0 || maximum.BitLen() > 256 {
 			return nil, errors.New("invalid connector maxAssets")
 		}
-		recipeExecutor, err := parse.NonZeroAddress(item.RecipeExecutor, "connector recipeExecutor")
-		if err != nil {
-			continue
-		}
-		data, until, err := s.workflow.build(ctx, order, signature, selectedRoute{Venue: venue, Executor: recipeExecutor, DiscountID: common.BytesToHash(id), MaxAssets: maximum}, s.backend)
+		data, until, err := s.workflow.build(ctx, order, signature, selectedRoute{Venue: venue, Executor: s.recipeExecutor, DiscountID: common.BytesToHash(id), MaxAssets: maximum}, s.backend)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()

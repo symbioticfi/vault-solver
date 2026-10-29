@@ -273,3 +273,36 @@ func TestServer_QuoteWhitelist(t *testing.T) {
 		})
 	}
 }
+
+func TestServerConnectorUsesLocalExecutorWithoutWireField(t *testing.T) {
+	srv := testServer()
+	srv.quotes.recipeExecutor = common.HexToAddress("0x43")
+	srv.quotes.discountsEnabled = true
+	srv.quotes.whitelist = adapterWhitelist{vlt: true}
+	body := validQuoteBody()
+	id := "0x" + strings.Repeat("ab", 32)
+	body.Adapters[0].DiscountID = &id
+	body.Adapters[0].DiscountPrecision = "100000000"
+	body.Adapters = append(body.Adapters, quoteAdapter{Adapter: common.HexToAddress("0xbad").Hex(), Asset: tOut.Hex(), MaxAssets: "1000", Discount: "0"})
+	rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("local recipe quote = %d: %s", rr.Code, rr.Body.String())
+	}
+	// The HTTP schema must reject an upstream attempt to pick an execution target.
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := strings.Replace(string(raw), `"discountPrecision":"100000000"`, `"recipeExecutor":"0x000000000000000000000000000000000000dead","discountPrecision":"100000000"`, 1)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/quote", strings.NewReader(injected))
+	req.Header.Set(sharedSecretHeader, testSecret)
+	rr = httptest.NewRecorder()
+	srv.handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("wire executor = %d: %s", rr.Code, rr.Body.String())
+	}
+	spec := do(t, srv.handler(), http.MethodGet, "/openapi.json", "", nil)
+	if strings.Contains(spec.Body.String(), `"recipeExecutor"`) {
+		t.Fatal("executor leaked into quote schema")
+	}
+}
