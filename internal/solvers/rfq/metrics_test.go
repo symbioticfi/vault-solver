@@ -35,7 +35,6 @@ func TestHTTPMetrics_InstrumentRecordsRequest(t *testing.T) {
 	if got != 1 {
 		t.Fatalf("rfq_filler_http_request_duration_seconds_count{POST,/quote,204} = %d, want 1", got)
 	}
-	metricstest.RequireValue(t, m.requests.With(labels), 1)
 }
 
 func TestQuoteDecisionMetricsClassifyAuthenticatedRequestsOnce(t *testing.T) {

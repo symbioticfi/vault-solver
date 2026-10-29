@@ -209,3 +209,46 @@ func TestDiscountedPricingRejectsInvalidInput(t *testing.T) {
 		t.Fatal("missing price must price nothing")
 	}
 }
+
+func TestConnectorDiscountPrecisionPreservesDigitsAndFloors(t *testing.T) {
+	price := big.NewInt(1_234_567_890_123_456_789)
+	discount := big.NewInt(1_000_001)
+	for _, amount := range []int64{1, 2, 99, 101, 1001, 1234567} {
+		input := big.NewInt(amount)
+		gross := AmountOutForRate(input, price, 6, 6)
+		want := new(big.Int).Div(new(big.Int).Mul(gross, big.NewInt(98_999_999)), big.NewInt(100_000_000))
+		got := DiscountedAmountOutPrecision(input, price, discount, 6, 6, 100_000_000)
+		if got.Cmp(want) != 0 {
+			t.Fatalf("amount %d: payout %s want %s", amount, got, want)
+		}
+		if got.Sign() == 0 {
+			continue
+		}
+		minimum := MinAmountInForDiscountedAmountOutPrecision(got, price, discount, 6, 6, 100_000_000)
+		if DiscountedAmountOutPrecision(minimum, price, discount, 6, 6, 100_000_000).Cmp(got) < 0 {
+			t.Fatal("inverse does not reach output")
+		}
+		previous := new(big.Int).Sub(minimum, big.NewInt(1))
+		if DiscountedAmountOutPrecision(previous, price, discount, 6, 6, 100_000_000).Cmp(got) >= 0 {
+			t.Fatal("inverse is not minimal")
+		}
+		maximum := MaxAmountInForDiscountedAmountOutPrecision(got, price, discount, 6, 6, 100_000_000)
+		if DiscountedAmountOutPrecision(maximum, price, discount, 6, 6, 100_000_000).Cmp(got) > 0 {
+			t.Fatal("cap exceeded")
+		}
+		next := new(big.Int).Add(maximum, big.NewInt(1))
+		if DiscountedAmountOutPrecision(next, price, discount, 6, 6, 100_000_000).Cmp(got) <= 0 {
+			t.Fatal("cap inverse is not maximal")
+		}
+	}
+	amount := big.NewInt(100_000_000)
+	exact := DiscountedAmountOutPrecision(amount, price, discount, 6, 6, 100_000_000)
+	rounded := DiscountedAmountOut(amount, price, big.NewInt(10_000), 6, 6)
+	if exact.Cmp(rounded) == 0 {
+		t.Fatal("connector precision was silently reduced to ppm")
+	}
+	candidate := QuoteCandidate{Price: price, Discount: discount, DiscountPrecision: 100_000_000, Route: Route{TokenInDecimals: 6, TokenOutDecimals: 6}}
+	if candidate.AmountOutFor(amount).Cmp(exact) != 0 {
+		t.Fatal("candidate lost connector discount precision")
+	}
+}

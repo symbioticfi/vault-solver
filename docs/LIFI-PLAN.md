@@ -325,7 +325,12 @@ backoff; repeated early disconnects increase it to the existing 30-second cap. T
 readiness is captured before cancellation and cleanup. Quote suspension and REST recovery are unchanged.
 
 **Order feed** — subscribe to the WebSocket `user:vm-order-submit` event (respond to `ping` with
-`pong`). On every connection the socket reader starts first, then the solver repeatedly paginates
+`pong`). `orderServer.wsReadTimeout` (default `60s`) bounds inactivity: each received application
+message or WebSocket ping/pong renews the read deadline. A silent open socket times out and reconnects,
+clearing connection/recovery readiness and canceling/joining its recovery work before the next
+connection. Application and control pong writes use `orderServer.wsWriteTimeout` (default `10s`).
+These budgets must be positive durations and come from the YAML configuration. On every connection
+the socket reader starts first, then the solver repeatedly paginates
 `GET /orders` for `Signed` and `Delivered` rows scoped to this executor and configured origin/destination
 chain until a pass adds no new immutable-order fingerprints. The live socket may also carry valid orders for
 other chains; routing checks classify foreign origin/output chains at info level before token parsing;
@@ -948,6 +953,9 @@ still requires the redeploy in phase 0.
 ---
 
 ## 10. Open items
+
+- [x] **Recover silent open order feeds.** Configured read inactivity and pong-write budgets force
+  reconnect/recovery and clear readiness when a previously recovered peer stops sending heartbeats.
 
 - [x] **Recover uncertain transaction outcomes on a healthy feed.** Re-read on-chain settlement and
   retain eligible orders in the existing timed retry mechanism through transient RPC/planning failures,

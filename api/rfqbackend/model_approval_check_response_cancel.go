@@ -20,7 +20,7 @@ var _ MappedNullable = &ApprovalCheckResponseCancel{}
 // ApprovalCheckResponseCancel Unsigned approve(Reactor, 0) transaction when allowance is nonzero but insufficient. Execute cancel before approval. Null when allowance is zero or already sufficient.
 type ApprovalCheckResponseCancel struct {
 	To                   string `json:"to" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Data                 string `json:"data" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	Data                 string `json:"data" validate:"regexp=^0x(?:[a-fA-F0-9]{2})*$"`
 	Value                string `json:"value"`
 	AdditionalProperties map[string]interface{}
 }

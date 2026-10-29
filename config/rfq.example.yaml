@@ -49,6 +49,8 @@ solvers:
         name: default                  #   "default" (in-process pricing/selection) | "webhook" (external decider)
         config: {}                     #   opaque to the framework; parsed by the named strategy
 
+      # Set true to serve quotes without polling/submitting awarded orders.
+      quoteOnly: false
       backendUrl: ${RFQ_BACKEND_URL}   # RFQ backend base URL (host root; the client adds the /api/v1 prefix)
       backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET  # env var NAME of the POST /quote shared secret
       listenAddr: ":42073"             # bind address for the quote HTTP server (POST /quote, /health, /docs)
@@ -86,6 +88,12 @@ solvers:
       #   "0xC26A6Fa2C37b38E549a4a1807543801Db684f99C": "1000000000000000000"  # 1 AA_FalconXUSDC
       #   "0x1DD91a111606382B77A917633ED90feAf25E0F76": "1000000000000000000"  # 1 mGLO
 
+      # Choose native adapters OR a Merkle recipe executor (mutually exclusive).
+      # To use a recipe, remove adapters below and configure:
+      # recipeExecutor: "0x..."
+      # stateDir: /persistent/rfq-merkle
+      # curator: {url: https://curator.example.invalid/api/v1}
+      # See rfq-merkle.example.yaml. quoteOnly needs no stateDir or curator service.
       # LiquidLane adapter instances this filler serves — the concrete per-token adapters (not the
       # factory). Each adapter's vault + asset are resolved on-chain at startup. In `external` mode
       # these scope quoting/filling and are required; the Executor must additionally be an authorized

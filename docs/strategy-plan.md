@@ -310,3 +310,66 @@ strategy:
       authorization:
         env: STRATEGY_AUTH_HEADER
 ```
+
+
+## Merkle SDK host boundary
+
+The Merkle host consumes independently versioned SDK identity discovery, active-root
+permission fetching, recipe input derivation, bounded recipe evidence caching,
+pinned batched reads and state-override numeric preparation. It rejects manual
+account/tree/input configuration and fingerprints its derived account, signer,
+curator source and runtime policy version for recovery. Complete original-code
+simulation and canonical block fences remain mandatory. The shared lens replays
+authenticated state-changing prefixes before later numerical reads; unresolved
+provider outputs, future input sources and executor self-queries fail closed.
+The host registers the SDK's `providers/aave` capacity provider before generic
+recipe input derivation. It replays authenticated supply prefixes and reads Aave
+capacity through a pinned eth_call code override; the committed recipe chooses
+the actual amount and enforces its health floor. The implementation is shared
+with the executor daemon; vault-solver contains no Aave sizing implementation.
+Canonical permission bundles may include unused `"nonzero"` payable markers;
+selecting such a leaf for recipe execution remains unsupported.
+
+The immutable SDK also classifies successful original execution results using the
+authenticated recipe: all Manage gates closed with no Call or Approve work is idle.
+Request IDs and bound arguments do not supply readiness policy. Unsigned admission
+rechecks the gates; malformed results, reverts and closing canonical-check failures
+remain errors. The existing signed journal recovery path remains unchanged, and
+on-chain completion assertions remain part of the recipe rather than host protocol
+recognition.
+
+The host's SDK transport continues to use the existing shared transaction manager's
+owner fence and persistence callbacks; it contains no copied sender or nonce engine.
+The SDK batch engine uses the existing HTTP fallback/tracing path with strict response
+identity validation. All solvers use HTTP(S) chain RPC endpoints. Vault-side LL/3F pricing,
+discounts and auction/order business logic stay in their existing integration packages; they are not implicitly
+wired through the Merkle host. Executor-daemon Merkl/CoW provider integration remains
+owned by merkle-executor.
+
+
+`rfq-merkle` separately consumes awarded RFQ orders through connector recipes. It
+uses no adapter inventory, economic strategy or shared capacity aggregation. The
+signed order supplies amounts; the SDK authenticates the immutable program and
+simulates the complete outer RFQ settlement. The Merkle hosts share
+`internal/merklesender`, which forwards owner fences, signed-byte persistence and
+optional execution deadlines to the single txmanager. See [RFQ-MERKLE.md](RFQ-MERKLE.md).
+
+`threef-merkle` independently owns one Merkle recipe executor for one curator BF/default
+maker. Its recipe contains 1..32 distinct guarded funding/underlying markets, with
+one API client, planner, provider, exclusive store and sender. One Run goroutine
+maintains existing commitments before scanning open/solvable auctions for new bids
+while the sender is idle. Positive and negative membership are memoized only at the
+current pin. Each pass checks every relevant unanswered open/solvable auction before
+bidding, with no eligibility count cap or persistent scan cursor. Matching requests
+are deduplicated per market, and each eligible market is considered once after the
+complete eligibility scan. Any API mutation ends the pass to refresh inventory.
+The account-level durable intent serializes self-originated offers across markets. Its API-key PUSH offer loop uses authenticated recipe/policy scope and idle
+account cash; its SDK provider binds native aggregate mint authorizations. The
+provider authenticates canonical mint guards and their input bindings. Additional
+funding activation follows the curator-authored committed recipe; no separate host
+proof restricts the sources used by its Manage gates.
+The generic `merkle` solver has no 3F configuration or provider dispatch. All 3F Merkle
+code lives in one package; API, reservation and durable intent checks remain inside
+that integration. Both recipe keepers share store/sender startup through
+`internal/merklesender.OpenKeeper`, including recovery validation before Run.
+See [THREEF-MERKLE.md](THREEF-MERKLE.md) for the flow and validation boundaries.

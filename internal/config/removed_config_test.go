@@ -5,6 +5,13 @@ import (
 	"testing"
 )
 
+func TestLoadRejectsRemovedChainWebSocket(t *testing.T) {
+	body := strings.Replace(validConfig, "chain:\n", "chain:\n  wsUrl: wss://unused.example\n", 1)
+	if _, err := Load(writeTemp(t, body)); err == nil || !strings.Contains(err.Error(), "wsUrl") {
+		t.Fatalf("removed chain WebSocket field should be rejected, got %v", err)
+	}
+}
+
 func TestLoadRejectsRemovedCancellationRPC(t *testing.T) {
 	for _, tc := range []struct {
 		name  string

@@ -40,6 +40,9 @@ jobs:
           go mod tidy
           git diff --exit-code -- go.mod go.sum
 
+      - name: Check schema registration and refresh failure handling offline
+        run: make test-tooling
+
       - name: Build
         run: make build
 
@@ -62,6 +65,12 @@ jobs:
 
       - name: Test independent nonce reconciliation
         run: make test-txmanager-anvil
+
+      - name: Test canonical RFQ Merkle settlement
+        run: make test-rfq-merkle-anvil
+
+      - name: Test composed SDK journal and shared sender
+        run: make test-merklesender-anvil
 
   lint:
     runs-on: ubuntu-latest

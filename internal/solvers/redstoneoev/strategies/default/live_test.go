@@ -68,7 +68,7 @@ func TestLiveAPIMonitorSnapshotAndCandidates(t *testing.T) {
 		ids = append(ids, id)
 		quotes[id] = newQuote("1780000000000000000000", nil)
 	}
-	apiPositions, err := mon.api.PositionsByMarket(ctx, ids, mon.maxPositions, &mon.maxHF)
+	apiPositions, err := mon.api.PositionsByMarket(ctx, mon.chainID, ids, mon.maxPositions, &mon.maxHF)
 	if err != nil {
 		t.Fatalf("PositionsByMarket live API failed: %v", err)
 	}

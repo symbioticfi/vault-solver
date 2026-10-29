@@ -10,6 +10,10 @@ This document is the source of truth for the build. It captures the agreed scope
 architecture, and decisions. See `3F_BRIDGE_FACILITATOR_INTEGRATION.md` (sibling
 repo root) §4 for the functional blueprint of the 3F solver.
 
+The native MerkleAccount API-key PUSH workflow is a separate `threef-merkle` solver,
+with 1..256 recipe executors, one shared sender and one broker/default maker. See [THREEF-MERKLE.md](THREEF-MERKLE.md).
+It does not use this adapter solver's discovery, signatures or liquidity strategies.
+
 ---
 
 ## 1. Scope
@@ -21,7 +25,8 @@ repo root) §4 for the functional blueprint of the 3F solver.
   bindings) **and its 3F onboarding**. In the new model each adapter is deployed and registered with 3F
   **as a facilitator by its own vault creator**, who then sets this solver's signer as the adapter's
   **EIP-1271 signer**. The bot registers nothing with 3F and holds no API key.
-- **Target networks:** 3F Sepolia dev (`chainId 11155111`) and Ethereum mainnet (`chainId 1`).
+- **Target networks:** Ethereum mainnet (`chainId 1`) by default; 3F Sepolia dev
+  (`chainId 11155111`) requires explicit API, RPC and contract configuration.
 
 ---
 
@@ -164,15 +169,19 @@ Two-stage decode keeps solver config encapsulated. The generic layer reads only
 `solver.name` to pick the impl and keeps `solver.config` as a deferred `yaml.Node`;
 the chosen solver decodes it into its own typed struct.
 
+Schema refresh, drift monitoring, the annotated example and opt-in live checks use production
+3F by default. API adapters combine the configured origin with the generated schema's default
+server path (`/v1`); the schema owns endpoint paths.
+
 ```yaml
-chain: { rpcUrl, writeRpcUrl?, chainId, rpcFallbackUrls?, wsUrl? }
+chain: { rpcUrl, writeRpcUrl?, chainId, rpcFallbackUrls? } # HTTP(S) endpoints
 signer: { keyEnv: SOLVER_PRIVATE_KEY }     # the EIP-1271 signer every served adapter trusts
 txManager: { confirmations: 2, maxFeeGwei, broadcastTimeoutMs, replacementIntervalMs, pendingTimeoutMs, shutdownTimeoutMs, horizon }
 
 solvers:
   - name: 3f-bridge-facilitator             # ← registry key: selects the impl
     config:                                  # ← opaque to framework; typed by the 3F package
-      apiBaseUrl: https://bf.dev.gcp.3f.xyz
+      apiBaseUrl: https://bf.3f.xyz
       strategy:
         name: default                        # default local strategy, or webhook
         config: {}
@@ -403,7 +412,7 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
   custom strategy or the built-in `webhook` strategy. The strategy returns principal and expected
   return; the solver only signs and submits the returned offer.
 - **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state.
-- **WS live-log subscription** (`chain.wsUrl`) — config field present but unused; the poll-based reconcile/redeem path is sufficient for v0.
+- **Chain transport** — HTTP(S) RPC only. The unused `chain.wsUrl` option and WebSocket/IPC RPC path were removed; reconcile/redeem remains poll-based.
 - **Resolved: pre-sign redeem estimation budget.** `redeem` still submits without a request
   deadline or supplied gas limit. The shared manager now bounds initial estimation and its fallback
   by one finite read budget; an unsigned timeout returns before the lane admits new work

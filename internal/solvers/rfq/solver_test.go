@@ -127,7 +127,7 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
 	rogueAdapter := quoteAdapter{
 		Adapter: rogue.Hex(), Asset: tOut.Hex(), AssetDecimals: 6,
-		MaxAssets: "10000000", Discount: "0", // not scoped → must be dropped
+		BlockNumber: "1", MaxAssets: "10000000", Discount: "0", // not scoped → must be dropped
 	}
 
 	// (1) Request offering ONLY the non-configured adapter ⇒ declined (nil → HTTP 204).
@@ -154,5 +154,18 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 	}
 	if decision.response.AmountOut != "1000000" {
 		t.Fatalf("amountOut = %s, want quote through the configured adapter", decision.response.AmountOut)
+	}
+}
+
+func TestBuildServicesUsesConfiguredRecipeExecutor(t *testing.T) {
+	cfg, err := parseCfg(t, minimalConfig+`recipeExecutor: "0x0000000000000000000000000000000000000043"
+quoteOnly: true
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	quotes, _ := buildServices(cfg, 1, newStore(time.Now), nil, nil, func() bool { return true }, nil, logr.Discard())
+	if quotes.recipeExecutor != cfg.RecipeExecutor || !quotes.discountsEnabled {
+		t.Fatal("local recipe configuration did not reach quote service")
 	}
 }

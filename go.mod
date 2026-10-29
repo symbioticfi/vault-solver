@@ -1,6 +1,6 @@
 module github.com/symbioticfi/vault-solver
 
-go 1.27
+go 1.27.0
 
 toolchain go1.27.3
 
@@ -16,6 +16,7 @@ require (
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
 	github.com/spf13/cobra v1.10.2
+	github.com/symbioticfi/merkle-executor/sdk v0.0.0-20261029084240-ef8232769e17
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.72.0
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.47.0

@@ -118,7 +118,7 @@ func buildFillCalldata(
 	if err != nil {
 		return nil, err
 	}
-	finaliseCalldata, err := lifiExecutor.TryPackFinaliseWithCurrentTimestamp(
+	finaliseCalldata, err := lifiExecutor.TryPackFinaliseWithCurrentTimestamp0(
 		toExecutorOrder(order.Order),
 		directRoutes,
 		discountRoutes,
