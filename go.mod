@@ -7,7 +7,7 @@ toolchain go1.27.3
 require (
 	github.com/Khan/genqlient v0.8.1
 	github.com/danielgtaylor/huma/v2 v2.39.1
-	github.com/ethereum/go-ethereum v1.17.8
+	github.com/ethereum/go-ethereum v1.17.10
 	github.com/getsentry/sentry-go v0.50.0
 	github.com/go-errors/errors v1.5.1
 	github.com/go-logr/logr v1.4.4
@@ -52,13 +52,13 @@ require (
 	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/prometheus/common v0.72.1 // indirect
-	github.com/prometheus/procfs v0.22.0 // indirect
+	github.com/prometheus/procfs v0.23.0 // indirect
 	github.com/shirou/gopsutil v3.21.11+incompatible // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/supranational/blst v0.3.17 // indirect
 	github.com/tklauser/go-sysconf v0.4.0 // indirect
 	github.com/tklauser/numcpus v0.12.0 // indirect
-	github.com/vektah/gqlparser/v2 v2.5.63 // indirect
+	github.com/vektah/gqlparser/v2 v2.5.64 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.mongodb.org/mongo-driver v1.17.10 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect

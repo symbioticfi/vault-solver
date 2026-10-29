@@ -7,7 +7,7 @@ SHELL := bash
 .DEFAULT_GOAL := help
 
 # Pinned codegen tool versions.
-ABIGEN_VERSION           ?= v1.17.8
+ABIGEN_VERSION           ?= v1.17.10
 GOLANGCI_LINT_VERSION    ?= v2.15.0
 GENQLIENT_VERSION        ?= v0.8.1
 GQLFETCH_VERSION         ?= v0.7.0

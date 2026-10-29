@@ -68,8 +68,8 @@ github.com/ethereum/c-kzg-4844/v2 v2.1.8 h1:oQ48q/TMe2SKU8qBE3N7e4/HlG3EpJftom6E
 github.com/ethereum/c-kzg-4844/v2 v2.1.8/go.mod h1:8HMkUZ5JRv4hpw/XUrYWSQNAUzhHMg2UDb/U+5m+XNw=
 github.com/ethereum/go-bigmodexpfix v0.0.0-20250911101455-f9e208c548ab h1:rvv6MJhy07IMfEKuARQ9TKojGqLVNxQajaXEp/BoqSk=
 github.com/ethereum/go-bigmodexpfix v0.0.0-20250911101455-f9e208c548ab/go.mod h1:IuLm4IsPipXKF7CW5Lzf68PIbZ5yl7FFd74l/E0o9A8=
-github.com/ethereum/go-ethereum v1.17.8 h1:iKuXrT38t1PaU6aBw6MjBJhGoCl/+Ir0vf5aqQhYT38=
-github.com/ethereum/go-ethereum v1.17.8/go.mod h1:Iui379BD7ryQSFeIDn3sh9Od2I1uheqJD2/6N0m4xm0=
+github.com/ethereum/go-ethereum v1.17.10 h1:b3WO+xux3pItpm13kqT5Xddv01zOxBFZxQgk/Ate4/M=
+github.com/ethereum/go-ethereum v1.17.10/go.mod h1:7ruvgGPsxGXtaSFJQKkSGwbKghz8V/G1xuDVY8NqQQM=
 github.com/felixge/httpsnoop v1.1.0 h1:3YtUj32ZZkqZtt3sZZsClsymw/QDuVfpNhoA31zeORc=
 github.com/felixge/httpsnoop v1.1.0/go.mod h1:Zqxgdd+1Rkcz8euOqdr7lqgCRJztwr5hp9vDSi5UZCE=
 github.com/ferranbt/fastssz v0.1.4 h1:OCDB+dYDEQDvAgtAGnTSidK1Pe2tW3nFV40XyMkTeDY=
@@ -194,8 +194,8 @@ github.com/prometheus/client_model v0.6.3 h1:O0jaTVAYNxTHYInEPFJt5I3+sN8zqBtVMPT
 github.com/prometheus/client_model v0.6.3/go.mod h1:gpN5P9S7Rr6Yr92PiQ+Ixvhf6JZEkF1dnxsYL2aPBEM=
 github.com/prometheus/common v0.72.1 h1:ZAiQed/nk8IIcsdzb2TlJu23NEUDyDLQ9TXTN2WRK6Y=
 github.com/prometheus/common v0.72.1/go.mod h1:1IoBY4IRaJnhs2ESjNzjilP1cJ/P8pimGoomq7zRXrA=
-github.com/prometheus/procfs v0.22.0 h1:6q9+/JL9IKAPbCmBrv9n5O5Ty3NKnciV5X7YGw0oics=
-github.com/prometheus/procfs v0.22.0/go.mod h1:CvmFr/GVhIjIvWJZW3tgkODBQMRIf0EyWMQLHCHab58=
+github.com/prometheus/procfs v0.23.0 h1:ad+S6FTkzwaMgacKLM5h6bNKExS+DMH0YiUwXItH/o4=
+github.com/prometheus/procfs v0.23.0/go.mod h1:3AVXO0FqLafyYFU/V/IQRZlC8Rgqz8Dm/x6pKLK+RIk=
 github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0tI/otEQ=
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/rs/cors v1.7.0 h1:+88SsELBHx5r+hZ8TCkggzSstaWNbDvThkVK8H6f9ik=
@@ -223,8 +223,8 @@ github.com/tklauser/numcpus v0.12.0 h1:NR85qdvHA9pFse3x3weVZ0r0ST8R6l5RHbZrlRaqo
 github.com/tklauser/numcpus v0.12.0/go.mod h1:ABHeXzJnr/qqwguhClkZKT1/8VABcYrsyUiUGobwWJg=
 github.com/urfave/cli/v2 v2.27.5 h1:WoHEJLdsXr6dDWoJgMq/CboDmyY/8HMMH1fTECbih+w=
 github.com/urfave/cli/v2 v2.27.5/go.mod h1:3Sevf16NykTbInEnD0yKkjDAeZDS0A6bzhBH5hrMvTQ=
-github.com/vektah/gqlparser/v2 v2.5.63 h1:vzHg/+/z7kZA3N4FhbGtF1pRo99KUpPzwXahk1bQtYk=
-github.com/vektah/gqlparser/v2 v2.5.63/go.mod h1:JNK+plRwKdXLsF/qPFPe5tE0z4s1WeroD9S5LR8um/Q=
+github.com/vektah/gqlparser/v2 v2.5.64 h1:N32yM6hQ6Kd5RdjCCEJsUrbCebVoA9yLLMOIa88Mkk0=
+github.com/vektah/gqlparser/v2 v2.5.64/go.mod h1:nILRSUbsWDTuf8hSmAgFxuYh0SaMZdkvl6JSEbkJX8g=
 github.com/wlynxg/anet v0.0.5 h1:J3VJGi1gvo0JwZ/P1/Yc/8p63SoW98B5dHkYDmpgvvU=
 github.com/wlynxg/anet v0.0.5/go.mod h1:eay5PRQr7fIVAMbTbchTnO9gG65Hg/uYGdc7mguHxoA=
 github.com/x448/float16 v0.8.4 h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=
