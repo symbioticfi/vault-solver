@@ -17,7 +17,6 @@ import (
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
-	"github.com/symbioticfi/vault-solver/internal/merklehost"
 	"github.com/symbioticfi/vault-solver/internal/merklesender"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
@@ -88,12 +87,7 @@ func New(cfg Config, deps solver.Deps) (*Solver, error) {
 	if deps.Chain == nil || (!cfg.QuoteOnly && (deps.Signer == nil || deps.TxManager == nil)) {
 		return nil, errors.New("rfq-merkle requires the shared chain, signer and transaction manager")
 	}
-	indexed, err := merklehost.NewRecipeSource(cfg.BackendURL)
-	if err != nil {
-		return nil, err
-	}
-	readChain := merklehost.NewIndexedReader(deps.Chain, indexed)
-	s := &Solver{recipeExecutor: cfg.RecipeExecutor, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: readChain, chainID: deps.Chain.ChainID(), connectors: cfg.Connectors, caller: cfg.Executor}}
+	s := &Solver{recipeExecutor: cfg.RecipeExecutor, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), connectors: cfg.Connectors, caller: cfg.Executor}}
 	if cfg.QuoteOnly {
 		return s, nil
 	}

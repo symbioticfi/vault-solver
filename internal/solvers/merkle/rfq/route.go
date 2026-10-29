@@ -10,7 +10,7 @@ import (
 )
 
 // Initialize scopes this process to the payment connector in its configured recipe.
-// Recipe bodies come from the indexed publication source, never request-time logs.
+// Recipe bytes are verified against the configured executor's commitment.
 func (s *Solver) Initialize(ctx context.Context) (common.Address, error) {
 	if s.venue != (common.Address{}) {
 		return s.venue, nil

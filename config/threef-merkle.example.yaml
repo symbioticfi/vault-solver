@@ -16,7 +16,6 @@ solvers:
       mode: simulate # send enables API offers and on-chain minting
       stateDir: /persistent/threef-merkle
       executor: "0x0000000000000000000000000000000000000010" # one recipe with 1..32 guarded funding pairs
-      indexerUrl: ${RFQ_BACKEND_URL} # Indexed recipe publications; never RPC log scans.
       curator:
         url: https://curator.example.invalid/api/v1
         # apiKeyEnv: CURATOR_API_TOKEN

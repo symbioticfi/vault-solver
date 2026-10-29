@@ -7,15 +7,14 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
@@ -214,72 +213,45 @@ func (s *sdkBatchAPI) Call(_ context.Context, args struct {
 	return args.Input, nil
 }
 
-func TestRequestReadersNeverSendBlockchainLogScans(t *testing.T) {
-	calls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		var request struct {
-			ID json.RawMessage `json:"id"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&request)
-		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": "0x1"})
-	}))
-	defer server.Close()
-	client, err := Dial(t.Context(), []string{server.URL}, "", protocolio.StandardMulticall3, 0)
+func TestSDKRecipePublicationLogsUseSharedTransport(t *testing.T) {
+	executor, event := common.HexToAddress("0x01"), common.HexToHash("0x02")
+	query := ethereum.FilterQuery{FromBlock: big.NewInt(12), ToBlock: big.NewInt(12), Addresses: []common.Address{executor}, Topics: [][]common.Hash{{event}}}
+	server := rpc.NewServer()
+	if err := server.RegisterName("eth", sdkLogsAPI{executor, event}); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Stop()
+	httpServer := httptest.NewServer(server)
+	defer httpServer.Close()
+	client, err := Dial(t.Context(), []string{httpServer.URL}, "", common.HexToAddress("0x99").Hex(), 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	before := calls
-	if _, err := client.FilterLogs(t.Context(), ethereum.FilterQuery{}); err == nil {
-		t.Fatal("single log scan admitted")
+	logs, err := client.FilterLogs(t.Context(), query)
+	if err != nil || len(logs) != 1 || logs[0].Address != executor {
+		t.Fatalf("single publication lookup: logs=%+v err=%v", logs, err)
 	}
-	if _, err := client.BatchRead(t.Context(), []protocolio.ReadRequest{{Kind: protocolio.ReadHeader}, {Kind: protocolio.ReadLogs}}); err == nil {
-		t.Fatal("batch log scan admitted")
-	}
-	if calls != before {
-		t.Fatal("log scan reached RPC transport")
+	results, err := client.BatchRead(t.Context(), []protocolio.ReadRequest{{Kind: protocolio.ReadLogs, Filter: query}})
+	if err != nil || len(results) != 1 || results[0].Err != nil || len(results[0].Logs) != 1 || results[0].Logs[0].Address != executor {
+		t.Fatalf("batch publication lookup: results=%+v err=%v", results, err)
 	}
 }
 
-func TestRawClientsRejectLogScansBeforeHTTP(t *testing.T) {
-	var calls atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		var request struct {
-			ID json.RawMessage `json:"id"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&request)
-		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": "0x1"})
-	}))
-	defer server.Close()
-	client, err := Dial(t.Context(), []string{server.URL}, server.URL, common.HexToAddress("0x99").Hex(), 0)
-	if err != nil {
-		t.Fatal(err)
+type sdkLogsAPI struct {
+	executor common.Address
+	event    common.Hash
+}
+
+func (sdkLogsAPI) ChainId() hexutil.Uint64 { return 1 }
+func (s sdkLogsAPI) GetLogs(_ context.Context, filter struct {
+	FromBlock string           `json:"fromBlock"`
+	ToBlock   string           `json:"toBlock"`
+	Addresses []common.Address `json:"address"`
+	Topics    [][]common.Hash  `json:"topics"`
+}) ([]types.Log, error) {
+	if filter.FromBlock != "0xc" || filter.ToBlock != "0xc" || len(filter.Addresses) != 1 || filter.Addresses[0] != s.executor || len(filter.Topics) != 1 || len(filter.Topics[0]) != 1 || filter.Topics[0][0] != s.event {
+		return nil, errors.New("recipe publication filter changed")
 	}
-	defer client.Close()
-	before := calls.Load()
-	for name, raw := range map[string]*rpc.Client{"read": client.Client.Client(), "write": client.writeClient.Client()} {
-		t.Run(name, func(t *testing.T) {
-			for _, method := range []string{"eth_getLogs", "eth_newFilter", "eth_getFilterLogs", "eth_getFilterChanges"} {
-				t.Run(method, func(t *testing.T) {
-					var result any
-					if err := raw.CallContext(t.Context(), &result, method, map[string]any{}); err == nil || !strings.Contains(err.Error(), "log scans belong to indexers") {
-						t.Fatalf("raw log scan admitted: %v", err)
-					}
-					// Even a preceding unknown method must not hide a later log scan.
-					batch := []rpc.BatchElem{{Method: "custom_other", Result: &result}, {Method: method, Result: &result}}
-					if err := raw.BatchCallContext(t.Context(), batch); err == nil || !strings.Contains(err.Error(), "log scans belong to indexers") {
-						t.Fatalf("raw batch log scan admitted: %v", err)
-					}
-				})
-			}
-		})
-	}
-	if _, err := client.Client.FilterLogs(t.Context(), ethereum.FilterQuery{}); err == nil {
-		t.Fatal("embedded ethclient bypassed log scan policy")
-	}
-	if calls.Load() != before {
-		t.Fatal("raw log scans reached an RPC endpoint")
-	}
+	return []types.Log{{Address: s.executor, Topics: []common.Hash{s.event}, Data: []byte{}, BlockNumber: 12}}, nil
 }
