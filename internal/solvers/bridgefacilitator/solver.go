@@ -268,13 +268,15 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 					"adapter", t.Adapter.Hex(), "offerId", o.Id)
 				nonce = nil
 			}
-			// One live offer per (adapter, auction) is assumed; if the API ever lists more, keep the latest.
+			// One live offer per (adapter, auction) is assumed; if the API ever lists more, an open one
+			// beats a funded or minting one so it stays re-priceable, then the latest expiry wins.
 			auctionID := int64(o.AuctionId)
-			if cur, exists := live[auctionID]; !exists || exp.After(cur.expiry) {
+			open := status == offerStatusSubmitted
+			if cur, exists := live[auctionID]; !exists || (open && !cur.open) || (open == cur.open && exp.After(cur.expiry)) {
 				live[auctionID] = offerState{
 					expiry: exp, principal: principal, expectedReturn: expectedReturn, nonce: nonce,
 					request: common.HexToAddress(o.RequestId),
-					open:    status == offerStatusSubmitted,
+					open:    open,
 					funded:  status == offerStatusSucceeded,
 				}
 			}

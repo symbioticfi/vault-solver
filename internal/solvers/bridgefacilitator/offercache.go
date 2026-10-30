@@ -116,7 +116,7 @@ func (t *offerTracker) dropFunded(adapter common.Address, requests []common.Addr
 // A top-up re-signs with it: the Request contract consumes at most one offer per nonce, so the old
 // and new signatures can never both fund.
 func (t *offerTracker) liveNonce(adapter common.Address, auctionID int64, now time.Time) *big.Int {
-	if st, ok := t.offers[offerKey{adapter, auctionID}]; ok && st.expiry.After(now) {
+	if st, ok := t.offers[offerKey{adapter, auctionID}]; ok && st.open && st.expiry.After(now) {
 		return cloneBig(st.nonce)
 	}
 	return nil

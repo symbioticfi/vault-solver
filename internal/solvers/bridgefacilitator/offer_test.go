@@ -74,7 +74,7 @@ func TestBuildSignedOfferReusesLiveNonce(t *testing.T) {
 		offers: newOfferTracker(),
 	}
 	s.offers.reconcileAdapter(adapter, map[int64]offerState{
-		1: {expiry: time.Now().Add(time.Hour), principal: big.NewInt(60), nonce: big.NewInt(42)},
+		1: {expiry: time.Now().Add(time.Hour), principal: big.NewInt(60), nonce: big.NewInt(42), open: true},
 	})
 	dto := testAuctionDto(1, common.Address{0xaa}, "1000")
 	name, version, chainID := "SuperstateRequest", "1", float32(1)
