@@ -257,11 +257,12 @@ func (r *reader) resolveAdapters(ctx context.Context, adapters []common.Address,
 // exposureState is the per-target funding headroom and per-request caps (setLimitsPerRequest) the sizer
 // pre-screens against before the contract enforces them at consume time.
 type exposureState struct {
-	fundable    *big.Int // getMaxAssets(): min(limitOf - totalAssets, vault.withdrawable), 0 if a sweep is pending
-	openCount   int      // active request count (requests[] length)
-	maxAssets   *big.Int // maxAssetsPerRequest — always-active ceiling (0 = reject-all)
-	minAssets   *big.Int // minAssetsPerRequest (0 = no floor)
-	minYieldPpm *big.Int // minYieldPerRequest (ppm) — exact on-chain floor (0 = no floor)
+	fundable    *big.Int         // getMaxAssets(): min(limitOf - totalAssets, vault.withdrawable), 0 if a sweep is pending
+	openCount   int              // active request count (requests[] length)
+	maxAssets   *big.Int         // maxAssetsPerRequest — always-active ceiling (0 = reject-all)
+	minAssets   *big.Int         // minAssetsPerRequest (0 = no floor)
+	minYieldPpm *big.Int         // minYieldPerRequest (ppm) — exact on-chain floor (0 = no floor)
+	requests    []common.Address // requests[] — the loans this adapter has funded and not yet finalized
 }
 
 // liquidityAndExposure reads the adapter's JIT-funding headroom (getMaxAssets), its per-request caps, and
@@ -316,13 +317,25 @@ func (r *reader) liquidityAndExposure(ctx context.Context, adapterAddr common.Ad
 	if err != nil {
 		return exposureState{}, err
 	}
+	n := clampCount(openCount)
+	// The funded request addresses let the offer cache drop offers the chain confirms as funded. A
+	// partial read only leaves some funded offers live, so completeness is not required here.
+	var requests []common.Address
+	if n > 0 {
+		rres, rerr := r.chain.Multicall(ctx, requestSlotCalls(adapterAddr, n))
+		if rerr != nil {
+			return exposureState{}, rerr
+		}
+		requests, _ = collectRequests(rres, n)
+	}
 
 	return exposureState{
 		fundable:    fundable,
-		openCount:   clampCount(openCount),
+		openCount:   n,
 		maxAssets:   maxAssets,
 		minAssets:   minAssets,
 		minYieldPpm: minYield,
+		requests:    requests,
 	}, nil
 }
 

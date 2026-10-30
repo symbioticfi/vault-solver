@@ -51,9 +51,9 @@ func (s *Strategy) DecideOffers(
 		order = append(order, &adapterState{snapshot: input.Adapters[i], committed: new(big.Int)})
 	}
 
-	live := make(map[liveKey]bool, len(input.LiveOffers))
+	live := make(map[liveKey]liveOffer, len(input.LiveOffers))
 	for _, l := range input.LiveOffers {
-		live[liveKey{l.AdapterID, l.AuctionID}] = true
+		live[liveKey{l.AdapterID, l.AuctionID}] = liveOffer{cloneBig(l.Principal), cloneBig(l.ExpectedReturn), l.Open}
 		for _, st := range order {
 			if st.snapshot.ID != l.AdapterID {
 				continue
@@ -75,14 +75,20 @@ func (s *Strategy) DecideOffers(
 			continue
 		}
 		// Adapters are independent makers: each offers the full request within its own capacity,
-		// regardless of what other adapters bid in this pass or already hold on the auction.
-		for _, st := range rankEligibleAdapters(auction, order, live) {
-			principal := minBig(st.capacity(), requested)
+		// regardless of what other adapters bid in this pass or already hold on the auction. An adapter
+		// whose open offer is stale (freed capacity lets it cover more, or its min-yield floor changed)
+		// re-posts it with the new terms; it never shrinks one.
+		for _, c := range rankEligibleAdapters(auction, order, live) {
+			st, held := c.st, c.held
+			principal := minBig(st.capacity(held), requested)
+			if held != nil && principal.Cmp(held) < 0 {
+				principal = cloneBig(held)
+			}
 			if principal.Sign() <= 0 || st.belowMinAssets(principal) {
 				continue
 			}
 			expectedReturn := offerReturn(principal, st.snapshot.MinYieldPpm, auction)
-			if expectedReturn == nil {
+			if expectedReturn == nil || (held != nil && !c.stale(principal, expectedReturn, st.snapshot.MinYieldPpm)) {
 				continue
 			}
 			offers = append(offers, types.OfferExecution{
@@ -93,46 +99,75 @@ func (s *Strategy) DecideOffers(
 				ExpectedReturn: expectedReturn,
 			})
 			st.committed.Add(st.committed, principal)
-			st.opened++
+			if held != nil {
+				st.committed.Sub(st.committed, held) // the replaced offer's principal and slot return
+			} else {
+				st.opened++
+			}
 		}
 	}
 	return types.OfferOutput{Offers: offers}, nil
 }
 
-// liveKey dedups an adapter's live offer on a given auction.
+// liveKey identifies an adapter's live offer on a given auction.
 type liveKey struct {
 	adapterID string
 	auctionID int64
 }
 
-// rankEligibleAdapters filters adapters eligible to offer on the auction (no live offer, matching
-// collateral, meeting the adapter's min-yield floor) and orders them by available capacity, largest
-// first. Capacity is computed once per adapter (not inside the comparator).
+// liveOffer is what an adapter already holds on an auction. A nil principal is an offer of unknown
+// size; open means 3F has not accepted it yet, so a re-post replaces it.
+type liveOffer struct {
+	principal, expectedReturn *big.Int
+	open                      bool
+}
+
+// candidate is an adapter eligible to offer on an auction; held and heldReturn are the terms of its
+// open offer on that auction, nil when it has none.
+type candidate struct {
+	st               *adapterState
+	held, heldReturn *big.Int
+}
+
+// stale reports whether the adapter would post different terms now: a larger principal fits, or the
+// open offer's price fails the adapter's current min-yield floor or sits above the current target.
+func (c candidate) stale(principal, target, floor *big.Int) bool {
+	if principal.Cmp(c.held) > 0 {
+		return true
+	}
+	return c.heldReturn != nil && (!types.MeetsMinYield(c.heldReturn, c.held, floor) || c.heldReturn.Cmp(target) > 0)
+}
+
+// rankEligibleAdapters filters adapters eligible to offer on the auction (matching collateral, and no
+// live offer on it unless that offer is open and of known size) and orders them by available capacity,
+// largest first. Capacity is computed once per adapter (not inside the comparator).
 func rankEligibleAdapters(
 	auction types.AuctionSnapshot,
 	order []*adapterState,
-	live map[liveKey]bool,
-) []*adapterState {
+	live map[liveKey]liveOffer,
+) []candidate {
 	type scored struct {
-		st       *adapterState
+		candidate
+
 		capacity *big.Int
 	}
 	eligible := make([]scored, 0, len(order))
 	for _, st := range order {
-		if live[liveKey{st.snapshot.ID, auction.AuctionID}] {
-			continue
-		}
 		if auction.DepositAsset != st.snapshot.Collateral {
 			continue
 		}
-		eligible = append(eligible, scored{st, st.capacity()})
+		l, holds := live[liveKey{st.snapshot.ID, auction.AuctionID}]
+		if holds && (l.principal == nil || !l.open) {
+			continue // accepted already, or of unknown size: nothing to replace
+		}
+		eligible = append(eligible, scored{candidate{st, l.principal, l.expectedReturn}, st.capacity(l.principal)})
 	}
 	sort.SliceStable(eligible, func(i, j int) bool {
 		return eligible[i].capacity.Cmp(eligible[j].capacity) > 0
 	})
-	ranked := make([]*adapterState, len(eligible))
+	ranked := make([]candidate, len(eligible))
 	for i := range eligible {
-		ranked[i] = eligible[i].st
+		ranked[i] = eligible[i].candidate
 	}
 	return ranked
 }
@@ -146,8 +181,9 @@ type adapterState struct {
 // capacity is the max principal this adapter can fund for one more request: the smaller of its
 // per-request ceiling (min(fundable, maxAssets); maxAssets 0 ⇒ reject-all) and its remaining budget
 // (fundable minus this pass's commitments), gated by the concurrency and min-request-size limits.
-func (s *adapterState) capacity() *big.Int {
-	if s.full() || s.snapshot.Fundable == nil {
+// held is the live offer the request would replace: its principal and slot count as available.
+func (s *adapterState) capacity(held *big.Int) *big.Int {
+	if s.full(held != nil) || s.snapshot.Fundable == nil {
 		return new(big.Int)
 	}
 	ceiling := new(big.Int).Set(s.snapshot.Fundable)
@@ -160,22 +196,22 @@ func (s *adapterState) capacity() *big.Int {
 	if s.snapshot.MinAssets != nil && ceiling.Cmp(s.snapshot.MinAssets) < 0 {
 		return new(big.Int) // capacity below the on-chain minimum request size
 	}
-	budget := s.remainingBudget()
+	budget := new(big.Int).Sub(s.snapshot.Fundable, s.committed)
+	if held != nil {
+		budget.Add(budget, held)
+	}
 	if budget.Sign() <= 0 {
 		return new(big.Int)
 	}
 	return minBig(ceiling, budget)
 }
 
-func (s *adapterState) full() bool {
-	return s.snapshot.MaxConcurrent > 0 && s.snapshot.OpenCount+s.opened >= s.snapshot.MaxConcurrent
-}
-
-func (s *adapterState) remainingBudget() *big.Int {
-	if s.snapshot.Fundable == nil {
-		return new(big.Int)
+func (s *adapterState) full(replacing bool) bool {
+	opened := s.opened
+	if replacing {
+		opened--
 	}
-	return new(big.Int).Sub(s.snapshot.Fundable, s.committed)
+	return s.snapshot.MaxConcurrent > 0 && s.snapshot.OpenCount+opened >= s.snapshot.MaxConcurrent
 }
 
 func (s *adapterState) belowMinAssets(amount *big.Int) bool {
