@@ -208,8 +208,9 @@ the adapter's current parameters: when capacity has grown since it was placed (a
 cancelled or expired, more fundable liquidity) and it can now cover more of the request, or its price no
 longer matches the adapter's `minYieldPerRequest` (a raised floor the live price fails, or a lowered floor
 that leaves it above the new target), the solver re-posts the offer with the new terms, signed with the
-live offer's own nonce so `POST /v1/offer` updates that offer and the Request contract, which consumes at
-most one offer per maker nonce, can never fund both the old and the new signature. Only a `SUBMITTED`
+live offer's own nonce so `POST /v1/offer` updates that offer (3F confirmed an update is keyed on the same
+`auctionId`, `maker` and `nonce`) and the Request contract, which consumes at most one offer per maker nonce,
+can never fund both the old and the new signature. Only a `SUBMITTED`
 offer's nonce is ever reused, and when 3F lists several unexpired offers on one auction the open one is
 the one kept, so a funded or minting sibling cannot hide it. It never shrinks an
 offer, and leaves accepted offers alone. The
