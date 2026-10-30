@@ -5,7 +5,13 @@ import (
 	"testing"
 	"time"
 
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 // seed inserts an offer straight into the tracker's map, standing in for a prior reconcile.
@@ -90,10 +96,24 @@ func TestOfferTrackerReconcileAdapter(t *testing.T) {
 	// API for adapter A now lists only auctions 1 (new principal/expiry) and 4. Auctions 2 and 3 are gone.
 	newExp := now.Add(2 * time.Hour)
 	live := map[int64]offerState{
-		1: {expiry: newExp, principal: big.NewInt(150)},
-		4: {expiry: newExp, principal: big.NewInt(400)},
+		1: {expiry: newExp, principal: big.NewInt(150), nonce: big.NewInt(7), open: true},
+		4: {expiry: newExp, principal: big.NewInt(400), nonce: big.NewInt(9)},
 	}
 	tr.reconcileAdapter(adapterA, live)
+
+	// A top-up re-signs with the open offer's nonce; expired, funded/minting or unknown offers yield none.
+	if got := tr.liveNonce(adapterA, 1, now); got == nil || got.Int64() != 7 {
+		t.Fatalf("liveNonce(A,1) = %v, want 7", got)
+	}
+	if got := tr.liveNonce(adapterA, 1, newExp); got != nil {
+		t.Fatalf("liveNonce(A,1) after expiry = %v, want nil", got)
+	}
+	if got := tr.liveNonce(adapterA, 4, now); got != nil {
+		t.Fatalf("liveNonce(A,4) on a non-open offer = %v, want nil", got)
+	}
+	if got := tr.liveNonce(adapterB, 4, now); got != nil {
+		t.Fatalf("liveNonce(B,4) = %v, want nil", got)
+	}
 
 	want := map[offerKey]*big.Int{
 		{adapterA, 1}: big.NewInt(150), // refreshed from API
@@ -134,5 +154,53 @@ func TestParseUnixTime(t *testing.T) {
 	}
 	if _, err := parseUnixTime("not-a-number"); err == nil {
 		t.Fatal("expected error on non-numeric input")
+	}
+}
+
+// TestReconcileOffersDropsChainConfirmedFundedOffers: a SUCCEEDED offer keeps reserving liquidity until
+// the adapter's on-chain request list confirms the loan; then it is dropped, because getMaxAssets and
+// requestsLength already account for it. An open SUBMITTED offer is never dropped.
+func TestReconcileOffersDropsChainConfirmedFundedOffers(t *testing.T) {
+	adapter := common.Address{0xAA}
+	fundedReq, unconfirmedReq, openReq, staleReq := common.Address{0x83}, common.Address{0x82}, common.Address{0x84}, common.Address{0x85}
+	expiration := strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)
+	offer := func(id, auction int, status string, req common.Address, amount string) string {
+		return `{"id":` + strconv.Itoa(id) + `,"auctionId":` + strconv.Itoa(auction) + `,"status":"` + status + `","maker":"` + lowerAddr(adapter) +
+			`","requestId":"` + req.Hex() + `","amount":"` + amount + `","expectedReturn":"1","nonce":"` + strconv.Itoa(id) + `","expiration":"` + expiration + `"}`
+	}
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		// Auction 84 lists a funded offer before the open one with the same expiry: the open one must win.
+		_, _ = w.Write([]byte(`[` + offer(1, 83, "SUCCEEDED", fundedReq, "45000") + `,` +
+			offer(2, 82, "SUCCEEDED", unconfirmedReq, "7") + `,` + offer(4, 84, "SUCCEEDED", staleReq, "1") + `,` +
+			offer(3, 84, "SUBMITTED", openReq, "414000") + `]`))
+	}))
+	defer api.Close()
+	s := &Solver{
+		api:    newAPIClient(api.URL, fakeSigner{}, big.NewInt(1), time.Second, logr.Discard()),
+		log:    logr.Discard(),
+		offers: newOfferTracker(),
+		links:  observability.NewSpanLinks(),
+	}
+	if !s.reconcileOffers(t.Context(), []Target{{Adapter: adapter}}) {
+		t.Fatal("reconcile reported incomplete")
+	}
+	if len(s.offers.liveEntries(time.Now())) != 3 {
+		t.Fatalf("live before chain confirmation = %d, want 3 (funded offers still reserve)", len(s.offers.liveEntries(time.Now())))
+	}
+
+	s.offers.dropFunded(adapter, []common.Address{fundedReq, openReq})
+
+	if _, ok := s.offers.offers[offerKey{adapter, 83}]; ok {
+		t.Fatal("funded offer on auction 83 is on-chain and must be dropped")
+	}
+	if _, ok := s.offers.offers[offerKey{adapter, 82}]; !ok {
+		t.Fatal("SUCCEEDED offer the chain does not list must stay live")
+	}
+	if got := s.offers.liveCoverage(84, time.Now()); got == nil || got.Int64() != 414000 {
+		t.Fatalf("auction 84 coverage = %v, want 414000", got)
+	}
+	if got := s.offers.liveNonce(adapter, 84, time.Now()); got == nil || got.Int64() != 3 {
+		t.Fatalf("auction 84 live nonce = %v, want 3 (the open offer, not the funded one listed first)", got)
 	}
 }

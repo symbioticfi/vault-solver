@@ -79,11 +79,6 @@ Number of items skipped.
 	skip: Int!
 }
 
-"""
-The `Int` scalar type represents non-fractional signed whole numeric values. Int can represent values between -(2^31) and 2^31 - 1.
-"""
-scalar Int
-
 type AddressMetadata {
 	type: AddressMetadataType!
 	metadata: Metadata!
@@ -103,11 +98,6 @@ type SafeAddressMetadata {
 	owners: [String!]!
 	threshold: Int!
 }
-
-"""
-The `String` scalar type represents textual data, represented as UTF-8 character sequences. The String type is most often used by GraphQL to represent free-form human-readable text.
-"""
-scalar String
 
 """
 Aragon address metadata
@@ -185,6 +175,10 @@ Asset yield (APR)
 """
 	apr: Float!
 """
+Asset yield (APY), compounded from the same measured exchange-rate growth and lookback as the APR.
+"""
+	apy: Float!
+"""
 Lookback period used to compute the APR, in seconds.
 """
 	lookback: Int!
@@ -249,27 +243,10 @@ Historical price in USD, for display purpose
 		options: TimeseriesOptions
 	): [FloatDataPoint!]!
 """
-Current spot price in ETH.
-"""
-	spotPriceEth(
-		timestamp: Float
-	): Float @deprecated(reason: "Use historicalPriceUsd instead.")
-"""
-ERC-20 token total supply
-"""
-	totalSupply: BigInt! @deprecated(reason: "Deprecated.")
-	oraclePriceUsd(
-		timestamp: Float
-	): Float @deprecated(reason: "Use price.usd instead.")
-"""
 Morpho Vault V1
 """
 	vault: Vault
 	yield: AssetYield
-}
-
-interface ChainReference {
-	chain: Chain!
 }
 
 """
@@ -277,10 +254,9 @@ The `ID` scalar type represents a unique identifier, often used to refetch an ob
 """
 scalar ID
 
-"""
-The `Boolean` scalar type represents `true` or `false`.
-"""
-scalar Boolean
+interface ChainReference {
+	chain: Chain!
+}
 
 input TimeseriesOptions {
 	startTimestamp: Int
@@ -406,7 +382,7 @@ The historical state of the vault.
 """
 Public allocator configuration
 """
-	publicAllocatorConfig: PublicAllocatorConfig
+	publicAllocatorConfig: PublicAllocatorConfig @deprecated(reason: "Vaults V1 public allocator data is being removed from the API.")
 """
 Vault allocators
 """
@@ -534,272 +510,6 @@ type CuratorSocial {
 type PaginatedCurators {
 	items: [Curator!]
 	pageInfo: PageInfo
-}
-
-"""
-Morpho Blue market state rewards
-"""
-type MarketStateReward implements AssetReference{
-"""
-The asset.
-"""
-	asset: Asset!
-"""
-Supply rewards APR.
-"""
-	supplyApr: Float
-"""
-Borrow rewards APR.
-"""
-	borrowApr: Float
-	id: ID!
-}
-
-"""
-Morpho Blue market state
-"""
-type MarketState {
-"""
-Block number of the state
-"""
-	blockNumber: BigInt!
-"""
-Amount borrowed on the market, in underlying units. Amount increases as interests accrue.
-"""
-	borrowAssets: BigInt!
-"""
-Amount supplied on the market, in underlying units. Amount increases as interests accrue.
-"""
-	supplyAssets: BigInt!
-"""
-Amount borrowed on the market, in USD for display purpose
-"""
-	borrowAssetsUsd: Float
-"""
-Amount supplied on the market, in USD for display purpose
-"""
-	supplyAssetsUsd: Float
-"""
-Amount borrowed on the market, in market share units. Amount does not increase as interest accrue.
-"""
-	borrowShares: BigInt!
-"""
-Amount supplied on the market, in market share units. Amount does not increase as interest accrue.
-"""
-	supplyShares: BigInt!
-"""
-Amount of collateral in the market, in underlying units
-"""
-	collateralAssets: BigInt
-"""
-Amount of collateral in the market, in USD for display purpose
-"""
-	collateralAssetsUsd: Float
-"""
-Utilization rate
-"""
-	utilization: Float!
-"""
-Apy at target utilization
-"""
-	apyAtTarget: Float!
-"""
-Rate at target utilization
-"""
-	rateAtTarget: BigInt
-"""
-Instantaneous Supply APY
-"""
-	supplyApy: Float!
-"""
-Instantaneous Borrow APY
-"""
-	borrowApy: Float!
-"""
-Instantaneous Supply APY including rewards
-"""
-	netSupplyApy: Float
-"""
-Instantaneous Borrow APY including rewards
-"""
-	netBorrowApy: Float
-"""
-Last update timestamp.
-"""
-	timestamp: BigInt!
-"""
-6h average supply APY excluding rewards (6h timeframe is subject to change).
-"""
-	avgSupplyApy: Float
-"""
-6h average borrow APY excluding rewards (6h timeframe is subject to change).
-"""
-	avgBorrowApy: Float
-"""
-Daily Supply APY excluding rewards
-"""
-	dailySupplyApy: Float
-"""
-Daily Borrow APY excluding rewards
-"""
-	dailyBorrowApy: Float
-	id: ID!
-"""
-Block information
-"""
-	block: Block!
-"""
-Collateral price
-"""
-	price: BigInt
-"""
-Market state rewards
-"""
-	rewards: [MarketStateReward!]!
-"""
-Market collateral price change percentage (24h). Null if there is no historical data
-"""
-	dailyPriceVariation: Float
-"""
-Fee rate
-"""
-	fee: Float!
-"""
-Amount available to borrow on the market, in underlying units
-"""
-	liquidityAssets: BigInt!
-"""
-Amount available to borrow on the market, in USD for display purpose
-"""
-	liquidityAssetsUsd: Float
-"""
-Total size of the market. This is the sum of all assets that are allocated or can be reallocated to this market.
-"""
-	size: BigInt!
-"""
-Total size of the market. This is the sum of all assets that are allocated or can be reallocated to this market, in USD for display purpose.
-"""
-	sizeUsd: Float
-"""
-Amount available to borrow on the market, including shared liquidity.
-"""
-	totalLiquidity: BigInt!
-"""
-Amount available to borrow on the market, including shared liquidity, in USD for display purpose.
-"""
-	totalLiquidityUsd: Float
-"""
-6h average supply APY including rewards (6h timeframe is subject to change).
-"""
-	avgNetSupplyApy: Float
-"""
-6h average borrow APY including rewards (6h timeframe is subject to change).
-"""
-	avgNetBorrowApy: Float
-"""
-Daily Supply APY including rewards
-"""
-	dailyNetSupplyApy: Float
-"""
-Daily Borrow APY including rewards
-"""
-	dailyNetBorrowApy: Float
-"""
-Weekly Supply APY excluding rewards
-"""
-	weeklySupplyApy: Float
-"""
-Weekly Supply APY including rewards
-"""
-	weeklyNetSupplyApy: Float
-"""
-Weekly Borrow APY excluding rewards
-"""
-	weeklyBorrowApy: Float
-"""
-Weekly Borrow APY including rewards
-"""
-	weeklyNetBorrowApy: Float
-"""
-Biweekly Supply APY excluding rewards
-"""
-	biweeklySupplyApy: Float
-"""
-Biweekly Supply APY including rewards
-"""
-	biweeklyNetSupplyApy: Float
-"""
-Biweekly Borrow APY excluding rewards
-"""
-	biweeklyBorrowApy: Float
-"""
-Biweekly Borrow APY including rewards
-"""
-	biweeklyNetBorrowApy: Float
-"""
-Monthly Supply APY excluding rewards
-"""
-	monthlySupplyApy: Float
-"""
-Monthly Supply APY including rewards
-"""
-	monthlyNetSupplyApy: Float
-"""
-Monthly Borrow APY excluding rewards
-"""
-	monthlyBorrowApy: Float
-"""
-Monthly Borrow APY including rewards
-"""
-	monthlyNetBorrowApy: Float
-"""
-Quarterly Supply APY excluding rewards
-"""
-	quarterlySupplyApy: Float
-"""
-Quarterly Supply APY including rewards
-"""
-	quarterlyNetSupplyApy: Float
-"""
-Quarterly Borrow APY excluding rewards
-"""
-	quarterlyBorrowApy: Float
-"""
-Quarterly Borrow APY including rewards
-"""
-	quarterlyNetBorrowApy: Float
-"""
-Yearly Supply APY excluding rewards
-"""
-	yearlySupplyApy: Float
-"""
-Yearly Supply APY including rewards
-"""
-	yearlyNetSupplyApy: Float
-"""
-Yearly Borrow APY excluding rewards
-"""
-	yearlyBorrowApy: Float
-"""
-Yearly Borrow APY including rewards
-"""
-	yearlyNetBorrowApy: Float
-"""
-All Time Supply APY excluding rewards
-"""
-	allTimeSupplyApy: Float
-"""
-All Time Supply APY including rewards
-"""
-	allTimeNetSupplyApy: Float
-"""
-All Time Borrow APY excluding rewards
-"""
-	allTimeBorrowApy: Float
-"""
-All Time Borrow APY including rewards
-"""
-	allTimeNetBorrowApy: Float
 }
 
 """
@@ -1041,6 +751,253 @@ All Time Borrow APY excluding rewards
 	allTimeBorrowApy(
 		options: TimeseriesOptions
 	): [FloatDataPoint!]!
+}
+
+"""
+Morpho Blue market state
+"""
+type MarketState {
+"""
+Block number of the state
+"""
+	blockNumber: BigInt!
+"""
+Amount borrowed on the market, in underlying units. Amount increases as interests accrue.
+"""
+	borrowAssets: BigInt!
+"""
+Amount supplied on the market, in underlying units. Amount increases as interests accrue.
+"""
+	supplyAssets: BigInt!
+"""
+Amount borrowed on the market, in USD for display purpose
+"""
+	borrowAssetsUsd: Float
+"""
+Amount supplied on the market, in USD for display purpose
+"""
+	supplyAssetsUsd: Float
+"""
+Amount borrowed on the market, in market share units. Amount does not increase as interest accrue.
+"""
+	borrowShares: BigInt!
+"""
+Amount supplied on the market, in market share units. Amount does not increase as interest accrue.
+"""
+	supplyShares: BigInt!
+"""
+Amount of collateral in the market, in underlying units
+"""
+	collateralAssets: BigInt
+"""
+Amount of collateral in the market, in USD for display purpose
+"""
+	collateralAssetsUsd: Float
+"""
+Utilization rate
+"""
+	utilization: Float!
+"""
+Apy at target utilization
+"""
+	apyAtTarget: Float!
+"""
+Rate at target utilization
+"""
+	rateAtTarget: BigInt
+"""
+Instantaneous Supply APY
+"""
+	supplyApy: Float!
+"""
+Instantaneous Borrow APY
+"""
+	borrowApy: Float!
+"""
+Instantaneous Supply APY including rewards
+"""
+	netSupplyApy: Float
+"""
+Instantaneous Borrow APY including rewards
+"""
+	netBorrowApy: Float
+"""
+Last update timestamp.
+"""
+	timestamp: BigInt!
+"""
+6h average supply APY excluding rewards (6h timeframe is subject to change).
+"""
+	avgSupplyApy: Float
+"""
+6h average borrow APY excluding rewards (6h timeframe is subject to change).
+"""
+	avgBorrowApy: Float
+"""
+Daily Supply APY excluding rewards
+"""
+	dailySupplyApy: Float
+"""
+Daily Borrow APY excluding rewards
+"""
+	dailyBorrowApy: Float
+	id: ID!
+"""
+Block information
+"""
+	block: Block!
+"""
+Collateral price
+"""
+	price: BigInt
+"""
+Market state rewards
+"""
+	rewards: [MarketStateReward!]!
+"""
+Market collateral price change percentage (24h). Null if there is no historical data
+"""
+	dailyPriceVariation: Float
+"""
+Fee rate
+"""
+	fee: Float!
+"""
+Amount available to borrow on the market, in underlying units
+"""
+	liquidityAssets: BigInt!
+"""
+Amount available to borrow on the market, in USD for display purpose
+"""
+	liquidityAssetsUsd: Float
+"""
+Total size of the market. This is the sum of all assets that are allocated or can be reallocated to this market.
+"""
+	size: BigInt! @deprecated(reason: "Vaults V1 public allocator shared liquidity is being removed from the API. Use supplyAssets instead.")
+"""
+Total size of the market. This is the sum of all assets that are allocated or can be reallocated to this market, in USD for display purpose.
+"""
+	sizeUsd: Float @deprecated(reason: "Vaults V1 public allocator shared liquidity is being removed from the API. Use supplyAssetsUsd instead.")
+"""
+Amount available to borrow on the market, including shared liquidity.
+"""
+	totalLiquidity: BigInt! @deprecated(reason: "Vaults V1 public allocator shared liquidity is being removed from the API. Use liquidityAssets instead.")
+"""
+Amount available to borrow on the market, including shared liquidity, in USD for display purpose.
+"""
+	totalLiquidityUsd: Float @deprecated(reason: "Vaults V1 public allocator shared liquidity is being removed from the API. Use liquidityAssetsUsd instead.")
+"""
+6h average supply APY including rewards (6h timeframe is subject to change).
+"""
+	avgNetSupplyApy: Float
+"""
+6h average borrow APY including rewards (6h timeframe is subject to change).
+"""
+	avgNetBorrowApy: Float
+"""
+Daily Supply APY including rewards
+"""
+	dailyNetSupplyApy: Float
+"""
+Daily Borrow APY including rewards
+"""
+	dailyNetBorrowApy: Float
+"""
+Weekly Supply APY excluding rewards
+"""
+	weeklySupplyApy: Float
+"""
+Weekly Supply APY including rewards
+"""
+	weeklyNetSupplyApy: Float
+"""
+Weekly Borrow APY excluding rewards
+"""
+	weeklyBorrowApy: Float
+"""
+Weekly Borrow APY including rewards
+"""
+	weeklyNetBorrowApy: Float
+"""
+Biweekly Supply APY excluding rewards
+"""
+	biweeklySupplyApy: Float
+"""
+Biweekly Supply APY including rewards
+"""
+	biweeklyNetSupplyApy: Float
+"""
+Biweekly Borrow APY excluding rewards
+"""
+	biweeklyBorrowApy: Float
+"""
+Biweekly Borrow APY including rewards
+"""
+	biweeklyNetBorrowApy: Float
+"""
+Monthly Supply APY excluding rewards
+"""
+	monthlySupplyApy: Float
+"""
+Monthly Supply APY including rewards
+"""
+	monthlyNetSupplyApy: Float
+"""
+Monthly Borrow APY excluding rewards
+"""
+	monthlyBorrowApy: Float
+"""
+Monthly Borrow APY including rewards
+"""
+	monthlyNetBorrowApy: Float
+"""
+Quarterly Supply APY excluding rewards
+"""
+	quarterlySupplyApy: Float
+"""
+Quarterly Supply APY including rewards
+"""
+	quarterlyNetSupplyApy: Float
+"""
+Quarterly Borrow APY excluding rewards
+"""
+	quarterlyBorrowApy: Float
+"""
+Quarterly Borrow APY including rewards
+"""
+	quarterlyNetBorrowApy: Float
+"""
+Yearly Supply APY excluding rewards
+"""
+	yearlySupplyApy: Float
+"""
+Yearly Supply APY including rewards
+"""
+	yearlyNetSupplyApy: Float
+"""
+Yearly Borrow APY excluding rewards
+"""
+	yearlyBorrowApy: Float
+"""
+Yearly Borrow APY including rewards
+"""
+	yearlyNetBorrowApy: Float
+"""
+All Time Supply APY excluding rewards
+"""
+	allTimeSupplyApy: Float
+"""
+All Time Supply APY including rewards
+"""
+	allTimeNetSupplyApy: Float
+"""
+All Time Borrow APY excluding rewards
+"""
+	allTimeBorrowApy: Float
+"""
+All Time Borrow APY including rewards
+"""
+	allTimeNetBorrowApy: Float
 }
 
 """
@@ -2596,28 +2553,6 @@ The asset.
 }
 
 """
-Market APY aggregates
-"""
-type MarketApyAggregates {
-"""
-Average market supply APY excluding rewards
-"""
-	supplyApy: Float
-"""
-Average market borrow APY excluding rewards
-"""
-	borrowApy: Float
-"""
-Average market supply APY including rewards
-"""
-	netSupplyApy: Float
-"""
-Average market borrow APY including rewards
-"""
-	netBorrowApy: Float
-}
-
-"""
 IRM curve data point
 """
 type IRMCurveDataPoint {
@@ -2647,13 +2582,6 @@ Amount of bad debt realized in the market in underlying units.
 Amount of bad debt realized in the market in USD.
 """
 	usd: Float
-}
-
-"""
-Market oracle information
-"""
-type MarketOracleInfo {
-	type: OracleType!
 }
 
 """
@@ -2698,7 +2626,6 @@ State history
 Current state
 """
 	state: MarketState
-	oracleInfo: MarketOracleInfo @deprecated(reason: "Use oracle entity instead.")
 	oracle: Oracle
 	oracleAddress: Address! @deprecated(reason: "Use oracle.address instead.")
 """
@@ -2709,19 +2636,18 @@ Market bad debt values
 Market realized bad debt values
 """
 	realizedBadDebt: MarketBadDebt
-	monthlyApys: MarketApyAggregates @deprecated(reason: "Use market.state monthly average APYs instead.")
 """
 Current IRM curve at different utilization thresholds for display purpose
 """
 	currentIrmCurve(
 		numberOfPoints: Int
 	): [IRMCurveDataPoint!]
-	reallocatableLiquidityAssets: BigInt!
+	reallocatableLiquidityAssets: BigInt! @deprecated(reason: "Vaults V1 public allocator data is being removed from the API.")
 	warnings: [MarketWarning!]!
 """
 Public allocator shared liquidity available reallocations
 """
-	publicAllocatorSharedLiquidity: [PublicAllocatorSharedLiquidity!]
+	publicAllocatorSharedLiquidity: [PublicAllocatorSharedLiquidity!] @deprecated(reason: "Vaults V1 public allocator data is being removed from the API.")
 """
 Whitelisted vaults having the market enabled with a non-zero cap.
 """
@@ -2946,6 +2872,25 @@ Time-Weighted Average Return of the position's borrow side since its inception.
 Margin of the position in USD (collateralUsd - borrowAssetsUsd).
 """
 	marginUsd: Float
+}
+
+"""
+Morpho Blue market state rewards
+"""
+type MarketStateReward implements AssetReference{
+"""
+The asset.
+"""
+	asset: Asset!
+"""
+Supply rewards APR.
+"""
+	supplyApr: Float
+"""
+Borrow rewards APR.
+"""
+	borrowApr: Float
+	id: ID!
 }
 
 """
@@ -3371,17 +3316,9 @@ Pending owner address.
 """
 	pendingOwner: Address
 """
-Deprecated direct-only vault state rewards.
-"""
-	rewards: [VaultStateReward!]! @deprecated(reason: "Use allRewards instead to include forwarded rewards.")
-"""
 Vault state rewards including forwarded rewards when the new Vault V1 rewards clients are enabled.
 """
 	allRewards: [VaultStateReward!]!
-"""
-Vault APY excluding rewards, after deducting the performance fee.
-"""
-	netApyWithoutRewards: Float! @deprecated(reason: "Use netApyExcludingRewards instead.")
 """
 Instantaneous vault APY excluding rewards, after deducting the performance fee.
 """
@@ -3464,22 +3401,6 @@ Predefined lookback period for APY calculation. Using preset periods improves qu
 """
 		lookback: VaultV1LookbackPeriod
 	): Float
-"""
-Daily Vault APY excluding rewards, before deducting the performance fee.
-"""
-	dailyApy: Float @deprecated(reason: "Use avgNetApyExcludingRewards(lookback: ONE_DAY) instead.")
-"""
-Daily Vault APY including rewards, after deducting the performance fee.
-"""
-	dailyNetApy: Float @deprecated(reason: "Use avgNetApy with lookback parameter instead.")
-"""
-Weekly Vault APY excluding rewards, before deducting the performance fee.
-"""
-	weeklyApy: Float @deprecated(reason: "Use avgNetApyExcludingRewards(lookback: SEVEN_DAYS) instead.")
-"""
-Weekly Vault APY including rewards, after deducting the performance fee.
-"""
-	weeklyNetApy: Float @deprecated(reason: "Use avgNetApy with lookback parameter instead.")
 }
 
 """
@@ -4417,7 +4338,7 @@ Number of items skipped. Maximum 10000.
 		orderBy: PublicAllocatorReallocateOrderBy
 		orderDirection: OrderDirection
 		where: PublicallocatorReallocateFilters
-	): PaginatedPublicAllocatorReallocates!
+	): PaginatedPublicAllocatorReallocates! @deprecated(reason: "Vaults V1 public allocator data is being removed from the API.")
 	vaultFactoryByAddress(
 		address: String!
 		chainId: Int
@@ -4595,12 +4516,13 @@ enum MarketOrderBy {
 	Fee
 	LoanAssetSymbol
 	CollateralAssetSymbol
-	TotalLiquidityUsd
+	TotalLiquidityUsd @deprecated(reason: "Vaults V1 public allocator shared liquidity is being removed from the API. Use LiquidityAssetsUsd instead.")
 	AvgBorrowApy
 	AvgNetBorrowApy
 	DailyBorrowApy
 	DailyNetBorrowApy
-	SizeUsd
+	SizeUsd @deprecated(reason: "Vaults V1 public allocator shared liquidity is being removed from the API. Use SupplyAssetsUsd instead.")
+	LiquidityAssetsUsd
 }
 
 """
@@ -5061,8 +4983,6 @@ input VaultFilters {
 	totalAssetsUsd_lte: Float
 	totalSupply_gte: BigInt
 	totalSupply_lte: BigInt
-	publicAllocatorFee_lte: Float
-	publicAllocatorFeeUsd_lte: Float
 }
 
 enum VaultPositionOrderBy {
@@ -5512,3 +5432,18 @@ enum CacheControlScope {
 	PUBLIC
 	PRIVATE
 }
+
+"""
+The `Int` scalar type represents non-fractional signed whole numeric values. Int can represent values between -(2^31) and 2^31 - 1.
+"""
+scalar Int
+
+"""
+The `Boolean` scalar type represents `true` or `false`.
+"""
+scalar Boolean
+
+"""
+The `String` scalar type represents textual data, represented as UTF-8 character sequences. The String type is most often used by GraphQL to represent free-form human-readable text.
+"""
+scalar String

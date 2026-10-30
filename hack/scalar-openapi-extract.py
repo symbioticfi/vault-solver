@@ -51,11 +51,24 @@ def drop_dynamic_examples(value: object) -> None:
             drop_dynamic_examples(child)
 
 
+def normalize_quote_expiry_examples(spec: dict) -> None:
+    """Pin only the server-clock expiry in quote-submission examples, preserving their valid shape."""
+    examples = (
+        spec.get("paths", {}).get("/quotes/submit", {}).get("post", {})
+        .get("requestBody", {}).get("content", {}).get("application/json", {}).get("examples", {})
+    )
+    for example in examples.values():
+        for quote in example.get("value", {}).get("quotes", []):
+            if type(quote.get("expiry")) is int:
+                quote["expiry"] = 1900000000
+
+
 def main() -> None:
     spec = extract(sys.stdin.read())
     if "openapi" not in spec:
         raise SystemExit("scalar-openapi-extract: extracted object is not an OpenAPI document")
     drop_dynamic_examples(spec)
+    normalize_quote_expiry_examples(spec)
     json.dump(spec, sys.stdout, indent=2, ensure_ascii=False)
     sys.stdout.write("\n")
 

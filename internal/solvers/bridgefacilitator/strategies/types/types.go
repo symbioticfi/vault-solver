@@ -60,11 +60,16 @@ type AuctionSnapshot struct {
 }
 
 // LiveOffer is one offer the solver already holds through an adapter on an auction. The strategy uses
-// these to reserve principal and request slots across discovery passes, and deduplicate pairs.
+// these to reserve principal and request slots across discovery passes, and to decide whether to
+// re-post an open pair's offer with new terms (the solver re-signs it with the live offer's nonce).
 type LiveOffer struct {
-	AdapterID string
-	AuctionID int64
-	Principal *big.Int
+	AdapterID      string
+	AuctionID      int64
+	Principal      *big.Int
+	ExpectedReturn *big.Int // nil when the listing omitted it
+	// Open means 3F has not accepted the offer yet (status SUBMITTED): a re-post replaces it. An
+	// accepted or funded offer is final and only reserves capacity.
+	Open bool
 }
 
 type OfferOutput struct {

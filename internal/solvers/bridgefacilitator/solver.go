@@ -22,11 +22,20 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
 
+var errRequiredFieldMissing = errors.New("required field missing from API response")
+
+// offerStatusSubmitted is the only status under which 3F has not acted on an offer yet, so the solver
+// may still replace it (top-up or re-price) by re-posting with its nonce.
+const offerStatusSubmitted = "SUBMITTED"
+
+// offerStatusSucceeded marks an offer 3F reports as funded. It stops reserving liquidity once the
+// adapter's on-chain request list confirms the loan (see offerTracker.dropFunded); until then it
+// stays live, so a status the chain does not yet back never frees budget.
+const offerStatusSucceeded = "SUCCEEDED"
+
 // offerStatusIgnored are 3F offer statuses that are not live coverage when reconciling the cache: a
 // FAILED consume, a NOT_ACCEPTED bid, or a CANCELLED offer won't cover the auction, so discovery should
 // re-offer.
-var errRequiredFieldMissing = errors.New("required field missing from API response")
-
 var offerStatusIgnored = map[string]bool{
 	"FAILED":       true,
 	"NOT_ACCEPTED": true,
@@ -55,7 +64,7 @@ type Solver struct {
 	signerAddr common.Address // the solver's own signer address (diagnostics only), set in factory
 	probe      signerProbe    // one-time (hash, sig) used to validate offer-signer authorization, set in factory
 	nonceSeq   atomic.Uint64
-	offers     *offerTracker // dedup: (adapter, auction) pairs we hold a live offer for (Run goroutine only)
+	offers     *offerTracker // live (adapter, auction) offers and their principal (Run goroutine only)
 	targets    []Target      // current resolved snapshot; owned exclusively by the Run goroutine
 	// targetsAuthoritative records whether targets covers the complete configured/discovered source.
 	// A partial refresh still installs its safe subset, but derived metric freshness must stay retained.
@@ -236,6 +245,13 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 					"adapter", t.Adapter.Hex(), "offerId", o.Id)
 				principal = nil
 			}
+			expectedReturn, ok := new(big.Int).SetString(o.ExpectedReturn, 10)
+			if !ok || expectedReturn.Sign() < 0 {
+				complete = false
+				offerLog.Info("reconcile offers: malformed expectedReturn; retaining valid subset",
+					"adapter", t.Adapter.Hex(), "offerId", o.Id)
+				expectedReturn = nil
+			}
 			if o.AuctionId <= 0 {
 				complete = false
 				if stageErr == nil {
@@ -245,10 +261,24 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 					"adapter", t.Adapter.Hex(), "offerId", o.Id)
 				continue
 			}
-			// One live offer per (adapter, auction) is assumed; if the API ever lists more, keep the latest.
+			nonce, ok := new(big.Int).SetString(o.Nonce, 10)
+			if !ok {
+				complete = false // a top-up must re-sign with this nonce; without it the pass cannot offer safely
+				offerLog.Info("reconcile offers: malformed nonce; retaining valid subset",
+					"adapter", t.Adapter.Hex(), "offerId", o.Id)
+				nonce = nil
+			}
+			// One live offer per (adapter, auction) is assumed; if the API ever lists more, an open one
+			// beats a funded or minting one so it stays re-priceable, then the latest expiry wins.
 			auctionID := int64(o.AuctionId)
-			if cur, exists := live[auctionID]; !exists || exp.After(cur.expiry) {
-				live[auctionID] = offerState{expiry: exp, principal: principal}
+			open := status == offerStatusSubmitted
+			if cur, exists := live[auctionID]; !exists || (open && !cur.open) || (open == cur.open && exp.After(cur.expiry)) {
+				live[auctionID] = offerState{
+					expiry: exp, principal: principal, expectedReturn: expectedReturn, nonce: nonce,
+					request: common.HexToAddress(o.RequestId),
+					open:    open,
+					funded:  status == offerStatusSucceeded,
+				}
 			}
 		}
 		s.offers.reconcileAdapter(t.Adapter, live)
@@ -313,6 +343,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 			observability.Log(ctx).Error(lerr, "offer: liquidity/exposure", "adapter", t.Adapter.Hex())
 			continue
 		}
+		s.offers.dropFunded(t.Adapter, st.requests)
 		observability.Log(ctx).V(1).Info("adapter liquidity",
 			"adapter", t.Adapter.Hex(), "fundable", st.fundable.String(), "openRequests", st.openCount,
 			"maxAssets", st.maxAssets.String(), "minAssets", st.minAssets.String(),
