@@ -32,11 +32,14 @@ type DutchV3OrderEntity struct {
 	// EIP-55 checksummed Ethereum address.
 	Swapper string `json:"swapper"`
 	// uint256 encoded as a base-10 string.
-	StartingBaseFee *string                          `json:"startingBaseFee,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
-	Input           *DutchV3OrderEntityInput         `json:"input,omitempty"`
-	Outputs         []DutchV3OrderEntityOutputsInner `json:"outputs,omitempty"`
-	CosignerData    *DutchV3OrderEntityCosignerData  `json:"cosignerData,omitempty"`
-	Cosignature     *string                          `json:"cosignature,omitempty"`
+	StartingBaseFee *string                           `json:"startingBaseFee,omitempty" validate:"regexp=^[0-9]{1\\,78}$"`
+	Input           *DutchV3OrderEntityInput          `json:"input,omitempty"`
+	Outputs         []DutchV3OrderEntityOutputsInner  `json:"outputs,omitempty"`
+	EffectiveInput  *DutchV3OrderEntityEffectiveInput `json:"effectiveInput,omitempty"`
+	// `outputs` with non-zero `cosignerData.outputOverrides` replacing `startAmount`: what the filler pays. `curve` and `adjustmentPerGweiBaseFee` still apply, plus `cosignerData.exclusivityOverrideBps` for a non-exclusive filler.
+	EffectiveOutputs []DutchV3OrderEntityOutputsInner `json:"effectiveOutputs,omitempty"`
+	CosignerData     *DutchV3OrderEntityCosignerData  `json:"cosignerData,omitempty"`
+	Cosignature      *string                          `json:"cosignature,omitempty"`
 	// Unix timestamp (seconds) at which the order was recorded.
 	CreatedAt *float32 `json:"createdAt,omitempty"`
 	// Defined when the order has a quote associated with it.
@@ -375,6 +378,70 @@ func (o *DutchV3OrderEntity) SetOutputs(v []DutchV3OrderEntityOutputsInner) {
 	o.Outputs = v
 }
 
+// GetEffectiveInput returns the EffectiveInput field value if set, zero value otherwise.
+func (o *DutchV3OrderEntity) GetEffectiveInput() DutchV3OrderEntityEffectiveInput {
+	if o == nil || IsNil(o.EffectiveInput) {
+		var ret DutchV3OrderEntityEffectiveInput
+		return ret
+	}
+	return *o.EffectiveInput
+}
+
+// GetEffectiveInputOk returns a tuple with the EffectiveInput field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *DutchV3OrderEntity) GetEffectiveInputOk() (*DutchV3OrderEntityEffectiveInput, bool) {
+	if o == nil || IsNil(o.EffectiveInput) {
+		return nil, false
+	}
+	return o.EffectiveInput, true
+}
+
+// HasEffectiveInput returns a boolean if a field has been set.
+func (o *DutchV3OrderEntity) HasEffectiveInput() bool {
+	if o != nil && !IsNil(o.EffectiveInput) {
+		return true
+	}
+
+	return false
+}
+
+// SetEffectiveInput gets a reference to the given DutchV3OrderEntityEffectiveInput and assigns it to the EffectiveInput field.
+func (o *DutchV3OrderEntity) SetEffectiveInput(v DutchV3OrderEntityEffectiveInput) {
+	o.EffectiveInput = &v
+}
+
+// GetEffectiveOutputs returns the EffectiveOutputs field value if set, zero value otherwise.
+func (o *DutchV3OrderEntity) GetEffectiveOutputs() []DutchV3OrderEntityOutputsInner {
+	if o == nil || IsNil(o.EffectiveOutputs) {
+		var ret []DutchV3OrderEntityOutputsInner
+		return ret
+	}
+	return o.EffectiveOutputs
+}
+
+// GetEffectiveOutputsOk returns a tuple with the EffectiveOutputs field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *DutchV3OrderEntity) GetEffectiveOutputsOk() ([]DutchV3OrderEntityOutputsInner, bool) {
+	if o == nil || IsNil(o.EffectiveOutputs) {
+		return nil, false
+	}
+	return o.EffectiveOutputs, true
+}
+
+// HasEffectiveOutputs returns a boolean if a field has been set.
+func (o *DutchV3OrderEntity) HasEffectiveOutputs() bool {
+	if o != nil && !IsNil(o.EffectiveOutputs) {
+		return true
+	}
+
+	return false
+}
+
+// SetEffectiveOutputs gets a reference to the given []DutchV3OrderEntityOutputsInner and assigns it to the EffectiveOutputs field.
+func (o *DutchV3OrderEntity) SetEffectiveOutputs(v []DutchV3OrderEntityOutputsInner) {
+	o.EffectiveOutputs = v
+}
+
 // GetCosignerData returns the CosignerData field value if set, zero value otherwise.
 func (o *DutchV3OrderEntity) GetCosignerData() DutchV3OrderEntityCosignerData {
 	if o == nil || IsNil(o.CosignerData) {
@@ -692,6 +759,12 @@ func (o DutchV3OrderEntity) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Outputs) {
 		toSerialize["outputs"] = o.Outputs
 	}
+	if !IsNil(o.EffectiveInput) {
+		toSerialize["effectiveInput"] = o.EffectiveInput
+	}
+	if !IsNil(o.EffectiveOutputs) {
+		toSerialize["effectiveOutputs"] = o.EffectiveOutputs
+	}
 	if !IsNil(o.CosignerData) {
 		toSerialize["cosignerData"] = o.CosignerData
 	}
@@ -756,6 +829,8 @@ func (o *DutchV3OrderEntity) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "startingBaseFee")
 		delete(additionalProperties, "input")
 		delete(additionalProperties, "outputs")
+		delete(additionalProperties, "effectiveInput")
+		delete(additionalProperties, "effectiveOutputs")
 		delete(additionalProperties, "cosignerData")
 		delete(additionalProperties, "cosignature")
 		delete(additionalProperties, "createdAt")

@@ -30,11 +30,14 @@ type DutchV2OrderEntity struct {
 	OrderStatus OrderStatus `json:"orderStatus"`
 	ChainId     ChainId     `json:"chainId"`
 	// EIP-55 checksummed Ethereum address.
-	Swapper      string                          `json:"swapper"`
-	Input        *DutchV2OrderEntityInput        `json:"input,omitempty"`
-	Outputs      []OrderOutput                   `json:"outputs,omitempty"`
-	CosignerData *DutchV2OrderEntityCosignerData `json:"cosignerData,omitempty"`
-	Cosignature  *string                         `json:"cosignature,omitempty"`
+	Swapper        string                            `json:"swapper"`
+	Input          *DutchV2OrderEntityInput          `json:"input,omitempty"`
+	Outputs        []OrderOutput                     `json:"outputs,omitempty"`
+	EffectiveInput *DutchV2OrderEntityEffectiveInput `json:"effectiveInput,omitempty"`
+	// `outputs` with non-zero `cosignerData.outputOverrides` replacing `startAmount`: what the filler pays. Still decays to `endAmount`, plus `cosignerData.exclusivityOverrideBps` for a non-exclusive filler.
+	EffectiveOutputs []OrderOutput                   `json:"effectiveOutputs,omitempty"`
+	CosignerData     *DutchV2OrderEntityCosignerData `json:"cosignerData,omitempty"`
+	Cosignature      *string                         `json:"cosignature,omitempty"`
 	// Unix timestamp (seconds) at which the order was recorded.
 	CreatedAt *float32 `json:"createdAt,omitempty"`
 	// Defined when the order has a quote associated with it.
@@ -339,6 +342,70 @@ func (o *DutchV2OrderEntity) HasOutputs() bool {
 // SetOutputs gets a reference to the given []OrderOutput and assigns it to the Outputs field.
 func (o *DutchV2OrderEntity) SetOutputs(v []OrderOutput) {
 	o.Outputs = v
+}
+
+// GetEffectiveInput returns the EffectiveInput field value if set, zero value otherwise.
+func (o *DutchV2OrderEntity) GetEffectiveInput() DutchV2OrderEntityEffectiveInput {
+	if o == nil || IsNil(o.EffectiveInput) {
+		var ret DutchV2OrderEntityEffectiveInput
+		return ret
+	}
+	return *o.EffectiveInput
+}
+
+// GetEffectiveInputOk returns a tuple with the EffectiveInput field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *DutchV2OrderEntity) GetEffectiveInputOk() (*DutchV2OrderEntityEffectiveInput, bool) {
+	if o == nil || IsNil(o.EffectiveInput) {
+		return nil, false
+	}
+	return o.EffectiveInput, true
+}
+
+// HasEffectiveInput returns a boolean if a field has been set.
+func (o *DutchV2OrderEntity) HasEffectiveInput() bool {
+	if o != nil && !IsNil(o.EffectiveInput) {
+		return true
+	}
+
+	return false
+}
+
+// SetEffectiveInput gets a reference to the given DutchV2OrderEntityEffectiveInput and assigns it to the EffectiveInput field.
+func (o *DutchV2OrderEntity) SetEffectiveInput(v DutchV2OrderEntityEffectiveInput) {
+	o.EffectiveInput = &v
+}
+
+// GetEffectiveOutputs returns the EffectiveOutputs field value if set, zero value otherwise.
+func (o *DutchV2OrderEntity) GetEffectiveOutputs() []OrderOutput {
+	if o == nil || IsNil(o.EffectiveOutputs) {
+		var ret []OrderOutput
+		return ret
+	}
+	return o.EffectiveOutputs
+}
+
+// GetEffectiveOutputsOk returns a tuple with the EffectiveOutputs field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *DutchV2OrderEntity) GetEffectiveOutputsOk() ([]OrderOutput, bool) {
+	if o == nil || IsNil(o.EffectiveOutputs) {
+		return nil, false
+	}
+	return o.EffectiveOutputs, true
+}
+
+// HasEffectiveOutputs returns a boolean if a field has been set.
+func (o *DutchV2OrderEntity) HasEffectiveOutputs() bool {
+	if o != nil && !IsNil(o.EffectiveOutputs) {
+		return true
+	}
+
+	return false
+}
+
+// SetEffectiveOutputs gets a reference to the given []OrderOutput and assigns it to the EffectiveOutputs field.
+func (o *DutchV2OrderEntity) SetEffectiveOutputs(v []OrderOutput) {
+	o.EffectiveOutputs = v
 }
 
 // GetCosignerData returns the CosignerData field value if set, zero value otherwise.
@@ -655,6 +722,12 @@ func (o DutchV2OrderEntity) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.Outputs) {
 		toSerialize["outputs"] = o.Outputs
 	}
+	if !IsNil(o.EffectiveInput) {
+		toSerialize["effectiveInput"] = o.EffectiveInput
+	}
+	if !IsNil(o.EffectiveOutputs) {
+		toSerialize["effectiveOutputs"] = o.EffectiveOutputs
+	}
 	if !IsNil(o.CosignerData) {
 		toSerialize["cosignerData"] = o.CosignerData
 	}
@@ -718,6 +791,8 @@ func (o *DutchV2OrderEntity) UnmarshalJSON(data []byte) (err error) {
 		delete(additionalProperties, "swapper")
 		delete(additionalProperties, "input")
 		delete(additionalProperties, "outputs")
+		delete(additionalProperties, "effectiveInput")
+		delete(additionalProperties, "effectiveOutputs")
 		delete(additionalProperties, "cosignerData")
 		delete(additionalProperties, "cosignature")
 		delete(additionalProperties, "createdAt")
