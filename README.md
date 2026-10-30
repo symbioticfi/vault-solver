@@ -100,6 +100,8 @@ pricing and fills, or with `recipeExecutor` for Merkle connector pricing and fil
 Setting both fails startup. The Merkle mode uses `stateDir` and `curator` for durable
 execution and permissions; `quoteOnly: true` needs neither. See its
 [configuration](config/rfq-merkle.example.yaml) and [runbook](docs/RFQ-MERKLE.md).
+[Sepolia setup](docs/SEPOLIA.md) identifies the shared basis and the actual
+curator-created instances required before starting a solver.
 They preserve backend signature bytes, including ERC-1271 wallet signatures.
 The committed permission must admit the supplied calldata length and signature
 framing, and the complete outer fill must simulate successfully. Existing Curator
