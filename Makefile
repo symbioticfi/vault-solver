@@ -267,6 +267,7 @@ build: ## Build the binary
 
 .PHONY: test
 test: ## Run tests with race detector + coverage (hermetic only; fork/live suites are tag-gated out)
+	python3 -m unittest discover -s hack -p 'test_scalar_openapi_extract.py'
 	go test -race -cover ./...
 
 # Local-only OEV integration suite — build-tagged, skipped by the default `test` + CI.
