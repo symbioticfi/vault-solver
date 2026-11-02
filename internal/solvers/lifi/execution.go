@@ -82,6 +82,7 @@ type orderInbox struct {
 	capacity      int
 	ready         chan struct{}
 	space         chan struct{}
+	onAdmit       func(*submittedOrder) // immutable before producers start; real insertions only
 }
 
 func newOrderInbox(capacity int) *orderInbox {
@@ -131,6 +132,9 @@ func (q *orderInbox) enqueue(order *submittedOrder) error {
 		q.markRecoverySeen(key)
 	}
 	q.mu.Unlock()
+	if q.onAdmit != nil && order.processed == nil {
+		q.onAdmit(order)
+	}
 	select {
 	case q.ready <- struct{}{}:
 	default:
@@ -408,6 +412,7 @@ func (s *Solver) runOrderFeed(
 	feedConnections chan<- context.Context,
 ) error {
 	inbox := newOrderInbox(orderInboxCapacity)
+	inbox.onAdmit = func(order *submittedOrder) { s.observeMatchedOrderAdmission(ctx, order) }
 	stopInboxMetrics := s.metrics.trackOrderQueue(orderQueueInbox, inbox.orderQueueSnapshot)
 	defer stopInboxMetrics()
 	stopRecoveryRetryMetrics := s.metrics.trackOrderQueue(
@@ -617,7 +622,7 @@ func (s *Solver) recoverOrder(
 	raw json.RawMessage,
 	recovered map[string]bool,
 ) (discovered bool, err error) {
-	order, err := s.admitOrderMessage(ctx, orderMessage{Event: orderSubmitEvent, Data: raw},
+	order, err := s.admitOrderMessage(ctx, orderMessage{Event: orderSubmitEvent, Data: raw, matchedFor: s.cfg.Executor},
 		func(msgCtx context.Context, order *submittedOrder) error {
 			key := orderInboxKey(order)
 			if key != "" && recovered[key] {
@@ -672,6 +677,9 @@ func (s *Solver) parseOrderMessage(
 			return nil, err
 		}
 		return nil, nil
+	}
+	if msg.matchedFor != (common.Address{}) && msg.matchedFor == s.cfg.Executor && order.matchSource != "other_quote" {
+		order.matchSource = "recovery_exclusive_for"
 	}
 	observability.SetAttributes(ctx, orderAttrs(order)...)
 	if isDutchAuctionContext(order.Output.Context) {

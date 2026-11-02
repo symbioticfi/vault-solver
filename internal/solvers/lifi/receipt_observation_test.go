@@ -1,7 +1,6 @@
 package lifi
 
 import (
-	"math/big"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/core/types"
@@ -28,8 +27,6 @@ func TestLateFillReceiptRecordsMetricsAfterWorkerReleasedOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	order := testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut)
-	wantInput, _ := new(big.Float).SetInt(order.AmountIn).Float64()
-	wantOutput, _ := new(big.Float).SetInt(order.OutputAmount).Float64()
 	orders := make(chan *submittedOrder, 1)
 	orders <- order
 	close(orders)
@@ -51,9 +48,8 @@ func TestLateFillReceiptRecordsMetricsAfterWorkerReleasedOrder(t *testing.T) {
 		t.Fatal("late receipt changed capacity or submitted another fill")
 	}
 	metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeSuccess, 1)
-	metricstest.RequireWorkflowAmount(t, reg, Name, "fill", fixture.tokenIn.Hex(), liquidlane.FillAmountInput, wantInput)
-	metricstest.RequireWorkflowAmount(t, reg, Name, "fill", fixture.tokenOut.Hex(), liquidlane.FillAmountOutput, wantOutput)
-	metricstest.RequireWorkflowAmount(t, reg, Name, "fill", fixture.tokenOut.Hex(), liquidlane.FillAmountPlannedSurplus, 1_000_000-wantOutput)
+	metricstest.RequireFamilyValue(t, reg, "solver_bot_pair_events_total", pairEventLabels(solver.chainID, fixture.tokenIn, fixture.tokenOut, "fill", "mined_success", "none"), 1)
+	metricstest.RequireNoWorkflowAmounts(t, reg, Name)
 }
 
 func TestOrdinaryFillReceiptRecordsSuccessOnce(t *testing.T) {
@@ -77,7 +73,8 @@ func TestOrdinaryFillReceiptRecordsSuccessOnce(t *testing.T) {
 			solver.processOrder(t.Context(), testResolvedRoutes(fixture.tokenIn, fixture.tokenOut, fixture.adapter),
 				testSubmittedOrder(t, fixture.cfg, fixture.tokenIn, fixture.tokenOut))
 			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeSuccess, 1)
-			metricstest.RequireWorkflowAmount(t, reg, Name, "fill", fixture.tokenIn.Hex(), liquidlane.FillAmountInput, 1_000_000)
+			metricstest.RequireFamilyValue(t, reg, "solver_bot_pair_events_total", pairEventLabels(solver.chainID, fixture.tokenIn, fixture.tokenOut, "fill", "mined_success", "none"), 1)
+			metricstest.RequireNoWorkflowAmounts(t, reg, Name)
 		})
 	}
 }

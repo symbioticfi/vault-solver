@@ -12,7 +12,6 @@ import (
 	uxexecutor "github.com/symbioticfi/vault-solver/api/bindings/uniswapx/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
-	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -252,12 +251,11 @@ func (s *Solver) startFill(
 		"deadlineRemaining", deadline.Sub(now),
 		"submissionDeadline", submissionDeadline.Unix(),
 	)
-	plannedSurplus := strategies.PlannedSurplus(plan.Routes, order.AmountOut)
 	var observeReceipt func(context.Context, txmanager.Result)
 	if s.metrics != nil {
+		// This plan has already passed the executable route and policy gates.
 		observeReceipt = s.metrics.fillAmounts.ReceiptObserver(
-			order.TokenIn, order.AmountIn, order.TokenOut, order.AmountOut, plannedSurplus,
-		)
+			s.metrics.pairs.ReceiptObserver(s.chainID, order.TokenIn, order.TokenOut))
 	}
 	result, err := s.submitFill(ctx, txmanager.Request{
 		Solver: Name,
@@ -583,8 +581,11 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 		return
 	}
 	if outcome == txmanager.OutcomeConfirmed {
-		observability.Log(ctx).Info("order filled", "source", order.Source, "executor", order.Executor.Hex(),
-			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", result.Hash.Hex())
+		observability.Log(ctx).WithValues(s.tokenMetadata.PairLogFields(order.TokenIn, order.TokenOut)...).
+			Info("order filled", "source", order.Source, "executor", order.Executor.Hex(),
+				"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", result.Hash.Hex(),
+				"chainId", s.chainID, "tokenIn", order.TokenIn.Hex(), "tokenOut", order.TokenOut.Hex(),
+				"amountIn", order.AmountIn.String(), "requiredAmountOut", order.AmountOut.String())
 	} else {
 		// Included, but the confirmation wait failed: the fill stands, the wait error is the span's.
 		err = result.Err

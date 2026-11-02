@@ -1053,47 +1053,69 @@ inputs and `InputSettlerEscrowLIFINative.t.sol` exercises the LIFI escrow path. 
 only an unsupported-asset skip; it does not enable native execution or prove any deployment's bytecode.
 
 
-### Advertised pair dashboard diagnostics
+### Standing state and supported-pair diagnostics
 
-The existing atomic quote collector exports `solver_bot_quote_published` with shared
-`solver,token_in,token_out` labels and `kind=quotes|ranges`. These are last-reconciled local standing
-records, not incoming upstream quote requests, unique advertisements or refresh attempts. Pair
-counts reset/repopulate under the same lock as the unchanged production
-`lifi_active_quote_max_input_atomic_units` gauge; retired pairs disappear. Counts aggregate local
-records, while capacity remains a maximum with original decimal labels and atomic units.
+Token/pair amount/state collectors are removed: `lifi_active_quote_max_input_atomic_units`,
+`solver_bot_quote_published`, the omission counter and the standalone standing-rejection counter.
+There is no startup token registry or arbitrary admission cap; supported route counters are described below. Fixed aggregate
+active quote/range counts, refresh freshness and bounded operational metrics remain. The capacity
+family existed in production, so its removal needs external-consumer migration; old samples retain
+their normal storage retention rather than an alias collector.
 
-The board uses the same pair identity fields as UniswapX/RFQ without inventing HTTP demand. Existing
-refresh/recovery outcome metrics, matched-order counters and freshness panels remain distinct.
-Remote TTL expiry may precede reconciliation. Namespace/solver selects environment and integration;
-storage must deduplicate HA scrapes. New pair gauges have no historical backfill.
+`observeStandingQuoteSnapshot` passively reads the already-reconciled state and transient current
+validated inventory. Scoped pair rows carry exact bounds, trusted decimals, optional cached symbols,
+record counts and expiry; a completion header emitted last identifies the cohort. Empty/suspended
+success clears previous pairs, while failed submissions emit uncertainty, not positive capacity.
+There is no additional state store, pair cache, RPC or modification to reconciliation decisions.
 
-### Standing-quote rejection diagnostics
+State/refusal detail requires exact policy-allowed current inventory direction with
+`pairInScope=true`, `pairScope="directed_route"` and `pairScopeSource="current_inventory"`.
+Legacy startup-proof logs cannot masquerade as current validation. Failures before a current
+snapshot exists remain operational diagnostics without attributed pair detail. Logs are independent
+of metrics registration; new trusted inventory does not require restarting a metric-label registry.
+Local publication/withdrawal retries are attempts, not upstream requests or matches.
 
-`solver_bot_quote_standing_rejections_total{solver,token_in,token_out,reason}` records local standing
-quote failures separately from the HTTP `solver_bot_quote_results_total` used by UniswapX/RFQ.
-A refresh counts each distinct startup route pair once when building cannot proceed or no quote is
-selected, regardless of physical route, discount alternative or range count. Successful/unchanged
-pairs add nothing. Early failure precedence follows the existing pipeline: `lane_unavailable`,
-`chain_time_error`, `snapshot_error`, `gas_price_error`, `strategy_error`. After a successful strategy
-call, an omitted pair is `pair_out_of_scope` when policy excludes it, otherwise `no_inventory` if no
-filtered inventory for that pair was passed to the strategy, otherwise `strategy_declined`.
-The latter deliberately does not claim insufficient liquidity, capacity, gas or expiry as a cause.
-A lane change after strategy selection counts only selected pairs, avoiding double-counting omitted
-pairs. Partial private-discount degradation retains the existing refresh degraded outcome; it is not
-invented as a cause for every pair.
+Consumers must select the latest observed cohort per deployment/chain/process, check expected
+versus observed rows and apply expiry. Empty, uncertain or orphan newer cohorts must not fall back
+to old published pairs; partial/mixed-expiry records cannot prove current available liquidity.
+Replica alternatives and unlike token quantities must not be summed. Sampling/retention still
+prevent complete totals; upstream client response counts are not locally observable.
 
-Reconciliation observes the actual submission batch without changing retries or conservative state
-handling: failed additions count `publish_error`, empty-range withdrawals count `withdrawal_error`,
-once per pair/action in that failed batch. These include local serialization/response validation or
-transport failures; remote acceptance may be uncertain. Suspension retries count again. This is an
-attempt/event counter, not a unique quote count, upstream request count or matched-order rejection.
-Existing operation metrics still count whole refresh/suspension attempts separately.
+Dashboard templates are intentionally unchanged from stage in this branch. Their pair-capacity,
+published/rejection and token amount consumers require a separate log-based migration before
+producer rollout; no dashboard-query framework or provisioning change is included here.
 
-Labels match the common token_in/token_out/reason convention. The existing trusted routes are copied
-once before loops start; no additional token registry is introduced. Only exact startup pairs get
-address labels, everything else is other/other. The bound is `11 × (distinct startup pairs + 1)` series, including the unresolved bucket,
-independent of untrusted addresses or error text. Raw pairs and bounded
-reasons are logged at debug level. The existing published-state/capacity gauges and decimals remain
-unchanged. The board adds one selected-range pair/reason table beside standing-state/refresh panels;
-no dashboard-query test harness is introduced. Unit tests cover stage reasons, duplicate routes,
-unchanged success, failed publish/withdraw batches and bounded labels.
+### Optional token log metadata
+
+LI.FI warms the shared chain cache from configured inputs/routes and trusted policy-filtered
+inventory. Startup and new tokens are read asynchronously once under the cancellable quote lifetime; optional failures never change publication.
+Unknown metadata stays unknown. No arbitrary inbound lookup, new database/service or additional
+pair registry is introduced. Trading, reservation, retry and settlement behavior is unchanged.
+
+### Aggregate matched-order observations
+
+The existing order-server contract identifies quote selection separately from actual fill: orders
+can be filtered by the matched solver (`solverId`) or its `exclusiveFor` address. Our REST recovery
+already filters by the configured executor. Live WebSocket delivery alone is not an ownership proof;
+optional nested `quote.exclusiveFor` supplies one when it exactly matches that executor. Optional
+malformed/missing metadata never changes order parsing, authorization or execution. An explicit
+foreign owner cannot be credited through recovery provenance.
+
+`matched_order/admitted` uses the existing fixed workflow family, with no identity labels. It counts
+only real insertions into the existing inbox; duplicate/closed/full/barrier paths do not increment.
+The callback is assigned before producers start and runs after unlocking; it observes only immutable
+order facts. No new map, RPC, retention policy or trading decision is added. Queued/recovery-window
+copies are deduplicated, but later lifecycles/reconnections/replicas may admit the same order again.
+Therefore this is not a lifetime-unique win counter. The `matched order admitted` event includes
+stable chain/order identity and verified ownership provenance for external dedup. Unknown ownership
+is omitted. Actual fills remain receipt observations; `fill/success` includes mined unconfirmed
+receipts by its existing contract, while txmanager separately records confirmed outcomes.
+
+Supported directed route observations use `solver_bot_pair_events_total`: acknowledged changed
+standing records published/withdrawn, known-pair local rejection attempts, proven owned inbox
+admissions and successful owned mined receipts. Repeated unchanged standing snapshots do not
+increment publication counts. Existing resolved routes/current inventory plus policy prove scope,
+including zero-capacity directions; metadata never decides eligibility. Retries count as attempts,
+and post-dequeue/reconnect/replica admissions can repeat: these are not unique upstream wins or
+client-response totals. The helper retains counters across refreshes; cardinality grows with trusted
+supported route history × fixed event/result/reason sets, not arbitrary inbound addresses or IDs.

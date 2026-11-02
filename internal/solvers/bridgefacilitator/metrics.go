@@ -2,10 +2,8 @@ package bridgefacilitator
 
 import (
 	"context"
-	"math/big"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -21,8 +19,6 @@ const (
 	threeFStateTargets            = "targets"
 	threeFEventOffer              = "offer"
 	threeFEventRedeem             = "redeem"
-	threeFOfferPrincipal          = "principal"
-	threeFOfferExpectedYield      = "expected_yield"
 	targetRefreshOperation        = "target_refresh"
 	offerRefreshOperation         = "offer_refresh"
 	activeRequestRefreshOperation = "active_request_refresh"
@@ -55,9 +51,6 @@ func newThreeFMetrics(reg prometheus.Registerer, strategyName string) (*threeFMe
 			{Event: threeFEventOffer, Outcomes: []string{"success", "error"}},
 			{Event: threeFEventRedeem, Outcomes: []string{"success"}},
 		},
-		Amounts: []observability.WorkflowAmountSpec{{
-			Event: threeFEventOffer, Kinds: []string{threeFOfferPrincipal, threeFOfferExpectedYield},
-		}},
 		States: []string{
 			threeFStateOffers, threeFStateActiveRequests, threeFStateRedeemable, threeFStateTargets,
 		},
@@ -98,18 +91,6 @@ func (s *Solver) observeOfferSubmission(result string) {
 		result = "error"
 	}
 	s.metrics.workflow.ObserveEventAt(threeFEventOffer, result, 1, s.metrics.now())
-}
-
-func (s *Solver) observeSubmittedOffer(token common.Address, principal, expectedYield *big.Int) {
-	if s.metrics == nil {
-		return
-	}
-	s.observeOfferSubmission("success")
-	if token == (common.Address{}) {
-		return
-	}
-	s.metrics.workflow.AddAmount(threeFEventOffer, token.Hex(), threeFOfferPrincipal, principal)
-	s.metrics.workflow.AddAmount(threeFEventOffer, token.Hex(), threeFOfferExpectedYield, expectedYield)
 }
 
 func (m *threeFMetrics) observeRedeemedRequests(count int) {

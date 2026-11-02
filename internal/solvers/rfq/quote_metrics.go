@@ -7,12 +7,18 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 )
 
 type quoteHTTPObservation struct {
-	request liquidlane.QuoteMetricRequest
-	reason  string
+	reason   string
+	response *quoteResponse
+	fields   []any
+	panicked bool
+	// Pair coordinates are set only by an existing exact-route/policy proof, never raw request parsing.
+	pairInScope bool
+	chainID     int64
+	tokenIn     common.Address
+	tokenOut    common.Address
 }
 
 func quoteHTTPReason(status int) string {

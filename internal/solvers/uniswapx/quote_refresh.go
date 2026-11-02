@@ -39,6 +39,16 @@ func (s *Solver) refreshLoop(ctx context.Context, routes []liquidlane.Route) err
 				observability.Log(ctx).Error(err, "quote state refresh failed")
 			}
 		}
+		// Only the already published, policy-filtered inventory can extend log metadata.
+		if state := s.quoteState.Load(); state != nil {
+			var tokens []common.Address
+			for _, item := range state.inventory {
+				if s.cfg.TokenPolicy.Allows(item.TokenIn) {
+					tokens = append(tokens, item.TokenIn, item.TokenOut)
+				}
+			}
+			s.tokenMetadata.WarmMetadataAsync(ctx, tokens, observability.Log(ctx))
+		}
 	}
 }
 

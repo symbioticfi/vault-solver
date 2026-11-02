@@ -64,6 +64,10 @@ func recoverPanics(next http.Handler) http.Handler {
 		//nolint:contextcheck // recovery closure: it reads the request context to log, never passes one on.
 		defer func() {
 			if v := recover(); v != nil {
+				if observation, ok := r.Context().Value(quoteMetricsKey).(*quoteHTTPObservation); ok {
+					observation.panicked = true
+					observation.reason = "internal_error"
+				}
 				observability.Log(r.Context()).Error(errors.Errorf("panic: %v", v),
 					"recovered panic in quote server",
 					"method", r.Method, "path", r.URL.Path, "requestId", requestID(r.Context()))

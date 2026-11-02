@@ -1,10 +1,8 @@
 package uniswapx
 
 import (
-	"math/big"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -53,6 +51,7 @@ type uniswapXMetrics struct {
 	operations           uniswapXOperationObservers
 	quoteTime            prometheus.Histogram
 	traffic              *liquidlane.QuoteMetrics
+	pairs                *liquidlane.PairMetrics
 	exclusiveOutstanding prometheus.GaugeFunc
 	exclusiveDeadline    prometheus.GaugeFunc
 	blockUntil           prometheus.GaugeFunc
@@ -93,9 +92,6 @@ func newUniswapXMetrics(
 			Outcomes: []string{"won", exclusiveOutcomeSettledInTime, exclusiveOutcomeMissed},
 		},
 	)
-	spec.Amounts = append(spec.Amounts, observability.WorkflowAmountSpec{
-		Event: "quote", Kinds: []string{"input", "output"},
-	})
 	workflow, err := observability.NewWorkflowMetrics(reg, Name, spec)
 	if err != nil {
 		return nil, err
@@ -104,9 +100,14 @@ func newUniswapXMetrics(
 	if err != nil {
 		return nil, err
 	}
+	pairs, err := liquidlane.NewPairMetrics(reg, Name, boundedQuoteRejectionReason)
+	if err != nil {
+		return nil, err
+	}
 	m := &uniswapXMetrics{
 		workflow: workflow,
 		traffic:  traffic,
+		pairs:    pairs,
 		operations: uniswapXOperationObservers{
 			quoteRefresh:       workflow.Operation(quoteRefreshOperation),
 			exclusiveOrderPoll: workflow.Operation(exclusiveOrderPollOperation),
@@ -190,38 +191,6 @@ func (s *Solver) observeQuote(outcome quoteMetricOutcome) {
 
 func (s *Solver) observeQuoteDecline(reason quoteDeclineReason) {
 	s.observeQuote(metricOutcomeForDecline(reason))
-}
-
-func (s *Solver) observeQuotedAmounts(response quoteResponse) {
-	if s.metrics == nil || !response.quotedPairBounded ||
-		!common.IsHexAddress(response.TokenIn) || !common.IsHexAddress(response.TokenOut) {
-		return
-	}
-	tokenIn := common.HexToAddress(response.TokenIn)
-	tokenOut := common.HexToAddress(response.TokenOut)
-	amountIn, inputOK := new(big.Int).SetString(response.AmountIn, 10)
-	amountOut, outputOK := new(big.Int).SetString(response.AmountOut, 10)
-	if !inputOK || !outputOK || amountIn.Sign() <= 0 || amountOut.Sign() <= 0 {
-		return
-	}
-	s.metrics.addQuotedAmount(tokenIn, "input", amountIn)
-	s.metrics.addQuotedAmount(tokenOut, "output", amountOut)
-}
-
-func quotePairIsBounded(state *quoteState, tokenIn, tokenOut common.Address) bool {
-	if state == nil {
-		return false
-	}
-	for _, inventory := range state.inventory {
-		if inventory.TokenIn == tokenIn && inventory.TokenOut == tokenOut {
-			return true
-		}
-	}
-	return false
-}
-
-func (m *uniswapXMetrics) addQuotedAmount(token common.Address, side string, amount *big.Int) {
-	m.workflow.AddAmount("quote", token.Hex(), side, amount)
 }
 
 // metricOutcomeForDecline deliberately maps every domain reason to a fixed label. The fallback is

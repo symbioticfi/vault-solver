@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/gorilla/websocket"
 
@@ -23,8 +24,9 @@ const (
 )
 
 type orderMessage struct {
-	Event string          `json:"event"`
-	Data  json.RawMessage `json:"data"`
+	Event      string          `json:"event"`
+	Data       json.RawMessage `json:"data"`
+	matchedFor common.Address  // set only by the existing executor-filtered REST recovery
 }
 
 type orderFeed struct {

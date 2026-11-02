@@ -69,16 +69,20 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
 		observation.reason = "invalid-json"
-		s.declineQuoteRequest(w, r, "invalid-json", "invalid request body", "error", err.Error())
+		s.declineQuoteRequest(w, r, "invalid-json", "invalid request body")
 		return
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		observation.reason = "trailing-json"
-		s.declineQuoteRequest(w, r, "trailing-json", "invalid request body",
-			"requestId", request.RequestID, "quoteId", request.QuoteID)
+		s.declineQuoteRequest(w, r, "trailing-json", "invalid request body")
 		return
 	}
-	observation.request, observation.parsed = request, true
+	pairInScope := s.quotePairInScope(request)
+	if request.TokenInChainID == s.chainID && request.TokenOutChainID == s.chainID &&
+		common.IsHexAddress(request.TokenIn) && common.IsHexAddress(request.TokenOut) {
+		observation.tokenIn, observation.tokenOut = common.HexToAddress(request.TokenIn), common.HexToAddress(request.TokenOut)
+		observation.pairKnown = s.metricPairSupported(observation.tokenIn, observation.tokenOut)
+	}
 	if request.RequestID == "" {
 		if request.BlockUntilTimestamp == nil || *request.BlockUntilTimestamp < 0 {
 			reason := "invalid-breaker-notification"
@@ -86,11 +90,7 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 				reason = string(quoteDeclineMissingIDs)
 			}
 			observation.reason = reason
-			s.declineQuoteRequest(w, r, reason, "invalid blockUntilTimestamp",
-				"requestId", request.RequestID, "quoteId", request.QuoteID,
-				"protocol", request.Protocol, "type", request.Type,
-				"tokenInChainId", request.TokenInChainID, "tokenOutChainId", request.TokenOutChainID,
-				"tokenIn", request.TokenIn, "tokenOut", request.TokenOut)
+			s.declineQuoteRequest(w, r, reason, "invalid blockUntilTimestamp", s.quoteLogFields(request, pairInScope)...)
 			return
 		}
 		observability.Log(r.Context()).V(1).Info(
@@ -107,49 +107,32 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 		observability.AttrRequestID.String(request.RequestID),
 		observability.AttrQuoteID.String(request.QuoteID),
 	)
-	observability.Log(r.Context()).V(1).Info(
-		"quote request received",
-		"requestId", request.RequestID,
-		"quoteId", request.QuoteID,
-		"type", request.Type,
-		"protocol", request.Protocol,
-		"tokenIn", request.TokenIn,
-		"tokenOut", request.TokenOut,
-		"amount", request.Amount,
-	)
 	response, err := s.quote(r.Context(), request)
+	if err == nil && response.AmountOut != "0" {
+		// Only the actual decision snapshot can prove a positive quote's direction. A refresh
+		// may replace the inventory after the preliminary scope check.
+		pairInScope = response.pairInScope
+	} else {
+		pairInScope = response.pairInScope || pairInScope
+	}
+	// The decision may discover a newly trusted inventory direction after the initial check.
+	observation.pairKnown = observation.pairKnown || pairInScope
+	requestLog := observability.Log(r.Context()).WithValues(s.quoteLogFields(request, pairInScope)...)
 	if err != nil {
 		observation.reason = "strategy_error"
 		s.observeQuote(quoteOutcomeError)
-		observability.Log(r.Context()).
-			Error(err, "quote failed", "reason", "strategy_error", "requestId", request.RequestID,
-				"quoteId", request.QuoteID, "protocol", request.Protocol, "type", request.Type,
-				"tokenInChainId", request.TokenInChainID, "tokenOutChainId", request.TokenOutChainID,
-				"tokenIn", request.TokenIn, "tokenOut", request.TokenOut)
+		loggedErr := err
+		if !pairInScope {
+			loggedErr = errors.New("quote strategy failed before directed pair validation")
+		}
+		requestLog.Error(loggedErr, "quote failed", "reason", "strategy_error")
 		http.Error(w, "quote unavailable", http.StatusServiceUnavailable)
 		return
 	}
 	if response.AmountOut == "0" {
 		observation.reason = string(response.declineReason)
 		s.observeQuoteDecline(response.declineReason)
-		observability.Log(r.Context()).V(1).Info(
-			"quote declined",
-			"requestId", request.RequestID,
-			"quoteId", request.QuoteID,
-			"type", request.Type,
-			"reason", response.declineReason,
-			"protocol", request.Protocol,
-			"tokenInChainId", request.TokenInChainID,
-			"tokenOutChainId", request.TokenOutChainID,
-			"tokenIn", request.TokenIn,
-			"tokenOut", request.TokenOut,
-			"amount", request.Amount,
-			"blockUntil", s.blockUntil.Load(),
-			"localBlockUntil", s.localBlockUntil.Load(),
-			"exclusiveBlockUntil", s.exclusiveBlockUntil.Load(),
-			"warmupUntil", s.warmupUntil.Load(),
-			"planningFills", s.planningFills.Load(),
-		)
+		requestLog.V(1).Info("quote declined", "reason", response.declineReason)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -159,29 +142,33 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 		s.rememberSelection(response, time.Now())
 	}
 	s.observeQuote(quoteOutcomeQuoted)
-	s.observeQuotedAmounts(response)
-	observability.Log(r.Context()).V(1).Info(
-		"quote returned",
-		"requestId", request.RequestID,
-		"quoteId", request.QuoteID,
-		"type", request.Type,
-		"tokenIn", request.TokenIn, "tokenOut", request.TokenOut,
-		"tokenInChainId", request.TokenInChainID, "tokenOutChainId", request.TokenOutChainID,
-		"protocol", request.Protocol,
-		"amountIn", response.AmountIn,
-		"amountOut", response.AmountOut,
-	)
+
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(response); err != nil {
+	if err := json.NewEncoder(quoteResponseWriter{writer: w}).Encode(response); err != nil {
 		observation.reason = "response_write_error"
-		observability.Log(r.Context()).
-			Error(err, "write quote response", "requestId", request.RequestID, "quoteId", request.QuoteID)
+		requestLog.Error(err, "write quote response", "reason", "response_write_error")
 		return
+	}
+	if pairInScope {
+		requestLog.V(1).Info("quote returned", "responseWritten", true,
+			"amountIn", response.AmountIn, "amountOut", response.AmountOut)
 	}
 	observation.returned = true
 	// Remember the served quote so the fill that wins it can link back to this trace (spec §12).
 	// Indicative and hard quotes share a request shape, so both are remembered; the later wins.
 	s.links.Remember(r.Context(), request.QuoteID, quoteLinkTTL)
+}
+
+// encoding/json propagates Write errors but not a nil-error short write. Preserve that distinction
+// before recording a successful response, even if the underlying writer violates io.Writer's contract.
+type quoteResponseWriter struct{ writer io.Writer }
+
+func (w quoteResponseWriter) Write(body []byte) (int, error) {
+	n, err := w.writer.Write(body)
+	if err == nil && n != len(body) {
+		err = io.ErrShortWrite
+	}
+	return n, err
 }
 
 // declineQuoteRequest answers a malformed body. The caller is at fault, so the server span records a
@@ -261,7 +248,15 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 	if state == nil || state.epoch != epoch || !state.expiresAt.After(time.Unix(now, 0)) {
 		return declinedQuote(response, quoteDeclineQuoteStateUnavailable), nil
 	}
+	response.pairInScope = s.inventoryPairInScope(tokenIn, tokenOut, state)
 	declines := &quoteStrategyDeclines{}
+	decisionTrace := s.decisionTrace(ctx, "requestId", request.RequestID,
+		"quoteId", request.QuoteID, "quoteType", request.Type)
+	if !response.pairInScope {
+		// Preserve bounded decline classification, but do not forward arbitrary unsupported
+		// pair details from the strategy's diagnostic trace.
+		decisionTrace = nil
+	}
 	input := types.QuoteInput{
 		RequestID: request.RequestID, QuoteID: request.QuoteID,
 		TokenIn: tokenIn, TokenOut: tokenOut,
@@ -270,11 +265,7 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 		Reservations:       s.capacity.Snapshot(),
 		GasSnapshot:        state.gasSnapshot, GasPrices: state.gasPrices,
 		MaxFeePerGas: state.maxFeePerGas, ChainTime: state.chainTime, QuoteExpiresAt: state.expiresAt,
-		Trace: declines.trace(s.decisionTrace(ctx,
-			"requestId", request.RequestID,
-			"quoteId", request.QuoteID,
-			"quoteType", request.Type,
-		)),
+		Trace: declines.trace(decisionTrace),
 	}
 	if request.Type == quoteTypeExactInput {
 		input.AmountIn = requestAmount
@@ -297,7 +288,6 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 	response.selectedCandidate = quote.CandidateID
 	response.AmountIn = quote.AmountIn.String()
 	response.AmountOut = quote.AmountOut.String()
-	response.quotedPairBounded = quotePairIsBounded(state, tokenIn, tokenOut)
 	return response, nil
 }
 
@@ -389,4 +379,55 @@ func (s *Solver) setBlockUntil(timestamp int64) {
 		s.invalidateQuotes()
 	}
 	s.requestQuoteRefresh()
+}
+
+// Diagnostic scope is an exact current trusted inventory direction admitted by input policy.
+// It is deliberately not a claim of available pair capacity or a priceable request amount.
+// quoteLogFields records details only for a direction proven by validated inventory. Metadata
+// enriches display, never decides support. Arbitrary unsupported request fields are not copied.
+func (s *Solver) quoteLogFields(request quoteRequest, inScope bool) []any {
+	fields := []any{"pairInScope", inScope}
+	if !inScope {
+		return fields
+	}
+	fields = append(fields, "pairScope", "directed_route", "pairScopeSource", "verified_inventory",
+		"requestId", request.RequestID, "quoteId", request.QuoteID,
+		"type", request.Type, "protocol", request.Protocol,
+		"tokenInChainId", request.TokenInChainID, "tokenOutChainId", request.TokenOutChainID,
+		"tokenIn", request.TokenIn, "tokenOut", request.TokenOut, "amount", request.Amount)
+	return append(fields, s.tokenMetadata.PairLogFields(common.HexToAddress(request.TokenIn), common.HexToAddress(request.TokenOut))...)
+}
+
+func (s *Solver) quotePairInScope(request quoteRequest) bool {
+	if request.TokenInChainID != s.chainID || request.TokenOutChainID != s.chainID ||
+		!common.IsHexAddress(request.TokenIn) || !common.IsHexAddress(request.TokenOut) {
+		return false
+	}
+	return s.inventoryPairInScope(common.HexToAddress(request.TokenIn), common.HexToAddress(request.TokenOut), s.quoteState.Load())
+}
+
+func (s *Solver) inventoryPairInScope(in, out common.Address, state *quoteState) bool {
+	if in == out || in == (common.Address{}) || out == (common.Address{}) || !s.cfg.TokenPolicy.Allows(in) || state == nil {
+		return false
+	}
+	for _, item := range state.inventory {
+		if item.TokenIn == in && item.TokenOut == out {
+			return true
+		}
+	}
+	return false
+}
+
+// metricPairSupported reuses the actual structural adapter directions and current trusted quote
+// inventory. Optional metadata and temporary capacity do not decide metric eligibility.
+func (s *Solver) metricPairSupported(in, out common.Address) bool {
+	if in == out || in == (common.Address{}) || out == (common.Address{}) || !s.cfg.TokenPolicy.Allows(in) {
+		return false
+	}
+	for _, route := range s.metricRoutes {
+		if route.TokenIn == in && route.TokenOut == out {
+			return true
+		}
+	}
+	return s.inventoryPairInScope(in, out, s.quoteState.Load())
 }

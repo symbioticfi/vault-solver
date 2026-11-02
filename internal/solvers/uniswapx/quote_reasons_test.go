@@ -265,8 +265,8 @@ func TestQuoteReasonMetricCannotExposeUnboundedLabels(t *testing.T) {
 	s := &Solver{}
 	metrics, reg := newUniswapXTestMetricsWithRegistry(t, s)
 	s.metrics = metrics
-	s.metrics.traffic.Observe(liquidlane.QuoteMetricRequest{}, false, "request-id-or-address")
-	s.metrics.traffic.Observe(liquidlane.QuoteMetricRequest{}, false, "other arbitrary error")
+	s.metrics.traffic.Observe(false, "request-id-or-address")
+	s.metrics.traffic.Observe(false, "other arbitrary error")
 	families, err := reg.Gather()
 	if err != nil {
 		t.Fatal(err)
@@ -279,7 +279,7 @@ func TestQuoteReasonMetricCannotExposeUnboundedLabels(t *testing.T) {
 			t.Fatalf("unbounded series: %v", family)
 		}
 		m := family.GetMetric()[0]
-		if len(m.GetLabel()) != 5 || m.GetCounter().GetValue() != 2 {
+		if len(m.GetLabel()) != 3 || m.GetCounter().GetValue() != 2 {
 			t.Fatalf("metric=%v", m)
 		}
 	}

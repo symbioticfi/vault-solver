@@ -5,14 +5,13 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
+	"github.com/go-logr/logr/funcr"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
@@ -48,24 +47,20 @@ func (s rejectionTestStrategy) DecideQuotes(context.Context, types.QuoteInput) (
 func TestStandingQuoteBuildRejectionPaths(t *testing.T) {
 	for _, reason := range []string{"no_inventory", "strategy_declined", "pair_out_of_scope", "strategy_error", "chain_time_error", "snapshot_error", "gas_price_error", "lane_unavailable", "lane_changed", "success"} {
 		t.Run(reason, func(t *testing.T) {
-			reg := prometheus.NewRegistry()
-			metrics, err := newLIFIMetrics(reg, nil, "")
-			if err != nil {
-				t.Fatal(err)
-			}
 			r := testQuoteRoute()
-			metrics.quotes.routes = []route{r}
 			cfg := testLifiConfig()
 			cfg.Gas = nil
 			ready := true
 			reader := rejectionTestReader{snapshot: quoteSnapshotSet{Direct: []liquidlane.Inventory{{Route: r}}}}
 			strategy := rejectionTestStrategy{}
-			s := &Solver{cfg: cfg, metrics: metrics,
+			s := &Solver{cfg: cfg,
 				now:         func(context.Context) (time.Time, error) { return time.Unix(1_800_000_000, 0), nil },
 				wallNow:     func() time.Time { return time.Unix(1_800_000_000, 0) },
 				txLaneState: &testTransactionLaneState{ready: func() bool { return ready }},
 			}
 			want := reason
+			events, write := standingObservationLogger(t)
+			ctx := observability.WithLogger(t.Context(), funcr.NewJSON(write, funcr.Options{Verbosity: 1}))
 			switch reason {
 			case "no_inventory":
 				reader.snapshot.Direct = nil
@@ -97,60 +92,59 @@ func TestStandingQuoteBuildRejectionPaths(t *testing.T) {
 				state.active = indexQuotePairs(strategy.output.Quotes)
 			}
 			// Two physical routes for the same pair still produce one rejected pair evaluation.
-			s.refreshQuotes(t.Context(), []route{r, r}, state)
-			families, err := reg.Gather()
-			if err != nil {
-				t.Fatal(err)
-			}
-			count := 0
-			for _, family := range families {
-				if family.GetName() != "solver_bot_quote_standing_rejections_total" {
-					continue
-				}
-				for _, sample := range family.GetMetric() {
-					count++
-					if sample.GetCounter().GetValue() != 1 {
-						t.Fatal("pair double counted")
-					}
-					for _, label := range sample.GetLabel() {
-						if label.GetName() == "reason" && label.GetValue() != want {
-							t.Fatalf("reason=%s want=%s", label.GetValue(), want)
-						}
-					}
+			s.refreshQuotes(ctx, []route{r, r}, state)
+			var rejected []map[string]any
+			for _, event := range *events {
+				if event["msg"] == "standing quote rejected" {
+					rejected = append(rejected, event)
 				}
 			}
-			if (reason == "success" && count != 0) || (reason != "success" && count != 1) {
-				t.Fatalf("series=%d", count)
+			wantCount := 0
+			switch reason {
+			case "strategy_declined", "strategy_error", "lane_changed":
+				wantCount = 1
+			}
+			if len(rejected) != wantCount {
+				t.Fatalf("rejected=%v wantCount=%d", rejected, wantCount)
+			}
+			if wantCount > 0 && rejected[0]["reason"] != want {
+				t.Fatalf("reason=%v want=%s", rejected[0], want)
 			}
 		})
 	}
 }
 
-func TestStandingQuoteSubmissionErrorsCountActualBatchPairs(t *testing.T) {
+func TestStandingQuoteSubmissionErrorsLogActualTrustedBatchPairs(t *testing.T) {
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls++
 		http.Error(w, "unavailable", http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
-	metrics, err := newLIFIMetrics(prometheus.NewRegistry(), nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
 	r := testQuoteRoute()
-	metrics.quotes.routes = []route{r}
-	s := &Solver{metrics: metrics, orders: newOrderClient(server.URL, "test-key", time.Second, 1)}
+	events, write := standingObservationLogger(t)
+	ctx := observability.WithLogger(t.Context(), funcr.NewJSON(write, funcr.Options{Verbosity: 1}))
+	s := &Solver{cfg: testLifiConfig(), orders: newOrderClient(server.URL, "test-key", time.Second, 1)}
 	state := newQuoteState(time.Second)
 	q := testStandingQuote(r, 100)
-	if _, err := s.reconcileQuotes(t.Context(), state, []types.Quote{q, q}, time.Unix(1_800_000_000, 0)); err == nil {
+	if _, err := s.reconcileQuotes(ctx, state, []types.Quote{q, q}, []liquidlane.Inventory{{Route: r}}, time.Unix(1_800_000_000, 0)); err == nil {
 		t.Fatal("expected publish failure")
 	}
-	if _, err := s.reconcileQuotes(t.Context(), state, nil, time.Unix(1_800_000_000, 0)); err == nil {
+	if _, err := s.reconcileQuotes(ctx, state, nil, []liquidlane.Inventory{{Route: r}}, time.Unix(1_800_000_000, 0)); err == nil {
 		t.Fatal("expected withdrawal failure")
 	}
+	counts := make(map[string]int)
+	for _, event := range *events {
+		if event["msg"] == "standing quote rejected" {
+			counts[event["reason"].(string)]++
+		}
+		if event["msg"] == "standing quote snapshot" && event["snapshotState"] != "uncertain" {
+			t.Fatalf("failure produced successful snapshot: %v", event)
+		}
+	}
 	for _, reason := range []string{"publish_error", "withdrawal_error"} {
-		if got := testutil.ToFloat64(metrics.quotes.rejections.WithLabelValues(strings.ToLower(r.TokenIn.Hex()), strings.ToLower(r.TokenOut.Hex()), reason)); got != 1 {
-			t.Fatalf("%s=%v want=1", reason, got)
+		if counts[reason] != 1 {
+			t.Fatalf("%s=%d want=1", reason, counts[reason])
 		}
 	}
 	if calls != 2 {
@@ -158,21 +152,14 @@ func TestStandingQuoteSubmissionErrorsCountActualBatchPairs(t *testing.T) {
 	}
 }
 
-func TestStandingQuoteRejectionsBoundUntrustedLabels(t *testing.T) {
-	reg := prometheus.NewRegistry()
-	metrics, err := newLIFIMetrics(reg, nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	metrics.quotes.routes = []route{testQuoteRoute()}
-	s := &Solver{metrics: metrics}
+func TestStandingQuoteRejectionsExcludeArbitraryPairsWithoutMetrics(t *testing.T) {
+	events, write := standingObservationLogger(t)
+	ctx := observability.WithLogger(t.Context(), funcr.NewJSON(write, funcr.Options{Verbosity: 1}))
+	s := &Solver{cfg: testLifiConfig()}
 	for i := int64(1); i <= 1000; i++ {
-		s.observeStandingQuoteRejection(t.Context(), common.BigToAddress(big.NewInt(i)), common.BigToAddress(big.NewInt(i+1)), "arbitrary error")
+		s.observeStandingQuoteRejection(ctx, common.BigToAddress(big.NewInt(i)), common.BigToAddress(big.NewInt(i+1)), "arbitrary error", nil)
 	}
-	if got := testutil.CollectAndCount(metrics.quotes.rejections); got != 1 {
-		t.Fatalf("unbounded series=%d", got)
-	}
-	if got := testutil.ToFloat64(metrics.quotes.rejections.WithLabelValues("other", "other", "unknown")); got != 1000 {
-		t.Fatalf("foreign count=%v", got)
+	if len(*events) != 0 {
+		t.Fatalf("arbitrary pairs leaked business detail: %v", *events)
 	}
 }
