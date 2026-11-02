@@ -43,7 +43,6 @@ solvers:
       stateDir: /persistent/merkle-state
       curator:
         url: https://curator-backend.example.invalid/api/v1
-        # apiKeyEnv: CURATOR_API_TOKEN
       strategies:
         - "0x0000000000000000000000000000000000000010" # deployed RecipeExecutor
 ```
@@ -92,7 +91,7 @@ a native-value leaf for recipe execution remains rejected.
 Polling is fixed at 15 seconds, operation timeout at 30 seconds, strategy cadence at
 one minute and the recipe cache at 16 MiB. YAML fields `pollInterval` and
 `operationTimeout` are rejected, including values equal to these fixed limits.
-Curator settings accept only `url` and `apiKeyEnv`. Its HTTP timeout is fixed at
+Curator settings accept only `url`. Its HTTP timeout is fixed at
 10 seconds and response limit at 2 MiB; `timeoutSeconds` and `maxResponseBytes`
 are rejected even when set to zero or those fixed limits.
 

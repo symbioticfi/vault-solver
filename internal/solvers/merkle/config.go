@@ -10,7 +10,6 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/vault-solver/internal/merklehost"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
@@ -49,7 +48,7 @@ func parseConfig(node yaml.Node) (config, error) {
 	if raw.StateDir == "" || len(raw.Strategies) == 0 || len(raw.Strategies) > 256 {
 		return config{}, errors.New("merkle stateDir and 1..256 strategies required")
 	}
-	if err := permissions.ValidateConfig(raw.Curator.HTTPConfig()); err != nil {
+	if err := permissions.ValidateURL(raw.Curator.URL); err != nil {
 		return config{}, err
 	}
 	cfg := config{mode: raw.Mode, stateDir: raw.StateDir, curator: raw.Curator}
@@ -72,11 +71,11 @@ func parseConfig(node yaml.Node) (config, error) {
 // Bind derived identity and the shared source to existing recovery guards.
 func strategyRevision(strategy keeper.Config, curator merklehost.Curator, caller common.Address) (string, error) {
 	raw, err := json.Marshal(struct {
-		Policy   string                `json:"policy"`
-		Strategy keeper.Config         `json:"strategy"`
-		Curator  protocolio.HTTPConfig `json:"curator"`
-		Caller   common.Address        `json:"caller"`
-	}{runtimePolicy, strategy, curator.HTTPConfig(), caller})
+		Policy   string             `json:"policy"`
+		Strategy keeper.Config      `json:"strategy"`
+		Curator  merklehost.Curator `json:"curator"`
+		Caller   common.Address     `json:"caller"`
+	}{runtimePolicy, strategy, curator, caller})
 	if err != nil {
 		return "", errors.Errorf("merkle strategy identity: %w", err)
 	}

@@ -4,7 +4,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/vault-solver/internal/merklehost"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
@@ -48,14 +47,14 @@ func (c Config) Validate() error {
 	if c.RecipeExecutor == (common.Address{}) || c.Executor == (common.Address{}) {
 		return errors.New("executor and recipeExecutor must be nonzero")
 	}
-	if err := permissions.ValidateConfig(protocolio.HTTPConfig{URL: c.BackendURL, TimeoutSeconds: permissions.HostTimeoutSeconds, MaxResponseBytes: permissions.HostMaxResponseBytes}); err != nil {
+	if err := permissions.ValidateURL(c.BackendURL); err != nil {
 		return errors.Errorf("backendUrl: %w", err)
 	}
 	if !c.QuoteOnly {
 		if c.StateDir == "" {
 			return errors.New("recipeExecutor requires stateDir")
 		}
-		if err := permissions.ValidateConfig(c.Curator.HTTPConfig()); err != nil {
+		if err := permissions.ValidateURL(c.Curator.URL); err != nil {
 			return errors.Errorf("curator: %w", err)
 		}
 	}

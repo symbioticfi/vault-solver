@@ -95,7 +95,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 	runtime := &mintProvider{API: api, Chain: deps.Chain}
 	strategy.Providers = []provider.Provider{runtime}
-	source, err := cfg.Curator.PermissionSource(deps.Chain, operationTimeout)
+	source, err := cfg.Curator.PermissionSource(deps.Chain)
 	if err != nil {
 		return nil, err
 	}

@@ -8,7 +8,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
-	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/vault-solver/internal/merklehost"
 
 	"gopkg.in/yaml.v3"
@@ -79,7 +78,6 @@ func TestRevisionBindsDerivedIdentityAndPermissionSource(t *testing.T) {
 		"source": func(_ *keeper.Config, c *merklehost.Curator, _ *common.Address) {
 			c.URL = "http://other.invalid/api/v1"
 		},
-		"credential": func(_ *keeper.Config, c *merklehost.Curator, _ *common.Address) { c.APIKeyEnv = "OTHER_CURATOR_KEY" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, c, owner := strategy, cfg.curator, caller
@@ -117,6 +115,7 @@ func TestCuratorTransportUsesFixedEffectivePolicy(t *testing.T) {
 		{"omitted", "", false},
 		{"zero timeout", "  timeoutSeconds: 0\n", true},
 		{"zero bound", "  maxResponseBytes: 0\n", true},
+		{"API key", "  apiKeyEnv: CURATOR_TEST_TOKEN\n", true},
 		{"fixed timeout", "  timeoutSeconds: 10\n", true},
 		{"fixed bound", "  maxResponseBytes: 2097152\n", true},
 		{"different timeout", "  timeoutSeconds: 11\n", true},
@@ -134,8 +133,8 @@ func TestCuratorTransportUsesFixedEffectivePolicy(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if cfg.curator.HTTPConfig().TimeoutSeconds != permissions.HostTimeoutSeconds || cfg.curator.HTTPConfig().MaxResponseBytes != permissions.HostMaxResponseBytes {
-				t.Fatalf("effective curator policy %+v", cfg.curator)
+			if cfg.curator.URL != "http://127.0.0.1:1/api/v1" {
+				t.Fatalf("curator URL changed: %+v", cfg.curator)
 			}
 		})
 	}

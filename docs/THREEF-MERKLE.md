@@ -44,7 +44,7 @@ fences at startup before any solver runs and persists every signed original and
 replacement before broadcast; the host drains the shared sender before closing stores.
 
 Polling and mint strategy cadence are 15 seconds, operations are bounded to 30 seconds,
-and the shared recipe cache holds the configured recipe within 16 MiB. Curator `url` and optional `apiKeyEnv` use the SDK's
+and the shared recipe cache holds the configured recipe within 16 MiB. The public Curator API uses `url` with the SDK's
 10-second/2-MiB limits. Existing live commitments are maintained first. Each pass then
 checks every relevant open/solvable auction without a blocking offer from this maker,
 matching its funding asset to the configured markets. Positive and negative policy

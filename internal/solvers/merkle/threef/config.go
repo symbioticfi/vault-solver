@@ -9,7 +9,6 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
-	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/vault-solver/internal/merklehost"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
@@ -54,7 +53,7 @@ func parseConfig(node yaml.Node) (config, error) {
 		return config{}, err
 	}
 	cfg.Broker = broker.Hex()
-	if err := permissions.ValidateConfig(cfg.Curator.HTTPConfig()); err != nil {
+	if err := permissions.ValidateURL(cfg.Curator.URL); err != nil {
 		return config{}, err
 	}
 	if err := validateAPIConfig(cfg.apiConfig()); err != nil {
@@ -64,12 +63,12 @@ func parseConfig(node yaml.Node) (config, error) {
 }
 func strategyRevision(strategy keeper.Config, cfg config, caller common.Address) (string, error) {
 	raw, err := json.Marshal(struct {
-		Policy   string                `json:"policy"`
-		Strategy keeper.Config         `json:"strategy"`
-		Curator  protocolio.HTTPConfig `json:"curator"`
-		API      apiConfig             `json:"api"`
-		Caller   common.Address        `json:"caller"`
-	}{"1", strategy, cfg.Curator.HTTPConfig(), cfg.apiConfig(), caller})
+		Policy   string             `json:"policy"`
+		Strategy keeper.Config      `json:"strategy"`
+		Curator  merklehost.Curator `json:"curator"`
+		API      apiConfig          `json:"api"`
+		Caller   common.Address     `json:"caller"`
+	}{"1", strategy, cfg.Curator, cfg.apiConfig(), caller})
 	if err != nil {
 		return "", errors.Errorf("threef-merkle strategy identity: %w", err)
 	}

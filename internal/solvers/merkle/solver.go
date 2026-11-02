@@ -88,7 +88,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 			return nil, err
 		}
 	}
-	source, err := cfg.curator.PermissionSource(deps.Chain, defaultOperationTimeout)
+	source, err := cfg.curator.PermissionSource(deps.Chain)
 	if err != nil {
 		return nil, err
 	}
