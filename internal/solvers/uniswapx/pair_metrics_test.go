@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/prometheus/client_golang/prometheus"
@@ -106,7 +107,7 @@ func TestSupportedPairMetricAuthorityNoArbitraryGrowth(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.cfg.TokenPolicy = policy
-	s.quoteState.Store(&quoteState{inventory: []liquidlane.Inventory{{Route: liquidlane.Route{TokenIn: newIn, TokenOut: out}}}})
+	s.quoteState.Store(&quoteState{expiresAt: time.Now().Add(time.Minute), inventory: []liquidlane.Inventory{{Route: liquidlane.Route{TokenIn: newIn, TokenOut: out}}}})
 	if !s.metricPairSupported(newIn, out) || s.metricPairSupported(out, newIn) {
 		t.Fatal("new trusted route direction incorrect")
 	}
