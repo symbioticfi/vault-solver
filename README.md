@@ -884,14 +884,12 @@ on another replica. `fill/mined_success` is a successful owned mined receipt, in
 yet at configured confirmation depth. Existing txmanager ownership/dedup applies; these are neither
 submission counts nor globally unique economic wins. LI.FI `standing_quote` counts acknowledged
 changed records (`published`/`withdrawn`) and local rejection attempts (`rejected/<reason>`), including
-retries, not upstream client quote responses. `discount_api_error` distinguishes failed LI.FI discount
-lookup for a known physical pair from missing inventory; publication and strategy behavior are unchanged.
-Scrape loss, restarts and replica ownership still limit business totals; log identities permit
-external dedup. Deployment is a scrape/resource identity,
+retries, not upstream client quote responses. Scrape loss, restarts and replica ownership still limit
+business totals; log identities permit external dedup. Deployment is a scrape/resource identity,
 not an order-ID label. Optional startup symbol/decimals warm-up is cancellable background work and
-cannot hold the HTTP/order loops behind a symbol RPC. Each newly warmed trusted token emits one
-`trusted token metadata` log with chain/address and only verified symbol/decimals, so consumers can
-learn names without token-labelled metadata metrics. Unknown fields stay absent.
+cannot hold the HTTP/order loops behind a symbol RPC. Newly warmed trusted tokens emit
+`trusted token metadata` with chain/address and verified fields; unknown fields stay absent.
+LI.FI `discount_api_error` distinguishes a failed lookup for physical inventory from no inventory.
 
 UniswapX `quote returned` and RFQ `quote response returned` prove a successful local response write,
 not client receipt. Planner decisions, failed writes, assignments and confirmed fills are distinct
@@ -901,12 +899,9 @@ or PnL. Sampling, debug level, ingestion and retention can make event totals inc
 
 Configured policy/adapters and the existing API/route validation remain eligibility authorities.
 `pairInScope=true` names the diagnostic proof in `pairScopeSource`: current validated
-inventory/candidates, UniswapX's validated configured/current-refresh routes, or LI.FI's revalidated
-configured routes.
-UniswapX dynamic proof expires with quote state; LI.FI refreshes optional scope in the background,
-expires it on discovery failure and removes withdrawn adapter directions without excluding zero capacity.
-This is not a new trading rule or complete configured token list; missing validation can still leave
-eligible directions unproven.
+inventory/candidates or validated routes, including zero capacity. UniswapX dynamic proof expires
+with quote state; LI.FI revalidates and ages configured-route proof. This is not a new trading rule or
+complete configured token list. Missing validation can still leave eligible directions unproven.
 Metadata never establishes support. Optional metadata reads reuse the chain-scoped decimals cache;
 startup and new trusted tokens are enriched asynchronously. Rejected arbitrary inputs trigger no optional
 metadata lookup, and unknown decimals are never assumed to be18.

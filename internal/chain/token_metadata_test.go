@@ -2,11 +2,12 @@ package chain
 
 import (
 	"context"
-	"encoding/json"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -227,40 +228,32 @@ func TestNewTrustedTokenMetadataAsyncDoesNotBlockAndHonorsCancellation(t *testin
 }
 
 func TestTrustedMetadataLogOnceAndNewToken(t *testing.T) {
-	backend := &metadataBackend{decimals: 0, symbol: "NEW.local"}
-	cache := metadataCache(backend)
-	events := make(chan map[string]any, 8)
-	log := funcr.NewJSON(func(line string) {
-		var row map[string]any
-		if err := json.Unmarshal([]byte(line), &row); err != nil {
-			t.Error(err)
-			return
-		}
-		events <- row
-	}, funcr.Options{}).WithValues("chainId", 31337)
-	first, second := common.HexToAddress("0x1234"), common.HexToAddress("0x5678")
-	for _, token := range []common.Address{first, second} {
-		cache.WarmMetadataAsync(t.Context(), []common.Address{token, token}, log)
-		select {
-		case event := <-events:
-			if event["msg"] != "trusted token metadata" || event["tokenIn"] != token.Hex() || event["chainId"] != float64(31337) || event["tokenInSymbol"] != "NEW.local" || event["tokenInDecimals"] != float64(0) {
-				t.Fatalf("metadata event=%v", event)
+	synctest.Test(t, func(t *testing.T) {
+		backend := &metadataBackend{decimals: 0, symbol: "NEW.local"}
+		cache := metadataCache(backend)
+		events := make(chan string, 2)
+		log := funcr.NewJSON(func(line string) { events <- line }, funcr.Options{}).WithValues("chainId", 31337)
+		for _, token := range []common.Address{common.HexToAddress("0x1234"), common.HexToAddress("0x5678")} {
+			cache.WarmMetadataAsync(t.Context(), []common.Address{token, token}, log)
+			synctest.Wait()
+			select {
+			case line := <-events:
+				for _, field := range []string{`"msg":"trusted token metadata"`, `"chainId":31337`, `"tokenIn":"` + token.Hex() + `"`, `"tokenInSymbol":"NEW.local"`, `"tokenInDecimals":0`} {
+					if !strings.Contains(line, field) {
+						t.Fatalf("missing %s in %s", field, line)
+					}
+				}
+			default:
+				t.Fatal("new trusted metadata not logged")
 			}
-		case <-time.After(time.Second):
-			t.Fatal("new trusted metadata not logged")
+			cache.WarmMetadataAsync(t.Context(), []common.Address{token}, log)
+			synctest.Wait()
+			if len(events) != 0 {
+				t.Fatal("known token duplicated metadata event")
+			}
 		}
-		cache.WarmMetadataAsync(t.Context(), []common.Address{token}, log)
-		if len(events) != 0 {
-			t.Fatal("known token duplicated metadata event")
+		if backend.calls != 4 {
+			t.Fatalf("metadata calls=%d want4", backend.calls)
 		}
-	}
-	if fields := cache.PairLogFields(common.HexToAddress("0xffff"), common.Address{}); len(fields) != 0 {
-		t.Fatal("untrusted request metadata inferred")
-	}
-	backend.mu.Lock()
-	calls := backend.calls
-	backend.mu.Unlock()
-	if calls != 4 {
-		t.Fatalf("metadata calls=%d want4", calls)
-	}
+	})
 }

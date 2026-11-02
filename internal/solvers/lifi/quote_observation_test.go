@@ -197,7 +197,7 @@ func TestStandingQuoteRejectionDetailsRequireCurrentDirection(t *testing.T) {
 	events, write := standingObservationLogger(t)
 	ctx := observability.WithLogger(t.Context(), funcr.NewJSON(write, funcr.Options{Verbosity: 1}))
 	inventory := []liquidlane.Inventory{{Route: r}, {Route: newRoute}, {Route: forbidden}}
-	s.observeQuoteBuildRejections(ctx, inventory, nil, "strategy_error", nil)
+	s.observeQuoteBuildRejections(ctx, inventory, nil, "strategy_error")
 	if len(*events) != 2 {
 		t.Fatalf("current supported rejection details=%v", *events)
 	}
@@ -207,12 +207,12 @@ func TestStandingQuoteRejectionDetailsRequireCurrentDirection(t *testing.T) {
 		}
 	}
 	// Fresh structural proof remains diagnostic at zero capacity; old inventory cannot renew it.
-	s.observeQuoteBuildRejections(ctx, nil, nil, "snapshot_error", nil)
+	s.observeQuoteBuildRejections(ctx, nil, nil, "snapshot_error")
 	if len(*events) != 4 {
 		t.Fatalf("fresh supported failure omitted: %v", *events)
 	}
 	s.pairRoutes.Store(nil)
-	s.observeQuoteBuildRejections(ctx, inventory, nil, "snapshot_error", nil)
+	s.observeQuoteBuildRejections(ctx, inventory, nil, "snapshot_error")
 	if len(*events) != 4 {
 		t.Fatal("withdrawn support reused old inventory")
 	}
