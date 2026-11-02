@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"io"
+	"slices"
 	"sync"
 	"time"
 
@@ -41,7 +43,7 @@ func newRunCmd() *cobra.Command {
 
 // runBot wires the dependency graph and runs the selected solver until ctx is cancelled. The log
 // level is resolved from config, overridden by the --debug flag when it was explicitly set.
-func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool) error {
+func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool) (err error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -163,6 +165,10 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	}
 	solvers := make([]solver.Solver, 0, len(cfg.Solvers))
 	solverLogs := make([]logr.Logger, 0, len(cfg.Solvers))
+	// Registered before the sender drain defer: close persistent resources only
+	// after accepted transaction lifecycles stop invoking callbacks.
+	var closers []io.Closer
+	defer func() { err = errors.Join(err, closeSolvers(closers)) }()
 	requiresTxManager := false
 	for _, sc := range cfg.Solvers {
 		solverDeps := deps
@@ -172,6 +178,9 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		slv, err := solver.New(sc.Name, sc.Config, solverDeps)
 		if err != nil {
 			return err
+		}
+		if closer, ok := slv.(io.Closer); ok {
+			closers = append(closers, closer)
 		}
 		solvers = append(solvers, slv)
 		solverLogs = append(solverLogs, solverDeps.Log)
@@ -329,4 +338,14 @@ func horizonConfig(c config.HorizonFeeConfig) txmanager.HorizonConfig {
 		GasHeadroomBps:            c.GasHeadroomBps,
 		FallbackGasHeadroomBps:    c.FallbackGasHeadroomBps,
 	}
+}
+
+func closeSolvers(closers []io.Closer) error {
+	var failures []error
+	for _, closer := range slices.Backward(closers) {
+		if err := closer.Close(); err != nil {
+			failures = append(failures, errors.Errorf("close solver resources: %w", err))
+		}
+	}
+	return errors.Join(failures...)
 }

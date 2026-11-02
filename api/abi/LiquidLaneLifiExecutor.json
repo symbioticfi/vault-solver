@@ -306,6 +306,223 @@
             "internalType": "bytes"
           }
         ]
+      },
+      {
+        "name": "calls",
+        "type": "tuple[]",
+        "internalType": "struct IExecutor.Call[]",
+        "components": [
+          {
+            "name": "target",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "value",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "data",
+            "type": "bytes",
+            "internalType": "bytes"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "finaliseWithCurrentTimestamp",
+    "inputs": [
+      {
+        "name": "order",
+        "type": "tuple",
+        "internalType": "struct IInputSettler.StandardOrder",
+        "components": [
+          {
+            "name": "user",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "nonce",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "originChainId",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "expires",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "fillDeadline",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "inputOracle",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "inputs",
+            "type": "uint256[2][]",
+            "internalType": "uint256[2][]"
+          },
+          {
+            "name": "outputs",
+            "type": "tuple[]",
+            "internalType": "struct MandateOutput[]",
+            "components": [
+              {
+                "name": "oracle",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "settler",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "chainId",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "token",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "amount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "recipient",
+                "type": "bytes32",
+                "internalType": "bytes32"
+              },
+              {
+                "name": "callbackData",
+                "type": "bytes",
+                "internalType": "bytes"
+              },
+              {
+                "name": "context",
+                "type": "bytes",
+                "internalType": "bytes"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "routes",
+        "type": "tuple[]",
+        "internalType": "struct ILiquidLaneLifiExecutor.FillRoute[]",
+        "components": [
+          {
+            "name": "adapter",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "amountIn",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "amountOut",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      },
+      {
+        "name": "discountRoutes",
+        "type": "tuple[]",
+        "internalType": "struct ILiquidLaneLifiExecutor.DiscountRoute[]",
+        "components": [
+          {
+            "name": "adapter",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "amountIn",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "discountSwap",
+            "type": "tuple",
+            "internalType": "struct ILiquidLaneAdapter.DiscountSwap",
+            "components": [
+              {
+                "name": "discount",
+                "type": "tuple",
+                "internalType": "struct ILiquidLaneAdapter.Discount",
+                "components": [
+                  {
+                    "name": "tokenToRedeem",
+                    "type": "address",
+                    "internalType": "address"
+                  },
+                  {
+                    "name": "discount",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                  },
+                  {
+                    "name": "signer",
+                    "type": "address",
+                    "internalType": "address"
+                  },
+                  {
+                    "name": "protocol",
+                    "type": "address",
+                    "internalType": "address"
+                  },
+                  {
+                    "name": "nonce",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                  },
+                  {
+                    "name": "deadline",
+                    "type": "uint48",
+                    "internalType": "uint48"
+                  }
+                ]
+              },
+              {
+                "name": "signerSignature",
+                "type": "bytes",
+                "internalType": "bytes"
+              },
+              {
+                "name": "protocolDeadline",
+                "type": "uint48",
+                "internalType": "uint48"
+              }
+            ]
+          },
+          {
+            "name": "protocolSignature",
+            "type": "bytes",
+            "internalType": "bytes"
+          }
+        ]
       }
     ],
     "outputs": [],
@@ -505,6 +722,38 @@
       }
     ],
     "anonymous": false
+  },
+  {
+    "type": "error",
+    "name": "AddressEmptyCode",
+    "inputs": [
+      {
+        "name": "target",
+        "type": "address",
+        "internalType": "address"
+      }
+    ]
+  },
+  {
+    "type": "error",
+    "name": "FailedCall",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "InsufficientBalance",
+    "inputs": [
+      {
+        "name": "balance",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "needed",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
   },
   {
     "type": "error",

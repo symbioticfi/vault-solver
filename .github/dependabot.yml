@@ -33,7 +33,7 @@ updates:
 
   # Enable version updates for Docker
   - package-ecosystem: "docker"
-    directory: "/"
+    directory: "/deploy"
     schedule:
       interval: "weekly"
     cooldown:

@@ -39,6 +39,7 @@ func testServer() *server {
 }
 
 func validQuoteBody() quoteRequest {
+	decimals := 18
 	return quoteRequest{
 		RequestID: "11111111-1111-4111-8111-111111111111", TokenInChainID: 1, TokenOutChainID: 1,
 		Swapper: "0x0000000000000000000000000000000000000099",
@@ -47,7 +48,8 @@ func validQuoteBody() quoteRequest {
 		QuoteID: "22222222-2222-4222-8222-222222222222",
 		Adapters: []quoteAdapter{{
 			Adapter: vlt.Hex(), Asset: tOut.Hex(), AssetDecimals: 6,
-			MaxAssets: "10000000", Discount: "0",
+			Account: vlt.Hex(), Price: "1000000000000000000", TokenInDecimals: &decimals,
+			BlockNumber: "1", MaxAssets: "10000000", Discount: "0",
 		}},
 	}
 }
@@ -220,7 +222,7 @@ func TestServer_QuoteWhitelist(t *testing.T) {
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
 	rogueAdapter := quoteAdapter{
 		Adapter: rogue.Hex(), Asset: tOut.Hex(), AssetDecimals: 6,
-		MaxAssets: "10000000", Discount: "0",
+		BlockNumber: "1", MaxAssets: "10000000", Discount: "0",
 	}
 	cases := map[string]struct {
 		whitelist adapterWhitelist
@@ -269,6 +271,64 @@ func TestServer_QuoteWhitelist(t *testing.T) {
 			}
 			if resp.AmountOut == "" {
 				t.Fatalf("quote response missing amountOut: %+v", resp)
+			}
+		})
+	}
+}
+
+func TestServerConnectorUsesLocalExecutorWithoutWireField(t *testing.T) {
+	srv := testServer()
+	srv.quotes.recipeExecutor = common.HexToAddress("0x43")
+	srv.quotes.discountsEnabled = true
+	srv.quotes.whitelist = adapterWhitelist{vlt: true}
+	body := validQuoteBody()
+	id := "0x" + strings.Repeat("ab", 32)
+	body.Adapters[0].DiscountID = &id
+	body.Adapters[0].DiscountPrecision = "100000000"
+	body.Adapters = append(body.Adapters, quoteAdapter{Adapter: common.HexToAddress("0xbad").Hex(), Asset: tOut.Hex(), BlockNumber: "1", MaxAssets: "1000", Discount: "0"})
+	rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, body)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("local recipe quote = %d: %s", rr.Code, rr.Body.String())
+	}
+	// The HTTP schema must reject an upstream attempt to pick an execution target.
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := strings.Replace(string(raw), `"discountPrecision":"100000000"`, `"recipeExecutor":"0x000000000000000000000000000000000000dead","discountPrecision":"100000000"`, 1)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/quote", strings.NewReader(injected))
+	req.Header.Set(sharedSecretHeader, testSecret)
+	rr = httptest.NewRecorder()
+	srv.handler().ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("wire executor = %d: %s", rr.Code, rr.Body.String())
+	}
+	spec := do(t, srv.handler(), http.MethodGet, "/openapi.json", "", nil)
+	if strings.Contains(spec.Body.String(), `"recipeExecutor"`) {
+		t.Fatal("executor leaked into quote schema")
+	}
+}
+
+func TestQuoteRequiresCapacityObservationBlock(t *testing.T) {
+	for name, block := range map[string]any{"missing": nil, "empty": "", "malformed": "0x7b"} {
+		t.Run(name, func(t *testing.T) {
+			encoded, err := json.Marshal(validQuoteBody())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(encoded, &body); err != nil {
+				t.Fatal(err)
+			}
+			adapter := body["adapters"].([]any)[0].(map[string]any)
+			if block == nil {
+				delete(adapter, "blockNumber")
+			} else {
+				adapter["blockNumber"] = block
+			}
+			rr := do(t, testServer().handler(), http.MethodPost, "/quote", testSecret, body)
+			if rr.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want 422 for %s blockNumber: %s", rr.Code, name, rr.Body.String())
 			}
 		})
 	}

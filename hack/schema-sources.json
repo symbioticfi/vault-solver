@@ -22,7 +22,7 @@
       "vendored": "openapi/3f-bf.openapi.json",
       "mode": "auto",
       "fetch": "json",
-      "url": "https://bf.dev.gcp.3f.xyz/docs/openapi.json",
+      "url": "https://bf.3f.xyz/docs/openapi.json",
       "refresh": "make refresh-openapi && make refresh-3f-client"
     },
     {

@@ -873,7 +873,7 @@ func TestOrderFeedDialCarriesTraceparent(t *testing.T) {
 		_ = conn.Close()
 	}))
 	defer server.Close()
-	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
+	feed := newTestOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
 
 	_, err := feed.watchOnce(t.Context(), orderFeedConnectionHooks{}, func(context.Context, orderMessage) {})
 	if err == nil {

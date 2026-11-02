@@ -131,7 +131,7 @@ func (m *apiMonitor) refresh(ctx context.Context) {
 	for id := range apiSnap.markets {
 		ids = append(ids, id)
 	}
-	apiPositions, err := m.api.PositionsByMarket(ctx, ids, m.maxPositions, &m.maxHF)
+	apiPositions, err := m.api.PositionsByMarket(ctx, m.chainID, ids, m.maxPositions, &m.maxHF)
 	if err != nil {
 		observability.Log(ctx).Error(err, "morpho API position refresh failed; keeping cache")
 		return

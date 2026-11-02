@@ -2,7 +2,6 @@ package discounts
 
 import (
 	"math/big"
-	"strconv"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -25,7 +24,7 @@ type Offer struct {
 	Discount  *big.Int
 	Deadline  int64
 	MaxAssets *big.Int
-	// BlockNumber is the block MaxAssets was read at; zero when the backend did not report it.
+	// BlockNumber is the block MaxAssets was read at.
 	BlockNumber uint64
 }
 
@@ -83,17 +82,11 @@ func ParseOffer(item ListItem) (*Offer, error) {
 	if item.Deadline <= 0 {
 		return nil, errors.New("deadline: must be positive")
 	}
-	var blockNumber uint64
-	if item.BlockNumber != "" {
-		if blockNumber, err = strconv.ParseUint(item.BlockNumber, 10, 64); err != nil {
-			return nil, errors.Errorf("blockNumber: invalid decimal %q", item.BlockNumber)
-		}
-	}
 	return &Offer{
 		DiscountID: id, Adapter: adapter, TokenToRedeem: tokenToRedeem,
 		Collateral: collateral, CollateralDecimals: item.CollateralDecimals,
 		Discount: discount, Deadline: item.Deadline,
-		MaxAssets: maxAssets, BlockNumber: blockNumber,
+		MaxAssets: maxAssets, BlockNumber: item.BlockNumber,
 	}, nil
 }
 

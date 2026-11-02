@@ -141,7 +141,7 @@ func unpackFinaliseCalldata(t *testing.T, calldata []byte) (
 	if err != nil {
 		t.Fatalf("parse executor ABI: %v", err)
 	}
-	method := executorABI.Methods["finaliseWithCurrentTimestamp"]
+	method := executorABI.Methods["finaliseWithCurrentTimestamp0"]
 	args, err := method.Inputs.Unpack(calldata[4:])
 	if err != nil {
 		t.Fatalf("unpack finaliseWithCurrentTimestamp: %v", err)

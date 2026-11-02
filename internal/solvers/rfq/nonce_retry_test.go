@@ -142,7 +142,7 @@ func TestExecutionNonceRetryRefreshesDiscountCalldata(t *testing.T) {
 	if !txm.lastReq.Deadline.Equal(time.Unix(190, 0)) {
 		t.Fatalf("retry deadline = %v, want refreshed protocol deadline", txm.lastReq.Deadline)
 	}
-	args, err := executorABI.Methods["fill"].Inputs.Unpack(txm.lastReq.Data[4:])
+	args, err := executorABI.Methods["fill1"].Inputs.Unpack(txm.lastReq.Data[4:])
 	if err != nil {
 		t.Fatal(err)
 	}

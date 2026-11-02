@@ -118,7 +118,7 @@ func executionConsumedNonceRebuildsOnlyAfterFreshOpenPoll(t *testing.T, outcome 
 	if bytes.Equal(first, txm.lastReq.Data) {
 		t.Fatal("retry replayed old calldata after the executable signature changed")
 	}
-	args, err := executorABI.Methods["fill"].Inputs.Unpack(txm.lastReq.Data[4:])
+	args, err := executorABI.Methods["fill1"].Inputs.Unpack(txm.lastReq.Data[4:])
 	if err != nil {
 		t.Fatal(err)
 	}

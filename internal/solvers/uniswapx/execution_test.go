@@ -159,7 +159,7 @@ func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
 			if err != nil {
 				return nil, err
 			}
-			values, err := parsed.Methods["execute"].Inputs.Unpack(call.Data[4:])
+			values, err := parsed.Methods["execute0"].Inputs.Unpack(call.Data[4:])
 			if err != nil {
 				return nil, err
 			}
@@ -294,7 +294,7 @@ func TestStartFillRepricesPartialDiscountLeg(t *testing.T) {
 			if err != nil {
 				return nil, err
 			}
-			values, err := parsed.Methods["execute"].Inputs.Unpack(call.Data[4:])
+			values, err := parsed.Methods["execute0"].Inputs.Unpack(call.Data[4:])
 			if err != nil {
 				return nil, err
 			}
@@ -496,7 +496,7 @@ func newDirectExecutionFixture(t *testing.T) *directExecutionFixture {
 			if err != nil {
 				return nil, err
 			}
-			values, err := parsed.Methods["execute"].Inputs.Unpack(call.Data[4:])
+			values, err := parsed.Methods["execute0"].Inputs.Unpack(call.Data[4:])
 			if err != nil {
 				return nil, err
 			}
@@ -1109,7 +1109,7 @@ func TestAbandonedFillAllowsFreshDifferentOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	args, err := parsed.Methods["execute"].Inputs.Unpack(fixture.txm.reqs[1].Data[4:])
+	args, err := parsed.Methods["execute0"].Inputs.Unpack(fixture.txm.reqs[1].Data[4:])
 	if err != nil {
 		t.Fatal(err)
 	}

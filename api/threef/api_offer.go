@@ -1,7 +1,7 @@
 /*
 BF API Reference
 
-BP subdomain API documentation for bf.dev.gcp.3f.xyz
+BP subdomain API documentation for bf.3f.xyz  ## API versions  V1 and v2 share the endpoint list below. Choose **v1** in the server selector for `/v1/...`, or choose **v2** and enter a supported chain ID for `/v2/chains/{chainId}/...`. Request examples update with your selection. The `X-3F-Chain-Id` response header identifies the backend that served the request.  Payloads and EIP-712 versions are unchanged. Use the requested chain’s contracts and credentials; example addresses and chain IDs are illustrative. Guardian HTTP signatures still use the internal `/v1/...` path, including its query string. `/v2/chains/{chainId}/v1/...` remains a compatibility alias.
 
 API version: 0.0.1
 */
@@ -115,7 +115,7 @@ func (a *OfferAPIService) OfferControllerCancelV1Execute(r ApiOfferControllerCan
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/v1/offer/cancel"
+	localVarPath := localBasePath + "/offer/cancel"
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -388,7 +388,7 @@ func (a *OfferAPIService) OfferControllerCreateV1Execute(r ApiOfferControllerCre
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/v1/offer"
+	localVarPath := localBasePath + "/offer"
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -473,7 +473,7 @@ func (r ApiOfferControllerGetByIdV1Request) Maker(maker string) ApiOfferControll
 	return r
 }
 
-// Chain ID for signature verification
+// Chain ID for signature verification; must equal this deployment&#39;s chain ID
 func (r ApiOfferControllerGetByIdV1Request) ChainId(chainId float32) ApiOfferControllerGetByIdV1Request {
 	r.chainId = &chainId
 	return r
@@ -534,7 +534,7 @@ func (a *OfferAPIService) OfferControllerGetByIdV1Execute(r ApiOfferControllerGe
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/v1/offer/{id}"
+	localVarPath := localBasePath + "/offer/{id}"
 	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -630,7 +630,7 @@ func (r ApiOfferControllerGetV1Request) Maker(maker string) ApiOfferControllerGe
 	return r
 }
 
-// Chain ID for signature verification
+// Chain ID for signature verification; must equal this deployment&#39;s chain ID
 func (r ApiOfferControllerGetV1Request) ChainId(chainId float32) ApiOfferControllerGetV1Request {
 	r.chainId = &chainId
 	return r
@@ -724,7 +724,7 @@ func (a *OfferAPIService) OfferControllerGetV1Execute(r ApiOfferControllerGetV1R
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/v1/offer"
+	localVarPath := localBasePath + "/offer"
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}

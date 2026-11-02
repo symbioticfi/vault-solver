@@ -333,7 +333,7 @@ an owned attempt, not a discovered winning transaction or proof of successful in
 20,000 ms), including response-body reads, on all read/write clients. Shorter caller
 deadlines remain authoritative and are shared across remaining fallback endpoints. Fee/receipt read
 budgets and `txManager.broadcastTimeoutMs` are unchanged. This controls the solver's wait for an
-endpoint such as eRPC, not eRPC's own upstream retry policy; WebSocket/IPC behavior is unchanged.
+endpoint such as eRPC, not eRPC's own upstream retry policy. All chain RPC endpoints use HTTP(S).
 Both `chain.Dial` and `chain.DialWithMetrics` accept the attempt timeout explicitly and use the
 same transport path; enabling metrics does not change how the timeout is selected.
 
@@ -504,6 +504,10 @@ Protocol order/bid nonces are not the shared sender's transaction nonce. Strateg
 returns decisions; it does not gain a signer, nonce manager or transaction-sending capability.
 
 ## 10. Verification and maintenance
+
+HTTP fallback attempts rebuild Authorization from each endpoint's own URL userinfo. They never inherit
+the primary's Basic credentials. URL redaction happens before stdout/Sentry in observability; transport
+errors retain their original identity for cancellation, nonce and RPC classification.
 
 Receipt tests cover independent RPC budgets, timer handling during blocked reads, new/old hashes,
 confirmation-time reorg recovery and teardown. Unit tests verify abandonment without a self-transfer,

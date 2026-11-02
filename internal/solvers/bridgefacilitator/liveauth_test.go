@@ -31,10 +31,10 @@ func TestLiveListOffers(t *testing.T) {
 
 	baseURL := os.Getenv("SOLVER_3F_BASE_URL")
 	if baseURL == "" {
-		baseURL = "https://bf.dev.gcp.3f.xyz"
+		baseURL = "https://bf.3f.xyz"
 	}
 
-	chainID := big.NewInt(11155111) // Sepolia; override for another chain
+	chainID := big.NewInt(1) // Ethereum mainnet; override for another chain
 	if v := os.Getenv("SOLVER_CHAIN_ID"); v != "" {
 		chainID, _ = new(big.Int).SetString(v, 10)
 	}

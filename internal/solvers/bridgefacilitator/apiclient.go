@@ -33,7 +33,7 @@ type apiClient struct {
 
 func newAPIClient(baseURL string, sgnr signer.Signer, chainID *big.Int, timeout time.Duration, log logr.Logger) *apiClient {
 	cfg := threef.NewConfiguration()
-	cfg.Servers = threef.ServerConfigurations{{URL: baseURL}}
+	cfg.Servers = threef.ServerConfigurations{{URL: strings.TrimRight(baseURL, "/") + cfg.Servers[0].URL}}
 	// Bound every call; the generated client otherwise uses http.DefaultClient (no timeout) and a hung
 	// request would stall the single solver loop, redemption scans included.
 	cfg.HTTPClient = &http.Client{Timeout: timeout, Transport: observability.TraceTransport(nil, "3f-api")}
