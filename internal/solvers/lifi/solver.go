@@ -6,6 +6,7 @@ import (
 	"context"
 	"math/big"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -58,7 +59,7 @@ type Solver struct {
 	discounts     discounts.Provider
 	metrics       *lifiMetrics
 
-	resolvedRoutes []route // immutable startup adapter directions, shared by observational callbacks
+	pairRoutes atomic.Pointer[pairRouteScope] // optional current proof; never used for trading
 }
 
 type chainReader interface {
@@ -225,7 +226,7 @@ func (s *Solver) Run(ctx context.Context) error {
 		"outputSettler", s.cfg.OutputSettler.Hex(),
 	)
 
-	s.resolvedRoutes = routes
+	s.setPairRoutes(routes)
 	s.quoteRefresh = make(chan struct{}, 1)
 	return s.runLoops(ctx, routes)
 }
@@ -236,8 +237,9 @@ func (s *Solver) runLoops(ctx context.Context, routes []route) error {
 	defer stopFeed()
 	quoteCtx, stopQuotes := context.WithCancel(ctx)
 	defer stopQuotes()
+	go s.observePairRoutes(quoteCtx, routes)
 	s.warmMetadata = func(tokens []common.Address) {
-		s.tokenMetadata.WarmMetadataAsync(quoteCtx, tokens, observability.Log(quoteCtx))
+		s.tokenMetadata.WarmMetadataAsync(quoteCtx, tokens, observability.Log(quoteCtx).WithValues("chainId", s.chainID))
 	}
 	var metadataTokens []common.Address
 	for token := range s.cfg.TokenPolicy.SingleRouteTokens() {

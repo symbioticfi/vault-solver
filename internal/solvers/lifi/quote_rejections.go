@@ -13,7 +13,7 @@ import (
 // Observe each trusted direction once per local refresh evaluation, irrespective of adapter count.
 // Resolved routes retain structural support at zero capacity; current inventory may add a newly
 // trusted direction. Missing inventory is distinct from a strategy declining an available pair.
-func (s *Solver) observeQuoteBuildRejections(ctx context.Context, inventory []liquidlane.Inventory, quotes []types.Quote, reason string) {
+func (s *Solver) observeQuoteBuildRejections(ctx context.Context, inventory []liquidlane.Inventory, quotes []types.Quote, reason string, unavailableDiscounts []liquidlane.Inventory) {
 	seen := make(map[[2]common.Address]bool)
 	observe := func(r route, hasInventory bool) {
 		if !s.cfg.TokenPolicy.Allows(r.TokenIn) {
@@ -34,6 +34,13 @@ func (s *Solver) observeQuoteBuildRejections(ctx context.Context, inventory []li
 			pairReason = "no_inventory"
 			if hasInventory {
 				pairReason = "strategy_declined"
+			} else {
+				for _, base := range unavailableDiscounts {
+					if base.TokenIn == r.TokenIn && base.TokenOut == r.TokenOut {
+						pairReason = "discount_api_error"
+						break
+					}
+				}
 			}
 		}
 		s.observeStandingQuoteRejection(ctx, r.TokenIn, r.TokenOut, pairReason, inventory)
@@ -41,7 +48,7 @@ func (s *Solver) observeQuoteBuildRejections(ctx context.Context, inventory []li
 	for _, item := range inventory {
 		observe(item.Route, true)
 	}
-	for _, r := range s.resolvedRoutes {
+	for _, r := range s.currentPairRoutes() {
 		observe(r, false)
 	}
 }
@@ -79,27 +86,27 @@ func (s *Solver) observeStandingQuoteRejection(ctx context.Context, in, out comm
 func boundedStandingQuoteReason(reason string) string {
 	switch reason {
 	case "lane_unavailable", "chain_time_error", "snapshot_error", "gas_price_error", "strategy_error",
-		"pair_out_of_scope", "no_inventory", "strategy_declined", "publish_error", "withdrawal_error":
+		"pair_out_of_scope", "no_inventory", "discount_api_error", "strategy_declined", "publish_error", "withdrawal_error":
 		return reason
 	default:
 		return "unknown"
 	}
 }
 
-// The existing resolved adapter slice proves structural direction even while capacity is zero.
-// Current validated inventory also admits newly discovered trusted directions; metadata is irrelevant.
+// Revalidated configured adapter direction survives zero capacity, but expires on discovery
+// failure and is replaced on removal. Old inventory cannot resurrect withdrawn route proof.
 func (s *Solver) pairScopeSource(in, out common.Address, inventory []liquidlane.Inventory) string {
 	if s.cfg == nil || !s.cfg.TokenPolicy.Allows(in) {
 		return ""
 	}
-	for _, item := range inventory {
-		if item.TokenIn == in && item.TokenOut == out {
-			return "current_inventory"
-		}
-	}
-	for _, route := range s.resolvedRoutes {
+	for _, route := range s.currentPairRoutes() {
 		if route.TokenIn == in && route.TokenOut == out {
-			return "resolved_route"
+			for _, item := range inventory {
+				if item.Route == route {
+					return "current_inventory"
+				}
+			}
+			return "current_configured_route"
 		}
 	}
 	return ""

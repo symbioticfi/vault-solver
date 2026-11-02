@@ -46,13 +46,16 @@ func newPairTestSolver(t *testing.T) (*Solver, *prometheus.Registry) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Solver{cfg: testLifiConfig(), chainID: 11155111, metrics: m}, reg
+	cfg := testLifiConfig()
+	cfg.QuoteTTL = time.Minute
+	cfg.QuoteInterval = time.Second
+	return &Solver{cfg: cfg, chainID: 11155111, metrics: m}, reg
 }
 
 func TestPairMetricsRequireTrustedDirectionAndRetainNewPairs(t *testing.T) {
 	s, reg := newPairTestSolver(t)
 	r := testQuoteRoute()
-	s.resolvedRoutes = []route{r}
+	s.setPairRoutes([]route{r})
 	// No metadata cache is needed to count a structurally supported zero-capacity direction.
 	s.observeStandingQuoteRejection(t.Context(), r.TokenIn, r.TokenOut, "strategy_declined", nil)
 	for i := int64(1); i <= 1000; i++ {
@@ -65,6 +68,7 @@ func TestPairMetricsRequireTrustedDirectionAndRetainNewPairs(t *testing.T) {
 	metricstest.RequireFamilyValue(t, reg, "solver_bot_pair_events_total", pairEventLabels(s.chainID, r.TokenIn, r.TokenOut, "standing_quote", "rejected", "strategy_declined"), 1)
 	next := r
 	next.TokenIn = common.HexToAddress("0x1234")
+	s.setPairRoutes([]route{r, next})
 	s.observeStandingQuoteRejection(t.Context(), next.TokenIn, next.TokenOut, "strategy_declined", []liquidlane.Inventory{{Route: next}})
 	// An inventory refresh does not reset prior counters; missing metadata does not exclude a new route.
 	s.observeStandingQuoteRejection(t.Context(), r.TokenIn, r.TokenOut, "strategy_declined", nil)
@@ -80,7 +84,7 @@ func TestPairMetricsRequireTrustedDirectionAndRetainNewPairs(t *testing.T) {
 func TestStandingPairMetricsCountAcknowledgedChangesAndActualRetryFailures(t *testing.T) {
 	s, reg := newPairTestSolver(t)
 	r := testQuoteRoute()
-	s.resolvedRoutes = []route{r}
+	s.setPairRoutes([]route{r})
 	fail := false
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -142,7 +146,7 @@ func TestStandingPairMetricsCountAcknowledgedChangesAndActualRetryFailures(t *te
 func TestMatchedPairMetricsScopeAndExistingInboxDedup(t *testing.T) {
 	s, reg := newPairTestSolver(t)
 	r := testQuoteRoute()
-	s.resolvedRoutes = []route{r}
+	s.setPairRoutes([]route{r})
 	owned := testSubmittedOrder(t, s.cfg, r.TokenIn, r.TokenOut)
 	owned.matchSource = "quote_exclusive_for"
 	q := newOrderInbox(10)
@@ -184,7 +188,7 @@ func TestRefreshPairMetricsIncludeResolvedZeroCapacityAndRefreshFailures(t *test
 		t.Run(reason, func(t *testing.T) {
 			s, reg := newPairTestSolver(t)
 			r := testQuoteRoute()
-			s.resolvedRoutes = []route{r, r}
+			s.setPairRoutes([]route{r, r})
 			s.cfg.Gas = nil
 			s.now = func(context.Context) (time.Time, error) { return time.Unix(1_800_000_000, 0), nil }
 			s.wallNow = func() time.Time { return time.Unix(1_800_000_000, 0) }
@@ -211,7 +215,7 @@ func TestRefreshPairMetricsIncludeResolvedZeroCapacityAndRefreshFailures(t *test
 				s.cfg.TokenPolicy = testTokenPolicy(t, tokenpolicy.Permissioned, common.HexToAddress("0xbeef"))
 			}
 			s.reader, s.strategy = reader, strategy
-			s.refreshQuotes(t.Context(), s.resolvedRoutes, newQuoteState(time.Second))
+			s.refreshQuotes(t.Context(), s.currentPairRoutes(), newQuoteState(time.Second))
 			if reason == "policy_denied" {
 				if count := pairSeriesCount(t, reg); count != 0 {
 					t.Fatalf("denied direction allocated %d series", count)

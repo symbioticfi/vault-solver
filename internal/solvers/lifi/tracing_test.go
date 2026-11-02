@@ -959,7 +959,7 @@ func TestDiscountSkipLogsCarryTraceIDOnce(t *testing.T) {
 	}
 
 	ctx, end := tracer.Start(observability.WithLogger(t.Context(), s.log), "lifi.quotes.refresh")
-	_, degraded := s.quoteDiscountInventories(ctx, nil, time.Unix(1_800_000_000, 0))
+	_, degraded, _ := s.quoteDiscountInventories(ctx, nil, time.Unix(1_800_000_000, 0))
 	end(nil)
 
 	if !degraded {

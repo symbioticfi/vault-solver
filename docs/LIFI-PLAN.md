@@ -1127,3 +1127,13 @@ including zero-capacity directions; metadata never decides eligibility. Retries 
 and post-dequeue/reconnect/replica admissions can repeat: these are not unique upstream wins or
 client-response totals. The helper retains counters across refreshes; cardinality grows with trusted
 supported route history × fixed event/result/reason sets, not arbitrary inbound addresses or IDs.
+When the discount API fails, a known pair with physical inventory but no usable quote inventory
+records `discount_api_error`, not `no_inventory`. Direct available inventory still uses its strategy
+outcome, and published pairs are not also rejected. This changes diagnostic attribution only.
+
+LI.FI pair scope is an atomic immutable route snapshot, refreshed by one optional background reader
+at `quoteInterval` and bounded by `quoteTTL`. Successful discovery replaces membership; read failures
+do not renew its expiry. Membership intersects the unchanged startup trading routes, including exact
+units: removing/changing an adapter direction excludes old inventory from diagnostic scope, and re-add
+restores it without resetting counters. Newly advertised trading directions still need the existing
+restart lifecycle. The observer never changes quote/order decisions or waits on their goroutines.

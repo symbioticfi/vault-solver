@@ -41,6 +41,8 @@ func TestStandingQuoteSnapshotUsesCurrentInventoryWithoutRegistry(t *testing.T) 
 	cfg := testLifiConfig()
 	cfg.TokenPolicy = testTokenPolicy(t, tokenpolicy.Permissioned, r.TokenIn, newRoute.TokenIn)
 	s := &Solver{cfg: cfg, chainID: 11155111}
+	s.cfg.QuoteTTL = time.Minute
+	s.setPairRoutes([]route{r, newRoute})
 	known, newlyTrusted := testStandingQuote(r, 100), testStandingQuote(newRoute, 200)
 	newlyTrusted.FromDecimals = 18
 	amount, ok := new(big.Int).SetString("900719925474099300000000000000000001", 10)
@@ -119,6 +121,8 @@ func TestStandingQuoteSnapshotAcknowledgementFailureAndClear(t *testing.T) {
 	defer srv.Close()
 	r := testQuoteRoute()
 	s := &Solver{cfg: testLifiConfig(), chainID: 11155111, orders: newOrderClient(srv.URL, "test-key", time.Second, 11155111)}
+	s.cfg.QuoteTTL = time.Minute
+	s.setPairRoutes([]route{r})
 	state := newQuoteState(time.Second)
 	inventory := []liquidlane.Inventory{{Route: r}}
 	events, write := standingObservationLogger(t)
@@ -152,6 +156,8 @@ func TestStandingQuoteSnapshotAcknowledgementFailureAndClear(t *testing.T) {
 func TestStandingQuoteSnapshotExpiryAndEmptyRanges(t *testing.T) {
 	r := testQuoteRoute()
 	s := &Solver{cfg: testLifiConfig()}
+	s.cfg.QuoteTTL = time.Minute
+	s.setPairRoutes([]route{r})
 	q := testStandingQuote(r, 100)
 	q.Expiry = time.Now().Add(-time.Minute).Unix()
 	state := newQuoteState(time.Second)
@@ -186,10 +192,12 @@ func TestStandingQuoteRejectionDetailsRequireCurrentDirection(t *testing.T) {
 	cfg := testLifiConfig()
 	cfg.TokenPolicy = testTokenPolicy(t, tokenpolicy.Permissioned, r.TokenIn, newRoute.TokenIn)
 	s := &Solver{cfg: cfg}
+	s.cfg.QuoteTTL = time.Minute
+	s.setPairRoutes([]route{r, newRoute})
 	events, write := standingObservationLogger(t)
 	ctx := observability.WithLogger(t.Context(), funcr.NewJSON(write, funcr.Options{Verbosity: 1}))
 	inventory := []liquidlane.Inventory{{Route: r}, {Route: newRoute}, {Route: forbidden}}
-	s.observeQuoteBuildRejections(ctx, inventory, nil, "strategy_error")
+	s.observeQuoteBuildRejections(ctx, inventory, nil, "strategy_error", nil)
 	if len(*events) != 2 {
 		t.Fatalf("current supported rejection details=%v", *events)
 	}
@@ -198,9 +206,14 @@ func TestStandingQuoteRejectionDetailsRequireCurrentDirection(t *testing.T) {
 			t.Fatalf("unsupported detail leaked: %v", row)
 		}
 	}
-	// A new failure with no current inventory must not reuse an earlier direction proof.
-	s.observeQuoteBuildRejections(ctx, nil, nil, "snapshot_error")
-	if len(*events) != 2 {
-		t.Fatalf("global failure reused old support: %v", *events)
+	// Fresh structural proof remains diagnostic at zero capacity; old inventory cannot renew it.
+	s.observeQuoteBuildRejections(ctx, nil, nil, "snapshot_error", nil)
+	if len(*events) != 4 {
+		t.Fatalf("fresh supported failure omitted: %v", *events)
+	}
+	s.pairRoutes.Store(nil)
+	s.observeQuoteBuildRejections(ctx, inventory, nil, "snapshot_error", nil)
+	if len(*events) != 4 {
+		t.Fatal("withdrawn support reused old inventory")
 	}
 }
