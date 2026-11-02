@@ -90,7 +90,7 @@ func New(cfg Config, deps solver.Deps) (*Solver, error) {
 	if cfg.QuoteOnly {
 		return s, nil
 	}
-	source, err := cfg.Curator.PermissionSource(deps.Chain, 10*time.Second)
+	source, err := cfg.Curator.PermissionSource(deps.Chain)
 	if err != nil {
 		return nil, err
 	}

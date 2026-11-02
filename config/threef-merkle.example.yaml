@@ -18,7 +18,6 @@ solvers:
       executor: "0x0000000000000000000000000000000000000010" # one recipe with 1..32 guarded funding pairs
       curator:
         url: https://curator.example.invalid/api/v1
-        # apiKeyEnv: CURATOR_API_TOKEN
       url: https://bf.3f.xyz
       apiKeyEnv: THREEF_CURATOR_API_KEY
       broker: "0x0000000000000000000000000000000000000040" # dedicated approved BF

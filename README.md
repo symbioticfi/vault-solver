@@ -1037,8 +1037,7 @@ the current commitment without scanning historical block ranges. Merkle hosts us
 chain connection and require no separate recipe indexer URL.
 
 Polling is fixed at 15 seconds and operation timeout at 30 seconds. `pollInterval` and
-`operationTimeout` are not configuration fields. Curator settings accept only `url` and
-`apiKeyEnv`; its HTTP timeout and response limit are fixed at 10 seconds and 2 MiB.
+`operationTimeout` are not configuration fields. Curator settings accept only `url`; its HTTP timeout and response limit are fixed at 10 seconds and 2 MiB.
 
 The authenticated recipe supplies on-chain readiness and completion checks. Successful
 simulations with all Manage gates closed and no Call or Approve work wait without
