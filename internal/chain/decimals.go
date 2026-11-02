@@ -19,9 +19,13 @@ var erc20B = erc20.NewERC20()
 // cache is mutex-guarded. It is a generic cross-solver primitive (both the RFQ and OEV readers need
 // it), so it lives in the chain layer next to Multicall.
 type Decimals struct {
-	chain *Client
+	chain interface {
+		Multicall(ctx context.Context, calls []Call) ([]CallResult, error)
+	}
 	mu    sync.Mutex
 	cache map[common.Address]int
+	// Presence also bounds optional log enrichment to the trusted startup/inventory universe.
+	symbols map[common.Address]string
 }
 
 // NewDecimals builds a decimals cache over the given client.

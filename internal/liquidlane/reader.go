@@ -85,6 +85,15 @@ func (r *Reader) TokenDecimals(ctx context.Context, token common.Address) (int, 
 	return r.dec.Get(ctx, token)
 }
 
+// TokenMetadata shares the reader's existing chain-scoped decimals cache for optional log fields.
+func (r *Reader) TokenMetadata() *chain.Decimals {
+	if r == nil {
+		return nil
+	}
+	cache, _ := r.dec.(*chain.Decimals)
+	return cache
+}
+
 func (r *Reader) ResolveAdapters(ctx context.Context, adapters []common.Address) ([]Adapter, error) {
 	adapters = dedupeAddresses(adapters)
 	if len(adapters) == 0 {

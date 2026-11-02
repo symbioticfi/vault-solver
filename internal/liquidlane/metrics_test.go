@@ -5,7 +5,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -27,23 +26,14 @@ func TestFillMetricsObserve(t *testing.T) {
 		t.Fatalf("register second solver: %v", err)
 	}
 	rfq := NewFillMetrics(workflow)
-	tokenIn := common.HexToAddress("0x0000000000000000000000000000000000000011")
-	tokenOut := common.HexToAddress("0x0000000000000000000000000000000000000022")
 	rfq.now = func() time.Time { return time.Unix(123, 0) }
-	rfq.Observe(
-		&types.Receipt{Status: types.ReceiptStatusSuccessful},
-		tokenIn, big.NewInt(100), tokenOut, big.NewInt(90), big.NewInt(5),
-	)
+	rfq.Observe(&types.Receipt{Status: types.ReceiptStatusSuccessful})
 	metricstest.RequireWorkflowEvent(t, reg, "rfq", "fill", FillOutcomeSuccess, 1, 123)
 	metricstest.RequireWorkflowEvent(t, reg, "rfq", "fill", FillOutcomeFailure, 0, 0)
 	metricstest.RequireWorkflowEvent(t, reg, "rfq", "fill", FillOutcomeNotAdmitted, 0, 0)
-	metricstest.RequireWorkflowAmount(t, reg, "rfq", "fill", tokenIn.Hex(), FillAmountInput, 100)
-	metricstest.RequireWorkflowAmount(t, reg, "rfq", "fill", tokenOut.Hex(), FillAmountPlannedSurplus, 5)
+	metricstest.RequireNoWorkflowAmounts(t, reg, "rfq")
 
-	rfq.Observe(
-		&types.Receipt{Status: types.ReceiptStatusFailed},
-		tokenIn, big.NewInt(100), tokenOut, big.NewInt(90), big.NewInt(5),
-	)
+	rfq.Observe(&types.Receipt{Status: types.ReceiptStatusFailed})
 	metricstest.RequireWorkflowEvent(t, reg, "rfq", "fill", FillOutcomeSuccess, 1, 123)
 
 	rfq.ObserveOutcome(FillOutcomeFailure)

@@ -5,11 +5,13 @@ import (
 	"math/big"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
@@ -19,10 +21,13 @@ import (
 
 // quoteService prices backend RFQ requests by handing filtered candidates to the strategy. It is safe
 // for concurrent use (the HTTP server serves quotes in parallel): its dependencies are individually
-// synchronized, and it holds no mutable state itself.
+// synchronized, and its optional configured route slice is published atomically once.
 type quoteService struct {
-	chainID  int64
-	executor common.Address
+	pairRoutes    atomic.Pointer[[]liquidlane.Route] // immutable configured adapter directions, optional background observation only
+	chainID       int64
+	tokenMetadata *chain.Decimals
+	warmMetadata  func([]common.Address) // optional lifecycle-owned background enrichment; assigned before HTTP starts
+	executor      common.Address
 	// laneAvailable is safe for concurrent use and reports sender initialization. A busy lane does not
 	// block quoting: pending fills are accounted through reservations instead. It is sampled before
 	// and after quote planning so work is declined whenever either check observes a nonce conflict.
@@ -87,16 +92,10 @@ var quoteDecisionOutcomes = [...]quoteDecisionOutcome{
 // owns metrics observation, so direct/internal quote evaluation does not masquerade as transport
 // traffic and every authenticated handler invocation records exactly one terminal decision.
 type quoteDecision struct {
-	response    *quoteResponse
-	outcome     quoteDecisionOutcome
-	observation *quoteObservation
-}
-
-type quoteObservation struct {
-	tokenIn   common.Address
-	tokenOut  common.Address
-	amountIn  *big.Int
-	amountOut *big.Int
+	response          *quoteResponse
+	outcome           quoteDecisionOutcome
+	pairInScope       bool
+	metricPairInScope bool
 }
 
 // quote returns a terminal domain decision. Its response is nil (→ HTTP 204) when the request is
@@ -131,11 +130,18 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (decision qu
 }
 
 // evaluate is the quote pipeline; quote wraps it in the rfq.quote span and classifies its outcome.
-func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDecision, error) {
+func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision quoteDecision, err error) {
+	knownDirection := false
+	configuredDirection := false
+	defer func() {
+		decision.pairInScope = knownDirection
+		decision.metricPairInScope = knownDirection || configuredDirection
+	}()
 	parsed, err := q.toStrategy(qs.chainID)
 	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, &badRequestError{errors.Errorf("parse request: %w", err)}
 	}
+	configuredDirection = qs.configuredPairInScope(q)
 	if !qs.canQuote() {
 		observability.Log(ctx).V(1).Info("declining quote: transaction nonce lane unavailable", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil
@@ -146,13 +152,12 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDec
 	}
 	if !qs.tokenPolicy.Allows(parsed.req.TokenIn) {
 		observability.Log(ctx).V(1).Info("declining quote: input token out of scope",
-			"quoteId", q.QuoteID, "tokenIn", lowerAddr(parsed.req.TokenIn), "scope", qs.tokenPolicy.Scope())
+			"quoteId", q.QuoteID, "scope", qs.tokenPolicy.Scope())
 		return quoteDecision{outcome: quoteDecisionNotQuotable}, nil
 	}
 	if minIn, ok := qs.minAmountsIn[parsed.req.TokenIn]; ok && parsed.req.Amount.Cmp(minIn) < 0 {
 		observability.Log(ctx).V(1).Info("declining quote: input amount below configured minimum",
-			"quoteId", q.QuoteID, "tokenIn", lowerAddr(parsed.req.TokenIn),
-			"amount", parsed.req.Amount.String(), "min", minIn.String())
+			"quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionBelowMinimum}, nil
 	}
 	req, inv := parsed.req, qs.whitelist.filter(parsed.inv)
@@ -173,6 +178,9 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDec
 		observability.Log(ctx).V(1).Info("declining quote: no viable LiquidLane candidates", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
 	}
+	// Only existing on-chain candidate validation establishes a known directed inventory pair.
+	// This is not a promise that the requested amount/strategy can be quoted.
+	knownDirection = true
 	input := newQuoteInput(qs.chainID, qs.executor, req, candidates, nil, requireSingleRoute, qs.now())
 	out, err := qs.decideQuote(ctx, input)
 	if err != nil {
@@ -192,10 +200,6 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDec
 		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil
 	}
 
-	observability.Log(ctx).V(1).Info("quoted",
-		"quoteId", q.QuoteID, "amountIn", req.Amount.String(),
-		"amountOut", out.QuotedAmountOut.String(), "legs", len(out.Legs))
-
 	response := &quoteResponse{
 		ChainID:   qs.chainID,
 		AmountIn:  req.Amount.String(),
@@ -210,10 +214,6 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (quoteDec
 	return quoteDecision{
 		response: response,
 		outcome:  quoteDecisionQuoted,
-		observation: &quoteObservation{
-			tokenIn: req.TokenIn, tokenOut: req.TokenOut,
-			amountIn: req.Amount, amountOut: out.QuotedAmountOut,
-		},
 	}, nil
 }
 

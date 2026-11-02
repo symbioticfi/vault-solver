@@ -17,6 +17,7 @@ import (
 
 func TestLateFillReceiptRecordsMetricsWithoutReplayingCompletion(t *testing.T) {
 	fixture := newDirectExecutionFixture(t)
+	fixture.solver.chainID = 1
 	metrics, reg := newUniswapXTestMetricsWithRegistry(t, fixture.solver)
 	fixture.solver.metrics = metrics
 	pending, err := fixture.solver.startFill(t.Context(), []liquidlane.Route{fixture.route},
@@ -50,9 +51,8 @@ func TestLateFillReceiptRecordsMetricsWithoutReplayingCompletion(t *testing.T) {
 		t.Fatal("late receipt replayed business completion, retry, or breaker state")
 	}
 	metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeSuccess, 1)
-	metricstest.RequireWorkflowAmount(t, reg, Name, "fill", fixture.route.TokenIn.Hex(), liquidlane.FillAmountInput, 100)
-	metricstest.RequireWorkflowAmount(t, reg, Name, "fill", fixture.route.TokenOut.Hex(), liquidlane.FillAmountOutput, 90)
-	metricstest.RequireWorkflowAmount(t, reg, Name, "fill", fixture.route.TokenOut.Hex(), liquidlane.FillAmountPlannedSurplus, 10)
+	metricstest.RequireNoWorkflowAmounts(t, reg, Name)
+	metricstest.RequireFamilyValue(t, reg, "solver_bot_pair_events_total", map[string]string{"event": "fill", "result": "mined_success"}, 1)
 	metricstest.RequireWorkflowEventCount(t, reg, Name, "exclusive_obligation", exclusiveOutcomeSettledInTime, 0)
 }
 
@@ -60,6 +60,7 @@ func TestOrdinaryFillReceiptRecordsSuccessOnce(t *testing.T) {
 	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeConfirmed, txmanager.OutcomeIncludedUnconfirmed} {
 		t.Run(string(outcome), func(t *testing.T) {
 			fixture := newDirectExecutionFixture(t)
+			fixture.solver.chainID = 1
 			metrics, reg := newUniswapXTestMetricsWithRegistry(t, fixture.solver)
 			fixture.solver.metrics = metrics
 			pending, err := fixture.solver.startFill(t.Context(), []liquidlane.Route{fixture.route},
@@ -72,7 +73,8 @@ func TestOrdinaryFillReceiptRecordsSuccessOnce(t *testing.T) {
 			})
 			fixture.solver.completePendingFill(t.Context(), pending, <-pending.result)
 			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeSuccess, 1)
-			metricstest.RequireWorkflowAmount(t, reg, Name, "fill", fixture.route.TokenIn.Hex(), liquidlane.FillAmountInput, 100)
+			metricstest.RequireNoWorkflowAmounts(t, reg, Name)
+			metricstest.RequireFamilyValue(t, reg, "solver_bot_pair_events_total", map[string]string{"event": "fill", "result": "mined_success"}, 1)
 		})
 	}
 }
@@ -138,12 +140,7 @@ func TestObsoleteOwnedFillKeepsLateReceiptMetricsExclusive(t *testing.T) {
 				metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeObsolete, 0)
 				metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeSuccess, want)
 				metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 0)
-				if !successful {
-					return
-				}
-				metricstest.RequireWorkflowAmount(t, reg, Name, "fill", fixture.route.TokenIn.Hex(), liquidlane.FillAmountInput, want*100)
-				metricstest.RequireWorkflowAmount(t, reg, Name, "fill", fixture.route.TokenOut.Hex(), liquidlane.FillAmountOutput, want*90)
-				metricstest.RequireWorkflowAmount(t, reg, Name, "fill", fixture.route.TokenOut.Hex(), liquidlane.FillAmountPlannedSurplus, want*10)
+				metricstest.RequireNoWorkflowAmounts(t, reg, Name)
 			})
 		}
 	}
@@ -217,9 +214,7 @@ func TestUnsignedObsoleteRetryDoesNotDoubleCountEarlierOwnedFill(t *testing.T) {
 			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeSuccess, 1)
 			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeObsolete, 0)
 			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 0)
-			metricstest.RequireWorkflowAmount(t, reg, Name, "fill", fixture.route.TokenIn.Hex(), liquidlane.FillAmountInput, 100)
-			metricstest.RequireWorkflowAmount(t, reg, Name, "fill", fixture.route.TokenOut.Hex(), liquidlane.FillAmountOutput, 90)
-			metricstest.RequireWorkflowAmount(t, reg, Name, "fill", fixture.route.TokenOut.Hex(), liquidlane.FillAmountPlannedSurplus, 10)
+			metricstest.RequireNoWorkflowAmounts(t, reg, Name)
 		})
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
@@ -13,10 +12,7 @@ import (
 )
 
 const (
-	FillAmountInput          = "input"
-	FillAmountOutput         = "output"
-	FillAmountPlannedSurplus = "planned_surplus"
-	fillWorkflowEvent        = "fill"
+	fillWorkflowEvent = "fill"
 
 	FillOutcomeSuccess     = "success"
 	FillOutcomeFailure     = "failure"
@@ -32,15 +28,10 @@ func FillWorkflowSpec() observability.WorkflowSpec {
 		Events: []observability.WorkflowEventSpec{{
 			Event: fillWorkflowEvent, Outcomes: []string{FillOutcomeSuccess},
 		}},
-		Amounts: []observability.WorkflowAmountSpec{{
-			Event: fillWorkflowEvent,
-			Kinds: []string{FillAmountInput, FillAmountOutput, FillAmountPlannedSurplus},
-		}},
 	}
 }
 
-// FillMetrics records successful LiquidLane fill count, freshness, and amounts without additional
-// chain reads.
+// FillMetrics records successful LiquidLane fill count and freshness without additional chain reads.
 type FillMetrics struct {
 	workflow *observability.WorkflowMetrics
 	now      func() time.Time
@@ -51,51 +42,33 @@ func NewFillMetrics(workflow *observability.WorkflowMetrics) *FillMetrics {
 	return &FillMetrics{workflow: workflow, now: time.Now}
 }
 
-// ReceiptObserver snapshots planned amounts for the manager's normal and late receipt telemetry.
+// ReceiptObserver records the manager's normal and late successful receipt telemetry.
 // The callback only updates metrics; it retains no order or solver state and performs no I/O.
-func (m *FillMetrics) ReceiptObserver(
-	tokenIn common.Address,
-	amountIn *big.Int,
-	tokenOut common.Address,
-	amountOut *big.Int,
-	plannedSurplus *big.Int,
-) func(context.Context, txmanager.Result) {
+func (m *FillMetrics) ReceiptObserver(observers ...func(context.Context, txmanager.Result)) func(context.Context, txmanager.Result) {
 	if m == nil {
 		return nil
 	}
-	input, output, surplus := CloneBig(amountIn), CloneBig(amountOut), CloneBig(plannedSurplus)
-	return func(_ context.Context, result txmanager.Result) {
-		m.Observe(result.Receipt, tokenIn, input, tokenOut, output, surplus)
+	return func(ctx context.Context, result txmanager.Result) {
+		m.Observe(result.Receipt)
+		for _, observe := range observers {
+			if observe != nil {
+				observe(ctx, result)
+			}
+		}
 	}
 }
 
-func (m *FillMetrics) Observe(
-	receipt *types.Receipt,
-	tokenIn common.Address,
-	amountIn *big.Int,
-	tokenOut common.Address,
-	amountOut *big.Int,
-	plannedSurplus *big.Int,
-) {
+func (m *FillMetrics) Observe(receipt *types.Receipt) {
 	if m == nil || receipt == nil || receipt.Status != types.ReceiptStatusSuccessful {
 		return
 	}
 	m.ObserveOutcome(FillOutcomeSuccess)
-	m.add(tokenIn, FillAmountInput, amountIn)
-	m.add(tokenOut, FillAmountOutput, amountOut)
-	m.add(tokenOut, FillAmountPlannedSurplus, plannedSurplus)
 }
 
-// ObserveOutcome records one bounded fill outcome without adding successful receipt amounts.
+// ObserveOutcome records one bounded fill outcome.
 func (m *FillMetrics) ObserveOutcome(outcome string) {
 	if m != nil {
 		m.workflow.ObserveEventAt(fillWorkflowEvent, outcome, 1, m.now())
-	}
-}
-
-func (m *FillMetrics) add(token common.Address, kind string, amount *big.Int) {
-	if token != (common.Address{}) {
-		m.workflow.AddAmount(fillWorkflowEvent, token.Hex(), kind, amount)
 	}
 }
 

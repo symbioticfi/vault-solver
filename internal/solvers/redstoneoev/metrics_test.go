@@ -72,6 +72,42 @@ func requireOEVBidAmount(
 	metricstest.RequireWorkflowAmount(t, reg, Name, "bid", "native", stage, want)
 }
 
+func TestNativeBidAmountMetricsHaveOnlyFixedKinds(t *testing.T) {
+	m, reg := newOEVTestMetrics(t, nil)
+	for _, kind := range bidLifecycleStages {
+		m.observeBid(kind, nil)
+		m.observeBid(kind, big.NewInt(-1))
+		m.observeBid(kind, big.NewInt(7))
+		requireOEVBidAmount(t, reg, kind, 7)
+		metricstest.RequireWorkflowEventCount(t, reg, Name, "bid", kind, 3)
+	}
+	m.observeBid("request-derived", big.NewInt(123))
+	families, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, family := range families {
+		if family.GetName() != "solver_bot_workflow_amount_atomic_units_total" {
+			continue
+		}
+		if len(family.GetMetric()) != len(bidLifecycleStages) {
+			t.Fatalf("native amount series = %d, want %d", len(family.GetMetric()), len(bidLifecycleStages))
+		}
+		for _, metric := range family.GetMetric() {
+			labels := make(map[string]string)
+			for _, label := range metric.GetLabel() {
+				labels[label.GetName()] = label.GetValue()
+			}
+			if labels["asset"] != "native" || labels["event"] != "bid" || labels["solver"] != Name ||
+				labels["strategy"] != defaultStrategyName || m.nativeBidAmounts[labels["kind"]] == nil || len(labels) != 5 {
+				t.Fatalf("unexpected native amount labels: %v", labels)
+			}
+		}
+		return
+	}
+	t.Fatal("native amount metric family missing")
+}
+
 func TestStateRefreshFreshnessAdvancesOnlyAfterSnapshotInstallation(t *testing.T) {
 	s, _ := seededSolver(t)
 	m, reg := newOEVTestMetrics(t, s.wonReservationMetrics)

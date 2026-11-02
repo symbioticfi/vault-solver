@@ -479,7 +479,7 @@ func (s *Solver) offerOnAuction(
 		return false
 	}
 	s.rememberOffer(ctx, offer, dto)
-	s.observeSubmittedOffer(common.HexToAddress(av.depositAsset()), offer.Principal, offer.ExpectedReturn)
+	s.observeOfferSubmission("success")
 	// No local record: the next reconcile re-lists this offer from the API (the poll is authoritative).
 	observability.Log(ctx).Info("offer submitted", "auctionId", offer.AuctionID, "adapter", offer.Maker.Hex(),
 		"request", offer.Request.Hex(), "principal", offer.Principal.String(), "expectedReturn", dto.ExpectedReturn)
