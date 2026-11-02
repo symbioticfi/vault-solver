@@ -76,7 +76,7 @@ func (s *Solver) observeStandingQuoteSnapshot(ctx context.Context, state *quoteS
 }
 
 func (s *Solver) standingPairInScope(key quotePairKey, inventory []liquidlane.Inventory) bool {
-	if s.cfg == nil || !s.cfg.TokenPolicy.Allows(key.fromAsset) {
+	if s.pairScopeSource(key.fromAsset, key.toAsset, inventory) == "" {
 		return false
 	}
 	for _, item := range inventory {

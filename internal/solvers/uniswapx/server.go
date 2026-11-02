@@ -401,16 +401,16 @@ func (s *Solver) setBlockUntil(timestamp int64) {
 	s.requestQuoteRefresh()
 }
 
-// Diagnostic scope is an exact current trusted inventory direction admitted by input policy.
+// Diagnostic scope is an exact validated route direction admitted by input policy.
 // It is deliberately not a claim of available pair capacity or a priceable request amount.
-// quoteLogFields records details only for a direction proven by validated inventory. Metadata
+// quoteLogFields records details only for a direction proven by validated routes/inventory. Metadata
 // enriches display, never decides support. Arbitrary unsupported request fields are not copied.
 func (s *Solver) quoteLogFields(request quoteRequest, inScope bool) []any {
 	fields := []any{"pairInScope", inScope}
 	if !inScope {
 		return fields
 	}
-	fields = append(fields, "pairScope", "directed_route", "pairScopeSource", "verified_inventory",
+	fields = append(fields, "pairScope", "directed_route", "pairScopeSource", "verified_quote_routes",
 		"requestId", request.RequestID, "quoteId", request.QuoteID,
 		"type", request.Type, "protocol", request.Protocol,
 		"tokenInChainId", request.TokenInChainID, "tokenOutChainId", request.TokenOutChainID,
@@ -423,7 +423,7 @@ func (s *Solver) quotePairInScope(request quoteRequest) bool {
 		!common.IsHexAddress(request.TokenIn) || !common.IsHexAddress(request.TokenOut) {
 		return false
 	}
-	return s.inventoryPairInScope(common.HexToAddress(request.TokenIn), common.HexToAddress(request.TokenOut), s.quoteState.Load())
+	return s.metricPairSupported(common.HexToAddress(request.TokenIn), common.HexToAddress(request.TokenOut))
 }
 
 func (s *Solver) inventoryPairInScope(in, out common.Address, state *quoteState) bool {
@@ -438,8 +438,8 @@ func (s *Solver) inventoryPairInScope(in, out common.Address, state *quoteState)
 	return false
 }
 
-// metricPairSupported reuses the actual structural adapter directions and current trusted quote
-// inventory. Optional metadata and temporary capacity do not decide metric eligibility.
+// metricPairSupported reuses configured adapter directions and this refresh's validated scope.
+// Dynamic proof expires/replaces with quoteState; temporary capacity and metadata do not decide it.
 func (s *Solver) metricPairSupported(in, out common.Address) bool {
 	if in == out || in == (common.Address{}) || out == (common.Address{}) || !s.cfg.TokenPolicy.Allows(in) {
 		return false
@@ -449,5 +449,14 @@ func (s *Solver) metricPairSupported(in, out common.Address) bool {
 			return true
 		}
 	}
-	return s.inventoryPairInScope(in, out, s.quoteState.Load())
+	state := s.quoteState.Load()
+	if state == nil || state.epoch != s.quoteEpoch.Load() || !state.expiresAt.After(time.Unix(s.currentTime(), 0)) {
+		return false
+	}
+	for _, route := range state.routes {
+		if route.TokenIn == in && route.TokenOut == out {
+			return true
+		}
+	}
+	return s.inventoryPairInScope(in, out, state)
 }

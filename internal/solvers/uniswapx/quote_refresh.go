@@ -3,6 +3,7 @@ package uniswapx
 import (
 	"context"
 	"math/big"
+	"slices"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -13,7 +14,9 @@ import (
 )
 
 type quoteState struct {
-	epoch          uint64
+	epoch uint64
+	// routes is this refresh's validated structural scope, independent of fillable capacity.
+	routes         []liquidlane.Route
 	inventory      []liquidlane.Inventory
 	gasSnapshot    *liquidlanegas.Snapshot
 	gasPrices      *liquidlanegas.PriceSnapshot
@@ -47,7 +50,7 @@ func (s *Solver) refreshLoop(ctx context.Context, routes []liquidlane.Route) err
 					tokens = append(tokens, item.TokenIn, item.TokenOut)
 				}
 			}
-			s.tokenMetadata.WarmMetadataAsync(ctx, tokens, observability.Log(ctx))
+			s.tokenMetadata.WarmMetadataAsync(ctx, tokens, observability.Log(ctx).WithValues("chainId", s.chainID))
 		}
 	}
 }
@@ -96,6 +99,7 @@ func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Rout
 	}
 	serverNow := time.Now()
 	if s.publishQuoteState(epoch, &quoteState{
+		routes:      slices.Clone(decisionRoutes),
 		inventory:   current.Direct,
 		gasSnapshot: current.GasSnapshot, gasPrices: current.GasPrices,
 		maxFeePerGas: maxFee, chainTime: now, expiresAt: serverNow.Add(s.cfg.QuoteServer.QuoteTTL),

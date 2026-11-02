@@ -20,11 +20,12 @@ type fakeDiscountClient struct {
 	resolved     *discounts.Resolved
 	listCalls    int
 	resolveCalls int
+	listErr      error
 }
 
 func (f *fakeDiscountClient) ListDiscounts(context.Context) (*discounts.List, error) {
 	f.listCalls++
-	return f.listed, nil
+	return f.listed, f.listErr
 }
 
 func (f *fakeDiscountClient) Resolve(context.Context, string) (*discounts.Resolved, error) {
