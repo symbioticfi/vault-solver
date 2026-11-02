@@ -40,6 +40,16 @@ func (d *Decimals) WarmMetadataAsync(ctx context.Context, tokens []common.Addres
 		if err := d.readMetadata(ctx, missing); err != nil {
 			log.V(1).Info("optional token metadata unavailable", "error", err.Error())
 		}
+		if ctx.Err() != nil {
+			return
+		}
+		// One observation per newly trusted token, independent of future quote demand. Pair
+		// panels can learn names from logs without a token-labelled metric or manual address map.
+		for _, token := range missing {
+			if fields := d.PairLogFields(token, common.Address{}); len(fields) > 0 {
+				log.WithValues(fields...).Info("trusted token metadata", "tokenIn", token.Hex())
+			}
+		}
 	}()
 }
 

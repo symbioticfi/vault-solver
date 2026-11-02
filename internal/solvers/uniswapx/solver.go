@@ -290,7 +290,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	}
 	metadataCtx, stopMetadata := context.WithCancel(ctx)
 	defer stopMetadata()
-	s.tokenMetadata.WarmMetadataAsync(metadataCtx, metadataTokens, observability.Log(ctx))
+	s.tokenMetadata.WarmMetadataAsync(metadataCtx, metadataTokens, observability.Log(ctx).WithValues("chainId", s.chainID))
 	observability.Log(ctx).Info("starting", "chainId", s.chainID, "solverMode", s.cfg.SolverMode,
 		"reactor", s.cfg.Reactor.Hex(), "executor", s.cfg.Executor.Hex(),
 		"routes", len(routes), "gasAccounting", s.cfg.Gas != nil,
