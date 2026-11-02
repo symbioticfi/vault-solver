@@ -14,7 +14,6 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 )
@@ -45,7 +44,6 @@ func TestQuoteTrafficHTTPFinalOutcome(t *testing.T) {
 			s := newQuoteTestSolver(t, in, &quoteTestStrategy{quote: tc.quote})
 			metrics, reg := newUniswapXTestMetricsWithRegistry(t, s)
 			s.metrics = metrics
-			metrics.traffic.Initialize(1, []liquidlane.Route{{TokenIn: in, TokenOut: out, TokenInDecimals: 6, TokenOutDecimals: 6}}, nil)
 			r := validQuoteRequest(in, out)
 			if tc.change != nil {
 				tc.change(&r)
@@ -63,14 +61,7 @@ func TestQuoteTrafficHTTPFinalOutcome(t *testing.T) {
 			if w.Code != tc.status {
 				t.Fatalf("HTTP=%d want=%d", w.Code, tc.status)
 			}
-			inLabel, outLabel := strings.ToLower(in.Hex()), strings.ToLower(out.Hex())
-			if tc.inLabel != "" {
-				inLabel = tc.inLabel
-			}
-			if tc.outLabel != "" {
-				outLabel = tc.outLabel
-			}
-			metricstest.RequireFamilyValue(t, reg, "solver_bot_quote_results_total", map[string]string{"token_in": inLabel, "token_out": outLabel, "result": tc.result, "reason": tc.reason}, 1)
+			metricstest.RequireFamilyValue(t, reg, "solver_bot_quote_results_total", map[string]string{"result": tc.result, "reason": tc.reason}, 1)
 			assertQuoteTrafficTotals(t, reg, 1)
 		})
 	}

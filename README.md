@@ -281,7 +281,7 @@ snapshot reasons remain available. Local planning can report `no_matching_routes
 existing log and workflow values remain unchanged. Strategy failures remain HTTP 503 / `strategy_error`, semantic declines remain
 empty HTTP 204, and malformed bodies remain HTTP 400 / aggregate outcome `invalid`. Missing
 `requestId` retains the existing breaker-notification/400 handling. The existing workflow metrics
-and aggregate workflow outcomes are unchanged; pair/reason labels are bounded by trusted metadata and fixed reasons.
+and aggregate workflow outcomes are unchanged; Coarse HTTP result labels contain fixed solver/result/reason values; supported pair observations use a separate counter.
 This adds diagnostics only: quote protocols remain `v1`/`v2`, and order ingestion/settlement remains
 `Dutch_V2`.
 
@@ -734,10 +734,12 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | RPC | `solver_bot_rpc_request_duration_seconds` | `role`, `method`, `outcome` | End-to-end HTTP JSON-RPC latency through response-body consumption. |
 | RPC | `solver_bot_rpc_last_successful_request_timestamp` | `role` | Last successful logical call by endpoint role. |
 | RPC | `solver_bot_rpc_last_successful_attempt_timestamp` | `role`, `endpoint` | Last successful endpoint attempt, so an idle or dead fallback can be distinguished from a healthy primary. |
+| LiquidLane | `solver_bot_quote_results_total` | `solver`, `result`, `reason` | One final UX/RFQ HTTP result, including unscoped requests. Fixed reason vocabulary. |
+| LiquidLane | `solver_bot_pair_events_total` | `solver`, `chain_id`, `token_in`, `token_out`, `event`, `result`, `reason` | Trusted supported directed-route observations only; final HTTP quote result, observed assignment, owned mined fill, or acknowledged LI.FI standing change/local rejection attempt. Retained across refreshes; grows with supported route history, not request IDs/count. |
 | Workflow | `solver_bot_workflow_events_total` | `solver`, `strategy`, `event`, `outcome` | Bounded solver events. Event/outcome pairs are fixed at construction; request data and errors cannot create labels. |
-| Workflow | `solver_bot_workflow_dropped_observations_total` | `solver`, `strategy`, `reason` | Observations rejected because code used an undeclared event/outcome, amount kind, or state view. Any increase is an instrumentation contract drift signal; reasons are bounded. |
+| Workflow | `solver_bot_workflow_dropped_observations_total` | `solver`, `strategy`, `reason` | Omitted observations for undeclared workflow event/outcome or state view. |
 | Workflow | `solver_bot_workflow_last_event_timestamp` | `solver`, `strategy`, `event`, `outcome` | Last occurrence of the matching bounded event, including successful fills, quotes, wins, settlements, and refreshes. |
-| Workflow | `solver_bot_workflow_amount_atomic_units_total` | `solver`, `strategy`, `event`, `asset`, `kind` | Event amounts in asset atomic units. Never aggregate unlike `asset` values; `planned_surplus` is gross planning output, not realized PnL. |
+| OEV | `solver_bot_workflow_amount_atomic_units_total` | `solver`, `strategy`, `event`, `asset`, `kind` | Compatibility family for fixed `event="bid", asset="native"` only; `kind` is a bounded bid lifecycle stage. No token-address amount series. |
 | Workflow | `solver_bot_workflow_observed_items` | `solver`, `strategy`, `view` | Last complete authoritative item count for a bounded state view. |
 | Workflow | `solver_bot_workflow_last_observation_timestamp` | `solver`, `strategy`, `view` | Freshness paired with each retained workflow state count. |
 | RFQ | `rfq_filler_http_request_duration_seconds` | `method`, `route`, `status` | Quote-server request count (`_count`), status funnel, and latency. Routes are allowlisted and methods are normalized to `GET`, `POST`, or `other` to bound cardinality. |
@@ -746,7 +748,6 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | RFQ | `rfq_oldest_active_order_age_seconds` | — | Age of the oldest active obligation; catches a single stuck order that a count-only alert can miss. |
 | LI.FI | `lifi_active_quotes` | — | Process-local quote count from the last successful publication or suspension reconciliation. It can remain nonzero after the remote quotes expire at `quoteTtl`, so use it with refresh freshness rather than as backend state. |
 | LI.FI | `lifi_active_quote_ranges` | — | Number of currently active standing-quote ranges from the last successful reconciliation. |
-| LI.FI | `lifi_active_quote_max_input_atomic_units` | `token_in`, `token_out`, `token_in_decimals`, `token_out_decimals` | Largest currently advertised input range ceiling per token pair. Alternative curves are maxed rather than summed, so the gauge does not double-count shared capacity. |
 | LI.FI | `lifi_last_successful_refresh_timestamp` | — | Freshness of standing-quote publication or suspension reconciliation; distinguishes an authoritative zero from a dead reconciliation loop. |
 | LI.FI | `lifi_order_feed_connected` | — | `1` only while the order-feed loop owns an established WebSocket; `0` while disconnected, dialing, or backing off. |
 | LI.FI | `lifi_order_recovery_ready` | — | `1` only when the current established order-feed connection has completed convergent REST recovery; every disconnect or reconnect resets it to `0`. |
@@ -772,11 +773,11 @@ Bounded workflow dimensions:
 
 | Solver | Events and outcomes | Amount/state dimensions |
 |---|---|---|
-| RFQ | `quote/<decision>`, `order/{won,nonce_retry_exhausted,expired_after_nonce_retries}`, `order_poll/success`, `fill/{success,failure,not_admitted,obsolete,peer}` | `quote/{input,output}` and successful local `fill/{input,output,planned_surplus}` by asset; `peer` counts only |
-| LI.FI | `order_processing/<result>`, `queue_drop/<stage>`, `fill/success` | Fill amounts by asset and kind |
-| UniswapX | `quote/<decision>`, `{exclusive,public}_order_poll/{ok,failed}`, `exclusive_obligation/{won,settled_in_time,missed}`, `fill/{success,failure,not_admitted,obsolete,declined}` | Quote and successful-fill amounts by asset and kind; quote amount assets are restricted to the immutable route snapshot used for that decision |
+| RFQ | `quote/<decision>`, `order/{won,nonce_retry_exhausted,expired_after_nonce_retries}`, `order_poll/success`, `fill/{success,failure,not_admitted,obsolete,peer}` | Quote/fill quantities are structured log fields; `peer` counts only. |
+| LI.FI | `matched_order/admitted`, `order_processing/<result>`, `queue_drop/<stage>`, `fill/success` | Fill quantities and standing pair bounds are structured log fields; aggregate counts/freshness remain metrics |
+| UniswapX | `quote/<decision>`, `{exclusive,public}_order_poll/{ok,failed}`, `exclusive_obligation/{won,settled_in_time,missed}`, `fill/{success,failure,not_admitted,obsolete,declined}` | Quote/fill quantities are structured log fields. |
 | OEV | `auction/<decision>`, `bid/{enqueued,won,settled_success,settled_failed,would_bid,unresolved}`, `breaker/failure`, `state_refresh/success` | Native bid amounts use `asset="native"`; `kind` is the bid stage, including dry-run `would_bid` |
-| 3F | `offer/{success,error}`, `redeem/success`; state views are `targets`, `offers`, `active_requests`, `redeemable` | Offer `principal` and `expected_yield` by deposit asset |
+| 3F | `offer/{success,error}`, `redeem/success`; state views are `targets`, `offers`, `active_requests`, `redeemable` | Observed offer principal/expected-return strings in logs; no token-address amount counter |
 
 OEV `bid/unresolved` records a local settlement timeout, not a mutually exclusive terminal state. A later
 result also advances `settled_success` or `settled_failed`, so lifecycle dashboards must not reconcile
@@ -797,63 +798,97 @@ External-operation labels are fixed at construction: 3F exposes `target_refresh`
 partial or last-known-good path remained usable, while `skipped` means a deliberate gate, stale-plan
 discard, or shutdown cancellation. Transaction sends are outside these timers.
 
-LiquidLane counters include successful receipts reported as `included_unconfirmed`; they are operational telemetry rather than an accounting ledger, and amounts for
-different token labels must not be added without price/decimal normalization. An inclusion observed only
+LiquidLane `fill/success` counters include successful mined receipts reported as
+`included_unconfirmed`; they are operational telemetry, not strictly depth-confirmed fills or an
+accounting ledger. Confirmed transaction observations are available in existing txmanager request
+outcomes and late-receipt counters (`outcome="confirmed"`, fixed fill labels); neither restores
+unobserved history. Raw log quantities with different units must not be summed. An inclusion observed only
 during shutdown can still be reorged after process exit, so it may overcount a success and, for UniswapX,
 clear the local fill-failure breaker; accounting systems must use canonical on-chain data instead.
 
 ### Grafana dashboards
 
-Six native Grafana Dashboard Schema v2 templates are committed under
-[`dashboards/`](dashboards/): one unified dashboard each for Runtime, 3F, RFQ, LI.FI, UniswapX, and OEV.
-Choose **Namespace** to select the environment. Solver dashboards aggregate all replicas in that
-namespace. Runtime also has a **Pod (RPC / resources)** filter for RPC and process diagnostics;
-**All** includes every replica, and the selector includes pods observed earlier in the selected time
-range. Execution totals remain aggregated across the namespace regardless of the pod selection.
-Counter increases are calculated per process before summing, percentiles use combined histogram
-buckets, and shared account balances are not summed across replicas.
+Six native Grafana Dashboard Schema v2 templates remain under
+[`dashboards/`](dashboards/): Runtime, 3F, RFQ, LI.FI, UniswapX and OEV. This branch deliberately
+keeps those files identical to its stage base. Dashboard migration is a separate change.
 
-Expanded amount tables show observed increases during the selected period. Retained counter peaks
-are in collapsed diagnostics: they include the first observed nonzero sample but may also include
-activity before the selected period, so they are not period volume. Token amounts are shown in atomic
-units and must not be summed across different tokens without decimal and price normalization.
+**Producer/template compatibility:** the retained stage templates still query retired token amount
+and pair metric series. After upgrading this producer, the UX/RFQ pair-count, requested-amount and
+quote/fill amount panels, LI.FI pair capacity/publication/rejection and fill amount panels, and 3F
+offer amount panels need migration to structured events or the new supported-pair event family. Old pair-labelled counter queries may now
+return unlabelled aggregate rows, while removed-series queries may show stale history or no data;
+neither is a valid pair total or zero activity. OEV's fixed native bid amount family remains compatible. Coordinate
+those dashboard and any external alert/consumer changes before deploying this producer.
 
-UniswapX and RFQ use one shared `solver_bot_quote_results_total` counter with
-`solver, token_in, token_out, result, reason` labels. Each completed HTTP call has one final result;
-sum returned/rejected results for incoming request counts. This includes raw/schema/auth failures,
-not internal strategy attempts or unique orders. RFQ schema validation runs before its typed
-handler, so those refusals have precise reasons and `unknown` pair labels. Older workflow panels
-retain their original domain/selected-before-write semantics and history.
+UniswapX and RFQ now share `solver_bot_quote_results_total{solver,result,reason}`: one final HTTP
+result, including bounded operational refusals. Supported directed pair counts use the separate family below; amounts and individual identities stay in logs.
+Token labels, the requested-amount histogram and token-overflow gauge are removed, as are generic
+quote/fill/offer token amount series. Coarse workflow counts and freshness remain. OEV alone retains
+five prebound native bid amount kinds. Historical samples remain until storage retention expires.
 
-Both use the same small immutable token allowlist: at most 16 configured/trusted startup identities,
-with configured permissioned inputs preferred. Requests never add addresses or decimals. `other`
-means a valid unregistered, later-discovered, overflow or foreign-chain identity; `unknown` means
-unparsed/malformed. Neither is a known pair. Exact typed request pairs remain in logs. The shared
-`solver_bot_quote_requested_amount_tokens` histogram uses trusted decimals and exact requested side;
-missing/conflicting metadata or more than 78 decimal digits omits samples. In particular RFQ request-provided inventory decimals
-are never trusted for metrics. Existing atomic-unit volume metrics remain unchanged.
+`solver_bot_pair_events_total{solver,chain_id,token_in,token_out,event,result,reason}` counts only
+trusted supported directions proven by resolved adapter routes/current validated inventory and input
+policy, never by token symbols or mere individual membership. RFQ optionally discovers configured
+adapter directions in the background; until resolved, validated candidates remain its proof. Zero
+liquidity does not revoke structural eligibility. Unknown pairs and wrong chains allocate no pair
+series. New trusted routes may add series, with no arbitrary cap. Counters are never reset on refresh:
+series scale with supported route history × fixed event/result/reason sets per deployment/process,
+not with request IDs/count. Configuration changes/restarts/retention can still grow TSDB history.
 
-LI.FI uses `solver_bot_quote_published{solver,token_in,token_out,kind="quotes|ranges"}` for current
-last-reconciled standing records. Its existing capacity gauge keeps atomic units and decimal labels;
-capacity is a maximum, not additive liquidity. Incoming upstream quote demand is not visible locally.
-Refresh failures and matched orders retain their distinct existing metrics.
-`solver_bot_quote_standing_rejections_total{solver,token_in,token_out,reason}` counts local build
-skips and failed publication/withdrawal attempts by pair. These are refresh evaluations and submission
-attempts, not upstream user requests. Retries count again; submission errors may have uncertain
-remote acceptance. Pair labels come only from fixed trusted startup routes, with other pairs
-aggregated as `other`. The LI.FI board shows counts by pair/reason for the selected range.
+For UX/RFQ `event="quote"` counts final written responses (`returned/none`) or known-pair refusals
+(`rejected/<bounded reason>`), alongside the coarse HTTP total; do not add these two totals.
+`assignment/observed` uses the existing per-order award observation boundary. LI.FI uses
+`assignment/admitted` for proven owned inbox admissions, which can recur after dequeue/reconnect or
+on another replica. `fill/mined_success` is a successful owned mined receipt, including receipts not
+yet at configured confirmation depth. Existing txmanager ownership/dedup applies; these are neither
+submission counts nor globally unique economic wins. LI.FI `standing_quote` counts acknowledged
+changed records (`published`/`withdrawn`) and local rejection attempts (`rejected/<reason>`), including
+retries, not upstream client quote responses. Scrape loss, restarts and replica ownership still limit
+business totals; log identities permit external dedup. Deployment is a scrape/resource identity,
+not an order-ID label. Optional startup symbol/decimals warm-up is cancellable background work and
+cannot hold the HTTP/order loops behind a symbol RPC.
 
-The three boards use the same pair labels and explicit solver/Namespace filters. New metrics have
-no historical backfill; range increase/rate requires multiple scrapes and can miss the first event.
-Storage must deduplicate HA scrapes of a process before queries sum process observations. Update
-producer and board templates separately.
+UniswapX `quote returned` and RFQ `quote response returned` prove a successful local response write,
+not client receipt. Planner decisions, failed writes, assignments and confirmed fills are distinct
+observations. Known-pair records include exact raw amounts and optional verified decimals/symbols;
+unknown units stay raw. Required fill output is an order requirement, not realized Transfer output
+or PnL. Sampling, debug level, ingestion and retention can make event totals incomplete.
 
-Each JSON file contains a Dashboard Schema v2 specification. Assign its dashboard identity through
-the Dashboard resource's `metadata.name` when provisioning; neither a dashboard UID nor a datasource
-UID is embedded in the template. Grafana resolves the empty `${datasource}` selection on load.
-Discovery uses the scrape labels `namespace` and `kubernetes_pod`; adapt these labels to your
-collector if needed. Runtime RPC queries normalize `exported_role` to `role` when the scraper has
-renamed the exporter's role label, and otherwise retain the native `role` label.
+Configured policy/adapters and the existing API/route validation remain eligibility authorities.
+`pairInScope=true` names the diagnostic proof in `pairScopeSource`: current validated
+inventory/candidates, or LI.FI's explicit resolved-route fallback. It is not a new trading rule or
+complete configured token list. Missing validation can still leave eligible directions unproven.
+Metadata never establishes support. Optional metadata reads reuse the chain-scoped decimals cache;
+startup and new trusted tokens are enriched asynchronously. Rejected arbitrary inputs trigger no optional
+metadata lookup, and unknown decimals are never assumed to be18.
+
+Native UX exclusive assignments and RFQ `quote award pair verified` carry directed pair evidence
+without preceding quote logs. RFQ also retains the initial backend-assignment observation and
+`assignmentObservedAt`; verification can occur later. Consumers must deduplicate stable order/hash
+identity by chain and logical deployment, preserving deployment identity across replicas. These
+observations do not establish every auction win, a fill, or profit; unvalidated assignments remain
+unattributed.
+
+LI.FI emits acknowledged standing pair rows followed by a completion header. Empty/suspended
+snapshots clear earlier state; failed submissions are uncertain. Consumers must check completeness
+and expiry and avoid fallback to older positive capacity after a newer partial/uncertain cohort.
+Replica alternatives and unlike token units must not be summed as independent cash.
+
+LI.FI can observe selection of our standing quote: recovery already filters orders by our executor's
+`exclusiveFor`, and a live payload may explicitly name that executor in `quote.exclusiveFor`.
+These are matched assignments, not price requests or completed fills. The bounded workflow counter
+`matched_order/admitted` counts proven own-match insertions into the existing inbox; queued/recovery
+duplicates are suppressed by that inbox. It has no token/order-ID labels or new identity store.
+After dequeue, reconnect, recovery or on another replica the same assignment may be admitted again:
+this is an admission-observation counter, not a globally unique win total. `matched order admitted`
+logs carry stable order identity for external dedup. Unknown or explicitly foreign live ownership
+is not credited. Upstream client response counts remain unavailable; refresh/publish retries remain
+local attempts, not matches.
+
+Retired LI.FI families are `lifi_active_quote_max_input_atomic_units`, `solver_bot_quote_published`
+and `solver_bot_quote_standing_rejections_total`. They exist in stage; external consumers need an
+explicit migration. New event fields require rollout and cannot backfill old history. No replacement
+dashboard templates, new service/store or telemetry deployment are included in this branch.
 
 ### RFQ rate alerts
 

@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 )
 
@@ -51,8 +51,14 @@ func TestRFQPairMetricsCountFinalHTTPResults(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			m.traffic.Initialize(1, []liquidlane.Route{{TokenIn: tIn, TokenOut: tOut, TokenInDecimals: 18, TokenOutDecimals: 6}}, nil)
 			srv := testServer()
+			metadataCalls := 0
+			srv.quotes.warmMetadata = func(tokens []common.Address) {
+				metadataCalls++
+				if len(tokens) != 2 || tokens[0] != tIn || tokens[1] != tOut {
+					t.Errorf("unexpected trusted metadata tokens: %v", tokens)
+				}
+			}
 			srv.metrics = m
 			body := validQuoteBody()
 			if tc.change != nil {
@@ -90,14 +96,15 @@ func TestRFQPairMetricsCountFinalHTTPResults(t *testing.T) {
 			if response.Code != tc.status {
 				t.Fatalf("status=%d want=%d body=%s", response.Code, tc.status, response.Body)
 			}
-			in, out := lowerAddr(tIn), lowerAddr(tOut)
-			if tc.schema {
-				in, out = "unknown", "unknown"
+
+			wantMetadataCalls := 0
+			if tc.result == "returned" {
+				wantMetadataCalls = 1
 			}
-			if tc.name == "foreign chain" {
-				in = "other"
+			if metadataCalls != wantMetadataCalls {
+				t.Fatalf("metadata calls=%d want=%d", metadataCalls, wantMetadataCalls)
 			}
-			metricstest.RequireFamilyValue(t, reg, "solver_bot_quote_results_total", map[string]string{"solver": Name, "token_in": in, "token_out": out, "result": tc.result, "reason": tc.reason}, 1)
+			metricstest.RequireFamilyValue(t, reg, "solver_bot_quote_results_total", map[string]string{"solver": Name, "result": tc.result, "reason": tc.reason}, 1)
 			families, err := reg.Gather()
 			if err != nil {
 				t.Fatal(err)

@@ -170,6 +170,7 @@ func (s *Solver) pollSource(
 		}
 		if s.trackExclusive(order, now) {
 			s.observeExclusiveWin()
+			s.observeAward(ctx, order)
 		}
 		if !s.claim(order.Hash, now) {
 			observability.Log(ctx).V(1).Info(
@@ -309,4 +310,19 @@ func (s *Solver) complete(hash common.Hash, now time.Time) {
 	delete(s.ownedFillAttempts, hash)
 	s.filled[hash] = now
 	s.stateMu.Unlock()
+}
+
+// observeAward makes a proven assignment self-contained even when the preceding HTTP trace was
+// sampled out. Unsupported directions retain the existing coarse win signal, without pair detail.
+func (s *Solver) observeAward(ctx context.Context, order *resolvedOrder) {
+	if s.metrics != nil && s.metricPairSupported(order.TokenIn, order.TokenOut) {
+		s.metrics.pairs.Assignment(s.chainID, order.TokenIn, order.TokenOut, "observed")
+	}
+	if !s.inventoryPairInScope(order.TokenIn, order.TokenOut, s.quoteState.Load()) {
+		return
+	}
+	observability.Log(ctx).WithValues(s.tokenMetadata.PairLogFields(order.TokenIn, order.TokenOut)...).
+		Info("exclusive quote awarded", "chainId", s.chainID, "orderHash", order.Hash.Hex(),
+			"quoteId", order.QuoteID, "tokenIn", order.TokenIn.Hex(), "tokenOut", order.TokenOut.Hex(),
+			"pairInScope", true, "pairScope", "directed_route", "pairScopeSource", "verified_inventory")
 }

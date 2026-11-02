@@ -10,6 +10,8 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
@@ -152,6 +154,22 @@ func TestParseAndResolveOrder(t *testing.T) {
 	if resolved.AmountIn.Cmp(big.NewInt(100)) != 0 || resolved.AmountOut.Cmp(big.NewInt(210)) != 0 {
 		t.Fatalf("resolved amounts = %s/%s, want 100/210", resolved.AmountIn, resolved.AmountOut)
 	}
+
+	t.Run("native award pair counter deduplicates", func(t *testing.T) {
+		// Exercise the signed native parser result, without a preceding HTTP quote or display metadata.
+		s := newQuoteTestSolver(t, tokenIn, &quoteTestStrategy{})
+		s.metricRoutes = []liquidlane.Route{{TokenIn: tokenIn, TokenOut: tokenOut}}
+		s.exclusiveUntil = make(map[common.Hash]trackedExclusive)
+		metrics, reg := newUniswapXTestMetricsWithRegistry(t, s)
+		s.metrics = metrics
+		for range 2 {
+			if s.trackExclusive(resolved, time.Unix(1_050, 0)) {
+				s.observeAward(t.Context(), resolved)
+			}
+		}
+		metricstest.RequireFamilyValue(t, reg, "solver_bot_pair_events_total", map[string]string{"event": "assignment", "result": "observed"}, 1)
+		requirePairSeries(t, reg, 1)
+	})
 
 	t.Run("accepts the cosigner authorized by each order", func(t *testing.T) {
 		rotatedKey, keyErr := crypto.HexToECDSA(

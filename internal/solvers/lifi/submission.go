@@ -100,12 +100,15 @@ func (s *Solver) submitFill(
 	retryDeadline, _ := liquidlane.SubmissionDeadline(
 		orderDeadline(order), chainTime, chainObservedAt, admissionNow,
 	)
-	plannedSurplus := liquidstrategies.PlannedSurplus(plan.Routes, order.OutputAmount)
 	var observeReceipt func(context.Context, txmanager.Result)
 	if s.metrics != nil {
-		observeReceipt = s.metrics.fillAmounts.ReceiptObserver(
-			order.TokenIn, order.AmountIn, order.TokenOut, order.OutputAmount, plannedSurplus,
-		)
+		// The plan has already been normalized against current trusted fill quotes; no metadata
+		// lookup or request-derived support registry is involved in this receipt observation.
+		if s.cfg.TokenPolicy.Allows(order.TokenIn) {
+			observeReceipt = s.metrics.fillAmounts.ReceiptObserver(s.metrics.pairs.ReceiptObserver(s.chainID, order.TokenIn, order.TokenOut))
+		} else {
+			observeReceipt = s.metrics.fillAmounts.ReceiptObserver()
+		}
 	}
 	result, accepted := s.sendFill(ctx, txmanager.Request{
 		Solver: Name,
@@ -221,8 +224,11 @@ func (s *Solver) completeFill(
 		return nil
 	}
 	if outcome == txmanager.OutcomeConfirmed {
-		observability.Log(ctx).Info("order filled", "orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
-			"quoteId", fill.order.QuoteID, "tx", completion.result.Hash.Hex())
+		observability.Log(ctx).WithValues(s.tokenMetadata.PairLogFields(fill.order.TokenIn, fill.order.TokenOut)...).
+			Info("order filled", "orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
+				"quoteId", fill.order.QuoteID, "tx", completion.result.Hash.Hex(), "chainId", s.chainID,
+				"tokenIn", fill.order.TokenIn.Hex(), "tokenOut", fill.order.TokenOut.Hex(),
+				"amountIn", bigString(fill.order.AmountIn), "requiredAmountOut", bigString(fill.order.OutputAmount))
 		return nil
 	}
 	if outcome == txmanager.OutcomeIncludedUnconfirmed {

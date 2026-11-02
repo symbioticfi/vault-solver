@@ -12,6 +12,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
+	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/observability"
@@ -44,6 +45,8 @@ type executable struct {
 	deadline     int64
 	filler       common.Address
 	outputs      []backendOut
+	// pairInScope is passive proof from this attempt's already-read candidates.
+	pairInScope bool
 }
 
 // executionService polls the backend for open orders and fills them via the Executor. The poll loop
@@ -52,6 +55,7 @@ type executable struct {
 // in-flight set so the two goroutines never handle the same order at once.
 type executionService struct {
 	chainID           int64
+	tokenMetadata     *chain.Decimals
 	executor          common.Address
 	orderLimit        int
 	maxNonceRetries   int
@@ -268,6 +272,9 @@ func (e *executionService) pollOpenOrders(ctx context.Context) (err error) {
 		o := &orders[i]
 		if e.store.upsertQueued(queuedOrder{OrderID: o.OrderID, QuoteID: o.QuoteID}) {
 			e.metrics.observeWin()
+			// Pair identity is available from the quote with this ID; never infer it from a fill.
+			observability.Log(ctx).Info("quote awarded", "chainId", e.chainID,
+				"orderId", o.OrderID, "quoteId", o.QuoteID)
 		}
 	}
 	if len(orders) > 0 {
@@ -379,10 +386,11 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 
 	var observeReceipt func(context.Context, txmanager.Result)
 	if e.metrics != nil {
-		observeReceipt = e.metrics.fillAmounts.ReceiptObserver(
-			order.Request.TokenIn, order.Request.AmountIn, outputToken, required,
-			liquidlane.PlannedSurplus(selected.QuotedAmountOut, required),
-		)
+		var observePair func(context.Context, txmanager.Result)
+		if exec.pairInScope {
+			observePair = e.metrics.pairs.ReceiptObserver(e.chainID, order.Request.TokenIn, outputToken)
+		}
+		observeReceipt = e.metrics.fillAmounts.ReceiptObserver(observePair)
 	}
 	res, sendErr := e.sendFill(ctx, txmanager.Request{
 		Solver: Name,
@@ -451,7 +459,10 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		return
 	}
 	if outcome == txmanager.OutcomeConfirmed {
-		observability.Log(ctx).Info("filled order", "tx", res.Hash.Hex())
+		observability.Log(ctx).WithValues(e.tokenMetadata.PairLogFields(order.Request.TokenIn, outputToken)...).
+			Info("filled order", "tx", res.Hash.Hex(), "chainId", e.chainID,
+				"tokenIn", order.Request.TokenIn.Hex(), "tokenOut", outputToken.Hex(),
+				"amountIn", order.Request.AmountIn.String(), "requiredAmountOut", required.String())
 		if res.Receipt != nil && res.Receipt.BlockNumber != nil {
 			e.store.markIncluded(orderID, res.Receipt.BlockNumber.Uint64())
 		}
@@ -722,6 +733,7 @@ func (e *executionService) buildFillPlan(
 	defer func() { end(err) }()
 	e.planningMu.Lock()
 	defer e.planningMu.Unlock()
+	exec.pairInScope = false
 	pending := func(inventory []solverInventory) liquidlane.CapacityReservations {
 		return e.store.pendingReservations(orderID, inventory)
 	}
@@ -756,6 +768,7 @@ func (e *executionService) buildFillPlan(
 			return nil, errors.Errorf("fill: read LiquidLane candidates: %w", err)
 		}
 	}
+	exec.pairInScope = e.observeAwardPair(ctx, orderID, req, required, candidates)
 	input := newFillInput(e.chainID, e.executor, req, candidates, required, requireSingleRoute, e.now())
 	plan, err = e.strategy.BuildFillPlan(ctx, input)
 	if err != nil || plan == nil {
@@ -772,6 +785,58 @@ func (e *executionService) buildFillPlan(
 		return nil, errors.New("fill: order is no longer active")
 	}
 	return plan, nil
+}
+
+// observeAwardPair enriches an existing backend assignment only after the normal planning path
+// validated its executable terms and obtained current candidates. It performs no reads or sends and
+// does not imply strategy acceptance or a fill. Order identity survives missing quote-log history.
+func (e *executionService) observeAwardPair(ctx context.Context, orderID string, req strategyRequest, required *big.Int, candidates []liquidlane.QuoteCandidate) bool {
+	if e.chainID <= 0 || req.TokenIn == (common.Address{}) || req.TokenOut == (common.Address{}) || req.TokenIn == req.TokenOut ||
+		req.Amount == nil || req.Amount.Sign() <= 0 || required == nil || required.Sign() <= 0 || !e.tokenPolicy.Allows(req.TokenIn) {
+		return false
+	}
+	var route *liquidlane.Route
+	for i := range candidates {
+		candidate := &candidates[i].Route
+		if candidate.TokenIn != req.TokenIn || candidate.TokenOut != req.TokenOut ||
+			candidate.ID != liquidlane.NewRouteID(e.chainID, candidate.Adapter, req.TokenIn, req.TokenOut) {
+			continue
+		}
+		if route != nil && (route.TokenInDecimals != candidate.TokenInDecimals || route.TokenOutDecimals != candidate.TokenOutDecimals) {
+			return false
+		}
+		route = candidate
+	}
+	if route == nil {
+		return false
+	}
+	assignedAt, first := e.store.markAwardPairObserved(orderID)
+	if !first {
+		return true
+	}
+	if e.metrics != nil {
+		e.metrics.pairs.Assignment(e.chainID, req.TokenIn, req.TokenOut, "observed")
+	}
+	// Keep optional cached symbols, but use only current validated candidate decimals for units.
+	var metadata []any
+	fields := e.tokenMetadata.PairLogFields(req.TokenIn, req.TokenOut)
+	for i := 0; i < len(fields); i += 2 {
+		if fields[i] != "tokenInDecimals" && fields[i] != "tokenOutDecimals" {
+			metadata = append(metadata, fields[i], fields[i+1])
+		}
+	}
+	if route.TokenInDecimals >= 0 && route.TokenInDecimals <= 255 {
+		metadata = append(metadata, "tokenInDecimals", route.TokenInDecimals)
+	}
+	if route.TokenOutDecimals >= 0 && route.TokenOutDecimals <= 255 {
+		metadata = append(metadata, "tokenOutDecimals", route.TokenOutDecimals)
+	}
+	observability.Log(ctx).WithValues(metadata...).Info("quote award pair verified",
+		"chainId", e.chainID, "orderId", orderID, "quoteId", req.QuoteID, "assignmentObservedAt", assignedAt.UnixMilli(),
+		"tokenIn", req.TokenIn.Hex(), "tokenOut", req.TokenOut.Hex(),
+		"amountIn", req.Amount.String(), "requiredAmountOut", required.String(),
+		"pairInScope", true, "pairScope", "directed_route", "pairScopeSource", "validated_candidates")
+	return true
 }
 
 // buildDiscountSwapInputs resolves each discount leg's fresh signed discount from the backend and

@@ -34,6 +34,7 @@ type submittedOrderEvent struct {
 	OrderType    string                  `json:"orderType"`
 	Order        json.RawMessage         `json:"order"`
 	QuoteID      *string                 `json:"quoteId,omitempty"`
+	Quote        json.RawMessage         `json:"quote,omitempty"`
 	InputSettler string                  `json:"inputSettler"`
 	Meta         submittedOrderEventMeta `json:"meta"`
 }
@@ -51,6 +52,7 @@ type submittedOrder struct {
 	OrderID        string
 	OnChainOrderID string
 	dedupeKey      string
+	matchSource    string // optional observation proof; never an execution/authorization input
 	processed      chan struct{}
 	recoveryGen    uint64
 	// span is the feed message span this order arrived under. It rides through the inbox and both
@@ -151,6 +153,7 @@ func parseSubmittedOrder(data []byte, cfg *Config, chainID int64) (*submittedOrd
 		OrderID:        event.Meta.OrderID,
 		OnChainOrderID: event.Meta.OnChainOrderID,
 		dedupeKey:      dedupeKey,
+		matchSource:    matchedQuoteSource(event.Quote, cfg.Executor),
 		Order:          parsed.order,
 		InputSettler:   inputSettler,
 		TokenIn:        parsed.tokenIn,

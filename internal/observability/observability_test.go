@@ -2,7 +2,6 @@ package observability
 
 import (
 	"context"
-	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -108,10 +107,7 @@ func TestWorkflowMetricsBindAndReportOnlyDeclaredLabels(t *testing.T) {
 		Strategy:   "webhook",
 		Operations: []string{"poll"},
 		Events:     []WorkflowEventSpec{{Event: "quote", Outcomes: []string{"success", "error"}}},
-		Amounts: []WorkflowAmountSpec{{
-			Event: "quote", Kinds: []string{"input"}, Assets: []string{"0xABC"},
-		}},
-		States: []string{"offers"},
+		States:     []string{"offers"},
 	}
 	metrics, err := NewWorkflowMetrics(reg, "solver-a", spec)
 	if err != nil {
@@ -123,8 +119,6 @@ func TestWorkflowMetricsBindAndReportOnlyDeclaredLabels(t *testing.T) {
 	now := time.Unix(123, 0)
 	metrics.ObserveEventAt("quote", "success", 2, now)
 	metrics.ObserveEventAt("quote", "request-derived", 9, now)
-	metrics.AddAmount("quote", "0xABC", "input", big.NewInt(50))
-	metrics.AddAmount("quote", "0xABC", "request-derived", big.NewInt(90))
 	metrics.ObserveStateAt("offers", 3, now)
 	metrics.ObserveStateAt("request-derived", 8, now)
 
@@ -132,11 +126,8 @@ func TestWorkflowMetricsBindAndReportOnlyDeclaredLabels(t *testing.T) {
 	if count, timestamp := testutil.ToFloat64(event.count), testutil.ToFloat64(event.last); count != 2 || timestamp != 123 {
 		t.Fatalf("event = (%v, %v), want (2, 123)", count, timestamp)
 	}
-	if got := testutil.ToFloat64(metrics.amounts[workflowAmountKey{
-		event: "quote", kind: "input",
-	}].WithLabelValues("0xabc")); got != 50 {
-		t.Fatalf("amount = %v, want 50", got)
-	}
+	metricstest.RequireNoWorkflowAmounts(t, reg, "solver-a")
+	metricstest.RequireNoWorkflowAmounts(t, reg, "solver-b")
 	state := metrics.states["offers"]
 	if count, timestamp := testutil.ToFloat64(state.value), testutil.ToFloat64(state.last); count != 3 || timestamp != 123 {
 		t.Fatalf("state = (%v, %v), want (3, 123)", count, timestamp)
@@ -147,35 +138,13 @@ func TestWorkflowMetricsBindAndReportOnlyDeclaredLabels(t *testing.T) {
 		t.Fatalf("pre-bound error series = %d, want 1", got)
 	}
 	for reason, want := range map[string]float64{
-		workflowDropUnknownEvent:  1,
-		workflowDropUnknownAmount: 1,
-		workflowDropUnknownState:  1,
+		workflowDropUnknownEvent: 1,
+		workflowDropUnknownState: 1,
 	} {
 		metricstest.RequireFamilyValue(t, reg, "solver_bot_workflow_dropped_observations_total", map[string]string{
 			"solver": "solver-a", "reason": reason,
 		}, want)
 	}
-}
-
-func TestWorkflowMetricsAllowSharedPreinitializedAssetsAcrossKinds(t *testing.T) {
-	reg := prometheus.NewRegistry()
-	_, err := NewWorkflowMetrics(reg, "solver", WorkflowSpec{Amounts: []WorkflowAmountSpec{
-		{Event: "quote", Kinds: []string{"input"}, Assets: []string{"0xABC"}},
-		{Event: "quote", Kinds: []string{"output"}, Assets: []string{"0xABC"}},
-	}})
-	if err != nil {
-		t.Fatalf("register shared route asset: %v", err)
-	}
-	families, err := reg.Gather()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, family := range families {
-		if family.GetName() == "solver_bot_workflow_amount_atomic_units_total" && len(family.GetMetric()) == 2 {
-			return
-		}
-	}
-	t.Fatal("shared route asset did not preinitialize both amount kinds")
 }
 
 func TestWorkflowMetricsRejectInvalidSpecBeforeRegistration(t *testing.T) {
@@ -185,9 +154,6 @@ func TestWorkflowMetricsRejectInvalidSpecBeforeRegistration(t *testing.T) {
 		{Events: []WorkflowEventSpec{{Event: "", Outcomes: []string{"success"}}}},
 		{Events: []WorkflowEventSpec{{Event: "quote", Outcomes: []string{""}}}},
 		{Events: []WorkflowEventSpec{{Event: "quote", Outcomes: []string{"ok", "ok"}}}},
-		{Amounts: []WorkflowAmountSpec{{Event: "quote"}}},
-		{Amounts: []WorkflowAmountSpec{{Event: "quote", Kinds: []string{"input"}, Assets: []string{""}}}},
-		{Amounts: []WorkflowAmountSpec{{Event: "quote", Kinds: []string{"input"}, Assets: []string{"0xABC", "0xabc"}}}},
 		{States: []string{"offers", "offers"}},
 	} {
 		reg := prometheus.NewRegistry()

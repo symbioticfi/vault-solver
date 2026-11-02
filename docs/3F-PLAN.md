@@ -427,7 +427,10 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
 **Testing and observability:**
 - **Integration coverage.** `bridgefacilitator` unit coverage is ~16% — pure logic (EIP-712 golden+parity, default-strategy capacity/caps, config) is covered; the HTTP/on-chain paths (apiclient, chainreader, redeemer, Run loop) need an httptest-backed API mock + a simulated/forked chain backend.
 - **Metrics.** The shared bounded workflow families report `offer/{success,error}` and
-  `redeem/success` events plus principal/quoted-expected-yield amounts by deposit asset.
+  `redeem/success` events. Token-address amount counters and their asset budget are removed;
+  `offer submitted` logs retain exact atomic principal/expectedReturn, adapter and request identity.
+  They do not establish deposit-token/decimal identity or exhaustive volume. The unchanged stage
+  dashboard still consumes retired amount metrics and needs a separate migration.
   `solver_bot_workflow_observed_items{solver="3f-bridge-facilitator",view}` reports installed valid
   targets, offers, active requests, and redeemable requests; matching observation freshness
   distinguishes current zeroes from retained last-known-good state. Each
@@ -453,8 +456,8 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
   Complete (including empty), partial/last-known-good, shutdown-interrupted, and failed passes map to
   bounded `success`, `degraded`, `skipped`, and `error` outcomes. Offer strategy execution and API
   submission are outside `offer_refresh`; redemption sends are outside `redeemable_refresh`, so these
-  dependency timings never absorb transaction latency. Successful API offers publish token-native
-  principal/yield workflow amounts. Event freshness accompanies successful offers and redeem batches;
+  dependency timings never absorb transaction latency. Successful API offers retain their structured
+  principal/expectedReturn logs. Event freshness accompanies successful offers and redeem batches;
   transaction outcomes, in-flight requests, gas, and replacements
   remain sourced from txmanager. The API does
   not attribute consumed offers to this solver, so no speculative 3F “wins” or realized-yield counter

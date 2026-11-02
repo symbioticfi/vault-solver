@@ -56,7 +56,7 @@ type quoteResponse struct {
 
 	selectedCandidate liquidlane.CandidateID
 	declineReason     quoteDeclineReason
-	quotedPairBounded bool
+	pairInScope       bool // observation from the exact snapshot used by this decision; never serialized
 }
 
 type orderEntry struct {

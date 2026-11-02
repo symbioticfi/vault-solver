@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"gopkg.in/yaml.v3"
 
+	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/observability"
@@ -40,6 +41,9 @@ type Solver struct {
 	solverAddress common.Address
 	chain         contractCaller
 	reader        chainReader
+	tokenMetadata *chain.Decimals
+	// Resolved once before serving; immutable structural adapter directions, including zero liquidity.
+	metricRoutes  []liquidlane.Route
 	strategy      types.Strategy
 	txm           transactionManager
 	confirmations uint64
@@ -170,6 +174,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		solverAddress:     deps.Signer.Address(),
 		chain:             deps.Chain,
 		reader:            reader,
+		tokenMetadata:     reader.snapshots.TokenMetadata(),
 		strategy:          strategy,
 		txm:               deps.TxManager,
 		confirmations:     deps.TxManager.Confirmations(),
@@ -265,18 +270,27 @@ func (s *Solver) Run(ctx context.Context) error {
 		observability.Log(ctx).Error(startupErr, "initial quote refresh failed", "routes", len(routes))
 		return startupErr
 	}
-	if s.metrics != nil {
-		state := s.quoteState.Load()
-		var inventory []liquidlane.Inventory
-		if state != nil {
-			inventory = state.inventory
+	s.metricRoutes = slices.Clone(routes)
+	// Warm optional log metadata from the trusted startup inventory.
+	startupRoutes := slices.Clone(routes)
+	if state := s.quoteState.Load(); state != nil {
+		for _, item := range state.inventory {
+			startupRoutes = append(startupRoutes, item.Route)
 		}
-		metricRoutes := slices.Clone(routes)
-		for _, item := range inventory {
-			metricRoutes = append(metricRoutes, item.Route)
-		}
-		s.metrics.traffic.Initialize(s.chainID, metricRoutes, s.cfg.TokenPolicy.SingleRouteTokens())
 	}
+
+	var metadataTokens []common.Address
+	for token := range s.cfg.TokenPolicy.SingleRouteTokens() {
+		metadataTokens = append(metadataTokens, token)
+	}
+	for _, route := range startupRoutes {
+		if s.cfg.TokenPolicy.Allows(route.TokenIn) {
+			metadataTokens = append(metadataTokens, route.TokenIn, route.TokenOut)
+		}
+	}
+	metadataCtx, stopMetadata := context.WithCancel(ctx)
+	defer stopMetadata()
+	s.tokenMetadata.WarmMetadataAsync(metadataCtx, metadataTokens, observability.Log(ctx))
 	observability.Log(ctx).Info("starting", "chainId", s.chainID, "solverMode", s.cfg.SolverMode,
 		"reactor", s.cfg.Reactor.Hex(), "executor", s.cfg.Executor.Hex(),
 		"routes", len(routes), "gasAccounting", s.cfg.Gas != nil,

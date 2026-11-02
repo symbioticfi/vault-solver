@@ -100,11 +100,13 @@ func TestObsoleteFillWithOwnedAttemptsWaitsForReceiptMetrics(t *testing.T) {
 				wantSuccess = 1
 			}
 			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeSuccess, wantSuccess)
+			requirePairSeries(t, reg, 1+int(wantSuccess))
+			if wantSuccess > 0 {
+				metricstest.RequireFamilyValue(t, reg, "solver_bot_pair_events_total", pairLabels("fill", "mined_success", "none"), 1)
+			}
 			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeObsolete, 0)
 			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeFailure, 0)
-			if wantSuccess != 0 {
-				metricstest.RequireWorkflowAmount(t, reg, Name, "fill", tIn.Hex(), liquidlane.FillAmountInput, 1e18)
-			}
+			metricstest.RequireNoWorkflowAmounts(t, reg, Name)
 		})
 	}
 }
@@ -148,12 +150,11 @@ func TestLateFillReceiptRecordsMetricsWithoutReopeningOrder(t *testing.T) {
 				t.Fatal("receipt metrics observation changed retired order state or capacity")
 			}
 			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeSuccess, want)
-			if !successful {
-				return
+			requirePairSeries(t, reg, 1+int(want))
+			if want > 0 {
+				metricstest.RequireFamilyValue(t, reg, "solver_bot_pair_events_total", pairLabels("fill", "mined_success", "none"), 1)
 			}
-			metricstest.RequireWorkflowAmount(t, reg, Name, "fill", tIn.Hex(), liquidlane.FillAmountInput, want*1e18)
-			metricstest.RequireWorkflowAmount(t, reg, Name, "fill", tOut.Hex(), liquidlane.FillAmountOutput, want*900_000)
-			metricstest.RequireWorkflowAmount(t, reg, Name, "fill", tOut.Hex(), liquidlane.FillAmountPlannedSurplus, want*50_000)
+			metricstest.RequireNoWorkflowAmounts(t, reg, Name)
 		})
 	}
 }
@@ -173,7 +174,7 @@ func TestOrdinaryFillReceiptRecordsSuccessOnce(t *testing.T) {
 			}
 			syncCycle(t.Context(), e)
 			metricstest.RequireWorkflowEventCount(t, reg, Name, "fill", liquidlane.FillOutcomeSuccess, 1)
-			metricstest.RequireWorkflowAmount(t, reg, Name, "fill", tIn.Hex(), liquidlane.FillAmountInput, 1e18)
+			metricstest.RequireNoWorkflowAmounts(t, reg, Name)
 		})
 	}
 }

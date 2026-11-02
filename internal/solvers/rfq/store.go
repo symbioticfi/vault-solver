@@ -83,6 +83,8 @@ type orderRecord struct {
 	IncludedAt uint64
 	// PeerFillObserved prevents repeated backend reconciliation from crediting the same order.
 	PeerFillObserved bool
+	// AwardPairObserved deduplicates passive pair verification within this existing order lifecycle.
+	AwardPairObserved bool
 	// AttemptHashes retains this process's signed transactions across replacements and retries.
 	// It is guarded by store.mu and retained until the order is swept.
 	AttemptHashes []common.Hash
@@ -162,6 +164,18 @@ func (s *store) upsertQueued(in queuedOrder) bool {
 	rec.QuoteID = parse.OrDefault(in.QuoteID, rec.QuoteID)
 	rec.UpdatedAt = now
 	return inserted
+}
+
+// markAwardPairObserved shares the existing order lifetime; it changes no execution/retry state.
+func (s *store) markAwardPairObserved(orderID string) (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	record := s.orders[orderID]
+	if record == nil || record.AwardPairObserved {
+		return time.Time{}, false
+	}
+	record.AwardPairObserved = true
+	return record.CreatedAt, true
 }
 
 func (s *store) order(orderID string) *orderRecord {

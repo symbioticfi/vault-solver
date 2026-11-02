@@ -168,6 +168,25 @@ func RequireWorkflowAmount(
 	}, want)
 }
 
+// RequireNoWorkflowAmounts checks that a solver exposes no asset amount series.
+func RequireNoWorkflowAmounts(tb testing.TB, gatherer prometheus.Gatherer, solver string) {
+	tb.Helper()
+	families, err := gatherer.Gather()
+	if err != nil {
+		tb.Fatalf("gather metrics: %v", err)
+	}
+	for _, family := range families {
+		if family.GetName() != workflowAmountsFamily {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			if hasLabels(metric, map[string]string{"solver": solver}) {
+				tb.Fatalf("solver %s still exposes workflow asset amounts: %v", solver, metric)
+			}
+		}
+	}
+}
+
 // RequireWorkflowState checks one complete state count and timestamp.
 func RequireWorkflowState(
 	tb testing.TB,
