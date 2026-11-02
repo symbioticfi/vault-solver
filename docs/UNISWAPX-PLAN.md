@@ -723,7 +723,7 @@ independently of optional metadata or preceding quote logs. The decision's exact
 rides only in an unexported response field so refresh races cannot replace it with a stale precheck.
 
 Config, resolved adapter routes and existing policy remain trading eligibility authorities.
-The diagnostic proof is narrower: an eligible route with zero/paused/unavailable capacity may be
+Native assignment proof is narrower: an eligible route with zero/paused/unavailable capacity may be
 absent from current inventory. Missing proof therefore does not mean unsupported. Arbitrary unproven
 HTTP inputs and their inner strategy detail are omitted from business logs, while the nil-forwarded
 trace still collects exact bounded decline reasons. Consumers must deduplicate stable order hashes
@@ -731,8 +731,8 @@ by deployment/chain and keep assignments distinct from confirmed fills.
 
 `solver_bot_pair_events_total` records the supported directed-route subset: final HTTP quote results,
 first live exclusive assignments through existing tracking, and successful owned mined receipts.
-Support reuses immutable startup-resolved routes (including zero capacity), current trusted inventory
-and input policy. No request-time RPC, token registry, arbitrary cap or metadata eligibility gate is
+Support reuses startup-resolved routes, current quote-state routes/inventory and input policy.
+Dynamic proof replaces/expires with quote state (TTL/epoch); zero capacity retains structural scope. No request-time RPC, token registry, arbitrary cap or metadata eligibility gate is
 added. Counters are never reset on refresh; series grow with supported route history and the fixed
 reason/event sets, not requests. Mined receipt counts preserve existing normal/late receipt dedup
 and include not-yet-depth-confirmed successes; they are not global unique auction wins.

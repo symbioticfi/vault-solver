@@ -270,7 +270,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	direct := filterQuoteInventory(snapshotSet.Direct, s.cfg.TokenPolicy)
 	discountBases := filterQuoteInventory(snapshotSet.Physical, s.cfg.TokenPolicy)
 	inventory := append([]liquidlane.Inventory(nil), direct...)
-	discountInventory, discountDegraded := s.quoteDiscountInventories(ctx, discountBases, chainTime)
+	discountInventory, discountDegraded, discountErr := s.quoteDiscountInventories(ctx, discountBases, chainTime)
 	inventory = append(inventory, discountInventory...)
 	var metadataTokens []common.Address
 	for _, item := range inventory {
@@ -298,7 +298,12 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		observability.Log(ctx).Error(err, "quote refresh: strategy")
 		return
 	}
-	s.observeQuoteBuildRejections(ctx, inventory, out.Quotes, "")
+	// Failure affects attribution only: preserve the same inventory/strategy/publication path.
+	var unavailableDiscounts []liquidlane.Inventory
+	if discountErr != nil {
+		unavailableDiscounts = discountBases
+	}
+	s.observeQuoteBuildRejections(ctx, inventory, out.Quotes, "", unavailableDiscounts...)
 	earliestExpiry, latestExpiry := quoteExpiryBounds(out.Quotes)
 	if len(out.Quotes) == 0 {
 		observability.Log(ctx).V(1).Info(

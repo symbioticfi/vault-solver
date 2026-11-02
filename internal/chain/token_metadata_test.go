@@ -4,11 +4,14 @@ import (
 	"context"
 	"reflect"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
@@ -222,4 +225,35 @@ func TestNewTrustedTokenMetadataAsyncDoesNotBlockAndHonorsCancellation(t *testin
 			}
 		})
 	}
+}
+
+func TestTrustedMetadataLogOnceAndNewToken(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		backend := &metadataBackend{decimals: 0, symbol: "NEW.local"}
+		cache := metadataCache(backend)
+		events := make(chan string, 2)
+		log := funcr.NewJSON(func(line string) { events <- line }, funcr.Options{}).WithValues("chainId", 31337)
+		for _, token := range []common.Address{common.HexToAddress("0x1234"), common.HexToAddress("0x5678")} {
+			cache.WarmMetadataAsync(t.Context(), []common.Address{token, token}, log)
+			synctest.Wait()
+			select {
+			case line := <-events:
+				for _, field := range []string{`"msg":"trusted token metadata"`, `"chainId":31337`, `"tokenIn":"` + token.Hex() + `"`, `"tokenInSymbol":"NEW.local"`, `"tokenInDecimals":0`} {
+					if !strings.Contains(line, field) {
+						t.Fatalf("missing %s in %s", field, line)
+					}
+				}
+			default:
+				t.Fatal("new trusted metadata not logged")
+			}
+			cache.WarmMetadataAsync(t.Context(), []common.Address{token}, log)
+			synctest.Wait()
+			if len(events) != 0 {
+				t.Fatal("known token duplicated metadata event")
+			}
+		}
+		if backend.calls != 4 {
+			t.Fatalf("metadata calls=%d want4", backend.calls)
+		}
+	})
 }

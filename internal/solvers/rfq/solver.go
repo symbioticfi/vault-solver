@@ -198,7 +198,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	metadataCtx, stopMetadata := context.WithCancel(ctx)
 	defer stopMetadata()
 	s.server.quotes.warmMetadata = func(tokens []common.Address) {
-		s.server.quotes.tokenMetadata.WarmMetadataAsync(metadataCtx, tokens, observability.Log(metadataCtx))
+		s.server.quotes.tokenMetadata.WarmMetadataAsync(metadataCtx, tokens, observability.Log(metadataCtx).WithValues("chainId", s.server.quotes.chainID))
 	}
 	var metadataTokens []common.Address
 	for token := range s.cfg.TokenPolicy.SingleRouteTokens() {
@@ -207,7 +207,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	for _, vault := range s.exec.vaults {
 		metadataTokens = append(metadataTokens, vault.TokenOut)
 	}
-	s.server.quotes.tokenMetadata.WarmMetadataAsync(metadataCtx, metadataTokens, observability.Log(metadataCtx))
+	s.server.quotes.tokenMetadata.WarmMetadataAsync(metadataCtx, metadataTokens, observability.Log(metadataCtx).WithValues("chainId", s.server.quotes.chainID))
 	s.warmPairRoutes(metadataCtx)
 
 	observability.Log(ctx).Info("starting",

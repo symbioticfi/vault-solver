@@ -6,9 +6,12 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -46,13 +49,16 @@ func newPairTestSolver(t *testing.T) (*Solver, *prometheus.Registry) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Solver{cfg: testLifiConfig(), chainID: 11155111, metrics: m}, reg
+	cfg := testLifiConfig()
+	cfg.QuoteTTL = time.Minute
+	cfg.QuoteInterval = time.Second
+	return &Solver{cfg: cfg, chainID: 11155111, metrics: m}, reg
 }
 
 func TestPairMetricsRequireTrustedDirectionAndRetainNewPairs(t *testing.T) {
 	s, reg := newPairTestSolver(t)
 	r := testQuoteRoute()
-	s.resolvedRoutes = []route{r}
+	s.setPairRoutes([]route{r})
 	// No metadata cache is needed to count a structurally supported zero-capacity direction.
 	s.observeStandingQuoteRejection(t.Context(), r.TokenIn, r.TokenOut, "strategy_declined", nil)
 	for i := int64(1); i <= 1000; i++ {
@@ -65,6 +71,7 @@ func TestPairMetricsRequireTrustedDirectionAndRetainNewPairs(t *testing.T) {
 	metricstest.RequireFamilyValue(t, reg, "solver_bot_pair_events_total", pairEventLabels(s.chainID, r.TokenIn, r.TokenOut, "standing_quote", "rejected", "strategy_declined"), 1)
 	next := r
 	next.TokenIn = common.HexToAddress("0x1234")
+	s.setPairRoutes([]route{r, next})
 	s.observeStandingQuoteRejection(t.Context(), next.TokenIn, next.TokenOut, "strategy_declined", []liquidlane.Inventory{{Route: next}})
 	// An inventory refresh does not reset prior counters; missing metadata does not exclude a new route.
 	s.observeStandingQuoteRejection(t.Context(), r.TokenIn, r.TokenOut, "strategy_declined", nil)
@@ -80,7 +87,7 @@ func TestPairMetricsRequireTrustedDirectionAndRetainNewPairs(t *testing.T) {
 func TestStandingPairMetricsCountAcknowledgedChangesAndActualRetryFailures(t *testing.T) {
 	s, reg := newPairTestSolver(t)
 	r := testQuoteRoute()
-	s.resolvedRoutes = []route{r}
+	s.setPairRoutes([]route{r})
 	fail := false
 	calls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -142,7 +149,7 @@ func TestStandingPairMetricsCountAcknowledgedChangesAndActualRetryFailures(t *te
 func TestMatchedPairMetricsScopeAndExistingInboxDedup(t *testing.T) {
 	s, reg := newPairTestSolver(t)
 	r := testQuoteRoute()
-	s.resolvedRoutes = []route{r}
+	s.setPairRoutes([]route{r})
 	owned := testSubmittedOrder(t, s.cfg, r.TokenIn, r.TokenOut)
 	owned.matchSource = "quote_exclusive_for"
 	q := newOrderInbox(10)
@@ -184,7 +191,7 @@ func TestRefreshPairMetricsIncludeResolvedZeroCapacityAndRefreshFailures(t *test
 		t.Run(reason, func(t *testing.T) {
 			s, reg := newPairTestSolver(t)
 			r := testQuoteRoute()
-			s.resolvedRoutes = []route{r, r}
+			s.setPairRoutes([]route{r, r})
 			s.cfg.Gas = nil
 			s.now = func(context.Context) (time.Time, error) { return time.Unix(1_800_000_000, 0), nil }
 			s.wallNow = func() time.Time { return time.Unix(1_800_000_000, 0) }
@@ -211,7 +218,7 @@ func TestRefreshPairMetricsIncludeResolvedZeroCapacityAndRefreshFailures(t *test
 				s.cfg.TokenPolicy = testTokenPolicy(t, tokenpolicy.Permissioned, common.HexToAddress("0xbeef"))
 			}
 			s.reader, s.strategy = reader, strategy
-			s.refreshQuotes(t.Context(), s.resolvedRoutes, newQuoteState(time.Second))
+			s.refreshQuotes(t.Context(), s.currentPairRoutes(), newQuoteState(time.Second))
 			if reason == "policy_denied" {
 				if count := pairSeriesCount(t, reg); count != 0 {
 					t.Fatalf("denied direction allocated %d series", count)
@@ -222,6 +229,122 @@ func TestRefreshPairMetricsIncludeResolvedZeroCapacityAndRefreshFailures(t *test
 			if count := pairSeriesCount(t, reg); count != 1 {
 				t.Fatalf("duplicate routes/refresh failure allocated %d series", count)
 			}
+		})
+	}
+}
+
+type pairScopeReader struct {
+	fakeLifiReader
+
+	read func(context.Context) ([]route, error)
+}
+
+func (r pairScopeReader) resolveRoutes(ctx context.Context, _ []common.Address) ([]route, error) {
+	return r.read(ctx)
+}
+
+func TestPairScopeRemovalReaddAndZeroInventory(t *testing.T) {
+	s, reg := newPairTestSolver(t)
+	r := testQuoteRoute()
+	changedOutput, changedUnits, added := r, r, r
+	changedOutput.TokenOut = common.HexToAddress("0x5678")
+	changedUnits.TokenInDecimals++
+	added.TokenIn = common.HexToAddress("0x9876")
+	trading := []route{r}
+	var catalog []route
+	s.reader = pairScopeReader{read: func(context.Context) ([]route, error) { return catalog, nil }}
+	for _, tc := range []struct {
+		routes    []route
+		supported bool
+	}{
+		{[]route{r}, true}, {nil, false}, {[]route{changedOutput}, false},
+		{[]route{changedUnits}, false}, {[]route{r, added}, true}, {[]route{r}, true},
+	} {
+		catalog = slices.Clone(tc.routes)
+		s.refreshPairRoutes(t.Context(), trading)
+		stale := []liquidlane.Inventory{{Route: r}}
+		if got := s.pairScopeSource(r.TokenIn, r.TokenOut, stale) != ""; got != tc.supported {
+			t.Fatalf("scope=%v want=%v catalog=%v", got, tc.supported, tc.routes)
+		}
+		if !slices.Equal(catalog, tc.routes) || !slices.Equal(trading, []route{r}) {
+			t.Fatal("observation mutated reader or trading routes")
+		}
+		if s.pairScopeSource(r.TokenOut, r.TokenIn, nil) != "" || s.pairScopeSource(added.TokenIn, added.TokenOut, nil) != "" {
+			t.Fatal("reverse or newly advertised trading direction admitted")
+		}
+		s.observeStandingQuoteRejection(t.Context(), r.TokenIn, r.TokenOut, "no_inventory", stale)
+	}
+	metricstest.RequireFamilyValue(t, reg, "solver_bot_pair_events_total", pairEventLabels(s.chainID, r.TokenIn, r.TokenOut, "standing_quote", "rejected", "no_inventory"), 3)
+	if pairSeriesCount(t, reg) != 1 {
+		t.Fatal("route refresh reset or expanded counter inventory")
+	}
+}
+
+func TestPairScopeDiscoveryLifecycle(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		delay     time.Duration
+		err       error
+		callsAt37 int32
+	}{
+		{"slow success", 1200 * time.Millisecond, nil, 2}, // Four serial300ms reads exceeded the old1s budget.
+		{"error", 0, errors.New("offline"), 3}, {"hung", time.Minute, nil, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				s, reg := newPairTestSolver(t)
+				s.cfg.QuoteTTL, s.cfg.QuoteInterval = 36*time.Second, time.Second
+				r := testQuoteRoute()
+				var calls atomic.Int32
+				s.reader = pairScopeReader{read: func(ctx context.Context) ([]route, error) {
+					calls.Add(1)
+					select {
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					case <-time.After(tc.delay):
+					}
+					return []route{r}, tc.err
+				}}
+				s.setPairRoutes([]route{r})
+				original := s.pairRoutes.Load()
+				s.observeStandingQuoteRejection(t.Context(), r.TokenIn, r.TokenOut, "no_inventory", nil)
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				done := make(chan struct{})
+				go func() { defer close(done); s.observePairRoutes(ctx, []route{r}) }()
+				time.Sleep(11 * time.Second)
+				synctest.Wait()
+				if calls.Load() != 0 {
+					t.Fatal("discovery duplicated startup or used block cadence")
+				}
+				time.Sleep(26 * time.Second)
+				synctest.Wait()
+				renewed := tc.name == "slow success"
+				if calls.Load() != tc.callsAt37 || (s.pairRoutes.Load() != original) != renewed {
+					t.Fatal("read budget, renewal or after-completion spacing regressed")
+				}
+				if renewed {
+					time.Sleep(40 * time.Second)
+					synctest.Wait()
+				} // Beyond two proofTTLs.
+				if (s.pairScopeSource(r.TokenIn, r.TokenOut, nil) != "") != renewed {
+					t.Fatal("proof renewal/expiry regressed")
+				}
+				before := calls.Load()
+				for i := int64(1); i <= 1000; i++ {
+					s.observeStandingQuoteRejection(ctx, common.BigToAddress(big.NewInt(i)), r.TokenOut, "no_inventory", nil)
+				}
+				if before > 6 || calls.Load() != before || pairSeriesCount(t, reg) != 1 {
+					t.Fatal("request-time discovery or untrusted series growth")
+				}
+				cancel()
+				synctest.Wait()
+				select {
+				case <-done:
+				default:
+					t.Fatal("optional discovery ignored cancellation")
+				}
+			})
 		})
 	}
 }
