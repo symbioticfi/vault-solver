@@ -86,6 +86,14 @@ func (r *Reader) ResolveRoutes(ctx context.Context, adapters []common.Address) (
 	return r.liquid.ResolveRoutes(ctx, adapters)
 }
 
+// TokenMetadata is optional observability data; custom/test readers need not provide it.
+func (r *Reader) TokenMetadata() *chain.Decimals {
+	if reader, ok := r.liquid.(*liquidlane.Reader); ok {
+		return reader.TokenMetadata()
+	}
+	return nil
+}
+
 // ValidateGasOracles checks token coverage and the timestamp selector during startup.
 func (r *Reader) ValidateGasOracles(ctx context.Context, routes []liquidlane.Route) error {
 	if r.gas == nil {

@@ -56,10 +56,13 @@ func buildStrategyInput(
 		input.Auctions = append(input.Auctions, auction)
 	}
 	for _, k := range offers.liveEntries(now) {
+		st := offers.offers[k]
 		input.LiveOffers = append(input.LiveOffers, types.LiveOffer{
-			AdapterID: adapterID(k.adapter),
-			AuctionID: k.auction,
-			Principal: cloneBig(offers.offers[k].principal),
+			AdapterID:      adapterID(k.adapter),
+			AuctionID:      k.auction,
+			Principal:      cloneBig(st.principal),
+			ExpectedReturn: cloneBig(st.expectedReturn),
+			Open:           st.open,
 		})
 	}
 	return input

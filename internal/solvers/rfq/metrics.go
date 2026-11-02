@@ -2,12 +2,10 @@ package rfq
 
 import (
 	"context"
-	"math/big"
 	"net/http"
 	"strconv"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -19,6 +17,7 @@ const fillOutcomePeer = "peer"
 type rfqMetrics struct {
 	workflow          *observability.WorkflowMetrics
 	traffic           *liquidlane.QuoteMetrics
+	pairs             *liquidlane.PairMetrics
 	orderPollObserver *observability.OperationObserver
 	duration          *prometheus.HistogramVec
 	activeOrders      prometheus.GaugeFunc
@@ -52,9 +51,6 @@ func newRFQMetrics(
 		}},
 		observability.WorkflowEventSpec{Event: "order_poll", Outcomes: []string{"success"}},
 	)
-	spec.Amounts = append(spec.Amounts, observability.WorkflowAmountSpec{
-		Event: "quote", Kinds: []string{"input", "output"},
-	})
 	workflow, err := observability.NewWorkflowMetrics(reg, Name, spec)
 	if err != nil {
 		return nil, err
@@ -63,9 +59,14 @@ func newRFQMetrics(
 	if err != nil {
 		return nil, err
 	}
+	pairs, err := liquidlane.NewPairMetrics(reg, Name, boundedQuoteReason)
+	if err != nil {
+		return nil, err
+	}
 	m := &rfqMetrics{
 		workflow:          workflow,
 		traffic:           traffic,
+		pairs:             pairs,
 		orderPollObserver: workflow.Operation(orderPollOperation),
 		duration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "rfq_filler_http_request_duration_seconds",
@@ -114,21 +115,6 @@ func boundedQuoteDecisionOutcome(outcome quoteDecisionOutcome) string {
 	return string(quoteDecisionError)
 }
 
-func (m *rfqMetrics) observeQuotedAmounts(observation *quoteObservation) {
-	if m == nil || observation == nil {
-		return
-	}
-	m.addQuotedAmount(observation.tokenIn, "input", observation.amountIn)
-	m.addQuotedAmount(observation.tokenOut, "output", observation.amountOut)
-}
-
-func (m *rfqMetrics) addQuotedAmount(token common.Address, side string, amount *big.Int) {
-	if token == (common.Address{}) || amount == nil || amount.Sign() <= 0 {
-		return
-	}
-	m.workflow.AddAmount("quote", token.Hex(), side, amount)
-}
-
 func (m *rfqMetrics) observeWin() {
 	if m != nil {
 		m.workflow.ObserveEventAt("order", "won", 1, m.now())
@@ -173,7 +159,34 @@ func (m *rfqMetrics) instrument(next http.Handler) http.Handler {
 			if rec.writeError {
 				reason = "response_write_error"
 			}
-			m.traffic.Observe(observation.request, rec.status == http.StatusOK && !rec.writeError, reason)
+			returned := observation.response != nil && rec.status == http.StatusOK && rec.bytesWritten > 0 && !rec.writeError && !observation.panicked
+			if returned {
+				fields := append(observation.fields, "responseWritten", true, "httpStatus", rec.status, "responseBytes", rec.bytesWritten)
+				observability.Log(r.Context()).V(1).Info("quote response returned", fields...)
+			} else if observation.response != nil {
+				if !observation.panicked {
+					reason = "response_write_error"
+				}
+				// Reuse the prepared, scoped fields, replacing the decision reason without
+				// duplicate JSON keys. A failed write is a refusal, never a returned quote.
+				fields := []any{"reason", reason}
+				for i := 0; i < len(observation.fields); i += 2 {
+					if observation.fields[i] != "reason" {
+						fields = append(fields, observation.fields[i], observation.fields[i+1])
+					}
+				}
+				fields = append(fields, "responseWritten", false, "httpStatus", rec.status, "responseBytes", rec.bytesWritten)
+				observability.Log(r.Context()).V(1).Info("quote result", fields...)
+			}
+			if m != nil {
+				m.traffic.Observe(returned, reason)
+				if observation.pairInScope {
+					m.pairs.Quote(observation.chainID, observation.tokenIn, observation.tokenOut, returned, reason)
+				}
+			}
+		}
+		if m == nil {
+			return
 		}
 		labels := prometheus.Labels{
 			"method": methodLabel(r.Method),
@@ -198,9 +211,10 @@ func methodLabel(method string) string {
 type statusRecorder struct {
 	http.ResponseWriter
 
-	status      int
-	wroteHeader bool
-	writeError  bool
+	status       int
+	wroteHeader  bool
+	writeError   bool
+	bytesWritten int
 }
 
 func (s *statusRecorder) WriteHeader(code int) {
@@ -212,7 +226,11 @@ func (s *statusRecorder) WriteHeader(code int) {
 }
 
 func (s *statusRecorder) Write(body []byte) (int, error) {
+	if !s.wroteHeader {
+		s.WriteHeader(http.StatusOK)
+	}
 	n, err := s.ResponseWriter.Write(body)
+	s.bytesWritten += n
 	s.writeError = s.writeError || err != nil || n != len(body)
 	return n, err
 }

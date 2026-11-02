@@ -46,7 +46,7 @@ func TestOfferInputMarshalJSONWireShape(t *testing.T) {
 			MaxRateBps:       200,
 			RateBasisSeconds: 86_400,
 		}},
-		LiveOffers: []LiveOffer{{AdapterID: "adapter-1", AuctionID: 10, Principal: big.NewInt(200)}},
+		LiveOffers: []LiveOffer{{AdapterID: "adapter-1", AuctionID: 10, Principal: big.NewInt(200), ExpectedReturn: big.NewInt(202), Open: true}},
 	}
 
 	body, err := json.Marshal(input)
@@ -73,7 +73,8 @@ func TestOfferInputMarshalJSONWireShape(t *testing.T) {
 	}
 	liveOffers := raw["liveOffers"].([]any)
 	liveOffer := liveOffers[0].(map[string]any)
-	if liveOffer["adapterId"] != "adapter-1" || liveOffer["auctionId"].(float64) != 10 || liveOffer["principal"] != "200" {
+	if liveOffer["adapterId"] != "adapter-1" || liveOffer["auctionId"].(float64) != 10 || liveOffer["principal"] != "200" ||
+		liveOffer["expectedReturn"] != "202" || liveOffer["open"] != any(true) {
 		t.Fatalf("liveOffer wire shape: %#v", liveOffer)
 	}
 }

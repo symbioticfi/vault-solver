@@ -14,6 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
+	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/observability"
@@ -37,23 +38,27 @@ func init() {
 }
 
 type Solver struct {
-	cfg          *Config
-	chainID      int64
-	reader       chainReader
-	strategy     types.Strategy
-	caller       common.Address
-	orders       *orderClient
-	feed         *orderFeed
-	txm          txSender
-	log          logr.Logger
-	now          func(context.Context) (time.Time, error)
-	maxFeePerGas func(context.Context) (*big.Int, error)
-	wallNow      func() time.Time
-	txLaneState  transactionLaneState
-	capacity     liquidlane.CapacityLedger
-	quoteRefresh chan struct{}
-	discounts    discounts.Provider
-	metrics      *lifiMetrics
+	cfg           *Config
+	chainID       int64
+	reader        chainReader
+	tokenMetadata *chain.Decimals
+	warmMetadata  func([]common.Address) // quote-loop lifetime, assigned before its goroutine starts
+	strategy      types.Strategy
+	caller        common.Address
+	orders        *orderClient
+	feed          *orderFeed
+	txm           txSender
+	log           logr.Logger
+	now           func(context.Context) (time.Time, error)
+	maxFeePerGas  func(context.Context) (*big.Int, error)
+	wallNow       func() time.Time
+	txLaneState   transactionLaneState
+	capacity      liquidlane.CapacityLedger
+	quoteRefresh  chan struct{}
+	discounts     discounts.Provider
+	metrics       *lifiMetrics
+
+	resolvedRoutes []route // immutable startup adapter directions, shared by observational callbacks
 }
 
 type chainReader interface {
@@ -113,20 +118,21 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		}
 	}
 	result := &Solver{
-		cfg:          cfg,
-		chainID:      chainID,
-		reader:       reader,
-		strategy:     strategy,
-		caller:       deps.Signer.Address(),
-		orders:       newOrderClient(cfg.OrderServer.BaseURL, apiKey, cfg.OrderServer.HTTPTimeout, chainID),
-		feed:         feed,
-		txm:          deps.TxManager,
-		log:          log,
-		now:          reader.latestBlockTime,
-		maxFeePerGas: deps.TxManager.MaxFeePerGas,
-		wallNow:      time.Now,
-		txLaneState:  deps.TxManager,
-		metrics:      metrics,
+		cfg:           cfg,
+		chainID:       chainID,
+		reader:        reader,
+		tokenMetadata: reader.snapshots.TokenMetadata(),
+		strategy:      strategy,
+		caller:        deps.Signer.Address(),
+		orders:        newOrderClient(cfg.OrderServer.BaseURL, apiKey, cfg.OrderServer.HTTPTimeout, chainID),
+		feed:          feed,
+		txm:           deps.TxManager,
+		log:           log,
+		now:           reader.latestBlockTime,
+		maxFeePerGas:  deps.TxManager.MaxFeePerGas,
+		wallNow:       time.Now,
+		txLaneState:   deps.TxManager,
+		metrics:       metrics,
 	}
 	if cfg.usesDiscounts() {
 		result.discounts = discounts.NewClient(cfg.DiscountsURL)
@@ -199,10 +205,6 @@ func (s *Solver) Run(ctx context.Context) error {
 		return err
 	}
 
-	if s.metrics != nil {
-		s.metrics.quotes.routes = append([]route(nil), routes...)
-	}
-
 	observability.Log(ctx).Info("starting",
 		"chainId", s.chainID,
 		"strategy", s.cfg.Strategy.Name,
@@ -223,6 +225,7 @@ func (s *Solver) Run(ctx context.Context) error {
 		"outputSettler", s.cfg.OutputSettler.Hex(),
 	)
 
+	s.resolvedRoutes = routes
 	s.quoteRefresh = make(chan struct{}, 1)
 	return s.runLoops(ctx, routes)
 }
@@ -233,6 +236,19 @@ func (s *Solver) runLoops(ctx context.Context, routes []route) error {
 	defer stopFeed()
 	quoteCtx, stopQuotes := context.WithCancel(ctx)
 	defer stopQuotes()
+	s.warmMetadata = func(tokens []common.Address) {
+		s.tokenMetadata.WarmMetadataAsync(quoteCtx, tokens, observability.Log(quoteCtx))
+	}
+	var metadataTokens []common.Address
+	for token := range s.cfg.TokenPolicy.SingleRouteTokens() {
+		metadataTokens = append(metadataTokens, token)
+	}
+	for _, route := range routes {
+		if s.cfg.TokenPolicy.Allows(route.TokenIn) {
+			metadataTokens = append(metadataTokens, route.TokenIn, route.TokenOut)
+		}
+	}
+	s.warmMetadata(metadataTokens)
 
 	feedDone := make(chan error, 1)
 	quoteDone := make(chan error, 1)

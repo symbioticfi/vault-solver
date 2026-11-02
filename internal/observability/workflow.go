@@ -1,7 +1,6 @@
 package observability
 
 import (
-	"math/big"
 	"slices"
 	"strings"
 	"time"
@@ -13,19 +12,13 @@ import (
 const unspecifiedWorkflowStrategy = "unspecified"
 
 const (
-	workflowDropUnknownEvent  = "unknown_event"
-	workflowDropUnknownAmount = "unknown_amount"
-	workflowDropUnknownState  = "unknown_state"
+	workflowDropUnknownEvent = "unknown_event"
+	workflowDropUnknownState = "unknown_state"
 )
 
 type workflowEventKey struct {
 	event   string
 	outcome string
-}
-
-type workflowAmountKey struct {
-	event string
-	kind  string
 }
 
 // WorkflowEventSpec declares the bounded outcomes for one integration-owned event.
@@ -34,20 +27,11 @@ type WorkflowEventSpec struct {
 	Outcomes []string
 }
 
-// WorkflowAmountSpec declares the bounded amount kinds for one integration-owned event. Assets may
-// preinitialize configured or authoritative routes; observations can add other validated route assets.
-type WorkflowAmountSpec struct {
-	Event  string
-	Kinds  []string
-	Assets []string
-}
-
 // WorkflowSpec declares one solver's complete bounded workflow metric surface.
 type WorkflowSpec struct {
 	Strategy   string
 	Operations []string
 	Events     []WorkflowEventSpec
-	Amounts    []WorkflowAmountSpec
 	States     []string
 }
 
@@ -61,13 +45,12 @@ type workflowStateMetrics struct {
 	last  prometheus.Gauge
 }
 
-// WorkflowMetrics records homogeneous solver events, amounts, and observed item counts through
-// shared metric families. All event, outcome, kind, and state labels are bound from WorkflowSpec at
+// WorkflowMetrics records homogeneous solver events and observed item counts through shared
+// metric families. All event, outcome, and state labels are bound from WorkflowSpec at
 // construction; runtime input can only select an existing series.
 type WorkflowMetrics struct {
 	operations map[string]*OperationObserver
 	events     map[workflowEventKey]workflowEventMetrics
-	amounts    map[workflowAmountKey]*prometheus.CounterVec
 	states     map[string]workflowStateMetrics
 	dropped    map[string]prometheus.Counter
 }
@@ -104,11 +87,6 @@ func NewWorkflowMetrics(
 		Name:      "workflow_last_event_timestamp",
 		Help:      "Unix timestamp of the last bounded solver workflow event by event and outcome.",
 	}, []string{"event", "outcome"})
-	amounts := prometheus.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "solver_bot",
-		Name:      "workflow_amount_atomic_units_total",
-		Help:      "Solver workflow amounts in asset atomic units; assets and kinds must not be aggregated across unlike units.",
-	}, []string{"event", "asset", "kind"})
 	states := prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Namespace: "solver_bot",
 		Name:      "workflow_observed_items",
@@ -128,10 +106,10 @@ func NewWorkflowMetrics(
 	dropped := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "solver_bot",
 		Name:      "workflow_dropped_observations_total",
-		Help:      "Workflow observations rejected because their event, amount, or state dimension was not declared.",
+		Help:      "Workflow observations omitted because their dimensions were undeclared.",
 	}, []string{"reason"})
 	for _, collector := range []prometheus.Collector{
-		events, lastEvents, amounts, states, lastStates, operations, dropped,
+		events, lastEvents, states, lastStates, operations, dropped,
 	} {
 		if err := wrapped.Register(collector); err != nil {
 			return nil, errors.Errorf("observability: register workflow metric: %w", err)
@@ -141,12 +119,10 @@ func NewWorkflowMetrics(
 	metrics := &WorkflowMetrics{
 		operations: make(map[string]*OperationObserver),
 		events:     make(map[workflowEventKey]workflowEventMetrics),
-		amounts:    make(map[workflowAmountKey]*prometheus.CounterVec),
 		states:     make(map[string]workflowStateMetrics),
 		dropped: map[string]prometheus.Counter{
-			workflowDropUnknownEvent:  dropped.WithLabelValues(workflowDropUnknownEvent),
-			workflowDropUnknownAmount: dropped.WithLabelValues(workflowDropUnknownAmount),
-			workflowDropUnknownState:  dropped.WithLabelValues(workflowDropUnknownState),
+			workflowDropUnknownEvent: dropped.WithLabelValues(workflowDropUnknownEvent),
+			workflowDropUnknownState: dropped.WithLabelValues(workflowDropUnknownState),
 		},
 	}
 	for _, operation := range spec.Operations {
@@ -164,16 +140,6 @@ func NewWorkflowMetrics(
 			metrics.events[key] = workflowEventMetrics{
 				count: events.WithLabelValues(event.Event, outcome),
 				last:  lastEvents.WithLabelValues(event.Event, outcome),
-			}
-		}
-	}
-	for _, amount := range spec.Amounts {
-		for _, kind := range amount.Kinds {
-			key := workflowAmountKey{event: amount.Event, kind: kind}
-			bound := amounts.MustCurryWith(prometheus.Labels{"event": amount.Event, "kind": kind})
-			metrics.amounts[key] = bound
-			for _, asset := range amount.Assets {
-				bound.WithLabelValues(strings.ToLower(asset))
 			}
 		}
 	}
@@ -214,21 +180,6 @@ func validateWorkflowSpec(spec WorkflowSpec) error {
 			}
 		}
 	}
-	for _, amount := range spec.Amounts {
-		if len(amount.Kinds) == 0 {
-			return errors.New("observability: workflow amount kinds are required")
-		}
-		for _, kind := range amount.Kinds {
-			if err := add("amount", amount.Event, kind); err != nil {
-				return err
-			}
-			for _, asset := range amount.Assets {
-				if err := add("amount asset", amount.Event, kind, strings.ToLower(asset)); err != nil {
-					return err
-				}
-			}
-		}
-	}
 	for _, state := range spec.States {
 		if err := add("state", state); err != nil {
 			return err
@@ -263,21 +214,6 @@ func (m *WorkflowMetrics) ObserveEventAt(event, outcome string, count float64, a
 // ObserveEvent records one event at the current wall-clock time.
 func (m *WorkflowMetrics) ObserveEvent(event, outcome string) {
 	m.ObserveEventAt(event, outcome, 1, time.Now())
-}
-
-// AddAmount adds a positive atomic-unit amount to a pre-bound event/kind pair. Empty assets are
-// ignored, unknown pairs increment a bounded drop counter, and asset labels are normalized to lowercase.
-func (m *WorkflowMetrics) AddAmount(event, asset, kind string, amount *big.Int) {
-	if m == nil || asset == "" || amount == nil || amount.Sign() <= 0 {
-		return
-	}
-	metric, ok := m.amounts[workflowAmountKey{event: event, kind: kind}]
-	if !ok {
-		m.dropped[workflowDropUnknownAmount].Inc()
-		return
-	}
-	value, _ := new(big.Float).SetInt(amount).Float64()
-	metric.WithLabelValues(strings.ToLower(asset)).Add(value)
 }
 
 // ObserveStateAt publishes one complete state count and its observation timestamp. Unknown views

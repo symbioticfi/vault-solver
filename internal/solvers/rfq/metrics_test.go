@@ -113,11 +113,14 @@ func TestQuoteDecisionMetricsClassifyAuthenticatedRequestsOnce(t *testing.T) {
 				}
 				metricstest.RequireWorkflowEvent(t, reg, Name, "quote", string(outcome), count, timestamp)
 			}
-			if test.want == quoteDecisionQuoted {
-				metricstest.RequireWorkflowAmount(
-					t, reg, Name, "quote", tIn.Hex(), "input", 1_000_000_000_000_000_000,
-				)
-				metricstest.RequireWorkflowAmount(t, reg, Name, "quote", tOut.Hex(), "output", 1_000_000)
+			families, err := reg.Gather()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, f := range families {
+				if f.GetName() == "solver_bot_workflow_amount_atomic_units_total" {
+					t.Fatal("quote created per-token amount metrics")
+				}
 			}
 		})
 	}

@@ -699,33 +699,51 @@ reason `strategy_error`. Successful strategy results ignore prior candidate decl
 
 Existing workflow outcome labels are retained: semantic reasons map to `declined_invalid_request`,
 planner reasons to `declined_strategy`, exactly once. A shared LiquidLane `QuoteMetrics` helper now
-records final HTTP results separately using `solver_bot_quote_results_total{solver,token_in,token_out,result,reason}`.
+records final HTTP results separately using `solver_bot_quote_results_total{solver,result,reason}`.
 Incoming is the sum of these results, without a separate incoming/rejection counter.
 Metric reason labels normalize hyphens to underscores; structured log reasons and
 workflow outcomes retain their values. `returned/none` requires successful encoding; write failure is `response_write_error`, panic
 `internal_error`. Workflow quote decisions measure selection before the HTTP write.
 
-### Shared pair metrics
+### Optional token log metadata
 
-The helper is also used by Symbiotic RFQ. It owns ordinary Prometheus vectors and a small metadata
-map initialized once before HTTP starts. Known labels come from at most 16 total identities drawn
-from configured permissioned inputs and trusted startup routes/initial inventory, ordered
-deterministically with configured inputs first. Requests never
-extend identities or supply decimal metadata. `other` is valid unregistered/foreign-chain/overflow;
-`unknown` is malformed/unparsed, independently per side. These buckets are not known pairs.
-`solver_bot_quote_token_overflow{solver}` exposes omitted startup identities. Unit tests retain the
-14 configured inputs + trusted outputs, exactly-16 and overflow scenarios using inline data.
+`chain.Decimals` also caches sanitized symbols for trusted tokens. Asynchronous startup warm-up and
+refresh-loop discovery share the same mutex/once-per-token claim; HTTP handlers only read metadata.
+New published inventory may extend log metadata; metadata never decides metric eligibility. RPC failure leaves
+fields unknown, never assumes 18 decimals or changes a quote/fill. Tasks inherit the solver lifecycle
+context; no persistent store/worker service is added. Confirmed fills and explicit award observations
+remain distinct; sampled logs cannot provide an exhaustive pair win history.
 
-`solver_bot_quote_requested_amount_tokens{solver,token,side}` records positive uint256 demand only
-with trusted decimals; EXACT_INPUT uses input and EXACT_OUTPUT uses output units. Conflicting or
-missing metadata skips amount samples without affecting route acceptance. No cross-token sums.
-Per UniswapX process the bound is 324 pairs × 29 final result/reason combinations + 416 classic
-histogram series + one overflow gauge = 9,813 new classic series, created lazily.
+### Coarse quote metrics and pair events
 
-The board shows pair counts/trends, a final refusal table and amount context.
-Queries filter solver and Namespace, calculate rate/increase
-per process, and assume HA scrape deduplication in storage. No backfill is possible from historical
-aggregate metrics. Unit tests cover transport counts, bounded labels, precedence and decimals.
+The shared LiquidLane helper records one final HTTP result with only bounded `solver/result/reason`
+labels. Token demand histograms, the startup token registry/overflow gauge, and quote amount workflow
+observations are removed; individual identities and sizes belong in logs. Token-address fill amount counters are removed as well; existing coarse fill counts/freshness remain unchanged.
+
+`quote returned` is emitted only after successful encoding with `responseWritten=true`; older
+pre-write logs do not prove a write. Native exclusive assignments carry `pairInScope` and
+`pairScopeSource=verified_inventory` from the current validated directed inventory and input policy,
+independently of optional metadata or preceding quote logs. The decision's exact snapshot proof
+rides only in an unexported response field so refresh races cannot replace it with a stale precheck.
+
+Config, resolved adapter routes and existing policy remain trading eligibility authorities.
+The diagnostic proof is narrower: an eligible route with zero/paused/unavailable capacity may be
+absent from current inventory. Missing proof therefore does not mean unsupported. Arbitrary unproven
+HTTP inputs and their inner strategy detail are omitted from business logs, while the nil-forwarded
+trace still collects exact bounded decline reasons. Consumers must deduplicate stable order hashes
+by deployment/chain and keep assignments distinct from confirmed fills.
+
+`solver_bot_pair_events_total` records the supported directed-route subset: final HTTP quote results,
+first live exclusive assignments through existing tracking, and successful owned mined receipts.
+Support reuses immutable startup-resolved routes (including zero capacity), current trusted inventory
+and input policy. No request-time RPC, token registry, arbitrary cap or metadata eligibility gate is
+added. Counters are never reset on refresh; series grow with supported route history and the fixed
+reason/event sets, not requests. Mined receipt counts preserve existing normal/late receipt dedup
+and include not-yet-depth-confirmed successes; they are not global unique auction wins.
+
+Stage dashboard templates are deliberately unchanged; their pair-count, request-amount and
+quote/fill token amount consumers require a separate migration. This branch changes producer events
+and metrics only; no dashboard-query implementation or telemetry deployment is included.
 
 Same-token multi-output orders are priced by their total output and settled with one aggregate approval;
 the Reactor distributes that token among recipients. Mixed-token outputs are declined during parsing and
@@ -910,8 +928,8 @@ in the owning repository and the integration harness pins the resulting revision
   direct + signed-discount routes, actual balance-delta enforcement, same-token multi-output settlement, and
   mock-Reactor coverage. Regenerate and vendor the ABI here, pin the landed RFQ revision in `rfq-integration`,
   and add a canonical-Reactor self-cosign test. Native output remains an optional post-v1 extension (§7).
-- [x] **Pair traffic board.** Reuse shared bounded pair outcomes and requested
-  amount histograms with RFQ; simplify existing-board panels. Retain current workflow metrics and protocol support (§5).
+- [ ] **Dashboard migration (separate change).** Retained stage templates still use token/pair
+  metrics retired by this producer; migrate those consumers to verified structured events before rollout (§5).
 - [x] **Bounded quote rejection diagnostics.** Split existing semantic validation reasons; retain
   protocol/chain acceptance, raw-body/semantic HTTP behavior and workflow aggregate labels. Capture
   homogeneous planner failures without classifying every nil as insufficient capacity (§5).

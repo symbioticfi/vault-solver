@@ -75,8 +75,7 @@ func TestThreeFMetricsObserveCompleteState(t *testing.T) {
 	} {
 		s.observeState(view, count)
 	}
-	token := common.HexToAddress("0x00000000000000000000000000000000000000a1")
-	s.observeSubmittedOffer(token, big.NewInt(1_000), big.NewInt(25))
+	s.observeOfferSubmission("success")
 	m.observeRedeemedRequests(2)
 
 	for view, want := range map[string]float64{
@@ -87,11 +86,7 @@ func TestThreeFMetricsObserveCompleteState(t *testing.T) {
 	}
 	requireThreeFEvent(t, reg, threeFEventOffer, "success", 1, 123)
 	requireThreeFEvent(t, reg, threeFEventRedeem, "success", 2, 123)
-	for kind, want := range map[string]float64{threeFOfferPrincipal: 1_000, threeFOfferExpectedYield: 25} {
-		metricstest.RequireWorkflowAmount(
-			t, reg, Name, threeFEventOffer, strings.ToLower(token.Hex()), kind, want,
-		)
-	}
+	metricstest.RequireNoWorkflowAmounts(t, reg, Name)
 }
 
 func TestThreeFBacklogNonemptySinceTimestampTracksAuthoritativeTransitions(t *testing.T) {

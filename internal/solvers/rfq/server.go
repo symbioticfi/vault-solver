@@ -8,9 +8,9 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
-	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
@@ -77,9 +77,8 @@ func (s *server) handler() http.Handler {
 	// Middleware chain (outer → inner): server span, body cap, access log + request-id, metrics,
 	// panic recovery. The span is outermost so every inner layer runs under the backend's trace.
 	var h = recoverPanics(mux)
-	if s.metrics != nil {
-		h = s.metrics.instrument(h)
-	}
+	// The post-write response event is available even when Prometheus is disabled.
+	h = s.metrics.instrument(h)
 	h = logRequests(h)
 	return observability.TraceHandler(
 		http.MaxBytesHandler(h, maxRequestBytes),
@@ -102,13 +101,6 @@ func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput,
 		observability.AttrQuoteID.String(in.Body.QuoteID),
 	)
 	observation, _ := ctx.Value(quoteMetricsKey).(*quoteHTTPObservation)
-	if observation != nil {
-		r := in.Body
-		observation.request = liquidlane.QuoteMetricRequest{TokenIn: r.TokenIn, TokenOut: r.TokenOut, TokenInChainID: r.TokenInChainID, TokenOutChainID: r.TokenOutChainID, Amount: r.Amount}
-		if r.Type == quoteTypeExactInput {
-			observation.request.Side = "input"
-		}
-	}
 	if !s.authorized(in.Secret) {
 		if observation != nil {
 			observation.reason = "unauthorized"
@@ -117,12 +109,31 @@ func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput,
 		observability.Log(ctx).V(1).Info("rejected /quote: bad shared secret", "requestId", requestID(ctx))
 		return nil, huma.Error403Forbidden("forbidden")
 	}
+	// Preserve existing structural support before optional strategy work can panic. A later
+	// candidate proof may extend this, but raw request tokens alone never establish support.
+	if observation != nil && common.IsHexAddress(in.Body.TokenIn) && common.IsHexAddress(in.Body.TokenOut) &&
+		s.quotes.configuredPairInScope(&in.Body) {
+		observation.pairInScope = true
+		observation.chainID = s.quotes.chainID
+		observation.tokenIn, observation.tokenOut = common.HexToAddress(in.Body.TokenIn), common.HexToAddress(in.Body.TokenOut)
+	}
 	decision, err := s.quotes.quote(ctx, &in.Body)
+	// Only a positive, on-chain-validated decision may extend optional log metadata.
+	if err == nil && decision.response != nil && s.quotes.warmMetadata != nil {
+		s.quotes.warmMetadata([]common.Address{
+			common.HexToAddress(in.Body.TokenIn), common.HexToAddress(in.Body.TokenOut),
+		})
+	}
 	var bad *badRequestError
 	if errors.As(err, &bad) {
 		decision.outcome = quoteDecisionBadRequest
 	}
 	if observation != nil {
+		if decision.metricPairInScope {
+			observation.pairInScope = true
+			observation.chainID = s.quotes.chainID
+			observation.tokenIn, observation.tokenOut = common.HexToAddress(in.Body.TokenIn), common.HexToAddress(in.Body.TokenOut)
+		}
 		observation.reason = string(decision.outcome)
 		if bad != nil {
 			observation.reason = quoteBadRequestReason(&in.Body)
@@ -136,16 +147,45 @@ func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput,
 				observation.reason = "pair_out_of_scope"
 			}
 		}
-		observability.Log(ctx).V(1).Info("quote result", "reason", observation.reason, "tokenIn", in.Body.TokenIn, "tokenOut", in.Body.TokenOut, "tokenInChainId", in.Body.TokenInChainID, "tokenOutChainId", in.Body.TokenOutChainID, "quoteId", in.Body.QuoteID)
+		quoteLog := observability.Log(ctx)
+		pairScope, pairScopeSource := "unknown", "unknown"
+		if decision.pairInScope {
+			pairScope, pairScopeSource = "directed_route", "validated_candidates"
+			quoteLog = quoteLog.WithValues(s.quotes.tokenMetadata.PairLogFields(common.HexToAddress(in.Body.TokenIn), common.HexToAddress(in.Body.TokenOut))...)
+		}
+		fields := []any{"reason", observation.reason, "requestId", requestID(ctx), "quoteId", in.Body.QuoteID,
+			"pairInScope", decision.pairInScope, "pairScope", pairScope, "pairScopeSource", pairScopeSource}
+		if decision.pairInScope {
+			fields = append(fields, "protocol", in.Body.Protocol, "tokenIn", in.Body.TokenIn, "tokenOut", in.Body.TokenOut,
+				"tokenInChainId", in.Body.TokenInChainID, "tokenOutChainId", in.Body.TokenOutChainID,
+				"type", in.Body.Type, "amount", in.Body.Amount)
+		}
+		if decision.response != nil {
+			fields = append(fields, "amountIn", decision.response.AmountIn, "amountOut", decision.response.AmountOut)
+			observation.response = decision.response
+			observation.fields = append(s.quotes.tokenMetadata.PairLogFields(common.HexToAddress(in.Body.TokenIn), common.HexToAddress(in.Body.TokenOut)), fields...)
+		}
+		if decision.response != nil {
+			// The transport wrapper emits the only detailed terminal event after writing.
+			observability.Log(ctx).V(1).Info("quote result", "reason", observation.reason,
+				"requestId", requestID(ctx), "quoteId", in.Body.QuoteID,
+				"pairInScope", decision.pairInScope, "pairScope", pairScope, "pairScopeSource", pairScopeSource)
+		} else {
+			quoteLog.V(1).Info("quote result", fields...)
+		}
 	}
 	s.metrics.observeQuoteDecision(decision.outcome)
-	s.metrics.observeQuotedAmounts(decision.observation)
 	if err != nil {
 		if bad != nil {
 			return nil, huma.Error400BadRequest(bad.Error())
 		}
-		backendErrorLogger(observability.Log(ctx), err).
-			Error(err, "quote failed", "quoteId", in.Body.QuoteID, "requestId", requestID(ctx))
+		if decision.pairInScope {
+			backendErrorLogger(observability.Log(ctx), err).
+				Error(err, "quote failed", "quoteId", in.Body.QuoteID, "requestId", requestID(ctx))
+		} else {
+			observability.Log(ctx).Error(errors.New("quote dependency failed before directed pair validation"),
+				"quote failed", "quoteId", in.Body.QuoteID, "requestId", requestID(ctx), "pairInScope", false)
+		}
 		return nil, huma.Error502BadGateway("quote failed")
 	}
 	if decision.response == nil {

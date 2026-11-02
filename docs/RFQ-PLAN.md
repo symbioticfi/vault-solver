@@ -652,25 +652,45 @@ removed body field.
 
 Merkle connector acquisition is owned by `internal/solvers/merkle/rfq`, as described in [RFQ-MERKLE.md](RFQ-MERKLE.md). The backend uses an explicit optional recipeExecutor binding for each adapter: absent means native adapter; present means connector. It estimates capacity from recipe reads and checks current roles with batched RPC calls, without scanning historical block ranges or fetching curator permission trees. Advertised maxAssets is a read estimate; exact ordered funding and settlement are validated by the solver's complete outer fill simulation. It supplies `maxAssets`, account and discount precision in quote inventory, without `recipeExecutor`. The solver chooses native behavior from local `adapters` configuration or Merkle behavior from local `recipeExecutor`; configuring both fails startup. Merkle mode derives its payment connector from the committed recipe and shares the existing Merkle fill component. Missing executors fail closed. Regular connector quote admission consumes backend capacity, clips it by current `remainingAssets` and subtracts account/asset reservations. The Merkle execution path reads the unchanged original recipe from `SetRecipe` only at the executor's known publication block, fetches the existing permission tree, verifies current roles and simulates the complete outer RFQ fill. It uses the shared chain reader without a separate publication indexer URL. The recipe commits one signed swap with the awarded amount and payment as inputs 0 and 1; no capacity metadata or embedded proofs are added. Include that asset's original issuer grants when redemption is required; route failures never fall back to custody.
 
-### Shared quote-pair transport diagnostics
+### Optional token log metadata
 
-RFQ means this repository's Symbiotic `rfq-filler`, not UniswapX RFQ. HTTP middleware records one
-`solver_bot_quote_results_total{solver,token_in,token_out,result,reason}` result per completed
-`POST /quote`; incoming count is its sum. Huma schema errors, unauthorized requests, domain declines,
-upstream failures, recovered panics and failed response writes are included; health/docs/internal
-quote evaluation are excluded. Existing workflow/domain and HTTP counters remain unchanged.
+RFQ shares the existing chain metadata cache. Only a positive quote decision, after adapter/asset and
+input decimals validation, can schedule new metadata; rejected arbitrary inputs cannot. Reads are
+asynchronous under a cancellable solver lifetime context, not the HTTP request. Missing metadata
+remains unknown and cannot change quoting. Optional metadata does not determine pair metric eligibility. Startup warm-up is also asynchronous and cancellable.
 
-A passive Huma transformer maps fixed validation locations to bounded reasons without changing
-responses, auth/validation order or supported type/protocol. Omitted required body keys use the
-same fixed field precedence as invalid values; missing IDs are distinct from malformed IDs. Schema failures occur before typed
-handler entry and use unknown pair labels, avoiding another body parser. Typed requests supply pair
-identities before auth; wrong chains map to other, with unsupported_chain retained as the reason.
-The original lane-before-not-quotable precedence is preserved. Unknown errors remain bounded error
-categories; arbitrary validation messages, webhook text, IDs and credentials never become labels.
+### Coarse transport metrics and pair events
 
-The same small LiquidLane helper as UniswapX initializes its bounded identity map before serving
-HTTP from configured input tokens and already-resolved on-chain vault assets. No request-provided
-inventory addresses/decimals are learned. Requested-amount samples require trusted decimals; absent
-RFQ input metadata omits normalized samples, while existing quoted atomic-unit volumes remain.
-The RFQ board adds the common pair counts/trend and exact refusal table; existing historical
-aggregates remain. New metrics do not backfill, and storage must deduplicate HA scrapes.
+RFQ means this repository's Symbiotic `rfq-filler`, not UniswapX RFQ. The shared
+`solver_bot_quote_results_total{solver,result,reason}` counter records one completed HTTP result.
+Huma validation locations still map passively to deterministic bounded reasons; API validation,
+auth order and trading decisions are unchanged. No token identity/amount histogram or quote amount
+workflow series is exported. Token-address fill amount counters are removed;
+fill quantities remain structured logs while bounded fill counts/freshness keep their existing semantics.
+
+`quote result` remains a planner decision. `quote response returned` is emitted after a successful
+200/nonempty/error-free HTTP write, independently of Prometheus being enabled. Failed writes and
+panics cannot produce that return event. A successful planner decision is not proof of a write.
+`quote awarded` remains the backend assignment observation. A new `quote award pair verified` event
+records the directed pair and order/quote/chain identity after the existing fill planner validates
+exact current candidates and input policy. One flag in the existing TTL-owned order record suppresses
+repeat observations; no extra RPC, history cache or execution decision is introduced. This event needs
+no prior quote log for pair attribution. Consumers must deduplicate deployment/chain/order identity
+and distinguish assignmentObservedAt from later verification time. Early refusals before candidate
+validation remain unscoped; this does not establish that a configured pair is unsupported. Policy,
+adapter/request inventory and existing candidate validation remain the trading authorities; the
+added proof is diagnostic only. Arbitrary unproven token/amount detail is omitted. Missing validation,
+sampling and retention prevent complete totals. Fills remain separate.
+
+The stage dashboard templates are deliberately retained unchanged; their token/pair metric consumers
+need separate migration. No new database, RPC lookup for rejected arbitrary tokens, dashboard-query
+harness or dashboard publication is introduced.
+
+Supported directed pair aggregates use `solver_bot_pair_events_total`, separate from the coarse
+HTTP total. Final HTTP result, verified award (existing order-record flag), and successful owned
+mined receipt boundaries are preserved. Configured adapter directions are optionally resolved once
+in the background into an immutable slice; until available, current validated candidates remain the
+proof. This never delays serving or adds arbitrary input RPCs. Policy gates direction observations;
+zero liquidity does not invalidate a resolved structural route. No counter reset, learned request
+registry or token cap is introduced. Cardinality follows supported route history × fixed outcomes,
+not quote IDs/count. Replica-local award observations are not globally unique economic wins.

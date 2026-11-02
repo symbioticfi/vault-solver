@@ -149,7 +149,9 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` â€
   ingress; a result lacking both an ID and transaction hash cannot fabricate lifecycle transitions. The
   eviction ring prefers settled records, and an in-flight reservation retains its observed-win transition
   even if its lifecycle record ages out. Late and post-restart frames for our callback still advance
-  lifecycle counts; amount series advance only when this process retained the original bid amount. A won
+  lifecycle counts; amount series advance only when this process retained the original bid amount.
+  The amount collector is integration-owned and prebinds only the fixed native asset/lifecycle stages,
+  preserving its existing metric family/labels without the removed generic token amount API or cap. A won
   reservation's fallback TTL starts at the observed win rather than enqueue time, so a just-won bid cannot
   be classified unresolved immediately. `unresolved` is a local timeout observation rather than a disjoint
   terminal state, so a later result also advances its settlement outcome. Breaker failures include late

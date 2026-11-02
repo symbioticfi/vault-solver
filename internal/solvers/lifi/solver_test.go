@@ -282,8 +282,11 @@ func TestRunGatesQuotesOnRecoveryAndDisconnect(t *testing.T) {
 		wallNow:      func() time.Time { return time.Unix(wallUnix.Load(), 0) },
 		txLaneState:  alwaysReadyTransactionLane(),
 	}
+	metadata, symbolStarted, symbolCanceled := blockedLIFISymbolMetadata(t, []common.Address{tokenIn, tokenOut})
+	solver.tokenMetadata = metadata
 	done := make(chan error, 1)
 	go func() { done <- solver.Run(ctx) }()
+	expectSignal(t, symbolStarted)
 
 	expectSignal(t, recoveryStarted)
 	select {
@@ -313,6 +316,7 @@ func TestRunGatesQuotesOnRecoveryAndDisconnect(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("Run did not stop")
 	}
+	expectSignal(t, symbolCanceled)
 }
 
 func TestQuoteLoopExpiresQuotesOnRootCancellation(t *testing.T) {

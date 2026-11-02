@@ -35,6 +35,7 @@ var (
 // the framework's /metrics). All methods are nil-safe so the solver runs unmetered when no registry
 // is provided.
 type metrics struct {
+	nativeBidAmounts  map[string]prometheus.Counter
 	workflow          *observability.WorkflowMetrics
 	wonInflight       prometheus.GaugeFunc
 	oldestWonInflight prometheus.GaugeFunc
@@ -65,16 +66,21 @@ func newMetrics(
 			{Event: "breaker", Outcomes: []string{"failure"}},
 			{Event: "state_refresh", Outcomes: []string{"success"}},
 		},
-		Amounts: []observability.WorkflowAmountSpec{{
-			Event: "bid", Kinds: bidLifecycleStages[:], Assets: []string{"native"},
-		}},
 	})
 	if err != nil {
 		return nil, err
 	}
 	reg = prometheus.WrapRegistererWith(prometheus.Labels{"strategy": strategyName}, reg)
+	// Native currency is a fixed unit; prebind every allowed lifecycle kind without asset-derived labels.
+	nativeBidAmounts := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace:   "solver_bot",
+		Name:        "workflow_amount_atomic_units_total",
+		Help:        "Solver workflow amounts in asset atomic units; assets and kinds must not be aggregated across unlike units.",
+		ConstLabels: prometheus.Labels{"solver": Name, "event": "bid", "asset": "native"},
+	}, []string{"kind"})
 	m := &metrics{
-		workflow: workflow,
+		nativeBidAmounts: make(map[string]prometheus.Counter, len(bidLifecycleStages)),
+		workflow:         workflow,
 		wonInflight: prometheus.NewGaugeFunc(prometheus.GaugeOpts{
 			Name: "oev_won_inflight",
 			Help: "Locally observed winning bids awaiting settlement.",
@@ -107,11 +113,14 @@ func newMetrics(
 		now: time.Now,
 	}
 	for _, collector := range []prometheus.Collector{
-		m.wonInflight, m.oldestWonInflight, m.hotPath, m.deposit, m.depositBelowFloor, m.feedConnected,
+		nativeBidAmounts, m.wonInflight, m.oldestWonInflight, m.hotPath, m.deposit, m.depositBelowFloor, m.feedConnected,
 	} {
 		if err := reg.Register(collector); err != nil {
 			return nil, errors.Errorf("redstoneoev: register metric: %w", err)
 		}
+	}
+	for _, kind := range bidLifecycleStages {
+		m.nativeBidAmounts[kind] = nativeBidAmounts.WithLabelValues(kind)
 	}
 	return m, nil
 }
@@ -165,7 +174,10 @@ func (m *metrics) settlement(success bool, amount *big.Int) {
 
 func (m *metrics) observeBid(outcome string, amount *big.Int) {
 	m.workflow.ObserveEventAt("bid", outcome, 1, m.now())
-	m.workflow.AddAmount("bid", "native", outcome, amount)
+	if counter := m.nativeBidAmounts[outcome]; counter != nil && amount != nil && amount.Sign() > 0 {
+		value, _ := new(big.Float).SetInt(amount).Float64()
+		counter.Add(value)
+	}
 }
 
 func (m *metrics) unresolvedWins(count int) {

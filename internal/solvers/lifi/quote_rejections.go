@@ -2,7 +2,6 @@ package lifi
 
 import (
 	"context"
-	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -11,46 +10,45 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 )
 
-// Count a pair once per failed build evaluation, irrespective of routes, discounts or ranges.
-// A missing strategy output has no proven liquidity/capacity cause, so retain strategy_declined.
-func (s *Solver) observeQuoteBuildRejections(ctx context.Context, routes []route, inventory []liquidlane.Inventory, quotes []types.Quote, reason string) {
-	if s.metrics == nil {
-		return
-	}
+// Observe each trusted direction once per local refresh evaluation, irrespective of adapter count.
+// Resolved routes retain structural support at zero capacity; current inventory may add a newly
+// trusted direction. Missing inventory is distinct from a strategy declining an available pair.
+func (s *Solver) observeQuoteBuildRejections(ctx context.Context, inventory []liquidlane.Inventory, quotes []types.Quote, reason string) {
 	seen := make(map[[2]common.Address]bool)
-	for _, r := range routes {
+	observe := func(r route, hasInventory bool) {
+		if !s.cfg.TokenPolicy.Allows(r.TokenIn) {
+			return
+		}
 		pair := [2]common.Address{r.TokenIn, r.TokenOut}
 		if seen[pair] {
-			continue
+			return
 		}
 		seen[pair] = true
 		pairReason := reason
 		if pairReason == "" {
-			quoted := false
 			for _, q := range quotes {
-				quoted = quoted || q.FromAsset == r.TokenIn && q.ToAsset == r.TokenOut
-			}
-			if quoted {
-				continue
-			}
-			pairReason = "no_inventory"
-			for _, item := range inventory {
-				if item.TokenIn == r.TokenIn && item.TokenOut == r.TokenOut {
-					pairReason = "strategy_declined"
-					break
+				if q.FromAsset == r.TokenIn && q.ToAsset == r.TokenOut {
+					return
 				}
 			}
-			if !s.cfg.TokenPolicy.Allows(r.TokenIn) {
-				pairReason = "pair_out_of_scope"
+			pairReason = "no_inventory"
+			if hasInventory {
+				pairReason = "strategy_declined"
 			}
 		}
-		s.observeStandingQuoteRejection(ctx, r.TokenIn, r.TokenOut, pairReason)
+		s.observeStandingQuoteRejection(ctx, r.TokenIn, r.TokenOut, pairReason, inventory)
+	}
+	for _, item := range inventory {
+		observe(item.Route, true)
+	}
+	for _, r := range s.resolvedRoutes {
+		observe(r, false)
 	}
 }
 
 // Failed submission is an observation of a local attempt; remote acceptance may be uncertain.
 // Withdrawals are separate from publication, including when both occur in one batch.
-func (s *Solver) observeQuoteSubmitError(ctx context.Context, quotes []types.Quote) {
+func (s *Solver) observeQuoteSubmitError(ctx context.Context, quotes []types.Quote, inventory []liquidlane.Inventory) {
 	for _, reason := range []string{"publish_error", "withdrawal_error"} {
 		seen := make(map[[2]common.Address]bool)
 		for _, q := range quotes {
@@ -60,31 +58,67 @@ func (s *Solver) observeQuoteSubmitError(ctx context.Context, quotes []types.Quo
 			pair := [2]common.Address{q.FromAsset, q.ToAsset}
 			if !seen[pair] {
 				seen[pair] = true
-				s.observeStandingQuoteRejection(ctx, q.FromAsset, q.ToAsset, reason)
+				s.observeStandingQuoteRejection(ctx, q.FromAsset, q.ToAsset, reason, inventory)
 			}
 		}
 	}
 }
 
-func (s *Solver) observeStandingQuoteRejection(ctx context.Context, in, out common.Address, reason string) {
-	if s.metrics == nil {
+func (s *Solver) observeStandingQuoteRejection(ctx context.Context, in, out common.Address, reason string, inventory []liquidlane.Inventory) {
+	source := s.pairScopeSource(in, out, inventory)
+	if source == "" {
 		return
 	}
+	reason = boundedStandingQuoteReason(reason)
+	if s.metrics != nil {
+		s.metrics.pairs.Standing(s.chainID, in, out, "rejected", reason)
+	}
+	observability.Log(ctx).WithValues(s.tokenMetadata.PairLogFields(in, out)...).V(1).Info("standing quote rejected", "chainId", s.chainID, "reason", reason, "tokenIn", in.Hex(), "tokenOut", out.Hex(), "pairInScope", true, "pairScope", "directed_route", "pairScopeSource", source)
+}
+
+func boundedStandingQuoteReason(reason string) string {
 	switch reason {
 	case "lane_unavailable", "chain_time_error", "snapshot_error", "gas_price_error", "strategy_error",
 		"pair_out_of_scope", "no_inventory", "strategy_declined", "publish_error", "withdrawal_error":
+		return reason
 	default:
-		reason = "unknown"
+		return "unknown"
 	}
-	// Only a pair from immutable startup routes can enter labels. No webhook/request/error data
-	// grows this set. The bound is the configured route-pair count plus one unresolved bucket.
-	inLabel, outLabel := "other", "other"
-	for _, r := range s.metrics.quotes.routes {
-		if r.TokenIn == in && r.TokenOut == out {
-			inLabel, outLabel = strings.ToLower(in.Hex()), strings.ToLower(out.Hex())
-			break
+}
+
+// The existing resolved adapter slice proves structural direction even while capacity is zero.
+// Current validated inventory also admits newly discovered trusted directions; metadata is irrelevant.
+func (s *Solver) pairScopeSource(in, out common.Address, inventory []liquidlane.Inventory) string {
+	if s.cfg == nil || !s.cfg.TokenPolicy.Allows(in) {
+		return ""
+	}
+	for _, item := range inventory {
+		if item.TokenIn == in && item.TokenOut == out {
+			return "current_inventory"
 		}
 	}
-	s.metrics.quotes.rejections.WithLabelValues(inLabel, outLabel, reason).Inc()
-	observability.Log(ctx).V(1).Info("standing quote rejected", "reason", reason, "tokenIn", in.Hex(), "tokenOut", out.Hex())
+	for _, route := range s.resolvedRoutes {
+		if route.TokenIn == in && route.TokenOut == out {
+			return "resolved_route"
+		}
+	}
+	return ""
+}
+
+// Count successful changed records only, including explicit empty-range withdrawals. This is
+// acknowledgement by the standing-quote server, not an observed response to a client quote request.
+func (s *Solver) observeStandingQuoteSubmission(quotes []types.Quote, inventory []liquidlane.Inventory) {
+	if s.metrics == nil {
+		return
+	}
+	for _, q := range quotes {
+		if s.pairScopeSource(q.FromAsset, q.ToAsset, inventory) == "" {
+			continue
+		}
+		result := "published"
+		if len(q.Ranges) == 0 {
+			result = "withdrawn"
+		}
+		s.metrics.pairs.Standing(s.chainID, q.FromAsset, q.ToAsset, result, "")
+	}
 }

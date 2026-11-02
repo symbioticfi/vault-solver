@@ -445,3 +445,27 @@ func TestResolveAdaptersDropsUnauthorized(t *testing.T) {
 		t.Errorf("adapter 1 signer = %s, want %s (kept for diagnostics)", got[1].signer.Hex(), signer1.Hex())
 	}
 }
+
+// TestLiquidityAndExposureReadsRequests: the exposure read enumerates requests(i) for requestsLength
+// slots in a second multicall so the offer cache can drop chain-confirmed funded offers.
+func TestLiquidityAndExposureReadsRequests(t *testing.T) {
+	req0, req1 := common.Address{0x01}, common.Address{0x02}
+	round1 := abiEncodeAggregate3Results(t,
+		abiEncodeUint256(t, 460_000),   // getMaxAssets
+		abiEncodeUint256(t, 82_000),    // minYieldPerRequest
+		abiEncodeUint256(t, 0),         // minAssetsPerRequest
+		abiEncodeUint256(t, 1_000_000), // maxAssetsPerRequest
+		abiEncodeUint256(t, 2),         // requestsLength
+	)
+	round2 := abiEncodeAggregate3Results(t, abiEncodeAddress(t, req0), abiEncodeAddress(t, req1))
+	c, stop := newMulticallFakeClient(t, round1, round2)
+	defer stop()
+
+	st, err := newReader(c, common.Address{}).liquidityAndExposure(t.Context(), common.Address{0xAD})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.openCount != 2 || len(st.requests) != 2 || st.requests[0] != req0 || st.requests[1] != req1 {
+		t.Fatalf("exposure = %+v, want 2 requests %s, %s", st, req0.Hex(), req1.Hex())
+	}
+}

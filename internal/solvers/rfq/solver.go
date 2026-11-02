@@ -13,7 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	merklerfq "github.com/symbioticfi/vault-solver/internal/solvers/merkle/rfq"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
@@ -126,7 +126,12 @@ func buildServices(
 	quoteWhitelist := buildAdapterWhitelist(cfg.quoteScopesToAdapters(), cfg.Adapters)
 	execWhitelist := buildAdapterWhitelist(cfg.restrictsToAdapters(), cfg.Adapters)
 
+	var tokenMetadata *chain.Decimals
+	if rdr != nil {
+		tokenMetadata = rdr.ll.TokenMetadata()
+	}
 	quotes := &quoteService{
+		tokenMetadata:    tokenMetadata,
 		discountsEnabled: cfg.usesDiscounts(),
 		recipeExecutor:   cfg.RecipeExecutor,
 		chainID:          chainID,
@@ -143,6 +148,7 @@ func buildServices(
 		now:              time.Now,
 	}
 	exec := &executionService{
+		tokenMetadata:    tokenMetadata,
 		chainID:          chainID,
 		executor:         cfg.Executor,
 		orderLimit:       cfg.OrderLimit,
@@ -207,13 +213,20 @@ func (s *Solver) Run(ctx context.Context) error {
 		}
 	}
 
-	if s.server.metrics != nil {
-		metricRoutes := make([]liquidlane.Route, 0, len(s.exec.vaults))
-		for _, vault := range s.exec.vaults {
-			metricRoutes = append(metricRoutes, liquidlane.Route{TokenOut: vault.TokenOut, TokenOutDecimals: vault.TokenOutDecimals})
-		}
-		s.server.metrics.traffic.Initialize(s.server.quotes.chainID, metricRoutes, s.cfg.TokenPolicy.SingleRouteTokens())
+	metadataCtx, stopMetadata := context.WithCancel(ctx)
+	defer stopMetadata()
+	s.server.quotes.warmMetadata = func(tokens []common.Address) {
+		s.server.quotes.tokenMetadata.WarmMetadataAsync(metadataCtx, tokens, observability.Log(metadataCtx))
 	}
+	var metadataTokens []common.Address
+	for token := range s.cfg.TokenPolicy.SingleRouteTokens() {
+		metadataTokens = append(metadataTokens, token)
+	}
+	for _, vault := range s.exec.vaults {
+		metadataTokens = append(metadataTokens, vault.TokenOut)
+	}
+	s.server.quotes.tokenMetadata.WarmMetadataAsync(metadataCtx, metadataTokens, observability.Log(metadataCtx))
+	s.warmPairRoutes(metadataCtx)
 
 	observability.Log(ctx).Info("starting",
 		"listenAddr", s.cfg.ListenAddr,

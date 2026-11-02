@@ -15,14 +15,22 @@ type offerKey struct {
 	auction int64
 }
 
-// offerState is one outstanding offer: when it expires and the principal it covers.
+// offerState is one outstanding offer: when it expires, its signed terms, its request contract, and
+// whether 3F has yet to accept it (status SUBMITTED, so a re-post with the same nonce replaces it) or
+// reports it funded (status SUCCEEDED, dropped once the chain confirms the loan).
 type offerState struct {
-	expiry    time.Time
-	principal *big.Int
+	expiry         time.Time
+	principal      *big.Int
+	expectedReturn *big.Int
+	nonce          *big.Int
+	request        common.Address
+	open           bool
+	funded         bool
 }
 
-// offerTracker remembers our outstanding offers per (adapter, auction) so we don't re-offer through the
-// same adapter while one is live, and so we can tell when an auction is fully covered. It is a snapshot
+// offerTracker remembers our outstanding offers per (adapter, auction) so the strategy knows what each
+// adapter already holds on an auction (dedup or top-up), and so we can tell how much of an auction we
+// cover. It is a snapshot
 // of the 3F API's live offers, rebuilt from the API before every offer pass (reconcileAdapter); Run
 // goroutine only, no locking.
 type offerTracker struct {
@@ -55,7 +63,10 @@ func (t *offerTracker) reconcileAdapter(adapter common.Address, live map[int64]o
 		}
 	}
 	for auctionID, st := range live {
-		t.offers[offerKey{adapter, auctionID}] = offerState{expiry: st.expiry, principal: cloneBig(st.principal)}
+		t.offers[offerKey{adapter, auctionID}] = offerState{
+			expiry: st.expiry, principal: cloneBig(st.principal), expectedReturn: cloneBig(st.expectedReturn),
+			nonce: cloneBig(st.nonce), request: st.request, open: st.open, funded: st.funded,
+		}
 	}
 }
 
@@ -83,6 +94,32 @@ func (t *offerTracker) liveCoverage(auctionID int64, now time.Time) *big.Int {
 		}
 	}
 	return total
+}
+
+// dropFunded forgets the adapter's SUCCEEDED offers whose request is among the adapter's on-chain
+// requests: that loan is funded, so getMaxAssets and requestsLength already account for its principal
+// and slot, and keeping the offer live would withhold them a second time. A SUCCEEDED offer the chain
+// does not list stays live.
+func (t *offerTracker) dropFunded(adapter common.Address, requests []common.Address) {
+	onChain := make(map[common.Address]bool, len(requests))
+	for _, r := range requests {
+		onChain[r] = true
+	}
+	for k, st := range t.offers {
+		if k.adapter == adapter && st.funded && onChain[st.request] {
+			delete(t.offers, k)
+		}
+	}
+}
+
+// liveNonce is the nonce of our unexpired offer through adapter on auctionID, nil when there is none.
+// A top-up re-signs with it: the Request contract consumes at most one offer per nonce, so the old
+// and new signatures can never both fund.
+func (t *offerTracker) liveNonce(adapter common.Address, auctionID int64, now time.Time) *big.Int {
+	if st, ok := t.offers[offerKey{adapter, auctionID}]; ok && st.open && st.expiry.After(now) {
+		return cloneBig(st.nonce)
+	}
+	return nil
 }
 
 // pruneExpired drops entries whose offer has already expired, keeping the map bounded over a long run.
