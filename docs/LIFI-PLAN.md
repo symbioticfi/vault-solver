@@ -1132,7 +1132,9 @@ records `discount_api_error`, not `no_inventory`. Direct available inventory sti
 outcome, and published pairs are not also rejected. This changes diagnostic attribution only.
 
 LI.FI pair scope is an atomic immutable route snapshot, refreshed by one optional background reader
-at `quoteInterval` and bounded by `quoteTTL`. Successful discovery replaces membership; read failures
+with both wait and read budgets of `quoteTTL/3` (12s each by default), independent of block polling.
+Attempts are spaced after completion; startup discovery is not repeated immediately. Successful
+discovery replaces membership; read failures
 do not renew its expiry. Membership intersects the unchanged startup trading routes, including exact
 units: removing/changing an adapter direction excludes old inventory from diagnostic scope, and re-add
 restores it without resetting counters. Newly advertised trading directions still need the existing

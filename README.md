@@ -886,8 +886,8 @@ submission counts nor globally unique economic wins. LI.FI `standing_quote` coun
 changed records (`published`/`withdrawn`) and local rejection attempts (`rejected/<reason>`), including
 retries, not upstream client quote responses. `discount_api_error` distinguishes failed LI.FI discount
 lookup for a known physical pair from missing inventory; publication and strategy behavior are unchanged.
-Scrape loss, restarts and replica ownership still limit
-business totals; log identities permit external dedup. Deployment is a scrape/resource identity,
+Scrape loss, restarts and replica ownership still limit business totals; log identities permit
+external dedup. Deployment is a scrape/resource identity,
 not an order-ID label. Optional startup symbol/decimals warm-up is cancellable background work and
 cannot hold the HTTP/order loops behind a symbol RPC. Each newly warmed trusted token emits one
 `trusted token metadata` log with chain/address and only verified symbol/decimals, so consumers can
@@ -901,11 +901,12 @@ or PnL. Sampling, debug level, ingestion and retention can make event totals inc
 
 Configured policy/adapters and the existing API/route validation remain eligibility authorities.
 `pairInScope=true` names the diagnostic proof in `pairScopeSource`: current validated
-inventory/candidates, UniswapX's validated configured/current-refresh routes, or LI.FI's revalidated configured routes.
+inventory/candidates, UniswapX's validated configured/current-refresh routes, or LI.FI's revalidated
+configured routes.
 UniswapX dynamic proof expires with quote state; LI.FI refreshes optional scope in the background,
 expires it on discovery failure and removes withdrawn adapter directions without excluding zero capacity.
-It is not a new trading rule or
-complete configured token list. Missing validation can still leave eligible directions unproven.
+This is not a new trading rule or complete configured token list; missing validation can still leave
+eligible directions unproven.
 Metadata never establishes support. Optional metadata reads reuse the chain-scoped decimals cache;
 startup and new trusted tokens are enriched asynchronously. Rejected arbitrary inputs trigger no optional
 metadata lookup, and unknown decimals are never assumed to be18.

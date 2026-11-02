@@ -17,20 +17,25 @@ type pairRouteScope struct {
 // when a configured adapter no longer advertises the same direction/units. New trading routes
 // still require the existing startup lifecycle; zero capacity never removes structural proof.
 func (s *Solver) observePairRoutes(ctx context.Context, tradingRoutes []route) {
-	ticker := time.NewTicker(s.cfg.QuoteInterval)
-	defer ticker.Stop()
+	// Wait and read each get one third of the existing proof TTL. This leaves renewal
+	// headroom without tying full discovery to the much faster block polling cadence.
+	interval := s.cfg.QuoteTTL / 3
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
 	for {
-		s.refreshPairRoutes(ctx, tradingRoutes)
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
+			s.refreshPairRoutes(ctx, tradingRoutes)
+			// Space attempts after completion; a slow read must not cause catch-up bursts.
+			timer.Reset(interval)
 		}
 	}
 }
 
 func (s *Solver) refreshPairRoutes(ctx context.Context, tradingRoutes []route) {
-	ctx, cancel := context.WithTimeout(ctx, s.cfg.QuoteInterval)
+	ctx, cancel := context.WithTimeout(ctx, s.cfg.QuoteTTL/3)
 	defer cancel()
 	current, err := s.reader.resolveRoutes(ctx, s.cfg.Adapters)
 	if err != nil {

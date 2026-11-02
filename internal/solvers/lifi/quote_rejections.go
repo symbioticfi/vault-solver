@@ -10,9 +10,9 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 )
 
-// Observe each trusted direction once per local refresh evaluation, irrespective of adapter count.
-// Resolved routes retain structural support at zero capacity; current inventory may add a newly
-// trusted direction. Missing inventory is distinct from a strategy declining an available pair.
+// Observe each revalidated configured direction once per refresh, irrespective of adapter count.
+// Zero capacity retains structural support; inventory cannot revive removed or expired proof.
+// Missing inventory is distinct from a strategy declining an available pair.
 func (s *Solver) observeQuoteBuildRejections(ctx context.Context, inventory []liquidlane.Inventory, quotes []types.Quote, reason string, unavailableDiscounts []liquidlane.Inventory) {
 	seen := make(map[[2]common.Address]bool)
 	observe := func(r route, hasInventory bool) {
