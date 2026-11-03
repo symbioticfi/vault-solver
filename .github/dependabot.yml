@@ -6,7 +6,7 @@ updates:
     schedule:
       interval: "weekly"
     cooldown:
-      default-days: 3
+      default-days: 7
     target-branch: "stage"
     open-pull-requests-limit: 5
     ignore:
@@ -21,7 +21,7 @@ updates:
     schedule:
       interval: "weekly"
     cooldown:
-      default-days: 3
+      default-days: 7
     target-branch: "stage"
     open-pull-requests-limit: 10
     assignees:
@@ -37,7 +37,7 @@ updates:
     schedule:
       interval: "weekly"
     cooldown:
-      default-days: 3
+      default-days: 7
     target-branch: "stage"
     open-pull-requests-limit: 5
     assignees:
