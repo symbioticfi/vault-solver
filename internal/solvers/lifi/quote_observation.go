@@ -27,14 +27,21 @@ func (s *Solver) observeStandingQuoteSnapshot(ctx context.Context, state *quoteS
 			continue
 		}
 		maximum := new(big.Int)
+		pairRanges := quoteRangeCount(pair.quotes)
+		terms := make([]map[string]any, 0, pairRanges)
 		for _, quote := range pair.quotes {
 			for _, r := range quote.Ranges {
+				// Preserve the wire decimal rate and integer amounts as strings, including
+				// each quote's expiry/owner so multiple curves remain distinguishable.
+				terms = append(terms, map[string]any{
+					"minAmount": bigString(r.MinAmount), "maxAmount": bigString(r.MaxAmount),
+					"rate": r.Quote, "expiry": quote.Expiry, "exclusiveFor": quote.ExclusiveFor.Hex(),
+				})
 				if r.MaxAmount != nil && r.MaxAmount.Cmp(maximum) > 0 {
 					maximum.Set(r.MaxAmount)
 				}
 			}
 		}
-		pairRanges := quoteRangeCount(pair.quotes)
 		if len(pair.quotes) == 0 || pairRanges == 0 || maximum.Sign() <= 0 {
 			continue
 		}
@@ -59,6 +66,7 @@ func (s *Solver) observeStandingQuoteSnapshot(ctx context.Context, state *quoteS
 			"tokenIn", key.fromAsset.Hex(), "tokenOut", key.toAsset.Hex(),
 			"pairInScope", true, "pairScope", "directed_route", "pairScopeSource", "current_inventory",
 			"maxInputAmount", maximum.String(), "quoteCount", len(pair.quotes), "rangeCount", pairRanges,
+			"ranges", terms,
 			"earliestExpiry", earliest, "latestExpiry", latest,
 		)
 		pairs++

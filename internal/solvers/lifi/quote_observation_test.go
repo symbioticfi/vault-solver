@@ -48,6 +48,7 @@ func TestStandingQuoteSnapshotUsesCurrentInventoryWithoutRegistry(t *testing.T) 
 		t.Fatal("invalid fixture amount")
 	}
 	newlyTrusted.Ranges[0].MaxAmount = amount
+	newlyTrusted.Ranges[0].Quote = "1.000000000000000001"
 	wrongDirection := known
 	wrongDirection.FromAsset, wrongDirection.ToAsset = wrongDirection.ToAsset, wrongDirection.FromAsset
 	wrongDecimals := known
@@ -79,6 +80,13 @@ func TestStandingQuoteSnapshotUsesCurrentInventoryWithoutRegistry(t *testing.T) 
 		}
 		if row["tokenIn"] == newRoute.TokenIn.Hex() {
 			foundNew = true
+			terms := row["ranges"].([]any)
+			term := terms[0].(map[string]any)
+			if len(terms) != 1 || term["minAmount"] != bigString(newlyTrusted.Ranges[0].MinAmount) ||
+				term["maxAmount"] != amount.String() || term["rate"] != newlyTrusted.Ranges[0].Quote ||
+				term["expiry"] != float64(newlyTrusted.Expiry) || term["exclusiveFor"] != newlyTrusted.ExclusiveFor.Hex() {
+				t.Fatalf("wire terms lost precision or identity: %v", terms)
+			}
 			if row["maxInputAmount"] != amount.String() || row["tokenInDecimals"] != float64(18) || row["tokenOutDecimals"] != float64(6) {
 				t.Fatalf("new trusted token fields=%v", row)
 			}

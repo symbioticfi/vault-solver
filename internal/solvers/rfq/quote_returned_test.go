@@ -43,13 +43,17 @@ func TestQuoteResponseReturnedRequiresSuccessfulWrite(t *testing.T) {
 	for _, mode := range []string{"success", "metrics disabled", "failure", "short", "panic", "declined", "unauthorized"} {
 		t.Run(mode, func(t *testing.T) {
 			var events []map[string]any
+			verbosity := 1
+			if mode == "success" || mode == "metrics disabled" {
+				verbosity = 0
+			}
 			log := funcr.NewJSON(func(line string) {
 				var event map[string]any
 				if err := json.Unmarshal([]byte(line), &event); err != nil {
 					t.Error(err)
 				}
 				events = append(events, event)
-			}, funcr.Options{Verbosity: 1})
+			}, funcr.Options{Verbosity: verbosity})
 			srv := testServer()
 			if mode != "metrics disabled" {
 				var err error
