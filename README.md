@@ -846,7 +846,9 @@ changed records (`published`/`withdrawn`) and local rejection attempts (`rejecte
 retries, not upstream client quote responses. Scrape loss, restarts and replica ownership still limit
 business totals; log identities permit external dedup. Deployment is a scrape/resource identity,
 not an order-ID label. Optional startup symbol/decimals warm-up is cancellable background work and
-cannot hold the HTTP/order loops behind a symbol RPC.
+cannot hold the HTTP/order loops behind a symbol RPC. Newly warmed trusted tokens emit
+`trusted token metadata` with chain/address and verified fields; unknown fields stay absent.
+LI.FI `discount_api_error` distinguishes a failed lookup for physical inventory from no inventory.
 
 UniswapX `quote returned` and RFQ `quote response returned` prove a successful local response write,
 not client receipt. Planner decisions, failed writes, assignments and confirmed fills are distinct
@@ -856,7 +858,8 @@ or PnL. Sampling, debug level, ingestion and retention can make event totals inc
 
 Configured policy/adapters and the existing API/route validation remain eligibility authorities.
 `pairInScope=true` names the diagnostic proof in `pairScopeSource`: current validated
-inventory/candidates, or LI.FI's explicit resolved-route fallback. It is not a new trading rule or
+inventory/candidates or validated routes, including zero capacity. UniswapX dynamic proof expires
+with quote state; LI.FI revalidates and ages configured-route proof. This is not a new trading rule or
 complete configured token list. Missing validation can still leave eligible directions unproven.
 Metadata never establishes support. Optional metadata reads reuse the chain-scoped decimals cache;
 startup and new trusted tokens are enriched asynchronously. Rejected arbitrary inputs trigger no optional

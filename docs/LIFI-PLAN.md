@@ -1119,3 +1119,9 @@ including zero-capacity directions; metadata never decides eligibility. Retries 
 and post-dequeue/reconnect/replica admissions can repeat: these are not unique upstream wins or
 client-response totals. The helper retains counters across refreshes; cardinality grows with trusted
 supported route history × fixed event/result/reason sets, not arbitrary inbound addresses or IDs.
+Discount API failure for physical inventory records `discount_api_error`; direct available pairs keep
+normal strategy outcomes. Pair proof is an immutable, atomic snapshot with `quoteTTL` expiry.
+Optional discovery waits and reads for `quoteTTL/3` each, independent of block polling, with no
+startup duplicate or catch-up bursts. Failure never renews expiry. Current catalog is intersected
+with unchanged startup trading directions/units: removal/re-add preserves counters, zero capacity
+retains support, and new trading directions still require the existing restart lifecycle.

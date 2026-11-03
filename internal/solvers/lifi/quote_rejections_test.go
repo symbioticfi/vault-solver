@@ -12,11 +12,57 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr/funcr"
 	"github.com/symbioticfi/vault-solver/internal/observability"
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
+
+func TestDiscountAPIFailurePairReason(t *testing.T) {
+	for _, mode := range []string{"physical inventory", "no physical inventory", "direct declined", "direct published", "policy denied"} {
+		t.Run(mode, func(t *testing.T) {
+			s, reg := newPairTestSolver(t)
+			r := testQuoteRoute()
+			s.setPairRoutes([]route{r})
+			s.cfg.Gas = nil
+			s.now = func(context.Context) (time.Time, error) { return time.Unix(1_800_000_000, 0), nil }
+			s.wallNow = func() time.Time { return time.Unix(1_800_000_000, 0) }
+			s.txLaneState = &testTransactionLaneState{ready: func() bool { return true }}
+			s.discounts = &fakeDiscountClient{listErr: errors.New("discount API unavailable")}
+			reader := rejectionTestReader{snapshot: quoteSnapshotSet{Physical: []liquidlane.Inventory{{Route: r}}}}
+			strategy := rejectionTestStrategy{}
+			state := newQuoteState(time.Second)
+			reason := "discount_api_error"
+			switch mode {
+			case "no physical inventory":
+				reader.snapshot.Physical = nil
+				reason = "no_inventory"
+			case "direct declined", "direct published":
+				reader.snapshot.Direct = []liquidlane.Inventory{{Route: r}}
+				reason = "strategy_declined"
+				if mode == "direct published" {
+					strategy.output.Quotes = []types.Quote{testStandingQuote(r, 100)}
+					state.active = indexQuotePairs(strategy.output.Quotes)
+				}
+			case "policy denied":
+				s.cfg.TokenPolicy = testTokenPolicy(t, tokenpolicy.Permissioned, common.HexToAddress("0xffff"))
+			}
+			s.reader, s.strategy = reader, strategy
+			s.refreshQuotes(t.Context(), s.currentPairRoutes(), state)
+			if mode == "direct published" || mode == "policy denied" {
+				if count := pairSeriesCount(t, reg); count != 0 {
+					t.Fatalf("spurious rejection series=%d", count)
+				}
+				return
+			}
+			metricstest.RequireFamilyValue(t, reg, "solver_bot_pair_events_total", pairEventLabels(s.chainID, r.TokenIn, r.TokenOut, "standing_quote", "rejected", reason), 1)
+			if count := pairSeriesCount(t, reg); count != 1 {
+				t.Fatalf("double-counted rejection series=%d", count)
+			}
+		})
+	}
+}
 
 type rejectionTestReader struct {
 	fakeLifiReader
@@ -87,6 +133,8 @@ func TestStandingQuoteBuildRejectionPaths(t *testing.T) {
 				// Unchanged curves require no HTTP submission and are not rejections.
 			}
 			s.reader, s.strategy = reader, strategy
+			cfg.QuoteTTL = time.Minute
+			s.setPairRoutes([]route{r})
 			state := newQuoteState(time.Second)
 			if reason == "success" {
 				state.active = indexQuotePairs(strategy.output.Quotes)
@@ -101,7 +149,7 @@ func TestStandingQuoteBuildRejectionPaths(t *testing.T) {
 			}
 			wantCount := 0
 			switch reason {
-			case "strategy_declined", "strategy_error", "lane_changed":
+			case "strategy_declined", "strategy_error", "lane_changed", "no_inventory", "chain_time_error", "snapshot_error", "gas_price_error", "lane_unavailable":
 				wantCount = 1
 			}
 			if len(rejected) != wantCount {
@@ -125,6 +173,8 @@ func TestStandingQuoteSubmissionErrorsLogActualTrustedBatchPairs(t *testing.T) {
 	events, write := standingObservationLogger(t)
 	ctx := observability.WithLogger(t.Context(), funcr.NewJSON(write, funcr.Options{Verbosity: 1}))
 	s := &Solver{cfg: testLifiConfig(), orders: newOrderClient(server.URL, "test-key", time.Second, 1)}
+	s.cfg.QuoteTTL = time.Minute
+	s.setPairRoutes([]route{r})
 	state := newQuoteState(time.Second)
 	q := testStandingQuote(r, 100)
 	if _, err := s.reconcileQuotes(ctx, state, []types.Quote{q, q}, []liquidlane.Inventory{{Route: r}}, time.Unix(1_800_000_000, 0)); err == nil {
