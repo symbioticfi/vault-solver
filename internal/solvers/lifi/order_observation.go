@@ -46,5 +46,7 @@ func (s *Solver) observeMatchedOrderAdmission(ctx context.Context, order *submit
 		Info("matched order admitted", "chainId", s.chainID, "assignmentSource", order.matchSource,
 			"orderKey", orderInboxKey(order), "orderId", order.OrderID, "onChainOrderId", order.OnChainOrderID,
 			"quoteId", order.QuoteID, "tokenIn", order.TokenIn.Hex(), "tokenOut", order.TokenOut.Hex(),
-			"amountIn", bigString(order.AmountIn), "requiredAmountOut", bigString(order.OutputAmount))
+			"amountIn", bigString(order.AmountIn), "requiredAmountOut", bigString(order.OutputAmount),
+			"orderStatus", order.OrderStatus, "inputSettler", order.InputSettler.Hex(), "user", order.Order.User.Hex(),
+			"expires", order.Order.Expires, "fillDeadline", order.Order.FillDeadline)
 }
