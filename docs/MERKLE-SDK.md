@@ -54,6 +54,20 @@ address are rejected. Strategy objects, custom labels and per-strategy options
 are rejected before network access. The unrelated `solvers[].name` still selects
 the solver integration.
 
+List order sets processing priority. Each later executor sees earlier confirmed
+effects; order does not reserve funds. Spending recipes must protect withdrawal
+obligations. Pending nonce recovery runs first while preserving the remaining
+order, and unsettled asynchronous work keeps its account reserved.
+
+The SDK automatically batches self-contained, state-driven recipes on the same
+executor while successive executions remain useful and executable. Every cycle
+includes the complete committed recipe, including its final collateral supply.
+Constant action sets execute once. Recipes with external provider inputs, quotes,
+proofs or result witnesses retain fresh single-execution preparation. There is no
+host loop, protocol-specific batching or per-executor switch. The existing chain
+client supplies code overrides and pinned bytecode reads; the SDK revalidates the
+exact atomic multicall against the original contract before submission.
+
 The supported runtime policy version is `1`. Unresolved journals fence ownership and
 retain their original identity and configuration. The shared SDK is pinned to an immutable version.
 

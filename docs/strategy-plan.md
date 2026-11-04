@@ -338,6 +338,12 @@ remain errors. The existing signed journal recovery path remains unchanged, and
 on-chain completion assertions remain part of the recipe rather than host protocol
 recognition.
 
+Self-contained state-driven recipes use the SDK's automatic atomic batching;
+external provider work stays single-execution with fresh data. The host supplies
+its existing code-override transport and pins the same SDK as the standalone
+executor, without a second loop or batching policy. Configured executor order is
+priority, not a withdrawal cash reservation.
+
 The host's SDK transport continues to use the existing shared transaction manager's
 owner fence and persistence callbacks; it contains no copied sender or nonce engine.
 The SDK batch engine uses the existing HTTP fallback/tracing path with strict response
