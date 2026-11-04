@@ -71,6 +71,19 @@ func TestMatchedOrderAdmissionObservation(t *testing.T) {
 			for _, line := range logs {
 				if strings.Contains(line, `"msg":"matched order admitted"`) {
 					count++
+					var event map[string]any
+					if err := json.Unmarshal([]byte(line), &event); err != nil {
+						t.Fatal(err)
+					}
+					if event["inputSettler"] != cfg.InputSettler.Hex() || event["orderStatus"] == nil ||
+						event["user"] == nil || event["expires"] == nil || event["fillDeadline"] == nil {
+						t.Fatalf("missing admitted order details: %v", event)
+					}
+					for _, field := range []string{"order", "signature", "callbackData", "context"} {
+						if event[field] != nil {
+							t.Fatalf("unsafe order field %s logged", field)
+						}
+					}
 				}
 			}
 			if float64(count) != want {

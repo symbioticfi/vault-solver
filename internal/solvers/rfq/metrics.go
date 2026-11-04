@@ -162,7 +162,11 @@ func (m *rfqMetrics) instrument(next http.Handler) http.Handler {
 			returned := observation.response != nil && rec.status == http.StatusOK && rec.bytesWritten > 0 && !rec.writeError && !observation.panicked
 			if returned {
 				fields := append(observation.fields, "responseWritten", true, "httpStatus", rec.status, "responseBytes", rec.bytesWritten)
-				observability.Log(r.Context()).V(1).Info("quote response returned", fields...)
+				log := observability.Log(r.Context())
+				if !observation.pairInScope {
+					log = log.V(1)
+				}
+				log.Info("quote response returned", fields...)
 			} else if observation.response != nil {
 				if !observation.panicked {
 					reason = "response_write_error"
