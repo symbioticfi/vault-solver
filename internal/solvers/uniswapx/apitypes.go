@@ -41,6 +41,7 @@ const (
 	quoteDeclineQuoteStateUnavailable quoteDeclineReason = "quote-state-unavailable"
 	quoteDeclineStrategy              quoteDeclineReason = "strategy-declined"
 	quoteDeclineStateChanged          quoteDeclineReason = "state-changed"
+	quoteDeclineDexUnavailable        quoteDeclineReason = "dex_unavailable"
 )
 
 type quoteResponse struct {

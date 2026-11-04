@@ -81,6 +81,23 @@ BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
             AggregatorV3:chainlink/aggregator \
             FrontendLiquidityLens:lens \
             ERC20:erc20 Multicall3:multicall3
+
+# Narrow typed call surface from canonical compiler artifacts; no handwritten ABI/selectors.
+DEX_FORGE_OUT ?= ../atomic-dex-contracts/out
+.PHONY: uniswapx-dex-bindings
+uniswapx-dex-bindings:
+	jq -s '[ (.[0].abi[] | select(.type == "function" and (.name | IN("executeWithDex", "reactorAddress", "INPUT_TOKEN", "BRIDGE_TOKEN", "ROUTER", "TREASURY", "OUTPUT_0", "OUTPUT_1", "FEE_0", "FEE_1")))), \
+	  (.[1].abi[] | select(.type == "function" and (.name | IN("factory", "quoteExactInputSingle", "quoteExactOutputSingle")))), \
+	  (.[2].abi[] | select(.type == "function" and .name == "getPool")), \
+	  (.[3].abi[] | select(.type == "function" and .name == "feeController")) ] \
+	  | if length == 15 then . else error("DEX compiler ABI surface changed") end' \
+	  "$(DEX_FORGE_OUT)/LiquidLaneUniswapXDexExecutor.sol/LiquidLaneUniswapXDexExecutor.json" \
+	  "$(DEX_FORGE_OUT)/IUniswapXV3.sol/IUniswapXV3Quoter.json" \
+	  "$(DEX_FORGE_OUT)/IUniswapXV3.sol/IUniswapXV3Factory.json" \
+	  "$(DEX_FORGE_OUT)/IUniswapXV3.sol/IUniswapXReactorView.json" > api/abi/UniswapXDex.json
+	@mkdir -p api/bindings/uniswapx/dex
+	abigen --v2 --abi api/abi/UniswapXDex.json --pkg dex --type UniswapXDex --out api/bindings/uniswapx/dex/UniswapXDex.go
+
 # The OEV contracts (Morpho + its AdaptiveCurve IRM + market oracle, RedStone
 # Executor, SymbioticOevSolver), the LI.FI input settler ABI, plus a minimal ERC20
 # (decimals() only) aren't in our default Foundry build, so their ABIs are hand-vendored under

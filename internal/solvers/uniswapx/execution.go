@@ -173,7 +173,8 @@ func (s *Solver) startFill(
 	if order.Deadline == 0 || int64(order.Deadline) <= now.Unix() {
 		return nil, declineFill(ctx, "fill_skipped", "order deadline has passed")
 	}
-	routeSet, discountErr := s.routesWithDiscounts(ctx, routes, now, advertisedRouteFilter{tokenIn: order.TokenIn, tokenOut: order.TokenOut})
+	routeSet, discountErr := s.routesWithDiscounts(ctx, routes, now,
+		advertisedRouteFilter{tokenIn: order.TokenIn, tokenOut: s.sourceTokenOut(order.TokenIn, order.TokenOut)})
 	decisionRoutes, listed := routeSet.routes, routeSet.listed
 	if discountErr != nil {
 		observability.Log(ctx).Error(discountErr, "refresh fill discount routes", "orderHash", order.Hash.Hex())
@@ -389,7 +390,7 @@ func (s *Solver) buildExecutorCalldata(
 			DiscountID:   *route.DiscountID,
 			Adapter:      route.Adapter,
 			TokenIn:      order.TokenIn,
-			TokenOut:     order.TokenOut,
+			TokenOut:     selectedRoute.TokenOut,
 			AmountIn:     route.AmountIn,
 			MinAmountOut: route.MinAmountOut,
 			MaxAmountOut: route.ReservedAmountOut,
@@ -425,6 +426,10 @@ func (s *Solver) buildExecutorCalldata(
 			},
 			ProtocolSignature: signed.ProtocolSignature,
 		})
+	}
+	if plan.Dex != nil {
+		data, err = packDexExecutorCalldata(order, plan.Dex, fillRoutes, discountRoutes)
+		return data, earlierTime(discountValidUntil, plan.Dex.ValidUntil), err
 	}
 	data, err = uniswapXExecutor.TryPackExecute0(
 		uxexecutor.UniswapXSignedOrder{Order: order.Encoded, Sig: order.Signature},

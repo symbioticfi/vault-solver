@@ -94,6 +94,27 @@ solvers:
             feed: ${VAULT_ASSET_USD_FEED}      # tokenOut / USD feed
             maxAge: 1h5m
 
+      # Optional atomic single-hop prototype; keep disabled until executor upgrade and qualification.
+      # Requires strategy.name: single, gas accounting and a feed for DEX_BRIDGE_TOKEN.
+      # Amounts below are bridge atomic units. These are illustrative risk settings, not live defaults.
+      # dex:
+      #   inputToken: ${DEX_INPUT_TOKEN}
+      #   bridgeToken: ${DEX_BRIDGE_TOKEN}
+      #   router: ${DEX_ROUTER}
+      #   quoter: ${DEX_QUOTER}
+      #   factory: ${DEX_FACTORY}
+      #   treasury: ${DEX_TREASURY} # fixed residual recipient, different from executor
+      #   outputs:
+      #     - {token: "${DEX_OUTPUT_0}", fee: 100}
+      #     - {token: "${DEX_OUTPUT_1}", fee: 500}
+      #   maxBridgeAmount: "100000000" # positive uint256; choose within actual route capacity
+      #   minProfitBridge: "1000000"   # added to conservative gas reserve; below maxBridgeAmount
+      #   slippageBps: 50              # 0..1000; output haircut / exact-output input ceiling
+      #   gasUnitsBudget: 5000000      # 100000..10000000; verify full transaction estimate
+      #   planValidity: 30s            # (0,30s], measured from the quoted block timestamp
+      #   rpcTimeout: 300ms            # (0,400ms], total reader deadline
+      #   maxConcurrentQuotes: 2       # 1..16; saturated requests fail closed
+
       breaker:
         maxFailures: 3 # pause quotes after this many failed fills in the window
         window: 5m     # failure-counting window and resulting pause duration

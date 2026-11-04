@@ -211,7 +211,7 @@ func metricOutcomeForDecline(reason quoteDeclineReason) quoteMetricOutcome {
 		return quoteOutcomeDeclinedQuoteState
 	case quoteDeclineStrategy, quoteDeclineNoMatchingRoutes, quoteDeclineNoCandidates,
 		quoteDeclineAmountBelowMinimum, quoteDeclineInsufficientCapacity, quoteDeclineNoAllocation,
-		quoteDeclineGasExceedsOutput, quoteDeclineMinimumInput:
+		quoteDeclineGasExceedsOutput, quoteDeclineMinimumInput, quoteDeclineDexUnavailable:
 		return quoteOutcomeDeclinedStrategy
 	case quoteDeclineStateChanged:
 		return quoteOutcomeDeclinedStateChanged

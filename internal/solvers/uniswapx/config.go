@@ -47,6 +47,7 @@ type rawConfig struct {
 	Gas           *liquidlanegas.RawConfig `yaml:"gas"`
 	Breaker       rawBreakerConfig         `yaml:"breaker"`
 	Strategy      rawStrategyConfig        `yaml:"strategy"`
+	Dex           *rawDexConfig            `yaml:"dex"`
 }
 
 type rawDiscountConfig struct {
@@ -104,6 +105,7 @@ type Config struct {
 	Gas           *liquidlanegas.OracleConfig
 	Breaker       BreakerConfig
 	Strategy      StrategyConfig
+	Dex           *DexConfig
 }
 
 type DiscountConfig struct {
@@ -268,6 +270,16 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if maxSelections < 1 {
 		return nil, errors.New("quoteServer.maxSelections must be positive")
 	}
+	dex, err := parseDexConfig(raw.Dex)
+	if err != nil {
+		return nil, err
+	}
+	if dex != nil && (gas == nil || raw.Strategy.Name != types.SingleName || !policy.Allows(dex.InputToken)) {
+		return nil, errors.New("dex requires gas accounting, single strategy and admitted inputToken")
+	}
+	if dex != nil && gas.TokenUSDFeeds[dex.BridgeToken].Address == (common.Address{}) {
+		return nil, errors.New("dex requires gas.tokenUsdFeeds for bridgeToken")
+	}
 	return &Config{
 		Reactor: reactor, Executor: executor, LiquidityLens: liquidityLens,
 		Adapters: adapters, SolverMode: solverMode, TokenPolicy: policy,
@@ -283,6 +295,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		},
 		Discounts: discountConfig,
 		Gas:       gas,
+		Dex:       dex,
 		Breaker:   breaker,
 		Strategy:  StrategyConfig{Name: parse.OrDefault(raw.Strategy.Name, defaultStrategyName), Config: raw.Strategy.Config},
 	}, nil

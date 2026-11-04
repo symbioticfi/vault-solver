@@ -42,7 +42,21 @@ func (s *Solver) prepareFill(
 	ctx context.Context, order *resolvedOrder, input types.FillInput,
 	routes []liquidlane.Route, now, observedAt time.Time, revision uint64,
 ) (preparedFill, error) {
+	if input.Dex == nil && s.cfg.Dex.matches(input.TokenIn, input.TokenOut) {
+		return s.prepareDexFill(ctx, order, input, routes, now, observedAt, revision)
+	}
 	tryPlan := func(plan *types.FillPlan) (preparedFill, error) {
+		if input.Dex != nil {
+			copyDex := *input.Dex
+			copyDex.MaxBridgePayout = new(big.Int)
+			for _, route := range plan.Routes {
+				copyDex.MaxBridgePayout.Add(copyDex.MaxBridgePayout, route.ReservedAmountOut)
+			}
+			if copyDex.MaxBridgePayout.Cmp(s.cfg.Dex.MaxBridgeAmount) > 0 {
+				return preparedFill{}, declineFill(ctx, "fill_declined", "dex bridge capacity exceeds configured cap")
+			}
+			plan.Dex = &copyDex
+		}
 		reservations, ok := strategies.FillRouteReservations(plan.Routes)
 		if !ok {
 			return preparedFill{}, errors.New("strategy returned invalid capacity reservations")
@@ -161,6 +175,18 @@ func (s *Solver) preflightPlan(
 	}
 	if _, err := s.chain.CallContract(ctx, ethereum.CallMsg{From: s.solverAddress, To: &order.Executor, Data: data}, nil); err != nil {
 		return preparedFill{}, errors.Errorf("%w: %w", errFillPreflight, err)
+	}
+	if plan.Dex != nil {
+		estimator, ok := s.chain.(interface {
+			EstimateGas(ctx context.Context, call ethereum.CallMsg) (uint64, error)
+		})
+		if !ok {
+			return preparedFill{}, errors.New("dex requires full transaction gas estimation")
+		}
+		gas, err := estimator.EstimateGas(ctx, ethereum.CallMsg{From: s.solverAddress, To: &order.Executor, Data: data})
+		if err != nil || gas > s.cfg.Dex.GasUnitsBudget {
+			return preparedFill{}, errors.New("dex full transaction exceeds gas envelope or cannot be estimated")
+		}
 	}
 	return preparedFill{plan: plan, data: data, validUntil: until}, nil
 }

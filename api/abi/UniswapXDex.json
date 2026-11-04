@@ -1,0 +1,453 @@
+[
+  {
+    "type": "function",
+    "name": "BRIDGE_TOKEN",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "FEE_0",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint24",
+        "internalType": "uint24"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "FEE_1",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint24",
+        "internalType": "uint24"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "INPUT_TOKEN",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "OUTPUT_0",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "OUTPUT_1",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "ROUTER",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "TREASURY",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "executeWithDex",
+    "inputs": [
+      {
+        "name": "order",
+        "type": "tuple",
+        "internalType": "struct UniswapXSignedOrder",
+        "components": [
+          {
+            "name": "order",
+            "type": "bytes",
+            "internalType": "bytes"
+          },
+          {
+            "name": "sig",
+            "type": "bytes",
+            "internalType": "bytes"
+          }
+        ]
+      },
+      {
+        "name": "fillCall",
+        "type": "tuple",
+        "internalType": "struct ILiquidLaneUniswapXExecutor.FillCall",
+        "components": [
+          {
+            "name": "routes",
+            "type": "tuple[]",
+            "internalType": "struct ILiquidLaneUniswapXExecutor.FillRoute[]",
+            "components": [
+              {
+                "name": "adapter",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amountIn",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "amountOut",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ]
+          },
+          {
+            "name": "discountRoutes",
+            "type": "tuple[]",
+            "internalType": "struct ILiquidLaneUniswapXExecutor.DiscountRoute[]",
+            "components": [
+              {
+                "name": "adapter",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amountIn",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "discountSwap",
+                "type": "tuple",
+                "internalType": "struct ILiquidLaneAdapter.DiscountSwap",
+                "components": [
+                  {
+                    "name": "discount",
+                    "type": "tuple",
+                    "internalType": "struct ILiquidLaneAdapter.Discount",
+                    "components": [
+                      {
+                        "name": "tokenToRedeem",
+                        "type": "address",
+                        "internalType": "address"
+                      },
+                      {
+                        "name": "discount",
+                        "type": "uint256",
+                        "internalType": "uint256"
+                      },
+                      {
+                        "name": "signer",
+                        "type": "address",
+                        "internalType": "address"
+                      },
+                      {
+                        "name": "protocol",
+                        "type": "address",
+                        "internalType": "address"
+                      },
+                      {
+                        "name": "nonce",
+                        "type": "uint256",
+                        "internalType": "uint256"
+                      },
+                      {
+                        "name": "deadline",
+                        "type": "uint48",
+                        "internalType": "uint48"
+                      }
+                    ]
+                  },
+                  {
+                    "name": "signerSignature",
+                    "type": "bytes",
+                    "internalType": "bytes"
+                  },
+                  {
+                    "name": "protocolDeadline",
+                    "type": "uint48",
+                    "internalType": "uint48"
+                  }
+                ]
+              },
+              {
+                "name": "protocolSignature",
+                "type": "bytes",
+                "internalType": "bytes"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "limits",
+        "type": "tuple",
+        "internalType": "struct LiquidLaneUniswapXDexExecutor.DexLimits",
+        "components": [
+          {
+            "name": "maxBridgePayout",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "maxDexInput",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "minBridgeResidual",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "validUntil",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "reactorAddress",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "factory",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "quoteExactInputSingle",
+    "inputs": [
+      {
+        "name": "params",
+        "type": "tuple",
+        "internalType": "struct IUniswapXV3Quoter.QuoteExactInputSingleParams",
+        "components": [
+          {
+            "name": "tokenIn",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "tokenOut",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "amountIn",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "fee",
+            "type": "uint24",
+            "internalType": "uint24"
+          },
+          {
+            "name": "sqrtPriceLimitX96",
+            "type": "uint160",
+            "internalType": "uint160"
+          }
+        ]
+      }
+    ],
+    "outputs": [
+      {
+        "name": "amountOut",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "sqrtPriceX96After",
+        "type": "uint160",
+        "internalType": "uint160"
+      },
+      {
+        "name": "initializedTicksCrossed",
+        "type": "uint32",
+        "internalType": "uint32"
+      },
+      {
+        "name": "gasEstimate",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "quoteExactOutputSingle",
+    "inputs": [
+      {
+        "name": "params",
+        "type": "tuple",
+        "internalType": "struct IUniswapXV3Quoter.QuoteExactOutputSingleParams",
+        "components": [
+          {
+            "name": "tokenIn",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "tokenOut",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "amount",
+            "type": "uint256",
+            "internalType": "uint256"
+          },
+          {
+            "name": "fee",
+            "type": "uint24",
+            "internalType": "uint24"
+          },
+          {
+            "name": "sqrtPriceLimitX96",
+            "type": "uint160",
+            "internalType": "uint160"
+          }
+        ]
+      }
+    ],
+    "outputs": [
+      {
+        "name": "amountIn",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "sqrtPriceX96After",
+        "type": "uint160",
+        "internalType": "uint160"
+      },
+      {
+        "name": "initializedTicksCrossed",
+        "type": "uint32",
+        "internalType": "uint32"
+      },
+      {
+        "name": "gasEstimate",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "getPool",
+    "inputs": [
+      {
+        "name": "tokenA",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "tokenB",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "fee",
+        "type": "uint24",
+        "internalType": "uint24"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "pool",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "feeController",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  }
+]

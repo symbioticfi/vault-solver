@@ -49,6 +49,7 @@ type Solver struct {
 	confirmations uint64
 	orders        orderPoller
 	discounts     liquiddiscounts.Provider
+	dex           dexQuoter
 	// links holds the span context of each quote this process served, so the fill that wins one can
 	// link back to it (spec §12). nil disables linking.
 	links       *observability.SpanLinks
@@ -192,6 +193,9 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		exclusiveUntil:    make(map[common.Hash]trackedExclusive),
 		exclusiveTerminal: make(map[common.Hash]time.Time),
 	}
+	if cfg.Dex != nil {
+		s.dex = newV3Dex(deps.Chain, cfg.Dex, cfg.Reactor)
+	}
 	if deps.Metrics != nil {
 		s.metrics, err = newUniswapXMetrics(deps.Metrics.Registerer(), s, cfg.Strategy.Name)
 		if err != nil {
@@ -232,6 +236,11 @@ func (s *Solver) Run(ctx context.Context) error {
 			"caller", s.solverAddress.Hex(),
 		)
 		return startupErr
+	}
+	if s.cfg.Dex != nil {
+		if err := s.dex.validate(ctx, s.cfg.Executor); err != nil {
+			return errors.Errorf("validate dex executor: %w", err)
+		}
 	}
 	if s.cfg.restrictsToAdapters() {
 		unauthorized, err := s.reader.unauthorizedAdapters(ctx, s.cfg.Executor, routes)

@@ -3,8 +3,7 @@
 Adding a **UniswapX RFQ quoter + filler** to `vault-solver` as the **`uniswapx-filler`** solver, following the
 framework boundary and conventions in [`../CLAUDE.md`](../CLAUDE.md). We become a UniswapX **market maker**:
 we expose the quote webhook Uniswap's RFQ server calls, win exclusivity, then settle the order on Uniswap's
-Reactor — sourcing liquidity from our Symbiotic vault `LiquidLaneAdapter`s (vaults-first; a secondary-DEX hop
-is a later step).
+Reactor — sourcing liquidity from our Symbiotic vault `LiquidLaneAdapter`s (vaults-first; the optional atomic single-hop prototype is described below).
 
 ---
 
@@ -45,7 +44,7 @@ shared strategy facade.
 | Decision | Choice | Rationale |
 |---|---|---|
 | Our role | **Quoter + Filler (market maker)** | We provide liquidity for our own vault assets on UniswapX. |
-| Liquidity source | **Symbiotic vaults first, including signed private discounts**; secondary-DEX hop later | Reuse LiquidLane direct and discount liquidity; widen pairs later. |
+| Liquidity source | **Symbiotic vaults first, including signed private discounts**; optional atomic single-hop prototype | Reuse LiquidLane direct and discount liquidity; widen pairs later. |
 | Order version | **V2 first (mainnet)** | "Goal is mainnet" (V2). Add a codec boundary when a second real order version is implemented. |
 | Pricing v1 | **Redemption rate − fixed haircut**, optional gas-aware floor | Ship fast, tune later (matches how `3f`/`rfq` shipped). |
 | On-chain executor | **UniswapX-specific** `LiquidLaneUniswapXExecutor.sol` | Smallest, auditable surface; no multi-venue abstraction yet. |
@@ -54,13 +53,14 @@ shared strategy facade.
 **Directionality (structural constraint):** `LiquidLaneAdapter`s are one-way — they consume a
 token-to-redeem and pay out the vault asset. So the only fillable orders are **RWA-in → vault-asset-out**:
 `tokenIn` must be a token-to-redeem on a configured direct route or a valid advertised signed-discount route,
-and `tokenOut` must be that adapter's ERC-20 vault asset. Native-ETH output is outside the initial route model
+and, by default, `tokenOut` must be that adapter's ERC-20 vault asset. The optional DEX prototype adds
+two configured final ERC-20 outputs through that asset. Native-ETH output is outside the initial route model
 and is declined in v1; §7 records an optional WETH-unwrapping extension. Everything else — including the
 reverse-direction opposing probe (§4.1) — auto-declines.
 
 **Out of scope (v1):** legacy V1 limit orders, V3/Tempo order type, mixed-token or native-token outputs,
-secondary-DEX sourcing, self-funding, a competitive
-exclusivity-override pricing controller, and quoting any pair our vaults can't settle. Exact on-chain
+general secondary-DEX routing beyond the opt-in fixed single-hop prototype, self-funding, a competitive
+exclusivity-override pricing controller, and quoting any pair without a validated physical route. Exact on-chain
 `exclusivityOverrideBps` is still applied when evaluating a public order during another filler's window.
 
 ---
@@ -1030,7 +1030,9 @@ Tracked operational and onboarding steps — **update as items start/finish/drop
 ### 10.5 Deferred (post-v1)
 - [ ] V3 order codec + reactor target where required; introduce a shared codec interface only when the
       second implementation proves it useful.
-- [ ] Secondary-DEX sourcing in `reactorCallback` for pairs our vaults can't settle.
+- [x] Local opt-in atomic single-hop prototype, pricing, calldata and execution tests (see below).
+- [ ] Production qualification of secondary-DEX sourcing: audit, full transaction gas/latency,
+      real backend/order-service integration, upgrade configuration and controlled rollout.
 - [ ] Competitive/win-rate pricing controller (`exclusivityOverrideBps`, time-in-auction, competing fillers).
 - [ ] Self-funding loops (keep solver-gas / pay-bid pots fed from profit) if needed.
 
@@ -1094,6 +1096,48 @@ Tracked operational and onboarding steps — **update as items start/finish/drop
 - Tokens: **no allow-list** (there *is* a blocklist — unsupportedtokens.uniswap.org) — open
   `tokenIn`/`tokenOut`; we **decline** (empty `204`) anything we can't price. Our fillable universe =
   pairs where `tokenIn` is redeemable through a configured direct route or a valid advertised signed-discount
-  route **and** `tokenOut` is that adapter's ERC-20 vault asset. Native-ETH output is currently declined and
-  remains an optional post-v1 extension (§7); the universe remains narrow by construction until the
-  secondary-DEX hop.
+  route **and** `tokenOut` is that adapter's ERC-20 vault asset or an explicitly configured atomic DEX
+  output. Native-ETH output is currently declined and remains an optional post-v1 extension (§7).
+
+
+## Atomic DEX prototype
+
+Optional UniswapX-owned `dex` configuration composes one `single` LiquidLane source with a fixed
+Uniswap v3 pool for either configured ERC-20 output. Legacy execution is unchanged when omitted.
+Exact-input pricing subtracts one gas/profit reserve then applies an output haircut; exact-output
+pricing rounds the DEX input ceiling up before inverting the first leg. Fill reprices exact output,
+reserves the entire physical bridge payout, and applies simulation, gas and deadline gates.
+
+The reader pins fee policy/pool/Quoter to a canonical block, with a bounded deadline and semaphore.
+Startup checks executor immutables, router/Quoter factories and pool existence. Generated bindings
+retain only used compiler ABI functions. The executor callback redeems input, swaps fresh bridge
+funds and settles Reactor, preserving old balances, clearing temporary allowances and paying only
+the new residual to treasury. Same-output fees are handled defensively; off-chain quoting requires
+zero fee controller. Native ETH, multihop and input/mixed-token fees are unsupported.
+
+The matching executor and fork harness are separate unpublished dependencies. Production backend,
+latency, permissions, economic and independent contract/upgrade qualification remain open. The fork
+bridge uses captured Quoter/inventory facts and fake Go transport/preflight/backend, then executes
+actual Go calldata against real Reactor/LiquidLane/DEX code with locally overridden roles/funding.
+It does not prove production E2E or latency. Historical full transaction estimates were about 4.23m
+gas; repeat with current state and permissions. A treasury residual is not net profit.
+
+Validate with Go 1.27.3: `go build ./...`, `make test`, `golangci-lint run ./...`.
+The generated call surface uses abigen 1.17.10 and existing compiler artifacts:
+
+```sh
+make uniswapx-dex-bindings DEX_FORGE_OUT=../atomic-dex-contracts/out
+mkdir -p .tools
+go test -c -o .tools/atomic-dex-fork-tests ./internal/solvers/uniswapx
+cd ../atomic-dex-contracts
+ATOMIC_DEX_FORK_RPC="$TEST_RPC_URL" ATOMIC_DEX_SOLVER_E2E=true \
+  forge test --threads 1 --isolate --match-test testForkGoSolver -vvv
+```
+
+Use a recent fork or an archive RPC/cache for `ATOMIC_DEX_FORK_BLOCK`. Missing opt-in variables
+cause skips, not passes; an old block combined with the fixture's wall clock can reject stale oracle
+data before IPC. Do not bypass freshness guards. GitHub CI runs for PR/main, not feature pushes.
+
+The simplified solver passed build, full race/coverage, lint, tidy, alerts and local nonce integration;
+all nine fork cases passed at block 26345456, including four Go calldata cases. A separate read-only
+agent found no material solver findings and independently ran focused tests/checked ABI parity.

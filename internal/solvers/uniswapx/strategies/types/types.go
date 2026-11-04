@@ -63,8 +63,9 @@ type Quote struct {
 }
 
 type FillInput struct {
-	OrderID string `json:"orderId"`
-	QuoteID string `json:"quoteId"`
+	Dex     *DexExecution `json:"-"`
+	OrderID string        `json:"orderId"`
+	QuoteID string        `json:"quoteId"`
 
 	TokenIn            common.Address `json:"tokenIn"`
 	TokenOut           common.Address `json:"tokenOut"`
@@ -85,7 +86,17 @@ type FillInput struct {
 }
 
 type FillPlan struct {
-	Routes []FillRoute `json:"routes"`
+	Routes []FillRoute   `json:"routes"`
+	Dex    *DexExecution `json:"dex,omitempty"`
+}
+
+// DexExecution keeps first-leg amounts/capacity in bridge atomic units. The order output
+// stays in the final asset; neither is substituted for the other's physical route identity.
+type DexExecution struct {
+	MaxBridgePayout   *big.Int  `json:"maxBridgePayout"`
+	MaxDexInput       *big.Int  `json:"maxDexInput"`
+	MinBridgeResidual *big.Int  `json:"minBridgeResidual"`
+	ValidUntil        time.Time `json:"validUntil"`
 }
 
 type FillRoute = strategies.FillRoute

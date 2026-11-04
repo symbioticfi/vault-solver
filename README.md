@@ -310,6 +310,20 @@ discount-only. Every fill is simulated again immediately before submission. The 
 a fill is captured before reading chain time, so RPC and planning latency consume the order's remaining
 validity instead of extending it.
 
+An optional `dex` block enables a local prototype for an admitted input → LiquidLane bridge asset →
+one of two configured ERC-20 outputs through fixed Uniswap v3 single-hop pools. It requires `single`
+strategy, gas accounting with a bridge-token feed, and the new `LiquidLaneUniswapXDexExecutor`
+implementation whose immutable settings are checked at startup. Omit `dex` to keep existing behavior.
+Both quote directions are supported; every fill reprices exact output, reserves the full bridge payout,
+simulates execution and rejects an estimate above `gasUnitsBudget`. RPC timeouts or saturation decline
+quotes normally. The prototype requires a zero Reactor fee controller for quoting; native ETH, multihop,
+input-token fees and arbitrary routers are unsupported. See the commented [configuration](config/uniswapx.example.yaml),
+[design and validation](docs/UNISWAPX-PLAN.md#atomic-dex-prototype).
+This solver-only branch includes generated ABI/bindings, but the matching executor implementation
+is a separate unpublished change and has not been deployed or qualified for production.
+Keep `dex` omitted until that implementation is reviewed and deployed; existing executors do not
+implement `executeWithDex`.
+
 Quote refusals include a stable `reason` in structured debug logs and
 `solver_bot_quote_results_total{solver="uniswapx-filler",reason="…"}`. Examples are `unsupported_protocol` (including `v3`),
 `unsupported_chain` (either requested chain differs from the configured chain), `unsupported_type`,

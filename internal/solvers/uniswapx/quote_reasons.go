@@ -78,7 +78,7 @@ func boundedQuoteRejectionReason(value string) string {
 		quoteDeclineInvalidAmount, quoteDeclineQuoteStateUnavailable, quoteDeclineStrategy,
 		quoteDeclineNoMatchingRoutes, quoteDeclineNoCandidates, quoteDeclineAmountBelowMinimum,
 		quoteDeclineInsufficientCapacity, quoteDeclineNoAllocation, quoteDeclineGasExceedsOutput,
-		quoteDeclineMinimumInput, quoteDeclineStateChanged:
+		quoteDeclineMinimumInput, quoteDeclineStateChanged, quoteDeclineDexUnavailable:
 		return strings.ReplaceAll(value, "-", "_")
 	}
 	switch value {

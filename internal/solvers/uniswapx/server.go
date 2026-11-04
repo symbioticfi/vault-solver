@@ -211,7 +211,7 @@ func quoteDeclineDecision(reason quoteDeclineReason) string {
 	case quoteDeclineBlocked, quoteDeclinePairOutOfScope, quoteDeclineQuoteStateUnavailable,
 		quoteDeclineStrategy, quoteDeclineStateChanged, quoteDeclineNoMatchingRoutes,
 		quoteDeclineNoCandidates, quoteDeclineAmountBelowMinimum, quoteDeclineInsufficientCapacity,
-		quoteDeclineNoAllocation, quoteDeclineGasExceedsOutput, quoteDeclineMinimumInput:
+		quoteDeclineNoAllocation, quoteDeclineGasExceedsOutput, quoteDeclineMinimumInput, quoteDeclineDexUnavailable:
 		return "no_quote"
 	}
 	return "no_quote"
@@ -279,9 +279,18 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 	} else {
 		input.AmountOut = requestAmount
 	}
-	quote, err := s.decideQuote(ctx, input)
+	var quote *types.Quote
+	var err error
+	if s.cfg.Dex.matches(tokenIn, tokenOut) {
+		quote, err = s.decideDexQuote(ctx, input)
+	} else {
+		quote, err = s.decideQuote(ctx, input)
+	}
 	if ctx.Err() != nil {
 		return declinedQuote(response, quoteDeclineStateChanged), nil
+	}
+	if errors.Is(err, errDexUnavailable) {
+		return declinedQuote(response, quoteDeclineDexUnavailable), nil
 	}
 	if err != nil {
 		return response, err
@@ -427,6 +436,9 @@ func (s *Solver) quotePairInScope(request quoteRequest) bool {
 }
 
 func (s *Solver) inventoryPairInScope(in, out common.Address, state *quoteState) bool {
+	if s.cfg.Dex.matches(in, out) {
+		out = s.cfg.Dex.BridgeToken
+	}
 	if in == out || in == (common.Address{}) || out == (common.Address{}) || !s.cfg.TokenPolicy.Allows(in) || state == nil {
 		return false
 	}
@@ -441,6 +453,9 @@ func (s *Solver) inventoryPairInScope(in, out common.Address, state *quoteState)
 // metricPairSupported reuses configured adapter directions and this refresh's validated scope.
 // Dynamic proof expires/replaces with quoteState; temporary capacity and metadata do not decide it.
 func (s *Solver) metricPairSupported(in, out common.Address) bool {
+	if s.cfg.Dex.matches(in, out) {
+		return s.metricPairSupported(in, s.cfg.Dex.BridgeToken)
+	}
 	if in == out || in == (common.Address{}) || out == (common.Address{}) || !s.cfg.TokenPolicy.Allows(in) {
 		return false
 	}
