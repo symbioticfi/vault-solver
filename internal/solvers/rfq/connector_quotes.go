@@ -75,8 +75,8 @@ func (r *reader) readConnectorCandidates(
 			return nil, errors.Errorf("connector account: %w", err)
 		}
 		account, err := binding.UnpackAccount(accountData)
-		if err != nil || account == (common.Address{}) {
-			return nil, errors.New("invalid connector account")
+		if err != nil || account == (common.Address{}) || account != item.Vault {
+			return nil, errors.New("connector account mismatch")
 		}
 		capacityData, err := call(item.Adapter, binding.PackRemainingAssets(tokenIn))
 		if err != nil {

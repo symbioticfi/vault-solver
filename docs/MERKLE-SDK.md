@@ -123,7 +123,7 @@ actions and no Call or Approve steps is idle. A separate readiness read can gate
 Manage action while its bound request ID is zero; the host assigns no protocol
 meaning to that ID. Unsigned saved plans are rebuilt against current state.
 Malformed simulation results, failed recipe checks and RPC failures remain errors.
-Signed recovery continues reconciling the exact persisted transaction bytes.
+Signed recovery continues reconciling the exact persisted transaction bytes. When no saved attempt has a receipt, the host rebroadcasts the latest saved bytes through the shared txmanager, without re-signing or new fees. This covers a crash between journal write and first broadcast. The SDK still owns canonical confirmation and acknowledgement.
 The recipe's own checks define the on-chain completion conditions; this host does
 not infer settlement from issuer selectors or off-chain status.
 
