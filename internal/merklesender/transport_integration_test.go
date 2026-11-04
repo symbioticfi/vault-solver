@@ -31,14 +31,26 @@ import (
 type journalRelay struct {
 	*ethclient.Client
 
-	directory string
-	mu        sync.Mutex
-	sent      []*types.Transaction
-	persisted chan struct{}
-	fault     error
+	directory    string
+	mu           sync.Mutex
+	sent         []*types.Transaction
+	persisted    chan struct{}
+	fault        error
+	forward      bool
+	receiptError common.Hash
 }
 
-func (b *journalRelay) SendTransaction(_ context.Context, tx *types.Transaction) error {
+func (b *journalRelay) TransactionReceipt(ctx context.Context, hash common.Hash) (*types.Receipt, error) {
+	b.mu.Lock()
+	failed := hash == b.receiptError
+	b.mu.Unlock()
+	if failed {
+		return nil, errors.New("original receipt RPC unavailable")
+	}
+	return b.Client.TransactionReceipt(ctx, hash)
+}
+
+func (b *journalRelay) SendTransaction(ctx context.Context, tx *types.Transaction) error {
 	var journal struct {
 		Raw      hexutil.Bytes   `json:"raw"`
 		Attempts []hexutil.Bytes `json:"attempts"`
@@ -61,6 +73,11 @@ func (b *journalRelay) SendTransaction(_ context.Context, tx *types.Transaction)
 		return b.fault
 	}
 	b.sent = append(b.sent, tx)
+	if b.forward {
+		if err := b.Client.SendTransaction(ctx, tx); err != nil {
+			return err
+		}
+	}
 	b.persisted <- struct{}{}
 	return nil
 }
@@ -92,7 +109,7 @@ func TestSDKJournalSharedSenderReplacementRestartAndAcknowledge(t *testing.T) {
 	stopped := make(chan struct{})
 	go func() { engine.Start(runCtx); close(stopped) }()
 	t.Cleanup(func() { stop(); <-stopped; _ = store.Close() })
-	journal, err := submission.New(relay, signing.Address(), big.NewInt(1337), store, submission.Config{PollInterval: time.Millisecond}, Transport{Manager: engine, Solver: "test"}, logr.Discard())
+	journal, err := New(relay, signing.Address(), big.NewInt(1337), store, submission.Config{PollInterval: time.Millisecond}, Transport{Manager: engine, Solver: "test"}, logr.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,9 +178,18 @@ func TestSDKJournalSharedSenderReplacementRestartAndAcknowledge(t *testing.T) {
 		t.Fatal(err)
 	}
 	restarted := txmanager.New(relay, signing, big.NewInt(1337), config, logr.Discard())
-	recovered, err := submission.New(relay, signing.Address(), big.NewInt(1337), store, submission.Config{PollInterval: time.Millisecond}, Transport{Manager: restarted, Solver: "test"}, logr.Discard())
+	recovered, err := New(relay, signing.Address(), big.NewInt(1337), store, submission.Config{PollInterval: time.Millisecond}, Transport{Manager: restarted, Solver: "test"}, logr.Discard())
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Decode the journal written by the pinned SDK, including replacement order.
+	if recovered.recoveredID != request.ID || len(recovered.attempts) != len(attempts) {
+		t.Fatal("SDK journal projection lost original or replacement attempts")
+	}
+	for index, attempt := range attempts {
+		if recovered.attempts[index].Hash() != attempt.Hash() {
+			t.Fatal("SDK journal projection changed signed attempt order or bytes")
+		}
 	}
 	if recovered.PendingID() != request.ID || restarted.LaneReady() {
 		t.Fatal("restart lost signer fence")
@@ -171,16 +197,65 @@ func TestSDKJournalSharedSenderReplacementRestartAndAcknowledge(t *testing.T) {
 	if err := restarted.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if err := chain.SendTransaction(t.Context(), attempts[len(attempts)-1]); err != nil {
-		t.Fatal(err)
+	relay.mu.Lock()
+	relay.forward = true
+	relay.mu.Unlock()
+	// Drain the old notifications; recovery must create a fresh broadcast.
+	for len(relay.persisted) > 0 {
+		<-relay.persisted
 	}
-	mine()
 	verifyCtx, verifyCancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer verifyCancel()
+	if restarted.Available() {
+		t.Fatal("restart lost signer fence")
+	}
+	if err := restarted.Rebroadcast(verifyCtx, "foreign-owner", attempts[len(attempts)-1]); err == nil {
+		t.Fatal("foreign owner rebroadcast through the signer fence")
+	}
+	relay.mu.Lock()
+	relay.receiptError = attempts[0].Hash()
+	relay.mu.Unlock()
+	pending, err := recovered.Send(verifyCtx, request)
+	if err == nil || !pending.Pending {
+		t.Fatalf("unreadable original lost pending ownership: %+v %v", pending, err)
+	}
+	relay.mu.Lock()
+	if len(relay.sent) != len(attempts) {
+		t.Error("receipt error allowed rebroadcast of the missing replacement")
+	}
+	relay.receiptError = common.Hash{}
+	relay.mu.Unlock()
+	type sendResult struct {
+		result submission.Result
+		err    error
+	}
+	completed := make(chan sendResult, 1)
+	resumeCtx, stopResume := context.WithCancel(verifyCtx)
+	go func() { r, err := recovered.Send(resumeCtx, request); completed <- sendResult{r, err} }()
+	select {
+	case <-relay.persisted:
+	case <-verifyCtx.Done():
+		t.Fatal("saved transaction not rebroadcast after restart")
+	}
+	// No transaction reached Anvil before restart. Stop the receipt wait before
+	// mining, then make the original receipt unreadable while the replacement lands.
+	stopResume()
+	if got := <-completed; !errors.Is(got.err, context.Canceled) || !got.result.Pending {
+		t.Fatalf("cancelled recovery lost journal: %+v %v", got.result, got.err)
+	}
+	relay.mu.Lock()
+	relay.receiptError = attempts[0].Hash()
+	relay.mu.Unlock()
+	mine()
 	terminal, err := recovered.Send(verifyCtx, request)
 	if err != nil || !terminal.Confirmed || terminal.Execution == nil {
-		t.Fatalf("canonical recovery: %+v %v", terminal, err)
+		t.Fatalf("original receipt error hid confirmed replacement: %+v %v", terminal, err)
 	}
+	relay.mu.Lock()
+	if relay.sent[len(relay.sent)-1].Hash() != attempts[len(attempts)-1].Hash() {
+		t.Error("recovery rebuilt signed bytes")
+	}
+	relay.mu.Unlock()
 	if restarted.LaneReady() {
 		t.Fatal("terminal receipt released lane before durable acknowledgement")
 	}
@@ -190,7 +265,7 @@ func TestSDKJournalSharedSenderReplacementRestartAndAcknowledge(t *testing.T) {
 	if err := recovered.Acknowledge(verifyCtx, "foreign-id"); err == nil {
 		t.Fatal("foreign acknowledgement released lane")
 	}
-	failedAck, err := submission.New(relay, signing.Address(), big.NewInt(1337), failingAcknowledgementStore{store}, submission.Config{}, Transport{Manager: restarted, Solver: "test"}, logr.Discard())
+	failedAck, err := New(relay, signing.Address(), big.NewInt(1337), failingAcknowledgementStore{store}, submission.Config{}, Transport{Manager: restarted, Solver: "test"}, logr.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +360,7 @@ func TestSDKJournalPersistenceFailureBlocksBroadcast(t *testing.T) {
 	if err := engine.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	journal, err := submission.New(relay, signing.Address(), big.NewInt(1337), store, submission.Config{}, Transport{Manager: engine, Solver: "test"}, logr.Discard())
+	journal, err := New(relay, signing.Address(), big.NewInt(1337), store, submission.Config{}, Transport{Manager: engine, Solver: "test"}, logr.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}

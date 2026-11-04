@@ -1,11 +1,15 @@
 package rfq
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 )
 
 func TestConfiguredExecutorDerivesPaymentConnector(t *testing.T) {
@@ -44,4 +48,51 @@ func TestConfiguredExecutorDerivesPaymentConnector(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A slow recipe read during deferred publication must not stall live quotes.
+func TestInitializeDoesNotBlockRouteReads(t *testing.T) {
+	fixture := connectorExecutionFixture(t, connectorDiscountFixture())
+	reader := &blockingLogsReader{connectorExecutionReader: fixture.reader, entered: make(chan struct{}), release: make(chan struct{})}
+	workflow := *fixture.workflow
+	workflow.chain = reader
+	workflow.connector = common.Address{}
+	s := &Solver{recipeExecutors: []common.Address{fixture.reader.recipeExecutor}, workflow: &workflow}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Initialize(t.Context())
+		done <- err
+	}()
+	<-reader.entered
+	declined := make(chan bool, 1)
+	go func() {
+		declined <- !s.AcceptsConnector(vlt) && !s.AcceptsRoute(fixture.reader.recipeExecutor, vlt, fixture.reader.recipeAccount, tOut)
+	}()
+	select {
+	case ok := <-declined:
+		if !ok {
+			t.Fatal("route accepted before publication")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("route read blocked on recipe discovery")
+	}
+	close(reader.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if !s.AcceptsConnector(vlt) {
+		t.Fatal("route not published")
+	}
+}
+
+type blockingLogsReader struct {
+	*connectorExecutionReader
+
+	entered, release chan struct{}
+}
+
+func (r *blockingLogsReader) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]types.Log, error) {
+	close(r.entered)
+	<-r.release
+	return r.connectorExecutionReader.FilterLogs(ctx, query)
 }

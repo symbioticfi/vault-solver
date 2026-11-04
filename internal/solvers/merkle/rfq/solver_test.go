@@ -3,6 +3,7 @@ package rfq
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math/big"
 	"reflect"
 	"strings"
@@ -12,10 +13,12 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 	"github.com/symbioticfi/merkle-executor/sdk/submission"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"gopkg.in/yaml.v3"
 )
@@ -131,20 +134,27 @@ func TestPollerPersistsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 		{Adapter: common.HexToAddress("0x01").Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "99999"},
 		{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: common.HexToAddress("0x43").Hex()},
 	}}
-	store, err := state.Open(t.TempDir())
+	directory := t.TempDir()
+	store, err := state.Open(directory)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
+	ledger, err := loadSpends(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sends := 0
 	sender := &fakeSender{result: submission.Result{Pending: true}}
 	sender.before = func(req submission.Request) {
+		sends++
 		var saved fillIntent
 		found, err := store.Load(intentKey, &saved)
 		if err != nil || !found || saved.ID != req.ID || !bytes.Equal(saved.Data, req.Data) || saved.Deadline.IsZero() {
 			t.Fatalf("fill admitted before durable intent: %v", err)
 		}
 	}
-	s := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender, store: store}
+	s := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender, store: store, spends: ledger}
 	if _, err := s.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -160,17 +170,64 @@ func TestPollerPersistsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	if _, err := store.Load(intentKey, &restored); err != nil {
 		t.Fatal(err)
 	}
-	restarted := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender, store: store, intent: restored}
-	sender.result = submission.Result{Confirmed: true, Hash: common.HexToHash("0x77")}
+	restarted := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender, store: store, intent: restored, spends: ledger}
+	capacityID := restored.Spend.CapacityID
+	restarted.intent.Spend = fillSpend{} // Signed intents from stage predate spend metadata.
+	caller := fixture.workflow.caller
+	fixture.reader.recipeCaller = common.HexToAddress("0xbad")
+	fixture.workflow.connector = common.Address{}
+	sender.result = submission.Result{Confirmed: true, Hash: common.HexToHash("0x77"), Execution: &provider.Execution{BlockNumber: big.NewInt(7)}}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if venues, err := restarted.Initialize(ctx); err != nil || len(venues) != 0 || sender.acks != 0 {
+		t.Fatalf("startup waited for signed recovery: %v", err)
+	}
+	if err := restarted.tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.Initialize(ctx); err == nil || !strings.Contains(err.Error(), "caller mismatch") {
+		t.Fatalf("current recipe should fail only after signed recovery: %v", err)
+	}
+	if err := restarted.tick(ctx); err == nil || backend.reads != reads {
+		t.Fatal("new award lookup bypassed unavailable recipe routing", err)
+	}
+	fixture.reader.recipeCaller, fixture.workflow.connector = caller, vlt
+	if backend.reads != reads || !reflect.DeepEqual(request, sender.request) || sender.acks != 1 || fixture.reader.latestIdentityReads != 2 {
+		t.Fatal("recovery rebuilt the fill or queried the backend")
+	}
+	// The backend is still listing the same open award twice. Neither may
+	// trigger another fill after canonical confirmation and acknowledgement.
 	if err := restarted.tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if backend.reads != reads || !reflect.DeepEqual(request, sender.request) || sender.acks != 1 {
-		t.Fatal("recovery rebuilt the fill or queried the backend")
+	if sends != 2 {
+		t.Fatalf("stale open award was resubmitted: sends=%d", sends)
 	}
 	var removed fillIntent
 	if found, err := store.Load(intentKey, &removed); err != nil || found {
 		t.Fatal("terminal intent not cleared", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := state.Open(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	restoredLedger, err := loadSpends(reopened)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := liquidlane.Route{CapacityID: capacityID, Adapter: common.HexToAddress("0x99")}
+	for _, block := range []uint64{0, 6, 7} {
+		accepted := (&Solver{spends: restoredLedger}).AcceptsSnapshots([]liquidlane.Inventory{{Route: route, BlockNumber: block}})
+		if accepted != (block >= 7) {
+			t.Fatalf("restart block=%d accepted=%v", block, accepted)
+		}
+	}
+	if !restoredLedger.finalized("award") {
+		t.Fatal("restart lost completed order cache")
 	}
 }
 
@@ -184,7 +241,7 @@ func TestWholeAwardRequiresVenueAndAdvertisedCapacity(t *testing.T) {
 			} else {
 				f.reader.remaining = big.NewInt(455)
 			}
-			if _, _, err := f.workflow.build(t.Context(), order, nil, selected, backend); err == nil || !strings.Contains(err.Error(), "whole award") {
+			if _, err := f.workflow.build(t.Context(), order, nil, selected, backend); err == nil || !strings.Contains(err.Error(), "whole award") {
 				t.Fatalf("capacity accepted: %v", err)
 			}
 			if f.reader.outerCalls != 0 {
@@ -274,6 +331,22 @@ curator: {url: https://curator.example/api/v1}
 			_, err := parseConfig(node)
 			if (err == nil) != tc.valid {
 				t.Fatalf("valid=%v error=%v", tc.valid, err)
+			}
+		})
+	}
+}
+
+func TestRunPendingRecoveryCancelsWithoutRecipeLookup(t *testing.T) {
+	for _, sendErr := range []error{nil, errors.New("receipt RPC unavailable")} {
+		t.Run(fmt.Sprint(sendErr), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			sender := &fakeSender{pending: "signed", result: submission.Result{Pending: true}, err: sendErr}
+			sender.before = func(submission.Request) { cancel() }
+			// No recipe reader or backend: recovery must not depend on either.
+			s := &Solver{sender: sender, intent: fillIntent{ID: "signed"}}
+			if err := s.Run(ctx); !errors.Is(err, context.Canceled) || sender.acks != 0 || sender.PendingID() != "signed" {
+				t.Fatal("shutdown did not cancel pending recovery with ownership retained", err)
 			}
 		})
 	}
