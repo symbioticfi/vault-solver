@@ -332,8 +332,8 @@ selecting such a leaf for recipe execution remains unsupported.
 
 The immutable SDK also classifies successful original execution results using the
 authenticated recipe: all Manage gates closed with no Call or Approve work is idle.
-Request IDs and bound arguments do not supply readiness policy. Unsigned admission
-rechecks the gates; malformed results, reverts and closing canonical-check failures
+Request IDs and bound arguments do not supply readiness policy. Unsigned saved plans
+are prepared again against current state; malformed results, reverts and closing canonical-check failures
 remain errors. The existing signed journal recovery path remains unchanged, and
 on-chain completion assertions remain part of the recipe rather than host protocol
 recognition.
@@ -341,8 +341,12 @@ recognition.
 Self-contained state-driven recipes use the SDK's automatic atomic batching;
 external provider work stays single-execution with fresh data. The host supplies
 its existing code-override transport and pins the same SDK as the standalone
-executor, without a second loop or batching policy. Configured executor order is
-priority, not a withdrawal cash reservation.
+executor, without a second loop or batching policy. `PrepareExecution` returns one
+plan for direct calls or cross-executor batches, detecting the shared signer's
+EIP-7702 delegation. Submission does not repeat preparation simulation. The 3F
+lease check closes preparation; signed recovery does not repeat it. One execution
+journal holds every member until its receipt is durable. Configured executor order
+is priority, not a withdrawal cash reservation.
 
 The host's SDK transport continues to use the existing shared transaction manager's
 owner fence and persistence callbacks; it contains no copied sender or nonce engine.

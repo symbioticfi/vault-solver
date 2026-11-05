@@ -126,11 +126,11 @@ or cancel offers.
 aggregate `mintAuthorization(account)` at the recipe's block, allowing several
 accepted offers and later partial-fill windows. It does not derive mint amounts
 from one offer row. Across every guarded group it uses the earliest eligible current API mint deadline (canonical request address breaks ties), reserves a
-30-second margin and checks current enrollment/lease again after full simulation,
-immediately before unsigned admission. Earlier requests for another funding pair
+30-second margin and closes preparation by checking current enrollment/lease
+after full simulation. The completed plan is submitted without another simulation. Earlier requests for another funding pair
 or outside the current policy budget, yield floor or recipe cap are skipped so
 they cannot block a later eligible request.
-The SDK's full recipe simulation and send checks remain mandatory. The account
+The SDK's full recipe simulation and durable submission checks remain mandatory. The account
 charges policy, approves, mints, receives PT/YT, verifies exact cash/PT/YT/budget
 deltas and clears allowance atomically. Confirmed reconciliation requires the
 canonical receipt and exactly one matching policy debit. Signed recovery retains

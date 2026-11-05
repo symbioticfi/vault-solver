@@ -1036,7 +1036,10 @@ without a GitHub token or a local merkle-executor checkout.
 Self-contained recipes automatically batch useful state-driven executions through
 that SDK. External quotes and proofs use fresh single-execution preparation.
 The executor list sets processing priority; spending recipes must reserve funds
-needed for withdrawals. Batching and pending-order recovery use the shared sender.
+needed for withdrawals. A compatible EIP-7702 shared signer also batches different
+executors in that order. Fresh plans submit without a second simulation; unsigned
+saved plans are rebuilt and signed transactions recover unchanged. Batching and
+pending-order recovery use the shared sender.
 
 The SDK reads signed permission bundles through `GET /merkle/{adapter}/{root}` under the configured curator API URL.
 The SDK reads `recipeHash` and `recipeBlock` at a pinned block and retrieves the original

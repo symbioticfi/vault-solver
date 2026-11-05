@@ -9,6 +9,13 @@ this host keeps its existing shared sender. Hosts explicitly supply credential
 lookup, so importing or constructing SDK components never implicitly reads the
 process environment.
 
+`keeper.Planner.PrepareExecution` returns the same execution-plan format for direct
+calls and EIP-7702 batches across executors. The SDK detects delegation, simulates
+the complete plan and retains detailed construction results. The host submits the
+prepared transaction without another simulation. Unsigned saved plans are rebuilt;
+signed transactions retain their exact bytes and shared-sender ownership. All batch
+members receive the same durable receipt before settlement advances.
+
 Awarded LiquidLane connector orders run in the separate [`rfq-merkle` solver](RFQ-MERKLE.md).
 Its RecipeExecutor caller is the RFQ Executor contract, so it must not be included in
 `merkle.strategies`, whose caller is the shared EOA. These integrations share the SDK
@@ -113,7 +120,7 @@ Readiness comes from the authenticated recipe. After the complete original execu
 simulation and canonical closing checks succeed, a recipe with no active Manage
 actions and no Call or Approve steps is idle. A separate readiness read can gate a
 Manage action while its bound request ID is zero; the host assigns no protocol
-meaning to that ID. Unsigned admission rechecks readiness against current state.
+meaning to that ID. Unsigned saved plans are rebuilt against current state.
 Malformed simulation results, failed recipe checks and RPC failures remain errors.
 Signed recovery continues reconciling the exact persisted transaction bytes.
 The recipe's own checks define the on-chain completion conditions; this host does

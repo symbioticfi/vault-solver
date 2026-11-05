@@ -47,7 +47,7 @@ func TestFactoryPlannerUsesRecipeReadinessIndependentlyOfRequestID(t *testing.T)
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			host := newGenericRecipeHost(t, tc.ready, tc.requestID, tc.simulation)
-			plan, err := host.solver.keeper.Planner.Prepare(t.Context(), host.solver.keeper.Strategies[0])
+			execution, err := host.solver.keeper.Planner.PrepareExecution(t.Context(), host.solver.keeper.Strategies)
 			if tc.wantIdle {
 				if !errors.Is(err, provider.ErrNotReady) {
 					t.Fatalf("closed recipe gate must wait after successful simulation: %v", err)
@@ -60,6 +60,7 @@ func TestFactoryPlannerUsesRecipeReadinessIndependentlyOfRequestID(t *testing.T)
 				if err != nil {
 					t.Fatal(err)
 				}
+				plan := execution.Members[0].Plan
 				targets, err := recipes.ManagedTargets(plan.Calldata)
 				if err != nil || len(targets) != 1 || targets["2:0"] != common.HexToAddress("0x80") {
 					t.Fatalf("host lost the unknown authorized action: %v, %v", targets, err)
@@ -72,16 +73,16 @@ func TestFactoryPlannerUsesRecipeReadinessIndependentlyOfRequestID(t *testing.T)
 	}
 }
 
-func TestFactoryPlannerRechecksUnsignedRecipeReadiness(t *testing.T) {
+func TestFactoryPlannerRebuildsUnsignedRecipeAgainstCurrentState(t *testing.T) {
 	host := newGenericRecipeHost(t, 1, 0, "")
 	planner := host.solver.keeper.Planner.(*keeper.Planner)
-	plan, err := planner.Prepare(t.Context(), host.solver.keeper.Strategies[0])
+	_, err := planner.PrepareExecution(t.Context(), host.solver.keeper.Strategies)
 	if err != nil {
 		t.Fatal(err)
 	}
 	before := host.simulations.Load()
 	host.ready.Store(0)
-	if err := planner.Validate(t.Context(), plan); !errors.Is(err, provider.ErrNotReady) {
+	if _, err := planner.PrepareExecution(t.Context(), host.solver.keeper.Strategies); !errors.Is(err, provider.ErrNotReady) {
 		t.Fatalf("unsigned admission accepted a recipe whose gate closed: %v", err)
 	}
 	if host.simulations.Load() <= before {
@@ -91,10 +92,11 @@ func TestFactoryPlannerRechecksUnsignedRecipeReadiness(t *testing.T) {
 
 func TestFactoryPlannerUsesSDKAutomaticBatching(t *testing.T) {
 	host := newGenericRecipeHost(t, 2, 7, "")
-	plan, err := host.solver.keeper.Planner.Prepare(t.Context(), host.solver.keeper.Strategies[0])
+	execution, err := host.solver.keeper.Planner.PrepareExecution(t.Context(), host.solver.keeper.Strategies)
 	if err != nil {
 		t.Fatal(err)
 	}
+	plan := execution.Members[0].Plan
 	binding := executorbinding.NewRecipeExecutor().GetABI()
 	method := binding.Methods["multicall"]
 	if len(plan.Calldata) < 4 || !bytes.Equal(plan.Calldata[:4], method.ID) {
@@ -108,8 +110,10 @@ func TestFactoryPlannerUsesSDKAutomaticBatching(t *testing.T) {
 	if len(calls) != 2 || !bytes.Equal(calls[0], calls[1]) || host.batchProbes.Load() == 0 {
 		t.Fatal("host must preserve both original executions and probe stateful progress")
 	}
-	if err := host.solver.keeper.Planner.Validate(t.Context(), plan); err != nil {
-		t.Fatal(err)
+	before := host.simulations.Load()
+	to, data, err := execution.Transaction()
+	if err != nil || to != plan.Snapshot.Executor || !bytes.Equal(data, plan.Calldata) || host.simulations.Load() != before {
+		t.Fatal("prepared transaction was changed or simulated again", err)
 	}
 }
 
@@ -256,6 +260,10 @@ func newGenericRecipeHost(t *testing.T, ready, requestID uint64, simulation stri
 				data := genericPack(t, event.Inputs.NonIndexed(), recipe.Queries, recipe.Steps)
 				response["result"] = []types.Log{{Address: executor, BlockNumber: 12, BlockHash: header.Hash(), Topics: []common.Hash{event.ID, recipeHash}, Data: data}}
 			case "eth_getCode":
+				if string(request.Params[0]) == `"`+caller.Hex()+`"` && string(request.Params[1]) == `"latest"` {
+					response["result"] = "0x"
+					break
+				}
 				if string(request.Params[0]) != `"`+executor.Hex()+`"` || string(request.Params[1]) != `"0xc"` {
 					t.Error("runtime code read was not pinned to the executor")
 				}
