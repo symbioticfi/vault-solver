@@ -29,10 +29,10 @@ func (p *mintPlanning) PrepareExecution(ctx context.Context, strategies []keeper
 		return plan, err
 	}
 	for _, member := range plan.Members {
-		if len(member.Plan.Outputs) != 1 {
+		if len(member.Plan.Outputs) != 1 || len(member.Plan.Outputs[0]) != 1 {
 			return keeper.ExecutionPlan{}, errors.New("3f plan requires one provider")
 		}
-		if err := p.runtime.ValidateLease(ctx, member.Plan.Snapshot, member.Plan.Outputs[0]); err != nil {
+		if err := p.runtime.ValidateLease(ctx, member.Plan.Snapshot, member.Plan.Outputs[0][0]); err != nil {
 			return keeper.ExecutionPlan{}, err
 		}
 	}

@@ -137,7 +137,11 @@ func TestAggregateAuthorizationLeaseAndPreparationAreReadOnly(t *testing.T) {
 		return requestABI.GetABI().Methods["mintAuthorization"].Outputs.Pack(big.NewInt(12), big.NewInt(5))
 	})
 	runtime := &mintProvider{API: api, Chain: chain, Now: func() time.Time { return now }}
-	out, err := runtime.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil)
+	outputs, err := runtime.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil)
+	var out provider.Output
+	if len(outputs) == 1 {
+		out = outputs[0]
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +247,11 @@ func TestMintSkipsIneligibleEarlierRequests(t *testing.T) {
 				return chain(ctx, msg, block)
 			})
 			p := mintProvider{API: api, Chain: withPolicy, Now: func() time.Time { return now }}
-			out, err := p.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil)
+			outputs, err := p.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil)
+			var out provider.Output
+			if len(outputs) == 1 {
+				out = outputs[0]
+			}
 			if err != nil {
 				t.Fatal(err)
 			}

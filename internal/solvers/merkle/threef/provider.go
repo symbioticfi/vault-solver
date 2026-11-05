@@ -61,17 +61,17 @@ func (p *mintProvider) RecipeRequirements(snapshot provider.Snapshot, recipe rec
 	return keeper.RecipeRequirements{Inputs: inputs}, nil
 }
 
-func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree, _ map[uint]*big.Int) (provider.Output, error) {
+func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree, _ map[uint]*big.Int) ([]provider.Output, error) {
 	markets, err := inspect(snapshot, recipe, tree)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	if err = p.API.Identity(ctx, snapshot.Account); err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	offers, err := p.API.Offers(ctx)
 	if err != nil {
-		return provider.Output{}, err
+		return nil, err
 	}
 	deadlines := map[common.Address]time.Time{}
 	for _, offer := range offers {
@@ -79,15 +79,15 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 			continue
 		}
 		if offer.ExecutionMode != "PUSH" || !common.IsHexAddress(offer.RequestId) || common.HexToAddress(offer.RequestId) == (common.Address{}) {
-			return provider.Output{}, errors.New("3f invalid pending PUSH request")
+			return nil, errors.New("3f invalid pending PUSH request")
 		}
 		deadline := offer.MintDeadline.Get()
 		if deadline == nil {
-			return provider.Output{}, errors.New("3f pending mint has no lease deadline")
+			return nil, errors.New("3f pending mint has no lease deadline")
 		}
 		parsed, e := time.Parse(time.RFC3339Nano, *deadline)
 		if e != nil {
-			return provider.Output{}, errors.New("3f invalid mint lease deadline")
+			return nil, errors.New("3f invalid mint lease deadline")
 		}
 		address := common.HexToAddress(offer.RequestId)
 		if old, ok := deadlines[address]; !ok || parsed.Before(old) {
@@ -105,14 +105,14 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 		return addresses[i].Cmp(addresses[j]) < 0
 	})
 	if len(addresses) == 0 {
-		return provider.Output{}, provider.ErrNotReady
+		return nil, provider.ErrNotReady
 	}
 	observations := make([]observation, 0, len(markets))
 	inputs := map[uint]string{}
 	for _, market := range markets {
 		observed, e := observe(ctx, p.Chain, snapshot, recipe, market)
 		if e != nil {
-			return provider.Output{}, e
+			return nil, e
 		}
 		observations = append(observations, observed)
 		for _, index := range []uint{market.RequestInput, market.PrincipalInput, market.YieldInput} {
@@ -126,11 +126,11 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 		}
 		raw, e := p.Chain.CallContract(ctx, ethereum.CallMsg{To: &address, Data: requestABI.PackMintAuthorization(snapshot.Account)}, snapshot.BlockNumber)
 		if e != nil {
-			return provider.Output{}, errors.New("3f read mintAuthorization failed")
+			return nil, errors.New("3f read mintAuthorization failed")
 		}
 		auth, e := requestABI.UnpackMintAuthorization(raw)
 		if e != nil {
-			return provider.Output{}, errors.New("3f invalid mintAuthorization")
+			return nil, errors.New("3f invalid mintAuthorization")
 		}
 		if auth.PtAmount.Sign() == 0 {
 			continue
@@ -144,20 +144,20 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 				if errors.Is(e, errIneligible) {
 					continue
 				}
-				return provider.Output{}, e
+				return nil, e
 			}
 			record := mint{Request: address, Policy: market.Policy, Asset: market.Asset, UnderlyingAsset: market.UnderlyingAsset, Principal: auth.PtAmount.String(), Deadline: deadline}
 			data, marshalErr := json.Marshal(record)
 			if marshalErr != nil {
-				return provider.Output{}, marshalErr
+				return nil, marshalErr
 			}
 			inputs[market.RequestInput] = new(big.Int).SetBytes(address.Bytes()).String()
 			inputs[market.PrincipalInput] = auth.PtAmount.String()
 			inputs[market.YieldInput] = auth.YtAmount.String()
-			return provider.Output{Inputs: inputs, Data: data}, nil
+			return []provider.Output{{Inputs: inputs, Data: data}}, nil
 		}
 	}
-	return provider.Output{}, provider.ErrNotReady
+	return nil, provider.ErrNotReady
 }
 
 // ValidateLease closes preparation after recipe simulation. Signed recovery

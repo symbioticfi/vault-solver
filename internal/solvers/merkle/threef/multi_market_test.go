@@ -135,7 +135,11 @@ func TestGlobalLeaseSelectionZerosEveryInactiveMarket(t *testing.T) {
 		return requestABI.GetABI().Methods["mintAuthorization"].Outputs.Pack(big.NewInt(12), big.NewInt(5))
 	})
 	p := mintProvider{API: api, Chain: chain, Now: func() time.Time { return now }}
-	out, err := p.PrepareRecipe(t.Context(), s, r, tr, nil)
+	outputs, err := p.PrepareRecipe(t.Context(), s, r, tr, nil)
+	var out provider.Output
+	if len(outputs) == 1 {
+		out = outputs[0]
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +148,10 @@ func TestGlobalLeaseSelectionZerosEveryInactiveMarket(t *testing.T) {
 	}
 	// Equal deadlines use canonical request address, independent of API ordering.
 	api.offers[0].MintDeadline = *wire.NewNullableString(&early)
-	out, err = p.PrepareRecipe(t.Context(), s, r, tr, nil)
+	outputs, err = p.PrepareRecipe(t.Context(), s, r, tr, nil)
+	if len(outputs) == 1 {
+		out = outputs[0]
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
