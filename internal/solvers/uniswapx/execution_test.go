@@ -21,6 +21,7 @@ import (
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/testutil/swapcalls"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 
@@ -136,7 +137,7 @@ func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
 		AmountIn: big.NewInt(100), GrossAmountOut: big.NewInt(100), MaxAmountOut: big.NewInt(100),
 		MinDiscount: new(big.Int),
 	}
-	var packed uxexecutor.ILiquidLaneUniswapXExecutorFillCall
+	var packed swapcalls.Plan
 	reader := &executionTestReader{
 		resolved: []liquidlane.Route{route},
 		snapshot: fillSnapshot{
@@ -159,11 +160,11 @@ func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
 			if err != nil {
 				return nil, err
 			}
-			values, err := parsed.Methods["execute0"].Inputs.Unpack(call.Data[4:])
+			values, err := parsed.Methods["execute"].Inputs.Unpack(call.Data[4:])
 			if err != nil {
 				return nil, err
 			}
-			packed = *abi.ConvertType(values[1], new(uxexecutor.ILiquidLaneUniswapXExecutorFillCall)).(*uxexecutor.ILiquidLaneUniswapXExecutorFillCall)
+			packed = swapcalls.Decode(t, values[1])
 			return nil, nil
 		}),
 		reader:   reader,
@@ -279,7 +280,7 @@ func TestStartFillRepricesPartialDiscountLeg(t *testing.T) {
 			SignerSignature: "0x01", ProtocolDeadline: deadline, ProtocolSignature: "0x02",
 		},
 	}
-	var packed uxexecutor.ILiquidLaneUniswapXExecutorFillCall
+	var packed swapcalls.Plan
 	solver := &Solver{
 		cfg: &Config{
 			Executor: common.HexToAddress("0x7777777777777777777777777777777777777777"), TokenPolicy: policy,
@@ -294,13 +295,11 @@ func TestStartFillRepricesPartialDiscountLeg(t *testing.T) {
 			if err != nil {
 				return nil, err
 			}
-			values, err := parsed.Methods["execute0"].Inputs.Unpack(call.Data[4:])
+			values, err := parsed.Methods["execute"].Inputs.Unpack(call.Data[4:])
 			if err != nil {
 				return nil, err
 			}
-			packed = *abi.ConvertType(
-				values[1], new(uxexecutor.ILiquidLaneUniswapXExecutorFillCall),
-			).(*uxexecutor.ILiquidLaneUniswapXExecutorFillCall)
+			packed = swapcalls.Decode(t, values[1])
 			return nil, nil
 		}),
 		reader: reader, strategy: strategy,
@@ -467,7 +466,7 @@ type directExecutionFixture struct {
 	solver   *Solver
 	strategy *executionTestStrategy
 	txm      *executionTestTxManager
-	packed   *uxexecutor.ILiquidLaneUniswapXExecutorFillCall
+	packed   *swapcalls.Plan
 }
 
 func newDirectExecutionFixture(t *testing.T) *directExecutionFixture {
@@ -487,7 +486,7 @@ func newDirectExecutionFixture(t *testing.T) *directExecutionFixture {
 		ReservedAmountOut: big.NewInt(100),
 	}}}}
 	txm := &executionTestTxManager{result: make(chan txmanager.Result, 1)}
-	packed := new(uxexecutor.ILiquidLaneUniswapXExecutorFillCall)
+	packed := new(swapcalls.Plan)
 	solver := &Solver{
 		cfg:           &Config{Executor: executor, OrderServer: OrderServerConfig{PollInterval: time.Second}},
 		solverAddress: common.HexToAddress("0x5555555555555555555555555555555555555555"),
@@ -496,13 +495,11 @@ func newDirectExecutionFixture(t *testing.T) *directExecutionFixture {
 			if err != nil {
 				return nil, err
 			}
-			values, err := parsed.Methods["execute0"].Inputs.Unpack(call.Data[4:])
+			values, err := parsed.Methods["execute"].Inputs.Unpack(call.Data[4:])
 			if err != nil {
 				return nil, err
 			}
-			*packed = *abi.ConvertType(
-				values[1], new(uxexecutor.ILiquidLaneUniswapXExecutorFillCall),
-			).(*uxexecutor.ILiquidLaneUniswapXExecutorFillCall)
+			*packed = swapcalls.Decode(t, values[1])
 			return nil, nil
 		}),
 		reader: &executionTestReader{now: now, snapshot: fillSnapshot{Direct: []liquidlane.FillQuote{{
@@ -1109,7 +1106,7 @@ func TestAbandonedFillAllowsFreshDifferentOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	args, err := parsed.Methods["execute0"].Inputs.Unpack(fixture.txm.reqs[1].Data[4:])
+	args, err := parsed.Methods["execute"].Inputs.Unpack(fixture.txm.reqs[1].Data[4:])
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -136,7 +136,7 @@ type outerFillEVMReader struct {
 }
 
 func (r *outerFillEVMReader) CallContract(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
-	outer := msg.To != nil && *msg.To == r.caller && bytes.HasPrefix(msg.Data, executorBinding.GetABI().Methods["fill1"].ID)
+	outer := msg.To != nil && *msg.To == r.caller && bytes.HasPrefix(msg.Data, executorBinding.GetABI().Methods["fill"].ID)
 	if outer {
 		r.outerCalls++
 		r.outerData = bytes.Clone(msg.Data)

@@ -7,7 +7,7 @@ at test time. Run `make test-rfq-merkle-anvil` with `anvil` on PATH.
 The full path executes unmodified canonical implementation runtime:
 
 - RFQ `Reactor` and `Executor`: symbioticfi/rfq
-  `de6dbd617bf3c1e8b4120419cbe5800efae7d410` (the source of the vendored RFQ ABI).
+  `425944096ad0ee06955e4de93c2380d0e8eb8764` (the source of the vendored RFQ ABI).
 - Adapters `RecipeExecutor`, `MerkleAccount`, and `LiquidLaneConnector`:
   symbioticfi/adapters `beaf24c50835fbbe181e3135a64285de2aca1315` (the source of
   the unchanged connector and recipe contract surfaces).

@@ -258,7 +258,7 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 		},
 		ProtocolSignature: terms.Signature, Recipient: w.caller, AmountIn: order.Request.AmountIn,
 	}}
-	calldata, err := executorBinding.TryPackFill1(order, protocolSig, nil, discountInputs, calls)
+	calldata, err := executorBinding.TryPackFill(order, protocolSig, nil, discountInputs, calls)
 	if err != nil {
 		return nil, time.Time{}, errors.Errorf("encode recipe fill: %w", err)
 	}

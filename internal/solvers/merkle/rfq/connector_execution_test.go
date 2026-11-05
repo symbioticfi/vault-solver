@@ -43,10 +43,10 @@ func TestConnectorBuildSimulatesCompleteAwardedOrder(t *testing.T) {
 	if chain.outerCalls != 1 || !bytes.Equal(calldata, chain.outerData) {
 		t.Fatalf("returned fill was not the simulated fill: calls=%d", chain.outerCalls)
 	}
-	if len(calldata) < 4 || !bytes.Equal(calldata[:4], executorBinding.GetABI().Methods["fill1"].ID) {
+	if len(calldata) < 4 || !bytes.Equal(calldata[:4], executorBinding.GetABI().Methods["fill"].ID) {
 		t.Fatalf("incorrect fill selector: %x", calldata)
 	}
-	values, err := executorBinding.GetABI().Methods["fill1"].Inputs.Unpack(calldata[4:])
+	values, err := executorBinding.GetABI().Methods["fill"].Inputs.Unpack(calldata[4:])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func (r *connectorExecutionReader) CallContract(ctx context.Context, msg ethereu
 	if msg.To == nil || len(msg.Data) < 4 {
 		return nil, errors.New("invalid contract call")
 	}
-	if *msg.To == r.recipeCaller && bytes.Equal(msg.Data[:4], executorBinding.GetABI().Methods["fill1"].ID) {
+	if *msg.To == r.recipeCaller && bytes.Equal(msg.Data[:4], executorBinding.GetABI().Methods["fill"].ID) {
 		if msg.From != r.signer || block != nil {
 			return nil, errors.New("outer fill must simulate from the host signer at latest")
 		}
