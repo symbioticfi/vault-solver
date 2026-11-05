@@ -98,7 +98,7 @@ authorization on every configured adapter; the fatal startup log includes the ex
 and underlying authorization error.
 
 Configure `rfq-filler` with the existing `adapters` list for native
-pricing and fills, or with `recipeExecutor` for Merkle connector pricing and fills.
+pricing and fills, or with `recipeExecutors` for Merkle connector pricing and fills.
 Setting both fails startup. The Merkle mode uses `stateDir` and `curator` for durable
 execution and permissions; `quoteOnly: true` needs neither. See its
 [configuration](config/rfq-merkle.example.yaml) and [runbook](docs/RFQ-MERKLE.md).

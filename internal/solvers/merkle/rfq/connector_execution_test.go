@@ -285,9 +285,13 @@ type connectorExecutionFixtureData struct {
 
 func connectorExecutionFixture(t *testing.T, resolved *discounts.Resolved) connectorExecutionFixtureData {
 	t.Helper()
+	return connectorExecutionFixtureAt(t, resolved, common.HexToAddress("0x43"))
+}
+
+func connectorExecutionFixtureAt(t *testing.T, resolved *discounts.Resolved, recipeExecutor common.Address) connectorExecutionFixtureData {
+	t.Helper()
 	account := common.HexToAddress("0x21")
 	rfqExecutor := common.HexToAddress("0x10")
-	recipeExecutor := common.HexToAddress("0x43")
 	signer := common.HexToAddress("0x99")
 	terms, err := parseConnectorDiscount(resolved, *connectorDiscountID(), vlt, tIn)
 	if err != nil {

@@ -9,32 +9,55 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
-// Initialize scopes this process to the payment connector in its configured recipe.
-// Recipe bytes are verified against the configured executor's commitment.
-func (s *Solver) Initialize(ctx context.Context) (common.Address, error) {
-	if s.workflow.connector != (common.Address{}) {
-		return s.workflow.connector, nil
+type recipeRoute struct {
+	connector, account, asset common.Address
+}
+
+// Initialize verifies every configured recipe and derives its payment connector.
+// Routes are published together before the quote server or fill loop starts.
+func (s *Solver) Initialize(ctx context.Context) ([]common.Address, error) {
+	if s.routes == nil {
+		routes := make(map[common.Address]recipeRoute, len(s.recipeExecutors))
+		for _, executor := range s.recipeExecutors {
+			snapshot, recipe, err := recipes.Discover(ctx, s.workflow.chain, executor, nil)
+			if err != nil {
+				return nil, err
+			}
+			if snapshot.Caller != s.workflow.caller {
+				return nil, errors.New("connector recipe caller mismatch")
+			}
+			venue, asset, err := paymentConnector(recipe)
+			if err != nil {
+				return nil, err
+			}
+			state, err := s.workflow.state(ctx, venue, new(big.Int).SetUint64(snapshot.BlockNumber))
+			if err != nil {
+				return nil, err
+			}
+			if state.Account != snapshot.Account || state.Asset != asset {
+				return nil, errors.New("recipe payment connector account or asset mismatch")
+			}
+			routes[executor] = recipeRoute{connector: venue, account: state.Account, asset: asset}
+		}
+		s.routes = routes
 	}
-	snapshot, recipe, err := recipes.Discover(ctx, s.workflow.chain, s.recipeExecutor, nil)
-	if err != nil {
-		return common.Address{}, err
+	venues := make([]common.Address, 0, len(s.routes))
+	seen := make(map[common.Address]bool)
+	for _, executor := range s.recipeExecutors {
+		venue := s.routes[executor].connector
+		if !seen[venue] {
+			venues = append(venues, venue)
+			seen[venue] = true
+		}
 	}
-	if snapshot.Caller != s.workflow.caller {
-		return common.Address{}, errors.New("connector recipe caller mismatch")
-	}
-	venue, asset, err := paymentConnector(recipe)
-	if err != nil {
-		return common.Address{}, err
-	}
-	state, err := s.workflow.state(ctx, venue, new(big.Int).SetUint64(snapshot.BlockNumber))
-	if err != nil {
-		return common.Address{}, err
-	}
-	if state.Account != snapshot.Account || state.Asset != asset {
-		return common.Address{}, errors.New("recipe payment connector account or asset mismatch")
-	}
-	s.workflow.connector = venue
-	return venue, nil
+	return venues, nil
+}
+
+// AcceptsRoute binds backend inventory to a locally configured, verified recipe.
+// The RWA-specific swap permission is verified again when building the fill.
+func (s *Solver) AcceptsRoute(executor, connector, account, asset common.Address) bool {
+	route, ok := s.routes[executor]
+	return ok && route.connector == connector && route.account == account && route.asset == asset
 }
 
 func paymentConnector(recipe recipes.Recipe) (venue, asset common.Address, err error) {
