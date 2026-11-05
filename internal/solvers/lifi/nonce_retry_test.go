@@ -216,7 +216,7 @@ func TestSubmitFillMapsNonceRetryDeadlineFromChainTime(t *testing.T) {
 		AmountIn: order.AmountIn, ExpectedAmountOut: big.NewInt(1_000_000), MinAmountOut: big.NewInt(990_000),
 		ReservedAmountOut: big.NewInt(1_000_000),
 	}}}
-	calldata, err := buildFillCalldata(*order, common.HexToHash("0x1"), plan, nil)
+	calldata, err := buildFillCalldata(solver.cfg.Executor, *order, common.HexToHash("0x1"), plan, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

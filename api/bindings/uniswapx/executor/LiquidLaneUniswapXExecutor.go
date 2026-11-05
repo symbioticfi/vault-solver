@@ -31,44 +31,6 @@ type IExecutorCall struct {
 	Data   []byte
 }
 
-// ILiquidLaneAdapterDiscount is an auto generated low-level Go binding around an user-defined struct.
-type ILiquidLaneAdapterDiscount struct {
-	TokenToRedeem common.Address
-	Discount      *big.Int
-	Signer        common.Address
-	Protocol      common.Address
-	Nonce         *big.Int
-	Deadline      *big.Int
-}
-
-// ILiquidLaneAdapterDiscountSwap is an auto generated low-level Go binding around an user-defined struct.
-type ILiquidLaneAdapterDiscountSwap struct {
-	Discount         ILiquidLaneAdapterDiscount
-	SignerSignature  []byte
-	ProtocolDeadline *big.Int
-}
-
-// ILiquidLaneUniswapXExecutorDiscountRoute is an auto generated low-level Go binding around an user-defined struct.
-type ILiquidLaneUniswapXExecutorDiscountRoute struct {
-	Adapter           common.Address
-	AmountIn          *big.Int
-	DiscountSwap      ILiquidLaneAdapterDiscountSwap
-	ProtocolSignature []byte
-}
-
-// ILiquidLaneUniswapXExecutorFillCall is an auto generated low-level Go binding around an user-defined struct.
-type ILiquidLaneUniswapXExecutorFillCall struct {
-	Routes         []ILiquidLaneUniswapXExecutorFillRoute
-	DiscountRoutes []ILiquidLaneUniswapXExecutorDiscountRoute
-}
-
-// ILiquidLaneUniswapXExecutorFillRoute is an auto generated low-level Go binding around an user-defined struct.
-type ILiquidLaneUniswapXExecutorFillRoute struct {
-	Adapter   common.Address
-	AmountIn  *big.Int
-	AmountOut *big.Int
-}
-
 // UniswapXInputToken is an auto generated low-level Go binding around an user-defined struct.
 type UniswapXInputToken struct {
 	Token     common.Address
@@ -110,7 +72,7 @@ type UniswapXSignedOrder struct {
 
 // LiquidLaneUniswapXExecutorMetaData contains all meta data concerning the LiquidLaneUniswapXExecutor contract.
 var LiquidLaneUniswapXExecutorMetaData = bind.MetaData{
-	ABI: "[{\"type\":\"constructor\",\"inputs\":[{\"name\":\"reactor\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"receive\",\"stateMutability\":\"payable\"},{\"type\":\"function\",\"name\":\"callers\",\"inputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"execute\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structUniswapXSignedOrder\",\"components\":[{\"name\":\"order\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"sig\",\"type\":\"bytes\",\"internalType\":\"bytes\"}]},{\"name\":\"fillCall\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneUniswapXExecutor.FillCall\",\"components\":[{\"name\":\"routes\",\"type\":\"tuple[]\",\"internalType\":\"structILiquidLaneUniswapXExecutor.FillRoute[]\",\"components\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"name\":\"discountRoutes\",\"type\":\"tuple[]\",\"internalType\":\"structILiquidLaneUniswapXExecutor.DiscountRoute[]\",\"components\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"discountSwap\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.DiscountSwap\",\"components\":[{\"name\":\"discount\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.Discount\",\"components\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"discount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"signer\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"deadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"signerSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"protocolDeadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"}]}]},{\"name\":\"calls\",\"type\":\"tuple[]\",\"internalType\":\"structIExecutor.Call[]\",\"components\":[{\"name\":\"target\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"value\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}]}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"execute\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structUniswapXSignedOrder\",\"components\":[{\"name\":\"order\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"sig\",\"type\":\"bytes\",\"internalType\":\"bytes\"}]},{\"name\":\"fillCall\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneUniswapXExecutor.FillCall\",\"components\":[{\"name\":\"routes\",\"type\":\"tuple[]\",\"internalType\":\"structILiquidLaneUniswapXExecutor.FillRoute[]\",\"components\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"name\":\"discountRoutes\",\"type\":\"tuple[]\",\"internalType\":\"structILiquidLaneUniswapXExecutor.DiscountRoute[]\",\"components\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"discountSwap\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.DiscountSwap\",\"components\":[{\"name\":\"discount\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.Discount\",\"components\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"discount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"signer\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"deadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"signerSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"protocolDeadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"}]}]}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"initialize\",\"inputs\":[{\"name\":\"owner\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"initCallers\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"owner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"reactorCallback\",\"inputs\":[{\"name\":\"resolvedOrders\",\"type\":\"tuple[]\",\"internalType\":\"structUniswapXResolvedOrder[]\",\"components\":[{\"name\":\"info\",\"type\":\"tuple\",\"internalType\":\"structUniswapXOrderInfo\",\"components\":[{\"name\":\"reactor\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"deadline\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"additionalValidationContract\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"additionalValidationData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}]},{\"name\":\"input\",\"type\":\"tuple\",\"internalType\":\"structUniswapXInputToken\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"maxAmount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structUniswapXOutputToken[]\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"sig\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"hash\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"}]},{\"name\":\"callbackData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"renounceOwnership\",\"inputs\":[],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setCallers\",\"inputs\":[{\"name\":\"newCallers\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"transferOwnership\",\"inputs\":[{\"name\":\"newOwner\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"event\",\"name\":\"Initialized\",\"inputs\":[{\"name\":\"version\",\"type\":\"uint64\",\"indexed\":false,\"internalType\":\"uint64\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"OwnershipTransferred\",\"inputs\":[{\"name\":\"previousOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"newOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetCallers\",\"inputs\":[{\"name\":\"newCallers\",\"type\":\"address[]\",\"indexed\":false,\"internalType\":\"address[]\"}],\"anonymous\":false},{\"type\":\"error\",\"name\":\"AddressEmptyCode\",\"inputs\":[{\"name\":\"target\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"FailedCall\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InsufficientBalance\",\"inputs\":[{\"name\":\"balance\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"needed\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"type\":\"error\",\"name\":\"InvalidInitialization\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotCaller\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotInitializing\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotReactor\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"OwnableInvalidOwner\",\"inputs\":[{\"name\":\"owner\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"OwnableUnauthorizedAccount\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"SafeERC20FailedOperation\",\"inputs\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"}]}]",
+	ABI: "[{\"type\":\"constructor\",\"inputs\":[{\"name\":\"reactor\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"receive\",\"stateMutability\":\"payable\"},{\"type\":\"function\",\"name\":\"callers\",\"inputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"execute\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structUniswapXSignedOrder\",\"components\":[{\"name\":\"order\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"sig\",\"type\":\"bytes\",\"internalType\":\"bytes\"}]},{\"name\":\"calls\",\"type\":\"tuple[]\",\"internalType\":\"structIExecutor.Call[]\",\"components\":[{\"name\":\"target\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"value\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}]}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"initialize\",\"inputs\":[{\"name\":\"owner\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"initCallers\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"owner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"reactorCallback\",\"inputs\":[{\"name\":\"resolvedOrders\",\"type\":\"tuple[]\",\"internalType\":\"structUniswapXResolvedOrder[]\",\"components\":[{\"name\":\"info\",\"type\":\"tuple\",\"internalType\":\"structUniswapXOrderInfo\",\"components\":[{\"name\":\"reactor\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"swapper\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"deadline\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"additionalValidationContract\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"additionalValidationData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}]},{\"name\":\"input\",\"type\":\"tuple\",\"internalType\":\"structUniswapXInputToken\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"maxAmount\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structUniswapXOutputToken[]\",\"components\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"name\":\"sig\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"hash\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"}]},{\"name\":\"callbackData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"renounceOwnership\",\"inputs\":[],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setCallers\",\"inputs\":[{\"name\":\"newCallers\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"transferOwnership\",\"inputs\":[{\"name\":\"newOwner\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"event\",\"name\":\"Initialized\",\"inputs\":[{\"name\":\"version\",\"type\":\"uint64\",\"indexed\":false,\"internalType\":\"uint64\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"OwnershipTransferred\",\"inputs\":[{\"name\":\"previousOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"newOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetCallers\",\"inputs\":[{\"name\":\"newCallers\",\"type\":\"address[]\",\"indexed\":false,\"internalType\":\"address[]\"}],\"anonymous\":false},{\"type\":\"error\",\"name\":\"AddressEmptyCode\",\"inputs\":[{\"name\":\"target\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"FailedCall\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InsufficientBalance\",\"inputs\":[{\"name\":\"balance\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"needed\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"type\":\"error\",\"name\":\"InvalidInitialization\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotCaller\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotInitializing\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotReactor\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"OwnableInvalidOwner\",\"inputs\":[{\"name\":\"owner\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"OwnableUnauthorizedAccount\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"SafeERC20FailedOperation\",\"inputs\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"}]}]",
 	ID:  "LiquidLaneUniswapXExecutor",
 }
 
@@ -187,12 +149,12 @@ func (liquidLaneUniswapXExecutor *LiquidLaneUniswapXExecutor) UnpackCallers(data
 }
 
 // PackExecute is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x463a7f16.  This method will panic if any
+// the contract method with ID 0xfef1f310.  This method will panic if any
 // invalid/nil inputs are passed.
 //
-// Solidity: function execute((bytes,bytes) order, ((address,uint256,uint256)[],(address,uint256,((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes)[]) fillCall, (address,uint256,bytes)[] calls) returns()
-func (liquidLaneUniswapXExecutor *LiquidLaneUniswapXExecutor) PackExecute(order UniswapXSignedOrder, fillCall ILiquidLaneUniswapXExecutorFillCall, calls []IExecutorCall) []byte {
-	enc, err := liquidLaneUniswapXExecutor.abi.Pack("execute", order, fillCall, calls)
+// Solidity: function execute((bytes,bytes) order, (address,uint256,bytes)[] calls) returns()
+func (liquidLaneUniswapXExecutor *LiquidLaneUniswapXExecutor) PackExecute(order UniswapXSignedOrder, calls []IExecutorCall) []byte {
+	enc, err := liquidLaneUniswapXExecutor.abi.Pack("execute", order, calls)
 	if err != nil {
 		panic(err)
 	}
@@ -200,34 +162,12 @@ func (liquidLaneUniswapXExecutor *LiquidLaneUniswapXExecutor) PackExecute(order 
 }
 
 // TryPackExecute is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x463a7f16.  This method will return an error
+// the contract method with ID 0xfef1f310.  This method will return an error
 // if any inputs are invalid/nil.
 //
-// Solidity: function execute((bytes,bytes) order, ((address,uint256,uint256)[],(address,uint256,((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes)[]) fillCall, (address,uint256,bytes)[] calls) returns()
-func (liquidLaneUniswapXExecutor *LiquidLaneUniswapXExecutor) TryPackExecute(order UniswapXSignedOrder, fillCall ILiquidLaneUniswapXExecutorFillCall, calls []IExecutorCall) ([]byte, error) {
-	return liquidLaneUniswapXExecutor.abi.Pack("execute", order, fillCall, calls)
-}
-
-// PackExecute0 is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0xf21abd0f.  This method will panic if any
-// invalid/nil inputs are passed.
-//
-// Solidity: function execute((bytes,bytes) order, ((address,uint256,uint256)[],(address,uint256,((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes)[]) fillCall) returns()
-func (liquidLaneUniswapXExecutor *LiquidLaneUniswapXExecutor) PackExecute0(order UniswapXSignedOrder, fillCall ILiquidLaneUniswapXExecutorFillCall) []byte {
-	enc, err := liquidLaneUniswapXExecutor.abi.Pack("execute0", order, fillCall)
-	if err != nil {
-		panic(err)
-	}
-	return enc
-}
-
-// TryPackExecute0 is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0xf21abd0f.  This method will return an error
-// if any inputs are invalid/nil.
-//
-// Solidity: function execute((bytes,bytes) order, ((address,uint256,uint256)[],(address,uint256,((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes)[]) fillCall) returns()
-func (liquidLaneUniswapXExecutor *LiquidLaneUniswapXExecutor) TryPackExecute0(order UniswapXSignedOrder, fillCall ILiquidLaneUniswapXExecutorFillCall) ([]byte, error) {
-	return liquidLaneUniswapXExecutor.abi.Pack("execute0", order, fillCall)
+// Solidity: function execute((bytes,bytes) order, (address,uint256,bytes)[] calls) returns()
+func (liquidLaneUniswapXExecutor *LiquidLaneUniswapXExecutor) TryPackExecute(order UniswapXSignedOrder, calls []IExecutorCall) ([]byte, error) {
+	return liquidLaneUniswapXExecutor.abi.Pack("execute", order, calls)
 }
 
 // PackInitialize is the Go binding used to pack the parameters required for calling

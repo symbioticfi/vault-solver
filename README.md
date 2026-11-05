@@ -177,6 +177,11 @@ Design, config, and roadmap:
 
 ### RedStone OEV — `redstone-oev`
 
+The callback supports signed generic exits, including Merkle recipes, while retaining its native
+Liquid Lane exit. The built-in strategy selects native exits; webhook strategies can supply recipe
+calldata. Actual Morpho repayment and profit checks remain mandatory.
+
+
 An off-chain bidder for **[RedStone Atom OEV](https://docs.redstone.finance/docs/oev)** auctions. When a
 price update makes a **[Morpho Blue](https://morpho.org)** position liquidatable, RedStone runs a
 sub-second WebSocket auction for the right to be the liquidator; this solver bids, and on winning, its
@@ -210,7 +215,8 @@ Both values must be positive. After REST recovery completes, WebSocket closes 10
 Earlier disconnects and other errors remain Error; reconnect backoff resets only after recovery. Before each fill it
 rechecks the canonical order status, adapter state, configured gas cost, and strategy decision, then atomically claims
 the input, redeems it through LiquidLane, and fills the output via
-`LiquidLaneLifiExecutor`. Capacity reserved by already-submitted fills is deducted from both later fill
+`LiquidLaneLifiExecutor`. The solver encodes explicit transfer/swap calls; the callback also accepts
+recipe calls without version dispatch. Capacity reserved by already-submitted fills is deducted from both later fill
 decisions and standing quotes until those transactions complete. Each token pair advertises its allocated share of
 available capacity when several pairs share one vault; accepting a fill reserves its shared `CapacityID`
 and immediately refreshes every affected quote. The reservation remains until the shared tx manager returns a
@@ -292,7 +298,8 @@ executor build, registering it with LI.FI, and granting it filler authorization 
 An Ethereum-mainnet UniswapX solver backed by LiquidLane routes. It serves the RFQ `POST /quote`
 webhook, polls the Uniswap order API for exclusive and public V2 orders, resolves
 their Dutch amounts from current chain time, and fills executable orders through a configured
-`LiquidLaneUniswapXExecutor`. The executor uses the same owner-managed caller list as the RFQ executor and
+`LiquidLaneUniswapXExecutor`. The solver encodes explicit transfer/swap calls in plan order.
+The executor uses the same owner-managed caller list as the RFQ executor and
 remains the Reactor-facing filler. Before serving traffic, the solver validates executor bytecode, finds the
 tx-sending EOA in the executor's indexed `callers` list, and, in external mode, checks every configured
 route's direct authorization. While a fill is pending, the solver checks the order's status in the Uniswap
