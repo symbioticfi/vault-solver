@@ -69,8 +69,9 @@ order, and unsettled asynchronous work keeps its account reserved.
 The SDK automatically batches self-contained, state-driven recipes on the same
 executor while successive executions remain useful and executable. Every cycle
 includes the complete committed recipe, including its final collateral supply.
-Constant action sets execute once. Recipes with external provider inputs, quotes,
-proofs or result witnesses retain fresh single-execution preparation. There is no
+Constant action sets execute once. External inputs are prepared once; a provider
+can return separately bound outputs for individual claims. Quotes, proofs and
+result witnesses are never reused to extend a state-driven cycle. There is no
 host loop, protocol-specific batching or per-executor switch. The existing chain
 client supplies code overrides and pinned bytecode reads; the SDK revalidates the
 exact atomic multicall against the original contract before submission.
@@ -91,8 +92,8 @@ Mount durable state and exclude concurrent processes with this signer, even if
 they use different state directories. A process-local lane cannot coordinate a
 second service independently using the same private key.
 
-The host registers the SDK's shared Aave V3 capacity provider before its generic
-recipe input provider, and uses the shared curator permission source.
+The host registers the SDK's shared Aave V3 capacity provider and uses the shared
+curator permission source. The planner derives deterministic recipe inputs directly.
 The active root determines the requested permission artifact at
 `GET /merkle/{adapter}/{root}` under the configured curator API URL; the SDK checks
 the chain, adapter, account, root, leaf hashes and every proof before preparation. Financial amounts
@@ -155,8 +156,9 @@ requiring unresolved provider outputs, future input sources or self-queries agai
 the overridden executor fail before external quote requests. The original executor's
 complete simulation verifies the resolved values and canonical guards still run.
 An RPC without state-override support cannot prepare a recipe requiring these
-values. SDK provider Prepare/Advance interfaces allow host integrations to supply
-fresh auction data and reconcile confirmed executions. LL/3F auction discovery, pricing,
+values. The SDK's `keeper.Provider` interface lets host integrations declare
+authenticated recipe requirements, prepare fresh inputs and reconcile confirmed
+executions. LL/3F auction discovery, pricing,
 signed offers, RFQ domain compatibility, reservations and order reconciliation
 remain business logic in vault-solver. The independent [`threef-merkle`](THREEF-MERKLE.md) and [`rfq-merkle`](RFQ-MERKLE.md)
 solvers supply that host logic. `merkle` rejects protocol-specific configuration.

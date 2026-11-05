@@ -149,7 +149,7 @@ func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
 					t.Fatal("host failed shared SDK integration")
 				}
 				providers := current.keeper.Strategies[0].Providers
-				if len(providers) != 2 {
+				if len(providers) != 1 {
 					t.Fatal("missing shared recipe providers")
 				}
 				if _, ok := providers[0].(*aave.Provider); !ok {

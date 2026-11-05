@@ -46,7 +46,7 @@ func TestHostFencesRemovedExecutorOwners(t *testing.T) {
 					t.Fatal(err)
 				}
 				defer store.Close()
-				job := keeper.Job{ID: "executor-owned", Phase: tc.phase, ConfigHash: "configured-policy", Plan: keeper.Plan{Outputs: []provider.Output{{Data: json.RawMessage(`{"uid":"durable-order"}`)}}}}
+				job := keeper.Job{ID: "executor-owned", Phase: tc.phase, ConfigHash: "configured-policy", Plan: keeper.Plan{Outputs: [][]provider.Output{{{Data: json.RawMessage(`{"uid":"durable-order"}`)}}}}}
 				key := "strategy." + removed + ".v1"
 				if err := store.Save("strategies.v1", []string{removed}); err != nil {
 					t.Fatal(err)
