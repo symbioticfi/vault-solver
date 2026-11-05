@@ -34,7 +34,7 @@ func (factorySigner) SignTx(context.Context, *types.Transaction, *big.Int) (*typ
 }
 
 func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
-	for _, mode := range []string{"valid", "send", "caller mismatch", "reorg", "zero account", "policy mismatch", "zero policy account", "wrong chain", "active recovery"} {
+	for _, mode := range []string{"valid", "send", "caller mismatch", "reorg", "zero account", "policy mismatch", "zero policy account", "sepolia", "active recovery"} {
 		t.Run(mode, func(t *testing.T) {
 			target, account, caller := common.HexToAddress("0x10"), common.HexToAddress("0x20"), common.HexToAddress("0x30")
 			header := &types.Header{Number: big.NewInt(12), Difficulty: new(big.Int)}
@@ -61,8 +61,8 @@ func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
 					switch q.Method {
 					case "eth_chainId":
 						result = "0x1"
-						if mode == "wrong chain" {
-							result = "0x2"
+						if mode == "sepolia" {
+							result = "0xaa36a7"
 						}
 					case "eth_getBlockByNumber":
 						observed := types.CopyHeader(header)
@@ -175,7 +175,7 @@ func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
 			owner := factorySigner{address: caller}
 			manager := txmanager.New(client, owner, big.NewInt(1), txmanager.Config{}, logr.Discard())
 			built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, TxManager: manager, Log: logr.Discard()})
-			if mode == "valid" || mode == "send" {
+			if mode == "valid" || mode == "send" || mode == "sepolia" {
 				if err != nil {
 					t.Fatal(err)
 				}

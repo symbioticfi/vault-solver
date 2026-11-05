@@ -25,7 +25,7 @@ func observe(ctx context.Context, chain provider.Reader, snapshot provider.Snaps
 	}
 	// Execution additionally obeys the committed recipe's principal bounds.
 	for _, step := range recipe.Steps {
-		if len(step) != 65 || step[0] != recipes.LessOrEqual || step[5] != recipes.Input || new(big.Int).SetBytes(step[6:33]).Uint64() != uint64(market.PrincipalInput) || step[37] != recipes.Literal {
+		if len(step) != 65 || step[0] != recipes.LessOrEqual || market.Principal.Source != recipes.Input || step[5] != recipes.Input || new(big.Int).SetBytes(step[6:33]).Cmp(market.Principal.Value) != 0 || step[37] != recipes.Literal {
 			continue
 		}
 		value := new(big.Int).SetBytes(step[38:65])

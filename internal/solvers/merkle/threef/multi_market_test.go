@@ -144,7 +144,7 @@ func TestGlobalLeaseSelectionZerosEveryInactiveMarket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Inputs[markets[0].RequestInput] != new(big.Int).SetBytes(second.Bytes()).String() || out.Inputs[markets[1].RequestInput] != "0" || out.Inputs[markets[1].PrincipalInput] != "0" || out.Inputs[markets[1].YieldInput] != "0" {
+	if out.Inputs[markets[0].RequestInput] != new(big.Int).SetBytes(second.Bytes()).String() || out.Inputs[markets[1].RequestInput] != "0" || out.Inputs[uint(markets[1].Principal.Value.Uint64())] != "0" || out.Inputs[uint(markets[1].Yield.Value.Uint64())] != "0" {
 		t.Fatalf("global earliest lease or inactive input isolation failed: %+v", out.Inputs)
 	}
 	// Equal deadlines use canonical request address, independent of API ordering.

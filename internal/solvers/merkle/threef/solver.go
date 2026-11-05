@@ -71,9 +71,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	// The factory interface has no context; bound the complete startup observation.
 	startup, cancel := context.WithTimeout(context.Background(), operationTimeout)
 	defer cancel()
-	if deps.Chain.ChainID().Cmp(common.Big1) != 0 {
-		return nil, errors.New("3f Merkle PUSH requires mainnet")
-	}
 	address := common.HexToAddress(cfg.Executor)
 	identity, err := recipes.DiscoverExecutors(startup, deps.Chain, []common.Address{address})
 	if err != nil {

@@ -69,19 +69,24 @@ func TestLatestAdaptersRecipe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(markets) != 1 || markets[0].PrincipalInput != 1 || markets[0].YieldInput != 2 || markets[0].RequestInput != 0 {
+	if len(markets) != 1 || uint(markets[0].Principal.Value.Uint64()) != 1 || uint(markets[0].Yield.Value.Uint64()) != 2 || markets[0].RequestInput != 0 {
 		t.Fatalf("latest adapters recipe has unexpected markets: %+v", markets)
 	}
 }
 
 type fakeAPI struct {
 	offers      []wire.OfferDto
+	auctions    []wire.AuctionDto
 	identityErr error
 	calls       int
 	onOffers    func()
 }
 
 func (f *fakeAPI) Identity(context.Context, common.Address) error { f.calls++; return f.identityErr }
+func (f *fakeAPI) Auctions(context.Context) ([]wire.AuctionDto, error) {
+	f.calls++
+	return f.auctions, nil
+}
 func (f *fakeAPI) Offers(context.Context) ([]wire.OfferDto, error) {
 	f.calls++
 	if f.onOffers != nil {

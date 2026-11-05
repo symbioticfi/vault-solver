@@ -26,7 +26,15 @@ curator/default account. The executor's account and caller are discovered togeth
 pinned block; its account must be the default maker and caller must match the shared signer.
 Set `THREEF_POLICY` to the deployed policy. Its `account()` must match the executor
 account at startup and at each offer snapshot. Every execution group must charge
-that same policy. Mainnet is required.
+that same policy. The chain comes from the host configuration. Use
+`https://bf.3f.xyz` for mainnet or `https://bf.dev.gcp.3f.xyz` for Sepolia, with
+credentials and contracts for the selected network.
+Mint permissions can bind amounts to runtime inputs or to on-chain recipe results.
+The provider discovers the `consume` call and its bindings; it does not assume an
+inner input layout. For on-chain amounts it supplies only the request and records
+the expected authorization amounts as result witnesses checked by the SDK's full
+transaction simulation. Dynamic collateral pairs come from pending auction metadata
+and are attested by the policy before use.
 Mode defaults to `simulate`; switch to `send` to authorize offers and mint execution.
 One configuration selects one executor and BF/default account. The configured policy and 3F auction catalog supply the offer funding pairs;
 position-manager and collateral-token reads resolve their underlying assets.
@@ -180,7 +188,7 @@ optional 3F dispatch in `merkle` and no dependency on `bridgefacilitator` strate
 
 Tests retain API wire/identity/bounds checks, ambiguous-POST restart recovery,
 reservations, cancellation, aggregate authorizations, lease expiry, alternative curator
-guards and canonical receipt evidence. Dedicated startup tests cover mainnet,
+guards and canonical receipt evidence. Dedicated startup tests cover mainnet and Sepolia,
 shared caller discovery, configured policy/account binding, grouped recipes, cross-account rejection, reorgs, invalid accounts and failure before state creation. Cross-market tests retain live/ambiguous account intents and prevent another pair budget from cancelling a foreign UI offer.
 Regression tests also cover committed funding gates, exact raw JSON rate periods,
 offers without a permission service, on-chain pair discovery, historical filtering, negative membership memoization,
