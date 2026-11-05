@@ -42,8 +42,11 @@ func (p *mintPlanning) PrepareExecution(ctx context.Context, strategies []keeper
 type offerWorkflow struct {
 	planner  *keeper.Planner
 	strategy keeper.Strategy
-	api      *apiClient
-	bot      *offerBot
+	policy   common.Address
+	api      interface {
+		Auctions(context.Context) ([]threef.AuctionDto, error)
+	}
+	bot *offerBot
 }
 
 func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
@@ -54,20 +57,8 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
-	raw, err := p.PermissionSource.PermissionTree(ctx, p.ChainID, snapshot)
-	if err != nil {
-		return err
-	}
-	tree, err := recipes.DecodeTree(raw)
-	if err != nil {
-		return err
-	}
-	if tree.ChainID == nil || tree.ChainID.Cmp(p.ChainID) != 0 || tree.Root != snapshot.Root || tree.Account != nil && *tree.Account != snapshot.Account {
-		return errors.New("3f permission scope mismatch")
-	}
 	pin := provider.Snapshot{ChainID: new(big.Int).Set(p.ChainID), BlockNumber: new(big.Int).SetUint64(snapshot.BlockNumber), BlockHash: snapshot.BlockHash, Timestamp: snapshot.Timestamp, Executor: snapshot.Executor, Account: snapshot.Account, Caller: snapshot.Caller, RecipeHash: snapshot.RecipeHash, Root: snapshot.Root}
-	markets, err := inspect(pin, recipe, tree)
-	if err != nil {
+	if err := verifyPolicyAccount(ctx, p.Chain, w.policy, pin.Account, pin.BlockNumber); err != nil {
 		return err
 	}
 	auctions, err := w.api.Auctions(ctx)
@@ -79,6 +70,14 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	}
 	// Consider unanswered auctions in stable oldest-first order.
 	sort.SliceStable(auctions, func(i, j int) bool { return auctions[i].Id < auctions[j].Id })
+	offers, err := w.bot.readOffers(ctx, pin.Account)
+	if err != nil {
+		return err
+	}
+	markets, err := discoverMarkets(ctx, p.Chain, pin, w.policy, auctions, offers)
+	if err != nil {
+		return err
+	}
 	// Every managed role participates, including the recipe's funding sources.
 	inspection, err := recipes.Inspect(recipe)
 	if err != nil {
@@ -94,18 +93,14 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	if err := recipes.ValidateSnapshot(ctx, p.Chain, snapshot, p.Caller); err != nil {
 		return err
 	}
-	return w.evaluate(ctx, p.Chain, pin, recipe, markets, auctions, func(ctx context.Context) error {
+	return w.evaluate(ctx, p.Chain, pin, markets, auctions, offers, func(ctx context.Context) error {
 		return recipes.ValidateSnapshot(ctx, p.Chain, snapshot, p.Caller)
 	})
 }
 
 // evaluate is owned by Run. Every membership result, including rejection,
 // belongs to this exact pin and is discarded after the pass.
-func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin provider.Snapshot, recipe recipes.Recipe, markets []mintMarket, auctions []threef.AuctionDto, validate func(context.Context) error) error {
-	offers, err := w.bot.readOffers(ctx, pin.Account)
-	if err != nil {
-		return err
-	}
+func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin provider.Snapshot, markets []mintMarket, auctions []threef.AuctionDto, offers []threef.OfferDto, validate func(context.Context) error) error {
 	if len(offers) > 4096 || len(auctions) > 4096 {
 		return errors.New("3F offer inventory exceeds 4096-row bound")
 	}
@@ -137,13 +132,13 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 			}
 		}
 		observed := observations[i]
-		market := offerMarket{ChainID: pin.ChainID.Uint64(), Account: pin.Account, Executor: pin.Executor, RecipeHash: pin.RecipeHash, Asset: observed.Market.Asset, UnderlyingAsset: observed.Market.UnderlyingAsset, Budget: observed.Budget, MinimumYield1e8: observed.MinimumYield, MaxPrincipal: observed.MaxPrincipal, AvailableCash: observed.AvailableCash, EligibleRequests: memberships[i]}
+		market := offerMarket{ChainID: pin.ChainID.Uint64(), Account: pin.Account, Executor: pin.Executor, Policy: observed.Market.Policy, RecipeHash: pin.RecipeHash, Asset: observed.Market.Asset, UnderlyingAsset: observed.Market.UnderlyingAsset, Budget: observed.Budget, MinimumYield1e8: observed.MinimumYield, MaxPrincipal: observed.MaxPrincipal, AvailableCash: observed.AvailableCash, EligibleRequests: memberships[i]}
 		return w.bot.tickInventory(ctx, market, auctions, offers, create)
 	}
 	// Existing commitments are maintained before any optional new-bid simulation.
 	// A mutation invalidates the shared inventory and ends this pass immediately.
 	for i, market := range markets {
-		observed, err := observe(ctx, chain, pin, recipe, market)
+		observed, err := observePolicy(ctx, chain, pin, market)
 		if err != nil {
 			return err
 		}

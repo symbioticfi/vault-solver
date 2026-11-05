@@ -22,6 +22,7 @@ type config struct {
 	Mode      string             `yaml:"mode"`
 	StateDir  string             `yaml:"stateDir"`
 	Executor  string             `yaml:"executor"`
+	Policy    string             `yaml:"policy"`
 	Curator   merklehost.Curator `yaml:"curator"`
 	URL       string             `yaml:"url"`
 	APIKeyEnv string             `yaml:"apiKeyEnv"`
@@ -48,6 +49,11 @@ func parseConfig(node yaml.Node) (config, error) {
 		return config{}, err
 	}
 	cfg.Executor = executor.Hex()
+	policy, err := parse.NonZeroAddress(cfg.Policy, "policy")
+	if err != nil {
+		return config{}, err
+	}
+	cfg.Policy = policy.Hex()
 	broker, err := parse.NonZeroAddress(cfg.Broker, "broker")
 	if err != nil {
 		return config{}, err
@@ -63,12 +69,13 @@ func parseConfig(node yaml.Node) (config, error) {
 }
 func strategyRevision(strategy keeper.Config, cfg config, caller common.Address) (string, error) {
 	raw, err := json.Marshal(struct {
+		Version  string             `json:"version"`
 		Policy   string             `json:"policy"`
 		Strategy keeper.Config      `json:"strategy"`
 		Curator  merklehost.Curator `json:"curator"`
 		API      apiConfig          `json:"api"`
 		Caller   common.Address     `json:"caller"`
-	}{"1", strategy, cfg.Curator, cfg.apiConfig(), caller})
+	}{"1", cfg.Policy, strategy, cfg.Curator, cfg.apiConfig(), caller})
 	if err != nil {
 		return "", errors.Errorf("threef-merkle strategy identity: %w", err)
 	}

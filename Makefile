@@ -52,7 +52,8 @@ REDSTONE_GUIDE_URL       ?= https://raw.githubusercontent.com/RedStone-Finance-U
 # and vault/ERC4626 interfaces) come from the core-mirror build, since they aren't in rfq/out.
 ABIS := IRequest IVaultController IWhitelist Executor Reactor LiquidLaneLifiExecutor LiquidLaneUniswapXExecutor
 CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IAdapterFactory IVaultV2 IERC4626
-ADAPTERS_ABIS := IRecipeCapability IThreeFPolicy LiquidLaneConnector
+ADAPTERS_DEPENDENCY_ABIS := IThreeFPositionManager IThreeFUnderlyingAsset
+ADAPTERS_ABIS := IRecipeCapability IThreeFPolicy LiquidLaneConnector $(ADAPTERS_DEPENDENCY_ABIS)
 # api/abi/UniversalDelegator.json is hand-vendored to a minimal {limitOf} ABI (the full contract has
 # an overloaded deallocateAll that abigen rejects, and the solver only reads limitOf) — like Multicall3.
 # api/abi/FrontendLiquidityLens.json is likewise hand-vendored to the two overloaded getMaxAssets views
@@ -70,6 +71,7 @@ ADAPTERS_ABIS := IRecipeCapability IThreeFPolicy LiquidLaneConnector
 # at the call site, not at runtime.
 BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
             IVaultController:3f/vaultcontroller IWhitelist:3f/whitelist \
+            IThreeFPositionManager:3f/positionmanager IThreeFUnderlyingAsset:3f/underlyingasset \
             IRecipeCapability:merkle/recipecapability IThreeFPolicy:merkle/threefpolicy \
             LiquidLaneAdapter:liquidlane/adapter LiquidLaneConnector:liquidlane/connector \
             Executor:rfq/executor Reactor:rfq/reactor \
@@ -130,6 +132,7 @@ refresh-merkle-abi: ## Project solver-used Merkle ABI entries from Foundry artif
 		trap 'rm -rf "$$stage"' EXIT; \
 		for c in $(ADAPTERS_ABIS); do \
 			src="$(ADAPTERS_OUT)/$$c.sol/$$c.json"; \
+			case " $(ADAPTERS_DEPENDENCY_ABIS) " in *" $$c "*) src="$(ADAPTERS_OUT)/IThreeFAdapterDependencies.sol/$$c.json" ;; esac; \
 			jq -e --arg contract "$$c" -f hack/merkle-abi.jq "$$src" | \
 				jq -e 'if type == "array" and length > 0 then . else error("invalid ABI projection") end' > "$$stage/$$c.json"; \
 		done; \

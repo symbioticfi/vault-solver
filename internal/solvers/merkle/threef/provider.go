@@ -25,12 +25,14 @@ var requestABI = request.NewIRequest()
 type mintAPI interface {
 	Identity(ctx context.Context, account common.Address) error
 	Offers(context.Context) ([]threef.OfferDto, error)
+	Auctions(context.Context) ([]threef.AuctionDto, error)
 }
 
 type mintProvider struct {
-	API   mintAPI
-	Chain provider.Reader
-	Now   func() time.Time
+	API    mintAPI
+	Chain  provider.Reader
+	Policy common.Address
+	Now    func() time.Time
 }
 
 type mint struct {
@@ -42,14 +44,28 @@ type mint struct {
 	Deadline        time.Time      `json:"deadline"`
 }
 
-func (p *mintProvider) RecipeRequirements(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) (keeper.RecipeRequirements, error) {
+// The configured offer policy must also be the policy charged by every mint group.
+func (p *mintProvider) markets(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) ([]mintMarket, error) {
 	markets, err := inspect(snapshot, recipe, tree)
+	if err != nil {
+		return nil, err
+	}
+	for _, market := range markets {
+		if market.Policy != p.Policy {
+			return nil, errors.New("3f recipe policy differs from configured policy")
+		}
+	}
+	return markets, nil
+}
+
+func (p *mintProvider) RecipeRequirements(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) (keeper.RecipeRequirements, error) {
+	markets, err := p.markets(snapshot, recipe, tree)
 	if err != nil {
 		return keeper.RecipeRequirements{}, err
 	}
 	var inputs []uint
 	for _, market := range markets {
-		for _, index := range []uint{market.RequestInput, market.PrincipalInput, market.YieldInput} {
+		for _, index := range market.inputs() {
 			if !slices.Contains(inputs, index) {
 				inputs = append(inputs, index)
 			}
@@ -59,7 +75,7 @@ func (p *mintProvider) RecipeRequirements(snapshot provider.Snapshot, recipe rec
 }
 
 func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree, _ map[uint]*big.Int) ([]provider.Output, error) {
-	markets, err := inspect(snapshot, recipe, tree)
+	markets, err := p.markets(snapshot, recipe, tree)
 	if err != nil {
 		return nil, err
 	}
@@ -104,17 +120,23 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 	if len(addresses) == 0 {
 		return nil, provider.ErrNotReady
 	}
-	observations := make([]observation, 0, len(markets))
 	inputs := map[uint]string{}
+	for _, market := range markets {
+		for _, index := range market.inputs() {
+			inputs[index] = "0"
+		}
+	}
+	markets, err = p.resolveMarkets(ctx, snapshot, markets, offers, deadlines)
+	if err != nil {
+		return nil, err
+	}
+	observations := make([]observation, 0, len(markets))
 	for _, market := range markets {
 		observed, e := observe(ctx, p.Chain, snapshot, recipe, market)
 		if e != nil {
 			return nil, e
 		}
 		observations = append(observations, observed)
-		for _, index := range []uint{market.RequestInput, market.PrincipalInput, market.YieldInput} {
-			inputs[index] = "0"
-		}
 	}
 	for _, address := range addresses {
 		deadline := deadlines[address]
@@ -149,12 +171,57 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 				return nil, marshalErr
 			}
 			inputs[market.RequestInput] = new(big.Int).SetBytes(address.Bytes()).String()
-			inputs[market.PrincipalInput] = auth.PtAmount.String()
-			inputs[market.YieldInput] = auth.YtAmount.String()
-			return []provider.Output{{Inputs: inputs, Data: data}}, nil
+			results := map[uint]string{}
+			for i, value := range []recipes.Value{market.Principal, market.Yield} {
+				amount := []*big.Int{auth.PtAmount, auth.YtAmount}[i].String()
+				index := uint(value.Value.Uint64())
+				if value.Source == recipes.Input {
+					inputs[index] = amount
+				} else {
+					// The SDK checks these against the full execution simulation.
+					results[index] = amount
+				}
+			}
+			return []provider.Output{{Inputs: inputs, Results: results, Data: data}}, nil
 		}
 	}
 	return nil, provider.ErrNotReady
+}
+
+// A dynamic mint leaf commits the funding token, not a fixed collateral pair.
+// Resolve candidates from pending auctions; eligible still attests the exact
+// request and pair through the policy before any input is supplied.
+func (p *mintProvider) resolveMarkets(ctx context.Context, snapshot provider.Snapshot, markets []mintMarket, offers []threef.OfferDto, pending map[common.Address]time.Time) ([]mintMarket, error) {
+	if !slices.ContainsFunc(markets, func(m mintMarket) bool { return m.UnderlyingAsset == (common.Address{}) }) {
+		return markets, nil
+	}
+	auctions, err := p.API.Auctions(ctx)
+	if err != nil {
+		return nil, err
+	}
+	auctions = slices.DeleteFunc(auctions, func(a threef.AuctionDto) bool {
+		_, ok := pending[common.HexToAddress(a.RequestId)]
+		return !ok
+	})
+	pairs, err := discoverMarkets(ctx, p.Chain, snapshot, p.Policy, auctions, offers)
+	if err != nil {
+		return nil, err
+	}
+	var resolved []mintMarket
+	for _, market := range markets {
+		if market.UnderlyingAsset != (common.Address{}) {
+			resolved = append(resolved, market)
+			continue
+		}
+		for _, pair := range pairs {
+			if pair.Asset == market.Asset {
+				candidate := market
+				candidate.UnderlyingAsset = pair.UnderlyingAsset
+				resolved = append(resolved, candidate)
+			}
+		}
+	}
+	return resolved, nil
 }
 
 // ValidateLease closes preparation after recipe simulation. Signed recovery

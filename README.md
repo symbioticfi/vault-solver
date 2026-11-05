@@ -1066,10 +1066,14 @@ does not imply waiting when a separate recipe gate authorizes the action.
 
 The independent `threef-merkle` solver runs native 3F API-key PUSH offers with a
 dedicated curator BF, a MerkleAccount maker and guarded account-side minting.
-Configure one recipe `executor`, one broker and an API-key environment reference using
+Configure one recipe `executor`, `policy: ${THREEF_POLICY}`, one broker and an API-key environment reference using
 [the example YAML](config/threef-merkle.example.yaml), then complete enrollment as
 described in [the 3F Merkle runbook](docs/THREEF-MERKLE.md). The generic `merkle`
-solver rejects the `threeF` field. The executor uses the maker account and shared signer. Its recipe supplies funding pairs and request/principal/yield inputs; inactive groups receive zero principal. Gates and fixed funding calls remain curator-owned. One journal and sender serialize all markets. Automatic offers reserve existing commitments
+solver rejects the `threeF` field. The policy and executor must use the same maker account.
+Offers use that policy's live budgets, the account's idle cash and 3F auction asset data,
+without fetching Curator permissions. Curator supplies permission data and proofs
+only for mint execution. The executor uses the shared signer; its recipe must support
+the enabled policy pairs and supplies request/principal/yield inputs; inactive groups receive zero principal. Gates and fixed funding calls remain curator-owned. One journal and sender serialize all markets. Automatic offers reserve existing commitments
 and use account idle cash; simulation never submits or cancels API offers.
 `rateBasisSeconds` is read from the exact JSON number and must
 be a nonnegative int64 integer; omitted, null and zero values use the unscaled rate comparison.

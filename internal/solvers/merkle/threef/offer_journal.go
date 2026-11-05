@@ -15,6 +15,7 @@ type intent struct {
 	Account         common.Address        `json:"account"`
 	Broker          common.Address        `json:"broker"`
 	Executor        common.Address        `json:"executor"`
+	Policy          common.Address        `json:"policy"`
 	RecipeHash      common.Hash           `json:"recipeHash"`
 	Asset           common.Address        `json:"asset"`
 	UnderlyingAsset common.Address        `json:"underlyingAsset"`
@@ -28,7 +29,7 @@ func journalKey(m offerMarket) string {
 }
 
 func newIntent(m offerMarket, request common.Address, offer threef.CreateOfferDto) *intent {
-	return &intent{Version: 1, ChainID: m.ChainID, Account: m.Account, Broker: common.HexToAddress(offer.Maker), Executor: m.Executor, RecipeHash: m.RecipeHash, Asset: m.Asset, UnderlyingAsset: m.UnderlyingAsset, Request: request, Offer: offer}
+	return &intent{Version: 1, ChainID: m.ChainID, Account: m.Account, Broker: common.HexToAddress(offer.Maker), Executor: m.Executor, Policy: m.Policy, RecipeHash: m.RecipeHash, Asset: m.Asset, UnderlyingAsset: m.UnderlyingAsset, Request: request, Offer: offer}
 }
 
 func (i *intent) matchesMarket(m offerMarket) bool {
@@ -36,7 +37,7 @@ func (i *intent) matchesMarket(m offerMarket) bool {
 }
 
 func (i *intent) validate(m offerMarket, broker common.Address) error {
-	if i.Version != 1 || i.ChainID != m.ChainID || i.Account != m.Account || i.Broker == (common.Address{}) || i.Broker != broker || i.Executor == (common.Address{}) || i.RecipeHash == (common.Hash{}) || i.Asset == (common.Address{}) || i.UnderlyingAsset == (common.Address{}) || i.Request == (common.Address{}) || i.Offer.Maker != strings.ToLower(i.Broker.Hex()) || i.Offer.ExecutionMode != nil || i.Offer.UseCallback || i.Offer.Signature != nil || i.Offer.PushAuthorizationSignature != nil || i.Offer.ChainId != nil || i.Offer.AuthorizationDeadline != nil || len(i.Offer.AdditionalProperties) > 0 {
+	if i.Version != 1 || i.ChainID != m.ChainID || i.Account != m.Account || i.Policy == (common.Address{}) || i.Policy != m.Policy || i.Broker == (common.Address{}) || i.Broker != broker || i.Executor == (common.Address{}) || i.RecipeHash == (common.Hash{}) || i.Asset == (common.Address{}) || i.UnderlyingAsset == (common.Address{}) || i.Request == (common.Address{}) || i.Offer.Maker != strings.ToLower(i.Broker.Hex()) || i.Offer.ExecutionMode != nil || i.Offer.UseCallback || i.Offer.Signature != nil || i.Offer.PushAuthorizationSignature != nil || i.Offer.ChainId != nil || i.Offer.AuthorizationDeadline != nil || len(i.Offer.AdditionalProperties) > 0 {
 		return errors.New("3F offer journal identity is invalid")
 	}
 	if _, err := dtoID(i.Offer.AuctionId); err != nil {

@@ -71,9 +71,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	// The factory interface has no context; bound the complete startup observation.
 	startup, cancel := context.WithTimeout(context.Background(), operationTimeout)
 	defer cancel()
-	if deps.Chain.ChainID().Cmp(common.Big1) != 0 {
-		return nil, errors.New("3f Merkle PUSH requires mainnet")
-	}
 	address := common.HexToAddress(cfg.Executor)
 	identity, err := recipes.DiscoverExecutors(startup, deps.Chain, []common.Address{address})
 	if err != nil {
@@ -92,7 +89,11 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	runtime := &mintProvider{API: api, Chain: deps.Chain}
+	policy := common.HexToAddress(cfg.Policy)
+	if err := verifyPolicyAccount(startup, deps.Chain, policy, target.Account, nil); err != nil {
+		return nil, err
+	}
+	runtime := &mintProvider{API: api, Chain: deps.Chain, Policy: policy}
 	strategy.Providers = []keeper.Provider{runtime}
 	source, err := cfg.Curator.PermissionSource(deps.Chain)
 	if err != nil {
@@ -105,6 +106,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, err
 	}
 	bot := &offerBot{Client: api, Store: store, Send: cfg.Mode == "send"}
-	workflow := &offerWorkflow{planner: planner, strategy: strategy, api: api, bot: bot}
+	workflow := &offerWorkflow{planner: planner, strategy: strategy, policy: policy, api: api, bot: bot}
 	return &Solver{keeper: k, store: store, offers: workflow}, nil
 }

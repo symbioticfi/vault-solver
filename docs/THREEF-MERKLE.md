@@ -13,6 +13,7 @@ solvers:
       mode: simulate
       stateDir: /persistent/threef-merkle
       executor: "0x0000000000000000000000000000000000000010"
+      policy: ${THREEF_POLICY}
       curator:
         url: https://curator.example.invalid/api/v1
       url: https://bf.3f.xyz
@@ -22,15 +23,28 @@ solvers:
 
 The account is the maker. A dedicated, 3F-approved BF EOA and API key serve one
 curator/default account. The executor's account and caller are discovered together at a
-pinned block; its account must be the default maker and caller must match the shared signer. Mainnet is required.
+pinned block; its account must be the default maker and caller must match the shared signer.
+Set `THREEF_POLICY` to the deployed policy. Its `account()` must match the executor
+account at startup and at each offer snapshot. Every execution group must charge
+that same policy. The chain comes from the host configuration. Use
+`https://bf.3f.xyz` for mainnet or `https://bf.dev.gcp.3f.xyz` for Sepolia, with
+credentials and contracts for the selected network.
+Mint permissions can bind amounts to runtime inputs or to on-chain recipe results.
+The provider discovers the `consume` call and its bindings; it does not assume an
+inner input layout. For on-chain amounts it supplies only the request and records
+the expected authorization amounts as result witnesses checked by the SDK's full
+transaction simulation. Dynamic collateral pairs come from pending auction metadata
+and are attested by the policy before use.
 Mode defaults to `simulate`; switch to `send` to authorize offers and mint execution.
-One configuration selects one executor and BF/default account. The recipe supplies
-its funding/underlying pairs and request/principal/yield Inputs. Inactive groups
+One configuration selects one executor and BF/default account. The configured policy and 3F auction catalog supply the offer funding pairs;
+position-manager and collateral-token reads resolve their underlying assets.
+The recipe supplies execution bindings for request/principal/yield Inputs. Inactive groups
 receive zero principal; the recipe determines which calls execute. The solver adds
 no group-count limit, canonical guard comparison, mint-gate rule, or separate
 funding-gate proof. Fixed withdrawals and additional Call/Approve steps use the
 curator-authorized program. Permission response and SDK input bounds still apply.
-Provider identity settings participate in recovery identity.
+Provider identity settings, including the policy address, participate in recovery
+identity. Durable offer intents are bound to the policy as well.
 The SDK retrieves the original `SetRecipe` event only at the executor's known
 `recipeBlock`, verifies its current commitment and checks the canonical snapshot.
 Use one exclusive durable state directory
@@ -50,7 +64,7 @@ checks every relevant open/solvable auction without a blocking offer from this m
 matching its funding asset to the configured markets. Positive and negative policy
 eligibility results are reused only within the same pinned snapshot. The complete
 candidate list is checked before bidding, with no per-tick check cap or rotating cursor.
-Auctions are ordered by ID and markets by recipe order. Each eligible market gets
+Auctions are ordered by ID and markets by their first relevant auction. Each eligible market gets
 one bidding pass over its complete eligible auction list. An API mutation ends
 the pass so the next pass reads fresh inventory.
 Financial amounts, account identity and manual inputs are not configuration fields.
@@ -69,17 +83,25 @@ It is resolved from the named environment variable at each HTTP request, never
 persisted in a workflow or logged. Missing/disabled enrollment, wrong BF or a changed
 default maker stops the workflow before mutations.
 
-The host decodes the funding pair/policy and the principal, yield and request Input
-bindings from the account capability. It does not reconstruct or compare its
+For execution, the host decodes the funding pair/policy and the principal, yield
+and request Input bindings from the account capability. It does not reconstruct or compare its
 internal guards. The SDK authenticates permissions and simulates the complete recipe.
 A pinned read-only policy simulation resolves native factory/Facility
 membership and verifies the exact funding pair's budget debit; an API position
 manager address is never substituted for collateral underlying. This simulation
 is a read, not a live transaction or proof of signer access.
 
+Offer discovery and sizing do not call Curator or decode a permission bundle.
+They use the configured policy, auction metadata, on-chain asset resolution and
+native policy eligibility simulation. The executor's on-chain recipe commitment
+and granted roles are still checked. Curator is needed only to prepare execution
+with the actual permission data and Merkle proofs. Configure the executor recipe
+to support the policy's enabled funding pairs; additional recipe-specific amount
+restrictions are applied during execution, not advertised as policy capacity.
+
 Automatic offers conservatively use **idle cash already held by the account**.
 Capacity is the minimum of that cash, the policy's remaining pair budget, the
-recipe principal cap and the auction's advertised request size, with cash reserved across all live offers of the same funding token and budget reserved only across offers for the exact funding/underlying pair. The bot keeps at most one
+request's uint128 amount range and the auction's advertised request size, with cash reserved across all live offers of the same funding token and budget reserved only across offers for the exact funding/underlying pair. The bot keeps at most one
 self-originated live offer at a time, preserving its full configuration binding
 until terminal across all configured markets. Another market cannot cancel, overwrite or rekey that live intent; an ambiguous POST blocks every market until its exact API row is reconciled. The workflow may cancel only its own intent or an eligible request within its current market. Multiple UI-originated offers and aggregate mints remain supported. Supply cash to the account
 before enabling automatic bidding. The actual mint recipe can still use its
@@ -166,10 +188,10 @@ optional 3F dispatch in `merkle` and no dependency on `bridgefacilitator` strate
 
 Tests retain API wire/identity/bounds checks, ambiguous-POST restart recovery,
 reservations, cancellation, aggregate authorizations, lease expiry, alternative curator
-guards and canonical receipt evidence. Dedicated startup tests cover mainnet,
-shared caller discovery, grouped recipes, cross-account rejection, reorgs, invalid accounts and failure before state creation. Cross-market tests retain live/ambiguous account intents and prevent another pair budget from cancelling a foreign UI offer.
+guards and canonical receipt evidence. Dedicated startup tests cover mainnet and Sepolia,
+shared caller discovery, configured policy/account binding, grouped recipes, cross-account rejection, reorgs, invalid accounts and failure before state creation. Cross-market tests retain live/ambiguous account intents and prevent another pair budget from cancelling a foreign UI offer.
 Regression tests also cover committed funding gates, exact raw JSON rate periods,
-historical filtering, negative membership memoization,
+offers without a permission service, on-chain pair discovery, historical filtering, negative membership memoization,
 full auction scans before bidding, maintenance before optional RPC failure and zero-budget
 cancellation ownership.
 Authenticated live-provider approval, enrollment and mainnet minting require
