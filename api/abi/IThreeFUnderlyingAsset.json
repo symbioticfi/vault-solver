@@ -1,0 +1,15 @@
+[
+  {
+    "type": "function",
+    "name": "underlying",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "asset",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  }
+]

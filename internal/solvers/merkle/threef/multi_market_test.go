@@ -70,6 +70,7 @@ func TestSingleExecutorConfigurationHasNoArrayAlias(t *testing.T) {
 	raw := `mode: simulate
 stateDir: state/threef-merkle
 executor: "0x0000000000000000000000000000000000000010"
+policy: "0x0000000000000000000000000000000000000050"
 curator:
   url: http://127.0.0.1:1/api/v1
 url: https://bf.3f.xyz
@@ -134,7 +135,7 @@ func TestGlobalLeaseSelectionZerosEveryInactiveMarket(t *testing.T) {
 	chain := marketReads(t, s, r, tr, func(_ context.Context, msg ethereum.CallMsg, _ *big.Int) ([]byte, error) {
 		return requestABI.GetABI().Methods["mintAuthorization"].Outputs.Pack(big.NewInt(12), big.NewInt(5))
 	})
-	p := mintProvider{API: api, Chain: chain, Now: func() time.Time { return now }}
+	p := mintProvider{Policy: fixturePolicy(t), API: api, Chain: chain, Now: func() time.Time { return now }}
 	outputs, err := p.PrepareRecipe(t.Context(), s, r, tr, nil)
 	var out provider.Output
 	if len(outputs) == 1 {
@@ -222,7 +223,7 @@ func TestMarketsCanShareRequestInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	recipe.Steps[last] = append([]byte{recipes.Manage}, packed...)
-	requirements, err := (&mintProvider{}).RecipeRequirements(snapshot, recipe, tree)
+	requirements, err := (&mintProvider{Policy: fixturePolicy(t)}).RecipeRequirements(snapshot, recipe, tree)
 	if err != nil {
 		t.Fatal(err)
 	}

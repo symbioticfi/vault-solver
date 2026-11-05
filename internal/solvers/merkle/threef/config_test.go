@@ -12,6 +12,7 @@ import (
 const validConfig = `mode: simulate
 stateDir: state/threef-merkle
 executor: "0x0000000000000000000000000000000000000010"
+policy: "0x0000000000000000000000000000000000000050"
 curator:
   url: http://127.0.0.1:1/api/v1
 url: https://bf.3f.xyz
@@ -42,6 +43,9 @@ func TestConfigValidation(t *testing.T) {
 		"mode":           strings.Replace(validConfig, "mode: simulate", "mode: unsafe", 1),
 		"state":          strings.Replace(validConfig, "stateDir: state/threef-merkle\n", "", 1),
 		"zero executor":  strings.Replace(validConfig, "0000000000000000000000000000000000000010", "0000000000000000000000000000000000000000", 1),
+		"missing policy": strings.Replace(validConfig, `policy: "0x0000000000000000000000000000000000000050"`, "", 1),
+		"zero policy":    strings.Replace(validConfig, "0000000000000000000000000000000000000050", "0000000000000000000000000000000000000000", 1),
+		"invalid policy": strings.Replace(validConfig, "0000000000000000000000000000000000000050", "bad", 1),
 		"zero broker":    strings.Replace(validConfig, "0000000000000000000000000000000000000040", "0000000000000000000000000000000000000000", 1),
 		"curator":        strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", "", 1),
 		"url":            strings.Replace(validConfig, "https://bf.3f.xyz", "https://bf.3f.xyz?key=private", 1),
@@ -72,6 +76,7 @@ func TestRecoveryIdentity(t *testing.T) {
 	}
 	for name, change := range map[string]func(*config, *keeper.Config, *common.Address){
 		"key":      func(c *config, _ *keeper.Config, _ *common.Address) { c.APIKeyEnv = "ANOTHER_CURATOR_KEY" },
+		"policy":   func(c *config, _ *keeper.Config, _ *common.Address) { c.Policy = common.HexToAddress("0x51").Hex() },
 		"broker":   func(c *config, _ *keeper.Config, _ *common.Address) { c.Broker = common.HexToAddress("0x41").Hex() },
 		"API":      func(c *config, _ *keeper.Config, _ *common.Address) { c.URL = "https://other.example" },
 		"curator":  func(c *config, _ *keeper.Config, _ *common.Address) { c.Curator.URL = "https://other.example" },

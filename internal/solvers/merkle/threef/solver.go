@@ -92,7 +92,11 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	runtime := &mintProvider{API: api, Chain: deps.Chain}
+	policy := common.HexToAddress(cfg.Policy)
+	if err := verifyPolicyAccount(startup, deps.Chain, policy, target.Account, nil); err != nil {
+		return nil, err
+	}
+	runtime := &mintProvider{API: api, Chain: deps.Chain, Policy: policy}
 	strategy.Providers = []keeper.Provider{runtime}
 	source, err := cfg.Curator.PermissionSource(deps.Chain)
 	if err != nil {
@@ -105,6 +109,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, err
 	}
 	bot := &offerBot{Client: api, Store: store, Send: cfg.Mode == "send"}
-	workflow := &offerWorkflow{planner: planner, strategy: strategy, api: api, bot: bot}
+	workflow := &offerWorkflow{planner: planner, strategy: strategy, policy: policy, api: api, bot: bot}
 	return &Solver{keeper: k, store: store, offers: workflow}, nil
 }

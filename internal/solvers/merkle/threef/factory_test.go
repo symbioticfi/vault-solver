@@ -34,7 +34,7 @@ func (factorySigner) SignTx(context.Context, *types.Transaction, *big.Int) (*typ
 }
 
 func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
-	for _, mode := range []string{"valid", "send", "caller mismatch", "reorg", "zero account", "wrong chain", "active recovery"} {
+	for _, mode := range []string{"valid", "send", "caller mismatch", "reorg", "zero account", "policy mismatch", "zero policy account", "wrong chain", "active recovery"} {
 		t.Run(mode, func(t *testing.T) {
 			target, account, caller := common.HexToAddress("0x10"), common.HexToAddress("0x20"), common.HexToAddress("0x30")
 			header := &types.Header{Number: big.NewInt(12), Difficulty: new(big.Int)}
@@ -77,6 +77,22 @@ func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
 							Input hexutil.Bytes  `json:"input"`
 						}
 						_ = json.Unmarshal(q.Params[0], &call)
+						if call.To == common.HexToAddress("0x50") {
+							owner := account
+							if mode == "policy mismatch" {
+								owner = caller
+							}
+							if mode == "zero policy account" {
+								owner = common.Address{}
+							}
+							data, packErr := policyABI.GetABI().Methods["account"].Outputs.Pack(owner)
+							if packErr != nil {
+								t.Error(packErr)
+								return
+							}
+							results[i] = map[string]any{"jsonrpc": "2.0", "id": q.ID, "result": hexutil.Bytes(data)}
+							continue
+						}
 						binding := multicall3.NewMulticall3()
 						method := binding.GetABI().Methods["aggregate3"]
 						args, err := method.Inputs.Unpack(call.Input[4:])
@@ -165,7 +181,7 @@ func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
 				}
 				current := built.(*Solver)
 				defer func() { _ = current.Close() }()
-				if current.Name() != Name || current.RequiresTxManager() != (mode == "send") || len(current.keeper.Strategies[0].Providers) != 1 || current.offers.bot.Send != (mode == "send") || getters != 1 || current.keeper.Planner.(*mintPlanning).PermissionSource == nil || current.keeper.Planner.(*mintPlanning).RecipeCache == nil || current.keeper.Strategies[0].Config.Account != account.Hex() {
+				if current.Name() != Name || current.RequiresTxManager() != (mode == "send") || len(current.keeper.Strategies[0].Providers) != 1 || current.offers.bot.Send != (mode == "send") || getters != 2 || current.keeper.Planner.(*mintPlanning).PermissionSource == nil || current.keeper.Planner.(*mintPlanning).RecipeCache == nil || current.keeper.Strategies[0].Config.Account != account.Hex() {
 					t.Fatal("host failed shared SDK integration")
 				}
 				if found, err := state.Read(directory, "txmanager.active.v1", new(any)); err != nil || found {

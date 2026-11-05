@@ -28,9 +28,10 @@ type mintAPI interface {
 }
 
 type mintProvider struct {
-	API   mintAPI
-	Chain provider.Reader
-	Now   func() time.Time
+	API    mintAPI
+	Chain  provider.Reader
+	Policy common.Address
+	Now    func() time.Time
 }
 
 type mint struct {
@@ -42,8 +43,22 @@ type mint struct {
 	Deadline        time.Time      `json:"deadline"`
 }
 
-func (p *mintProvider) RecipeRequirements(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) (keeper.RecipeRequirements, error) {
+// The configured offer policy must also be the policy charged by every mint group.
+func (p *mintProvider) markets(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) ([]mintMarket, error) {
 	markets, err := inspect(snapshot, recipe, tree)
+	if err != nil {
+		return nil, err
+	}
+	for _, market := range markets {
+		if market.Policy != p.Policy {
+			return nil, errors.New("3f recipe policy differs from configured policy")
+		}
+	}
+	return markets, nil
+}
+
+func (p *mintProvider) RecipeRequirements(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) (keeper.RecipeRequirements, error) {
+	markets, err := p.markets(snapshot, recipe, tree)
 	if err != nil {
 		return keeper.RecipeRequirements{}, err
 	}
@@ -59,7 +74,7 @@ func (p *mintProvider) RecipeRequirements(snapshot provider.Snapshot, recipe rec
 }
 
 func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree, _ map[uint]*big.Int) ([]provider.Output, error) {
-	markets, err := inspect(snapshot, recipe, tree)
+	markets, err := p.markets(snapshot, recipe, tree)
 	if err != nil {
 		return nil, err
 	}

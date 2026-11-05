@@ -26,7 +26,7 @@ type offerClient interface {
 // EligibleRequests comes from native policy/underlying attestation, never API metadata alone.
 type offerMarket struct {
 	ChainID                                              uint64
-	Account, Executor, Asset, UnderlyingAsset            common.Address
+	Account, Executor, Policy, Asset, UnderlyingAsset    common.Address
 	RecipeHash                                           common.Hash
 	Budget, MinimumYield1e8, MaxPrincipal, AvailableCash *big.Int
 	EligibleRequests                                     map[common.Address]bool
@@ -251,7 +251,7 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 }
 
 func validateMarket(m offerMarket) error {
-	if m.ChainID == 0 || m.Account == (common.Address{}) || m.Executor == (common.Address{}) || m.Asset == (common.Address{}) || m.UnderlyingAsset == (common.Address{}) || m.RecipeHash == (common.Hash{}) {
+	if m.ChainID == 0 || m.Account == (common.Address{}) || m.Executor == (common.Address{}) || m.Policy == (common.Address{}) || m.Asset == (common.Address{}) || m.UnderlyingAsset == (common.Address{}) || m.RecipeHash == (common.Hash{}) {
 		return errors.New("3F market identity is incomplete")
 	}
 	for _, amount := range []*big.Int{m.Budget, m.MinimumYield1e8, m.MaxPrincipal, m.AvailableCash} {

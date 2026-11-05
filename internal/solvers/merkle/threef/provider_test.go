@@ -26,6 +26,16 @@ func fixture(t *testing.T) (provider.Snapshot, recipes.Recipe, *recipes.Tree) {
 	return loadFixture(t, "testdata/3f-executing.json")
 }
 
+func fixturePolicy(t *testing.T) common.Address {
+	t.Helper()
+	s, r, tree := fixture(t)
+	markets, err := inspect(s, r, tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return markets[0].Policy
+}
+
 func loadFixture(t *testing.T, path string) (provider.Snapshot, recipes.Recipe, *recipes.Tree) {
 	t.Helper()
 	raw, err := os.ReadFile(path)
@@ -136,7 +146,7 @@ func TestAggregateAuthorizationLeaseAndPreparationAreReadOnly(t *testing.T) {
 		}
 		return requestABI.GetABI().Methods["mintAuthorization"].Outputs.Pack(big.NewInt(12), big.NewInt(5))
 	})
-	runtime := &mintProvider{API: api, Chain: chain, Now: func() time.Time { return now }}
+	runtime := &mintProvider{Policy: fixturePolicy(t), API: api, Chain: chain, Now: func() time.Time { return now }}
 	outputs, err := runtime.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil)
 	var out provider.Output
 	if len(outputs) == 1 {
@@ -199,7 +209,7 @@ func TestMintRejectsMalformedLeaseAndAuthorization(t *testing.T) {
 				}
 				return requestABI.GetABI().Methods["mintAuthorization"].Outputs.Pack(tc.principal, tc.yield)
 			})
-			p := mintProvider{API: api, Chain: chain, Now: func() time.Time { return time.Unix(1000, 0) }}
+			p := mintProvider{Policy: fixturePolicy(t), API: api, Chain: chain, Now: func() time.Time { return time.Unix(1000, 0) }}
 			if _, err := p.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil); err == nil {
 				t.Fatal("invalid mint became executable")
 			}
@@ -246,7 +256,7 @@ func TestMintSkipsIneligibleEarlierRequests(t *testing.T) {
 				}
 				return chain(ctx, msg, block)
 			})
-			p := mintProvider{API: api, Chain: withPolicy, Now: func() time.Time { return now }}
+			p := mintProvider{Policy: fixturePolicy(t), API: api, Chain: withPolicy, Now: func() time.Time { return now }}
 			outputs, err := p.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil)
 			var out provider.Output
 			if len(outputs) == 1 {
@@ -275,7 +285,7 @@ func TestConfirmedMintRequiresCanonicalReceiptAndPolicyDebit(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := provider.Output{Data: data}
-	p := mintProvider{}
+	p := mintProvider{Policy: fixturePolicy(t)}
 	if _, err := p.Advance(t.Context(), snapshot, out, nil); err == nil {
 		t.Fatal("unconfirmed mint accepted")
 	}
