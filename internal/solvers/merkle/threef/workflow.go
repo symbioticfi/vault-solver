@@ -23,17 +23,20 @@ type mintPlanning struct {
 	runtime *mintProvider
 }
 
-func (p *mintPlanning) Validate(ctx context.Context, plan keeper.Plan) error {
-	if err := p.Planner.Validate(ctx, plan); err != nil {
-		return err
+func (p *mintPlanning) PrepareExecution(ctx context.Context, strategies []keeper.Strategy) (keeper.ExecutionPlan, error) {
+	plan, err := p.Planner.PrepareExecution(ctx, strategies)
+	if err != nil {
+		return plan, err
 	}
-	if len(plan.Outputs) != 1 {
-		return errors.New("3f plan requires one provider")
+	for _, member := range plan.Members {
+		if len(member.Plan.Outputs) != 1 {
+			return keeper.ExecutionPlan{}, errors.New("3f plan requires one provider")
+		}
+		if err := p.runtime.ValidateLease(ctx, member.Plan.Snapshot, member.Plan.Outputs[0]); err != nil {
+			return keeper.ExecutionPlan{}, err
+		}
 	}
-	if err := p.runtime.ValidateLease(ctx, plan.Snapshot, plan.Outputs[0]); err != nil {
-		return err
-	}
-	return nil
+	return plan, nil
 }
 
 type offerWorkflow struct {

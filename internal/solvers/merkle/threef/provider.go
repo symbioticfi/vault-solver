@@ -160,7 +160,7 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 	return provider.Output{}, provider.ErrNotReady
 }
 
-// ValidateLease runs again immediately before unsigned admission. Signed recovery
+// ValidateLease closes preparation after recipe simulation. Signed recovery
 // retains ownership and never rebuilds or resubmits an external offer.
 func (p *mintProvider) ValidateLease(ctx context.Context, snapshot provider.Snapshot, output provider.Output) error {
 	record, err := decodeMint(output)

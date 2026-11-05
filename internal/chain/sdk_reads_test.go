@@ -18,8 +18,11 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/bindings/multicall3"
 )
+
+var _ recipes.BatchReader = (*Client)(nil)
 
 func TestSDKBatchAggregatesPinnedGettersAndKeepsSimulationCaller(t *testing.T) {
 	first, second, caller := common.HexToAddress("0x01"), common.HexToAddress("0x02"), common.HexToAddress("0x03")
