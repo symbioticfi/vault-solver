@@ -322,8 +322,9 @@ curator source and runtime policy version for recovery. Complete original-code
 simulation and canonical block fences remain mandatory. The shared lens replays
 authenticated state-changing prefixes before later numerical reads; unresolved
 provider outputs, future input sources and executor self-queries fail closed.
-The host registers the SDK's `providers/aave` capacity provider before generic
-recipe input derivation. It replays authenticated supply prefixes and reads Aave
+The host registers the SDK's `providers/aave` capacity provider; the planner
+derives deterministic recipe inputs directly. It replays authenticated supply
+prefixes and reads Aave
 capacity through a pinned eth_call code override; the committed recipe chooses
 the actual amount and enforces its health floor. The implementation is shared
 with the executor daemon; vault-solver contains no Aave sizing implementation.
@@ -339,7 +340,7 @@ on-chain completion assertions remain part of the recipe rather than host protoc
 recognition.
 
 Self-contained state-driven recipes use the SDK's automatic atomic batching;
-external provider work stays single-execution with fresh data. The host supplies
+external providers prepare distinct inputs for each execution. The host supplies
 its existing code-override transport and pins the same SDK as the standalone
 executor, without a second loop or batching policy. `PrepareExecution` returns one
 plan for direct calls or cross-executor batches, detecting the shared signer's

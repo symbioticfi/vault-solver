@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/aave"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 
@@ -81,7 +80,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		if err != nil {
 			return nil, err
 		}
-		strategy.Providers = []provider.Provider{capacity, keeper.NewRecipeInputs()}
+		strategy.Providers = []keeper.Provider{capacity}
 		strategy.Config.Account = identity.Account.Hex()
 		strategy.Config.Revision, err = strategyRevision(strategy.Config, cfg.curator, deps.Signer.Address())
 		if err != nil {

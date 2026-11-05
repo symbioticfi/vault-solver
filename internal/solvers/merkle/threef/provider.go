@@ -42,9 +42,6 @@ type mint struct {
 	Deadline        time.Time      `json:"deadline"`
 }
 
-func (p *mintProvider) Prepare(context.Context, provider.Snapshot) (provider.Output, error) {
-	return provider.Output{}, errors.New("3f requires authenticated recipe preparation")
-}
 func (p *mintProvider) RecipeRequirements(snapshot provider.Snapshot, recipe recipes.Recipe, tree *recipes.Tree) (keeper.RecipeRequirements, error) {
 	markets, err := inspect(snapshot, recipe, tree)
 	if err != nil {

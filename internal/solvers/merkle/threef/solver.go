@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 
 	"github.com/go-errors/errors"
@@ -94,7 +93,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, err
 	}
 	runtime := &mintProvider{API: api, Chain: deps.Chain}
-	strategy.Providers = []provider.Provider{runtime}
+	strategy.Providers = []keeper.Provider{runtime}
 	source, err := cfg.Curator.PermissionSource(deps.Chain)
 	if err != nil {
 		return nil, err

@@ -1034,7 +1034,7 @@ The SDK is public and pinned in `go.mod`; normal Go and Docker builds download i
 without a GitHub token or a local merkle-executor checkout.
 
 Self-contained recipes automatically batch useful state-driven executions through
-that SDK. External quotes and proofs use fresh single-execution preparation.
+that SDK. External quotes and proofs are prepared separately for each execution.
 The executor list sets processing priority; spending recipes must reserve funds
 needed for withdrawals. A compatible EIP-7702 shared signer also batches different
 executors in that order. Fresh plans submit without a second simulation; unsigned
