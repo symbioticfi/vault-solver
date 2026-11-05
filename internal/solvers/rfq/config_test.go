@@ -294,7 +294,7 @@ func TestQuoteOnlyDoesNotStartExecution(t *testing.T) {
 }
 
 func TestLocalRecipeExecutorSelectsMode(t *testing.T) {
-	const recipe = `recipeExecutor: "0x0000000000000000000000000000000000000043"
+	const recipe = `recipeExecutors: ["0x0000000000000000000000000000000000000043"]
 stateDir: /persistent/rfq-merkle
 curator: {url: https://curator.example/api/v1}
 `
@@ -306,10 +306,10 @@ curator: {url: https://curator.example/api/v1}
 		{name: "adapters preserve native mode", text: oneAdapter},
 		{name: "recipe selects connector mode", text: recipe, merkle: true},
 		{name: "adapters and recipe executor conflict", text: recipe + oneAdapter, want: "mutually exclusive"},
-		{name: "zero executor", text: `recipeExecutor: "0x0000000000000000000000000000000000000000"`, want: "recipeExecutor"},
-		{name: "bad executor", text: `recipeExecutor: no`, want: "recipeExecutor"},
-		{name: "no durable state", text: `recipeExecutor: "0x0000000000000000000000000000000000000043"`, want: "stateDir"},
-		{name: "quote only needs no journal", text: `recipeExecutor: "0x0000000000000000000000000000000000000043"
+		{name: "zero executor", text: `recipeExecutors: ["0x0000000000000000000000000000000000000000"]`, want: "recipeExecutor"},
+		{name: "bad executor", text: `recipeExecutors: [no]`, want: "recipeExecutor"},
+		{name: "no durable state", text: `recipeExecutors: ["0x0000000000000000000000000000000000000043"]`, want: "stateDir"},
+		{name: "quote only needs no journal", text: `recipeExecutors: ["0x0000000000000000000000000000000000000043"]
 quoteOnly: true
 `, merkle: true},
 	} {
@@ -324,7 +324,7 @@ quoteOnly: true
 			if err != nil {
 				t.Fatal(err)
 			}
-			if (cfg.RecipeExecutor != (common.Address{})) != tc.merkle {
+			if (len(cfg.RecipeExecutors) > 0) != tc.merkle {
 				t.Fatalf("wrong mode: %+v", cfg)
 			}
 			if tc.merkle && (len(cfg.Adapters) > 0 || !cfg.usesDiscounts()) {

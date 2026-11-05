@@ -1,6 +1,7 @@
 package rfq
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -14,12 +15,12 @@ func TestConfiguredExecutorDerivesPaymentConnector(t *testing.T) {
 		want   string
 	}{
 		{name: "configured executor"},
-		{name: "wrong executor", mutate: func(s *Solver) { s.recipeExecutor = common.HexToAddress("0xbad") }, want: ""},
+		{name: "wrong executor", mutate: func(s *Solver) { s.recipeExecutors[0] = common.HexToAddress("0xbad") }, want: ""},
 		{name: "wrong caller", mutate: func(s *Solver) { s.workflow.caller = common.HexToAddress("0xbad") }, want: "caller mismatch"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := connectorExecutionFixture(t, connectorDiscountFixture())
-			s := &Solver{recipeExecutor: fixture.reader.recipeExecutor, workflow: fixture.workflow}
+			s := &Solver{recipeExecutors: []common.Address{fixture.reader.recipeExecutor}, workflow: fixture.workflow}
 			s.workflow.connector = common.Address{}
 			if tc.mutate != nil {
 				tc.mutate(s)
@@ -34,11 +35,11 @@ func TestConfiguredExecutorDerivesPaymentConnector(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if venue != vlt || s.workflow.connector != vlt {
+			if len(venue) != 1 || venue[0] != vlt || !s.AcceptsRoute(fixture.reader.recipeExecutor, vlt, fixture.reader.recipeAccount, tOut) {
 				t.Fatalf("wrong recipe connector %s", venue)
 			}
 			again, err := s.Initialize(t.Context())
-			if err != nil || again != venue {
+			if err != nil || !slices.Equal(again, venue) {
 				t.Fatalf("initialize not stable: %s %v", again, err)
 			}
 		})

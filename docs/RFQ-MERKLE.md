@@ -1,7 +1,7 @@
 # RFQ orders through Merkle recipes
 
 `rfq-filler` selects its path from local configuration: the existing `adapters`
-list preserves native quoting and fills; `recipeExecutor` selects Merkle
+list preserves native quoting and fills; `recipeExecutors` selects Merkle
 quoting and fills. Setting both fails before startup. The execution implementation
 is shared with the execution-only `rfq-merkle` plugin in `internal/solvers/merkle/rfq`.
 It polls awarded `/api/v1/orders?filler=…&orderStatus=open`, obtains signed terms
@@ -10,25 +10,29 @@ from the backend discounts API, and builds:
 `EOA → RFQ Executor → RecipeExecutor → MerkleAccount → LiquidLaneConnector`.
 
 Use [the example config](../config/rfq-merkle.example.yaml). Configure the RFQ
-`executor` and a separate `recipeExecutor`; they identify different contracts.
-The EOA must be an authorized caller of the RFQ Executor. The solver derives its
+`executor` and a `recipeExecutors: [...]` list. The first is the RFQ filler;
+the list contains the funding recipes.
+The EOA must be an authorized caller of the RFQ Executor. The solver derives each
 payment connector from the original recipe's output-token approval using input 1,
 checks its account and output asset, and requires the recipe caller to be the RFQ
 Executor. The connector must be registered as version `2` in the Reactor's Liquid
 Lane adapter factory (version `1` is a native adapter).
 
-Backend quote requests carry capacity, price, token decimals, account and discount precision, without
-`recipeExecutor`. Neither quote requests nor discount listings select the execution
-target. The backend keeps its own matching executor binding for capacity reads and
-routing; operators must configure the same executor on both sides. The SDK retrieves
-original recipe bytes at the executor's known `recipeBlock`. Execution verifies current
-permissions and the complete outer fill. Recipes remain unchanged.
+Backend quote requests carry capacity, price, token decimals, account, discount precision
+and the `recipeExecutor` whose funding capacity was measured. The solver accepts only
+executors in its local list, and checks their connector, account and output asset.
+The backend maps each connector to a `recipeExecutors` list, and measures each recipe
+against the requested RWA. Fill construction checks the RWA's pinned swap permission.
+The SDK retrieves original recipe bytes at the executor's known `recipeBlock`.
+Execution verifies current permissions and the complete outer fill; recipes remain unchanged.
 
 Merkle fills require a durable `stateDir` and curator permission service. With
 `quoteOnly: true`, `rfq-filler` opens no execution journal and needs no curator URL.
-Both plugins derive one payment connector from the configured `recipeExecutor`;
-there is no separate connector list. Use one order poller per RFQ Executor/filler
-identity; a second process for quotes must set `quoteOnly: true`.
+All configured recipes share one keeper, transaction manager and durable journal.
+Quote capacity is grouped by account and funding asset, not executor. Overlapping
+recipes are alternatives; they cannot multiply that balance within a quote.
+Use one order poller per RFQ Executor/filler identity; a second process for quotes must
+set `quoteOnly: true`.
 Polling is every three seconds;
 each iteration has a thirty-second context and fetches at most 100 open orders.
 Curator HTTP limits are ten seconds and 2 MiB. Secret configuration contains

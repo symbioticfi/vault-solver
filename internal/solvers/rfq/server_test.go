@@ -276,15 +276,16 @@ func TestServer_QuoteWhitelist(t *testing.T) {
 	}
 }
 
-func TestServerConnectorUsesLocalExecutorWithoutWireField(t *testing.T) {
+func TestServerConnectorRequiresConfiguredWireExecutor(t *testing.T) {
 	srv := testServer()
-	srv.quotes.recipeExecutor = common.HexToAddress("0x43")
+	srv.quotes.recipeExecutors = []common.Address{common.HexToAddress("0x43")}
 	srv.quotes.discountsEnabled = true
 	srv.quotes.whitelist = adapterWhitelist{vlt: true}
 	body := validQuoteBody()
 	id := "0x" + strings.Repeat("ab", 32)
 	body.Adapters[0].DiscountID = &id
 	body.Adapters[0].DiscountPrecision = "100000000"
+	body.Adapters[0].RecipeExecutor = common.HexToAddress("0x43").Hex()
 	body.Adapters = append(body.Adapters, quoteAdapter{Adapter: common.HexToAddress("0xbad").Hex(), Asset: tOut.Hex(), BlockNumber: "1", MaxAssets: "1000", Discount: "0"})
 	rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, body)
 	if rr.Code != http.StatusOK {
@@ -295,17 +296,17 @@ func TestServerConnectorUsesLocalExecutorWithoutWireField(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	injected := strings.Replace(string(raw), `"discountPrecision":"100000000"`, `"recipeExecutor":"0x000000000000000000000000000000000000dead","discountPrecision":"100000000"`, 1)
+	injected := strings.Replace(string(raw), `"recipeExecutor":"0x0000000000000000000000000000000000000043"`, `"recipeExecutor":"0x000000000000000000000000000000000000dead"`, 1)
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/quote", strings.NewReader(injected))
 	req.Header.Set(sharedSecretHeader, testSecret)
 	rr = httptest.NewRecorder()
 	srv.handler().ServeHTTP(rr, req)
-	if rr.Code != http.StatusUnprocessableEntity {
+	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("wire executor = %d: %s", rr.Code, rr.Body.String())
 	}
 	spec := do(t, srv.handler(), http.MethodGet, "/openapi.json", "", nil)
-	if strings.Contains(spec.Body.String(), `"recipeExecutor"`) {
-		t.Fatal("executor leaked into quote schema")
+	if !strings.Contains(spec.Body.String(), `"recipeExecutor"`) {
+		t.Fatal("executor missing from quote schema")
 	}
 }
 

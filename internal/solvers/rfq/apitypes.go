@@ -2,6 +2,7 @@ package rfq
 
 import (
 	"math/big"
+	"slices"
 	"strconv"
 	"time"
 
@@ -32,6 +33,7 @@ type quoteRequest struct {
 
 // quoteAdapter is one adapter inventory entry the backend offers for the request.
 type quoteAdapter struct {
+	RecipeExecutor    string  `json:"recipeExecutor,omitempty" pattern:"^0x[a-fA-F0-9]{40}$"`
 	DiscountPrecision string  `json:"discountPrecision,omitempty"`
 	Account           string  `json:"account,omitempty"`
 	Price             string  `json:"price,omitempty" pattern:"^[0-9]+$" doc:"Undiscounted oracle price scaled by 1e18; required for signed-discount quotes"`
@@ -76,7 +78,7 @@ type parsedQuote struct {
 // toStrategy validates and parses the request. A non-nil error is a malformed payload (→ 400). A nil
 // result with nil error means the request is well-formed but not quotable here — wrong chain or no
 // adapters — and the caller replies 204.
-func (q *quoteRequest) toStrategy(chainID int64, recipeExecutor common.Address) (*parsedQuote, error) {
+func (q *quoteRequest) toStrategy(chainID int64, recipeExecutors []common.Address) (*parsedQuote, error) {
 	// Schema-level validation (malformed → 400).
 	if q.Type != quoteTypeExactInput {
 		return nil, errors.Errorf("type must be %q", quoteTypeExactInput)
@@ -107,6 +109,16 @@ func (q *quoteRequest) toStrategy(chainID int64, recipeExecutor common.Address) 
 	}
 	inv := make([]solverInventory, 0, len(q.Adapters))
 	for i := range q.Adapters {
+		recipeExecutor := common.Address{}
+		if q.Adapters[i].RecipeExecutor != "" {
+			var err error
+			recipeExecutor, err = parse.NonZeroAddress(q.Adapters[i].RecipeExecutor, idxField(i, "recipeExecutor"))
+			if err != nil || !slices.Contains(recipeExecutors, recipeExecutor) {
+				return nil, errors.New("inventory recipeExecutor is not configured")
+			}
+		} else if len(recipeExecutors) > 0 {
+			return nil, errors.New("connector inventory requires recipeExecutor")
+		}
 		entry, perr := q.Adapters[i].parse(i, q.TokenInChainID, tokenIn, recipeExecutor)
 		if perr != nil {
 			return nil, perr

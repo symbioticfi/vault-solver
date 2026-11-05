@@ -30,8 +30,9 @@ func TestDiscountQuoteUsesBackendSnapshotWithoutRPC(t *testing.T) {
 				entry.Discount = big.NewInt(precision / 20).String()
 				entry.BlockNumber = "42"
 				if precision == 100_000_000 {
-					s.quotes.recipeExecutor = common.HexToAddress("0x43")
+					s.quotes.recipeExecutors = []common.Address{common.HexToAddress("0x43")}
 					entry.DiscountPrecision = "100000000"
+					entry.RecipeExecutor = common.HexToAddress("0x43").Hex()
 				}
 				s.quotes.reservations = func(_ string, rows []solverInventory) liquidlane.CapacityReservations {
 					if len(rows) != 1 || rows[0].Vault != vlt || rows[0].BlockNumber != 42 {
@@ -77,6 +78,34 @@ func TestDiscountQuoteRequiresBackendPricing(t *testing.T) {
 			change(&entry)
 			if _, err := entry.parse(0, 1, tIn, common.Address{}); err == nil || !strings.Contains(err.Error(), "discounted quote") {
 				t.Fatalf("invalid pricing accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestOverlappingRecipeExecutorsQuoteOneSharedBalance(t *testing.T) {
+	for _, maximum := range []string{"1000000", "2000000"} {
+		t.Run(maximum, func(t *testing.T) {
+			s := testServer()
+			s.quotes.recipeExecutors = []common.Address{common.HexToAddress("0x43"), common.HexToAddress("0x44")}
+			s.quotes.discountsEnabled = true
+			s.quotes.reader = nil
+			body := validQuoteBody()
+			entry := &body.Adapters[0]
+			id, decimals := common.HexToHash("0x1234").Hex(), 18
+			entry.Account, entry.TokenInDecimals, entry.Price = vlt.Hex(), &decimals, "1234567890123456789"
+			entry.DiscountID, entry.Discount, entry.DiscountPrecision = &id, "5000000", "100000000"
+			entry.RecipeExecutor, entry.MaxAssets = s.quotes.recipeExecutors[0].Hex(), "1000000"
+			other := *entry
+			other.RecipeExecutor, other.MaxAssets = s.quotes.recipeExecutors[1].Hex(), maximum
+			body.Adapters = append(body.Adapters, other)
+			rr := do(t, s.handler(), http.MethodPost, "/quote", testSecret, body)
+			want := http.StatusNoContent
+			if maximum == "2000000" {
+				want = http.StatusOK
+			}
+			if rr.Code != want {
+				t.Fatalf("overlapping capacity: status=%d want=%d body=%s", rr.Code, want, rr.Body.String())
 			}
 		})
 	}

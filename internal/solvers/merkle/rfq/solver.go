@@ -54,12 +54,13 @@ type fillIntent struct {
 }
 
 type Solver struct {
-	recipeExecutor common.Address
-	workflow       *connectorWorkflow
-	backend        orderBackend
-	sender         journalSender
-	store          *state.Store
-	intent         fillIntent // Only Run accesses the intent; the sender reads its deadline at admission.
+	recipeExecutors []common.Address
+	routes          map[common.Address]recipeRoute
+	workflow        *connectorWorkflow
+	backend         orderBackend
+	sender          journalSender
+	store           *state.Store
+	intent          fillIntent // Only Run accesses the intent; the sender reads its deadline at admission.
 }
 
 func (*Solver) Name() string { return Name }
@@ -86,7 +87,7 @@ func New(cfg Config, deps solver.Deps) (*Solver, error) {
 	if deps.Chain == nil || (!cfg.QuoteOnly && (deps.Signer == nil || deps.TxManager == nil)) {
 		return nil, errors.New("rfq-merkle requires the shared chain, signer and transaction manager")
 	}
-	s := &Solver{recipeExecutor: cfg.RecipeExecutor, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), caller: cfg.Executor}}
+	s := &Solver{recipeExecutors: cfg.RecipeExecutors, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), caller: cfg.Executor}}
 	if cfg.QuoteOnly {
 		return s, nil
 	}
@@ -219,7 +220,9 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	}
 	for _, item := range listed {
 		venue := common.HexToAddress(item.Adapter)
-		if venue != s.workflow.connector || common.HexToAddress(item.TokenToRedeem) != order.Request.TokenIn || common.HexToAddress(item.Collateral) != token {
+		recipeExecutor := common.HexToAddress(item.RecipeExecutor)
+		route, configured := s.routes[recipeExecutor]
+		if !configured || route.connector != venue || common.HexToAddress(item.TokenToRedeem) != order.Request.TokenIn || common.HexToAddress(item.Collateral) != token {
 			continue
 		}
 		id, err := hexutil.Decode(item.DiscountID)
@@ -230,7 +233,9 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 		if !ok || maximum.Sign() < 0 || maximum.BitLen() > 256 {
 			return nil, errors.New("invalid connector maxAssets")
 		}
-		data, until, err := s.workflow.build(ctx, order, signature, selectedRoute{Venue: venue, Executor: s.recipeExecutor, DiscountID: common.BytesToHash(id), MaxAssets: maximum}, s.backend)
+		workflow := *s.workflow
+		workflow.connector = route.connector
+		data, until, err := workflow.build(ctx, order, signature, selectedRoute{Venue: venue, Executor: recipeExecutor, DiscountID: common.BytesToHash(id), MaxAssets: maximum}, s.backend)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()

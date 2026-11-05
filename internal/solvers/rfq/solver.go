@@ -84,11 +84,12 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	links := observability.NewSpanLinks()
 	exec.links = links
 	var merkle *merklerfq.Solver
-	if cfg.RecipeExecutor != (common.Address{}) {
+	if len(cfg.RecipeExecutors) > 0 {
 		merkle, err = merklerfq.New(cfg.merkleConfig(), deps)
 		if err != nil {
 			return nil, err
 		}
+		quotes.acceptsRoute = merkle.AcceptsRoute
 	}
 	return &Solver{
 		merkle: merkle,
@@ -133,7 +134,7 @@ func buildServices(
 	quotes := &quoteService{
 		tokenMetadata:    tokenMetadata,
 		discountsEnabled: cfg.usesDiscounts(),
-		recipeExecutor:   cfg.RecipeExecutor,
+		recipeExecutors:  cfg.RecipeExecutors,
 		chainID:          chainID,
 		executor:         cfg.Executor,
 		laneAvailable:    laneAvailable,
@@ -183,11 +184,14 @@ func (s *Solver) ShutdownPreparationTimeout() time.Duration {
 // backend order-poll + fill loop. The filler is poll-only (no push/notify endpoint).
 func (s *Solver) Run(ctx context.Context) error {
 	if s.merkle != nil {
-		venue, err := s.merkle.Initialize(ctx)
+		venues, err := s.merkle.Initialize(ctx)
 		if err != nil {
 			return errors.Errorf("rfq: initialize recipe executor: %w", err)
 		}
-		s.server.quotes.whitelist = adapterWhitelist{venue: true}
+		s.server.quotes.whitelist = make(adapterWhitelist, len(venues))
+		for _, venue := range venues {
+			s.server.quotes.whitelist[venue] = true
+		}
 	}
 	// Resolve each recovery adapter's vault + collateral once at startup (config carries only adapter
 	// addresses; both are fixed for the adapter's lifetime) and hand the resolved set to recovery. Runs

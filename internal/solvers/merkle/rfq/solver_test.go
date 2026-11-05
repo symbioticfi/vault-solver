@@ -129,7 +129,7 @@ func TestPollerPersistsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	backend.rows = []rfqbackend.OrdersResponseOrdersInner{awardRow(t, order), awardRow(t, order)}
 	backend.listed = &discounts.List{Discounts: []discounts.ListItem{
 		{Adapter: common.HexToAddress("0x01").Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "99999"},
-		{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: common.HexToAddress("0xdead").Hex()},
+		{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: common.HexToAddress("0x43").Hex()},
 	}}
 	store, err := state.Open(t.TempDir())
 	if err != nil {
@@ -144,7 +144,10 @@ func TestPollerPersistsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 			t.Fatalf("fill admitted before durable intent: %v", err)
 		}
 	}
-	s := &Solver{recipeExecutor: common.HexToAddress("0x43"), workflow: fixture.workflow, backend: backend, sender: sender, store: store}
+	s := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender, store: store}
+	if _, err := s.Initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +160,7 @@ func TestPollerPersistsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	if _, err := store.Load(intentKey, &restored); err != nil {
 		t.Fatal(err)
 	}
-	restarted := &Solver{recipeExecutor: common.HexToAddress("0x43"), workflow: fixture.workflow, backend: backend, sender: sender, store: store, intent: restored}
+	restarted := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender, store: store, intent: restored}
 	sender.result = submission.Result{Confirmed: true, Hash: common.HexToHash("0x77")}
 	if err := restarted.tick(t.Context()); err != nil {
 		t.Fatal(err)
@@ -195,11 +198,15 @@ func TestPrepareCountsHeaderLatencyAgainstDeadline(t *testing.T) {
 	f := connectorExecutionFixture(t, connectorDiscountFixture())
 	chainTime := time.Now().Add(time.Hour).Truncate(time.Second)
 	f.reader.header.Time = uint64(chainTime.Unix())
-	f.reader.headerDelay = 250 * time.Millisecond
 	order, _, backend := connectorExecutionAward(f.workflow.caller)
 	order.Request.Deadline = big.NewInt(chainTime.Add(10 * time.Second).Unix())
-	s := Solver{recipeExecutor: common.HexToAddress("0x43"), workflow: f.workflow, backend: backend}
-	intent, err := s.prepare(t.Context(), awardRow(t, order), []discounts.ListItem{{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: common.HexToAddress("0xdead").Hex()}})
+	s := Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: f.workflow, backend: backend}
+	if _, err := s.Initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	f.reader.headerDelay = 250 * time.Millisecond
+	f.reader.headerStarted = time.Time{}
+	intent, err := s.prepare(t.Context(), awardRow(t, order), []discounts.ListItem{{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: common.HexToAddress("0x43").Hex()}})
 	if err != nil || intent == nil {
 		t.Fatalf("prepare: intent=%v err=%v", intent, err)
 	}
@@ -243,7 +250,7 @@ func TestConfigKeepsMerkleSeparateFromAdapterSolver(t *testing.T) {
 	valid := `backendUrl: https://rfq.example
 stateDir: /persistent/rfq-merkle
 executor: "0x0000000000000000000000000000000000000010"
-recipeExecutor: "0x0000000000000000000000000000000000000043"
+recipeExecutors: ["0x0000000000000000000000000000000000000043"]
 curator: {url: https://curator.example/api/v1}
 `
 	for _, tc := range []struct {

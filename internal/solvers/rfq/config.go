@@ -32,7 +32,7 @@ type rawConfig struct {
 	TokensToQuote          string             `yaml:"tokensToQuote"`
 	PermissionedTokens     []string           `yaml:"permissionedTokens"`
 	MinAmountsIn           map[string]string  `yaml:"minAmountsIn"`
-	RecipeExecutor         string             `yaml:"recipeExecutor"`
+	RecipeExecutors        []string           `yaml:"recipeExecutors"`
 	StateDir               string             `yaml:"stateDir"`
 	Curator                merklehost.Curator `yaml:"curator"`
 	Adapters               []string           `yaml:"adapters"`
@@ -46,8 +46,8 @@ type rawStrategyConfig struct {
 
 // Config is the validated, typed RFQ solver configuration.
 type Config struct {
-	// RecipeExecutor selects connector pricing and Merkle fills instead of native adapters.
-	RecipeExecutor common.Address
+	// RecipeExecutors selects connector pricing and Merkle fills instead of native adapters.
+	RecipeExecutors []common.Address
 	// StateDir and Curator provide the Merkle journal and permission tree for full execution.
 	StateDir string
 	Curator  merklehost.Curator
@@ -128,8 +128,8 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err := solver.DecodeStrict(node, &raw); err != nil {
 		return nil, err
 	}
-	if raw.RecipeExecutor != "" && len(raw.Adapters) > 0 {
-		return nil, errors.New("adapters and recipeExecutor are mutually exclusive")
+	if len(raw.RecipeExecutors) > 0 && len(raw.Adapters) > 0 {
+		return nil, errors.New("adapters and recipeExecutors are mutually exclusive")
 	}
 	if raw.BackendURL == "" {
 		return nil, errors.New("backendUrl is required")
@@ -220,8 +220,8 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		}
 		cfg.Adapters = append(cfg.Adapters, recoveryVault{Adapter: adapter})
 	}
-	if raw.RecipeExecutor != "" {
-		cfg.RecipeExecutor, err = parse.NonZeroAddress(raw.RecipeExecutor, "recipeExecutor")
+	if len(raw.RecipeExecutors) > 0 {
+		cfg.RecipeExecutors, err = merklerfq.ParseRecipeExecutors(raw.RecipeExecutors)
 		if err != nil {
 			return nil, err
 		}
@@ -229,7 +229,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 			return nil, err
 		}
 	}
-	if mode == solverModeExternal && len(cfg.Adapters) == 0 && cfg.RecipeExecutor == (common.Address{}) {
+	if mode == solverModeExternal && len(cfg.Adapters) == 0 && len(cfg.RecipeExecutors) == 0 {
 		return nil, errors.New(`solverMode "external" requires at least one adapters entry`)
 	}
 	return cfg, nil
@@ -237,7 +237,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 
 // usesDiscounts enables signed terms for native internal mode and Merkle connector mode.
 func (c *Config) usesDiscounts() bool {
-	return c.SolverMode == solverModeInternal || c.RecipeExecutor != (common.Address{})
+	return c.SolverMode == solverModeInternal || len(c.RecipeExecutors) > 0
 }
 
 // restrictsToAdapters reports whether the EXECUTION path (order filling, incl. discount-leg recovery) is
@@ -254,5 +254,5 @@ func (c *Config) quoteScopesToAdapters() bool {
 }
 
 func (c *Config) merkleConfig() merklerfq.Config {
-	return merklerfq.Config{BackendURL: c.BackendURL, Executor: c.Executor, RecipeExecutor: c.RecipeExecutor, StateDir: c.StateDir, Curator: c.Curator, QuoteOnly: c.QuoteOnly}
+	return merklerfq.Config{BackendURL: c.BackendURL, Executor: c.Executor, RecipeExecutors: c.RecipeExecutors, StateDir: c.StateDir, Curator: c.Curator, QuoteOnly: c.QuoteOnly}
 }

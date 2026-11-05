@@ -11,21 +11,21 @@ import (
 )
 
 type Config struct {
-	RecipeExecutor common.Address
-	QuoteOnly      bool
-	BackendURL     string
-	StateDir       string
-	Executor       common.Address
-	Curator        merklehost.Curator
+	RecipeExecutors []common.Address
+	QuoteOnly       bool
+	BackendURL      string
+	StateDir        string
+	Executor        common.Address
+	Curator         merklehost.Curator
 }
 
 func parseConfig(node yaml.Node) (Config, error) {
 	var raw struct {
-		BackendURL     string             `yaml:"backendUrl"`
-		StateDir       string             `yaml:"stateDir"`
-		Executor       string             `yaml:"executor"`
-		RecipeExecutor string             `yaml:"recipeExecutor"`
-		Curator        merklehost.Curator `yaml:"curator"`
+		BackendURL      string             `yaml:"backendUrl"`
+		StateDir        string             `yaml:"stateDir"`
+		Executor        string             `yaml:"executor"`
+		RecipeExecutors []string           `yaml:"recipeExecutors"`
+		Curator         merklehost.Curator `yaml:"curator"`
 	}
 	if err := solver.DecodeStrict(node, &raw); err != nil {
 		return Config{}, err
@@ -34,29 +34,49 @@ func parseConfig(node yaml.Node) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	recipeExecutor, err := parse.NonZeroAddress(raw.RecipeExecutor, "recipeExecutor")
+	recipeExecutors, err := ParseRecipeExecutors(raw.RecipeExecutors)
 	if err != nil {
 		return Config{}, err
 	}
-	cfg := Config{RecipeExecutor: recipeExecutor, BackendURL: raw.BackendURL, StateDir: raw.StateDir, Executor: executor, Curator: raw.Curator}
+	cfg := Config{RecipeExecutors: recipeExecutors, BackendURL: raw.BackendURL, StateDir: raw.StateDir, Executor: executor, Curator: raw.Curator}
 	return cfg, cfg.Validate()
 }
 
 // Validate checks the reusable Merkle execution component's startup settings.
 func (c Config) Validate() error {
-	if c.RecipeExecutor == (common.Address{}) || c.Executor == (common.Address{}) {
-		return errors.New("executor and recipeExecutor must be nonzero")
+	if len(c.RecipeExecutors) == 0 || c.Executor == (common.Address{}) {
+		return errors.New("executor and recipeExecutors must be nonzero")
+	}
+	seen := make(map[common.Address]bool, len(c.RecipeExecutors))
+	for _, executor := range c.RecipeExecutors {
+		if executor == (common.Address{}) || seen[executor] {
+			return errors.New("recipeExecutors must contain distinct nonzero addresses")
+		}
+		seen[executor] = true
 	}
 	if err := permissions.ValidateURL(c.BackendURL); err != nil {
 		return errors.Errorf("backendUrl: %w", err)
 	}
 	if !c.QuoteOnly {
 		if c.StateDir == "" {
-			return errors.New("recipeExecutor requires stateDir")
+			return errors.New("recipeExecutors requires stateDir")
 		}
 		if err := permissions.ValidateURL(c.Curator.URL); err != nil {
 			return errors.Errorf("curator: %w", err)
 		}
 	}
 	return nil
+}
+
+// ParseRecipeExecutors parses the shared RFQ host and plugin configuration.
+func ParseRecipeExecutors(values []string) ([]common.Address, error) {
+	out := make([]common.Address, 0, len(values))
+	for _, value := range values {
+		address, err := parse.NonZeroAddress(value, "recipeExecutors")
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, address)
+	}
+	return out, nil
 }
