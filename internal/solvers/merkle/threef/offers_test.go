@@ -73,6 +73,47 @@ func testBot(t *testing.T) (*offerBot, *fakeClient, offerMarket) {
 	return &offerBot{Client: client, Store: store, Send: true, Now: func() time.Time { return time.Unix(1900000000, 0) }}, client, m
 }
 
+func TestTickRespectsPolicyAndAuctionMinimum(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		principal int64
+		floor1e8  int64
+		maxAPR    string
+		basis     float32
+		want      string
+	}{
+		{"auction floor above policy", 100_000_000, 10_000, "100", 31536000, "250000"},
+		{"eight percent policy floor", 100_000_000, 8_000_000, "1000", 31536000, "8000000"},
+		{"policy floor above auction ceiling", 100_000_000, 8_000_000, "700", 31536000, ""},
+		{"daily auction basis", 365_000_000, 0, "100", 86400, "2500"},
+		{"rounded auction floor", 100_001, 0, "100", 31536000, "251"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bot, client, market := testBot(t)
+			market.MaxPrincipal = big.NewInt(tc.principal)
+			market.Budget, market.AvailableCash = big.NewInt(tc.principal), big.NewInt(tc.principal)
+			market.MinimumYield1e8 = big.NewInt(tc.floor1e8)
+			auction := &client.auctions[0]
+			amount := market.MaxPrincipal.String()
+			auction.AmountRequested = *threef.NewNullableString(&amount)
+			auction.RateBasisSeconds = tc.basis
+			auction.AdditionalProperties[exactMaxRateKey] = tc.maxAPR
+			if err := bot.Tick(t.Context(), market, client.auctions); err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == "" {
+				if len(client.created) != 0 {
+					t.Fatalf("unexpected offer: %+v", client.created)
+				}
+				return
+			}
+			if len(client.created) != 1 || client.created[0].ExpectedReturn != tc.want {
+				t.Fatalf("offers = %+v, want expectedReturn %s", client.created, tc.want)
+			}
+		})
+	}
+}
+
 func TestTickSizesExactUnsignedPushAndJournalsBeforePost(t *testing.T) {
 	b, client, m := testBot(t)
 	client.beforeCreate = func(offer threef.CreateOfferDto) {
@@ -262,7 +303,6 @@ func TestTickRejectsUnexecutableNativeQuantities(t *testing.T) {
 			} else {
 				m.MinimumYield1e8 = new(big.Int).Lsh(big.NewInt(1), 255)
 			}
-			c.auctions[0].AdditionalProperties = nil
 			if err := b.Tick(t.Context(), m, c.auctions); err != nil {
 				t.Fatal(err)
 			}
@@ -277,7 +317,7 @@ func TestFitsTermsNativeAuthorizationBounds(t *testing.T) {
 	m := testMarket()
 	maximum := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1))
 	m.MaxPrincipal, m.MinimumYield1e8 = maximum, new(big.Int)
-	auction := threef.AuctionDto{}
+	auction := threef.AuctionDto{AdditionalProperties: map[string]any{exactMaxRateKey: "10000"}}
 	fits, err := fitsTerms(m, maximum, maximum, auction)
 	if err != nil || !fits {
 		t.Fatalf("uint128 boundary rejected: %v %v", fits, err)
@@ -304,6 +344,10 @@ func TestFitsTermsAuctionRateBasis(t *testing.T) {
 		{"annual above ceiling", 31536000, 150000001, false, false},
 		{"daily ceiling", 86400, 410958, true, false},
 		{"daily above ceiling", 86400, 410959, false, false},
+		{"annual floor", 31536000, 37500000, true, false},
+		{"below annual floor", 31536000, 37499999, false, false},
+		{"daily rounded floor", 86400, 102740, true, false},
+		{"below daily rounded floor", 86400, 102739, false, false},
 		{"daily cannot use annual yield", 86400, 150000000, false, false},
 		{"absent basis", 0, 150000000, true, false},
 		{"negative basis", -1, 1, false, true},
