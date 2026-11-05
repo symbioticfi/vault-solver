@@ -300,7 +300,7 @@ eligible adapter offer the **full requested amount** within its own capacity, in
    adapter's offer, live or new, never shrinks another's on the same auction. Commitments are tracked per
    adapter across the pass, initialized from live offer principals and slots, including auctions absent
    from the current listing. Each
-   offer is **priced at the adapter's `minYieldPerRequest` floor plus a partial-consumption margin** of
+   offer is **priced at the higher of the auction minimum and the adapter's `minYieldPerRequest` floor plus a partial-consumption margin** of
    `max(2, ceil(principal/1e6))` base units (~1 ppm). A floor-exact offer reverts `TooLowYield` whenever
    the keeper consumes it partially, because `consume()` pro-rates the return with floor division while
    the floor check rounds up (mainnet tx `0xc637…8386`: 30,000.035 USDC at the 190 ppm floor consumed at
@@ -310,10 +310,13 @@ eligible adapter offer the **full requested amount** within its own capacity, in
    auction's max rate but the max rate itself clears the floor, the offer is priced at the max rate
    (keeping the margin that fits); a pair whose floor exceeds the max rate is skipped. The submission
    loop re-checks every strategy's offers (default and webhook) against the exact `minYieldPerRequest`
-   before signing, so no path posts a sub-floor offer the fill would revert.
+   and auction bounds before signing. 3F requires at least a quarter of the lowest ramp APR but only
+   exposes the current maximum. Both native and Merkle solvers conservatively use `maxRate / 4`
+   as the minimum. This can exceed the true minimum as the ramp increases. Missing or invalid rates
+   cannot be priced. The minimum return rounds up; the maximum rounds down.
    From 3F's APR switch (23 Oct 2026) `maxRate` is an annual rate and every auction carries
    `rateBasisSeconds` (a year for new auctions, the old settlement delay for ones created before);
-   `expectedReturn` covers that basis, so the max-rate cap is scaled by `basis / year`
+   `expectedReturn` covers that basis, so both auction bounds are scaled by `basis / year`
    (`types.ExpectedReturn`, `types.ValidateYield`). A response without the field is pre-switch and keeps
    the per-term pricing; a negative field skips the auction.
    The on-chain `minYieldPerRequest` floor is compared to the raw `expectedReturn` exactly as the

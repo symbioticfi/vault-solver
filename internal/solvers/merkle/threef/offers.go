@@ -206,6 +206,13 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 			continue
 		}
 		yield := minimumReturn(amount, market.MinimumYield1e8)
+		auctionMinimum, _, rateErr := auctionReturnBounds(amount, auction)
+		if rateErr != nil {
+			return false, rateErr
+		}
+		if yield.Cmp(auctionMinimum) < 0 {
+			yield = auctionMinimum
+		}
 		fits, fitErr := fitsTerms(market, amount, yield, auction)
 		if fitErr != nil {
 			return false, fitErr

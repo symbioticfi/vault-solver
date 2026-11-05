@@ -1075,6 +1075,12 @@ without fetching Curator permissions. Curator supplies permission data and proof
 only for mint execution. The executor uses the shared signer; its recipe must support
 the enabled policy pairs and supplies request/principal/yield inputs; inactive groups receive zero principal. Gates and fixed funding calls remain curator-owned. One journal and sender serialize all markets. Automatic offers reserve existing commitments
 and use account idle cash; simulation never submits or cancels API offers.
+Both 3F solvers honor the on-chain minimum and the auction APR bounds. Since the API
+does not expose the lowest ramp APR, they use a quarter of the current `maxRate` as
+a conservative auction minimum. Both auction bounds use
+`amount * aprBps * rateBasisSeconds / (10_000 * 31_536_000)`, rounding the minimum up
+and maximum down. Missing or invalid rates prevent offers; an on-chain floor above
+the auction maximum also prevents an offer.
 `rateBasisSeconds` is read from the exact JSON number and must
 be a nonnegative int64 integer; omitted, null and zero values use the unscaled rate comparison.
 

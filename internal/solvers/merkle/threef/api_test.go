@@ -356,7 +356,7 @@ func TestAuctionRateBasisUsesExactJSONBeforeFloatRounding(t *testing.T) {
 		yield               int64
 		wantFits, wantError bool
 	}{
-		{"16777217", 16777217, true, false}, {"9223372036854775807", 1, true, false},
+		{"16777217", 16777217, true, false}, {"9223372036854775807", 9223372036854775807, true, false},
 		{"3.1536e7", 31536000, true, false},
 		{"0", 31536000, true, false}, {"null", 31536000, true, false},
 	} {
