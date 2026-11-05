@@ -571,7 +571,7 @@ func (e *executionService) buildFillCalldata(
 		backendErrorLogger(observability.Log(ctx), err).Error(err, "resolve discounts (will retry)")
 		return nil, time.Time{}, false
 	}
-	calldata, err = encodeFill(order, exec.signature, swaps, discountSwaps, emptyExecutorData)
+	calldata, err = encodeFill(order, exec.signature, swaps, discountSwaps)
 	if err != nil {
 		e.fail(ctx, orderID, "encode fill: "+err.Error())
 		return nil, time.Time{}, false

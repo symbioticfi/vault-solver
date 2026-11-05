@@ -7,16 +7,15 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
+	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/adapter"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 )
 
-// executorBinding (abigen --v2) packs fill() via TryPackFill1; executorABI is parsed only for tuple
-// reflection (decoding the backend's order tuple), which the Pack helpers don't expose. fill() is
-// overloaded; PackFill1 is the mixed order+protocolSig+swaps+discountSwaps overload we build — the
-// golden selector test pins it.
 var (
-	executorBinding = executor.NewExecutor()
-	executorABI     = mustExecutorABI()
+	executorBinding   = executor.NewExecutor()
+	executorABI       = mustExecutorABI()
+	adapterBinding    = adapter.NewLiquidLaneAdapter()
+	executorCallsArgs = executorCallArguments()
 )
 
 func mustExecutorABI() abi.ABI {
@@ -31,12 +30,8 @@ func mustExecutorABI() abi.ABI {
 // to fill()'s first argument type.
 var orderTupleArgs = abi.Arguments{{Type: fillOrderType()}}
 
-// emptyExecutorData is abi.encode(ExecutorCall[]) for an empty call list — the executorData a direct
-// fill passes (the Executor decodes it to a (target,value,data)[] and runs no extra calls).
-var emptyExecutorData = encodeEmptyExecutorData()
-
 func fillOrderType() abi.Type {
-	m, ok := executorABI.Methods["fill1"]
+	m, ok := executorABI.Methods["fill"]
 	if !ok || len(m.Inputs) == 0 {
 		panic("rfq: executor ABI missing fill(order, ...)")
 	}
@@ -50,7 +45,7 @@ type executorCall struct {
 	Data   []byte
 }
 
-func encodeEmptyExecutorData() []byte {
+func executorCallArguments() abi.Arguments {
 	t, err := abi.NewType("tuple[]", "", []abi.ArgumentMarshaling{
 		{Name: "target", Type: "address"},
 		{Name: "value", Type: "uint256"},
@@ -59,11 +54,7 @@ func encodeEmptyExecutorData() []byte {
 	if err != nil {
 		panic("rfq: build executorData type: " + err.Error())
 	}
-	data, err := abi.Arguments{{Type: t}}.Pack([]executorCall{})
-	if err != nil {
-		panic("rfq: pack empty executorData: " + err.Error())
-	}
-	return data
+	return abi.Arguments{{Type: t}}
 }
 
 // decodeOrder decodes a backend-provided ABI-encoded Reactor order into the typed struct fill expects.
@@ -82,16 +73,38 @@ func decodeOrder(encoded []byte) (executor.IReactorOrder, error) {
 	return *out, nil
 }
 
-// encodeFill builds Executor.fill(order, protocolSig, swapInputs, discountSwapInputs, executorData)
-// calldata for the mixed overload.
+// Reactor funds the input arrays; Executor runs the corresponding calls in this order.
 func encodeFill(
 	order executor.IReactorOrder,
 	protocolSig []byte,
 	swaps []executor.IReactorSwapInput,
 	discountSwaps []executor.IReactorDiscountSwapInput,
-	executorData []byte,
 ) ([]byte, error) {
-	data, err := executorBinding.TryPackFill1(order, protocolSig, swaps, discountSwaps, executorData)
+	calls := make([]executorCall, 0, len(swaps)+len(discountSwaps))
+	for _, input := range swaps {
+		data, err := adapterBinding.TryPackSwap(adapter.ILiquidLaneAdapterSwap(input.Swap))
+		if err != nil {
+			return nil, errors.Errorf("encode adapter swap: %w", err)
+		}
+		calls = append(calls, executorCall{Target: input.Adapter, Value: new(big.Int), Data: data})
+	}
+	for _, input := range discountSwaps {
+		discount := adapter.ILiquidLaneAdapterDiscountSwap{
+			Discount:         adapter.ILiquidLaneAdapterDiscount(input.DiscountSwap.Discount),
+			SignerSignature:  input.DiscountSwap.SignerSignature,
+			ProtocolDeadline: input.DiscountSwap.ProtocolDeadline,
+		}
+		data, err := adapterBinding.TryPackSwap0(discount, input.ProtocolSignature, input.Recipient, input.AmountIn)
+		if err != nil {
+			return nil, errors.Errorf("encode discounted adapter swap: %w", err)
+		}
+		calls = append(calls, executorCall{Target: input.Adapter, Value: new(big.Int), Data: data})
+	}
+	executorData, err := executorCallsArgs.Pack(calls)
+	if err != nil {
+		return nil, errors.Errorf("encode executor calls: %w", err)
+	}
+	data, err := executorBinding.TryPackFill(order, protocolSig, swaps, discountSwaps, executorData)
 	if err != nil {
 		return nil, errors.Errorf("encode fill: %w", err)
 	}

@@ -91,6 +91,8 @@ that fills the orders it is awarded, settling on-chain through the adapter.
 It runs either in `external` mode (the open-source filler; quoting and filling scoped to the operator's
 own adapters) or `internal` mode (Symbiotic-internal; adds the private discounts flow). The caller EOA
 must be an authorized caller of the RFQ `Executor` (its `setCallers` allowlist, granted by the owner).
+Use the generic-call Executor from RFQ PR #25 together with this filler: it encodes all
+adapter swaps explicitly. An older Executor would execute those swaps twice.
 External mode also fails startup unless that executor has direct `owner`/`marketMaker`/`isFiller`
 authorization on every configured adapter; the fatal startup log includes the executor, configured adapters,
 and underlying authorization error.

@@ -20,9 +20,10 @@ push path; orders are found exclusively by polling the backend.
 - **Poller** — every `pollInterval`, `GET /orders?filler=<executor>&orderStatus=open` from the
   backend, then drives each order through `queued → submitting → submitted → {filled|expired|failed}`.
 - **Execution** — builds `Executor.fill(Order, protocolSig, Swap[], DiscountSwapInput[], bytes)` and
-  sends it; the `Executor` calls the `Reactor`, which calls back into `Executor.execute()` to run the
-  adapter `swap`s and satisfy the order's outputs. Each on-chain `Swap`'s `vault` slot is set to the
-  leg's **adapter** address.
+  sends it; `Reactor` validates and funds the input arrays, then calls `Executor.execute()`.
+  The solver encodes direct swaps followed by discounted swaps in the `Call[]` payload;
+  Executor runs only those calls, without adapter-version dispatch, then permits Reactor to collect outputs.
+  Each input carries its funding **adapter** address. The Executor has one full `fill` entrypoint.
 - **State** — in-memory only: `orders` (state machine) and `attempts`.
 
 The `/quote` request inventory (`adapters[]`) still matches the TS `solverQuoteRequestSchema`, but the

@@ -7,7 +7,7 @@ import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parent
 SOURCES = {
-    'rfq': 'de6dbd617bf3c1e8b4120419cbe5800efae7d410',
+    'rfq': '425944096ad0ee06955e4de93c2380d0e8eb8764',
     'adapters': 'beaf24c50835fbbe181e3135a64285de2aca1315',
 }
 p = argparse.ArgumentParser()
