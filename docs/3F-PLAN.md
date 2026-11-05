@@ -188,6 +188,7 @@ solvers:
       adapterFactory: "0x…factory"             # used when adapters is omitted; max 2,000 entities
       # adapters:                               # optional exclusive override; factory is not queried
       #   - "0x…adapterA"
+      redeem: true                            # optional (default false: no redeem loop)
       redeemBatchSize: 10                     # optional (default 10)
       httpTimeout: 30s                        # optional
       intervals: { discover: 5m, redeemPoll: 5m, reconcile: 15m }
