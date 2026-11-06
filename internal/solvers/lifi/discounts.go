@@ -28,7 +28,7 @@ func (s *Solver) quoteDiscountInventories(
 	}
 	listed, err := s.discounts.ListDiscounts(ctx)
 	if err != nil {
-		observability.Log(ctx).Error(err, "private discounts: list for quote")
+		observability.ErrorUnlessCanceled(ctx, err, "private discounts: list for quote")
 		return nil, true, err
 	}
 	inventory, issues := discounts.MatchInventories(listed, bases, discounts.MatchOptions{Now: now})
@@ -50,7 +50,7 @@ func (s *Solver) fillDiscountQuotes(
 	}
 	listed, err := s.discounts.ListDiscounts(ctx)
 	if err != nil {
-		observability.Log(ctx).Error(err, "private discounts: list for fill")
+		observability.ErrorUnlessCanceled(ctx, err, "private discounts: list for fill")
 		return nil, nil
 	}
 	// Rank advertised discounts by their exact payout rate at the order amount before resolving.

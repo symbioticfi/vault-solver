@@ -179,10 +179,15 @@ func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput,
 		if bad != nil {
 			return nil, huma.Error400BadRequest(bad.Error())
 		}
-		if decision.pairInScope {
+		switch {
+		case observability.Canceled(ctx, err):
+			// The backend dropped the request or the server is stopping; the quote metrics count it.
+			observability.Log(ctx).V(1).Info("quote abandoned: request canceled",
+				"error", err.Error(), "quoteId", in.Body.QuoteID, "requestId", requestID(ctx))
+		case decision.pairInScope:
 			backendErrorLogger(observability.Log(ctx), err).
 				Error(err, "quote failed", "quoteId", in.Body.QuoteID, "requestId", requestID(ctx))
-		} else {
+		default:
 			observability.Log(ctx).Error(errors.New("quote dependency failed before directed pair validation"),
 				"quote failed", "quoteId", in.Body.QuoteID, "requestId", requestID(ctx), "pairInScope", false)
 		}

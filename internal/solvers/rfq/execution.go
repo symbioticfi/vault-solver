@@ -132,7 +132,7 @@ func (e *executionService) syncOnce(ctx context.Context) {
 	defer func() { end(err) }()
 
 	err = e.pollOpenOrders(ctx)
-	if err != nil {
+	if err != nil && !observability.Canceled(ctx, err) {
 		backendErrorLogger(observability.Log(ctx), err).Error(err, "poll open orders")
 	}
 	for _, o := range e.store.activeOrders() {
