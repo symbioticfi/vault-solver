@@ -106,9 +106,17 @@ The API client rejects larger nonces locally. A saved nonce wider than 64 bits i
 discarded only when there is no matching API offer and no confirmed offer ID,
 allowing the next eligible auction to proceed. Other uncertain offers retain their nonce and terms.
 Capacity is the minimum of that cash, the policy's remaining pair budget, the
-request's uint128 amount range and the auction's advertised request size, with cash reserved across all live offers of the same funding token and budget reserved only across offers for the exact funding/underlying pair. The bot keeps at most one
-self-originated live offer at a time, preserving its full configuration binding
-until terminal across all configured markets. Another market cannot cancel, overwrite or rekey that live intent; an ambiguous POST retains that intent across every market. If its API row is missing, the next pass retries the identical request with the same maker, auction, nonce and terms; it never replaces the unresolved commitment with a new nonce. Recovery rechecks native eligibility, the current budget, available cash and rate limits before replaying. The workflow may cancel only its own intent or an eligible request within its current market. Multiple UI-originated offers and aggregate mints remain supported. Supply cash to the account
+request's uint128 amount range and the auction's advertised request size.
+Like the standalone 3F solver, it can offer on multiple auctions: each live offer
+reserves cash for its funding token and budget for its funding/underlying pair.
+Only the remainder is available for the next offer. Each auction has its own
+durable intent; creating another offer cannot overwrite it. Reservations include
+UI offers and unresolved submissions, without counting an API row and its journal
+twice. Missing API rows retain their reservations. Unknown POST outcomes retry the
+same maker, auction, nonce and terms after rechecking native eligibility, remaining
+cash, pair budget and rates. Another market cannot cancel or rekey that intent.
+The workflow may cancel its own unaccepted offers or eligible requests within its
+current market. Supply cash to the account
 before enabling automatic bidding. The actual mint recipe can still use its
 committed funding sources; API-key offers created in the UI are reconciled by the
 same mint provider. This bot does not promise a quote against liquidity that may
@@ -143,7 +151,7 @@ offer inventory and one auction response. Eligibility considers live commitments
 and open/solvable candidates with the relevant funding token, not historical
 auctions. Positive and negative results are memoized per request/market at the
 current pin. A confirmed cancellation or creation ends the pass and discards its
-inventory. Historical auctions with live commitments still participate in maintenance. Unknown POST outcomes retry only the original immutable request. A definite rejection of the first POST clears that unsent intent. Rejection of a retry does not clear an earlier uncertain submission, and local expiration alone cannot prove an accepted mint authorization is gone. A confirmed offer missing from the API inventory or an unresolved intent from a different recipe remains blocked for investigation. Never delete state to clear a
+inventory. Historical auctions with live commitments still participate in maintenance. Unknown POST outcomes retry only the original immutable request. A definite rejection of the first POST clears that unsent intent. Rejection of a retry does not clear an earlier uncertain submission, and local expiration alone cannot prove an accepted mint authorization is gone. A confirmed offer missing from API inventory is not reposted; its principal stays reserved. Other auctions can use the remaining capacity. Never delete state to clear a
 pending signed transaction. Simulation mode does not write the journal, submit
 or cancel offers.
 
@@ -192,7 +200,7 @@ optional 3F dispatch in `merkle` and no dependency on `bridgefacilitator` strate
 Tests retain API wire/identity/bounds checks, ambiguous-POST restart recovery,
 reservations, cancellation, aggregate authorizations, lease expiry, alternative curator
 guards and canonical receipt evidence. Dedicated startup tests cover mainnet and Sepolia,
-shared caller discovery, configured policy/account binding, grouped recipes, cross-account rejection, reorgs, invalid accounts and failure before state creation. Cross-market tests retain live/ambiguous account intents and prevent another pair budget from cancelling a foreign UI offer.
+shared caller discovery, configured policy/account binding, grouped recipes, cross-account rejection, reorgs, invalid accounts and failure before state creation. Multi-auction tests cover shared cash, separate pair budgets, partial remaining capacity, durable recovery and cancellation isolation.
 Regression tests also cover committed funding gates, exact raw JSON rate periods,
 offers without a permission service, on-chain pair discovery, historical filtering, negative membership memoization,
 full auction scans before bidding, maintenance before optional RPC failure and zero-budget
