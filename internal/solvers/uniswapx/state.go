@@ -38,6 +38,7 @@ type trackedExclusive struct {
 	deadline         time.Time
 	recoveredAtStart bool
 	liveObserved     bool
+	openLogged       bool
 }
 
 type exclusiveDecision struct {
@@ -209,6 +210,7 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 		return errors.Errorf("lookup expired obligations: %w", err)
 	}
 	decisions := make([]exclusiveDecision, 0, len(expired))
+	var stillOpen []exclusiveObligation
 	for _, obligation := range expired {
 		terminal, ok := terminals[obligation.hash]
 		if !ok {
@@ -237,10 +239,12 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 			// unfilled, even if our executor later wins the public Dutch auction.
 			decision.settledInTime = !filledAt.After(obligation.deadline)
 		case orderStatusOpen:
-			return errors.Errorf(
-				"lookup expired obligation %s: order is still open",
-				obligation.hash.Hex(),
-			)
+			// Open after exclusivity is normal during the public Dutch decay. Within the grace the
+			// API may still lag a timely fill; past it the order was not filled in time.
+			if !now.After(obligation.deadline.Add(s.cfg.OrderServer.OpenGrace)) {
+				stillOpen = append(stillOpen, obligation)
+				continue
+			}
 		case orderStatusExpired, orderStatusError, orderStatusCancelled, orderStatusInsufficientFunds:
 			// Only a successful on-chain fill before exclusivity ends discharges the obligation.
 			// Every other known lifecycle state means the awarded fill was not delivered in time.
@@ -264,8 +268,18 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 
 	var missed, historicalMissed []exclusiveDecision
 	var settled []exclusiveDecision
+	var logOpen []exclusiveObligation
 	s.stateMu.Lock()
 	s.cleanupExclusiveLocked(now)
+	for _, obligation := range stillOpen {
+		tracked, ok := s.exclusiveUntil[obligation.hash]
+		if !ok || !tracked.deadline.Equal(obligation.deadline) || tracked.openLogged {
+			continue
+		}
+		tracked.openLogged = true
+		s.exclusiveUntil[obligation.hash] = tracked
+		logOpen = append(logOpen, obligation)
+	}
 	for _, decision := range decisions {
 		tracked, ok := s.exclusiveUntil[decision.hash]
 		if !ok || !tracked.deadline.Equal(decision.deadline) {
@@ -285,6 +299,14 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 	}
 	s.stateMu.Unlock()
 
+	for _, obligation := range logOpen {
+		observability.Log(ctx).Info(
+			"exclusive order still open after exclusivity ended; keeping obligation pending",
+			"orderHash", obligation.hash.Hex(),
+			"exclusiveUntil", obligation.deadline.Unix(),
+			"missedAfter", obligation.deadline.Add(s.cfg.OrderServer.OpenGrace).Unix(),
+		)
+	}
 	for _, decision := range settled {
 		if !decision.recoveredAtStart {
 			s.observeExclusiveOutcome(exclusiveOutcomeSettledInTime)

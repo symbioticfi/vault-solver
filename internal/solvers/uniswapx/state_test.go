@@ -3,16 +3,19 @@ package uniswapx
 import (
 	"context"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 )
 
@@ -303,35 +306,104 @@ func TestUnresolvedExclusiveStateKeepsObligationPending(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	deadline := now.Add(time.Second)
 	hash := common.HexToHash("0x1234")
-	for _, tc := range []struct {
-		name      string
-		terminals map[common.Hash]orderTerminal
-	}{
-		{name: "missing", terminals: map[common.Hash]orderTerminal{}},
-		{name: "still open", terminals: map[common.Hash]orderTerminal{
+	solver := &Solver{
+		cfg:    &Config{Breaker: BreakerConfig{Window: time.Minute}},
+		log:    logr.Discard(),
+		orders: &stateTestOrderPoller{terminals: map[common.Hash]orderTerminal{}},
+	}
+	solver.trackExclusive(&resolvedOrder{
+		Hash: hash, Source: orderSourceExclusiveV2, ExclusiveUntil: uint64(deadline.Unix()),
+	}, now)
+
+	if err := solver.sweepExclusive(t.Context(), deadline.Add(time.Second)); err == nil {
+		t.Fatal("missing terminal result was accepted")
+	}
+	if solver.exclusiveBlockUntil.Load() != 0 {
+		t.Fatal("missing terminal result tripped the exclusive breaker")
+	}
+	if _, pending := solver.exclusiveUntil[hash]; !pending {
+		t.Fatal("unresolved obligation was removed instead of retried")
+	}
+}
+
+func TestOpenExclusiveOrderWithinGraceStaysPending(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	deadline := now.Add(time.Second)
+	open := common.HexToHash("0x1234")
+	expired := common.HexToHash("0x5678")
+	var logs []string
+	solver := &Solver{
+		cfg: &Config{
+			Breaker:     BreakerConfig{Window: time.Minute},
+			OrderServer: OrderServerConfig{OpenGrace: 30 * time.Second},
+		},
+		log: logr.Discard(),
+		orders: &stateTestOrderPoller{terminals: map[common.Hash]orderTerminal{
+			open:    {Status: orderStatusOpen},
+			expired: {Status: orderStatusExpired},
+		}},
+	}
+	for _, hash := range []common.Hash{open, expired} {
+		solver.trackExclusive(&resolvedOrder{
+			Hash: hash, Source: orderSourceExclusiveV2, ExclusiveUntil: uint64(deadline.Unix()),
+		}, now)
+	}
+	ctx := observability.WithLogger(
+		t.Context(),
+		funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
+	)
+
+	for _, at := range []time.Time{deadline.Add(3 * time.Second), deadline.Add(6 * time.Second)} {
+		if err := solver.sweepExclusive(ctx, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, pending := solver.exclusiveUntil[open]; !pending {
+		t.Fatal("open order inside grace was resolved")
+	}
+	if _, pending := solver.exclusiveUntil[expired]; pending {
+		t.Fatal("open order blocked the rest of the sweep")
+	}
+	if solver.exclusiveBlockUntil.Load() == 0 {
+		t.Fatal("expired obligation in the same sweep did not trip the breaker")
+	}
+	stillOpen := 0
+	for _, entry := range logs {
+		if strings.Contains(entry, "still open after exclusivity ended") {
+			stillOpen++
+		}
+	}
+	if stillOpen != 1 {
+		t.Fatalf("still-open notice logged %d times, want 1: %v", stillOpen, logs)
+	}
+}
+
+func TestOpenExclusiveOrderPastGraceCountsAsMissed(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	deadline := now.Add(time.Second)
+	hash := common.HexToHash("0x1234")
+	solver := &Solver{
+		cfg: &Config{
+			Breaker:     BreakerConfig{Window: time.Minute},
+			OrderServer: OrderServerConfig{OpenGrace: 30 * time.Second},
+		},
+		log: logr.Discard(),
+		orders: &stateTestOrderPoller{terminals: map[common.Hash]orderTerminal{
 			hash: {Status: orderStatusOpen},
 		}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			solver := &Solver{
-				cfg:    &Config{Breaker: BreakerConfig{Window: time.Minute}},
-				log:    logr.Discard(),
-				orders: &stateTestOrderPoller{terminals: tc.terminals},
-			}
-			solver.trackExclusive(&resolvedOrder{
-				Hash: hash, Source: orderSourceExclusiveV2, ExclusiveUntil: uint64(deadline.Unix()),
-			}, now)
+	}
+	solver.trackExclusive(&resolvedOrder{
+		Hash: hash, Source: orderSourceExclusiveV2, ExclusiveUntil: uint64(deadline.Unix()),
+	}, now)
 
-			if err := solver.sweepExclusive(t.Context(), deadline.Add(time.Second)); err == nil {
-				t.Fatal("unresolved terminal result was accepted")
-			}
-			if solver.exclusiveBlockUntil.Load() != 0 {
-				t.Fatal("unresolved terminal result tripped the exclusive breaker")
-			}
-			if _, pending := solver.exclusiveUntil[hash]; !pending {
-				t.Fatal("unresolved obligation was removed instead of retried")
-			}
-		})
+	if err := solver.sweepExclusive(t.Context(), deadline.Add(31*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, pending := solver.exclusiveUntil[hash]; pending {
+		t.Fatal("open order past grace stayed pending")
+	}
+	if solver.exclusiveBlockUntil.Load() == 0 {
+		t.Fatal("open order past grace did not trip the exclusive breaker")
 	}
 }
 

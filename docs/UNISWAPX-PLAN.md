@@ -606,8 +606,11 @@ the deadline discharges the obligation. This includes another filler's soft over
 filler, including our executor, or any final non-filled state for an obligation observed live or recovered
 after a runtime poll gap is a local fade. An already-terminal miss discovered only by initial startup history
 reconciliation is logged and terminalized without opening a fresh local breaker. An order that is still
-`open`, missing/unknown API data, or an unreadable receipt makes exclusive state unknown and blocks quotes
-without opening the breaker; the next successful reconciliation retries it.
+`open` is normal while the public Dutch decay runs: within `orderServer.openGrace` (default `30s`) past
+the deadline it is attributed to API lag, kept pending, and logged once at info, without failing the sweep for
+other obligations; past the grace it counts as missed. Missing/unknown API data or an unreadable receipt makes
+exclusive state unknown and blocks quotes without opening the breaker; the next successful reconciliation
+retries it.
 
 **Hard-quote phase** is run and cosigned by Uniswap; **we do not host it**. The same webhook receives both
 indicative and hard RFQs, and the quoter cannot distinguish them. A fresh `quoteId` is generated for each
@@ -801,7 +804,8 @@ is economic, not just gas:
   opens an independent local fade breaker: Uniswap still counts the original quoter as faded once exclusivity
   expires unfilled. An already-terminal miss found only during initial startup recovery is retained and
   logged without starting a new local penalty window. Consequently, an unrelated or late successful fill
-  cannot clear a live/runtime-recovered timed breaker. An `open` order, unknown status, or unknown receipt
+  cannot clear a live/runtime-recovered timed breaker. An `open` order stays pending through
+  `orderServer.openGrace` and then counts as missed. An unknown status or unknown receipt
   time invalidates quotes and retries reconciliation without guessing fade. The trusted
   `blockUntilTimestamp` remains the authoritative external penalty window.
 
