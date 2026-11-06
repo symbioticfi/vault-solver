@@ -70,6 +70,7 @@ solvers:
         apiKeyEnv: UNISWAPX_ORDER_API_KEY   # env var containing the Uniswap API key
         pollInterval: 1s                    # order polling cadence; minimum 167ms
         httpTimeout: 5s                     # timeout for each order API request
+        openGrace: 30s                      # API lag allowed for `open` past decayStartTime before a miss
         beta: true                          # send the x-beta-rfq header
         sources:
           exclusiveV2: true # awarded orders plus terminal reconciliation; required while quoting
