@@ -32,6 +32,11 @@ GQLFETCH = "github.com/suessflorian/gqlfetch/gqlfetch@v0.7.0"
 DISCOVER_GLOBS = ("openapi/*", "api/graphql/*/schema.graphql")
 MAX_DIFF_LINES = 200
 TIMEOUT = 90
+# Fetch modes whose live body is an HTML page; the named hack/ script turns it into the vendored form.
+EXTRACTORS = {
+    "scalar-html": "scalar-openapi-extract.py",
+    "docusaurus-html": "docusaurus-article-extract.py",
+}
 
 
 def normalize(text: str, fetch: str) -> str:
@@ -55,9 +60,10 @@ def fetch_live(source: dict) -> str:
         ["curl", "-fsSL", "--max-time", str(TIMEOUT), url],
         capture_output=True, text=True, timeout=TIMEOUT + 30, check=True,
     ).stdout
-    if fetch == "scalar-html":
+    extractor = EXTRACTORS.get(fetch)
+    if extractor:
         body = subprocess.run(
-            [sys.executable, str(ROOT / "hack" / "scalar-openapi-extract.py")],
+            [sys.executable, str(ROOT / "hack" / extractor)],
             input=body, capture_output=True, text=True, timeout=TIMEOUT, check=True,
         ).stdout
     return body

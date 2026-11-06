@@ -44,8 +44,9 @@ LIFI_OPENAPI_URL ?= https://order-dev.li.fi/docs
 UNISWAPX_OPENAPI_URL ?= https://raw.githubusercontent.com/Uniswap/uniswapx-service/main/swagger.json
 MORPHO_GRAPHQL_URL ?= https://api.morpho.org/graphql
 # RedStone's public Atom OEV integration guide — the only public contract-of-record for the OEV
-# WebSocket (the zod schema they shared directly is not published anywhere).
-REDSTONE_GUIDE_URL       ?= https://raw.githubusercontent.com/RedStone-Finance-UI/redstone-docs/main/docs/stage2-capital-efficiency/atom/integration-guide.md
+# WebSocket (the zod schema they shared directly is not published anywhere). The raw-markdown repo is
+# gone, so this is the rendered Docusaurus page; hack/docusaurus-article-extract.py keeps its text.
+REDSTONE_GUIDE_URL       ?= https://docs.redstone.finance/docs/stage2-capital-efficiency/atom/integration-guide/
 
 # Contracts whose ABIs are vendored via refresh-abi. ABIS come from the rfq Foundry build; the
 # CORE_MIRROR_ABIS (the 3F ThreeFAdapter, LiquidLane adapter, adapter factory, universal delegator,
@@ -173,7 +174,7 @@ refresh-redstone-guide: ## Re-pull RedStone's public Atom OEV integration guide 
 	@mkdir -p openapi
 	@set -euo pipefail; tmp="$$(mktemp openapi/.refresh.XXXXXX)"; \
 		trap 'rm -f "$$tmp"' EXIT; \
-		curl -fsSL --max-time 90 "$(REDSTONE_GUIDE_URL)" > "$$tmp"; \
+		curl -fsSL --max-time 90 "$(REDSTONE_GUIDE_URL)" | python3 hack/docusaurus-article-extract.py > "$$tmp"; \
 		test -s "$$tmp"; \
 		mv "$$tmp" openapi/redstone-oev-atom-integration-guide.md
 
@@ -286,7 +287,7 @@ build: ## Build the binary
 
 .PHONY: test
 test: ## Run tests with race detector + coverage (hermetic only; fork/live suites are tag-gated out)
-	python3 -m unittest discover -s hack -p 'test_scalar_openapi_extract.py'
+	python3 -m unittest discover -s hack -p 'test_*_extract.py'
 	go test -race -cover ./...
 
 .PHONY: test-tooling

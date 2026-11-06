@@ -168,7 +168,7 @@ live source daily in CI (`.github/workflows/schema-drift.yml`) and **fails when 
 `openapi/` or `api/graphql/*/schema.graphql` is not registered**, so a new integration cannot silently
 escape monitoring. When you vendor a schema, in the same change: add the `make refresh-<name>-openapi`
 (or `-schema`) target that pulls it, add the `make refresh-<name>-client` target that generates from it,
-and add a manifest entry naming the live `url`, the `fetch` mode (`json`, `scalar-html`, `graphql`,
+and add a manifest entry naming the live `url`, the `fetch` mode (`json`, `scalar-html`, `docusaurus-html`, `graphql`,
 `text`), and the `refresh` command to run when it drifts. Use `mode: "manual"` when there is no public
 endpoint to diff (RedStone's zod, shared privately); the checker skips those but keeps them listed so the
 gap is recorded rather than rediscovered. Spec URLs live in the `Makefile` as `?=` variables so they can be overridden per
