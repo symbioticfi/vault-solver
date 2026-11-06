@@ -102,8 +102,9 @@ restrictions are applied during execution, not advertised as policy capacity.
 Automatic offers conservatively use **idle cash already held by the account**.
 New offers use cryptographically random nonces from 1 through 2^63-1, encoded as decimal
 strings. Although the on-chain field is uint256, 3F's offer storage is limited to 64 bits.
-The API client rejects larger nonces locally. An existing oversized journaled intent
-is preserved for reconciliation; recovery never changes an offer's nonce or terms.
+The API client rejects larger nonces locally. A saved nonce wider than 64 bits is
+discarded only when there is no matching API offer and no confirmed offer ID,
+allowing the next eligible auction to proceed. Other uncertain offers retain their nonce and terms.
 Capacity is the minimum of that cash, the policy's remaining pair budget, the
 request's uint128 amount range and the auction's advertised request size, with cash reserved across all live offers of the same funding token and budget reserved only across offers for the exact funding/underlying pair. The bot keeps at most one
 self-originated live offer at a time, preserving its full configuration binding
@@ -163,7 +164,7 @@ its original bytes and ownership even when the external lease later expires.
 Provider list responses are capped at 2 MiB and inventories at 4096 rows. IDs must
 be exact positive integers below 2^24 because the generated upstream client uses
 float32 IDs; monetary quantities remain integer strings and `big.Int`. Redirects
-are refused. API errors include only a bounded, single-line JSON message with the configured API key redacted; other response fields are omitted. The canonical
+are refused. API errors expose the HTTP status, not response bodies or credentials. The canonical
 OpenAPI and solver-used contract ABI entries are vendored and regenerated with the Makefile.
 `make refresh-merkle-abi` projects those entries directly from the contracts build using
 `hack/merkle-abi.jq`, preserving their complete tuple definitions.

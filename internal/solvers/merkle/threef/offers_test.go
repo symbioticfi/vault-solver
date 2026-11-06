@@ -232,6 +232,78 @@ func TestTickAmbiguousPostRetriesExactIntentAfterRestart(t *testing.T) {
 	}
 }
 
+func TestTickRecoversOnlyUnconfirmedOversizedNonce(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		confirmed bool
+		listed    bool
+	}{
+		{"unstored offer", false, false},
+		{"confirmed offer", true, false},
+		{"listed offer", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bot, client, market := testBot(t)
+			request := common.HexToAddress(client.auctions[0].RequestId)
+			oldNonce := new(big.Int).Lsh(big.NewInt(1), 200).String()
+			offer := *threef.NewCreateOfferDto(1, strings.ToLower(client.Broker().Hex()), "500000", "95", oldNonce, "1900000300", false)
+			pending := newIntent(market, request, offer)
+			if tc.confirmed {
+				pending.OfferID = 12
+			}
+			if err := bot.Store.Save(journalKey(market), pending); err != nil {
+				t.Fatal(err)
+			}
+			if tc.listed {
+				row := testOffer(market, 1, "AWAITING_MINT", offer.Amount)
+				row.Nonce, row.ExpectedReturn, row.Expiration = offer.Nonce, offer.ExpectedReturn, offer.Expiration
+				client.offers = []threef.OfferDto{row}
+			}
+			if !tc.confirmed && !tc.listed {
+				client.auctions[0].Status = "SUCCEEDED"
+				nextRequest := common.HexToAddress("0x1234")
+				market.EligibleRequests[nextRequest] = true
+				client.auctions = append(client.auctions, testAuction(market, 2, nextRequest))
+			}
+			err := bot.Tick(t.Context(), market, client.auctions)
+			if (err != nil) != tc.confirmed {
+				t.Fatalf("unexpected recovery error: %v", err)
+			}
+			var saved intent
+			found, err := bot.Store.Load(journalKey(market), &saved)
+			if err != nil || !found {
+				t.Fatalf("missing current intent: found=%v err=%v", found, err)
+			}
+			if tc.confirmed || tc.listed {
+				if len(client.created) != 0 || saved.Offer.Nonce != oldNonce {
+					t.Fatal("confirmed or listed offer was replaced")
+				}
+			} else if len(client.created) != 1 || saved.Offer.Nonce == oldNonce || saved.Offer.AuctionId != 2 {
+				t.Fatal("unstored oversized nonce blocked a new offer")
+			}
+		})
+	}
+}
+
+func TestTickRetainsUncertain64BitNonce(t *testing.T) {
+	bot, client, market := testBot(t)
+	nonce := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 64), big.NewInt(1)).String()
+	offer := *threef.NewCreateOfferDto(1, strings.ToLower(client.Broker().Hex()), "500000", "95", nonce, "1900000300", false)
+	pending := newIntent(market, common.HexToAddress(client.auctions[0].RequestId), offer)
+	if err := bot.Store.Save(journalKey(market), pending); err != nil {
+		t.Fatal(err)
+	}
+	client.createErr = errors.New("uncertain submission")
+	if err := bot.Tick(t.Context(), market, client.auctions); err == nil {
+		t.Fatal("missing submission error")
+	}
+	var saved intent
+	found, err := bot.Store.Load(journalKey(market), &saved)
+	if err != nil || !found || saved.Offer.Nonce != nonce {
+		t.Fatalf("uncertain 64-bit nonce was replaced: found=%v err=%v", found, err)
+	}
+}
+
 func TestTickRepeatedFailureKeepsOriginalIntent(t *testing.T) {
 	bot, client, market := testBot(t)
 	client.createErr = errors.New("HTTP 500")

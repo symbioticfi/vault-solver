@@ -76,6 +76,14 @@ func (b *offerBot) reconcileIntent(ctx context.Context, m offerMarket, offers []
 	}
 	// Replaying the same tuple updates the same API offer, including after a lost response.
 	if matched == nil {
+		nonce, _ := uintAmount(previous.Offer.Nonce)
+		// 3F cannot store a nonce wider than 64 bits. No API row or receipt confirms this offer.
+		if previous.OfferID == 0 && !nonce.IsUint64() {
+			if err := b.Store.Delete(journalKey(m)); err != nil {
+				return nil, false, errors.Errorf("clear unsupported 3F offer nonce: %w", err)
+			}
+			return nil, false, nil
+		}
 		if previous.OfferID != 0 || !previous.matchesMarket(m) {
 			return nil, false, errors.New("3F offer POST outcome unresolved; waiting for maker/nonce/auction reconciliation")
 		}

@@ -55,6 +55,7 @@ the same nonce; nonce handling does not coordinate their liquidity or off-chain 
 
 The Merkle 3F solver retries uncertain offer submissions with the original nonce and terms.
 New offers use random positive 63-bit nonces to fit 3F's off-chain storage.
+Unconfirmed nonces wider than 64 bits are cleared when no matching API offer exists.
 Definite initial rejections release the intent; accepted or still-uncertain submissions remain tracked.
 
 All solvers expose a pluggable
