@@ -111,8 +111,17 @@ func assembleConnectorRoute(recipe recipes.Recipe, tree *recipes.Tree, venue, to
 		if err = action.Pinned(4, 32); err != nil {
 			return assembledConnector{}, err
 		}
-		if common.BytesToAddress(action.Leaf.Data[132:164]) != token {
-			continue
+		if value, err := action.Field(132); err == nil {
+			if value.Source != recipes.Literal || value.Value.Cmp(new(big.Int).SetBytes(token[:])) != 0 {
+				continue
+			}
+		} else {
+			if err := action.Pinned(132, 32); err != nil {
+				return assembledConnector{}, err
+			}
+			if common.BytesToAddress(action.Leaf.Data[132:164]) != token {
+				continue
+			}
 		}
 		actions[action.Key] = data
 	}
