@@ -114,10 +114,9 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 	}
 	observations := make([]observation, len(markets))
 	memberships := make([]map[common.Address]bool, len(markets))
-	var pending intent
-	var hasPending bool
+	var pending []*intent
 	if w.bot.Send {
-		hasPending, err = w.bot.Store.Load(journalKey(offerMarket{ChainID: pin.ChainID.Uint64(), Account: pin.Account}), &pending)
+		pending, err = w.bot.loadIntents(offerMarket{ChainID: pin.ChainID.Uint64(), Account: pin.Account})
 		if err != nil {
 			return errors.Errorf("load 3F offer recovery: %w", err)
 		}
@@ -153,9 +152,11 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 		observations[i] = observed
 		memberships[i] = make(map[common.Address]bool)
 		if observed.Budget.Sign() > 0 {
-			if hasPending && pending.OfferID == 0 && pending.Policy == market.Policy && pending.Asset == market.Asset && pending.UnderlyingAsset == market.UnderlyingAsset {
-				if err := check(i, pending.Request); err != nil {
-					return err
+			for _, previous := range pending {
+				if previous != nil && previous.OfferID == 0 && previous.Policy == market.Policy && previous.Asset == market.Asset && previous.UnderlyingAsset == market.UnderlyingAsset {
+					if err := check(i, previous.Request); err != nil {
+						return err
+					}
 				}
 			}
 			for _, offer := range live {

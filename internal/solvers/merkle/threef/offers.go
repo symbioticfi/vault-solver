@@ -99,36 +99,23 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 	if !b.Send {
 		return false, nil
 	}
-	previous, retried, err := b.reconcileIntent(ctx, market, offers, byID)
-	if err != nil || retried {
-		return retried, err
+	pending, err := b.reconcileIntents(market, offers)
+	if err != nil {
+		return false, err
 	}
-	// Another recipe owns this account's live intent. Its workflow alone may
-	// cancel it; an unresolved POST must remain bound to the original recipe.
-	if previous != nil && (previous.Executor != market.Executor || previous.Asset != market.Asset || previous.UnderlyingAsset != market.UnderlyingAsset) {
-		for _, offer := range live {
-			if offer.id == previous.OfferID {
-				return false, nil
-			}
-		}
+	for _, previous := range pending {
+		id, _ := dtoID(previous.Offer.AuctionId)
+		blocked[id] = true
 	}
-	reserved := new(big.Int)
-	pairReserved := new(big.Int)
-	for _, offer := range live {
-		if offer.asset == market.Asset {
-			reserved.Add(reserved, offer.amount)
-			if market.EligibleRequests[common.HexToAddress(offer.dto.RequestId)] {
-				pairReserved.Add(pairReserved, offer.amount)
-			}
-		}
-	}
+	reserved, pairReserved := reserveOffers(market, live, pending)
 	capacity := minInt(new(big.Int).Sub(market.Budget, pairReserved), new(big.Int).Sub(market.AvailableCash, reserved))
 	for _, offer := range live {
 		if offer.dto.Status != "SUBMITTED" {
 			continue
 		}
 		request := common.HexToAddress(offer.dto.RequestId)
-		owned := previous != nil && previous.OfferID == offer.id && previous.Executor == market.Executor
+		previous := findIntent(pending, offer.id)
+		owned := previous != nil && previous.Executor == market.Executor && previous.Policy == market.Policy && previous.Asset == market.Asset && previous.UnderlyingAsset == market.UnderlyingAsset
 		if !owned && !market.EligibleRequests[request] {
 			continue
 		}
@@ -159,17 +146,31 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 			return true, nil
 		}
 	}
+	for _, previous := range pending {
+		if previous.OfferID != 0 || !previous.matchesMarket(market) {
+			continue
+		}
+		auctionID, _ := dtoID(previous.Offer.AuctionId)
+		auction, exists := byID[auctionID]
+		amount, _ := uintAmount(previous.Offer.Amount)
+		yield, _ := uintAmount(previous.Offer.ExpectedReturn)
+		// The original amount is already reserved; only other offers reduce
+		// the cash and pair budget available to replay this exact request.
+		available := new(big.Int).Add(capacity, amount)
+		if !exists || !market.EligibleRequests[previous.Request] || amount.Cmp(available) > 0 || amount.Cmp(market.MaxPrincipal) > 0 {
+			return false, errors.New("3F unresolved offer cannot be retried within current policy and cash limits")
+		}
+		fits, err := fitsTerms(market, amount, yield, auction)
+		if err != nil {
+			return false, err
+		}
+		if !fits {
+			return false, errors.New("3F unresolved offer cannot be retried within current rate limits")
+		}
+		return true, b.postIntent(ctx, market, previous, pending, false)
+	}
 	if !create {
 		return false, nil
-	}
-	// Keep the single durable intent bound to every live bot-origin offer.
-	// Other account offers still contribute reservations and may mint together.
-	if previous != nil {
-		for _, offer := range live {
-			if offer.id == previous.OfferID {
-				return false, nil
-			}
-		}
 	}
 	remaining := capacity
 	if remaining.Sign() <= 0 {
@@ -235,21 +236,22 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 			return false, errors.New("3F offer clock is invalid")
 		}
 		offer := threef.CreateOfferDto{AuctionId: auction.Id, Maker: strings.ToLower(b.Client.Broker().Hex()), Amount: amount.String(), ExpectedReturn: yield.String(), Nonce: nonce.String(), Expiration: strconv.FormatInt(now.Unix()+300, 10)}
-		pending := newIntent(market, request, offer)
-		if err := b.Store.Save(journalKey(market), pending); err != nil {
+		created := newIntent(market, request, offer)
+		pending = append(pending, created)
+		if err := b.saveIntents(market, pending); err != nil {
 			return false, errors.Errorf("journal 3F offer before POST: %w", err)
 		}
-		return true, b.postIntent(ctx, market, pending, true)
+		return true, b.postIntent(ctx, market, created, pending, true)
 	}
 	return false, nil
 }
 
-func (b *offerBot) postIntent(ctx context.Context, market offerMarket, pending *intent, first bool) error {
+func (b *offerBot) postIntent(ctx context.Context, market offerMarket, pending *intent, all []*intent, first bool) error {
 	response, err := b.Client.Create(ctx, pending.Offer)
 	if err != nil {
 		// A rejected retry cannot disprove acceptance of the earlier request.
 		if first && definiteRejection(err) {
-			if deleteErr := b.Store.Delete(journalKey(market)); deleteErr != nil {
+			if deleteErr := b.saveIntents(market, withoutIntent(all, pending)); deleteErr != nil {
 				return errors.Errorf("clear rejected 3F offer: %w", deleteErr)
 			}
 			return errors.Errorf("3F offer rejected: %w", err)
@@ -263,11 +265,40 @@ func (b *offerBot) postIntent(ctx context.Context, market offerMarket, pending *
 	if err != nil {
 		return err
 	}
-	if err := b.Store.Save(journalKey(market), pending); err != nil {
+	if err := b.saveIntents(market, all); err != nil {
 		return errors.Errorf("journal 3F POST receipt: %w", err)
 	}
 	observability.Log(ctx).Info("3F PUSH offer submitted", "account", market.Account.Hex(), "auctionId", pending.Offer.AuctionId, "offerId", pending.OfferID)
 	return nil
+}
+
+// Cash is shared by funding asset; policy budget is shared by funding/underlying
+// pair. API rows and their journal entries represent one reservation, not two.
+func reserveOffers(m offerMarket, live []liveOffer, pending []*intent) (cash, pair *big.Int) {
+	cash, pair = new(big.Int), new(big.Int)
+	listed := make(map[uint64]bool, len(live))
+	for _, offer := range live {
+		listed[offer.id] = true
+		if offer.asset == m.Asset {
+			cash.Add(cash, offer.amount)
+			previous := findIntent(pending, offer.id)
+			ownedPair := previous != nil && previous.Policy == m.Policy && previous.UnderlyingAsset == m.UnderlyingAsset
+			if ownedPair || m.EligibleRequests[common.HexToAddress(offer.dto.RequestId)] {
+				pair.Add(pair, offer.amount)
+			}
+		}
+	}
+	for _, previous := range pending {
+		if listed[previous.OfferID] || previous.Asset != m.Asset {
+			continue
+		}
+		amount, _ := uintAmount(previous.Offer.Amount)
+		cash.Add(cash, amount)
+		if previous.Policy == m.Policy && previous.UnderlyingAsset == m.UnderlyingAsset {
+			pair.Add(pair, amount)
+		}
+	}
+	return cash, pair
 }
 
 func validateMarket(m offerMarket) error {

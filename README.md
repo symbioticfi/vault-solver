@@ -1098,6 +1098,10 @@ the auction maximum also prevents an offer.
 `rateBasisSeconds` is read from the exact JSON number and must
 be a nonnegative int64 integer; omitted, null and zero values use the unscaled rate comparison.
 
+The Merkle 3F solver can offer on multiple auctions. Outstanding offers reserve cash by funding token
+and policy budget by funding/underlying pair; subsequent offers use only the remaining capacity.
+Each auction retains its own durable intent, including across restarts and uncertain POST responses.
+
 Live commitments are maintained first. Each cycle then checks every relevant unanswered open/solvable
 auction before bidding, reusing policy eligibility results within the pinned snapshot. There is no
 per-cycle eligibility check cap. At zero pair budget,
