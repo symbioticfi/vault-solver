@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/state"
 	"github.com/symbioticfi/vault-solver/internal/merklesender"
 	"github.com/symbioticfi/vault-solver/internal/observability"
@@ -41,9 +42,7 @@ func (s *Solver) Run(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := s.keeper.Tick(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			observability.Log(ctx).Error(err, "3f mint iteration failed")
-		}
+		logMintIteration(ctx, s.keeper.Tick(ctx))
 
 		if s.keeper.Sender == nil || s.keeper.Sender.PendingID() == "" {
 			run, cancel := context.WithTimeout(ctx, operationTimeout)
@@ -60,6 +59,37 @@ func (s *Solver) Run(ctx context.Context) error {
 		}
 	}
 }
+
+func logMintIteration(ctx context.Context, err error) {
+	if err == nil {
+		return
+	}
+	if mintIterationWaiting(err) {
+		if errors.Is(err, provider.ErrNotReady) {
+			observability.Log(ctx).V(1).Info("3f mint iteration waiting", "reason", err)
+		}
+		return
+	}
+	observability.Log(ctx).Error(err, "3f mint iteration failed")
+}
+
+func mintIterationWaiting(err error) bool {
+	// A keeper batch can join a pending transaction with an independent failure.
+	// Every cause must be expected before lowering the whole error's severity.
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, cause := range joined.Unwrap() {
+			if !mintIterationWaiting(cause) {
+				return false
+			}
+		}
+		return true
+	}
+	if cause := errors.Unwrap(err); cause != nil {
+		return mintIterationWaiting(cause)
+	}
+	return errors.Is(err, provider.ErrNotReady) || errors.Is(err, context.Canceled)
+}
+
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
