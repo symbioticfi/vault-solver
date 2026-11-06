@@ -169,7 +169,11 @@ func (c *apiClient) Auctions(ctx context.Context) ([]threef.AuctionDto, error) {
 
 // Create sends exactly one request. Its caller must journal the immutable DTO before invoking it.
 func (c *apiClient) Create(ctx context.Context, dto threef.CreateOfferDto) (*threef.CreateOfferResponseDto, error) {
-	if validateID(dto.AuctionId) != nil || !matches(dto.Maker, c.broker) || !validUint(dto.Amount, true) || !validUint(dto.ExpectedReturn, false) || !validUint(dto.Nonce, false) || !validUint(dto.Expiration, true) || dto.UseCallback || dto.ChainId != nil || dto.ExecutionMode != nil || dto.Signature != nil || dto.PushAuthorizationSignature != nil || dto.AuthorizationDeadline != nil || len(dto.AdditionalProperties) > 0 {
+	nonce, nonceErr := uintAmount(dto.Nonce)
+	if nonceErr != nil || !nonce.IsInt64() {
+		return nil, errors.New("3f offer nonce must be a nonnegative int64")
+	}
+	if validateID(dto.AuctionId) != nil || !matches(dto.Maker, c.broker) || !validUint(dto.Amount, true) || !validUint(dto.ExpectedReturn, false) || !validUint(dto.Expiration, true) || dto.UseCallback || dto.ChainId != nil || dto.ExecutionMode != nil || dto.Signature != nil || dto.PushAuthorizationSignature != nil || dto.AuthorizationDeadline != nil || len(dto.AdditionalProperties) > 0 {
 		return nil, errors.New("3f invalid unsigned PUSH offer")
 	}
 	dto.Maker = lower(c.broker)

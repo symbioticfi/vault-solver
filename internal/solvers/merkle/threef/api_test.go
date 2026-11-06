@@ -145,6 +145,38 @@ func TestCreateErrorIncludesSanitizedMessage(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsNonceOutsideStorageRange(t *testing.T) {
+	for _, tc := range []struct {
+		nonce string
+		valid bool
+	}{
+		{"0", true},
+		{"1", true},
+		{"9223372036854775807", true},
+		{"9223372036854775808", false},
+		{"18446744073709551616", false},
+		{"-1", false},
+	} {
+		t.Run(tc.nonce, func(t *testing.T) {
+			calls := 0
+			client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write([]byte(`{"id":12}`))
+			})
+			dto := *threef.NewCreateOfferDto(34, testBroker.Hex(), "100", "9", tc.nonce, "4102444800", false)
+			_, err := client.Create(t.Context(), dto)
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v, got error %v", tc.valid, err)
+			}
+			if !tc.valid && calls != 0 {
+				t.Fatal("unsupported nonce reached the API")
+			}
+		})
+	}
+}
+
 func TestOffersAndCancelWire(t *testing.T) {
 	var posted bool
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {

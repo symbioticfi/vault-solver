@@ -100,6 +100,10 @@ to support the policy's enabled funding pairs; additional recipe-specific amount
 restrictions are applied during execution, not advertised as policy capacity.
 
 Automatic offers conservatively use **idle cash already held by the account**.
+New offers use cryptographically random nonces from 1 through 2^63-1, encoded as decimal
+strings. Although the on-chain field is uint256, 3F's offer storage is limited to 64 bits.
+The API client rejects larger nonces locally. An existing oversized journaled intent
+is preserved for reconciliation; recovery never changes an offer's nonce or terms.
 Capacity is the minimum of that cash, the policy's remaining pair budget, the
 request's uint128 amount range and the auction's advertised request size, with cash reserved across all live offers of the same funding token and budget reserved only across offers for the exact funding/underlying pair. The bot keeps at most one
 self-originated live offer at a time, preserving its full configuration binding

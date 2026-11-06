@@ -87,6 +87,25 @@ func sameOffer(t *testing.T, first, second threef.CreateOfferDto) bool {
 	return string(a) == string(b)
 }
 
+func TestTickCreatesStorageCompatibleNonce(t *testing.T) {
+	bot, client, market := testBot(t)
+	if err := bot.Tick(t.Context(), market, client.auctions); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.created) != 1 {
+		t.Fatalf("created %d offers, want one", len(client.created))
+	}
+	nonce, ok := new(big.Int).SetString(client.created[0].Nonce, 10)
+	if !ok || nonce.Sign() <= 0 || !nonce.IsInt64() {
+		t.Fatalf("offer nonce must fit positive int64: %q", client.created[0].Nonce)
+	}
+	var saved intent
+	found, err := bot.Store.Load(journalKey(market), &saved)
+	if err != nil || !found || saved.Offer.Nonce != client.created[0].Nonce {
+		t.Fatalf("submitted nonce not preserved in journal: found=%v err=%v", found, err)
+	}
+}
+
 func TestTickRespectsPolicyAndAuctionMinimum(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

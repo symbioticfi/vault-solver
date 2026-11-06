@@ -54,6 +54,7 @@ the same nonce; nonce handling does not coordinate their liquidity or off-chain 
 | `uniswapx-filler` | UniswapX V2 RFQ quoting and LiquidLane filling | [plan](docs/UNISWAPX-PLAN.md) | [yaml](config/uniswapx.example.yaml) |
 
 The Merkle 3F solver retries uncertain offer submissions with the original nonce and terms.
+New offers use random positive 63-bit nonces to fit 3F's off-chain storage.
 Definite initial rejections release the intent; accepted or still-uncertain submissions remain tracked.
 
 All solvers expose a pluggable

@@ -3,6 +3,7 @@ package threef
 import (
 	"context"
 	"crypto/rand"
+	"math"
 	"math/big"
 	"strconv"
 	"strings"
@@ -220,11 +221,12 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 		if !fits {
 			continue
 		}
-		var nonce [32]byte
-		if _, randomErr := rand.Read(nonce[:]); randomErr != nil {
+		// 3F stores nonces in 64 bits; positive int64 values fit signed and unsigned storage.
+		nonce, randomErr := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
+		if randomErr != nil {
 			return false, errors.Errorf("create 3F offer nonce: %w", randomErr)
 		}
-		nonce[0] |= 1
+		nonce.Add(nonce, big.NewInt(1))
 		now := time.Now()
 		if b.Now != nil {
 			now = b.Now()
@@ -232,7 +234,7 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 		if now.Unix() <= 0 || now.Unix() > int64(^uint64(0)>>1)-300 {
 			return false, errors.New("3F offer clock is invalid")
 		}
-		offer := threef.CreateOfferDto{AuctionId: auction.Id, Maker: strings.ToLower(b.Client.Broker().Hex()), Amount: amount.String(), ExpectedReturn: yield.String(), Nonce: new(big.Int).SetBytes(nonce[:]).String(), Expiration: strconv.FormatInt(now.Unix()+300, 10)}
+		offer := threef.CreateOfferDto{AuctionId: auction.Id, Maker: strings.ToLower(b.Client.Broker().Hex()), Amount: amount.String(), ExpectedReturn: yield.String(), Nonce: nonce.String(), Expiration: strconv.FormatInt(now.Unix()+300, 10)}
 		pending := newIntent(market, request, offer)
 		if err := b.Store.Save(journalKey(market), pending); err != nil {
 			return false, errors.Errorf("journal 3F offer before POST: %w", err)
