@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"math/big"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -19,15 +20,25 @@ func TestFrontendRecipeCatalog(t *testing.T) {
 	if path == "" {
 		t.Skip("set LL_RECIPE_MATRIX_PATH to the curator-frontend catalog export")
 	}
-	data, err := os.ReadFile(path)
+	root, err := os.OpenRoot(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = root.Close() })
+	data, err := root.ReadFile(filepath.Base(path))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var rows []struct {
-		ChainID                                         int
-		Route, Rwa, Connector, Payment, Account, Redeem string
-		Set                                             json.RawMessage
-		Recipe                                          hexutil.Bytes
+		ChainID   int             `json:"chainId"`
+		Route     string          `json:"route"`
+		Rwa       string          `json:"rwa"`
+		Connector string          `json:"connector"`
+		Payment   string          `json:"payment"`
+		Account   string          `json:"account"`
+		Redeem    string          `json:"redeem"`
+		Set       json.RawMessage `json:"set"`
+		Recipe    hexutil.Bytes   `json:"recipe"`
 	}
 	if err = json.Unmarshal(data, &rows); err != nil {
 		t.Fatal(err)
