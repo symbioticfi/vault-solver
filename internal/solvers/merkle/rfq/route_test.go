@@ -1,11 +1,14 @@
 package rfq
 
 import (
+	"math/big"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
 func TestConfiguredExecutorDerivesPaymentConnector(t *testing.T) {
@@ -41,6 +44,43 @@ func TestConfiguredExecutorDerivesPaymentConnector(t *testing.T) {
 			again, err := s.Initialize(t.Context())
 			if err != nil || !slices.Equal(again, venue) {
 				t.Fatalf("initialize not stable: %s %v", again, err)
+			}
+		})
+	}
+}
+
+func TestConfiguredExecutorWithManagedPaymentApproval(t *testing.T) {
+	for _, gate := range []int64{1, 0} {
+		t.Run(big.NewInt(gate).String(), func(t *testing.T) {
+			fixture := connectorExecutionFixture(t, connectorDiscountFixture())
+			args := abi.Arguments{
+				{Type: connectorDeltaType(t, "uint256")},
+				{Type: connectorDeltaType(t, "bytes32[]")},
+				{Type: connectorDeltaType(t, "uint256[][]")},
+			}
+			amount := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(36), 224), connectorDeltaOperand(recipes.Input, 1))
+			data, err := args.Pack(big.NewInt(gate), [][32]byte{fixture.reader.approvalHash}, [][]*big.Int{{amount}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture.reader.recipe.Steps[0] = append([]byte{recipes.Manage}, data...)
+			fixture.reader.recipeHash, err = recipes.HashRecipe(fixture.reader.recipe)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := &Solver{recipeExecutors: []common.Address{fixture.reader.recipeExecutor}, workflow: fixture.workflow}
+			venues, err := s.Initialize(t.Context())
+			if gate == 0 {
+				if err == nil || !strings.Contains(err.Error(), "unconditional") {
+					t.Fatalf("conditional payment accepted: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(venues, []common.Address{vlt}) || !s.AcceptsRoute(fixture.reader.recipeExecutor, vlt, fixture.reader.recipeAccount, tOut) {
+				t.Fatal("managed approval did not identify the payment connector")
 			}
 		})
 	}

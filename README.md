@@ -115,6 +115,9 @@ framing, and the complete outer fill must simulate successfully. Existing Curato
 templates with fixed 65-byte fields require compatible permissions for other lengths.
 It consumes awarded `/orders` and signed backend terms without aggregating adapter liquidity.
 The solver derives the payment connector from its locally configured RecipeExecutor.
+Both the dedicated approval instruction and ordinary ERC-20 approval calls are supported.
+Discovery authenticates the current permission tree before resolving the latter's token,
+spender and Input1 amount binding.
 The backend advertises its capacity estimate from recipe reads, without an executor in
 its quote request. The solver applies current policy budgets and shared reservations.
 Recipes keep their original format: the SDK retrieves publication bytes at the
@@ -124,6 +127,12 @@ Filling verifies the current commitment and permissions, then simulates the comp
 settlement to check ordered funding and actual payment before admission. Missing executors or
 invalid capacity fail closed. Each recipe handles one asset and includes its issuer calls when
 redemption is required.
+
+For the complete current frontend RWA catalog, export its recipe test matrix and run
+`LL_RECIPE_MATRIX_PATH=/tmp/liquid-lane.json go test ./internal/solvers/merkle/rfq`.
+This checks payment discovery and SDK assembly for every exported asset and native-redemption
+variant, with account cash and optional synchronous funding. Live liquidity and issuer
+eligibility remain execution-time requirements.
 
 When `tokensToQuote: permissioned`, admitted inputs are never aggregated: the selected strategy must
 use one candidate route. Other scopes keep the existing multi-route behavior.

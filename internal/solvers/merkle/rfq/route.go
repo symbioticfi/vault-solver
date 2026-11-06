@@ -1,11 +1,13 @@
 package rfq
 
 import (
+	"bytes"
 	"context"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
@@ -26,7 +28,11 @@ func (s *Solver) Initialize(ctx context.Context) ([]common.Address, error) {
 			if snapshot.Caller != s.workflow.caller {
 				return nil, errors.New("connector recipe caller mismatch")
 			}
-			venue, asset, err := paymentConnector(recipe)
+			tree, err := s.workflow.permissionTree(ctx, snapshot)
+			if err != nil {
+				return nil, err
+			}
+			venue, asset, err := paymentConnector(recipe, tree)
 			if err != nil {
 				return nil, err
 			}
@@ -60,19 +66,48 @@ func (s *Solver) AcceptsRoute(executor, connector, account, asset common.Address
 	return ok && route.connector == connector && route.account == account && route.asset == asset
 }
 
-func paymentConnector(recipe recipes.Recipe) (venue, asset common.Address, err error) {
+func paymentConnector(recipe recipes.Recipe, tree *recipes.Tree) (venue, asset common.Address, err error) {
 	inspection, err := recipes.Inspect(recipe)
 	if err != nil {
 		return common.Address{}, common.Address{}, err
+	}
+	selectPayment := func(token, spender common.Address) error {
+		if venue != (common.Address{}) || spender == (common.Address{}) || token == (common.Address{}) {
+			return errors.New("recipe requires one payment approval from input 1")
+		}
+		venue, asset = spender, token
+		return nil
 	}
 	for _, slot := range inspection.Slots {
 		if slot.Operation != recipes.Approve || slot.Amount.Source != recipes.Input || slot.Amount.Value == nil || slot.Amount.Value.Cmp(big.NewInt(1)) != 0 {
 			continue
 		}
-		if venue != (common.Address{}) || slot.Spender == (common.Address{}) || slot.Token == (common.Address{}) {
-			return common.Address{}, common.Address{}, errors.New("recipe requires one payment approval from input 1")
+		if err := selectPayment(slot.Token, slot.Spender); err != nil {
+			return common.Address{}, common.Address{}, err
 		}
-		venue, asset = slot.Spender, slot.Token
+	}
+	actions, err := recipes.ManagedActions(recipe, tree)
+	if err != nil {
+		return common.Address{}, common.Address{}, err
+	}
+	selector := erc20.NewERC20().PackApprove(common.Address{}, new(big.Int))[:4]
+	for _, action := range actions {
+		if len(action.Leaf.Data) != 68 || !bytes.Equal(action.Leaf.Data[:4], selector) {
+			continue
+		}
+		amount, err := action.Field(36)
+		if err != nil || amount.Source != recipes.Input || amount.Value.Cmp(big.NewInt(1)) != 0 {
+			continue
+		}
+		if action.Slot.Gate.Source != recipes.Literal || action.Slot.Gate.Value.Cmp(big.NewInt(1)) != 0 {
+			return common.Address{}, common.Address{}, errors.New("recipe payment approval must be unconditional")
+		}
+		if err := action.Pinned(4, 32); err != nil {
+			return common.Address{}, common.Address{}, err
+		}
+		if err := selectPayment(action.Leaf.Target, common.BytesToAddress(action.Leaf.Data[4:36])); err != nil {
+			return common.Address{}, common.Address{}, err
+		}
 	}
 	if venue == (common.Address{}) {
 		return venue, asset, errors.New("recipe payment approval from input 1 missing")

@@ -148,6 +148,21 @@ type connectorWorkflow struct {
 	caller, signer common.Address
 }
 
+func (w *connectorWorkflow) permissionTree(ctx context.Context, snapshot recipes.Snapshot) (*recipes.Tree, error) {
+	raw, err := w.source.PermissionTree(ctx, w.chainID, snapshot)
+	if err != nil {
+		return nil, errors.Errorf("connector permission tree: %w", err)
+	}
+	tree, err := recipes.DecodeTree(raw)
+	if err != nil {
+		return nil, errors.Errorf("connector permission tree: %w", err)
+	}
+	if tree.Root != snapshot.Root || tree.ChainID == nil || tree.ChainID.Cmp(w.chainID) != 0 || tree.Account == nil || *tree.Account != snapshot.Account {
+		return nil, errors.New("connector permission tree scope mismatch")
+	}
+	return tree, nil
+}
+
 func (w *connectorWorkflow) state(ctx context.Context, venue common.Address, block *big.Int) (connectorState, error) {
 	var account, asset common.Address
 	call := func(data []byte) ([]byte, error) {
@@ -229,16 +244,9 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if state.Asset != token {
 		return nil, time.Time{}, errors.New("connector outputAsset differs from awarded output")
 	}
-	raw, err = w.source.PermissionTree(ctx, w.chainID, snapshot)
+	tree, err := w.permissionTree(ctx, snapshot)
 	if err != nil {
-		return nil, time.Time{}, errors.Errorf("connector permission tree: %w", err)
-	}
-	tree, err := recipes.DecodeTree(raw)
-	if err != nil {
-		return nil, time.Time{}, errors.Errorf("connector permission tree: %w", err)
-	}
-	if tree.Root != snapshot.Root || tree.ChainID == nil || tree.ChainID.Cmp(w.chainID) != 0 || tree.Account == nil || *tree.Account != snapshot.Account {
-		return nil, time.Time{}, errors.New("connector permission tree scope mismatch")
+		return nil, time.Time{}, err
 	}
 	resolved, err := backend.resolveDiscount(ctx, selected.DiscountID.Hex())
 	if err != nil {
