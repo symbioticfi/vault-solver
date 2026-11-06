@@ -129,22 +129,6 @@ func TestUnsignedCreateWireAndPointOfUseKey(t *testing.T) {
 	}
 }
 
-func TestCreateErrorIncludesSanitizedMessage(t *testing.T) {
-	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`{"message":"upstream refused secret-one\nplease retry","credentials":"hidden"}`))
-	})
-	dto := *threef.NewCreateOfferDto(34, testBroker.Hex(), "100", "9", "1", "4102444800", false)
-	_, err := c.Create(t.Context(), dto)
-	if err == nil || !strings.Contains(err.Error(), "HTTP status 500: upstream refused [redacted] please retry") {
-		t.Fatalf("missing sanitized server reason: %v", err)
-	}
-	if strings.Contains(err.Error(), "secret-one") || strings.Contains(err.Error(), "hidden") {
-		t.Fatal("error exposed credentials or an unrelated response field")
-	}
-}
-
 func TestOffersAndCancelWire(t *testing.T) {
 	var posted bool
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {

@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"strconv"
 	"testing"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -57,41 +56,6 @@ func eligibilityReads(t *testing.T, pin provider.Snapshot, recipe recipes.Recipe
 			}
 		}
 		return reads(ctx, msg, block)
-	}
-}
-
-func TestOfferPassRecoveryRechecksNativeMembership(t *testing.T) {
-	for _, allowed := range []bool{true, false} {
-		t.Run(strconv.FormatBool(allowed), func(t *testing.T) {
-			w, client, data := offerPassFixture(t)
-			request := common.HexToAddress("0x1000000000000000000000000000000000000001")
-			auction := testAuction(data.market, 1, request)
-			auction.AdditionalProperties[exactMaxRateKey] = "1000"
-			client.createErr = errors.New("HTTP 500")
-			if err := w.bot.Tick(t.Context(), data.market, []threef.AuctionDto{auction}); err == nil {
-				t.Fatal("missing initial POST failure")
-			}
-			client.createErr = nil
-			checks := 0
-			chain := eligibilityReads(t, data.pin, data.recipe, data.tree, func(ethereum.CallMsg) error {
-				checks++
-				if !allowed {
-					return policyRevertError{}
-				}
-				return nil
-			})
-			err := w.evaluate(t.Context(), chain, data.pin, data.markets, []threef.AuctionDto{auction}, nil, nil)
-			if (err == nil) != allowed || checks != 1 {
-				t.Fatalf("recovery membership checks=%d err=%v", checks, err)
-			}
-			want := 1
-			if allowed {
-				want = 2
-			}
-			if len(client.created) != want {
-				t.Fatalf("got %d attempts, want %d", len(client.created), want)
-			}
-		})
 	}
 }
 

@@ -1,7 +1,6 @@
 package threef
 
 import (
-	"context"
 	"strconv"
 	"strings"
 
@@ -52,74 +51,58 @@ func (i *intent) validate(m offerMarket, broker common.Address) error {
 	return nil
 }
 
-func (b *offerBot) reconcileIntent(ctx context.Context, m offerMarket, offers []threef.OfferDto, auctions map[uint64]threef.AuctionDto) (*intent, bool, error) {
+func (b *offerBot) reconcileIntent(m offerMarket, offers []threef.OfferDto) (*intent, error) {
 	var previous intent
 	found, err := b.Store.Load(journalKey(m), &previous)
 	if err != nil {
-		return nil, false, errors.Errorf("load 3F offer journal: %w", err)
+		return nil, errors.Errorf("load 3F offer journal: %w", err)
 	}
 	if !found {
-		return nil, false, nil
+		return nil, nil
 	}
 	if err := previous.validate(m, b.Client.Broker()); err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	var matched *threef.OfferDto
 	for index := range offers {
 		offer := &offers[index]
 		if strings.EqualFold(offer.Maker, previous.Account.Hex()) && offer.Nonce == previous.Offer.Nonce && offer.AuctionId == previous.Offer.AuctionId {
 			if matched != nil {
-				return nil, false, errors.New("multiple 3F offers match journal nonce")
+				return nil, errors.New("multiple 3F offers match journal nonce")
 			}
 			matched = offer
 		}
 	}
-	// Replaying the same tuple updates the same API offer, including after a lost response.
+	// Expiration cannot prove an accepted authorization has disappeared. An unknown
+	// POST remains blocked even after restart until its exact API row is observed.
 	if matched == nil {
-		if previous.OfferID != 0 || !previous.matchesMarket(m) {
-			return nil, false, errors.New("3F offer POST outcome unresolved; waiting for maker/nonce/auction reconciliation")
-		}
-		auctionID, _ := dtoID(previous.Offer.AuctionId)
-		auction, exists := auctions[auctionID]
-		amount, _ := uintAmount(previous.Offer.Amount)
-		yield, _ := uintAmount(previous.Offer.ExpectedReturn)
-		if !exists || !m.EligibleRequests[previous.Request] || amount.Cmp(m.Budget) > 0 || amount.Cmp(m.AvailableCash) > 0 || amount.Cmp(m.MaxPrincipal) > 0 {
-			return nil, false, errors.New("3F unresolved offer cannot be retried within current policy and cash limits")
-		}
-		fits, err := fitsTerms(m, amount, yield, auction)
-		if err != nil {
-			return nil, false, err
-		}
-		if !fits {
-			return nil, false, errors.New("3F unresolved offer cannot be retried within current rate limits")
-		}
-		return &previous, true, b.postIntent(ctx, m, &previous, false)
+		return nil, errors.New("3F offer POST outcome unresolved; waiting for maker/nonce/auction reconciliation")
 	}
 	id, err := dtoID(matched.Id)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if matched.ExecutionMode != "PUSH" || common.HexToAddress(matched.RequestId) != previous.Request || matched.Expiration != previous.Offer.Expiration || (previous.OfferID != 0 && previous.OfferID != id) {
-		return nil, false, errors.New("3F reconciled offer differs from durable intent")
+		return nil, errors.New("3F reconciled offer differs from durable intent")
 	}
 	amount, err := uintAmount(matched.Amount)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	yield, err := uintAmount(matched.ExpectedReturn)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	originalAmount, _ := uintAmount(previous.Offer.Amount)
 	originalYield, _ := uintAmount(previous.Offer.ExpectedReturn)
 	if amount.Cmp(originalAmount) > 0 || yield.Cmp(originalYield) > 0 || (matched.Status == "SUBMITTED" && (amount.Cmp(originalAmount) != 0 || yield.Cmp(originalYield) != 0)) {
-		return nil, false, errors.New("3F reconciled offer terms differ from durable intent")
+		return nil, errors.New("3F reconciled offer terms differ from durable intent")
 	}
 	if previous.OfferID == 0 {
 		previous.OfferID = id
 		if err := b.Store.Save(journalKey(m), previous); err != nil {
-			return nil, false, errors.Errorf("journal reconciled 3F offer: %w", err)
+			return nil, errors.Errorf("journal reconciled 3F offer: %w", err)
 		}
 	}
-	return &previous, false, nil
+	return &previous, nil
 }

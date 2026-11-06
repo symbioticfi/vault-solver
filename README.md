@@ -53,9 +53,6 @@ the same nonce; nonce handling does not coordinate their liquidity or off-chain 
 | `lifi-samechain` | LI.FI same-chain intents over LiquidLane | [plan](docs/LIFI-PLAN.md) | [yaml](config/lifi.example.yaml) |
 | `uniswapx-filler` | UniswapX V2 RFQ quoting and LiquidLane filling | [plan](docs/UNISWAPX-PLAN.md) | [yaml](config/uniswapx.example.yaml) |
 
-The Merkle 3F solver retries uncertain offer submissions with the original nonce and terms.
-Definite initial rejections release the intent; accepted or still-uncertain submissions remain tracked.
-
 All solvers expose a pluggable
 **strategy** — the built-in `default` or an external `webhook` you run; see
 [Strategies](#strategies).
