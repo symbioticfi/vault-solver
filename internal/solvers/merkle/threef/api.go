@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,6 +39,7 @@ type apiConfig struct {
 type apiClient struct {
 	c      *threef.APIClient
 	broker common.Address
+	keyEnv string
 }
 
 func validateAPIConfig(cfg apiConfig) error {
@@ -65,7 +67,7 @@ func newClient(cfg apiConfig) (*apiClient, error) {
 	c := threef.NewConfiguration()
 	c.Servers = threef.ServerConfigurations{{URL: strings.TrimRight(cfg.URL, "/") + c.Servers[0].URL}}
 	c.HTTPClient = &http.Client{Timeout: requestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: boundedTransport{keyEnv: cfg.APIKeyEnv}}
-	return &apiClient{c: threef.NewAPIClient(c), broker: cfg.Broker}, nil
+	return &apiClient{c: threef.NewAPIClient(c), broker: cfg.Broker, keyEnv: cfg.APIKeyEnv}, nil
 }
 
 func (c *apiClient) Broker() common.Address { return c.broker }
@@ -74,7 +76,7 @@ func (c *apiClient) Identity(ctx context.Context, account common.Address) error 
 	identity, response, err := c.c.FacilitatorAPI.AdminControllerGetFacilitatorOfferAddressV1(ctx).XApiKey("").Execute()
 	closeResponse(response)
 	if err != nil {
-		return apiError(ctx, "read identity", response)
+		return c.apiError(ctx, "read identity", response, err)
 	}
 	if identity == nil || !matches(identity.Facilitator, c.broker) || !matches(identity.OfferAddress, account) || account == (common.Address{}) {
 		return errors.New("3f broker or default maker mismatch")
@@ -82,7 +84,7 @@ func (c *apiClient) Identity(ctx context.Context, account common.Address) error 
 	makers, response, err := c.c.FacilitatorAPI.AdminControllerListMakersV1(ctx).XApiKey("").Execute()
 	closeResponse(response)
 	if err != nil {
-		return apiError(ctx, "read enrolled makers", response)
+		return c.apiError(ctx, "read enrolled makers", response, err)
 	}
 	var found bool
 	for _, maker := range makers {
@@ -106,7 +108,7 @@ func (c *apiClient) Offers(ctx context.Context) ([]threef.OfferDto, error) {
 	rows, response, err := c.c.OfferAPI.OfferControllerGetV1(ctx).Maker(lower(c.broker)).Execute()
 	closeResponse(response)
 	if err != nil {
-		return nil, apiError(ctx, "list offers", response)
+		return nil, c.apiError(ctx, "list offers", response, err)
 	}
 	if rows == nil || len(rows) > 4096 {
 		return nil, errors.New("3f invalid or oversized offers response")
@@ -123,7 +125,7 @@ func (c *apiClient) Auctions(ctx context.Context) ([]threef.AuctionDto, error) {
 	rows, response, err := c.c.AuctionAPI.AuctionControllerListV1(ctx).Scope("all").Execute()
 	defer closeResponse(response)
 	if err != nil {
-		return nil, apiError(ctx, "list auctions", response)
+		return nil, c.apiError(ctx, "list auctions", response, err)
 	}
 	// The generated response keeps a fresh copy of its body. Preserve exact rate numbers from it.
 	var raw []map[string]json.RawMessage
@@ -174,7 +176,7 @@ func (c *apiClient) Create(ctx context.Context, dto threef.CreateOfferDto) (*thr
 	result, response, err := c.c.OfferAPI.OfferControllerCreateV1(ctx).CreateOfferDto(dto).Execute()
 	closeResponse(response)
 	if err != nil {
-		return nil, apiError(ctx, "create offer", response)
+		return nil, c.apiError(ctx, "create offer", response, err)
 	}
 	if result == nil || validateID(result.Id) != nil {
 		return nil, errors.New("3f invalid created offer ID")
@@ -190,7 +192,7 @@ func (c *apiClient) Cancel(ctx context.Context, id uint64) (*threef.CancelOfferR
 	row, response, err := c.c.OfferAPI.OfferControllerGetByIdV1(ctx, float32(id)).Maker(lower(c.broker)).Execute()
 	closeResponse(response)
 	if err != nil {
-		return nil, apiError(ctx, "read offer before cancellation", response)
+		return nil, c.apiError(ctx, "read offer before cancellation", response, err)
 	}
 	if row == nil || validateOffer(*row) != nil || row.Id != float32(id) || row.Status != "SUBMITTED" || row.ExecutionMode != "PUSH" {
 		return nil, errors.New("3f only unaccepted PUSH offers can be cancelled")
@@ -199,7 +201,7 @@ func (c *apiClient) Cancel(ctx context.Context, id uint64) (*threef.CancelOfferR
 	result, response, err := c.c.OfferAPI.OfferControllerCancelV1(ctx).CancelOfferDto(dto).Execute()
 	closeResponse(response)
 	if err != nil {
-		return nil, apiError(ctx, "cancel offer", response)
+		return nil, c.apiError(ctx, "cancel offer", response, err)
 	}
 	if result == nil || result.Id != float32(id) || result.Status != "CANCELLED" {
 		return nil, errors.New("3f invalid cancelled offer response")
@@ -294,14 +296,60 @@ func (t boundedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return response, nil
 }
 
-func apiError(ctx context.Context, operation string, response *http.Response) error {
+type apiStatusError struct {
+	status             int
+	operation, message string
+}
+
+func (e *apiStatusError) Error() string {
+	text := "3f " + e.operation + ": HTTP status " + strconv.Itoa(e.status)
+	if e.message != "" {
+		text += ": " + e.message
+	}
+	return text
+}
+
+func (c *apiClient) apiError(ctx context.Context, operation string, response *http.Response, cause error) error {
 	if ctx.Err() != nil {
 		return errors.Errorf("3f %s: %w", operation, ctx.Err())
 	}
-	if response != nil {
-		return errors.Errorf("3f %s: HTTP status %d", operation, response.StatusCode)
+	if response == nil {
+		return errors.Errorf("3f %s failed", operation)
 	}
-	return errors.Errorf("3f %s failed", operation)
+	failure := &apiStatusError{status: response.StatusCode, operation: operation}
+	var upstream *threef.GenericOpenAPIError
+	if errors.As(cause, &upstream) {
+		var body struct {
+			Message json.RawMessage `json:"message"`
+		}
+		if json.Unmarshal(upstream.Body(), &body) == nil {
+			var message string
+			if json.Unmarshal(body.Message, &message) == nil {
+				if key := os.Getenv(c.keyEnv); key != "" {
+					message = strings.ReplaceAll(message, key, "[redacted]")
+				}
+				message = strings.Join(strings.Fields(message), " ")
+				if len(message) > 512 {
+					message = message[:512] + "..."
+				}
+				failure.message = message
+			}
+		}
+	}
+	return failure
+}
+
+func definiteRejection(err error) bool {
+	var failure *apiStatusError
+	if !errors.As(err, &failure) {
+		return false
+	}
+	switch failure.status {
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
+		return true
+	default:
+		return false
+	}
 }
 
 func closeResponse(response *http.Response) {
