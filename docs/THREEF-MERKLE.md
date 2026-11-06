@@ -100,10 +100,15 @@ to support the policy's enabled funding pairs; additional recipe-specific amount
 restrictions are applied during execution, not advertised as policy capacity.
 
 Automatic offers conservatively use **idle cash already held by the account**.
+New offers use cryptographically random nonces from 1 through 2^63-1, encoded as decimal
+strings. Although the on-chain field is uint256, 3F's offer storage is limited to 64 bits.
+The API client rejects larger nonces locally. A saved nonce wider than 64 bits is
+discarded only when there is no matching API offer and no confirmed offer ID,
+allowing the next eligible auction to proceed. Other uncertain offers retain their nonce and terms.
 Capacity is the minimum of that cash, the policy's remaining pair budget, the
 request's uint128 amount range and the auction's advertised request size, with cash reserved across all live offers of the same funding token and budget reserved only across offers for the exact funding/underlying pair. The bot keeps at most one
 self-originated live offer at a time, preserving its full configuration binding
-until terminal across all configured markets. Another market cannot cancel, overwrite or rekey that live intent; an ambiguous POST blocks every market until its exact API row is reconciled. The workflow may cancel only its own intent or an eligible request within its current market. Multiple UI-originated offers and aggregate mints remain supported. Supply cash to the account
+until terminal across all configured markets. Another market cannot cancel, overwrite or rekey that live intent; an ambiguous POST retains that intent across every market. If its API row is missing, the next pass retries the identical request with the same maker, auction, nonce and terms; it never replaces the unresolved commitment with a new nonce. Recovery rechecks native eligibility, the current budget, available cash and rate limits before replaying. The workflow may cancel only its own intent or an eligible request within its current market. Multiple UI-originated offers and aggregate mints remain supported. Supply cash to the account
 before enabling automatic bidding. The actual mint recipe can still use its
 committed funding sources; API-key offers created in the UI are reconciled by the
 same mint provider. This bot does not promise a quote against liquidity that may
@@ -138,9 +143,7 @@ offer inventory and one auction response. Eligibility considers live commitments
 and open/solvable candidates with the relevant funding token, not historical
 auctions. Positive and negative results are memoized per request/market at the
 current pin. A confirmed cancellation or creation ends the pass and discards its
-inventory. Historical auctions with live commitments still participate in maintenance. It never blindly retries an unsigned POST.
-An absent ambiguous intent remains blocked even after local expiration; investigate
-provider history before manually resolving it. Never delete state to clear a
+inventory. Historical auctions with live commitments still participate in maintenance. Unknown POST outcomes retry only the original immutable request. A definite rejection of the first POST clears that unsent intent. Rejection of a retry does not clear an earlier uncertain submission, and local expiration alone cannot prove an accepted mint authorization is gone. A confirmed offer missing from the API inventory or an unresolved intent from a different recipe remains blocked for investigation. Never delete state to clear a
 pending signed transaction. Simulation mode does not write the journal, submit
 or cancel offers.
 
@@ -161,7 +164,7 @@ its original bytes and ownership even when the external lease later expires.
 Provider list responses are capped at 2 MiB and inventories at 4096 rows. IDs must
 be exact positive integers below 2^24 because the generated upstream client uses
 float32 IDs; monetary quantities remain integer strings and `big.Int`. Redirects
-are refused and upstream error bodies/credentials are redacted. The canonical
+are refused. API errors expose the HTTP status, not response bodies or credentials. The canonical
 OpenAPI and solver-used contract ABI entries are vendored and regenerated with the Makefile.
 `make refresh-merkle-abi` projects those entries directly from the contracts build using
 `hack/merkle-abi.jq`, preserving their complete tuple definitions.

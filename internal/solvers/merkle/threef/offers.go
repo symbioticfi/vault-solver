@@ -3,6 +3,7 @@ package threef
 import (
 	"context"
 	"crypto/rand"
+	"math"
 	"math/big"
 	"strconv"
 	"strings"
@@ -98,9 +99,9 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 	if !b.Send {
 		return false, nil
 	}
-	previous, err := b.reconcileIntent(market, offers)
-	if err != nil {
-		return false, err
+	previous, retried, err := b.reconcileIntent(ctx, market, offers, byID)
+	if err != nil || retried {
+		return retried, err
 	}
 	// Another recipe owns this account's live intent. Its workflow alone may
 	// cancel it; an unresolved POST must remain bound to the original recipe.
@@ -220,11 +221,12 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 		if !fits {
 			continue
 		}
-		var nonce [32]byte
-		if _, randomErr := rand.Read(nonce[:]); randomErr != nil {
+		// 3F stores nonces in 64 bits; positive int64 values fit signed and unsigned storage.
+		nonce, randomErr := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
+		if randomErr != nil {
 			return false, errors.Errorf("create 3F offer nonce: %w", randomErr)
 		}
-		nonce[0] |= 1
+		nonce.Add(nonce, big.NewInt(1))
 		now := time.Now()
 		if b.Now != nil {
 			now = b.Now()
@@ -232,29 +234,40 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 		if now.Unix() <= 0 || now.Unix() > int64(^uint64(0)>>1)-300 {
 			return false, errors.New("3F offer clock is invalid")
 		}
-		offer := threef.CreateOfferDto{AuctionId: auction.Id, Maker: strings.ToLower(b.Client.Broker().Hex()), Amount: amount.String(), ExpectedReturn: yield.String(), Nonce: new(big.Int).SetBytes(nonce[:]).String(), Expiration: strconv.FormatInt(now.Unix()+300, 10)}
+		offer := threef.CreateOfferDto{AuctionId: auction.Id, Maker: strings.ToLower(b.Client.Broker().Hex()), Amount: amount.String(), ExpectedReturn: yield.String(), Nonce: nonce.String(), Expiration: strconv.FormatInt(now.Unix()+300, 10)}
 		pending := newIntent(market, request, offer)
 		if err := b.Store.Save(journalKey(market), pending); err != nil {
 			return false, errors.Errorf("journal 3F offer before POST: %w", err)
 		}
-		response, postErr := b.Client.Create(ctx, offer)
-		if postErr != nil {
-			return false, errors.Errorf("3F offer POST outcome unresolved; retained intent: %w", postErr)
-		}
-		if response == nil {
-			return false, errors.New("3F offer POST outcome unresolved: empty response")
-		}
-		pending.OfferID, err = dtoID(response.Id)
-		if err != nil {
-			return false, err
-		}
-		if err := b.Store.Save(journalKey(market), pending); err != nil {
-			return false, errors.Errorf("journal 3F POST receipt: %w", err)
-		}
-		observability.Log(ctx).Info("3F PUSH offer submitted", "account", market.Account.Hex(), "auctionId", id, "offerId", pending.OfferID)
-		return true, nil
+		return true, b.postIntent(ctx, market, pending, true)
 	}
 	return false, nil
+}
+
+func (b *offerBot) postIntent(ctx context.Context, market offerMarket, pending *intent, first bool) error {
+	response, err := b.Client.Create(ctx, pending.Offer)
+	if err != nil {
+		// A rejected retry cannot disprove acceptance of the earlier request.
+		if first && definiteRejection(err) {
+			if deleteErr := b.Store.Delete(journalKey(market)); deleteErr != nil {
+				return errors.Errorf("clear rejected 3F offer: %w", deleteErr)
+			}
+			return errors.Errorf("3F offer rejected: %w", err)
+		}
+		return errors.Errorf("3F offer POST outcome unresolved; retained intent for auction %v nonce %s: %w", pending.Offer.AuctionId, pending.Offer.Nonce, err)
+	}
+	if response == nil {
+		return errors.New("3F offer POST outcome unresolved: empty response")
+	}
+	pending.OfferID, err = dtoID(response.Id)
+	if err != nil {
+		return err
+	}
+	if err := b.Store.Save(journalKey(market), pending); err != nil {
+		return errors.Errorf("journal 3F POST receipt: %w", err)
+	}
+	observability.Log(ctx).Info("3F PUSH offer submitted", "account", market.Account.Hex(), "auctionId", pending.Offer.AuctionId, "offerId", pending.OfferID)
+	return nil
 }
 
 func validateMarket(m offerMarket) error {

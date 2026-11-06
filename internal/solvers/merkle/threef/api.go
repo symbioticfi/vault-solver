@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -167,7 +168,11 @@ func (c *apiClient) Auctions(ctx context.Context) ([]threef.AuctionDto, error) {
 
 // Create sends exactly one request. Its caller must journal the immutable DTO before invoking it.
 func (c *apiClient) Create(ctx context.Context, dto threef.CreateOfferDto) (*threef.CreateOfferResponseDto, error) {
-	if validateID(dto.AuctionId) != nil || !matches(dto.Maker, c.broker) || !validUint(dto.Amount, true) || !validUint(dto.ExpectedReturn, false) || !validUint(dto.Nonce, false) || !validUint(dto.Expiration, true) || dto.UseCallback || dto.ChainId != nil || dto.ExecutionMode != nil || dto.Signature != nil || dto.PushAuthorizationSignature != nil || dto.AuthorizationDeadline != nil || len(dto.AdditionalProperties) > 0 {
+	nonce, nonceErr := uintAmount(dto.Nonce)
+	if nonceErr != nil || !nonce.IsInt64() {
+		return nil, errors.New("3f offer nonce must be a nonnegative int64")
+	}
+	if validateID(dto.AuctionId) != nil || !matches(dto.Maker, c.broker) || !validUint(dto.Amount, true) || !validUint(dto.ExpectedReturn, false) || !validUint(dto.Expiration, true) || dto.UseCallback || dto.ChainId != nil || dto.ExecutionMode != nil || dto.Signature != nil || dto.PushAuthorizationSignature != nil || dto.AuthorizationDeadline != nil || len(dto.AdditionalProperties) > 0 {
 		return nil, errors.New("3f invalid unsigned PUSH offer")
 	}
 	dto.Maker = lower(c.broker)
@@ -294,14 +299,36 @@ func (t boundedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return response, nil
 }
 
+type apiStatusError struct {
+	status    int
+	operation string
+}
+
+func (e *apiStatusError) Error() string {
+	return "3f " + e.operation + ": HTTP status " + strconv.Itoa(e.status)
+}
+
 func apiError(ctx context.Context, operation string, response *http.Response) error {
 	if ctx.Err() != nil {
 		return errors.Errorf("3f %s: %w", operation, ctx.Err())
 	}
-	if response != nil {
-		return errors.Errorf("3f %s: HTTP status %d", operation, response.StatusCode)
+	if response == nil {
+		return errors.Errorf("3f %s failed", operation)
 	}
-	return errors.Errorf("3f %s failed", operation)
+	return &apiStatusError{status: response.StatusCode, operation: operation}
+}
+
+func definiteRejection(err error) bool {
+	var failure *apiStatusError
+	if !errors.As(err, &failure) {
+		return false
+	}
+	switch failure.status {
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
+		return true
+	default:
+		return false
+	}
 }
 
 func closeResponse(response *http.Response) {
