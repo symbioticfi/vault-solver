@@ -1093,7 +1093,7 @@ intent and never cancels accepted mint windows.
 
 The `rfq-filler` recipe mode (also available as the execution-only `rfq-merkle` plugin) executes awarded orders through the RFQ Executor and committed
 Merkle recipes. It samples wall time before reading the chain header so RPC latency consumes submission validity.
-See [the RFQ Merkle runbook](docs/RFQ-MERKLE.md) and [configuration](config/rfq-merkle.example.yaml).
+See [the RFQ Merkle runbook](docs/RFQ-MERKLE.md) and [configuration](config/rfq-merkle.example.yaml). Signed recovery runs in the poll loop and can rebroadcast the saved bytes after a restart; quotes are declined until it finishes. Confirmed fills persist an inclusion watermark that rejects older quote snapshots, so keep the state directory across restarts.
 
 Local integration checks require Anvil on `PATH`: `make test-txmanager-anvil`,
 `make test-merklesender-anvil`, and `make test-rfq-merkle-anvil`. They exercise nonce reconciliation,

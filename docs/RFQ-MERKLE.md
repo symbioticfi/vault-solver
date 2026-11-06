@@ -87,10 +87,22 @@ Only one fill is admitted at a time. Its intent is fsynced before admission; the
 SDK journal persists each signed original and replacement before broadcast through
 the shared txmanager. The earlier order/discount deadline bounds unsigned sending
 and replacement. Signed recovery restores the lane fence during construction,
-reconciles the original bytes without fetching new terms, and releases ownership
-only after canonical confirmed inclusion or revert is acknowledged. A prepared
-unsigned intent is rebuilt from fresh orders on restart. Mount an exclusive durable
-directory, and never run independent processes with the same signer.
+reconciles the original bytes in the poll loop, and releases ownership only after
+canonical confirmed inclusion or revert is acknowledged. The quote server starts
+during recovery; quotes are declined until the signer fence is released and the
+recipe routes are published. If no saved attempt has a receipt, recovery
+rebroadcasts the latest saved signed bytes without re-signing. A prepared unsigned
+intent is rebuilt from fresh orders on restart. Mount an exclusive durable
+directory, and never run independent processes with the same signer. After an
+in-process `PendingTimeout`, a dropped transaction needs a restart to rebroadcast.
+
+Before acknowledging a confirmed fill, execution persists an inclusion-block
+watermark for its account/asset capacity. Quotes reject inventory observed before
+that block (or at an unknown block), and check again right before publishing.
+Backend account, connector and asset must match the verified recipe route. Filled
+order IDs are kept until their signed deadline so a still-listed award is not
+filled twice. Intents saved before this metadata existed recover it from their
+calldata and the connector's immutable identity at latest.
 
 The RFQ bridge ABI comes from [RFQ PR 25](https://github.com/symbioticfi/rfq/pull/25),
 commit `de6dbd617bf3c1e8b4120419cbe5800efae7d410`. Connector and RecipeExecutor use the unchanged canonical adapters contract surface.
