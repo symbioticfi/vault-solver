@@ -64,6 +64,13 @@ effects; order does not reserve funds. Spending recipes must protect withdrawal
 obligations. Pending transaction reconciliation runs first while preserving the remaining
 order, and unsettled asynchronous work keeps its account reserved.
 
+Candidate failures are reported individually while authenticated healthy candidates
+continue through shared planning. A keeper cycle can settle immediately confirmed
+work and submit other eligible executors, submitting each at most once per cycle.
+Idle candidates may be prepared again after earlier confirmed effects.
+Canonical shared-sender completion wakes the loop before its normal timer; pending
+work and uncertain failures retain the normal retry cadence.
+
 The SDK automatically batches self-contained, state-driven recipes on the same
 executor while successive executions remain useful and executable. Every cycle
 includes the complete committed recipe, including its final collateral supply.
@@ -74,7 +81,7 @@ host loop, protocol-specific batching or per-executor switch. The existing chain
 client supplies code overrides and pinned bytecode reads; the SDK revalidates the
 exact atomic multicall against the original contract before submission.
 
-The SDK is pinned to immutable commit `2a75db71d238584448218392cf0794512aee62bb`.
+The SDK is pinned to immutable commit `1a6567ec6867a649952024d2b45c9737f98cc438`.
 Remove `stateDir` from Merkle YAML: strict decoding rejects it. There is no journal,
 configuration fingerprint, saved plan or restart recovery. Process exit loses
 transaction, order and reservation tracking while external work may continue.

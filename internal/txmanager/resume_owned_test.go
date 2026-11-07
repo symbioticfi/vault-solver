@@ -22,13 +22,22 @@ func TestResumeOwnedKeepsNonceAfterAmbiguousOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 	var attempts []*types.Transaction
-	req := Request{Owner: "ram", To: common.HexToAddress("0x1234"), GasLimit: 21000, BeforeBroadcast: func(_, signed *types.Transaction) error { attempts = append(attempts, signed); return nil }}
+	notified := make(chan Result, 2)
+	req := Request{Owner: "ram", To: common.HexToAddress("0x1234"), GasLimit: 21000, BeforeBroadcast: func(_, signed *types.Transaction) error { attempts = append(attempts, signed); return nil }, AfterResult: func(result Result) { notified <- result }}
 	first := m.Send(t.Context(), req)
 	if first.Outcome != OutcomeAbandoned || len(attempts) != 1 {
 		t.Fatalf("initial = %+v attempts=%d", first, len(attempts))
 	}
 	if m.Available() {
 		t.Fatal("ambiguous result released reservation")
+	}
+	select {
+	case got := <-notified:
+		if got.Outcome != first.Outcome || got.Hash != first.Hash {
+			t.Fatalf("initial notification=%+v result=%+v", got, first)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("initial ambiguous lifecycle did not notify")
 	}
 	// A lagging receipt appears after the host lifecycle timed out. An expired
 	// business deadline permits receipt observation, never another broadcast.
@@ -47,6 +56,14 @@ func TestResumeOwnedKeepsNonceAfterAmbiguousOutcome(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("owned receipt not observed")
+	}
+	select {
+	case got := <-notified:
+		if got.Outcome != OutcomeConfirmed || got.Hash != first.Hash {
+			t.Fatalf("resumed notification=%+v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("resumed lifecycle did not notify")
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()

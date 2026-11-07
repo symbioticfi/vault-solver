@@ -39,6 +39,7 @@ type Sender struct {
 	manager       hostSender
 	solver, owner string
 	active        *ownedRequest
+	wakeup        chan struct{}
 }
 
 type ownedRequest struct {
@@ -53,11 +54,24 @@ type ownedRequest struct {
 var _ keeper.Sender = (*Sender)(nil)
 
 func New(manager *txmanager.Manager, solverName string) *Sender {
-	s := &Sender{solver: solverName, owner: "merkle/" + solverName + "/" + strconv.FormatUint(nextOwner.Add(1), 10)}
+	s := &Sender{solver: solverName, owner: "merkle/" + solverName + "/" + strconv.FormatUint(nextOwner.Add(1), 10), wakeup: make(chan struct{}, 1)}
 	if manager != nil {
 		s.manager = manager
 	}
 	return s
+}
+
+// Wakeup coalesces canonical completions for the host's existing run loop.
+// Ambiguous outcomes wait for its normal cadence to avoid immediate retry loops.
+func (s *Sender) Wakeup() <-chan struct{} { return s.wakeup }
+
+func (s *Sender) afterResult(result txmanager.Result) {
+	if result.Outcome == txmanager.OutcomeConfirmed || result.Outcome == txmanager.OutcomeReverted {
+		select {
+		case s.wakeup <- struct{}{}:
+		default:
+		}
+	}
 }
 
 func (s *Sender) Busy() bool {
@@ -87,7 +101,7 @@ func (s *Sender) Submit(ctx context.Context, req transaction.Request) error {
 		return err
 	}
 	work := &ownedRequest{signed: make(chan struct{})}
-	work.req = txmanager.Request{Owner: s.owner, To: req.To, Data: bytes.Clone(req.Data), Label: "execute_recipe", Solver: s.solver, BeforeBroadcast: work.capture}
+	work.req = txmanager.Request{Owner: s.owner, To: req.To, Data: bytes.Clone(req.Data), Label: "execute_recipe", Solver: s.solver, BeforeBroadcast: work.capture, AfterResult: s.afterResult}
 	if s.Deadline != nil {
 		work.req.Deadline = s.Deadline()
 	}

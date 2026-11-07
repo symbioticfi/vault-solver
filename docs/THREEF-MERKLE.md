@@ -55,8 +55,10 @@ it. Settle unresolved offers and signed work before upgrading or restarting.
 Restart loses tracking and reservations while transactions and offers may continue
 externally; no saved journal or signed-owner recovery remains.
 
-Polling and mint strategy cadence are 15 seconds, operations are bounded to 30 seconds,
-and the shared recipe cache holds the configured recipe within 16 MiB. The public Curator API uses `url` with the SDK's
+Polling and mint strategy cadence are 15 seconds; canonical shared-sender
+completion wakes the existing loop early. Pending work and uncertain failures keep
+the normal retry cadence. Operations are bounded to 30 seconds, and the shared
+recipe cache holds the configured recipe within 16 MiB. The public Curator API uses `url` with the SDK's
 10-second/2-MiB limits. Existing live commitments are maintained first. Each pass then
 checks every relevant open/solvable auction without a blocking offer from this maker,
 matching its funding asset to the configured markets. Positive and negative policy

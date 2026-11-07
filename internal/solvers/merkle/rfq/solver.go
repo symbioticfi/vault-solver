@@ -95,17 +95,26 @@ func (s *Solver) Run(ctx context.Context) error {
 	}
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
+	var wakeup <-chan struct{}
+	if sender, ok := s.sender.(interface{ Wakeup() <-chan struct{} }); ok {
+		wakeup = sender.Wakeup()
+	}
 	for {
+		pending := s.intent != nil
 		run, cancel := context.WithTimeout(ctx, operationTimeout)
 		err := s.tick(run)
 		cancel()
 		if err != nil && ctx.Err() == nil {
 			observability.Log(ctx).Error(err, "RFQ Merkle iteration failed")
 		}
+		if pending && s.intent == nil && err == nil {
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+		case <-wakeup:
 		}
 	}
 }

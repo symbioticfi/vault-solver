@@ -353,6 +353,13 @@ The host's SDK transport continues to use the existing shared transaction manage
 owner fence and pre-broadcast capture callbacks; it contains no copied sender or nonce engine.
 The shared `DiscoverBatch` and `ValidatePreparedBatch` APIs serve one executor or many.
 There is no disk journal or restart recovery; external work must be settled before restarting.
+The planner isolates candidate failures through the same grouped discovery core
+and reports them alongside healthy selected work. A bounded keeper drain submits
+each eligible executor at most once per tick, allowing previously idle candidates
+to become ready after earlier confirmed effects. Canonical sender results notify the host
+after publication, waking generic, RFQ and 3F loops without an extra worker or an
+error-triggered retry loop. Rejected envelopes try descending prefixes so valid
+intermediate sizes are considered before deferring the remaining calls.
 The SDK batch engine uses the existing HTTP fallback/tracing path with strict response
 identity validation. Compatible pinned getters use one Multicall3 `eth_call` as a
 JSON-RPC object. Caller-sensitive, gas-limited or different-block calls stay separate,

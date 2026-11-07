@@ -1066,6 +1066,11 @@ orders and reservations live only in RAM; restart loses tracking while external
 work may continue. Remove `stateDir` from Merkle configuration; strict decoding
 rejects it. Settle existing work before upgrading and use one process per signer.
 
+Invalid executor candidates are reported while healthy candidates continue.
+Confirmed transactions wake execution promptly, and ready work can continue
+within the same cycle. Pending transactions and uncertain failures keep their
+normal polling cadence.
+
 The SDK reads signed permission bundles through `GET /merkle/{adapter}/{root}` under the configured curator API URL.
 The SDK reads `recipeHash` and `recipeBlock` at a pinned block and retrieves the original
 `SetRecipe` event only from that single publication block. It verifies the recipe bytes against

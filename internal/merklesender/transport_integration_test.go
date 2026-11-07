@@ -113,15 +113,21 @@ func TestSDKRAMSharedSenderReplacementAndReorg(t *testing.T) {
 	if err := chain.Client().CallContext(t.Context(), &reverted, "evm_revert", snapshot); err != nil || !reverted {
 		t.Fatal("revert local chain", err)
 	}
-	if result, err := sender.Poll(t.Context()); result != nil || err != nil || !sender.Busy() {
+	// A receipt sweep may precede mining while its later nonce read follows it.
+	// That execution-unknown result remains valid after the local reorg.
+	result, err := sender.Poll(t.Context())
+	if result != nil || !sender.Busy() || engine.Available() || engine.LaneReady() {
 		t.Fatalf("reorg released ownership: %+v %v", result, err)
+	}
+	if err != nil && !errors.Is(err, transaction.ErrNonceConsumed) {
+		t.Fatalf("unexpected reorg observation: %v", err)
 	}
 	if err := chain.SendTransaction(t.Context(), latest); err != nil {
 		t.Fatal(err)
 	}
 	mine()
 	mine()
-	result := awaitRAMTerminal(t, sender)
+	result = awaitRAMTerminal(t, sender)
 	if result.Hash != latest.Hash() || result.Execution == nil || sender.Busy() || !engine.Available() {
 		t.Fatalf("canonical result = %+v", result)
 	}
