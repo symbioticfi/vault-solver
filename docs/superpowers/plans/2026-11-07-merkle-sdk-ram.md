@@ -51,3 +51,11 @@ Funding validation with published SDK `26e64712a1ec85379175e0aa0450a23d20c5eb24`
 - [x] Repeat Go 1.27.3 tidy/verify, format, build, full race/coverage, lint, tooling and all three Anvil 1.9.0 targets with `GOWORK=off`. Host runtime code and configuration stay unchanged.
 
 Validation on the published SDK above passed: `go mod tidy`, `go mod verify`, `make format`, `go build ./...`, `make test`, `make lint`, `make test-tooling`, `make test-txmanager-anvil`, `make test-rfq-merkle-anvil` and `make test-merklesender-anvil`. Both lint runs reported zero issues. Tests use local Anvil 1.9.0 and API fixtures; no live signing, provider credentials or deployment was used.
+
+## Settlement timeout isolation
+
+- [x] Pin public SDK `fd35d773278b14a774487f84fc03c83f3e920bd9` (`v0.0.0-20261107234645-fd35d773278b`). Sender polls and each settlement receive independent operation deadlines so a slow account cannot consume another account's budget. Preparation and submission share one deadline; parent cancellation, admission validation, signed ownership and visitation limits remain intact.
+- [x] Adopt the upstream removal of the standalone daemon's `--once` option. The vault-solver host API, continuous loop and configuration remain unchanged.
+- [x] Complete Go 1.27.3 tidy/verify, formatting, build, full race/coverage, lint, tooling and all three local Anvil 1.9.0 suites with `GOWORK=off` before updating PR #277.
+
+Validation on this published SDK passed: `make tidy`, `go mod verify`, `make format`, `go build ./...`, `make test`, `make lint`, `make test-tooling`, `make test-txmanager-anvil`, `make test-rfq-merkle-anvil` and `make test-merklesender-anvil`. Both lint runs reported zero issues. The dependency diff changes only the SDK pin and its checksums; tests use local fixtures, with no live signing, provider credentials or deployment.
