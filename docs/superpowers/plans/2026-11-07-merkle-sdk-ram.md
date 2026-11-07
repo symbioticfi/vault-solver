@@ -44,3 +44,10 @@ Validation on SDK `26e64712a1ec85379175e0aa0450a23d20c5eb24` with `GOWORK=off`: 
 - [x] Pin the published SDK and complete required repository/Anvil gates, independent review and PR #277 update. Signed RPC rejection ownership remains unchanged; no cancellation workflow or new recovery state.
 
 Funding validation with published SDK `26e64712a1ec85379175e0aa0450a23d20c5eb24` and `GOWORK=off`: tidy/verify, format/lint autofix and plain lint (zero issues), build, full race/coverage, tooling and all three Anvil 1.9.0 targets passed. Initial funding failures produce no signature/capture/broadcast; exact coverage, invalid data, fee floors, value and replacement retention are covered. The real shared-manager Merkle release/funded-retry regression passed ten race-enabled Anvil runs. Independent review found no production blockers; its test scheduling observation was fixed with a bounded lane-release wait.
+
+## Same-account starvation fix
+
+- [x] Pin public SDK `51d79326d077d6e4411afd03aafbb29aa5b6b5fd` (`v0.0.0-20261107231501-51d79326d077`). Before a provisional settlement task excludes another executor sharing its account, the SDK admits the collected prefix and rebuilds composition and reservations from surviving members. Idle or rejected tasks release provisional reservations; prepared evidence and task identity are reused, and final selected work still receives full admission.
+- [x] Repeat Go 1.27.3 tidy/verify, format, build, full race/coverage, lint, tooling and all three Anvil 1.9.0 targets with `GOWORK=off`. Host runtime code and configuration stay unchanged.
+
+Validation on the published SDK above passed: `go mod tidy`, `go mod verify`, `make format`, `go build ./...`, `make test`, `make lint`, `make test-tooling`, `make test-txmanager-anvil`, `make test-rfq-merkle-anvil` and `make test-merklesender-anvil`. Both lint runs reported zero issues. Tests use local Anvil 1.9.0 and API fixtures; no live signing, provider credentials or deployment was used.
