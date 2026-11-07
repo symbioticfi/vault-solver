@@ -81,7 +81,7 @@ host loop, protocol-specific batching or per-executor switch. The existing chain
 client supplies code overrides and pinned bytecode reads; the SDK revalidates the
 exact atomic multicall against the original contract before submission.
 
-The SDK is pinned to immutable commit `1a6567ec6867a649952024d2b45c9737f98cc438`.
+The SDK is pinned to immutable commit `aca8bc6e9b78e47618b38279efdda92177ca2aa3`.
 Remove `stateDir` from Merkle YAML: strict decoding rejects it. There is no journal,
 configuration fingerprint, saved plan or restart recovery. Process exit loses
 transaction, order and reservation tracking while external work may continue.
@@ -117,12 +117,17 @@ Curator settings accept only `url`. Its HTTP timeout is fixed at
 10 seconds and response limit at 2 MiB; `timeoutSeconds` and `maxResponseBytes`
 are rejected even when set to zero or those fixed limits.
 
-Readiness comes from the authenticated recipe. After the complete original executor
+For generic execution, readiness comes from the authenticated recipe. After the complete original executor
 simulation and canonical closing checks succeed, a recipe with no active Manage
 actions and no Call or Approve steps is idle. A separate readiness read can gate a
 Manage action while its bound request ID is zero; the host assigns no protocol
 meaning to that ID. Each new plan is prepared against current state.
 Malformed simulation results, failed recipe checks and RPC failures remain errors.
+RFQ admits its exact inner call through the same identity, role and canonical-pin
+checks but simulates the complete outer fill from the actual signer using
+`ValidatePreparedBatchWithSimulation`. It supplies no numerical witness and uses
+successful awarded settlement as its work condition. No nested result probe or
+RFQ code-override capability is required.
 Signed retries continue reconciling the exact retained transaction identities.
 The recipe's own checks define the on-chain completion conditions; this host does
 not infer settlement from issuer selectors or off-chain status.

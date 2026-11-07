@@ -27,29 +27,19 @@ three exact balance deltas and its swap leaf has real mask/proof/role enforcemen
 The unused committed Query supplies approval/swap permission preimages.
 No Solidity settlement, signature, economics or permission logic is mocked in Go.
 
-The complete unchanged outer fill first simulates from the host signer at a pinned
-block and the original gas budget. A separate `eth_call` temporarily installs the
-return-data probe from `../../simulation/OuterFillSimulation.sol` at the recipe
-executor. It delegates to a copy of the original runtime with the same executor
-address, storage, caller and outer funding state, then bubbles tagged execute
-results through the canonical outer contracts. The SDK admits those values only
-after the unchanged outer transaction succeeds, and closes the block pins after
-its role, commitment and execution checks. The probe never substitutes for the
-canonical settlement check and is never deployed on-chain.
+The complete unchanged outer fill simulates from the host signer at a pinned
+block and the original gas budget through an ordinary `eth_call`. Shared SDK
+admission checks the inner recipe/call identity, fresh metadata and roles, and
+closes original/fresh block pins around that simulation. RFQ supplies no numerical
+witness and uses successful signed award settlement as its work condition, so no
+inner return data, code override or probe artifact is needed.
 
 Tests require a valid whole fill to simulate without changing state and then
 actually mine with the expected input/output balances. Other cases must reach
-the complete outer `eth_call` and fail on invalid discount economics, cash missing
-before the pinned settlement simulation, and an EOA
-missing from Executor's caller allowlist. The earlier Go fake tests retain
-recipe discovery, mask, role, reorg, RAM ownership and return-data identity edge coverage.
-
-The return-data probe has its own reproducible Solidity 0.8.38 artifact:
-
-```sh
-python3 internal/solvers/merkle/rfq/simulation/generate.py
-python3 internal/solvers/merkle/rfq/simulation/generate.py --check
-```
+the complete outer `eth_call` and fail on invalid discount economics, signatures,
+cash missing before settlement simulation, and an EOA missing from Executor's
+caller allowlist. Go fixtures retain recipe discovery, mask, role, reorg and RAM
+ownership edge coverage.
 
 Offline canonical-fixture regeneration uses built artifacts from clean checkouts at the pinned
 revisions plus Solidity 0.8.28 for the small external fixture:

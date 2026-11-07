@@ -68,13 +68,16 @@ call data and proofs come from the existing curator permission-tree service.
 otherwise its configured issuer calls execute before the complete outer fill succeeds.
 It simulates the complete outer RFQ fill from the EOA so Reactor funding, recipe
 authorization and output settlement are checked together.
-Because that fill discards the inner return values, a separate eth_call-only code
-override captures the original recipe's results in the actual outer funding
-context. The SDK validates those results and the recipe through its shared
-admission path. The unmodified outer fill must independently succeed at the same
-pinned block and transaction gas budget. The probe is never deployed and requires
-ordinary state-override support, without a tracing RPC. `make verify-merkle-simulation`
-checks its committed artifact against the pinned Solidity source and compiler.
+The shared external-simulation admission path authenticates the inner call, fresh
+metadata and roles, then runs that exact outer fill at the supplied pinned block
+and transaction gas budget before closing both original and fresh block pins.
+RFQ supplies no numerical result witness. The awarded fill's complete settlement
+is its work condition; generic inner `HasWork` classification is not required.
+A successful fill can therefore use existing RFQ Executor inventory even when an
+inner Manage gate is closed, provided every committed recipe check and the full
+signed award still succeeds. Generic recipe paths retain numerical witness and
+result-based readiness validation. RFQ requires ordinary `eth_call` only; it does
+not fetch recipe bytecode or install a nested return-data probe.
 
 The host puts the awarded connector amount and unchanged signed terms in
 `discountSwapInputs`. It forwards the SDK-assembled `RecipeExecutor.execute`

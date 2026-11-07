@@ -3,7 +3,6 @@ package rfq
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"math/big"
 	"reflect"
 	"strings"
@@ -13,9 +12,7 @@ import (
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
@@ -279,51 +276,6 @@ func (r *connectorExecutionReader) CallContract(ctx context.Context, msg ethereu
 	return nil, errors.New("unexpected contract call or direct inner simulation")
 }
 
-type recipeProbeError struct{ data string }
-
-func (e recipeProbeError) Error() string  { return "execution reverted" }
-func (e recipeProbeError) ErrorData() any { return e.data }
-func (e recipeProbeError) ErrorCode() int { return 3 }
-
-func (*connectorExecutionReader) CodeAt(context.Context, common.Address, *big.Int) ([]byte, error) {
-	return []byte{1}, nil
-}
-
-func (r *connectorExecutionReader) CallContractWithCodeAt(_ context.Context, msg ethereum.CallMsg, block *big.Int, target common.Address, code []byte) ([]byte, error) {
-	if msg.From != r.signer || msg.To == nil || *msg.To != r.recipeCaller || target != r.recipeExecutor || block == nil || block.Uint64() != 7 || msg.Gas != r.header.GasLimit+8_000_000 || !bytes.Equal(msg.Data, r.outerData) || r.outerCalls != 1 {
-		return nil, errors.New("RFQ probe changed the complete settlement context")
-	}
-	var artifact struct {
-		ABI json.RawMessage `json:"abi"`
-	}
-	if err := json.Unmarshal(outerSimulationArtifact, &artifact); err != nil {
-		return nil, err
-	}
-	binding, err := abi.JSON(bytes.NewReader(artifact.ABI))
-	if err != nil {
-		return nil, err
-	}
-	resultError := binding.Errors["RFQRecipeResult"]
-	length := new(big.Int).SetBytes(code[len(code)-32:]).Int64()
-	configuration, err := (abi.Arguments{resultError.Inputs[4], resultError.Inputs[1], resultError.Inputs[2]}).Unpack(code[len(code)-32-int(length) : len(code)-32])
-	if err != nil {
-		return nil, err
-	}
-	results := make([]*big.Int, len(r.recipe.Steps))
-	for i := range results {
-		results[i] = new(big.Int)
-	}
-	returned, err := recipeBinding.GetABI().Methods["execute"].Outputs.Pack(results)
-	if err != nil {
-		return nil, err
-	}
-	data, err := resultError.Inputs.Pack(r.recipeExecutor, configuration[1], configuration[2], crypto.Keccak256Hash(configuration[0].([]byte)), returned)
-	if err != nil {
-		return nil, err
-	}
-	return nil, recipeProbeError{hexutil.Encode(append(resultError.ID.Bytes()[:4], data...))}
-}
-
 type connectorExecutionFixtureData struct {
 	workflow *connectorWorkflow
 	reader   *connectorExecutionReader
@@ -441,13 +393,6 @@ func (r *headAdvanceReader) CallContract(ctx context.Context, msg ethereum.CallM
 		r.simulationBlock = block.Uint64()
 	}
 	return r.connectorExecutionReader.CallContract(ctx, msg, big.NewInt(7))
-}
-
-func (r *headAdvanceReader) CallContractWithCodeAt(ctx context.Context, msg ethereum.CallMsg, block *big.Int, target common.Address, code []byte) ([]byte, error) {
-	if block == nil || block.Uint64() != 8 {
-		return nil, errors.New("return probe escaped prepared block")
-	}
-	return r.connectorExecutionReader.CallContractWithCodeAt(ctx, msg, big.NewInt(7), target, code)
 }
 
 type advancedPermissions struct{ permissionSource }

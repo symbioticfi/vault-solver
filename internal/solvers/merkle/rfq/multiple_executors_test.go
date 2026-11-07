@@ -100,10 +100,6 @@ func (r *multiRecipeReader) CallContract(ctx context.Context, msg ethereum.CallM
 	return r.connectorExecutionReader.CallContract(ctx, msg, block)
 }
 
-func (r *multiRecipeReader) CallContractWithCodeAt(ctx context.Context, msg ethereum.CallMsg, block *big.Int, target common.Address, code []byte) ([]byte, error) {
-	return r.readers[target].CallContractWithCodeAt(ctx, msg, block, target, code)
-}
-
 type multiRecipeSource map[common.Address]permissionSource
 
 func (s multiRecipeSource) PermissionTree(ctx context.Context, chainID *big.Int, snapshot recipes.Snapshot) ([]byte, error) {

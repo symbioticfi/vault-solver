@@ -273,8 +273,8 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if err != nil {
 		return nil, time.Time{}, errors.Errorf("encode recipe fill: %w", err)
 	}
-	reader := outerFillReader{Reader: w.chain, snapshot: snapshot, inner: assembled.Calldata, outer: calldata, caller: w.caller, signer: w.signer}
-	if err := recipes.ValidatePreparedBatch(ctx, reader, prepared, []recipes.ExecutorCall{{Executor: snapshot.Executor, Data: assembled.Calldata}}, [][]common.Hash{assembled.Leaves}, []map[uint]string{nil}, w.caller); err != nil {
+	simulation := outerFillSimulation{reader: w.chain, executor: snapshot.Executor, inner: assembled.Calldata, outer: calldata, caller: w.caller, signer: w.signer}
+	if err := recipes.ValidatePreparedBatchWithSimulation(ctx, w.chain, prepared, []recipes.ExecutorCall{{Executor: snapshot.Executor, Data: assembled.Calldata}}, [][]common.Hash{assembled.Leaves}, w.caller, simulation.Simulate); err != nil {
 		return nil, time.Time{}, errors.Errorf("validate outer RFQ recipe fill: %w", err)
 	}
 	return calldata, terms.ValidUntil, nil

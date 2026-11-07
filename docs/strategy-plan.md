@@ -352,6 +352,13 @@ is priority, not a withdrawal cash reservation.
 The host's SDK transport continues to use the existing shared transaction manager's
 owner fence and pre-broadcast capture callbacks; it contains no copied sender or nonce engine.
 The shared `DiscoverBatch` and `ValidatePreparedBatch` APIs serve one executor or many.
+RFQ uses `ValidatePreparedBatchWithSimulation` through the same admission core:
+a mandatory host callback simulates the complete unchanged outer fill from the
+real signer at the supplied fresh block and gas limit. The shared core still
+checks recipe/call identity, metadata, roles and original/fresh canonical pins.
+RFQ provides no numerical witness and uses awarded settlement as its work
+condition, so it needs no inner return data or code override. Generic admission
+keeps result/witness and readiness validation.
 There is no disk journal or restart recovery; external work must be settled before restarting.
 The planner isolates candidate failures through the same grouped discovery core
 and reports them alongside healthy selected work. A bounded keeper drain submits

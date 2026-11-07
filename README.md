@@ -1080,7 +1080,7 @@ chain connection and require no separate recipe indexer URL.
 Polling is fixed at 15 seconds and operation timeout at 30 seconds. `pollInterval` and
 `operationTimeout` are not configuration fields. Curator settings accept only `url`; its HTTP timeout and response limit are fixed at 10 seconds and 2 MiB.
 
-The authenticated recipe supplies on-chain readiness and completion checks. Successful
+For generic recipe execution, the authenticated recipe supplies on-chain readiness and completion checks. Successful
 simulations with all Manage gates closed and no Call or Approve work wait without
 sending; malformed results and failed simulations remain errors. A zero request ID
 does not imply waiting when a separate recipe gate authorizes the action.
@@ -1117,7 +1117,11 @@ budget-consuming check cannot establish their scope. The bot can cancel its own 
 intent and never cancels accepted mint windows.
 
 The `rfq-filler` recipe mode (also available as the execution-only `rfq-merkle` plugin) executes awarded orders through the RFQ Executor and committed
-Merkle recipes. It samples wall time before reading the chain header so RPC latency consumes submission validity.
+Merkle recipes. Each awarded fill is validated by one complete, unchanged outer
+`eth_call` from the actual signer at the pinned block and gas budget; no RFQ
+return-data probe or code-override support is required. Successful awarded
+settlement supplies its work condition. It samples wall time before reading the
+chain header so RPC latency consumes submission validity.
 See [the RFQ Merkle runbook](docs/RFQ-MERKLE.md) and [configuration](config/rfq-merkle.example.yaml).
 
 Local integration checks require Anvil on `PATH`: `make test-txmanager-anvil`,

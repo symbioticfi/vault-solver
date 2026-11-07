@@ -653,6 +653,13 @@ removed body field.
 
 Merkle connector acquisition is owned by `internal/solvers/merkle/rfq`, as described in [RFQ-MERKLE.md](RFQ-MERKLE.md). The backend uses an optional `recipeExecutors` list for each connector: absent means native adapter; present means connector. It estimates capacity from recipe reads and checks current roles with batched RPC calls, without scanning historical block ranges or fetching curator permission trees. Advertised maxAssets is a read estimate; exact ordered funding and settlement are validated by the solver's complete outer fill simulation. It supplies `maxAssets`, account, discount precision and the measured `recipeExecutor` in quote inventory. The solver chooses native behavior from local `adapters` configuration or Merkle behavior from local `recipeExecutors`; configuring both fails startup. Merkle mode derives each payment connector from its committed recipe and shares the existing Merkle fill component. Overlapping recipes use one account/asset capacity within each quote, and awards select a configured executor with the matching connector and RWA. Missing executors fail closed. Regular connector quote admission consumes backend capacity, clips it by current `remainingAssets` and subtracts account/asset reservations. The Merkle execution path reads the unchanged original recipe from `SetRecipe` only at the executor's known publication block, fetches the existing permission tree, verifies current roles and simulates the complete outer RFQ fill. It uses the shared chain reader without a separate publication indexer URL. The recipe commits one signed swap with the awarded amount and payment as inputs 0 and 1; no capacity metadata or embedded proofs are added. Include that asset's original issuer grants when redemption is required; route failures never fall back to custody.
 
+Shared SDK admission authenticates RFQ recipe identity, permissions, fresh roles
+and original/fresh block pins around the unchanged full outer-fill simulation.
+RFQ supplies no numerical witness and uses signed awarded settlement as its work
+condition, so it consumes no inner return data. The host needs no nested probe,
+recipe runtime fetch or code override; generic recipe paths keep numerical and
+result-based readiness checks.
+
 ### Optional token log metadata
 
 RFQ shares the existing chain metadata cache. Only a positive quote decision, after adapter/asset and
