@@ -3,7 +3,7 @@
 The `merkle` solver consumes the independently versioned
 `github.com/symbioticfi/merkle-executor/sdk` module pinned in go.mod.
 The SDK implements recipe/tree/proof/role checks,
-pinned runtime assembly, simulation, canonical receipts and durable recovery.
+pinned runtime assembly, simulation, canonical receipts and RAM settlement tasks.
 It also exposes opt-in off-chain providers, RPC, signing and a standalone sender;
 this host keeps its existing shared sender. Hosts explicitly supply credential
 lookup, so importing or constructing SDK components never implicitly reads the
@@ -12,9 +12,10 @@ process environment.
 `keeper.Planner.PrepareExecution` returns the same execution-plan format for direct
 calls and EIP-7702 batches across executors. The SDK detects delegation, simulates
 the complete plan and retains detailed construction results. The host submits the
-prepared transaction without another simulation. Unsigned saved plans are rebuilt;
-signed transactions retain their exact bytes and shared-sender ownership. All batch
-members receive the same durable receipt before settlement advances.
+prepared transaction without another simulation. Signed transactions retain their exact
+identity and shared-sender ownership through in-process retries. All batch members
+receive the same canonical receipt before settlement advances. At the recipe layer,
+`DiscoverBatch` and `ValidatePreparedBatch` serve both one executor and many.
 
 Awarded LiquidLane connector orders run in the separate [`rfq-merkle` solver](RFQ-MERKLE.md).
 Its RecipeExecutor caller is the RFQ Executor contract, so it must not be included in
@@ -31,14 +32,12 @@ canonical snapshot. It does not scan historical block ranges. Generic, RFQ and
 Permission data still uses the curator service.
 
 This solver receives the same transaction manager and signer as all other
-solvers. The SDK's transport is a thin bridge to that manager's Owner and
-BeforeBroadcast hooks. Every signed original and fee replacement is persisted
-before broadcast. A journal owner fences new admission by other solvers until
-durable business acknowledgement. Recovery restores the fence during factory
-construction, before the shared sender or any solver runs; it never replays a
-stored recipe. Simulation mode refuses a recovered signed job rather than
-allowing the other solvers to reuse its signer lane. Stores close after the
-shared sender's shutdown drain, including on partial startup failure.
+solvers. `internal/merklesender` implements the SDK Submit/Poll/Busy contract using
+the manager's Owner and BeforeBroadcast hooks. Every signed original and replacement
+is captured in RAM before broadcast. A process-local owner fences other solvers
+until a canonical owned receipt is delivered. Ambiguous outcomes retain the exact
+attempts; resumption uses the same host manager, nonce and fee policy. No additional
+signer, nonce allocator or SDK transaction engine is constructed.
 
 Add this solver alongside the existing solvers in the normal YAML file:
 
@@ -47,7 +46,6 @@ solvers:
   - name: merkle
     config:
       mode: simulate # switch to send for configured, authorized execution
-      stateDir: /persistent/merkle-state
       curator:
         url: https://curator-backend.example.invalid/api/v1
       strategies:
@@ -55,7 +53,7 @@ solvers:
 ```
 
 `strategies` is a list of full nonzero executor addresses. Each canonical lowercase
-address, including `0x`, is the durable state and log identifier. Order does not
+address, including `0x`, is the strategy and log identifier. Order does not
 change identity; duplicate addresses and different checksum spellings of the same
 address are rejected. Strategy objects, custom labels and per-strategy options
 are rejected before network access. The unrelated `solvers[].name` still selects
@@ -63,7 +61,7 @@ the solver integration.
 
 List order sets processing priority. Each later executor sees earlier confirmed
 effects; order does not reserve funds. Spending recipes must protect withdrawal
-obligations. Pending nonce recovery runs first while preserving the remaining
+obligations. Pending transaction reconciliation runs first while preserving the remaining
 order, and unsettled asynchronous work keeps its account reserved.
 
 The SDK automatically batches self-contained, state-driven recipes on the same
@@ -76,21 +74,16 @@ host loop, protocol-specific batching or per-executor switch. The existing chain
 client supplies code overrides and pinned bytecode reads; the SDK revalidates the
 exact atomic multicall against the original contract before submission.
 
-The supported runtime policy version is `1`. Unresolved journals fence ownership and
-retain their original identity and configuration. The shared SDK is pinned to an immutable version.
+The SDK is pinned to immutable commit `2a75db71d238584448218392cf0794512aee62bb`.
+Remove `stateDir` from Merkle YAML: strict decoding rejects it. There is no journal,
+configuration fingerprint, saved plan or restart recovery. Process exit loses
+transaction, order and reservation tracking while external work may continue.
+Settle existing work before migration and use one active process per signer.
 
-Paths resolve from the process working directory; use absolute paths for mounted
-configuration and persistent state. The regular chain/signer/txManager settings
-still apply. Send mode requires the shared signer to match the on-chain executor
-caller; the executor must hold the required leaf roles. Startup reads the executor
-account and caller together at one pinned block,
-deduplicates repeated executors and checks that block again. Every caller must
-match the existing shared signer before state opens. Derived identity, curator
-source and the fixed runtime policy version fingerprint active work; do not remove
-or change a workflow while it owns unresolved work.
-Mount durable state and exclude concurrent processes with this signer, even if
-they use different state directories. A process-local lane cannot coordinate a
-second service independently using the same private key.
+The regular chain/signer/txManager settings still apply. Send mode requires the
+shared signer to match the on-chain executor caller; the executor must hold the
+required leaf roles. Startup reads account and caller together at one pinned block,
+deduplicates executors and closes that pin before accepting the identities.
 
 The host registers the SDK's shared Aave V3 capacity provider and uses the shared
 curator permission source. The planner derives deterministic recipe inputs directly.
@@ -121,9 +114,9 @@ Readiness comes from the authenticated recipe. After the complete original execu
 simulation and canonical closing checks succeed, a recipe with no active Manage
 actions and no Call or Approve steps is idle. A separate readiness read can gate a
 Manage action while its bound request ID is zero; the host assigns no protocol
-meaning to that ID. Unsigned saved plans are rebuilt against current state.
+meaning to that ID. Each new plan is prepared against current state.
 Malformed simulation results, failed recipe checks and RPC failures remain errors.
-Signed recovery continues reconciling the exact persisted transaction bytes.
+Signed retries continue reconciling the exact retained transaction identities.
 The recipe's own checks define the on-chain completion conditions; this host does
 not infer settlement from issuer selectors or off-chain status.
 
@@ -143,11 +136,10 @@ empty-retry opt-out as scalar lookups. Inspection preserves the SDK's 256-member
 independently of the smaller metrics prefix. Complete malformed envelopes are left to the SDK;
 response-body I/O failures follow ordinary read fallback.
 
-`make test-merklesender-anvil` composes the real SDK state store and submission manager with the
-host Transport and shared txmanager on a local chain. It checks durable bytes before every original
-and replacement broadcast, restart ownership restoration, canonical receipt recovery, and durable
-acknowledgement before fence release. Storage failure prevents broadcast; failed acknowledgement
-retains the journal and reservation. CI runs it in the existing Foundry-equipped integration job.
+`make test-merklesender-anvil` composes the RAM sender bridge with the host
+transaction manager on a local chain. It checks signed identity capture, ambiguous
+submission, canonical receipts, replacements and shared-signer fencing. CI runs
+it in the existing Foundry-equipped integration job.
 
 Read-dependent numeric values are resolved in one same-address code-override lens
 call. Authenticated Manage/Approve/Call instructions execute in order before later
@@ -157,8 +149,8 @@ the overridden executor fail before external quote requests. The original execut
 complete simulation verifies the resolved values and canonical guards still run.
 An RPC without state-override support cannot prepare a recipe requiring these
 values. The SDK's `keeper.Provider` interface lets host integrations declare
-authenticated recipe requirements, prepare fresh inputs and reconcile confirmed
-executions. LL/3F auction discovery, pricing,
+authenticated recipe requirements and prepare fresh inputs. Optional typed
+`provider.Task` values reconcile canonical executions and retain progress in RAM. LL/3F auction discovery, pricing,
 signed offers, RFQ domain compatibility, reservations and order reconciliation
 remain business logic in vault-solver. The independent [`threef-merkle`](THREEF-MERKLE.md) and [`rfq-merkle`](RFQ-MERKLE.md)
 solvers supply that host logic. `merkle` rejects protocol-specific configuration.

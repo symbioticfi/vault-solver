@@ -24,20 +24,34 @@ factory/root/oracle registries plus a constant-price feed. The EOA request,
 protocol order, connector discount and discount-swap signatures are real ECDSA
 EIP-712 signatures checked by the canonical contracts. The recipe commits the
 three exact balance deltas and its swap leaf has real mask/proof/role enforcement.
-The unused committed Query supplies approval/swap permission preimages. Capacity runs the
-empty funding prefix over existing account cash through the SDK code override; no contract
-capacity or executor-binding extension is deployed.
-No Solidity settlement, signature, economics, permission or capacity logic is
-mocked in Go.
+The unused committed Query supplies approval/swap permission preimages.
+No Solidity settlement, signature, economics or permission logic is mocked in Go.
+
+The complete unchanged outer fill first simulates from the host signer at a pinned
+block and the original gas budget. A separate `eth_call` temporarily installs the
+return-data probe from `../../simulation/OuterFillSimulation.sol` at the recipe
+executor. It delegates to a copy of the original runtime with the same executor
+address, storage, caller and outer funding state, then bubbles tagged execute
+results through the canonical outer contracts. The SDK admits those values only
+after the unchanged outer transaction succeeds, and closes the block pins after
+its role, commitment and execution checks. The probe never substitutes for the
+canonical settlement check and is never deployed on-chain.
 
 Tests require a valid whole fill to simulate without changing state and then
 actually mine with the expected input/output balances. Other cases must reach
-the complete outer `eth_call` and fail on invalid discount economics, cash lost
-between the pinned capacity observation and latest-state settlement, and an EOA
+the complete outer `eth_call` and fail on invalid discount economics, cash missing
+before the pinned settlement simulation, and an EOA
 missing from Executor's caller allowlist. The earlier Go fake tests retain
-recipe discovery, mask, role, reorg and persistence edge coverage.
+recipe discovery, mask, role, reorg, RAM ownership and return-data identity edge coverage.
 
-Offline regeneration uses built artifacts from clean checkouts at the pinned
+The return-data probe has its own reproducible Solidity 0.8.38 artifact:
+
+```sh
+python3 internal/solvers/merkle/rfq/simulation/generate.py
+python3 internal/solvers/merkle/rfq/simulation/generate.py --check
+```
+
+Offline canonical-fixture regeneration uses built artifacts from clean checkouts at the pinned
 revisions plus Solidity 0.8.28 for the small external fixture:
 
 ```sh

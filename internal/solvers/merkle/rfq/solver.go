@@ -10,10 +10,9 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
-	"github.com/symbioticfi/merkle-executor/sdk/submission"
+	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
@@ -24,7 +23,6 @@ import (
 )
 
 const Name = "rfq-merkle"
-const intentKey = "rfq-merkle.fill.1"
 const operationTimeout = 30 * time.Second
 
 var tracer = observability.NewTracer("github.com/symbioticfi/vault-solver/internal/solvers/merkle/rfq", Name)
@@ -38,19 +36,11 @@ type orderBackend interface {
 	listDiscounts(ctx context.Context) (*discounts.List, error)
 }
 
-type journalSender interface {
-	PendingID() string
-	Send(ctx context.Context, req submission.Request) (submission.Result, error)
-	Acknowledge(ctx context.Context, id string) error
-}
-
 type fillIntent struct {
-	ChainID  string         `json:"chainId"`
-	OrderID  string         `json:"orderId"`
-	ID       string         `json:"id"`
-	To       common.Address `json:"to"`
-	Data     hexutil.Bytes  `json:"data"`
-	Deadline time.Time      `json:"deadline"`
+	OrderID  string
+	To       common.Address
+	Data     []byte
+	Deadline time.Time
 }
 
 type Solver struct {
@@ -58,19 +48,11 @@ type Solver struct {
 	routes          map[common.Address]recipeRoute
 	workflow        *connectorWorkflow
 	backend         orderBackend
-	sender          journalSender
-	store           *state.Store
-	intent          fillIntent // Only Run accesses the intent; the sender reads its deadline at admission.
+	sender          keeper.Sender
+	intent          *fillIntent // Only Run accesses the intent; the sender reads its deadline at admission.
 }
 
 func (*Solver) Name() string { return Name }
-func (s *Solver) Close() error {
-	if s.store == nil {
-		return nil
-	}
-	return s.store.Close()
-}
-
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
@@ -96,31 +78,14 @@ func New(cfg Config, deps solver.Deps) (*Solver, error) {
 		return nil, err
 	}
 	s.workflow.source, s.workflow.signer = source, deps.Signer.Address()
-	store, err := state.Open(cfg.StateDir)
-	if err != nil {
-		return nil, err
-	}
-	complete := false
-	defer func() {
-		if !complete {
-			_ = store.Close()
+	sender := merklesender.New(deps.TxManager, Name)
+	sender.Deadline = func() time.Time {
+		if s.intent == nil {
+			return time.Time{}
 		}
-	}()
-	s.store = store
-	s.sender, err = submission.New(deps.Chain, deps.Signer.Address(), deps.Chain.ChainID(), store, submission.Config{Confirmations: deps.TxManager.Confirmations()}, merklesender.Transport{Manager: deps.TxManager, Solver: Name, Deadline: func() time.Time { return s.intent.Deadline }}, deps.Log)
-	if err != nil {
-		return nil, err
+		return s.intent.Deadline
 	}
-	if s.sender.PendingID() != "" {
-		found, err := store.Load(intentKey, &s.intent)
-		if err != nil {
-			return nil, err
-		}
-		if !found || s.intent.ChainID != deps.Chain.ChainID().String() || s.intent.To != cfg.Executor || s.intent.ID != s.sender.PendingID() || s.intent.ID != intentID(s.intent.Data) {
-			return nil, errors.New("rfq-merkle signed transaction has no matching fill intent")
-		}
-	}
-	complete = true
+	s.sender = sender
 	return s, nil
 }
 
@@ -145,14 +110,15 @@ func (s *Solver) Run(ctx context.Context) error {
 	}
 }
 
-func intentID(data []byte) string { return Name + ":" + crypto.Keccak256Hash(data).Hex() }
-
-// One admitted award owns the signer lane until its canonical receipt is acknowledged.
+// One admitted award owns the signer lane until its canonical receipt is returned.
 func (s *Solver) tick(ctx context.Context) (err error) {
 	ctx, end := tracer.Start(ctx, "rfq-merkle.poll")
 	defer func() { end(err) }()
-	if s.sender.PendingID() != "" {
-		return s.send(ctx)
+	if s.intent != nil {
+		return s.poll(ctx)
+	}
+	if s.sender.Busy() {
+		return errors.New("RFQ sender has work without a fill owner")
 	}
 	rows, err := s.backend.orders(ctx, strings.ToLower(s.workflow.caller.Hex()))
 	if err != nil {
@@ -188,11 +154,13 @@ func (s *Solver) tick(ctx context.Context) (err error) {
 		if intent == nil {
 			continue
 		}
-		if err := s.store.Save(intentKey, intent); err != nil {
-			return err
+		// Capture the awarded bytes before submission; a timeout may follow a send.
+		s.intent = intent
+		err = s.sender.Submit(ctx, transaction.Request{To: intent.To, Data: intent.Data})
+		if err != nil && !s.sender.Busy() {
+			s.intent = nil
 		}
-		s.intent = *intent
-		return s.send(ctx)
+		return err
 	}
 	return nil
 }
@@ -247,26 +215,27 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 		if !ok {
 			return nil, errors.New("fill deadline elapsed during preparation")
 		}
-		return &fillIntent{ChainID: s.workflow.chainID.String(), OrderID: row.OrderId, ID: intentID(data), To: s.workflow.caller, Data: data, Deadline: deadline}, nil
+		return &fillIntent{OrderID: row.OrderId, To: s.workflow.caller, Data: data, Deadline: deadline}, nil
 	}
 	return nil, nil
 }
 
-func (s *Solver) send(ctx context.Context) (err error) {
+func (s *Solver) poll(ctx context.Context) (err error) {
 	ctx, end := tracer.Start(ctx, "rfq-merkle.fill", observability.AttrOrderID.String(s.intent.OrderID))
 	defer func() { end(err) }()
-	r, err := s.sender.Send(ctx, submission.Request{ID: s.intent.ID, To: s.intent.To, Data: s.intent.Data})
-	if err != nil {
+	result, err := s.sender.Poll(ctx)
+	if err != nil || result == nil {
 		return err
 	}
-	if !r.Confirmed && !r.Reverted {
-		return nil
+	if result.Hash == (common.Hash{}) || result.Execution == nil || result.Execution.TxHash != result.Hash {
+		return errors.New("RFQ sender returned invalid execution identity")
 	}
-	if err := s.sender.Acknowledge(ctx, s.intent.ID); err != nil {
+	if err := result.Execution.Validate(); err != nil {
 		return err
 	}
-	observability.Log(ctx).Info("RFQ fill transaction finalized", "orderId", s.intent.OrderID, "tx", r.Hash.Hex(), "reverted", r.Reverted)
-	return s.store.Delete(intentKey)
+	observability.Log(ctx).Info("RFQ fill transaction finalized", "orderId", s.intent.OrderID, "tx", result.Hash.Hex(), "reverted", result.Reverted)
+	s.intent = nil
+	return nil
 }
 
 func minTime(a, b time.Time) time.Time {

@@ -8,7 +8,9 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+	accountbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/threef"
@@ -53,10 +55,11 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	ctx, end := tracer.Start(ctx, "threef-merkle.offers.tick", observability.AttrAdapter.String(w.strategy.Config.Account))
 	defer func() { end(err) }()
 	p := w.planner
-	snapshot, recipe, err := recipes.DiscoverForAccount(ctx, p.Chain, common.HexToAddress(w.strategy.Config.Executor), common.HexToAddress(w.strategy.Config.Account), nil)
+	prepared, err := recipes.DiscoverBatch(ctx, p.Chain, []common.Address{common.HexToAddress(w.strategy.Config.Executor)}, []common.Address{common.HexToAddress(w.strategy.Config.Account)}, p.Caller, recipes.PreparationOptions{ChainID: p.ChainID, Cache: p.RecipeCache})
 	if err != nil {
 		return err
 	}
+	snapshot, recipe := prepared[0].Snapshot, prepared[0].Recipe
 	pin := provider.Snapshot{ChainID: new(big.Int).Set(p.ChainID), BlockNumber: new(big.Int).SetUint64(snapshot.BlockNumber), BlockHash: snapshot.BlockHash, Timestamp: snapshot.Timestamp, Executor: snapshot.Executor, Account: snapshot.Account, Caller: snapshot.Caller, RecipeHash: snapshot.RecipeHash, Root: snapshot.Root}
 	if err := verifyPolicyAccount(ctx, p.Chain, w.policy, pin.Account, pin.BlockNumber); err != nil {
 		return err
@@ -87,15 +90,69 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	for _, slot := range inspection.Slots {
 		leaves = append(leaves, slot.Leaves...)
 	}
-	if err := recipes.VerifyRoles(ctx, p.Chain, snapshot, leaves); err != nil {
-		return err
-	}
-	if err := recipes.ValidateSnapshot(ctx, p.Chain, snapshot, p.Caller); err != nil {
+	if err := w.validateOfferAuthorization(ctx, prepared[0], leaves); err != nil {
 		return err
 	}
 	return w.evaluate(ctx, p.Chain, pin, markets, auctions, offers, func(ctx context.Context) error {
-		return recipes.ValidateSnapshot(ctx, p.Chain, snapshot, p.Caller)
+		return w.validateOfferAuthorization(ctx, prepared[0], leaves)
 	})
+}
+
+// Offers precede mint authorization, so full mint simulation cannot admit them.
+// Reauthenticate the committed recipe and all roles without inventing mint data.
+func (w *offerWorkflow) validateOfferAuthorization(ctx context.Context, original recipes.PreparedRecipe, leaves []common.Hash) error {
+	p := w.planner
+	fresh, err := recipes.DiscoverBatch(ctx, p.Chain, []common.Address{original.Snapshot.Executor}, []common.Address{original.Snapshot.Account}, p.Caller, recipes.PreparationOptions{ChainID: p.ChainID, Cache: p.RecipeCache})
+	if err != nil {
+		return err
+	}
+	a, b := original.Snapshot, fresh[0].Snapshot
+	if a.Executor != b.Executor || a.Account != b.Account || a.Caller != b.Caller || a.RecipeHash != b.RecipeHash || a.RecipeBlock != b.RecipeBlock || a.Root != b.Root || a.BlockNumber > b.BlockNumber {
+		return errors.New("3f offer authorization changed; prepare again")
+	}
+	binding := accountbinding.NewMerkleAccount()
+	requests := make([]protocolio.ReadRequest, len(leaves))
+	for i, leaf := range leaves {
+		requests[i] = protocolio.ContractRead(b.Account, binding.PackHasRole(leaf, b.Executor), new(big.Int).SetUint64(b.BlockNumber), true)
+	}
+	roles, err := protocolio.ReadGroup(ctx, p.Chain, requests...)
+	if err != nil {
+		return err
+	}
+	for i := range leaves {
+		result := roles.At(i)
+		if result.Err != nil {
+			return errors.Errorf("3f read offer leaf role: %w", result.Err)
+		}
+		allowed, err := binding.UnpackHasRole(result.Data)
+		if err != nil {
+			return errors.Errorf("3f decode offer leaf role: %w", err)
+		}
+		if !allowed {
+			return errors.New("3f executor lacks offer leaf role")
+		}
+	}
+	// Close both pins after role reads, including the original policy/cash pin.
+	pins := []recipes.Snapshot{a, b}
+	requests = make([]protocolio.ReadRequest, len(pins))
+	for i, pin := range pins {
+		requests[i] = protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: new(big.Int).SetUint64(pin.BlockNumber)}
+	}
+	headers, err := protocolio.ReadGroup(ctx, p.Chain, requests...)
+	if err != nil {
+		return err
+	}
+	for i, pin := range pins {
+		result := headers.At(i)
+		if result.Err != nil {
+			return errors.Errorf("3f close offer block pin: %w", result.Err)
+		}
+		header := result.Header
+		if header == nil || header.Number == nil || !header.Number.IsUint64() || header.Number.Uint64() != pin.BlockNumber || header.Hash() != pin.BlockHash {
+			return errors.New("3f offer authorization block was reorganized")
+		}
+	}
+	return nil
 }
 
 // evaluate is owned by Run. Every membership result, including rejection,
@@ -116,10 +173,7 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 	memberships := make([]map[common.Address]bool, len(markets))
 	var pending []*intent
 	if w.bot.Send {
-		pending, err = w.bot.loadIntents(offerMarket{ChainID: pin.ChainID.Uint64(), Account: pin.Account})
-		if err != nil {
-			return errors.Errorf("load 3F offer recovery: %w", err)
-		}
+		pending = w.bot.pending
 	}
 	check := func(i int, request common.Address) error {
 		if _, known := memberships[i][request]; known {

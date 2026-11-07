@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
@@ -56,7 +57,11 @@ func TestAnvilConnectorOuterFillCanonicalBoundaries(t *testing.T) {
 			if name == "insufficient funding at simulation" {
 				// Backend capacity was advertised, then cash disappears before
 				// latest-state settlement simulation. The outer transaction must still fail.
-				f.reader.beforeOuter = func() { f.send(f.signer, tOut, "FixtureToken", "burn", f.account, big.NewInt(90)) }
+				f.reader.beforeOuter = func() {
+					// Mutate the observed head's cash without mining a later block.
+					slot := crypto.Keccak256Hash(common.LeftPadBytes(f.account.Bytes(), 32), make([]byte, 32))
+					f.rpcCall("anvil_setStorageAt", tOut, slot, common.Hash{})
+				}
 			}
 			if name == "unauthorized EOA" {
 				f.workflow.signer = common.HexToAddress("0x8888")
@@ -92,6 +97,10 @@ func TestAnvilConnectorOuterFillCanonicalBoundaries(t *testing.T) {
 				}
 				return
 			}
+			if f.reader.probeCalls != 1 {
+				t.Fatalf("original recipe result was not captured: probes=%d", f.reader.probeCalls)
+			}
+			f.assertProbeResults()
 			if !bytes.Equal(data, f.reader.outerData) || f.balance(tOut, f.account).Int64() != 90 || f.balance(tIn, f.signer).Int64() != 100 {
 				t.Fatal("simulation changed state or differed from submitted bytes")
 			}
@@ -133,6 +142,8 @@ type outerFillEVMReader struct {
 	outerCalls  int
 	outerData   []byte
 	revertData  []byte
+	probeRevert []byte
+	probeCalls  int
 }
 
 func (r *outerFillEVMReader) CallContract(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
@@ -155,6 +166,19 @@ func (r *outerFillEVMReader) CallContract(ctx context.Context, msg ethereum.Call
 		}
 	}
 	return data, err
+}
+
+func (r *outerFillEVMReader) CallContractWithCodeAt(ctx context.Context, msg ethereum.CallMsg, block *big.Int, target common.Address, code []byte) ([]byte, error) {
+	r.probeCalls++
+	var result hexutil.Bytes
+	err := r.Client.Client().CallContext(ctx, &result, "eth_call", protocolio.CallArgument(msg), protocolio.BlockArgument(block), map[common.Address]any{target: map[string]any{"code": hexutil.Bytes(code)}})
+	var revert rpc.DataError
+	if errors.As(err, &revert) {
+		if encoded, ok := revert.ErrorData().(string); ok {
+			r.probeRevert, _ = hexutil.Decode(encoded)
+		}
+	}
+	return result, err
 }
 
 type outerFillPermissions []byte
@@ -355,6 +379,34 @@ func (f *outerFillEVM) balance(token, account common.Address) *big.Int {
 		f.t.Fatal(err)
 	}
 	return new(big.Int).SetBytes(raw)
+}
+
+func (f *outerFillEVM) assertProbeResults() {
+	f.t.Helper()
+	var artifact struct {
+		ABI json.RawMessage `json:"abi"`
+	}
+	if err := json.Unmarshal(outerSimulationArtifact, &artifact); err != nil {
+		f.t.Fatal(err)
+	}
+	binding, err := abi.JSON(bytes.NewReader(artifact.ABI))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	values, err := binding.Errors["RFQRecipeResult"].Inputs.Unpack(f.reader.probeRevert[4:])
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	returned, err := recipeBinding.GetABI().Methods["execute"].Outputs.Unpack(values[4].([]byte))
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	results := returned[0].([]*big.Int)
+	for index, want := range map[int]int64{1: 90, 5: 0, 6: 90, 8: 90, 9: 90, 11: 100, 12: 100} {
+		if len(results) != 14 || results[index].Int64() != want {
+			f.t.Fatalf("probe did not return original funded recipe values: index=%d want=%d results=%v", index, want, results)
+		}
+	}
 }
 
 func (f *outerFillEVM) assertRevert(contract, name string) {

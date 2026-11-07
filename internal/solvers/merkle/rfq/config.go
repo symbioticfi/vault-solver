@@ -14,7 +14,6 @@ type Config struct {
 	RecipeExecutors []common.Address
 	QuoteOnly       bool
 	BackendURL      string
-	StateDir        string
 	Executor        common.Address
 	Curator         merklehost.Curator
 }
@@ -22,7 +21,6 @@ type Config struct {
 func parseConfig(node yaml.Node) (Config, error) {
 	var raw struct {
 		BackendURL      string             `yaml:"backendUrl"`
-		StateDir        string             `yaml:"stateDir"`
 		Executor        string             `yaml:"executor"`
 		RecipeExecutors []string           `yaml:"recipeExecutors"`
 		Curator         merklehost.Curator `yaml:"curator"`
@@ -38,7 +36,7 @@ func parseConfig(node yaml.Node) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cfg := Config{RecipeExecutors: recipeExecutors, BackendURL: raw.BackendURL, StateDir: raw.StateDir, Executor: executor, Curator: raw.Curator}
+	cfg := Config{RecipeExecutors: recipeExecutors, BackendURL: raw.BackendURL, Executor: executor, Curator: raw.Curator}
 	return cfg, cfg.Validate()
 }
 
@@ -58,9 +56,6 @@ func (c Config) Validate() error {
 		return errors.Errorf("backendUrl: %w", err)
 	}
 	if !c.QuoteOnly {
-		if c.StateDir == "" {
-			return errors.New("recipeExecutors requires stateDir")
-		}
 		if err := permissions.ValidateURL(c.Curator.URL); err != nil {
 			return errors.Errorf("curator: %w", err)
 		}

@@ -284,18 +284,13 @@ func TestConfirmedMintRequiresCanonicalReceiptAndPolicyDebit(t *testing.T) {
 		t.Fatal(err)
 	}
 	market := markets[0]
-	record := mint{Request: common.HexToAddress("0x123"), Policy: market.Policy, Asset: market.Asset, UnderlyingAsset: market.UnderlyingAsset, Principal: "12", Deadline: time.Unix(2000, 0)}
-	data, err := json.Marshal(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := provider.Output{Data: data}
-	p := mintProvider{Policy: fixturePolicy(t)}
-	if _, err := p.Advance(t.Context(), snapshot, out, nil); err == nil {
+	record := mint{Request: common.HexToAddress("0x123"), Policy: market.Policy, Asset: market.Asset, UnderlyingAsset: market.UnderlyingAsset, Principal: big.NewInt(12), Deadline: time.Unix(2000, 0)}
+	out := provider.Output{Task: &record}
+	if _, err := out.Task.Advance(t.Context(), snapshot); err == nil {
 		t.Fatal("unconfirmed mint accepted")
 	}
 	snapshot.Execution = &provider.Execution{TxHash: common.HexToHash("0xabc"), BlockHash: common.HexToHash("0xdef"), BlockNumber: big.NewInt(12)}
-	if _, err := p.Advance(t.Context(), snapshot, out, nil); err == nil {
+	if _, err := out.Task.Advance(t.Context(), snapshot); err == nil {
 		t.Fatal("missing debit accepted")
 	}
 	event := policySchema.Events["Consume"]
@@ -304,13 +299,13 @@ func TestConfirmedMintRequiresCanonicalReceiptAndPolicyDebit(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot.Execution.Logs = []types.Log{{Address: market.Policy, Topics: []common.Hash{event.ID, common.BytesToHash(market.Asset.Bytes()), common.BytesToHash(market.UnderlyingAsset.Bytes())}, Data: packed, TxHash: snapshot.Execution.TxHash, BlockHash: snapshot.Execution.BlockHash, BlockNumber: 12}}
-	result, err := p.Advance(t.Context(), snapshot, out, nil)
+	result, err := out.Task.Advance(t.Context(), snapshot)
 	if err != nil || !result.Done {
 		t.Fatalf("canonical confirmed debit rejected: %+v %v", result, err)
 	}
 	snapshot.Execution.Logs = append(snapshot.Execution.Logs, snapshot.Execution.Logs[0])
 	snapshot.Execution.Logs[1].Index = 1
-	if _, err := p.Advance(t.Context(), snapshot, out, nil); err == nil {
+	if _, err := out.Task.Advance(t.Context(), snapshot); err == nil {
 		t.Fatal("ambiguous duplicate debit accepted")
 	}
 }

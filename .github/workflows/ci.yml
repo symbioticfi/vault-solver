@@ -69,7 +69,7 @@ jobs:
       - name: Test canonical RFQ Merkle settlement
         run: make test-rfq-merkle-anvil
 
-      - name: Test composed SDK journal and shared sender
+      - name: Test RAM SDK ownership and shared sender
         run: make test-merklesender-anvil
 
   lint:

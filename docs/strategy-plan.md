@@ -317,8 +317,8 @@ strategy:
 The Merkle host consumes independently versioned SDK identity discovery, active-root
 permission fetching, recipe input derivation, bounded recipe evidence caching,
 pinned batched reads and state-override numeric preparation. It rejects manual
-account/tree/input configuration and fingerprints its derived account, signer,
-curator source and runtime policy version for recovery. Complete original-code
+account/tree/input configuration. Derived identity and execution ownership live
+only in RAM. Complete original-code
 simulation and canonical block fences remain mandatory. The shared lens replays
 authenticated state-changing prefixes before later numerical reads; unresolved
 provider outputs, future input sources and executor self-queries fail closed.
@@ -333,9 +333,9 @@ selecting such a leaf for recipe execution remains unsupported.
 
 The immutable SDK also classifies successful original execution results using the
 authenticated recipe: all Manage gates closed with no Call or Approve work is idle.
-Request IDs and bound arguments do not supply readiness policy. Unsigned saved plans
-are prepared again against current state; malformed results, reverts and closing canonical-check failures
-remain errors. The existing signed journal recovery path remains unchanged, and
+Request IDs and bound arguments do not supply readiness policy. New plans are
+prepared against current state; malformed results, reverts and closing canonical-check failures
+remain errors. Signed attempts retain exact identity through in-process retries, and
 on-chain completion assertions remain part of the recipe rather than host protocol
 recognition.
 
@@ -345,12 +345,14 @@ its existing code-override transport and pins the same SDK as the standalone
 executor, without a second loop or batching policy. `PrepareExecution` returns one
 plan for direct calls or cross-executor batches, detecting the shared signer's
 EIP-7702 delegation. Submission does not repeat preparation simulation. The 3F
-lease check closes preparation; signed recovery does not repeat it. One execution
-journal holds every member until its receipt is durable. Configured executor order
+lease check closes preparation; signed retries do not repeat it. One RAM execution
+holds every member until its canonical receipt is delivered. Configured executor order
 is priority, not a withdrawal cash reservation.
 
 The host's SDK transport continues to use the existing shared transaction manager's
-owner fence and persistence callbacks; it contains no copied sender or nonce engine.
+owner fence and pre-broadcast capture callbacks; it contains no copied sender or nonce engine.
+The shared `DiscoverBatch` and `ValidatePreparedBatch` APIs serve one executor or many.
+There is no disk journal or restart recovery; external work must be settled before restarting.
 The SDK batch engine uses the existing HTTP fallback/tracing path with strict response
 identity validation. Compatible pinned getters use one Multicall3 `eth_call` as a
 JSON-RPC object. Caller-sensitive, gas-limited or different-block calls stay separate,
@@ -366,25 +368,26 @@ owned by merkle-executor.
 uses no adapter inventory, economic strategy or shared capacity aggregation. The
 signed order supplies amounts; the SDK authenticates the immutable program and
 simulates the complete outer RFQ settlement. The Merkle hosts share
-`internal/merklesender`, which forwards owner fences, signed-byte persistence and
+`internal/merklesender`, which forwards owner fences, RAM signed-attempt capture and
 optional execution deadlines to the single txmanager. See [RFQ-MERKLE.md](RFQ-MERKLE.md).
 
 `threef-merkle` independently owns one Merkle recipe executor for one curator BF/default
 maker. Its recipe contains 1..32 distinct guarded funding/underlying markets, with
-one API client, planner, provider, exclusive store and sender. One Run goroutine
+one API client, planner, provider and RAM sender. One Run goroutine
 maintains existing commitments before scanning open/solvable auctions for new bids
 while the sender is idle. Positive and negative membership are memoized only at the
 current pin. Each pass checks every relevant unanswered open/solvable auction before
 bidding, with no eligibility count cap or persistent scan cursor. Matching requests
 are deduplicated per market, and each eligible market is considered once after the
 complete eligibility scan. Any API mutation ends the pass to refresh inventory.
-The account-level durable intent serializes self-originated offers across markets. Its API-key PUSH offer loop uses authenticated recipe/policy scope and idle
+Per-auction RAM intents preserve self-originated offer identity across markets. Its API-key PUSH offer loop uses authenticated recipe/policy scope and idle
 account cash; its SDK provider binds native aggregate mint authorizations. The
 provider authenticates canonical mint guards and their input bindings. Additional
 funding activation follows the curator-authored committed recipe; no separate host
 proof restricts the sources used by its Manage gates.
 The generic `merkle` solver has no 3F configuration or provider dispatch. All 3F Merkle
-code lives in one package; API, reservation and durable intent checks remain inside
-that integration. Both recipe keepers share store/sender startup through
-`internal/merklesender.OpenKeeper`, including recovery validation before Run.
+code lives in one package; API, reservation and RAM intent checks remain inside
+that integration. Both recipe keepers use `internal/merklesender.New` with the
+same host transaction manager. Offer mutations authenticate fresh SDK identity,
+all committed roles and both original and fresh block pins without needing a ready mint.
 See [THREEF-MERKLE.md](THREEF-MERKLE.md) for the flow and validation boundaries.

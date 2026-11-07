@@ -3,6 +3,7 @@ package rfq
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"math/big"
 	"reflect"
 	"strings"
@@ -12,7 +13,9 @@ import (
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
@@ -127,7 +130,7 @@ func TestConnectorBuildRejectsUnauthorizedOrUnsettledExecution(t *testing.T) {
 		{"outer fill reverts", func(_ *connectorWorkflow, r *connectorExecutionReader) {
 			r.outerErr = errors.New("Reactor output shortfall")
 		}, "simulat"},
-		{"binding snapshot changes before discovery", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.reorgBeforeDiscovery = true }, "reorganiz"},
+		{"binding snapshot reorganizes after discovery", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.reorgBeforeDiscovery = true }, "block hash"},
 		{"snapshot changes during outer fill", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.reorgDuringFill = true }, "reorganiz"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -216,8 +219,8 @@ func (r *connectorExecutionReader) CallContract(ctx context.Context, msg ethereu
 		return nil, errors.New("invalid contract call")
 	}
 	if *msg.To == r.recipeCaller && bytes.Equal(msg.Data[:4], executorBinding.GetABI().Methods["fill"].ID) {
-		if msg.From != r.signer || block != nil {
-			return nil, errors.New("outer fill must simulate from the host signer at latest")
+		if msg.From != r.signer || block == nil || block.Uint64() != 7 || msg.Gas != r.header.GasLimit {
+			return nil, errors.New("outer fill must simulate from the host signer at the pinned block and gas budget")
 		}
 		r.outerCalls++
 		r.outerData = bytes.Clone(msg.Data)
@@ -276,6 +279,51 @@ func (r *connectorExecutionReader) CallContract(ctx context.Context, msg ethereu
 	return nil, errors.New("unexpected contract call or direct inner simulation")
 }
 
+type recipeProbeError struct{ data string }
+
+func (e recipeProbeError) Error() string  { return "execution reverted" }
+func (e recipeProbeError) ErrorData() any { return e.data }
+func (e recipeProbeError) ErrorCode() int { return 3 }
+
+func (*connectorExecutionReader) CodeAt(context.Context, common.Address, *big.Int) ([]byte, error) {
+	return []byte{1}, nil
+}
+
+func (r *connectorExecutionReader) CallContractWithCodeAt(_ context.Context, msg ethereum.CallMsg, block *big.Int, target common.Address, code []byte) ([]byte, error) {
+	if msg.From != r.signer || msg.To == nil || *msg.To != r.recipeCaller || target != r.recipeExecutor || block == nil || block.Uint64() != 7 || msg.Gas != r.header.GasLimit+8_000_000 || !bytes.Equal(msg.Data, r.outerData) || r.outerCalls != 1 {
+		return nil, errors.New("RFQ probe changed the complete settlement context")
+	}
+	var artifact struct {
+		ABI json.RawMessage `json:"abi"`
+	}
+	if err := json.Unmarshal(outerSimulationArtifact, &artifact); err != nil {
+		return nil, err
+	}
+	binding, err := abi.JSON(bytes.NewReader(artifact.ABI))
+	if err != nil {
+		return nil, err
+	}
+	resultError := binding.Errors["RFQRecipeResult"]
+	length := new(big.Int).SetBytes(code[len(code)-32:]).Int64()
+	configuration, err := (abi.Arguments{resultError.Inputs[4], resultError.Inputs[1], resultError.Inputs[2]}).Unpack(code[len(code)-32-int(length) : len(code)-32])
+	if err != nil {
+		return nil, err
+	}
+	results := make([]*big.Int, len(r.recipe.Steps))
+	for i := range results {
+		results[i] = new(big.Int)
+	}
+	returned, err := recipeBinding.GetABI().Methods["execute"].Outputs.Pack(results)
+	if err != nil {
+		return nil, err
+	}
+	data, err := resultError.Inputs.Pack(r.recipeExecutor, configuration[1], configuration[2], crypto.Keccak256Hash(configuration[0].([]byte)), returned)
+	if err != nil {
+		return nil, err
+	}
+	return nil, recipeProbeError{hexutil.Encode(append(resultError.ID.Bytes()[:4], data...))}
+}
+
 type connectorExecutionFixtureData struct {
 	workflow *connectorWorkflow
 	reader   *connectorExecutionReader
@@ -316,7 +364,7 @@ func connectorExecutionFixtureAt(t *testing.T, resolved *discounts.Resolved, rec
 		connectorReadFake: &connectorReadFake{remaining: big.NewInt(900), account: account, executor: recipeExecutor},
 		recipeExecutor:    recipeExecutor, recipeAccount: account, recipeCaller: rfqExecutor, signer: signer,
 		recipeHash: hash, root: tree.Root, recipe: recipe, approvalHash: tree.Leaves[0].Hash, swapHash: leaf.Hash,
-		header: &types.Header{Number: big.NewInt(7), Time: 7}, allowed: true,
+		header: &types.Header{Number: big.NewInt(7), Time: 7, GasLimit: 30_000_000}, allowed: true,
 	}
 	workflow := &connectorWorkflow{
 		chain: reader, chainID: big.NewInt(1), connector: vlt,
@@ -343,4 +391,71 @@ func TestConnectorBuildRequiresDiscoveredExecutor(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no recipe executor") || fixture.reader.outerCalls != 0 {
 		t.Fatalf("missing executor did not fail closed: %v", err)
 	}
+}
+
+func TestConnectorBuildAcceptsHeadAdvanceBetweenDiscoveryStages(t *testing.T) {
+	f := connectorExecutionFixture(t, connectorDiscountFixture())
+	reader := &headAdvanceReader{connectorExecutionReader: f.reader}
+	f.workflow.chain = reader
+	f.workflow.source = advancedPermissions{f.workflow.source}
+	order, selected, backend := connectorExecutionAward(f.workflow.caller)
+	if data, _, err := f.workflow.build(t.Context(), order, nil, selected, backend); err != nil || len(data) == 0 {
+		t.Fatalf("ordinary head advance rejected: %v", err)
+	}
+	if reader.connectorReads != 3 || reader.simulationBlock != 8 || f.reader.outerCalls != 1 {
+		t.Fatalf("connector or settlement escaped prepared block: reads=%d simulation=%d", reader.connectorReads, reader.simulationBlock)
+	}
+}
+
+// Discovery starts at head 7, then head 8 becomes available. The recipe event
+// remains in canonical block 7, while the prepared connector state is block 8.
+type headAdvanceReader struct {
+	*connectorExecutionReader
+
+	latestReads     int
+	connectorReads  int
+	simulationBlock uint64
+}
+
+func (r *headAdvanceReader) HeaderByNumber(_ context.Context, number *big.Int) (*types.Header, error) {
+	header := types.CopyHeader(r.header)
+	if number == nil {
+		r.latestReads++
+		if r.latestReads > 1 {
+			header.Number = big.NewInt(8)
+		}
+	} else {
+		header.Number = new(big.Int).Set(number)
+	}
+	return header, nil
+}
+
+func (r *headAdvanceReader) CallContract(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
+	if msg.To != nil && *msg.To == vlt {
+		if block == nil || block.Uint64() != 8 {
+			return nil, errors.New("connector read escaped prepared block")
+		}
+		r.connectorReads++
+	}
+	if msg.To != nil && *msg.To == r.recipeCaller {
+		r.simulationBlock = block.Uint64()
+	}
+	return r.connectorExecutionReader.CallContract(ctx, msg, big.NewInt(7))
+}
+
+func (r *headAdvanceReader) CallContractWithCodeAt(ctx context.Context, msg ethereum.CallMsg, block *big.Int, target common.Address, code []byte) ([]byte, error) {
+	if block == nil || block.Uint64() != 8 {
+		return nil, errors.New("return probe escaped prepared block")
+	}
+	return r.connectorExecutionReader.CallContractWithCodeAt(ctx, msg, big.NewInt(7), target, code)
+}
+
+type advancedPermissions struct{ permissionSource }
+
+func (s advancedPermissions) PermissionTree(ctx context.Context, chainID *big.Int, snapshot recipes.Snapshot) ([]byte, error) {
+	if snapshot.BlockNumber != 8 {
+		return nil, errors.New("permissions did not use the prepared head")
+	}
+	snapshot.BlockNumber = 7 // The shared fixture asserts its original transport height.
+	return s.permissionSource.PermissionTree(ctx, chainID, snapshot)
 }

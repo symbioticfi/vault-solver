@@ -6,9 +6,6 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -20,7 +17,6 @@ import (
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/providers/aave"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 	"github.com/symbioticfi/vault-solver/api/bindings/multicall3"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/solver"
@@ -35,7 +31,7 @@ func (factorySigner) SignTx(context.Context, *types.Transaction, *big.Int) (*typ
 	panic("factory must not sign")
 }
 
-func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
+func TestFactoryDiscoversSharedSignerWithoutStartingWork(t *testing.T) {
 	for _, mode := range []string{"valid", "caller mismatch", "reorg", "zero account"} {
 		t.Run(mode, func(t *testing.T) {
 			target, account, caller := common.HexToAddress("0x10"), common.HexToAddress("0x20"), common.HexToAddress("0x30")
@@ -134,8 +130,7 @@ func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer client.Close()
-			directory := filepath.Join(t.TempDir(), "state")
-			raw := strings.Replace(validConfig, "state/merkle", directory, 1)
+			raw := validConfig
 			owner := factorySigner{address: caller}
 			manager := txmanager.New(client, owner, big.NewInt(1), txmanager.Config{}, logr.Discard())
 			built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, TxManager: manager, Log: logr.Discard()})
@@ -144,8 +139,7 @@ func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
 					t.Fatal(err)
 				}
 				current := built.(*Solver)
-				defer func() { _ = current.Close() }()
-				if getters != 1 || current.keeper.Planner.(*keeper.Planner).PermissionSource == nil || current.keeper.Planner.(*keeper.Planner).RecipeCache == nil || current.keeper.Strategies[0].Config.Account != account.Hex() {
+				if current.keeper.Pending() || current.keeper.Sender != nil || getters != 1 || current.keeper.Planner.(*keeper.Planner).PermissionSource == nil || current.keeper.Planner.(*keeper.Planner).RecipeCache == nil || current.keeper.Strategies[0].Config.Account != account.Hex() {
 					t.Fatal("host failed shared SDK integration")
 				}
 				providers := current.keeper.Strategies[0].Providers
@@ -155,17 +149,8 @@ func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
 				if _, ok := providers[0].(*aave.Provider); !ok {
 					t.Fatal("host must reuse SDK Aave capacity preparation")
 				}
-				if found, err := state.Read(directory, "txmanager.active.v1", new(any)); err != nil || found {
-					t.Fatal("factory created owned transaction", err)
-				}
-			} else {
-				if err == nil {
-					_ = built.(*Solver).Close()
-					t.Fatal("invalid discovery accepted")
-				}
-				if _, err := os.Stat(directory); !os.IsNotExist(err) {
-					t.Fatal("failed discovery opened state", err)
-				}
+			} else if err == nil {
+				t.Fatal("invalid discovery accepted")
 			}
 		})
 	}
@@ -202,8 +187,7 @@ func TestFactoryRejectsStrategyObjectsAndDuplicatesBeforeRPC(t *testing.T) {
 			}
 			defer client.Close()
 			calls.Store(0)
-			directory := filepath.Join(t.TempDir(), "state")
-			raw := strings.Replace(strategyConfig(body), "state/merkle", directory, 1)
+			raw := strategyConfig(body)
 			owner := factorySigner{address: common.HexToAddress("0x30")}
 			manager := txmanager.New(client, owner, big.NewInt(1), txmanager.Config{}, logr.Discard())
 			if _, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, TxManager: manager, Log: logr.Discard()}); err == nil {
@@ -211,9 +195,6 @@ func TestFactoryRejectsStrategyObjectsAndDuplicatesBeforeRPC(t *testing.T) {
 			}
 			if calls.Load() != 0 {
 				t.Fatal("invalid strategy reached RPC")
-			}
-			if _, err := os.Stat(directory); !os.IsNotExist(err) {
-				t.Fatal("invalid strategy opened state", err)
 			}
 		})
 	}

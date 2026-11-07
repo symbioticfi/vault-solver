@@ -11,7 +11,6 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 	"github.com/symbioticfi/vault-solver/internal/merklesender"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
@@ -25,16 +24,12 @@ func init() { solver.Register(Name, factory) }
 
 type Solver struct {
 	keeper *keeper.Keeper
-	store  *state.Store
 	offers *offerWorkflow
 }
 
 func (s *Solver) Name() string            { return Name }
 func (s *Solver) RequiresTxManager() bool { return s.keeper.Mode == "send" }
 
-// Close is called by the host after its shared sender has drained, so persistence
-// callbacks cannot outlive their store. It also handles partial startup failure.
-func (s *Solver) Close() error { return s.store.Close() }
 func (s *Solver) Run(ctx context.Context) error {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -44,7 +39,7 @@ func (s *Solver) Run(ctx context.Context) error {
 		}
 		logMintIteration(ctx, s.keeper.Tick(ctx))
 
-		if s.keeper.Sender == nil || s.keeper.Sender.PendingID() == "" {
+		if s.keeper.Sender == nil || !s.keeper.Sender.Busy() {
 			run, cancel := context.WithTimeout(ctx, operationTimeout)
 			err := s.offers.Tick(run)
 			cancel()
@@ -111,10 +106,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, errors.New("3f executor caller differs from the shared signer")
 	}
 	strategy := keeper.Strategy{Config: keeper.Config{Name: address.Hex(), Executor: address.Hex(), Account: target.Account.Hex(), Interval: pollInterval}}
-	strategy.Config.Revision, err = strategyRevision(strategy.Config, cfg, deps.Signer.Address())
-	if err != nil {
-		return nil, err
-	}
 	api, err := newClient(cfg.apiConfig())
 	if err != nil {
 		return nil, err
@@ -131,11 +122,10 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(1, 16<<20), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: deps.TxManager.Confirmations()}
 	k := &keeper.Keeper{Planner: &mintPlanning{Planner: planner, runtime: runtime}, Strategies: []keeper.Strategy{strategy}, Mode: cfg.Mode, OperationTimeout: operationTimeout, Log: deps.Log.WithName(Name)}
-	store, err := merklesender.OpenKeeper(k, cfg.StateDir, deps, Name)
-	if err != nil {
-		return nil, err
+	if cfg.Mode == "send" {
+		k.Sender = merklesender.New(deps.TxManager, Name)
 	}
-	bot := &offerBot{Client: api, Store: store, Send: cfg.Mode == "send"}
+	bot := &offerBot{Client: api, Send: cfg.Mode == "send"}
 	workflow := &offerWorkflow{planner: planner, strategy: strategy, policy: policy, api: api, bot: bot}
-	return &Solver{keeper: k, store: store, offers: workflow}, nil
+	return &Solver{keeper: k, offers: workflow}, nil
 }

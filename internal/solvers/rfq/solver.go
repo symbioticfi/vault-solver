@@ -309,11 +309,3 @@ func (s *Solver) runExecution(ctx context.Context) error {
 	s.exec.run(ctx)
 	return ctx.Err()
 }
-
-// Close releases the Merkle execution journal, when this process uses a recipe.
-func (s *Solver) Close() error {
-	if s.merkle != nil {
-		return s.merkle.Close()
-	}
-	return nil
-}

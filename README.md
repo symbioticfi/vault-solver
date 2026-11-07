@@ -104,8 +104,8 @@ and underlying authorization error.
 
 Configure `rfq-filler` with the existing `adapters` list for native
 pricing and fills, or with `recipeExecutors` for Merkle connector pricing and fills.
-Setting both fails startup. The Merkle mode uses `stateDir` and `curator` for durable
-execution and permissions; `quoteOnly: true` needs neither. See its
+Setting both fails startup. The Merkle mode uses `curator` for permissions and keeps pending execution in RAM;
+`quoteOnly: true` needs no curator service. See its
 [configuration](config/rfq-merkle.example.yaml) and [runbook](docs/RFQ-MERKLE.md).
 [Sepolia setup](docs/SEPOLIA.md) identifies the shared basis and the actual
 curator-created instances required before starting a solver.
@@ -1051,7 +1051,7 @@ modern Go 1.27 style, the required test/lint/format gate, and secure-coding rule
 [`CLAUDE.md`](./CLAUDE.md) (`AGENTS.md` is a symlink to it). Every change must keep
 `make format && make test && make lint` green and unit-test new logic.
 
-Merkle recipes run through the shared sender using the independently versioned [Merkle SDK integration](docs/MERKLE-SDK.md). Its `config.strategies` is a list of full executor addresses, for example `strategies: ["0x0000000000000000000000000000000000000010"]`. Each lowercase address is the durable identity; labels and strategy objects are rejected.
+Merkle recipes run through the shared sender using the independently versioned [Merkle SDK integration](docs/MERKLE-SDK.md). Its `config.strategies` is a list of full executor addresses, for example `strategies: ["0x0000000000000000000000000000000000000010"]`. Each lowercase address is the strategy identity; labels and strategy objects are rejected.
 
 The SDK is public and pinned in `go.mod`; normal Go and Docker builds download it
 without a GitHub token or a local merkle-executor checkout.
@@ -1060,9 +1060,11 @@ Self-contained recipes automatically batch useful state-driven executions throug
 that SDK. External quotes and proofs are prepared separately for each execution.
 The executor list sets processing priority; spending recipes must reserve funds
 needed for withdrawals. A compatible EIP-7702 shared signer also batches different
-executors in that order. Fresh plans submit without a second simulation; unsigned
-saved plans are rebuilt and signed transactions recover unchanged. Batching and
-pending-order recovery use the shared sender.
+executors in that order. Fresh plans submit without a second simulation. Signed attempts retain their exact
+identity through in-process retries, using the shared sender. Pending transactions,
+orders and reservations live only in RAM; restart loses tracking while external
+work may continue. Remove `stateDir` from Merkle configuration; strict decoding
+rejects it. Settle existing work before upgrading and use one process per signer.
 
 The SDK reads signed permission bundles through `GET /merkle/{adapter}/{root}` under the configured curator API URL.
 The SDK reads `recipeHash` and `recipeBlock` at a pinned block and retrieves the original
@@ -1087,7 +1089,7 @@ solver rejects the `threeF` field. The policy and executor must use the same mak
 Offers use that policy's live budgets, the account's idle cash and 3F auction asset data,
 without fetching Curator permissions. Curator supplies permission data and proofs
 only for mint execution. The executor uses the shared signer; its recipe must support
-the enabled policy pairs and supplies request/principal/yield inputs; inactive groups receive zero principal. Gates and fixed funding calls remain curator-owned. One journal and sender serialize all markets. Automatic offers reserve existing commitments
+the enabled policy pairs and supplies request/principal/yield inputs; inactive groups receive zero principal. Gates and fixed funding calls remain curator-owned. One RAM workflow and shared sender serialize all markets. Automatic offers reserve existing commitments
 and use account idle cash; simulation never submits or cancels API offers.
 Both 3F solvers honor the on-chain minimum and the auction APR bounds. Since the API
 does not expose the lowest ramp APR, they use a quarter of the current `maxRate` as
@@ -1100,13 +1102,13 @@ be a nonnegative int64 integer; omitted, null and zero values use the unscaled r
 
 The Merkle 3F solver can offer on multiple auctions. Outstanding offers reserve cash by funding token
 and policy budget by funding/underlying pair; subsequent offers use only the remaining capacity.
-Each auction retains its own durable intent, including across restarts and uncertain POST responses.
+Each auction retains its own RAM intent through uncertain POST responses; restart loses that intent.
 
 Live commitments are maintained first. Each cycle then checks every relevant unanswered open/solvable
 auction before bidding, reusing policy eligibility results within the pinned snapshot. There is no
 per-cycle eligibility check cap. At zero pair budget,
-new bids are blocked and unjournaled UI offers require explicit UI cancellation because the canonical
-budget-consuming check cannot establish their scope. The bot can cancel its own unaccepted journaled
+new bids are blocked and UI offers without a retained intent require explicit UI cancellation because the canonical
+budget-consuming check cannot establish their scope. The bot can cancel its own unaccepted retained
 intent and never cancels accepted mint windows.
 
 The `rfq-filler` recipe mode (also available as the execution-only `rfq-merkle` plugin) executes awarded orders through the RFQ Executor and committed
@@ -1115,4 +1117,4 @@ See [the RFQ Merkle runbook](docs/RFQ-MERKLE.md) and [configuration](config/rfq-
 
 Local integration checks require Anvil on `PATH`: `make test-txmanager-anvil`,
 `make test-merklesender-anvil`, and `make test-rfq-merkle-anvil`. They exercise nonce reconciliation,
-durable SDK journal recovery, and canonical RFQ settlement without live services.
+RAM sender ownership, and canonical RFQ settlement without live services.

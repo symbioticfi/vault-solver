@@ -19,15 +19,21 @@ type recipeRoute struct {
 // Routes are published together before the quote server or fill loop starts.
 func (s *Solver) Initialize(ctx context.Context) ([]common.Address, error) {
 	if s.routes == nil {
-		routes := make(map[common.Address]recipeRoute, len(s.recipeExecutors))
-		for _, executor := range s.recipeExecutors {
-			snapshot, recipe, err := recipes.Discover(ctx, s.workflow.chain, executor, nil)
-			if err != nil {
-				return nil, err
-			}
-			if snapshot.Caller != s.workflow.caller {
-				return nil, errors.New("connector recipe caller mismatch")
-			}
+		identities, err := recipes.DiscoverExecutors(ctx, s.workflow.chain, s.recipeExecutors)
+		if err != nil {
+			return nil, err
+		}
+		accounts := make([]common.Address, len(s.recipeExecutors))
+		for i, executor := range s.recipeExecutors {
+			accounts[i] = identities[executor].Account
+		}
+		prepared, err := recipes.DiscoverBatch(ctx, s.workflow.chain, s.recipeExecutors, accounts, s.workflow.caller, recipes.PreparationOptions{ChainID: s.workflow.chainID})
+		if err != nil {
+			return nil, err
+		}
+		routes := make(map[common.Address]recipeRoute, len(prepared))
+		for _, member := range prepared {
+			snapshot, recipe := member.Snapshot, member.Recipe
 			tree, err := s.workflow.permissionTree(ctx, snapshot)
 			if err != nil {
 				return nil, err
@@ -43,7 +49,7 @@ func (s *Solver) Initialize(ctx context.Context) ([]common.Address, error) {
 			if state.Account != snapshot.Account || state.Asset != asset {
 				return nil, errors.New("recipe payment connector account or asset mismatch")
 			}
-			routes[executor] = recipeRoute{connector: venue, account: state.Account, asset: asset}
+			routes[snapshot.Executor] = recipeRoute{connector: venue, account: state.Account, asset: asset}
 		}
 		s.routes = routes
 	}

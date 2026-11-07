@@ -11,7 +11,6 @@ solvers:
   - name: threef-merkle
     config:
       mode: simulate
-      stateDir: /persistent/threef-merkle
       executor: "0x0000000000000000000000000000000000000010"
       policy: ${THREEF_POLICY}
       curator:
@@ -43,19 +42,18 @@ receive zero principal; the recipe determines which calls execute. The solver ad
 no group-count limit, canonical guard comparison, mint-gate rule, or separate
 funding-gate proof. Fixed withdrawals and additional Call/Approve steps use the
 curator-authorized program. Permission response and SDK input bounds still apply.
-Provider identity settings, including the policy address, participate in recovery
-identity. Durable offer intents are bound to the policy as well.
+Retained offer intents bind the executor, recipe, account, policy and exact
+upstream terms for in-process retries.
 The SDK retrieves the original `SetRecipe` event only at the executor's known
 `recipeBlock`, verifies its current commitment and checks the canonical snapshot.
-Use one exclusive durable state directory
-and one process per curator BF. Do not also list this executor in `merkle.strategies`
+Use one process per curator BF. Do not also list this executor in `merkle.strategies`
 or share that BF/key with another independently allocating bot.
 
-`threeF` is not a field of the generic `merkle` solver. Drain any unresolved offer
-or signed work before changing solver configuration. Do not discard a journal or
-use a new empty directory to evade recovery checks. The SDK restores signed owner
-fences at startup before any solver runs and persists every signed original and
-replacement before broadcast; the host drains the shared sender before closing stores.
+`threeF` is not a field of the generic `merkle` solver. The Merkle SDK runtime
+and offer intents live in RAM. Remove `stateDir` from YAML; strict decoding rejects
+it. Settle unresolved offers and signed work before upgrading or restarting.
+Restart loses tracking and reservations while transactions and offers may continue
+externally; no saved journal or signed-owner recovery remains.
 
 Polling and mint strategy cadence are 15 seconds, operations are bounded to 30 seconds,
 and the shared recipe cache holds the configured recipe within 16 MiB. The public Curator API uses `url` with the SDK's
@@ -93,8 +91,10 @@ is a read, not a live transaction or proof of signer access.
 
 Offer discovery and sizing do not call Curator or decode a permission bundle.
 They use the configured policy, auction metadata, on-chain asset resolution and
-native policy eligibility simulation. The executor's on-chain recipe commitment
-and granted roles are still checked. Curator is needed only to prepare execution
+native policy eligibility simulation. Before each API mutation, shared SDK
+discovery authenticates fresh account, caller, recipe and root metadata. The host
+rechecks every committed leaf role and closes both original and fresh block pins.
+This offer-only authorization needs no executable mint. Curator is needed only to prepare execution
 with the actual permission data and Merkle proofs. Configure the executor recipe
 to support the policy's enabled funding pairs; additional recipe-specific amount
 restrictions are applied during execution, not advertised as policy capacity.
@@ -110,8 +110,8 @@ request's uint128 amount range and the auction's advertised request size.
 Like the standalone 3F solver, it can offer on multiple auctions: each live offer
 reserves cash for its funding token and budget for its funding/underlying pair.
 Only the remainder is available for the next offer. Each auction has its own
-durable intent; creating another offer cannot overwrite it. Reservations include
-UI offers and unresolved submissions, without counting an API row and its journal
+RAM intent; creating another offer cannot overwrite it. Reservations include
+UI offers and unresolved submissions, without counting an API row and its retained intent
 twice. Missing API rows retain their reservations. Unknown POST outcomes retry the
 same maker, auction, nonce and terms after rechecking native eligibility, remaining
 cash, pair budget and rates. Another market cannot cancel or rekey that intent.
@@ -135,25 +135,24 @@ post-acceptance mint lease. Unaccepted offers reserve their full principal;
 accepted mint windows reserve their pending principal. Manual UI cancellations
 suppress automatic replacement for that auction. Unaccepted commitments within authenticated cancellation scope that exceed
 cash/budget or the bot's changed terms are cancelled before new offers are created.
-At zero remaining pair budget, the native check cannot attest an unjournaled UI
-request: the canonical `ThreeFPolicy.consume` requires positive principal and
+At zero remaining pair budget, the native check cannot attest a UI
+request without a retained intent: the canonical `ThreeFPolicy.consume` requires positive principal and
 `AssetRateLimits.consume` rejects disabled or exhausted budgets. The bot therefore
 leaves those UI offers for explicit UI cancellation. It may still cancel its own
-journaled unaccepted intent, and it never cancels an accepted mint window. Zero
+retained unaccepted intent, and it never cancels an accepted mint window. Zero
 budget always blocks automatic bids. A separate budget-independent membership
 interface or an explicit policy change is required to broaden UI cancellation;
 API asset metadata alone does not grant that authority.
 
-Each random nonce and immutable create intent is fsynced **before** the POST.
-After an uncertain response or restart, the bot reconciles the account/auction/nonce
+Each random nonce and immutable create intent is retained in RAM **before** the POST.
+After an uncertain response, the bot reconciles the account/auction/nonce
 and exact terms against API inventory. Maintenance and bidding share one authenticated
 offer inventory and one auction response. Eligibility considers live commitments
 and open/solvable candidates with the relevant funding token, not historical
 auctions. Positive and negative results are memoized per request/market at the
 current pin. A confirmed cancellation or creation ends the pass and discards its
-inventory. Historical auctions with live commitments still participate in maintenance. Unknown POST outcomes retry only the original immutable request. A definite rejection of the first POST clears that unsent intent. Rejection of a retry does not clear an earlier uncertain submission, and local expiration alone cannot prove an accepted mint authorization is gone. A confirmed offer missing from API inventory is not reposted; its principal stays reserved. Other auctions can use the remaining capacity. Never delete state to clear a
-pending signed transaction. Simulation mode does not write the journal, submit
-or cancel offers.
+inventory. Historical auctions with live commitments still participate in maintenance. Unknown POST outcomes retry only the original immutable request. A definite rejection of the first POST clears that unsent intent. Rejection of a retry does not clear an earlier uncertain submission, and local expiration alone cannot prove an accepted mint authorization is gone. A confirmed offer missing from API inventory is not reposted; its principal stays reserved. Other auctions can use the remaining capacity. A pending signed transaction retains ownership. Simulation mode never submits
+or cancels offers.
 
 `AWAITING_MINT` is readiness, not funding completion. The provider reads the native
 aggregate `mintAuthorization(account)` at the recipe's block, allowing several
@@ -163,11 +162,11 @@ from one offer row. Across every guarded group it uses the earliest eligible cur
 after full simulation. The completed plan is submitted without another simulation. Earlier requests for another funding pair
 or outside the current policy budget, yield floor or recipe cap are skipped so
 they cannot block a later eligible request.
-The SDK's full recipe simulation and durable submission checks remain mandatory. The account
+The SDK's full recipe simulation and owned submission checks remain mandatory. The account
 charges policy, approves, mints, receives PT/YT, verifies exact cash/PT/YT/budget
 deltas and clears allowance atomically. Confirmed reconciliation requires the
-canonical receipt and exactly one matching policy debit. Signed recovery retains
-its original bytes and ownership even when the external lease later expires.
+canonical receipt and exactly one matching policy debit. Signed retries retain
+their original identities and ownership even when the external lease later expires.
 
 Provider list responses are capped at 2 MiB and inventories at 4096 rows. IDs must
 be exact positive integers below 2^24 because the generated upstream client uses
@@ -182,7 +181,7 @@ history. Open PT uses face principal; YT uses native residual value; settled cla
 use the exact PT-priority waterfall. Projected APR deliberately remains unavailable
 for open YT without authoritative forecast economics and settlement horizon.
 
-Validation covers host API wire payloads, durable ambiguous submissions/restart,
+Validation covers host API wire payloads, ambiguous in-process submissions,
 reservations and cancellation, aggregate authorizations, expired leases, curator-owned
 guards and confirmed receipts. The canonical contracts' local 3F suite is
 separate from live-provider approval, authenticated mainnet enrollment and minting.
@@ -190,17 +189,17 @@ separate from live-provider approval, authenticated mainnet enrollment and minti
 ## Implementation and validation
 
 All hand-written 3F Merkle logic lives in `internal/solvers/merkle/threef`:
-API transport/JSON admission, offer sizing and journal recovery, policy snapshots,
+API transport/JSON admission, offer sizing and RAM intent reconciliation, policy snapshots,
 recipe input extraction and the mint provider. One Run goroutine evaluates guarded markets sequentially. Live commitment
-maintenance precedes a full scan of relevant unanswered auctions. One API client, planner, provider, exclusive store and submission sender serve one executor strategy. The SDK keeper owns mint progress. It admits no new offer work
-while a signed recipe is pending. `internal/merklesender.OpenKeeper` shares only
-SDK store/sender startup and recovery with the generic recipe host. There is no
+maintenance precedes a full scan of relevant unanswered auctions. One API client, planner, provider and RAM sender serve one executor strategy. The SDK keeper owns mint progress. It admits no new offer work
+while a signed recipe is pending. `internal/merklesender.New` adapts the same host transaction manager used by the
+generic recipe host. There is no
 optional 3F dispatch in `merkle` and no dependency on `bridgefacilitator` strategies.
 
-Tests retain API wire/identity/bounds checks, ambiguous-POST restart recovery,
+Tests retain API wire/identity/bounds checks, ambiguous-POST retry identity,
 reservations, cancellation, aggregate authorizations, lease expiry, alternative curator
 guards and canonical receipt evidence. Dedicated startup tests cover mainnet and Sepolia,
-shared caller discovery, configured policy/account binding, grouped recipes, cross-account rejection, reorgs, invalid accounts and failure before state creation. Multi-auction tests cover shared cash, separate pair budgets, partial remaining capacity, durable recovery and cancellation isolation.
+shared caller discovery, configured policy/account binding, grouped recipes, cross-account rejection, reorgs, invalid accounts and failure before API mutation. Multi-auction tests cover shared cash, separate pair budgets, partial remaining capacity, RAM retry identity and cancellation isolation.
 Regression tests also cover committed funding gates, exact raw JSON rate periods,
 offers without a permission service, on-chain pair discovery, historical filtering, negative membership memoization,
 full auction scans before bidding, maintenance before optional RPC failure and zero-budget

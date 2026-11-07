@@ -209,28 +209,25 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if w.connector == (common.Address{}) || selected.Venue != w.connector || selected.DiscountID == (common.Hash{}) || selected.MaxAssets == nil || selected.MaxAssets.Sign() < 0 {
 		return nil, time.Time{}, errors.New("connector requires recipe-derived routing and upstream discount")
 	}
-	header, err := w.chain.HeaderByNumber(ctx, nil)
+	identities, err := recipes.DiscoverExecutors(ctx, w.chain, []common.Address{selected.Executor})
 	if err != nil {
-		return nil, time.Time{}, errors.Errorf("pin connector recipe: %w", err)
+		return nil, time.Time{}, errors.Errorf("discover connector executor: %w", err)
 	}
-	if header == nil || header.Number == nil {
-		return nil, time.Time{}, errors.New("missing connector recipe block")
-	}
-	state, err := w.state(ctx, selected.Venue, header.Number)
-	if err != nil {
-		return nil, time.Time{}, err
-	}
-	snapshot, recipe, err := recipes.DiscoverForAccount(ctx, w.chain, selected.Executor, state.Account, header.Number)
+	prepared, err := recipes.DiscoverBatch(ctx, w.chain, []common.Address{selected.Executor}, []common.Address{identities[selected.Executor].Account}, w.caller, recipes.PreparationOptions{ChainID: w.chainID})
 	if err != nil {
 		return nil, time.Time{}, errors.Errorf("discover connector recipe: %w", err)
 	}
-	if snapshot.Caller != w.caller {
-		return nil, time.Time{}, errors.New("connector recipe caller mismatch")
+	member := prepared[0]
+	snapshot, recipe := member.Snapshot, member.Recipe
+	block := new(big.Int).SetUint64(snapshot.BlockNumber)
+	state, err := w.state(ctx, selected.Venue, block)
+	if err != nil {
+		return nil, time.Time{}, err
 	}
-	if snapshot.BlockHash != header.Hash() {
-		return nil, time.Time{}, errors.New("connector bindings reorganized during recipe discovery")
+	if state.Account != snapshot.Account {
+		return nil, time.Time{}, errors.New("connector account differs from recipe account")
 	}
-	raw, err := w.chain.CallContract(ctx, ethereum.CallMsg{To: &selected.Venue, Data: connectorBinding.PackRemainingAssets(order.Request.TokenIn)}, header.Number)
+	raw, err := w.chain.CallContract(ctx, ethereum.CallMsg{To: &selected.Venue, Data: connectorBinding.PackRemainingAssets(order.Request.TokenIn)}, block)
 	if err != nil {
 		return nil, time.Time{}, errors.Errorf("connector remainingAssets: %w", err)
 	}
@@ -260,9 +257,6 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if err != nil {
 		return nil, time.Time{}, errors.Errorf("assemble connector recipe: %w", err)
 	}
-	if err := recipes.VerifyRoles(ctx, w.chain, snapshot, assembled.Leaves); err != nil {
-		return nil, time.Time{}, errors.Errorf("connector recipe roles: %w", err)
-	}
 	calls, err := executorCallsArgs.Pack([]executorCall{{Target: snapshot.Executor, Value: new(big.Int), Data: assembled.Calldata}})
 	if err != nil {
 		return nil, time.Time{}, errors.Errorf("encode recipe call: %w", err)
@@ -280,24 +274,8 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 		return nil, time.Time{}, errors.Errorf("encode recipe fill: %w", err)
 	}
 	reader := outerFillReader{Reader: w.chain, snapshot: snapshot, inner: assembled.Calldata, outer: calldata, caller: w.caller, signer: w.signer}
-	if err := recipes.ValidateExecution(ctx, reader, snapshot, w.caller, assembled.Calldata); err != nil {
+	if err := recipes.ValidatePreparedBatch(ctx, reader, prepared, []recipes.ExecutorCall{{Executor: snapshot.Executor, Data: assembled.Calldata}}, [][]common.Hash{assembled.Leaves}, []map[uint]string{nil}, w.caller); err != nil {
 		return nil, time.Time{}, errors.Errorf("validate outer RFQ recipe fill: %w", err)
 	}
 	return calldata, terms.ValidUntil, nil
-}
-
-// Validate the immutable inner authorization against the complete settlement transaction.
-type outerFillReader struct {
-	recipes.Reader
-
-	snapshot       recipes.Snapshot
-	inner, outer   []byte
-	caller, signer common.Address
-}
-
-func (r outerFillReader) CallContract(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
-	if msg.To != nil && *msg.To == r.snapshot.Executor && msg.From == r.caller && bytes.Equal(msg.Data, r.inner) {
-		return r.Reader.CallContract(ctx, ethereum.CallMsg{From: r.signer, To: &r.caller, Data: r.outer}, block)
-	}
-	return r.Reader.CallContract(ctx, msg, block)
 }

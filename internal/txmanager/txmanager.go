@@ -89,10 +89,10 @@ type Config struct {
 // Request is a transaction to send. Value nil means 0. Stateful solver calls leave GasLimit at 0 so
 // gas estimation re-simulates their exact calldata after lifecycle admission and immediately before signing.
 type Request struct {
-	// Owner identifies a durable host journal reserving this signer lane. Empty
+	// Owner identifies host-owned work reserving this signer lane. Empty
 	// requests are ordinary unreserved solver work.
 	Owner string
-	// BeforeBroadcast must persist each signed original/replacement before RPC.
+	// BeforeBroadcast must capture each signed original/replacement before RPC.
 	// Failure prevents broadcasting those bytes; the owner retains its reservation.
 	BeforeBroadcast func(unsigned, signed *types.Transaction) error
 	To              common.Address
@@ -196,8 +196,8 @@ type txAttempt struct {
 
 // Manager serializes signed lifecycles and owns accepted work through its terminal result.
 type Manager struct {
-	// reservationMu serializes durable ownership with admission. Existing admitted
-	// work finishes normally; no new foreign work enters while a journal holds it.
+	// reservationMu serializes host ownership with admission. Existing admitted
+	// work finishes normally; no new foreign work enters while an owner holds it.
 	reservationMu sync.Mutex
 	reservation   string
 	backend       Backend
@@ -250,6 +250,7 @@ type Manager struct {
 
 type job struct {
 	req              Request
+	resume           *pendingTransaction
 	res              chan Result
 	admissionStarted time.Time
 	span             trace.Span // the caller-derived send span, ended by whoever resolves the request
@@ -378,7 +379,7 @@ func (m *Manager) ValidateFeeHeadroom() error {
 }
 
 // Available reports readiness for ordinary solver work and external quotes.
-// Durable reservations pause other owners; ordinary pending transactions and
+// Host reservations pause other owners; ordinary pending transactions and
 // nonce races still permit queued admission. LaneReady additionally checks idle work.
 func (m *Manager) Available() bool {
 	m.reservationMu.Lock()
@@ -572,7 +573,13 @@ func (m *Manager) Start(ctx context.Context) {
 
 			m.metrics.finishAdmission(j.req.Label, j.admissionStarted, nil)
 			lifecycle := m.metrics.beginLifecycle(j.req.Label)
-			pending, err := m.broadcast(spanCtx, j.req)
+			pending := j.resume
+			var err error
+			if pending == nil {
+				pending, err = m.broadcast(spanCtx, j.req)
+			} else {
+				pending.req, pending.span = j.req, j.span
+			}
 			if err != nil {
 				outcome := OutcomeSubmissionError
 				if ctx.Err() != nil {
@@ -645,6 +652,10 @@ func (m *Manager) SendAsync(ctx context.Context, req Request) (<-chan Result, bo
 }
 
 func (m *Manager) sendAsync(ctx context.Context, req Request, try bool) (<-chan Result, bool) {
+	return m.enqueue(ctx, req, try, nil)
+}
+
+func (m *Manager) enqueue(ctx context.Context, req Request, try bool, resume *pendingTransaction) (<-chan Result, bool) {
 	admissionStarted := time.Now()
 	m.addAdmissionDemand()
 	releaseDemandOnReturn := true
@@ -656,7 +667,7 @@ func (m *Manager) sendAsync(ctx context.Context, req Request, try bool) (<-chan 
 
 	admissionCtx := ctx
 	cancel := func() {}
-	if !req.Deadline.IsZero() {
+	if resume == nil && !req.Deadline.IsZero() {
 		admissionCtx, cancel = context.WithDeadline(ctx, req.Deadline)
 	}
 	defer cancel()
@@ -708,7 +719,7 @@ func (m *Manager) sendAsync(ctx context.Context, req Request, try bool) (<-chan 
 	res := make(chan Result, 1)
 	select {
 	case m.queue <- job{
-		req: cloneRequest(req), res: res, admissionStarted: admissionStarted,
+		req: cloneRequest(req), resume: resume, res: res, admissionStarted: admissionStarted,
 		span: span,
 	}:
 		m.reservationMu.Unlock()
@@ -1623,13 +1634,22 @@ func (m *Manager) signAndSend(
 	if err != nil {
 		return nil, errors.Errorf("sign transaction: %w", err)
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, errors.Errorf("sign transaction: %w", err)
+	if err := m.validateOwnedTransaction(signed); err != nil {
+		return nil, err
+	}
+	if types.LatestSignerForChainID(m.chainID).Hash(tx) != types.LatestSignerForChainID(m.chainID).Hash(signed) {
+		return nil, errors.New("signer changed transaction payload")
 	}
 	if beforeBroadcast != nil {
 		if err := beforeBroadcast(tx, signed); err != nil {
-			return nil, errors.Errorf("persist signed transaction before broadcast: %w", err)
+			return nil, errors.Errorf("capture signed transaction before broadcast: %w", err)
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		if beforeBroadcast != nil {
+			return signed, errors.Errorf("signed transaction retained after cancellation: %w", err)
+		}
+		return nil, errors.Errorf("sign transaction: %w", err)
 	}
 	sendErr := m.sendSigned(ctx, signed)
 	if !existingLifecycle && (isNonceConsumedError(sendErr) || isPendingNonceCollision(sendErr)) {

@@ -309,15 +309,19 @@ test-txmanager-anvil: ## Exercise fee replacement, nonce reuse and independent r
 refresh-rfq-merkle-fixture: ## Re-vendor pinned canonical EVM fixture artifacts (requires sibling Foundry builds + solc 0.8.28)
 	python3 internal/solvers/merkle/rfq/testdata/outer-fill/generate.py --rfq-root "$(RFQ_FIXTURE_ROOT)" --adapters-root "$(ADAPTERS_FIXTURE_ROOT)" --solc "$(FIXTURE_SOLC)"
 
+.PHONY: verify-merkle-simulation
+verify-merkle-simulation: ## Verify the committed RFQ eth_call probe against its source
+	python3 internal/solvers/merkle/rfq/simulation/generate.py --check
+
 .PHONY: test-rfq-merkle-anvil
-test-rfq-merkle-anvil: ## Execute canonical RFQ outer settlement boundaries on local Anvil
+test-rfq-merkle-anvil: verify-merkle-simulation ## Execute canonical RFQ outer settlement boundaries on local Anvil
 	@command -v anvil >/dev/null
 	go test -race -tags integration -run '^TestAnvilConnectorOuterFillCanonicalBoundaries$$' -v ./internal/solvers/merkle/rfq
 
 .PHONY: test-merklesender-anvil
-test-merklesender-anvil: ## Exercise SDK journal persistence, replacement, restart and signer ownership on local Anvil
+test-merklesender-anvil: ## Exercise RAM SDK ownership, replacement and shared signer fencing on local Anvil
 	@command -v anvil >/dev/null
-	go test -race -tags integration -run TestSDKJournal -v ./internal/merklesender
+	go test -race -tags integration -run TestSDKRAM -v ./internal/merklesender
 
 .PHONY: format
 format: ## Run golangci-lint with autofix

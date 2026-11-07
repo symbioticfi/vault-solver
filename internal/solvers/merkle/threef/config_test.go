@@ -4,13 +4,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"gopkg.in/yaml.v3"
 )
 
 const validConfig = `mode: simulate
-stateDir: state/threef-merkle
 executor: "0x0000000000000000000000000000000000000010"
 policy: "0x0000000000000000000000000000000000000050"
 curator:
@@ -41,7 +38,7 @@ func TestConfigValidation(t *testing.T) {
 	}
 	for name, raw := range map[string]string{
 		"mode":           strings.Replace(validConfig, "mode: simulate", "mode: unsafe", 1),
-		"state":          strings.Replace(validConfig, "stateDir: state/threef-merkle\n", "", 1),
+		"removed state":  validConfig + "stateDir: state/threef-merkle\n",
 		"zero executor":  strings.Replace(validConfig, "0000000000000000000000000000000000000010", "0000000000000000000000000000000000000000", 1),
 		"missing policy": strings.Replace(validConfig, `policy: "0x0000000000000000000000000000000000000050"`, "", 1),
 		"zero policy":    strings.Replace(validConfig, "0000000000000000000000000000000000000050", "0000000000000000000000000000000000000000", 1),
@@ -63,38 +60,6 @@ func TestConfigValidation(t *testing.T) {
 		})
 	}
 }
-func TestRecoveryIdentity(t *testing.T) {
-	cfg, err := parseConfig(configNode(t, validConfig))
-	if err != nil {
-		t.Fatal(err)
-	}
-	strategy := keeper.Config{Name: cfg.Executor, Executor: cfg.Executor, Account: common.HexToAddress("0x20").Hex(), Interval: pollInterval}
-	caller := common.HexToAddress("0x30")
-	original, err := strategyRevision(strategy, cfg, caller)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, change := range map[string]func(*config, *keeper.Config, *common.Address){
-		"key":      func(c *config, _ *keeper.Config, _ *common.Address) { c.APIKeyEnv = "ANOTHER_CURATOR_KEY" },
-		"policy":   func(c *config, _ *keeper.Config, _ *common.Address) { c.Policy = common.HexToAddress("0x51").Hex() },
-		"broker":   func(c *config, _ *keeper.Config, _ *common.Address) { c.Broker = common.HexToAddress("0x41").Hex() },
-		"API":      func(c *config, _ *keeper.Config, _ *common.Address) { c.URL = "https://other.example" },
-		"curator":  func(c *config, _ *keeper.Config, _ *common.Address) { c.Curator.URL = "https://other.example" },
-		"account":  func(_ *config, s *keeper.Config, _ *common.Address) { s.Account = common.HexToAddress("0x21").Hex() },
-		"executor": func(_ *config, s *keeper.Config, _ *common.Address) { s.Executor = common.HexToAddress("0x11").Hex() },
-		"caller":   func(_ *config, _ *keeper.Config, c *common.Address) { *c = common.HexToAddress("0x31") },
-	} {
-		t.Run(name, func(t *testing.T) {
-			c, s, owner := cfg, strategy, caller
-			change(&c, &s, &owner)
-			got, err := strategyRevision(s, c, owner)
-			if err != nil || got == original {
-				t.Fatalf("changed configuration escaped recovery: %v", err)
-			}
-		})
-	}
-}
-
 func TestConfigRequiresOneExecutorAndRejectsArray(t *testing.T) {
 	const entry = `executor: "0x0000000000000000000000000000000000000010"`
 	for name, tc := range map[string]struct{ value, want string }{

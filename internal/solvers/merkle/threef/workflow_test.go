@@ -274,85 +274,174 @@ func TestOfferPassMemoizesPositiveMembershipPerPin(t *testing.T) {
 type offerTestChain struct {
 	readFunc
 
-	header *types.Header
-	logs   []types.Log
+	header   *types.Header
+	logs     []types.Log
+	headerFn func(*big.Int) (*types.Header, error)
 }
 
 func (c offerTestChain) HeaderByHash(context.Context, common.Hash) (*types.Header, error) {
 	return c.header, nil
 }
-func (c offerTestChain) HeaderByNumber(context.Context, *big.Int) (*types.Header, error) {
+func (c offerTestChain) HeaderByNumber(_ context.Context, block *big.Int) (*types.Header, error) {
+	if c.headerFn != nil {
+		return c.headerFn(block)
+	}
 	return c.header, nil
 }
 func (c offerTestChain) FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error) {
 	return c.logs, nil
 }
 
-func TestOfferTickDoesNotNeedPermissionService(t *testing.T) {
-	w, client, data := offerPassFixture(t)
-	pin, recipe, market := data.pin, data.recipe, data.markets[0]
-	pin.Caller = common.HexToAddress("0xcafe")
-	header := &types.Header{Number: pin.BlockNumber, Time: pin.Timestamp, Difficulty: new(big.Int)}
-	executor := executorbinding.NewRecipeExecutor().GetABI()
-	account := accountbinding.NewMerkleAccount().GetABI()
-	hash, err := recipes.HashRecipe(recipe)
-	if err != nil {
-		t.Fatal(err)
-	}
-	event := executor.Events["SetRecipe"]
-	encoded, err := event.Inputs.NonIndexed().Pack(recipe.Queries, recipe.Steps)
-	if err != nil {
-		t.Fatal(err)
-	}
-	log := types.Log{Address: pin.Executor, BlockNumber: pin.BlockNumber.Uint64(), BlockHash: header.Hash(), Topics: []common.Hash{event.ID, hash}, Data: encoded}
-	manager, collateral := common.HexToAddress("0x91"), common.HexToAddress("0x92")
-	auction := testAuction(data.market, 1, common.HexToAddress("0x101"))
-	auction.Asset.Set(&threef.ResolvedAssetDto{PositionManager: manager.Hex()})
-	auction.AdditionalProperties[exactMaxRateKey] = "10000"
-	client.auctions = []threef.AuctionDto{auction}
-	base := eligibilityReads(t, pin, recipe, data.tree, func(ethereum.CallMsg) error { return nil })
-	chain := offerTestChain{header: header, logs: []types.Log{log}}
-	chain.readFunc = func(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
-		switch *msg.To {
-		case pin.Executor:
-			method, err := executor.MethodById(msg.Data)
+func TestOfferTickAuthenticatesWithoutPermissionServiceOrMint(t *testing.T) {
+	for _, change := range []string{"valid", "account", "caller", "recipe", "recipe block", "root", "role", "role before POST", "role before cancel", "original reorg", "fresh reorg", "role read failure", "pin read failure"} {
+		t.Run(change, func(t *testing.T) {
+			w, client, data := offerPassFixture(t)
+			pin, recipe, market := data.pin, data.recipe, data.markets[0]
+			pin.Caller = common.HexToAddress("0xcafe")
+			original := &types.Header{Number: pin.BlockNumber, Time: pin.Timestamp, Difficulty: new(big.Int)}
+			fresh := types.CopyHeader(original)
+			fresh.Number = new(big.Int).Add(original.Number, big.NewInt(1))
+			executor := executorbinding.NewRecipeExecutor().GetABI()
+			account := accountbinding.NewMerkleAccount().GetABI()
+			hash, err := recipes.HashRecipe(recipe)
 			if err != nil {
-				return nil, err
+				t.Fatal(err)
 			}
-			switch method.Name {
-			case "account":
-				return method.Outputs.Pack(pin.Account)
-			case "caller":
-				return method.Outputs.Pack(pin.Caller)
-			case "recipeHash":
-				return method.Outputs.Pack(hash)
-			case "recipeBlock":
-				return method.Outputs.Pack(pin.BlockNumber)
+			event := executor.Events["SetRecipe"]
+			encoded, err := event.Inputs.NonIndexed().Pack(recipe.Queries, recipe.Steps)
+			if err != nil {
+				t.Fatal(err)
 			}
-		case pin.Account:
-			if method, err := account.MethodById(msg.Data); err == nil {
-				switch method.Name {
-				case "root":
-					return method.Outputs.Pack(pin.Root)
-				case "hasRole":
-					return method.Outputs.Pack(true)
+			log := types.Log{Address: pin.Executor, BlockNumber: pin.BlockNumber.Uint64(), BlockHash: original.Hash(), Topics: []common.Hash{event.ID, hash}, Data: encoded}
+			manager, collateral := common.HexToAddress("0x91"), common.HexToAddress("0x92")
+			auction := testAuction(data.market, 1, common.HexToAddress("0x101"))
+			auction.Asset.Set(&threef.ResolvedAssetDto{PositionManager: manager.Hex()})
+			auction.AdditionalProperties[exactMaxRateKey] = "10000"
+			client.auctions = []threef.AuctionDto{auction}
+			if change == "role before cancel" {
+				row := testOffer(data.market, 1, "SUBMITTED", "100")
+				row.RequestId = auction.RequestId
+				client.offers = []threef.OfferDto{row}
+			}
+			base := eligibilityReads(t, pin, recipe, data.tree, func(ethereum.CallMsg) error { return nil })
+			chain := offerTestChain{logs: []types.Log{log}}
+			heads, roleReads := 0, 0
+			chain.headerFn = func(block *big.Int) (*types.Header, error) {
+				if block == nil {
+					heads++
+					if heads == 1 {
+						return original, nil
+					}
+					return fresh, nil
 				}
+				header := original
+				if block.Cmp(fresh.Number) == 0 {
+					header = fresh
+				}
+				if roleReads > 0 {
+					if change == "pin read failure" {
+						return nil, errors.New("header unavailable")
+					}
+					if change == "original reorg" && block.Cmp(original.Number) == 0 || change == "fresh reorg" && block.Cmp(fresh.Number) == 0 {
+						reorganized := types.CopyHeader(header)
+						reorganized.Extra = []byte{1}
+						return reorganized, nil
+					}
+				}
+				return header, nil
 			}
-		case manager:
-			return positionManagerABI.GetABI().Methods["assets"].Outputs.Pack(collateral, common.Address{})
-		case collateral:
-			return underlyingAssetABI.GetABI().Methods["underlying"].Outputs.Pack(market.UnderlyingAsset)
-		}
-		return base(ctx, msg, block)
-	}
-	// Deliberately no PermissionSource: an offer pass must not fetch a Merkle bundle.
-	w.planner = &keeper.Planner{Chain: chain, ChainID: pin.ChainID, Caller: pin.Caller}
-	w.strategy.Config.Executor, w.strategy.Config.Account = pin.Executor.Hex(), pin.Account.Hex()
-	w.policy, w.api = market.Policy, client
-	if err := w.Tick(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if len(client.created) != 1 || client.created[0].Amount != "45" {
-		t.Fatalf("policy capacity was not offered: %+v", client.created)
+			chain.readFunc = func(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
+				switch *msg.To {
+				case pin.Executor:
+					method, err := executor.MethodById(msg.Data)
+					if err != nil {
+						return nil, err
+					}
+					modified := block.Cmp(fresh.Number) == 0
+					switch method.Name {
+					case "account", "caller":
+						value := pin.Account
+						if method.Name == "caller" {
+							value = pin.Caller
+						}
+						if modified && change == method.Name {
+							value = common.HexToAddress("0xbad")
+						}
+						return method.Outputs.Pack(value)
+					case "recipeHash":
+						value := hash
+						if modified && change == "recipe" {
+							value = common.HexToHash("0xbad")
+						}
+						return method.Outputs.Pack(value)
+					case "recipeBlock":
+						value := pin.BlockNumber
+						if modified && change == "recipe block" {
+							value = fresh.Number
+						}
+						return method.Outputs.Pack(value)
+					default:
+						t.Fatal("offer authorization attempted mint execution")
+					}
+				case pin.Account:
+					if method, err := account.MethodById(msg.Data); err == nil {
+						switch method.Name {
+						case "root":
+							value := pin.Root
+							if block.Cmp(fresh.Number) == 0 && change == "root" {
+								value = common.HexToHash("0xbad")
+							}
+							return method.Outputs.Pack(value)
+						case "hasRole":
+							roleReads++
+							if block.Cmp(fresh.Number) != 0 {
+								t.Fatal("offer leaf roles lost fresh block pin")
+							}
+							if change == "role read failure" {
+								return nil, errors.New("role unavailable")
+							}
+							allowed := true
+							switch change {
+							case "role":
+								allowed = false
+							case "role before POST":
+								allowed = heads < 4
+							case "role before cancel":
+								allowed = heads < 3
+							}
+							return method.Outputs.Pack(allowed)
+						}
+					}
+				case manager:
+					return positionManagerABI.GetABI().Methods["assets"].Outputs.Pack(collateral, common.Address{})
+				case collateral:
+					return underlyingAssetABI.GetABI().Methods["underlying"].Outputs.Pack(market.UnderlyingAsset)
+				}
+				return base(ctx, msg, block)
+			}
+			// No PermissionSource or mint authorization exists before the first offer.
+			w.planner = &keeper.Planner{Chain: chain, ChainID: pin.ChainID, Caller: pin.Caller}
+			w.strategy.Config.Executor, w.strategy.Config.Account = pin.Executor.Hex(), pin.Account.Hex()
+			w.policy, w.api = market.Policy, client
+			err = w.Tick(t.Context())
+			if change == "valid" {
+				if err != nil || len(client.created) != 1 || client.created[0].Amount != "45" {
+					t.Fatalf("policy capacity was not offered: %+v, err=%v", client.created, err)
+				}
+				inspection, err := recipes.Inspect(recipe)
+				if err != nil {
+					t.Fatal(err)
+				}
+				leaves := 0
+				for _, slot := range inspection.Slots {
+					leaves += len(slot.Leaves)
+				}
+				if roleReads != 3*leaves {
+					t.Fatalf("all recipe leaves must be authorized before every mutation: reads=%d, leaves=%d", roleReads, leaves)
+				}
+			} else if err == nil || len(client.created) != 0 || len(client.cancelled) != 0 {
+				t.Fatalf("changed authorization caused side effects: created=%v cancelled=%v err=%v", client.created, client.cancelled, err)
+			}
+		})
 	}
 }

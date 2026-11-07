@@ -5,7 +5,6 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -216,13 +215,11 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 			owner := factorySigner{address: caller}
 			manager := txmanager.New(client, owner, big.NewInt(1), txmanager.Config{}, logr.Discard())
 			raw := strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", curator.URL+"/api/v1", 1)
-			raw = strings.Replace(raw, "state/merkle", filepath.Join(t.TempDir(), "state"), 1)
 			built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, TxManager: manager, Log: logr.Discard()})
 			if err != nil {
 				t.Fatal(err)
 			}
 			current := built.(*Solver)
-			defer func() { _ = current.Close() }()
 			_, err = current.keeper.Planner.(*keeper.Planner).Prepare(t.Context(), current.keeper.Strategies[0])
 			valid := mode == "valid"
 			if valid && !errors.Is(err, provider.ErrNotReady) || !valid && (err == nil || errors.Is(err, provider.ErrNotReady)) || fetches != 1 {

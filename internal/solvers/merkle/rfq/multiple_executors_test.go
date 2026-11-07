@@ -1,6 +1,7 @@
 package rfq
 
 import (
+	"bytes"
 	"context"
 	"math/big"
 	"testing"
@@ -75,6 +76,18 @@ func (r *multiRecipeReader) FilterLogs(ctx context.Context, query ethereum.Filte
 	return r.readers[query.Addresses[0]].FilterLogs(ctx, query)
 }
 func (r *multiRecipeReader) CallContract(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
+	if msg.To != nil && *msg.To == r.recipeCaller && bytes.HasPrefix(msg.Data, executorBinding.GetABI().Methods["fill"].ID) {
+		values, err := executorBinding.GetABI().Methods["fill"].Inputs.Unpack(msg.Data[4:])
+		if err != nil {
+			return nil, err
+		}
+		encoded, err := executorCallsArgs.Unpack(values[4].([]byte))
+		if err != nil {
+			return nil, err
+		}
+		calls := *abi.ConvertType(encoded[0], new([]executorCall)).(*[]executorCall)
+		return r.readers[calls[0].Target].CallContract(ctx, msg, block)
+	}
 	if reader := r.readers[*msg.To]; reader != nil {
 		return reader.CallContract(ctx, msg, block)
 	}
@@ -85,6 +98,10 @@ func (r *multiRecipeReader) CallContract(ctx context.Context, msg ethereum.CallM
 		}
 	}
 	return r.connectorExecutionReader.CallContract(ctx, msg, block)
+}
+
+func (r *multiRecipeReader) CallContractWithCodeAt(ctx context.Context, msg ethereum.CallMsg, block *big.Int, target common.Address, code []byte) ([]byte, error) {
+	return r.readers[target].CallContractWithCodeAt(ctx, msg, block, target, code)
 }
 
 type multiRecipeSource map[common.Address]permissionSource

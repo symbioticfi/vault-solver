@@ -11,7 +11,6 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 	"github.com/symbioticfi/vault-solver/internal/merklesender"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
@@ -25,15 +24,11 @@ func init() { solver.Register(Name, factory) }
 
 type Solver struct {
 	keeper *keeper.Keeper
-	store  *state.Store
 }
 
 func (s *Solver) Name() string            { return Name }
 func (s *Solver) RequiresTxManager() bool { return s.keeper.Mode == "send" }
 
-// Close is called by the host after its shared sender has drained, so persistence
-// callbacks cannot outlive their store. It also handles partial startup failure.
-func (s *Solver) Close() error { return s.store.Close() }
 func (s *Solver) Run(ctx context.Context) error {
 	ticker := time.NewTicker(defaultPollInterval)
 	defer ticker.Stop()
@@ -82,10 +77,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		}
 		strategy.Providers = []keeper.Provider{capacity}
 		strategy.Config.Account = identity.Account.Hex()
-		strategy.Config.Revision, err = strategyRevision(strategy.Config, cfg.curator, deps.Signer.Address())
-		if err != nil {
-			return nil, err
-		}
 	}
 	source, err := cfg.curator.PermissionSource(deps.Chain)
 	if err != nil {
@@ -93,9 +84,8 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(len(cfg.strategies), recipeCacheBytes), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: deps.TxManager.Confirmations()}
 	k := &keeper.Keeper{Planner: planner, Strategies: cfg.strategies, Mode: cfg.mode, OperationTimeout: defaultOperationTimeout, Log: deps.Log.WithName(Name)}
-	store, err := merklesender.OpenKeeper(k, cfg.stateDir, deps, Name)
-	if err != nil {
-		return nil, err
+	if cfg.mode == "send" {
+		k.Sender = merklesender.New(deps.TxManager, Name)
 	}
-	return &Solver{keeper: k, store: store}, nil
+	return &Solver{keeper: k}, nil
 }
