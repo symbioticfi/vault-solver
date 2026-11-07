@@ -29,6 +29,7 @@ import (
 
 // Backend is the EVM client surface the manager needs. NonceAt must read the sending endpoint
 // when selecting the first unconsumed nonce; pending state is used only by account telemetry.
+// Signing also requires TransactionSenderBalanceAt or BalanceAt for fresh funding admission.
 type Backend interface {
 	NonceAt(ctx context.Context, account common.Address, blockNumber *big.Int) (uint64, error)
 	PendingNonceAt(ctx context.Context, account common.Address) (uint64, error)
@@ -1640,6 +1641,9 @@ func (m *Manager) signAndSend(
 		Value:     value,
 		Data:      data,
 	})
+	if err := m.checkTransactionFunding(ctx, tx); err != nil {
+		return nil, err
+	}
 	signed, err := m.signer.SignTx(ctx, tx, m.chainID)
 	if err != nil {
 		return nil, errors.Errorf("sign transaction: %w", err)
@@ -1669,6 +1673,29 @@ func (m *Manager) signAndSend(
 		return nil, errors.Errorf("broadcast rejected before acceptance: %w", sendErr)
 	}
 	return signed, sendErr
+}
+
+func (m *Manager) checkTransactionFunding(ctx context.Context, tx *types.Transaction) error {
+	maximumCost := tx.Cost()
+	if tx.Value().Sign() < 0 || tx.GasFeeCap().Sign() < 0 || tx.GasFeeCap().BitLen() > 256 || maximumCost.Sign() < 0 || maximumCost.BitLen() > 256 {
+		return errors.New("invalid transaction maximum funding cost")
+	}
+	readCtx, cancel := context.WithTimeout(ctx, m.receiptReadTimeout())
+	defer cancel()
+	balance, err := m.transactionSenderBalance(readCtx)
+	if err != nil {
+		return errors.Errorf("check transaction funding: %w", err)
+	}
+	if err := readCtx.Err(); err != nil {
+		return errors.Errorf("check transaction funding: %w", err)
+	}
+	if balance == nil || balance.Sign() < 0 || balance.BitLen() > 256 {
+		return errors.New("invalid transaction sender balance")
+	}
+	if balance.Cmp(maximumCost) < 0 {
+		return errors.Errorf("insufficient transaction funding: balance %s, maximum cost %s", balance, maximumCost)
+	}
+	return nil
 }
 
 func (m *Manager) sendSigned(ctx context.Context, signed *types.Transaction) error {

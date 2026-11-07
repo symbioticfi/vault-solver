@@ -81,11 +81,17 @@ host loop, protocol-specific batching or per-executor switch. The existing chain
 client supplies code overrides and pinned bytecode reads; the SDK revalidates the
 exact atomic multicall against the original contract before submission.
 
-The SDK is pinned to immutable commit `aca8bc6e9b78e47618b38279efdda92177ca2aa3`.
+The SDK is pinned to immutable commit `26e64712a1ec85379175e0aa0450a23d20c5eb24`.
 Remove `stateDir` from Merkle YAML: strict decoding rejects it. There is no journal,
 configuration fingerprint, saved plan or restart recovery. Process exit loses
 transaction, order and reservation tracking while external work may continue.
 Settle existing work before migration and use one active process per signer.
+
+The shared manager checks fresh sender funding against final maximum gas cost
+plus value before signing. An initial funding failure captures no signed attempt
+and releases the Merkle reservation through the existing unsigned-failure path.
+Funding changes after a broadcast do not release signed ownership; a failed fee
+replacement keeps the earlier signed identity.
 
 The regular chain/signer/txManager settings still apply. Send mode requires the
 shared signer to match the on-chain executor caller; the executor must hold the

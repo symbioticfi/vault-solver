@@ -27,7 +27,7 @@ No live-provider credentials, external signing, deployment or migration were exe
 - [x] Notify existing host loops after canonical sender completion through a coalescing channel. Publish the transaction result before notification; retain timer cadence for uncertain outcomes.
 - [x] Wake generic Merkle, 3F and RFQ hosts. Check the next RFQ award immediately after a pending fill settles.
 - [x] Cover publication order, resumed canonical notification, coalescing and RFQ wakeup without waiting for the three-second timer. Independent host review found no code regressions.
-- [x] Pin SDK `aca8bc6e9b78e47618b38279efdda92177ca2aa3` and repeat the required repository and local Anvil gates before publishing the PR update. Go 1.27.3 tidy/verify, build, full race/coverage, lint with and without autofix, tooling and all three integration targets passed. Final Anvil runs use 1.9.0 to match CI. The reorg fixture permits only the documented transient nonce-consumed observation while asserting ownership and signer reservation, then requires canonical completion of the exact owned hash.
+- [x] Pin SDK `26e64712a1ec85379175e0aa0450a23d20c5eb24` and repeat the required repository and local Anvil gates before publishing the PR update. Go 1.27.3 tidy/verify, build, full race/coverage, lint with and without autofix, tooling and all three integration targets passed. Final Anvil runs use 1.9.0 to match CI. The reorg fixture permits only the documented transient nonce-consumed observation while asserting ownership and signer reservation, then requires canonical completion of the exact owned hash.
 
 ## RFQ external simulation simplification
 
@@ -35,4 +35,12 @@ No live-provider credentials, external signing, deployment or migration were exe
 - [x] Delete the unused nested result probe, artifact, generator, verification target and probe-only tests. Retain generic numerical/result validation.
 - [x] Verify ordinary eth_call-only readers, empty outer returns, exact calldata/signer/block/gas, canonical contract rejection fixtures, and the distinction between awarded settlement and generic inner readiness. Update the SDK pin, required gates and both PRs.
 
-Validation on SDK `aca8bc6e9b78e47618b38279efdda92177ca2aa3` with `GOWORK=off`: tidy/verify, lint with and without autofix, build, full race/coverage, tooling and all three Anvil integration targets passed. RFQ executes seven canonical-contract cases, including a funded swap rejected by its committed native assertion. Independent review found no admission bypass; generic witness/readiness checks and shared opening/closing guards remain intact. SDK hosted CI passed.
+Validation on SDK `26e64712a1ec85379175e0aa0450a23d20c5eb24` with `GOWORK=off`: tidy/verify, lint with and without autofix, build, full race/coverage, tooling and all three Anvil integration targets passed. RFQ executes seven canonical-contract cases, including a funded swap rejected by its committed native assertion. Independent review found no admission bypass; generic witness/readiness checks and shared opening/closing guards remain intact. SDK hosted CI passed.
+
+## Funding admission follow-up
+
+- [x] Require fresh balance coverage for final unsigned maximum cost before signatures, including value, fee floors and replacement gas.
+- [x] Prove insufficient/unavailable funding causes no signature/capture/broadcast and an initial Merkle reservation releases; prove funded retry settles and replacement failures retain prior signed work.
+- [x] Pin the published SDK and complete required repository/Anvil gates, independent review and PR #277 update. Signed RPC rejection ownership remains unchanged; no cancellation workflow or new recovery state.
+
+Funding validation with published SDK `26e64712a1ec85379175e0aa0450a23d20c5eb24` and `GOWORK=off`: tidy/verify, format/lint autofix and plain lint (zero issues), build, full race/coverage, tooling and all three Anvil 1.9.0 targets passed. Initial funding failures produce no signature/capture/broadcast; exact coverage, invalid data, fee floors, value and replacement retention are covered. The real shared-manager Merkle release/funded-retry regression passed ten race-enabled Anvil runs. Independent review found no production blockers; its test scheduling observation was fixed with a bounded lane-release wait.

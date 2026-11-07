@@ -73,7 +73,7 @@ func (c *Client) PendingNonceAt(ctx context.Context, account common.Address) (ui
 	return c.writeClient.PendingNonceAt(ctx, account)
 }
 
-// TransactionSenderBalanceAt prefers the write endpoint for sender telemetry, then falls back to the
+// TransactionSenderBalanceAt prefers the write endpoint for sender funding and telemetry, then falls back to the
 // ordinary read client when a distinct submission endpoint rejects or cannot serve eth_getBalance.
 func (c *Client) TransactionSenderBalanceAt(
 	ctx context.Context,

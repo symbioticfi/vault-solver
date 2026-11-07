@@ -41,7 +41,7 @@ func TestAccountMetricsActivateOnlyWhenManagerStarts(t *testing.T) {
 	manager.Start(ctx)
 
 	// Identity plus both zero-valued refresh outcomes produce three series; snapshot gauges remain
-	// absent because this backend does not expose balance reads.
+	// absent because cancellation prevents a complete account refresh.
 	assertAccountMetricSeriesCount(t, reg, 3)
 	metrics.account.mu.RLock()
 	address := metrics.account.address

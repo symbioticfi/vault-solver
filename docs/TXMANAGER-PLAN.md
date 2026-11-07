@@ -96,6 +96,14 @@ The override and latest-state fallback share that single estimate budget, capped
 context. A supplied gas limit still bypasses estimation. Caller cancellation after admission does not
 release the lane: an unsigned timeout must return through the worker before another request enters.
 These internal read budgets are separate from broadcast timeout.
+Before each signature, a fresh sender balance read uses the receipt-read budget
+(at most two seconds, shortened by the inherited context). The final unsigned
+transaction maximum cost includes gas headroom, any reusable fee floor and value.
+Nil, negative, out-of-range or insufficient balances and invalid/overflowing costs
+fail before signing or pre-broadcast capture. Replacement funding failure retains
+the previous signed lifecycle; it cannot release or rebuild that work. Sender
+balance uses the existing write-preferred chain helper and its read fallback,
+without using account telemetry snapshots.
 An estimate exceeding its budget returns an unsigned `submission_error`, even if the HTTP attempt
 timeout allows longer. Watch estimate timeouts on deployment before changing this bound.
 

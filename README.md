@@ -465,6 +465,10 @@ The shared `txManager` serializes transaction-sending solvers on one EOA. While 
 or active, UniswapX declines new quotes, LI.FI retires standing curves, and 3F stops new offers;
 reconciliation continues. RFQ keeps quoting and accounts for pending fills through reservations; it stops
 only while the nonce lane is unavailable. Pending calls receive ordinary fee bumps at the same nonce.
+Before every signature, including a fee replacement, the manager checks a fresh
+sender balance against the final maximum gas cost plus transaction value. Invalid
+or insufficient funding fails before signing; an initial unsigned failure releases
+its work, while a replacement failure keeps the prior signed attempt owned.
 At the request deadline, pending timeout or a terminal business-status check, the manager abandons active tracking
 and releases the local lane. It remembers the unused nonce and last signed fees so the next freshly planned
 order can replace that call, with both fee fields increased by at least 12.5% under the configured ceilings.

@@ -73,6 +73,13 @@ func newMockBackend() *mockBackend {
 	}
 }
 
+func (*mockBackend) BalanceAt(ctx context.Context, _ common.Address, _ *big.Int) (*big.Int, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return new(big.Int).Lsh(big.NewInt(1), 128), nil
+}
+
 func (b *mockBackend) NonceAt(_ context.Context, _ common.Address, number *big.Int) (uint64, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
