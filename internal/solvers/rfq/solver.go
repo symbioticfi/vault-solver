@@ -187,7 +187,7 @@ func (s *Solver) ShutdownPreparationTimeout() time.Duration {
 // backend order-poll + fill loop. The filler is poll-only (no push/notify endpoint).
 func (s *Solver) Run(ctx context.Context) error {
 	if s.merkle != nil {
-		if _, err := s.merkle.Initialize(ctx); err != nil {
+		if err := s.merkle.Initialize(ctx); err != nil {
 			return errors.Errorf("rfq: initialize recipe executor: %w", err)
 		}
 	}

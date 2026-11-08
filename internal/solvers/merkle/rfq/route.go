@@ -17,32 +17,23 @@ type recipeRoute struct {
 
 // Initialize publishes verified payment routes together. Quotes keep declining
 // while discovery runs without holding routesMu.
-func (s *Solver) Initialize(ctx context.Context) ([]common.Address, error) {
+func (s *Solver) Initialize(ctx context.Context) error {
 	s.routesMu.RLock()
-	routes := s.routes
+	initialized := s.routes != nil
 	s.routesMu.RUnlock()
-	if routes == nil {
-		built, err := s.buildRoutes(ctx)
-		if err != nil {
-			return nil, err
-		}
-		s.routesMu.Lock()
-		if s.routes == nil {
-			s.routes = built
-		}
-		routes = s.routes
-		s.routesMu.Unlock()
+	if initialized {
+		return nil
 	}
-	venues := make([]common.Address, 0, len(routes))
-	seen := make(map[common.Address]bool)
-	for _, executor := range s.recipeExecutors {
-		venue := routes[executor].connector
-		if !seen[venue] {
-			venues = append(venues, venue)
-			seen[venue] = true
-		}
+	routes, err := s.buildRoutes(ctx)
+	if err != nil {
+		return err
 	}
-	return venues, nil
+	s.routesMu.Lock()
+	if s.routes == nil {
+		s.routes = routes
+	}
+	s.routesMu.Unlock()
+	return nil
 }
 
 func (s *Solver) buildRoutes(ctx context.Context) (map[common.Address]recipeRoute, error) {

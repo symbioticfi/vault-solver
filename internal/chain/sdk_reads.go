@@ -48,19 +48,10 @@ func (sdkAggregateCodec) Decode(raw []byte) ([]protocolio.AggregateResult, error
 // CallContractWithCode preserves the recipe lens's sender, target, block and
 // state overrides through the same read transport as ordinary eth_call.
 func (c *Client) CallContractWithCode(ctx context.Context, msg ethereum.CallMsg, block *big.Int, code []byte) ([]byte, error) {
-	if msg.To == nil {
+	if msg.To == nil || *msg.To == (common.Address{}) || msg.From == (common.Address{}) || block == nil || block.Sign() < 0 || len(code) == 0 {
 		return nil, errors.New("chain: code override requires target, caller, numeric block and code")
 	}
-	return c.CallContractWithCodeAt(ctx, msg, block, *msg.To, code)
-}
-
-// CallContractWithCodeAt replaces a nested call target while preserving the
-// outer call's sender, destination, calldata and pinned state.
-func (c *Client) CallContractWithCodeAt(ctx context.Context, msg ethereum.CallMsg, block *big.Int, target common.Address, code []byte) ([]byte, error) {
-	if msg.To == nil || *msg.To == (common.Address{}) || target == (common.Address{}) || msg.From == (common.Address{}) || block == nil || block.Sign() < 0 || len(code) == 0 {
-		return nil, errors.New("chain: code override requires target, caller, numeric block and code")
-	}
-	overrides := map[common.Address]any{target: map[string]any{"code": hexutil.Bytes(code)}}
+	overrides := map[common.Address]any{*msg.To: map[string]any{"code": hexutil.Bytes(code)}}
 	var result hexutil.Bytes
 	err := c.Client.Client().CallContext(ctx, &result, "eth_call", protocolio.CallArgument(msg), protocolio.BlockArgument(block), overrides)
 	return result, err

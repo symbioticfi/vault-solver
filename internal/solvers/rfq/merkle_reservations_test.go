@@ -76,7 +76,7 @@ func TestFactoryQuotesAuthenticateMerkleRoute(t *testing.T) {
 	if decision, err := s.server.quotes.quote(t.Context(), &body); err != nil || decision.response != nil {
 		t.Fatalf("quote before route publication = %+v %v", decision, err)
 	}
-	if _, err := s.merkle.Initialize(t.Context()); err != nil {
+	if err := s.merkle.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {

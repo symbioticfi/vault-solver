@@ -72,8 +72,6 @@ Candidate failures are reported individually while authenticated healthy candida
 continue through shared planning. A keeper cycle can settle immediately confirmed
 work and submit other eligible executors, submitting each at most once per cycle.
 Idle candidates may be prepared again after earlier confirmed effects.
-Canonical shared-sender completion wakes the loop before its normal timer; pending
-work and uncertain failures retain the normal retry cadence.
 
 The SDK automatically batches self-contained, state-driven recipes on the same
 executor while successive executions remain useful and executable. Every cycle
@@ -85,7 +83,6 @@ host loop, protocol-specific batching or per-executor switch. The existing chain
 client supplies code overrides and pinned bytecode reads; the SDK revalidates the
 exact atomic multicall against the original contract before submission.
 
-The SDK is pinned to immutable commit `26e64712a1ec85379175e0aa0450a23d20c5eb24`.
 Remove `stateDir` from Merkle YAML: strict decoding rejects it. There is no journal,
 configuration fingerprint, saved plan or restart recovery. Process exit loses
 transaction, order and reservation tracking while external work may continue.

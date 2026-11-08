@@ -98,7 +98,7 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 	if !b.Send {
 		return false, nil
 	}
-	pending, err := b.reconcileIntents(market, offers)
+	pending, err := b.reconcileIntents(offers)
 	if err != nil {
 		return false, err
 	}

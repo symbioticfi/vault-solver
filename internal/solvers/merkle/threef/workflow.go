@@ -90,9 +90,6 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	for _, slot := range inspection.Slots {
 		leaves = append(leaves, slot.Leaves...)
 	}
-	if err := w.validateOfferAuthorization(ctx, prepared[0], leaves); err != nil {
-		return err
-	}
 	return w.evaluate(ctx, p.Chain, pin, markets, auctions, offers, func(ctx context.Context) error {
 		return w.validateOfferAuthorization(ctx, prepared[0], leaves)
 	})
@@ -207,7 +204,7 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 		memberships[i] = make(map[common.Address]bool)
 		if observed.Budget.Sign() > 0 {
 			for _, previous := range pending {
-				if previous != nil && previous.OfferID == 0 && previous.Policy == market.Policy && previous.Asset == market.Asset && previous.UnderlyingAsset == market.UnderlyingAsset {
+				if previous.OfferID == 0 && previous.Policy == market.Policy && previous.Asset == market.Asset && previous.UnderlyingAsset == market.UnderlyingAsset {
 					if err := check(i, previous.Request); err != nil {
 						return err
 					}

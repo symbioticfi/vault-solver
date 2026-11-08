@@ -27,9 +27,8 @@ func TestMultipleExecutorsShareRouting(t *testing.T) {
 	workflow.source = multiRecipeSource{first.reader.recipeExecutor: first.workflow.source, second.reader.recipeExecutor: second.workflow.source}
 	_, _, backend := connectorExecutionAward(workflow.caller)
 	s := &Solver{recipeExecutors: []common.Address{first.reader.recipeExecutor, second.reader.recipeExecutor}, workflow: &workflow, backend: backend}
-	venues, err := s.Initialize(t.Context())
-	if err != nil || len(venues) != 1 || venues[0] != vlt {
-		t.Fatalf("routes: %v %v", venues, err)
+	if err := s.Initialize(t.Context()); err != nil || !s.AcceptsConnector(vlt) {
+		t.Fatalf("routes: %v", err)
 	}
 	for _, executor := range s.recipeExecutors {
 		if !s.AcceptsRoute(executor, vlt, first.reader.recipeAccount, tOut) {

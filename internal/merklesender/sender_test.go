@@ -80,7 +80,7 @@ func signedFixture(req txmanager.Request, nonce uint64, fee int64) (unsignedTx, 
 }
 func newFakeSender() (*Sender, *fakeHost) {
 	h := new(fakeHost)
-	return &Sender{manager: h, owner: "test-owner", solver: "test", wakeup: make(chan struct{}, 1)}, h
+	return &Sender{manager: h, owner: "test-owner", solver: "test"}, h
 }
 func ownedReceipt(tx *types.Transaction) *types.Receipt {
 	return &types.Receipt{TxHash: tx.Hash(), BlockNumber: big.NewInt(9), BlockHash: common.HexToHash("0x1234"), Status: 1}
@@ -121,38 +121,6 @@ func TestSenderKeepsSignedOwnershipAcrossAmbiguousHostResults(t *testing.T) {
 			}
 			if result, err = s.Poll(t.Context()); result != nil || err != nil {
 				t.Fatal("terminal result delivered twice")
-			}
-		})
-	}
-}
-
-func TestSenderWakeupOnlyForCanonicalCompletion(t *testing.T) {
-	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeConfirmed, txmanager.OutcomeReverted, txmanager.OutcomeAbandoned, txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict, txmanager.OutcomeTrackingStopped, txmanager.OutcomeSubmissionError, txmanager.OutcomeIncludedUnconfirmed} {
-		t.Run(string(outcome), func(t *testing.T) {
-			s, h := newFakeSender()
-			if err := s.Submit(t.Context(), transaction.Request{To: common.HexToAddress("0x1234")}); err != nil {
-				t.Fatal(err)
-			}
-			result := txmanager.Result{Hash: h.attempts[0].Hash(), Outcome: outcome}
-			h.results <- result
-			// Several completed requests before a host observes the signal coalesce.
-			h.req.AfterResult(result)
-			h.req.AfterResult(result)
-			canonical := outcome == txmanager.OutcomeConfirmed || outcome == txmanager.OutcomeReverted
-			select {
-			case <-s.Wakeup():
-				if !canonical {
-					t.Fatal("ambiguous result woke host")
-				}
-			default:
-				if canonical {
-					t.Fatal("canonical result did not wake host")
-				}
-			}
-			select {
-			case <-s.Wakeup():
-				t.Fatal("completion notifications did not coalesce")
-			default:
 			}
 		})
 	}

@@ -152,7 +152,7 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 			t.Fatal("fill admitted before quote fence")
 		}
 	}
-	if _, err := s.Initialize(t.Context()); err != nil {
+	if err := s.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.tick(t.Context()); err != nil {
@@ -218,7 +218,7 @@ func TestPrepareCountsHeaderLatencyAgainstDeadline(t *testing.T) {
 	order, _, backend := connectorExecutionAward(f.workflow.caller)
 	order.Request.Deadline = big.NewInt(chainTime.Add(10 * time.Second).Unix())
 	s := Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: f.workflow, backend: backend}
-	if _, err := s.Initialize(t.Context()); err != nil {
+	if err := s.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	f.reader.headerDelay = 250 * time.Millisecond
@@ -264,7 +264,7 @@ func TestSubmissionErrorRetainsOnlySignedWork(t *testing.T) {
 			backend.listed = &discounts.List{Discounts: []discounts.ListItem{{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: common.HexToAddress("0x43").Hex()}}}
 			sender := &fakeSender{unsigned: unsigned, submitErr: context.DeadlineExceeded}
 			s := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender}
-			if _, err := s.Initialize(t.Context()); err != nil {
+			if err := s.Initialize(t.Context()); err != nil {
 				t.Fatal(err)
 			}
 			if err := s.tick(t.Context()); !errors.Is(err, context.DeadlineExceeded) || (s.intent == nil) != unsigned {
@@ -310,4 +310,32 @@ curator: {url: https://curator.example/api/v1}
 			}
 		})
 	}
+}
+
+// A completed fill advances directly to the next award; pending work uses polling.
+func TestRunContinuesToNextAwardAfterConfirmation(t *testing.T) {
+	f := connectorExecutionFixture(t, connectorDiscountFixture())
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	s := &Solver{
+		recipeExecutors: []common.Address{f.reader.recipeExecutor},
+		workflow:        f.workflow,
+		backend:         &nextAwardBackend{cancel: cancel},
+		sender:          &fakeSender{busy: true, result: fillResult()},
+		intent:          &fillIntent{OrderID: "pending"},
+	}
+	if err := s.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal("confirmed fill waited for the polling timer before next award", err)
+	}
+}
+
+type nextAwardBackend struct {
+	fakeBackend
+
+	cancel context.CancelFunc
+}
+
+func (b *nextAwardBackend) orders(context.Context, string) ([]rfqbackend.OrdersResponseOrdersInner, error) {
+	b.cancel()
+	return nil, nil
 }

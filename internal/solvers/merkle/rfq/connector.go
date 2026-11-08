@@ -143,7 +143,6 @@ type permissionSource interface {
 type connectorWorkflow struct {
 	chain          recipes.Reader
 	chainID        *big.Int
-	connector      common.Address
 	source         permissionSource
 	caller, signer common.Address
 }
@@ -212,8 +211,11 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if selected.Executor == (common.Address{}) {
 		return builtConnector{}, errors.New("connector has no recipe executor")
 	}
-	if w.connector == (common.Address{}) || selected.Venue != w.connector || selected.DiscountID == (common.Hash{}) || selected.MaxAssets == nil || selected.MaxAssets.Sign() < 0 {
+	if selected.Venue == (common.Address{}) || selected.DiscountID == (common.Hash{}) || selected.MaxAssets == nil || selected.MaxAssets.Sign() < 0 {
 		return builtConnector{}, errors.New("connector requires recipe-derived routing and upstream discount")
+	}
+	if w.signer == (common.Address{}) {
+		return builtConnector{}, errors.New("connector fill requires a host signer")
 	}
 	identities, err := recipes.DiscoverExecutors(ctx, w.chain, []common.Address{selected.Executor})
 	if err != nil {
@@ -279,8 +281,12 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if err != nil {
 		return builtConnector{}, errors.Errorf("encode recipe fill: %w", err)
 	}
-	simulation := outerFillSimulation{reader: w.chain, executor: snapshot.Executor, inner: assembled.Calldata, outer: calldata, caller: w.caller, signer: w.signer}
-	if err := recipes.ValidatePreparedBatchWithSimulation(ctx, w.chain, prepared, []recipes.ExecutorCall{{Executor: snapshot.Executor, Data: assembled.Calldata}}, [][]common.Hash{assembled.Leaves}, w.caller, simulation.Simulate); err != nil {
+	// The SDK authenticates the inner call and pins around the unchanged outer fill.
+	simulate := func(ctx context.Context, request recipes.PreparedBatchSimulationRequest) error {
+		_, err := w.chain.CallContract(ctx, ethereum.CallMsg{From: w.signer, To: &w.caller, Data: bytes.Clone(calldata), Gas: request.GasLimit}, request.BlockNumber)
+		return err
+	}
+	if err := recipes.ValidatePreparedBatchWithSimulation(ctx, w.chain, prepared, []recipes.ExecutorCall{{Executor: snapshot.Executor, Data: assembled.Calldata}}, [][]common.Hash{assembled.Leaves}, w.caller, simulate); err != nil {
 		return builtConnector{}, errors.Errorf("validate outer RFQ recipe fill: %w", err)
 	}
 	return builtConnector{Calldata: calldata, ValidUntil: terms.ValidUntil, State: state}, nil

@@ -363,9 +363,8 @@ There is no disk journal or restart recovery; external work must be settled befo
 The planner isolates candidate failures through the same grouped discovery core
 and reports them alongside healthy selected work. A bounded keeper drain submits
 each eligible executor at most once per tick, allowing previously idle candidates
-to become ready after earlier confirmed effects. Canonical sender results notify the host
-after publication, waking generic, RFQ and 3F loops without an extra worker or an
-error-triggered retry loop. Rejected envelopes try descending prefixes so valid
+to become ready after earlier confirmed effects. Hosts observe canonical results
+through their existing polling loops. Rejected envelopes try descending prefixes so valid
 intermediate sizes are considered before deferring the remaining calls.
 The SDK batch engine uses the existing HTTP fallback/tracing path with strict response
 identity validation. Compatible pinned getters use one Multicall3 `eth_call` as a

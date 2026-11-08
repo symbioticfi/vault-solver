@@ -94,15 +94,11 @@ func New(cfg Config, deps solver.Deps) (*Solver, error) {
 }
 
 func (s *Solver) Run(ctx context.Context) error {
-	if _, err := s.Initialize(ctx); err != nil {
+	if err := s.Initialize(ctx); err != nil {
 		return err
 	}
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
-	var wakeup <-chan struct{}
-	if sender, ok := s.sender.(interface{ Wakeup() <-chan struct{} }); ok {
-		wakeup = sender.Wakeup()
-	}
 	for {
 		pending := s.intent != nil
 		run, cancel := context.WithTimeout(ctx, operationTimeout)
@@ -118,7 +114,6 @@ func (s *Solver) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-		case <-wakeup:
 		}
 	}
 }
@@ -133,7 +128,7 @@ func (s *Solver) tick(ctx context.Context) (err error) {
 	if s.sender.Busy() {
 		return errors.New("RFQ sender has work without a fill owner")
 	}
-	if _, err := s.Initialize(ctx); err != nil {
+	if err := s.Initialize(ctx); err != nil {
 		return err
 	}
 	rows, err := s.backend.orders(ctx, strings.ToLower(s.workflow.caller.Hex()))
@@ -223,9 +218,7 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 		if !ok || maximum.Sign() < 0 || maximum.BitLen() > 256 {
 			return nil, errors.New("invalid connector maxAssets")
 		}
-		workflow := *s.workflow
-		workflow.connector = route.connector
-		built, err := workflow.build(ctx, order, signature, selectedRoute{Venue: venue, Executor: recipeExecutor, DiscountID: common.BytesToHash(id), MaxAssets: maximum}, s.backend)
+		built, err := s.workflow.build(ctx, order, signature, selectedRoute{Venue: venue, Executor: recipeExecutor, DiscountID: common.BytesToHash(id), MaxAssets: maximum}, s.backend)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()

@@ -10,9 +10,7 @@ import (
 )
 
 type intent struct {
-	ChainID         uint64
 	Account         common.Address
-	Broker          common.Address
 	Executor        common.Address
 	Policy          common.Address
 	RecipeHash      common.Hash
@@ -24,26 +22,11 @@ type intent struct {
 }
 
 func newIntent(m offerMarket, request common.Address, offer threef.CreateOfferDto) *intent {
-	return &intent{ChainID: m.ChainID, Account: m.Account, Broker: common.HexToAddress(offer.Maker), Executor: m.Executor, Policy: m.Policy, RecipeHash: m.RecipeHash, Asset: m.Asset, UnderlyingAsset: m.UnderlyingAsset, Request: request, Offer: offer}
+	return &intent{Account: m.Account, Executor: m.Executor, Policy: m.Policy, RecipeHash: m.RecipeHash, Asset: m.Asset, UnderlyingAsset: m.UnderlyingAsset, Request: request, Offer: offer}
 }
 
 func (i *intent) matchesMarket(m offerMarket) bool {
 	return i.Policy == m.Policy && i.Executor == m.Executor && i.RecipeHash == m.RecipeHash && i.Asset == m.Asset && i.UnderlyingAsset == m.UnderlyingAsset
-}
-
-func (i *intent) validate(m offerMarket, broker common.Address) error {
-	if i.ChainID != m.ChainID || i.Account != m.Account || i.Policy == (common.Address{}) || i.Broker == (common.Address{}) || i.Broker != broker || i.Executor == (common.Address{}) || i.RecipeHash == (common.Hash{}) || i.Asset == (common.Address{}) || i.UnderlyingAsset == (common.Address{}) || i.Request == (common.Address{}) || i.Offer.Maker != strings.ToLower(i.Broker.Hex()) || i.Offer.ExecutionMode != nil || i.Offer.UseCallback || i.Offer.Signature != nil || i.Offer.PushAuthorizationSignature != nil || i.Offer.ChainId != nil || i.Offer.AuthorizationDeadline != nil || len(i.Offer.AdditionalProperties) > 0 {
-		return errors.New("3F offer intent identity is invalid")
-	}
-	if _, err := dtoID(i.Offer.AuctionId); err != nil {
-		return err
-	}
-	for _, value := range []string{i.Offer.Amount, i.Offer.ExpectedReturn, i.Offer.Nonce, i.Offer.Expiration} {
-		if _, err := uintAmount(value); err != nil {
-			return errors.Errorf("invalid 3F offer intent: %w", err)
-		}
-	}
-	return nil
 }
 
 func withoutIntent(pending []*intent, removed *intent) []*intent {
@@ -61,21 +44,10 @@ func findIntent(pending []*intent, id uint64) *intent {
 
 // Reconcile all auctions before sizing. An absent API row retains its original
 // reservation; it must not free cash or erase another auction's RAM intent.
-func (b *offerBot) reconcileIntents(m offerMarket, offers []threef.OfferDto) ([]*intent, error) {
+func (b *offerBot) reconcileIntents(offers []threef.OfferDto) ([]*intent, error) {
 	pending := b.pending
 	retained := make([]*intent, 0, len(pending))
-	seen := make(map[float32]bool, len(pending))
 	for _, previous := range pending {
-		if previous == nil {
-			return nil, errors.New("nil 3F offer intent")
-		}
-		if err := previous.validate(m, b.Client.Broker()); err != nil {
-			return nil, err
-		}
-		if seen[previous.Offer.AuctionId] {
-			return nil, errors.New("duplicate auction in 3F offer intent")
-		}
-		seen[previous.Offer.AuctionId] = true
 		matched, err := matchIntent(previous, offers)
 		if err != nil {
 			return nil, err

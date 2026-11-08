@@ -405,9 +405,9 @@ func TestOfferTickAuthenticatesWithoutPermissionServiceOrMint(t *testing.T) {
 							case "role":
 								allowed = false
 							case "role before POST":
-								allowed = heads < 4
-							case "role before cancel":
 								allowed = heads < 3
+							case "role before cancel":
+								allowed = heads < 2
 							}
 							return method.Outputs.Pack(allowed)
 						}
@@ -436,7 +436,7 @@ func TestOfferTickAuthenticatesWithoutPermissionServiceOrMint(t *testing.T) {
 				for _, slot := range inspection.Slots {
 					leaves += len(slot.Leaves)
 				}
-				if roleReads != 3*leaves {
+				if roleReads != 2*leaves {
 					t.Fatalf("all recipe leaves must be authorized before every mutation: reads=%d, leaves=%d", roleReads, leaves)
 				}
 			} else if err == nil || len(client.created) != 0 || len(client.cancelled) != 0 {

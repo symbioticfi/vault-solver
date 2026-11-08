@@ -96,16 +96,12 @@ type Request struct {
 	// BeforeBroadcast must capture each signed original/replacement before RPC.
 	// Failure prevents broadcasting those bytes; the owner retains its reservation.
 	BeforeBroadcast func(unsigned, signed *types.Transaction) error
-	// AfterResult notifies the host after the worker publishes its terminal result.
-	// It runs synchronously on the delivering worker and must not block or mutate
-	// result data. Use it only to signal an existing host loop.
-	AfterResult  func(Result)
-	To           common.Address
-	Data         []byte
-	Value        *big.Int
-	GasLimit     uint64
-	MaxFeePerGas *big.Int  // optional EIP-1559 fee ceiling
-	Deadline     time.Time // optional latest time to submit this call; later work may reuse its nonce
+	To              common.Address
+	Data            []byte
+	Value           *big.Int
+	GasLimit        uint64
+	MaxFeePerGas    *big.Int  // optional EIP-1559 fee ceiling
+	Deadline        time.Time // optional latest time to submit this call; later work may reuse its nonce
 	// Obsolete optionally reports that the call can no longer succeed. It must honor ctx and have no
 	// authorization role: errors preserve the current lifecycle. True before signing drops the call;
 	// true after broadcast abandons tracking without proving whether it executed.
@@ -767,9 +763,6 @@ func notAdmittedResult(err error) Result {
 func deliverJobResult(j job, result Result) {
 	endSendSpan(j.span, result)
 	j.res <- result
-	if j.req.AfterResult != nil {
-		j.req.AfterResult(result)
-	}
 }
 
 func (m *Manager) releaseLifecycleSlot() {
@@ -994,9 +987,6 @@ func (pending *pendingTransaction) deliver(result Result) bool {
 		result.Attempts = pending.attemptHashSnapshot()
 		pending.result <- result
 		delivered = true
-		if pending.req.AfterResult != nil {
-			pending.req.AfterResult(result)
-		}
 	})
 	return delivered
 }

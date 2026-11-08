@@ -124,8 +124,7 @@ func TestConnectorBuildRejectsUnauthorizedOrUnsettledExecution(t *testing.T) {
 		want   string
 	}{
 
-		{"connector not derived", func(w *connectorWorkflow, _ *connectorExecutionReader) { w.connector = common.Address{} }, "recipe-derived routing"},
-		{"different connector", func(w *connectorWorkflow, _ *connectorExecutionReader) { w.connector = common.HexToAddress("0x88") }, "recipe-derived routing"},
+		{"host signer missing", func(w *connectorWorkflow, _ *connectorExecutionReader) { w.signer = common.Address{} }, "host signer"},
 		{"connector account differs", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.account = common.HexToAddress("0x88") }, "account"},
 		{"recipe caller differs", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.recipeCaller = common.HexToAddress("0x88") }, "caller"},
 		{"permission role missing", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.allowed = false }, "role"},
@@ -177,7 +176,7 @@ type connectorExecutionReader struct {
 	header                                              *types.Header
 	allowed                                             bool
 	outerCalls                                          int
-	identityReads, latestIdentityReads                  int
+	identityReads                                       int
 	outerData                                           []byte
 	outerErr                                            error
 	reorgDuringFill                                     bool
@@ -235,10 +234,6 @@ func (r *connectorExecutionReader) CallContract(ctx context.Context, msg ethereu
 	}
 	if *msg.To == vlt && (bytes.Equal(msg.Data, connectorBinding.PackAccount()) || bytes.Equal(msg.Data, connectorBinding.PackOutputAsset())) {
 		r.identityReads++
-		if block == nil {
-			r.latestIdentityReads++
-			return r.connectorReadFake.CallContract(ctx, msg, big.NewInt(7))
-		}
 	}
 	if block == nil || block.Uint64() != 7 {
 		return nil, errors.New("metadata read escaped recipe snapshot")
@@ -333,7 +328,7 @@ func connectorExecutionFixtureAt(t *testing.T, resolved *discounts.Resolved, rec
 		header: &types.Header{Number: big.NewInt(7), Time: 7, GasLimit: 30_000_000}, allowed: true,
 	}
 	workflow := &connectorWorkflow{
-		chain: reader, chainID: big.NewInt(1), connector: vlt,
+		chain: reader, chainID: big.NewInt(1),
 		source: connectorExecutionPermissions{raw: permission, account: account, executor: recipeExecutor}, caller: rfqExecutor, signer: signer,
 	}
 	return connectorExecutionFixtureData{workflow, reader, recipe, leaf}
@@ -349,13 +344,21 @@ func connectorExecutionAward(caller common.Address) (executor.IReactorOrder, sel
 	return order, selected, &fakeBackend{discount: connectorDiscountFixture()}
 }
 
-func TestConnectorBuildRequiresDiscoveredExecutor(t *testing.T) {
-	fixture := connectorExecutionFixture(t, connectorDiscountFixture())
-	order, selected, backend := connectorExecutionAward(fixture.workflow.caller)
-	selected.Executor = common.Address{}
-	_, err := fixture.workflow.build(t.Context(), order, nil, selected, backend)
-	if err == nil || !strings.Contains(err.Error(), "no recipe executor") || fixture.reader.outerCalls != 0 {
-		t.Fatalf("missing executor did not fail closed: %v", err)
+func TestConnectorBuildRequiresSelectedRoute(t *testing.T) {
+	for _, field := range []string{"executor", "venue"} {
+		t.Run(field, func(t *testing.T) {
+			fixture := connectorExecutionFixture(t, connectorDiscountFixture())
+			order, selected, backend := connectorExecutionAward(fixture.workflow.caller)
+			if field == "executor" {
+				selected.Executor = common.Address{}
+			} else {
+				selected.Venue = common.Address{}
+			}
+			_, err := fixture.workflow.build(t.Context(), order, nil, selected, backend)
+			if err == nil || fixture.reader.outerCalls != 0 {
+				t.Fatalf("missing %s did not fail closed: %v", field, err)
+			}
+		})
 	}
 }
 

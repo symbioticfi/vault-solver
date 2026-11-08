@@ -51,7 +51,6 @@ func (s *Solver) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-		case <-s.keeper.Wakeup():
 		}
 	}
 }
