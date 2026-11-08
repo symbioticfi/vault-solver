@@ -461,7 +461,10 @@ how liquidity is chosen within that source set.
 This is the seam for customizing a solver without forking. Contract and trust model:
 [`docs/strategy-plan.md`](docs/strategy-plan.md).
 
-The shared `txManager` serializes transaction-sending solvers on one EOA. While a transaction is queued
+The shared SDK `transaction.Manager` serializes transaction-sending solvers on one EOA.
+The host supplies configuration, signing/RPC dependencies and telemetry, then
+explicitly starts and drains it; every native and Merkle integration uses that
+same implementation and nonce lane. While a transaction is queued
 or active, UniswapX declines new quotes, LI.FI retires standing curves, and 3F stops new offers;
 reconciliation continues. RFQ keeps quoting and accounts for pending fills through reservations; it stops
 only while the nonce lane is unavailable. Pending calls receive ordinary fee bumps at the same nonce.
@@ -1131,5 +1134,5 @@ Confirmed fills retain inclusion watermarks in RAM to reject stale quote invento
 See [the RFQ Merkle runbook](docs/RFQ-MERKLE.md) and [configuration](config/rfq-merkle.example.yaml).
 
 Local integration checks require Anvil on `PATH`: `make test-txmanager-anvil`,
-`make test-merklesender-anvil`, and `make test-rfq-merkle-anvil`. They exercise nonce reconciliation,
+`make test-merkle-sdk-anvil`, and `make test-rfq-merkle-anvil`. They exercise nonce reconciliation,
 RAM sender ownership, and canonical RFQ settlement without live services.

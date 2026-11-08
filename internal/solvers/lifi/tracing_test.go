@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/api/lifiorder"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -29,7 +30,6 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 const (

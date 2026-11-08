@@ -7,8 +7,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/core/types"
 
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/observability"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 const (

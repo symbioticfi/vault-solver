@@ -8,8 +8,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
 
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 func TestLateRedeemReceiptRecordsOnlyCappedBatchSuccess(t *testing.T) {

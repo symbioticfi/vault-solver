@@ -9,15 +9,16 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/config"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 	"github.com/symbioticfi/vault-solver/internal/solver"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 	"github.com/symbioticfi/vault-solver/internal/version"
 )
 
@@ -138,7 +139,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	log.Info("signer ready", "address", sgnr.Address().Hex())
 
 	// Shared, nonce-serialized transaction sender.
-	txMetrics, err := txmanager.NewMetrics(metrics.Registerer())
+	txMetrics, err := txmanager.NewMetrics(prometheus.WrapRegistererWithPrefix("solver_bot_", metrics.Registerer()))
 	if err != nil {
 		return err
 	}

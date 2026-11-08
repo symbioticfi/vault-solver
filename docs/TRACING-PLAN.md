@@ -532,7 +532,7 @@ run against the no-op provider and prove there is no behaviour change when traci
 | `internal/observability/spanlinks.go` | `SpanLinks` |
 | `internal/observability/tracetest` | test provider installation and the shared span assertions |
 | `internal/chain/trace.go` | HTTP JSON-RPC spans and attempt events |
-| `internal/txmanager/trace.go` | the send span's start and terminal end, and `RecordResult` |
+| `sdk/transaction/trace.go` (shared SDK module) | the send span's start and terminal end, and `RecordResult` |
 | `internal/solvers/<name>/tracing.go` | each solver's tracer, link keys, TTLs and span helpers |
 
 ## 10. TODO

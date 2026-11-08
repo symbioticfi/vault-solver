@@ -303,7 +303,7 @@ test-oev-live: ## OEV live checks — Morpho API discovery plus optional Sepolia
 .PHONY: test-txmanager-anvil
 test-txmanager-anvil: ## Exercise fee replacement, nonce reuse and independent replica contention against Anvil
 	@command -v anvil >/dev/null
-	go test -race -tags integration -run TestAnvil -v ./internal/txmanager
+	go test -race -tags integration -run TestAnvil -v github.com/symbioticfi/merkle-executor/sdk/transaction
 
 .PHONY: refresh-rfq-merkle-fixture
 refresh-rfq-merkle-fixture: ## Re-vendor pinned canonical EVM fixture artifacts (requires sibling Foundry builds + solc 0.8.28)
@@ -314,10 +314,10 @@ test-rfq-merkle-anvil: ## Execute canonical RFQ outer settlement boundaries on l
 	@command -v anvil >/dev/null
 	go test -race -tags integration -run '^TestAnvilConnectorOuterFillCanonicalBoundaries$$' -v ./internal/solvers/merkle/rfq
 
-.PHONY: test-merklesender-anvil
-test-merklesender-anvil: ## Exercise RAM SDK ownership, replacement and shared signer fencing on local Anvil
+.PHONY: test-merkle-sdk-anvil
+test-merkle-sdk-anvil: ## Exercise RAM SDK ownership, replacement and shared signer fencing on local Anvil
 	@command -v anvil >/dev/null
-	go test -race -tags integration -run TestSDKRAM -v ./internal/merklesender
+	go test -race -tags integration -run TestSDKRAM -v ./internal/solvers/merkle
 
 .PHONY: format
 format: ## Run golangci-lint with autofix

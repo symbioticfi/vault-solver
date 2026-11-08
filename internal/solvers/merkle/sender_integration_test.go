@@ -1,6 +1,6 @@
 //go:build integration
 
-package merklesender
+package merkle
 
 import (
 	"context"
@@ -20,17 +20,15 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
-	"github.com/symbioticfi/merkle-executor/sdk/transaction"
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/signer"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
-// Only relay delivery is held back. The real host signs/replaces; every network
-// mutation must already have an immutable signed identity in the RAM owner.
+// Only relay delivery is held back. The host signer uses the shared SDK engine
+// through its public sender and ordinary transaction APIs.
 type ownedRelay struct {
 	*ethclient.Client
 
-	sender    *Sender
 	mu        sync.Mutex
 	sent      []*types.Transaction
 	observed  chan struct{}
@@ -38,18 +36,6 @@ type ownedRelay struct {
 }
 
 func (b *ownedRelay) SendTransaction(_ context.Context, tx *types.Transaction) error {
-	b.sender.mu.Lock()
-	work := b.sender.active
-	b.sender.mu.Unlock()
-	found := false
-	if work != nil {
-		for _, owned := range work.snapshot() {
-			found = found || owned.Hash() == tx.Hash()
-		}
-	}
-	if !found {
-		return errors.New("broadcast preceded RAM ownership capture")
-	}
 	b.mu.Lock()
 	b.sent = append(b.sent, tx)
 	b.mu.Unlock()
@@ -70,10 +56,9 @@ func TestSDKRAMSharedSenderReplacementAndReorg(t *testing.T) {
 	chain, mine := senderAnvil(t, signing.Address())
 	relay := &ownedRelay{Client: chain, observed: make(chan struct{}, 64)}
 	engine := txmanager.New(relay, signing, big.NewInt(1337), txmanager.Config{MaxFeeGwei: 100, Confirmations: 1, PollInterval: time.Millisecond, ReplacementInterval: time.Second, PendingTimeout: 10 * time.Second, ShutdownTimeout: time.Millisecond, Horizon: txmanager.HorizonConfig{BlockTime: time.Second}}, logr.Discard())
-	sender := New(engine, "test")
-	relay.sender = sender
+	sender := engine.Sender("test")
 	runRAMManager(t, engine)
-	if err := sender.Submit(t.Context(), transaction.Request{To: common.HexToAddress("0x1234"), Data: []byte{1}}); err != nil {
+	if err := sender.Submit(t.Context(), txmanager.ExecutionRequest{To: common.HexToAddress("0x1234"), Data: []byte{1}}); err != nil {
 		t.Fatal(err)
 	}
 	awaitBroadcast(t, relay)
@@ -119,7 +104,7 @@ func TestSDKRAMSharedSenderReplacementAndReorg(t *testing.T) {
 	if result != nil || !sender.Busy() || engine.Available() || engine.LaneReady() {
 		t.Fatalf("reorg released ownership: %+v %v", result, err)
 	}
-	if err != nil && !errors.Is(err, transaction.ErrNonceConsumed) {
+	if err != nil && !errors.Is(err, txmanager.ErrNonceConsumed) {
 		t.Fatalf("unexpected reorg observation: %v", err)
 	}
 	if err := chain.SendTransaction(t.Context(), latest); err != nil {
@@ -138,11 +123,10 @@ func TestSDKRAMAmbiguousOutcomeResumesAfterDeadline(t *testing.T) {
 	chain, mine := senderAnvil(t, signing.Address())
 	relay := &ownedRelay{Client: chain, observed: make(chan struct{}, 64), ambiguous: true}
 	engine := txmanager.New(relay, signing, big.NewInt(1337), txmanager.Config{MaxFeeGwei: 100, PollInterval: time.Millisecond, ReplacementInterval: 20 * time.Millisecond, PendingTimeout: 50 * time.Millisecond, ShutdownTimeout: time.Millisecond, Horizon: txmanager.HorizonConfig{BlockTime: time.Second}}, logr.Discard())
-	sender := New(engine, "test")
-	relay.sender = sender
+	sender := engine.Sender("test")
 	sender.Deadline = func() time.Time { return time.Now().Add(80 * time.Millisecond) }
 	runRAMManager(t, engine)
-	if err := sender.Submit(t.Context(), transaction.Request{To: common.HexToAddress("0x1234")}); err != nil {
+	if err := sender.Submit(t.Context(), txmanager.ExecutionRequest{To: common.HexToAddress("0x1234")}); err != nil {
 		t.Fatal(err)
 	}
 	awaitBroadcast(t, relay)
@@ -211,7 +195,7 @@ func awaitBroadcast(t *testing.T, relay *ownedRelay) {
 		t.Fatal("host broadcast absent")
 	}
 }
-func awaitRAMTerminal(t *testing.T, sender *Sender) *transaction.Result {
+func awaitRAMTerminal(t *testing.T, sender *txmanager.Sender) *txmanager.ExecutionResult {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

@@ -8,8 +8,8 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
 
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/observability"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 const (

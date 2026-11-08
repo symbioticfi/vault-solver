@@ -9,7 +9,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 )
 
 // blockingAcceptedTxSender models txmanager.Send after admission: caller cancellation no longer

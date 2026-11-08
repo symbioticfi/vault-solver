@@ -6,11 +6,11 @@ import (
 
 	"github.com/go-errors/errors"
 
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/reactor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 type estimateRevertKind string

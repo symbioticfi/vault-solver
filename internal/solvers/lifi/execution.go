@@ -12,9 +12,9 @@ import (
 	"github.com/go-errors/errors"
 	"go.opentelemetry.io/otel/trace"
 
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 const (

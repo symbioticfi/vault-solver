@@ -11,7 +11,6 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	"github.com/symbioticfi/vault-solver/internal/merklesender"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"gopkg.in/yaml.v3"
@@ -123,7 +122,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(1, 16<<20), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: deps.TxManager.Confirmations()}
 	k := &keeper.Keeper{Planner: &mintPlanning{Planner: planner, runtime: runtime}, Strategies: []keeper.Strategy{strategy}, Mode: cfg.Mode, OperationTimeout: operationTimeout, Log: deps.Log.WithName(Name)}
 	if cfg.Mode == "send" {
-		k.Sender = merklesender.New(deps.TxManager, Name)
+		k.Sender = deps.TxManager.Sender(Name)
 	}
 	bot := &offerBot{Client: api, Send: cfg.Mode == "send"}
 	workflow := &offerWorkflow{planner: planner, strategy: strategy, policy: policy, api: api, bot: bot}

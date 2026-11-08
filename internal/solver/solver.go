@@ -14,11 +14,11 @@ import (
 	"github.com/go-logr/logr"
 	"gopkg.in/yaml.v3"
 
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/signer"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 // Deps are the shared services every solver receives. The txmanager is shared so solvers never

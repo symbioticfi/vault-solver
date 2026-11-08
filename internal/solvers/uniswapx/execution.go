@@ -9,13 +9,13 @@ import (
 	"github.com/go-errors/errors"
 	"go.opentelemetry.io/otel/trace"
 
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	uxexecutor "github.com/symbioticfi/vault-solver/api/bindings/uniswapx/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/execution"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 var (

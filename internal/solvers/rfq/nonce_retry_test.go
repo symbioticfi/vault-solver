@@ -14,10 +14,10 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 func abandonedTxResult() txmanager.Result {

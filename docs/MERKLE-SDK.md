@@ -2,12 +2,12 @@
 
 The `merkle` solver consumes the independently versioned
 `github.com/symbioticfi/merkle-executor/sdk` module pinned in go.mod.
-The current pin is `8af1d36dc5680c63535eb6af930d59e782bd7568`
-(`v0.0.0-20261108154558-8af1d36dc568`).
+The current pin is `01bef7b4b6b3c84ded61efc97ddb73cb2e2ac292`
+(`v0.0.0-20261108170917-01bef7b4b6b3`).
 The SDK implements recipe/tree/proof/role checks,
 pinned runtime assembly, simulation, canonical receipts and RAM settlement tasks.
-It also exposes opt-in off-chain providers, RPC, signing and a standalone sender;
-this host keeps its existing shared sender. Hosts explicitly supply credential
+It also exposes opt-in off-chain providers, RPC, signing and the shared transaction
+manager used by both services. Hosts explicitly supply credential
 lookup, so importing or constructing SDK components never implicitly reads the
 process environment.
 
@@ -35,13 +35,14 @@ canonical snapshot. It does not scan historical block ranges. Generic, RFQ and
 3F hosts use their existing shared chain reader; no recipe indexer URL is required.
 Permission data still uses the curator service.
 
-This solver receives the same transaction manager and signer as all other
-solvers. `internal/merklesender` implements the SDK Submit/Poll/Busy contract using
-the manager's Owner and BeforeBroadcast hooks. Every signed original and replacement
-is captured in RAM before broadcast. A process-local owner fences other solvers
-until a canonical owned receipt is delivered. Ambiguous outcomes retain the exact
-attempts; resumption uses the same host manager, nonce and fee policy. No additional
-signer, nonce allocator or SDK transaction engine is constructed.
+All transaction integrations use one SDK `transaction.Manager` and signer. The
+host maps YAML, supplies RPC/signing dependencies and metrics, then explicitly
+initializes, starts and drains that manager. Merkle keepers use
+`manager.Sender(name)`; native integrations use its rich send APIs. The SDK owns
+nonce admission, fee policy, signing, replacements and canonical receipt checks.
+Signed originals and replacements are retained in its single RAM lifecycle
+before broadcast. Keeper ownership survives ambiguous outcomes until a canonical
+owned result. There is no host transaction engine or sender bridge.
 
 Add this solver alongside the existing solvers in the normal YAML file:
 
@@ -156,8 +157,8 @@ empty-retry opt-out as scalar lookups. Inspection preserves the SDK's 256-member
 independently of the smaller metrics prefix. Complete malformed envelopes are left to the SDK;
 response-body I/O failures follow ordinary read fallback.
 
-`make test-merklesender-anvil` composes the RAM sender bridge with the host
-transaction manager on a local chain. It checks signed identity capture, ambiguous
+`make test-merkle-sdk-anvil` exercises the SDK manager through host signing and
+public sender APIs on a local chain. It checks signed identity capture, ambiguous
 submission, canonical receipts, replacements and shared-signer fencing. CI runs
 it in the existing Foundry-equipped integration job.
 

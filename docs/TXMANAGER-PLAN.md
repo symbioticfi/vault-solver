@@ -1,11 +1,14 @@
 # Transaction manager
 
-This is the source of truth for the shared transaction lifecycle in `internal/txmanager`.
+This describes the SDK transaction lifecycle consumed by every vault-solver integration.
+The implementation lives in `github.com/symbioticfi/merkle-executor/sdk/transaction`;
+vault-solver owns configuration, credentials, RPC routing, telemetry setup and explicit
+manager startup/shutdown. There is no host transaction engine or sender bridge.
 Integration plans describe calldata, protocol deadlines, capacity and quote policy; they link here for
 admission, fees, nonce ownership, receipts and shutdown. The [README](../README.md) remains the operator
 entry point. Configuration is defined by [config.go](../internal/config/config.go) and wired in
 [run.go](../cmd/vault-solver/run.go); implementation lives in
-[txmanager.go](../internal/txmanager/txmanager.go).
+[the SDK transaction package](https://pkg.go.dev/github.com/symbioticfi/merkle-executor/sdk/transaction).
 
 ## 1. Ownership and admission
 
@@ -473,8 +476,9 @@ bounds rather than recording a failed fill or spending its signed retry budget.
 ### Metrics
 
 Names include the `solver_bot_` prefix; deployment identity is supplied by scrape target labels.
-Definitions: [metrics.go](../internal/txmanager/metrics.go),
-[account_metrics.go](../internal/txmanager/account_metrics.go).
+Metric definitions and account collectors live in the SDK transaction package.
+The host registers them with the `solver_bot_` prefix, preserving the existing
+metric names and dashboards.
 
 | Component | Metric | Labels | Meaning |
 |---|---|---|---|

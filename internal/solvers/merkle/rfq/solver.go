@@ -17,7 +17,6 @@ import (
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
-	"github.com/symbioticfi/vault-solver/internal/merklesender"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"gopkg.in/yaml.v3"
@@ -82,7 +81,7 @@ func New(cfg Config, deps solver.Deps) (*Solver, error) {
 		return nil, err
 	}
 	s.workflow.source, s.workflow.signer = source, deps.Signer.Address()
-	sender := merklesender.New(deps.TxManager, Name)
+	sender := deps.TxManager.Sender(Name)
 	sender.Deadline = func() time.Time {
 		if s.intent == nil {
 			return time.Time{}
@@ -168,7 +167,7 @@ func (s *Solver) tick(ctx context.Context) (err error) {
 		// Capture the awarded bytes before submission; a timeout may follow a send.
 		s.intent = intent
 		s.spends.setActive(true)
-		err = s.sender.Submit(ctx, transaction.Request{To: intent.To, Data: intent.Data})
+		err = s.sender.Submit(ctx, transaction.ExecutionRequest{To: intent.To, Data: intent.Data})
 		if err != nil && !s.sender.Busy() {
 			s.intent = nil
 			s.spends.setActive(false)

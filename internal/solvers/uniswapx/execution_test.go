@@ -16,6 +16,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	uxexecutor "github.com/symbioticfi/vault-solver/api/bindings/uniswapx/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
@@ -23,7 +24,6 @@ import (
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/testutil/swapcalls"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 
 	"go.opentelemetry.io/otel/trace/noop"
 )

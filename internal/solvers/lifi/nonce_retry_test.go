@@ -14,11 +14,11 @@ import (
 	"github.com/go-logr/logr/funcr"
 	"github.com/prometheus/client_golang/prometheus"
 
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 // Removing the worker's timed re-enqueue would leave an open order unsent forever on a healthy feed.

@@ -69,8 +69,8 @@ jobs:
       - name: Test canonical RFQ Merkle settlement
         run: make test-rfq-merkle-anvil
 
-      - name: Test RAM SDK ownership and shared sender
-        run: make test-merklesender-anvil
+      - name: Test SDK ownership through host wiring
+        run: make test-merkle-sdk-anvil
 
   lint:
     runs-on: ubuntu-latest

@@ -21,7 +21,8 @@ decisions, and the live TODO lists (§10).
 Two layers, and code lives in exactly one:
 
 - **Generic framework** (integration-agnostic, shared by every solver):
-  `internal/{config,chain,signer,txmanager,solver,observability,version}` and `cmd/`.
+  `internal/{config,chain,signer,solver,observability,version}` and `cmd/`, plus the
+  independently versioned Merkle SDK `transaction` package.
   Nothing here may know about 3F, RFQ, Redstone, or any specific protocol.
 - **Integration packages** (fully self-contained): `internal/solvers/<name>/`
   (today `bridgefacilitator/`). All protocol-specific logic, types, ABIs usage, pricing, and config
@@ -94,7 +95,8 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
 - **Context:** thread `context.Context` through all I/O (RPC, HTTP, tx). Respect cancellation; never
   `context.Background()` deep in a call path.
 - **Concurrency:** shared on-chain sending goes through the single `txmanager` (nonce-serialized) —
-  solvers build calldata and submit a request, they never send transactions directly and never race
+  solvers build calldata and submit a request to the shared SDK manager, they never
+  send transactions directly and never race
   on nonces. Document the goroutine/locking model of any new shared state (see the `apiClient`
   "single Run goroutine" note).
 - Keep functions at one altitude, prefer small pure helpers (they're the easily-tested seams),

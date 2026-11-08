@@ -349,8 +349,9 @@ lease check closes preparation; signed retries do not repeat it. One RAM executi
 holds every member until its canonical receipt is delivered. Configured executor order
 is priority, not a withdrawal cash reservation.
 
-The host's SDK transport continues to use the existing shared transaction manager's
-owner fence and pre-broadcast capture callbacks; it contains no copied sender or nonce engine.
+The host constructs and explicitly starts the shared SDK transaction manager.
+Its keeper sender views share the same retained lifecycle and nonce lane as
+native sends; no host sender bridge or transaction implementation remains.
 The shared `DiscoverBatch` and `ValidatePreparedBatch` APIs serve one executor or many.
 RFQ uses `ValidatePreparedBatchWithSimulation` through the same admission core:
 a mandatory host callback simulates the complete unchanged outer fill from the
@@ -380,9 +381,10 @@ owned by merkle-executor.
 `rfq-merkle` separately consumes awarded RFQ orders through connector recipes. It
 uses no adapter inventory, economic strategy or shared capacity aggregation. The
 signed order supplies amounts; the SDK authenticates the immutable program and
-simulates the complete outer RFQ settlement. The Merkle hosts share
-`internal/merklesender`, which forwards owner fences, RAM signed-attempt capture and
-optional execution deadlines to the single txmanager. See [RFQ-MERKLE.md](RFQ-MERKLE.md).
+simulates the complete outer RFQ settlement. All native and Merkle integrations
+share one SDK `transaction.Manager`; Merkle hosts use its `Sender(name)` view
+with optional business deadlines. The SDK owns the retained lifecycle and signed
+attempts, nonce lane, funding, replacement fees and canonical results. See [RFQ-MERKLE.md](RFQ-MERKLE.md).
 
 `threef-merkle` independently owns one Merkle recipe executor for one curator BF/default
 maker. Its recipe contains 1..32 distinct guarded funding/underlying markets, with
@@ -400,7 +402,7 @@ funding activation follows the curator-authored committed recipe; no separate ho
 proof restricts the sources used by its Manage gates.
 The generic `merkle` solver has no 3F configuration or provider dispatch. All 3F Merkle
 code lives in one package; API, reservation and RAM intent checks remain inside
-that integration. Both recipe keepers use `internal/merklesender.New` with the
-same host transaction manager. Offer mutations authenticate fresh SDK identity,
+that integration. Both recipe keepers use `transaction.Manager.Sender` with the
+same SDK transaction manager used by every native integration. Offer mutations authenticate fresh SDK identity,
 all committed roles and both original and fresh block pins without needing a ready mint.
 See [THREEF-MERKLE.md](THREEF-MERKLE.md) for the flow and validation boundaries.

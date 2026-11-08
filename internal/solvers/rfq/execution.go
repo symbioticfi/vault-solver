@@ -19,8 +19,8 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 // txSender sends a transaction and blocks until the shared txmanager reports its typed outcome.

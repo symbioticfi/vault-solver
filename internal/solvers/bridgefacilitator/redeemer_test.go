@@ -11,8 +11,8 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/chain"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 type transactionSenderFunc func(context.Context, txmanager.Request) txmanager.Result

@@ -46,11 +46,11 @@ func (b *fakeBackend) resolveDiscount(context.Context, string) (*discounts.Resol
 
 type fakeSender struct {
 	busy       bool
-	request    transaction.Request
-	result     *transaction.Result
+	request    transaction.ExecutionRequest
+	result     *transaction.ExecutionResult
 	submitErr  error
 	pollErr    error
-	before     func(transaction.Request)
+	before     func(transaction.ExecutionRequest)
 	duringPoll func()
 	submits    int
 	polls      int
@@ -58,7 +58,7 @@ type fakeSender struct {
 }
 
 func (s *fakeSender) Busy() bool { return s.busy }
-func (s *fakeSender) Submit(_ context.Context, req transaction.Request) error {
+func (s *fakeSender) Submit(_ context.Context, req transaction.ExecutionRequest) error {
 	if s.before != nil {
 		s.before(req)
 	}
@@ -67,7 +67,7 @@ func (s *fakeSender) Submit(_ context.Context, req transaction.Request) error {
 	s.busy = !s.unsigned
 	return s.submitErr
 }
-func (s *fakeSender) Poll(context.Context) (*transaction.Result, error) {
+func (s *fakeSender) Poll(context.Context) (*transaction.ExecutionResult, error) {
 	s.polls++
 	if s.result != nil && s.pollErr == nil {
 		s.busy = false
@@ -78,9 +78,9 @@ func (s *fakeSender) Poll(context.Context) (*transaction.Result, error) {
 	return s.result, s.pollErr
 }
 
-func fillResult() *transaction.Result {
+func fillResult() *transaction.ExecutionResult {
 	hash := common.HexToHash("0x77")
-	return &transaction.Result{Hash: hash, Execution: &provider.Execution{TxHash: hash, BlockNumber: big.NewInt(8), BlockHash: common.HexToHash("0x78")}}
+	return &transaction.ExecutionResult{Hash: hash, Execution: &provider.Execution{TxHash: hash, BlockNumber: big.NewInt(8), BlockHash: common.HexToHash("0x78")}}
 }
 
 func awardRow(t *testing.T, order executor.IReactorOrder) rfqbackend.OrdersResponseOrdersInner {
@@ -144,7 +144,7 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	}}
 	sender := &fakeSender{}
 	s := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender, spends: newSpendLedger()}
-	sender.before = func(req transaction.Request) {
+	sender.before = func(req transaction.ExecutionRequest) {
 		if s.intent == nil || !bytes.Equal(s.intent.Data, req.Data) || s.intent.Deadline.IsZero() {
 			t.Fatal("fill admitted before RAM intent")
 		}
@@ -235,13 +235,13 @@ func TestPrepareCountsHeaderLatencyAgainstDeadline(t *testing.T) {
 func TestUncertainFillKeepsIntent(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		result *transaction.Result
+		result *transaction.ExecutionResult
 		err    error
 	}{
 		{"pending", nil, nil},
 		{"cancelled wait", nil, context.Canceled},
 		{"canonical check fails", nil, errors.New("reorg")},
-		{"invalid execution identity", &transaction.Result{Hash: common.HexToHash("0x77")}, nil},
+		{"invalid execution identity", &transaction.ExecutionResult{Hash: common.HexToHash("0x77")}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			intent := &fillIntent{OrderID: "owned", To: vlt, Data: []byte{1}, Deadline: time.Now()}

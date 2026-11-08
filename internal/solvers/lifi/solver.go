@@ -14,6 +14,7 @@ import (
 	"github.com/go-logr/logr"
 	"gopkg.in/yaml.v3"
 
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -21,7 +22,6 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 const Name = "lifi-samechain"

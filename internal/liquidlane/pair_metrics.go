@@ -10,7 +10,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
 
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 )
 
 // PairMetrics records observations only after the caller proves a directed route from trusted
