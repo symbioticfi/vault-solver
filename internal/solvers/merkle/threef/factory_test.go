@@ -6,8 +6,6 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,12 +15,10 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-logr/logr"
 	executor "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/multicall3"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/solver"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 type factorySigner struct{ address common.Address }
@@ -33,8 +29,8 @@ func (factorySigner) SignTx(context.Context, *types.Transaction, *big.Int) (*typ
 	panic("factory must not sign")
 }
 
-func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
-	for _, mode := range []string{"valid", "send", "caller mismatch", "reorg", "zero account", "policy mismatch", "zero policy account", "sepolia", "active recovery"} {
+func TestFactoryDiscoversSharedSignerAndOwnsRAMRuntime(t *testing.T) {
+	for _, mode := range []string{"valid", "send", "caller mismatch", "reorg", "zero account", "policy mismatch", "zero policy account", "sepolia"} {
 		t.Run(mode, func(t *testing.T) {
 			target, account, caller := common.HexToAddress("0x10"), common.HexToAddress("0x20"), common.HexToAddress("0x30")
 			header := &types.Header{Number: big.NewInt(12), Difficulty: new(big.Int)}
@@ -152,60 +148,29 @@ func TestFactoryDiscoversSharedSignerAndNeverRewritesFailedState(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer client.Close()
-			directory := filepath.Join(t.TempDir(), "state")
-			raw := strings.Replace(validConfig, "state/threef-merkle", directory, 1)
+			raw := validConfig
 			if mode == "send" {
 				raw = strings.Replace(raw, "mode: simulate", "mode: send", 1)
 			}
-			if mode == "active recovery" {
-				store, err := state.Open(directory)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := store.Save("strategies.v1", []string{target.Hex()}); err != nil {
-					t.Fatal(err)
-				}
-				if err := store.Save("strategy."+target.Hex()+".v1", keeper.Job{ID: "previous-mint", Phase: "prepared", ConfigHash: "changed-configuration"}); err != nil {
-					t.Fatal(err)
-				}
-				if err := store.Close(); err != nil {
-					t.Fatal(err)
-				}
-			}
 			owner := factorySigner{address: caller}
-			manager := txmanager.New(client, owner, big.NewInt(1), txmanager.Config{}, logr.Discard())
-			built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, TxManager: manager, Log: logr.Discard()})
+			manager, err := txmanager.New(client, owner, big.NewInt(1), txmanager.Config{}, logr.Discard())
+			if err != nil {
+				t.Fatal(err)
+			}
+			built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, MerkleTxManager: func() (*txmanager.Manager, error) { return manager, nil }, MaxGas: 2_000_000, Log: logr.Discard()})
 			if mode == "valid" || mode == "send" || mode == "sepolia" {
 				if err != nil {
 					t.Fatal(err)
 				}
 				current := built.(*Solver)
-				defer func() { _ = current.Close() }()
-				if current.Name() != Name || current.RequiresTxManager() != (mode == "send") || len(current.keeper.Strategies[0].Providers) != 1 || current.offers.bot.Send != (mode == "send") || getters != 2 || current.keeper.Planner.(*mintPlanning).PermissionSource == nil || current.keeper.Planner.(*mintPlanning).RecipeCache == nil || current.keeper.Strategies[0].Config.Account != account.Hex() {
+				if current.RequiresTxManager() || current.Name() != Name || current.RequiresMerkleTxManager() != (mode == "send") || len(current.keeper.Strategies[0].Providers) != 1 || current.offers.bot.Send != (mode == "send") || getters != 2 || current.keeper.Planner.(*mintPlanning).PermissionSource == nil || current.keeper.Planner.(*mintPlanning).RecipeCache == nil || current.keeper.Planner.(*mintPlanning).MaxGas != 2_000_000 || current.keeper.Strategies[0].Config.Account != account.Hex() {
 					t.Fatal("host failed shared SDK integration")
 				}
-				if found, err := state.Read(directory, "txmanager.active.v1", new(any)); err != nil || found {
-					t.Fatal("factory created owned transaction", err)
+				if (current.keeper.Sender != nil) != (mode == "send") || current.keeper.Pending() {
+					t.Fatal("factory must create a sender only for send mode and start idle")
 				}
-			} else {
-				if err == nil {
-					_ = built.(*Solver).Close()
-					t.Fatal("invalid discovery accepted")
-				}
-				if mode == "active recovery" {
-					reopened, err := state.Open(directory)
-					if err != nil {
-						t.Fatalf("failed recovery did not close store: %v", err)
-					}
-					defer reopened.Close()
-					var job keeper.Job
-					found, err := reopened.Load("strategy."+target.Hex()+".v1", &job)
-					if err != nil || !found || job.ID != "previous-mint" || job.ConfigHash != "changed-configuration" {
-						t.Fatal("failed recovery rewrote active work", err)
-					}
-				} else if _, err := os.Stat(directory); !os.IsNotExist(err) {
-					t.Fatal("failed discovery opened state", err)
-				}
+			} else if err == nil {
+				t.Fatal("invalid discovery accepted")
 			}
 		})
 	}

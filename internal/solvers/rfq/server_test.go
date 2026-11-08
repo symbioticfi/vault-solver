@@ -280,7 +280,7 @@ func TestServerConnectorRequiresConfiguredWireExecutor(t *testing.T) {
 	srv := testServer()
 	srv.quotes.recipeExecutors = []common.Address{common.HexToAddress("0x43")}
 	srv.quotes.discountsEnabled = true
-	srv.quotes.whitelist = adapterWhitelist{vlt: true}
+	srv.quotes.acceptsConnector = func(adapter common.Address) bool { return adapter == vlt }
 	body := validQuoteBody()
 	id := "0x" + strings.Repeat("ab", 32)
 	body.Adapters[0].DiscountID = &id

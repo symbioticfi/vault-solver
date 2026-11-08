@@ -1,6 +1,7 @@
 package rfq
 
 import (
+	"bytes"
 	"context"
 	"math/big"
 	"testing"
@@ -26,9 +27,8 @@ func TestMultipleExecutorsShareRouting(t *testing.T) {
 	workflow.source = multiRecipeSource{first.reader.recipeExecutor: first.workflow.source, second.reader.recipeExecutor: second.workflow.source}
 	_, _, backend := connectorExecutionAward(workflow.caller)
 	s := &Solver{recipeExecutors: []common.Address{first.reader.recipeExecutor, second.reader.recipeExecutor}, workflow: &workflow, backend: backend}
-	venues, err := s.Initialize(t.Context())
-	if err != nil || len(venues) != 1 || venues[0] != vlt {
-		t.Fatalf("routes: %v %v", venues, err)
+	if err := s.Initialize(t.Context()); err != nil || !s.AcceptsConnector(vlt) {
+		t.Fatalf("routes: %v", err)
 	}
 	for _, executor := range s.recipeExecutors {
 		if !s.AcceptsRoute(executor, vlt, first.reader.recipeAccount, tOut) {
@@ -75,6 +75,18 @@ func (r *multiRecipeReader) FilterLogs(ctx context.Context, query ethereum.Filte
 	return r.readers[query.Addresses[0]].FilterLogs(ctx, query)
 }
 func (r *multiRecipeReader) CallContract(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
+	if msg.To != nil && *msg.To == r.recipeCaller && bytes.HasPrefix(msg.Data, executorBinding.GetABI().Methods["fill"].ID) {
+		values, err := executorBinding.GetABI().Methods["fill"].Inputs.Unpack(msg.Data[4:])
+		if err != nil {
+			return nil, err
+		}
+		encoded, err := executorCallsArgs.Unpack(values[4].([]byte))
+		if err != nil {
+			return nil, err
+		}
+		calls := *abi.ConvertType(encoded[0], new([]executorCall)).(*[]executorCall)
+		return r.readers[calls[0].Target].CallContract(ctx, msg, block)
+	}
 	if reader := r.readers[*msg.To]; reader != nil {
 		return reader.CallContract(ctx, msg, block)
 	}

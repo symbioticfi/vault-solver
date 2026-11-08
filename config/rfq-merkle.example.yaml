@@ -1,4 +1,4 @@
-# Merkle quote server and awarded-order filler. Supply deployed addresses and a persistent state mount.
+# Merkle quote server and awarded-order filler. Supply deployed addresses; pending work is held in RAM.
 chain:
   rpcUrl: ${ETH_RPC_URL_MAINNET}
   writeRpcUrl: ${WRITE_RPC_URL}
@@ -16,7 +16,6 @@ solvers:
       backendUrl: ${RFQ_BACKEND_URL}
       backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET
       listenAddr: ":42073"
-      stateDir: /persistent/rfq-merkle
       executor: "0x0000000000000000000000000000000000000010" # RFQ Executor with RecipeFill
       curator:
         url: https://curator.example.invalid/api/v1
