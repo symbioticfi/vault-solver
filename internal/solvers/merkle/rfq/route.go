@@ -15,48 +15,28 @@ type recipeRoute struct {
 	connector, account, asset common.Address
 }
 
-// Initialize verifies every configured recipe and derives its payment connector.
-// Routes are published together before the quote server or fill loop starts.
+// Initialize publishes verified payment routes together. Quotes keep declining
+// while discovery runs without holding routesMu.
 func (s *Solver) Initialize(ctx context.Context) ([]common.Address, error) {
-	if s.routes == nil {
-		identities, err := recipes.DiscoverExecutors(ctx, s.workflow.chain, s.recipeExecutors)
+	s.routesMu.RLock()
+	routes := s.routes
+	s.routesMu.RUnlock()
+	if routes == nil {
+		built, err := s.buildRoutes(ctx)
 		if err != nil {
 			return nil, err
 		}
-		accounts := make([]common.Address, len(s.recipeExecutors))
-		for i, executor := range s.recipeExecutors {
-			accounts[i] = identities[executor].Account
+		s.routesMu.Lock()
+		if s.routes == nil {
+			s.routes = built
 		}
-		prepared, err := recipes.DiscoverBatch(ctx, s.workflow.chain, s.recipeExecutors, accounts, s.workflow.caller, recipes.PreparationOptions{ChainID: s.workflow.chainID})
-		if err != nil {
-			return nil, err
-		}
-		routes := make(map[common.Address]recipeRoute, len(prepared))
-		for _, member := range prepared {
-			snapshot, recipe := member.Snapshot, member.Recipe
-			tree, err := s.workflow.permissionTree(ctx, snapshot)
-			if err != nil {
-				return nil, err
-			}
-			venue, asset, err := paymentConnector(recipe, tree)
-			if err != nil {
-				return nil, err
-			}
-			state, err := s.workflow.state(ctx, venue, new(big.Int).SetUint64(snapshot.BlockNumber))
-			if err != nil {
-				return nil, err
-			}
-			if state.Account != snapshot.Account || state.Asset != asset {
-				return nil, errors.New("recipe payment connector account or asset mismatch")
-			}
-			routes[snapshot.Executor] = recipeRoute{connector: venue, account: state.Account, asset: asset}
-		}
-		s.routes = routes
+		routes = s.routes
+		s.routesMu.Unlock()
 	}
-	venues := make([]common.Address, 0, len(s.routes))
+	venues := make([]common.Address, 0, len(routes))
 	seen := make(map[common.Address]bool)
 	for _, executor := range s.recipeExecutors {
-		venue := s.routes[executor].connector
+		venue := routes[executor].connector
 		if !seen[venue] {
 			venues = append(venues, venue)
 			seen[venue] = true
@@ -65,11 +45,66 @@ func (s *Solver) Initialize(ctx context.Context) ([]common.Address, error) {
 	return venues, nil
 }
 
+func (s *Solver) buildRoutes(ctx context.Context) (map[common.Address]recipeRoute, error) {
+	identities, err := recipes.DiscoverExecutors(ctx, s.workflow.chain, s.recipeExecutors)
+	if err != nil {
+		return nil, err
+	}
+	accounts := make([]common.Address, len(s.recipeExecutors))
+	for i, executor := range s.recipeExecutors {
+		accounts[i] = identities[executor].Account
+	}
+	prepared, err := recipes.DiscoverBatch(ctx, s.workflow.chain, s.recipeExecutors, accounts, s.workflow.caller, recipes.PreparationOptions{ChainID: s.workflow.chainID})
+	if err != nil {
+		return nil, err
+	}
+	routes := make(map[common.Address]recipeRoute, len(prepared))
+	for _, member := range prepared {
+		snapshot, recipe := member.Snapshot, member.Recipe
+		tree, err := s.workflow.permissionTree(ctx, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		venue, asset, err := paymentConnector(recipe, tree)
+		if err != nil {
+			return nil, err
+		}
+		state, err := s.workflow.state(ctx, venue, new(big.Int).SetUint64(snapshot.BlockNumber))
+		if err != nil {
+			return nil, err
+		}
+		if state.Account != snapshot.Account || state.Asset != asset {
+			return nil, errors.New("recipe payment connector account or asset mismatch")
+		}
+		routes[snapshot.Executor] = recipeRoute{connector: venue, account: state.Account, asset: asset}
+	}
+	return routes, nil
+}
+
 // AcceptsRoute binds backend inventory to a locally configured, verified recipe.
 // The RWA-specific swap permission is verified again when building the fill.
 func (s *Solver) AcceptsRoute(executor, connector, account, asset common.Address) bool {
-	route, ok := s.routes[executor]
+	route, ok := s.recipeRoute(executor)
 	return ok && route.connector == connector && route.account == account && route.asset == asset
+}
+
+// AcceptsConnector reports whether a published route pays through connector.
+func (s *Solver) AcceptsConnector(connector common.Address) bool {
+	s.routesMu.RLock()
+	defer s.routesMu.RUnlock()
+	for _, route := range s.routes {
+		if route.connector == connector {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Solver) recipeRoute(executor common.Address) (recipeRoute, bool) {
+	s.routesMu.RLock()
+	defer s.routesMu.RUnlock()
+	route, ok := s.routes[executor]
+	return route, ok
 }
 
 func paymentConnector(recipe recipes.Recipe, tree *recipes.Tree) (venue, asset common.Address, err error) {

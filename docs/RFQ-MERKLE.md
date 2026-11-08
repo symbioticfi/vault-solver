@@ -105,6 +105,14 @@ only a canonical owned inclusion or revert releases the signer fence. Restart
 loses intent and transaction tracking while the transaction may still execute.
 Settle old work before upgrading and use one active process per signer.
 
+Quote inventory must match the verified recipe connector, account and asset. A
+process-local quote fence stays active until the fill loop records the canonical
+receipt, including the gap after shared-sender release. Confirmed fills retain an
+account/asset inclusion watermark; older or unknown inventory heights are rejected
+at final quote publication. Completed award IDs are retained until their signed
+chain deadlines, preventing a still-listed award from being filled twice. These
+watermarks and completed IDs are RAM only and are lost on process exit.
+
 The RFQ bridge ABI comes from [RFQ PR 25](https://github.com/symbioticfi/rfq/pull/25),
 commit `de6dbd617bf3c1e8b4120419cbe5800efae7d410`. Connector and RecipeExecutor use the unchanged canonical adapters contract surface.
 `make refresh-merkle-abi` projects only solver-used entries from canonical Foundry artifacts;

@@ -89,6 +89,9 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		if err != nil {
 			return nil, err
 		}
+		quotes.reservations = nil // The signer fence pauses quotes during signed Merkle work.
+		quotes.inventoryCurrent = merkle.AcceptsSnapshots
+		quotes.acceptsConnector = merkle.AcceptsConnector
 		quotes.acceptsRoute = merkle.AcceptsRoute
 	}
 	return &Solver{
@@ -184,13 +187,8 @@ func (s *Solver) ShutdownPreparationTimeout() time.Duration {
 // backend order-poll + fill loop. The filler is poll-only (no push/notify endpoint).
 func (s *Solver) Run(ctx context.Context) error {
 	if s.merkle != nil {
-		venues, err := s.merkle.Initialize(ctx)
-		if err != nil {
+		if _, err := s.merkle.Initialize(ctx); err != nil {
 			return errors.Errorf("rfq: initialize recipe executor: %w", err)
-		}
-		s.server.quotes.whitelist = make(adapterWhitelist, len(venues))
-		for _, venue := range venues {
-			s.server.quotes.whitelist[venue] = true
 		}
 	}
 	// Resolve each recovery adapter's vault + collateral once at startup (config carries only adapter

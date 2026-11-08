@@ -45,15 +45,16 @@ func (b *fakeBackend) resolveDiscount(context.Context, string) (*discounts.Resol
 }
 
 type fakeSender struct {
-	busy      bool
-	request   transaction.Request
-	result    *transaction.Result
-	submitErr error
-	pollErr   error
-	before    func(transaction.Request)
-	submits   int
-	polls     int
-	unsigned  bool
+	busy       bool
+	request    transaction.Request
+	result     *transaction.Result
+	submitErr  error
+	pollErr    error
+	before     func(transaction.Request)
+	duringPoll func()
+	submits    int
+	polls      int
+	unsigned   bool
 }
 
 func (s *fakeSender) Busy() bool { return s.busy }
@@ -70,6 +71,9 @@ func (s *fakeSender) Poll(context.Context) (*transaction.Result, error) {
 	s.polls++
 	if s.result != nil && s.pollErr == nil {
 		s.busy = false
+		if s.duringPoll != nil {
+			s.duringPoll()
+		}
 	}
 	return s.result, s.pollErr
 }
@@ -139,10 +143,13 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 		{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: common.HexToAddress("0x43").Hex()},
 	}}
 	sender := &fakeSender{}
-	s := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender}
+	s := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender, spends: newSpendLedger()}
 	sender.before = func(req transaction.Request) {
 		if s.intent == nil || !bytes.Equal(s.intent.Data, req.Data) || s.intent.Deadline.IsZero() {
 			t.Fatal("fill admitted before RAM intent")
+		}
+		if s.AcceptsSnapshots(nil) {
+			t.Fatal("fill admitted before quote fence")
 		}
 	}
 	if _, err := s.Initialize(t.Context()); err != nil {
@@ -163,11 +170,24 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 		t.Fatal("pending fill was rebuilt or its deadline changed")
 	}
 	sender.result = fillResult()
+	sender.duringPoll = func() {
+		if s.AcceptsSnapshots(nil) {
+			t.Fatal("quotes resumed before canonical accounting")
+		}
+	}
 	if err := s.tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if backend.reads != reads || !reflect.DeepEqual(request, sender.request) || sender.submits != 1 || s.intent != nil || sender.Busy() {
 		t.Fatal("canonical fill was rebuilt or its ownership was not released")
+	}
+	if !s.spends.finalized("award") || !s.AcceptsSnapshots(nil) {
+		t.Fatal("canonical accounting did not release quote fence")
+	}
+	backend.rows = []rfqbackend.OrdersResponseOrdersInner{awardRow(t, order), awardRow(t, order)}
+	backend.listed = &discounts.List{}
+	if err := s.tick(t.Context()); err != nil || sender.submits != 1 {
+		t.Fatal("completed award was submitted again", err)
 	}
 }
 
@@ -181,7 +201,7 @@ func TestWholeAwardRequiresVenueAndAdvertisedCapacity(t *testing.T) {
 			} else {
 				f.reader.remaining = big.NewInt(455)
 			}
-			if _, _, err := f.workflow.build(t.Context(), order, nil, selected, backend); err == nil || !strings.Contains(err.Error(), "whole award") {
+			if _, err := f.workflow.build(t.Context(), order, nil, selected, backend); err == nil || !strings.Contains(err.Error(), "whole award") {
 				t.Fatalf("capacity accepted: %v", err)
 			}
 			if f.reader.outerCalls != 0 {

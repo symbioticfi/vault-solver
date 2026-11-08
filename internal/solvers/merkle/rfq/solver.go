@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -41,11 +42,14 @@ type fillIntent struct {
 	To       common.Address
 	Data     []byte
 	Deadline time.Time
+	Spend    fillSpend
 }
 
 type Solver struct {
 	recipeExecutors []common.Address
 	routes          map[common.Address]recipeRoute
+	routesMu        sync.RWMutex
+	spends          *spendLedger
 	workflow        *connectorWorkflow
 	backend         orderBackend
 	sender          keeper.Sender
@@ -69,7 +73,7 @@ func New(cfg Config, deps solver.Deps) (*Solver, error) {
 	if deps.Chain == nil || (!cfg.QuoteOnly && (deps.Signer == nil || deps.TxManager == nil)) {
 		return nil, errors.New("rfq-merkle requires the shared chain, signer and transaction manager")
 	}
-	s := &Solver{recipeExecutors: cfg.RecipeExecutors, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), caller: cfg.Executor}}
+	s := &Solver{spends: newSpendLedger(), recipeExecutors: cfg.RecipeExecutors, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), caller: cfg.Executor}}
 	if cfg.QuoteOnly {
 		return s, nil
 	}
@@ -129,6 +133,9 @@ func (s *Solver) tick(ctx context.Context) (err error) {
 	if s.sender.Busy() {
 		return errors.New("RFQ sender has work without a fill owner")
 	}
+	if _, err := s.Initialize(ctx); err != nil {
+		return err
+	}
 	rows, err := s.backend.orders(ctx, strings.ToLower(s.workflow.caller.Hex()))
 	if err != nil {
 		return err
@@ -165,9 +172,11 @@ func (s *Solver) tick(ctx context.Context) (err error) {
 		}
 		// Capture the awarded bytes before submission; a timeout may follow a send.
 		s.intent = intent
+		s.spends.setActive(true)
 		err = s.sender.Submit(ctx, transaction.Request{To: intent.To, Data: intent.Data})
 		if err != nil && !s.sender.Busy() {
 			s.intent = nil
+			s.spends.setActive(false)
 		}
 		return err
 	}
@@ -191,6 +200,10 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	if header == nil || header.Time > ^uint64(0)>>1 {
 		return nil, errors.New("invalid chain timestamp")
 	}
+	s.spends.expire(int64(header.Time))
+	if s.spends.finalized(row.OrderId) {
+		return nil, nil
+	}
 	chainTime := time.Unix(int64(header.Time), 0)
 	if order.Request.Deadline.Cmp(new(big.Int).SetUint64(header.Time)) <= 0 {
 		return nil, errors.New("order expired")
@@ -198,7 +211,7 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	for _, item := range listed {
 		venue := common.HexToAddress(item.Adapter)
 		recipeExecutor := common.HexToAddress(item.RecipeExecutor)
-		route, configured := s.routes[recipeExecutor]
+		route, configured := s.recipeRoute(recipeExecutor)
 		if !configured || route.connector != venue || common.HexToAddress(item.TokenToRedeem) != order.Request.TokenIn || common.HexToAddress(item.Collateral) != token {
 			continue
 		}
@@ -212,7 +225,7 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 		}
 		workflow := *s.workflow
 		workflow.connector = route.connector
-		data, until, err := workflow.build(ctx, order, signature, selectedRoute{Venue: venue, Executor: recipeExecutor, DiscountID: common.BytesToHash(id), MaxAssets: maximum}, s.backend)
+		built, err := workflow.build(ctx, order, signature, selectedRoute{Venue: venue, Executor: recipeExecutor, DiscountID: common.BytesToHash(id), MaxAssets: maximum}, s.backend)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -220,11 +233,11 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 			observability.Log(ctx).V(1).Info("connector route unavailable", "connector", venue.Hex(), "reason", err.Error())
 			continue
 		}
-		deadline, ok := liquidlane.SubmissionDeadline(minTime(time.Unix(order.Request.Deadline.Int64(), 0), until), chainTime, observed, time.Now())
+		deadline, ok := liquidlane.SubmissionDeadline(minTime(time.Unix(order.Request.Deadline.Int64(), 0), built.ValidUntil), chainTime, observed, time.Now())
 		if !ok {
 			return nil, errors.New("fill deadline elapsed during preparation")
 		}
-		return &fillIntent{OrderID: row.OrderId, To: s.workflow.caller, Data: data, Deadline: deadline}, nil
+		return &fillIntent{OrderID: row.OrderId, To: s.workflow.caller, Data: built.Calldata, Deadline: deadline, Spend: fillSpend{CapacityID: liquidlane.NewCapacityID(s.workflow.chainID.Int64(), built.State.Account, token), Deadline: order.Request.Deadline.Int64()}}, nil
 	}
 	return nil, nil
 }
@@ -242,6 +255,14 @@ func (s *Solver) poll(ctx context.Context) (err error) {
 	if err := result.Execution.Validate(); err != nil {
 		return err
 	}
+	if !result.Reverted {
+		spend := s.intent.Spend
+		spend.IncludedAt = result.Execution.BlockNumber.Uint64()
+		if err := s.spends.include(s.intent.OrderID, spend); err != nil {
+			return err
+		}
+	}
+	s.spends.setActive(false)
 	observability.Log(ctx).Info("RFQ fill transaction finalized", "orderId", s.intent.OrderID, "tx", result.Hash.Hex(), "reverted", result.Reverted)
 	s.intent = nil
 	return nil

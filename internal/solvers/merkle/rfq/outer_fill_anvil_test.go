@@ -73,7 +73,8 @@ func TestAnvilConnectorOuterFillCanonicalBoundaries(t *testing.T) {
 			if name == "unauthorized EOA" {
 				f.workflow.signer = common.HexToAddress("0x8888")
 			}
-			data, _, err := f.workflow.build(t.Context(), f.order, f.protocolSignature, f.selected, f.backend)
+			built, err := f.workflow.build(t.Context(), f.order, f.protocolSignature, f.selected, f.backend)
+			data := built.Calldata
 			if f.reader.outerCalls != 1 {
 				t.Fatalf("full settlement was not simulated: calls=%d err=%v", f.reader.outerCalls, err)
 			}

@@ -68,3 +68,12 @@ Validation on this published SDK passed: `make tidy`, `go mod verify`, `make for
 - [x] Complete tidy/verify, format, build, full race/coverage, lint, tooling and all three local Anvil 1.9.0 suites with `GOWORK=off` before updating PR #277.
 
 All listed gates passed on the published module. Both lint runs reported zero issues. Integration evidence uses local Anvil and API fixtures; no live signing, provider credentials or deployment was used.
+
+
+## Current stage reconciliation
+
+- [x] Reconcile stage's RFQ connector/account authentication, atomic route publication, final stale-inventory check and duplicate-award protection with the RAM host. Keep inclusion watermarks and completed signed-deadline IDs in process memory; retain the quote fence until the fill loop records its canonical result.
+- [x] Remove stage's obsolete journal recovery, legacy intent decoding and saved-byte rebroadcast path from this migration. Preserve the RAM sender's original/replacement capture and nonce ownership.
+- [x] Repeat the required repository and all three Anvil gates after conflict resolution, then push the merge to PR #277.
+
+Post-merge-resolution tidy/verify, format, build, full race/coverage, lint, tooling and all three local Anvil 1.9.0 targets passed. The actual RFQ poller regression also fails under a temporary overlay that removes the quote fence.

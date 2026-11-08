@@ -1128,6 +1128,7 @@ Merkle recipes. Each awarded fill is validated by one complete, unchanged outer
 return-data probe or code-override support is required. Successful awarded
 settlement supplies its work condition. It samples wall time before reading the
 chain header so RPC latency consumes submission validity.
+Confirmed fills retain inclusion watermarks in RAM to reject stale quote inventory, and completed award IDs until their signed deadlines. These protections last for the current process.
 See [the RFQ Merkle runbook](docs/RFQ-MERKLE.md) and [configuration](config/rfq-merkle.example.yaml).
 
 Local integration checks require Anvil on `PATH`: `make test-txmanager-anvil`,
