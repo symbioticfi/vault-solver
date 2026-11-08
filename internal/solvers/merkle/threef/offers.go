@@ -11,7 +11,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 	"github.com/symbioticfi/vault-solver/api/threef"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
@@ -33,13 +32,13 @@ type offerMarket struct {
 	EligibleRequests                                     map[common.Address]bool
 }
 
-// offerBot is owned by the single solver Run goroutine and its exclusive SDK store.
-// It never signs or sends a transaction. Send=false performs no journal or API writes.
+// offerBot and its pending intents belong to the single solver Run goroutine.
+// It never signs or sends a transaction. Send=false performs no API writes.
 type offerBot struct {
-	Client offerClient
-	Store  *state.Store
-	Send   bool
-	Now    func() time.Time
+	Client  offerClient
+	pending []*intent
+	Send    bool
+	Now     func() time.Time
 }
 
 type liveOffer struct {
@@ -63,8 +62,8 @@ func (b *offerBot) Tick(ctx context.Context, market offerMarket, auctions []thre
 
 // readOffers authenticates one inventory shared by maintenance and bidding.
 func (b *offerBot) readOffers(ctx context.Context, account common.Address) ([]threef.OfferDto, error) {
-	if b.Client == nil || (b.Send && b.Store == nil) {
-		return nil, errors.New("3F offer client and send-mode journal are required")
+	if b.Client == nil {
+		return nil, errors.New("3F offer client is required")
 	}
 	if b.Client.Broker() == (common.Address{}) {
 		return nil, errors.New("3F offer broker is required")
@@ -99,7 +98,7 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 	if !b.Send {
 		return false, nil
 	}
-	pending, err := b.reconcileIntents(market, offers)
+	pending, err := b.reconcileIntents(offers)
 	if err != nil {
 		return false, err
 	}
@@ -167,7 +166,7 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 		if !fits {
 			return false, errors.New("3F unresolved offer cannot be retried within current rate limits")
 		}
-		return true, b.postIntent(ctx, market, previous, pending, false)
+		return true, b.postIntent(ctx, market, previous, false)
 	}
 	if !create {
 		return false, nil
@@ -237,23 +236,19 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 		}
 		offer := threef.CreateOfferDto{AuctionId: auction.Id, Maker: strings.ToLower(b.Client.Broker().Hex()), Amount: amount.String(), ExpectedReturn: yield.String(), Nonce: nonce.String(), Expiration: strconv.FormatInt(now.Unix()+300, 10)}
 		created := newIntent(market, request, offer)
-		pending = append(pending, created)
-		if err := b.saveIntents(market, pending); err != nil {
-			return false, errors.Errorf("journal 3F offer before POST: %w", err)
-		}
-		return true, b.postIntent(ctx, market, created, pending, true)
+		// Capture the exact request before HTTP can accept it and lose the response.
+		b.pending = append(pending, created)
+		return true, b.postIntent(ctx, market, created, true)
 	}
 	return false, nil
 }
 
-func (b *offerBot) postIntent(ctx context.Context, market offerMarket, pending *intent, all []*intent, first bool) error {
+func (b *offerBot) postIntent(ctx context.Context, market offerMarket, pending *intent, first bool) error {
 	response, err := b.Client.Create(ctx, pending.Offer)
 	if err != nil {
 		// A rejected retry cannot disprove acceptance of the earlier request.
 		if first && definiteRejection(err) {
-			if deleteErr := b.saveIntents(market, withoutIntent(all, pending)); deleteErr != nil {
-				return errors.Errorf("clear rejected 3F offer: %w", deleteErr)
-			}
+			b.pending = withoutIntent(b.pending, pending)
 			return errors.Errorf("3F offer rejected: %w", err)
 		}
 		return errors.Errorf("3F offer POST outcome unresolved; retained intent for auction %v nonce %s: %w", pending.Offer.AuctionId, pending.Offer.Nonce, err)
@@ -265,15 +260,12 @@ func (b *offerBot) postIntent(ctx context.Context, market offerMarket, pending *
 	if err != nil {
 		return err
 	}
-	if err := b.saveIntents(market, all); err != nil {
-		return errors.Errorf("journal 3F POST receipt: %w", err)
-	}
 	observability.Log(ctx).Info("3F PUSH offer submitted", "account", market.Account.Hex(), "auctionId", pending.Offer.AuctionId, "offerId", pending.OfferID)
 	return nil
 }
 
 // Cash is shared by funding asset; policy budget is shared by funding/underlying
-// pair. API rows and their journal entries represent one reservation, not two.
+// pair. API rows and their RAM intents represent one reservation, not two.
 func reserveOffers(m offerMarket, live []liveOffer, pending []*intent) (cash, pair *big.Int) {
 	cash, pair = new(big.Int), new(big.Int)
 	listed := make(map[uint64]bool, len(live))

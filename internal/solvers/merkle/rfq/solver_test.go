@@ -3,7 +3,6 @@ package rfq
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"math/big"
 	"reflect"
 	"strings"
@@ -14,11 +13,9 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
-	"github.com/symbioticfi/merkle-executor/sdk/submission"
+	"github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
-	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"gopkg.in/yaml.v3"
 )
@@ -48,31 +45,42 @@ func (b *fakeBackend) resolveDiscount(context.Context, string) (*discounts.Resol
 }
 
 type fakeSender struct {
-	pending string
-	request submission.Request
-	result  submission.Result
-	err     error
-	ackErr  error
-	before  func(submission.Request)
-	acks    int
+	busy       bool
+	request    transaction.ExecutionRequest
+	result     *transaction.ExecutionResult
+	submitErr  error
+	pollErr    error
+	before     func(transaction.ExecutionRequest)
+	duringPoll func()
+	submits    int
+	polls      int
+	unsigned   bool
 }
 
-func (s *fakeSender) PendingID() string { return s.pending }
-func (s *fakeSender) Send(_ context.Context, req submission.Request) (submission.Result, error) {
+func (s *fakeSender) Busy() bool { return s.busy }
+func (s *fakeSender) Submit(_ context.Context, req transaction.ExecutionRequest) error {
 	if s.before != nil {
 		s.before(req)
 	}
+	s.submits++
 	s.request = req
-	s.pending = req.ID
-	return s.result, s.err
+	s.busy = !s.unsigned
+	return s.submitErr
 }
-func (s *fakeSender) Acknowledge(context.Context, string) error {
-	s.acks++
-	if s.ackErr != nil {
-		return s.ackErr
+func (s *fakeSender) Poll(context.Context) (*transaction.ExecutionResult, error) {
+	s.polls++
+	if s.result != nil && s.pollErr == nil {
+		s.busy = false
+		if s.duringPoll != nil {
+			s.duringPoll()
+		}
 	}
-	s.pending = ""
-	return nil
+	return s.result, s.pollErr
+}
+
+func fillResult() *transaction.ExecutionResult {
+	hash := common.HexToHash("0x77")
+	return &transaction.ExecutionResult{Hash: hash, Execution: &provider.Execution{TxHash: hash, BlockNumber: big.NewInt(8), BlockHash: common.HexToHash("0x78")}}
 }
 
 func awardRow(t *testing.T, order executor.IReactorOrder) rfqbackend.OrdersResponseOrdersInner {
@@ -126,7 +134,7 @@ func TestAwardSizingOnlyUsesSignedTuple(t *testing.T) {
 	}
 }
 
-func TestPollerPersistsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
+func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	fixture := connectorExecutionFixture(t, connectorDiscountFixture())
 	order, _, backend := connectorExecutionAward(fixture.workflow.caller)
 	backend.rows = []rfqbackend.OrdersResponseOrdersInner{awardRow(t, order), awardRow(t, order)}
@@ -134,100 +142,52 @@ func TestPollerPersistsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 		{Adapter: common.HexToAddress("0x01").Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "99999"},
 		{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: common.HexToAddress("0x43").Hex()},
 	}}
-	directory := t.TempDir()
-	store, err := state.Open(directory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	ledger, err := loadSpends(store)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sends := 0
-	sender := &fakeSender{result: submission.Result{Pending: true}}
-	sender.before = func(req submission.Request) {
-		sends++
-		var saved fillIntent
-		found, err := store.Load(intentKey, &saved)
-		if err != nil || !found || saved.ID != req.ID || !bytes.Equal(saved.Data, req.Data) || saved.Deadline.IsZero() {
-			t.Fatalf("fill admitted before durable intent: %v", err)
+	sender := &fakeSender{}
+	s := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender, spends: newSpendLedger()}
+	sender.before = func(req transaction.ExecutionRequest) {
+		if s.intent == nil || !bytes.Equal(s.intent.Data, req.Data) || s.intent.Deadline.IsZero() {
+			t.Fatal("fill admitted before RAM intent")
+		}
+		if s.AcceptsSnapshots(nil) {
+			t.Fatal("fill admitted before quote fence")
 		}
 	}
-	s := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender, store: store, spends: ledger}
-	if _, err := s.Initialize(t.Context()); err != nil {
+	if err := s.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if fixture.reader.outerCalls != 1 || sender.acks != 0 || sender.request.To != fixture.workflow.caller {
+	if fixture.reader.outerCalls != 1 || sender.polls != 0 || sender.request.To != fixture.workflow.caller || !sender.Busy() {
 		t.Fatal("award split, unconfigured venue used or pending work released")
 	}
-	reads, request := backend.reads, sender.request
-	// Reload the original intent as startup does; API terms may disappear after signing.
-	var restored fillIntent
-	if _, err := store.Load(intentKey, &restored); err != nil {
+	reads, request, intent := backend.reads, sender.request, *s.intent
+	backend.rows, backend.listed, backend.discount = nil, nil, nil // Signed terms may disappear.
+	if err := s.tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	restarted := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender, store: store, intent: restored, spends: ledger}
-	capacityID := restored.Spend.CapacityID
-	restarted.intent.Spend = fillSpend{} // Signed intents from stage predate spend metadata.
-	caller := fixture.workflow.caller
-	fixture.reader.recipeCaller = common.HexToAddress("0xbad")
-	fixture.workflow.connector = common.Address{}
-	sender.result = submission.Result{Confirmed: true, Hash: common.HexToHash("0x77"), Execution: &provider.Execution{BlockNumber: big.NewInt(7)}}
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	if venues, err := restarted.Initialize(ctx); err != nil || len(venues) != 0 || sender.acks != 0 {
-		t.Fatalf("startup waited for signed recovery: %v", err)
+	if backend.reads != reads || sender.submits != 1 || !reflect.DeepEqual(intent, *s.intent) {
+		t.Fatal("pending fill was rebuilt or its deadline changed")
 	}
-	if err := restarted.tick(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := restarted.Initialize(ctx); err == nil || !strings.Contains(err.Error(), "caller mismatch") {
-		t.Fatalf("current recipe should fail only after signed recovery: %v", err)
-	}
-	if err := restarted.tick(ctx); err == nil || backend.reads != reads {
-		t.Fatal("new award lookup bypassed unavailable recipe routing", err)
-	}
-	fixture.reader.recipeCaller, fixture.workflow.connector = caller, vlt
-	if backend.reads != reads || !reflect.DeepEqual(request, sender.request) || sender.acks != 1 || fixture.reader.latestIdentityReads != 2 {
-		t.Fatal("recovery rebuilt the fill or queried the backend")
-	}
-	// The backend is still listing the same open award twice. Neither may
-	// trigger another fill after canonical confirmation and acknowledgement.
-	if err := restarted.tick(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if sends != 2 {
-		t.Fatalf("stale open award was resubmitted: sends=%d", sends)
-	}
-	var removed fillIntent
-	if found, err := store.Load(intentKey, &removed); err != nil || found {
-		t.Fatal("terminal intent not cleared", err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := state.Open(directory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer reopened.Close()
-	restoredLedger, err := loadSpends(reopened)
-	if err != nil {
-		t.Fatal(err)
-	}
-	route := liquidlane.Route{CapacityID: capacityID, Adapter: common.HexToAddress("0x99")}
-	for _, block := range []uint64{0, 6, 7} {
-		accepted := (&Solver{spends: restoredLedger}).AcceptsSnapshots([]liquidlane.Inventory{{Route: route, BlockNumber: block}})
-		if accepted != (block >= 7) {
-			t.Fatalf("restart block=%d accepted=%v", block, accepted)
+	sender.result = fillResult()
+	sender.duringPoll = func() {
+		if s.AcceptsSnapshots(nil) {
+			t.Fatal("quotes resumed before canonical accounting")
 		}
 	}
-	if !restoredLedger.finalized("award") {
-		t.Fatal("restart lost completed order cache")
+	if err := s.tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if backend.reads != reads || !reflect.DeepEqual(request, sender.request) || sender.submits != 1 || s.intent != nil || sender.Busy() {
+		t.Fatal("canonical fill was rebuilt or its ownership was not released")
+	}
+	if !s.spends.finalized("award") || !s.AcceptsSnapshots(nil) {
+		t.Fatal("canonical accounting did not release quote fence")
+	}
+	backend.rows = []rfqbackend.OrdersResponseOrdersInner{awardRow(t, order), awardRow(t, order)}
+	backend.listed = &discounts.List{}
+	if err := s.tick(t.Context()); err != nil || sender.submits != 1 {
+		t.Fatal("completed award was submitted again", err)
 	}
 }
 
@@ -258,7 +218,7 @@ func TestPrepareCountsHeaderLatencyAgainstDeadline(t *testing.T) {
 	order, _, backend := connectorExecutionAward(f.workflow.caller)
 	order.Request.Deadline = big.NewInt(chainTime.Add(10 * time.Second).Unix())
 	s := Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: f.workflow, backend: backend}
-	if _, err := s.Initialize(t.Context()); err != nil {
+	if err := s.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	f.reader.headerDelay = 250 * time.Millisecond
@@ -272,32 +232,49 @@ func TestPrepareCountsHeaderLatencyAgainstDeadline(t *testing.T) {
 	}
 }
 
-func TestUncertainOrUnacknowledgedFillKeepsIntent(t *testing.T) {
+func TestUncertainFillKeepsIntent(t *testing.T) {
 	for _, tc := range []struct {
-		name            string
-		result          submission.Result
-		sendErr, ackErr error
+		name   string
+		result *transaction.ExecutionResult
+		err    error
 	}{
-		{"pending", submission.Result{Pending: true}, nil, nil},
-		{"cancelled wait", submission.Result{Pending: true}, context.Canceled, nil},
-		{"canonical acknowledgement fails", submission.Result{Confirmed: true}, nil, errors.New("reorg")},
+		{"pending", nil, nil},
+		{"cancelled wait", nil, context.Canceled},
+		{"canonical check fails", nil, errors.New("reorg")},
+		{"invalid execution identity", &transaction.ExecutionResult{Hash: common.HexToHash("0x77")}, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			store, err := state.Open(t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer store.Close()
-			intent := fillIntent{ID: "owned", To: vlt, Data: []byte{1}, Deadline: time.Now()}
-			if err := store.Save(intentKey, intent); err != nil {
-				t.Fatal(err)
-			}
-			sender := &fakeSender{pending: intent.ID, result: tc.result, err: tc.sendErr, ackErr: tc.ackErr}
-			s := &Solver{sender: sender, store: store, intent: intent}
+			intent := &fillIntent{OrderID: "owned", To: vlt, Data: []byte{1}, Deadline: time.Now()}
+			sender := &fakeSender{busy: true, result: tc.result, pollErr: tc.err}
+			s := &Solver{sender: sender, intent: intent}
 			_ = s.tick(t.Context())
-			var saved fillIntent
-			if found, err := store.Load(intentKey, &saved); err != nil || !found || sender.pending != intent.ID {
-				t.Fatal("uncertain work lost ownership", err)
+			if s.intent != intent || sender.submits != 0 || sender.polls != 1 {
+				t.Fatal("uncertain work lost ownership")
+			}
+		})
+	}
+}
+
+func TestSubmissionErrorRetainsOnlySignedWork(t *testing.T) {
+	for _, unsigned := range []bool{false, true} {
+		t.Run(map[bool]string{false: "signed ambiguity", true: "before signing"}[unsigned], func(t *testing.T) {
+			fixture := connectorExecutionFixture(t, connectorDiscountFixture())
+			order, _, backend := connectorExecutionAward(fixture.workflow.caller)
+			backend.rows = []rfqbackend.OrdersResponseOrdersInner{awardRow(t, order)}
+			backend.listed = &discounts.List{Discounts: []discounts.ListItem{{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: common.HexToAddress("0x43").Hex()}}}
+			sender := &fakeSender{unsigned: unsigned, submitErr: context.DeadlineExceeded}
+			s := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender}
+			if err := s.Initialize(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.tick(t.Context()); !errors.Is(err, context.DeadlineExceeded) || (s.intent == nil) != unsigned {
+				t.Fatalf("signed ownership changed: intent=%v err=%v", s.intent, err)
+			}
+			if !unsigned {
+				reads := backend.reads
+				if err := s.tick(t.Context()); err != nil || backend.reads != reads || sender.submits != 1 {
+					t.Fatal("ambiguous signed fill was rebuilt", err)
+				}
 			}
 		})
 	}
@@ -305,7 +282,6 @@ func TestUncertainOrUnacknowledgedFillKeepsIntent(t *testing.T) {
 
 func TestConfigKeepsMerkleSeparateFromAdapterSolver(t *testing.T) {
 	valid := `backendUrl: https://rfq.example
-stateDir: /persistent/rfq-merkle
 executor: "0x0000000000000000000000000000000000000010"
 recipeExecutors: ["0x0000000000000000000000000000000000000043"]
 curator: {url: https://curator.example/api/v1}
@@ -319,7 +295,7 @@ curator: {url: https://curator.example/api/v1}
 		{"no old mode", valid + "solverMode: internal\n", false},
 		{"no quoting", valid + "listenAddr: ':8080'\n", false},
 		{"no strategies", valid + "strategy: {name: default}\n", false},
-		{"no recovery store", strings.ReplaceAll(valid, "stateDir: /persistent/rfq-merkle\n", ""), false},
+		{"obsolete recovery store", valid + "stateDir: /persistent/rfq-merkle\n", false},
 		{"zero executor", strings.ReplaceAll(valid, "0000000010", "0000000000"), false},
 		{"unsafe source", strings.ReplaceAll(valid, "https://rfq.example", "https://secret@rfq.example"), false},
 	} {
@@ -336,18 +312,30 @@ curator: {url: https://curator.example/api/v1}
 	}
 }
 
-func TestRunPendingRecoveryCancelsWithoutRecipeLookup(t *testing.T) {
-	for _, sendErr := range []error{nil, errors.New("receipt RPC unavailable")} {
-		t.Run(fmt.Sprint(sendErr), func(t *testing.T) {
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			sender := &fakeSender{pending: "signed", result: submission.Result{Pending: true}, err: sendErr}
-			sender.before = func(submission.Request) { cancel() }
-			// No recipe reader or backend: recovery must not depend on either.
-			s := &Solver{sender: sender, intent: fillIntent{ID: "signed"}}
-			if err := s.Run(ctx); !errors.Is(err, context.Canceled) || sender.acks != 0 || sender.PendingID() != "signed" {
-				t.Fatal("shutdown did not cancel pending recovery with ownership retained", err)
-			}
-		})
+// A completed fill advances directly to the next award; pending work uses polling.
+func TestRunContinuesToNextAwardAfterConfirmation(t *testing.T) {
+	f := connectorExecutionFixture(t, connectorDiscountFixture())
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	s := &Solver{
+		recipeExecutors: []common.Address{f.reader.recipeExecutor},
+		workflow:        f.workflow,
+		backend:         &nextAwardBackend{cancel: cancel},
+		sender:          &fakeSender{busy: true, result: fillResult()},
+		intent:          &fillIntent{OrderID: "pending"},
 	}
+	if err := s.Run(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatal("confirmed fill waited for the polling timer before next award", err)
+	}
+}
+
+type nextAwardBackend struct {
+	fakeBackend
+
+	cancel context.CancelFunc
+}
+
+func (b *nextAwardBackend) orders(context.Context, string) ([]rfqbackend.OrdersResponseOrdersInner, error) {
+	b.cancel()
+	return nil, nil
 }

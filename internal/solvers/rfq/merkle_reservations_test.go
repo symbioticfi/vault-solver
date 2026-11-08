@@ -19,36 +19,19 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
+	merkletransaction "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/api/bindings/multicall3"
 	"github.com/symbioticfi/vault-solver/internal/chain"
-	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 	"github.com/symbioticfi/vault-solver/internal/solver"
+	merklerfq "github.com/symbioticfi/vault-solver/internal/solvers/merkle/rfq"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 	"gopkg.in/yaml.v3"
 )
 
-// Exercise the factory, actual durable Merkle ledger and quote allocator together.
-// A receipt-only execution unit test would miss this cross-service wiring.
-func TestFactoryQuotesFenceDurableMerkleSpend(t *testing.T) {
-	directory := t.TempDir()
-	store, err := state.Open(directory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	capacity := liquidlane.NewCapacityID(1, vlt, tOut)
-	saved := struct {
-		Watermarks map[liquidlane.CapacityID]uint64 `json:"watermarks"`
-		Completed  map[string]int64                 `json:"completed"`
-	}{map[liquidlane.CapacityID]uint64{capacity: 8}, map[string]int64{"award": 4102444800}}
-	if err := store.Save("rfq-merkle.accounting.2", saved); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
+// Exercise factory route publication, account authentication and quote allocation.
+func TestFactoryQuotesAuthenticateMerkleRoute(t *testing.T) {
 	rpcServer := rpc.NewServer()
 	if err := rpcServer.RegisterName("eth", newMerkleQuoteRPC(t)); err != nil {
 		t.Fatal(err)
@@ -72,17 +55,23 @@ func TestFactoryQuotesFenceDurableMerkleSpend(t *testing.T) {
 	curator := httptest.NewServer(http.HandlerFunc(serveMerkleQuoteTree))
 	defer curator.Close()
 	t.Setenv("RFQ_BACKEND_SHARED_SECRET", "test-secret")
-	text := minimalConfig + "recipeExecutors: ['0x0000000000000000000000000000000000000043']\nstateDir: " + directory + "\ncurator: {url: " + curator.URL + "}\n"
+	text := minimalConfig + "recipeExecutors: ['0x0000000000000000000000000000000000000043']\ncurator: {url: " + curator.URL + "}\n"
 	var node yaml.Node
 	if err := yaml.Unmarshal([]byte(text), &node); err != nil {
 		t.Fatal(err)
 	}
-	built, err := factory(*node.Content[0], solver.Deps{Chain: client, Signer: signing, TxManager: manager, Log: logr.Discard()})
+	merkleManager, err := merkletransaction.New(client, signing, big.NewInt(1), merkletransaction.Config{MaxFeeGwei: 100}, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := merkleManager.Initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	built, err := factory(*node.Content[0], solver.Deps{Chain: client, Signer: signing, TxManager: manager, MerkleTxManager: func() (*merkletransaction.Manager, error) { return merkleManager, nil }, Log: logr.Discard()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := built.(*Solver)
-	defer s.Close()
 	s.server.quotes.reader = nil // All-discount quotes must use authenticated backend inventory.
 	body := validQuoteBody()
 	body.Amount = "456000000000000"
@@ -92,11 +81,11 @@ func TestFactoryQuotesFenceDurableMerkleSpend(t *testing.T) {
 	body.Adapters[0].RecipeExecutor = common.HexToAddress("0x43").Hex()
 	// A shared backend response also lists native adapters for other solvers.
 	body.Adapters = append(body.Adapters, quoteAdapter{Adapter: common.HexToAddress("0xbad").Hex(), Asset: tOut.Hex(), BlockNumber: "1", MaxAssets: "1000", Discount: "0"})
-	// Routes publish after signed recovery, possibly after the server starts.
+	// Quotes decline until the verified routes are published.
 	if decision, err := s.server.quotes.quote(t.Context(), &body); err != nil || decision.response != nil {
 		t.Fatalf("quote before route publication = %+v %v", decision, err)
 	}
-	if _, err := s.merkle.Initialize(t.Context()); err != nil {
+	if err := s.merkle.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
@@ -104,13 +93,10 @@ func TestFactoryQuotesFenceDurableMerkleSpend(t *testing.T) {
 		wrongAccount    bool
 		quoted          bool
 	}{
-		{"7", "900", false, false},  // Observation predates the block-8 fill.
-		{"0", "900", false, false},  // Unknown observation height is also stale.
-		{"999", "456", false, true}, // Fresh snapshots must not advance the durable boundary.
-		{"8", "456", false, true},   // No double subtraction after inclusion.
-		{"7", "900", false, false},  // One fresh snapshot must not forget the watermark.
-		{"7", "900", true, false},   // A different account cannot bypass the block-8 watermark.
-		{"999", "900", true, false}, // Nor can its capacity be relabeled as the on-chain account.
+		{"7", "456", false, true},
+		{"999", "456", false, true},
+		{"7", "900", true, false},
+		{"999", "900", true, false},
 	} {
 		body.Adapters[0].Account = vlt.Hex()
 		if tc.wrongAccount {
@@ -270,5 +256,56 @@ func TestQuoteWatermarkAdvancesDuringFinalLaneRead(t *testing.T) {
 	}
 	if decision.response != nil {
 		t.Fatal("quote escaped after watermark advanced during final lane read")
+	}
+}
+
+func TestRFQTransactionManagerFollowsExecutionMode(t *testing.T) {
+	native := &Solver{}
+	if !native.RequiresTxManager() || native.RequiresMerkleTxManager() {
+		t.Fatal("native RFQ must retain the existing transaction manager")
+	}
+	merkle := &Solver{merkle: &merklerfq.Solver{}}
+	if merkle.RequiresTxManager() || !merkle.RequiresMerkleTxManager() {
+		t.Fatal("Merkle RFQ must use only the SDK transaction manager")
+	}
+}
+
+func TestNativeFactoryDoesNotConfigureMerkleTransactions(t *testing.T) {
+	rpcServer := rpc.NewServer()
+	if err := rpcServer.RegisterName("eth", newMerkleQuoteRPC(t)); err != nil {
+		t.Fatal(err)
+	}
+	defer rpcServer.Stop()
+	httpServer := httptest.NewServer(rpcServer)
+	defer httpServer.Close()
+	client, err := chain.Dial(t.Context(), []string{httpServer.URL}, "", common.HexToAddress("0x66").Hex(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	signing, err := signer.NewFromHexKey(strings.Repeat("1", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The native engine accepts confirmation depths beyond the SDK's bound.
+	manager := txmanager.New(client, signing, big.NewInt(1), txmanager.Config{Confirmations: 1025}, logr.Discard())
+	t.Setenv("RFQ_BACKEND_SHARED_SECRET", "test-secret")
+	var node yaml.Node
+	if err := yaml.Unmarshal([]byte(minimalConfig+oneAdapter), &node); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	built, err := factory(*node.Content[0], solver.Deps{
+		Chain: client, Signer: signing, TxManager: manager, Log: logr.Discard(),
+		MerkleTxManager: func() (*merkletransaction.Manager, error) {
+			calls++
+			return merkletransaction.New(client, signing, big.NewInt(1), merkletransaction.Config{MaxFeeGwei: 100, Confirmations: 1025}, logr.Discard())
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 || !solver.RequiresTxManager(built) || solver.RequiresMerkleTxManager(built) {
+		t.Fatal("native RFQ configured the Merkle transaction manager")
 	}
 }

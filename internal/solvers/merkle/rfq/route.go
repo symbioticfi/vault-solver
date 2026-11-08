@@ -15,51 +15,43 @@ type recipeRoute struct {
 	connector, account, asset common.Address
 }
 
-// Initialize verifies every configured recipe and publishes its payment route.
-// It is deferred while signed work is pending, so recovery never depends on the
-// current recipe; quotes reject routes until they are published. Routes are built
-// without routesMu so quotes keep declining while the RPC reads run.
-func (s *Solver) Initialize(ctx context.Context) ([]common.Address, error) {
-	if s.sender != nil && s.sender.PendingID() != "" {
-		return nil, nil
-	}
+// Initialize publishes verified payment routes together. Quotes keep declining
+// while discovery runs without holding routesMu.
+func (s *Solver) Initialize(ctx context.Context) error {
 	s.routesMu.RLock()
-	routes := s.routes
+	initialized := s.routes != nil
 	s.routesMu.RUnlock()
-	if routes == nil {
-		built, err := s.buildRoutes(ctx)
-		if err != nil {
-			return nil, err
-		}
-		s.routesMu.Lock()
-		if s.routes == nil {
-			s.routes = built
-		}
-		routes = s.routes
-		s.routesMu.Unlock()
+	if initialized {
+		return nil
 	}
-	venues := make([]common.Address, 0, len(routes))
-	seen := make(map[common.Address]bool)
-	for _, executor := range s.recipeExecutors {
-		venue := routes[executor].connector
-		if !seen[venue] {
-			venues = append(venues, venue)
-			seen[venue] = true
-		}
+	routes, err := s.buildRoutes(ctx)
+	if err != nil {
+		return err
 	}
-	return venues, nil
+	s.routesMu.Lock()
+	if s.routes == nil {
+		s.routes = routes
+	}
+	s.routesMu.Unlock()
+	return nil
 }
 
 func (s *Solver) buildRoutes(ctx context.Context) (map[common.Address]recipeRoute, error) {
-	routes := make(map[common.Address]recipeRoute, len(s.recipeExecutors))
-	for _, executor := range s.recipeExecutors {
-		snapshot, recipe, err := recipes.Discover(ctx, s.workflow.chain, executor, nil)
-		if err != nil {
-			return nil, err
-		}
-		if snapshot.Caller != s.workflow.caller {
-			return nil, errors.New("connector recipe caller mismatch")
-		}
+	identities, err := recipes.DiscoverExecutors(ctx, s.workflow.chain, s.recipeExecutors)
+	if err != nil {
+		return nil, err
+	}
+	accounts := make([]common.Address, len(s.recipeExecutors))
+	for i, executor := range s.recipeExecutors {
+		accounts[i] = identities[executor].Account
+	}
+	prepared, err := recipes.DiscoverBatch(ctx, s.workflow.chain, s.recipeExecutors, accounts, s.workflow.caller, recipes.PreparationOptions{ChainID: s.workflow.chainID})
+	if err != nil {
+		return nil, err
+	}
+	routes := make(map[common.Address]recipeRoute, len(prepared))
+	for _, member := range prepared {
+		snapshot, recipe := member.Snapshot, member.Recipe
 		tree, err := s.workflow.permissionTree(ctx, snapshot)
 		if err != nil {
 			return nil, err
@@ -75,7 +67,7 @@ func (s *Solver) buildRoutes(ctx context.Context) (map[common.Address]recipeRout
 		if state.Account != snapshot.Account || state.Asset != asset {
 			return nil, errors.New("recipe payment connector account or asset mismatch")
 		}
-		routes[executor] = recipeRoute{connector: venue, account: state.Account, asset: asset}
+		routes[snapshot.Executor] = recipeRoute{connector: venue, account: state.Account, asset: asset}
 	}
 	return routes, nil
 }

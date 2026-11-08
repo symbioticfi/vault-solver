@@ -24,20 +24,24 @@ factory/root/oracle registries plus a constant-price feed. The EOA request,
 protocol order, connector discount and discount-swap signatures are real ECDSA
 EIP-712 signatures checked by the canonical contracts. The recipe commits the
 three exact balance deltas and its swap leaf has real mask/proof/role enforcement.
-The unused committed Query supplies approval/swap permission preimages. Capacity runs the
-empty funding prefix over existing account cash through the SDK code override; no contract
-capacity or executor-binding extension is deployed.
-No Solidity settlement, signature, economics, permission or capacity logic is
-mocked in Go.
+The unused committed Query supplies approval/swap permission preimages.
+No Solidity settlement, signature, economics or permission logic is mocked in Go.
+
+The complete unchanged outer fill simulates from the host signer at a pinned
+block and the original gas budget through an ordinary `eth_call`. Shared SDK
+admission checks the inner recipe/call identity, fresh metadata and roles, and
+closes original/fresh block pins around that simulation. RFQ supplies no numerical
+witness and uses successful signed award settlement as its work condition, so no
+inner return data, code override or probe artifact is needed.
 
 Tests require a valid whole fill to simulate without changing state and then
 actually mine with the expected input/output balances. Other cases must reach
-the complete outer `eth_call` and fail on invalid discount economics, cash lost
-between the pinned capacity observation and latest-state settlement, and an EOA
-missing from Executor's caller allowlist. The earlier Go fake tests retain
-recipe discovery, mask, role, reorg and persistence edge coverage.
+the complete outer `eth_call` and fail on invalid discount economics, signatures,
+cash missing before settlement simulation, and an EOA missing from Executor's
+caller allowlist. Go fixtures retain recipe discovery, mask, role, reorg and RAM
+ownership edge coverage.
 
-Offline regeneration uses built artifacts from clean checkouts at the pinned
+Offline canonical-fixture regeneration uses built artifacts from clean checkouts at the pinned
 revisions plus Solidity 0.8.28 for the small external fixture:
 
 ```sh

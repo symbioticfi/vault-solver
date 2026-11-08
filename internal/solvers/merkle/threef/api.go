@@ -166,7 +166,7 @@ func (c *apiClient) Auctions(ctx context.Context) ([]threef.AuctionDto, error) {
 	return rows, nil
 }
 
-// Create sends exactly one request. Its caller must journal the immutable DTO before invoking it.
+// Create sends exactly one request. Its caller must retain the immutable DTO in RAM before invoking it.
 func (c *apiClient) Create(ctx context.Context, dto threef.CreateOfferDto) (*threef.CreateOfferResponseDto, error) {
 	nonce, nonceErr := uintAmount(dto.Nonce)
 	if nonceErr != nil || !nonce.IsInt64() {

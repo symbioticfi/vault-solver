@@ -1,86 +1,70 @@
 package rfq
 
 import (
-	"math/big"
 	"testing"
 
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
-	"github.com/symbioticfi/merkle-executor/sdk/submission"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 )
-
-func testSpendLedger(t *testing.T) *spendLedger {
-	t.Helper()
-	store, err := state.Open(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	ledger, err := loadSpends(store)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return ledger
-}
 
 func testSpend() fillSpend {
 	return fillSpend{CapacityID: liquidlane.NewCapacityID(1, vlt, tOut), IncludedAt: 8, Deadline: 100}
 }
 
-func TestSpendPersistenceFailureKeepsSignerOwnership(t *testing.T) {
-	ledger := testSpendLedger(t)
-	if err := ledger.store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	sender := &fakeSender{pending: "signed", result: submission.Result{Confirmed: true, Execution: &provider.Execution{BlockNumber: big.NewInt(8)}}}
-	s := &Solver{store: ledger.store, sender: sender, spends: ledger, intent: fillIntent{ID: "signed", OrderID: "award", Spend: testSpend()}}
-	if err := s.send(t.Context()); err == nil || sender.acks != 0 || sender.PendingID() == "" {
-		t.Fatal("failed durable accounting released the signer fence", err)
+func TestCanonicalFillRecordsSpendBeforeQuotesResume(t *testing.T) {
+	for _, outcome := range []string{"pending", "confirmed", "reverted", "unknown", "invalid receipt"} {
+		t.Run(outcome, func(t *testing.T) {
+			ledger := newSpendLedger()
+			ledger.setActive(true)
+			sender := &fakeSender{busy: true}
+			switch outcome {
+			case "confirmed":
+				sender.result = fillResult()
+			case "reverted":
+				sender.result = fillResult()
+				sender.result.Reverted = true
+			case "unknown":
+				sender.pollErr = errors.New("receipt RPC unavailable")
+			case "invalid receipt":
+				sender.result = fillResult()
+				sender.result.Execution.BlockNumber = nil
+			}
+			s := &Solver{sender: sender, spends: ledger, intent: &fillIntent{OrderID: "award", Spend: testSpend()}}
+			err := s.poll(t.Context())
+			if (err != nil) != (outcome == "unknown" || outcome == "invalid receipt") {
+				t.Fatal(err)
+			}
+			pending := outcome == "pending" || outcome == "unknown" || outcome == "invalid receipt"
+			if (s.intent != nil) != pending || ledger.finalized("award") != (outcome == "confirmed") {
+				t.Fatal("fill accounting or ownership changed incorrectly")
+			}
+			for _, block := range []uint64{0, 7, 8, 999, 7} {
+				inventory := []liquidlane.Inventory{{Route: liquidlane.Route{CapacityID: testSpend().CapacityID}, BlockNumber: block}}
+				want := !pending && (outcome != "confirmed" || block >= 8)
+				if s.AcceptsSnapshots(inventory) != want {
+					t.Fatalf("block %d: snapshot acceptance = %v, want %v", block, s.AcceptsSnapshots(inventory), want)
+				}
+			}
+		})
 	}
 }
 
-func TestPendingJournalPrecedesExpiryAndFailedAcknowledgement(t *testing.T) {
-	ledger := testSpendLedger(t)
-	spend := testSpend()
-	if err := ledger.include("award", spend); err != nil {
+func TestSpendExpiryRetainsInclusionWatermark(t *testing.T) {
+	ledger := newSpendLedger()
+	if err := ledger.include("award", testSpend()); err != nil {
 		t.Fatal(err)
 	}
-	if err := ledger.expire(99); err != nil || !ledger.finalized("award") {
-		t.Fatal("order expired before signed deadline", err)
+	ledger.expire(99)
+	if !ledger.finalized("award") {
+		t.Fatal("completed award expired before signed deadline")
 	}
-	sender := &fakeSender{pending: "signed", result: submission.Result{Pending: true}}
-	f := connectorExecutionFixture(t, connectorDiscountFixture())
-	f.reader.header.Time = 1000 // The signed deadline has passed while acknowledgement is pending.
-	backend := &fakeBackend{}
-	s := &Solver{sender: sender, store: ledger.store, spends: ledger, workflow: f.workflow, backend: backend, intent: fillIntent{ID: "signed", OrderID: "award", Spend: spend}}
-	if err := s.tick(t.Context()); err != nil {
-		t.Fatal(err)
+	ledger.expire(100)
+	if ledger.finalized("award") || ledger.watermarks[testSpend().CapacityID] != 8 {
+		t.Fatal("signed deadline cleanup lost inclusion watermark")
 	}
-	sender.result = submission.Result{Confirmed: true, Execution: &provider.Execution{BlockNumber: big.NewInt(8)}}
-	sender.ackErr = errors.New("canonical recheck unavailable")
-	if err := s.tick(t.Context()); err == nil || sender.PendingID() == "" || !ledger.finalized("award") {
-		t.Fatal("failed acknowledgement lost protected work", err)
-	}
-	if !f.reader.headerStarted.IsZero() || backend.reads != 0 || !ledger.finalized("award") {
-		t.Fatal("pending acknowledgement permitted deadline cleanup or new lookup")
-	}
-	sender.ackErr = nil
-	if err := s.tick(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if len(ledger.state.Watermarks) != 1 || len(ledger.state.Completed) != 1 {
-		t.Fatal("acknowledgement retry duplicated accounting")
-	}
-	if err := s.tick(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	restored, err := loadSpends(ledger.store)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if restored.finalized("award") || restored.state.Watermarks[spend.CapacityID] != 8 || backend.reads != 1 {
-		t.Fatal("deadline cleanup lost durable watermark protection")
+	older := testSpend()
+	older.IncludedAt = 7
+	if err := ledger.include("other", older); err != nil || ledger.watermarks[older.CapacityID] != 8 {
+		t.Fatal("older fill moved watermark backwards", err)
 	}
 }

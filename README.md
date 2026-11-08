@@ -30,8 +30,9 @@ the relevant protocol API on each tick; no database.
 ## Solvers
 
 Solvers are listed in config under `solvers:` — one or more, **at most one entry per solver type**.
-Every solver shares the chain client and signer. Transaction-sending solvers also share the single
-nonce-serialized `txManager`, so multiple solvers within one process never race on nonces. Solvers whose
+Every solver shares the chain client and signer. Native transaction-sending solvers share the single
+nonce-serialized `txManager`. Merkle integrations use the SDK manager described below; deploy each
+solver process with its own signer. Solvers whose
 settlement is submitted externally do not start it. Each entry's `config` block is typed and validated
 by its own solver. Adding a solver touches **no** framework code — see the recipe in
 [`CLAUDE.md`](./CLAUDE.md).
@@ -104,8 +105,8 @@ and underlying authorization error.
 
 Configure `rfq-filler` with the existing `adapters` list for native
 pricing and fills, or with `recipeExecutors` for Merkle connector pricing and fills.
-Setting both fails startup. The Merkle mode uses `stateDir` and `curator` for durable
-execution and permissions; `quoteOnly: true` needs neither. See its
+Setting both fails startup. The Merkle mode uses `curator` for permissions and keeps pending execution in RAM;
+`quoteOnly: true` needs no curator service. See its
 [configuration](config/rfq-merkle.example.yaml) and [runbook](docs/RFQ-MERKLE.md).
 [Sepolia setup](docs/SEPOLIA.md) identifies the shared basis and the actual
 curator-created instances required before starting a solver.
@@ -461,7 +462,7 @@ how liquidity is chosen within that source set.
 This is the seam for customizing a solver without forking. Contract and trust model:
 [`docs/strategy-plan.md`](docs/strategy-plan.md).
 
-The shared `txManager` serializes transaction-sending solvers on one EOA. While a transaction is queued
+The native `txManager` serializes native transaction-sending solvers on one EOA. While a transaction is queued
 or active, UniswapX declines new quotes, LI.FI retires standing curves, and 3F stops new offers;
 reconciliation continues. RFQ keeps quoting and accounts for pending fills through reservations; it stops
 only while the nonce lane is unavailable. Pending calls receive ordinary fee bumps at the same nonce.
@@ -475,7 +476,7 @@ manager returns the actual outcome. Canonical confirmation checks a fixed number
 head advancement does not restart the proof. Zero depth reuses the verified inclusion receipt;
 invalid receipt status or log identity cannot confirm a request.
 
-Configure `maxFeeGwei` for every transaction-sending process. `pendingTimeoutMs`,
+Configure `maxFeeGwei` for every transaction-sending process. For native solvers, `pendingTimeoutMs`,
 `broadcastTimeoutMs` and `shutdownTimeoutMs` bound pending tracking, submission and shutdown.
 The manager remains alive while solvers drain accepted work; orchestrator SIGTERM grace must cover both
 solver preparation/drain and manager shutdown. A timeout does not guarantee that a signed call cannot land.
@@ -692,8 +693,9 @@ does not detect arbitrary secrets outside URLs.
 
 The observability listener (default `:9090`) serves `/metrics`, `/healthz`, and `/readyz`. No extra
 config is required for the collectors below. `/readyz` fails before startup completes and during
-shutdown. Pending transactions and nonce collisions do not take quote servers out of rotation. During graceful shutdown readiness
-drops first, while liveness and metrics remain available until the shared transaction manager finishes its
+shutdown. Native pending transactions and nonce collisions do not take quote servers out of rotation.
+Merkle readiness follows SDK availability and clears while signed nonce ownership remains unresolved.
+During graceful shutdown readiness drops first, while liveness and metrics remain available until the selected transaction manager finishes its
 bounded drain.
 
 ### OpenTelemetry tracing
@@ -789,7 +791,7 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | Scope | Metric family | Labels | What it shows and why it is useful |
 |---|---|---|---|
 | LI.FI | `solver_bot_workflow_events_total{event="order_parse"}` | `solver`, `strategy`, `event`, `outcome` | Rejected feed observations: `invalid`, `unsupported` (including Dutch auctions), or `other_chain`. REST recovery replays count again; this is not a unique-order count. Uses the existing workflow event family and its last-event timestamp. |
-| Framework | `solver_bot_service_ready` | — | `1` exactly when the shared `/readyz` gate reports ready, otherwise `0`. This is process and nonce-safety readiness; a pending transaction does not clear it. It is not a claim that every solver upstream is healthy; combine it with solver freshness and connectivity. |
+| Framework | `solver_bot_service_ready` | — | `1` exactly when the shared `/readyz` gate reports ready, otherwise `0`. Native pending transactions do not clear it; Merkle processes follow SDK availability. It is not a claim that every solver upstream is healthy; combine it with solver freshness and connectivity. |
 | Framework | `solver_bot_solver_info` | `solver` | Constant `1` for each solver configured in this process. Prometheus target labels such as `instance`/`lane` make process membership explicit without adding deployment-specific labels in application code. |
 | Txmanager | `solver_bot_txmanager_fee_limit_reached_total` | `label`, `phase` | Submitted request preparation or replacement decisions stopped by a configured fee ceiling (`initial` or `replacement`); profitability quote reads and transport errors are excluded. |
 | Framework | `solver_bot_external_operation_duration_seconds` | `solver`, `strategy`, `operation`, `outcome` | Count and latency of allowlisted recurring solver operations such as polls and authoritative refreshes. Outcomes are bounded to `success`, `degraded`, `skipped`, or `error`; errors and request-derived values never become labels. |
@@ -1051,18 +1053,26 @@ modern Go 1.27 style, the required test/lint/format gate, and secure-coding rule
 [`CLAUDE.md`](./CLAUDE.md) (`AGENTS.md` is a symlink to it). Every change must keep
 `make format && make test && make lint` green and unit-test new logic.
 
-Merkle recipes run through the shared sender using the independently versioned [Merkle SDK integration](docs/MERKLE-SDK.md). Its `config.strategies` is a list of full executor addresses, for example `strategies: ["0x0000000000000000000000000000000000000010"]`. Each lowercase address is the durable identity; labels and strategy objects are rejected.
+Merkle recipes run through the SDK transaction manager using the independently versioned [Merkle SDK integration](docs/MERKLE-SDK.md). Its `config.strategies` is a list of full executor addresses, for example `strategies: ["0x0000000000000000000000000000000000000010"]`. Each lowercase address is the strategy identity; labels and strategy objects are rejected.
 
 The SDK is public and pinned in `go.mod`; normal Go and Docker builds download it
 without a GitHub token or a local merkle-executor checkout.
+Merkle preparation, RFQ admission and signing share `txManager.maxGas`
+(default 16,777,216), bounded by the current block gas limit.
 
 Self-contained recipes automatically batch useful state-driven executions through
 that SDK. External quotes and proofs are prepared separately for each execution.
 The executor list sets processing priority; spending recipes must reserve funds
-needed for withdrawals. A compatible EIP-7702 shared signer also batches different
-executors in that order. Fresh plans submit without a second simulation; unsigned
-saved plans are rebuilt and signed transactions recover unchanged. Batching and
-pending-order recovery use the shared sender.
+needed for withdrawals. A compatible EIP-7702 process signer also batches different
+executors in that order. Fresh plans submit without a second simulation. Signed attempts retain their exact
+identity through in-process retries, using the SDK transaction manager. Pending transactions,
+orders and reservations live only in RAM; restart loses tracking while external
+work may continue. Remove `stateDir` from Merkle configuration; strict decoding
+rejects it. Settle existing work before upgrading and use one process per signer.
+
+Invalid executor candidates are reported while healthy candidates continue.
+Ready work can continue within the same keeper cycle; hosts otherwise use their
+normal polling cadence.
 
 The SDK reads signed permission bundles through `GET /merkle/{adapter}/{root}` under the configured curator API URL.
 The SDK reads `recipeHash` and `recipeBlock` at a pinned block and retrieves the original
@@ -1073,7 +1083,7 @@ chain connection and require no separate recipe indexer URL.
 Polling is fixed at 15 seconds and operation timeout at 30 seconds. `pollInterval` and
 `operationTimeout` are not configuration fields. Curator settings accept only `url`; its HTTP timeout and response limit are fixed at 10 seconds and 2 MiB.
 
-The authenticated recipe supplies on-chain readiness and completion checks. Successful
+For generic recipe execution, the authenticated recipe supplies on-chain readiness and completion checks. Successful
 simulations with all Manage gates closed and no Call or Approve work wait without
 sending; malformed results and failed simulations remain errors. A zero request ID
 does not imply waiting when a separate recipe gate authorizes the action.
@@ -1086,8 +1096,8 @@ described in [the 3F Merkle runbook](docs/THREEF-MERKLE.md). The generic `merkle
 solver rejects the `threeF` field. The policy and executor must use the same maker account.
 Offers use that policy's live budgets, the account's idle cash and 3F auction asset data,
 without fetching Curator permissions. Curator supplies permission data and proofs
-only for mint execution. The executor uses the shared signer; its recipe must support
-the enabled policy pairs and supplies request/principal/yield inputs; inactive groups receive zero principal. Gates and fixed funding calls remain curator-owned. One journal and sender serialize all markets. Automatic offers reserve existing commitments
+only for mint execution. The executor uses the process signer; its recipe must support
+the enabled policy pairs and supplies request/principal/yield inputs; inactive groups receive zero principal. Gates and fixed funding calls remain curator-owned. One RAM workflow and the SDK transaction manager serialize all markets. Automatic offers reserve existing commitments
 and use account idle cash; simulation never submits or cancels API offers.
 Both 3F solvers honor the on-chain minimum and the auction APR bounds. Since the API
 does not expose the lowest ramp APR, they use a quarter of the current `maxRate` as
@@ -1100,19 +1110,29 @@ be a nonnegative int64 integer; omitted, null and zero values use the unscaled r
 
 The Merkle 3F solver can offer on multiple auctions. Outstanding offers reserve cash by funding token
 and policy budget by funding/underlying pair; subsequent offers use only the remaining capacity.
-Each auction retains its own durable intent, including across restarts and uncertain POST responses.
+Each auction retains its own RAM intent through uncertain POST responses; restart loses that intent.
 
 Live commitments are maintained first. Each cycle then checks every relevant unanswered open/solvable
 auction before bidding, reusing policy eligibility results within the pinned snapshot. There is no
 per-cycle eligibility check cap. At zero pair budget,
-new bids are blocked and unjournaled UI offers require explicit UI cancellation because the canonical
-budget-consuming check cannot establish their scope. The bot can cancel its own unaccepted journaled
+new bids are blocked and UI offers without a retained intent require explicit UI cancellation because the canonical
+budget-consuming check cannot establish their scope. The bot can cancel its own unaccepted retained
 intent and never cancels accepted mint windows.
 
 The `rfq-filler` recipe mode (also available as the execution-only `rfq-merkle` plugin) executes awarded orders through the RFQ Executor and committed
-Merkle recipes. It samples wall time before reading the chain header so RPC latency consumes submission validity.
-See [the RFQ Merkle runbook](docs/RFQ-MERKLE.md) and [configuration](config/rfq-merkle.example.yaml). Signed recovery runs in the poll loop and can rebroadcast the saved bytes after a restart; quotes are declined until it finishes. Confirmed fills persist an inclusion watermark that rejects older quote snapshots, so keep the state directory across restarts.
+Merkle recipes. Each awarded fill is validated by one complete, unchanged outer
+`eth_call` from the actual signer at the pinned block and gas budget; no RFQ
+return-data probe or code-override support is required. Successful awarded
+settlement supplies its work condition. It samples wall time before reading the
+chain header so RPC latency consumes submission validity.
+Confirmed fills retain inclusion watermarks in RAM to reject stale quote inventory, and completed award IDs until their signed deadlines. These protections last for the current process.
+See [the RFQ Merkle runbook](docs/RFQ-MERKLE.md) and [configuration](config/rfq-merkle.example.yaml).
 
 Local integration checks require Anvil on `PATH`: `make test-txmanager-anvil`,
-`make test-merklesender-anvil`, and `make test-rfq-merkle-anvil`. They exercise nonce reconciliation,
-durable SDK journal recovery, and canonical RFQ settlement without live services.
+`make test-merkle-sdk-anvil`, and `make test-rfq-merkle-anvil`. They separately exercise the unchanged native transaction engine, RAM SDK ownership,
+and canonical RFQ settlement without live services.
+
+Merkle integrations use the same SDK transaction implementation as merkle-executor.
+Native integrations retain `internal/txmanager`, including their fee policy, retries,
+telemetry and shutdown behavior. Deploy each solver process with its own signer.
+The SDK host lifecycle and Merkle metrics are described in [the integration guide](docs/MERKLE-SDK.md).

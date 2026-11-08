@@ -46,6 +46,9 @@ type Solver struct {
 	reportFatal func(error)
 }
 
+func (s *Solver) RequiresTxManager() bool       { return s.merkle == nil }
+func (s *Solver) RequiresMerkleTxManager() bool { return s.merkle != nil }
+
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
@@ -90,6 +93,11 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 			return nil, err
 		}
 		quotes.reservations = nil // The signer fence pauses quotes during signed Merkle work.
+		manager, err := deps.MerkleTxManager()
+		if err != nil {
+			return nil, err
+		}
+		quotes.laneAvailable = manager.Available
 		quotes.inventoryCurrent = merkle.AcceptsSnapshots
 		quotes.acceptsConnector = merkle.AcceptsConnector
 		quotes.acceptsRoute = merkle.AcceptsRoute
@@ -187,7 +195,7 @@ func (s *Solver) ShutdownPreparationTimeout() time.Duration {
 // backend order-poll + fill loop. The filler is poll-only (no push/notify endpoint).
 func (s *Solver) Run(ctx context.Context) error {
 	if s.merkle != nil {
-		if _, err := s.merkle.Initialize(ctx); err != nil {
+		if err := s.merkle.Initialize(ctx); err != nil {
 			return errors.Errorf("rfq: initialize recipe executor: %w", err)
 		}
 	}
@@ -306,12 +314,4 @@ func (s *Solver) runExecution(ctx context.Context) error {
 	}
 	s.exec.run(ctx)
 	return ctx.Err()
-}
-
-// Close releases the Merkle execution journal, when this process uses a recipe.
-func (s *Solver) Close() error {
-	if s.merkle != nil {
-		return s.merkle.Close()
-	}
-	return nil
 }

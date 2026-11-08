@@ -130,7 +130,7 @@ func TestDynamicMintResolvesAndAttestsPendingAuctionPair(t *testing.T) {
 			if len(out) != 1 || out[0].Inputs[9] != "145" || !attested {
 				t.Fatalf("wrong authorized inputs: %+v, attested %v", out, attested)
 			}
-			record, err := decodeMint(out[0])
+			record, err := mintFromOutput(out[0])
 			if err != nil || record.UnderlyingAsset != underlying {
 				t.Fatalf("wrong policy pair: %+v, %v", record, err)
 			}

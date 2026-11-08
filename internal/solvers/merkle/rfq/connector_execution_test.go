@@ -124,15 +124,14 @@ func TestConnectorBuildRejectsUnauthorizedOrUnsettledExecution(t *testing.T) {
 		want   string
 	}{
 
-		{"connector not derived", func(w *connectorWorkflow, _ *connectorExecutionReader) { w.connector = common.Address{} }, "recipe-derived routing"},
-		{"different connector", func(w *connectorWorkflow, _ *connectorExecutionReader) { w.connector = common.HexToAddress("0x88") }, "recipe-derived routing"},
+		{"host signer missing", func(w *connectorWorkflow, _ *connectorExecutionReader) { w.signer = common.Address{} }, "host signer"},
 		{"connector account differs", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.account = common.HexToAddress("0x88") }, "account"},
 		{"recipe caller differs", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.recipeCaller = common.HexToAddress("0x88") }, "caller"},
 		{"permission role missing", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.allowed = false }, "role"},
 		{"outer fill reverts", func(_ *connectorWorkflow, r *connectorExecutionReader) {
 			r.outerErr = errors.New("Reactor output shortfall")
 		}, "simulat"},
-		{"binding snapshot changes before discovery", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.reorgBeforeDiscovery = true }, "reorganiz"},
+		{"binding snapshot reorganizes after discovery", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.reorgBeforeDiscovery = true }, "block hash"},
 		{"snapshot changes during outer fill", func(_ *connectorWorkflow, r *connectorExecutionReader) { r.reorgDuringFill = true }, "reorganiz"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -150,6 +149,30 @@ func TestConnectorBuildRejectsUnauthorizedOrUnsettledExecution(t *testing.T) {
 			}
 			if len(calldata) != 0 {
 				t.Fatal("failed preparation returned transaction calldata")
+			}
+		})
+	}
+}
+
+func TestConnectorBuildUsesHostAndBlockGasBudgets(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		maxGas, blockGas, wantGas uint64
+	}{
+		{name: "default", blockGas: 30_000_000, wantGas: 16_777_216},
+		{name: "host budget", maxGas: 2_000_000, blockGas: 30_000_000, wantGas: 2_000_000},
+		{name: "block limit", maxGas: 5_000_000, blockGas: 1_000_000, wantGas: 1_000_000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := connectorExecutionFixture(t, connectorDiscountFixture())
+			fixture.workflow.maxGas = tc.maxGas
+			fixture.reader.header.GasLimit = tc.blockGas
+			order, selected, backend := connectorExecutionAward(fixture.workflow.caller)
+			if _, err := fixture.workflow.build(t.Context(), order, []byte{0x91, 0x92}, selected, backend); err != nil {
+				t.Fatal(err)
+			}
+			if fixture.reader.outerCalls != 1 || fixture.reader.outerGas != tc.wantGas {
+				t.Fatalf("outer fill simulation: calls=%d gas=%d, want %d", fixture.reader.outerCalls, fixture.reader.outerGas, tc.wantGas)
 			}
 		})
 	}
@@ -177,7 +200,8 @@ type connectorExecutionReader struct {
 	header                                              *types.Header
 	allowed                                             bool
 	outerCalls                                          int
-	identityReads, latestIdentityReads                  int
+	outerGas                                            uint64
+	identityReads                                       int
 	outerData                                           []byte
 	outerErr                                            error
 	reorgDuringFill                                     bool
@@ -223,10 +247,11 @@ func (r *connectorExecutionReader) CallContract(ctx context.Context, msg ethereu
 		return nil, errors.New("invalid contract call")
 	}
 	if *msg.To == r.recipeCaller && bytes.Equal(msg.Data[:4], executorBinding.GetABI().Methods["fill"].ID) {
-		if msg.From != r.signer || block != nil {
-			return nil, errors.New("outer fill must simulate from the host signer at latest")
+		if msg.From != r.signer || block == nil || block.Uint64() != 7 || msg.Gas == 0 {
+			return nil, errors.New("outer fill must simulate from the host signer at the pinned block and gas budget")
 		}
 		r.outerCalls++
+		r.outerGas = msg.Gas
 		r.outerData = bytes.Clone(msg.Data)
 		if r.reorgDuringFill {
 			r.header.Extra = []byte("new canonical hash")
@@ -235,10 +260,6 @@ func (r *connectorExecutionReader) CallContract(ctx context.Context, msg ethereu
 	}
 	if *msg.To == vlt && (bytes.Equal(msg.Data, connectorBinding.PackAccount()) || bytes.Equal(msg.Data, connectorBinding.PackOutputAsset())) {
 		r.identityReads++
-		if block == nil {
-			r.latestIdentityReads++
-			return r.connectorReadFake.CallContract(ctx, msg, big.NewInt(7))
-		}
 	}
 	if block == nil || block.Uint64() != 7 {
 		return nil, errors.New("metadata read escaped recipe snapshot")
@@ -330,10 +351,10 @@ func connectorExecutionFixtureAt(t *testing.T, resolved *discounts.Resolved, rec
 		connectorReadFake: &connectorReadFake{remaining: big.NewInt(900), account: account, executor: recipeExecutor},
 		recipeExecutor:    recipeExecutor, recipeAccount: account, recipeCaller: rfqExecutor, signer: signer,
 		recipeHash: hash, root: tree.Root, recipe: recipe, approvalHash: tree.Leaves[0].Hash, swapHash: leaf.Hash,
-		header: &types.Header{Number: big.NewInt(7), Time: 7}, allowed: true,
+		header: &types.Header{Number: big.NewInt(7), Time: 7, GasLimit: 30_000_000}, allowed: true,
 	}
 	workflow := &connectorWorkflow{
-		chain: reader, chainID: big.NewInt(1), connector: vlt,
+		chain: reader, chainID: big.NewInt(1),
 		source: connectorExecutionPermissions{raw: permission, account: account, executor: recipeExecutor}, caller: rfqExecutor, signer: signer,
 	}
 	return connectorExecutionFixtureData{workflow, reader, recipe, leaf}
@@ -349,12 +370,80 @@ func connectorExecutionAward(caller common.Address) (executor.IReactorOrder, sel
 	return order, selected, &fakeBackend{discount: connectorDiscountFixture()}
 }
 
-func TestConnectorBuildRequiresDiscoveredExecutor(t *testing.T) {
-	fixture := connectorExecutionFixture(t, connectorDiscountFixture())
-	order, selected, backend := connectorExecutionAward(fixture.workflow.caller)
-	selected.Executor = common.Address{}
-	_, err := fixture.workflow.build(t.Context(), order, nil, selected, backend)
-	if err == nil || !strings.Contains(err.Error(), "no recipe executor") || fixture.reader.outerCalls != 0 {
-		t.Fatalf("missing executor did not fail closed: %v", err)
+func TestConnectorBuildRequiresSelectedRoute(t *testing.T) {
+	for _, field := range []string{"executor", "venue"} {
+		t.Run(field, func(t *testing.T) {
+			fixture := connectorExecutionFixture(t, connectorDiscountFixture())
+			order, selected, backend := connectorExecutionAward(fixture.workflow.caller)
+			if field == "executor" {
+				selected.Executor = common.Address{}
+			} else {
+				selected.Venue = common.Address{}
+			}
+			_, err := fixture.workflow.build(t.Context(), order, nil, selected, backend)
+			if err == nil || fixture.reader.outerCalls != 0 {
+				t.Fatalf("missing %s did not fail closed: %v", field, err)
+			}
+		})
 	}
+}
+
+func TestConnectorBuildAcceptsHeadAdvanceBetweenDiscoveryStages(t *testing.T) {
+	f := connectorExecutionFixture(t, connectorDiscountFixture())
+	reader := &headAdvanceReader{connectorExecutionReader: f.reader}
+	f.workflow.chain = reader
+	f.workflow.source = advancedPermissions{f.workflow.source}
+	order, selected, backend := connectorExecutionAward(f.workflow.caller)
+	if built, err := f.workflow.build(t.Context(), order, nil, selected, backend); err != nil || len(built.Calldata) == 0 {
+		t.Fatalf("ordinary head advance rejected: %v", err)
+	}
+	if reader.connectorReads != 3 || reader.simulationBlock != 8 || f.reader.outerCalls != 1 {
+		t.Fatalf("connector or settlement escaped prepared block: reads=%d simulation=%d", reader.connectorReads, reader.simulationBlock)
+	}
+}
+
+// Discovery starts at head 7, then head 8 becomes available. The recipe event
+// remains in canonical block 7, while the prepared connector state is block 8.
+type headAdvanceReader struct {
+	*connectorExecutionReader
+
+	latestReads     int
+	connectorReads  int
+	simulationBlock uint64
+}
+
+func (r *headAdvanceReader) HeaderByNumber(_ context.Context, number *big.Int) (*types.Header, error) {
+	header := types.CopyHeader(r.header)
+	if number == nil {
+		r.latestReads++
+		if r.latestReads > 1 {
+			header.Number = big.NewInt(8)
+		}
+	} else {
+		header.Number = new(big.Int).Set(number)
+	}
+	return header, nil
+}
+
+func (r *headAdvanceReader) CallContract(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
+	if msg.To != nil && *msg.To == vlt {
+		if block == nil || block.Uint64() != 8 {
+			return nil, errors.New("connector read escaped prepared block")
+		}
+		r.connectorReads++
+	}
+	if msg.To != nil && *msg.To == r.recipeCaller {
+		r.simulationBlock = block.Uint64()
+	}
+	return r.connectorExecutionReader.CallContract(ctx, msg, big.NewInt(7))
+}
+
+type advancedPermissions struct{ permissionSource }
+
+func (s advancedPermissions) PermissionTree(ctx context.Context, chainID *big.Int, snapshot recipes.Snapshot) ([]byte, error) {
+	if snapshot.BlockNumber != 8 {
+		return nil, errors.New("permissions did not use the prepared head")
+	}
+	snapshot.BlockNumber = 7 // The shared fixture asserts its original transport height.
+	return s.permissionSource.PermissionTree(ctx, chainID, snapshot)
 }

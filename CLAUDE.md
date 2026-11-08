@@ -279,3 +279,11 @@ reader or operator would be surprised to discover.
 - Keep the docs current in the same change: architecture/design or TODO changes update `docs/*-PLAN.md`;
   user-facing changes (CLI flags, config knobs, solver/strategy capabilities) update `README.md`.
 - Commit titles are Conventional Commits: `type(scope): imperative summary` (e.g. `feat(rfq): …`).
+
+## Merkle runtime
+
+Merkle integrations use the independently versioned SDK transaction manager shared
+with merkle-executor. Native integrations keep `internal/txmanager` and its existing
+behavior. Hosts explicitly start the transaction lifecycle selected by the solver.
+Each solver process is configured with its own signer as a trusted deployment assumption.
+Merkle planning and signing share `txManager.maxGas`; SDK state remains in RAM only.
