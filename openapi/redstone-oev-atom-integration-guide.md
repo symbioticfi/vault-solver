@@ -22,7 +22,7 @@ If the connection hangs and the server doesn't receive a pong frame, the connect
 ## 2. Executor contract deposit
 Each external solver is required to deposit a minimum amount of the native token on the Executor contract. The Executor contract address and the minimum deposit amount will be provided by RedStone.
 The deposit/withdrawal functions ABI:
-```
+```javascript
 const abi = [
   "function deposit() external payable",
   "function requestWithdraw(uint256 amount, address payable to) external",
@@ -39,14 +39,14 @@ In order to check the current solver balance, use the deposits view function.
 
 ## 3. Feeds Subscription
 To receive auction payloads, the websocket client must explicitly subscribe to the oev/feeds topic using a JSON message once the connection enters the OPEN state.
-```
+```json
 {
   "op": "subscribe",
   "topic": "oev/feeds"
 }
 ```
 To unsubscribe:
-```
+```json
 {
   "op": "unsubscribe",
   "topic": "oev/feeds"
@@ -55,21 +55,21 @@ To unsubscribe:
 
 ### 3a. Liquidations subscription mode
 Some integrations support the "liquidations" subscription mode:
-```
+```json
 {
   "op": "subscribe",
   "topic": "oev/liquidations"
 }
 ```
 To unsubscribe:
-```
+```json
 {
   "op": "unsubscribe",
   "topic": "oev/liquidations"
 }
 ```
 In this mode, the auction payload contains not only price data, but the potentially liquidatable positions as well. An example payload for Morpho-like integration may look like this:
-```
+```json
 {
   "positions": [
     {
@@ -130,7 +130,7 @@ In this mode, the auction payload contains not only price data, but the potentia
 ### Step 4a: Reading the Auction Update
 When an auction begins, the server broadcasts an auction envelope containing the feed values out to the oev/feeds topic.
 Server Message Format:
-```
+```json
 {
   "op": "auction",
   "id": "e9803b9f-4318-4dc0-811d-23f2f0b938f2",
@@ -155,7 +155,7 @@ When the external solver identifies a liquidation opportunity using the feeds, i
 warning
 Submission of failing transaction could lead to deposit slashing and account blacklisting.
 Expected Solver Response Format:
-```
+```json
 {
   "op": "solve",
   "id": "e9803b9f-4318-4dc0-811d-23f2f0b938f2",
@@ -178,7 +178,7 @@ The operationData and liquidationSig parameters in your response must be cryptog
 The operationData parameter acts as an opaque payload. Its format is entirely up to you (the external solver) and your chosen operationCallback smart contract. You may ABI-encode any custom variables, targets, or operational instructions your contract needs to successfully execute the liquidations.
 The RedStone system simply passes this encoded payload directly to your callback contract.
 Example Custom Encoding:
-```
+```javascript
 // This format is purely arbitrary based on your callback contract's needs
 const operationData = ethers.AbiCoder.defaultAbiCoder().encode(
   ["tuple(bytes32 marketId, address borrower, uint256 minProfit)[]"],
@@ -190,12 +190,12 @@ Ensure the final operationData output is passed as a standard hex string (e.g., 
 #### Generating liquidationSig
 1.
 First, hash your encoded operationData output:
-```
+```javascript
 const operationDataHash = ethers.keccak256(operationData);
 ```
 2.
 Prepare the primary authentication payload. Use ABI standard encoding across these 7 fields:
-```
+```javascript
 const types = [
   "string", // "EXECUTOR_V6"
   "uint256", // network chainId
@@ -220,7 +220,7 @@ const encodedData = ethers.AbiCoder.defaultAbiCoder().encode(types, values);
 ```
 3.
 Take the keccak256 hash of this encodedData payload, and sign it using your Solver wallet:
-```
+```javascript
 const messageHash = ethers.keccak256(encodedData);
 const liquidationSig = await wallet.signMessage(
   ethers.getBytes(messageHash),
@@ -230,7 +230,7 @@ info
 The wallet signing the transaction must be the one that has the deposit on the Executor contract.
 info
 Use the nonces view function on the Executor contract to check the currently registered nonce.
-```
+```javascript
 const abi = ["function nonces(address solver) external view returns (uint256)"];
 ```
 
@@ -238,7 +238,7 @@ const abi = ["function nonces(address solver) external view returns (uint256)"];
 The operationCallback address you provide in your response must be a smart contract that implements the Executor's IOperationCallback interface.
 During settlement, the RedStone Executor contract will invoke your contract's liquidate function, passing down the encoded operationData you provided. Immediately after your liquidate routine finishes, the Executor will invoke payBid expecting your contract to transfer the native ETH bidAmount back to it.
 Here is a Solidity template to base your solver upon:
-```
+```solidity
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.22;
 
@@ -301,15 +301,15 @@ Note: Example (simplified - not to be used in production code) Solver contract e
 
 ### On-chain
 - LiquidationFailed event - emitted whenever liquidation fails within the operationCallback contract.
-```
+```solidity
     event LiquidationFailed(address indexed solver, uint256 nonce);
 ```
 - BidUnderpaid event - emitted whenever the Liquidator contract does not pay enough bid to the Executor contract.
-```
+```solidity
 event BidUnderpaid(address indexed solver, uint256 bidAmount, uint256 bidPaid);
 ```
 - Executed event - emitted whenever the liquidation call was successful
-```
+```solidity
 event Executed(
     address indexed solver,
     address indexed operationCallback,
@@ -323,7 +323,7 @@ Multiple LiquidationFailed and/or BidUnderpaid events may lead to slashing.
 
 ### Off-chain
 To receive notifications, the websocket client must explicitly subscribe to the oev/notify topic using a JSON message once the connection enters the OPEN state.
-```
+```json
 {
   "op": "subscribe",
   "topic": "oev/notify"
@@ -332,7 +332,7 @@ To receive notifications, the websocket client must explicitly subscribe to the 
 info
 You can subscribe to notifications specific to your individual Liquidator contract address using the oev/notify/{liquidator_contract_address.toLowerCase()} topic. E.g. oev/notify/0xbb4cdb9cbd36b01bd1cbaebf2de08d9173bc095c
 To unsubscribe:
-```
+```json
 {
   "op": "unsubscribe",
   "topic": "oev/notify"
@@ -342,7 +342,7 @@ To unsubscribe:
 
 #### Notifications
 - Auction result - which liquidator won the auction.
-```
+```json
 {
   "op": "auction-result",
   "id": "auctionId",
@@ -353,7 +353,7 @@ To unsubscribe:
 }
 ```
 - Liquidation result - whether the Executor call was successful.
-```
+```json
 {
   "op": "liquidation-result",
   "id": "auctionId",
@@ -365,7 +365,7 @@ To unsubscribe:
 }
 ```
 - Blacklist - whenever the given client's api-key has been blacklisted due to failing transactions.
-```
+```json
 {
   "op": "blacklisted",
   "id": "auctionId",

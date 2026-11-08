@@ -57,7 +57,8 @@ class Extractor(html.parser.HTMLParser):
             self.flush() if self.pre else self.current.append(" ")
         elif tag == "pre":
             self.block()
-            self.lines.append("```")
+            language = next((c.removeprefix("language-") for c in classes if c.startswith("language-")), "")
+            self.lines.append("```" + language)
             self.pre += 1
         elif self.pre:
             return

@@ -16,7 +16,7 @@ header.</p>
 <ol><li>request</li><li>execute</li></ol>
 <ul><li>see <a href="https://example.com/repo">here</a></li></ul>
 <table><tr><th>op</th><th>meaning</th></tr><tr><td>solve</td><td>bid</td></tr></table>
-<div class="codeBlock"><pre><code><span class="token-line">{<br></span><span class="token-line">  "op": "subscribe"<br></span><span class="token-line">}</span></code></pre><button>Copy</button></div>
+<div class="codeBlock"><pre class="prism-code language-json codeBlock_x"><code><span class="token-line">{<br></span><span class="token-line">  "op": "subscribe"<br></span><span class="token-line">}</span></code></pre><button>Copy</button></div>
 </div><footer>Edit this page</footer></article>
 <footer>Copyright</footer></body></html>
 """
@@ -30,7 +30,7 @@ Send the x-api-key header.
 - see here <https://example.com/repo>
 op | meaning
 solve | bid
-```
+```json
 {
   "op": "subscribe"
 }
