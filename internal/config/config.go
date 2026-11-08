@@ -22,9 +22,8 @@ type Config struct {
 	Chain     ChainConfig     `yaml:"chain"`
 	Signer    SignerConfig    `yaml:"signer"`
 	TxManager TxManagerConfig `yaml:"txManager"`
-	// Solvers is the set of solvers to run in one process — at most one entry per solver type. They
-	// share the chain client and signer; transaction-sending solvers also share the single
-	// nonce-serialized txManager, so they never race on nonces.
+	// Solvers selects the integration workers for this solver process, at most one per type.
+	// Workers use the process chain client, signer and SDK transaction manager.
 	Solvers       []SolverConfig      `yaml:"solvers"`
 	Observability ObservabilityConfig `yaml:"observability"`
 }

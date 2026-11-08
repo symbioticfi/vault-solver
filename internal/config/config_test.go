@@ -84,7 +84,7 @@ solvers: [{name: x}]
 	}
 }
 
-const multiSolverConfig = `
+const multiWorkerConfig = `
 chain:
   rpcUrl: https://sepolia.example.org
   chainId: 11155111
@@ -99,14 +99,14 @@ solvers:
     config: {backendUrl: https://rfq.example}
 `
 
-func TestLoad_MultipleSolvers(t *testing.T) {
-	cfg, err := Load(writeTemp(t, multiSolverConfig))
+func TestLoad_MultipleIntegrationWorkers(t *testing.T) {
+	cfg, err := Load(writeTemp(t, multiWorkerConfig))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
 	if len(cfg.Solvers) != 2 ||
 		cfg.Solvers[0].Name != "3f-bridge-facilitator" || cfg.Solvers[1].Name != "rfq-filler" {
-		t.Fatalf("expected two distinct solvers, got %+v", cfg.Solvers)
+		t.Fatalf("expected two distinct integration workers, got %+v", cfg.Solvers)
 	}
 }
 

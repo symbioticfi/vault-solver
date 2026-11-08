@@ -46,7 +46,7 @@ func TestQuoteMetricsHaveOnlyCoarseFixedDimensions(t *testing.T) {
 	}
 }
 
-func TestQuoteMetricsShareRegistryAcrossSolvers(t *testing.T) {
+func TestQuoteMetricsShareRegistryAcrossIntegrationWorkers(t *testing.T) {
 	reg := prometheus.NewRegistry()
 	for _, name := range []string{"uniswapx-filler", "rfq-filler"} {
 		m, err := NewQuoteMetrics(reg, name, boundTestQuoteReason)

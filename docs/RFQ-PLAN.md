@@ -116,7 +116,7 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   unavailable or unknown backend status keeps the obligation until its recorded order deadline.
   `maxNonceRetries` defaults to three additional attempts after accepted abandonment or nonce
   consumption; zero disables those retries. Rejected initial `nonce_conflict` results do not spend this
-  budget and cannot permanently retire an open order merely because other replicas race its EOA nonce.
+  budget and cannot permanently retire an open order after an initial transaction nonce collision.
   They still require fresh backend-open reconciliation, a poll delay and a fresh open-order listing,
   and stop at the order deadline. The accepted-execution retry budget survives these conflicts and
   re-queuing; retrying clears only the attempted

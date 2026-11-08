@@ -21,8 +21,8 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/signer"
 )
 
-// Deps are the shared services every solver receives. The txmanager is shared so solvers never
-// race on the sending account's nonce.
+// Deps are the services each integration worker receives from its solver process.
+// The process transaction manager serializes work for its configured signer.
 type Deps struct {
 	Chain     *chain.Client
 	TxManager *txmanager.Manager
@@ -34,15 +34,15 @@ type Deps struct {
 	ReportFatal func(error)
 }
 
-// Solver is a long-running strategy. Run must honor ctx cancellation and return nil (or a
+// Solver is a long-running integration worker. Run must honor ctx cancellation and return nil (or a
 // context error) on clean shutdown.
 type Solver interface {
 	Name() string
 	Run(ctx context.Context) error
 }
 
-// RequiresTxManager reports whether a solver uses the shared on-chain sender. Solvers default to
-// requiring it; integrations whose transactions are submitted externally may opt out.
+// RequiresTxManager reports whether an integration worker uses the process on-chain sender.
+// Workers default to requiring it; externally submitted integrations may opt out.
 func RequiresTxManager(s Solver) bool {
 	requirer, ok := s.(interface{ RequiresTxManager() bool })
 	return !ok || requirer.RequiresTxManager()
@@ -115,8 +115,8 @@ func Registered() []string {
 // as a clean shutdown, not an error.
 func Run(ctx context.Context, s Solver, log logr.Logger) error {
 	log.Info("solver running")
-	// With several solvers configured each gets its own stamped logger; carry it, named after the
-	// solver, so every line the solver logs through observability.Log names the integration it serves.
+	// Carry the integration worker's stamped logger in its context so every downstream log line
+	// names the integration it serves.
 	err := s.Run(observability.WithLogger(ctx, log.WithName(s.Name())))
 	if err != nil && !errors.Is(err, context.Canceled) {
 		wrapped := errors.Errorf("solver %q: %w", s.Name(), err)

@@ -166,7 +166,7 @@ the role-local **ordinal** and its classified outcome — never the URL, the sam
 follow. Every attempt's request gets `traceparent` injected, so the RPC provider can continue the
 trace. The span ends exactly where the metrics observation finishes: on response-body close, or
 immediately on a transport-level failure. Status is Error for every outcome other than success.
-Because the chain client is shared by all solvers, RPC spans carry no `solver` attribute; they inherit
+RPC spans use the process chain client and carry no separate `solver` attribute; they inherit
 whichever span is in the caller's context. `rpc.jsonrpc.request_id` is empty for batches (§10).
 
 All chain RPC endpoints use HTTP(S); tracing and propagation live in the shared HTTP
@@ -196,7 +196,7 @@ nonce contention or observed mined nonce advancement with an unknown business re
 transaction's inclusion, a winning peer or a fill failure. An attached
 `tx.hash` remains the process's attempted hash. Account evidence never manufactures a receipt, so this
 outcome adds no receipt gas/fee accounting. Solver completion stages record the same outcome and reconcile
-authoritative protocol/backend state before considering a retry; see [REPLICA-PLAN](REPLICA-PLAN.md).
+authoritative protocol/backend state before considering a retry; see [nonce outcome handling](TXMANAGER-PLAN.md#fresh-mined-nonce-and-initial-collisions).
 The send span **ends before the result is delivered** to the
 caller, so a caller resuming its own trace never races the span it nests under. A send declined because
 the lane is busy gets a `declined` event with `decision=not_admitted`, `reason=lane_busy`, and ends

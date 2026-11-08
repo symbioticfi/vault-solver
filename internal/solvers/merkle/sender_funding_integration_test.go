@@ -45,7 +45,7 @@ func TestSDKRAMFundingFailureReleasesUnsignedWork(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	if !engine.Available() || !engine.LaneReady() {
-		t.Fatal("unsigned funding failure did not release the shared lane")
+		t.Fatal("unsigned funding failure did not release the signer lane")
 	}
 	relay.funded.Store(true)
 	if err := sender.Submit(t.Context(), request); err != nil {

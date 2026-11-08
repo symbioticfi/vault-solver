@@ -4,7 +4,7 @@ The `threef-merkle` solver runs native API-key PUSH offers for one MerkleAccount
 and executes one guarded mint recipe covering all configured funding pairs. The adapter-based `3f-bridge-facilitator`
 solver and generic `merkle` solver run independently. No liquidity is aggregated
 between their accounts. Use [the example YAML](../config/threef-merkle.example.yaml)
-with the regular chain, signer and shared transaction manager configuration.
+with the regular chain, signer and process transaction manager configuration.
 
 ```yaml
 solvers:
@@ -22,7 +22,7 @@ solvers:
 
 The account is the maker. A dedicated, 3F-approved BF EOA and API key serve one
 curator/default account. The executor's account and caller are discovered together at a
-pinned block; its account must be the default maker and caller must match the shared signer.
+pinned block; its account must be the default maker and caller must match the process signer.
 Set `THREEF_POLICY` to the deployed policy. Its `account()` must match the executor
 account at startup and at each offer snapshot. Every execution group must charge
 that same policy. The chain comes from the host configuration. Use

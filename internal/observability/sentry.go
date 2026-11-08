@@ -84,9 +84,9 @@ func (c *sentryCore) Write(e zapcore.Entry, fields []zapcore.Field) error {
 }
 
 // eventTags picks the searchable attribution for an event. "solver" is the log field run.go
-// stamps (process-wide with one solver, per solver otherwise), falling back to the first logger
+// stamps (process-wide with one worker, per integration otherwise), falling back to the first logger
 // name segment ("rfq.txmanager" -> "rfq"); "label" is the txmanager request label, which is how
-// shared components attribute work when several solvers share a process; "trace_id" (when the log
+// common components attribute work to configured integration workers; "trace_id" (when the log
 // line carries one) links the event to its OpenTelemetry trace.
 func eventTags(loggerName string, fields map[string]any) map[string]string {
 	tags := map[string]string{}

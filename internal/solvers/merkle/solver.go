@@ -1,4 +1,4 @@
-// Package merkle hosts the Merkle SDK using vault-solver's existing shared sender.
+// Package merkle hosts the Merkle SDK using vault-solver's process transaction manager.
 package merkle
 
 import (
@@ -51,7 +51,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, err
 	}
 	if deps.Chain == nil || deps.Signer == nil || deps.TxManager == nil {
-		return nil, errors.New("merkle requires host chain, signer and shared transaction manager")
+		return nil, errors.New("merkle requires host chain, signer and process transaction manager")
 	}
 	// The factory interface has no context; bound the complete startup observation.
 	startup, cancel := context.WithTimeout(context.Background(), defaultOperationTimeout)
@@ -68,7 +68,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		strategy := &cfg.strategies[i]
 		identity := identities[common.HexToAddress(strategy.Config.Executor)]
 		if identity.Caller != deps.Signer.Address() {
-			return nil, errors.New("merkle executor caller differs from the shared signer")
+			return nil, errors.New("merkle executor caller differs from the process signer")
 		}
 		capacity, err := aave.New(deps.Chain)
 		if err != nil {

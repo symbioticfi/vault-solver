@@ -1,6 +1,6 @@
 # Transaction manager
 
-This describes the SDK transaction lifecycle consumed by every vault-solver integration.
+This describes the common SDK transaction lifecycle used by vault-solver and merkle-executor.
 The implementation lives in `github.com/symbioticfi/merkle-executor/sdk/transaction`;
 vault-solver owns configuration, credentials, RPC routing, telemetry setup and explicit
 manager startup/shutdown. There is no host transaction engine or sender bridge.
@@ -12,14 +12,15 @@ entry point. Configuration is defined by [config.go](../internal/config/config.g
 
 ## 1. Ownership and admission
 
-One process has one chain client, signer and transaction manager shared by its transaction-sending
-solvers. Only one signed lifecycle is actively tracked **per process**. Each initial send reads the latest
+Each solver process has its own chain client, signer and SDK transaction manager. Its configured
+integration workers use that one manager. Only one signed lifecycle is actively tracked **per process**. Each initial send reads the latest
 mined account nonce from the sending endpoint and uses that lowest unconsumed nonce. Fresh work can replace
-an unmined call, including after restart; it never queues a higher nonce just because pending counts the
-old call. Independent processes can share the EOA without a database,
-shared file, leader, coordinator or peer discovery. They may race on a nonce; an initial collision ends
-that request promptly and leaves later work eligible. The [replica plan](REPLICA-PLAN.md) records the
-account and integration limits.
+an unmined call; it never queues a higher nonce just because pending counts the
+old call. Separate solver processes are configured with their own signers; the service trusts that operator
+configuration and does not coordinate keys. An initial nonce collision ends that request promptly and
+leaves later work eligible. Integration workers own order and claim discovery, protocol authorization,
+capacity, business deadlines, calldata and reconciliation. The SDK owns transaction admission, signing,
+replacements and canonical receipts in both services.
 
 An owned receipt that passes canonical ancestry and its requested confirmation depth advances a
 process-local floor to its nonce plus one, including a reverted receipt. New selection uses the maximum
@@ -32,16 +33,16 @@ does not initialize/start the manager or require `txManager.maxFeeGwei`.
 
 Solvers build calldata and submit a `Request`; they never sign or broadcast transactions directly.
 `Send` waits for the terminal result. `SendAsync` waits for admission and returns a result channel;
-its name does not mean admission is non-blocking. `TrySend` declines an occupied lane without signing;
-when admitted, it waits for the result. Caller context and `Deadline` bound pre-admission waiting.
+its name does not mean admission is non-blocking. Caller context and `Deadline` bound pre-admission waiting.
 Once enqueued, the manager owns execution: caller cancellation is not proof the signed call cannot land.
 Definitive pre-sign/submission failures can finish without a receipt; accepted ambiguous sends stay tracked.
 
-`Available()` reports initial mined-nonce RPC readiness; `Idle()` reports absence of queued/admitted demand. `LaneReady()`
-requires both. Quote producers that cannot account for pending work use `LaneReady`; RFQ uses `Available`
+`Available()` requires initialized mined-nonce state and no retained keeper work. `LaneReady()` also
+requires no queued/admitted work. Quote producers that cannot account for pending work use `LaneReady`; RFQ uses `Available`
 and subtracts pending fills through its own reservations. Already-owned recovery work can continue during
-contention. Process readiness (`/readyz`) follows `Available`, so an owned pending transaction does not
-by itself take quote servers out of rotation; startup and shutdown do.
+contention. Process readiness (`/readyz`) follows `Available`, so an ordinary native pending transaction does not
+by itself take quote servers out of rotation. Retained keeper work pauses readiness until release;
+startup and shutdown also keep it unready.
 Subscribers receive coalesced change notifications and must re-read state and unsubscribe when done.
 
 ## 2. Request contract
@@ -362,8 +363,8 @@ remains documented in the [README configuration section](../README.md#configurat
 `Initialize` verifies one bounded latest mined nonce read. Every new broadcast reads
 `eth_getTransactionCount(address, "latest")` again immediately before signing, without a cached counter,
 empty-pool requirement or account-confirmation proof. Pending state never advances this selection, so
-fresh requests do not queue higher nonces behind unmined work. All replicas can replace the lowest
-unconsumed nonce after a restart, without remembering or querying the pending call.
+fresh requests do not queue higher nonces behind unmined work. After restart, fresh business work
+uses the lowest unconsumed nonce without recovering the old pending call.
 If the manager retains a fee hint, it applies only when its nonce equals that mined count and its
 `pendingTimeoutMs` lifetime has not elapsed. Advancement or a lower nonce after a reorg discards an
 inapplicable hint; a failed nonce read defers signing and retains an unexpired hint. Failed preparation,
@@ -371,7 +372,7 @@ signing or definitive submission retains an applicable hint without renewing its
 Quote/admission snapshots carry the expiry as well as fees, so a stale read cannot clear a renewed
 same-fee hint. Eligibility is checked again after cooldown and preparation before fees are applied.
 The sending endpoint must serve current mined state; private pending visibility is not required.
-The local lifecycle slot serializes this process's work only. Two processes can read the same nonce.
+The local lifecycle slot serializes work for this process's signer.
 
 An initial nonce-too-low or replacement-underpriced response yields `OutcomeNonceConflict`, an error
 wrapping `ErrNonceConflict`, and the exact attempted hash with no receipt. The worker ends that request
@@ -385,7 +386,7 @@ normal ownership and receipt tracking: they may describe an accepted transaction
 
 The next request reads mined state again. A failed nonce read produces a submission error before
 signing and does not create a persistent account pause. `Available` reports initial RPC readiness;
-`Idle` and `LaneReady` continue to reflect local admission demand. No idle account recovery monitor runs.
+`LaneReady` continues to reflect local admission demand. No idle account recovery monitor runs.
 
 ### Owned replacements and uncertain execution
 
@@ -491,8 +492,8 @@ metric names and dashboards.
 | Txmanager | `solver_bot_txmanager_late_receipt_pending` | `label` | Hashes retained for passive observation; does not represent occupied nonce lanes or unique orders. |
 | Txmanager | `solver_bot_txmanager_late_receipt_dropped_total` | `label`, `reason` | Unobserved hashes dropped for `expired`, `capacity` or `shutdown`; not proof those transactions executed. |
 | Txmanager | `solver_bot_txmanager_replacements_total` | `label`, `kind`, `reason` | Successfully broadcast replacements and exact rebroadcasts (`kind` = `replacement`, `rebroadcast`). Replacement `reason` is `validity`, `congestion`, `stall`, `gas` or `fallback`; a rebroadcast is `stall`, `uncertain` (ambiguous first broadcast) or `capped` (fee cap reached). Spikes expose fee-policy, relay or congestion problems that terminal outcomes alone cannot show. |
-| Txmanager | `solver_bot_txmanager_admission_rejections_total` | `label`, `reason` | Requests rejected before the signed worker lifecycle. Reasons are `manager_stopped`, `deadline_exceeded`, `caller_cancelled`, or bounded fallback `other`; an expected busy `TrySend` probe is excluded. |
-| Txmanager | `solver_bot_txmanager_admission_wait_duration_seconds` | `label`, `outcome` | Time from a real send request until worker admission or a terminal pre-admission outcome. `outcome` is `admitted` or one of the bounded rejection reasons; expected busy `TrySend` probes are excluded. |
+| Txmanager | `solver_bot_txmanager_admission_rejections_total` | `label`, `reason` | Requests rejected before the signed worker lifecycle. Reasons are `manager_stopped`, `deadline_exceeded`, `caller_cancelled`, or bounded fallback `other`. |
+| Txmanager | `solver_bot_txmanager_admission_wait_duration_seconds` | `label`, `outcome` | Time from a real send request until worker admission or a terminal pre-admission outcome. `outcome` is `admitted` or one of the bounded rejection reasons. |
 | Txmanager | `solver_bot_txmanager_lifecycle_duration_seconds` | `label`, `outcome` | Time from worker admission through broadcast and terminal tracking. It excludes pre-admission nonce-lane wait, so use admission rejections alongside its latency distribution. |
 | Txmanager | `solver_bot_txmanager_phase_duration_seconds` | `label`, `phase`, `outcome` | Time spent in each reached worker phase: `prebroadcast`, `pending`, or `confirming`. Reorgs may return a lifecycle to `pending`; the emitted sample contains the cumulative time spent in that phase. |
 | Txmanager | `solver_bot_txmanager_account_info` | `address` | Constant `1` identifying the active public transaction-sender address; absent when no configured solver starts txmanager. Private key material is never exposed. |
@@ -512,7 +513,7 @@ metric names and dashboards.
 | [UniswapX](UNISWAPX-PLAN.md) | Reactor/executor calldata, earliest validity deadline, order-API status obsolescence, profitability ceiling and exclusive-order obligations. |
 | [OEV](OEV-PLAN.md) | External settlement and protocol bid nonce; does not start txmanager in an OEV-only process. |
 
-Protocol order/bid nonces are not the shared sender's transaction nonce. Strategy code receives facts and
+Protocol order/bid nonces are not the process signer's transaction nonce. Strategy code receives facts and
 returns decisions; it does not gain a signer, nonce manager or transaction-sending capability.
 
 ## 10. Verification and maintenance

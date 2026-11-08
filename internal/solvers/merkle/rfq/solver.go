@@ -70,7 +70,7 @@ func New(cfg Config, deps solver.Deps) (*Solver, error) {
 		return nil, err
 	}
 	if deps.Chain == nil || (!cfg.QuoteOnly && (deps.Signer == nil || deps.TxManager == nil)) {
-		return nil, errors.New("rfq-merkle requires the shared chain, signer and transaction manager")
+		return nil, errors.New("rfq-merkle requires the host chain, signer and transaction manager")
 	}
 	s := &Solver{spends: newSpendLedger(), recipeExecutors: cfg.RecipeExecutors, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), caller: cfg.Executor}}
 	if cfg.QuoteOnly {

@@ -90,7 +90,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, err
 	}
 	if deps.Chain == nil || deps.Signer == nil || deps.TxManager == nil {
-		return nil, errors.New("threef-merkle requires host chain, signer and shared transaction manager")
+		return nil, errors.New("threef-merkle requires host chain, signer and process transaction manager")
 	}
 	// The factory interface has no context; bound the complete startup observation.
 	startup, cancel := context.WithTimeout(context.Background(), operationTimeout)
@@ -102,7 +102,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 	target := identity[address]
 	if target.Caller != deps.Signer.Address() {
-		return nil, errors.New("3f executor caller differs from the shared signer")
+		return nil, errors.New("3f executor caller differs from the process signer")
 	}
 	strategy := keeper.Strategy{Config: keeper.Config{Name: address.Hex(), Executor: address.Hex(), Account: target.Account.Hex(), Interval: pollInterval}}
 	api, err := newClient(cfg.apiConfig())

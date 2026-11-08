@@ -97,7 +97,7 @@ output tokens and split connector routes also remain unsupported.
 
 Only one fill is admitted at a time. Its awarded order, immutable calldata and
 deadline stay in RAM through ambiguous submission. Each signed original and
-replacement is captured before broadcast through the shared transaction manager.
+replacement is captured before broadcast through the process transaction manager.
 The earlier order/discount deadline bounds unsigned sending and replacement.
 Resumption observes the same signed attempts and nonce without fetching new terms;
 only a canonical owned inclusion or revert releases the signer fence. Restart

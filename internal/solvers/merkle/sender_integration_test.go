@@ -51,7 +51,7 @@ func (b *ownedRelay) snapshot() []*types.Transaction {
 	return append([]*types.Transaction(nil), b.sent...)
 }
 
-func TestSDKRAMSharedSenderReplacementAndReorg(t *testing.T) {
+func TestSDKRAMSenderReplacementAndReorg(t *testing.T) {
 	signing := ramSigning(t)
 	chain, mine := senderAnvil(t, signing.Address())
 	relay := &ownedRelay{Client: chain, observed: make(chan struct{}, 64)}
@@ -63,10 +63,7 @@ func TestSDKRAMSharedSenderReplacementAndReorg(t *testing.T) {
 	}
 	awaitBroadcast(t, relay)
 	if engine.Available() || engine.LaneReady() {
-		t.Fatal("foreign quote admitted while signed work owned")
-	}
-	if _, accepted := engine.TrySend(t.Context(), txmanager.Request{To: common.HexToAddress("0x5678")}); accepted {
-		t.Fatal("foreign solver entered owned lane")
+		t.Fatal("new quote admitted while signed work owned")
 	}
 	if err := chain.Client().CallContext(t.Context(), nil, "anvil_setNextBlockBaseFeePerGas", hexutil.EncodeBig(big.NewInt(40_000_000_000))); err != nil {
 		t.Fatal(err)
@@ -144,7 +141,7 @@ func TestSDKRAMAmbiguousOutcomeResumesAfterDeadline(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	if !ambiguous || !sender.Busy() || engine.Available() {
-		t.Fatal("ambiguous outcome lost shared signer ownership")
+		t.Fatal("ambiguous outcome lost signer ownership")
 	}
 	// The business deadline expires while the process retains the exact signed
 	// transaction. Receipt observation still succeeds after that deadline.

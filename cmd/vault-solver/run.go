@@ -76,9 +76,8 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		}
 	}()
 
-	// With one solver per process (the deployed shape), stamp every line, shared components such as
-	// txmanager included, with the integration it serves. With several, each solver's own logger is
-	// stamped below instead, and shared components attribute work through the request label.
+	// With one integration worker, stamp every line, including common components, with its name.
+	// With several workers, stamp each worker logger below and attribute manager work per request.
 	if len(solverNames) == 1 {
 		log = log.WithValues("solver", solverNames[0])
 	}
@@ -138,7 +137,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	}
 	log.Info("signer ready", "address", sgnr.Address().Hex())
 
-	// Shared, nonce-serialized transaction sender.
+	// This solver process owns one signer and SDK transaction manager.
 	txMetrics, err := txmanager.NewMetrics(prometheus.WrapRegistererWithPrefix("solver_bot_", metrics.Registerer()))
 	if err != nil {
 		return err
@@ -158,8 +157,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	runCtx, reportFatal := context.WithCancelCause(ctx)
 	defer reportFatal(nil)
 
-	// Build every configured solver. Transaction-sending solvers share the single nonce-serialized
-	// txManager so they never race on nonces.
+	// Build the configured integration workers using this process's signer and transaction manager.
 	deps := solver.Deps{
 		Chain: chainClient, TxManager: txm, Signer: sgnr, Log: log, Metrics: metrics,
 		ReportFatal: reportFatal,
@@ -216,7 +214,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		}()
 	}
 
-	// Run all solvers concurrently. The first fatal error cancels the rest; ctx cancellation is a
+	// Run integration workers concurrently. The first fatal error cancels the rest; ctx cancellation is a
 	// clean shutdown (solver.Run maps context.Canceled to nil).
 	var shutdownPreparationTimeout time.Duration
 	for _, slv := range solvers {

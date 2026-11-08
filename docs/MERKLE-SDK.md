@@ -2,8 +2,8 @@
 
 The `merkle` solver consumes the independently versioned
 `github.com/symbioticfi/merkle-executor/sdk` module pinned in go.mod.
-The current pin is `01bef7b4b6b3c84ded61efc97ddb73cb2e2ac292`
-(`v0.0.0-20261108170917-01bef7b4b6b3`).
+The current pin is `03ae399f73fd55d590cd3d4f5e6d90ff30ea52fe`
+(`v0.0.0-20261108175136-03ae399f73fd`).
 The SDK implements recipe/tree/proof/role checks,
 pinned runtime assembly, simulation, canonical receipts and RAM settlement tasks.
 It also exposes opt-in off-chain providers, RPC, signing and the shared transaction
@@ -15,7 +15,7 @@ process environment.
 calls and EIP-7702 batches across executors. The SDK detects delegation, simulates
 the complete plan and retains detailed construction results. The host submits the
 prepared transaction without another simulation. Signed transactions retain their exact
-identity and shared-sender ownership through in-process retries. All batch members
+identity and process-local transaction ownership through in-process retries. All batch members
 receive the same canonical receipt before settlement advances. At the recipe layer,
 `DiscoverBatch` and `ValidatePreparedBatch` serve both one executor and many.
 Generic planning and external RFQ admission simulate within the SDK's default
@@ -23,8 +23,8 @@ Generic planning and external RFQ admission simulate within the SDK's default
 
 Awarded LiquidLane connector orders run in the separate [`rfq-merkle` solver](RFQ-MERKLE.md).
 Its RecipeExecutor caller is the RFQ Executor contract, so it must not be included in
-`merkle.strategies`, whose caller is the shared EOA. These integrations share the SDK
-and transaction manager; their liquidity and scheduling are independent.
+`merkle.strategies`, whose caller is the process EOA. These integrations use the common SDK; workers configured
+in one process use its transaction manager. Their liquidity and scheduling remain integration-owned.
 `internal/merklehost.Curator` supplies their shared permission-service settings and
 redirect-rejecting HTTP transport; each solver keeps its transport timeout.
 
@@ -35,8 +35,8 @@ canonical snapshot. It does not scan historical block ranges. Generic, RFQ and
 3F hosts use their existing shared chain reader; no recipe indexer URL is required.
 Permission data still uses the curator service.
 
-All transaction integrations use one SDK `transaction.Manager` and signer. The
-host maps YAML, supplies RPC/signing dependencies and metrics, then explicitly
+Each solver process has its own signer and SDK `transaction.Manager`. Its integration workers
+use that manager. The host maps YAML, supplies RPC/signing dependencies and metrics, then explicitly
 initializes, starts and drains that manager. Merkle keepers use
 `manager.Sender(name)`; native integrations use its rich send APIs. The SDK owns
 nonce admission, fee policy, signing, replacements and canonical receipt checks.
@@ -44,7 +44,7 @@ Signed originals and replacements are retained in its single RAM lifecycle
 before broadcast. Keeper ownership survives ambiguous outcomes until a canonical
 owned result. There is no host transaction engine or sender bridge.
 
-Add this solver alongside the existing solvers in the normal YAML file:
+Select this integration in the solver process YAML file:
 
 ```yaml
 solvers:
@@ -89,14 +89,14 @@ configuration fingerprint, saved plan or restart recovery. Process exit loses
 transaction, order and reservation tracking while external work may continue.
 Settle existing work before migration and use one active process per signer.
 
-The shared manager checks fresh sender funding against final maximum gas cost
+The process manager checks fresh sender funding against final maximum gas cost
 plus value before signing. An initial funding failure captures no signed attempt
 and releases the Merkle reservation through the existing unsigned-failure path.
 Funding changes after a broadcast do not release signed ownership; a failed fee
 replacement keeps the earlier signed identity.
 
 The regular chain/signer/txManager settings still apply. Send mode requires the
-shared signer to match the on-chain executor caller; the executor must hold the
+process signer to match the on-chain executor caller; the executor must hold the
 required leaf roles. Startup reads account and caller together at one pinned block,
 deduplicates executors and closes that pin before accepting the identities.
 
@@ -159,7 +159,7 @@ response-body I/O failures follow ordinary read fallback.
 
 `make test-merkle-sdk-anvil` exercises the SDK manager through host signing and
 public sender APIs on a local chain. It checks signed identity capture, ambiguous
-submission, canonical receipts, replacements and shared-signer fencing. CI runs
+submission, canonical receipts, replacements and retained-work admission. CI runs
 it in the existing Foundry-equipped integration job.
 
 Read-dependent numeric values are resolved in one same-address code-override lens

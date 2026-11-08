@@ -250,8 +250,9 @@ The generic HTTP chain transport records bounded logical requests and endpoint a
 role, method, ordinal endpoint, and outcome; configured URLs and error strings never become labels.
 `solver_bot_solver_info{solver}` exposes bounded config-time membership for fleet joins.
 
-A process is one execution lane: one chain client (primary/fallback reads and optional private write endpoint), one signer, and one nonce-serialized txmanager shared by its configured solvers. Different
-signer/RPC tuples run as separate processes with disjoint solver subsets and unique Prometheus `instance`
+A solver process owns one chain client (primary/fallback reads and optional private write endpoint),
+one configured signer and one SDK transaction manager. Its configured integration workers use that
+process lane. Separate processes are configured with their own signers and unique Prometheus `instance`
 (or deployment-supplied `lane`) target labels. Committed dashboards use the standard Kubernetes `pod` target
 label and query namespace/pod options from Prometheus rather than embedding deployment names. Application metrics do not carry URLs or deployment names.
 The [shared manager ownership contract](TXMANAGER-PLAN.md#1-ownership-and-admission) serializes local
@@ -260,8 +261,8 @@ unconsumed nonce, including after restart. Accepted/transport-uncertain abandonm
 for at most `pendingTimeoutMs`; fresh work discards it if its required bump cannot fit the global fee
 ceiling. A lower request ceiling skips the hint for that send without discarding or renewing it, so
 later affordable work retains the known replacement floor until its original expiry.
-Rejected initial fees neither create nor ratchet that hint. Several processes can share the EOA, but nonces and off-chain commitments are not allocated atomically across processes; see the
-[replica plan](REPLICA-PLAN.md).
+Rejected initial fees neither create nor ratchet that hint. The service trusts the per-process signer configuration and does not coordinate external commitments
+between processes; see [process ownership](TXMANAGER-PLAN.md#1-ownership-and-admission).
 
 The manager abandons tracking at the pending timeout, request deadline or terminal business-status check
 without sending a cancellation transaction. Execution remains unknown. RFQ owns the retry policy: backend
@@ -343,7 +344,7 @@ Self-contained state-driven recipes use the SDK's automatic atomic batching;
 external providers prepare distinct inputs for each execution. The host supplies
 its existing code-override transport and pins the same SDK as the standalone
 executor, without a second loop or batching policy. `PrepareExecution` returns one
-plan for direct calls or cross-executor batches, detecting the shared signer's
+plan for direct calls or cross-executor batches, detecting the process signer's
 EIP-7702 delegation. Submission does not repeat preparation simulation. The 3F
 lease check closes preparation; signed retries do not repeat it. One RAM execution
 holds every member until its canonical receipt is delivered. Configured executor order

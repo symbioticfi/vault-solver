@@ -1,9 +1,8 @@
 # Vault Solver
 
-A Go service that monitors a configured selection of [Symbiotic](https://symbiotic.fi) vaults and
-runs a pluggable **solver** against them. A solver is a self-contained integration with an external
-protocol that sources, prices, or routes liquidity on top of a Symbiotic vault adapter; the bot
-handles discovery, pricing/signing, on-chain reads, reconciliation, and settlement for it.
+A Go service that monitors configured [Symbiotic](https://symbiotic.fi) vaults and runs integration
+workers that source, price or route liquidity. A solver is one process with its own signer and
+transaction manager. Its workers handle protocol discovery, pricing, authorization and reconciliation.
 
 The framework is **solver-agnostic**: each integration lives in its own package, registers itself,
 and is selected by config — adding one never touches the generic engine. The available integrations
@@ -18,9 +17,8 @@ are listed under [Solvers](#solvers).
 - **`internal/solver`** — generic `Solver` interface, registry, and engine.
 - **`internal/solvers/<name>/`** — one self-contained package per integration; all protocol-specific
   logic lives here.
-- **`internal/{config,chain,signer,txmanager}`** — solver-agnostic infra: two-stage config, vault /
-  Multicall3 reads, a pluggable signer, and a nonce-serialized transaction broadcaster that shares
-  one unresolved signed lifecycle across solvers.
+- **`internal/{config,chain,signer}`** and the SDK `transaction` package — integration-agnostic
+  configuration, vault / Multicall3 reads, signing and the common transaction lifecycle.
 - **`api/`** — committed codegen: contract `bindings/` (abigen) and protocol API clients, each
   refreshable from upstream.
 
@@ -29,19 +27,15 @@ the relevant protocol API on each tick; no database.
 
 ## Solvers
 
-Solvers are listed in config under `solvers:` — one or more, **at most one entry per solver type**.
-Every solver shares the chain client and signer. Transaction-sending solvers also share the single
-nonce-serialized `txManager`, so multiple solvers within one process never race on nonces. Solvers whose
-settlement is submitted externally do not start it. Each entry's `config` block is typed and validated
-by its own solver. Adding a solver touches **no** framework code — see the recipe in
-[`CLAUDE.md`](./CLAUDE.md).
+A solver is one process with its own configured signer, chain client and SDK transaction manager.
+The `solvers:` list selects its integration workers — one or more, **at most one entry per integration type**.
+Workers use that process's dependencies; each worker decodes and validates its own `config` block.
+Workers whose settlement is submitted externally do not start a transaction manager. Adding an
+integration touches **no** framework code — see the recipe in [`CLAUDE.md`](./CLAUDE.md).
 
-Sharing is deliberately process-scoped. Deploy solvers that use a different signer, read-RPC set, or private
-write endpoint as a separate process with its own config subset and txmanager. Assign each scrape target a
-unique Prometheus `instance` (and optionally a stable `lane` target label). The transaction manager always
-reads the latest mined account nonce before every new send, including when
-[independent processes use the same EOA](#independent-processes-with-the-same-eoa). They can compete at
-the same nonce; nonce handling does not coordinate their liquidity or off-chain commitments.
+Each solver process is configured with its own signer. This is an operator configuration assumption;
+the service does not coordinate keys across processes. Assign each scrape target a unique Prometheus
+`instance` (and optionally a stable `lane` target label). See [process ownership](docs/TXMANAGER-PLAN.md#1-ownership-and-admission).
 
 | `solver.name` | Integration | Docs | Example config |
 |---|---|---|---|
@@ -461,10 +455,10 @@ how liquidity is chosen within that source set.
 This is the seam for customizing a solver without forking. Contract and trust model:
 [`docs/strategy-plan.md`](docs/strategy-plan.md).
 
-The shared SDK `transaction.Manager` serializes transaction-sending solvers on one EOA.
-The host supplies configuration, signing/RPC dependencies and telemetry, then
-explicitly starts and drains it; every native and Merkle integration uses that
-same implementation and nonce lane. While a transaction is queued
+Each solver process uses the common SDK `transaction.Manager` for its signer.
+The host supplies configuration, signing/RPC dependencies and telemetry, then explicitly starts and
+drains that manager. Native and Merkle workers use the same implementation; workers configured
+in one process use its one nonce lane. While a transaction is queued
 or active, UniswapX declines new quotes, LI.FI retires standing curves, and 3F stops new offers;
 reconciliation continues. RFQ keeps quoting and accounts for pending fills through reservations; it stops
 only while the nonce lane is unavailable. Pending calls receive ordinary fee bumps at the same nonce.
@@ -518,104 +512,20 @@ Defaults, fee headroom, request/result semantics, nonce recovery and internal ow
 in the [transaction manager plan](docs/TXMANAGER-PLAN.md). Integration-specific deadline and capacity
 rules remain in each solver's plan.
 
-### Independent processes with the same EOA
+### Solver processes
 
-Run, for example, three independent processes with the same existing signer and solver config.
-Canonical nonce reconciliation is always active for transaction-manager users, including a single
-process. The processes do not know each other's identities or count and require no database, shared
-writable file, leader or coordinator. Each actively tracks one signed lifecycle locally. The chain
-determines which transaction consumed a nonce; it does
-not reserve a nonce for a process, so concurrent sends and fee replacements can compete.
+Configure each solver process with its own signer and complete YAML configuration, including its
+chain routing, integration workers, confirmation depth and fee ceiling. The SDK serializes accepted
+transactions for that process and checks current mined nonce state before fresh sends. It retains
+signed work in RAM through ambiguous outcomes; restart loses that tracking.
 
-Keep the existing full YAML config and select its confirmation depth and fee ceiling:
+The common transaction lifecycle does not coordinate liquidity reservations, offer budgets or
+external orders between processes. Integrations own order and claim discovery, authorization,
+capacity, deadlines and reconciliation. The SDK owns transaction admission, signing, replacements,
+canonical receipts and RAM transaction ownership for both vault-solver and merkle-executor.
 
-```yaml
-txManager:
-  confirmations: 2
-  maxFeeGwei: 50 # choose a finite positive ceiling for your deployment
-  # retain the existing timeout and horizon settings
-```
-
-Each process reads `eth_getTransactionCount(address, "latest")` from the write endpoint before preparing
-each new request, then keeps that nonce through estimation, the final status check and signing. A sibling
-fill mined during preparation cannot move this request's calldata to the next nonce. Fresh business work
-uses the next unconsumed nonce, even after
-a restart and even when a private relay counts an expired call as pending. The account advances to the
-next nonce after a transaction is mined; fresh requests do not queue higher nonces behind unmined work.
-Use a write RPC that serves current mined account state. Private pending visibility is not required
-for nonce selection.
-After an owned receipt reaches its requested canonical confirmation depth, the process remembers the
-next nonce as a local minimum. A temporarily lagging write RPC cannot make it reuse that confirmed nonce;
-successful and reverted receipts both consume it. The minimum resets on process restart.
-Sends remain serialized locally. There is no database, shared file, leader election, replica identity,
-or feature flag.
-
-Two replicas can still select the same nonce. An initial `nonce too low` or
-`replacement transaction underpriced` response returns `nonce_conflict` and releases the local lane
-immediately. Rejected initial fees do not create or raise a remembered fee floor. After the nonce
-cooldown, the next request reads mined state and fresh market fees again. The manager does not cancel
-the competing transaction or automatically replay the old calldata at a new nonce. Solvers recheck protocol/backend
-state before retrying an order. RFQ and UniswapX use their polling retries; 3F rebuilds from its next
-redemption scan; LI.FI immediately rechecks on-chain status and retries eligible orders through its
-deadline-bounded timer queue without requiring redelivery or reconnect.
-
-An underpriced response starts a cooldown for that nonce across all fresh local requests, including
-other queued orders. The manager waits up to `horizon.blockTimeMs` (12 seconds by default), checking mined
-state at its polling cadence, and resumes immediately when the account nonce changes. The request
-deadline and manager context bound this wait. An underpriced replacement of an owned transaction
-abandons tracking at Info for protocol reconciliation. It retains signed hashes and the previous
-accepted or transport-uncertain fee hint, without escalating from the rejected replacement's fees.
-An abandoned call's fee hint lasts at most `pendingTimeoutMs` after it is remembered. Fresh sends and
-profitability quotes discard it sooner if its required bump cannot fit the global ceiling, then use
-fresh market fees within their ceilings. A request with a lower fee ceiling skips the hint for that
-send and preserves its original expiry, so a later affordable request can still replace the pending
-call. A dropped obsolete call cannot pin the process to stale fees until restart; a relay that still
-holds a higher-priced call may reject that fresh attempt.
-
-Accepted or transport-uncertain broadcasts keep their exact signed hashes and ordinary receipt,
-confirmation and fee-replacement policy. Abandonment returns an unknown execution result; solvers
-reconcile business state before retrying. Before replacement, a higher mined account nonce
-stops further broadcasts. If all owned hashes are absent, the manager can return `nonce_consumed` without
-a receipt. Neither nonce outcome proves that our order executed or that another replica won.
-
-Reorg checks run while a transaction is being confirmed. Completed RFQ and UniswapX orders use their
-existing terminal records and deduplication caches; there is no completed-order watcher or automatic
-reopening after a later reorg.
-
-The bot sends no cancellation transactions. Recovery requires a fresh eligible business request;
-until then the old call may remain pending. Restart loses signed hashes and fee hints, but fresh work
-still targets the lowest unconsumed nonce and uses fresh market fees. Rejected bids do not progressively
-discover an unknown pending call's fee floor. It can execute once fresh fees meet the relay's replacement
-policy, the old call is dropped, or the account nonce advances. An unknown pending call's fees may exceed
-an order's budget or the global ceiling; bounded solver deadlines can also expire before a replacement is accepted. Replica contention can increase fees and
-does not guarantee ordering or fairness. RFQ retry limits use `maxNonceRetries`.
-
-To start three containers from one existing operator config, save it as
-`config/replicas.local.yaml` and supply its secret env vars in the existing
-gitignored `.env`. The same file and signer are passed to all three containers. Container names and
-host ports below identify deployment instances only; they are not application coordination settings.
-
-```bash
-docker build -f deploy/Dockerfile -t vault-solver:local .
-for solver_instance in 1 2 3; do
-  docker run -d --name "vault-solver-${solver_instance}" \
-    --restart unless-stopped --stop-timeout 420 \
-    --env-file .env \
-    --mount "type=bind,src=$PWD/config/replicas.local.yaml,dst=/etc/vault-solver/config.yaml,readonly" \
-    --publish "127.0.0.1:$((9090 + solver_instance)):9090" \
-    vault-solver:local
-done
-```
-
-Increase the stop timeout if the existing config needs a longer solver/transaction drain. Existing
-quote-server and upstream routing remain operator configuration; this example exposes each process's
-observability listener and adds no leader or request router. Assign distinct scrape target labels.
-
-This nonce handling applies to 3F, RFQ, LI.FI and UniswapX. It does not make their
-quote caches, reservations, offer budgets or exclusive-order obligations global. Concurrent off-chain
-commitments can exceed the assumptions of a single process; a globally coordinated liquidity book is
-unsupported. OEV settlement is submitted externally and receives no new replication guarantee from this
-transaction manager. See the [replica plan](docs/REPLICA-PLAN.md) and each solver's plan for these limits.
+See [process ownership](docs/TXMANAGER-PLAN.md#1-ownership-and-admission) and each integration's plan. Orchestrator shutdown grace
+must cover worker preparation/drain followed by transaction-manager shutdown.
 
 For liquidity commitments, the built-in strategies apply these limits:
 
@@ -700,7 +610,7 @@ does not detect arbitrary secrets outside URLs.
 The observability listener (default `:9090`) serves `/metrics`, `/healthz`, and `/readyz`. No extra
 config is required for the collectors below. `/readyz` fails before startup completes and during
 shutdown. Pending transactions and nonce collisions do not take quote servers out of rotation. During graceful shutdown readiness
-drops first, while liveness and metrics remain available until the shared transaction manager finishes its
+drops first, while liveness and metrics remain available until the process transaction manager finishes its
 bounded drain.
 
 ### OpenTelemetry tracing
@@ -1058,7 +968,7 @@ modern Go 1.27 style, the required test/lint/format gate, and secure-coding rule
 [`CLAUDE.md`](./CLAUDE.md) (`AGENTS.md` is a symlink to it). Every change must keep
 `make format && make test && make lint` green and unit-test new logic.
 
-Merkle recipes run through the shared sender using the independently versioned [Merkle SDK integration](docs/MERKLE-SDK.md). Its `config.strategies` is a list of full executor addresses, for example `strategies: ["0x0000000000000000000000000000000000000010"]`. Each lowercase address is the strategy identity; labels and strategy objects are rejected.
+Merkle recipes run through the process transaction manager using the independently versioned [Merkle SDK integration](docs/MERKLE-SDK.md). Its `config.strategies` is a list of full executor addresses, for example `strategies: ["0x0000000000000000000000000000000000000010"]`. Each lowercase address is the strategy identity; labels and strategy objects are rejected.
 
 The SDK is public and pinned in `go.mod`; normal Go and Docker builds download it
 without a GitHub token or a local merkle-executor checkout.
@@ -1068,9 +978,9 @@ of 16,777,216, bounded by the current block gas limit.
 Self-contained recipes automatically batch useful state-driven executions through
 that SDK. External quotes and proofs are prepared separately for each execution.
 The executor list sets processing priority; spending recipes must reserve funds
-needed for withdrawals. A compatible EIP-7702 shared signer also batches different
+needed for withdrawals. A compatible EIP-7702 process signer also batches different
 executors in that order. Fresh plans submit without a second simulation. Signed attempts retain their exact
-identity through in-process retries, using the shared sender. Pending transactions,
+identity through in-process retries, using the process transaction manager. Pending transactions,
 orders and reservations live only in RAM; restart loses tracking while external
 work may continue. Remove `stateDir` from Merkle configuration; strict decoding
 rejects it. Settle existing work before upgrading and use one process per signer.
@@ -1101,8 +1011,8 @@ described in [the 3F Merkle runbook](docs/THREEF-MERKLE.md). The generic `merkle
 solver rejects the `threeF` field. The policy and executor must use the same maker account.
 Offers use that policy's live budgets, the account's idle cash and 3F auction asset data,
 without fetching Curator permissions. Curator supplies permission data and proofs
-only for mint execution. The executor uses the shared signer; its recipe must support
-the enabled policy pairs and supplies request/principal/yield inputs; inactive groups receive zero principal. Gates and fixed funding calls remain curator-owned. One RAM workflow and shared sender serialize all markets. Automatic offers reserve existing commitments
+only for mint execution. The executor uses the process signer; its recipe must support
+the enabled policy pairs and supplies request/principal/yield inputs; inactive groups receive zero principal. Gates and fixed funding calls remain curator-owned. One RAM workflow and the process transaction manager serialize all markets. Automatic offers reserve existing commitments
 and use account idle cash; simulation never submits or cancels API offers.
 Both 3F solvers honor the on-chain minimum and the auction APR bounds. Since the API
 does not expose the lowest ramp APR, they use a quarter of the current `maxRate` as

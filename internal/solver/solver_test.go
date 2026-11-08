@@ -98,7 +98,7 @@ func TestRunTreatsCancellationAsClean(t *testing.T) {
 	}
 }
 
-// With several solvers configured each gets its own stamped logger, and Run is where that logger,
+// With several integration workers each gets its own stamped logger, and Run is where that logger,
 // named after the solver, joins the context every line below it is logged through.
 func TestRunCarriesTheSolverLoggerInContext(t *testing.T) {
 	var lines []string
