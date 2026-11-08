@@ -6,7 +6,6 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -24,10 +23,10 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/multicall3"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/solver"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 func TestFactoryPlannerUsesRecipeReadinessIndependentlyOfRequestID(t *testing.T) {
@@ -66,8 +65,11 @@ func TestFactoryPlannerUsesRecipeReadinessIndependentlyOfRequestID(t *testing.T)
 					t.Fatalf("host lost the unknown authorized action: %v, %v", targets, err)
 				}
 			}
-			if host.simulations.Load() == 0 {
-				t.Fatal("readiness bypassed the original executor simulation")
+			if host.simulations.Load()+host.batchProbes.Load() == 0 {
+				t.Fatal("readiness bypassed execution of the original runtime")
+			}
+			if !tc.wantIdle && !tc.wantError && host.simulations.Load() == 0 {
+				t.Fatal("admission bypassed the exact original executor simulation")
 			}
 		})
 	}
@@ -80,13 +82,13 @@ func TestFactoryPlannerRebuildsUnsignedRecipeAgainstCurrentState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := host.simulations.Load()
+	before := host.simulations.Load() + host.batchProbes.Load()
 	host.ready.Store(0)
 	if _, err := planner.PrepareExecution(t.Context(), host.solver.keeper.Strategies); !errors.Is(err, provider.ErrNotReady) {
 		t.Fatalf("unsigned admission accepted a recipe whose gate closed: %v", err)
 	}
-	if host.simulations.Load() <= before {
-		t.Fatal("unsigned readiness recheck skipped the original executor")
+	if host.simulations.Load()+host.batchProbes.Load() <= before {
+		t.Fatal("unsigned readiness recheck skipped the original runtime")
 	}
 }
 
@@ -290,8 +292,16 @@ func newGenericRecipeHost(t *testing.T, ready, requestID uint64, simulation stri
 						return
 					}
 					calls := args[1].([][]byte)
+					if simulation == "revert" || simulation == "check failed" {
+						response["error"] = map[string]any{"code": 3, "message": "execution reverted", "data": "0x"}
+						break
+					}
 					results := make([][]byte, len(calls))
 					for i := range calls {
+						if simulation == "malformed" {
+							results[i] = []byte{1}
+							continue
+						}
 						remaining := uint64(0)
 						if host.ready.Load() > uint64(i) {
 							remaining = host.ready.Load() - uint64(i)
@@ -328,15 +338,16 @@ func newGenericRecipeHost(t *testing.T, ready, requestID uint64, simulation stri
 	}
 	t.Cleanup(client.Close)
 	owner := factorySigner{address: caller}
-	manager := txmanager.New(client, owner, big.NewInt(1), txmanager.Config{}, logr.Discard())
+	manager, err := txmanager.New(client, owner, big.NewInt(1), txmanager.Config{}, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
 	raw := strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", curator.URL+"/api/v1", 1)
-	raw = strings.Replace(raw, "state/merkle", filepath.Join(t.TempDir(), "state"), 1)
-	built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, TxManager: manager, Log: logr.Discard()})
+	built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, MerkleTxManager: func() (*txmanager.Manager, error) { return manager, nil }, Log: logr.Discard()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	host.solver = built.(*Solver)
-	t.Cleanup(func() { _ = host.solver.Close() })
 	return host
 }
 

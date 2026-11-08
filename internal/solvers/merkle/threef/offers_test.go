@@ -2,16 +2,17 @@ package threef
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"math/big"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 	"github.com/symbioticfi/vault-solver/api/threef"
 )
 
@@ -22,6 +23,7 @@ type fakeClient struct {
 	cancelled              []uint64
 	identityErr, createErr error
 	beforeCreate           func(threef.CreateOfferDto)
+	createdIDs             map[string]float32
 }
 
 func (f *fakeClient) Auctions(context.Context) ([]threef.AuctionDto, error) { return f.auctions, nil }
@@ -34,8 +36,17 @@ func (f *fakeClient) Create(_ context.Context, offer threef.CreateOfferDto) (*th
 	if f.beforeCreate != nil {
 		f.beforeCreate(offer)
 	}
+	if f.createdIDs == nil {
+		f.createdIDs = make(map[string]float32)
+	}
+	key := fmt.Sprintf("%v/%s", offer.AuctionId, offer.Nonce)
+	id, exists := f.createdIDs[key]
+	if !exists {
+		id = float32(15 + len(f.createdIDs))
+		f.createdIDs[key] = id
+	}
 	f.created = append(f.created, offer)
-	return &threef.CreateOfferResponseDto{Id: 15}, f.createErr
+	return &threef.CreateOfferResponseDto{Id: id}, f.createErr
 }
 func (f *fakeClient) Cancel(_ context.Context, id uint64) (*threef.CancelOfferResponseDto, error) {
 	f.cancelled = append(f.cancelled, id)
@@ -60,17 +71,46 @@ func testOffer(m offerMarket, auctionID float32, status string, amount string) t
 func testBot(t *testing.T) (*offerBot, *fakeClient, offerMarket) {
 	t.Helper()
 	m := testMarket()
-	store, err := state.Open(t.TempDir())
+	client := &fakeClient{auctions: []threef.AuctionDto{testAuction(m, 1, common.HexToAddress("0x1000000000000000000000000000000000000001"))}}
+	return &offerBot{Client: client, Send: true, Now: func() time.Time { return time.Unix(1900000000, 0) }}, client, m
+}
+
+func sameOffer(t *testing.T, first, second threef.CreateOfferDto) bool {
+	t.Helper()
+	a, err := json.Marshal(first)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	client := &fakeClient{auctions: []threef.AuctionDto{testAuction(m, 1, common.HexToAddress("0x1000000000000000000000000000000000000001"))}}
-	return &offerBot{Client: client, Store: store, Send: true, Now: func() time.Time { return time.Unix(1900000000, 0) }}, client, m
+	b, err := json.Marshal(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(a) == string(b)
+}
+
+func firstRetainedIntent(bot *offerBot) (intent, bool) {
+	if len(bot.pending) == 0 {
+		return intent{}, false
+	}
+	return *bot.pending[0], true
+}
+
+func TestTickCreatesStorageCompatibleNonce(t *testing.T) {
+	bot, client, market := testBot(t)
+	if err := bot.Tick(t.Context(), market, client.auctions); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.created) != 1 {
+		t.Fatalf("created %d offers, want one", len(client.created))
+	}
+	nonce, ok := new(big.Int).SetString(client.created[0].Nonce, 10)
+	if !ok || nonce.Sign() <= 0 || !nonce.IsInt64() {
+		t.Fatalf("offer nonce must fit positive int64: %q", client.created[0].Nonce)
+	}
+	saved, found := firstRetainedIntent(bot)
+	if !found || saved.Offer.Nonce != client.created[0].Nonce {
+		t.Fatalf("submitted nonce not preserved in RAM: found=%v", found)
+	}
 }
 
 func TestTickRespectsPolicyAndAuctionMinimum(t *testing.T) {
@@ -114,13 +154,12 @@ func TestTickRespectsPolicyAndAuctionMinimum(t *testing.T) {
 	}
 }
 
-func TestTickSizesExactUnsignedPushAndJournalsBeforePost(t *testing.T) {
+func TestTickSizesExactUnsignedPushAndRetainsBeforePost(t *testing.T) {
 	b, client, m := testBot(t)
 	client.beforeCreate = func(offer threef.CreateOfferDto) {
-		var saved intent
-		found, err := b.Store.Load(journalKey(m), &saved)
-		if err != nil || !found || saved.Offer.Nonce != offer.Nonce {
-			t.Fatalf("POST without durable exact intent: %v %v", found, err)
+		saved, found := firstRetainedIntent(b)
+		if !found || saved.Offer.Nonce != offer.Nonce {
+			t.Fatalf("POST without retained exact intent: %v", found)
 		}
 	}
 	if err := b.Tick(t.Context(), m, client.auctions); err != nil {
@@ -157,49 +196,154 @@ func TestTickReservesOtherRequestsAndTargetsBeforeSizing(t *testing.T) {
 	}
 }
 
-func TestTickAmbiguousPostSurvivesRestartAndExpirationWithoutRetry(t *testing.T) {
+func TestTickAmbiguousPostRetriesExactIntentInProcess(t *testing.T) {
 	b, client, m := testBot(t)
-	directory := t.TempDir()
-	store, err := state.Open(directory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	b.Store = store
 	client.createErr = errors.New("timeout after sending")
 	if err := b.Tick(t.Context(), m, client.auctions); err == nil {
 		t.Fatal("expected uncertain POST error")
 	}
-	if err := store.Close(); err != nil {
+	b.Now = func() time.Time { return time.Unix(2000000000, 0) }
+	client.createErr = nil
+	if err := b.Tick(t.Context(), m, client.auctions); err != nil {
 		t.Fatal(err)
 	}
-	restored, err := state.Open(directory)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = restored.Close() })
-	b = &offerBot{Client: client, Store: restored, Send: true, Now: func() time.Time { return time.Unix(2000000000, 0) }}
-	if err := b.Tick(t.Context(), m, client.auctions); err == nil || !strings.Contains(err.Error(), "unresolved") {
-		t.Fatalf("uncertain intent not retained: %v", err)
-	}
-	if len(client.created) != 1 {
-		t.Fatalf("ambiguous offer resubmitted %d times", len(client.created))
+	if len(client.created) != 2 || !sameOffer(t, client.created[0], client.created[1]) {
+		t.Fatalf("retry changed the original request: %+v", client.created)
 	}
 	created := client.created[0]
 	offer := testOffer(m, 1, "AWAITING_MINT", created.Amount)
+	offer.Id = 15
 	offer.Nonce, offer.ExpectedReturn, offer.Expiration = created.Nonce, created.ExpectedReturn, created.Expiration
 	client.offers = []threef.OfferDto{offer}
 	if err := b.Tick(t.Context(), m, client.auctions); err != nil {
 		t.Fatal(err)
 	}
-	if len(client.created) != 1 || len(client.cancelled) != 0 {
-		t.Fatal("accepted offer changed on restart")
+	if len(client.created) != 2 || len(client.cancelled) != 0 {
+		t.Fatal("accepted offer changed in process")
+	}
+}
+
+func TestTickRetainsUncertain64BitNonce(t *testing.T) {
+	bot, client, market := testBot(t)
+	nonce := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 64), big.NewInt(1)).String()
+	offer := *threef.NewCreateOfferDto(1, strings.ToLower(client.Broker().Hex()), "500000", "95", nonce, "1900000300", false)
+	pending := newIntent(market, common.HexToAddress(client.auctions[0].RequestId), offer)
+	bot.pending = []*intent{pending}
+	client.createErr = errors.New("uncertain submission")
+	if err := bot.Tick(t.Context(), market, client.auctions); err == nil {
+		t.Fatal("missing submission error")
+	}
+	saved, found := firstRetainedIntent(bot)
+	if !found || saved.Offer.Nonce != nonce {
+		t.Fatalf("uncertain 64-bit nonce was replaced: found=%v", found)
+	}
+}
+
+func TestTickRepeatedFailureKeepsOriginalIntent(t *testing.T) {
+	bot, client, market := testBot(t)
+	client.createErr = errors.New("HTTP 500")
+	for range 3 {
+		if err := bot.Tick(t.Context(), market, client.auctions); err == nil {
+			t.Fatal("missing POST failure")
+		}
+	}
+	if len(client.created) != 3 {
+		t.Fatalf("got %d POSTs, want three identical attempts", len(client.created))
+	}
+	for _, offer := range client.created[1:] {
+		if !sameOffer(t, offer, client.created[0]) {
+			t.Fatal("retry changed the offer identity or terms")
+		}
+	}
+}
+
+func TestTickDoesNotRetryConfirmedOfferMissingFromInventory(t *testing.T) {
+	bot, client, market := testBot(t)
+	if err := bot.Tick(t.Context(), market, client.auctions); err != nil {
+		t.Fatal(err)
+	}
+	if err := bot.Tick(t.Context(), market, client.auctions); err != nil {
+		t.Fatal(err)
+	}
+	if len(client.created) != 1 {
+		t.Fatal("confirmed offer was reposted")
+	}
+}
+
+func TestTickDoesNotRetryOutsideCurrentPolicy(t *testing.T) {
+	for _, change := range []string{"minimum", "budget", "cash", "eligibility"} {
+		t.Run(change, func(t *testing.T) {
+			bot, client, market := testBot(t)
+			client.createErr = errors.New("lost response")
+			if err := bot.Tick(t.Context(), market, client.auctions); err == nil {
+				t.Fatal("missing initial POST failure")
+			}
+			switch change {
+			case "minimum":
+				market.MinimumYield1e8 = big.NewInt(99_000_000)
+			case "budget":
+				market.Budget = new(big.Int)
+			case "cash":
+				market.AvailableCash = new(big.Int)
+			case "eligibility":
+				market.EligibleRequests = nil
+			}
+			_ = bot.Tick(t.Context(), market, client.auctions)
+			if len(client.created) != 1 {
+				t.Fatal("retry submitted an offer outside the current policy")
+			}
+		})
+	}
+}
+
+func TestTickOnlyClearsDefiniteInitialRejections(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		initial int
+		retry   bool
+	}{
+		{"initial bad request", 400, false},
+		{"initial forbidden", 403, false},
+		{"ambiguous server error", 500, false},
+		{"ambiguous timeout", 408, false},
+		{"rejected retry after server error", 500, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bot, client, market := testBot(t)
+			client.createErr = &apiStatusError{status: tc.initial, operation: "create offer"}
+			if err := bot.Tick(t.Context(), market, client.auctions); err == nil {
+				t.Fatal("missing rejection")
+			}
+			if tc.retry {
+				client.createErr = &apiStatusError{status: 400, operation: "create offer"}
+				if err := bot.Tick(t.Context(), market, client.auctions); err == nil {
+					t.Fatal("missing retry rejection")
+				}
+			}
+			saved, found := firstRetainedIntent(bot)
+			wantRetained := tc.initial == 500 || tc.initial == 408
+			if found != wantRetained {
+				t.Fatalf("retained=%v, want %v", found, wantRetained)
+			}
+			if found && saved.Offer.Nonce != client.created[0].Nonce {
+				t.Fatal("rejection changed the unresolved offer identity")
+			}
+			if !found {
+				client.createErr = nil
+				if err := bot.Tick(t.Context(), market, client.auctions); err != nil {
+					t.Fatal(err)
+				}
+				if len(client.created) != 2 || client.created[1].Nonce == client.created[0].Nonce {
+					t.Fatal("definite rejection prevented the next offer")
+				}
+			}
+		})
 	}
 }
 
 func TestTickSimulationAndWrongMakerCannotMutate(t *testing.T) {
 	b, client, m := testBot(t)
-	b.Send, b.Store = false, nil
+	b.Send = false
 	client.offers = []threef.OfferDto{testOffer(m, 1, "SUBMITTED", "10000000")}
 	if err := b.Tick(t.Context(), m, client.auctions); err != nil {
 		t.Fatal(err)
@@ -368,7 +512,7 @@ func TestFitsTermsAuctionRateBasis(t *testing.T) {
 	}
 }
 
-func TestTickPreservesJournaledSubmittedOfferForAnotherFundingPair(t *testing.T) {
+func TestTickPreservesRetainedSubmittedOfferForAnotherFundingPair(t *testing.T) {
 	b, c, m := testBot(t)
 	if err := b.Tick(t.Context(), m, c.auctions); err != nil {
 		t.Fatal(err)
@@ -382,7 +526,7 @@ func TestTickPreservesJournaledSubmittedOfferForAnotherFundingPair(t *testing.T)
 		t.Fatal(err)
 	}
 	if len(c.cancelled) != 0 || len(c.created) != 1 {
-		t.Fatal("another funding pair mutated the durable intent")
+		t.Fatal("another funding pair mutated the retained intent")
 	}
 }
 
@@ -403,38 +547,129 @@ func TestTickIgnoresKnownDifferentFundingAsset(t *testing.T) {
 	}
 }
 
-func TestTickRetainsOneLiveBotOriginIntentAcrossAuctions(t *testing.T) {
+func TestTickReservesCapacityAcrossBotAuctions(t *testing.T) {
 	for _, status := range []string{"SUBMITTED", "ACCEPTED", "AWAITING_MINT"} {
 		t.Run(status, func(t *testing.T) {
 			b, c, m := testBot(t)
-			other := common.HexToAddress("0x7000000000000000000000000000000000000007")
+			m.Budget, m.AvailableCash = big.NewInt(550000), big.NewInt(600000)
+			c.auctions = nil
+			for i := range 4 {
+				request := common.BigToAddress(big.NewInt(int64(i + 100)))
+				m.EligibleRequests[request] = true
+				auction := testAuction(m, float32(i+1), request)
+				amount := "200000"
+				auction.AmountRequested = *threef.NewNullableString(&amount)
+				c.auctions = append(c.auctions, auction)
+			}
+			for i, want := range []string{"200000", "200000", "150000"} {
+				if err := b.Tick(t.Context(), m, c.auctions); err != nil {
+					t.Fatal(err)
+				}
+				if len(c.created) != i+1 || c.created[i].Amount != want || c.created[i].AuctionId != float32(i+1) {
+					t.Fatalf("offer %d must use remaining capacity: %+v", i, c.created)
+				}
+				created := c.created[i]
+				row := testOffer(m, created.AuctionId, status, created.Amount)
+				row.Id, row.RequestId = float32(15+i), c.auctions[i].RequestId
+				row.Nonce, row.ExpectedReturn, row.Expiration = created.Nonce, created.ExpectedReturn, created.Expiration
+				c.offers = append(c.offers, row)
+			}
+			if err := b.Tick(t.Context(), m, c.auctions); err != nil {
+				t.Fatal(err)
+			}
+			if len(c.created) != 3 || len(c.cancelled) != 0 {
+				t.Fatalf("fully reserved budget must stop new offers: %+v", c.created)
+			}
+			if len(b.pending) != 3 {
+				t.Fatalf("must retain every live offer: saved=%d", len(b.pending))
+			}
+		})
+	}
+}
+
+func TestTickSharesCashAcrossPairsWithoutCancellingOtherPair(t *testing.T) {
+	for _, differentToken := range []bool{false, true} {
+		t.Run(strconv.FormatBool(differentToken), func(t *testing.T) {
+			b, c, first := testBot(t)
+			first.MaxPrincipal = big.NewInt(400000)
+			if err := b.Tick(t.Context(), first, c.auctions); err != nil {
+				t.Fatal(err)
+			}
+			created := c.created[0]
+			row := testOffer(first, 1, "SUBMITTED", created.Amount)
+			row.Id, row.Nonce, row.ExpectedReturn, row.Expiration = 15, created.Nonce, created.ExpectedReturn, created.Expiration
+			c.offers = []threef.OfferDto{row}
+			second := first
+			second.UnderlyingAsset = common.HexToAddress("0x99")
+			second.Budget, second.AvailableCash, second.MaxPrincipal = big.NewInt(800000), big.NewInt(900000), big.NewInt(800000)
+			if differentToken {
+				second.Asset = common.HexToAddress("0xaa")
+			}
+			request := common.HexToAddress("0xbb")
+			second.EligibleRequests = map[common.Address]bool{request: true}
+			c.auctions = append(c.auctions, testAuction(second, 2, request))
+			if err := b.Tick(t.Context(), second, c.auctions); err != nil {
+				t.Fatal(err)
+			}
+			want := "500000"
+			if differentToken {
+				want = "800000"
+			}
+			if len(c.cancelled) != 0 || len(c.created) != 2 || c.created[1].Amount != want {
+				t.Fatalf("incorrect cross-pair reservations: created=%+v cancelled=%v", c.created, c.cancelled)
+			}
+		})
+	}
+}
+
+func TestTickRetryReservesOtherOffersAndPreservesTheirIntents(t *testing.T) {
+	for _, failure := range []int{400, 500} {
+		t.Run(strconv.Itoa(failure), func(t *testing.T) {
+			b, c, m := testBot(t)
+			m.MaxPrincipal = big.NewInt(400000)
+			other := common.HexToAddress("0x99")
 			m.EligibleRequests[other] = true
 			c.auctions = append(c.auctions, testAuction(m, 2, other))
 			if err := b.Tick(t.Context(), m, c.auctions); err != nil {
 				t.Fatal(err)
 			}
 			created := c.created[0]
-			row := testOffer(m, 1, status, created.Amount)
+			row := testOffer(m, 1, "ACCEPTED", created.Amount)
 			row.Id, row.Nonce, row.ExpectedReturn, row.Expiration = 15, created.Nonce, created.ExpectedReturn, created.Expiration
 			c.offers = []threef.OfferDto{row}
+			c.createErr = &apiStatusError{status: failure, operation: "create offer"}
+			if err := b.Tick(t.Context(), m, c.auctions); err == nil {
+				t.Fatal("missing submission failure")
+			}
+			pending := b.pending
+			want := 1
+			if failure == 500 {
+				want = 2
+			}
+			if len(pending) != want || !sameOffer(t, pending[0].Offer, created) {
+				t.Fatalf("other RAM intent lost on rejection: count=%d", len(pending))
+			}
+			if failure == 400 {
+				return
+			}
+			// Retry must subtract the existing 400000 offer from cash too.
+			m.AvailableCash = big.NewInt(700000)
+			if err := b.Tick(t.Context(), m, c.auctions); err == nil || len(c.created) != 2 {
+				t.Fatal("retried while aggregate commitments exceeded cash")
+			}
+			m.AvailableCash = big.NewInt(900000)
+			c.createErr = nil
 			if err := b.Tick(t.Context(), m, c.auctions); err != nil {
 				t.Fatal(err)
 			}
-			if len(c.created) != 1 || len(c.cancelled) != 0 {
-				t.Fatal("live bot intent was replaced or cancelled")
-			}
-			c.offers[0].Status, c.auctions[0].Status = "SUCCEEDED", "SOLVED"
-			if err := b.Tick(t.Context(), m, c.auctions); err != nil {
-				t.Fatal(err)
-			}
-			if len(c.created) != 2 || c.created[1].AuctionId != 2 {
-				t.Fatal("terminal bot intent prevented the next auction")
+			if len(c.created) != 3 || !sameOffer(t, c.created[1], c.created[2]) {
+				t.Fatal("retry changed the second auction's intent")
 			}
 		})
 	}
 }
 
-func TestTickPreservesOtherRecipeIntentUntilTerminal(t *testing.T) {
+func TestTickReservesOtherRecipeIntentWithoutBlockingNewAuctions(t *testing.T) {
 	for _, status := range []string{"SUBMITTED", "ACCEPTED", "AWAITING_MINT", "PENDING", "unresolved", "SUCCEEDED"} {
 		t.Run(status, func(t *testing.T) {
 			b, c, first := testBot(t)
@@ -456,34 +691,25 @@ func TestTickPreservesOtherRecipeIntentUntilTerminal(t *testing.T) {
 			if status == "SUCCEEDED" {
 				c.auctions[0].Status = "SOLVED"
 			}
-			err := b.Tick(t.Context(), second, c.auctions)
-			if status == "unresolved" {
-				if err == nil || !strings.Contains(err.Error(), "POST outcome unresolved") {
-					t.Fatalf("unresolved intent escaped: %v", err)
-				}
-			} else if err != nil {
+			if err := b.Tick(t.Context(), second, c.auctions); err != nil {
 				t.Fatal(err)
 			}
-			if len(c.cancelled) != 0 {
-				t.Fatal("another recipe cancelled live intent")
+			if len(c.cancelled) != 0 || len(c.created) != 2 {
+				t.Fatal("another recipe blocked new auction or cancelled the original")
 			}
-			want := 1
+			want := "99999" // Shared cash, separate pair budget.
 			if status == "SUCCEEDED" {
-				want = 2
+				want = "800001"
 			}
-			if len(c.created) != want {
-				t.Fatal("another recipe replaced unresolved intent or terminal intent blocked progress")
+			if c.created[1].Amount != want {
+				t.Fatalf("amount = %s, want %s", c.created[1].Amount, want)
 			}
-			var saved intent
-			found, err := b.Store.Load(journalKey(first), &saved)
-			if err != nil || !found {
-				t.Fatal("account journal lost", err)
+			pending := b.pending
+			if status != "SUCCEEDED" && (len(pending) != 2 || pending[0].Executor != first.Executor || pending[0].Offer.Nonce != created.Nonce) {
+				t.Fatal("another recipe rewrote retained intent")
 			}
-			if status != "SUCCEEDED" && (saved.Executor != first.Executor || saved.Offer.Nonce != created.Nonce) {
-				t.Fatal("another recipe rewrote durable intent")
-			}
-			if status == "SUCCEEDED" && saved.Executor != second.Executor {
-				t.Fatal("terminal handoff did not retain new recipe")
+			if status == "SUCCEEDED" && (len(pending) != 1 || pending[0].Executor != second.Executor) {
+				t.Fatal("terminal intent was not released")
 			}
 		})
 	}

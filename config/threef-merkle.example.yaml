@@ -14,7 +14,6 @@ solvers:
   - name: threef-merkle
     config:
       mode: simulate # send enables API offers and on-chain minting
-      stateDir: /persistent/threef-merkle
       executor: "0x0000000000000000000000000000000000000010" # one guarded mint recipe
       policy: ${THREEF_POLICY}
       curator:

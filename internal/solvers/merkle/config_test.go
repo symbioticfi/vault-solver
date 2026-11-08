@@ -6,10 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/common"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
-	"github.com/symbioticfi/vault-solver/internal/merklehost"
-
 	"gopkg.in/yaml.v3"
 )
 
@@ -23,7 +19,6 @@ func configNode(t *testing.T, text string) yaml.Node {
 }
 
 const validConfig = `mode: simulate
-stateDir: state/merkle
 curator:
   url: http://127.0.0.1:1/api/v1
 strategies:
@@ -32,11 +27,12 @@ strategies:
 
 func TestConfigValidation(t *testing.T) {
 	for name, raw := range map[string]string{
+		"removed stateDir":   validConfig + "stateDir: state/merkle\n",
 		"unknown":            validConfig + "unexpected: true\n",
 		"mode":               strings.Replace(validConfig, "mode: simulate", "mode: unsafe", 1),
 		"duration":           validConfig + "pollInterval: -1s\n",
 		"override":           validConfig + "operationTimeout: 1s\n",
-		"missing strategies": "stateDir: state/merkle\ncurator: {url: 'http://127.0.0.1:1/api/v1'}\nstrategies: []\n",
+		"missing strategies": "curator: {url: 'http://127.0.0.1:1/api/v1'}\nstrategies: []\n",
 		"missing curator":    strings.Replace(validConfig, "curator:\n  url: http://127.0.0.1:1/api/v1\n", "", 1),
 		"manual account":     strategyConfig("  - executor: '0x0000000000000000000000000000000000000010'\n    account: '0x0000000000000000000000000000000000000020'\n"),
 		"manual tree":        strategyConfig("  - executor: '0x0000000000000000000000000000000000000010'\n    tree: permissions.json\n"),
@@ -55,41 +51,6 @@ func TestConfigValidation(t *testing.T) {
 	}
 	if cfg.mode != "simulate" || len(cfg.strategies) != 1 || len(cfg.strategies[0].Providers) != 0 || cfg.strategies[0].Config.Account != "" || cfg.strategies[0].Config.Tree != "" {
 		t.Fatalf("wrong SDK derivation workflow: %+v", cfg)
-	}
-}
-
-func TestRevisionBindsDerivedIdentityAndPermissionSource(t *testing.T) {
-	cfg, err := parseConfig(configNode(t, validConfig))
-	if err != nil {
-		t.Fatal(err)
-	}
-	strategy := cfg.strategies[0].Config
-	strategy.Account = "0x0000000000000000000000000000000000000020"
-	caller := common.HexToAddress("0x03")
-	original, err := strategyRevision(strategy, cfg.curator, caller)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, change := range map[string]func(*keeper.Config, *merklehost.Curator, *common.Address){
-		"account": func(s *keeper.Config, _ *merklehost.Curator, _ *common.Address) {
-			s.Account = common.HexToAddress("0x04").Hex()
-		},
-		"caller": func(_ *keeper.Config, _ *merklehost.Curator, c *common.Address) { *c = common.HexToAddress("0x05") },
-		"source": func(_ *keeper.Config, c *merklehost.Curator, _ *common.Address) {
-			c.URL = "http://other.invalid/api/v1"
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			s, c, owner := strategy, cfg.curator, caller
-			change(&s, &c, &owner)
-			revision, err := strategyRevision(s, c, owner)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if revision == original {
-				t.Fatal("changed identity invisible to recovery")
-			}
-		})
 	}
 }
 
@@ -189,30 +150,6 @@ func TestScalarStrategyAddressSchema(t *testing.T) {
 				t.Fatal("invalid strategy accepted")
 			}
 		})
-	}
-}
-
-func TestAddressRevisionIgnoresCaseAndOrder(t *testing.T) {
-	a, err := parseConfig(configNode(t, strategyConfig("  - '0xaBcDeF0000000000000000000000000000000001'\n  - '0x0000000000000000000000000000000000000002'\n")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := parseConfig(configNode(t, strategyConfig("  - '0x0000000000000000000000000000000000000002'\n  - '0xabcdef0000000000000000000000000000000001'\n")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for i, s := range a.strategies {
-		first, err := strategyRevision(s.Config, a.curator, common.HexToAddress("0x03"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		second, err := strategyRevision(b.strategies[1-i].Config, b.curator, common.HexToAddress("0x03"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if first != second {
-			t.Fatal("case/order changed revision")
-		}
 	}
 }
 

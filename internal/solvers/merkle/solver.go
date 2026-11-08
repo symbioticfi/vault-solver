@@ -1,4 +1,4 @@
-// Package merkle hosts the Merkle SDK using vault-solver's existing shared sender.
+// Package merkle hosts the Merkle SDK using vault-solver's process transaction manager.
 package merkle
 
 import (
@@ -11,8 +11,6 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
-	"github.com/symbioticfi/vault-solver/internal/merklesender"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"gopkg.in/yaml.v3"
@@ -25,15 +23,12 @@ func init() { solver.Register(Name, factory) }
 
 type Solver struct {
 	keeper *keeper.Keeper
-	store  *state.Store
 }
 
-func (s *Solver) Name() string            { return Name }
-func (s *Solver) RequiresTxManager() bool { return s.keeper.Mode == "send" }
+func (s *Solver) Name() string                  { return Name }
+func (*Solver) RequiresTxManager() bool         { return false }
+func (s *Solver) RequiresMerkleTxManager() bool { return s.keeper.Mode == "send" }
 
-// Close is called by the host after its shared sender has drained, so persistence
-// callbacks cannot outlive their store. It also handles partial startup failure.
-func (s *Solver) Close() error { return s.store.Close() }
 func (s *Solver) Run(ctx context.Context) error {
 	ticker := time.NewTicker(defaultPollInterval)
 	defer ticker.Stop()
@@ -56,8 +51,12 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	if deps.Chain == nil || deps.Signer == nil || deps.TxManager == nil {
-		return nil, errors.New("merkle requires host chain, signer and shared transaction manager")
+	if deps.Chain == nil || deps.Signer == nil || deps.MerkleTxManager == nil {
+		return nil, errors.New("merkle requires host chain, signer and process transaction manager")
+	}
+	manager, err := deps.MerkleTxManager()
+	if err != nil {
+		return nil, err
 	}
 	// The factory interface has no context; bound the complete startup observation.
 	startup, cancel := context.WithTimeout(context.Background(), defaultOperationTimeout)
@@ -74,7 +73,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		strategy := &cfg.strategies[i]
 		identity := identities[common.HexToAddress(strategy.Config.Executor)]
 		if identity.Caller != deps.Signer.Address() {
-			return nil, errors.New("merkle executor caller differs from the shared signer")
+			return nil, errors.New("merkle executor caller differs from the process signer")
 		}
 		capacity, err := aave.New(deps.Chain)
 		if err != nil {
@@ -82,20 +81,15 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		}
 		strategy.Providers = []keeper.Provider{capacity}
 		strategy.Config.Account = identity.Account.Hex()
-		strategy.Config.Revision, err = strategyRevision(strategy.Config, cfg.curator, deps.Signer.Address())
-		if err != nil {
-			return nil, err
-		}
 	}
 	source, err := cfg.curator.PermissionSource(deps.Chain)
 	if err != nil {
 		return nil, err
 	}
-	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(len(cfg.strategies), recipeCacheBytes), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: deps.TxManager.Confirmations()}
+	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(len(cfg.strategies), recipeCacheBytes), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: manager.Confirmations(), MaxGas: deps.MaxGas}
 	k := &keeper.Keeper{Planner: planner, Strategies: cfg.strategies, Mode: cfg.mode, OperationTimeout: defaultOperationTimeout, Log: deps.Log.WithName(Name)}
-	store, err := merklesender.OpenKeeper(k, cfg.stateDir, deps, Name)
-	if err != nil {
-		return nil, err
+	if cfg.mode == "send" {
+		k.Sender = manager.Sender(Name)
 	}
-	return &Solver{keeper: k, store: store}, nil
+	return &Solver{keeper: k}, nil
 }
