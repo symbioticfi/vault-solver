@@ -22,7 +22,7 @@ func OpenKeeper(k *keeper.Keeper, directory string, deps solver.Deps, name strin
 		}
 	}()
 	k.Store = store
-	sender, err := submission.New(deps.Chain, deps.Signer.Address(), deps.Chain.ChainID(), store, submission.Config{Confirmations: deps.TxManager.Confirmations()}, Transport{Manager: deps.TxManager, Solver: name}, deps.Log)
+	sender, err := New(deps.Chain, deps.Signer.Address(), deps.Chain.ChainID(), store, submission.Config{Confirmations: deps.TxManager.Confirmations()}, Transport{Manager: deps.TxManager, Solver: name}, deps.Log)
 	if err != nil {
 		return nil, err
 	}

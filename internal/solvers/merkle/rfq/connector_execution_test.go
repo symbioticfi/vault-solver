@@ -33,9 +33,13 @@ func TestConnectorBuildSimulatesCompleteAwardedOrder(t *testing.T) {
 	}
 	order, selected, backend := connectorExecutionAward(w.caller)
 	backend.discount = resolved
-	calldata, until, err := w.build(t.Context(), order, []byte{0x91, 0x92}, selected, backend)
+	built, err := w.build(t.Context(), order, []byte{0x91, 0x92}, selected, backend)
 	if err != nil {
 		t.Fatal(err)
+	}
+	calldata, until := built.Calldata, built.ValidUntil
+	if built.State.Account != chain.recipeAccount || built.State.Asset != tOut || chain.identityReads != 2 {
+		t.Fatal("build did not return its single pinned connector identity")
 	}
 	if !until.Equal(time.Unix(4102444800, 0)) {
 		t.Fatalf("discount expiry = %v", until)
@@ -103,7 +107,8 @@ func TestConnectorBuildRejectsIncompatibleSignaturePermission(t *testing.T) {
 	fixture := connectorExecutionFixture(t, connectorDiscountFixture())
 	order, selected, backend := connectorExecutionAward(fixture.workflow.caller)
 	backend.discount.SignerSignature = "0x" + strings.Repeat("ab", 130)
-	calldata, _, err := fixture.workflow.build(t.Context(), order, []byte{0x91, 0x92}, selected, backend)
+	built, err := fixture.workflow.build(t.Context(), order, []byte{0x91, 0x92}, selected, backend)
+	calldata := built.Calldata
 	if err == nil || !strings.Contains(err.Error(), "changes calldata length") {
 		t.Fatalf("error = %v, want committed calldata length rejection", err)
 	}
@@ -138,7 +143,8 @@ func TestConnectorBuildRejectsUnauthorizedOrUnsettledExecution(t *testing.T) {
 			tc.mutate(w, chain)
 			order, selected, backend := connectorExecutionAward(w.caller)
 			backend.discount = resolved
-			calldata, _, err := w.build(t.Context(), order, []byte{0x91, 0x92}, selected, backend)
+			built, err := w.build(t.Context(), order, []byte{0x91, 0x92}, selected, backend)
+			calldata := built.Calldata
 			if err == nil || !strings.Contains(strings.ToLower(err.Error()), tc.want) {
 				t.Fatalf("error = %v, want %q", err, tc.want)
 			}
@@ -171,6 +177,7 @@ type connectorExecutionReader struct {
 	header                                              *types.Header
 	allowed                                             bool
 	outerCalls                                          int
+	identityReads, latestIdentityReads                  int
 	outerData                                           []byte
 	outerErr                                            error
 	reorgDuringFill                                     bool
@@ -225,6 +232,13 @@ func (r *connectorExecutionReader) CallContract(ctx context.Context, msg ethereu
 			r.header.Extra = []byte("new canonical hash")
 		}
 		return nil, r.outerErr
+	}
+	if *msg.To == vlt && (bytes.Equal(msg.Data, connectorBinding.PackAccount()) || bytes.Equal(msg.Data, connectorBinding.PackOutputAsset())) {
+		r.identityReads++
+		if block == nil {
+			r.latestIdentityReads++
+			return r.connectorReadFake.CallContract(ctx, msg, big.NewInt(7))
+		}
 	}
 	if block == nil || block.Uint64() != 7 {
 		return nil, errors.New("metadata read escaped recipe snapshot")
@@ -339,7 +353,7 @@ func TestConnectorBuildRequiresDiscoveredExecutor(t *testing.T) {
 	fixture := connectorExecutionFixture(t, connectorDiscountFixture())
 	order, selected, backend := connectorExecutionAward(fixture.workflow.caller)
 	selected.Executor = common.Address{}
-	_, _, err := fixture.workflow.build(t.Context(), order, nil, selected, backend)
+	_, err := fixture.workflow.build(t.Context(), order, nil, selected, backend)
 	if err == nil || !strings.Contains(err.Error(), "no recipe executor") || fixture.reader.outerCalls != 0 {
 		t.Fatalf("missing executor did not fail closed: %v", err)
 	}
