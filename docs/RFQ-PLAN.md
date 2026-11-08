@@ -634,6 +634,13 @@ generated from, and refreshed with `make refresh-rfq-openapi` (`RFQ_OPENAPI_URL=
   `createOpenApiDocument` and `createInternalOpenApiDocument` exports, or refresh them
   from a backend running that source. The daily drift check compares the vendored
   documents with the URLs registered in `hack/schema-sources.json`.
+- vault-solver `stage` vendors the rfq-backend `stage` contract, while `swap.symbiotic.fi` serves
+  rfq-backend `main`. Since symbioticfi/rfq-backend#430 (recipes, `recipeExecutor`,
+  `discountPrecision`, read here since #221) the two differ, and prod also has solver discounts
+  (symbioticfi/rfq-backend#450) that backend `stage` does not. Both registry entries carry an
+  `expectedDrift` digest of today's prod documents, so the daily check stays quiet only while prod is
+  unchanged. Once rfq-backend `stage` is promoted, re-vendor from the live URLs, regenerate both clients and
+  remove the entries.
 - **Generated Go client (`api/rfqbackend/`).** The spec now carries `components` schemas with `$ref`s
   (the earlier hono-openapi all-inlined limitation is fixed), so the client is generated with the Java
   **openapi-generator** (`make refresh-rfq-client`) — the only generator that ingests this OpenAPI 3.1

@@ -9,7 +9,11 @@ Generated clients tolerate added/removed fields (hack/openapi-relax-client.py), 
 check exists for the drift that tolerance cannot absorb: renamed fields, changed enums,
 new required request fields, altered semantics in descriptions.
 
-Usage: check-schema-drift.py [--report FILE] [--only NAME] [--check-coverage]
+A source may carry `expectedDrift: {reason, liveDigest}` when the vendored copy is knowingly ahead of
+or behind its live source. That one live state (`liveDigest` of the normalized live document) is
+reported but not counted as drift; any other live state, or a match with the vendored copy, is.
+
+Usage: check-schema-drift.py [--report FILE] [--only NAME] [--check-coverage] [--digest NAME]
 Offline --check-coverage exits nonzero for registration gaps. Live drift always exits 0;
 the outcome is reported as `status=clean|drift` on stdout and,
 when running under GitHub Actions, appended to $GITHUB_OUTPUT.
@@ -19,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
 import json
 import os
 import pathlib
@@ -46,6 +51,10 @@ def normalize(text: str, fetch: str) -> str:
     if fetch == "graphql":
         return text.rstrip() + "\n"
     return text
+
+
+def digest(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
 
 
 def fetch_live(source: dict) -> str:
@@ -100,8 +109,18 @@ def check(source: dict, report: list[str]) -> bool:
         report.append(f"- {name}: live source is not valid JSON; treating as drift until it can be verified ({err})")
         return True
 
+    # An acknowledged gap: the vendored copy deliberately differs from one specific live state,
+    # e.g. it tracks an upstream branch that is not deployed yet. Any other live state is drift.
+    expected = source.get("expectedDrift")
     if live == current:
+        if expected:
+            report.append(f"- **{name}**: up to date, so its `expectedDrift` entry is stale; remove it")
+            return True
         report.append(f"- {name}: up to date")
+        return False
+    live_digest = digest(live)
+    if expected and expected.get("liveDigest") == live_digest:
+        report.append(f"- {name}: differs from live as acknowledged in `expectedDrift`; live unchanged. {expected['reason']}")
         return False
 
     diff = list(difflib.unified_diff(
@@ -115,6 +134,11 @@ def check(source: dict, report: list[str]) -> bool:
         "",
         f"  Refresh: `{source['refresh']}`",
         "",
+        *([
+            "  Live changed since the acknowledged `expectedDrift` state; re-check whether the "
+            f"upstream deploy landed. Live is now `{live_digest}`.",
+            "",
+        ] if expected else []),
         "  <details><summary>diff (vendored → live)</summary>",
         "",
         "  ```diff",
@@ -154,11 +178,18 @@ def main() -> int:
     parser.add_argument("--report", default="drift-report.md")
     parser.add_argument("--only", help="check a single source by (substring of) name")
     parser.add_argument("--check-coverage", action="store_true", help="offline registration-only check; fail on gaps")
+    parser.add_argument("--digest", metavar="NAME", help="print the expectedDrift liveDigest of one source and exit")
     args = parser.parse_args()
     if args.check_coverage and args.only:
         parser.error("--check-coverage checks the entire registry; --only is not supported")
 
     sources = json.loads(MANIFEST.read_text())["sources"]
+    if args.digest:
+        matches = [s for s in sources if args.digest.lower() in s["name"].lower() and s["mode"] == "auto"]
+        if len(matches) != 1:
+            parser.error(f"--digest {args.digest!r} matches {len(matches)} auto sources; it must match one")
+        print(digest(normalize(fetch_live(matches[0]), matches[0]["fetch"])))
+        return 0
     selected = [s for s in sources if not args.only or args.only.lower() in s["name"].lower()]
 
     report: list[str] = []

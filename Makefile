@@ -287,7 +287,7 @@ build: ## Build the binary
 
 .PHONY: test
 test: ## Run tests with race detector + coverage (hermetic only; fork/live suites are tag-gated out)
-	python3 -m unittest discover -s hack -p 'test_*_extract.py'
+	python3 -m unittest discover -s hack -p 'test_*.py'
 	go test -race -cover ./...
 
 .PHONY: test-tooling
