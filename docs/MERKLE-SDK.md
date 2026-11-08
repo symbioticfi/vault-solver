@@ -2,6 +2,8 @@
 
 The `merkle` solver consumes the independently versioned
 `github.com/symbioticfi/merkle-executor/sdk` module pinned in go.mod.
+The current pin is `8af1d36dc5680c63535eb6af930d59e782bd7568`
+(`v0.0.0-20261108154558-8af1d36dc568`).
 The SDK implements recipe/tree/proof/role checks,
 pinned runtime assembly, simulation, canonical receipts and RAM settlement tasks.
 It also exposes opt-in off-chain providers, RPC, signing and a standalone sender;
@@ -16,6 +18,8 @@ prepared transaction without another simulation. Signed transactions retain thei
 identity and shared-sender ownership through in-process retries. All batch members
 receive the same canonical receipt before settlement advances. At the recipe layer,
 `DiscoverBatch` and `ValidatePreparedBatch` serve both one executor and many.
+Generic planning and external RFQ admission simulate within the SDK's default
+16,777,216 gas budget, further bounded by the current block gas limit.
 
 Awarded LiquidLane connector orders run in the separate [`rfq-merkle` solver](RFQ-MERKLE.md).
 Its RecipeExecutor caller is the RFQ Executor contract, so it must not be included in
@@ -107,10 +111,11 @@ come from the recipe's deterministic computation or fixed literal, bound directl
 through an exact input equality. Bounds validate the chosen amount; they do not
 choose it. For example, a recipe can compute `min(balance, liquidity)` without
 embedding either actual amount. The SDK checks every lower bound and cap.
-For guarded Aave borrowing, the shared provider supplies capacity after replaying
+For native Aave borrowing, the shared provider supplies capacity after replaying
 the authenticated supply prefix at the pinned block. The recipe still selects the
-actual amount through its `Min` chain and enforces its health floor. Pool, asset,
-account and health policy come from the committed permission; vault-solver adds no
+actual amount through its `Min` chain and checks the same pool's
+`getUserAccountData(account)` health word after borrowing. Pool, asset and account
+are pinned, and the recipe commits a health floor of at least `1e18`; vault-solver adds no
 Aave sizing implementation or configuration.
 Unconstrained inputs and manual account, tree and inputs configuration fields
 are rejected. Unused `"nonzero"` payable permission markers are accepted; selecting

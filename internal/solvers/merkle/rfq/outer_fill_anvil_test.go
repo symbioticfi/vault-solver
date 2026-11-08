@@ -166,8 +166,8 @@ func (r *outerFillEVMReader) CallContract(ctx context.Context, msg ethereum.Call
 			return nil, errors.New("outer settlement simulation lost its block or gas budget")
 		}
 		header, err := r.client.HeaderByNumber(ctx, block)
-		if err != nil || header == nil || msg.Gas != header.GasLimit {
-			return nil, errors.New("outer settlement simulation did not use current block gas limit")
+		if err != nil || header == nil || msg.Gas != min(header.GasLimit, uint64(16_777_216)) {
+			return nil, errors.New("outer settlement simulation did not use bounded transaction gas budget")
 		}
 		if r.beforeOuter != nil {
 			r.beforeOuter()

@@ -14,7 +14,7 @@ func TestOuterFillSimulationUsesCompleteSettlementWithOrdinaryReader(t *testing.
 	f := connectorExecutionFixture(t, connectorDiscountFixture())
 	outer := append([]byte{}, executorBinding.GetABI().Methods["fill"].ID...)
 	simulation := outerFillSimulation{reader: f.reader, executor: f.reader.recipeExecutor, inner: []byte{1, 2, 3}, outer: outer, caller: f.workflow.caller, signer: f.workflow.signer}
-	request := recipes.PreparedBatchSimulationRequest{Calls: []recipes.ExecutorCall{{Executor: simulation.executor, Data: []byte{1, 2, 3}}}, Caller: simulation.caller, BlockNumber: big.NewInt(7), GasLimit: 30_000_000}
+	request := recipes.PreparedBatchSimulationRequest{Calls: []recipes.ExecutorCall{{Executor: simulation.executor, Data: []byte{1, 2, 3}}}, Caller: simulation.caller, BlockNumber: big.NewInt(7), GasLimit: 16_777_216}
 	if err := simulation.Simulate(t.Context(), request); err != nil {
 		t.Fatalf("complete outer fill with empty return rejected: %v", err)
 	}
@@ -60,7 +60,7 @@ func TestOuterFillSimulationRejectsChangedAdmissionContext(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := connectorExecutionFixture(t, connectorDiscountFixture())
 			simulation := outerFillSimulation{reader: f.reader, executor: f.reader.recipeExecutor, inner: []byte{1}, outer: executorBinding.GetABI().Methods["fill"].ID, caller: f.workflow.caller, signer: f.workflow.signer}
-			request := recipes.PreparedBatchSimulationRequest{Calls: []recipes.ExecutorCall{{Executor: simulation.executor, Data: []byte{1}}}, Caller: simulation.caller, BlockNumber: big.NewInt(7), GasLimit: 30_000_000}
+			request := recipes.PreparedBatchSimulationRequest{Calls: []recipes.ExecutorCall{{Executor: simulation.executor, Data: []byte{1}}}, Caller: simulation.caller, BlockNumber: big.NewInt(7), GasLimit: 16_777_216}
 			tc.edit(&simulation, &request)
 			if err := simulation.Simulate(t.Context(), request); err == nil || f.reader.outerCalls != 0 {
 				t.Fatalf("changed context reached outer simulation: calls=%d err=%v", f.reader.outerCalls, err)
@@ -72,7 +72,7 @@ func TestOuterFillSimulationRejectsChangedAdmissionContext(t *testing.T) {
 func TestOuterFillSimulationHonorsCancellation(t *testing.T) {
 	f := connectorExecutionFixture(t, connectorDiscountFixture())
 	simulation := outerFillSimulation{reader: f.reader, executor: f.reader.recipeExecutor, inner: []byte{1}, outer: executorBinding.GetABI().Methods["fill"].ID, caller: f.workflow.caller, signer: f.workflow.signer}
-	request := recipes.PreparedBatchSimulationRequest{Calls: []recipes.ExecutorCall{{Executor: simulation.executor, Data: []byte{1}}}, Caller: simulation.caller, BlockNumber: big.NewInt(7), GasLimit: 30_000_000}
+	request := recipes.PreparedBatchSimulationRequest{Calls: []recipes.ExecutorCall{{Executor: simulation.executor, Data: []byte{1}}}, Caller: simulation.caller, BlockNumber: big.NewInt(7), GasLimit: 16_777_216}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if err := simulation.Simulate(ctx, request); !errors.Is(err, context.Canceled) || f.reader.outerCalls != 0 {

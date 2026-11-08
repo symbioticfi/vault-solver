@@ -1059,6 +1059,8 @@ Merkle recipes run through the shared sender using the independently versioned [
 
 The SDK is public and pinned in `go.mod`; normal Go and Docker builds download it
 without a GitHub token or a local merkle-executor checkout.
+Merkle preparation and RFQ admission use the SDK's default simulation gas budget
+of 16,777,216, bounded by the current block gas limit.
 
 Self-contained recipes automatically batch useful state-driven executions through
 that SDK. External quotes and proofs are prepared separately for each execution.

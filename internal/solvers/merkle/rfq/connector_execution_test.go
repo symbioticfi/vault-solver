@@ -216,7 +216,7 @@ func (r *connectorExecutionReader) CallContract(ctx context.Context, msg ethereu
 		return nil, errors.New("invalid contract call")
 	}
 	if *msg.To == r.recipeCaller && bytes.Equal(msg.Data[:4], executorBinding.GetABI().Methods["fill"].ID) {
-		if msg.From != r.signer || block == nil || block.Uint64() != 7 || msg.Gas != r.header.GasLimit {
+		if msg.From != r.signer || block == nil || block.Uint64() != 7 || msg.Gas != min(r.header.GasLimit, uint64(16_777_216)) {
 			return nil, errors.New("outer fill must simulate from the host signer at the pinned block and gas budget")
 		}
 		r.outerCalls++

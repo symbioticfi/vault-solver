@@ -38,7 +38,7 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 			adapter := common.HexToAddress("0x100")
 			executor, account, caller := common.HexToAddress("0x10"), common.HexToAddress("0x20"), common.HexToAddress("0x30")
 			root := common.HexToHash("0x40")
-			header := &types.Header{Number: big.NewInt(12), Difficulty: new(big.Int)}
+			header := &types.Header{Number: big.NewInt(12), Difficulty: new(big.Int), GasLimit: 30_000_000}
 			recipe := recipes.Recipe{}
 			if mode == "free input" {
 				word, err := abi.NewType("uint256", "", nil)

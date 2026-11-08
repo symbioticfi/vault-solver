@@ -59,3 +59,12 @@ Validation on the published SDK above passed: `go mod tidy`, `go mod verify`, `m
 - [x] Complete Go 1.27.3 tidy/verify, formatting, build, full race/coverage, lint, tooling and all three local Anvil 1.9.0 suites with `GOWORK=off` before updating PR #277.
 
 Validation on this published SDK passed: `make tidy`, `go mod verify`, `make format`, `go build ./...`, `make test`, `make lint`, `make test-tooling`, `make test-txmanager-anvil`, `make test-rfq-merkle-anvil` and `make test-merklesender-anvil`. Both lint runs reported zero issues. The dependency diff changes only the SDK pin and its checksums; tests use local fixtures, with no live signing, provider credentials or deployment.
+
+## Current native recipe SDK
+
+- [x] Pin published SDK `8af1d36dc5680c63535eb6af930d59e782bd7568` (`v0.0.0-20261108154558-8af1d36dc568`), the current upstream main commit containing native-only Aave borrowing and bounded CoW expiry/appData fixes.
+- [x] Update host fixtures for positive block gas limits and the SDK's default 16,777,216 simulation budget, bounded by the current block. Preserve exact outer RFQ settlement and canonical checks; host runtime APIs remain unchanged.
+- [x] Update Aave documentation to the native pool borrow and committed outer health floor.
+- [x] Complete tidy/verify, format, build, full race/coverage, lint, tooling and all three local Anvil 1.9.0 suites with `GOWORK=off` before updating PR #277.
+
+All listed gates passed on the published module. Both lint runs reported zero issues. Integration evidence uses local Anvil and API fixtures; no live signing, provider credentials or deployment was used.
