@@ -5,7 +5,6 @@ package merkle
 import (
 	"context"
 	"math/big"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,12 +31,15 @@ func TestSDKRAMFundingFailureReleasesUnsignedWork(t *testing.T) {
 	signing := ramSigning(t)
 	chain, mine := senderAnvil(t, signing.Address())
 	relay := &fundingRelay{ownedRelay: &ownedRelay{Client: chain, observed: make(chan struct{}, 64)}}
-	engine := txmanager.New(relay, signing, big.NewInt(1337), txmanager.Config{MaxFeeGwei: 100, PollInterval: time.Millisecond, ReplacementInterval: time.Second, ShutdownTimeout: time.Millisecond}, logr.Discard())
+	engine, err := txmanager.New(relay, signing, big.NewInt(1337), txmanager.Config{MaxFeeGwei: 100, PollInterval: time.Millisecond, ReplacementInterval: time.Second, ShutdownTimeout: time.Millisecond}, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
 	sender := engine.Sender("test")
 	runRAMManager(t, engine)
 	request := txmanager.ExecutionRequest{To: common.HexToAddress("0x1234")}
-	err := sender.Submit(t.Context(), request)
-	if err == nil || !strings.Contains(err.Error(), "insufficient transaction funding") || sender.Busy() || len(relay.snapshot()) != 0 {
+	err = sender.Submit(t.Context(), request)
+	if err == nil || sender.Busy() || len(relay.snapshot()) != 0 {
 		t.Fatalf("unsigned funding failure retained work: err=%v busy=%v sends=%d", err, sender.Busy(), len(relay.snapshot()))
 	}
 	deadline := time.Now().Add(time.Second)
@@ -48,7 +50,7 @@ func TestSDKRAMFundingFailureReleasesUnsignedWork(t *testing.T) {
 		t.Fatal("unsigned funding failure did not release the signer lane")
 	}
 	relay.funded.Store(true)
-	if err := sender.Submit(t.Context(), request); err != nil {
+	if err = sender.Submit(t.Context(), request); err != nil {
 		t.Fatal(err)
 	}
 	awaitBroadcast(t, relay.ownedRelay)

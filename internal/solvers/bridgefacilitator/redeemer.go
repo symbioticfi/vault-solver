@@ -108,15 +108,17 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 	}
 
 	res := s.txManager.Send(submitCtx, txmanager.Request{
-		Solver:         Name,
-		To:             target.Adapter,
-		Data:           data,
-		Label:          "redeem",
-		ObserveReceipt: s.metrics.redeemReceiptObserver(len(ready)),
+		// Rebuild from the next fresh scan if this batch becomes stale. Signed attempts
+		// remain owned by the manager until their canonical outcome is known.
+		Deadline: time.Now().Add(s.cfg.Intervals.RedeemPoll),
+		Solver:   Name,
+		To:       target.Adapter,
+		Data:     data,
+		Label:    "redeem",
 	})
-	txmanager.RecordResult(submitCtx, res) // the stage
-	txmanager.RecordResult(ctx, res)       // the redeem pass it belongs to
-	if res.Outcome.NonceUncertain() {
+	observability.RecordTransactionResult(submitCtx, res) // the stage
+	observability.RecordTransactionResult(ctx, res)       // the redeem pass it belongs to
+	if res.Uncertain() {
 		observability.Decline(submitCtx, "redeem_nonce_uncertain", "transaction nonce result is uncertain")
 		// The next poll reads canWithdraw again before rebuilding a batch. Missing owned
 		// receipts cannot prove that this batch finalized any requests.
@@ -124,23 +126,14 @@ func (s *Solver) redeemReady(ctx context.Context, target Target, ready []common.
 			"requests", len(ready), "tx", res.Hash.Hex())
 		return
 	}
-	if !res.Outcome.Included() {
+	if !res.Included() || res.Reverted() {
 		err = res.Err
 		if err == nil {
-			err = errors.Errorf("unexpected tx outcome %q", res.Outcome)
+			err = errors.New("transaction was not included")
 		}
-		observability.Log(submitCtx).Error(err, "redeem: tx not included", "requests", len(ready), "outcome", res.Outcome)
+		observability.Log(submitCtx).Error(err, "redeem: tx not included", "requests", len(ready))
 		return
 	}
-	if res.Outcome == txmanager.OutcomeIncludedUnconfirmed {
-		if res.Err != nil {
-			err = res.Err
-			observability.Log(submitCtx).Error(res.Err, "redeem included; confirmation tracking stopped",
-				"requests", len(ready), "tx", res.Hash.Hex())
-		} else {
-			observability.Log(submitCtx).Info("redeem included without final confirmation", "requests", len(ready), "tx", res.Hash.Hex())
-		}
-		return
-	}
+	s.metrics.observeRedeemedRequests(len(ready))
 	observability.Log(submitCtx).Info("finalized ready requests", "count", len(ready), "tx", res.Hash.Hex())
 }

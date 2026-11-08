@@ -81,7 +81,7 @@ func NewTracer(name, solver string) *Tracer {
 }
 
 // Raw exposes the underlying tracer for code that must hold a trace.Span across goroutines
-// (txmanager keeps one span from submission to receipt). Resolving through the global provider
+// (a worker may keep one span from submission to completion). Resolving through the global provider
 // takes two process-wide mutexes, so the result is cached and re-resolved only once a new provider
 // bumps the generation: a Tracer built before NewTracing installs the real provider still reaches
 // it, without paying that cost per span.
@@ -189,9 +189,8 @@ func LinkMiss(ctx context.Context, key string) {
 }
 
 // EndSpan ends span under the shared policy, for the few callers that hold a trace.Span rather than
-// an EndFunc (txmanager carries one from admission to receipt). Safe to call more than once, for the
-// same reason EndFunc is: the SDK ignores an End on an ended span, and gates the error and status it
-// would record first on the span still recording. The txmanager shutdown drain relies on that.
+// an EndFunc. Safe to call more than once: OpenTelemetry ignores End on an ended span, and
+// the error and status are recorded only while the span is still recording.
 func EndSpan(span trace.Span, err error) { endSpan(span, err) }
 
 // spanStatusDescriber lets an error bound the text of the error status it produces. A span status

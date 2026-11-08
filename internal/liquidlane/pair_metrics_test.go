@@ -8,7 +8,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/prometheus/client_golang/prometheus"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 )
 
@@ -35,10 +34,9 @@ func TestPairMetricsFixedVocabularyAndReceiptBoundary(t *testing.T) {
 	m.Standing(1, in, out, "withdrawn", "ignored")
 	m.Standing(1, in, out, "rejected", "capacity")
 	m.Standing(1, in, out, "arbitrary", "arbitrary")
-	receipt := m.ReceiptObserver(1, in, out)
-	receipt(t.Context(), txmanager.Result{})
-	receipt(t.Context(), txmanager.Result{Receipt: &types.Receipt{Status: types.ReceiptStatusFailed}})
-	receipt(t.Context(), txmanager.Result{Receipt: &types.Receipt{Status: types.ReceiptStatusSuccessful}})
+	m.ObserveReceipt(1, in, out, nil)
+	m.ObserveReceipt(1, in, out, &types.Receipt{Status: types.ReceiptStatusFailed})
+	m.ObserveReceipt(1, in, out, &types.Receipt{Status: types.ReceiptStatusSuccessful})
 	for _, item := range []struct{ event, result, reason string }{
 		{"quote", "returned", "none"}, {"quote", "rejected", "capacity"}, {"quote", "rejected", "unknown"},
 		{"assignment", "observed", "none"}, {"assignment", "admitted", "none"},

@@ -213,7 +213,10 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 			}
 			defer client.Close()
 			owner := factorySigner{address: caller}
-			manager := txmanager.New(client, owner, big.NewInt(1), txmanager.Config{}, logr.Discard())
+			manager, err := txmanager.New(client, owner, big.NewInt(1), txmanager.Config{}, logr.Discard())
+			if err != nil {
+				t.Fatal(err)
+			}
 			raw := strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", curator.URL+"/api/v1", 1)
 			built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, TxManager: manager, Log: logr.Discard()})
 			if err != nil {

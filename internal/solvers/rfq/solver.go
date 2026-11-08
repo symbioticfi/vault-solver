@@ -179,10 +179,6 @@ func buildServices(
 // Name identifies the solver.
 func (s *Solver) Name() string { return Name }
 
-func (s *Solver) ShutdownPreparationTimeout() time.Duration {
-	return quoteServerShutdownTimeout
-}
-
 // Run serves the quote HTTP API until ctx is cancelled, then shuts it down gracefully, alongside the
 // backend order-poll + fill loop. The filler is poll-only (no push/notify endpoint).
 func (s *Solver) Run(ctx context.Context) error {

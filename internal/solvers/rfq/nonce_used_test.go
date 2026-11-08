@@ -4,6 +4,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common/hexutil"
+
 	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -13,8 +15,8 @@ import (
 )
 
 func nonceUsedResult(data []byte) txmanager.Result {
-	return txmanager.Result{Outcome: txmanager.OutcomeSubmissionError,
-		Err: errors.Errorf("estimate: %w", &txmanager.ExecutionRevertError{Data: data, Cause: errors.New("execution reverted")})}
+	return txmanager.Result{
+		Err: errors.Errorf("estimate: %w", &estimateRPCError{Data: data})}
 }
 
 func TestExecutionNonceUsedRetiresSendingBeforeBackendCatchesUp(t *testing.T) {
@@ -89,3 +91,11 @@ func TestExecutionNonceUsedStopsEvenWhenBackendIsMissing(t *testing.T) {
 		t.Fatalf("nonce-used backend observation exceeded its deadline: %+v", st.order("o1"))
 	}
 }
+
+// estimateRPCError models eth_estimateGas JSON-RPC error data.
+type estimateRPCError struct {
+	Data []byte
+}
+
+func (e *estimateRPCError) Error() string  { return "execution reverted" }
+func (e *estimateRPCError) ErrorData() any { return hexutil.Encode(e.Data) }

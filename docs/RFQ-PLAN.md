@@ -110,16 +110,13 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   deadline. The backend status covers what an on-chain nonce read cannot (an unfunded swapper, backend-side
   cancellation); a read error or an unknown status preserves the lifecycle.
 - **Retries distinguish unsent work from transactions.** Failed pre-submission work with no recorded hash
-  may be retried while the order is open. `abandoned`, `nonce_conflict` and `nonce_consumed` mean signed
-  execution is uncertain without an owned receipt. It first enters backend reconciliation: a terminal status
+  may be retried while the order is open. Signed attempts without a canonical receipt have uncertain execution. It first enters backend reconciliation: a terminal status
   retires the order, while `open` schedules a fresh retry under the order deadline and polling backoff. Missing,
   unavailable or unknown backend status keeps the obligation until its recorded order deadline.
-  `maxNonceRetries` defaults to three additional attempts after accepted abandonment or nonce
-  consumption; zero disables those retries. Rejected initial `nonce_conflict` results do not spend this
-  budget and cannot permanently retire an open order after an initial transaction nonce collision.
-  They still require fresh backend-open reconciliation, a poll delay and a fresh open-order listing,
-  and stop at the order deadline. The accepted-execution retry budget survives these conflicts and
-  re-queuing; retrying clears only the attempted
+  `maxNonceRetries` defaults to three additional attempts after signed uncertain results;
+  zero disables those retries. Unsigned admission failures do not spend this signed-execution budget.
+  All retries require fresh backend-open reconciliation, a poll delay and a fresh open-order listing,
+  and stop at the order deadline. The retry budget survives re-queuing; retrying clears only the attempted
   hash and runs the full executable-order lookup, chain deadline validation, strategy plan, and discount
   resolution again. Retry waiting counts as an active obligation and reconciles terminal
   backend status; its retained order deadline also expires it locally if backend views disappear or stay
@@ -176,16 +173,11 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   than proof of a particular sibling or EOA. Missing/malformed/zero hashes still mark the order filled
   without peer attribution. Reconciliation deduplication and attempt ownership are process-local and
   reset on restart; a previous local attempt is never called peer while its history is retained.
-- **Receipt observations update metrics only.** Each fill snapshots its metric pointer, token addresses,
-  input/output amounts and gross planned surplus into `Request.ObserveReceipt`. The manager invokes that
-  hook once per locally retained owned hash for normal inclusion or a late canonical receipt at the
-  configured confirmation depth. A successful late receipt records `fill/success`, freshness and amounts,
-  including when backend reconciliation already retired the order. It does not change store status,
-  reservations, retries or order ownership. Backend `filled` alone never records these local fill metrics.
-  Obsolete retirement uses the existing retained signed-attempt history across retries: it counts
-  `fill/obsolete` only without owned attempts. A pending abandonment or an unsigned retry made obsolete
-  by our earlier fill therefore cannot also be counted as a skip alongside a normal or late success.
-  If no owned receipt is observed within the manager's bounds, no local execution outcome is inferred.
+- **Receipt evidence drives local metrics.** Returned successful canonical receipts at the
+  configured confirmation depth record `fill/success`, freshness and amounts. Backend `filled`
+  alone never records local successful-fill amounts. Obsolete retirement uses retained signed-attempt
+  history so a locally signed fill is not also counted as an unsigned skip. There are no receipt
+  observer callbacks; a transaction that lands after the request returns may have no local fill metric.
 - **Completed orders have no later-reorg recovery.** A `filled` record stays terminal in the local store.
   Open-order polling does not recheck its old inclusion or reopen it after a later reorg. The backend's
   terminal order status remains authoritative; txmanager's existing reorg checks run during confirmation.

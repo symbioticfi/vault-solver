@@ -22,8 +22,8 @@ import (
 
 func abandonedTxResult() txmanager.Result {
 	return txmanager.Result{
-		Outcome: txmanager.OutcomeAbandoned, Hash: common.HexToHash("0x1234"),
-		Err: txmanager.ErrAbandoned,
+		Hash: common.HexToHash("0x1234"),
+		Err:  context.DeadlineExceeded,
 	}
 }
 
@@ -34,7 +34,6 @@ func TestExecutionNonceRetryRequiresSafeOutcome(t *testing.T) {
 		want   orderStatus
 	}{
 		{name: "disabled", mutate: func(e *executionService, _ *fakeTxm) { e.maxNonceRetries = 0 }, want: statusNonceUncertain},
-		{name: "tracking stopped", mutate: func(_ *executionService, txm *fakeTxm) { txm.result.Outcome = txmanager.OutcomeTrackingStopped }, want: statusSubmitted},
 		{name: "order expires before next poll", mutate: func(e *executionService, _ *fakeTxm) {
 			e.reader.(*fakeRecoveryReader).chainTime = time.Unix(4_102_444_797, 0)
 		}, want: statusExpired},
@@ -214,7 +213,7 @@ func TestExecutionNonceRetryExpiresWithoutBackendReconciliation(t *testing.T) {
 	}
 }
 
-func TestExecutionRetryDeadlineDoesNotExpireUnknownInclusion(t *testing.T) {
+func TestExecutionUnknownInclusionExpiresWithoutAnotherSend(t *testing.T) {
 	st, be := fillFixtures(t)
 	now := time.Unix(0, 0)
 	st.now = func() time.Time { return now }
@@ -224,8 +223,8 @@ func TestExecutionRetryDeadlineDoesNotExpireUnknownInclusion(t *testing.T) {
 	e.now = st.now
 	syncCycle(t.Context(), e)
 	txm.result = txmanager.Result{
-		Hash: common.HexToHash("0x5678"), Outcome: txmanager.OutcomeTrackingStopped,
-		Err: errors.New("tracking stopped"),
+		Hash: common.HexToHash("0x5678"),
+		Err:  errors.New("tracking stopped"),
 	}
 	now = now.Add(3 * time.Second)
 	syncCycle(t.Context(), e)
@@ -233,7 +232,7 @@ func TestExecutionRetryDeadlineDoesNotExpireUnknownInclusion(t *testing.T) {
 	be.order = nil
 	now = time.Unix(4_102_444_800, 0)
 	syncCycle(t.Context(), e)
-	if txm.calls != 2 || st.order("o1").Status != statusSubmitted || st.order("o1").TxHash != txm.result.Hash {
+	if txm.calls != 2 || st.order("o1").Status != statusExpired || st.order("o1").TxHash != txm.result.Hash {
 		t.Fatalf("unknown retry inclusion lost tracking: sends=%d order=%+v", txm.calls, st.order("o1"))
 	}
 }
@@ -283,8 +282,6 @@ func TestExecutionObsoleteHookReadsBackendOrderStatus(t *testing.T) {
 func TestExecutionRetiresObsoleteOrderWithoutRetry(t *testing.T) {
 	obsoleteAbandonment := abandonedTxResult()
 	obsoleteAbandonment.Err = errors.Errorf("pending transaction abandoned: %w", txmanager.ErrRequestObsolete)
-	unconfirmed := obsoleteAbandonment
-	unconfirmed.Outcome = txmanager.OutcomeTrackingStopped
 	for _, tc := range []struct {
 		name          string
 		result        txmanager.Result
@@ -293,10 +290,9 @@ func TestExecutionRetiresObsoleteOrderWithoutRetry(t *testing.T) {
 		wantObsolete  float64
 	}{
 		{name: "abandoned obsolete fill", result: obsoleteAbandonment, backendStatus: "open", want: statusObsolete},
-		{name: "tracking stopped after obsolescence", result: unconfirmed, backendStatus: "open", want: statusObsolete},
 		{name: "dropped before signing", result: txmanager.Result{
-			Outcome: txmanager.OutcomeSubmissionError,
-			Err:     errors.Errorf("send %q: %w", "rfq-fill", txmanager.ErrRequestObsolete),
+
+			Err: errors.Errorf("send %q: %w", "rfq-fill", txmanager.ErrRequestObsolete),
 		}, backendStatus: "open", want: statusObsolete, wantObsolete: 1},
 		{name: "backend already reports the fill", result: obsoleteAbandonment, backendStatus: "filled", want: statusFilled},
 	} {

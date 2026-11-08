@@ -301,7 +301,7 @@ test-oev-live: ## OEV live checks — Morpho API discovery plus optional Sepolia
 	go test -tags live -run TestLive -v ./internal/solvers/redstoneoev/...
 
 .PHONY: test-txmanager-anvil
-test-txmanager-anvil: ## Exercise fee replacement, nonce reuse and independent replica contention against Anvil
+test-txmanager-anvil: ## Exercise shared SDK signing, replacements and canonical receipts on Anvil
 	@command -v anvil >/dev/null
 	go test -race -tags integration -run TestAnvil -v github.com/symbioticfi/merkle-executor/sdk/transaction
 
@@ -315,7 +315,7 @@ test-rfq-merkle-anvil: ## Execute canonical RFQ outer settlement boundaries on l
 	go test -race -tags integration -run '^TestAnvilConnectorOuterFillCanonicalBoundaries$$' -v ./internal/solvers/merkle/rfq
 
 .PHONY: test-merkle-sdk-anvil
-test-merkle-sdk-anvil: ## Exercise RAM SDK ownership, replacement and shared signer fencing on local Anvil
+test-merkle-sdk-anvil: ## Exercise RAM SDK recipe ownership and canonical settlement on local Anvil
 	@command -v anvil >/dev/null
 	go test -race -tags integration -run TestSDKRAM -v ./internal/solvers/merkle
 

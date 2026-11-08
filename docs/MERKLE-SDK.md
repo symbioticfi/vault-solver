@@ -2,8 +2,8 @@
 
 The `merkle` solver consumes the independently versioned
 `github.com/symbioticfi/merkle-executor/sdk` module pinned in go.mod.
-The current pin is `03ae399f73fd55d590cd3d4f5e6d90ff30ea52fe`
-(`v0.0.0-20261108175136-03ae399f73fd`).
+The current pin is `9d93c50132f29a91b70e6c326c7382763534953f`
+(`v0.0.0-20261108183232-9d93c50132f2`).
 The SDK implements recipe/tree/proof/role checks,
 pinned runtime assembly, simulation, canonical receipts and RAM settlement tasks.
 It also exposes opt-in off-chain providers, RPC, signing and the shared transaction
@@ -18,8 +18,8 @@ prepared transaction without another simulation. Signed transactions retain thei
 identity and process-local transaction ownership through in-process retries. All batch members
 receive the same canonical receipt before settlement advances. At the recipe layer,
 `DiscoverBatch` and `ValidatePreparedBatch` serve both one executor and many.
-Generic planning and external RFQ admission simulate within the SDK's default
-16,777,216 gas budget, further bounded by the current block gas limit.
+Generic planning, external RFQ admission and signing share `txManager.maxGas`
+(default 16,777,216), further bounded by the current block gas limit.
 
 Awarded LiquidLane connector orders run in the separate [`rfq-merkle` solver](RFQ-MERKLE.md).
 Its RecipeExecutor caller is the RFQ Executor contract, so it must not be included in
@@ -36,9 +36,9 @@ canonical snapshot. It does not scan historical block ranges. Generic, RFQ and
 Permission data still uses the curator service.
 
 Each solver process has its own signer and SDK `transaction.Manager`. Its integration workers
-use that manager. The host maps YAML, supplies RPC/signing dependencies and metrics, then explicitly
+use that manager. The host maps YAML, supplies RPC/signing dependencies and logger, then explicitly
 initializes, starts and drains that manager. Merkle keepers use
-`manager.Sender(name)`; native integrations use its rich send APIs. The SDK owns
+`manager.Sender(name)`; native integrations use `Send`/`SendAsync`. The SDK owns
 nonce admission, fee policy, signing, replacements and canonical receipt checks.
 Signed originals and replacements are retained in its single RAM lifecycle
 before broadcast. Keeper ownership survives ambiguous outcomes until a canonical
@@ -90,7 +90,7 @@ transaction, order and reservation tracking while external work may continue.
 Settle existing work before migration and use one active process per signer.
 
 The process manager checks fresh sender funding against final maximum gas cost
-plus value before signing. An initial funding failure captures no signed attempt
+before signing. An initial funding failure captures no signed attempt
 and releases the Merkle reservation through the existing unsigned-failure path.
 Funding changes after a broadcast do not release signed ownership; a failed fee
 replacement keeps the earlier signed identity.

@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/core/types"
+
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -234,7 +236,7 @@ func newTracingFillFixture(t *testing.T) *tracingFillFixture {
 // run polls the order, hands it to the fill loop, and confirms its transaction.
 func (f *tracingFillFixture) run(t *testing.T) {
 	t.Helper()
-	f.runWithResult(t, txmanager.Result{Hash: tracingFillTxHash, Outcome: txmanager.OutcomeConfirmed})
+	f.runWithResult(t, txmanager.Result{Receipt: &types.Receipt{Status: types.ReceiptStatusSuccessful}, Hash: tracingFillTxHash})
 }
 
 // runWithResult is run with the transaction outcome the manager reports back.
@@ -398,7 +400,7 @@ func TestOrderTraceLinksQuoteToFill(t *testing.T) {
 	if got := tracetest.Attr(complete, "tx.hash"); got != tracingFillTxHash.Hex() {
 		t.Fatalf("complete span tx.hash = %q, want %s", got, tracingFillTxHash.Hex())
 	}
-	if got := tracetest.Attr(complete, "tx.outcome"); got != string(txmanager.OutcomeConfirmed) {
+	if got := tracetest.Attr(complete, "tx.outcome"); got != "confirmed" {
 		t.Fatalf("complete span tx.outcome = %q, want confirmed", got)
 	}
 	if got := tracetest.Attr(tracetest.Ended(t, rec, "uniswapx.fill.plan"), "strategy.name"); got != tracingStrategy {
@@ -435,14 +437,14 @@ func TestFillCompletionOmitsTxHashWhenNotBroadcast(t *testing.T) {
 	fixture := newTracingFillFixture(t)
 
 	fixture.runWithResult(t, txmanager.Result{
-		Outcome: txmanager.OutcomeSubmissionError,
-		Err:     errors.New("insufficient funds for gas * price + value"),
+
+		Err: errors.New("insufficient funds for gas * price + value"),
 	})
 
 	for _, name := range []string{"uniswapx.fill", "uniswapx.fill.complete"} {
 		span := tracetest.Ended(t, rec, name)
 		tracetest.RequireNoAttr(t, span, "tx.hash") // a transaction that never went out has none
-		tracetest.RequireAttr(t, span, "tx.outcome", string(txmanager.OutcomeSubmissionError))
+		tracetest.RequireAttr(t, span, "tx.outcome", "submission_error")
 	}
 }
 

@@ -904,7 +904,7 @@ func (s *Solver) runOrderWorker(
 		// logger while that span is still open rather than logging through a closed one.
 		filledLog := observability.Log(filledCtx)
 		completionErr := s.completeFill(filledCtx, &pending, completion)
-		if completion.result.Outcome.NonceUncertain() && ctx.Err() == nil &&
+		if completion.result.Uncertain() && ctx.Err() == nil &&
 			!errors.Is(completion.result.Err, txmanager.ErrRequestObsolete) {
 			retry, reconcileErr := s.reconcileUncertainFill(filledCtx, completion.fill)
 			if reconcileErr != nil {

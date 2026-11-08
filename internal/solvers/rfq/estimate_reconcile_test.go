@@ -15,8 +15,8 @@ import (
 )
 
 func estimateRevertResult() txmanager.Result {
-	return txmanager.Result{Outcome: txmanager.OutcomeSubmissionError, Err: errors.Errorf("estimate fill: %w",
-		&txmanager.ExecutionRevertError{Cause: errors.New("execution reverted")})}
+	return txmanager.Result{Err: errors.Errorf("estimate fill: %w",
+		&estimateRPCError{})}
 }
 
 func TestExecutionEstimateRevertReconcilesBeforeFailure(t *testing.T) {

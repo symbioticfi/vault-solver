@@ -7,7 +7,6 @@ import (
 	"context"
 	"sort"
 	"sync"
-	"time"
 
 	"github.com/go-errors/errors"
 
@@ -26,6 +25,7 @@ import (
 type Deps struct {
 	Chain     *chain.Client
 	TxManager *txmanager.Manager
+	MaxGas    uint64 // Same transaction budget used by SDK planning and signing.
 	Signer    signer.Signer
 	Log       logr.Logger
 	Metrics   *observability.Metrics
@@ -46,12 +46,6 @@ type Solver interface {
 func RequiresTxManager(s Solver) bool {
 	requirer, ok := s.(interface{ RequiresTxManager() bool })
 	return !ok || requirer.RequiresTxManager()
-}
-
-// ShutdownPreparer optionally reports how long a solver may keep admitting work after cancellation
-// while it retires externally visible work such as active quotes.
-type ShutdownPreparer interface {
-	ShutdownPreparationTimeout() time.Duration
 }
 
 // Factory builds a Solver from its opaque config block (decoded by the solver into its own type)

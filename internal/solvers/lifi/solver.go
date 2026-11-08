@@ -87,7 +87,6 @@ type txSender interface {
 
 type transactionLaneState interface {
 	LaneReady() bool
-	SubscribeLaneState() (<-chan struct{}, func())
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
@@ -142,10 +141,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 }
 
 func (s *Solver) Name() string { return Name }
-
-func (s *Solver) ShutdownPreparationTimeout() time.Duration {
-	return 2 * s.cfg.OrderServer.HTTPTimeout
-}
 
 func (s *Solver) Run(ctx context.Context) error {
 	routes, err := s.reader.resolveRoutes(ctx, s.cfg.Adapters)

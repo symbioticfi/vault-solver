@@ -57,8 +57,6 @@ func (s *Solver) quoteLoop(
 ) error {
 	ticker := time.NewTicker(s.cfg.QuoteInterval)
 	defer ticker.Stop()
-	laneStateChanges, unsubscribe := s.subscribeTransactionLaneState()
-	defer unsubscribe()
 
 	state := newQuoteState(max(s.cfg.QuoteInterval, s.cfg.QuoteTTL/3))
 	defer func() {
@@ -83,7 +81,7 @@ func (s *Solver) quoteLoop(
 			stopOnShutdown := context.AfterFunc(ctx, stopConnected)
 			//nolint:contextcheck // connectedCtx is cancelled by either the feed connection or quote-loop context.
 			s.runConnectedQuoteLoop(
-				connectedCtx, routes, refresh, ticker.C, laneStateChanges, state, &lastBlock,
+				connectedCtx, routes, refresh, ticker.C, state, &lastBlock,
 			)
 			_ = stopOnShutdown()
 			stopConnected()
@@ -95,10 +93,6 @@ func (s *Solver) quoteLoop(
 			s.suspendQuotes(ctx, state)
 		case <-ticker.C:
 			s.suspendQuotes(ctx, state)
-		case <-laneStateChanges:
-			// A coalesced signal may represent pause followed by resume. Always retire any curve
-			// first so a missed intermediate state cannot leave a pre-pause commitment live.
-			s.suspendQuotes(ctx, state)
 		}
 	}
 }
@@ -108,42 +102,41 @@ func (s *Solver) runConnectedQuoteLoop(
 	routes []route,
 	refresh <-chan struct{},
 	ticks <-chan time.Time,
-	laneStateChanges <-chan struct{},
 	state *quoteState,
 	lastBlock *uint64,
 ) {
+	wasReady := s.transactionLaneReady()
 	s.refreshQuotes(ctx, routes, state)
 	for {
+		force := false
 		select {
 		case <-ctx.Done():
 			return
 		case <-refresh:
-			s.refreshQuotes(ctx, routes, state)
+			force = true
 		case <-ticks:
-			if s.shouldRefreshQuotes(ctx, state, lastBlock) {
-				s.refreshQuotes(ctx, routes, state)
-			}
-		case <-laneStateChanges:
-			// Signals are deliberately coalesced. Retire the current curve even when the latest
-			// state is already ready, then republish from fresh state below.
+		}
+		// Check signer readiness before the unchanged-block optimization. Busy work
+		// retires standing commitments; becoming ready republishes fresh quotes.
+		ready := s.transactionLaneReady()
+		if !ready {
 			s.suspendQuotes(ctx, state)
-			if s.transactionLaneReady() {
-				state.forceRenewal()
-				s.refreshQuotes(ctx, routes, state)
-			}
+			wasReady = false
+			continue
+		}
+		if !wasReady {
+			state.forceRenewal()
+			force = true
+		}
+		wasReady = true
+		if force || s.shouldRefreshQuotes(ctx, state, lastBlock) {
+			s.refreshQuotes(ctx, routes, state)
 		}
 	}
 }
 
 func (s *Solver) transactionLaneReady() bool {
 	return s.txLaneState != nil && s.txLaneState.LaneReady()
-}
-
-func (s *Solver) subscribeTransactionLaneState() (<-chan struct{}, func()) {
-	if s.txLaneState == nil {
-		return nil, func() {}
-	}
-	return s.txLaneState.SubscribeLaneState()
 }
 
 func (s *Solver) suspendQuotes(ctx context.Context, state *quoteState) {

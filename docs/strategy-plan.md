@@ -244,8 +244,7 @@ unique gauges/histograms; the framework does not know them. RFQ, LI.FI, and Unis
 `fill/success` event and token-native amount kinds; RFQ and UniswapX additionally classify `failure`,
 `not_admitted`, and `obsolete` (the order was settled elsewhere before our fill landed). UniswapX records pre-submission declines separately as `fill/declined`.
 Unknown event/outcome, amount-kind, or state-view observations increment one bounded
-contract-drift counter instead of disappearing silently. Detailed gas, fee, and transaction lifecycle
-accounting remains in the [shared transaction manager](TXMANAGER-PLAN.md#8-observability).
+contract-drift counter instead of disappearing silently. Integration metrics use returned canonical receipts; transaction lifecycle logs come from the shared SDK.
 The generic HTTP chain transport records bounded logical requests and endpoint attempts by read/write/shared
 role, method, ordinal endpoint, and outcome; configured URLs and error strings never become labels.
 `solver_bot_solver_info{solver}` exposes bounded config-time membership for fleet joins.
@@ -255,26 +254,23 @@ one configured signer and one SDK transaction manager. Its configured integratio
 process lane. Separate processes are configured with their own signers and unique Prometheus `instance`
 (or deployment-supplied `lane`) target labels. Committed dashboards use the standard Kubernetes `pod` target
 label and query namespace/pod options from Prometheus rather than embedding deployment names. Application metrics do not carry URLs or deployment names.
-The [shared manager ownership contract](TXMANAGER-PLAN.md#1-ownership-and-admission) serializes local
-signed lifecycles and reads the latest mined nonce before every new send. Fresh requests use the lowest
-unconsumed nonce, including after restart. Accepted/transport-uncertain abandonment retains a fee hint
-for at most `pendingTimeoutMs`; fresh work discards it if its required bump cannot fit the global fee
-ceiling. A lower request ceiling skips the hint for that send without discarding or renewing it, so
-later affordable work retains the known replacement floor until its original expiry.
-Rejected initial fees neither create nor ratchet that hint. The service trusts the per-process signer configuration and does not coordinate external commitments
-between processes; see [process ownership](TXMANAGER-PLAN.md#1-ownership-and-admission).
+The [shared manager ownership contract](TXMANAGER-PLAN.md#1-ownership-and-admission)
+serializes local signing and retains all signed attempts at the unresolved nonce.
+Each process trusts its signer configuration and does not coordinate external
+commitments with other processes. Native deadline or business obsolescence returns
+the request while signed hashes remain tracked. Freshly validated work may replace
+the same nonce under accepted fee floors and global/request ceilings. Unknown
+nonce advancement never proves execution.
 
-The manager abandons tracking at the pending timeout, request deadline or terminal business-status check
-without sending a cancellation transaction. Execution remains unknown. RFQ owns the retry policy: backend
+RFQ owns the retry policy: backend
 reconciliation followed by one configured poll interval and a fresh open-order poll can re-enter fill planning.
 Accepted uncertain outcomes use its `maxNonceRetries` budget. Generic `FailedCall` and
 `SafeERC20FailedOperation` errors, unknown and malformed unsigned estimate
 reverts have a separate retry count bounded by the same setting; exhaustion logs Error once and retires
 the unsigned failure so stale open listings cannot re-arm it. Known Reactor/Executor setup
 errors fail with Error once after backend reconciliation, `ExpiredRequest` expires, and indexed peer
-completion takes precedence. Missing views keep bounded observation without another estimate. Initial
-nonce collisions use the same backend reconciliation, poll delay and order deadline without spending
-that budget. Each retry resolves the executable order,
+completion takes precedence. Missing views keep bounded observation without another estimate. Unsigned admission failures use the same backend reconciliation, poll delay and order deadline without spending
+the signed retry budget. Each retry resolves the executable order,
 chain inputs, strategy plan, and discount signatures again. Retry budgets remain process-local; neither strategy code
 nor the generic manager decides whether to replay a protocol order.
 

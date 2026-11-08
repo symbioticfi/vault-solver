@@ -113,27 +113,9 @@ type recoveryGateStrategy struct {
 	tokenOut common.Address
 }
 
-type testTransactionLaneState struct {
-	ready       func() bool
-	changes     <-chan struct{}
-	onSubscribe func()
-	unsubscribe func()
-}
+type testTransactionLaneState struct{ ready func() bool }
 
-func (s *testTransactionLaneState) LaneReady() bool {
-	return s.ready()
-}
-
-func (s *testTransactionLaneState) SubscribeLaneState() (<-chan struct{}, func()) {
-	if s.onSubscribe != nil {
-		s.onSubscribe()
-	}
-	unsubscribe := s.unsubscribe
-	if unsubscribe == nil {
-		unsubscribe = func() {}
-	}
-	return s.changes, unsubscribe
-}
+func (s *testTransactionLaneState) LaneReady() bool { return s.ready() }
 
 func alwaysReadyTransactionLane() transactionLaneState {
 	return &testTransactionLaneState{ready: func() bool { return true }}
@@ -397,10 +379,10 @@ func TestQuoteLoopExpiresQuotesOnRootCancellation(t *testing.T) {
 	}
 }
 
-func TestQuoteLoopSuspendsWhileLaneBusyAndRepublishesOnCoalescedIdle(t *testing.T) {
+func TestQuoteLoopPollsLaneBeforeUnchangedBlockOptimization(t *testing.T) {
 	cfg := testLifiConfig()
-	cfg.QuoteRefreshMode = quoteRefreshModeInterval
-	cfg.QuoteInterval = time.Hour
+	cfg.QuoteRefreshMode = quoteRefreshModeBlock
+	cfg.QuoteInterval = 10 * time.Millisecond
 	cfg.QuoteTTL = 2 * time.Hour
 	cfg.OrderServer.HTTPTimeout = time.Second
 	tokenIn := common.HexToAddress("0x6666666666666666666666666666666666666666")
@@ -438,9 +420,6 @@ func TestQuoteLoopSuspendsWhileLaneBusyAndRepublishesOnCoalescedIdle(t *testing.
 
 	var ready atomic.Bool
 	ready.Store(false)
-	laneStateChanges := make(chan struct{}, 1)
-	laneStateSubscribed := make(chan struct{})
-	var unsubscribed atomic.Bool
 	refresh := make(chan struct{}, 1)
 	solver := &Solver{
 		cfg:      cfg,
@@ -453,14 +432,7 @@ func TestQuoteLoopSuspendsWhileLaneBusyAndRepublishesOnCoalescedIdle(t *testing.
 		maxFeePerGas: func(context.Context) (*big.Int, error) {
 			return big.NewInt(1), nil
 		},
-		txLaneState: &testTransactionLaneState{
-			ready:       ready.Load,
-			changes:     laneStateChanges,
-			onSubscribe: func() { close(laneStateSubscribed) },
-			unsubscribe: func() {
-				unsubscribed.Store(true)
-			},
-		},
+		txLaneState: &testTransactionLaneState{ready: ready.Load},
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	connectionCtx, cancelConnection := context.WithCancel(t.Context())
@@ -473,17 +445,14 @@ func TestQuoteLoopSuspendsWhileLaneBusyAndRepublishesOnCoalescedIdle(t *testing.
 	}()
 
 	// A busy initial state must suppress the first connected refresh.
-	expectSignal(t, laneStateSubscribed)
 	select {
 	case <-quoteSubmitted:
 		t.Fatal("quote was published while transaction lane was initially not ready")
 	case <-time.After(50 * time.Millisecond):
 	}
 	ready.Store(true)
-	laneStateChanges <- struct{}{}
 	expectSignal(t, quoteSubmitted)
 	ready.Store(false)
-	laneStateChanges <- struct{}{}
 	expectSignal(t, quoteExpired)
 	refresh <- struct{}{}
 	select {
@@ -493,16 +462,8 @@ func TestQuoteLoopSuspendsWhileLaneBusyAndRepublishesOnCoalescedIdle(t *testing.
 	}
 
 	ready.Store(true)
-	laneStateChanges <- struct{}{}
 	expectSignal(t, quoteSubmitted)
 
-	// A coalesced busy+idle transition leaves one undifferentiated notification with LaneReady already
-	// true. The listener must still expire the old curve before publishing the fresh one.
-	ready.Store(false)
-	ready.Store(true)
-	laneStateChanges <- struct{}{}
-	expectSignal(t, quoteExpired)
-	expectSignal(t, quoteSubmitted)
 	cancel()
 	expectSignal(t, quoteExpired)
 	select {
@@ -513,16 +474,6 @@ func TestQuoteLoopSuspendsWhileLaneBusyAndRepublishesOnCoalescedIdle(t *testing.
 	case <-time.After(3 * time.Second):
 		t.Fatal("quoteLoop did not stop after resumed quote expiry")
 	}
-	if !unsubscribed.Load() {
-		t.Fatal("quoteLoop did not unsubscribe from transaction lane state")
-	}
-}
-
-func TestShutdownPreparationTimeoutIncludesQuoteAndInboxDrain(t *testing.T) {
-	solver := &Solver{cfg: &Config{OrderServer: OrderServerConfig{HTTPTimeout: 3 * time.Second}}}
-	if got, want := solver.ShutdownPreparationTimeout(), 6*time.Second; got != want {
-		t.Fatalf("shutdown preparation timeout = %s, want %s", got, want)
-	}
 }
 
 func (s *Solver) processOrder(ctx context.Context, routes []route, order *submittedOrder) {
@@ -530,13 +481,12 @@ func (s *Solver) processOrder(ctx context.Context, routes []route, order *submit
 }
 
 type fakeLifiTxSender struct {
-	reqs      []txmanager.Request
-	results   []chan txmanager.Result
-	result    txmanager.Result
-	reject    bool
-	hold      bool
-	onSend    func(int, chan<- txmanager.Result)
-	observers sync.Map // result channels own their immutable request callbacks
+	reqs    []txmanager.Request
+	results []chan txmanager.Result
+	result  txmanager.Result
+	reject  bool
+	hold    bool
+	onSend  func(int, chan<- txmanager.Result)
 }
 
 func (f *fakeLifiTxSender) SendAsync(
@@ -549,11 +499,7 @@ func (f *fakeLifiTxSender) SendAsync(
 	f.reqs = append(f.reqs, req)
 	result := make(chan txmanager.Result, 1)
 	f.results = append(f.results, result)
-	f.observers.Store((chan<- txmanager.Result)(result), func(value txmanager.Result) {
-		if req.ObserveReceipt != nil && value.Receipt != nil {
-			req.ObserveReceipt(ctx, value)
-		}
-	})
+
 	if f.onSend != nil {
 		f.onSend(len(f.reqs), result)
 	}
@@ -564,21 +510,17 @@ func (f *fakeLifiTxSender) SendAsync(
 }
 
 func (f *fakeLifiTxSender) complete(result chan<- txmanager.Result, value txmanager.Result) {
-	if observer, ok := f.observers.LoadAndDelete(result); ok {
-		observer.(func(txmanager.Result))(value)
-	}
 	result <- value
 }
 
 func (f *fakeLifiTxSender) fillResult() txmanager.Result {
-	if f.result.Outcome != "" || f.result.Err != nil ||
+	if f.result.Err != nil ||
 		f.result.Receipt != nil || f.result.Hash != (common.Hash{}) {
 		return f.result
 	}
 	return txmanager.Result{
 		Hash:    common.HexToHash("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 		Receipt: &ethtypes.Receipt{Status: ethtypes.ReceiptStatusSuccessful},
-		Outcome: txmanager.OutcomeConfirmed,
 	}
 }
 
@@ -1386,8 +1328,7 @@ func TestProcessOrderDoesNotRetryFailedSend(t *testing.T) {
 		t.Fatalf("New strategy: %v", err)
 	}
 	txm := &fakeLifiTxSender{result: txmanager.Result{
-		Outcome: txmanager.OutcomeSubmissionError,
-		Err:     errors.New("send failed"),
+		Err: errors.New("send failed"),
 	}}
 	s := newProcessTestSolver(fixture.cfg, fixture.caller, txm, strategy, fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited)
 
@@ -1549,11 +1490,6 @@ func TestOrderWorkerSubmitsAllFillsWithoutWaitingForReceipts(t *testing.T) {
 	}
 	if fillReads != 5 || feeReads != 5 || len(txm.reqs) != 5 {
 		t.Fatalf("fills=%d fees=%d submissions=%d, want 5/5/5", fillReads, feeReads, len(txm.reqs))
-	}
-	for i, req := range txm.reqs {
-		if req.Confirmations != nil {
-			t.Fatalf("request %d confirmations = %v, want global txmanager configuration", i, req.Confirmations)
-		}
 	}
 }
 

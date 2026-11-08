@@ -143,6 +143,7 @@ type permissionSource interface {
 type connectorWorkflow struct {
 	chain          recipes.Reader
 	chainID        *big.Int
+	maxGas         uint64
 	source         permissionSource
 	caller, signer common.Address
 }
@@ -286,7 +287,7 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 		_, err := w.chain.CallContract(ctx, ethereum.CallMsg{From: w.signer, To: &w.caller, Data: bytes.Clone(calldata), Gas: request.GasLimit}, request.BlockNumber)
 		return err
 	}
-	if err := recipes.ValidatePreparedBatchWithSimulation(ctx, w.chain, prepared, []recipes.ExecutorCall{{Executor: snapshot.Executor, Data: assembled.Calldata}}, [][]common.Hash{assembled.Leaves}, w.caller, simulate); err != nil {
+	if err := recipes.ValidatePreparedBatchWithSimulation(ctx, w.chain, prepared, []recipes.ExecutorCall{{Executor: snapshot.Executor, Data: assembled.Calldata}}, [][]common.Hash{assembled.Leaves}, w.caller, simulate, w.maxGas); err != nil {
 		return builtConnector{}, errors.Errorf("validate outer RFQ recipe fill: %w", err)
 	}
 	return builtConnector{Calldata: calldata, ValidUntil: terms.ValidUntil, State: state}, nil

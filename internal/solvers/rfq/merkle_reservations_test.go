@@ -46,7 +46,10 @@ func TestFactoryQuotesAuthenticateMerkleRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := txmanager.New(client, signing, big.NewInt(1), txmanager.Config{}, logr.Discard())
+	manager, err := txmanager.New(client, signing, big.NewInt(1), txmanager.Config{MaxFeeGwei: 100}, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := manager.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}

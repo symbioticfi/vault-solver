@@ -98,8 +98,7 @@ defer func() { end(err) }()
 ```
 
 - `Start` stamps `solver=<name>` on every span it creates, the way `run.go` stamps the logger, so any
-  span can be filtered by integration without joining on the resource. Shared components (txmanager,
-  chain) pass `""` and carry no `solver` attribute.
+  span can be filtered by integration without joining on the resource. Shared host components (chain) pass `""` and carry no `solver` attribute.
 - `Tracer.Raw()` resolves the provider lazily and then caches it against a package-level generation
   counter that `NewTracing` (and the test helper) bump after `otel.SetTracerProvider`. Resolving per
   span start takes the global delegate's mutex while tracing is disabled, and the SDK's tracer-map
@@ -131,7 +130,7 @@ defer func() { end(err) }()
   `link_miss` event naming the key and returns `""`. `observability.LinkMiss(ctx, key)` emits that
   event on its own, for the one caller (3F redeem) resolving several keys at once.
 - `Tracer.Raw()` is for the rare span that must be held across goroutines rather than scoped to a
-  function (txmanager's send span).
+  function.
 
 ### 3.3 Boundaries
 
@@ -176,44 +175,14 @@ transport, including SDK batches. No per-method tracing wrappers are needed.
 `traceparent` into the handshake headers, so a connection is findable in the trace backend. Per-message
 handling is described per solver in §5.
 
-### 3.4 txmanager
+### 3.4 Transaction results
 
-`sendAsync` starts the transaction span
-`"txmanager.send <label>"` from the caller's context, so it is an ordinary child of the submitting
-fill span, and hands the span to the worker on the internal job. Starting it in `sendAsync` means the
-span **covers the admission wait** as well as the broadcast. The worker continues that span on its own
-contexts with `trace.ContextWithSpan`, legal even after the caller's context is cancelled, so the span
-survives the manager's deliberate detachment and covers admission → broadcast → terminal outcome.
-
-Children: `txmanager.broadcast` (fee quote, gas estimate, nonce, sign, send — each RPC call becomes a
-grandchild automatically) and one `txmanager.replace` per replacement carrying `tx.attempt`
-and `tx.replace_reason` (the `replacements_total{reason}` value that triggered it).
-Receipt polls are ordinary RPC child spans. Attributes: `solver` (from
-`Request.Solver`), `tx.label`, `tx.hash` and `tx.nonce` once known, and terminal `tx.outcome`; status
-is Error for `reverted`, `submission_error` and `tracking_stopped`, and unset for
-`confirmed`, `included_unconfirmed` and the expected `abandoned`, `nonce_conflict` / `nonce_consumed` outcomes. These record
-nonce contention or observed mined nonce advancement with an unknown business result; they must not be presented as our
-transaction's inclusion, a winning peer or a fill failure. An attached
-`tx.hash` remains the process's attempted hash. Account evidence never manufactures a receipt, so this
-outcome adds no receipt gas/fee accounting. Solver completion stages record the same outcome and reconcile
-authoritative protocol/backend state before considering a retry; see [nonce outcome handling](TXMANAGER-PLAN.md#fresh-mined-nonce-and-initial-collisions).
-The send span **ends before the result is delivered** to the
-caller, so a caller resuming its own trace never races the span it nests under. A send declined because
-the lane is busy gets a `declined` event with `decision=not_admitted`, `reason=lane_busy`, and ends
-without a `tx.outcome` (§10). `txmanager.account_poll` roots each account-poll tick.
-
-After `abandoned` or `nonce_consumed`, passive polls use short `txmanager.late_receipt` spans linked
-to the ended send span through its immutable `SpanContext`. They carry `solver`, `tx.label` and
-`tx.hash` and `tx.nonce`; a qualified receipt adds its `tx.outcome`. The original lifecycle stays ended.
-Expected absent receipts decline with
-`receipt_unavailable`; depth waiting uses `confirmation_depth_pending`. Invalid/RPC/canonical-proof
-errors end that individual poll span as Error and defer observation. Late receipt metrics and callbacks
-do not change the original send span outcome or solver completion trace.
-
-The worker stores the request's `solver`-stamped logger on every context of the lifecycle, the send
-span included, so `observability.Log(ctx)` puts `solver`, `label`, `trace_id` and `span_id` on every
-lifecycle line — including the lines written long after the broadcast span has ended, from the
-detached lifecycle goroutine.
+The SDK manager logs signed identities and owns no spans. Solver submission and
+completion spans remain in the host, using `observability.RecordTransactionResult`
+to attach a nonzero signed hash and an outcome derived from canonical receipt
+and uncertainty evidence. RPC transport instrumentation remains host-owned.
+Signed uncertainty is reconciled against protocol/backend state before retry.
+It never claims inclusion, a winning peer or a fill without receipt evidence.
 
 ### 3.5 Root spans for loops
 
@@ -265,7 +234,7 @@ need to know the solver's prefix. Log lines keep their existing camelCase keys (
 
 | Attribute | Set on | Source |
 |---|---|---|
-| `solver` | every span started through `NewTracer` with a name, and txmanager send spans | package `Name` / `Request.Solver` |
+| `solver` | every host span started through `NewTracer` with a name | package `Name` |
 | `chain.id` | the resource (one chain per process) | `cfg.Chain.ChainID` |
 | `request.id` | inbound quote spans | RFQ: the `X-Request-Id` the middleware propagates or mints. UniswapX: the request id in the quote body |
 | `quote.id` | quote spans, order/fill spans | solver quote id |
@@ -274,16 +243,15 @@ need to know the solver's prefix. Log lines keep their existing camelCase keys (
 | `auction.id`, `request.address` | 3F auction spans, RedStone auction and result spans | 3F auction id and Request address, RedStone auction id |
 | `adapter.address` | quote, order and 3F auction/redeem spans | resolved adapter (3F: the offer's maker) |
 | `strategy.name` | strategy stage spans | strategy registry key |
-| `tx.label`, `tx.hash`, `tx.nonce`, `tx.outcome`, `tx.attempt` | txmanager spans; `tx.hash`/`tx.outcome` also on the solver's completion span | txmanager |
+| `tx.hash`, `tx.outcome` | solver submission and completion spans | host result helper |
 | `rpc.method`, `rpc.jsonrpc.request_id`, `chain.rpc.role`, `chain.rpc.batch`, attempt `endpoint` ordinal | RPC spans | fallback transport |
 | `peer.service` | outbound HTTP client spans | the wiring's peer name |
 | `reason_code` | any span ended with a classified error | the error's `ReasonCode()` |
 
-`tx.hash` is set only once a transaction exists. A submission the manager rejected before
-broadcasting carries the zero hash in its `Result`, and every site records `tx.outcome` alone rather
-than an attribute that looks like a transaction and matches nothing. That rule lives in one place:
-`txmanager.RecordResult(ctx, res)` stamps both attributes on the span in `ctx`, and the manager's own
-send span ends through the same builder, so the solvers cannot drift from it.
+`tx.hash` is recorded only when the result identifies a signed transaction.
+The host's `observability.RecordTransactionResult` helper derives the result outcome
+from signed hashes and canonical receipt evidence. The shared SDK has no tracing
+worker or result observer. Protocol spans remain in the host.
 
 Identifiers propagate downward by context: a stage span under a fill span does not repeat `order.id`,
 because the trace view shows it on the parent. Nothing secret is ever an attribute — no API keys, no
@@ -306,7 +274,7 @@ Three rules, established in review and mandatory for any new span site:
 
 ## 5. Spans per solver
 
-Span names are the contract. Everything under a stage (HTTP, RPC, txmanager) nests automatically
+Span names are the contract. Host HTTP and RPC work under a stage nests automatically
 through the context.
 
 **rfq** (`internal/solvers/rfq`) — see [RFQ-PLAN](RFQ-PLAN.md)
@@ -514,8 +482,8 @@ its fallback to the default logger, `TraceHandler` extracting a
 keeping the query string out of `url.full` while the wire request keeps it, the
 tracer's error / cancellation / `reason_code` behaviour and its re-resolution across providers,
 `SpanLinks` remember, lookup, TTL expiry and
-eviction, one RPC span per logical request with an event per attempt, the txmanager span tree and its
-`trace_id`-carrying lifecycle logs, and per solver the expected span tree by name with the identifier
+eviction, one RPC span per logical request with an event per attempt, host transaction result attributes,
+and per solver the expected span tree by name with the identifier
 attributes and the error-versus-decline distinction. Benchmarks in `internal/observability` record `Start`/`end` cost with and without a provider,
 sequentially and under `RunParallel`, plus the disabled-path allocation count and `Log(ctx)` under a
 span, so a regression is visible in review. Existing suites
@@ -532,17 +500,15 @@ run against the no-op provider and prove there is no behaviour change when traci
 | `internal/observability/spanlinks.go` | `SpanLinks` |
 | `internal/observability/tracetest` | test provider installation and the shared span assertions |
 | `internal/chain/trace.go` | HTTP JSON-RPC spans and attempt events |
-| `sdk/transaction/trace.go` (shared SDK module) | the send span's start and terminal end, and `RecordResult` |
 | `internal/solvers/<name>/tracing.go` | each solver's tracer, link keys, TTLs and span helpers |
 
 ## 10. TODO
 
 - [ ] backend returns quote trace id on order list (would replace the RFQ in-memory link)
 - [ ] omit `rpc.jsonrpc.request_id` when empty (batches) instead of setting an empty attribute
-- [ ] set `tx.outcome=not_admitted` on declined txmanager sends, and skip an empty `solver` attribute
+- [ ] set `tx.outcome=not_admitted` on declined host submissions, and skip an empty `solver` attribute
 - [ ] cap or aggregate the per-offer `declined` events on `3f.offers.reconcile`
 - [ ] the RPC span's success `attempt` event is timestamped at body close, not at the attempt
-- [ ] a no-op `txmanager.replace` tick emits an empty span, and replace spans carry no `tx.hash`
 - [ ] the LI.FI quote-loop tick (`runConnectedQuoteLoop`) is unspanned, so `shouldRefreshQuotes` lines carry no trace ids
 - [ ] 3F `refreshTargetsAndHydrate` emits a root `3f.offers.reconcile`, and the health-tick reconcile is untraced
 - [ ] no unit tests for `NewTracer("")`, `NewSpanLinks()`, `Raw()`, or `TraceTransport` with a non-nil base

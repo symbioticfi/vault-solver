@@ -115,17 +115,15 @@ vault-solver/
 manager and consumes `txmanager.Result`. Admission, nonce ownership, fee policy, replacements,
 confirmation and shutdown are defined in the [transaction manager plan](TXMANAGER-PLAN.md).
 
-`abandoned`, `nonce_conflict` and `nonce_consumed` are expected unknown-execution results; their terminal
-result does not prove a successful redemption. The next normal redemption poll reads `canWithdraw` again and constructs a
-fresh batch; completed requests are excluded. This account-level recovery does not coordinate signed
+Signed uncertain results have unknown execution; their terminal
+result does not prove a successful redemption. The request deadline is the next configured `intervals.redeemPoll` scan. That scan
+reads `canWithdraw` again and constructs a fresh batch; completed requests are excluded. This account-level recovery does not coordinate signed
 offers, offer counters or capacity promises across independent processes; see the [process ownership contract](TXMANAGER-PLAN.md#1-ownership-and-admission).
 
-Each redemption's `Request.ObserveReceipt` captures only the metric pointer and capped submitted batch
-size. Normal successful inclusion and a late canonical successful owned receipt at the configured
-confirmation depth record the same `redeem/success` count and freshness through the manager's bounded
-process-local hash deduplication. Late observations do not rescan requests or update backlog/active-state
-gauges. The current metrics do not report realized loan gains or losses; the vendored `FinalizeRequest`
-event contains only the finalized request address.
+A returned canonical successful redemption receipt records the submitted batch's
+`redeem/success` count and freshness. There is no late-receipt observer. Metrics
+may miss a call that lands after its result returns. The metrics do not report
+realized loan gains or losses; `FinalizeRequest` contains only the request address.
 
 An occupied local transaction lane pauses new 3F commitments: offer
 discovery exits before chain/API planning, and lane readiness is checked again immediately before each
@@ -176,7 +174,7 @@ server path (`/v1`); the schema owns endpoint paths.
 ```yaml
 chain: { rpcUrl, writeRpcUrl?, chainId, rpcFallbackUrls? } # HTTP(S) endpoints
 signer: { keyEnv: SOLVER_PRIVATE_KEY }     # the EIP-1271 signer every served adapter trusts
-txManager: { confirmations: 2, maxFeeGwei, broadcastTimeoutMs, replacementIntervalMs, pendingTimeoutMs, shutdownTimeoutMs, horizon }
+txManager: { confirmations: 2, maxFeeGwei, maxGas, pollIntervalMs, replacementIntervalMs, shutdownTimeoutMs }
 
 solvers:
   - name: 3f-bridge-facilitator             # ← registry key: selects the impl

@@ -1,6 +1,7 @@
 package rfq
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"testing"
@@ -39,7 +40,7 @@ func TestExecutionFeeCeilingReconcilesWithoutFailureAlert(t *testing.T) {
 				cause = errors.New("gas estimate RPC connection reset")
 			}
 			txm := &fakeTxm{result: txmanager.Result{
-				Outcome: txmanager.OutcomeSubmissionError, Err: errors.Errorf("estimate fill: %w", cause), NotAdmitted: tc.notAdmitted,
+				Err: errors.Errorf("estimate fill: %w", cause), NotAdmitted: tc.notAdmitted,
 			}}
 			e := newExec(t, st, be, txm)
 			e.maxNonceRetries = 0
@@ -73,11 +74,11 @@ func TestExecutionFeeCeilingReconcilesWithoutFailureAlert(t *testing.T) {
 }
 
 func TestExhaustedNonceRetriesObserveBackendUntilTerminal(t *testing.T) {
-	for _, outcome := range []txmanager.Outcome{
-		txmanager.OutcomeAbandoned, txmanager.OutcomeNonceConsumed, txmanager.OutcomeReverted,
+	for _, outcome := range []error{
+		context.DeadlineExceeded, txmanager.ErrNonceConsumed, errCanonicalRevert,
 	} {
 		for _, terminal := range []string{"filled", "expired", "local deadline"} {
-			t.Run(string(outcome)+"/"+terminal, func(t *testing.T) {
+			t.Run(outcome.Error()+"/"+terminal, func(t *testing.T) {
 				st, be := fillFixtures(t)
 				now := time.Unix(0, 0)
 				st.now = func() time.Time { return now }
@@ -153,12 +154,12 @@ func TestNonceUsedExpiryDoesNotBecomeRetryExhaustion(t *testing.T) {
 }
 
 func TestLastPollIntervalKeepsUncertainOrderUntilActualDeadline(t *testing.T) {
-	for _, outcome := range []txmanager.Outcome{
-		txmanager.OutcomeAbandoned, txmanager.OutcomeNonceConsumed, txmanager.OutcomeReverted,
+	for _, outcome := range []error{
+		context.DeadlineExceeded, txmanager.ErrNonceConsumed, errCanonicalRevert,
 	} {
 		for _, limit := range []int{0, 1} {
 			for _, peerFilled := range []bool{false, true} {
-				t.Run(string(outcome)+"/"+strconv.Itoa(limit)+"/"+strconv.FormatBool(peerFilled), func(t *testing.T) {
+				t.Run(outcome.Error()+"/"+strconv.Itoa(limit)+"/"+strconv.FormatBool(peerFilled), func(t *testing.T) {
 					st, be := fillFixtures(t)
 					now := time.Unix(0, 0)
 					st.now = func() time.Time { return now }

@@ -221,8 +221,8 @@ func TestExecution_SubmissionErrorOmitsTxHash(t *testing.T) {
 	rec := tracetest.Install(t)
 	st, be := fillFixtures(t)
 	txm := &fakeTxm{result: txmanager.Result{
-		Outcome: txmanager.OutcomeSubmissionError,
-		Err:     errors.New("insufficient funds for gas * price + value"),
+
+		Err: errors.New("insufficient funds for gas * price + value"),
 	}}
 	e := newExec(t, st, be, txm)
 
@@ -234,7 +234,7 @@ func TestExecution_SubmissionErrorOmitsTxHash(t *testing.T) {
 	for _, name := range []string{"rfq.order", "rfq.order.submit"} {
 		span := tracetest.Ended(t, rec, name)
 		tracetest.RequireNoAttr(t, span, "tx.hash") // a transaction that never went out has none
-		tracetest.RequireAttr(t, span, "tx.outcome", string(txmanager.OutcomeSubmissionError))
+		tracetest.RequireAttr(t, span, "tx.outcome", "submission_error")
 	}
 	if got := tracetest.Ended(t, rec, "rfq.order.submit").Status().Code; got != codes.Error {
 		t.Fatalf("submit span status = %v, want Error", got)

@@ -35,11 +35,18 @@ type ownedRelay struct {
 	ambiguous bool
 }
 
+func (b *ownedRelay) TransactionSenderBalanceAt(ctx context.Context, account common.Address, block *big.Int) (*big.Int, error) {
+	return b.BalanceAt(ctx, account, block)
+}
+
 func (b *ownedRelay) SendTransaction(_ context.Context, tx *types.Transaction) error {
 	b.mu.Lock()
 	b.sent = append(b.sent, tx)
 	b.mu.Unlock()
-	b.observed <- struct{}{}
+	select {
+	case b.observed <- struct{}{}:
+	default:
+	}
 	if b.ambiguous {
 		return errors.New("relay response lost")
 	}
@@ -55,7 +62,10 @@ func TestSDKRAMSenderReplacementAndReorg(t *testing.T) {
 	signing := ramSigning(t)
 	chain, mine := senderAnvil(t, signing.Address())
 	relay := &ownedRelay{Client: chain, observed: make(chan struct{}, 64)}
-	engine := txmanager.New(relay, signing, big.NewInt(1337), txmanager.Config{MaxFeeGwei: 100, Confirmations: 1, PollInterval: time.Millisecond, ReplacementInterval: time.Second, PendingTimeout: 10 * time.Second, ShutdownTimeout: time.Millisecond, Horizon: txmanager.HorizonConfig{BlockTime: time.Second}}, logr.Discard())
+	engine, err := txmanager.New(relay, signing, big.NewInt(1337), txmanager.Config{MaxFeeGwei: 100, Confirmations: 1, PollInterval: time.Millisecond, ReplacementInterval: time.Second, ShutdownTimeout: time.Millisecond}, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
 	sender := engine.Sender("test")
 	runRAMManager(t, engine)
 	if err := sender.Submit(t.Context(), txmanager.ExecutionRequest{To: common.HexToAddress("0x1234"), Data: []byte{1}}); err != nil {
@@ -69,7 +79,7 @@ func TestSDKRAMSenderReplacementAndReorg(t *testing.T) {
 		t.Fatal(err)
 	}
 	mine()
-	awaitBroadcast(t, relay)
+	awaitReplacement(t, relay)
 	attempts := relay.snapshot()
 	latest := attempts[len(attempts)-1]
 	if attempts[0].Hash() == latest.Hash() || attempts[0].Nonce() != latest.Nonce() {
@@ -119,7 +129,10 @@ func TestSDKRAMAmbiguousOutcomeResumesAfterDeadline(t *testing.T) {
 	signing := ramSigning(t)
 	chain, mine := senderAnvil(t, signing.Address())
 	relay := &ownedRelay{Client: chain, observed: make(chan struct{}, 64), ambiguous: true}
-	engine := txmanager.New(relay, signing, big.NewInt(1337), txmanager.Config{MaxFeeGwei: 100, PollInterval: time.Millisecond, ReplacementInterval: 20 * time.Millisecond, PendingTimeout: 50 * time.Millisecond, ShutdownTimeout: time.Millisecond, Horizon: txmanager.HorizonConfig{BlockTime: time.Second}}, logr.Discard())
+	engine, err := txmanager.New(relay, signing, big.NewInt(1337), txmanager.Config{MaxFeeGwei: 100, PollInterval: time.Millisecond, ReplacementInterval: 20 * time.Millisecond, ShutdownTimeout: time.Millisecond}, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
 	sender := engine.Sender("test")
 	sender.Deadline = func() time.Time { return time.Now().Add(80 * time.Millisecond) }
 	runRAMManager(t, engine)
@@ -190,6 +203,23 @@ func awaitBroadcast(t *testing.T, relay *ownedRelay) {
 	case <-relay.observed:
 	case <-time.After(5 * time.Second):
 		t.Fatal("host broadcast absent")
+	}
+}
+func awaitReplacement(t *testing.T, relay *ownedRelay) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	first := relay.snapshot()[0]
+	for {
+		attempts := relay.snapshot()
+		if attempts[len(attempts)-1].Hash() != first.Hash() {
+			return
+		}
+		select {
+		case <-relay.observed:
+		case <-ctx.Done():
+			t.Fatal("host fee replacement absent")
+		}
 	}
 }
 func awaitRAMTerminal(t *testing.T, sender *txmanager.Sender) *txmanager.ExecutionResult {

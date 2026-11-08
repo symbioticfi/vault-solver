@@ -470,8 +470,7 @@ Each fill request supplies the generic tx-manager obsolescence check with a fres
 The manager evaluates it before signing and after a receipt sweep finishes without a valid receipt.
 A receipt of our own fill takes precedence over interpreting `Claimed` as obsolescence. `Deposited` keeps normal replacements alive. `None` also preserves the lifecycle because a lagging latest-state RPC can return the older
 pre-deposit value for a fresh order. An observed `Claimed` or `Refunded` status drops an unsigned request or
-immediately abandons signed tracking without waiting for `pendingTimeoutMs` or sending another
-transaction. The next fresh business request can reuse the unused nonce.
+ends the native request without further signing, retaining its signed hashes. The next fresh business request can replace the same nonce.
 Unknown statuses and read errors preserve the current lifecycle and are retried. A terminal result wrapping
 `txmanager.ErrRequestObsolete` is an expected skip: completion records a `fill_obsolete` decline, logs at
 Info, and ends the order trace without an error. Capacity is released
@@ -542,7 +541,7 @@ order tokens. For private candidates it resolves the
 signatures under one order-server timeout, then re-reads latest-state LiquidLane inventory and current block
 time before each strategy decision. With `gas:` configured, that decision-time max fee is a hard per-request
 cap; without it, the request cap is nil. The shared manager applies
-[fee selection and headroom](TXMANAGER-PLAN.md#4-fees-replacements-and-abandonment). LI.FI verifies
+[fee selection and headroom](TXMANAGER-PLAN.md#4-fees-replacements-and-expiry). LI.FI verifies
 `Deposited` again immediately before `SendAsync`. `Deadline` is the earliest non-zero order expiry, fill
 deadline, selected signer deadline, or protocol-signature deadline. It is translated from the final observed
 chain time to wall time immediately before admission, so RPC/planning latency and positive chain-clock skew
@@ -555,7 +554,7 @@ reverts atomically rather than being repriced by the executor.
 There is no solver-level retained route plan or future-auction scheduling. Deposit propagation and
 reservation-blocked built-in decisions use their respective timer and completion-driven FIFO described above.
 The txmanager may replace the same pending nonce; that is fee management for one submission.
-`abandoned`, `nonce_conflict` and `nonce_consumed` release the fill's local reservation and
+Signed uncertain results release the fill's local reservation and
 record an expected decline. Their terminal result supplies no owned receipt and never records fill success. The worker immediately
 re-reads the InputSettler under `lifi.order.reconcile`: `Claimed` and `Refunded` retire the order at Info;
 `None`, `Deposited`, unsupported status values and status-read failures retain recovery. RPC/invalid-status
@@ -576,15 +575,13 @@ nearest-deadline gauges, and actual overflow/invalid-key drops record `queue_dro
 expiry is an expected decline. A healthy feed needs neither redelivery nor reconnect to recover nonce
 competition. These rules do not coordinate quote inventory or reservations across replicas.
 
-Each submitted fill snapshots only its metric pointer, token addresses, input/output amounts and gross
-planned surplus into `Request.ObserveReceipt`. The manager's bounded process-local hash deduplication
-covers normal inclusion and late canonical owned receipts at the configured confirmation depth. A
-successful late observation records `fill/success`, freshness and amounts after the worker has released
-the order, without changing capacity, queue state or protocol reconciliation and without submitting a retry.
-During process shutdown the shared txmanager outlives solver intake cancellation while accepted fills finish.
-LI.FI first keeps the feed alive while expiring active quotes, then stops accepting orders and drains admitted
-inbox work and accepted fills. The process hard stop bounds that solver preparation and the txmanager's configured
-`shutdownTimeoutMs`; it does not guarantee mining or canonical confirmation before exit.
+Returned canonical successful receipts at the configured confirmation depth
+record fill counts, freshness and planned amounts. There are no receipt callbacks
+or late-receipt metrics. Results returned before eventual inclusion may miss local
+execution metrics; protocol reconciliation still owns order and reservation state.
+Worker cancellation and the manager's bounded receipt drain begin together;
+shutdown cannot guarantee mining or confirmation before exit.
+
 For a selected private candidate, the solver uses its `DiscountID` only as the off-chain resolution key,
 then commits the fresh signed terms and both signatures inside a separate `DiscountRoute`; a missing or
 mismatched resolution aborts before submission. Those two signatures authorize the private LiquidLane route

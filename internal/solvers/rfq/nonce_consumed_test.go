@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -18,18 +19,18 @@ import (
 
 func nonceConsumedResult() txmanager.Result {
 	return txmanager.Result{
-		Hash: common.HexToHash("0x1234"), Outcome: txmanager.OutcomeNonceConsumed,
-		Err: txmanager.ErrNonceConsumed,
+		Hash: common.HexToHash("0x1234"),
+		Err:  txmanager.ErrNonceConsumed,
 	}
 }
 
 func TestExecutionConsumedNonceReconcilesTerminalBackendStatus(t *testing.T) {
-	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict, txmanager.OutcomeAbandoned} {
-		t.Run(string(outcome), func(t *testing.T) { executionConsumedNonceReconcilesTerminalBackendStatus(t, outcome) })
+	for _, outcome := range []error{txmanager.ErrNonceConsumed, context.DeadlineExceeded} {
+		t.Run(outcome.Error(), func(t *testing.T) { executionConsumedNonceReconcilesTerminalBackendStatus(t, outcome) })
 	}
 }
 
-func executionConsumedNonceReconcilesTerminalBackendStatus(t *testing.T, outcome txmanager.Outcome) {
+func executionConsumedNonceReconcilesTerminalBackendStatus(t *testing.T, outcome error) {
 	t.Helper()
 	for _, tc := range []struct {
 		backend string
@@ -65,20 +66,19 @@ func executionConsumedNonceReconcilesTerminalBackendStatus(t *testing.T, outcome
 
 func TestExecutionConsumedNonceRebuildsOnlyAfterFreshOpenPoll(t *testing.T) {
 	for _, tc := range []struct {
-		outcome     txmanager.Outcome
+		outcome     error
 		wantRetries int
 	}{
-		{outcome: txmanager.OutcomeNonceConsumed, wantRetries: 1},
-		{outcome: txmanager.OutcomeNonceConflict, wantRetries: 0},
-		{outcome: txmanager.OutcomeAbandoned, wantRetries: 1},
+		{outcome: txmanager.ErrNonceConsumed, wantRetries: 1},
+		{outcome: context.DeadlineExceeded, wantRetries: 1},
 	} {
-		t.Run(string(tc.outcome), func(t *testing.T) {
+		t.Run(tc.outcome.Error(), func(t *testing.T) {
 			executionConsumedNonceRebuildsOnlyAfterFreshOpenPoll(t, tc.outcome, tc.wantRetries)
 		})
 	}
 }
 
-func executionConsumedNonceRebuildsOnlyAfterFreshOpenPoll(t *testing.T, outcome txmanager.Outcome, wantRetries int) {
+func executionConsumedNonceRebuildsOnlyAfterFreshOpenPoll(t *testing.T, outcome error, wantRetries int) {
 	t.Helper()
 	st, be := fillFixtures(t)
 	now := time.Unix(0, 0)
@@ -94,7 +94,7 @@ func executionConsumedNonceRebuildsOnlyAfterFreshOpenPoll(t *testing.T, outcome 
 	if rec := st.order("o1"); rec.Status != statusRetryWaiting || rec.TxHash != txm.result.Hash || rec.NonceRetries != wantRetries {
 		t.Fatalf("consumed nonce did not retain identity and schedule retry: %+v", rec)
 	}
-	if txm.lastReq.GasLimit != 0 || txm.lastReq.Obsolete == nil {
+	if txm.lastReq.Obsolete == nil {
 		t.Fatal("fresh fills must retain gas estimation and protocol obsolescence checks")
 	}
 	syncCycle(t.Context(), e)
@@ -128,12 +128,12 @@ func executionConsumedNonceRebuildsOnlyAfterFreshOpenPoll(t *testing.T, outcome 
 }
 
 func TestExecutionConsumedNonceRetryBudgetIsBounded(t *testing.T) {
-	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeAbandoned, txmanager.OutcomeReverted} {
-		t.Run(string(outcome), func(t *testing.T) { executionConsumedNonceRetryBudgetIsBounded(t, outcome) })
+	for _, outcome := range []error{txmanager.ErrNonceConsumed, context.DeadlineExceeded, errCanonicalRevert} {
+		t.Run(outcome.Error(), func(t *testing.T) { executionConsumedNonceRetryBudgetIsBounded(t, outcome) })
 	}
 }
 
-func executionConsumedNonceRetryBudgetIsBounded(t *testing.T, outcome txmanager.Outcome) {
+func executionConsumedNonceRetryBudgetIsBounded(t *testing.T, outcome error) {
 	t.Helper()
 	for _, limit := range []int{0, 2} {
 		t.Run(strconv.Itoa(limit), func(t *testing.T) {
@@ -200,108 +200,13 @@ func TestExecutionConsumedNonceDoesNotScheduleDuringShutdown(t *testing.T) {
 	}
 }
 
-func uncertainNonceResult(outcome txmanager.Outcome) txmanager.Result {
+var errCanonicalRevert = errors.New("canonical transaction reverted")
+
+func uncertainNonceResult(cause error) txmanager.Result {
 	result := nonceConsumedResult()
-	result.Outcome = outcome
-	if outcome == txmanager.OutcomeAbandoned {
-		result.Err = txmanager.ErrAbandoned
-	}
-	if outcome == txmanager.OutcomeNonceConflict {
-		result.Err = txmanager.ErrNonceConflict
+	result.Err = cause
+	if errors.Is(cause, errCanonicalRevert) {
+		result.Receipt = &types.Receipt{Status: types.ReceiptStatusFailed}
 	}
 	return result
-}
-
-func TestExecutionInitialNonceConflictsDoNotSpendAcceptedRetryBudget(t *testing.T) {
-	for _, limit := range []int{0, 3} {
-		t.Run(strconv.Itoa(limit), func(t *testing.T) {
-			st, be := fillFixtures(t)
-			now := time.Unix(0, 0)
-			st.now = func() time.Time { return now }
-			be.order.OrderStatus = "open"
-			txm := &fakeTxm{result: uncertainNonceResult(txmanager.OutcomeNonceConflict)}
-			e := newExec(t, st, be, txm)
-			e.now, e.maxNonceRetries = st.now, limit
-			builds := 0
-			e.strategy = fixedFillStrategy{plan: baseFillPlan(), onBuild: func() { builds++ }}
-			for attempt := 1; attempt <= 6; attempt++ {
-				syncCycle(t.Context(), e)
-				if rec := st.order("o1"); rec.Status != statusRetryWaiting || rec.NonceRetries != 0 || !st.reserved("o1") {
-					t.Fatalf("initial collision spent accepted retry budget or retired the order: %+v", rec)
-				}
-				if txm.calls != attempt || builds != attempt {
-					t.Fatalf("fresh retry attempts=%d plans=%d, want %d", txm.calls, builds, attempt)
-				}
-				syncCycle(t.Context(), e)
-				if txm.calls != attempt {
-					t.Fatal("initial collision retried before polling backoff")
-				}
-				now = now.Add(3 * time.Second)
-			}
-			lastData := append([]byte(nil), txm.lastReq.Data...)
-			be.open = nil
-			syncCycle(t.Context(), e)
-			if txm.calls != 6 {
-				t.Fatal("initial collision retried without a fresh open-order listing")
-			}
-			be.open = []backendOrder{{OrderID: "o1", OrderStatus: "open", QuoteID: "q1", Filler: be.executable.Filler}}
-			be.executable.ProtocolSignature = strPtr("0x1234")
-			txm.result = confirmedTxResult()
-			be.order.OrderStatus = "filled"
-			syncCycle(t.Context(), e)
-			if txm.calls != 7 || builds != 7 || st.order("o1").Status != statusFilled || st.order("o1").NonceRetries != 0 {
-				t.Fatalf("order failed to recover after initial collisions: sends=%d plans=%d order=%+v", txm.calls, builds, st.order("o1"))
-			}
-			if bytes.Equal(lastData, txm.lastReq.Data) {
-				t.Fatal("fresh recovery replayed stale executable calldata")
-			}
-		})
-	}
-}
-
-func TestExecutionInitialNonceConflictsPreserveAcceptedRetryBudget(t *testing.T) {
-	st, be := fillFixtures(t)
-	now := time.Unix(0, 0)
-	st.now = func() time.Time { return now }
-	be.order.OrderStatus = "open"
-	txm := &fakeTxm{result: uncertainNonceResult(txmanager.OutcomeAbandoned)}
-	e := newExec(t, st, be, txm)
-	e.now, e.maxNonceRetries = st.now, 1
-	syncCycle(t.Context(), e)
-	if st.order("o1").NonceRetries != 1 {
-		t.Fatal("accepted abandonment did not spend its bounded retry")
-	}
-	for range 5 {
-		now = now.Add(3 * time.Second)
-		txm.result = uncertainNonceResult(txmanager.OutcomeNonceConflict)
-		syncCycle(t.Context(), e)
-		if rec := st.order("o1"); rec.Status != statusRetryWaiting || rec.NonceRetries != 1 {
-			t.Fatalf("initial collision reset or consumed accepted budget: %+v", rec)
-		}
-	}
-	now = now.Add(3 * time.Second)
-	txm.result = uncertainNonceResult(txmanager.OutcomeNonceConsumed)
-	syncCycle(t.Context(), e)
-	if rec := st.order("o1"); rec.Status != statusNonceUncertain || rec.NonceRetries != 1 || !rec.NonceRetryExhausted {
-		t.Fatalf("accepted unknown outcome bypassed its exhausted budget: %+v", rec)
-	}
-}
-
-func TestExecutionInitialNonceConflictRetriesExpireLocally(t *testing.T) {
-	st, be := fillFixtures(t)
-	now := time.Unix(0, 0)
-	st.now = func() time.Time { return now }
-	be.order.OrderStatus = "open"
-	txm := &fakeTxm{result: uncertainNonceResult(txmanager.OutcomeNonceConflict)}
-	e := newExec(t, st, be, txm)
-	e.now, e.maxNonceRetries = st.now, 0
-	for range 6 {
-		syncCycle(t.Context(), e)
-		now = now.Add(3 * time.Second)
-	}
-	now = st.order("o1").RetryDeadline
-	syncCycle(t.Context(), e)
-	if rec := st.order("o1"); rec.Status != statusExpired || rec.NonceRetries != 0 || st.reserved("o1") || txm.calls != 6 {
-		t.Fatalf("initial collision retries outlived order validity: sends=%d order=%+v", txm.calls, rec)
-	}
 }

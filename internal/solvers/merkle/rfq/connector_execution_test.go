@@ -154,6 +154,30 @@ func TestConnectorBuildRejectsUnauthorizedOrUnsettledExecution(t *testing.T) {
 	}
 }
 
+func TestConnectorBuildUsesHostAndBlockGasBudgets(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		maxGas, blockGas, wantGas uint64
+	}{
+		{name: "default", blockGas: 30_000_000, wantGas: 16_777_216},
+		{name: "host budget", maxGas: 2_000_000, blockGas: 30_000_000, wantGas: 2_000_000},
+		{name: "block limit", maxGas: 5_000_000, blockGas: 1_000_000, wantGas: 1_000_000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := connectorExecutionFixture(t, connectorDiscountFixture())
+			fixture.workflow.maxGas = tc.maxGas
+			fixture.reader.header.GasLimit = tc.blockGas
+			order, selected, backend := connectorExecutionAward(fixture.workflow.caller)
+			if _, err := fixture.workflow.build(t.Context(), order, []byte{0x91, 0x92}, selected, backend); err != nil {
+				t.Fatal(err)
+			}
+			if fixture.reader.outerCalls != 1 || fixture.reader.outerGas != tc.wantGas {
+				t.Fatalf("outer fill simulation: calls=%d gas=%d, want %d", fixture.reader.outerCalls, fixture.reader.outerGas, tc.wantGas)
+			}
+		})
+	}
+}
+
 type connectorExecutionPermissions struct {
 	raw      []byte
 	account  common.Address
@@ -176,6 +200,7 @@ type connectorExecutionReader struct {
 	header                                              *types.Header
 	allowed                                             bool
 	outerCalls                                          int
+	outerGas                                            uint64
 	identityReads                                       int
 	outerData                                           []byte
 	outerErr                                            error
@@ -222,10 +247,11 @@ func (r *connectorExecutionReader) CallContract(ctx context.Context, msg ethereu
 		return nil, errors.New("invalid contract call")
 	}
 	if *msg.To == r.recipeCaller && bytes.Equal(msg.Data[:4], executorBinding.GetABI().Methods["fill"].ID) {
-		if msg.From != r.signer || block == nil || block.Uint64() != 7 || msg.Gas != min(r.header.GasLimit, uint64(16_777_216)) {
+		if msg.From != r.signer || block == nil || block.Uint64() != 7 || msg.Gas == 0 {
 			return nil, errors.New("outer fill must simulate from the host signer at the pinned block and gas budget")
 		}
 		r.outerCalls++
+		r.outerGas = msg.Gas
 		r.outerData = bytes.Clone(msg.Data)
 		if r.reorgDuringFill {
 			r.header.Extra = []byte("new canonical hash")

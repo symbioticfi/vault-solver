@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/rpc"
+
 	"github.com/go-errors/errors"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/reactor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -27,29 +29,43 @@ const (
 // classifyEstimateRevert uses the vendored contracts' generated decoders. Exact ABI lengths stop
 // malformed data from being treated as terminal proof; generated UnpackError requires four bytes.
 func classifyEstimateRevert(err error) (estimateRevertKind, string) {
-	var revert *txmanager.ExecutionRevertError
-	if !errors.As(err, &revert) {
+	data, reverted := estimateRevertData(err)
+	if !reverted {
 		return estimateNotReverted, ""
 	}
-	if len(revert.Data) < 4 {
+	if len(data) < 4 {
 		return estimateRevertUnknown, "unknown"
 	}
-	decoded, decodeErr := reactor.NewReactor().UnpackError(revert.Data)
+	decoded, decodeErr := reactor.NewReactor().UnpackError(data)
 	if decodeErr == nil {
 		kind, name, size := reactorEstimateError(decoded)
-		if size == len(revert.Data) && canonicalErrorArguments(revert.Data, decoded) {
+		if size == len(data) && canonicalErrorArguments(data, decoded) {
 			return kind, name
 		}
 		return estimateRevertUnknown, "unknown"
 	}
-	decoded, decodeErr = executor.NewExecutor().UnpackError(revert.Data)
+	decoded, decodeErr = executor.NewExecutor().UnpackError(data)
 	if decodeErr == nil {
 		kind, name, size := executorEstimateError(decoded)
-		if size == len(revert.Data) && canonicalErrorArguments(revert.Data, decoded) {
+		if size == len(data) && canonicalErrorArguments(data, decoded) {
 			return kind, name
 		}
 	}
 	return estimateRevertUnknown, "unknown"
+}
+
+// estimateRevertData preserves structured estimate RPC failures through the SDK error wrapper.
+func estimateRevertData(err error) ([]byte, bool) {
+	var revert rpc.DataError
+	if !errors.As(err, &revert) {
+		return nil, false
+	}
+	raw, ok := revert.ErrorData().(string)
+	if !ok {
+		return nil, true
+	}
+	data, _ := hexutil.Decode(raw)
+	return data, true
 }
 
 func reactorEstimateError(decoded any) (estimateRevertKind, string, int) {

@@ -117,9 +117,6 @@ type fakeTxm struct {
 func (f *fakeTxm) Send(ctx context.Context, req txmanager.Request) txmanager.Result {
 	f.calls++
 	f.lastReq = req
-	if req.ObserveReceipt != nil && f.result.Receipt != nil {
-		req.ObserveReceipt(ctx, f.result)
-	}
 	if f.onResult != nil {
 		f.onResult()
 	}
@@ -129,7 +126,6 @@ func (f *fakeTxm) Send(ctx context.Context, req txmanager.Request) txmanager.Res
 func confirmedTxResult() txmanager.Result {
 	return txmanager.Result{
 		Hash:    common.HexToHash("0xdead"),
-		Outcome: txmanager.OutcomeConfirmed,
 		Receipt: &gethtypes.Receipt{Status: gethtypes.ReceiptStatusSuccessful},
 	}
 }
@@ -344,10 +340,10 @@ func TestExecution_RejectsBackendOutputMismatch(t *testing.T) {
 
 func TestExecution_RevertReconcilesFilled(t *testing.T) {
 	st, be := fillFixtures(t)
-	txm := &fakeTxm{result: txmanager.Result{
-		Hash:    common.HexToHash("0xdead"),
-		Outcome: txmanager.OutcomeReverted,
-		Err:     errors.New("tx reverted on-chain"),
+	txm := &fakeTxm{result: txmanager.Result{Receipt: &gethtypes.Receipt{Status: gethtypes.ReceiptStatusFailed},
+		Hash: common.HexToHash("0xdead"),
+
+		Err: errors.New("tx reverted on-chain"),
 	}}
 	e := newExec(t, st, be, txm)
 
@@ -367,15 +363,15 @@ func TestExecution_FailedFillOutcomesAreMetered(t *testing.T) {
 		{
 			name: "submission error",
 			result: txmanager.Result{
-				Outcome: txmanager.OutcomeSubmissionError,
-				Err:     errors.New("signing failed"),
+
+				Err: errors.New("signing failed"),
 			},
 			outcome: liquidlane.FillOutcomeFailure,
 		},
 		{
 			name: "not admitted",
 			result: txmanager.Result{
-				Outcome:     txmanager.OutcomeSubmissionError,
+
 				Err:         errors.New("admission rejected"),
 				NotAdmitted: true,
 			},
@@ -410,13 +406,11 @@ func TestExecution_FailedFillOutcomesAreMetered(t *testing.T) {
 	}
 }
 
-func TestExecution_IncludedUnconfirmedStaysSubmitted(t *testing.T) {
+func TestExecution_CanonicalInclusionAwaitsBackendSettlement(t *testing.T) {
 	st, be := fillFixtures(t)
 	be.order.OrderStatus = "open"
-	txm := &fakeTxm{result: txmanager.Result{
-		Hash:    common.HexToHash("0xdead"),
-		Outcome: txmanager.OutcomeIncludedUnconfirmed,
-		Err:     errors.New("confirmation wait failed"),
+	txm := &fakeTxm{result: txmanager.Result{Receipt: &gethtypes.Receipt{Status: gethtypes.ReceiptStatusSuccessful},
+		Hash: common.HexToHash("0xdead"),
 	}}
 	e := newExec(t, st, be, txm)
 
@@ -725,11 +719,14 @@ func TestExecution_ReconcileUnknownStatusRetainsOrder(t *testing.T) {
 }
 
 func TestExecutionDoesNotResubmitPaidOrUncertainFailures(t *testing.T) {
-	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeReverted, txmanager.OutcomeTrackingStopped} {
-		t.Run(string(outcome), func(t *testing.T) {
+	for _, reverted := range []bool{true, false} {
+		t.Run(map[bool]string{true: "reverted", false: "uncertain"}[reverted], func(t *testing.T) {
 			st, be := fillFixtures(t)
 			hash := common.HexToHash("0x1234")
-			txm := &fakeTxm{result: txmanager.Result{Outcome: outcome, Hash: hash, Err: errors.New("fill failed")}}
+			txm := &fakeTxm{result: txmanager.Result{Hash: hash, Err: errors.New("fill failed")}}
+			if reverted {
+				txm.result.Receipt = &gethtypes.Receipt{Status: gethtypes.ReceiptStatusFailed}
+			}
 			e := newExec(t, st, be, txm)
 			for range 5 {
 				syncCycle(t.Context(), e)
