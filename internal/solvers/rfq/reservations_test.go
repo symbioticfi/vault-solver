@@ -12,8 +12,8 @@ import (
 	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 func vltFillCapacity() liquidlane.CapacityID {
@@ -143,8 +143,8 @@ func TestReservationLifecycleFollowsOrderOutcome(t *testing.T) {
 		reserved bool
 	}{
 		{name: "filled releases", result: confirmedTxResult(), settled: "filled", status: statusFilled},
-		{name: "revert retry keeps", result: txmanager.Result{Receipt: &ethtypes.Receipt{Status: ethtypes.ReceiptStatusFailed},
-			Hash: common.HexToHash("0xbad"), Err: errors.New("reverted"),
+		{name: "revert retry keeps", result: txmanager.Result{
+			Hash: common.HexToHash("0xbad"), Outcome: txmanager.OutcomeReverted, Err: errors.New("reverted"),
 		}, settled: "open", status: statusRetryWaiting, reserved: true},
 		{name: "abandonment retry keeps", result: abandonedTxResult(), settled: "open",
 			status: statusRetryWaiting, reserved: true},

@@ -1,6 +1,7 @@
 package liquidlane
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
@@ -8,6 +9,8 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 // PairMetrics records observations only after the caller proves a directed route from trusted
@@ -62,10 +65,13 @@ func (m *PairMetrics) Standing(chainID int64, in, out common.Address, result, re
 	m.observe(chainID, in, out, "standing_quote", result, reason)
 }
 
-// ObserveReceipt counts a successful canonical receipt returned to the worker.
-func (m *PairMetrics) ObserveReceipt(chainID int64, in, out common.Address, receipt *types.Receipt) {
-	if receipt != nil && receipt.Status == types.ReceiptStatusSuccessful {
-		m.observe(chainID, in, out, "fill", "mined_success", "none")
+// ReceiptObserver follows txmanager's owned normal/late receipt accounting. A successful mined
+// receipt may still await the configured confirmation depth; it is deliberately not named confirmed.
+func (m *PairMetrics) ReceiptObserver(chainID int64, in, out common.Address) func(context.Context, txmanager.Result) {
+	return func(_ context.Context, result txmanager.Result) {
+		if result.Receipt != nil && result.Receipt.Status == types.ReceiptStatusSuccessful {
+			m.observe(chainID, in, out, "fill", "mined_success", "none")
+		}
 	}
 }
 

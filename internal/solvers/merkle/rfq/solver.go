@@ -55,7 +55,9 @@ type Solver struct {
 	intent          *fillIntent // Only Run accesses the intent; the sender reads its deadline at admission.
 }
 
-func (*Solver) Name() string { return Name }
+func (*Solver) Name() string                    { return Name }
+func (*Solver) RequiresTxManager() bool         { return false }
+func (s *Solver) RequiresMerkleTxManager() bool { return s.sender != nil }
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
@@ -69,7 +71,7 @@ func New(cfg Config, deps solver.Deps) (*Solver, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	if deps.Chain == nil || (!cfg.QuoteOnly && (deps.Signer == nil || deps.TxManager == nil)) {
+	if deps.Chain == nil || (!cfg.QuoteOnly && (deps.Signer == nil || deps.MerkleTxManager == nil)) {
 		return nil, errors.New("rfq-merkle requires the host chain, signer and transaction manager")
 	}
 	s := &Solver{spends: newSpendLedger(), recipeExecutors: cfg.RecipeExecutors, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), caller: cfg.Executor, maxGas: deps.MaxGas}}
@@ -81,7 +83,11 @@ func New(cfg Config, deps solver.Deps) (*Solver, error) {
 		return nil, err
 	}
 	s.workflow.source, s.workflow.signer = source, deps.Signer.Address()
-	sender := deps.TxManager.Sender(Name)
+	manager, err := deps.MerkleTxManager()
+	if err != nil {
+		return nil, err
+	}
+	sender := manager.Sender(Name)
 	sender.Deadline = func() time.Time {
 		if s.intent == nil {
 			return time.Time{}

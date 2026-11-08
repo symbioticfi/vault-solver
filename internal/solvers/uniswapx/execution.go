@@ -9,13 +9,13 @@ import (
 	"github.com/go-errors/errors"
 	"go.opentelemetry.io/otel/trace"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	uxexecutor "github.com/symbioticfi/vault-solver/api/bindings/uniswapx/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/execution"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 var (
@@ -252,11 +252,18 @@ func (s *Solver) startFill(
 		"deadlineRemaining", deadline.Sub(now),
 		"submissionDeadline", submissionDeadline.Unix(),
 	)
+	var observeReceipt func(context.Context, txmanager.Result)
+	if s.metrics != nil {
+		// This plan has already passed the executable route and policy gates.
+		observeReceipt = s.metrics.fillAmounts.ReceiptObserver(
+			s.metrics.pairs.ReceiptObserver(s.chainID, order.TokenIn, order.TokenOut))
+	}
 	result, err := s.submitFill(ctx, txmanager.Request{
 		Solver: Name,
 		To:     order.Executor, Data: data, MaxFeePerGas: transactionMaxFee, Deadline: submissionDeadline,
-		Obsolete: s.orderObsolete(order),
-		Label:    "uniswapx-fill",
+		Obsolete:       s.orderObsolete(order),
+		Label:          "uniswapx-fill",
+		ObserveReceipt: observeReceipt,
 	})
 	if err != nil {
 		return nil, err
@@ -496,9 +503,9 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 	order := fill.order
 	// The fill span this result belongs to, plus the order's quote-linked logger.
 	fillCtx := observability.WithLogger(fill.traceContext(ctx), s.orderLogger(order))
-	observability.RecordTransactionResult(fillCtx, result)
+	txmanager.RecordResult(fillCtx, result)
 	ctx, end := tracer.Start(fillCtx, "uniswapx.fill.complete")
-	observability.RecordTransactionResult(ctx, result)
+	txmanager.RecordResult(ctx, result)
 	var err error
 	// Deferred so both spans end on every path, including a panic; ending twice is a no-op.
 	defer func() {
@@ -525,12 +532,13 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 		return
 	}
 	ownedAttempt := s.recordOwnedFillAttempt(order.Hash, result)
-	if !result.Included() && errors.Is(result.Err, txmanager.ErrRequestObsolete) {
+	outcome := result.Outcome
+	if !outcome.Included() && errors.Is(result.Err, txmanager.ErrRequestObsolete) {
 		// A terminal protocol status retires the order without a retry and stays out of the
 		// failure breaker, since this does not establish a failed execution of our fill.
 		observability.Decline(ctx, "fill_obsolete", errorReason(result.Err))
 		// An earlier owned fill may be what made this unsigned retry obsolete. Preserve its
-		// ownership evidence instead of also counting an unsigned skip.
+		// late telemetry and let receipts determine execution instead of also counting a skip.
 		if !ownedAttempt {
 			s.observeFillOutcome(liquidlane.FillOutcomeObsolete)
 		}
@@ -538,11 +546,11 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 		observability.Log(ctx).Info(
 			"order fill obsolete: order no longer fillable",
 			"source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
-			"tx", result.Hash.Hex(),
+			"tx", result.Hash.Hex(), "outcome", outcome,
 		)
 		return
 	}
-	if result.Uncertain() {
+	if outcome.NonceUncertain() {
 		observability.Decline(ctx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
 		// Fresh polling rechecks order status, terms and execution-time state. The missing owned
 		// receipt neither proves this order filled nor counts as a local execution failure.
@@ -552,10 +560,10 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 			"tx", result.Hash.Hex())
 		return
 	}
-	if !result.Included() || result.Reverted() {
+	if !outcome.Included() {
 		err = result.Err
 		if err == nil {
-			err = errors.New("transaction was not included")
+			err = errors.Errorf("unknown transaction outcome %q", outcome)
 		}
 		s.observeFillOutcome(liquidlane.FillOutcomeFailure)
 		s.retry(order.Hash, now, true)
@@ -568,21 +576,25 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 		)
 		return
 	}
-	if s.metrics != nil {
-		s.metrics.fillAmounts.Observe(result.Receipt)
-		s.metrics.pairs.ObserveReceipt(s.chainID, order.TokenIn, order.TokenOut, result.Receipt)
+	if outcome == txmanager.OutcomeConfirmed {
+		observability.Log(ctx).WithValues(s.tokenMetadata.PairLogFields(order.TokenIn, order.TokenOut)...).
+			Info("order filled", "source", order.Source, "executor", order.Executor.Hex(),
+				"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", result.Hash.Hex(),
+				"chainId", s.chainID, "tokenIn", order.TokenIn.Hex(), "tokenOut", order.TokenOut.Hex(),
+				"amountIn", order.AmountIn.String(), "requiredAmountOut", order.AmountOut.String())
+	} else {
+		// Included, but the confirmation wait failed: the fill stands, the wait error is the span's.
+		err = result.Err
+		observability.Log(ctx).Error(err, "order fill included but confirmation wait failed",
+			"source", order.Source, "executor", order.Executor.Hex(),
+			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", result.Hash.Hex())
 	}
-	observability.Log(ctx).WithValues(s.tokenMetadata.PairLogFields(order.TokenIn, order.TokenOut)...).
-		Info("order filled", "source", order.Source, "executor", order.Executor.Hex(),
-			"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "tx", result.Hash.Hex(),
-			"chainId", s.chainID, "tokenIn", order.TokenIn.Hex(), "tokenOut", order.TokenOut.Hex(),
-			"amountIn", order.AmountIn.String(), "requiredAmountOut", order.AmountOut.String())
 	s.recordFillSuccess()
 	s.complete(order.Hash, now)
 }
 
 // recordOwnedFillAttempt retains signed ownership across retries without changing failure budgets.
-// All order-state access is under stateMu.
+// All order-state access is under stateMu; normal and late receipt callbacks only update metrics.
 func (s *Solver) recordOwnedFillAttempt(orderHash common.Hash, result txmanager.Result) bool {
 	owned := result.Hash != (common.Hash{})
 	for _, hash := range result.Attempts {

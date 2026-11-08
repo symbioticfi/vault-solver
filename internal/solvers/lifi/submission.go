@@ -8,11 +8,11 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 // errFillPlanRejected marks a plan this solver will not submit because its capacity reservations
@@ -100,6 +100,16 @@ func (s *Solver) submitFill(
 	retryDeadline, _ := liquidlane.SubmissionDeadline(
 		orderDeadline(order), chainTime, chainObservedAt, admissionNow,
 	)
+	var observeReceipt func(context.Context, txmanager.Result)
+	if s.metrics != nil {
+		// The plan has already been normalized against current trusted fill quotes; no metadata
+		// lookup or request-derived support registry is involved in this receipt observation.
+		if s.cfg.TokenPolicy.Allows(order.TokenIn) {
+			observeReceipt = s.metrics.fillAmounts.ReceiptObserver(s.metrics.pairs.ReceiptObserver(s.chainID, order.TokenIn, order.TokenOut))
+		} else {
+			observeReceipt = s.metrics.fillAmounts.ReceiptObserver()
+		}
+	}
 	result, accepted := s.sendFill(ctx, txmanager.Request{
 		Solver: Name,
 		To:     s.cfg.Executor, Data: calldata.Finalise, MaxFeePerGas: liquidlane.CloneBig(maxFeePerGas),
@@ -107,7 +117,8 @@ func (s *Solver) submitFill(
 		Obsolete: func(checkCtx context.Context) (bool, error) {
 			return s.fillRequestObsolete(checkCtx, calldata.OrderID)
 		},
-		Label: "lifi-fill",
+		Label:          "lifi-fill",
+		ObserveReceipt: observeReceipt,
 	})
 	if !accepted {
 		observability.Log(ctx).Info("order skipped: transaction submission canceled", "orderId", order.OrderID,
@@ -185,13 +196,13 @@ func (s *Solver) completeFill(
 ) (err error) {
 	fill := completion.fill
 	pending.remove(fill.reservationKey)
-	observability.RecordTransactionResult(ctx, completion.result) // the processing span this result belongs to
+	txmanager.RecordResult(ctx, completion.result) // the processing span this result belongs to
 	ctx, end := tracer.Start(ctx, "lifi.order.complete")
-	observability.RecordTransactionResult(ctx, completion.result)
+	txmanager.RecordResult(ctx, completion.result)
 	defer func() { end(err) }()
 
-	result := completion.result
-	if !result.Included() && errors.Is(completion.result.Err, txmanager.ErrRequestObsolete) {
+	outcome := completion.result.Outcome
+	if !outcome.Included() && errors.Is(completion.result.Err, txmanager.ErrRequestObsolete) {
 		// The input settler already claimed or refunded the order: an expected skip, not a failure.
 		observability.Decline(ctx, "fill_obsolete", completion.result.Err.Error())
 		observability.Log(ctx).Info("order fill obsolete: order settled elsewhere",
@@ -199,10 +210,11 @@ func (s *Solver) completeFill(
 			"onChainOrderId", fill.orderID.Hex(),
 			"quoteId", fill.order.QuoteID,
 			"tx", completion.result.Hash.Hex(),
+			"outcome", outcome,
 		)
 		return nil
 	}
-	if result.Uncertain() {
+	if outcome.NonceUncertain() {
 		observability.Decline(ctx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
 		// The worker re-reads on-chain status and schedules eligible orders for fresh planning.
 		// This outcome carries no owned receipt and is never counted as a successful fill.
@@ -211,13 +223,7 @@ func (s *Solver) completeFill(
 			"quoteId", fill.order.QuoteID, "tx", completion.result.Hash.Hex())
 		return nil
 	}
-	if result.Included() && !result.Reverted() {
-		if s.metrics != nil {
-			s.metrics.fillAmounts.Observe(result.Receipt)
-			if s.cfg.TokenPolicy.Allows(fill.order.TokenIn) {
-				s.metrics.pairs.ObserveReceipt(s.chainID, fill.order.TokenIn, fill.order.TokenOut, result.Receipt)
-			}
-		}
+	if outcome == txmanager.OutcomeConfirmed {
 		observability.Log(ctx).WithValues(s.tokenMetadata.PairLogFields(fill.order.TokenIn, fill.order.TokenOut)...).
 			Info("order filled", "orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
 				"quoteId", fill.order.QuoteID, "tx", completion.result.Hash.Hex(), "chainId", s.chainID,
@@ -225,9 +231,20 @@ func (s *Solver) completeFill(
 				"amountIn", bigString(fill.order.AmountIn), "requiredAmountOut", bigString(fill.order.OutputAmount))
 		return nil
 	}
+	if outcome == txmanager.OutcomeIncludedUnconfirmed {
+		// The fill stands; the confirmation wait is what failed, and it is the span's error.
+		err = completion.result.Err
+		observability.Log(ctx).Error(err, "order fill included but confirmation wait failed",
+			"orderId", fill.order.OrderID,
+			"onChainOrderId", fill.orderID.Hex(),
+			"quoteId", fill.order.QuoteID,
+			"tx", completion.result.Hash.Hex(),
+		)
+		return err
+	}
 	err = completion.result.Err
 	if err == nil {
-		err = errors.New("transaction did not confirm successfully")
+		err = errors.Errorf("unknown transaction outcome %q", outcome)
 	}
 	observability.Log(ctx).Error(err, "order fill failed",
 		"orderId", fill.order.OrderID,

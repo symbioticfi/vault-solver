@@ -193,7 +193,7 @@ API transport/JSON admission, offer sizing and RAM intent reconciliation, policy
 recipe input extraction and the mint provider. One Run goroutine evaluates guarded markets sequentially. Live commitment
 maintenance precedes a full scan of relevant unanswered auctions. One API client, planner, provider and RAM sender serve one executor strategy. The SDK keeper owns mint progress. It admits no new offer work
 while a signed recipe is pending. `transaction.Manager.Sender` uses the same SDK
-transaction engine and signer lane as the generic recipe host and native solvers. There is no
+transaction engine as the generic recipe host. There is no
 optional 3F dispatch in `merkle` and no dependency on `bridgefacilitator` strategies.
 
 Tests retain API wire/identity/bounds checks, ambiguous-POST retry identity,

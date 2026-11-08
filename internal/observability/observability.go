@@ -104,7 +104,7 @@ func (m *Metrics) SetBuildInfo(version, commit string) {
 	m.buildInfo.WithLabelValues(version, commit).Set(1)
 }
 
-// SetSolvers records this process's bounded, config-time integration worker names.
+// SetSolvers records the bounded, config-time solver membership of this runtime.
 func (m *Metrics) SetSolvers(names []string) {
 	for _, name := range names {
 		m.solverInfo.WithLabelValues(name).Set(1)

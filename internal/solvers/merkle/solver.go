@@ -25,8 +25,9 @@ type Solver struct {
 	keeper *keeper.Keeper
 }
 
-func (s *Solver) Name() string            { return Name }
-func (s *Solver) RequiresTxManager() bool { return s.keeper.Mode == "send" }
+func (s *Solver) Name() string                  { return Name }
+func (*Solver) RequiresTxManager() bool         { return false }
+func (s *Solver) RequiresMerkleTxManager() bool { return s.keeper.Mode == "send" }
 
 func (s *Solver) Run(ctx context.Context) error {
 	ticker := time.NewTicker(defaultPollInterval)
@@ -50,8 +51,12 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	if deps.Chain == nil || deps.Signer == nil || deps.TxManager == nil {
+	if deps.Chain == nil || deps.Signer == nil || deps.MerkleTxManager == nil {
 		return nil, errors.New("merkle requires host chain, signer and process transaction manager")
+	}
+	manager, err := deps.MerkleTxManager()
+	if err != nil {
+		return nil, err
 	}
 	// The factory interface has no context; bound the complete startup observation.
 	startup, cancel := context.WithTimeout(context.Background(), defaultOperationTimeout)
@@ -81,10 +86,10 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(len(cfg.strategies), recipeCacheBytes), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: deps.TxManager.Confirmations(), MaxGas: deps.MaxGas}
+	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(len(cfg.strategies), recipeCacheBytes), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: manager.Confirmations(), MaxGas: deps.MaxGas}
 	k := &keeper.Keeper{Planner: planner, Strategies: cfg.strategies, Mode: cfg.mode, OperationTimeout: defaultOperationTimeout, Log: deps.Log.WithName(Name)}
 	if cfg.mode == "send" {
-		k.Sender = deps.TxManager.Sender(Name)
+		k.Sender = manager.Sender(Name)
 	}
 	return &Solver{keeper: k}, nil
 }

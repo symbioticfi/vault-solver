@@ -19,13 +19,13 @@ import (
 	"golang.org/x/sync/errgroup"
 	"gopkg.in/yaml.v3"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 const Name = "uniswapx-filler"

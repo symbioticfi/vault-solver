@@ -110,13 +110,16 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   deadline. The backend status covers what an on-chain nonce read cannot (an unfunded swapper, backend-side
   cancellation); a read error or an unknown status preserves the lifecycle.
 - **Retries distinguish unsent work from transactions.** Failed pre-submission work with no recorded hash
-  may be retried while the order is open. Signed attempts without a canonical receipt have uncertain execution. It first enters backend reconciliation: a terminal status
+  may be retried while the order is open. `abandoned`, `nonce_conflict` and `nonce_consumed` mean signed
+  execution is uncertain without an owned receipt. It first enters backend reconciliation: a terminal status
   retires the order, while `open` schedules a fresh retry under the order deadline and polling backoff. Missing,
   unavailable or unknown backend status keeps the obligation until its recorded order deadline.
-  `maxNonceRetries` defaults to three additional attempts after signed uncertain results;
-  zero disables those retries. Unsigned admission failures do not spend this signed-execution budget.
-  All retries require fresh backend-open reconciliation, a poll delay and a fresh open-order listing,
-  and stop at the order deadline. The retry budget survives re-queuing; retrying clears only the attempted
+  `maxNonceRetries` defaults to three additional attempts after accepted abandonment or nonce
+  consumption; zero disables those retries. Rejected initial `nonce_conflict` results do not spend this
+  budget and cannot permanently retire an open order merely because other replicas race its EOA nonce.
+  They still require fresh backend-open reconciliation, a poll delay and a fresh open-order listing,
+  and stop at the order deadline. The accepted-execution retry budget survives these conflicts and
+  re-queuing; retrying clears only the attempted
   hash and runs the full executable-order lookup, chain deadline validation, strategy plan, and discount
   resolution again. Retry waiting counts as an active obligation and reconciles terminal
   backend status; its retained order deadline also expires it locally if backend views disappear or stay
@@ -173,11 +176,16 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   than proof of a particular sibling or EOA. Missing/malformed/zero hashes still mark the order filled
   without peer attribution. Reconciliation deduplication and attempt ownership are process-local and
   reset on restart; a previous local attempt is never called peer while its history is retained.
-- **Receipt evidence drives local metrics.** Returned successful canonical receipts at the
-  configured confirmation depth record `fill/success`, freshness and amounts. Backend `filled`
-  alone never records local successful-fill amounts. Obsolete retirement uses retained signed-attempt
-  history so a locally signed fill is not also counted as an unsigned skip. There are no receipt
-  observer callbacks; a transaction that lands after the request returns may have no local fill metric.
+- **Receipt observations update metrics only.** Each fill snapshots its metric pointer, token addresses,
+  input/output amounts and gross planned surplus into `Request.ObserveReceipt`. The manager invokes that
+  hook once per locally retained owned hash for normal inclusion or a late canonical receipt at the
+  configured confirmation depth. A successful late receipt records `fill/success`, freshness and amounts,
+  including when backend reconciliation already retired the order. It does not change store status,
+  reservations, retries or order ownership. Backend `filled` alone never records these local fill metrics.
+  Obsolete retirement uses the existing retained signed-attempt history across retries: it counts
+  `fill/obsolete` only without owned attempts. A pending abandonment or an unsigned retry made obsolete
+  by our earlier fill therefore cannot also be counted as a skip alongside a normal or late success.
+  If no owned receipt is observed within the manager's bounds, no local execution outcome is inferred.
 - **Completed orders have no later-reorg recovery.** A `filled` record stays terminal in the local store.
   Open-order polling does not recheck its old inclusion or reopen it after a later reorg. The backend's
   terminal order status remains authoritative; txmanager's existing reorg checks run during confirmation.
@@ -643,14 +651,7 @@ specifications when this contract changes. Deploy these generated clients with
 the backend header-only contract so resolve-union decoding no longer requires the
 removed body field.
 
-Merkle connector acquisition is owned by `internal/solvers/merkle/rfq`, as described in [RFQ-MERKLE.md](RFQ-MERKLE.md). The backend uses an optional `recipeExecutors` list for each connector: absent means native adapter; present means connector. It estimates capacity from recipe reads and checks current roles with batched RPC calls, without scanning historical block ranges or fetching curator permission trees. Advertised maxAssets is a read estimate; exact ordered funding and settlement are validated by the solver's complete outer fill simulation. It supplies `maxAssets`, account, discount precision and the measured `recipeExecutor` in quote inventory. The solver chooses native behavior from local `adapters` configuration or Merkle behavior from local `recipeExecutors`; configuring both fails startup. Merkle mode derives each payment connector from its committed recipe and shares the existing Merkle fill component. Overlapping recipes use one account/asset capacity within each quote, and awards select a configured executor with the matching connector and RWA. Missing executors fail closed. Connector quote admission verifies backend connector/account/asset against the on-chain recipe route. Pending signed work holds the signer fence; confirmed fills retain account/asset inclusion watermarks in RAM that reject older quote snapshots (see RFQ-MERKLE.md). The Merkle execution path reads the unchanged original recipe from `SetRecipe` only at the executor's known publication block, fetches the existing permission tree, verifies current roles and simulates the complete outer RFQ fill. It uses the shared chain reader without a separate publication indexer URL. The recipe commits one signed swap with the awarded amount and payment as inputs 0 and 1; no capacity metadata or embedded proofs are added. Include that asset's original issuer grants when redemption is required; route failures never fall back to custody.
-
-Shared SDK admission authenticates RFQ recipe identity, permissions, fresh roles
-and original/fresh block pins around the unchanged full outer-fill simulation.
-RFQ supplies no numerical witness and uses signed awarded settlement as its work
-condition, so it consumes no inner return data. The host needs no nested probe,
-recipe runtime fetch or code override; generic recipe paths keep numerical and
-result-based readiness checks.
+Merkle connector acquisition is owned by `internal/solvers/merkle/rfq`, as described in [RFQ-MERKLE.md](RFQ-MERKLE.md). The backend uses an optional `recipeExecutors` list for each connector: absent means native adapter; present means connector. It estimates capacity from recipe reads and checks current roles with batched RPC calls, without scanning historical block ranges or fetching curator permission trees. Advertised maxAssets is a read estimate; exact ordered funding and settlement are validated by the solver's complete outer fill simulation. It supplies `maxAssets`, account, discount precision and the measured `recipeExecutor` in quote inventory. The solver chooses native behavior from local `adapters` configuration or Merkle behavior from local `recipeExecutors`; configuring both fails startup. Merkle mode derives each payment connector from its committed recipe and shares the existing Merkle fill component. Overlapping recipes use one account/asset capacity within each quote, and awards select a configured executor with the matching connector and RWA. Missing executors fail closed. Connector quote admission verifies backend connector/account/asset against the on-chain recipe route. Pending signed work holds the signer fence; confirmed fills persist account/asset inclusion watermarks that reject older quote snapshots (see RFQ-MERKLE.md). The Merkle execution path reads the unchanged original recipe from `SetRecipe` only at the executor's known publication block, fetches the existing permission tree, verifies current roles and simulates the complete outer RFQ fill. It uses the shared chain reader without a separate publication indexer URL. The recipe commits one signed swap with the awarded amount and payment as inputs 0 and 1; no capacity metadata or embedded proofs are added. Include that asset's original issuer grants when redemption is required; route failures never fall back to custody.
 
 ### Optional token log metadata
 

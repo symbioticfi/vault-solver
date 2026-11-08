@@ -19,8 +19,8 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 // txSender sends a transaction and blocks until the shared txmanager reports its typed outcome.
@@ -384,26 +384,25 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		return
 	}
 
+	var observeReceipt func(context.Context, txmanager.Result)
+	if e.metrics != nil {
+		var observePair func(context.Context, txmanager.Result)
+		if exec.pairInScope {
+			observePair = e.metrics.pairs.ReceiptObserver(e.chainID, order.Request.TokenIn, outputToken)
+		}
+		observeReceipt = e.metrics.fillAmounts.ReceiptObserver(observePair)
+	}
 	res, sendErr := e.sendFill(ctx, txmanager.Request{
 		Solver: Name,
 		To:     e.executor, Data: calldata, Deadline: submissionDeadline, Label: "rfq-fill",
-		Obsolete: e.orderObsolete(orderID),
+		Obsolete:       e.orderObsolete(orderID),
+		ObserveReceipt: observeReceipt,
 	})
 	attemptHashes := append([]common.Hash{res.Hash}, res.Attempts...)
 	attempt := e.store.recordAttempt(orderID, attemptHashes...)
-
-	if !res.Included() && errors.Is(res.Err, txmanager.ErrRequestObsolete) {
+	outcome := res.Outcome
+	if !outcome.Included() && errors.Is(res.Err, txmanager.ErrRequestObsolete) {
 		e.retireObsoleteOrder(ctx, orderID, res, res.Err)
-		return
-	}
-	if res.Uncertain() || res.Reverted() {
-		// A reverted transaction does not establish the business outcome: a sibling may have
-		// filled it first. Backend evidence decides terminal state or a bounded, rebuilt retry.
-		observability.Decline(ctx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
-		e.store.markNonceUncertain(orderID, res.Hash, errString(res.Err), false)
-		observability.Log(ctx).Info("fill result requires order reconciliation", "attempt", attempt,
-			"tx", res.Hash.Hex())
-		e.reconcileTerminalStatus(ctx, orderID)
 		return
 	}
 	if !res.NotAdmitted && errors.Is(res.Err, txmanager.ErrFeeLimitReached) {
@@ -431,7 +430,17 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		e.reconcileTerminalStatus(ctx, orderID)
 		return
 	}
-	if !res.Included() {
+	if outcome.NonceUncertain() || outcome == txmanager.OutcomeReverted {
+		// A reverted transaction does not establish the business outcome: a sibling may have
+		// filled it first. Backend evidence decides terminal state or a bounded, rebuilt retry.
+		observability.Decline(ctx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
+		e.store.markNonceUncertain(orderID, res.Hash, errString(res.Err), outcome == txmanager.OutcomeNonceConflict)
+		observability.Log(ctx).Info("fill result requires order reconciliation", "attempt", attempt,
+			"tx", res.Hash.Hex(), "outcome", outcome)
+		e.reconcileTerminalStatus(ctx, orderID)
+		return
+	}
+	if !outcome.Included() {
 		if e.metrics != nil {
 			fillOutcome := liquidlane.FillOutcomeFailure
 			if res.NotAdmitted {
@@ -439,22 +448,27 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 			}
 			e.metrics.fillAmounts.ObserveOutcome(fillOutcome)
 		}
-		e.store.markStatus(orderID, statusFailed, res.Hash, sendErr.Error())
-		observability.Log(ctx).Error(sendErr, "fill failed", "attempt", attempt, "tx", res.Hash.Hex())
+		status := statusFailed
+		if outcome == txmanager.OutcomeTrackingStopped {
+			// Inclusion is unknown; reconcile the backend without sending another transaction.
+			status = statusSubmitted
+		}
+		e.store.markStatus(orderID, status, res.Hash, sendErr.Error())
+		observability.Log(ctx).Error(sendErr, "fill failed", "attempt", attempt, "tx", res.Hash.Hex(),
+			"outcome", outcome)
 		return
 	}
-	if e.metrics != nil {
-		e.metrics.fillAmounts.Observe(res.Receipt)
-		if exec.pairInScope {
-			e.metrics.pairs.ObserveReceipt(e.chainID, order.Request.TokenIn, outputToken, res.Receipt)
+	if outcome == txmanager.OutcomeConfirmed {
+		observability.Log(ctx).WithValues(e.tokenMetadata.PairLogFields(order.Request.TokenIn, outputToken)...).
+			Info("filled order", "tx", res.Hash.Hex(), "chainId", e.chainID,
+				"tokenIn", order.Request.TokenIn.Hex(), "tokenOut", outputToken.Hex(),
+				"amountIn", order.Request.AmountIn.String(), "requiredAmountOut", required.String())
+		if res.Receipt != nil && res.Receipt.BlockNumber != nil {
+			e.store.markIncluded(orderID, res.Receipt.BlockNumber.Uint64())
 		}
-	}
-	observability.Log(ctx).WithValues(e.tokenMetadata.PairLogFields(order.Request.TokenIn, outputToken)...).
-		Info("filled order", "tx", res.Hash.Hex(), "chainId", e.chainID,
-			"tokenIn", order.Request.TokenIn.Hex(), "tokenOut", outputToken.Hex(),
-			"amountIn", order.Request.AmountIn.String(), "requiredAmountOut", required.String())
-	if res.Receipt.BlockNumber != nil {
-		e.store.markIncluded(orderID, res.Receipt.BlockNumber.Uint64())
+	} else {
+		observability.Log(ctx).Error(res.Err, "fill included but confirmation wait failed",
+			"attempt", attempt, "tx", res.Hash.Hex())
 	}
 	e.store.markStatus(orderID, statusSubmitted, res.Hash, "")
 	e.reconcileTerminalStatus(ctx, orderID)
@@ -507,7 +521,7 @@ func (e *executionService) retireObsoleteOrder(
 	}
 	observability.Decline(ctx, "fill_obsolete", sendErr.Error())
 	observability.Log(ctx).Info("fill skipped: order no longer fillable",
-		"tx", res.Hash.Hex())
+		"tx", res.Hash.Hex(), "outcome", res.Outcome)
 	e.store.markStatus(orderID, statusObsolete, res.Hash, sendErr.Error())
 	e.reconcileTerminalStatus(ctx, orderID)
 }
@@ -575,13 +589,13 @@ func (e *executionService) sendFill(
 	defer func() { end(err) }()
 
 	res = e.txm.Send(submitCtx, req)
-	observability.RecordTransactionResult(submitCtx, res) // the stage
-	observability.RecordTransactionResult(ctx, res)       // the order span it belongs to
-	if !res.Included() && errors.Is(res.Err, txmanager.ErrRequestObsolete) {
+	txmanager.RecordResult(submitCtx, res) // the stage
+	txmanager.RecordResult(ctx, res)       // the order span it belongs to
+	if !res.Outcome.Included() && errors.Is(res.Err, txmanager.ErrRequestObsolete) {
 		observability.Decline(submitCtx, "fill_obsolete", res.Err.Error())
 		return res, nil
 	}
-	if res.Uncertain() || res.Reverted() {
+	if res.Outcome.NonceUncertain() || res.Outcome == txmanager.OutcomeReverted {
 		observability.Decline(submitCtx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
 		return res, nil
 	}
@@ -593,16 +607,16 @@ func (e *executionService) sendFill(
 		observability.Decline(submitCtx, "fill_estimate_reverted", "execution changed before signing")
 		return res, nil
 	}
-	err = res.Err
-	if err == nil && !res.Included() {
-		err = errors.New("transaction was not included")
+	err = res.Err // included-but-unconfirmed still carries the wait failure
+	if err == nil && !res.Outcome.Included() {
+		err = errors.Errorf("unknown transaction outcome %q", res.Outcome)
 	}
 	return res, err
 }
 
 func estimateExecutionReverted(err error) bool {
-	_, reverted := estimateRevertData(err)
-	return reverted
+	var revert *txmanager.ExecutionRevertError
+	return errors.As(err, &revert)
 }
 
 // resolveExecutable returns the executable payload for a polled order from the backend.
@@ -662,7 +676,7 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 		if local.Status != statusNonceUncertain {
 			return
 		}
-		exhausted := local.NonceRetryExhausted || (!local.UnsignedRetry && local.NonceRetries >= e.maxNonceRetries)
+		exhausted := local.NonceRetryExhausted || (!local.NonceConflict && local.NonceRetries >= e.maxNonceRetries)
 		if exhausted && e.store.markNonceRetryExhausted(orderID) {
 			e.metrics.observeNonceRetryExhausted()
 			observability.Log(ctx).Info("nonce retry budget exhausted; observing backend until order deadline",

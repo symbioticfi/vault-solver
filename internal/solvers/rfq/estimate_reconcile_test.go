@@ -9,14 +9,14 @@ import (
 	"github.com/go-logr/logr/funcr"
 	"github.com/prometheus/client_golang/prometheus"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 func estimateRevertResult() txmanager.Result {
-	return txmanager.Result{Err: errors.Errorf("estimate fill: %w",
-		&estimateRPCError{})}
+	return txmanager.Result{Outcome: txmanager.OutcomeSubmissionError, Err: errors.Errorf("estimate fill: %w",
+		&txmanager.ExecutionRevertError{Cause: errors.New("execution reverted")})}
 }
 
 func TestExecutionEstimateRevertReconcilesBeforeFailure(t *testing.T) {

@@ -1,10 +1,8 @@
 package bridgefacilitator
 
 import (
-	"bytes"
 	"context"
 	"testing"
-	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
@@ -13,14 +11,17 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/chain"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 type transactionSenderFunc func(context.Context, txmanager.Request) txmanager.Result
 
 func (f transactionSenderFunc) Send(ctx context.Context, req txmanager.Request) txmanager.Result {
 	result := f(ctx, req)
+	if req.ObserveReceipt != nil && result.Receipt != nil {
+		req.ObserveReceipt(ctx, result)
+	}
 	return result
 }
 
@@ -61,7 +62,7 @@ func TestRedeemAllScansOncePerAdapterBeforeItsSend(t *testing.T) {
 		if req.To != wantAdapter || req.Label != "redeem" || len(req.Data) == 0 {
 			t.Fatalf("unexpected redeem request: to=%s label=%q dataLen=%d", req.To.Hex(), req.Label, len(req.Data))
 		}
-		return txmanager.Result{
+		return txmanager.Result{Outcome: txmanager.OutcomeConfirmed,
 			Receipt: &types.Receipt{Status: types.ReceiptStatusSuccessful}}
 	})
 
@@ -111,7 +112,7 @@ func TestRedeemAllMalformedCanWithdrawRetainsFreshnessAndRedeemsValidSubset(t *t
 		if req.To != adapterAddr {
 			t.Fatalf("tx target = %s, want %s", req.To.Hex(), adapterAddr.Hex())
 		}
-		return txmanager.Result{
+		return txmanager.Result{Outcome: txmanager.OutcomeIncludedUnconfirmed,
 			Receipt: &types.Receipt{Status: types.ReceiptStatusSuccessful}}
 	})
 
@@ -125,12 +126,12 @@ func TestRedeemAllMalformedCanWithdrawRetainsFreshnessAndRedeemsValidSubset(t *t
 }
 
 func TestRedeemConsumedNonceRechecksRequestsWithoutReportingSuccess(t *testing.T) {
-	for _, outcome := range []error{txmanager.ErrNonceConsumed, context.DeadlineExceeded} {
-		t.Run(outcome.Error(), func(t *testing.T) { redeemConsumedNonceRechecksRequestsWithoutReportingSuccess(t, outcome) })
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict, txmanager.OutcomeAbandoned} {
+		t.Run(string(outcome), func(t *testing.T) { redeemConsumedNonceRechecksRequestsWithoutReportingSuccess(t, outcome) })
 	}
 }
 
-func redeemConsumedNonceRechecksRequestsWithoutReportingSuccess(t *testing.T, outcome error) {
+func redeemConsumedNonceRechecksRequestsWithoutReportingSuccess(t *testing.T, outcome txmanager.Outcome) {
 	t.Helper()
 	rec := tracetest.Install(t)
 	adapter := common.HexToAddress("0xa0")
@@ -153,8 +154,8 @@ func redeemConsumedNonceRechecksRequestsWithoutReportingSuccess(t *testing.T, ou
 	}
 	s.txManager = transactionSenderFunc(func(context.Context, txmanager.Request) txmanager.Result {
 		sent++
-		return txmanager.Result{
-			Hash: common.HexToHash("0xfeed"), Err: outcome}
+		return txmanager.Result{Outcome: outcome,
+			Hash: common.HexToHash("0xfeed"), Err: nonceOutcomeError(outcome)}
 	})
 	s.redeemAll(t.Context())
 	s.redeemAll(t.Context())
@@ -163,66 +164,19 @@ func redeemConsumedNonceRechecksRequestsWithoutReportingSuccess(t *testing.T, ou
 	}
 	metricstest.RequireWorkflowEventCount(t, reg, Name, threeFEventRedeem, "success", 0)
 	submit := tracetest.Ended(t, rec, "3f.redeem.submit")
-	tracetest.RequireAttr(t, submit, "tx.outcome", "uncertain")
+	tracetest.RequireAttr(t, submit, "tx.outcome", string(outcome))
 	if !tracetest.HasEvent(submit, "declined") {
 		t.Fatal("consumed nonce did not record an expected decline")
 	}
 	tracetest.RequireNoErrorSpans(t, rec)
 }
 
-func TestRedeemExpiredBatchRebuildsFromFreshReadyRequests(t *testing.T) {
-	adapter := common.HexToAddress("0xa0")
-	finalized := common.HexToAddress("0xb0")
-	pending := common.HexToAddress("0xb1")
-	c, stop := newMulticallFakeClient(t,
-		abiEncodeAggregate3Results(t, abiEncodeUint256(t, 2)),
-		abiEncodeAggregate3Results(t, abiEncodeAddress(t, finalized), abiEncodeAddress(t, pending)),
-		abiEncodeAggregate3Results(t, abiEncodeBool(t, true), abiEncodeBool(t, true)),
-		abiEncodeAggregate3Results(t, abiEncodeUint256(t, 2)),
-		abiEncodeAggregate3Results(t, abiEncodeAddress(t, finalized), abiEncodeAddress(t, pending)),
-		abiEncodeAggregate3Results(t, abiEncodeBool(t, false), abiEncodeBool(t, true)),
-	)
-	defer stop()
-	metrics, reg := newThreeFTestMetrics(t)
-	const poll = 20 * time.Millisecond
-	s := &Solver{
-		cfg:    &Config{RedeemBatchSize: 10, Intervals: Intervals{RedeemPoll: poll}},
-		reader: newReader(c, common.Address{}), log: logr.Discard(), metrics: metrics,
-		targets: []Target{{Adapter: adapter}}, targetsAuthoritative: true,
+func nonceOutcomeError(outcome txmanager.Outcome) error {
+	if outcome == txmanager.OutcomeAbandoned {
+		return txmanager.ErrAbandoned
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	sends := 0
-	s.txManager = transactionSenderFunc(func(ctx context.Context, req txmanager.Request) txmanager.Result {
-		sends++
-		if req.Deadline.IsZero() || req.Deadline.After(time.Now().Add(poll)) {
-			t.Fatalf("redemption batch has no next-scan deadline: %s", req.Deadline)
-		}
-		if sends == 1 {
-			want := bfAdapter.PackMulticall([][]byte{bfAdapter.PackFinalizeRequest(finalized), bfAdapter.PackFinalizeRequest(pending)})
-			if !bytes.Equal(req.Data, want) {
-				t.Fatal("initial batch did not contain both ready requests")
-			}
-			batchCtx, stop := context.WithDeadline(ctx, req.Deadline)
-			defer stop()
-			<-batchCtx.Done()
-			if ctx.Err() != nil {
-				t.Fatal("stale redemption batch outlived its next scan")
-			}
-			// The first request was finalized elsewhere while this signed batch remained unresolved.
-			return txmanager.Result{Hash: common.HexToHash("0xfeed"), Err: batchCtx.Err()}
-		}
-		want := bfAdapter.PackMulticall([][]byte{bfAdapter.PackFinalizeRequest(pending)})
-		if !bytes.Equal(req.Data, want) {
-			t.Fatal("fresh batch retained an externally finalized request")
-		}
-		return txmanager.Result{Receipt: &types.Receipt{Status: types.ReceiptStatusSuccessful}}
-	})
-	s.redeemAll(ctx)
-	metricstest.RequireWorkflowEventCount(t, reg, Name, threeFEventRedeem, "success", 0)
-	s.redeemAll(ctx)
-	if sends != 2 {
-		t.Fatalf("sends=%d, want stale batch then freshly rebuilt batch", sends)
+	if outcome == txmanager.OutcomeNonceConflict {
+		return txmanager.ErrNonceConflict
 	}
-	metricstest.RequireWorkflowEventCount(t, reg, Name, threeFEventRedeem, "success", 1)
+	return txmanager.ErrNonceConsumed
 }

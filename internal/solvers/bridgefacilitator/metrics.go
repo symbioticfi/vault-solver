@@ -1,12 +1,15 @@
 package bridgefacilitator
 
 import (
+	"context"
 	"time"
 
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 const (
@@ -95,6 +98,19 @@ func (m *threeFMetrics) observeRedeemedRequests(count int) {
 		m.workflow.ObserveEventAt(
 			threeFEventRedeem, "success", float64(count), m.now(),
 		)
+	}
+}
+
+// redeemReceiptObserver retains only metrics and the submitted batch size. Late telemetry never
+// repeats redemption scanning, changes backlog state, or sends another transaction.
+func (m *threeFMetrics) redeemReceiptObserver(count int) func(context.Context, txmanager.Result) {
+	if m == nil {
+		return nil
+	}
+	return func(_ context.Context, result txmanager.Result) {
+		if result.Receipt != nil && result.Receipt.Status == types.ReceiptStatusSuccessful {
+			m.observeRedeemedRequests(count)
+		}
 	}
 }
 

@@ -21,7 +21,6 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/api/lifiorder"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -30,6 +29,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 const (
@@ -164,7 +164,7 @@ func TestOrderTraceSpansMessageThroughFill(t *testing.T) {
 	if got := tracetest.Attr(complete, "tx.hash"); got != wantHash {
 		t.Fatalf("complete span tx.hash = %q, want %s", got, wantHash)
 	}
-	if got := tracetest.Attr(complete, "tx.outcome"); got != "confirmed" {
+	if got := tracetest.Attr(complete, "tx.outcome"); got != string(txmanager.OutcomeConfirmed) {
 		t.Fatalf("complete span tx.outcome = %q, want confirmed", got)
 	}
 	if got := tracetest.Attr(tracetest.Ended(t, rec, "lifi.order.plan"), "strategy.name"); got != tracingStrategyName {
@@ -931,7 +931,8 @@ func TestFillCompletionOmitsTxHashWhenNotBroadcast(t *testing.T) {
 
 	ctx, end := tracer.Start(t.Context(), "lifi.order.process")
 	err := solver.completeFill(ctx, pending, fillCompletion{fill: fill, result: txmanager.Result{
-		Err: errors.New("insufficient funds for gas * price + value"),
+		Outcome: txmanager.OutcomeSubmissionError,
+		Err:     errors.New("insufficient funds for gas * price + value"),
 	}})
 	end(err)
 
@@ -941,7 +942,7 @@ func TestFillCompletionOmitsTxHashWhenNotBroadcast(t *testing.T) {
 	for _, name := range []string{"lifi.order.process", "lifi.order.complete"} {
 		span := tracetest.Ended(t, rec, name)
 		tracetest.RequireNoAttr(t, span, "tx.hash") // a transaction that never went out has none
-		tracetest.RequireAttr(t, span, "tx.outcome", "submission_error")
+		tracetest.RequireAttr(t, span, "tx.outcome", string(txmanager.OutcomeSubmissionError))
 	}
 }
 

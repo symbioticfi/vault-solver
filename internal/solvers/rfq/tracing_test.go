@@ -15,10 +15,10 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 const (
@@ -221,8 +221,8 @@ func TestExecution_SubmissionErrorOmitsTxHash(t *testing.T) {
 	rec := tracetest.Install(t)
 	st, be := fillFixtures(t)
 	txm := &fakeTxm{result: txmanager.Result{
-
-		Err: errors.New("insufficient funds for gas * price + value"),
+		Outcome: txmanager.OutcomeSubmissionError,
+		Err:     errors.New("insufficient funds for gas * price + value"),
 	}}
 	e := newExec(t, st, be, txm)
 
@@ -234,7 +234,7 @@ func TestExecution_SubmissionErrorOmitsTxHash(t *testing.T) {
 	for _, name := range []string{"rfq.order", "rfq.order.submit"} {
 		span := tracetest.Ended(t, rec, name)
 		tracetest.RequireNoAttr(t, span, "tx.hash") // a transaction that never went out has none
-		tracetest.RequireAttr(t, span, "tx.outcome", "submission_error")
+		tracetest.RequireAttr(t, span, "tx.outcome", string(txmanager.OutcomeSubmissionError))
 	}
 	if got := tracetest.Ended(t, rec, "rfq.order.submit").Status().Code; got != codes.Error {
 		t.Fatalf("submit span status = %v, want Error", got)

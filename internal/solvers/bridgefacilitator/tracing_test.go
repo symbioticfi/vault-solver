@@ -12,9 +12,6 @@ import (
 	"testing"
 	"time"
 
-	gethtypes "github.com/ethereum/go-ethereum/core/types"
-	"github.com/go-errors/errors"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
@@ -22,12 +19,12 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/threef"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 // stubOfferStrategy stands in for the configured 3F strategy: it returns a fixed plan, an error, or
@@ -286,7 +283,7 @@ func TestDiscoverAndOfferEndsSpansOnStrategyPanic(t *testing.T) {
 
 // newRedeemFixture wires a solver whose single adapter holds two requests, only one of which can
 // still be withdrawn, so exactly one finalize is batched.
-func newRedeemFixture(t *testing.T, successful bool, hash common.Hash) (*Solver, common.Address, *atomic.Int64) {
+func newRedeemFixture(t *testing.T, outcome txmanager.Outcome, hash common.Hash) (*Solver, common.Address, *atomic.Int64) {
 	t.Helper()
 
 	adapter := common.HexToAddress(tracingAdapterHex)
@@ -310,10 +307,7 @@ func newRedeemFixture(t *testing.T, successful bool, hash common.Hash) (*Solver,
 	}
 	s.txManager = transactionSenderFunc(func(context.Context, txmanager.Request) txmanager.Result {
 		sent.Add(1)
-		if successful {
-			return txmanager.Result{Hash: hash, Receipt: &gethtypes.Receipt{Status: gethtypes.ReceiptStatusSuccessful}}
-		}
-		return txmanager.Result{Err: errors.New("preparation failed")}
+		return txmanager.Result{Outcome: outcome, Hash: hash}
 	})
 	return s, request, &sent
 }
@@ -323,7 +317,7 @@ func newRedeemFixture(t *testing.T, successful bool, hash common.Hash) (*Solver,
 func TestRedeemAllLinksToRememberedOfferSpans(t *testing.T) {
 	rec := tracetest.Install(t)
 	hash := common.HexToHash("0xfeed")
-	s, request, sent := newRedeemFixture(t, true, hash)
+	s, request, sent := newRedeemFixture(t, txmanager.OutcomeConfirmed, hash)
 
 	offerCtx, endOffer := tracer.Start(t.Context(), "3f.auction")
 	s.links.Remember(offerCtx, requestLinkKey(common.HexToAddress(tracingAdapterHex), request), time.Hour)
@@ -356,8 +350,8 @@ func TestRedeemAllLinksToRememberedOfferSpans(t *testing.T) {
 	if got := tracetest.Attr(redeem, "tx.hash"); got != hash.Hex() {
 		t.Fatalf("redeem tx.hash = %q, want %s", got, hash.Hex())
 	}
-	if got := tracetest.Attr(submit, "tx.outcome"); got != "confirmed" {
-		t.Fatalf("submit tx.outcome = %q, want confirmed", got)
+	if got := tracetest.Attr(submit, "tx.outcome"); got != string(txmanager.OutcomeConfirmed) {
+		t.Fatalf("submit tx.outcome = %q, want %s", got, txmanager.OutcomeConfirmed)
 	}
 	if tracetest.HasEvent(submit, "link_miss") {
 		t.Fatal("redeem submit recorded a link miss despite a remembered offer")
@@ -368,7 +362,7 @@ func TestRedeemAllLinksToRememberedOfferSpans(t *testing.T) {
 // A miss is inert (spec §12): the redeem still sends, with no link and one link_miss naming the key.
 func TestRedeemAllSendsWithoutRememberedOfferSpan(t *testing.T) {
 	rec := tracetest.Install(t)
-	s, request, sent := newRedeemFixture(t, true, common.HexToHash("0xbeef"))
+	s, request, sent := newRedeemFixture(t, txmanager.OutcomeConfirmed, common.HexToHash("0xbeef"))
 
 	s.redeemAll(t.Context())
 
@@ -393,7 +387,7 @@ func TestRedeemAllSendsWithoutRememberedOfferSpan(t *testing.T) {
 // tx.hash is left off rather than stamped as the zero hash.
 func TestRedeemAllOmitsTxHashWhenNotBroadcast(t *testing.T) {
 	rec := tracetest.Install(t)
-	s, _, sent := newRedeemFixture(t, false, common.Hash{})
+	s, _, sent := newRedeemFixture(t, txmanager.OutcomeSubmissionError, common.Hash{})
 
 	s.redeemAll(t.Context())
 
@@ -403,7 +397,7 @@ func TestRedeemAllOmitsTxHashWhenNotBroadcast(t *testing.T) {
 	for _, name := range []string{"3f.redeem", "3f.redeem.submit"} {
 		span := tracetest.Ended(t, rec, name)
 		tracetest.RequireNoAttr(t, span, "tx.hash") // a transaction that never went out has none
-		tracetest.RequireAttr(t, span, "tx.outcome", "submission_error")
+		tracetest.RequireAttr(t, span, "tx.outcome", string(txmanager.OutcomeSubmissionError))
 	}
 	if got := tracetest.Ended(t, rec, "3f.redeem.submit").Status().Code; got != codes.Error {
 		t.Fatalf("submit span status = %v, want Error", got)
@@ -507,7 +501,7 @@ func TestRedeemLinksTheOfferOfItsOwnAdapter(t *testing.T) {
 	adapterB := common.HexToAddress("0x00000000000000000000000000000000000000bb")
 	s := &Solver{cfg: &Config{RedeemBatchSize: 10}, log: logr.Discard(), links: observability.NewSpanLinks()}
 	s.txManager = transactionSenderFunc(func(context.Context, txmanager.Request) txmanager.Result {
-		return txmanager.Result{Receipt: &gethtypes.Receipt{Status: gethtypes.ReceiptStatusSuccessful}, Hash: common.HexToHash("0xfeed")}
+		return txmanager.Result{Outcome: txmanager.OutcomeConfirmed, Hash: common.HexToHash("0xfeed")}
 	})
 	offerSpans := make(map[common.Address]trace.SpanContext)
 	for _, adapter := range []common.Address{adapterA, adapterB} {

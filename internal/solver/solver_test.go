@@ -98,7 +98,7 @@ func TestRunTreatsCancellationAsClean(t *testing.T) {
 	}
 }
 
-// With several integration workers each gets its own stamped logger, and Run is where that logger,
+// With several solvers configured each gets its own stamped logger, and Run is where that logger,
 // named after the solver, joins the context every line below it is logged through.
 func TestRunCarriesTheSolverLoggerInContext(t *testing.T) {
 	var lines []string
@@ -154,5 +154,28 @@ func TestRunWrapsNonCancellationError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `"3f"`) {
 		t.Fatalf("error should name the solver, got %v", err)
+	}
+}
+
+type merkleTransactionSolver struct{ fakeSolver }
+
+func (merkleTransactionSolver) RequiresTxManager() bool       { return false }
+func (merkleTransactionSolver) RequiresMerkleTxManager() bool { return true }
+
+func TestTransactionManagersRemainIntegrationScoped(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		worker         Solver
+		native, merkle bool
+	}{
+		{"native", fakeSolver{name: "native"}, true, false},
+		{"external", txManagerIndependentSolver{fakeSolver{name: "external"}}, false, false},
+		{"merkle", merkleTransactionSolver{fakeSolver{name: "merkle"}}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if RequiresTxManager(tc.worker) != tc.native || RequiresMerkleTxManager(tc.worker) != tc.merkle {
+				t.Fatal("worker selected a transaction implementation outside its integration")
+			}
+		})
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
 	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 )
@@ -66,12 +67,18 @@ func TestSDKRAMSenderReplacementAndReorg(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	registry := prometheus.NewRegistry()
+	engine.Metrics, err = txmanager.NewMetrics(prometheus.WrapRegistererWithPrefix("solver_bot_merkle_", registry))
+	if err != nil {
+		t.Fatal(err)
+	}
 	sender := engine.Sender("test")
 	runRAMManager(t, engine)
 	if err := sender.Submit(t.Context(), txmanager.ExecutionRequest{To: common.HexToAddress("0x1234"), Data: []byte{1}}); err != nil {
 		t.Fatal(err)
 	}
 	awaitBroadcast(t, relay)
+	assertRAMMetric(t, registry, "transaction_unresolved_nonce", 1)
 	if engine.Available() || engine.LaneReady() {
 		t.Fatal("new quote admitted while signed work owned")
 	}
@@ -123,6 +130,38 @@ func TestSDKRAMSenderReplacementAndReorg(t *testing.T) {
 	if result.Hash != latest.Hash() || result.Execution == nil || sender.Busy() || !engine.Available() {
 		t.Fatalf("canonical result = %+v", result)
 	}
+	receipt, err := chain.TransactionReceipt(t.Context(), result.Hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paid, _ := new(big.Float).SetInt(new(big.Int).Mul(new(big.Int).SetUint64(receipt.GasUsed), receipt.EffectiveGasPrice)).Float64()
+	assertRAMMetric(t, registry, "transaction_unresolved_nonce", 0)
+	assertRAMMetric(t, registry, "transaction_requests_total", 1)
+	assertRAMMetric(t, registry, "transaction_gas_used_total", float64(receipt.GasUsed))
+	assertRAMMetric(t, registry, "transaction_fee_paid_wei_total", paid)
+}
+
+func assertRAMMetric(t *testing.T, registry *prometheus.Registry, suffix string, want float64) {
+	t.Helper()
+	families, err := registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "solver_bot_merkle_" + suffix
+	for _, family := range families {
+		if family.GetName() != name {
+			continue
+		}
+		var got float64
+		for _, metric := range family.GetMetric() {
+			got += metric.GetCounter().GetValue() + metric.GetGauge().GetValue()
+		}
+		if got != want {
+			t.Fatalf("%s = %g, want %g", name, got, want)
+		}
+		return
+	}
+	t.Fatalf("metric %s missing", name)
 }
 
 func TestSDKRAMAmbiguousOutcomeResumesAfterDeadline(t *testing.T) {

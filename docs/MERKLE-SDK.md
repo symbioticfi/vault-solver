@@ -2,8 +2,8 @@
 
 The `merkle` solver consumes the independently versioned
 `github.com/symbioticfi/merkle-executor/sdk` module pinned in go.mod.
-The current pin is `9d93c50132f29a91b70e6c326c7382763534953f`
-(`v0.0.0-20261108183232-9d93c50132f2`).
+The current pin is `997a561d872caeb5dac83d6b6c28a210e10828e6`
+(`v0.0.0-20261108192150-997a561d872c`).
 The SDK implements recipe/tree/proof/role checks,
 pinned runtime assembly, simulation, canonical receipts and RAM settlement tasks.
 It also exposes opt-in off-chain providers, RPC, signing and the shared transaction
@@ -35,14 +35,14 @@ canonical snapshot. It does not scan historical block ranges. Generic, RFQ and
 3F hosts use their existing shared chain reader; no recipe indexer URL is required.
 Permission data still uses the curator service.
 
-Each solver process has its own signer and SDK `transaction.Manager`. Its integration workers
-use that manager. The host maps YAML, supplies RPC/signing dependencies and logger, then explicitly
+Each Merkle solver process has its own signer and SDK `transaction.Manager`. The host maps YAML, supplies RPC/signing dependencies and logger, then explicitly
 initializes, starts and drains that manager. Merkle keepers use
-`manager.Sender(name)`; native integrations use `Send`/`SendAsync`. The SDK owns
+`manager.Sender(name)`; the RFQ Merkle integration uses the same SDK lifecycle for its outer call. The SDK owns
 nonce admission, fee policy, signing, replacements and canonical receipt checks.
 Signed originals and replacements are retained in its single RAM lifecycle
 before broadcast. Keeper ownership survives ambiguous outcomes until a canonical
-owned result. There is no host transaction engine or sender bridge.
+owned result. Native solvers keep their existing `internal/txmanager`, fee policy, retries, telemetry and lifecycle.
+Deploy each solver process with its own signer; the two lifecycle implementations do not coordinate nonce ownership.
 
 Select this integration in the solver process YAML file:
 
@@ -95,7 +95,11 @@ and releases the Merkle reservation through the existing unsigned-failure path.
 Funding changes after a broadcast do not release signed ownership; a failed fee
 replacement keeps the earlier signed identity.
 
-The regular chain/signer/txManager settings still apply. Send mode requires the
+Chain and signer settings remain shared. Merkle maps `txManager.confirmations`,
+`maxFeeGwei`, `maxGas`, `replacementIntervalMs` and `shutdownTimeoutMs` to the SDK.
+The SDK polls every two seconds and bounds each submission RPC to five seconds.
+Native horizon, pending-timeout, account-polling and late-receipt settings configure
+only the native engine. Send mode requires the
 process signer to match the on-chain executor caller; the executor must hold the
 required leaf roles. Startup reads account and caller together at one pinned block,
 deduplicates executors and closes that pin before accepting the identities.
@@ -181,3 +185,19 @@ use the immutable requirement and go.sum checksums through the public Go proxy.
 No GitHub token, private-module configuration or sibling checkout is required.
 If developing with a local `go.work`, set `GOWORK=off` to verify the pinned module.
 Docker excludes workspace files so images always use that dependency.
+
+## Transaction observability
+
+The host explicitly registers the SDK's small metric set under `solver_bot_merkle_`:
+
+- `transaction_requests_total{solver,label,outcome}` for terminal request outcomes.
+- `transaction_inflight{solver,label}` for admitted work still awaiting a result.
+- `transaction_broadcasts_total{solver,label,kind,outcome}` for initial sends, replacements and rebroadcasts.
+- `transaction_gas_used_total{solver,label,outcome}` and `transaction_fee_paid_wei_total` for canonical costs.
+- `transaction_unresolved_nonce` for retained signed ownership, including after an SDK caller returns.
+
+Receipt costs are recorded once after the configured canonical confirmation depth,
+including a retained attempt that wins after its caller has returned. Metrics never
+change order state or authorize settlement. There is no SDK account sampler or
+separate receipt-observer queue. Existing native transaction metrics and dashboards
+remain unchanged.

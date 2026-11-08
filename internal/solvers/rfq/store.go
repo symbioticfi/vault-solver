@@ -73,9 +73,9 @@ type orderRecord struct {
 	EstimateErrorName string
 	// RetryRetired prevents permanent unsigned failures from being re-armed by stale open listings.
 	RetryRetired bool
-	// UnsignedRetry identifies a request stopped before signing.
+	// NonceConflict identifies rejected initial nonce work.
 	// It needs fresh protocol reconciliation but does not spend the signed retry budget.
-	UnsignedRetry bool
+	NonceConflict bool
 	RetryAt       time.Time
 	RetryDeadline time.Time
 	// IncludedAt is the block a confirmed fill landed in; zero until then. A snapshot read at or
@@ -156,7 +156,7 @@ func (s *store) upsertQueued(in queuedOrder) bool {
 	}
 	if rec.Status == statusRetryWaiting && !now.Before(rec.RetryAt) {
 		rec.Status = statusQueued
-		rec.UnsignedRetry = false
+		rec.NonceConflict = false
 		rec.TxHash = common.Hash{} // protocol reconciliation authorized a fresh attempt
 		rec.LastError = ""
 		rec.RetryAt = time.Time{}
@@ -258,7 +258,7 @@ func (s *store) markFilled(orderID string, txHash common.Hash) bool {
 
 func (s *store) markStatusLocked(rec *orderRecord, status orderStatus, txHash common.Hash, lastErr string) {
 	rec.Status = status
-	rec.UnsignedRetry = false
+	rec.NonceConflict = false
 	if !status.active() && rec.IncludedAt == 0 {
 		// Nothing was spent. A confirmed spend stays until sweep for older snapshots.
 		s.reservations.Delete(rec.OrderID)
@@ -301,12 +301,12 @@ func (s *store) markNonceRetryExhausted(orderID string) bool {
 
 // markNonceUncertain retains the result category while fresh backend state is unavailable.
 // The caller holds per-order execution ownership, and this state remains guarded by the store mutex.
-func (s *store) markNonceUncertain(orderID string, txHash common.Hash, lastErr string, unsigned bool) {
+func (s *store) markNonceUncertain(orderID string, txHash common.Hash, lastErr string, conflict bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if rec := s.orders[orderID]; rec != nil {
 		rec.Status = statusNonceUncertain
-		rec.UnsignedRetry = unsigned
+		rec.NonceConflict = conflict
 		rec.TxHash = txHash
 		rec.LastError = lastErr
 		rec.UpdatedAt = s.now()
@@ -320,7 +320,7 @@ func (s *store) markNonceUsed(orderID string, lastErr string) {
 	defer s.mu.Unlock()
 	if rec := s.orders[orderID]; rec != nil {
 		rec.Status = statusNonceUsed
-		rec.UnsignedRetry = false
+		rec.NonceConflict = false
 		rec.LastError = lastErr
 		rec.UpdatedAt = s.now()
 		s.reservations.Delete(orderID)
@@ -335,7 +335,7 @@ func (s *store) markEstimateReverted(orderID string, kind estimateRevertKind, na
 	if rec := s.orders[orderID]; rec != nil {
 		rec.Status = statusEstimateReverted
 		rec.EstimateKind, rec.EstimateErrorName = kind, name
-		rec.UnsignedRetry = false
+		rec.NonceConflict = false
 		rec.LastError = lastErr
 		rec.UpdatedAt = s.now()
 		if kind == estimateRevertFatal || kind == estimateRevertExpired {
@@ -481,10 +481,10 @@ func (s *store) scheduleNonceRetry(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec := s.orders[orderID]
-	if rec == nil || rec.NonceRetryExhausted || (!rec.UnsignedRetry && rec.NonceRetries >= limit) {
+	if rec == nil || rec.NonceRetryExhausted || (!rec.NonceConflict && rec.NonceRetries >= limit) {
 		return false
 	}
-	if !rec.UnsignedRetry {
+	if !rec.NonceConflict {
 		rec.NonceRetries++
 	}
 	rec.Status = statusRetryWaiting

@@ -43,7 +43,7 @@ It does not use this adapter solver's discovery, signatures or liquidity strateg
 | Adapter scope | One solver serves adapters from exactly one source: an explicit `adapters` list when present, otherwise a dynamic set discovered from a configured on-chain `IAdapterFactory`. Factory enumeration has a hard 2,000-entity limit and returns an error above it. The snapshot is refreshed before every auction-discovery pass; either source is filtered by `offerSigner`, non-zero vault, and non-zero asset. Per auction every eligible adapter offers the **full requested amount** within its own capacity; adapters bid independently and never split an auction between them. **1 adapter per offer, no aggregation within an offer** (a single offer is never split across adapters). |
 | Persistence | **Stateless + periodic on-chain resync.** No DB. Open requests come from enumerating `adapter.requests(i)` (per adapter); redemption readiness from `canWithdraw()`; auctions/offers from the 3F API. Optional live-log subscription is a latency optimization only, never on the critical path. |
 | Key management | Env/file private key behind a pluggable **`Signer`** interface (KMS/remote-signer can be added later without touching call sites). This key is the **EIP-1271 signer every served adapter trusts** (each adapter's owner sets it on-chain): it signs offers with `maker = adapter`, and the adapter's `isValidSignature` authorizes them. The same EOA is the tx-sender for `multicall(finalizeRequest…)` (via the shared `txmanager`). |
-| Integration workers | 3F logic is fully encapsulated in its own package; a name→factory **registry** selects the worker from config. The solver process owns its signer and SDK transaction manager. |
+| Multi-solver shape | 3F logic fully encapsulated in its own package; a name→factory **registry** selects the impl from config. A **shared `txmanager`** owns on-chain sending so solvers never race on nonces. |
 
 ---
 
@@ -115,15 +115,17 @@ vault-solver/
 manager and consumes `txmanager.Result`. Admission, nonce ownership, fee policy, replacements,
 confirmation and shutdown are defined in the [transaction manager plan](TXMANAGER-PLAN.md).
 
-Signed uncertain results have unknown execution; their terminal
-result does not prove a successful redemption. The request deadline is the next configured `intervals.redeemPoll` scan. That scan
-reads `canWithdraw` again and constructs a fresh batch; completed requests are excluded. This account-level recovery does not coordinate signed
-offers, offer counters or capacity promises across independent processes; see the [process ownership contract](TXMANAGER-PLAN.md#1-ownership-and-admission).
+`abandoned`, `nonce_conflict` and `nonce_consumed` are expected unknown-execution results; their terminal
+result does not prove a successful redemption. The next normal redemption poll reads `canWithdraw` again and constructs a
+fresh batch; completed requests are excluded. This account-level recovery does not coordinate signed
+offers, offer counters or capacity promises across independent processes; see the [replica plan](REPLICA-PLAN.md).
 
-A returned canonical successful redemption receipt records the submitted batch's
-`redeem/success` count and freshness. There is no late-receipt observer. Metrics
-may miss a call that lands after its result returns. The metrics do not report
-realized loan gains or losses; `FinalizeRequest` contains only the request address.
+Each redemption's `Request.ObserveReceipt` captures only the metric pointer and capped submitted batch
+size. Normal successful inclusion and a late canonical successful owned receipt at the configured
+confirmation depth record the same `redeem/success` count and freshness through the manager's bounded
+process-local hash deduplication. Late observations do not rescan requests or update backlog/active-state
+gauges. The current metrics do not report realized loan gains or losses; the vendored `FinalizeRequest`
+event contains only the finalized request address.
 
 An occupied local transaction lane pauses new 3F commitments: offer
 discovery exits before chain/API planning, and lane readiness is checked again immediately before each
@@ -174,7 +176,7 @@ server path (`/v1`); the schema owns endpoint paths.
 ```yaml
 chain: { rpcUrl, writeRpcUrl?, chainId, rpcFallbackUrls? } # HTTP(S) endpoints
 signer: { keyEnv: SOLVER_PRIVATE_KEY }     # the EIP-1271 signer every served adapter trusts
-txManager: { confirmations: 2, maxFeeGwei, maxGas, pollIntervalMs, replacementIntervalMs, shutdownTimeoutMs }
+txManager: { confirmations: 2, maxFeeGwei, broadcastTimeoutMs, replacementIntervalMs, pendingTimeoutMs, shutdownTimeoutMs, horizon }
 
 solvers:
   - name: 3f-bridge-facilitator             # ← registry key: selects the impl

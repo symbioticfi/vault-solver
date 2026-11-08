@@ -9,15 +9,17 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/cobra"
+	merkletransaction "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"golang.org/x/sync/errgroup"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/config"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 	"github.com/symbioticfi/vault-solver/internal/solver"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 	"github.com/symbioticfi/vault-solver/internal/version"
 )
 
@@ -75,8 +77,9 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		}
 	}()
 
-	// With one integration worker, stamp every line, including common components, with its name.
-	// With several workers, stamp each worker logger below and attribute manager work per request.
+	// With one solver per process (the deployed shape), stamp every line, shared components such as
+	// txmanager included, with the integration it serves. With several, each solver's own logger is
+	// stamped below instead, and shared components attribute work through the request label.
 	if len(solverNames) == 1 {
 		log = log.WithValues("solver", solverNames[0])
 	}
@@ -136,31 +139,52 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	}
 	log.Info("signer ready", "address", sgnr.Address().Hex())
 
-	// This solver process owns one signer and SDK transaction manager.
-	txm, err := txmanager.New(chainClient, sgnr, chainClient.ChainID(), txmanager.Config{
-		Confirmations: cfg.TxManager.Confirmations, MaxFeeGwei: cfg.TxManager.MaxFeeGwei, MaxGas: cfg.TxManager.MaxGas,
-		PollInterval:        time.Duration(cfg.TxManager.PollIntervalMs) * time.Millisecond,
-		ReplacementInterval: time.Duration(cfg.TxManager.ReplacementIntervalMs) * time.Millisecond,
-		ShutdownTimeout:     time.Duration(cfg.TxManager.ShutdownTimeoutMs) * time.Millisecond,
-	}, log)
+	// Shared, nonce-serialized transaction sender.
+	txMetrics, err := txmanager.NewMetrics(metrics.Registerer())
 	if err != nil {
-		return errors.Errorf("create tx manager: %w", err)
+		return err
 	}
+	txm := txmanager.NewWithMetrics(chainClient, sgnr, chainClient.ChainID(), txmanager.Config{
+		Confirmations:        cfg.TxManager.Confirmations,
+		MaxFeeGwei:           cfg.TxManager.MaxFeeGwei,
+		BroadcastTimeout:     time.Duration(cfg.TxManager.BroadcastTimeoutMs) * time.Millisecond,
+		AccountPollInterval:  time.Duration(cfg.TxManager.AccountPollIntervalMs) * time.Millisecond,
+		ReplacementInterval:  time.Duration(cfg.TxManager.ReplacementIntervalMs) * time.Millisecond,
+		PendingTimeout:       time.Duration(cfg.TxManager.PendingTimeoutMs) * time.Millisecond,
+		LateReceiptTimeout:   time.Duration(cfg.TxManager.LateReceiptTimeoutMs) * time.Millisecond,
+		LateReceiptMaxHashes: cfg.TxManager.LateReceiptMaxHashes,
+		ShutdownTimeout:      time.Duration(cfg.TxManager.ShutdownTimeoutMs) * time.Millisecond,
+		Horizon:              horizonConfig(cfg.TxManager.Horizon),
+	}, txMetrics, log)
+	merkleTransactions := sync.OnceValues(func() (*merkletransaction.Manager, error) {
+		manager, err := merkletransaction.New(chainClient, sgnr, chainClient.ChainID(), merkletransaction.Config{
+			Confirmations:       cfg.TxManager.Confirmations,
+			MaxFeeGwei:          cfg.TxManager.MaxFeeGwei,
+			MaxGas:              cfg.TxManager.MaxGas,
+			ReplacementInterval: time.Duration(cfg.TxManager.ReplacementIntervalMs) * time.Millisecond,
+			ShutdownTimeout:     time.Duration(cfg.TxManager.ShutdownTimeoutMs) * time.Millisecond,
+		}, log)
+		if err != nil {
+			return nil, errors.Errorf("configure Merkle transaction manager: %w", err)
+		}
+		return manager, nil
+	})
 	runCtx, reportFatal := context.WithCancelCause(ctx)
 	defer reportFatal(nil)
 
-	// Build the configured integration workers using this process's signer and transaction manager.
+	// Native solvers share txManager; Merkle factories explicitly request the SDK manager.
 	deps := solver.Deps{
-		Chain: chainClient, TxManager: txm, MaxGas: cfg.TxManager.MaxGas, Signer: sgnr, Log: log, Metrics: metrics,
+		Chain: chainClient, TxManager: txm, MerkleTxManager: merkleTransactions, MaxGas: cfg.TxManager.MaxGas, Signer: sgnr, Log: log, Metrics: metrics,
 		ReportFatal: reportFatal,
 	}
 	solvers := make([]solver.Solver, 0, len(cfg.Solvers))
 	solverLogs := make([]logr.Logger, 0, len(cfg.Solvers))
 	// Registered before the sender drain defer: close persistent resources only
-	// after accepted transaction lifecycles finish.
+	// after accepted transaction lifecycles stop invoking callbacks.
 	var closers []io.Closer
 	defer func() { err = errors.Join(err, closeSolvers(closers)) }()
 	requiresTxManager := false
+	requiresMerkleTxManager := false
 	for _, sc := range cfg.Solvers {
 		solverDeps := deps
 		if len(cfg.Solvers) > 1 {
@@ -176,37 +200,121 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		solvers = append(solvers, slv)
 		solverLogs = append(solverLogs, solverDeps.Log)
 		requiresTxManager = requiresTxManager || solver.RequiresTxManager(slv)
+		requiresMerkleTxManager = requiresMerkleTxManager || solver.RequiresMerkleTxManager(slv)
 	}
 	if requiresTxManager {
 		if err := cfg.ValidateTxManager(); err != nil {
 			return errors.Errorf("invalid config %q: %w", configPath, err)
+		}
+		if err := txm.ValidateFeeHeadroom(); err != nil {
+			return errors.Errorf("invalid config %q: txManager: %w", configPath, err)
 		}
 		if err := txm.Initialize(runCtx); err != nil {
 			return errors.Errorf("initialize tx manager: %w", err)
 		}
 	}
 
-	// Worker cancellation and manager drain start together. Workers waiting for accepted results
-	// can finish while the manager applies its bounded shutdown timeout.
-	g, gctx := errgroup.WithContext(runCtx)
+	var merkleTxm *merkletransaction.Manager
+	if requiresMerkleTxManager {
+		merkleTxm, err = merkleTransactions()
+		if err != nil {
+			return err
+		}
+		if err := cfg.ValidateTxManager(); err != nil {
+			return errors.Errorf("invalid config %q: %w", configPath, err)
+		}
+		merkleMetrics, err := merkletransaction.NewMetrics(prometheus.WrapRegistererWithPrefix("solver_bot_merkle_", metrics.Registerer()))
+		if err != nil {
+			return errors.Errorf("register Merkle transaction metrics: %w", err)
+		}
+		merkleTxm.Metrics = merkleMetrics
+		if err := merkleTxm.Initialize(runCtx); err != nil {
+			return errors.Errorf("initialize Merkle transaction manager: %w", err)
+		}
+	}
+
+	var stopTx context.CancelFunc
 	if requiresTxManager {
+		// Accepted transactions outlive solver intake cancellation: solvers first stop admitting
+		// work and drain their pending results, then this detached context stops the shared manager.
+		txCtx, cancelTx := context.WithCancel(context.WithoutCancel(runCtx))
+		stopTx = cancelTx
 		txDone := make(chan struct{})
-		go func() { defer close(txDone); txm.Start(gctx) }()
-		defer func() { reportFatal(nil); <-txDone }()
+		go func() {
+			defer close(txDone)
+			txm.Start(txCtx)
+		}()
+		defer func() {
+			stopTx()
+			<-txDone
+		}()
+	}
+
+	// Run all solvers concurrently. The first fatal error cancels the rest; ctx cancellation is a
+	// clean shutdown (solver.Run maps context.Canceled to nil).
+	var shutdownPreparationTimeout time.Duration
+	for _, slv := range solvers {
+		if preparer, ok := slv.(solver.ShutdownPreparer); ok {
+			shutdownPreparationTimeout = max(
+				shutdownPreparationTimeout,
+				preparer.ShutdownPreparationTimeout(),
+			)
+		}
+	}
+	g, gctx := errgroup.WithContext(runCtx)
+	if requiresMerkleTxManager {
+		done := make(chan struct{})
+		go func() { defer close(done); merkleTxm.Start(gctx) }()
+		defer func() { <-done }()
 	}
 	var background sync.WaitGroup
+	var laneStateChanged <-chan struct{}
 	laneAvailable := func() bool { return true }
+	unsubscribe := func() {}
 	if requiresTxManager {
+		laneStateChanged, unsubscribe = txm.SubscribeLaneState()
 		laneAvailable = txm.Available
 	}
 	background.Go(func() {
-		watchReadiness(gctx, time.Duration(cfg.TxManager.PollIntervalMs)*time.Millisecond, laneAvailable, health.SetReady)
+		if requiresMerkleTxManager {
+			watchMerkleReadiness(gctx, merkleTxm.Available, health.SetReady)
+			return
+		}
+		defer unsubscribe()
+		// Subscribe before reading current availability, so initialization cannot complete between a
+		// stale snapshot and subscription. Cancellation drops readiness for every solver.
+		watchReadiness(gctx, laneStateChanged, laneAvailable, health.SetReady)
 	})
 	for i, slv := range solvers {
 		g.Go(func() error { return solver.Run(gctx, slv, solverLogs[i]) })
 	}
 
+	var (
+		solversDone      chan struct{}
+		drainMonitorDone chan struct{}
+	)
+	if requiresTxManager {
+		solversDone = make(chan struct{})
+		drainMonitorDone = make(chan struct{})
+		// The finite shutdown budget covers solver preparation, one pending-timeout window, and one
+		// replacement interval. It bounds how long the process waits before stopping txmanager;
+		// txmanager then applies its own configured lifecycle drain timeout.
+		shutdownTimeout := shutdownPreparationTimeout + time.Duration(
+			cfg.TxManager.PendingTimeoutMs+cfg.TxManager.ReplacementIntervalMs,
+		)*time.Millisecond
+		go func() {
+			defer close(drainMonitorDone)
+			monitorTransactionDrain(gctx.Done(), solversDone, shutdownTimeout, func() {
+				log.Info("solver shutdown timed out; stopping tx manager", "timeout", shutdownTimeout.String())
+				stopTx()
+			})
+		}()
+	}
 	err = g.Wait()
+	if requiresTxManager {
+		close(solversDone)
+		<-drainMonitorDone
+	}
 	background.Wait()
 	if err == nil {
 		if cause := context.Cause(runCtx); cause != nil && !errors.Is(cause, context.Canceled) {
@@ -216,24 +324,79 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	return err
 }
 
-func watchReadiness(ctx context.Context, interval time.Duration, laneAvailable func() bool, setReady func(bool)) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	last, known := false, false
+func watchReadiness(
+	ctx context.Context,
+	laneStateChanged <-chan struct{},
+	laneAvailable func() bool,
+	setReady func(bool),
+) {
 	for {
 		if ctx.Err() != nil {
 			setReady(false)
 			return
 		}
-		ready := laneAvailable()
-		if !known || ready != last {
-			setReady(ready)
-			last, known = ready, true
+		setReady(laneAvailable())
+		select {
+		case <-laneStateChanged:
+		case <-ctx.Done():
 		}
+	}
+}
+
+func watchMerkleReadiness(ctx context.Context, available func() bool, setReady func(bool)) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			setReady(false)
+			return
+		}
+		setReady(available())
 		select {
 		case <-ticker.C:
 		case <-ctx.Done():
 		}
+	}
+}
+
+func monitorTransactionDrain(
+	shutdown <-chan struct{},
+	solversDone <-chan struct{},
+	timeout time.Duration,
+	onTimeout func(),
+) {
+	select {
+	case <-shutdown:
+	case <-solversDone:
+		return
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		onTimeout()
+	case <-solversDone:
+	}
+}
+
+// The transaction manager estimates gas against the next block through the chain client; without
+// this method it silently falls back to latest-state estimates.
+var _ txmanager.NextBlockGasEstimator = (*chain.Client)(nil)
+
+func horizonConfig(c config.HorizonFeeConfig) txmanager.HorizonConfig {
+	return txmanager.HorizonConfig{
+		MaxBlocks:                 c.MaxBlocks,
+		BlockTime:                 time.Duration(c.BlockTimeMs) * time.Millisecond,
+		TipFloorGwei:              c.TipFloorGwei,
+		FullBlockTipGwei:          c.FullBlockTipGwei,
+		CongestedTipFloorGwei:     c.CongestedTipFloorGwei,
+		CongestedTipCapGwei:       c.CongestedTipCapGwei,
+		CongestedRewardBlocks:     c.CongestedRewardBlocks,
+		CongestedRewardPercentile: c.CongestedRewardPercentile,
+		EscalateAfterFullBlocks:   c.EscalateAfterFullBlocks,
+		StallAfterBlocks:          c.StallAfterBlocks,
+		GasHeadroomBps:            c.GasHeadroomBps,
+		FallbackGasHeadroomBps:    c.FallbackGasHeadroomBps,
 	}
 }
 

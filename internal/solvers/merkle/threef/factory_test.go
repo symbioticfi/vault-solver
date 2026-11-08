@@ -157,13 +157,13 @@ func TestFactoryDiscoversSharedSignerAndOwnsRAMRuntime(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, TxManager: manager, MaxGas: 2_000_000, Log: logr.Discard()})
+			built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, MerkleTxManager: func() (*txmanager.Manager, error) { return manager, nil }, MaxGas: 2_000_000, Log: logr.Discard()})
 			if mode == "valid" || mode == "send" || mode == "sepolia" {
 				if err != nil {
 					t.Fatal(err)
 				}
 				current := built.(*Solver)
-				if current.Name() != Name || current.RequiresTxManager() != (mode == "send") || len(current.keeper.Strategies[0].Providers) != 1 || current.offers.bot.Send != (mode == "send") || getters != 2 || current.keeper.Planner.(*mintPlanning).PermissionSource == nil || current.keeper.Planner.(*mintPlanning).RecipeCache == nil || current.keeper.Planner.(*mintPlanning).MaxGas != 2_000_000 || current.keeper.Strategies[0].Config.Account != account.Hex() {
+				if current.RequiresTxManager() || current.Name() != Name || current.RequiresMerkleTxManager() != (mode == "send") || len(current.keeper.Strategies[0].Providers) != 1 || current.offers.bot.Send != (mode == "send") || getters != 2 || current.keeper.Planner.(*mintPlanning).PermissionSource == nil || current.keeper.Planner.(*mintPlanning).RecipeCache == nil || current.keeper.Planner.(*mintPlanning).MaxGas != 2_000_000 || current.keeper.Strategies[0].Config.Account != account.Hex() {
 					t.Fatal("host failed shared SDK integration")
 				}
 				if (current.keeper.Sender != nil) != (mode == "send") || current.keeper.Pending() {

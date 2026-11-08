@@ -136,13 +136,13 @@ func TestFactoryDiscoversSharedSignerWithoutStartingWork(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, TxManager: manager, MaxGas: 2_000_000, Log: logr.Discard()})
+			built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, MerkleTxManager: func() (*txmanager.Manager, error) { return manager, nil }, MaxGas: 2_000_000, Log: logr.Discard()})
 			if mode == "valid" {
 				if err != nil {
 					t.Fatal(err)
 				}
 				current := built.(*Solver)
-				if current.keeper.Pending() || current.keeper.Sender != nil || getters != 1 || current.keeper.Planner.(*keeper.Planner).PermissionSource == nil || current.keeper.Planner.(*keeper.Planner).RecipeCache == nil || current.keeper.Planner.(*keeper.Planner).MaxGas != 2_000_000 || current.keeper.Strategies[0].Config.Account != account.Hex() {
+				if current.RequiresTxManager() || current.RequiresMerkleTxManager() || current.keeper.Pending() || current.keeper.Sender != nil || getters != 1 || current.keeper.Planner.(*keeper.Planner).PermissionSource == nil || current.keeper.Planner.(*keeper.Planner).RecipeCache == nil || current.keeper.Planner.(*keeper.Planner).MaxGas != 2_000_000 || current.keeper.Strategies[0].Config.Account != account.Hex() {
 					t.Fatal("host failed shared SDK integration")
 				}
 				providers := current.keeper.Strategies[0].Providers
@@ -196,7 +196,7 @@ func TestFactoryRejectsStrategyObjectsAndDuplicatesBeforeRPC(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, TxManager: manager, MaxGas: 2_000_000, Log: logr.Discard()}); err == nil {
+			if _, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, MerkleTxManager: func() (*txmanager.Manager, error) { return manager, nil }, MaxGas: 2_000_000, Log: logr.Discard()}); err == nil {
 				t.Fatal("obsolete strategy accepted")
 			}
 			if calls.Load() != 0 {

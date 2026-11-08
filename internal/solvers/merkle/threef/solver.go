@@ -26,8 +26,9 @@ type Solver struct {
 	offers *offerWorkflow
 }
 
-func (s *Solver) Name() string            { return Name }
-func (s *Solver) RequiresTxManager() bool { return s.keeper.Mode == "send" }
+func (s *Solver) Name() string                  { return Name }
+func (*Solver) RequiresTxManager() bool         { return false }
+func (s *Solver) RequiresMerkleTxManager() bool { return s.keeper.Mode == "send" }
 
 func (s *Solver) Run(ctx context.Context) error {
 	ticker := time.NewTicker(pollInterval)
@@ -89,8 +90,12 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	if deps.Chain == nil || deps.Signer == nil || deps.TxManager == nil {
+	if deps.Chain == nil || deps.Signer == nil || deps.MerkleTxManager == nil {
 		return nil, errors.New("threef-merkle requires host chain, signer and process transaction manager")
+	}
+	manager, err := deps.MerkleTxManager()
+	if err != nil {
+		return nil, err
 	}
 	// The factory interface has no context; bound the complete startup observation.
 	startup, cancel := context.WithTimeout(context.Background(), operationTimeout)
@@ -119,10 +124,10 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(1, 16<<20), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: deps.TxManager.Confirmations(), MaxGas: deps.MaxGas}
+	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(1, 16<<20), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: manager.Confirmations(), MaxGas: deps.MaxGas}
 	k := &keeper.Keeper{Planner: &mintPlanning{Planner: planner, runtime: runtime}, Strategies: []keeper.Strategy{strategy}, Mode: cfg.Mode, OperationTimeout: operationTimeout, Log: deps.Log.WithName(Name)}
 	if cfg.Mode == "send" {
-		k.Sender = deps.TxManager.Sender(Name)
+		k.Sender = manager.Sender(Name)
 	}
 	bot := &offerBot{Client: api, Send: cfg.Mode == "send"}
 	workflow := &offerWorkflow{planner: planner, strategy: strategy, policy: policy, api: api, bot: bot}

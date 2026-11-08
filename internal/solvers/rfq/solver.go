@@ -46,6 +46,9 @@ type Solver struct {
 	reportFatal func(error)
 }
 
+func (s *Solver) RequiresTxManager() bool       { return s.merkle == nil }
+func (s *Solver) RequiresMerkleTxManager() bool { return s.merkle != nil }
+
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
@@ -90,6 +93,11 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 			return nil, err
 		}
 		quotes.reservations = nil // The signer fence pauses quotes during signed Merkle work.
+		manager, err := deps.MerkleTxManager()
+		if err != nil {
+			return nil, err
+		}
+		quotes.laneAvailable = manager.Available
 		quotes.inventoryCurrent = merkle.AcceptsSnapshots
 		quotes.acceptsConnector = merkle.AcceptsConnector
 		quotes.acceptsRoute = merkle.AcceptsRoute
@@ -178,6 +186,10 @@ func buildServices(
 
 // Name identifies the solver.
 func (s *Solver) Name() string { return Name }
+
+func (s *Solver) ShutdownPreparationTimeout() time.Duration {
+	return quoteServerShutdownTimeout
+}
 
 // Run serves the quote HTTP API until ctx is cancelled, then shuts it down gracefully, alongside the
 // backend order-poll + fill loop. The filler is poll-only (no push/notify endpoint).

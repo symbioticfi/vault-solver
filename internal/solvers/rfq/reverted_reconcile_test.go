@@ -5,16 +5,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethereum/go-ethereum/core/types"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr/funcr"
 	"github.com/prometheus/client_golang/prometheus"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 func TestExecutionMinedRevertReconcilesBeforeFailure(t *testing.T) {
@@ -34,7 +32,7 @@ func TestExecutionMinedRevertReconcilesBeforeFailure(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			st, be := fillFixtures(t)
 			be.order.OrderStatus, be.order.TxHash = tc.backend, strPtr(tc.hash.Hex())
-			txm := &fakeTxm{result: txmanager.Result{Receipt: &types.Receipt{Status: types.ReceiptStatusFailed},
+			txm := &fakeTxm{result: txmanager.Result{Outcome: txmanager.OutcomeReverted,
 				Hash: common.HexToHash("0xdead"), Attempts: []common.Hash{common.HexToHash("0xabcd")}, Err: errors.New("tx reverted")}}
 			e := newExec(t, st, be, txm)
 			reg := prometheus.NewRegistry()
@@ -65,7 +63,7 @@ func TestExecutionMinedRevertRetainsUnavailableBackendForPeerFill(t *testing.T) 
 	st, be := fillFixtures(t)
 	terminal := be.order
 	be.order = nil
-	txm := &fakeTxm{result: txmanager.Result{Receipt: &types.Receipt{Status: types.ReceiptStatusFailed},
+	txm := &fakeTxm{result: txmanager.Result{Outcome: txmanager.OutcomeReverted,
 		Hash: common.HexToHash("0xdead"), Err: errors.New("tx reverted")}}
 	e := newExec(t, st, be, txm)
 	syncCycle(t.Context(), e)

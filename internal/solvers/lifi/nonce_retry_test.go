@@ -14,19 +14,19 @@ import (
 	"github.com/go-logr/logr/funcr"
 	"github.com/prometheus/client_golang/prometheus"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 // Removing the worker's timed re-enqueue would leave an open order unsent forever on a healthy feed.
 func TestOrderWorkerRetriesUncertainNonceWithoutFeedReplay(t *testing.T) {
-	for _, outcome := range []error{
-		txmanager.ErrNonceConsumed, context.DeadlineExceeded, txmanager.ErrStopped,
+	for _, outcome := range []txmanager.Outcome{
+		txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict, txmanager.OutcomeAbandoned,
 	} {
-		t.Run(outcome.Error(), func(t *testing.T) {
+		t.Run(string(outcome), func(t *testing.T) {
 			fixture := nonceRetryFixture(t, outcome)
 			solver, routes, order, txm := fixture.solver, fixture.routes, fixture.order, fixture.txm
 			reg := prometheus.NewRegistry()
@@ -46,7 +46,7 @@ func TestOrderWorkerRetriesUncertainNonceWithoutFeedReplay(t *testing.T) {
 
 // A failed status read at completion or on the following retry must not consume the order.
 func TestOrderWorkerRetainsUncertainOrderAcrossStatusReadFailures(t *testing.T) {
-	fixture := nonceRetryFixture(t, txmanager.ErrNonceConsumed)
+	fixture := nonceRetryFixture(t, txmanager.OutcomeNonceConsumed)
 	solver, routes, order, txm := fixture.solver, fixture.routes, fixture.order, fixture.txm
 	reader := solver.reader.(fakeLifiReader)
 	var reads atomic.Int32
@@ -69,7 +69,7 @@ func TestOrderWorkerRetainsUncertainOrderAcrossStatusReadFailures(t *testing.T) 
 func TestOrderWorkerReconcilesTerminalStatusAfterUncertainNonce(t *testing.T) {
 	for _, status := range []uint8{lifiOrderStatusClaimed, lifiOrderStatusRefunded} {
 		t.Run(strconv.Itoa(int(status)), func(t *testing.T) {
-			fixture := nonceRetryFixture(t, txmanager.ErrNonceConsumed)
+			fixture := nonceRetryFixture(t, txmanager.OutcomeNonceConsumed)
 			solver, routes, order, txm := fixture.solver, fixture.routes, fixture.order, fixture.txm
 			reader := solver.reader.(fakeLifiReader)
 			var reads int
@@ -101,7 +101,7 @@ type nonceRetryTestSetup struct {
 	txm    *fakeLifiTxSender
 }
 
-func nonceRetryFixture(t *testing.T, outcome error) nonceRetryTestSetup {
+func nonceRetryFixture(t *testing.T, outcome txmanager.Outcome) nonceRetryTestSetup {
 	t.Helper()
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
@@ -111,7 +111,7 @@ func nonceRetryFixture(t *testing.T, outcome error) nonceRetryTestSetup {
 	txm := &fakeLifiTxSender{hold: true}
 	txm.onSend = func(attempt int, result chan<- txmanager.Result) {
 		if attempt == 1 {
-			txm.complete(result, txmanager.Result{Hash: common.HexToHash("0x1234"), Attempts: []common.Hash{common.HexToHash("0x1234")}, Err: outcome})
+			txm.complete(result, txmanager.Result{Hash: common.HexToHash("0x1234"), Outcome: outcome, Err: nonceOutcomeError(outcome)})
 			return
 		}
 		txm.complete(result, txm.fillResult())
@@ -203,7 +203,7 @@ func TestNonceRetryQueueContinuesBeyondDepositWindow(t *testing.T) {
 }
 
 func TestSubmitFillMapsNonceRetryDeadlineFromChainTime(t *testing.T) {
-	fixture := nonceRetryFixture(t, txmanager.ErrNonceConsumed)
+	fixture := nonceRetryFixture(t, txmanager.OutcomeNonceConsumed)
 	solver, order, txm := fixture.solver, fixture.order, fixture.txm
 	wall := time.Unix(1_700_000_000, 0)
 	chainNow := wall.Add(time.Hour)
@@ -235,7 +235,7 @@ func TestSubmitFillMapsNonceRetryDeadlineFromChainTime(t *testing.T) {
 }
 
 func TestOrderWorkerUncertainShutdownDoesNotReconcileStatus(t *testing.T) {
-	fixture := nonceRetryFixture(t, txmanager.ErrNonceConsumed)
+	fixture := nonceRetryFixture(t, txmanager.OutcomeNonceConsumed)
 	solver, routes, order, txm := fixture.solver, fixture.routes, fixture.order, fixture.txm
 	var logs []string
 	solver.log = funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{})
@@ -312,7 +312,7 @@ func TestNonceRetryRetainsTimerWhenCapacityQueueIsFull(t *testing.T) {
 }
 
 func TestOrderWorkerRetainsUncertainOrderAcrossUnknownStatuses(t *testing.T) {
-	fixture := nonceRetryFixture(t, txmanager.ErrNonceConsumed)
+	fixture := nonceRetryFixture(t, txmanager.OutcomeNonceConsumed)
 	solver, routes, order, txm := fixture.solver, fixture.routes, fixture.order, fixture.txm
 	reader := solver.reader.(fakeLifiReader)
 	var reads atomic.Int32

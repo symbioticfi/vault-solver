@@ -14,18 +14,17 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
 	"github.com/prometheus/client_golang/prometheus"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	defaultstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/default"
 	webhookstrategy "github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/webhook"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 	"github.com/symbioticfi/vault-solver/internal/webhook"
 )
 
@@ -1239,27 +1238,37 @@ func TestOrderRecoveryRetriesLiveWorkerFailureBeforeReady(t *testing.T) {
 	}
 }
 
-func TestCompleteFillTreatsCanonicalReceiptAsSuccess(t *testing.T) {
+func TestCompleteFillTreatsIncludedTransactionAsSuccess(t *testing.T) {
 	var logs []string
-	solver := &Solver{log: funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{})}
-	fill := &pendingFill{order: &submittedOrder{OrderID: "order-1", QuoteID: "quote-1"}, orderID: common.HexToHash("0x1"), reservationKey: "order-1"}
+	solver := &Solver{
+		log: funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
+	}
+	fill := &pendingFill{
+		order:          &submittedOrder{OrderID: "order-1", QuoteID: "quote-1"},
+		orderID:        common.HexToHash("0x1"),
+		reservationKey: "order-1",
+	}
 	pending := &pendingFillState{byOrder: map[string]*pendingFill{"order-1": fill}}
-	err := solver.completeFill(solverContext(t, solver), pending, fillCompletion{fill: fill, result: txmanager.Result{
-		Hash: common.HexToHash("0x1"), Receipt: &ethtypes.Receipt{Status: ethtypes.ReceiptStatusSuccessful},
+
+	solver.completeFill(solverContext(t, solver), pending, fillCompletion{fill: fill, result: txmanager.Result{
+		Outcome: txmanager.OutcomeIncludedUnconfirmed,
+		Err:     errors.New("confirmation wait failed"),
 	}})
+
 	logged := strings.Join(logs, "\n")
-	if err != nil || pending.len() != 0 || strings.Contains(logged, `"msg":"order fill failed"`) || !strings.Contains(logged, `"msg":"order filled"`) {
-		t.Fatalf("canonical completion: err=%v pending=%d logs=%s", err, pending.len(), logged)
+	if pending.len() != 0 || strings.Contains(logged, `"msg":"order fill failed"`) ||
+		!strings.Contains(logged, "order fill included but confirmation wait failed") {
+		t.Fatalf("included completion: pending=%d logs=%s", pending.len(), logged)
 	}
 }
 
 func TestOrderWorkerUncertainNonceReleasesReservationWithoutSuccess(t *testing.T) {
-	for _, outcome := range []error{txmanager.ErrNonceConsumed, context.DeadlineExceeded} {
-		t.Run(outcome.Error(), func(t *testing.T) { orderWorkerUncertainNonceReleasesReservationWithoutSuccess(t, outcome) })
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeAbandoned} {
+		t.Run(string(outcome), func(t *testing.T) { orderWorkerUncertainNonceReleasesReservationWithoutSuccess(t, outcome) })
 	}
 }
 
-func orderWorkerUncertainNonceReleasesReservationWithoutSuccess(t *testing.T, outcome error) {
+func orderWorkerUncertainNonceReleasesReservationWithoutSuccess(t *testing.T, outcome txmanager.Outcome) {
 	t.Helper()
 	fixture := immediateTestSetup(t)
 	strategy, err := defaultstrategy.New(defaultstrategy.Config{})
@@ -1267,7 +1276,7 @@ func orderWorkerUncertainNonceReleasesReservationWithoutSuccess(t *testing.T, ou
 		t.Fatal(err)
 	}
 	txm := &fakeLifiTxSender{result: txmanager.Result{
-		Hash: common.HexToHash("0x1234"), Attempts: []common.Hash{common.HexToHash("0x1234")}, Err: outcome,
+		Hash: common.HexToHash("0x1234"), Outcome: outcome, Err: nonceOutcomeError(outcome),
 	}}
 	solver := newProcessTestSolver(fixture.cfg, fixture.caller, txm, strategy,
 		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited)
@@ -1300,12 +1309,12 @@ func orderWorkerUncertainNonceReleasesReservationWithoutSuccess(t *testing.T, ou
 }
 
 func TestCompleteFillTreatsConsumedNonceAsExpectedSkip(t *testing.T) {
-	for _, outcome := range []error{txmanager.ErrNonceConsumed, context.DeadlineExceeded, txmanager.ErrStopped} {
-		t.Run(outcome.Error(), func(t *testing.T) { completeFillTreatsConsumedNonceAsExpectedSkip(t, outcome) })
+	for _, outcome := range []txmanager.Outcome{txmanager.OutcomeNonceConsumed, txmanager.OutcomeNonceConflict, txmanager.OutcomeAbandoned} {
+		t.Run(string(outcome), func(t *testing.T) { completeFillTreatsConsumedNonceAsExpectedSkip(t, outcome) })
 	}
 }
 
-func completeFillTreatsConsumedNonceAsExpectedSkip(t *testing.T, outcome error) {
+func completeFillTreatsConsumedNonceAsExpectedSkip(t *testing.T, outcome txmanager.Outcome) {
 	t.Helper()
 	var logs []string
 	solver := &Solver{log: funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{Verbosity: 1})}
@@ -1315,7 +1324,7 @@ func completeFillTreatsConsumedNonceAsExpectedSkip(t *testing.T, outcome error) 
 	}
 	pending := &pendingFillState{byOrder: map[string]*pendingFill{"order-1": fill}}
 	err := solver.completeFill(solverContext(t, solver), pending, fillCompletion{fill: fill, result: txmanager.Result{
-		Hash: common.HexToHash("0x1234"), Attempts: []common.Hash{common.HexToHash("0x1234")}, Err: outcome,
+		Hash: common.HexToHash("0x1234"), Outcome: outcome, Err: nonceOutcomeError(outcome),
 	}})
 	logged := strings.Join(logs, "\n")
 	if err != nil || pending.len() != 0 || strings.Contains(logged, `"msg":"order fill failed"`) ||
@@ -1337,8 +1346,9 @@ func TestCompleteFillTreatsObsoleteOrderAsExpectedSkip(t *testing.T) {
 	pending := &pendingFillState{byOrder: map[string]*pendingFill{"order-1": fill}}
 
 	err := solver.completeFill(solverContext(t, solver), pending, fillCompletion{fill: fill, result: txmanager.Result{
-		Hash: common.HexToHash("0xc"),
-		Err:  errors.Errorf("pending transaction abandoned at nonce 3: %w", txmanager.ErrRequestObsolete),
+		Hash:    common.HexToHash("0xc"),
+		Outcome: txmanager.OutcomeAbandoned,
+		Err:     errors.Errorf("pending transaction abandoned at nonce 3: %w", txmanager.ErrRequestObsolete),
 	}})
 
 	logged := strings.Join(logs, "\n")
@@ -1415,4 +1425,14 @@ func TestOrderRecoverySkipsUndecodableOrder(t *testing.T) {
 	// converging sweep.
 	metricstest.RequireWorkflowEventCount(t, registry, Name, "order_parse", "invalid", 2)
 	metricstest.RequireExternalOperationCount(t, registry, Name, orderRecoveryOperation, "success", 1)
+}
+
+func nonceOutcomeError(outcome txmanager.Outcome) error {
+	if outcome == txmanager.OutcomeAbandoned {
+		return txmanager.ErrAbandoned
+	}
+	if outcome == txmanager.OutcomeNonceConflict {
+		return txmanager.ErrNonceConflict
+	}
+	return txmanager.ErrNonceConsumed
 }

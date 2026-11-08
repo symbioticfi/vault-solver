@@ -183,10 +183,10 @@ wrapping `txmanager.ErrRequestObsolete` retires the order without a retry or a b
 It records `fill/obsolete` only if the order has no current or historical locally signed attempt;
 otherwise receipt observation decides owned execution metrics. The signed-attempt marker is guarded
 by `stateMu`, survives retries, and is removed on completion or the existing retry-state expiry.
-Receipt metrics never change it. Continued quoting does not guarantee execution within exclusivity;
+Receipt callbacks never change it. Continued quoting does not guarantee execution within exclusivity;
 the exclusive window must also cover any preceding fill's confirmation time.
 
-Signed uncertain results have no owned receipt in their terminal result and do not
+`abandoned`, `nonce_conflict` and `nonce_consumed` have no owned receipt in their terminal result and do not
 count as a successful fill at that point. Completion invalidates inventory and releases the local reservation, then defers the order until the
 normal polling interval without increasing execution-failure attempts or opening the fade breaker. A later
 open-order poll and the normal fresh deadline, planning, preflight and protocol-obsolescence checks decide
@@ -194,12 +194,12 @@ whether another fill can be submitted. The manager may reuse an abandoned unused
 request; calldata from the previous request is never replayed. These are local
 recovery rules; they do not coordinate outstanding orders, exclusive obligations or capacity across replicas.
 
-Returned canonical successful receipts at the configured confirmation depth
-record fill counts, freshness and planned amounts. There are no receipt callbacks
-or late-receipt metrics. Results returned before eventual inclusion may miss local
-execution metrics; protocol reconciliation still owns order and reservation state.
-Worker cancellation and the manager's bounded receipt drain begin together;
-shutdown cannot guarantee mining or confirmation before exit.
+Each submitted fill snapshots only its metric pointer, token addresses, input/output amounts and gross
+planned surplus into `Request.ObserveReceipt`. Normal inclusion and a late canonical owned receipt at
+the configured confirmation depth use the manager's bounded hash deduplication. Successful observations
+record `fill/success`, freshness and amounts; late observations never repeat completion, modify the filled
+cache, clear a breaker, release reservations again or alter retries. Exclusive-obligation outcomes remain
+owned by the existing terminal API and canonical block-time reconciliation.
 
 Completed orders retain the existing one-hour local deduplication cache. The poller does not retain a
 successful receipt for a later-reorg watcher or reopen cached completions. It follows the order service's
@@ -254,7 +254,7 @@ exclusive obligations remain independently tracked through terminal reconciliati
   request ceiling. With it enabled, `MaxFeePerGas` supplies the decision-time profitability ceiling
   including an unexpired, affordable fee floor retained after accepted/uncertain abandonment at the
   current mined nonce, plus one normal replacement when the global ceiling permits. The manager owns
-  [fee selection and headroom](TXMANAGER-PLAN.md#4-fees-replacements-and-expiry).
+  [fee selection and headroom](TXMANAGER-PLAN.md#4-fees-replacements-and-abandonment).
 - **Signed lifecycle ownership remains in txmanager.** UniswapX consumes its
   [nonce handling and terminal results](TXMANAGER-PLAN.md#6-rpc-routing-nonce-conflicts-and-restart),
   retaining its own quote/readiness gates during startup and shutdown.
@@ -315,8 +315,9 @@ chain: { rpcUrl: "${ETH_RPC_URL_MAINNET}", writeRpcUrl: "${WRITE_RPC_URL}", chai
 txManager:
   confirmations: 2
   maxFeeGwei: 50
-  pollIntervalMs: 2000
+  broadcastTimeoutMs: 5000
   replacementIntervalMs: 15000
+  pendingTimeoutMs: 300000
   shutdownTimeoutMs: 60000
 
 solvers:
@@ -737,8 +738,8 @@ first live exclusive assignments through existing tracking, and successful owned
 Support reuses startup-resolved routes, current quote-state routes/inventory and input policy.
 Dynamic proof replaces/expires with quote state (TTL/epoch); zero capacity retains structural scope. No request-time RPC, token registry, arbitrary cap or metadata eligibility gate is
 added. Counters are never reset on refresh; series grow with supported route history and the fixed
-reason/event sets, not requests. Mined receipt counts use returned canonical successes;
-they are not global unique auction wins.
+reason/event sets, not requests. Mined receipt counts preserve existing normal/late receipt dedup
+and include not-yet-depth-confirmed successes; they are not global unique auction wins.
 
 Stage dashboard templates are deliberately unchanged; their pair-count, request-amount and
 quote/fill token amount consumers require a separate migration. This branch changes producer events
@@ -777,7 +778,7 @@ is economic, not just gas:
 - **Local breaker** halts quoting after repeated public-order preflight/submission failures; exclusive
   attempts are classified only by their tracked terminal reconciliation. A txmanager result rejected before
   the worker lifecycle is retried without incrementing the local breaker and is counted by
-  an admission retry, without counting as a terminal fill failure.
+  `solver_bot_txmanager_admission_rejections_total{label="uniswapx-fill"}`, not as a terminal fill failure.
   Successful settlement resets it.
 - **Honor trusted `blockUntilTimestamp` notifications** from Uniswap and expose the block/readiness state;
   readiness also fails when the latest published snapshot has no quotable inventory, while health remains

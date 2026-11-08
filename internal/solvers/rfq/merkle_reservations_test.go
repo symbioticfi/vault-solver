@@ -19,12 +19,14 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
+	merkletransaction "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/api/bindings/multicall3"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 	"github.com/symbioticfi/vault-solver/internal/solver"
+	merklerfq "github.com/symbioticfi/vault-solver/internal/solvers/merkle/rfq"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 	"gopkg.in/yaml.v3"
 )
 
@@ -46,10 +48,7 @@ func TestFactoryQuotesAuthenticateMerkleRoute(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := txmanager.New(client, signing, big.NewInt(1), txmanager.Config{MaxFeeGwei: 100}, logr.Discard())
-	if err != nil {
-		t.Fatal(err)
-	}
+	manager := txmanager.New(client, signing, big.NewInt(1), txmanager.Config{}, logr.Discard())
 	if err := manager.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +60,14 @@ func TestFactoryQuotesAuthenticateMerkleRoute(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(text), &node); err != nil {
 		t.Fatal(err)
 	}
-	built, err := factory(*node.Content[0], solver.Deps{Chain: client, Signer: signing, TxManager: manager, Log: logr.Discard()})
+	merkleManager, err := merkletransaction.New(client, signing, big.NewInt(1), merkletransaction.Config{MaxFeeGwei: 100}, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := merkleManager.Initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	built, err := factory(*node.Content[0], solver.Deps{Chain: client, Signer: signing, TxManager: manager, MerkleTxManager: func() (*merkletransaction.Manager, error) { return merkleManager, nil }, Log: logr.Discard()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,5 +256,56 @@ func TestQuoteWatermarkAdvancesDuringFinalLaneRead(t *testing.T) {
 	}
 	if decision.response != nil {
 		t.Fatal("quote escaped after watermark advanced during final lane read")
+	}
+}
+
+func TestRFQTransactionManagerFollowsExecutionMode(t *testing.T) {
+	native := &Solver{}
+	if !native.RequiresTxManager() || native.RequiresMerkleTxManager() {
+		t.Fatal("native RFQ must retain the existing transaction manager")
+	}
+	merkle := &Solver{merkle: &merklerfq.Solver{}}
+	if merkle.RequiresTxManager() || !merkle.RequiresMerkleTxManager() {
+		t.Fatal("Merkle RFQ must use only the SDK transaction manager")
+	}
+}
+
+func TestNativeFactoryDoesNotConfigureMerkleTransactions(t *testing.T) {
+	rpcServer := rpc.NewServer()
+	if err := rpcServer.RegisterName("eth", newMerkleQuoteRPC(t)); err != nil {
+		t.Fatal(err)
+	}
+	defer rpcServer.Stop()
+	httpServer := httptest.NewServer(rpcServer)
+	defer httpServer.Close()
+	client, err := chain.Dial(t.Context(), []string{httpServer.URL}, "", common.HexToAddress("0x66").Hex(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	signing, err := signer.NewFromHexKey(strings.Repeat("1", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The native engine accepts confirmation depths beyond the SDK's bound.
+	manager := txmanager.New(client, signing, big.NewInt(1), txmanager.Config{Confirmations: 1025}, logr.Discard())
+	t.Setenv("RFQ_BACKEND_SHARED_SECRET", "test-secret")
+	var node yaml.Node
+	if err := yaml.Unmarshal([]byte(minimalConfig+oneAdapter), &node); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	built, err := factory(*node.Content[0], solver.Deps{
+		Chain: client, Signer: signing, TxManager: manager, Log: logr.Discard(),
+		MerkleTxManager: func() (*merkletransaction.Manager, error) {
+			calls++
+			return merkletransaction.New(client, signing, big.NewInt(1), merkletransaction.Config{MaxFeeGwei: 100, Confirmations: 1025}, logr.Discard())
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 || !solver.RequiresTxManager(built) || solver.RequiresMerkleTxManager(built) {
+		t.Fatal("native RFQ configured the Merkle transaction manager")
 	}
 }

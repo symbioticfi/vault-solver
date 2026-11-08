@@ -5,9 +5,9 @@ It applies to AI agents and humans alike. `AGENTS.md` is a symlink to this file.
 
 ## Purpose
 
-`vault-solver` monitors configured **Symbiotic vaults** and runs pluggable integration workers that
-source or price liquidity on top of vault adapters. A solver is one process with its own configured
-signer and SDK transaction manager. The `Solver` interface and `solvers:` config select its workers.
+`vault-solver` is a Go service that monitors a configured selection of **Symbiotic vaults** and runs a
+pluggable **solver** strategy against them. A "solver" is an off-chain integration with some external
+protocol that sources or prices liquidity on top of a Symbiotic vault adapter.
 
 The first implementation is the **3F (Grunt) Bridge Facilitator**. The repository is explicitly
 structured so additional integrations — **RFQ, Redstone/OEV, and others** — can be added *without
@@ -21,8 +21,7 @@ decisions, and the live TODO lists (§10).
 Two layers, and code lives in exactly one:
 
 - **Generic framework** (integration-agnostic, shared by every solver):
-  `internal/{config,chain,signer,solver,observability,version}` and `cmd/`, plus the
-  independently versioned Merkle SDK `transaction` package.
+  `internal/{config,chain,signer,txmanager,solver,observability,version}` and `cmd/`.
   Nothing here may know about 3F, RFQ, Redstone, or any specific protocol.
 - **Integration packages** (fully self-contained): `internal/solvers/<name>/`
   (today `bridgefacilitator/`). All protocol-specific logic, types, ABIs usage, pricing, and config
@@ -51,13 +50,12 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
 - **All configuration comes from the YAML config file** (and, at runtime, from the upstream API).
   Do not hardcode addresses, URLs, chain IDs, rates, intervals, or limits in Go. The bot is started
   with `run --config <path>`; there is no other source of operational config.
-- A solver is one process with its own configured signer. `solvers:` selects its integration
-  workers (one or more, at most one per type). The generic layer decodes
+- Config lists solvers under `solvers:` (one or more, at most one per type). The generic layer decodes
   only `chain`, `signer`, `txManager`, `observability`, and each `solvers[].name`, and keeps each
   `solvers[].config` as an opaque `yaml.Node` (two-stage decode); each solver decodes that node into
-  its own typed, **validated** struct in `parseConfig`. Workers in one process use its
-  chain client, signer and single nonce-serialized SDK `transaction.Manager`. Separate solver processes
-  are configured with their own signers; this is an operator assumption, not cross-process enforcement.
+  its own typed, **validated** struct in `parseConfig`. All solvers run in one process and share the
+  chain client, signer, and the single nonce-serialized `txManager` — which is why multiple solvers on
+  one EOA never race on nonces.
 - **Prefer values from the upstream source over constants.** When the 3F API (or any integration's
   source of truth) provides a value — e.g. the EIP-712 domain `name`/`version`/`chainId` — read it
   from there; use an in-code constant only as a *fallback* when the source omits it, and say so.
@@ -76,8 +74,8 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
   static, known-good ABI call), never for runtime/IO failures.
 - **Logging:** `logr.Logger` everywhere (backed by zap, wired only in `main`). Info level for
   operational events; `V(1)` for debug detail. Structured key/values, not formatted strings. Every line
-  names the integration it serves: with one configured integration `main` stamps the root logger with
-  `solver=<name>` (shared components such as `txmanager` included); with several workers, each integration's
+  names the integration it serves: with one configured solver `main` stamps the root logger with
+  `solver=<name>` (shared components such as `txmanager` included); with several, each solver's
   `deps.Log` is stamped instead and the txmanager stamps each request's lifecycle logs from
   `Request.Solver` (set it to the package `Name` at every `txmanager.Request{}` site) plus `label`.
   Each solver also uses `deps.Log.WithName(Name)`. The Sentry sink tags events with
@@ -95,9 +93,8 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
   attribute keys, and the linking rules live in `docs/TRACING-PLAN.md`.
 - **Context:** thread `context.Context` through all I/O (RPC, HTTP, tx). Respect cancellation; never
   `context.Background()` deep in a call path.
-- **Concurrency:** on-chain sending in one solver process goes through its single SDK manager (nonce-serialized) —
-  integration workers build calldata and submit a request to that manager, they never
-  send transactions directly and never race
+- **Concurrency:** shared on-chain sending goes through the single `txmanager` (nonce-serialized) —
+  solvers build calldata and submit a request, they never send transactions directly and never race
   on nonces. Document the goroutine/locking model of any new shared state (see the `apiClient`
   "single Run goroutine" note).
 - Keep functions at one altitude, prefer small pure helpers (they're the easily-tested seams),
@@ -282,3 +279,11 @@ reader or operator would be surprised to discover.
 - Keep the docs current in the same change: architecture/design or TODO changes update `docs/*-PLAN.md`;
   user-facing changes (CLI flags, config knobs, solver/strategy capabilities) update `README.md`.
 - Commit titles are Conventional Commits: `type(scope): imperative summary` (e.g. `feat(rfq): …`).
+
+## Merkle runtime
+
+Merkle integrations use the independently versioned SDK transaction manager shared
+with merkle-executor. Native integrations keep `internal/txmanager` and its existing
+behavior. Hosts explicitly start the transaction lifecycle selected by the solver.
+Each solver process is configured with its own signer as a trusted deployment assumption.
+Merkle planning and signing share `txManager.maxGas`; SDK state remains in RAM only.

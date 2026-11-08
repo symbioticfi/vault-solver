@@ -5,13 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ethereum/go-ethereum/core/types"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 // blockingAcceptedTxSender models txmanager.Send after admission: caller cancellation no longer
@@ -24,6 +22,13 @@ type blockingAcceptedTxSender struct {
 func (s *blockingAcceptedTxSender) Send(context.Context, txmanager.Request) txmanager.Result {
 	close(s.started)
 	return <-s.result
+}
+
+func TestShutdownPreparationTimeoutCoversQuoteServerDrain(t *testing.T) {
+	s := &Solver{}
+	if got, want := s.ShutdownPreparationTimeout(), 5*time.Second; got != want {
+		t.Fatalf("ShutdownPreparationTimeout() = %v, want %v", got, want)
+	}
 }
 
 func TestRunDrainsAcceptedExecutionBeforeReturning(t *testing.T) {
@@ -70,7 +75,7 @@ func TestRunDrainsAcceptedExecutionBeforeReturning(t *testing.T) {
 	}
 
 	wantHash := common.HexToHash("0xdead")
-	txm.result <- txmanager.Result{Receipt: &types.Receipt{Status: types.ReceiptStatusSuccessful}, Hash: wantHash}
+	txm.result <- txmanager.Result{Hash: wantHash, Outcome: txmanager.OutcomeConfirmed}
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.Canceled) {
@@ -140,7 +145,7 @@ func TestRunReportsListenerFailureBeforeDrainingAcceptedExecution(t *testing.T) 
 	}
 
 	wantHash := common.HexToHash("0xbeef")
-	txm.result <- txmanager.Result{Receipt: &types.Receipt{Status: types.ReceiptStatusSuccessful}, Hash: wantHash}
+	txm.result <- txmanager.Result{Hash: wantHash, Outcome: txmanager.OutcomeConfirmed}
 	select {
 	case err := <-done:
 		if !errors.Is(err, listenerErr) {

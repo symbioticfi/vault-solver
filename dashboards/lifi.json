@@ -209,6 +209,7 @@
                             "confirmed": {"text": "Confirmed transaction"},
                             "cancelled": {"text": "Cancelled"},
                             "reverted": {"text": "Reverted"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
                             "submission_error": {"text": "Submission failed"},
                             "abandoned": {"text": "Tracking abandoned; execution unknown"},
                             "tracking_stopped": {"text": "Tracking stopped"},
@@ -408,6 +409,7 @@
                             "expected_yield": {"text": "Expected yield"},
                             "failed": {"text": "Failed"},
                             "failure": {"text": "Failed"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
                             "lane_unavailable": {"text": "Liquidity lane unavailable"},
                             "lifi-samechain": {"text": "LI.FI"},
                             "missed": {"text": "Missed"},
@@ -474,6 +476,7 @@
                             "not_admitted": {"text": "Not admitted"},
                             "obsolete": {"text": "Settled elsewhere"},
                             "submission_error": {"text": "Submission error"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
                             "settled_success": {"text": "Settlement succeeded"},
                             "settled_failed": {"text": "Settlement failed"},
                             "enqueued": {"text": "Enqueued"},
@@ -536,6 +539,7 @@
                             "not_admitted": {"text": "Not admitted"},
                             "obsolete": {"text": "Settled elsewhere"},
                             "submission_error": {"text": "Submission failed"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
                             "settled_success": {"text": "Settlement succeeded"},
                             "settled_failed": {"text": "Settlement failed"},
                             "enqueued": {"text": "Enqueued"},
@@ -614,6 +618,7 @@
                             "not_admitted": {"text": "Not admitted"},
                             "obsolete": {"text": "Settled elsewhere"},
                             "submission_error": {"text": "Submission error"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
                             "settled_success": {"text": "Settlement succeeded"},
                             "settled_failed": {"text": "Settlement failed"},
                             "enqueued": {"text": "Enqueued"},
@@ -676,6 +681,7 @@
                             "not_admitted": {"text": "Not admitted"},
                             "obsolete": {"text": "Settled elsewhere"},
                             "submission_error": {"text": "Submission error"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
                             "settled_success": {"text": "Settlement succeeded"},
                             "settled_failed": {"text": "Settlement failed"},
                             "enqueued": {"text": "Enqueued"},
@@ -738,6 +744,7 @@
                             "not_admitted": {"text": "Not admitted"},
                             "obsolete": {"text": "Settled elsewhere"},
                             "submission_error": {"text": "Submission error"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
                             "settled_success": {"text": "Settlement succeeded"},
                             "settled_failed": {"text": "Settlement failed"},
                             "enqueued": {"text": "Enqueued"},
@@ -800,6 +807,7 @@
                             "not_admitted": {"text": "Not admitted"},
                             "obsolete": {"text": "Settled elsewhere"},
                             "submission_error": {"text": "Submission error"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
                             "settled_success": {"text": "Settlement succeeded"},
                             "settled_failed": {"text": "Settlement failed"},
                             "enqueued": {"text": "Enqueued"},
@@ -1056,6 +1064,7 @@
                             "expected_yield": {"text": "Expected yield"},
                             "failed": {"text": "Failed"},
                             "failure": {"text": "Failed"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
                             "lane_unavailable": {"text": "Liquidity lane unavailable"},
                             "lifi-samechain": {"text": "LI.FI"},
                             "missed": {"text": "Missed"},
@@ -1122,6 +1131,7 @@
                             "not_admitted": {"text": "Not admitted"},
                             "obsolete": {"text": "Settled elsewhere"},
                             "submission_error": {"text": "Submission error"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
                             "settled_success": {"text": "Settlement succeeded"},
                             "settled_failed": {"text": "Settlement failed"},
                             "enqueued": {"text": "Enqueued"},
@@ -1184,6 +1194,7 @@
                             "not_admitted": {"text": "Not admitted"},
                             "obsolete": {"text": "Settled elsewhere"},
                             "submission_error": {"text": "Submission failed"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
                             "settled_success": {"text": "Settlement succeeded"},
                             "settled_failed": {"text": "Settlement failed"},
                             "enqueued": {"text": "Enqueued"},
@@ -1262,6 +1273,7 @@
                             "not_admitted": {"text": "Not admitted"},
                             "obsolete": {"text": "Settled elsewhere"},
                             "submission_error": {"text": "Submission error"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
                             "settled_success": {"text": "Settlement succeeded"},
                             "settled_failed": {"text": "Settlement failed"},
                             "enqueued": {"text": "Enqueued"},
@@ -1324,6 +1336,7 @@
                             "not_admitted": {"text": "Not admitted"},
                             "obsolete": {"text": "Settled elsewhere"},
                             "submission_error": {"text": "Submission error"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
                             "settled_success": {"text": "Settlement succeeded"},
                             "settled_failed": {"text": "Settlement failed"},
                             "enqueued": {"text": "Enqueued"},
@@ -1386,6 +1399,7 @@
                             "not_admitted": {"text": "Not admitted"},
                             "obsolete": {"text": "Settled elsewhere"},
                             "submission_error": {"text": "Submission error"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
                             "settled_success": {"text": "Settlement succeeded"},
                             "settled_failed": {"text": "Settlement failed"},
                             "enqueued": {"text": "Enqueued"},
@@ -1448,6 +1462,7 @@
                             "not_admitted": {"text": "Not admitted"},
                             "obsolete": {"text": "Settled elsewhere"},
                             "submission_error": {"text": "Submission error"},
+                            "included_unconfirmed": {"text": "Included, awaiting confirmation"},
                             "settled_success": {"text": "Settlement succeeded"},
                             "settled_failed": {"text": "Settlement failed"},
                             "enqueued": {"text": "Enqueued"},
@@ -1473,6 +1488,125 @@
                             "rfq-filler": {"text": "RFQ"},
                             "uniswapx-filler": {"text": "UniswapX"},
                             "redstone-oev": {"text": "RedStone OEV"}
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "transparent": true
+      }
+    },
+    "panel-18": {
+      "kind": "Panel",
+      "spec": {
+        "id": 18,
+        "title": "Fill transaction outcomes",
+        "description": "Exact terminal txmanager outcomes over the selected range. Values aggregate all matching services.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "(sum by (outcome) (increase(solver_bot_txmanager_requests_total{namespace=\"${namespace}\",label=\"lifi-fill\"}[$__range])))",
+                      "format": "table",
+                      "instant": true,
+                      "legendFormat": "",
+                      "range": false
+                    }
+                  },
+                  "refId": "A",
+                  "hidden": false
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "job": true, "instance": true, "namespace": true},
+                    "indexByName": {"Value": 1, "outcome": 0},
+                    "renameByName": {"Value": "Count", "outcome": "Outcome"}
+                  }
+                },
+                "group": "organize"
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {"cellHeight": "sm", "showHeader": true, "enablePagination": false},
+            "fieldConfig": {
+              "defaults": {
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "noValue": "—"
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "Count"},
+                  "properties": [
+                    {"id": "unit", "value": "none"},
+                    {"id": "decimals", "value": 0},
+                    {"id": "custom.width", "value": 140}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Outcome"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "confirmed": {"text": "Confirmed transaction"},
+                            "cancelled": {"text": "Cancelled"},
+                            "reverted": {"text": "Reverted"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
+                            "submission_error": {"text": "Submission failed"},
+                            "abandoned": {"text": "Tracking abandoned; execution unknown"},
+                            "tracking_stopped": {"text": "Tracking stopped"},
+                            "settled_in_time": {"text": "Delivered on time"},
+                            "missed": {"text": "Deadline missed"},
+                            "not_actionable": {"text": "Order not currently fillable or outside scope"},
+                            "deposit_deferred": {"text": "Deposit not visible yet"},
+                            "capacity_deferred": {"text": "Waiting for execution capacity"},
+                            "capacity_dropped": {"text": "Dropped after waiting for capacity"},
+                            "submitted": {"text": "Submitted for execution"},
+                            "invalid_plan": {"text": "Invalid execution plan"},
+                            "retryable_error": {"text": "Temporary error; retry scheduled"},
+                            "other": {"text": "Other processing decision"},
+                            "invalid": {"text": "Invalid request"},
+                            "queue_drop:inbox": {"text": "Dropped: incoming queue full"},
+                            "queue_drop:deposit_retry": {"text": "Dropped: deposit retry queue full"},
+                            "queue_drop:capacity_retry": {"text": "Dropped: capacity retry queue full"},
+                            "queue_drop:recovery_retry": {"text": "Dropped: recovery retry queue full"}
                           }
                         }
                       ]
@@ -1569,6 +1703,131 @@
         },
         "transparent": true,
         "description": "Current value at the end of the selected time range."
+      }
+    },
+    "panel-20": {
+      "kind": "Panel",
+      "spec": {
+        "id": 20,
+        "title": "Transaction fee increases · selected period",
+        "description": "Observed increases in the selected period. The first exported nonzero value may be missed, so zero here does not prove that no fee was paid. Fees recorded from transaction receipts, grouped by terminal outcome. Reverted transactions consumed fees without a successful execution. Included-unconfirmed means final confirmation was not established. Missing receipt prices can undercount costs.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(outcome)(increase(solver_bot_txmanager_fee_paid_wei_total{namespace=\"${namespace}\",label=\"lifi-fill\"}[$__range])) / 1e18",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true},
+                    "indexByName": {},
+                    "renameByName": {"outcome": "Transaction outcome", "Value": "Fees (ETH)"}
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": false,
+              "sortBy": [
+                {"displayName": "Fees (ETH)", "desc": true}
+              ]
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "Fees (ETH)"},
+                  "properties": [
+                    {"id": "unit", "value": "suffix: ETH"},
+                    {"id": "decimals", "value": 9}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Transaction outcome"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "confirmed": {"text": "Confirmed transaction"},
+                            "cancelled": {"text": "Cancelled"},
+                            "reverted": {"text": "Reverted"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
+                            "submission_error": {"text": "Submission failed"},
+                            "abandoned": {"text": "Tracking abandoned; execution unknown"},
+                            "tracking_stopped": {"text": "Tracking stopped"},
+                            "settled_in_time": {"text": "Delivered on time"},
+                            "missed": {"text": "Deadline missed"},
+                            "not_actionable": {"text": "Order not currently fillable or outside scope"},
+                            "deposit_deferred": {"text": "Deposit not visible yet"},
+                            "capacity_deferred": {"text": "Waiting for execution capacity"},
+                            "capacity_dropped": {"text": "Dropped after waiting for capacity"},
+                            "submitted": {"text": "Submitted for execution"},
+                            "invalid_plan": {"text": "Invalid execution plan"},
+                            "retryable_error": {"text": "Temporary error; retry scheduled"},
+                            "other": {"text": "Other processing decision"},
+                            "invalid": {"text": "Invalid request"},
+                            "queue_drop:inbox": {"text": "Dropped: incoming queue full"},
+                            "queue_drop:deposit_retry": {"text": "Dropped: deposit retry queue full"},
+                            "queue_drop:capacity_retry": {"text": "Dropped: capacity retry queue full"},
+                            "queue_drop:recovery_retry": {"text": "Dropped: recovery retry queue full"}
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "transparent": true
       }
     },
     "panel-3": {
@@ -2153,6 +2412,7 @@
                             "confirmed": {"text": "Confirmed transaction"},
                             "cancelled": {"text": "Cancelled"},
                             "reverted": {"text": "Reverted"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
                             "submission_error": {"text": "Submission failed"},
                             "abandoned": {"text": "Tracking abandoned; execution unknown"},
                             "tracking_stopped": {"text": "Tracking stopped"},
@@ -2190,6 +2450,131 @@
           },
           "version": ""
         }
+      }
+    },
+    "panel-86": {
+      "kind": "Panel",
+      "spec": {
+        "id": 86,
+        "title": "Transaction fees · since process starts",
+        "description": "Current reporting services only, since their process starts. Includes preperiod fees and the first nonzero sample; excludes vanished services. Fees recorded from transaction receipts, grouped by terminal outcome. Reverted transactions consumed fees without a successful execution. Included-unconfirmed means final confirmation was not established. Missing receipt prices can undercount costs.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(outcome)(solver_bot_txmanager_fee_paid_wei_total{namespace=\"${namespace}\",label=\"lifi-fill\"}) / 1e18",
+                      "instant": true,
+                      "range": false,
+                      "legendFormat": "",
+                      "format": "table"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [
+              {
+                "kind": "Transformation",
+                "group": "organize",
+                "spec": {
+                  "options": {
+                    "excludeByName": {"Time": true, "__name__": true},
+                    "indexByName": {},
+                    "renameByName": {"outcome": "Transaction outcome", "Value": "Fees (ETH)"}
+                  }
+                }
+              }
+            ],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "table",
+          "version": "",
+          "spec": {
+            "options": {
+              "showHeader": true,
+              "cellHeight": "sm",
+              "enablePagination": false,
+              "sortBy": [
+                {"displayName": "Fees (ETH)", "desc": true}
+              ]
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "none",
+                "decimals": 0,
+                "noValue": "—",
+                "custom": {
+                  "align": "left",
+                  "cellOptions": {"type": "auto"},
+                  "inspect": false
+                }
+              },
+              "overrides": [
+                {
+                  "matcher": {"id": "byName", "options": "Fees (ETH)"},
+                  "properties": [
+                    {"id": "unit", "value": "suffix: ETH"},
+                    {"id": "decimals", "value": 9}
+                  ]
+                },
+                {
+                  "matcher": {"id": "byName", "options": "Transaction outcome"},
+                  "properties": [
+                    {
+                      "id": "mappings",
+                      "value": [
+                        {
+                          "type": "value",
+                          "options": {
+                            "confirmed": {"text": "Confirmed transaction"},
+                            "cancelled": {"text": "Cancelled"},
+                            "reverted": {"text": "Reverted"},
+                            "included_unconfirmed": {"text": "Included without final confirmation"},
+                            "submission_error": {"text": "Submission failed"},
+                            "abandoned": {"text": "Tracking abandoned; execution unknown"},
+                            "tracking_stopped": {"text": "Tracking stopped"},
+                            "settled_in_time": {"text": "Delivered on time"},
+                            "missed": {"text": "Deadline missed"},
+                            "not_actionable": {"text": "Order not currently fillable or outside scope"},
+                            "deposit_deferred": {"text": "Deposit not visible yet"},
+                            "capacity_deferred": {"text": "Waiting for execution capacity"},
+                            "capacity_dropped": {"text": "Dropped after waiting for capacity"},
+                            "submitted": {"text": "Submitted for execution"},
+                            "invalid_plan": {"text": "Invalid execution plan"},
+                            "retryable_error": {"text": "Temporary error; retry scheduled"},
+                            "other": {"text": "Other processing decision"},
+                            "invalid": {"text": "Invalid request"},
+                            "queue_drop:inbox": {"text": "Dropped: incoming queue full"},
+                            "queue_drop:deposit_retry": {"text": "Dropped: deposit retry queue full"},
+                            "queue_drop:capacity_retry": {"text": "Dropped: capacity retry queue full"},
+                            "queue_drop:recovery_retry": {"text": "Dropped: recovery retry queue full"}
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "transparent": true
       }
     },
     "panel-102": {
@@ -2696,6 +3081,176 @@
         }
       }
     },
+    "panel-202": {
+      "kind": "Panel",
+      "spec": {
+        "id": 202,
+        "title": "Transaction outcomes over time",
+        "description": "Terminal logical transaction outcomes per second. Failed submissions without receipts do not contribute receipt fees.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(outcome)(rate(solver_bot_txmanager_requests_total{namespace=\"${namespace}\",label=\"lifi-fill\"}[$__rate_interval]))",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{outcome}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "ops",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 3
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
+    "panel-203": {
+      "kind": "Panel",
+      "spec": {
+        "id": 203,
+        "title": "Transaction fee rate",
+        "description": "Observed receipt fee increases in ETH per second, grouped by transaction outcome. Missing receipt prices or an absent initial scrape can undercount fees.",
+        "links": [],
+        "data": {
+          "kind": "QueryGroup",
+          "spec": {
+            "queries": [
+              {
+                "kind": "PanelQuery",
+                "spec": {
+                  "refId": "A",
+                  "hidden": false,
+                  "query": {
+                    "kind": "DataQuery",
+                    "group": "prometheus",
+                    "version": "v0",
+                    "datasource": {"name": "${datasource}"},
+                    "spec": {
+                      "editorMode": "code",
+                      "expr": "sum by(outcome)(rate(solver_bot_txmanager_fee_paid_wei_total{namespace=\"${namespace}\",label=\"lifi-fill\"}[$__rate_interval])) / 1e18",
+                      "instant": false,
+                      "range": true,
+                      "format": "time_series",
+                      "legendFormat": "{{outcome}}"
+                    }
+                  }
+                }
+              }
+            ],
+            "transformations": [],
+            "queryOptions": {}
+          }
+        },
+        "vizConfig": {
+          "kind": "VizConfig",
+          "group": "timeseries",
+          "version": "",
+          "spec": {
+            "options": {
+              "legend": {
+                "calcs": ["lastNotNull", "max"],
+                "displayMode": "table",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {"hideZeros": false, "mode": "multi", "sort": "desc"}
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "suffix: ETH/s",
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {"value": 0, "color": "green"}
+                  ]
+                },
+                "color": {"mode": "palette-classic"},
+                "custom": {
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "fillOpacity": 8,
+                  "hideFrom": {"legend": false, "tooltip": false, "viz": false},
+                  "insertNulls": false,
+                  "pointSize": 5,
+                  "scaleDistribution": {"type": "linear"},
+                  "showPoints": "never",
+                  "spanNulls": false,
+                  "thresholdsStyle": {"mode": "off"},
+                  "drawStyle": "line",
+                  "lineInterpolation": "linear",
+                  "stacking": {"mode": "none", "group": "A"}
+                },
+                "decimals": 12
+              },
+              "overrides": []
+            }
+          }
+        }
+      }
+    },
     "panel-210": {
       "kind": "Panel",
       "spec": {
@@ -3190,10 +3745,7 @@
                       "y": 0,
                       "width": 8,
                       "height": 4,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-7"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-7"}
                     }
                   },
                   {
@@ -3203,10 +3755,7 @@
                       "y": 0,
                       "width": 8,
                       "height": 4,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-41"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-41"}
                     }
                   },
                   {
@@ -3216,10 +3765,7 @@
                       "y": 0,
                       "width": 8,
                       "height": 4,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-102"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-102"}
                     }
                   }
                 ]
@@ -3243,10 +3789,7 @@
                       "y": 0,
                       "width": 24,
                       "height": 6,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-19"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-19"}
                     }
                   }
                 ]
@@ -3270,10 +3813,7 @@
                       "y": 0,
                       "width": 12,
                       "height": 8,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-200"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-200"}
                     }
                   },
                   {
@@ -3283,10 +3823,7 @@
                       "y": 0,
                       "width": 12,
                       "height": 8,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-201"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-201"}
                     }
                   }
                 ]
@@ -3310,10 +3847,7 @@
                       "y": 0,
                       "width": 24,
                       "height": 7,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-10"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-10"}
                     }
                   }
                 ]
@@ -3322,59 +3856,59 @@
           }
         },
         {
-          "kind": "RowsLayoutRow",
-          "spec": {
-            "title": "Advertised pair state and refresh health",
-            "collapse": false,
-            "layout": {
-              "kind": "GridLayout",
-              "spec": {
-                "items": [
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 0,
-                      "y": 0,
-                      "width": 12,
-                      "height": 8,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-300"
-                      }
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 12,
-                      "y": 0,
-                      "width": 12,
-                      "height": 8,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-301"
-                      }
-                    }
-                  },
-                  {
-                    "kind": "GridLayoutItem",
-                    "spec": {
-                      "x": 0,
-                      "y": 8,
-                      "width": 24,
-                      "height": 7,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-302"
-                      }
+        "kind": "RowsLayoutRow",
+        "spec": {
+          "title": "Advertised pair state and refresh health",
+          "collapse": false,
+          "layout": {
+            "kind": "GridLayout",
+            "spec": {
+              "items": [
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 0,
+                    "width": 12,
+                    "height": 8,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-300"
                     }
                   }
-                ]
-              }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 12,
+                    "y": 0,
+                    "width": 12,
+                    "height": 8,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-301"
+                    }
+                  }
+                },
+                {
+                  "kind": "GridLayoutItem",
+                  "spec": {
+                    "x": 0,
+                    "y": 8,
+                    "width": 24,
+                    "height": 7,
+                    "element": {
+                      "kind": "ElementReference",
+                      "name": "panel-302"
+                    }
+                  }
+                }
+              ]
             }
           }
-        },
-        {
+        }
+      },
+      {
           "kind": "RowsLayoutRow",
           "spec": {
             "title": "Why orders are not executing",
@@ -3390,10 +3924,7 @@
                       "y": 0,
                       "width": 24,
                       "height": 7,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-14"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-14"}
                     }
                   }
                 ]
@@ -3417,10 +3948,7 @@
                       "y": 0,
                       "width": 12,
                       "height": 6,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-15"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-15"}
                     }
                   },
                   {
@@ -3430,10 +3958,31 @@
                       "y": 0,
                       "width": 12,
                       "height": 6,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-16"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-16"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Execution costs",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 24,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-20"}
                     }
                   }
                 ]
@@ -3457,10 +4006,7 @@
                       "y": 0,
                       "width": 6,
                       "height": 4,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-40"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-40"}
                     }
                   },
                   {
@@ -3470,10 +4016,7 @@
                       "y": 0,
                       "width": 6,
                       "height": 4,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-2"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-2"}
                     }
                   },
                   {
@@ -3483,10 +4026,7 @@
                       "y": 0,
                       "width": 6,
                       "height": 4,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-3"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-3"}
                     }
                   },
                   {
@@ -3496,10 +4036,31 @@
                       "y": 0,
                       "width": 6,
                       "height": 4,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-6"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-6"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Transaction outcome details",
+            "collapse": true,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 24,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-18"}
                     }
                   }
                 ]
@@ -3523,10 +4084,7 @@
                       "y": 0,
                       "width": 12,
                       "height": 7,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-11"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-11"}
                     }
                   },
                   {
@@ -3536,10 +4094,7 @@
                       "y": 0,
                       "width": 12,
                       "height": 7,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-9"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-9"}
                     }
                   }
                 ]
@@ -3563,10 +4118,7 @@
                       "y": 0,
                       "width": 12,
                       "height": 7,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-80"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-80"}
                     }
                   },
                   {
@@ -3576,10 +4128,7 @@
                       "y": 0,
                       "width": 12,
                       "height": 7,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-12"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-12"}
                     }
                   }
                 ]
@@ -3600,13 +4149,54 @@
                     "kind": "GridLayoutItem",
                     "spec": {
                       "x": 0,
+                      "y": 0,
+                      "width": 24,
+                      "height": 6,
+                      "element": {"kind": "ElementReference", "name": "panel-86"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
                       "y": 6,
                       "width": 24,
                       "height": 6,
-                      "element": {
-                        "kind": "ElementReference",
-                        "name": "panel-210"
-                      }
+                      "element": {"kind": "ElementReference", "name": "panel-210"}
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "kind": "RowsLayoutRow",
+          "spec": {
+            "title": "Transaction outcomes and fees over time",
+            "collapse": false,
+            "layout": {
+              "kind": "GridLayout",
+              "spec": {
+                "items": [
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 0,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-202"}
+                    }
+                  },
+                  {
+                    "kind": "GridLayoutItem",
+                    "spec": {
+                      "x": 12,
+                      "y": 0,
+                      "width": 12,
+                      "height": 8,
+                      "element": {"kind": "ElementReference", "name": "panel-203"}
                     }
                   }
                 ]

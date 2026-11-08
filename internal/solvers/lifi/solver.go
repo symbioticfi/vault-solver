@@ -14,7 +14,6 @@ import (
 	"github.com/go-logr/logr"
 	"gopkg.in/yaml.v3"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -22,6 +21,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 const Name = "lifi-samechain"
@@ -87,6 +87,7 @@ type txSender interface {
 
 type transactionLaneState interface {
 	LaneReady() bool
+	SubscribeLaneState() (<-chan struct{}, func())
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
@@ -141,6 +142,10 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 }
 
 func (s *Solver) Name() string { return Name }
+
+func (s *Solver) ShutdownPreparationTimeout() time.Duration {
+	return 2 * s.cfg.OrderServer.HTTPTimeout
+}
 
 func (s *Solver) Run(ctx context.Context) error {
 	routes, err := s.reader.resolveRoutes(ctx, s.cfg.Adapters)

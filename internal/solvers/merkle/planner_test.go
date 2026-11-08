@@ -218,7 +218,7 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 				t.Fatal(err)
 			}
 			raw := strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", curator.URL+"/api/v1", 1)
-			built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, TxManager: manager, Log: logr.Discard()})
+			built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, MerkleTxManager: func() (*txmanager.Manager, error) { return manager, nil }, Log: logr.Discard()})
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -7,45 +7,60 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/go-errors/errors"
 
 	"github.com/go-logr/logr"
 	"gopkg.in/yaml.v3"
 
-	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
+	merkletransaction "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/signer"
+	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
-// Deps are the services each integration worker receives from its solver process.
-// The process transaction manager serializes work for its configured signer.
+// Deps are the shared services every solver receives. Native solvers share txmanager;
+// Merkle factories explicitly request their SDK manager.
 type Deps struct {
-	Chain     *chain.Client
-	TxManager *txmanager.Manager
-	MaxGas    uint64 // Same transaction budget used by SDK planning and signing.
-	Signer    signer.Signer
-	Log       logr.Logger
-	Metrics   *observability.Metrics
+	Chain           *chain.Client
+	TxManager       *txmanager.Manager
+	MerkleTxManager func() (*merkletransaction.Manager, error)
+	MaxGas          uint64 // Merkle planning and signing budget; zero selects the SDK default.
+	Signer          signer.Signer
+	Log             logr.Logger
+	Metrics         *observability.Metrics
 	// ReportFatal cancels the process runtime before a solver finishes draining accepted work.
 	// The solver must still return the reported error from Run.
 	ReportFatal func(error)
 }
 
-// Solver is a long-running integration worker. Run must honor ctx cancellation and return nil (or a
+// Solver is a long-running strategy. Run must honor ctx cancellation and return nil (or a
 // context error) on clean shutdown.
 type Solver interface {
 	Name() string
 	Run(ctx context.Context) error
 }
 
-// RequiresTxManager reports whether an integration worker uses the process on-chain sender.
-// Workers default to requiring it; externally submitted integrations may opt out.
+// RequiresTxManager reports whether a solver uses the shared on-chain sender. Solvers default to
+// requiring it; integrations whose transactions are submitted externally may opt out.
 func RequiresTxManager(s Solver) bool {
 	requirer, ok := s.(interface{ RequiresTxManager() bool })
 	return !ok || requirer.RequiresTxManager()
+}
+
+// RequiresMerkleTxManager reports whether a worker explicitly uses SDK transaction execution.
+func RequiresMerkleTxManager(s Solver) bool {
+	requirer, ok := s.(interface{ RequiresMerkleTxManager() bool })
+	return ok && requirer.RequiresMerkleTxManager()
+}
+
+// ShutdownPreparer optionally reports how long a solver may keep admitting work after cancellation
+// while it retires externally visible work such as active quotes.
+type ShutdownPreparer interface {
+	ShutdownPreparationTimeout() time.Duration
 }
 
 // Factory builds a Solver from its opaque config block (decoded by the solver into its own type)
@@ -109,8 +124,8 @@ func Registered() []string {
 // as a clean shutdown, not an error.
 func Run(ctx context.Context, s Solver, log logr.Logger) error {
 	log.Info("solver running")
-	// Carry the integration worker's stamped logger in its context so every downstream log line
-	// names the integration it serves.
+	// With several solvers configured each gets its own stamped logger; carry it, named after the
+	// solver, so every line the solver logs through observability.Log names the integration it serves.
 	err := s.Run(observability.WithLogger(ctx, log.WithName(s.Name())))
 	if err != nil && !errors.Is(err, context.Canceled) {
 		wrapped := errors.Errorf("solver %q: %w", s.Name(), err)

@@ -244,33 +244,36 @@ unique gauges/histograms; the framework does not know them. RFQ, LI.FI, and Unis
 `fill/success` event and token-native amount kinds; RFQ and UniswapX additionally classify `failure`,
 `not_admitted`, and `obsolete` (the order was settled elsewhere before our fill landed). UniswapX records pre-submission declines separately as `fill/declined`.
 Unknown event/outcome, amount-kind, or state-view observations increment one bounded
-contract-drift counter instead of disappearing silently. Integration metrics use returned canonical receipts; transaction lifecycle logs come from the shared SDK.
+contract-drift counter instead of disappearing silently. Detailed gas, fee, and transaction lifecycle
+accounting remains in the [shared transaction manager](TXMANAGER-PLAN.md#8-observability).
 The generic HTTP chain transport records bounded logical requests and endpoint attempts by read/write/shared
 role, method, ordinal endpoint, and outcome; configured URLs and error strings never become labels.
 `solver_bot_solver_info{solver}` exposes bounded config-time membership for fleet joins.
 
-A solver process owns one chain client (primary/fallback reads and optional private write endpoint),
-one configured signer and one SDK transaction manager. Its configured integration workers use that
-process lane. Separate processes are configured with their own signers and unique Prometheus `instance`
+A process is one execution lane: one chain client (primary/fallback reads and optional private write endpoint), one signer, and one nonce-serialized txmanager shared by its configured solvers. Different
+signer/RPC tuples run as separate processes with disjoint solver subsets and unique Prometheus `instance`
 (or deployment-supplied `lane`) target labels. Committed dashboards use the standard Kubernetes `pod` target
 label and query namespace/pod options from Prometheus rather than embedding deployment names. Application metrics do not carry URLs or deployment names.
-The [shared manager ownership contract](TXMANAGER-PLAN.md#1-ownership-and-admission)
-serializes local signing and retains all signed attempts at the unresolved nonce.
-Each process trusts its signer configuration and does not coordinate external
-commitments with other processes. Native deadline or business obsolescence returns
-the request while signed hashes remain tracked. Freshly validated work may replace
-the same nonce under accepted fee floors and global/request ceilings. Unknown
-nonce advancement never proves execution.
+The [shared manager ownership contract](TXMANAGER-PLAN.md#1-ownership-and-admission) serializes local
+signed lifecycles and reads the latest mined nonce before every new send. Fresh requests use the lowest
+unconsumed nonce, including after restart. Accepted/transport-uncertain abandonment retains a fee hint
+for at most `pendingTimeoutMs`; fresh work discards it if its required bump cannot fit the global fee
+ceiling. A lower request ceiling skips the hint for that send without discarding or renewing it, so
+later affordable work retains the known replacement floor until its original expiry.
+Rejected initial fees neither create nor ratchet that hint. Several processes can share the EOA, but nonces and off-chain commitments are not allocated atomically across processes; see the
+[replica plan](REPLICA-PLAN.md).
 
-RFQ owns the retry policy: backend
+The manager abandons tracking at the pending timeout, request deadline or terminal business-status check
+without sending a cancellation transaction. Execution remains unknown. RFQ owns the retry policy: backend
 reconciliation followed by one configured poll interval and a fresh open-order poll can re-enter fill planning.
 Accepted uncertain outcomes use its `maxNonceRetries` budget. Generic `FailedCall` and
 `SafeERC20FailedOperation` errors, unknown and malformed unsigned estimate
 reverts have a separate retry count bounded by the same setting; exhaustion logs Error once and retires
 the unsigned failure so stale open listings cannot re-arm it. Known Reactor/Executor setup
 errors fail with Error once after backend reconciliation, `ExpiredRequest` expires, and indexed peer
-completion takes precedence. Missing views keep bounded observation without another estimate. Unsigned admission failures use the same backend reconciliation, poll delay and order deadline without spending
-the signed retry budget. Each retry resolves the executable order,
+completion takes precedence. Missing views keep bounded observation without another estimate. Initial
+nonce collisions use the same backend reconciliation, poll delay and order deadline without spending
+that budget. Each retry resolves the executable order,
 chain inputs, strategy plan, and discount signatures again. Retry budgets remain process-local; neither strategy code
 nor the generic manager decides whether to replay a protocol order.
 
@@ -314,8 +317,8 @@ strategy:
 The Merkle host consumes independently versioned SDK identity discovery, active-root
 permission fetching, recipe input derivation, bounded recipe evidence caching,
 pinned batched reads and state-override numeric preparation. It rejects manual
-account/tree/input configuration. Derived identity and execution ownership live
-only in RAM. Complete original-code
+account/tree/input configuration and fingerprints its derived account, signer,
+curator source and runtime policy version for recovery. Complete original-code
 simulation and canonical block fences remain mandatory. The shared lens replays
 authenticated state-changing prefixes before later numerical reads; unresolved
 provider outputs, future input sources and executor self-queries fail closed.
@@ -330,9 +333,9 @@ selecting such a leaf for recipe execution remains unsupported.
 
 The immutable SDK also classifies successful original execution results using the
 authenticated recipe: all Manage gates closed with no Call or Approve work is idle.
-Request IDs and bound arguments do not supply readiness policy. New plans are
-prepared against current state; malformed results, reverts and closing canonical-check failures
-remain errors. Signed attempts retain exact identity through in-process retries, and
+Request IDs and bound arguments do not supply readiness policy. Unsigned saved plans
+are prepared again against current state; malformed results, reverts and closing canonical-check failures
+remain errors. The existing signed journal recovery path remains unchanged, and
 on-chain completion assertions remain part of the recipe rather than host protocol
 recognition.
 
@@ -340,30 +343,14 @@ Self-contained state-driven recipes use the SDK's automatic atomic batching;
 external providers prepare distinct inputs for each execution. The host supplies
 its existing code-override transport and pins the same SDK as the standalone
 executor, without a second loop or batching policy. `PrepareExecution` returns one
-plan for direct calls or cross-executor batches, detecting the process signer's
+plan for direct calls or cross-executor batches, detecting the shared signer's
 EIP-7702 delegation. Submission does not repeat preparation simulation. The 3F
-lease check closes preparation; signed retries do not repeat it. One RAM execution
-holds every member until its canonical receipt is delivered. Configured executor order
+lease check closes preparation; signed recovery does not repeat it. One execution
+journal holds every member until its receipt is durable. Configured executor order
 is priority, not a withdrawal cash reservation.
 
-The host constructs and explicitly starts the shared SDK transaction manager.
-Its keeper sender views share the same retained lifecycle and nonce lane as
-native sends; no host sender bridge or transaction implementation remains.
-The shared `DiscoverBatch` and `ValidatePreparedBatch` APIs serve one executor or many.
-RFQ uses `ValidatePreparedBatchWithSimulation` through the same admission core:
-a mandatory host callback simulates the complete unchanged outer fill from the
-real signer at the supplied fresh block and gas limit. The shared core still
-checks recipe/call identity, metadata, roles and original/fresh canonical pins.
-RFQ provides no numerical witness and uses awarded settlement as its work
-condition, so it needs no inner return data or code override. Generic admission
-keeps result/witness and readiness validation.
-There is no disk journal or restart recovery; external work must be settled before restarting.
-The planner isolates candidate failures through the same grouped discovery core
-and reports them alongside healthy selected work. A bounded keeper drain submits
-each eligible executor at most once per tick, allowing previously idle candidates
-to become ready after earlier confirmed effects. Hosts observe canonical results
-through their existing polling loops. Rejected envelopes try descending prefixes so valid
-intermediate sizes are considered before deferring the remaining calls.
+The host's SDK transport continues to use the existing shared transaction manager's
+owner fence and persistence callbacks; it contains no copied sender or nonce engine.
 The SDK batch engine uses the existing HTTP fallback/tracing path with strict response
 identity validation. Compatible pinned getters use one Multicall3 `eth_call` as a
 JSON-RPC object. Caller-sensitive, gas-limited or different-block calls stay separate,
@@ -378,28 +365,26 @@ owned by merkle-executor.
 `rfq-merkle` separately consumes awarded RFQ orders through connector recipes. It
 uses no adapter inventory, economic strategy or shared capacity aggregation. The
 signed order supplies amounts; the SDK authenticates the immutable program and
-simulates the complete outer RFQ settlement. All native and Merkle integrations
-share one SDK `transaction.Manager`; Merkle hosts use its `Sender(name)` view
-with optional business deadlines. The SDK owns the retained lifecycle and signed
-attempts, nonce lane, funding, replacement fees and canonical results. See [RFQ-MERKLE.md](RFQ-MERKLE.md).
+simulates the complete outer RFQ settlement. The Merkle hosts share
+`internal/merklesender`, which forwards owner fences, signed-byte persistence and
+optional execution deadlines to the single txmanager. See [RFQ-MERKLE.md](RFQ-MERKLE.md).
 
 `threef-merkle` independently owns one Merkle recipe executor for one curator BF/default
 maker. Its recipe contains 1..32 distinct guarded funding/underlying markets, with
-one API client, planner, provider and RAM sender. One Run goroutine
+one API client, planner, provider, exclusive store and sender. One Run goroutine
 maintains existing commitments before scanning open/solvable auctions for new bids
 while the sender is idle. Positive and negative membership are memoized only at the
 current pin. Each pass checks every relevant unanswered open/solvable auction before
 bidding, with no eligibility count cap or persistent scan cursor. Matching requests
 are deduplicated per market, and each eligible market is considered once after the
 complete eligibility scan. Any API mutation ends the pass to refresh inventory.
-Per-auction RAM intents preserve self-originated offer identity across markets. Its API-key PUSH offer loop uses authenticated recipe/policy scope and idle
+The account-level durable intent serializes self-originated offers across markets. Its API-key PUSH offer loop uses authenticated recipe/policy scope and idle
 account cash; its SDK provider binds native aggregate mint authorizations. The
 provider authenticates canonical mint guards and their input bindings. Additional
 funding activation follows the curator-authored committed recipe; no separate host
 proof restricts the sources used by its Manage gates.
 The generic `merkle` solver has no 3F configuration or provider dispatch. All 3F Merkle
-code lives in one package; API, reservation and RAM intent checks remain inside
-that integration. Both recipe keepers use `transaction.Manager.Sender` with the
-same SDK transaction manager used by every native integration. Offer mutations authenticate fresh SDK identity,
-all committed roles and both original and fresh block pins without needing a ready mint.
+code lives in one package; API, reservation and durable intent checks remain inside
+that integration. Both recipe keepers share store/sender startup through
+`internal/merklesender.OpenKeeper`, including recovery validation before Run.
 See [THREEF-MERKLE.md](THREEF-MERKLE.md) for the flow and validation boundaries.

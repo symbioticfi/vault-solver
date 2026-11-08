@@ -83,7 +83,7 @@ func TestEventTagsAttributeSolverAndLabel(t *testing.T) {
 			want: map[string]string{"logger": "txmanager", "solver": "rfq", "label": "rfq-fill"}},
 		{name: "logger name fallback", logger: "lifi.txmanager", fields: map[string]any{},
 			want: map[string]string{"logger": "lifi.txmanager", "solver": "lifi"}},
-		{name: "common component serving integration workers", logger: "txmanager", fields: map[string]any{"label": "uniswapx-fill"},
+		{name: "shared component in a multi-solver process", logger: "txmanager", fields: map[string]any{"label": "uniswapx-fill"},
 			want: map[string]string{"logger": "txmanager", "solver": "txmanager", "label": "uniswapx-fill"}},
 		{name: "nothing known", logger: "", fields: map[string]any{}, want: map[string]string{}},
 	} {
