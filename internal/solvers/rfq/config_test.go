@@ -295,7 +295,6 @@ func TestQuoteOnlyDoesNotStartExecution(t *testing.T) {
 
 func TestLocalRecipeExecutorSelectsMode(t *testing.T) {
 	const recipe = `recipeExecutors: ["0x0000000000000000000000000000000000000043"]
-stateDir: /persistent/rfq-merkle
 curator: {url: https://curator.example/api/v1}
 `
 	for _, tc := range []struct {
@@ -305,11 +304,12 @@ curator: {url: https://curator.example/api/v1}
 		{name: "singular adapter is unsupported", text: `adapter: "0x0000000000000000000000000000000000000042"`, want: "field adapter not found"},
 		{name: "adapters preserve native mode", text: oneAdapter},
 		{name: "recipe selects connector mode", text: recipe, merkle: true},
+		{name: "obsolete state directory", text: recipe + "stateDir: /persistent/rfq-merkle\n", want: "field stateDir not found"},
 		{name: "adapters and recipe executor conflict", text: recipe + oneAdapter, want: "mutually exclusive"},
 		{name: "zero executor", text: `recipeExecutors: ["0x0000000000000000000000000000000000000000"]`, want: "recipeExecutor"},
 		{name: "bad executor", text: `recipeExecutors: [no]`, want: "recipeExecutor"},
-		{name: "no durable state", text: `recipeExecutors: ["0x0000000000000000000000000000000000000043"]`, want: "stateDir"},
-		{name: "quote only needs no journal", text: `recipeExecutors: ["0x0000000000000000000000000000000000000043"]
+		{name: "no curator", text: `recipeExecutors: ["0x0000000000000000000000000000000000000043"]`, want: "curator"},
+		{name: "quote only needs no execution source", text: `recipeExecutors: ["0x0000000000000000000000000000000000000043"]
 quoteOnly: true
 `, merkle: true},
 	} {

@@ -352,7 +352,11 @@ is priority, not a withdrawal cash reservation.
 The host's SDK transport continues to use the existing shared transaction manager's
 owner fence and persistence callbacks; it contains no copied sender or nonce engine.
 The SDK batch engine uses the existing HTTP fallback/tracing path with strict response
-identity validation. All solvers use HTTP(S) chain RPC endpoints. Vault-side LL/3F pricing,
+identity validation. Compatible pinned getters use one Multicall3 `eth_call` as a
+JSON-RPC object. Caller-sensitive, gas-limited or different-block calls stay separate,
+with at most eight HTTP requests in flight; only groups containing other RPC methods
+use JSON arrays. Singleton reads always use an object. No gas-estimation round trip
+or failed-aggregate retry is added. All solvers use HTTP(S) chain RPC endpoints. Vault-side LL/3F pricing,
 discounts and auction/order business logic stay in their existing integration packages; they are not implicitly
 wired through the Merkle host. Executor-daemon Merkl/CoW provider integration remains
 owned by merkle-executor.
