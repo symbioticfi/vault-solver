@@ -193,6 +193,7 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 	}
 	s.stateMu.Unlock()
 	if len(expired) == 0 {
+		s.exclusiveOpenInGrace.Store(false)
 		return nil
 	}
 	observability.Log(ctx).V(1).Info(
@@ -299,9 +300,14 @@ func (s *Solver) sweepExclusive(ctx context.Context, now time.Time) error {
 	}
 	s.stateMu.Unlock()
 
+	// A still-open order is most likely a miss, so exclusive quoting pauses until it resolves.
+	paused := len(stillOpen) > 0
+	if wasPaused := s.exclusiveOpenInGrace.Swap(paused); paused && !wasPaused {
+		s.invalidateQuotes()
+	}
 	for _, obligation := range logOpen {
 		observability.Log(ctx).Info(
-			"exclusive order still open after exclusivity ended; keeping obligation pending",
+			"exclusive order still open after exclusivity ended; pausing exclusive quoting",
 			"orderHash", obligation.hash.Hex(),
 			"exclusiveUntil", obligation.deadline.Unix(),
 			"missedAfter", obligation.deadline.Add(s.cfg.OrderServer.OpenGrace).Unix(),

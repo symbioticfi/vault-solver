@@ -326,7 +326,7 @@ func TestUnresolvedExclusiveStateKeepsObligationPending(t *testing.T) {
 	}
 }
 
-func TestOpenExclusiveOrderWithinGraceStaysPending(t *testing.T) {
+func TestOpenExclusiveOrderPendingThroughGraceThenMissed(t *testing.T) {
 	now := time.Unix(1_000, 0)
 	deadline := now.Add(time.Second)
 	open := common.HexToHash("0x1234")
@@ -364,8 +364,12 @@ func TestOpenExclusiveOrderWithinGraceStaysPending(t *testing.T) {
 	if _, pending := solver.exclusiveUntil[expired]; pending {
 		t.Fatal("open order blocked the rest of the sweep")
 	}
-	if solver.exclusiveBlockUntil.Load() == 0 {
+	blockedUntil := solver.exclusiveBlockUntil.Load()
+	if blockedUntil == 0 {
 		t.Fatal("expired obligation in the same sweep did not trip the breaker")
+	}
+	if solver.exclusiveDeliveryHealthy() {
+		t.Fatal("exclusive quoting was not paused while an order is open inside grace")
 	}
 	stillOpen := 0
 	for _, entry := range logs {
@@ -376,34 +380,18 @@ func TestOpenExclusiveOrderWithinGraceStaysPending(t *testing.T) {
 	if stillOpen != 1 {
 		t.Fatalf("still-open notice logged %d times, want 1: %v", stillOpen, logs)
 	}
-}
 
-func TestOpenExclusiveOrderPastGraceCountsAsMissed(t *testing.T) {
-	now := time.Unix(1_000, 0)
-	deadline := now.Add(time.Second)
-	hash := common.HexToHash("0x1234")
-	solver := &Solver{
-		cfg: &Config{
-			Breaker:     BreakerConfig{Window: time.Minute},
-			OrderServer: OrderServerConfig{OpenGrace: 30 * time.Second},
-		},
-		log: logr.Discard(),
-		orders: &stateTestOrderPoller{terminals: map[common.Hash]orderTerminal{
-			hash: {Status: orderStatusOpen},
-		}},
-	}
-	solver.trackExclusive(&resolvedOrder{
-		Hash: hash, Source: orderSourceExclusiveV2, ExclusiveUntil: uint64(deadline.Unix()),
-	}, now)
-
-	if err := solver.sweepExclusive(t.Context(), deadline.Add(31*time.Second)); err != nil {
+	if err := solver.sweepExclusive(ctx, deadline.Add(31*time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	if _, pending := solver.exclusiveUntil[hash]; pending {
+	if _, pending := solver.exclusiveUntil[open]; pending {
 		t.Fatal("open order past grace stayed pending")
 	}
-	if solver.exclusiveBlockUntil.Load() == 0 {
-		t.Fatal("open order past grace did not trip the exclusive breaker")
+	if solver.exclusiveBlockUntil.Load() <= blockedUntil {
+		t.Fatal("open order past grace did not open the exclusive breaker")
+	}
+	if !solver.exclusiveDeliveryHealthy() {
+		t.Fatal("grace pause outlived the open obligation")
 	}
 }
 

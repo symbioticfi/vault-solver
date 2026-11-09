@@ -6,7 +6,7 @@ import (
 )
 
 func (s *Solver) exclusiveDeliveryHealthy() bool {
-	if s.exclusiveStateUnknown.Load() {
+	if s.exclusiveStateUnknown.Load() || s.exclusiveOpenInGrace.Load() {
 		return false
 	}
 	last := s.lastExclusivePoll.Load()
