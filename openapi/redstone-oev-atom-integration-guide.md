@@ -188,13 +188,11 @@ const operationData = ethers.AbiCoder.defaultAbiCoder().encode(
 Ensure the final operationData output is passed as a standard hex string (e.g., "0x...") in the JSON response.
 
 #### Generating liquidationSig
-1.
-First, hash your encoded operationData output:
+1. First, hash your encoded operationData output:
 ```javascript
 const operationDataHash = ethers.keccak256(operationData);
 ```
-2.
-Prepare the primary authentication payload. Use ABI standard encoding across these 7 fields:
+2. Prepare the primary authentication payload. Use ABI standard encoding across these 7 fields:
 ```javascript
 const types = [
   "string", // "EXECUTOR_V6"
@@ -218,8 +216,7 @@ const values = [
 
 const encodedData = ethers.AbiCoder.defaultAbiCoder().encode(types, values);
 ```
-3.
-Take the keccak256 hash of this encodedData payload, and sign it using your Solver wallet:
+3. Take the keccak256 hash of this encodedData payload, and sign it using your Solver wallet:
 ```javascript
 const messageHash = ethers.keccak256(encodedData);
 const liquidationSig = await wallet.signMessage(

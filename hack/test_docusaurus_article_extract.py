@@ -15,6 +15,8 @@ PAGE = """<!doctype html><html><head><script src="/assets/js/main.1a2b.js"></scr
 header.</p>
 <ol><li>request</li><li>execute</li></ol>
 <ul><li>see <a href="https://example.com/repo">here</a></li></ul>
+<ol><li><p>hash it</p><p>then more</p></li><li>
+<p>sign it</p></li></ol>
 <table><tr><th>op</th><th>meaning</th></tr><tr><td>solve</td><td>bid</td></tr></table>
 <div class="codeBlock"><pre class="prism-code language-json codeBlock_x"><code><span class="token-line">{<br></span><span class="token-line">  "op": "subscribe"<br></span><span class="token-line">}</span></code></pre><button>Copy</button></div>
 </div><footer>Edit this page</footer></article>
@@ -28,6 +30,9 @@ Send the x-api-key header.
 1. request
 2. execute
 - see here <https://example.com/repo>
+1. hash it
+then more
+2. sign it
 op | meaning
 solve | bid
 ```json

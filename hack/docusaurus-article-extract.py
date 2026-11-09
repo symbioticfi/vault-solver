@@ -28,6 +28,7 @@ class Extractor(html.parser.HTMLParser):
         self.found = False
         self.lists: list[int | None] = []  # per open list: next ordered number, or None for <ul>
         self.links: list[str | None] = []
+        self.marker = False  # `current` holds only a list item's prefix, waiting for its text
 
     def flush(self) -> None:
         text = "".join(self.current)
@@ -36,9 +37,11 @@ class Extractor(html.parser.HTMLParser):
         if text or self.pre:
             self.lines.append(text.rstrip())
         self.current = []
+        self.marker = False
 
-    def block(self) -> None:
-        if self.current:
+    def block(self, keep_marker: bool = False) -> None:
+        # A loose list wraps item text in <p>; keep_marker leaves the "1. " in place so the text joins it.
+        if self.current and not (keep_marker and self.marker):
             self.flush()
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
@@ -75,6 +78,7 @@ class Extractor(html.parser.HTMLParser):
             self.current.append(f"{number}. " if number else "- ")
             if number:
                 self.lists[-1] = number + 1
+            self.marker = True
         elif tag == "a":
             href = dict(attrs).get("href") or ""
             self.links.append(href if href.startswith(("http://", "https://")) else None)
@@ -84,7 +88,7 @@ class Extractor(html.parser.HTMLParser):
             if self.current:
                 self.current.append(" | ")
         elif tag in BLOCKS:
-            self.block()
+            self.block(keep_marker=True)
 
     def handle_endtag(self, tag: str) -> None:
         if not self.depth or tag in VOID:
@@ -113,6 +117,8 @@ class Extractor(html.parser.HTMLParser):
     def handle_data(self, data: str) -> None:
         if self.depth and not self.skip:
             self.current.append(data)
+            if data.strip():
+                self.marker = False
 
 
 def extract(page: str) -> str:
