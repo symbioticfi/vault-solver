@@ -111,8 +111,17 @@ func assembleConnectorRoute(recipe recipes.Recipe, tree *recipes.Tree, venue, to
 		if err = action.Pinned(4, 32); err != nil {
 			return assembledConnector{}, err
 		}
-		if common.BytesToAddress(action.Leaf.Data[132:164]) != token {
-			continue
+		if value, err := action.Field(132); err == nil {
+			if value.Source != recipes.Literal || value.Value.Cmp(new(big.Int).SetBytes(token[:])) != 0 {
+				continue
+			}
+		} else {
+			if err := action.Pinned(132, 32); err != nil {
+				return assembledConnector{}, err
+			}
+			if common.BytesToAddress(action.Leaf.Data[132:164]) != token {
+				continue
+			}
 		}
 		actions[action.Key] = data
 	}
@@ -134,9 +143,24 @@ type permissionSource interface {
 type connectorWorkflow struct {
 	chain          recipes.Reader
 	chainID        *big.Int
-	connector      common.Address
+	maxGas         uint64
 	source         permissionSource
 	caller, signer common.Address
+}
+
+func (w *connectorWorkflow) permissionTree(ctx context.Context, snapshot recipes.Snapshot) (*recipes.Tree, error) {
+	raw, err := w.source.PermissionTree(ctx, w.chainID, snapshot)
+	if err != nil {
+		return nil, errors.Errorf("connector permission tree: %w", err)
+	}
+	tree, err := recipes.DecodeTree(raw)
+	if err != nil {
+		return nil, errors.Errorf("connector permission tree: %w", err)
+	}
+	if tree.Root != snapshot.Root || tree.ChainID == nil || tree.ChainID.Cmp(w.chainID) != 0 || tree.Account == nil || *tree.Account != snapshot.Account {
+		return nil, errors.New("connector permission tree scope mismatch")
+	}
+	return tree, nil
 }
 
 func (w *connectorWorkflow) state(ctx context.Context, venue common.Address, block *big.Int) (connectorState, error) {
@@ -174,81 +198,77 @@ type discountResolver interface {
 	resolveDiscount(ctx context.Context, id string) (*discounts.Resolved, error)
 }
 
-func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOrder, protocolSig []byte, selected selectedRoute, backend discountResolver) ([]byte, time.Time, error) {
+type builtConnector struct {
+	Calldata   []byte
+	ValidUntil time.Time
+	State      connectorState
+}
+
+func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOrder, protocolSig []byte, selected selectedRoute, backend discountResolver) (builtConnector, error) {
 	token, required, err := orderTerms(order, w.caller)
 	if err != nil {
-		return nil, time.Time{}, err
+		return builtConnector{}, err
 	}
 	if selected.Executor == (common.Address{}) {
-		return nil, time.Time{}, errors.New("connector has no recipe executor")
+		return builtConnector{}, errors.New("connector has no recipe executor")
 	}
-	if w.connector == (common.Address{}) || selected.Venue != w.connector || selected.DiscountID == (common.Hash{}) || selected.MaxAssets == nil || selected.MaxAssets.Sign() < 0 {
-		return nil, time.Time{}, errors.New("connector requires recipe-derived routing and upstream discount")
+	if selected.Venue == (common.Address{}) || selected.DiscountID == (common.Hash{}) || selected.MaxAssets == nil || selected.MaxAssets.Sign() < 0 {
+		return builtConnector{}, errors.New("connector requires recipe-derived routing and upstream discount")
 	}
-	header, err := w.chain.HeaderByNumber(ctx, nil)
+	if w.signer == (common.Address{}) {
+		return builtConnector{}, errors.New("connector fill requires a host signer")
+	}
+	identities, err := recipes.DiscoverExecutors(ctx, w.chain, []common.Address{selected.Executor})
 	if err != nil {
-		return nil, time.Time{}, errors.Errorf("pin connector recipe: %w", err)
+		return builtConnector{}, errors.Errorf("discover connector executor: %w", err)
 	}
-	if header == nil || header.Number == nil {
-		return nil, time.Time{}, errors.New("missing connector recipe block")
-	}
-	state, err := w.state(ctx, selected.Venue, header.Number)
+	prepared, err := recipes.DiscoverBatch(ctx, w.chain, []common.Address{selected.Executor}, []common.Address{identities[selected.Executor].Account}, w.caller, recipes.PreparationOptions{ChainID: w.chainID})
 	if err != nil {
-		return nil, time.Time{}, err
+		return builtConnector{}, errors.Errorf("discover connector recipe: %w", err)
 	}
-	snapshot, recipe, err := recipes.DiscoverForAccount(ctx, w.chain, selected.Executor, state.Account, header.Number)
+	member := prepared[0]
+	snapshot, recipe := member.Snapshot, member.Recipe
+	block := new(big.Int).SetUint64(snapshot.BlockNumber)
+	state, err := w.state(ctx, selected.Venue, block)
 	if err != nil {
-		return nil, time.Time{}, errors.Errorf("discover connector recipe: %w", err)
+		return builtConnector{}, err
 	}
-	if snapshot.Caller != w.caller {
-		return nil, time.Time{}, errors.New("connector recipe caller mismatch")
+	if state.Account != snapshot.Account {
+		return builtConnector{}, errors.New("connector account differs from recipe account")
 	}
-	if snapshot.BlockHash != header.Hash() {
-		return nil, time.Time{}, errors.New("connector bindings reorganized during recipe discovery")
-	}
-	raw, err := w.chain.CallContract(ctx, ethereum.CallMsg{To: &selected.Venue, Data: connectorBinding.PackRemainingAssets(order.Request.TokenIn)}, header.Number)
+	raw, err := w.chain.CallContract(ctx, ethereum.CallMsg{To: &selected.Venue, Data: connectorBinding.PackRemainingAssets(order.Request.TokenIn)}, block)
 	if err != nil {
-		return nil, time.Time{}, errors.Errorf("connector remainingAssets: %w", err)
+		return builtConnector{}, errors.Errorf("connector remainingAssets: %w", err)
 	}
 	remaining, err := connectorBinding.UnpackRemainingAssets(raw)
 	if err != nil {
-		return nil, time.Time{}, errors.Errorf("connector remainingAssets decode: %w", err)
+		return builtConnector{}, errors.Errorf("connector remainingAssets decode: %w", err)
 	}
 	if remaining.Cmp(required) < 0 || selected.MaxAssets.Cmp(required) < 0 {
-		return nil, time.Time{}, errors.New("connector has insufficient capacity for the whole award")
+		return builtConnector{}, errors.New("connector has insufficient capacity for the whole award")
 	}
 	if state.Asset != token {
-		return nil, time.Time{}, errors.New("connector outputAsset differs from awarded output")
+		return builtConnector{}, errors.New("connector outputAsset differs from awarded output")
 	}
-	raw, err = w.source.PermissionTree(ctx, w.chainID, snapshot)
+	tree, err := w.permissionTree(ctx, snapshot)
 	if err != nil {
-		return nil, time.Time{}, errors.Errorf("connector permission tree: %w", err)
-	}
-	tree, err := recipes.DecodeTree(raw)
-	if err != nil {
-		return nil, time.Time{}, errors.Errorf("connector permission tree: %w", err)
-	}
-	if tree.Root != snapshot.Root || tree.ChainID == nil || tree.ChainID.Cmp(w.chainID) != 0 || tree.Account == nil || *tree.Account != snapshot.Account {
-		return nil, time.Time{}, errors.New("connector permission tree scope mismatch")
+		return builtConnector{}, err
 	}
 	resolved, err := backend.resolveDiscount(ctx, selected.DiscountID.Hex())
 	if err != nil {
-		return nil, time.Time{}, errors.Errorf("resolve connector discount: %w", err)
+		return builtConnector{}, errors.Errorf("resolve connector discount: %w", err)
 	}
 	terms, err := parseConnectorDiscount(resolved, selected.DiscountID, selected.Venue, order.Request.TokenIn)
 	if err != nil {
-		return nil, time.Time{}, err
+		return builtConnector{}, err
 	}
 	assembled, err := assembleConnectorRoute(recipe, tree, selected.Venue, order.Request.TokenIn, w.caller, order.Request.AmountIn, required, terms.Swap, terms.Signature)
 	if err != nil {
-		return nil, time.Time{}, errors.Errorf("assemble connector recipe: %w", err)
-	}
-	if err := recipes.VerifyRoles(ctx, w.chain, snapshot, assembled.Leaves); err != nil {
-		return nil, time.Time{}, errors.Errorf("connector recipe roles: %w", err)
+		return builtConnector{}, errors.Errorf("assemble connector recipe: %w", err)
 	}
 	calls, err := executorCallsArgs.Pack([]executorCall{{Target: snapshot.Executor, Value: new(big.Int), Data: assembled.Calldata}})
 	if err != nil {
-		return nil, time.Time{}, errors.Errorf("encode recipe call: %w", err)
+		return builtConnector{}, errors.Errorf("encode recipe call: %w", err)
 	}
 	discountInputs := []executor.IReactorDiscountSwapInput{{
 		Adapter: selected.Venue,
@@ -260,27 +280,15 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	}}
 	calldata, err := executorBinding.TryPackFill(order, protocolSig, nil, discountInputs, calls)
 	if err != nil {
-		return nil, time.Time{}, errors.Errorf("encode recipe fill: %w", err)
+		return builtConnector{}, errors.Errorf("encode recipe fill: %w", err)
 	}
-	reader := outerFillReader{Reader: w.chain, snapshot: snapshot, inner: assembled.Calldata, outer: calldata, caller: w.caller, signer: w.signer}
-	if err := recipes.ValidateExecution(ctx, reader, snapshot, w.caller, assembled.Calldata); err != nil {
-		return nil, time.Time{}, errors.Errorf("validate outer RFQ recipe fill: %w", err)
+	// The SDK authenticates the inner call and pins around the unchanged outer fill.
+	simulate := func(ctx context.Context, request recipes.PreparedBatchSimulationRequest) error {
+		_, err := w.chain.CallContract(ctx, ethereum.CallMsg{From: w.signer, To: &w.caller, Data: bytes.Clone(calldata), Gas: request.GasLimit}, request.BlockNumber)
+		return err
 	}
-	return calldata, terms.ValidUntil, nil
-}
-
-// Validate the immutable inner authorization against the complete settlement transaction.
-type outerFillReader struct {
-	recipes.Reader
-
-	snapshot       recipes.Snapshot
-	inner, outer   []byte
-	caller, signer common.Address
-}
-
-func (r outerFillReader) CallContract(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
-	if msg.To != nil && *msg.To == r.snapshot.Executor && msg.From == r.caller && bytes.Equal(msg.Data, r.inner) {
-		return r.Reader.CallContract(ctx, ethereum.CallMsg{From: r.signer, To: &r.caller, Data: r.outer}, block)
+	if err := recipes.ValidatePreparedBatchWithSimulation(ctx, w.chain, prepared, []recipes.ExecutorCall{{Executor: snapshot.Executor, Data: assembled.Calldata}}, [][]common.Hash{assembled.Leaves}, w.caller, simulate, w.maxGas); err != nil {
+		return builtConnector{}, errors.Errorf("validate outer RFQ recipe fill: %w", err)
 	}
-	return r.Reader.CallContract(ctx, msg, block)
+	return builtConnector{Calldata: calldata, ValidUntil: terms.ValidUntil, State: state}, nil
 }

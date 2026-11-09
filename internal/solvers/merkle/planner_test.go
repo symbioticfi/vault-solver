@@ -5,7 +5,6 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -21,10 +20,10 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	txmanager "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/multicall3"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/solver"
-	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
 type plannerRPCRequest struct {
@@ -39,7 +38,7 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 			adapter := common.HexToAddress("0x100")
 			executor, account, caller := common.HexToAddress("0x10"), common.HexToAddress("0x20"), common.HexToAddress("0x30")
 			root := common.HexToHash("0x40")
-			header := &types.Header{Number: big.NewInt(12), Difficulty: new(big.Int)}
+			header := &types.Header{Number: big.NewInt(12), Difficulty: new(big.Int), GasLimit: 30_000_000}
 			recipe := recipes.Recipe{}
 			if mode == "free input" {
 				word, err := abi.NewType("uint256", "", nil)
@@ -214,15 +213,16 @@ func TestFactoryPlannerAuthenticatesCuratorAndRejectsFreeInputs(t *testing.T) {
 			}
 			defer client.Close()
 			owner := factorySigner{address: caller}
-			manager := txmanager.New(client, owner, big.NewInt(1), txmanager.Config{}, logr.Discard())
+			manager, err := txmanager.New(client, owner, big.NewInt(1), txmanager.Config{}, logr.Discard())
+			if err != nil {
+				t.Fatal(err)
+			}
 			raw := strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", curator.URL+"/api/v1", 1)
-			raw = strings.Replace(raw, "state/merkle", filepath.Join(t.TempDir(), "state"), 1)
-			built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, TxManager: manager, Log: logr.Discard()})
+			built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, MerkleTxManager: func() (*txmanager.Manager, error) { return manager, nil }, Log: logr.Discard()})
 			if err != nil {
 				t.Fatal(err)
 			}
 			current := built.(*Solver)
-			defer func() { _ = current.Close() }()
 			_, err = current.keeper.Planner.(*keeper.Planner).Prepare(t.Context(), current.keeper.Strategies[0])
 			valid := mode == "valid"
 			if valid && !errors.Is(err, provider.ErrNotReady) || !valid && (err == nil || errors.Is(err, provider.ErrNotReady)) || fetches != 1 {

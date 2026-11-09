@@ -2,7 +2,6 @@ package threef
 
 import (
 	"context"
-	"encoding/json"
 	"math/big"
 	"slices"
 	"sort"
@@ -36,12 +35,12 @@ type mintProvider struct {
 }
 
 type mint struct {
-	Request         common.Address `json:"request"`
-	Policy          common.Address `json:"policy"`
-	Asset           common.Address `json:"asset"`
-	UnderlyingAsset common.Address `json:"underlyingAsset"`
-	Principal       string         `json:"principal"`
-	Deadline        time.Time      `json:"deadline"`
+	Request         common.Address
+	Policy          common.Address
+	Asset           common.Address
+	UnderlyingAsset common.Address
+	Principal       *big.Int
+	Deadline        time.Time
 }
 
 // The configured offer policy must also be the policy charged by every mint group.
@@ -165,11 +164,7 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 				}
 				return nil, e
 			}
-			record := mint{Request: address, Policy: market.Policy, Asset: market.Asset, UnderlyingAsset: market.UnderlyingAsset, Principal: auth.PtAmount.String(), Deadline: deadline}
-			data, marshalErr := json.Marshal(record)
-			if marshalErr != nil {
-				return nil, marshalErr
-			}
+			record := mint{Request: address, Policy: market.Policy, Asset: market.Asset, UnderlyingAsset: market.UnderlyingAsset, Principal: new(big.Int).Set(auth.PtAmount), Deadline: deadline}
 			inputs[market.RequestInput] = new(big.Int).SetBytes(address.Bytes()).String()
 			results := map[uint]string{}
 			for i, value := range []recipes.Value{market.Principal, market.Yield} {
@@ -182,7 +177,7 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 					results[index] = amount
 				}
 			}
-			return []provider.Output{{Inputs: inputs, Results: results, Data: data}}, nil
+			return []provider.Output{{Inputs: inputs, Results: results, Task: &record}}, nil
 		}
 	}
 	return nil, provider.ErrNotReady
@@ -224,10 +219,10 @@ func (p *mintProvider) resolveMarkets(ctx context.Context, snapshot provider.Sna
 	return resolved, nil
 }
 
-// ValidateLease closes preparation after recipe simulation. Signed recovery
-// retains ownership and never rebuilds or resubmits an external offer.
+// ValidateLease closes preparation after recipe simulation. The keeper retains
+// the admitted task in RAM without rebuilding or resubmitting an external offer.
 func (p *mintProvider) ValidateLease(ctx context.Context, snapshot provider.Snapshot, output provider.Output) error {
-	record, err := decodeMint(output)
+	record, err := mintFromOutput(output)
 	if err != nil {
 		return err
 	}
@@ -265,17 +260,12 @@ func (p *mintProvider) ValidateLease(ctx context.Context, snapshot provider.Snap
 	return nil
 }
 
-func (p *mintProvider) Advance(_ context.Context, snapshot provider.Snapshot, output provider.Output, _ json.RawMessage) (provider.Progress, error) {
-	record, err := decodeMint(output)
-	if err != nil {
+func (record *mint) Advance(_ context.Context, snapshot provider.Snapshot) (provider.Progress, error) {
+	if err := record.validate(); err != nil {
 		return provider.Progress{}, err
 	}
-	if err = snapshot.Execution.Validate(); err != nil {
+	if err := snapshot.Execution.Validate(); err != nil {
 		return provider.Progress{}, err
-	}
-	principal, ok := new(big.Int).SetString(record.Principal, 10)
-	if !ok || principal.Sign() <= 0 {
-		return provider.Progress{}, errors.New("3f invalid persisted principal")
 	}
 	count := 0
 	event := policySchema.Events["Consume"]
@@ -287,7 +277,7 @@ func (p *mintProvider) Advance(_ context.Context, snapshot provider.Snapshot, ou
 		if e != nil {
 			return provider.Progress{}, errors.New("3f invalid policy consume receipt")
 		}
-		if decoded.Asset == record.Asset && decoded.UnderlyingAsset == record.UnderlyingAsset && decoded.Assets.Cmp(principal) == 0 {
+		if decoded.Asset == record.Asset && decoded.UnderlyingAsset == record.UnderlyingAsset && decoded.Assets.Cmp(record.Principal) == 0 {
 			count++
 		}
 	}
@@ -297,15 +287,25 @@ func (p *mintProvider) Advance(_ context.Context, snapshot provider.Snapshot, ou
 	return provider.Progress{Done: true, Outcome: "minted", Reference: snapshot.Execution.TxHash.Hex()}, nil
 }
 
-func decodeMint(output provider.Output) (mint, error) {
-	var record mint
-	if err := json.Unmarshal(output.Data, &record); err != nil {
-		return record, errors.New("3f invalid persisted mint")
+func mintFromOutput(output provider.Output) (*mint, error) {
+	record, ok := output.Task.(*mint)
+	if !ok || record == nil {
+		return nil, errors.New("3f mint task is required")
 	}
-	if record.Request == (common.Address{}) || record.Policy == (common.Address{}) || record.Asset == (common.Address{}) || record.UnderlyingAsset == (common.Address{}) || record.Deadline.IsZero() {
-		return record, errors.New("3f incomplete persisted mint")
+	if err := record.validate(); err != nil {
+		return nil, err
 	}
 	return record, nil
+}
+
+func (record *mint) validate() error {
+	if record == nil || record.Request == (common.Address{}) || record.Policy == (common.Address{}) || record.Asset == (common.Address{}) || record.UnderlyingAsset == (common.Address{}) || record.Deadline.IsZero() {
+		return errors.New("3f incomplete mint task")
+	}
+	if record.Principal == nil || record.Principal.Sign() <= 0 || record.Principal.BitLen() > 256 {
+		return errors.New("3f invalid mint principal")
+	}
+	return nil
 }
 func (p *mintProvider) time() time.Time {
 	if p.Now != nil {

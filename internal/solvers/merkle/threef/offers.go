@@ -3,6 +3,7 @@ package threef
 import (
 	"context"
 	"crypto/rand"
+	"math"
 	"math/big"
 	"strconv"
 	"strings"
@@ -10,7 +11,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/state"
 	"github.com/symbioticfi/vault-solver/api/threef"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
@@ -32,13 +32,13 @@ type offerMarket struct {
 	EligibleRequests                                     map[common.Address]bool
 }
 
-// offerBot is owned by the single solver Run goroutine and its exclusive SDK store.
-// It never signs or sends a transaction. Send=false performs no journal or API writes.
+// offerBot and its pending intents belong to the single solver Run goroutine.
+// It never signs or sends a transaction. Send=false performs no API writes.
 type offerBot struct {
-	Client offerClient
-	Store  *state.Store
-	Send   bool
-	Now    func() time.Time
+	Client  offerClient
+	pending []*intent
+	Send    bool
+	Now     func() time.Time
 }
 
 type liveOffer struct {
@@ -62,8 +62,8 @@ func (b *offerBot) Tick(ctx context.Context, market offerMarket, auctions []thre
 
 // readOffers authenticates one inventory shared by maintenance and bidding.
 func (b *offerBot) readOffers(ctx context.Context, account common.Address) ([]threef.OfferDto, error) {
-	if b.Client == nil || (b.Send && b.Store == nil) {
-		return nil, errors.New("3F offer client and send-mode journal are required")
+	if b.Client == nil {
+		return nil, errors.New("3F offer client is required")
 	}
 	if b.Client.Broker() == (common.Address{}) {
 		return nil, errors.New("3F offer broker is required")
@@ -98,36 +98,23 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 	if !b.Send {
 		return false, nil
 	}
-	previous, err := b.reconcileIntent(market, offers)
+	pending, err := b.reconcileIntents(offers)
 	if err != nil {
 		return false, err
 	}
-	// Another recipe owns this account's live intent. Its workflow alone may
-	// cancel it; an unresolved POST must remain bound to the original recipe.
-	if previous != nil && (previous.Executor != market.Executor || previous.Asset != market.Asset || previous.UnderlyingAsset != market.UnderlyingAsset) {
-		for _, offer := range live {
-			if offer.id == previous.OfferID {
-				return false, nil
-			}
-		}
+	for _, previous := range pending {
+		id, _ := dtoID(previous.Offer.AuctionId)
+		blocked[id] = true
 	}
-	reserved := new(big.Int)
-	pairReserved := new(big.Int)
-	for _, offer := range live {
-		if offer.asset == market.Asset {
-			reserved.Add(reserved, offer.amount)
-			if market.EligibleRequests[common.HexToAddress(offer.dto.RequestId)] {
-				pairReserved.Add(pairReserved, offer.amount)
-			}
-		}
-	}
+	reserved, pairReserved := reserveOffers(market, live, pending)
 	capacity := minInt(new(big.Int).Sub(market.Budget, pairReserved), new(big.Int).Sub(market.AvailableCash, reserved))
 	for _, offer := range live {
 		if offer.dto.Status != "SUBMITTED" {
 			continue
 		}
 		request := common.HexToAddress(offer.dto.RequestId)
-		owned := previous != nil && previous.OfferID == offer.id && previous.Executor == market.Executor
+		previous := findIntent(pending, offer.id)
+		owned := previous != nil && previous.Executor == market.Executor && previous.Policy == market.Policy && previous.Asset == market.Asset && previous.UnderlyingAsset == market.UnderlyingAsset
 		if !owned && !market.EligibleRequests[request] {
 			continue
 		}
@@ -158,17 +145,31 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 			return true, nil
 		}
 	}
+	for _, previous := range pending {
+		if previous.OfferID != 0 || !previous.matchesMarket(market) {
+			continue
+		}
+		auctionID, _ := dtoID(previous.Offer.AuctionId)
+		auction, exists := byID[auctionID]
+		amount, _ := uintAmount(previous.Offer.Amount)
+		yield, _ := uintAmount(previous.Offer.ExpectedReturn)
+		// The original amount is already reserved; only other offers reduce
+		// the cash and pair budget available to replay this exact request.
+		available := new(big.Int).Add(capacity, amount)
+		if !exists || !market.EligibleRequests[previous.Request] || amount.Cmp(available) > 0 || amount.Cmp(market.MaxPrincipal) > 0 {
+			return false, errors.New("3F unresolved offer cannot be retried within current policy and cash limits")
+		}
+		fits, err := fitsTerms(market, amount, yield, auction)
+		if err != nil {
+			return false, err
+		}
+		if !fits {
+			return false, errors.New("3F unresolved offer cannot be retried within current rate limits")
+		}
+		return true, b.postIntent(ctx, market, previous, false)
+	}
 	if !create {
 		return false, nil
-	}
-	// Keep the single durable intent bound to every live bot-origin offer.
-	// Other account offers still contribute reservations and may mint together.
-	if previous != nil {
-		for _, offer := range live {
-			if offer.id == previous.OfferID {
-				return false, nil
-			}
-		}
 	}
 	remaining := capacity
 	if remaining.Sign() <= 0 {
@@ -220,11 +221,12 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 		if !fits {
 			continue
 		}
-		var nonce [32]byte
-		if _, randomErr := rand.Read(nonce[:]); randomErr != nil {
+		// 3F stores nonces in 64 bits; positive int64 values fit signed and unsigned storage.
+		nonce, randomErr := rand.Int(rand.Reader, big.NewInt(math.MaxInt64))
+		if randomErr != nil {
 			return false, errors.Errorf("create 3F offer nonce: %w", randomErr)
 		}
-		nonce[0] |= 1
+		nonce.Add(nonce, big.NewInt(1))
 		now := time.Now()
 		if b.Now != nil {
 			now = b.Now()
@@ -232,29 +234,63 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 		if now.Unix() <= 0 || now.Unix() > int64(^uint64(0)>>1)-300 {
 			return false, errors.New("3F offer clock is invalid")
 		}
-		offer := threef.CreateOfferDto{AuctionId: auction.Id, Maker: strings.ToLower(b.Client.Broker().Hex()), Amount: amount.String(), ExpectedReturn: yield.String(), Nonce: new(big.Int).SetBytes(nonce[:]).String(), Expiration: strconv.FormatInt(now.Unix()+300, 10)}
-		pending := newIntent(market, request, offer)
-		if err := b.Store.Save(journalKey(market), pending); err != nil {
-			return false, errors.Errorf("journal 3F offer before POST: %w", err)
-		}
-		response, postErr := b.Client.Create(ctx, offer)
-		if postErr != nil {
-			return false, errors.Errorf("3F offer POST outcome unresolved; retained intent: %w", postErr)
-		}
-		if response == nil {
-			return false, errors.New("3F offer POST outcome unresolved: empty response")
-		}
-		pending.OfferID, err = dtoID(response.Id)
-		if err != nil {
-			return false, err
-		}
-		if err := b.Store.Save(journalKey(market), pending); err != nil {
-			return false, errors.Errorf("journal 3F POST receipt: %w", err)
-		}
-		observability.Log(ctx).Info("3F PUSH offer submitted", "account", market.Account.Hex(), "auctionId", id, "offerId", pending.OfferID)
-		return true, nil
+		offer := threef.CreateOfferDto{AuctionId: auction.Id, Maker: strings.ToLower(b.Client.Broker().Hex()), Amount: amount.String(), ExpectedReturn: yield.String(), Nonce: nonce.String(), Expiration: strconv.FormatInt(now.Unix()+300, 10)}
+		created := newIntent(market, request, offer)
+		// Capture the exact request before HTTP can accept it and lose the response.
+		b.pending = append(pending, created)
+		return true, b.postIntent(ctx, market, created, true)
 	}
 	return false, nil
+}
+
+func (b *offerBot) postIntent(ctx context.Context, market offerMarket, pending *intent, first bool) error {
+	response, err := b.Client.Create(ctx, pending.Offer)
+	if err != nil {
+		// A rejected retry cannot disprove acceptance of the earlier request.
+		if first && definiteRejection(err) {
+			b.pending = withoutIntent(b.pending, pending)
+			return errors.Errorf("3F offer rejected: %w", err)
+		}
+		return errors.Errorf("3F offer POST outcome unresolved; retained intent for auction %v nonce %s: %w", pending.Offer.AuctionId, pending.Offer.Nonce, err)
+	}
+	if response == nil {
+		return errors.New("3F offer POST outcome unresolved: empty response")
+	}
+	pending.OfferID, err = dtoID(response.Id)
+	if err != nil {
+		return err
+	}
+	observability.Log(ctx).Info("3F PUSH offer submitted", "account", market.Account.Hex(), "auctionId", pending.Offer.AuctionId, "offerId", pending.OfferID)
+	return nil
+}
+
+// Cash is shared by funding asset; policy budget is shared by funding/underlying
+// pair. API rows and their RAM intents represent one reservation, not two.
+func reserveOffers(m offerMarket, live []liveOffer, pending []*intent) (cash, pair *big.Int) {
+	cash, pair = new(big.Int), new(big.Int)
+	listed := make(map[uint64]bool, len(live))
+	for _, offer := range live {
+		listed[offer.id] = true
+		if offer.asset == m.Asset {
+			cash.Add(cash, offer.amount)
+			previous := findIntent(pending, offer.id)
+			ownedPair := previous != nil && previous.Policy == m.Policy && previous.UnderlyingAsset == m.UnderlyingAsset
+			if ownedPair || m.EligibleRequests[common.HexToAddress(offer.dto.RequestId)] {
+				pair.Add(pair, offer.amount)
+			}
+		}
+	}
+	for _, previous := range pending {
+		if listed[previous.OfferID] || previous.Asset != m.Asset {
+			continue
+		}
+		amount, _ := uintAmount(previous.Offer.Amount)
+		cash.Add(cash, amount)
+		if previous.Policy == m.Policy && previous.UnderlyingAsset == m.UnderlyingAsset {
+			pair.Add(pair, amount)
+		}
+	}
+	return cash, pair
 }
 
 func validateMarket(m offerMarket) error {

@@ -34,7 +34,6 @@ type rawConfig struct {
 	PermissionedTokens     []string           `yaml:"permissionedTokens"`
 	MinAmountsIn           map[string]string  `yaml:"minAmountsIn"`
 	RecipeExecutors        []string           `yaml:"recipeExecutors"`
-	StateDir               string             `yaml:"stateDir"`
 	Curator                merklehost.Curator `yaml:"curator"`
 	Adapters               []string           `yaml:"adapters"`
 	Strategy               rawStrategyConfig  `yaml:"strategy"`
@@ -49,9 +48,8 @@ type rawStrategyConfig struct {
 type Config struct {
 	// RecipeExecutors selects connector pricing and Merkle fills instead of native adapters.
 	RecipeExecutors []common.Address
-	// StateDir and Curator provide the Merkle journal and permission tree for full execution.
-	StateDir string
-	Curator  merklehost.Curator
+	// Curator provides the Merkle permission tree for full execution.
+	Curator merklehost.Curator
 	// QuoteOnly serves pricing for a separately operated filler without polling or submitting orders.
 	QuoteOnly bool
 	// BackendURL is the RFQ backend base URL (orders + discounts).
@@ -157,7 +155,6 @@ func parseConfig(node yaml.Node) (*Config, error) {
 
 	cfg := &Config{
 		QuoteOnly:              raw.QuoteOnly,
-		StateDir:               raw.StateDir,
 		Curator:                raw.Curator,
 		BackendURL:             raw.BackendURL,
 		BackendSharedSecretEnv: raw.BackendSharedSecretEnv,
@@ -263,5 +260,5 @@ func (c *Config) quoteScopesToAdapters() bool {
 }
 
 func (c *Config) merkleConfig() merklerfq.Config {
-	return merklerfq.Config{BackendURL: c.BackendURL, Executor: c.Executor, RecipeExecutors: c.RecipeExecutors, StateDir: c.StateDir, Curator: c.Curator, QuoteOnly: c.QuoteOnly}
+	return merklerfq.Config{BackendURL: c.BackendURL, Executor: c.Executor, RecipeExecutors: c.RecipeExecutors, Curator: c.Curator, QuoteOnly: c.QuoteOnly}
 }
