@@ -68,7 +68,6 @@ func TestOneExecutorAcceptsDistinctGuardedMarkets(t *testing.T) {
 }
 func TestSingleExecutorConfigurationHasNoArrayAlias(t *testing.T) {
 	raw := `mode: simulate
-stateDir: state/threef-merkle
 executor: "0x0000000000000000000000000000000000000010"
 policy: "0x0000000000000000000000000000000000000050"
 curator:

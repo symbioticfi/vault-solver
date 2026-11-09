@@ -129,6 +129,54 @@ func TestUnsignedCreateWireAndPointOfUseKey(t *testing.T) {
 	}
 }
 
+func TestCreateErrorOmitsResponseBody(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"message":"upstream refused secret-one\nplease retry","credentials":"hidden"}`))
+	})
+	dto := *threef.NewCreateOfferDto(34, testBroker.Hex(), "100", "9", "1", "4102444800", false)
+	_, err := c.Create(t.Context(), dto)
+	if err == nil || !strings.Contains(err.Error(), "HTTP status 500") {
+		t.Fatalf("missing HTTP status: %v", err)
+	}
+	if strings.Contains(err.Error(), "upstream refused") || strings.Contains(err.Error(), "secret-one") || strings.Contains(err.Error(), "hidden") {
+		t.Fatal("error exposed the response body")
+	}
+}
+
+func TestCreateRejectsNonceOutsideStorageRange(t *testing.T) {
+	for _, tc := range []struct {
+		nonce string
+		valid bool
+	}{
+		{"0", true},
+		{"1", true},
+		{"9223372036854775807", true},
+		{"9223372036854775808", false},
+		{"18446744073709551616", false},
+		{"-1", false},
+	} {
+		t.Run(tc.nonce, func(t *testing.T) {
+			calls := 0
+			client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write([]byte(`{"id":12}`))
+			})
+			dto := *threef.NewCreateOfferDto(34, testBroker.Hex(), "100", "9", tc.nonce, "4102444800", false)
+			_, err := client.Create(t.Context(), dto)
+			if (err == nil) != tc.valid {
+				t.Fatalf("valid=%v, got error %v", tc.valid, err)
+			}
+			if !tc.valid && calls != 0 {
+				t.Fatal("unsupported nonce reached the API")
+			}
+		})
+	}
+}
+
 func TestOffersAndCancelWire(t *testing.T) {
 	var posted bool
 	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
