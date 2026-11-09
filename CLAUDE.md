@@ -168,11 +168,14 @@ live source daily in CI (`.github/workflows/schema-drift.yml`) and **fails when 
 `openapi/` or `api/graphql/*/schema.graphql` is not registered**, so a new integration cannot silently
 escape monitoring. When you vendor a schema, in the same change: add the `make refresh-<name>-openapi`
 (or `-schema`) target that pulls it, add the `make refresh-<name>-client` target that generates from it,
-and add a manifest entry naming the live `url`, the `fetch` mode (`json`, `scalar-html`, `graphql`,
+and add a manifest entry naming the live `url`, the `fetch` mode (`json`, `scalar-html`, `docusaurus-html`, `graphql`,
 `text`), and the `refresh` command to run when it drifts. Use `mode: "manual"` when there is no public
 endpoint to diff (RedStone's zod, shared privately); the checker skips those but keeps them listed so the
-gap is recorded rather than rediscovered. Spec URLs live in the `Makefile` as `?=` variables so they can be overridden per
-environment.
+gap is recorded rather than rediscovered. When the vendored copy is knowingly out of step with its live
+source (it tracks an upstream branch that is not deployed yet), add `expectedDrift: {reason, liveDigest}` to the
+entry; `liveDigest` comes from `python3 hack/check-schema-drift.py --digest <name>`. Only that exact live
+state is silenced: any change upstream, or the copies matching again, reports drift so the entry is revisited.
+Spec URLs live in the `Makefile` as `?=` variables so they can be overridden per environment.
 
 **Generated clients are deliberately tolerant of upstream drift**, because a third-party API adding or
 removing a field must not blank a whole feed (3F dropping `cadence` from one nested schema stopped the
