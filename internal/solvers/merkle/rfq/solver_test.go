@@ -16,6 +16,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"gopkg.in/yaml.v3"
 )
@@ -137,7 +138,9 @@ func TestAwardSizingOnlyUsesSignedTuple(t *testing.T) {
 func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	fixture := connectorExecutionFixture(t, connectorDiscountFixture())
 	order, _, backend := connectorExecutionAward(fixture.workflow.caller)
-	backend.rows = []rfqbackend.OrdersResponseOrdersInner{awardRow(t, order), awardRow(t, order)}
+	next := awardRow(t, order)
+	next.OrderId = "next-award"
+	backend.rows = []rfqbackend.OrdersResponseOrdersInner{awardRow(t, order), next}
 	backend.listed = &discounts.List{Discounts: []discounts.ListItem{
 		{Adapter: common.HexToAddress("0x01").Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "99999"},
 		{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: common.HexToAddress("0x43").Hex()},
@@ -148,8 +151,8 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 		if s.intent == nil || !bytes.Equal(s.intent.Data, req.Data) || s.intent.Deadline.IsZero() {
 			t.Fatal("fill admitted before RAM intent")
 		}
-		if s.AcceptsSnapshots(nil) {
-			t.Fatal("fill admitted before quote fence")
+		if reserved := s.Reservations(nil)[s.intent.Spend.CapacityID]; reserved == nil || reserved.Cmp(big.NewInt(456)) != 0 {
+			t.Fatal("fill admitted before reserving its signed output")
 		}
 	}
 	if err := s.Initialize(t.Context()); err != nil {
@@ -171,8 +174,8 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	}
 	sender.result = fillResult()
 	sender.duringPoll = func() {
-		if s.AcceptsSnapshots(nil) {
-			t.Fatal("quotes resumed before canonical accounting")
+		if reserved := s.Reservations(nil)[s.intent.Spend.CapacityID]; reserved == nil || reserved.Cmp(big.NewInt(456)) != 0 {
+			t.Fatal("manager release lost the spend before canonical accounting")
 		}
 	}
 	if err := s.tick(t.Context()); err != nil {
@@ -181,13 +184,25 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	if backend.reads != reads || !reflect.DeepEqual(request, sender.request) || sender.submits != 1 || s.intent != nil || sender.Busy() {
 		t.Fatal("canonical fill was rebuilt or its ownership was not released")
 	}
-	if !s.spends.finalized("award") || !s.AcceptsSnapshots(nil) {
-		t.Fatal("canonical accounting did not release quote fence")
+	if !s.spends.finalized("award") {
+		t.Fatal("canonical accounting did not remember the completed award")
 	}
 	backend.rows = []rfqbackend.OrdersResponseOrdersInner{awardRow(t, order), awardRow(t, order)}
 	backend.listed = &discounts.List{}
 	if err := s.tick(t.Context()); err != nil || sender.submits != 1 {
 		t.Fatal("completed award was submitted again", err)
+	}
+	// A different award waits for canonical settlement, then starts on the same single lane.
+	backend.rows = append(backend.rows, next)
+	backend.listed = &discounts.List{Discounts: []discounts.ListItem{{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: common.HexToAddress("0x43").Hex()}}}
+	backend.discount = connectorDiscountFixture()
+	sender.result = nil
+	sender.before = nil
+	if err := s.tick(t.Context()); err != nil || sender.submits != 2 || s.intent == nil || s.intent.OrderID != next.OrderId {
+		t.Fatal("next award did not start after the first completed", err)
+	}
+	if err := s.tick(t.Context()); err != nil || sender.submits != 2 {
+		t.Fatal("pending second award admitted parallel work", err)
 	}
 }
 
@@ -263,12 +278,17 @@ func TestSubmissionErrorRetainsOnlySignedWork(t *testing.T) {
 			backend.rows = []rfqbackend.OrdersResponseOrdersInner{awardRow(t, order)}
 			backend.listed = &discounts.List{Discounts: []discounts.ListItem{{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: common.HexToAddress("0x43").Hex()}}}
 			sender := &fakeSender{unsigned: unsigned, submitErr: context.DeadlineExceeded}
-			s := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender}
+			s := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender, spends: newSpendLedger()}
 			if err := s.Initialize(t.Context()); err != nil {
 				t.Fatal(err)
 			}
 			if err := s.tick(t.Context()); !errors.Is(err, context.DeadlineExceeded) || (s.intent == nil) != unsigned {
 				t.Fatalf("signed ownership changed: intent=%v err=%v", s.intent, err)
+			}
+			capacityID := liquidlane.NewCapacityID(1, fixture.reader.recipeAccount, tOut)
+			reserved := s.Reservations(nil)[capacityID]
+			if unsigned && len(s.Reservations(nil)) != 0 || !unsigned && (reserved == nil || reserved.Cmp(big.NewInt(456)) != 0) {
+				t.Fatal("submission error released signed capacity or retained an unsigned reservation")
 			}
 			if !unsigned {
 				reads := backend.reads

@@ -14,6 +14,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/vault-solver/internal/chain"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	merklerfq "github.com/symbioticfi/vault-solver/internal/solvers/merkle/rfq"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
@@ -92,13 +93,14 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		if err != nil {
 			return nil, err
 		}
-		quotes.reservations = nil // The signer fence pauses quotes during signed Merkle work.
+		quotes.reservations = func(_ string, inventory []solverInventory) liquidlane.CapacityReservations {
+			return merkle.Reservations(inventory)
+		}
 		manager, err := deps.MerkleTxManager()
 		if err != nil {
 			return nil, err
 		}
-		quotes.laneAvailable = manager.Available
-		quotes.inventoryCurrent = merkle.AcceptsSnapshots
+		quotes.laneAvailable = manager.Ready
 		quotes.acceptsConnector = merkle.AcceptsConnector
 		quotes.acceptsRoute = merkle.AcceptsRoute
 	}

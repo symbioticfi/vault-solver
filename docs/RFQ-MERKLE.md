@@ -104,13 +104,21 @@ only a canonical owned inclusion or revert releases the signer fence. Restart
 loses intent and transaction tracking while the transaction may still execute.
 Settle old work before upgrading and use one active process per signer.
 
-Quote inventory must match the verified recipe connector, account and asset. A
-process-local quote fence stays active until the fill loop records the canonical
-receipt, including the gap after shared-sender release. Confirmed fills retain an
-account/asset inclusion watermark; older or unknown inventory heights are rejected
-at final quote publication. Completed award IDs are retained until their signed
-chain deadlines, preventing a still-listed award from being filled twice. These
-watermarks and completed IDs are RAM only and are lost on process exit.
+Quote inventory must match the verified recipe connector, account and asset.
+Quoting stays available during a fill; execution remains sequential. Before
+submission, the awarded output is reserved against its physical account/asset
+capacity. Other capacity and the unreserved remainder stay quotable. Ambiguous
+submissions keep that reservation, including the gap after sender release and
+before the fill loop records its canonical receipt. Unsigned failures and canonical
+reverts release it. Confirmed spends remain subtracted from older inventory until
+that capacity's snapshots reflect inclusion. Confirmed details compact after fresh
+inventory or the signed deadline; an inclusion watermark prevents later stale
+snapshots from reopening that capacity. Pending reservations survive their deadlines
+until the signed outcome is known.
+Completed award IDs are retained until their signed chain deadlines, preventing
+a still-listed award from being filled twice. Reservations, watermarks and completed
+IDs are RAM only and are lost on process exit. SDK lifecycle readiness keeps the
+quote service in rotation while the transaction lane is occupied.
 
 The RFQ bridge ABI comes from [RFQ PR 25](https://github.com/symbioticfi/rfq/pull/25),
 commit `de6dbd617bf3c1e8b4120419cbe5800efae7d410`. Connector and RecipeExecutor use the unchanged canonical adapters contract surface.

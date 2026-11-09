@@ -2,8 +2,8 @@
 
 The `merkle` solver consumes the independently versioned
 `github.com/symbioticfi/merkle-executor/sdk` module pinned in go.mod.
-The current pin is `997a561d872caeb5dac83d6b6c28a210e10828e6`
-(`v0.0.0-20261108192150-997a561d872c`).
+The current pin is `180ee8dec197cc5219aaf5650b1ef006df05ff09`
+(`v0.0.0-20261109092900-180ee8dec197`).
 The SDK implements recipe/tree/proof/role checks,
 pinned runtime assembly, simulation, canonical receipts and RAM settlement tasks.
 It also exposes opt-in off-chain providers, RPC, signing and the shared transaction
@@ -43,6 +43,11 @@ Signed originals and replacements are retained in its single RAM lifecycle
 before broadcast. Keeper ownership survives ambiguous outcomes until a canonical
 owned result. Native solvers keep their existing `internal/txmanager`, fee policy, retries, telemetry and lifecycle.
 Deploy each solver process with its own signer; the two lifecycle implementations do not coordinate nonce ownership.
+
+SDK `Ready()` reports initialization and shutdown, so pending signed work does not
+remove quote servers from service. `Available()` and `LaneReady()` retain transaction
+admission semantics. RFQ quotes subtract active and not-yet-reflected canonical
+spends by physical capacity while the Merkle fill loop executes awards sequentially.
 
 Select this integration in the solver process YAML file:
 
