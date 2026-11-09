@@ -86,7 +86,9 @@ Public solver IDs use `symbiotic_<name>`; workloads, services, and Vault paths u
 
 An externally-owned solver/executor for **[Symbiotic RFQ](https://symbiotic.fi)**, on top of per-vault
 `LiquidLaneAdapter`s. It runs a `POST /quote` server that prices swaps for the RFQ backend and a poller
-that fills the orders it is awarded, settling on-chain through the adapter.
+that fills the orders it is awarded, settling on-chain through the adapter. Each quote is bounded by
+`quoteTimeoutMs` (default 900, below the backend's 1000 ms solver timeout) so a slow dependency is logged
+as a failed quote rather than dropped as a backend disconnect.
 
 It runs either in `external` mode (the open-source filler; quoting and filling scoped to the operator's
 own adapters) or `internal` mode (Symbiotic-internal; adds the private discounts flow). The caller EOA

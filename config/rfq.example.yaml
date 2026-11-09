@@ -55,6 +55,7 @@ solvers:
       backendSharedSecretEnv: RFQ_BACKEND_SHARED_SECRET  # env var NAME of the POST /quote shared secret
       listenAddr: ":42073"             # bind address for the quote HTTP server (POST /quote, /health, /docs)
       pollIntervalMs: 3000             # open-order polling interval and minimum nonce retry delay
+      quoteTimeoutMs: 900              # per-quote bound; keep below the backend's RFQ_SOLVER_TIMEOUT_MS (1000)
       orderLimit: 20                   # max open orders fetched per poll
       maxNonceRetries: 3               # separate accepted-send/transient-estimate budgets; 0 disables; initial collisions use deadline
 

@@ -88,8 +88,8 @@ func (s *Solver) fillDiscountQuotes(
 			}
 			resolved, resolveErr := s.discounts.Resolve(resolveCtx, candidate.DiscountID.Hex())
 			if resolveErr != nil {
-				observability.Log(resolveCtx).Error(
-					resolveErr, "private discounts: resolve", "discountId", candidate.DiscountID.Hex())
+				observability.ErrorUnlessCanceled(
+					resolveCtx, resolveErr, "private discounts: resolve", "discountId", candidate.DiscountID.Hex())
 				return nil
 			}
 			signed, validateErr := discounts.ParseAndValidate(resolved, selection, baseQuote, now)

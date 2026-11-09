@@ -39,6 +39,9 @@ func TestParseConfig_Defaults(t *testing.T) {
 	if cfg.PollInterval != defaultPollInterval {
 		t.Fatalf("pollInterval = %s, want %s", cfg.PollInterval, defaultPollInterval)
 	}
+	if cfg.QuoteTimeout != defaultQuoteTimeout {
+		t.Fatalf("quoteTimeout = %s, want %s", cfg.QuoteTimeout, defaultQuoteTimeout)
+	}
 	if cfg.OrderLimit != defaultOrderLimit {
 		t.Fatalf("orderLimit = %d, want %d", cfg.OrderLimit, defaultOrderLimit)
 	}
@@ -192,6 +195,7 @@ func TestParseConfig_Overrides(t *testing.T) {
 	cfg, err := parseCfg(t, minimalConfig+`
 listenAddr: ":9000"
 pollIntervalMs: 1500
+quoteTimeoutMs: 700
 orderLimit: 5
 reactor: "0x0000000000000000000000000000000000000030"
 `+oneAdapter)
@@ -199,7 +203,7 @@ reactor: "0x0000000000000000000000000000000000000030"
 		t.Fatalf("parseConfig: %v", err)
 	}
 	if cfg.ListenAddr != ":9000" ||
-		cfg.PollInterval != 1500*time.Millisecond || cfg.OrderLimit != 5 {
+		cfg.PollInterval != 1500*time.Millisecond || cfg.QuoteTimeout != 700*time.Millisecond || cfg.OrderLimit != 5 {
 		t.Fatalf("overrides not applied: %+v", cfg)
 	}
 	if cfg.Reactor == [20]byte{} {

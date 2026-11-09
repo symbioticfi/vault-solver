@@ -26,6 +26,7 @@ type rawConfig struct {
 	Reactor                string             `yaml:"reactor"`
 	LiquidityLens          string             `yaml:"liquidityLens"`
 	PollIntervalMs         int                `yaml:"pollIntervalMs"`
+	QuoteTimeoutMs         int                `yaml:"quoteTimeoutMs"`
 	OrderLimit             int                `yaml:"orderLimit"`
 	MaxNonceRetries        *int               `yaml:"maxNonceRetries"`
 	SolverMode             string             `yaml:"solverMode"`
@@ -72,6 +73,9 @@ type Config struct {
 	// PollInterval is how often the backend is polled for open orders and the minimum wait before
 	// a nonce retry.
 	PollInterval time.Duration
+	// QuoteTimeout bounds one /quote. Keep it below the backend's solver timeout so a slow
+	// dependency fails here at Error instead of surfacing as the backend's disconnect.
+	QuoteTimeout time.Duration
 	// OrderLimit caps how many open orders are fetched per poll.
 	OrderLimit int
 	// MaxNonceRetries independently bounds additional fresh fills after accepted uncertain execution
@@ -116,6 +120,7 @@ const (
 const (
 	defaultListenAddr      = ":42073"
 	defaultPollInterval    = 3 * time.Second
+	defaultQuoteTimeout    = 900 * time.Millisecond // backend RFQ_SOLVER_TIMEOUT_MS defaults to 1000
 	defaultOrderLimit      = 20
 	defaultSolverMode      = solverModeExternal
 	defaultStrategyName    = "default"
@@ -159,6 +164,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		ListenAddr:             parse.OrDefault(raw.ListenAddr, defaultListenAddr),
 		Executor:               executor,
 		PollInterval:           defaultPollInterval,
+		QuoteTimeout:           defaultQuoteTimeout,
 		OrderLimit:             defaultOrderLimit,
 		MaxNonceRetries:        defaultMaxNonceRetries,
 		SolverMode:             mode,
@@ -170,6 +176,9 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	}
 	if raw.PollIntervalMs > 0 {
 		cfg.PollInterval = time.Duration(raw.PollIntervalMs) * time.Millisecond
+	}
+	if raw.QuoteTimeoutMs > 0 {
+		cfg.QuoteTimeout = time.Duration(raw.QuoteTimeoutMs) * time.Millisecond
 	}
 	if raw.OrderLimit > 0 {
 		cfg.OrderLimit = raw.OrderLimit
