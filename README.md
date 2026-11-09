@@ -398,6 +398,9 @@ local fade breaker, matching Uniswap's
 [fade definition](https://developers.uniswap.org/docs/liquidity/uniswapx/filling/faq#fade-mechanics).
 An already-terminal miss found only by initial startup history reconciliation is logged and terminalized
 without opening a fresh local breaker.
+An order the API still reports `open` stays pending for `orderServer.openGrace` (default `30s`) past
+the deadline to absorb API lag, with exclusive quoting paused, then counts as missed. Set `openGrace` above
+the worst status lag you observe: a timely fill still shown `open` after it costs one `breaker.window`.
 If terminal status or receipt time cannot be established, quoting stops without opening the breaker until
 reconciliation succeeds.
 The upstream `/orders` endpoint returns only the newest 50 rows and no longer paginates. A full 50-row open
