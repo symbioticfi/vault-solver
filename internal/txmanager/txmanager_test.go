@@ -1652,6 +1652,7 @@ func TestRelaySimulationRevertClassification(t *testing.T) {
 		"execution reverted: order already filled":          false,
 		"transaction reverted":                              false,
 		"Reverted":                                          false,
+		"Failed in pending block with: NonceTooHigh":        false,
 		"pending block not available":                       false,
 		"insufficient funds for gas * price + value":        false,
 	} {

@@ -92,7 +92,7 @@ func TestAnvilRelaySimulationRevertReleasesNonce(t *testing.T) {
 		t.Fatalf("relay rejection = %v err %v, want a submission error wrapping a dataless revert",
 			rejected.Outcome, rejected.Err)
 	}
-	if relay.rejected.Load() != 1 || !m.Available() {
+	if relay.rejected.Load() != 1 || !m.LaneReady() {
 		t.Fatalf("rejections=%d available=%v, want one rejection and a free lane", relay.rejected.Load(), m.Available())
 	}
 	assertAnvilPoolNonceAbsent(t, rpcClient, sgnr.Address(), 0)

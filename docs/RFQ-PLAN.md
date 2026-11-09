@@ -131,7 +131,8 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   existing deadline. A later indexed peer fill retires it at Info rather than turning it into a
   failed order. `order/nonce_retry_exhausted` counts the first exhausted transition; only subsequent
   evidenced backend or local deadline expiry advances `order/expired_after_nonce_retries`, once.
-  Execution-reverted gas estimates enter `estimate_reverted` for backend reconciliation before
+  Execution-reverted gas estimates, and write-relay simulation reverts the txmanager reports as
+  dataless `ExecutionRevertError`s, enter `estimate_reverted` for backend reconciliation before
   severity or retry decisions. Indexed peer completion takes precedence over every estimate error.
   The generated Reactor and Executor bindings decode canonical error payloads: `ExpiredRequest`
   expires the order, while known setup, authorization and input-validation errors

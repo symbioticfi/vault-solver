@@ -34,7 +34,7 @@ func (e *ExecutionRevertError) RevertData() []byte { return bytes.Clone(e.Data) 
 // relaySimulationRevert recognizes MEV Blocker's "Failed in pending block with: Reverted": its
 // pre-admission simulation reverted and the bytes were not admitted. It carries no revert data.
 func relaySimulationRevert(err error) *ExecutionRevertError {
-	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "failed in pending block") {
+	if err == nil || !strings.Contains(strings.ToLower(err.Error()), "failed in pending block with: reverted") {
 		return nil
 	}
 	return &ExecutionRevertError{Cause: err}
