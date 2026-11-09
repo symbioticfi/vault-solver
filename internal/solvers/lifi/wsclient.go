@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -61,11 +63,7 @@ func (f *orderFeed) run(
 		if ready {
 			backoff = initialWSBackoff
 		}
-		var closeErr *websocket.CloseError
-		if ready && errors.As(err, &closeErr) && (closeErr.Code == websocket.CloseNormalClosure ||
-			closeErr.Code == websocket.CloseGoingAway || closeErr.Code == websocket.CloseNoStatusReceived ||
-			closeErr.Code == websocket.CloseAbnormalClosure || closeErr.Code == websocket.CloseServiceRestart ||
-			closeErr.Code == websocket.CloseTryAgainLater) {
+		if ready && normalDisconnect(err) {
 			observability.Log(ctx).Info(
 				"order feed disconnected; reconnecting", "error", err.Error(), "backoff", backoff.String())
 		} else {
@@ -83,6 +81,21 @@ func (f *orderFeed) run(
 			backoff = maxWSBackoff
 		}
 	}
+}
+
+// normalDisconnect reports whether a ready connection ended the way servers routinely end
+// them: a benign close frame, or the bare EOF and TCP reset Cloudflare uses to drop idle sockets.
+func normalDisconnect(err error) bool {
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		switch closeErr.Code {
+		case websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived,
+			websocket.CloseAbnormalClosure, websocket.CloseServiceRestart, websocket.CloseTryAgainLater:
+			return true
+		}
+		return false
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET)
 }
 
 func (f *orderFeed) watchOnce(
