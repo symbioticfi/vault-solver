@@ -1,6 +1,7 @@
 package rfq
 
 import (
+	"math/big"
 	"sync"
 
 	"github.com/go-errors/errors"
@@ -9,28 +10,37 @@ import (
 
 type fillSpend struct {
 	CapacityID liquidlane.CapacityID
+	Amount     *big.Int
 	IncludedAt uint64
 	Deadline   int64 // Original signed chain deadline.
 }
 
 type spendLedger struct {
 	mu         sync.Mutex
-	active     bool
+	spends     map[string]fillSpend
 	watermarks map[liquidlane.CapacityID]uint64
 	completed  map[string]int64
 }
 
 func newSpendLedger() *spendLedger {
-	return &spendLedger{watermarks: make(map[liquidlane.CapacityID]uint64), completed: make(map[string]int64)}
+	return &spendLedger{spends: make(map[string]fillSpend), watermarks: make(map[liquidlane.CapacityID]uint64), completed: make(map[string]int64)}
 }
 
-func (l *spendLedger) setActive(active bool) {
-	if l == nil {
-		return
+func (l *spendLedger) reserve(id string, spend fillSpend) error {
+	if id == "" || spend.CapacityID == "" || spend.Amount == nil || spend.Amount.Sign() <= 0 || spend.Amount.BitLen() > 256 || spend.Deadline <= 0 {
+		return errors.New("RFQ fill has no valid spend")
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.active = active
+	spend.Amount = new(big.Int).Set(spend.Amount)
+	l.spends[id] = spend
+	return nil
+}
+
+func (l *spendLedger) release(id string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.spends, id)
 }
 
 func (l *spendLedger) finalized(id string) bool {
@@ -47,12 +57,14 @@ func (l *spendLedger) include(id string, spend fillSpend) error {
 	if l == nil {
 		return nil
 	}
-	if id == "" || spend.CapacityID == "" || spend.IncludedAt == 0 || spend.Deadline <= 0 {
-		return errors.New("RFQ fill has no valid spend or inclusion block")
+	if spend.IncludedAt == 0 {
+		return errors.New("RFQ fill has no inclusion block")
+	}
+	if err := l.reserve(id, spend); err != nil {
+		return err
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.watermarks[spend.CapacityID] = max(l.watermarks[spend.CapacityID], spend.IncludedAt)
 	l.completed[id] = spend.Deadline
 	return nil
 }
@@ -65,26 +77,50 @@ func (l *spendLedger) expire(chainTime int64) {
 	defer l.mu.Unlock()
 	for id, deadline := range l.completed {
 		if deadline <= chainTime {
+			if spend, found := l.spends[id]; found && spend.IncludedAt != 0 {
+				l.watermarks[spend.CapacityID] = max(l.watermarks[spend.CapacityID], spend.IncludedAt)
+				delete(l.spends, id)
+			}
 			delete(l.completed, id)
 		}
 	}
 }
 
-// AcceptsSnapshots also fences the gap between shared-sender release and the
-// fill loop recording its canonical inclusion. Quotes call it after the lane read.
-func (s *Solver) AcceptsSnapshots(inventory []liquidlane.Inventory) bool {
+// Reservations subtracts pending spends and canonical spends absent from each
+// capacity's oldest snapshot. An unrelated route remains available while a fill runs.
+func (s *Solver) Reservations(inventory []liquidlane.Inventory) liquidlane.CapacityReservations {
 	if s.spends == nil {
-		return true
+		return nil
+	}
+	blocks := make(map[liquidlane.CapacityID]uint64, len(inventory))
+	maximums := make(liquidlane.CapacityReservations)
+	for _, item := range inventory {
+		capacityID := liquidlane.RouteCapacityID(item.Route)
+		block, seen := blocks[capacityID]
+		if !seen || item.BlockNumber < block {
+			blocks[capacityID] = item.BlockNumber
+		}
+		if item.MaxAssets != nil && (maximums[capacityID] == nil || item.MaxAssets.Cmp(maximums[capacityID]) > 0) {
+			maximums[capacityID] = item.MaxAssets
+		}
 	}
 	s.spends.mu.Lock()
 	defer s.spends.mu.Unlock()
-	if s.spends.active {
-		return false
+	reserved := make(liquidlane.CapacityReservations)
+	for id, spend := range s.spends.spends {
+		block, known := blocks[spend.CapacityID]
+		if spend.IncludedAt != 0 && known && block >= spend.IncludedAt {
+			// Keep a watermark after pruning so later older snapshots cannot reuse spent cash.
+			s.spends.watermarks[spend.CapacityID] = max(s.spends.watermarks[spend.CapacityID], spend.IncludedAt)
+			delete(s.spends.spends, id)
+			continue
+		}
+		reserved.Add(spend.CapacityID, spend.Amount)
 	}
-	for _, item := range inventory {
-		if item.BlockNumber < s.spends.watermarks[liquidlane.RouteCapacityID(item.Route)] {
-			return false
+	for capacityID, block := range blocks {
+		if block < s.spends.watermarks[capacityID] {
+			reserved.Add(capacityID, maximums[capacityID])
 		}
 	}
-	return true
+	return reserved
 }

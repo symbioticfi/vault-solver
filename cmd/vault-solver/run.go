@@ -277,7 +277,7 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 	}
 	background.Go(func() {
 		if requiresMerkleTxManager {
-			watchMerkleReadiness(gctx, merkleTxm.Available, health.SetReady)
+			watchMerkleReadiness(gctx, merkleTxm.Ready, health.SetReady)
 			return
 		}
 		defer unsubscribe()
@@ -343,7 +343,7 @@ func watchReadiness(
 	}
 }
 
-func watchMerkleReadiness(ctx context.Context, available func() bool, setReady func(bool)) {
+func watchMerkleReadiness(ctx context.Context, ready func() bool, setReady func(bool)) {
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -351,7 +351,7 @@ func watchMerkleReadiness(ctx context.Context, available func() bool, setReady f
 			setReady(false)
 			return
 		}
-		setReady(available())
+		setReady(ready())
 		select {
 		case <-ticker.C:
 		case <-ctx.Done():

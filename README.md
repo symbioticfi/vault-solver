@@ -694,7 +694,7 @@ does not detect arbitrary secrets outside URLs.
 The observability listener (default `:9090`) serves `/metrics`, `/healthz`, and `/readyz`. No extra
 config is required for the collectors below. `/readyz` fails before startup completes and during
 shutdown. Native pending transactions and nonce collisions do not take quote servers out of rotation.
-Merkle readiness follows SDK availability and clears while signed nonce ownership remains unresolved.
+Merkle readiness follows SDK lifecycle readiness; pending fills keep quote servers in rotation.
 During graceful shutdown readiness drops first, while liveness and metrics remain available until the selected transaction manager finishes its
 bounded drain.
 
@@ -791,7 +791,7 @@ map each scrape instance/execution lane to its solvers without inferring ownersh
 | Scope | Metric family | Labels | What it shows and why it is useful |
 |---|---|---|---|
 | LI.FI | `solver_bot_workflow_events_total{event="order_parse"}` | `solver`, `strategy`, `event`, `outcome` | Rejected feed observations: `invalid`, `unsupported` (including Dutch auctions), or `other_chain`. REST recovery replays count again; this is not a unique-order count. Uses the existing workflow event family and its last-event timestamp. |
-| Framework | `solver_bot_service_ready` | — | `1` exactly when the shared `/readyz` gate reports ready, otherwise `0`. Native pending transactions do not clear it; Merkle processes follow SDK availability. It is not a claim that every solver upstream is healthy; combine it with solver freshness and connectivity. |
+| Framework | `solver_bot_service_ready` | — | `1` exactly when the shared `/readyz` gate reports ready, otherwise `0`. Pending transactions do not clear it; Merkle processes follow SDK lifecycle readiness. It is not a claim that every solver upstream is healthy; combine it with solver freshness and connectivity. |
 | Framework | `solver_bot_solver_info` | `solver` | Constant `1` for each solver configured in this process. Prometheus target labels such as `instance`/`lane` make process membership explicit without adding deployment-specific labels in application code. |
 | Txmanager | `solver_bot_txmanager_fee_limit_reached_total` | `label`, `phase` | Submitted request preparation or replacement decisions stopped by a configured fee ceiling (`initial` or `replacement`); profitability quote reads and transport errors are excluded. |
 | Framework | `solver_bot_external_operation_duration_seconds` | `solver`, `strategy`, `operation`, `outcome` | Count and latency of allowlisted recurring solver operations such as polls and authoritative refreshes. Outcomes are bounded to `success`, `degraded`, `skipped`, or `error`; errors and request-derived values never become labels. |

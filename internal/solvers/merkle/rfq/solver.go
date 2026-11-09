@@ -171,12 +171,14 @@ func (s *Solver) tick(ctx context.Context) (err error) {
 			continue
 		}
 		// Capture the awarded bytes before submission; a timeout may follow a send.
+		if err := s.spends.reserve(intent.OrderID, intent.Spend); err != nil {
+			return err
+		}
 		s.intent = intent
-		s.spends.setActive(true)
 		err = s.sender.Submit(ctx, transaction.ExecutionRequest{To: intent.To, Data: intent.Data})
 		if err != nil && !s.sender.Busy() {
+			s.spends.release(intent.OrderID)
 			s.intent = nil
-			s.spends.setActive(false)
 		}
 		return err
 	}
@@ -188,7 +190,7 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	if err != nil {
 		return nil, err
 	}
-	token, _, err := orderTerms(order, s.workflow.caller)
+	token, required, err := orderTerms(order, s.workflow.caller)
 	if err != nil {
 		return nil, err
 	}
@@ -235,7 +237,7 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 		if !ok {
 			return nil, errors.New("fill deadline elapsed during preparation")
 		}
-		return &fillIntent{OrderID: row.OrderId, To: s.workflow.caller, Data: built.Calldata, Deadline: deadline, Spend: fillSpend{CapacityID: liquidlane.NewCapacityID(s.workflow.chainID.Int64(), built.State.Account, token), Deadline: order.Request.Deadline.Int64()}}, nil
+		return &fillIntent{OrderID: row.OrderId, To: s.workflow.caller, Data: built.Calldata, Deadline: deadline, Spend: fillSpend{CapacityID: liquidlane.NewCapacityID(s.workflow.chainID.Int64(), built.State.Account, token), Amount: required, Deadline: order.Request.Deadline.Int64()}}, nil
 	}
 	return nil, nil
 }
@@ -259,8 +261,9 @@ func (s *Solver) poll(ctx context.Context) (err error) {
 		if err := s.spends.include(s.intent.OrderID, spend); err != nil {
 			return err
 		}
+	} else {
+		s.spends.release(s.intent.OrderID)
 	}
-	s.spends.setActive(false)
 	observability.Log(ctx).Info("RFQ fill transaction finalized", "orderId", s.intent.OrderID, "tx", result.Hash.Hex(), "reverted", result.Reverted)
 	s.intent = nil
 	return nil

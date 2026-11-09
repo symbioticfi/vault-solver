@@ -8,7 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -31,7 +33,7 @@ import (
 )
 
 // Exercise factory route publication, account authentication and quote allocation.
-func TestFactoryQuotesAuthenticateMerkleRoute(t *testing.T) {
+func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.T) {
 	rpcServer := rpc.NewServer()
 	if err := rpcServer.RegisterName("eth", newMerkleQuoteRPC(t)); err != nil {
 		t.Fatal(err)
@@ -60,7 +62,7 @@ func TestFactoryQuotesAuthenticateMerkleRoute(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(text), &node); err != nil {
 		t.Fatal(err)
 	}
-	merkleManager, err := merkletransaction.New(client, signing, big.NewInt(1), merkletransaction.Config{MaxFeeGwei: 100}, logr.Discard())
+	merkleManager, err := merkletransaction.New(pendingQuoteChain{client}, signing, big.NewInt(1), merkletransaction.Config{MaxFeeGwei: 100, ShutdownTimeout: time.Millisecond}, logr.Discard())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,6 +90,17 @@ func TestFactoryQuotesAuthenticateMerkleRoute(t *testing.T) {
 	if err := s.merkle.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); merkleManager.Start(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	sender := merkleManager.Sender("rfq-merkle")
+	if err := sender.Submit(t.Context(), merkletransaction.ExecutionRequest{To: common.HexToAddress("0x10")}); err != nil {
+		t.Fatal(err)
+	}
+	if !sender.Busy() || merkleManager.Available() {
+		t.Fatal("fixture must retain an unresolved signed transaction")
+	}
 	for _, tc := range []struct {
 		block, capacity string
 		wrongAccount    bool
@@ -107,7 +120,34 @@ func TestFactoryQuotesAuthenticateMerkleRoute(t *testing.T) {
 		if err != nil || (decision.response != nil) != tc.quoted {
 			t.Fatalf("block=%s quote=%+v err=%v", tc.block, decision, err)
 		}
+		status := http.StatusNoContent
+		if tc.quoted {
+			status = http.StatusOK
+		}
+		if response := do(t, s.server.handler(), http.MethodPost, "/quote", "test-secret", body); response.Code != status {
+			t.Fatalf("pending quote HTTP status = %d, want %d: %s", response.Code, status, response.Body.String())
+		}
 	}
+}
+
+// Only the submission RPCs are stubbed; route authentication still uses the real chain client.
+type pendingQuoteChain struct{ *chain.Client }
+
+func (pendingQuoteChain) HeaderByNumber(context.Context, *big.Int) (*types.Header, error) {
+	return &types.Header{Number: big.NewInt(7), BaseFee: big.NewInt(1), GasLimit: 30_000_000}, nil
+}
+func (pendingQuoteChain) FeeHistory(context.Context, uint64, *big.Int, []float64) (*ethereum.FeeHistory, error) {
+	return &ethereum.FeeHistory{Reward: [][]*big.Int{{big.NewInt(1)}}}, nil
+}
+func (pendingQuoteChain) EstimateGas(context.Context, ethereum.CallMsg) (uint64, error) {
+	return 21_000, nil
+}
+func (pendingQuoteChain) TransactionSenderBalanceAt(context.Context, common.Address, *big.Int) (*big.Int, error) {
+	return big.NewInt(1e18), nil
+}
+func (pendingQuoteChain) SendTransaction(context.Context, *types.Transaction) error { return nil }
+func (pendingQuoteChain) TransactionReceipt(context.Context, common.Hash) (*types.Receipt, error) {
+	return nil, ethereum.NotFound
 }
 
 type merkleQuoteRPC struct {
@@ -235,28 +275,6 @@ func (s *merkleQuoteRPC) GetLogs(context.Context, map[string]any) ([]types.Log, 
 
 func (*merkleQuoteRPC) GetTransactionCount(context.Context, common.Address, string) (hexutil.Uint64, error) {
 	return 0, nil
-}
-
-func TestQuoteWatermarkAdvancesDuringFinalLaneRead(t *testing.T) {
-	srv := testServer()
-	current := true
-	reads := 0
-	srv.quotes.inventoryCurrent = func([]solverInventory) bool { return current }
-	srv.quotes.laneAvailable = func() bool {
-		reads++
-		if reads == 2 {
-			current = false
-		} // A concurrent fill confirmed and released its fence.
-		return true
-	}
-	body := validQuoteBody()
-	decision, err := srv.quotes.quote(t.Context(), &body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decision.response != nil {
-		t.Fatal("quote escaped after watermark advanced during final lane read")
-	}
 }
 
 func TestRFQTransactionManagerFollowsExecutionMode(t *testing.T) {

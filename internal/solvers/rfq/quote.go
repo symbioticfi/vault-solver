@@ -38,9 +38,8 @@ type quoteService struct {
 	// reservations returns the liquidity held by won, unfinished orders against a resolved
 	// inventory; nil means none.
 	reservations     func(excludedOrderID string, inventory []solverInventory) liquidlane.CapacityReservations
-	inventoryCurrent func([]solverInventory) bool // optional Merkle inclusion-watermark fence
-	acceptsConnector func(common.Address) bool    // optional published recipe connectors; may change after start
-	whitelist        adapterWhitelist             // nil disables adapter filtering
+	acceptsConnector func(common.Address) bool // optional published recipe connectors; may change after start
+	whitelist        adapterWhitelist          // nil disables adapter filtering
 	tokenPolicy      tokenpolicy.Policy
 	// minAmountsIn holds per-input-token minimum request sizes in base units; a token absent from the
 	// map (or a nil map) has no minimum.
@@ -223,11 +222,6 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 	if !qs.canQuote() {
 		observability.Log(ctx).V(1).Info("declining quote: transaction nonce lane no longer available", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil
-	}
-
-	// After the lane read: a fill can confirm and release the fence in between.
-	if qs.inventoryCurrent != nil && !qs.inventoryCurrent(inv) {
-		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
 	}
 
 	response := &quoteResponse{
