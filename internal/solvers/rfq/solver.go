@@ -111,6 +111,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		server: &server{
 			sharedSecret: secret,
 			quotes:       quotes,
+			quoteTimeout: cfg.QuoteTimeout,
 			metrics:      metrics,
 			links:        links,
 		},

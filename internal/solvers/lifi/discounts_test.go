@@ -21,6 +21,7 @@ type fakeDiscountClient struct {
 	listCalls    int
 	resolveCalls int
 	listErr      error
+	resolveErr   error
 }
 
 func (f *fakeDiscountClient) ListDiscounts(context.Context) (*discounts.List, error) {
@@ -30,7 +31,7 @@ func (f *fakeDiscountClient) ListDiscounts(context.Context) (*discounts.List, er
 
 func (f *fakeDiscountClient) Resolve(context.Context, string) (*discounts.Resolved, error) {
 	f.resolveCalls++
-	return f.resolved, nil
+	return f.resolved, f.resolveErr
 }
 
 func TestFillDiscountQuotesUsesFreshSignedTerms(t *testing.T) {

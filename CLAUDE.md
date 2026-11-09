@@ -81,6 +81,8 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
   Each solver also uses `deps.Log.WithName(Name)`. The Sentry sink tags events with
   `solver`, `logger` and `label`, puts the logged error in the title, and groups on (solver, message),
   so `log.Error` lines only for conditions that should page; expected skips go to `V(1)`.
+  Where a context cancel (shutdown, reconnect, client disconnect) leaves nothing half done, log with
+  `observability.ErrorUnlessCanceled` so the cancel drops to `V(1)` while deadlines stay at Error.
   **Log through `observability.Log(ctx)` wherever a context is in hand** — the context stores the
   *base* logger and `Log` returns it stamped with the current span's `trace_id`/`span_id`, memoised
   per span. To narrow the logger for a scope, store it with
