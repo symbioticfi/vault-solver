@@ -431,7 +431,7 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	if kind != estimateNotReverted {
 		// Backend terminal evidence takes precedence over simulation: a sibling may have filled
 		// this order. Setup errors stop; transient operations and undecoded races have a retry budget.
-		observability.Decline(ctx, "fill_estimate_reverted", "execution changed before signing")
+		observability.Decline(ctx, "fill_estimate_reverted", "execution changed before admission")
 		e.store.markEstimateReverted(orderID, kind, revertName, errString(res.Err))
 		observability.Log(ctx).Info("fill estimate reverted; reconciling order", "attempt", attempt, "revert", revertName)
 		e.reconcileTerminalStatus(ctx, orderID)
@@ -611,7 +611,7 @@ func (e *executionService) sendFill(
 		return res, nil
 	}
 	if estimateExecutionReverted(res.Err) {
-		observability.Decline(submitCtx, "fill_estimate_reverted", "execution changed before signing")
+		observability.Decline(submitCtx, "fill_estimate_reverted", "execution changed before admission")
 		return res, nil
 	}
 	err = res.Err // included-but-unconfirmed still carries the wait failure
