@@ -4,9 +4,9 @@
 # Pin the toolchain via GOTOOLCHAIN (matches the Makefile/CI); the base image only needs to be
 # new enough to honour it. CGO is disabled so go-ethereum uses its pure-Go secp256k1 path and the
 # result is a fully static binary.
-FROM golang:1.27.3-alpine3.24@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS build
+FROM golang:1.27.4-alpine3.24@sha256:0a5f7fe796599ff487605987432e7619ae45beeb2fba4c2ce0b907879932aebf AS build
 
-ENV GOTOOLCHAIN=go1.27.3 \
+ENV GOTOOLCHAIN=go1.27.4 \
     CGO_ENABLED=0 \
     GOFLAGS=-trimpath
 
@@ -30,7 +30,7 @@ RUN go build \
 
 # ─────────────── runtime stage ───────────────
 # Distroless static + nonroot: no shell, no package manager, runs as uid 65532.
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99 AS final
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:25ac8f0c3b2334a9eb05452266bd4697864a8c8ef0ef71e5e6480d7f92868329 AS final
 
 COPY --from=build /out/vault-solver /usr/local/bin/vault-solver
 
