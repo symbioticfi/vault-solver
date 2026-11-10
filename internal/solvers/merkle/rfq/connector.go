@@ -218,11 +218,7 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if w.signer == (common.Address{}) {
 		return builtConnector{}, errors.New("connector fill requires a host signer")
 	}
-	identities, err := recipes.DiscoverExecutors(ctx, w.chain, []common.Address{selected.Executor})
-	if err != nil {
-		return builtConnector{}, errors.Errorf("discover connector executor: %w", err)
-	}
-	prepared, err := recipes.DiscoverBatch(ctx, w.chain, []common.Address{selected.Executor}, []common.Address{identities[selected.Executor].Account}, w.caller, recipes.PreparationOptions{ChainID: w.chainID})
+	prepared, err := w.discoverRecipes(ctx, []common.Address{selected.Executor})
 	if err != nil {
 		return builtConnector{}, errors.Errorf("discover connector recipe: %w", err)
 	}
@@ -266,7 +262,11 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if err != nil {
 		return builtConnector{}, errors.Errorf("assemble connector recipe: %w", err)
 	}
-	calls, err := executorCallsArgs.Pack([]executorCall{{Target: snapshot.Executor, Value: new(big.Int), Data: assembled.Calldata}})
+	routed, err := recipes.RouteExecution(ctx, w.chain, snapshot, w.caller, assembled.Calldata)
+	if err != nil {
+		return builtConnector{}, err
+	}
+	calls, err := executorCallsArgs.Pack([]executorCall{{Target: routed.Executor, Value: new(big.Int), Data: routed.Data}})
 	if err != nil {
 		return builtConnector{}, errors.Errorf("encode recipe call: %w", err)
 	}
@@ -287,7 +287,7 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 		_, err := w.chain.CallContract(ctx, ethereum.CallMsg{From: w.signer, To: &w.caller, Data: bytes.Clone(calldata), Gas: request.GasLimit}, request.BlockNumber)
 		return err
 	}
-	if err := recipes.ValidatePreparedBatchWithSimulation(ctx, w.chain, prepared, []recipes.ExecutorCall{{Executor: snapshot.Executor, Data: assembled.Calldata}}, [][]common.Hash{assembled.Leaves}, w.caller, simulate, w.maxGas); err != nil {
+	if err := recipes.ValidatePreparedBatchWithSimulation(ctx, w.chain, prepared, []recipes.ExecutorCall{{Executor: snapshot.Executor, Data: assembled.Calldata}}, [][]common.Hash{assembled.Leaves}, snapshot.Caller, simulate, w.maxGas); err != nil {
 		return builtConnector{}, errors.Errorf("validate outer RFQ recipe fill: %w", err)
 	}
 	return builtConnector{Calldata: calldata, ValidUntil: terms.ValidUntil, State: state}, nil

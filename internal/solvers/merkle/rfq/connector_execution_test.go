@@ -194,20 +194,20 @@ func (s connectorExecutionPermissions) PermissionTree(_ context.Context, chainID
 type connectorExecutionReader struct {
 	*connectorReadFake
 
-	recipeExecutor, recipeAccount, recipeCaller, signer common.Address
-	recipeHash, root, approvalHash, swapHash            common.Hash
-	recipe                                              recipes.Recipe
-	header                                              *types.Header
-	allowed                                             bool
-	outerCalls                                          int
-	outerGas                                            uint64
-	identityReads                                       int
-	outerData                                           []byte
-	outerErr                                            error
-	reorgDuringFill                                     bool
-	reorgBeforeDiscovery                                bool
-	headerDelay                                         time.Duration
-	headerStarted                                       time.Time
+	recipeExecutor, recipeAccount, recipeCaller, signer, rfqCaller common.Address
+	recipeHash, root, approvalHash, swapHash                       common.Hash
+	recipe                                                         recipes.Recipe
+	header                                                         *types.Header
+	allowed                                                        bool
+	outerCalls                                                     int
+	outerGas                                                       uint64
+	identityReads                                                  int
+	outerData                                                      []byte
+	outerErr                                                       error
+	reorgDuringFill                                                bool
+	reorgBeforeDiscovery                                           bool
+	headerDelay                                                    time.Duration
+	headerStarted                                                  time.Time
 }
 
 func (r *connectorExecutionReader) HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error) {
@@ -246,7 +246,7 @@ func (r *connectorExecutionReader) CallContract(ctx context.Context, msg ethereu
 	if msg.To == nil || len(msg.Data) < 4 {
 		return nil, errors.New("invalid contract call")
 	}
-	if *msg.To == r.recipeCaller && bytes.Equal(msg.Data[:4], executorBinding.GetABI().Methods["fill"].ID) {
+	if *msg.To == r.rfqCaller && bytes.Equal(msg.Data[:4], executorBinding.GetABI().Methods["fill"].ID) {
 		if msg.From != r.signer || block == nil || block.Uint64() != 7 || msg.Gas == 0 {
 			return nil, errors.New("outer fill must simulate from the host signer at the pinned block and gas budget")
 		}
@@ -349,7 +349,7 @@ func connectorExecutionFixtureAt(t *testing.T, resolved *discounts.Resolved, rec
 
 	reader := &connectorExecutionReader{
 		connectorReadFake: &connectorReadFake{remaining: big.NewInt(900), account: account, executor: recipeExecutor},
-		recipeExecutor:    recipeExecutor, recipeAccount: account, recipeCaller: rfqExecutor, signer: signer,
+		recipeExecutor:    recipeExecutor, recipeAccount: account, recipeCaller: rfqExecutor, signer: signer, rfqCaller: rfqExecutor,
 		recipeHash: hash, root: tree.Root, recipe: recipe, approvalHash: tree.Leaves[0].Hash, swapHash: leaf.Hash,
 		header: &types.Header{Number: big.NewInt(7), Time: 7, GasLimit: 30_000_000}, allowed: true,
 	}
