@@ -488,9 +488,9 @@ type Strategy interface {
 Inventory refreshes call the configured lens's `getMaxAssetsBatch(adapter, tokensToRedeem)` once per
 adapter. The lens owns capacity math, acquired balances and post-sweep token limits, with independent
 per-token success results. All inventory reads remain in one latest-state Multicall; no Go capacity
-formula, dependent RPC batches or cross-refresh cache is needed. Deploy the batch-capable lens and
-update the configured address before rolling out this solver version; the incident lens is a
-standalone deployment. Existing lens proxies can instead upgrade their implementation. See
+formula, dependent RPC batches or cross-refresh cache is needed. Upgrade the configured shared lens
+proxy implementation with the batch API before rolling out this solver version; its address can
+stay unchanged. A replacement deployment instead requires updating the configured address. See
 [shared read semantics](LIQUIDLANE-CONVENTIONS.md#reads-and-freshness).
 
 The order worker owns pending fills and their capacity reservations. It reserves each direct route's
@@ -959,7 +959,7 @@ still requires the redeploy in phase 0.
 
 - [x] **Batch multi-token inventory through the liquidity lens.** Calculate shared adapter capacity
   once in Solidity and return per-token results in one latest-state Multicall. The configured lens
-  requires the batch getter before solver rollout; deploy the new lens and update its configured address.
+  requires the batch getter before solver rollout; upgrade its implementation while retaining the proxy address.
   Contract fork tests cover both incident adapters.
 - [x] **Recover uncertain transaction outcomes on a healthy feed.** Re-read on-chain settlement and
   retain eligible orders in the existing timed retry mechanism through transient RPC/planning failures,
