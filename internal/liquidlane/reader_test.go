@@ -8,6 +8,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
@@ -22,6 +23,14 @@ type scriptedLiquidLaneBackend struct {
 }
 
 func (b *scriptedLiquidLaneBackend) ChainID() *big.Int { return big.NewInt(11155111) }
+
+func (b *scriptedLiquidLaneBackend) HeaderByNumber(context.Context, *big.Int) (*types.Header, error) {
+	return &types.Header{Number: big.NewInt(1)}, nil
+}
+
+func (b *scriptedLiquidLaneBackend) MulticallAtHash(ctx context.Context, calls []chain.Call, _ common.Hash) ([]chain.CallResult, error) {
+	return b.Multicall(ctx, calls)
+}
 
 func (b *scriptedLiquidLaneBackend) Multicall(_ context.Context, _ []chain.Call) ([]chain.CallResult, error) {
 	result := b.latest[0]

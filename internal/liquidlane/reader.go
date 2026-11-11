@@ -5,6 +5,7 @@ import (
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 
@@ -50,7 +51,9 @@ type gasAdapterState struct {
 
 type liquidLaneBackend interface {
 	ChainID() *big.Int
+	HeaderByNumber(ctx context.Context, number *big.Int) (*types.Header, error)
 	Multicall(ctx context.Context, calls []chain.Call) ([]chain.CallResult, error)
+	MulticallAtHash(ctx context.Context, calls []chain.Call, blockHash common.Hash) ([]chain.CallResult, error)
 }
 
 type decimalsReader interface {
@@ -326,7 +329,7 @@ func (r *Reader) readInventory(ctx context.Context, routes []Route, keepZero boo
 			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackGetAmountOut(route.TokenIn, probe)},
 		)
 	}
-	res, err := r.chain.Multicall(ctx, calls)
+	res, err := r.inventoryCalls(ctx, routes, calls)
 	if err != nil {
 		return nil, err
 	}

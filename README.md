@@ -165,6 +165,9 @@ from current adapter liquidity with optional gas accounting and receives matched
 LI.FI WebSocket feed. On startup and reconnect it catches up active matches through `GET /orders` before
 publishing quotes; while disconnected it suspends renewal and retries withdrawal of known curves
 until the order server acknowledges removal.
+With a configured liquidity lens, multi-token inventory reads calculate shared adapter capacity once
+per refresh. Their dependent batches use the same fresh head hash, so the read RPC must support
+EIP-1898 block-hash `eth_call`; no new lens deployment or configuration is needed.
 After REST recovery completes, WebSocket closes 1000/1001/1005/1006/1012/1013 are logged at Info.
 Earlier disconnects and other errors remain Error; reconnect backoff resets only after recovery. Before each fill it
 rechecks the canonical order status, adapter state, configured gas cost, and strategy decision, then atomically claims

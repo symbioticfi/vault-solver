@@ -485,6 +485,12 @@ type Strategy interface {
   in the shared LiquidLane fill core; this strategy supplies the policy values and adapts the result to
   `FillPlan{Routes}`.
 
+Inventory refreshes reuse the configured lens's adapter-wide capacity once per adapter, then apply
+each token's acquired balances and post-sweep account limit. Metadata and capacity batches share the
+freshly selected head hash; nothing is cached across refreshes. This removes repeated delegator
+simulation from multi-token quote reads while preserving the lens's output formula and failure
+isolation. See [shared read semantics](LIQUIDLANE-CONVENTIONS.md#reads-and-freshness).
+
 The order worker owns pending fills and their capacity reservations. It reserves each direct route's
 target output and each private route's upward-buffered output against its shared `CapacityID` while an
 accepted fill tx is in flight, passes the aggregate reservation snapshot to every later fill decision,
@@ -949,6 +955,9 @@ still requires the redeploy in phase 0.
 
 ## 10. Open items
 
+- [x] **Reuse shared lens capacity during multi-token inventory reads.** Calculate the adapter-wide
+  deallocation estimate once, pin dependent reads to one fresh head hash, and retain per-token limits,
+  acquired balances and post-sweep account state. Historical incident parity covers both LI.FI adapters.
 - [x] **Recover uncertain transaction outcomes on a healthy feed.** Re-read on-chain settlement and
   retain eligible orders in the existing timed retry mechanism through transient RPC/planning failures,
   with replay coalescing, preserved backoff and an admission-time deadline; no feed reconnect required.
