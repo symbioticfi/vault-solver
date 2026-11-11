@@ -146,8 +146,8 @@ func TestStoreAwardPairFlagDeduplicatesConcurrentObservers(t *testing.T) {
 	}
 	workers.Wait()
 	after := st.order("o1")
-	if admitted.Load() != 1 || before.Status != after.Status || before.UpdatedAt != after.UpdatedAt ||
-		before.CreatedAt != after.CreatedAt || before.NonceRetries != after.NonceRetries {
+	if admitted.Load() != 1 || before.Status != after.Status || !before.UpdatedAt.Equal(after.UpdatedAt) ||
+		!before.CreatedAt.Equal(after.CreatedAt) || before.NonceRetries != after.NonceRetries {
 		t.Fatalf("admitted=%d before=%+v after=%+v", admitted.Load(), before, after)
 	}
 }

@@ -73,6 +73,16 @@ not independent liquidity.
 LiquidLane reads always target RPC `latest` through `chain.Multicall` or `chain.MulticallWithTime`.
 Fixed block numbers/hashes are not used for these decision reads.
 
+With a configured liquidity lens, inventory groups token reads by adapter and calls
+`getMaxAssetsBatch(adapter, tokensToRedeem)` once per adapter inside the same Multicall as pause,
+rate and oracle reads. The lens performs one shared sweep/cascade calculation, applies token limits
+against post-sweep account assets, and returns success/capacity in input order for each token. A
+failed token remains unavailable without suppressing healthy tokens; a failed or malformed adapter
+batch suppresses that adapter. Capacity math stays in Solidity and nothing is cached across calls.
+Deploy a batch-capable lens and update the configured address before deploying this solver version,
+or upgrade the implementation if the configured lens is a proxy. The existing single-token overload
+remains in use for amount-specific fill quotes.
+
 Gas oracle reads batch `latestRoundData`, `decimals`, and Multicall3
 `getCurrentBlockTimestamp()` into one `latest` eth_call. Freshness is checked against that returned
 block timestamp, not an earlier header or the process clock. This requires no future-skew allowance

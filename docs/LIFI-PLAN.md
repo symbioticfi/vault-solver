@@ -485,6 +485,14 @@ type Strategy interface {
   in the shared LiquidLane fill core; this strategy supplies the policy values and adapts the result to
   `FillPlan{Routes}`.
 
+Inventory refreshes call the configured lens's `getMaxAssetsBatch(adapter, tokensToRedeem)` once per
+adapter. The lens owns capacity math, acquired balances and post-sweep token limits, with independent
+per-token success results. All inventory reads remain in one latest-state Multicall; no Go capacity
+formula, dependent RPC batches or cross-refresh cache is needed. Mainnet configuration must use the
+shared batch-capable lens proxy deployed on November 11, 2026 at
+`0xf3f6397f15e0c3f3e645212f24f25cc2b91721f6` before rolling out this solver version. See
+[shared read semantics](LIQUIDLANE-CONVENTIONS.md#reads-and-freshness).
+
 The order worker owns pending fills and their capacity reservations. It reserves each direct route's
 target output and each private route's upward-buffered output against its shared `CapacityID` while an
 accepted fill tx is in flight, passes the aggregate reservation snapshot to every later fill decision,
@@ -949,6 +957,10 @@ still requires the redeploy in phase 0.
 
 ## 10. Open items
 
+- [x] **Batch multi-token inventory through the liquidity lens.** Calculate shared adapter capacity
+  once in Solidity and return per-token results in one latest-state Multicall. The configured lens
+  requires the batch getter before solver rollout; point mainnet profiles to the new shared proxy above.
+  Contract fork tests cover both incident adapters.
 - [x] **Recover uncertain transaction outcomes on a healthy feed.** Re-read on-chain settlement and
   retain eligible orders in the existing timed retry mechanism through transient RPC/planning failures,
   with replay coalescing, preserved backoff and an admission-time deadline; no feed reconnect required.
