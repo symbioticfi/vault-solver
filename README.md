@@ -225,6 +225,9 @@ from current adapter liquidity with optional gas accounting and receives matched
 LI.FI WebSocket feed. On startup and reconnect it catches up active matches through `GET /orders` before
 publishing quotes; while disconnected it suspends renewal and retries withdrawal of known curves
 until the order server acknowledges removal.
+LiquidLane inventory readers use the configured lens's `getMaxAssetsBatch` once per adapter in a
+single latest-state multicall. Deploy a lens exposing that API and update the configured lens address
+before rolling out this solver version. An existing lens proxy can instead upgrade its implementation.
 `orderServer.wsReadTimeout` (default `60s`) bounds feed inactivity; data and ping/pong traffic
 renew the deadline. Silent connections cancel their work and reconnect, with readiness restored after
 the new connection completes recovery. `orderServer.wsWriteTimeout` (default `10s`) bounds pong writes.

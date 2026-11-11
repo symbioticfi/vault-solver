@@ -52,14 +52,12 @@ REDSTONE_GUIDE_URL       ?= https://docs.redstone.finance/docs/stage2-capital-ef
 # CORE_MIRROR_ABIS (the 3F ThreeFAdapter, LiquidLane adapter, adapter factory, universal delegator,
 # and vault/ERC4626 interfaces) come from the core-mirror build, since they aren't in rfq/out.
 ABIS := IRequest IVaultController IWhitelist Executor Reactor LiquidLaneLifiExecutor LiquidLaneUniswapXExecutor
-CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IAdapterFactory IVaultV2 IERC4626
+CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IAdapterFactory IVaultV2 IERC4626 FrontendLiquidityLens
 ADAPTERS_DEPENDENCY_ABIS := IThreeFPositionManager IThreeFUnderlyingAsset
 ADAPTERS_ABIS := IRecipeCapability IThreeFPolicy LiquidLaneConnector $(ADAPTERS_DEPENDENCY_ABIS)
 # api/abi/UniversalDelegator.json is hand-vendored to a minimal {limitOf} ABI (the full contract has
 # an overloaded deallocateAll that abigen rejects, and the solver only reads limitOf) — like Multicall3.
-# api/abi/FrontendLiquidityLens.json is likewise hand-vendored to the two overloaded getMaxAssets views
-# (getMaxAssets(adapter) for 3F, getMaxAssets(adapter,tokenToRedeem) for LiquidLane) — the core lens that
-# replaces each adapter's own getMaxAssets with a cross-adapter deallocation-cascade estimate.
+# FrontendLiquidityLens is sourced from the same core build, including its LiquidLane batch getter.
 
 # Contract:relpath mapping for Go bindings. Each contract gets its own package (the leaf dir) so
 # shared ABI structs (e.g. the `Offer` tuple in both the adapter and IRequest) don't collide.

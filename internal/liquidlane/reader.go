@@ -326,7 +326,7 @@ func (r *Reader) readInventory(ctx context.Context, routes []Route, keepZero boo
 			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackGetAmountOut(route.TokenIn, probe)},
 		)
 	}
-	res, err := r.chain.Multicall(ctx, calls)
+	res, err := r.inventoryCalls(ctx, routes, calls)
 	if err != nil {
 		return nil, err
 	}
@@ -362,6 +362,70 @@ func (r *Reader) readInventory(ctx context.Context, routes []Route, keepZero boo
 		inventory.AdapterMinDiscount = CloneBig(minDiscount)
 		inventory.Price = price
 		out = append(out, inventory)
+	}
+	return out, nil
+}
+
+// inventoryCalls keeps capacity calculation in the lens and reads all inventory in one latest
+// Multicall. Each adapter's token batch performs the shared sweep/cascade only once.
+func (r *Reader) inventoryCalls(ctx context.Context, routes []Route, calls []chain.Call) ([]chain.CallResult, error) {
+	if r.lens == (common.Address{}) {
+		return r.chain.Multicall(ctx, calls)
+	}
+	type lensBatch struct {
+		adapter common.Address
+		tokens  []common.Address
+		slots   []int
+	}
+	var batches []lensBatch
+	byAdapter := make(map[common.Address]int, len(routes))
+	for i, route := range routes {
+		index, ok := byAdapter[route.Adapter]
+		if !ok {
+			index = len(batches)
+			byAdapter[route.Adapter] = index
+			batches = append(batches, lensBatch{adapter: route.Adapter})
+		}
+		batches[index].tokens = append(batches[index].tokens, route.TokenIn)
+		batches[index].slots = append(batches[index].slots, i*inventoryReadsPerRoute+1)
+	}
+	batchCalls := make([]chain.Call, 0, len(calls)+len(batches)-len(routes))
+	for _, batch := range batches {
+		batchCalls = append(batchCalls, chain.Call{
+			Target: r.lens, AllowFailure: true, Data: lensB.PackGetMaxAssetsBatch(batch.adapter, batch.tokens),
+		})
+	}
+	slots := make([]int, 0, len(calls)-len(routes))
+	for i, call := range calls {
+		if i%inventoryReadsPerRoute != 1 {
+			batchCalls = append(batchCalls, call)
+			slots = append(slots, i)
+		}
+	}
+	results, err := r.chain.Multicall(ctx, batchCalls)
+	if err != nil {
+		return nil, err
+	}
+	if len(results) != len(batchCalls) {
+		return nil, errors.Errorf("liquidlane: inventory lens multicall: got %d results, want %d", len(results), len(batchCalls))
+	}
+	out := make([]chain.CallResult, len(calls))
+	for i, slot := range slots {
+		out[slot] = results[len(batches)+i]
+	}
+	for i, batch := range batches {
+		if !results[i].Success {
+			continue
+		}
+		capacities, unpackErr := lensB.UnpackGetMaxAssetsBatch(results[i].ReturnData)
+		if unpackErr != nil || len(capacities) != len(batch.tokens) {
+			continue
+		}
+		for j, capacity := range capacities {
+			if capacity.Success && capacity.MaxAssets != nil {
+				out[batch.slots[j]] = chain.CallResult{Success: true, ReturnData: capacity.MaxAssets.FillBytes(make([]byte, 32))}
+			}
+		}
 	}
 	return out, nil
 }
