@@ -234,18 +234,20 @@ func TestTransportBoundsAndRedaction(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		handler http.HandlerFunc
+		want    string
 	}{
 		{"redirect", func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
-		}},
+		}, "HTTP status 307"},
 		{"upstream error", func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte("secret-one"))
-		}},
+		}, "HTTP status 401"},
 		{"large body", func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(strings.Repeat("x", int(maxResponseBytes)+1)))
-		}},
-		{"invalid json", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"secret-one":`)) }},
+		}, "response read failed or exceeded bound"},
+		{"invalid json", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"secret-one":`)) }, "invalid or ambiguous JSON response"},
+		{"connection closed", func(http.ResponseWriter, *http.Request) { panic(http.ErrAbortHandler) }, "HTTP transport failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c := newTestClient(t, tc.handler)
@@ -253,10 +255,37 @@ func TestTransportBoundsAndRedaction(t *testing.T) {
 			if err == nil || strings.Contains(err.Error(), "secret-one") || strings.Contains(err.Error(), "http://") {
 				t.Fatalf("unsafe error %v", err)
 			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("missing diagnostic %q: %v", tc.want, err)
+			}
 		})
 	}
 	if redirected {
 		t.Fatal("credential redirect followed")
+	}
+}
+
+func TestMissingAPIKeyIdentifiesEnvironmentVariable(t *testing.T) {
+	for name, call := range map[string]func(*apiClient) error{
+		"identity": func(c *apiClient) error { return c.Identity(t.Context(), testAccount) },
+		"auctions": func(c *apiClient) error { _, err := c.Auctions(t.Context()); return err },
+	} {
+		t.Run(name, func(t *testing.T) {
+			c := newTestClient(t, func(http.ResponseWriter, *http.Request) { t.Error("request sent without API key") })
+			for _, key := range []string{"", "secret-one\r\n"} {
+				t.Setenv("TEST_3F_KEY", key)
+				err := call(c)
+				if err == nil || !strings.Contains(err.Error(), "TEST_3F_KEY") || !strings.Contains(err.Error(), "missing or invalid") {
+					t.Fatalf("missing credential diagnostic: %v", err)
+				}
+				if strings.Contains(err.Error(), "secret-one") || strings.Contains(err.Error(), "http://") {
+					t.Fatalf("unsafe credential error: %v", err)
+				}
+				if definiteRejection(err) {
+					t.Fatal("missing credential treated as an upstream rejection")
+				}
+			}
+		})
 	}
 }
 

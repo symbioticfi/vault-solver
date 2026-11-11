@@ -75,7 +75,7 @@ func (c *apiClient) Identity(ctx context.Context, account common.Address) error 
 	identity, response, err := c.c.FacilitatorAPI.AdminControllerGetFacilitatorOfferAddressV1(ctx).XApiKey("").Execute()
 	closeResponse(response)
 	if err != nil {
-		return apiError(ctx, "read identity", response)
+		return apiError(ctx, "read identity", response, err)
 	}
 	if identity == nil || !matches(identity.Facilitator, c.broker) || !matches(identity.OfferAddress, account) || account == (common.Address{}) {
 		return errors.New("3f broker or default maker mismatch")
@@ -83,7 +83,7 @@ func (c *apiClient) Identity(ctx context.Context, account common.Address) error 
 	makers, response, err := c.c.FacilitatorAPI.AdminControllerListMakersV1(ctx).XApiKey("").Execute()
 	closeResponse(response)
 	if err != nil {
-		return apiError(ctx, "read enrolled makers", response)
+		return apiError(ctx, "read enrolled makers", response, err)
 	}
 	var found bool
 	for _, maker := range makers {
@@ -107,7 +107,7 @@ func (c *apiClient) Offers(ctx context.Context) ([]threef.OfferDto, error) {
 	rows, response, err := c.c.OfferAPI.OfferControllerGetV1(ctx).Maker(lower(c.broker)).Execute()
 	closeResponse(response)
 	if err != nil {
-		return nil, apiError(ctx, "list offers", response)
+		return nil, apiError(ctx, "list offers", response, err)
 	}
 	if rows == nil || len(rows) > 4096 {
 		return nil, errors.New("3f invalid or oversized offers response")
@@ -124,7 +124,7 @@ func (c *apiClient) Auctions(ctx context.Context) ([]threef.AuctionDto, error) {
 	rows, response, err := c.c.AuctionAPI.AuctionControllerListV1(ctx).Scope("all").Execute()
 	defer closeResponse(response)
 	if err != nil {
-		return nil, apiError(ctx, "list auctions", response)
+		return nil, apiError(ctx, "list auctions", response, err)
 	}
 	// The generated response keeps a fresh copy of its body. Preserve exact rate numbers from it.
 	var raw []map[string]json.RawMessage
@@ -179,7 +179,7 @@ func (c *apiClient) Create(ctx context.Context, dto threef.CreateOfferDto) (*thr
 	result, response, err := c.c.OfferAPI.OfferControllerCreateV1(ctx).CreateOfferDto(dto).Execute()
 	closeResponse(response)
 	if err != nil {
-		return nil, apiError(ctx, "create offer", response)
+		return nil, apiError(ctx, "create offer", response, err)
 	}
 	if result == nil || validateID(result.Id) != nil {
 		return nil, errors.New("3f invalid created offer ID")
@@ -195,7 +195,7 @@ func (c *apiClient) Cancel(ctx context.Context, id uint64) (*threef.CancelOfferR
 	row, response, err := c.c.OfferAPI.OfferControllerGetByIdV1(ctx, float32(id)).Maker(lower(c.broker)).Execute()
 	closeResponse(response)
 	if err != nil {
-		return nil, apiError(ctx, "read offer before cancellation", response)
+		return nil, apiError(ctx, "read offer before cancellation", response, err)
 	}
 	if row == nil || validateOffer(*row) != nil || row.Id != float32(id) || row.Status != "SUBMITTED" || row.ExecutionMode != "PUSH" {
 		return nil, errors.New("3f only unaccepted PUSH offers can be cancelled")
@@ -204,7 +204,7 @@ func (c *apiClient) Cancel(ctx context.Context, id uint64) (*threef.CancelOfferR
 	result, response, err := c.c.OfferAPI.OfferControllerCancelV1(ctx).CancelOfferDto(dto).Execute()
 	closeResponse(response)
 	if err != nil {
-		return nil, apiError(ctx, "cancel offer", response)
+		return nil, apiError(ctx, "cancel offer", response, err)
 	}
 	if result == nil || result.Id != float32(id) || result.Status != "CANCELLED" {
 		return nil, errors.New("3f invalid cancelled offer response")
@@ -264,6 +264,12 @@ func matches(value string, expected common.Address) bool {
 }
 func lower(value common.Address) string { return strings.ToLower(value.Hex()) }
 
+// transportError contains only diagnostics safe to include in solver logs.
+// Raw HTTP client errors can contain request URLs or credentials.
+type transportError string
+
+func (e transportError) Error() string { return string(e) }
+
 type boundedTransport struct{ keyEnv string }
 
 func (t boundedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -271,7 +277,7 @@ func (t boundedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if t.keyEnv != "" {
 		key := os.Getenv(t.keyEnv)
 		if key == "" || strings.ContainsAny(key, "\r\n") {
-			return nil, errors.New("3f API key is missing or invalid")
+			return nil, transportError("API key environment variable " + t.keyEnv + " is missing or invalid")
 		}
 		// Generated methods may insert a noncanonical lowercase empty header.
 		for name := range clone.Header {
@@ -283,16 +289,16 @@ func (t boundedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	response, err := http.DefaultTransport.RoundTrip(clone)
 	if err != nil {
-		return nil, errors.New("3f HTTP transport failed")
+		return nil, transportError("HTTP transport failed")
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
 	if err != nil || int64(len(body)) > maxResponseBytes {
-		return nil, errors.New("3f response read failed or exceeded bound")
+		return nil, transportError("response read failed or exceeded bound")
 	}
 	if response.StatusCode >= 200 && response.StatusCode < 300 {
 		if err = checkJSON(body); err != nil {
-			return nil, err
+			return nil, transportError(err.Error())
 		}
 	}
 	response.Body = io.NopCloser(bytes.NewReader(body))
@@ -308,11 +314,15 @@ func (e *apiStatusError) Error() string {
 	return "3f " + e.operation + ": HTTP status " + strconv.Itoa(e.status)
 }
 
-func apiError(ctx context.Context, operation string, response *http.Response) error {
+func apiError(ctx context.Context, operation string, response *http.Response, cause error) error {
 	if ctx.Err() != nil {
 		return errors.Errorf("3f %s: %w", operation, ctx.Err())
 	}
 	if response == nil {
+		var diagnostic transportError
+		if errors.As(cause, &diagnostic) {
+			return errors.Errorf("3f %s: %w", operation, diagnostic)
+		}
 		return errors.Errorf("3f %s failed", operation)
 	}
 	return &apiStatusError{status: response.StatusCode, operation: operation}
