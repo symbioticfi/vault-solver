@@ -258,28 +258,12 @@ func (c *Client) MulticallWithTime(ctx context.Context, calls []Call) ([]CallRes
 
 // Multicall batches reads through Multicall3.aggregate3 at the latest block.
 func (c *Client) Multicall(ctx context.Context, calls []Call) ([]CallResult, error) {
-	return c.multicallAt(ctx, calls, nil)
-}
-
-// MulticallAtHash pins dependent batches to one state, including across RPC fallbacks or a reorg.
-func (c *Client) MulticallAtHash(ctx context.Context, calls []Call, blockHash common.Hash) ([]CallResult, error) {
-	return c.multicallAt(ctx, calls, &blockHash)
-}
-
-func (c *Client) multicallAt(ctx context.Context, calls []Call, blockHash *common.Hash) ([]CallResult, error) {
 	in := make([]multicall3.Multicall3Call3, len(calls))
 	for i, call := range calls {
 		in[i] = multicall3.Multicall3Call3{Target: call.Target, AllowFailure: call.AllowFailure, CallData: call.Data}
 	}
 	data := multicallB.PackAggregate3(in)
-	msg := ethereum.CallMsg{To: &c.multicall, Data: data}
-	var ret []byte
-	var err error
-	if blockHash == nil {
-		ret, err = c.CallContract(ctx, msg, nil)
-	} else {
-		ret, err = c.CallContractAtHash(ctx, msg, *blockHash)
-	}
+	ret, err := c.CallContract(ctx, ethereum.CallMsg{To: &c.multicall, Data: data}, nil)
 	if err != nil {
 		return nil, errors.Errorf("chain: multicall aggregate3: %w", err)
 	}

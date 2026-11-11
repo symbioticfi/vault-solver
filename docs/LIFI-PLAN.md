@@ -485,11 +485,13 @@ type Strategy interface {
   in the shared LiquidLane fill core; this strategy supplies the policy values and adapts the result to
   `FillPlan{Routes}`.
 
-Inventory refreshes reuse the configured lens's adapter-wide capacity once per adapter, then apply
-each token's acquired balances and post-sweep account limit. Metadata and capacity batches share the
-freshly selected head hash; nothing is cached across refreshes. This removes repeated delegator
-simulation from multi-token quote reads while preserving the lens's output formula and failure
-isolation. See [shared read semantics](LIQUIDLANE-CONVENTIONS.md#reads-and-freshness).
+Inventory refreshes call the configured lens's `getMaxAssetsBatch(adapter, tokensToRedeem)` once per
+adapter. The lens owns capacity math, acquired balances and post-sweep token limits, with independent
+per-token success results. All inventory reads remain in one latest-state Multicall; no Go capacity
+formula, dependent RPC batches or cross-refresh cache is needed. Deploy the batch-capable lens and
+update the configured address before rolling out this solver version; the incident lens is a
+standalone deployment. Existing lens proxies can instead upgrade their implementation. See
+[shared read semantics](LIQUIDLANE-CONVENTIONS.md#reads-and-freshness).
 
 The order worker owns pending fills and their capacity reservations. It reserves each direct route's
 target output and each private route's upward-buffered output against its shared `CapacityID` while an
@@ -955,9 +957,10 @@ still requires the redeploy in phase 0.
 
 ## 10. Open items
 
-- [x] **Reuse shared lens capacity during multi-token inventory reads.** Calculate the adapter-wide
-  deallocation estimate once, pin dependent reads to one fresh head hash, and retain per-token limits,
-  acquired balances and post-sweep account state. Historical incident parity covers both LI.FI adapters.
+- [x] **Batch multi-token inventory through the liquidity lens.** Calculate shared adapter capacity
+  once in Solidity and return per-token results in one latest-state Multicall. The configured lens
+  requires the batch getter before solver rollout; deploy the new lens and update its configured address.
+  Contract fork tests cover both incident adapters.
 - [x] **Recover uncertain transaction outcomes on a healthy feed.** Re-read on-chain settlement and
   retain eligible orders in the existing timed retry mechanism through transient RPC/planning failures,
   with replay coalescing, preserved backoff and an admission-time deadline; no feed reconnect required.

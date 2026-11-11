@@ -70,27 +70,18 @@ not independent liquidity.
 
 ## Reads and freshness
 
-LiquidLane reads start from RPC `latest` through `chain.Multicall`, `chain.MulticallWithTime`, or a
-fresh latest header. When inventory contains multiple tokens for an adapter and a liquidity lens is
-configured, its two dependent batches use that header's hash through `chain.MulticallAtHash`. The
-hash is local to one read; subsequent refreshes select a new head.
+LiquidLane reads always target RPC `latest` through `chain.Multicall` or `chain.MulticallWithTime`.
+Fixed block numbers/hashes are not used for these decision reads.
 
-The lens's token overload repeats `sweepPending()` and cross-adapter capacity discovery for every
-token. Instead, the shared inventory reader resolves owner, market maker and token-account addresses
-at the selected head, then reads acquire balances, one `getMaxAssets(adapter)` per adapter, and the
-token-specific limit/account state in one final Multicall. Account `totalAssets()` is read **after**
-the lens's simulated sweep, so realized account cash has already returned to the vault. The token cap
-is `acquired + min(sharedCapacity, saturatingSub(tokenLimit, accountTotalAssets))`, matching the lens.
-Owner and market-maker acquire balances are counted once when their addresses match. Zero shared
-capacity returns acquired balances without requiring readable token-limit/account state. Malformed,
-reverted or overflowing capacities exclude affected routes; a transport error aborts the read.
-
-This reuses capacity only inside one inventory snapshot, with no cache across refreshes and no new
-deployment or configuration. The adapter fallback and amount-specific fill reads retain their existing
-calls. Splitting the original batch or raising the client timeout would retain the repeated execution;
-bypassing the lens would change the deallocation estimate. The read-only integration regression
-`TestInventoryCapacityIncidentParity` compares all inventory outputs for both incident adapters at
-block 26,390,430 (`LIQUIDLANE_FORK_RPC_URL`, `go test -tags=integration ./internal/liquidlane`).
+With a configured liquidity lens, inventory groups token reads by adapter and calls
+`getMaxAssetsBatch(adapter, tokensToRedeem)` once per adapter inside the same Multicall as pause,
+rate and oracle reads. The lens performs one shared sweep/cascade calculation, applies token limits
+against post-sweep account assets, and returns success/capacity in input order for each token. A
+failed token remains unavailable without suppressing healthy tokens; a failed or malformed adapter
+batch suppresses that adapter. Capacity math stays in Solidity and nothing is cached across calls.
+Deploy a batch-capable lens and update the configured address before deploying this solver version,
+or upgrade the implementation if the configured lens is a proxy. The existing single-token overload
+remains in use for amount-specific fill quotes.
 
 Gas oracle reads batch `latestRoundData`, `decimals`, and Multicall3
 `getCurrentBlockTimestamp()` into one `latest` eth_call. Freshness is checked against that returned
@@ -111,11 +102,9 @@ explicit publication margin. A heartbeat starts an update; inclusion can take ad
 For example, use `24h5m` for a 24h heartbeat when five minutes is acceptable for that deployment.
 Check each feed/network independently; the oracle still fails closed beyond the configured limit.
 
-- Do not use historical snapshots for live decisions or require archive-capable RPCs. The capacity
-  optimization pins only the head selected at the start of that read; an unavailable hash fails the
-  read rather than mixing metadata and capacity from different blocks.
-- Batch related calls per logical read. Dependent capacity batches share a block hash; separate protocol
-  reads may naturally observe adjacent heads.
+- Do not use historical block tags or require archive-capable RPCs.
+- Batch related calls once per logical read. A single Multicall is internally coherent enough for current
+  quoting; separate protocol reads may naturally observe adjacent heads.
 - Do not attach an exact block number to latest inventory. Use decision-time chain state, TTLs, and
   protocol deadlines.
 - A latest snapshot is an estimate until transaction inclusion. Strategies apply reserve, two-sided price

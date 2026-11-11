@@ -3,10 +3,18 @@
     "type": "function",
     "name": "getMaxAssets",
     "inputs": [
-      { "internalType": "address", "name": "adapter", "type": "address" }
+      {
+        "name": "adapter",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
     "outputs": [
-      { "internalType": "uint256", "name": "", "type": "uint256" }
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
     "stateMutability": "nonpayable"
   },
@@ -14,12 +22,94 @@
     "type": "function",
     "name": "getMaxAssets",
     "inputs": [
-      { "internalType": "address", "name": "adapter", "type": "address" },
-      { "internalType": "address", "name": "tokenToRedeem", "type": "address" }
+      {
+        "name": "adapter",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "tokenToRedeem",
+        "type": "address",
+        "internalType": "address"
+      }
     ],
     "outputs": [
-      { "internalType": "uint256", "name": "", "type": "uint256" }
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
     ],
     "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "getMaxAssetsBatch",
+    "inputs": [
+      {
+        "name": "adapter",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "tokensToRedeem",
+        "type": "address[]",
+        "internalType": "address[]"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "results",
+        "type": "tuple[]",
+        "internalType": "struct FrontendLiquidityLens.MaxAssetsResult[]",
+        "components": [
+          {
+            "name": "success",
+            "type": "bool",
+            "internalType": "bool"
+          },
+          {
+            "name": "maxAssets",
+            "type": "uint256",
+            "internalType": "uint256"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "getTokenMaxAssets",
+    "inputs": [
+      {
+        "name": "adapter",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "tokenToRedeem",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "maxAssets",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "error",
+    "name": "NotSelf",
+    "inputs": []
   }
 ]
