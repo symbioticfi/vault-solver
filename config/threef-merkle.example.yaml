@@ -19,5 +19,5 @@ solvers:
       curator:
         url: https://curator.example.invalid/api/v1
       url: https://bf.3f.xyz
-      apiKeyEnv: THREEF_CURATOR_API_KEY
+      apiKeyEnv: THREEF_API_KEY
       broker: "0x0000000000000000000000000000000000000040" # dedicated approved BF

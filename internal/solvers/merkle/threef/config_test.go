@@ -13,7 +13,7 @@ policy: "0x0000000000000000000000000000000000000050"
 curator:
   url: http://127.0.0.1:1/api/v1
 url: https://bf.3f.xyz
-apiKeyEnv: THREEF_CURATOR_API_KEY
+apiKeyEnv: THREEF_API_KEY
 broker: "0x0000000000000000000000000000000000000040"
 `
 
@@ -46,7 +46,7 @@ func TestConfigValidation(t *testing.T) {
 		"zero broker":    strings.Replace(validConfig, "0000000000000000000000000000000000000040", "0000000000000000000000000000000000000000", 1),
 		"curator":        strings.Replace(validConfig, "http://127.0.0.1:1/api/v1", "", 1),
 		"url":            strings.Replace(validConfig, "https://bf.3f.xyz", "https://bf.3f.xyz?key=private", 1),
-		"key":            strings.Replace(validConfig, "THREEF_CURATOR_API_KEY", "invalid-env-name", 1),
+		"key":            strings.Replace(validConfig, "THREEF_API_KEY", "invalid-env-name", 1),
 		"inline key":     validConfig + "apiKey: secret\n",
 		"manual amount":  validConfig + "principal: '100'\n",
 		"manual account": validConfig + "account: '0x20'\n",
