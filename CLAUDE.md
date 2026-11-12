@@ -81,6 +81,8 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
   Each solver also uses `deps.Log.WithName(Name)`. The Sentry sink tags events with
   `solver`, `logger` and `label`, puts the logged error in the title, and groups on (solver, message),
   so `log.Error` lines only for conditions that should page; expected skips go to `V(1)`.
+  Where a context cancel (shutdown, reconnect, client disconnect) leaves nothing half done, log with
+  `observability.ErrorUnlessCanceled` so the cancel drops to `V(1)` while deadlines stay at Error.
   **Log through `observability.Log(ctx)` wherever a context is in hand** — the context stores the
   *base* logger and `Log` returns it stamped with the current span's `trace_id`/`span_id`, memoised
   per span. To narrow the logger for a scope, store it with
@@ -166,11 +168,14 @@ live source daily in CI (`.github/workflows/schema-drift.yml`) and **fails when 
 `openapi/` or `api/graphql/*/schema.graphql` is not registered**, so a new integration cannot silently
 escape monitoring. When you vendor a schema, in the same change: add the `make refresh-<name>-openapi`
 (or `-schema`) target that pulls it, add the `make refresh-<name>-client` target that generates from it,
-and add a manifest entry naming the live `url`, the `fetch` mode (`json`, `scalar-html`, `graphql`,
+and add a manifest entry naming the live `url`, the `fetch` mode (`json`, `scalar-html`, `docusaurus-html`, `graphql`,
 `text`), and the `refresh` command to run when it drifts. Use `mode: "manual"` when there is no public
 endpoint to diff (RedStone's zod, shared privately); the checker skips those but keeps them listed so the
-gap is recorded rather than rediscovered. Spec URLs live in the `Makefile` as `?=` variables so they can be overridden per
-environment.
+gap is recorded rather than rediscovered. When the vendored copy is knowingly out of step with its live
+source (it tracks an upstream branch that is not deployed yet), add `expectedDrift: {reason, liveDigest}` to the
+entry; `liveDigest` comes from `python3 hack/check-schema-drift.py --digest <name>`. Only that exact live
+state is silenced: any change upstream, or the copies matching again, reports drift so the entry is revisited.
+Spec URLs live in the `Makefile` as `?=` variables so they can be overridden per environment.
 
 **Generated clients are deliberately tolerant of upstream drift**, because a third-party API adding or
 removing a field must not blank a whole feed (3F dropping `cadence` from one nested schema stopped the
@@ -279,3 +284,11 @@ reader or operator would be surprised to discover.
 - Keep the docs current in the same change: architecture/design or TODO changes update `docs/*-PLAN.md`;
   user-facing changes (CLI flags, config knobs, solver/strategy capabilities) update `README.md`.
 - Commit titles are Conventional Commits: `type(scope): imperative summary` (e.g. `feat(rfq): …`).
+
+## Merkle runtime
+
+Merkle integrations use the independently versioned SDK transaction manager shared
+with merkle-executor. Native integrations keep `internal/txmanager` and its existing
+behavior. Hosts explicitly start the transaction lifecycle selected by the solver.
+Each solver process is configured with its own signer as a trusted deployment assumption.
+Merkle planning and signing share `txManager.maxGas`; SDK state remains in RAM only.

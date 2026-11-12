@@ -3,6 +3,7 @@ package uniswapx
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -11,8 +12,11 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/observability"
+	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
@@ -68,6 +72,115 @@ func TestQuoteDelegatesOneRequestedAmountToStrategy(t *testing.T) {
 	}
 	if strategy.inputs[1].AmountIn != nil || strategy.inputs[1].AmountOut.String() != "70" {
 		t.Fatalf("exact-output strategy input = %+v", strategy.inputs[1])
+	}
+}
+
+func TestQuoteRechecksSnapshotExpiryAfterDecision(t *testing.T) {
+	for _, offset := range []int64{-1, 0, 1} {
+		t.Run(time.Duration(offset*time.Second.Nanoseconds()).String(), func(t *testing.T) {
+			tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
+			tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
+			strategy := &quoteTestStrategy{quote: &strategytypes.Quote{AmountIn: big.NewInt(100), AmountOut: big.NewInt(90)}}
+			solver := newQuoteTestSolver(t, tokenIn, strategy)
+			expiry := time.Now().Add(time.Minute).Truncate(time.Second)
+			solver.quoteState.Load().expiresAt = expiry
+			strategy.beforeReturn = func(context.Context) { solver.chainTime.Store(expiry.Unix() + offset) }
+			response, err := solver.quote(t.Context(), validQuoteRequest(tokenIn, tokenOut))
+			want := "0"
+			if offset < 0 {
+				want = "90"
+			}
+			if err != nil || response.AmountOut != want {
+				t.Fatalf("response = %+v, err %v, want amountOut %s", response, err, want)
+			}
+		})
+	}
+}
+
+func TestQuoteDeclinesCanceledRequestEvenWhenStrategyIgnoresIt(t *testing.T) {
+	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	strategy := &quoteTestStrategy{quote: &strategytypes.Quote{AmountIn: big.NewInt(100), AmountOut: big.NewInt(90)}}
+	solver := newQuoteTestSolver(t, tokenIn, strategy)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	response, err := solver.quote(ctx, validQuoteRequest(tokenIn, tokenOut))
+	if err != nil || response.AmountOut != "0" {
+		t.Fatalf("canceled response = %+v, err %v", response, err)
+	}
+}
+
+func TestQuoteStrategyContextDeadline(t *testing.T) {
+	for _, source := range []string{"budget", "caller", "snapshot", "chain skew"} {
+		t.Run(source, func(t *testing.T) {
+			tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
+			tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
+			strategy := &quoteTestStrategy{quote: &strategytypes.Quote{AmountIn: big.NewInt(100), AmountOut: big.NewInt(90)}}
+			solver := newQuoteTestSolver(t, tokenIn, strategy)
+			solver.cfg.QuoteServer.HTTPTimeout = time.Minute
+			ctx := t.Context()
+			latest := time.Now().Add(time.Second)
+			switch source {
+			case "budget":
+				solver.cfg.QuoteServer.HTTPTimeout = time.Second
+			case "caller":
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithDeadline(ctx, latest)
+				defer cancel()
+			case "snapshot":
+				solver.quoteState.Load().expiresAt = latest
+			case "chain skew":
+				expiry := time.Now().Add(time.Minute).Truncate(time.Second)
+				solver.quoteState.Load().expiresAt = expiry
+				solver.chainTime.Store(expiry.Unix() - 1)
+			}
+			strategy.beforeReturn = func(strategyCtx context.Context) {
+				deadline, ok := strategyCtx.Deadline()
+				if !ok || deadline.After(latest.Add(100*time.Millisecond)) {
+					t.Errorf("strategy deadline = %s, present %v, want at most %s", deadline, ok, latest)
+				}
+			}
+			response, err := solver.quote(ctx, validQuoteRequest(tokenIn, tokenOut))
+			if err != nil || response.AmountOut != "90" {
+				t.Fatalf("response = %+v, err %v", response, err)
+			}
+		})
+	}
+}
+
+func TestQuoteHandlerBudgetCancellationIsExpectedDecline(t *testing.T) {
+	tokenIn := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	tokenOut := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	strategy := &blockingQuoteStrategy{entered: make(chan struct{}), release: make(chan struct{})}
+	solver := newBlockingQuoteTestSolver(t, tokenIn, strategy)
+	solver.cfg.QuoteServer.HTTPTimeout = 10 * time.Millisecond
+	metrics, reg := newUniswapXTestMetricsWithRegistry(t, solver)
+	solver.metrics = metrics
+	errorLogged := false
+	log := funcr.NewJSON(func(entry string) {
+		var fields map[string]any
+		if err := json.Unmarshal([]byte(entry), &fields); err != nil {
+			t.Fatal(err)
+		}
+		if fields["msg"] == "quote failed" {
+			errorLogged = true
+		}
+	}, funcr.Options{})
+	body, err := json.Marshal(validQuoteRequest(tokenIn, tokenOut))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(observability.WithLogger(t.Context(), log), time.Second)
+	defer cancel()
+	request := httptest.NewRequestWithContext(ctx, http.MethodPost, "/quote", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	solver.quoteHandler(response, request)
+	if response.Code != http.StatusNoContent || errorLogged {
+		t.Fatalf("status = %d, strategy error logged = %v", response.Code, errorLogged)
+	}
+	metricstest.RequireWorkflowEventCount(t, reg, Name, "quote", string(quoteOutcomeError), 0)
+	if got := metricstest.FamilyValue(t, reg, "solver_bot_quote_results_total", map[string]string{"reason": "state_changed"}); got != 1 {
+		t.Fatalf("state_changed decline = %v, want 1", got)
 	}
 }
 
@@ -278,6 +391,7 @@ func newQuoteTestSolver(t *testing.T, tokenIn common.Address, strategy *quoteTes
 	solver := &Solver{
 		chainID: 1,
 		cfg: &Config{
+			QuoteServer: QuoteServerConfig{HTTPTimeout: time.Second},
 			Executor:    common.HexToAddress("0x3333333333333333333333333333333333333333"),
 			TokenPolicy: policy,
 		},
@@ -300,6 +414,7 @@ func newBlockingQuoteTestSolver(t *testing.T, tokenIn common.Address, strategy s
 	solver := &Solver{
 		chainID: 1,
 		cfg: &Config{
+			QuoteServer: QuoteServerConfig{HTTPTimeout: time.Second},
 			Executor:    common.HexToAddress("0x3333333333333333333333333333333333333333"),
 			TokenPolicy: policy,
 		},
@@ -322,12 +437,16 @@ func validQuoteRequest(tokenIn, tokenOut common.Address) quoteRequest {
 }
 
 type quoteTestStrategy struct {
-	quote  *strategytypes.Quote
-	inputs []strategytypes.QuoteInput
+	quote        *strategytypes.Quote
+	inputs       []strategytypes.QuoteInput
+	beforeReturn func(context.Context)
 }
 
-func (s *quoteTestStrategy) DecideQuote(_ context.Context, input strategytypes.QuoteInput) (*strategytypes.Quote, error) {
+func (s *quoteTestStrategy) DecideQuote(ctx context.Context, input strategytypes.QuoteInput) (*strategytypes.Quote, error) {
 	s.inputs = append(s.inputs, input)
+	if s.beforeReturn != nil {
+		s.beforeReturn(ctx)
+	}
 	return s.quote, nil
 }
 

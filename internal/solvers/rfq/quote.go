@@ -13,6 +13,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
@@ -23,20 +24,23 @@ import (
 // for concurrent use (the HTTP server serves quotes in parallel): its dependencies are individually
 // synchronized, and its optional configured route slice is published atomically once.
 type quoteService struct {
-	pairRoutes    atomic.Pointer[[]liquidlane.Route] // immutable configured adapter directions, optional background observation only
-	chainID       int64
-	tokenMetadata *chain.Decimals
-	warmMetadata  func([]common.Address) // optional lifecycle-owned background enrichment; assigned before HTTP starts
-	executor      common.Address
+	recipeExecutors []common.Address
+	acceptsRoute    func(executor, connector, account, asset common.Address) bool
+	pairRoutes      atomic.Pointer[[]liquidlane.Route] // immutable configured adapter directions, optional background observation only
+	chainID         int64
+	tokenMetadata   *chain.Decimals
+	warmMetadata    func([]common.Address) // optional lifecycle-owned background enrichment; assigned before HTTP starts
+	executor        common.Address
 	// laneAvailable is safe for concurrent use and reports sender initialization. A busy lane does not
 	// block quoting: pending fills are accounted through reservations instead. It is sampled before
 	// and after quote planning so work is declined whenever either check observes a nonce conflict.
 	laneAvailable func() bool
 	// reservations returns the liquidity held by won, unfinished orders against a resolved
 	// inventory; nil means none.
-	reservations func(excludedOrderID string, inventory []solverInventory) liquidlane.CapacityReservations
-	whitelist    adapterWhitelist // nil disables adapter filtering
-	tokenPolicy  tokenpolicy.Policy
+	reservations     func(excludedOrderID string, inventory []solverInventory) liquidlane.CapacityReservations
+	acceptsConnector func(common.Address) bool // optional published recipe connectors; may change after start
+	whitelist        adapterWhitelist          // nil disables adapter filtering
+	tokenPolicy      tokenpolicy.Policy
 	// minAmountsIn holds per-input-token minimum request sizes in base units; a token absent from the
 	// map (or a nil map) has no minimum.
 	discountsEnabled bool
@@ -137,7 +141,19 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 		decision.pairInScope = knownDirection
 		decision.metricPairInScope = knownDirection || configuredDirection
 	}()
-	parsed, err := q.toStrategy(qs.chainID)
+	// A recipe process serves only its committed payment connector. Filter before
+	// parsing so unrelated native entries in a shared backend response stay out.
+	if len(qs.recipeExecutors) > 0 && qs.acceptsConnector != nil {
+		scoped := *q
+		scoped.Adapters = nil
+		for _, item := range q.Adapters {
+			if qs.acceptsConnector(common.HexToAddress(item.Adapter)) {
+				scoped.Adapters = append(scoped.Adapters, item)
+			}
+		}
+		q = &scoped
+	}
+	parsed, err := q.toStrategy(qs.chainID, qs.recipeExecutors)
 	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, &badRequestError{errors.Errorf("parse request: %w", err)}
 	}
@@ -161,6 +177,14 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 		return quoteDecision{outcome: quoteDecisionBelowMinimum}, nil
 	}
 	req, inv := parsed.req, qs.whitelist.filter(parsed.inv)
+	if qs.acceptsRoute != nil {
+		inv = slices.DeleteFunc(slices.Clone(inv), func(item solverInventory) bool {
+			return !qs.acceptsRoute(item.RecipeExecutor, item.Adapter, item.Vault, item.TokenOut)
+		})
+	}
+	if len(qs.recipeExecutors) > 0 {
+		inv = bestRouteInventory(inv)
+	}
 	if !qs.discountsEnabled {
 		inv = slices.DeleteFunc(slices.Clone(inv), func(item solverInventory) bool { return item.DiscountID != nil })
 	}
@@ -217,7 +241,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 	}, nil
 }
 
-// snapshotCandidates reads current on-chain pricing for the request as the rfq.quote.snapshot stage.
+// snapshotCandidates prices backend discounts or reads direct adapters as the rfq.quote.snapshot stage.
 func (qs *quoteService) snapshotCandidates(
 	ctx context.Context, inv []solverInventory, req strategyRequest,
 ) (candidates []liquidlane.QuoteCandidate, err error) {
@@ -228,6 +252,23 @@ func (qs *quoteService) snapshotCandidates(
 		pending = func(inventory []solverInventory) liquidlane.CapacityReservations {
 			return qs.reservations("", inventory)
 		}
+	}
+	// Discount quotes use the backend's complete snapshot; fill planning still reads current state.
+	if !slices.ContainsFunc(inv, func(item solverInventory) bool { return item.DiscountID == nil }) {
+		inv = slices.DeleteFunc(slices.Clone(inv), func(item solverInventory) bool {
+			return item.TokenIn != req.TokenIn || item.TokenOut != req.TokenOut
+		})
+		var reservations liquidlane.CapacityReservations
+		if pending != nil {
+			reservations = pending(inv)
+		}
+		allocated := liquidgreedy.AllocateInventoryCapacity(inv, reservations, 0)
+		for _, item := range allocated {
+			if candidate := liquidgreedy.NewQuoteCandidate(item, item.MaxAssets); candidate != nil {
+				candidates = append(candidates, *candidate)
+			}
+		}
+		return candidates, nil
 	}
 	return qs.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount, pending)
 }
@@ -250,3 +291,22 @@ func (qs *quoteService) canQuote() bool {
 
 // lowerAddr renders an address as lowercase hex; RFQ backend payloads use lowercase addresses.
 func lowerAddr(a common.Address) string { return strings.ToLower(a.Hex()) }
+
+// Recipes funding the same swap are alternatives, not additional liquidity.
+// Keep the largest eligible snapshot for each physical route and discount.
+func bestRouteInventory(inventory []solverInventory) []solverInventory {
+	out := make([]solverInventory, 0, len(inventory))
+	positions := make(map[liquidlane.CandidateID]int)
+	for _, item := range inventory {
+		id := liquidlane.NewCandidateID(item.Route, item.DiscountID)
+		if index, found := positions[id]; found {
+			if item.MaxAssets.Cmp(out[index].MaxAssets) > 0 {
+				out[index] = item
+			}
+			continue
+		}
+		positions[id] = len(out)
+		out = append(out, item)
+	}
+	return out
+}

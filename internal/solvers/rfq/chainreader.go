@@ -69,13 +69,22 @@ func (r *reader) readQuoteCandidates(
 	pending pendingReservations,
 ) ([]liquidlane.QuoteCandidate, error) {
 	matching := make([]liquidlane.Inventory, 0, len(inventory))
+	connectorInventory := make([]liquidlane.Inventory, 0)
 	for _, item := range inventory {
 		if item.TokenIn == tokenIn && item.TokenOut == tokenOut {
-			matching = append(matching, item)
+			if item.RecipeExecutor != (common.Address{}) {
+				connectorInventory = append(connectorInventory, item)
+			} else {
+				matching = append(matching, item)
+			}
 		}
 	}
+	connectorCandidates, err := r.readConnectorCandidates(ctx, connectorInventory, tokenIn, tokenOut, amountIn, pending)
+	if err != nil {
+		return nil, err
+	}
 	if len(matching) == 0 {
-		return nil, nil
+		return connectorCandidates, nil
 	}
 	metadata := r.quoteAdapters
 	unknown := unresolvedQuoteAdapters(matching, metadata)
@@ -90,7 +99,7 @@ func (r *reader) readQuoteCandidates(
 			metadata[adapter.Adapter] = adapter
 		}
 	}
-	matching, err := applyResolvedQuoteAdapters(r.chainID, matching, metadata)
+	matching, err = applyResolvedQuoteAdapters(r.chainID, matching, metadata)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +116,7 @@ func (r *reader) readQuoteCandidates(
 	}
 	allocated := liquidgreedy.AllocateInventoryCapacity(matching, reservations, 0)
 	if len(allocated) == 0 {
-		return nil, nil
+		return connectorCandidates, nil
 	}
 	routes := make([]liquidlane.Route, 0, len(allocated))
 	seen := make(map[liquidlane.RouteID]bool, len(allocated))
@@ -121,7 +130,7 @@ func (r *reader) readQuoteCandidates(
 	if err != nil {
 		return nil, err
 	}
-	return liquidgreedy.NormalizeOracleInventory(amountIn, allocated, quotes), nil
+	return append(liquidgreedy.NormalizeOracleInventory(amountIn, allocated, quotes), connectorCandidates...), nil
 }
 
 func (r *reader) setQuoteAdapters(resolved []recoveryVault) {

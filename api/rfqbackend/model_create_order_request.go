@@ -20,7 +20,7 @@ var _ MappedNullable = &CreateOrderRequest{}
 // CreateOrderRequest struct for CreateOrderRequest
 type CreateOrderRequest struct {
 	Quote                CreateOrderRequestQuote `json:"quote"`
-	Signature            string                  `json:"signature" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	Signature            string                  `json:"signature" validate:"regexp=^0x(?:[a-fA-F0-9]{2})*$"`
 	AdditionalProperties map[string]interface{}
 }
 

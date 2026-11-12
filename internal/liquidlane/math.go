@@ -65,13 +65,18 @@ func RateForAmountOut(amountOut, amountIn *big.Int, tokenInDecimals, tokenOutDec
 
 // AmountOutAfterDiscount applies a LiquidLane ppm discount, rounding down.
 func AmountOutAfterDiscount(grossAmountOut, discount *big.Int) *big.Int {
-	precision := big.NewInt(DiscountPrecision)
+	return AmountOutAfterDiscountPrecision(grossAmountOut, discount, DiscountPrecision)
+}
+
+// AmountOutAfterDiscountPrecision preserves the signed integer in its contract scale.
+func AmountOutAfterDiscountPrecision(grossAmountOut, discount *big.Int, scale int64) *big.Int {
+	precision := big.NewInt(scale)
 	if grossAmountOut == nil || grossAmountOut.Sign() <= 0 || discount == nil || discount.Sign() < 0 ||
-		discount.Cmp(precision) > 0 {
+		scale <= 0 || discount.Cmp(precision) > 0 {
 		return new(big.Int)
 	}
 	multiplier := new(big.Int).Sub(precision, discount)
-	return new(big.Int).Div(new(big.Int).Mul(grossAmountOut, multiplier), big.NewInt(DiscountPrecision))
+	return new(big.Int).Div(new(big.Int).Mul(grossAmountOut, multiplier), precision)
 }
 
 // The adapter pays a swap in two floored steps, and the helpers below mirror them exactly:
@@ -96,18 +101,28 @@ func OraclePriceProbe(tokenInDecimals, tokenOutDecimals int) (amountIn *big.Int,
 // DiscountedRate is getMaxRate for an arbitrary discount: floor(price × (1e6 − discount) / 1e6).
 // It ranks alternatives; amounts come from DiscountedAmountOut.
 func DiscountedRate(price, discount *big.Int) *big.Int {
-	if !validPricing(price, discount) {
+	return DiscountedRatePrecision(price, discount, DiscountPrecision)
+}
+
+// DiscountedRatePrecision applies the contract-native discount scale.
+func DiscountedRatePrecision(price, discount *big.Int, scale int64) *big.Int {
+	if !validPricingPrecision(price, discount, scale) {
 		return new(big.Int)
 	}
-	return AmountOutAfterDiscount(price, discount)
+	return AmountOutAfterDiscountPrecision(price, discount, scale)
 }
 
 // DiscountedAmountOut returns exactly what the adapter pays for amountIn.
 func DiscountedAmountOut(amountIn, price, discount *big.Int, tokenInDecimals, tokenOutDecimals int) *big.Int {
-	if !validPricing(price, discount) {
+	return DiscountedAmountOutPrecision(amountIn, price, discount, tokenInDecimals, tokenOutDecimals, DiscountPrecision)
+}
+
+// DiscountedAmountOutPrecision applies the contract-native discount scale.
+func DiscountedAmountOutPrecision(amountIn, price, discount *big.Int, tokenInDecimals, tokenOutDecimals int, scale int64) *big.Int {
+	if !validPricingPrecision(price, discount, scale) {
 		return new(big.Int)
 	}
-	return AmountOutAfterDiscount(AmountOutForRate(amountIn, price, tokenInDecimals, tokenOutDecimals), discount)
+	return AmountOutAfterDiscountPrecision(AmountOutForRate(amountIn, price, tokenInDecimals, tokenOutDecimals), discount, scale)
 }
 
 // MinAmountInForDiscountedAmountOut returns the smallest amountIn whose payout reaches amountOut:
@@ -116,10 +131,15 @@ func DiscountedAmountOut(amountIn, price, discount *big.Int, tokenInDecimals, to
 func MinAmountInForDiscountedAmountOut(
 	amountOut, price, discount *big.Int, tokenInDecimals, tokenOutDecimals int,
 ) *big.Int {
-	if amountOut == nil || amountOut.Sign() <= 0 || !validPricing(price, discount) {
+	return MinAmountInForDiscountedAmountOutPrecision(amountOut, price, discount, tokenInDecimals, tokenOutDecimals, DiscountPrecision)
+}
+
+// MinAmountInForDiscountedAmountOutPrecision applies the contract-native discount scale.
+func MinAmountInForDiscountedAmountOutPrecision(amountOut, price, discount *big.Int, tokenInDecimals, tokenOutDecimals int, scale int64) *big.Int {
+	if amountOut == nil || amountOut.Sign() <= 0 || !validPricingPrecision(price, discount, scale) {
 		return new(big.Int)
 	}
-	grossAmountOut := MulDivUp(amountOut, big.NewInt(DiscountPrecision), payoutMultiplier(discount))
+	grossAmountOut := MulDivUp(amountOut, big.NewInt(scale), new(big.Int).Sub(big.NewInt(scale), discount))
 	return MinAmountInForAmountOut(grossAmountOut, price, tokenInDecimals, tokenOutDecimals)
 }
 
@@ -129,13 +149,18 @@ func MinAmountInForDiscountedAmountOut(
 func MaxAmountInForDiscountedAmountOut(
 	maxAmountOut, price, discount *big.Int, tokenInDecimals, tokenOutDecimals int,
 ) *big.Int {
-	if maxAmountOut == nil || maxAmountOut.Sign() < 0 || !validPricing(price, discount) {
+	return MaxAmountInForDiscountedAmountOutPrecision(maxAmountOut, price, discount, tokenInDecimals, tokenOutDecimals, DiscountPrecision)
+}
+
+// MaxAmountInForDiscountedAmountOutPrecision applies the contract-native discount scale.
+func MaxAmountInForDiscountedAmountOutPrecision(maxAmountOut, price, discount *big.Int, tokenInDecimals, tokenOutDecimals int, scale int64) *big.Int {
+	if maxAmountOut == nil || maxAmountOut.Sign() < 0 || !validPricingPrecision(price, discount, scale) {
 		return new(big.Int)
 	}
 	gross := new(big.Int).Add(maxAmountOut, big.NewInt(1))
-	gross.Mul(gross, big.NewInt(DiscountPrecision))
+	gross.Mul(gross, big.NewInt(scale))
 	gross.Sub(gross, big.NewInt(1))
-	gross.Div(gross, payoutMultiplier(discount))
+	gross.Div(gross, new(big.Int).Sub(big.NewInt(scale), discount))
 
 	amountIn := gross.Add(gross, big.NewInt(1))
 	amountIn.Mul(amountIn, rateScale)
@@ -144,12 +169,7 @@ func MaxAmountInForDiscountedAmountOut(
 	return amountIn.Div(amountIn, new(big.Int).Mul(price, pow10(tokenOutDecimals)))
 }
 
-// validPricing accepts a positive price and a discount that leaves a positive payout.
-func validPricing(price, discount *big.Int) bool {
-	return price != nil && price.Sign() > 0 &&
-		discount != nil && discount.Sign() >= 0 && discount.Cmp(big.NewInt(DiscountPrecision)) < 0
-}
-
-func payoutMultiplier(discount *big.Int) *big.Int {
-	return new(big.Int).Sub(big.NewInt(DiscountPrecision), discount)
+func validPricingPrecision(price, discount *big.Int, scale int64) bool {
+	return scale > 0 && price != nil && price.Sign() > 0 &&
+		discount != nil && discount.Sign() >= 0 && discount.Cmp(big.NewInt(scale)) < 0
 }

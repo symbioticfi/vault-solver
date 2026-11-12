@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"math/big"
+	"strconv"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -27,13 +28,17 @@ type quoteInputJSON struct {
 }
 
 type quoteCandidateJSON struct {
-	ID            string         `json:"id"`
-	Adapter       common.Address `json:"adapter"`
-	Asset         common.Address `json:"asset"`
-	AssetDecimals int            `json:"assetDecimals"`
-	MaxAssets     string         `json:"maxAssets"`
-	MaxRate       string         `json:"maxRate"`
-	DiscountID    *common.Hash   `json:"discountId,omitempty"`
+	ID                string         `json:"id"`
+	Adapter           common.Address `json:"adapter"`
+	Asset             common.Address `json:"asset"`
+	AssetDecimals     int            `json:"assetDecimals"`
+	MaxAssets         string         `json:"maxAssets"`
+	MaxRate           string         `json:"maxRate"`
+	DiscountID        *common.Hash   `json:"discountId,omitempty"`
+	InputDecimals     int            `json:"inputDecimals"`
+	Price             string         `json:"price,omitempty"`
+	Discount          string         `json:"discount,omitempty"`
+	DiscountPrecision string         `json:"discountPrecision,omitempty"`
 }
 
 type quoteOutputJSON struct {
@@ -52,11 +57,18 @@ type quoteLegJSON struct {
 func (in QuoteInput) MarshalJSON() ([]byte, error) {
 	candidates := make([]quoteCandidateJSON, 0, len(in.Candidates))
 	for _, c := range in.Candidates {
-		candidates = append(candidates, quoteCandidateJSON{
+		candidate := quoteCandidateJSON{
 			ID: string(c.ID), Adapter: c.Route.Adapter, Asset: c.Route.TokenOut,
 			AssetDecimals: c.Route.TokenOutDecimals,
 			MaxAssets:     bigString(c.MaxAmountOut), MaxRate: bigString(c.Rate), DiscountID: c.DiscountID,
-		})
+			InputDecimals: c.Route.TokenInDecimals,
+		}
+		if c.ExactPricing() {
+			candidate.Price = bigString(c.Price)
+			candidate.Discount = bigString(c.Discount)
+			candidate.DiscountPrecision = strconv.FormatInt(c.PricingPrecision(), 10)
+		}
+		candidates = append(candidates, candidate)
 	}
 	return json.Marshal(quoteInputJSON{
 		RequestID: in.RequestID, QuoteID: in.QuoteID, ChainID: in.ChainID,

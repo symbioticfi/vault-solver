@@ -233,10 +233,6 @@ Maximum lookback in hours when resolving the latest available price. Accepted ra
 		maxLag: Int
 	): AssetPrice
 """
-Current price in USD, for display purpose.
-"""
-	priceUsd: Float @deprecated(reason: "Use price.usd instead.")
-"""
 Historical price in USD, for display purpose
 """
 	historicalPriceUsd(
@@ -329,7 +325,6 @@ Vault metadata
 type VaultMetadata {
 	description: String!
 	image: String!
-	forumLink: String @deprecated(reason: "Deprecated and always returns null.")
 }
 
 """
@@ -2612,8 +2607,6 @@ Block number at which the market was created
 Timestamp at which the market was created
 """
 	creationTimestamp: BigInt!
-	targetBorrowUtilization: BigInt! @deprecated(reason: "Deprecated. This field always returns 90%.")
-	targetWithdrawUtilization: BigInt! @deprecated(reason: "Deprecated. This field always returns 90%.")
 """
 State history
 """
@@ -2627,7 +2620,6 @@ Current state
 """
 	state: MarketState
 	oracle: Oracle
-	oracleAddress: Address! @deprecated(reason: "Use oracle.address instead.")
 """
 Market bad debt values
 """
@@ -4046,7 +4038,6 @@ Vault V2 metadata
 type VaultV2Metadata {
 	description: String
 	image: String
-	forumLink: String @deprecated(reason: "Deprecated and always returns null.")
 }
 
 """

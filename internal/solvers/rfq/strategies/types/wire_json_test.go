@@ -122,3 +122,25 @@ func TestQuoteOutputUnmarshalJSONRejectsInvalidDecimal(t *testing.T) {
 		t.Fatalf("Unmarshal error = %v, want quotedAmountOut decimal rejection", err)
 	}
 }
+
+func TestQuoteInputMarshalPreservesConnectorExactPricing(t *testing.T) {
+	input := QuoteInput{Candidates: []liquidlane.QuoteCandidate{{
+		ID: "connector", Route: liquidlane.Route{TokenInDecimals: 18, TokenOutDecimals: 6},
+		Price: mustBig(t, "1234567890123456789"), Discount: big.NewInt(1000001), DiscountPrecision: 100000000,
+		MaxAmountOut: big.NewInt(1000), Rate: big.NewInt(1),
+	}}}
+	body, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw struct {
+		Candidates []map[string]any `json:"candidates"`
+	}
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	c := raw.Candidates[0]
+	if c["price"] != "1234567890123456789" || c["discount"] != "1000001" || c["discountPrecision"] != "100000000" || c["inputDecimals"] != float64(18) || c["assetDecimals"] != float64(6) {
+		t.Fatalf("lost exact pricing: %s", body)
+	}
+}

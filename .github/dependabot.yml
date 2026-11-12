@@ -6,7 +6,7 @@ updates:
     schedule:
       interval: "weekly"
     cooldown:
-      default-days: 3
+      default-days: 7
     target-branch: "stage"
     open-pull-requests-limit: 5
     ignore:
@@ -21,7 +21,7 @@ updates:
     schedule:
       interval: "weekly"
     cooldown:
-      default-days: 3
+      default-days: 7
     target-branch: "stage"
     open-pull-requests-limit: 10
     assignees:
@@ -33,11 +33,11 @@ updates:
 
   # Enable version updates for Docker
   - package-ecosystem: "docker"
-    directory: "/"
+    directory: "/deploy"
     schedule:
       interval: "weekly"
     cooldown:
-      default-days: 3
+      default-days: 7
     target-branch: "stage"
     open-pull-requests-limit: 5
     assignees:

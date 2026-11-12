@@ -275,7 +275,7 @@ func TestRunGatesQuotesOnRecoveryAndDisconnect(t *testing.T) {
 		strategy: recoveryGateStrategy{tokenIn: tokenIn, tokenOut: tokenOut},
 		caller:   common.HexToAddress("0x5555555555555555555555555555555555555555"),
 		orders:   newOrderClient(orderServer.URL, "test-key", cfg.OrderServer.HTTPTimeout, 11155111),
-		feed:     newOrderFeed("ws"+strings.TrimPrefix(webSocketServer.URL, "http"), "test-key"),
+		feed:     newTestOrderFeed("ws"+strings.TrimPrefix(webSocketServer.URL, "http"), "test-key"),
 		txm:      &fakeLifiTxSender{}, log: logr.Discard(),
 		now:          func(context.Context) (time.Time, error) { return time.Unix(1_700_000_000, 0), nil },
 		maxFeePerGas: func(context.Context) (*big.Int, error) { return big.NewInt(1), nil },

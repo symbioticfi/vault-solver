@@ -1,7 +1,7 @@
 /*
 BF API Reference
 
-BP subdomain API documentation for bf.dev.gcp.3f.xyz
+BP subdomain API documentation for bf.3f.xyz  ## API versions  V1 and v2 share the endpoint list below. Choose **v1** in the server selector for `/v1/...`, or choose **v2** and enter a supported chain ID for `/v2/chains/{chainId}/...`. Request examples update with your selection. The `X-3F-Chain-Id` response header identifies the backend that served the request.  Payloads and EIP-712 versions are unchanged. Use the requested chain’s contracts and credentials; example addresses and chain IDs are illustrative. Guardian HTTP signatures still use the internal `/v1/...` path, including its query string. `/v2/chains/{chainId}/v1/...` remains a compatibility alias.
 
 API version: 0.0.1
 */
@@ -19,7 +19,7 @@ var _ MappedNullable = &EnrollMakerDto{}
 
 // EnrollMakerDto struct for EnrollMakerDto
 type EnrollMakerDto struct {
-	// Chain ID for maker signature verification
+	// Chain ID for maker signature verification; must equal this deployment's chain ID
 	ChainId float32 `json:"chainId"`
 	Maker   string  `json:"maker" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	// EIP-712 authorization deadline

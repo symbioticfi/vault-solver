@@ -809,7 +809,7 @@ func TestExecution_DiscountInventoriesCarrySnapshotBlock(t *testing.T) {
 		DiscountID: "0x00000000000000000000000000000000000000000000000000000000000000ab",
 		Adapter:    vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), CollateralDecimals: 6,
 		Discount: "500", Deadline: 4_102_444_800, MaxAssets: "10000000",
-		BlockNumber: "4242",
+		BlockNumber: 4242,
 	}}}
 	e := newExec(t, newStore(func() time.Time { return time.Unix(0, 0) }), be, &fakeTxm{})
 

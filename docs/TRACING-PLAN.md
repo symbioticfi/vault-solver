@@ -169,26 +169,8 @@ immediately on a transport-level failure. Status is Error for every outcome othe
 Because the chain client is shared by all solvers, RPC spans carry no `solver` attribute; they inherit
 whichever span is in the caller's context. `rpc.jsonrpc.request_id` is empty for batches (§10).
 
-**Non-HTTP JSON-RPC (`ws://`, `wss://`, IPC).** These transports never reach `fallbackTransport`, so
-the spans are produced on our side of the client instead. The dial itself is a `chain.rpc.connect`
-client span carrying `chain.rpc.role` and `chain.rpc.transport` (`ws` or `ipc`); a failed dial ends it
-with status Error. A websocket handshake is the one place this transport can carry a header, so
-`traceparent`/`tracestate`/`baggage` are injected into the upgrade request from that connect span's
-context — go-ethereum reconnects a dropped socket internally and replays the same headers, so the
-provider can tie the connection back to the dial but **never to an individual call**, and IPC has no
-handshake at all. Each call is then spanned locally: `internal/chain/calls.go` shadows exactly the
-backend methods this repo calls (`CallContract`, `HeaderByNumber`, `HeaderByHash`, `FeeHistory`,
-`EstimateGas` and its next-block variant `EstimateGasNextBlock`, `TransactionReceipt`, `BalanceAt`, `CodeAt`, `BlockNumber`,
-`SendTransaction`, `NonceAt`, `PendingNonceAt`, `TransactionSenderBalanceAt`) and starts a client span
-named by the JSON-RPC method with `rpc.system=jsonrpc`, `rpc.method`, `chain.rpc.role` and
-`chain.rpc.transport`, so dashboards see one series across transports. A cancelled call and an
-`ethereum.NotFound` (the null result a node returns for an unmined transaction or an unknown block)
-end the span with an event and no Error status: over HTTP the same response classifies as a success,
-and an unmined transaction is the txmanager's steady state, not a fault. `Multicall` is not spanned: it
-reaches the chain through `CallContract`, which is where its `eth_call` span belongs. Read and write
-endpoints are labelled separately, since their transports may differ. On the HTTP path the
-shadowed methods are plain passthroughs and the transport's spans are the only RPC spans — a new call
-site through the client needs a new shadow or it goes untraced on websocket and IPC.
+All chain RPC endpoints use HTTP(S); tracing and propagation live in the shared HTTP
+transport, including SDK batches. No per-method tracing wrappers are needed.
 
 **WebSocket feeds.** Both feeds dial under a short `"<feed>.feed.connect"` span and inject
 `traceparent` into the handshake headers, so a connection is findable in the trace backend. Per-message
@@ -243,6 +225,11 @@ struct (`resolvedOrder`, `submittedOrder`) so the consumer's span continues the 
 nothing else is stored in those structs.
 
 ### 3.6 Logs and Sentry
+
+One core decorator outside the stdout/Sentry tee applies the same URL redaction policy as traces to
+messages, bound/dynamic string fields and error display. Error wrapping preserves diagnostic interfaces.
+The original CheckedEntry performs per-sink level checks, sampling and write-error output; its Before
+hook sanitizes a copied field slice before writes. This boundary does not identify non-URL secrets.
 
 The base logger travels in the context. The rule: **log through `observability.Log(ctx)` wherever a
 context is in hand** — it reads the context's logger and stamps the current span's `trace_id` and
@@ -544,8 +531,7 @@ run against the no-op provider and prove there is no behaviour change when traci
 | `internal/observability/httptrace.go` | `TraceHandler`, `TraceTransport`, `InjectTraceHeaders` |
 | `internal/observability/spanlinks.go` | `SpanLinks` |
 | `internal/observability/tracetest` | test provider installation and the shared span assertions |
-| `internal/chain/trace.go` | JSON-RPC spans, attempt events, the connect span |
-| `internal/chain/calls.go` | per-call spans for websocket/IPC endpoints |
+| `internal/chain/trace.go` | HTTP JSON-RPC spans and attempt events |
 | `internal/txmanager/trace.go` | the send span's start and terminal end, and `RecordResult` |
 | `internal/solvers/<name>/tracing.go` | each solver's tracer, link keys, TTLs and span helpers |
 
@@ -560,9 +546,19 @@ run against the no-op provider and prove there is no behaviour change when traci
 - [ ] the LI.FI quote-loop tick (`runConnectedQuoteLoop`) is unspanned, so `shouldRefreshQuotes` lines carry no trace ids
 - [ ] 3F `refreshTargetsAndHydrate` emits a root `3f.offers.reconcile`, and the health-tick reconcile is untraced
 - [ ] no unit tests for `NewTracer("")`, `NewSpanLinks()`, `Raw()`, or `TraceTransport` with a non-nil base
-- [ ] ws/ipc calls do not feed `rpcMetrics.observeAttempt`; only their spans exist, so the two transports classify the same answers in one vocabulary but count only one of them
 - [ ] a receipt read of a still-pending transaction opens a full RPC span per poll, so one long-pending send exports hundreds of near-identical spans
 - [ ] `orderTrace.context` (LI.FI) re-attaches the processing span without a stamp slot, so lines under it rebuild the stamped logger each time
 - [ ] `Log(ctx)` walks the context three times; with tracing off the stamp-slot lookup always walks to the root
 - [ ] `recoverOrders` re-enqueues a recovery retry that the inbox can still coalesce away as a queued replay, if the worker marks it before the inbox releases the delivered key
-- [ ] a ws/ipc RPC failure records its `exception.type` as the chain package's wrapper type rather than the underlying error's
+
+
+**rfq-merkle** (`internal/solvers/merkle/rfq`) uses `rfq-merkle.poll` for each
+bounded polling/recovery iteration and `rfq-merkle.fill` for signed submission or
+reconciliation, with `order.id` on the fill. HTTP spans use peer `rfq-merkle`;
+chain reads retain the shared RPC spans. It has no quote server or quote-span links.
+
+**threef-merkle** (`internal/solvers/merkle/threef`) owns
+`threef-merkle.offers.tick` for its bounded policy/auction/offer iteration. Mint
+preparation and recovery retain the SDK spans; chain requests retain the shared
+RPC spans. Every transaction uses `solver=threef-merkle` through the common sender.
+There is no 3F offer span or provider dispatch in the generic `merkle` solver.

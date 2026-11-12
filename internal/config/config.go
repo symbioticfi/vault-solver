@@ -39,6 +39,7 @@ type ObservabilityConfig struct {
 
 // ChainConfig describes the EVM endpoint the bot reads from and sends to.
 type ChainConfig struct {
+	// RPCURL and WriteRPCURL must use HTTP(S).
 	RPCURL string `yaml:"rpcUrl"`
 	// RPCAttemptTimeoutMs bounds each HTTP(S) endpoint attempt, including reading the response body.
 	// Shorter caller deadlines still apply. Zero uses the default of 20 seconds.
@@ -51,8 +52,6 @@ type ChainConfig struct {
 	// fills so startup observes its private nonce lane. Optional; empty means `rpcUrl` serves both.
 	WriteRPCURL string `yaml:"writeRpcUrl,omitempty"`
 	ChainID     uint64 `yaml:"chainId"`
-	// WSURL is optional; when set it enables live log subscriptions (a latency optimization only).
-	WSURL string `yaml:"wsUrl,omitempty"`
 	// MulticallAddress overrides the Multicall3 contract used to batch reads. Defaults to the
 	// canonical cross-chain Multicall3 deployment when unset. With gas accounting enabled,
 	// it must also support getCurrentBlockTimestamp(); startup checks this selector.
@@ -73,6 +72,8 @@ type TxManagerConfig struct {
 	Confirmations uint64 `yaml:"confirmations"`
 	// MaxFeeGwei is the required absolute EIP-1559 max fee per gas.
 	MaxFeeGwei float64 `yaml:"maxFeeGwei"`
+	// MaxGas bounds Merkle planning and signing; native transaction policy is unchanged.
+	MaxGas uint64 `yaml:"maxGas"`
 	// BroadcastTimeoutMs bounds one transaction submission RPC call independently of replacement cadence.
 	BroadcastTimeoutMs int `yaml:"broadcastTimeoutMs"`
 	// AccountPollIntervalMs controls signer balance and nonce telemetry refresh cadence.

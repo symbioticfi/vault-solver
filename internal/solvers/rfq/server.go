@@ -31,6 +31,7 @@ func (e *badRequestError) Unwrap() error { return e.err }
 type server struct {
 	sharedSecret string
 	quotes       *quoteService
+	quoteTimeout time.Duration            // zero leaves the request context unbounded
 	metrics      *rfqMetrics              // nil disables instrumentation (e.g. in tests)
 	links        *observability.SpanLinks // shared with executionService; nil disables quote→fill links
 }
@@ -117,7 +118,12 @@ func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput,
 		observation.chainID = s.quotes.chainID
 		observation.tokenIn, observation.tokenOut = common.HexToAddress(in.Body.TokenIn), common.HexToAddress(in.Body.TokenOut)
 	}
-	decision, err := s.quotes.quote(ctx, &in.Body)
+	quoteCtx, cancel := ctx, context.CancelFunc(func() {})
+	if s.quoteTimeout > 0 {
+		quoteCtx, cancel = context.WithTimeout(ctx, s.quoteTimeout)
+	}
+	decision, err := s.quotes.quote(quoteCtx, &in.Body)
+	cancel()
 	// Only a positive, on-chain-validated decision may extend optional log metadata.
 	if err == nil && decision.response != nil && s.quotes.warmMetadata != nil {
 		s.quotes.warmMetadata([]common.Address{
@@ -179,10 +185,15 @@ func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput,
 		if bad != nil {
 			return nil, huma.Error400BadRequest(bad.Error())
 		}
-		if decision.pairInScope {
+		switch {
+		case observability.Canceled(ctx, err):
+			// The backend hung up before quoteTimeout; the quote metrics count it.
+			observability.Log(ctx).V(1).Info("quote abandoned: request canceled",
+				"error", err.Error(), "quoteId", in.Body.QuoteID, "requestId", requestID(ctx))
+		case decision.pairInScope:
 			backendErrorLogger(observability.Log(ctx), err).
 				Error(err, "quote failed", "quoteId", in.Body.QuoteID, "requestId", requestID(ctx))
-		} else {
+		default:
 			observability.Log(ctx).Error(errors.New("quote dependency failed before directed pair validation"),
 				"quote failed", "quoteId", in.Body.QuoteID, "requestId", requestID(ctx), "pairInScope", false)
 		}
