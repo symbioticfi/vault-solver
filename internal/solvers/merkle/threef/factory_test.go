@@ -30,6 +30,7 @@ func (factorySigner) SignTx(context.Context, *types.Transaction, *big.Int) (*typ
 }
 
 func TestFactoryDiscoversSharedSignerAndOwnsRAMRuntime(t *testing.T) {
+	t.Setenv("THREEF_API_KEY", "test-key")
 	for _, mode := range []string{"valid", "send", "caller mismatch", "reorg", "zero account", "policy mismatch", "zero policy account", "sepolia"} {
 		t.Run(mode, func(t *testing.T) {
 			target, account, caller := common.HexToAddress("0x10"), common.HexToAddress("0x20"), common.HexToAddress("0x30")
