@@ -20,8 +20,8 @@ solvers:
       broker: "0x0000000000000000000000000000000000000040"
 ```
 
-`apiKeyEnv` names the environment variable holding the 3F BF API key. The Curator
-permission service needs no API credential.
+`apiKeyEnv` names the environment variable holding the 3F BF API key; the solver refuses
+to start when it is unset. The Curator permission service needs no API credential.
 
 The account is the maker. A dedicated, 3F-approved BF EOA and API key serve one
 curator/default account. The executor's account and caller are discovered together at a

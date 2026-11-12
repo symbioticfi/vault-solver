@@ -284,8 +284,11 @@ func TestConfigAndMissingSecret(t *testing.T) {
 	}
 	c := newTestClient(t, func(http.ResponseWriter, *http.Request) { t.Error("missing key sent") })
 	t.Setenv("TEST_3F_KEY", "")
-	if _, err := c.Offers(context.Background()); err == nil {
-		t.Fatal("missing secret accepted")
+	if _, err := c.Offers(context.Background()); err == nil || !strings.Contains(err.Error(), "TEST_3F_KEY is missing") {
+		t.Fatalf("missing secret accepted or cause dropped: %v", err)
+	}
+	if _, err := newClient(apiConfig{URL: "https://example.org", APIKeyEnv: "TEST_3F_KEY", Broker: testBroker}); err == nil { //nolint:gosec // APIKeyEnv names an environment variable, never a credential.
+		t.Fatal("client started without its API key")
 	}
 }
 
