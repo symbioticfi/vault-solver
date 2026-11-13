@@ -1625,43 +1625,6 @@ func TestDefiniteBroadcastRejectionDoesNotConsumeNonce(t *testing.T) {
 	}
 }
 
-func TestSendRelaySimulationRevertFreesLane(t *testing.T) {
-	b := newMockBackend()
-	b.sendErrs = []error{errors.New("Failed in pending block with: Reverted")}
-	m := newTestManager(t, b)
-	req := Request{To: common.HexToAddress("0xabc"), GasLimit: 21_000, Label: "rfq-fill", Solver: "rfq"}
-
-	res := m.Send(t.Context(), req)
-	var revert *ExecutionRevertError
-	if res.Outcome != OutcomeSubmissionError || !errors.As(res.Err, &revert) || revert.Data != nil {
-		t.Fatalf("outcome %v err %v, want a submission error wrapping a dataless execution revert", res.Outcome, res.Err)
-	}
-	if next := m.Send(t.Context(), req); next.Err != nil || next.Outcome != OutcomeConfirmed {
-		t.Fatalf("follow-up send = %v err %v, want confirmed on the freed lane", next.Outcome, next.Err)
-	}
-	if attempted := b.attemptedTransactions(); len(attempted) != 2 || attempted[1].Nonce() != attempted[0].Nonce() {
-		t.Fatalf("attempts %v, want the follow-up to reuse the rejected nonce", transactionHashes(attempted))
-	}
-}
-
-func TestRelaySimulationRevertClassification(t *testing.T) {
-	for message, want := range map[string]bool{
-		"Failed in pending block with: Reverted":            true,
-		"rpc error: failed in pending block with: reverted": true,
-		"execution reverted":                                false,
-		"execution reverted: order already filled":          false,
-		"transaction reverted":                              false,
-		"Reverted":                                          false,
-		"Failed in pending block with: NonceTooHigh":        false,
-		"pending block not available":                       false,
-		"insufficient funds for gas * price + value":        false,
-	} {
-		if got := relaySimulationRevert(errors.New(message)) != nil; got != want {
-			t.Errorf("relaySimulationRevert(%q) = %v, want %v", message, got, want)
-		}
-	}
-}
-
 func TestKnownTransactionErrorClassificationIsNarrow(t *testing.T) {
 	if !isKnownTransactionError(errors.New("already known")) {
 		t.Fatal("already-known transaction was not recognized")

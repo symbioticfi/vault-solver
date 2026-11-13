@@ -7,15 +7,16 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
-	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/adapter"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 )
 
+// executorBinding (abigen --v2) packs fill() via TryPackFill; executorABI is parsed only for tuple
+// reflection (decoding the backend's order tuple), which the Pack helpers don't expose. fill() is
+// overloaded 3×; PackFill is the mixed order+protocolSig+swaps+discountSwaps overload we build — the
+// golden selector test pins it.
 var (
-	executorBinding   = executor.NewExecutor()
-	executorABI       = mustExecutorABI()
-	adapterBinding    = adapter.NewLiquidLaneAdapter()
-	executorCallsArgs = executorCallArguments()
+	executorBinding = executor.NewExecutor()
+	executorABI     = mustExecutorABI()
 )
 
 func mustExecutorABI() abi.ABI {
@@ -29,6 +30,10 @@ func mustExecutorABI() abi.ABI {
 // orderTupleArgs decodes the backend's `encodedOrder` — an ABI-encoded single Order tuple, identical
 // to fill()'s first argument type.
 var orderTupleArgs = abi.Arguments{{Type: fillOrderType()}}
+
+// emptyExecutorData is abi.encode(ExecutorCall[]) for an empty call list — the executorData a direct
+// fill passes (the Executor decodes it to a (target,value,data)[] and runs no extra calls).
+var emptyExecutorData = encodeEmptyExecutorData()
 
 func fillOrderType() abi.Type {
 	m, ok := executorABI.Methods["fill"]
@@ -45,7 +50,7 @@ type executorCall struct {
 	Data   []byte
 }
 
-func executorCallArguments() abi.Arguments {
+func encodeEmptyExecutorData() []byte {
 	t, err := abi.NewType("tuple[]", "", []abi.ArgumentMarshaling{
 		{Name: "target", Type: "address"},
 		{Name: "value", Type: "uint256"},
@@ -54,7 +59,11 @@ func executorCallArguments() abi.Arguments {
 	if err != nil {
 		panic("rfq: build executorData type: " + err.Error())
 	}
-	return abi.Arguments{{Type: t}}
+	data, err := abi.Arguments{{Type: t}}.Pack([]executorCall{})
+	if err != nil {
+		panic("rfq: pack empty executorData: " + err.Error())
+	}
+	return data
 }
 
 // decodeOrder decodes a backend-provided ABI-encoded Reactor order into the typed struct fill expects.
@@ -73,37 +82,15 @@ func decodeOrder(encoded []byte) (executor.IReactorOrder, error) {
 	return *out, nil
 }
 
-// Reactor funds the input arrays; Executor runs the corresponding calls in this order.
+// encodeFill builds Executor.fill(order, protocolSig, swapInputs, discountSwapInputs, executorData)
+// calldata for the mixed overload.
 func encodeFill(
 	order executor.IReactorOrder,
 	protocolSig []byte,
 	swaps []executor.IReactorSwapInput,
 	discountSwaps []executor.IReactorDiscountSwapInput,
+	executorData []byte,
 ) ([]byte, error) {
-	calls := make([]executorCall, 0, len(swaps)+len(discountSwaps))
-	for _, input := range swaps {
-		data, err := adapterBinding.TryPackSwap(adapter.ILiquidLaneAdapterSwap(input.Swap))
-		if err != nil {
-			return nil, errors.Errorf("encode adapter swap: %w", err)
-		}
-		calls = append(calls, executorCall{Target: input.Adapter, Value: new(big.Int), Data: data})
-	}
-	for _, input := range discountSwaps {
-		discount := adapter.ILiquidLaneAdapterDiscountSwap{
-			Discount:         adapter.ILiquidLaneAdapterDiscount(input.DiscountSwap.Discount),
-			SignerSignature:  input.DiscountSwap.SignerSignature,
-			ProtocolDeadline: input.DiscountSwap.ProtocolDeadline,
-		}
-		data, err := adapterBinding.TryPackSwap0(discount, input.ProtocolSignature, input.Recipient, input.AmountIn)
-		if err != nil {
-			return nil, errors.Errorf("encode discounted adapter swap: %w", err)
-		}
-		calls = append(calls, executorCall{Target: input.Adapter, Value: new(big.Int), Data: data})
-	}
-	executorData, err := executorCallsArgs.Pack(calls)
-	if err != nil {
-		return nil, errors.Errorf("encode executor calls: %w", err)
-	}
 	data, err := executorBinding.TryPackFill(order, protocolSig, swaps, discountSwaps, executorData)
 	if err != nil {
 		return nil, errors.Errorf("encode fill: %w", err)

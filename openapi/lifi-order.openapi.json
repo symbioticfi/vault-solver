@@ -5,17 +5,7 @@
       "post": {
         "description": "Submit an order (intent) to the bridge",
         "operationId": "OrdersController_submitOrder",
-        "parameters": [
-          {
-            "name": "x-lifi-api-key",
-            "in": "header",
-            "description": "Your LI.FI API key. Optional; requests without it are anonymous.",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
+        "parameters": [],
         "requestBody": {
           "required": true,
           "content": {
@@ -156,7 +146,6 @@
                     "quoteId": "quote_kQAD6-AIP5AdHKTwPUlz-Ha6VYN31n",
                     "submitTime": 1760615834,
                     "orderStatus": "Signed",
-                    "version": "0",
                     "destinationAddress": "0x9773dacbc46cafb4e055060565e319922b48607d",
                     "sendingTokenAddress": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
                     "sendingTokenAmount": "1000000",
@@ -192,18 +181,8 @@
               }
             }
           },
-          "401": {
-            "description": "A credential in the request is invalid, such as a malformed, unknown or disabled LI.FI API key.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          },
           "403": {
-            "description": "The LI.FI API key is not allowed from this IP address.\n\nOrder was refused, or the LI.FI API key is not allowed from this IP address",
+            "description": "Order was refused",
             "content": {
               "application/json": {
                 "schema": {
@@ -226,16 +205,6 @@
                       "error": "Forbidden"
                     }
                   }
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Too many requests or API key checks from your integration or network. Retry after the Retry-After delay.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
                 }
               }
             }
@@ -453,7 +422,6 @@
                         "quoteId": "quote_kQAD6-AIP5AdHKTwPUlz-Ha6VYN31n",
                         "submitTime": 1760615834,
                         "orderStatus": "Delivered",
-                        "version": "1",
                         "destinationAddress": "0x9773dacbc46cafb4e055060565e319922b48607d",
                         "sendingTokenAddress": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
                         "sendingTokenAmount": "1000000",
@@ -511,7 +479,6 @@
                         "quoteId": null,
                         "submitTime": 1759839240,
                         "orderStatus": "Signed",
-                        "version": "0",
                         "destinationAddress": "0xae013dc3a3456459766a729a15c427a6607bd98d",
                         "sendingTokenAddress": "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238",
                         "sendingTokenAmount": "10000",
@@ -586,15 +553,6 @@
               "example": "intent_iU_VePNSu8ED3Y2WxEcQmA0GKxmJsE",
               "type": "string"
             }
-          },
-          {
-            "name": "x-lifi-api-key",
-            "in": "header",
-            "description": "Your LI.FI API key. Optional; requests without it are anonymous.",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -660,7 +618,6 @@
                     "quoteId": "quote_kQAD6-AIP5AdHKTwPUlz-Ha6VYN31n",
                     "submitTime": 1759839240,
                     "orderStatus": "Signed",
-                    "version": "0",
                     "destinationAddress": "0xae013dc3a3456459766a729a15c427a6607bd98d",
                     "sendingTokenAddress": "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238",
                     "sendingTokenAmount": "10000",
@@ -696,38 +653,8 @@
               }
             }
           },
-          "401": {
-            "description": "A credential in the request is invalid, such as a malformed, unknown or disabled LI.FI API key.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The LI.FI API key is not allowed from this IP address.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          },
           "404": {
             "description": "Order not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Too many requests or API key checks from your integration or network. Retry after the Retry-After delay.",
             "content": {
               "application/json": {
                 "schema": {
@@ -746,8 +673,6 @@
     },
     "/chains/supported": {
       "get": {
-        "deprecated": true,
-        "description": "Deprecated. Use `GET /api/v1/chains`.",
         "operationId": "ChainsController_getSupportedChains",
         "parameters": [],
         "responses": {
@@ -788,94 +713,6 @@
         "summary": "Get supported chains",
         "tags": [
           "Bridge API"
-        ],
-        "security": []
-      }
-    },
-    "/api/v1/chains": {
-      "get": {
-        "description": "Returns the active chains as CAIP-2 identifiers. A chain can be listed even when no route on it currently has quotes.",
-        "operationId": "ChainsV1Controller_getChains",
-        "parameters": [
-          {
-            "name": "x-lifi-api-key",
-            "in": "header",
-            "description": "Your LI.FI API key. Optional; requests without it are anonymous.",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The active chains",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GetChainsV1ResponseDto"
-                },
-                "example": {
-                  "chains": [
-                    {
-                      "chain": "eip155:1",
-                      "name": "Ethereum"
-                    },
-                    {
-                      "chain": "eip155:8453",
-                      "name": "Base"
-                    },
-                    {
-                      "chain": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-                      "name": "Solana"
-                    },
-                    {
-                      "chain": "tron:728126428",
-                      "name": "Tron"
-                    },
-                    {
-                      "chain": "stellar:pubnet",
-                      "name": "Stellar"
-                    }
-                  ]
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A credential in the request is invalid, such as a malformed, unknown or disabled LI.FI API key.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The LI.FI API key is not allowed from this IP address.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Too many requests or API key checks from your integration or network. Retry after the Retry-After delay.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          }
-        },
-        "summary": "Get chains",
-        "tags": [
-          "Bridge API v1"
         ],
         "security": []
       }
@@ -2507,15 +2344,6 @@
               "example": "84532",
               "type": "string"
             }
-          },
-          {
-            "name": "x-lifi-api-key",
-            "in": "header",
-            "description": "Your LI.FI API key. Optional; requests without it are anonymous.",
-            "required": false,
-            "schema": {
-              "type": "string"
-            }
           }
         ],
         "responses": {
@@ -3141,36 +2969,6 @@
               }
             }
           },
-          "401": {
-            "description": "A credential in the request is invalid, such as a malformed, unknown or disabled LI.FI API key.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The LI.FI API key is not allowed from this IP address.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Too many requests or API key checks from your integration or network. Retry after the Retry-After delay.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          },
           "503": {
             "description": "The route list is not available yet. Retry in a few seconds.",
             "content": {
@@ -3211,15 +3009,6 @@
             "description": "Destination chain network ID to filter routes to (CAIP-2 format, e.g. \"eip155:8453\")",
             "schema": {
               "example": "eip155:8453",
-              "type": "string"
-            }
-          },
-          {
-            "name": "x-lifi-api-key",
-            "in": "header",
-            "description": "Your LI.FI API key. Optional; requests without it are anonymous.",
-            "required": false,
-            "schema": {
               "type": "string"
             }
           }
@@ -3321,36 +3110,6 @@
               }
             }
           },
-          "401": {
-            "description": "A credential in the request is invalid, such as a malformed, unknown or disabled LI.FI API key.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The LI.FI API key is not allowed from this IP address.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Too many requests or API key checks from your integration or network. Retry after the Retry-After delay.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          },
           "503": {
             "description": "The route list is not available yet. Retry in a few seconds.",
             "content": {
@@ -3378,15 +3137,6 @@
             "required": false,
             "in": "header",
             "description": "Raw integrator key. Use a high-entropy random string. When provided, ONLY quotes tagged for that key are served — open-market quotes are excluded, with no fallback when no tagged quote exists.",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "x-lifi-api-key",
-            "in": "header",
-            "description": "Your LI.FI API key. Optional; requests without it are anonymous.",
-            "required": false,
             "schema": {
               "type": "string"
             }
@@ -3519,28 +3269,8 @@
               }
             }
           },
-          "401": {
-            "description": "A credential in the request is invalid, such as a malformed, unknown or disabled LI.FI API key.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          },
           "403": {
-            "description": "Unsupported swap type or solver not found. The LI.FI API key is not allowed from this IP address.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Too many requests or API key checks from your integration or network. Retry after the Retry-After delay.",
+            "description": "Unsupported swap type or solver not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -3566,15 +3296,6 @@
             "required": false,
             "in": "header",
             "description": "Raw integrator key. Use a high-entropy random string. When provided, ONLY quotes tagged for that key are served — open-market quotes are excluded, with no fallback when no tagged quote exists.",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "x-lifi-api-key",
-            "in": "header",
-            "description": "Your LI.FI API key. Optional; requests without it are anonymous.",
-            "required": false,
             "schema": {
               "type": "string"
             }
@@ -4045,36 +3766,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "A credential in the request is invalid, such as a malformed, unknown or disabled LI.FI API key.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The LI.FI API key is not allowed from this IP address.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "Too many requests or API key checks from your integration or network. Retry after the Retry-After delay.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HttpErrorDto"
-                }
-              }
-            }
           }
         },
         "summary": "Request quote",
@@ -4371,7 +4062,7 @@
   "info": {
     "title": "Lifi Intents API Reference",
     "description": "",
-    "version": "0.0.22",
+    "version": "0.0.21",
     "contact": {}
   },
   "tags": [],
@@ -4811,11 +4502,6 @@
             ],
             "example": "Signed"
           },
-          "version": {
-            "type": "string",
-            "description": "Increases each time a transaction of the order changes, including a correction after a chain reorganization. Compare it as a number and discard an update with a lower version.",
-            "example": "2"
-          },
           "orderIdentifier": {
             "type": "string",
             "description": "Unique identifier for the order (intent id)",
@@ -4979,7 +4665,6 @@
         "required": [
           "submitTime",
           "orderStatus",
-          "version",
           "orderIdentifier",
           "onChainOrderId",
           "destinationAddress",
@@ -5186,40 +4871,6 @@
           "chainId",
           "name",
           "chainType"
-        ]
-      },
-      "ChainV1Dto": {
-        "type": "object",
-        "properties": {
-          "chain": {
-            "type": "string",
-            "description": "CAIP-2 chain identifier. Use it wherever the v1 API takes a chain.",
-            "example": "eip155:8453"
-          },
-          "name": {
-            "type": "string",
-            "description": "Chain name",
-            "example": "Base"
-          }
-        },
-        "required": [
-          "chain",
-          "name"
-        ]
-      },
-      "GetChainsV1ResponseDto": {
-        "type": "object",
-        "properties": {
-          "chains": {
-            "description": "Active chains",
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ChainV1Dto"
-            }
-          }
-        },
-        "required": [
-          "chains"
         ]
       },
       "CatalogInputSettlerDto": {
@@ -5950,7 +5601,7 @@
           "chain": {
             "type": "string",
             "minLength": 1,
-            "description": "CAIP-2 chain identifier for the account. Stellar registration uses the configured verification network. Other supported chains: GET /api/v1/chains.",
+            "description": "CAIP-2 chain identifier for the account. Stellar registration uses the configured verification network. Other supported chains: GET /chains/supported.",
             "example": "eip155:1"
           }
         },
@@ -7392,7 +7043,7 @@
             ]
           },
           "rfqEnabled": {
-            "description": "When true, solvers are also asked to quote this request directly, which can make the response slower. Applies only to integrations with RFQ access, and to requests with one input and one output and without an integrator key. Other requests get posted quotes only. Defaults to false.",
+            "description": "When true, solvers are also asked to quote this request directly, which can make the response slower. Applies only to requests with one input and one output and without an integrator key. Defaults to false.",
             "example": false,
             "type": "boolean"
           },

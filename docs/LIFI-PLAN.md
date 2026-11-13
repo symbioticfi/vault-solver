@@ -29,7 +29,7 @@ A user opens/funds an intent on-chain: "here is X of RWA token `tokenIn`; pay me
 and matched-order delivery. We settle
 that already-opened order in **one atomic transaction**:
 
-1. call `LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(order, calls)` with the
+1. call `LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(order, routes, discountRoutes)` with the
    matched `StandardOrder` and selected direct/discount-backed LiquidLane routes,
 2. the executor calls `InputSettler.finalise(...)` with `solver = destination = address(this)`; the input
    settler releases the opened order input to the executor and calls `orderFinalised(inputs, FillCall)` with
@@ -93,9 +93,9 @@ shutdown-preparation duration used to bound process-wide transaction draining. R
 
 | Piece | Where | Responsibility |
 |---|---|---|
-| `LiquidLaneLifiExecutor` (Solidity) | `../rfq/src/lifi/` | Caller-gated solver/callback contract; `finaliseWithCurrentTimestamp(...)` calls `InputSettler.finalise`; `orderFinalised(..., (FillCall, Call[]))` executes the supplied calls, fills output, and attests; ERC-1271 validates domain-separated registration signatures against the current callers. |
+| `LiquidLaneLifiExecutor` (Solidity) | `../rfq/src/lifi/` | Caller-gated solver/callback contract; `finaliseWithCurrentTimestamp(...)` calls `InputSettler.finalise`; `orderFinalised(..., FillCall)` redeems claimed input via LiquidLane, fills output, and attests; ERC-1271 validates domain-separated registration signatures against the current callers. |
 | Vendored OIF interfaces/structs | `../rfq/src/lifi/interfaces/` | `IInputCallback`, `MandateOutput`, `StandardOrder`, OutputSettler `fill`/`setAttestation` surface. |
-| `lifi` solver (Go) | `internal/solvers/lifi/` | Pricing, decision, finalise calldata with ordered transfer/swap `Call[]`, submit. |
+| `lifi` solver (Go) | `internal/solvers/lifi/` | Pricing, decision, finalise calldata with typed direct `FillRoute[]` plus discount-backed `DiscountRoute[]`, submit. |
 | Order-server client (Go, generated) | `api/lifiorder/` ← `openapi/lifi-order.openapi.json` | Typed HTTP client for register / `quotes/submit` / `orders` (vendor→generate→commit, like `api/rfqbackend`). The WebSocket order feed is a thin hand-written client. |
 | LI.FI strategies (Go) | `internal/solvers/lifi/strategies/` | `default` owns local quote/fill policy; `webhook` delegates to `/decide-quotes` and `/decide-fill` and validates returned route references. |
 | LI.FI order server | external | Standing quotes and matched-order discovery. |
@@ -127,7 +127,8 @@ tx entrypoint the Go solver calls.
 // Caller-gated runtime entrypoint. The executor derives settler, solver, and destination itself.
 function finaliseWithCurrentTimestamp(
     StandardOrder calldata order,
-    IExecutor.Call[] calldata calls
+    FillRoute[] calldata routes,
+    DiscountRoute[] calldata discountRoutes
 ) external;
 
 // IInputCallback (vendored from OIF) — the settler calls this on `destination`.
@@ -145,18 +146,46 @@ The current contract also exposes `initialize`, `callers`/`setCallers`/`isCaller
 owner, caller list, and EIP-712 state are initialized in proxy storage. The owner manages caller authorization.
 ERC-1271 uses the same caller set but is not used by the Go fill path.
 
-The input settler delivers funds to the executor. The solver builds an ordered `Call[]` containing
-an ERC-20 transfer to each adapter followed by its direct or signed-discount swap. The callback no
-longer infers calls from route arrays or checks adapter versions.
+`inputs` are the RWA amounts delivered to the executor during finalise. The solver submits separate direct
+and discount-backed route arrays. The executor constructs the callback `FillCall` from the canonical order
+and those routes:
 
-The executor derives `FillCall { orderId, output, fillDeadline }` from the canonical order, then
-passes `(FillCall, Call[])` to the input settler. After the authenticated callback executes the calls,
-the output settler resolves and pulls the owed amount; failure reverts the whole transaction.
-Finally the executor attests the fill. Surplus remains on the executor.
+```solidity
+struct FillCall {
+    bytes32 orderId;          // OIF order id
+    MandateOutput output;     // the single output to satisfy (token, amount, recipient, ...)
+    uint32 fillDeadline;      // from the order
+    FillRoute[] routes;               // direct-swap LiquidLane legs
+    DiscountRoute[] discountRoutes;   // signed discount-backed legs
+}
+struct FillRoute {
+    address adapter;
+    uint256 amountIn;
+    uint256 amountOut;
+}
+struct DiscountRoute {
+    address adapter;
+    uint256 amountIn;
+    ILiquidLaneAdapter.DiscountSwap discountSwap;
+    bytes protocolSignature;
+}
+```
 
-The single `finaliseWithCurrentTimestamp(order, calls)` entrypoint also accepts recipe calls.
-The built-in strategy constructs native Liquid Lane transfers/swaps; recipe route discovery is
-not part of that strategy. Upgrade the executor implementation and solver encoder together.
+### Execution flow
+
+1. `finaliseWithCurrentTimestamp(order, routes, discountRoutes)` requires an authorized executor caller,
+   computes the order id, and constructs callback data from `order.outputs[0]`, `order.fillDeadline`, and
+   the supplied direct/discount-backed routes.
+2. It calls `InputSettler.finalise(order, solveParams, bytes32(address(this)), call)` with
+   `solveParams[0].solver = bytes32(address(this))`. The settler's direct path accepts this because its caller
+   is the canonical solver contract.
+3. After the input is claimed, `orderFinalised` accepts calls only from the immutable input settler, transfers
+   each route's input to its adapter, executes `FillRoute[]` through direct `swap` and `DiscountRoute[]`
+   through signed `discountSwap`. The canonical adapter verifies discount signer/protocol signatures and terms.
+4. The OutputSettler resolves the accepted limit or exclusive-limit context authoritatively and pulls the
+   amount it is owed; a shortfall or invalid context reverts the transaction. Dutch contexts are rejected by
+   the solver before planning.
+5. The executor calls `setAttestation(...)`. Any produced surplus stays in the executor.
 
 ### Authorization & safety
 
@@ -208,7 +237,7 @@ The solver supports only limit and exclusive-limit contexts. It discards both Du
 admission and logs the order identifiers and unsupported context type.
 
 **Entrypoint:** the bot calls
-`LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(order, calls)`. The executor calls
+`LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(order, routes, discountRoutes)`. The executor calls
 the LI.FI opened-order direct finalise path with the current `block.timestamp`; both canonical solver and
 destination are the executor itself, and it constructs the callback `FillCall` internally. Gasless
 `openForAndFinalise` is not supported.
@@ -296,12 +325,7 @@ backoff; repeated early disconnects increase it to the existing 30-second cap. T
 readiness is captured before cancellation and cleanup. Quote suspension and REST recovery are unchanged.
 
 **Order feed** — subscribe to the WebSocket `user:vm-order-submit` event (respond to `ping` with
-`pong`). `orderServer.wsReadTimeout` (default `60s`) bounds inactivity: each received application
-message or WebSocket ping/pong renews the read deadline. A silent open socket times out and reconnects,
-clearing connection/recovery readiness and canceling/joining its recovery work before the next
-connection. Application and control pong writes use `orderServer.wsWriteTimeout` (default `10s`).
-These budgets must be positive durations and come from the YAML configuration. On every connection
-the socket reader starts first, then the solver repeatedly paginates
+`pong`). On every connection the socket reader starts first, then the solver repeatedly paginates
 `GET /orders` for `Signed` and `Delivered` rows scoped to this executor and configured origin/destination
 chain until a pass adds no new immutable-order fingerprints. The live socket may also carry valid orders for
 other chains; routing checks classify foreign origin/output chains at info level before token parsing;
@@ -526,7 +550,7 @@ Local state advances only after a successful acknowledgement; otherwise replacem
 pending for retry. An unchanged pair is not reposted on every calculation tick.
 
 The solver then executes the result — publish the curve, or send one
-`finaliseWithCurrentTimestamp(order, calls)` tx from the
+`finaliseWithCurrentTimestamp(order, routes, discountRoutes)` tx from the
 `FillPlan`. `default` is in-process. `webhook` posts the same raw snapshots to `/decide-quotes` and
 `/decide-fill`; its response is a `FillPlan` or `null`. The solver normalizes adapters/capacity IDs from
 trusted candidates and rejects unknown, oversized, duplicated, input-mismatched, or capacity-conflicting
@@ -535,9 +559,9 @@ the shared calculator using LI.FI's fixed settlement/private-payload envelope.
 
 ### 5.3 Build & submit
 
-Build a transfer/swap pair for each selected route in plan order → require the combined transfer
-amount to equal the gross order input → pack
-`LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(order, calls)` via generated bindings
+Split the strategy plan into direct executor `FillRoute[]` and discount-backed `DiscountRoute[]` by
+`DiscountID` → require the combined input sum to equal the gross order input → pack
+`LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(order, routes, discountRoutes)` via generated bindings
 → read `InputSettlerEscrowLIFI.orderStatus(orderId)` again → submit only when the status is `Deposited`.
 The executor derives the solver identifier from `address(this)`. The WS handler places parsed orders into an
 in-memory FIFO without blocking the socket reader, so ping/pong and later messages continue while one planner
@@ -647,13 +671,13 @@ LI.FI order server ──(WS: opened/funded StandardOrder)──▶ lifi solver
   price: fresh direct getAmountOut or signed-discount output; getMaxAssets → reserved cap
   decide: buffered target ≥ resolved output + gas, deadlines buffered ?  ── no ─▶ skip
      │ yes
-  build ordered transfer/swap Call[]; require combined input amounts == order input
+  build direct FillRoute[] + discount-backed DiscountRoute[]; require combined Σ amountIn == order input
      │
-  txmanager ─▶ LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(order, calls)
+  txmanager ─▶ LiquidLaneLifiExecutor.finaliseWithCurrentTimestamp(order, routes, discountRoutes)
               └▶ InputSettlerEscrowLIFI.finalise(... solver=destination=EXECUTOR ...)
                  ├─ deliver opened order RWA → EXECUTOR
-                 └─ EXECUTOR.orderFinalised(inputs, (FillCall, calls)):
-                    execute transfers and direct/signed swaps → EXECUTOR
+                 └─ EXECUTOR.orderFinalised(inputs, FillCall):
+                    direct swap(amountOut) or signed discount swap → EXECUTOR
                     OUTPUT_SETTLER.fill + setAttestation
   surplus (redeemed - resolved output) remains in EXECUTOR
 ```
@@ -907,7 +931,7 @@ still requires the redeploy in phase 0.
    LiquidLane fill planning,
    asset match, immediate OutputSettlerSimple context resolution
    for limit and exclusive-limit outputs, with Dutch contexts rejected at order-feed admission);
-   executor-as-solver ordered transfer/swap `Call[]` finalise calldata;
+   executor-as-solver typed direct `FillRoute[]` plus discount-backed `DiscountRoute[]` finalise calldata;
    early/final `orderStatus == Deposited` checks; latest-state snapshots; optional txmanager profitability-ceiling fee
    input; dynamic ranges; quote reconciliation; bounded replay-coalescing fill handoff, sequential nonce broadcast,
    pending-capacity-aware bounded FIFO retry, terminal-result reservation release (receipted outcomes wait for
@@ -937,9 +961,6 @@ still requires the redeploy in phase 0.
   once in Solidity and return per-token results in one latest-state Multicall. The configured lens
   requires the batch getter before solver rollout; point mainnet profiles to the new shared proxy above.
   Contract fork tests cover both incident adapters.
-- [x] **Recover silent open order feeds.** Configured read inactivity and pong-write budgets force
-  reconnect/recovery and clear readiness when a previously recovered peer stops sending heartbeats.
-
 - [x] **Recover uncertain transaction outcomes on a healthy feed.** Re-read on-chain settlement and
   retain eligible orders in the existing timed retry mechanism through transient RPC/planning failures,
   with replay coalescing, preserved backoff and an admission-time deadline; no feed reconnect required.

@@ -24,13 +24,6 @@ var (
 	_ = abi.ConvertType
 )
 
-// IExecutorCall is an auto generated low-level Go binding around an user-defined struct.
-type IExecutorCall struct {
-	Target common.Address
-	Value  *big.Int
-	Data   []byte
-}
-
 // IInputSettlerStandardOrder is an auto generated low-level Go binding around an user-defined struct.
 type IInputSettlerStandardOrder struct {
 	User          common.Address
@@ -41,6 +34,38 @@ type IInputSettlerStandardOrder struct {
 	InputOracle   common.Address
 	Inputs        [][2]*big.Int
 	Outputs       []MandateOutput
+}
+
+// ILiquidLaneAdapterDiscount is an auto generated low-level Go binding around an user-defined struct.
+type ILiquidLaneAdapterDiscount struct {
+	TokenToRedeem common.Address
+	Discount      *big.Int
+	Signer        common.Address
+	Protocol      common.Address
+	Nonce         *big.Int
+	Deadline      *big.Int
+}
+
+// ILiquidLaneAdapterDiscountSwap is an auto generated low-level Go binding around an user-defined struct.
+type ILiquidLaneAdapterDiscountSwap struct {
+	Discount         ILiquidLaneAdapterDiscount
+	SignerSignature  []byte
+	ProtocolDeadline *big.Int
+}
+
+// ILiquidLaneLifiExecutorDiscountRoute is an auto generated low-level Go binding around an user-defined struct.
+type ILiquidLaneLifiExecutorDiscountRoute struct {
+	Adapter           common.Address
+	AmountIn          *big.Int
+	DiscountSwap      ILiquidLaneAdapterDiscountSwap
+	ProtocolSignature []byte
+}
+
+// ILiquidLaneLifiExecutorFillRoute is an auto generated low-level Go binding around an user-defined struct.
+type ILiquidLaneLifiExecutorFillRoute struct {
+	Adapter   common.Address
+	AmountIn  *big.Int
+	AmountOut *big.Int
 }
 
 // MandateOutput is an auto generated low-level Go binding around an user-defined struct.
@@ -57,7 +82,7 @@ type MandateOutput struct {
 
 // LiquidLaneLifiExecutorMetaData contains all meta data concerning the LiquidLaneLifiExecutor contract.
 var LiquidLaneLifiExecutorMetaData = bind.MetaData{
-	ABI: "[{\"type\":\"constructor\",\"inputs\":[{\"name\":\"inputSettler\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"outputSettler\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"INPUT_SETTLER\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"LIFI_REGISTRATION_TYPEHASH\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"OUTPUT_SETTLER\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"callers\",\"inputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"eip712Domain\",\"inputs\":[],\"outputs\":[{\"name\":\"fields\",\"type\":\"bytes1\",\"internalType\":\"bytes1\"},{\"name\":\"name\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"version\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"chainId\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"verifyingContract\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"salt\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"extensions\",\"type\":\"uint256[]\",\"internalType\":\"uint256[]\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"finaliseWithCurrentTimestamp\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structIInputSettler.StandardOrder\",\"components\":[{\"name\":\"user\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"originChainId\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"expires\",\"type\":\"uint32\",\"internalType\":\"uint32\"},{\"name\":\"fillDeadline\",\"type\":\"uint32\",\"internalType\":\"uint32\"},{\"name\":\"inputOracle\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"inputs\",\"type\":\"uint256[2][]\",\"internalType\":\"uint256[2][]\"},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structMandateOutput[]\",\"components\":[{\"name\":\"oracle\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"settler\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"chainId\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"token\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"callbackData\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"context\",\"type\":\"bytes\",\"internalType\":\"bytes\"}]}]},{\"name\":\"calls\",\"type\":\"tuple[]\",\"internalType\":\"structIExecutor.Call[]\",\"components\":[{\"name\":\"target\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"value\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"data\",\"type\":\"bytes\",\"internalType\":\"bytes\"}]}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"initialize\",\"inputs\":[{\"name\":\"owner_\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"initCallers\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"isCaller\",\"inputs\":[{\"name\":\"caller\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"isValidSignature\",\"inputs\":[{\"name\":\"hash\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"signature\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[{\"name\":\"\",\"type\":\"bytes4\",\"internalType\":\"bytes4\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"lifiRegistrationDigest\",\"inputs\":[{\"name\":\"messageHash\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"}],\"outputs\":[{\"name\":\"\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"orderFinalised\",\"inputs\":[{\"name\":\"\",\"type\":\"uint256[2][]\",\"internalType\":\"uint256[2][]\"},{\"name\":\"executionData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"owner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"renounceOwnership\",\"inputs\":[],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setCallers\",\"inputs\":[{\"name\":\"newCallers\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"transferOwnership\",\"inputs\":[{\"name\":\"newOwner\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"event\",\"name\":\"EIP712DomainChanged\",\"inputs\":[],\"anonymous\":false},{\"type\":\"event\",\"name\":\"Initialized\",\"inputs\":[{\"name\":\"version\",\"type\":\"uint64\",\"indexed\":false,\"internalType\":\"uint64\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"OwnershipTransferred\",\"inputs\":[{\"name\":\"previousOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"newOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetCallers\",\"inputs\":[{\"name\":\"newCallers\",\"type\":\"address[]\",\"indexed\":false,\"internalType\":\"address[]\"}],\"anonymous\":false},{\"type\":\"error\",\"name\":\"AddressEmptyCode\",\"inputs\":[{\"name\":\"target\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"FailedCall\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"InsufficientBalance\",\"inputs\":[{\"name\":\"balance\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"needed\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"type\":\"error\",\"name\":\"InvalidInitialization\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotCaller\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotInitializing\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotInputSettler\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"OwnableInvalidOwner\",\"inputs\":[{\"name\":\"owner\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"OwnableUnauthorizedAccount\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"SafeERC20FailedOperation\",\"inputs\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"}]}]",
+	ABI: "[{\"type\":\"constructor\",\"inputs\":[{\"name\":\"inputSettler\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"outputSettler\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"INPUT_SETTLER\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"LIFI_REGISTRATION_TYPEHASH\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"OUTPUT_SETTLER\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"callers\",\"inputs\":[{\"name\":\"\",\"type\":\"uint256\",\"internalType\":\"uint256\"}],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"eip712Domain\",\"inputs\":[],\"outputs\":[{\"name\":\"fields\",\"type\":\"bytes1\",\"internalType\":\"bytes1\"},{\"name\":\"name\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"version\",\"type\":\"string\",\"internalType\":\"string\"},{\"name\":\"chainId\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"verifyingContract\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"salt\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"extensions\",\"type\":\"uint256[]\",\"internalType\":\"uint256[]\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"finaliseWithCurrentTimestamp\",\"inputs\":[{\"name\":\"order\",\"type\":\"tuple\",\"internalType\":\"structIInputSettler.StandardOrder\",\"components\":[{\"name\":\"user\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"originChainId\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"expires\",\"type\":\"uint32\",\"internalType\":\"uint32\"},{\"name\":\"fillDeadline\",\"type\":\"uint32\",\"internalType\":\"uint32\"},{\"name\":\"inputOracle\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"inputs\",\"type\":\"uint256[2][]\",\"internalType\":\"uint256[2][]\"},{\"name\":\"outputs\",\"type\":\"tuple[]\",\"internalType\":\"structMandateOutput[]\",\"components\":[{\"name\":\"oracle\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"settler\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"chainId\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"token\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"amount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"recipient\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"callbackData\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"context\",\"type\":\"bytes\",\"internalType\":\"bytes\"}]}]},{\"name\":\"routes\",\"type\":\"tuple[]\",\"internalType\":\"structILiquidLaneLifiExecutor.FillRoute[]\",\"components\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"amountOut\",\"type\":\"uint256\",\"internalType\":\"uint256\"}]},{\"name\":\"discountRoutes\",\"type\":\"tuple[]\",\"internalType\":\"structILiquidLaneLifiExecutor.DiscountRoute[]\",\"components\":[{\"name\":\"adapter\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"amountIn\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"discountSwap\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.DiscountSwap\",\"components\":[{\"name\":\"discount\",\"type\":\"tuple\",\"internalType\":\"structILiquidLaneAdapter.Discount\",\"components\":[{\"name\":\"tokenToRedeem\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"discount\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"signer\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"protocol\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"nonce\",\"type\":\"uint256\",\"internalType\":\"uint256\"},{\"name\":\"deadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"signerSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"},{\"name\":\"protocolDeadline\",\"type\":\"uint48\",\"internalType\":\"uint48\"}]},{\"name\":\"protocolSignature\",\"type\":\"bytes\",\"internalType\":\"bytes\"}]}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"initialize\",\"inputs\":[{\"name\":\"owner_\",\"type\":\"address\",\"internalType\":\"address\"},{\"name\":\"initCallers\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"isCaller\",\"inputs\":[{\"name\":\"caller\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[{\"name\":\"\",\"type\":\"bool\",\"internalType\":\"bool\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"isValidSignature\",\"inputs\":[{\"name\":\"hash\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"},{\"name\":\"signature\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[{\"name\":\"\",\"type\":\"bytes4\",\"internalType\":\"bytes4\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"lifiRegistrationDigest\",\"inputs\":[{\"name\":\"messageHash\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"}],\"outputs\":[{\"name\":\"\",\"type\":\"bytes32\",\"internalType\":\"bytes32\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"orderFinalised\",\"inputs\":[{\"name\":\"inputs\",\"type\":\"uint256[2][]\",\"internalType\":\"uint256[2][]\"},{\"name\":\"executionData\",\"type\":\"bytes\",\"internalType\":\"bytes\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"owner\",\"inputs\":[],\"outputs\":[{\"name\":\"\",\"type\":\"address\",\"internalType\":\"address\"}],\"stateMutability\":\"view\"},{\"type\":\"function\",\"name\":\"renounceOwnership\",\"inputs\":[],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"setCallers\",\"inputs\":[{\"name\":\"newCallers\",\"type\":\"address[]\",\"internalType\":\"address[]\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"function\",\"name\":\"transferOwnership\",\"inputs\":[{\"name\":\"newOwner\",\"type\":\"address\",\"internalType\":\"address\"}],\"outputs\":[],\"stateMutability\":\"nonpayable\"},{\"type\":\"event\",\"name\":\"EIP712DomainChanged\",\"inputs\":[],\"anonymous\":false},{\"type\":\"event\",\"name\":\"Initialized\",\"inputs\":[{\"name\":\"version\",\"type\":\"uint64\",\"indexed\":false,\"internalType\":\"uint64\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"OwnershipTransferred\",\"inputs\":[{\"name\":\"previousOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"},{\"name\":\"newOwner\",\"type\":\"address\",\"indexed\":true,\"internalType\":\"address\"}],\"anonymous\":false},{\"type\":\"event\",\"name\":\"SetCallers\",\"inputs\":[{\"name\":\"newCallers\",\"type\":\"address[]\",\"indexed\":false,\"internalType\":\"address[]\"}],\"anonymous\":false},{\"type\":\"error\",\"name\":\"InvalidInitialization\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotCaller\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotInitializing\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"NotInputSettler\",\"inputs\":[]},{\"type\":\"error\",\"name\":\"OwnableInvalidOwner\",\"inputs\":[{\"name\":\"owner\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"OwnableUnauthorizedAccount\",\"inputs\":[{\"name\":\"account\",\"type\":\"address\",\"internalType\":\"address\"}]},{\"type\":\"error\",\"name\":\"SafeERC20FailedOperation\",\"inputs\":[{\"name\":\"token\",\"type\":\"address\",\"internalType\":\"address\"}]}]",
 	ID:  "LiquidLaneLifiExecutor",
 }
 
@@ -293,12 +318,12 @@ func (liquidLaneLifiExecutor *LiquidLaneLifiExecutor) UnpackEip712Domain(data []
 }
 
 // PackFinaliseWithCurrentTimestamp is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x3e9abffa.  This method will panic if any
+// the contract method with ID 0xd24f1d03.  This method will panic if any
 // invalid/nil inputs are passed.
 //
-// Solidity: function finaliseWithCurrentTimestamp((address,uint256,uint256,uint32,uint32,address,uint256[2][],(bytes32,bytes32,uint256,bytes32,uint256,bytes32,bytes,bytes)[]) order, (address,uint256,bytes)[] calls) returns()
-func (liquidLaneLifiExecutor *LiquidLaneLifiExecutor) PackFinaliseWithCurrentTimestamp(order IInputSettlerStandardOrder, calls []IExecutorCall) []byte {
-	enc, err := liquidLaneLifiExecutor.abi.Pack("finaliseWithCurrentTimestamp", order, calls)
+// Solidity: function finaliseWithCurrentTimestamp((address,uint256,uint256,uint32,uint32,address,uint256[2][],(bytes32,bytes32,uint256,bytes32,uint256,bytes32,bytes,bytes)[]) order, (address,uint256,uint256)[] routes, (address,uint256,((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes)[] discountRoutes) returns()
+func (liquidLaneLifiExecutor *LiquidLaneLifiExecutor) PackFinaliseWithCurrentTimestamp(order IInputSettlerStandardOrder, routes []ILiquidLaneLifiExecutorFillRoute, discountRoutes []ILiquidLaneLifiExecutorDiscountRoute) []byte {
+	enc, err := liquidLaneLifiExecutor.abi.Pack("finaliseWithCurrentTimestamp", order, routes, discountRoutes)
 	if err != nil {
 		panic(err)
 	}
@@ -306,12 +331,12 @@ func (liquidLaneLifiExecutor *LiquidLaneLifiExecutor) PackFinaliseWithCurrentTim
 }
 
 // TryPackFinaliseWithCurrentTimestamp is the Go binding used to pack the parameters required for calling
-// the contract method with ID 0x3e9abffa.  This method will return an error
+// the contract method with ID 0xd24f1d03.  This method will return an error
 // if any inputs are invalid/nil.
 //
-// Solidity: function finaliseWithCurrentTimestamp((address,uint256,uint256,uint32,uint32,address,uint256[2][],(bytes32,bytes32,uint256,bytes32,uint256,bytes32,bytes,bytes)[]) order, (address,uint256,bytes)[] calls) returns()
-func (liquidLaneLifiExecutor *LiquidLaneLifiExecutor) TryPackFinaliseWithCurrentTimestamp(order IInputSettlerStandardOrder, calls []IExecutorCall) ([]byte, error) {
-	return liquidLaneLifiExecutor.abi.Pack("finaliseWithCurrentTimestamp", order, calls)
+// Solidity: function finaliseWithCurrentTimestamp((address,uint256,uint256,uint32,uint32,address,uint256[2][],(bytes32,bytes32,uint256,bytes32,uint256,bytes32,bytes,bytes)[]) order, (address,uint256,uint256)[] routes, (address,uint256,((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes)[] discountRoutes) returns()
+func (liquidLaneLifiExecutor *LiquidLaneLifiExecutor) TryPackFinaliseWithCurrentTimestamp(order IInputSettlerStandardOrder, routes []ILiquidLaneLifiExecutorFillRoute, discountRoutes []ILiquidLaneLifiExecutorDiscountRoute) ([]byte, error) {
+	return liquidLaneLifiExecutor.abi.Pack("finaliseWithCurrentTimestamp", order, routes, discountRoutes)
 }
 
 // PackInitialize is the Go binding used to pack the parameters required for calling
@@ -445,9 +470,9 @@ func (liquidLaneLifiExecutor *LiquidLaneLifiExecutor) UnpackLifiRegistrationDige
 // the contract method with ID 0x73e57c27.  This method will panic if any
 // invalid/nil inputs are passed.
 //
-// Solidity: function orderFinalised(uint256[2][] , bytes executionData) returns()
-func (liquidLaneLifiExecutor *LiquidLaneLifiExecutor) PackOrderFinalised(arg0 [][2]*big.Int, executionData []byte) []byte {
-	enc, err := liquidLaneLifiExecutor.abi.Pack("orderFinalised", arg0, executionData)
+// Solidity: function orderFinalised(uint256[2][] inputs, bytes executionData) returns()
+func (liquidLaneLifiExecutor *LiquidLaneLifiExecutor) PackOrderFinalised(inputs [][2]*big.Int, executionData []byte) []byte {
+	enc, err := liquidLaneLifiExecutor.abi.Pack("orderFinalised", inputs, executionData)
 	if err != nil {
 		panic(err)
 	}
@@ -458,9 +483,9 @@ func (liquidLaneLifiExecutor *LiquidLaneLifiExecutor) PackOrderFinalised(arg0 []
 // the contract method with ID 0x73e57c27.  This method will return an error
 // if any inputs are invalid/nil.
 //
-// Solidity: function orderFinalised(uint256[2][] , bytes executionData) returns()
-func (liquidLaneLifiExecutor *LiquidLaneLifiExecutor) TryPackOrderFinalised(arg0 [][2]*big.Int, executionData []byte) ([]byte, error) {
-	return liquidLaneLifiExecutor.abi.Pack("orderFinalised", arg0, executionData)
+// Solidity: function orderFinalised(uint256[2][] inputs, bytes executionData) returns()
+func (liquidLaneLifiExecutor *LiquidLaneLifiExecutor) TryPackOrderFinalised(inputs [][2]*big.Int, executionData []byte) ([]byte, error) {
+	return liquidLaneLifiExecutor.abi.Pack("orderFinalised", inputs, executionData)
 }
 
 // PackOwner is the Go binding used to pack the parameters required for calling
@@ -743,15 +768,6 @@ func (liquidLaneLifiExecutor *LiquidLaneLifiExecutor) UnpackSetCallersEvent(log 
 // UnpackError attempts to decode the provided error data using user-defined
 // error definitions.
 func (liquidLaneLifiExecutor *LiquidLaneLifiExecutor) UnpackError(raw []byte) (any, error) {
-	if bytes.Equal(raw[:4], liquidLaneLifiExecutor.abi.Errors["AddressEmptyCode"].ID.Bytes()[:4]) {
-		return liquidLaneLifiExecutor.UnpackAddressEmptyCodeError(raw[4:])
-	}
-	if bytes.Equal(raw[:4], liquidLaneLifiExecutor.abi.Errors["FailedCall"].ID.Bytes()[:4]) {
-		return liquidLaneLifiExecutor.UnpackFailedCallError(raw[4:])
-	}
-	if bytes.Equal(raw[:4], liquidLaneLifiExecutor.abi.Errors["InsufficientBalance"].ID.Bytes()[:4]) {
-		return liquidLaneLifiExecutor.UnpackInsufficientBalanceError(raw[4:])
-	}
 	if bytes.Equal(raw[:4], liquidLaneLifiExecutor.abi.Errors["InvalidInitialization"].ID.Bytes()[:4]) {
 		return liquidLaneLifiExecutor.UnpackInvalidInitializationError(raw[4:])
 	}
@@ -774,78 +790,6 @@ func (liquidLaneLifiExecutor *LiquidLaneLifiExecutor) UnpackError(raw []byte) (a
 		return liquidLaneLifiExecutor.UnpackSafeERC20FailedOperationError(raw[4:])
 	}
 	return nil, errors.New("Unknown error")
-}
-
-// LiquidLaneLifiExecutorAddressEmptyCode represents a AddressEmptyCode error raised by the LiquidLaneLifiExecutor contract.
-type LiquidLaneLifiExecutorAddressEmptyCode struct {
-	Target common.Address
-}
-
-// ErrorID returns the hash of canonical representation of the error's signature.
-//
-// Solidity: error AddressEmptyCode(address target)
-func LiquidLaneLifiExecutorAddressEmptyCodeErrorID() common.Hash {
-	return common.HexToHash("0x9996b315c842ff135b8fc4a08ad5df1c344efbc03d2687aecc0678050d2aac89")
-}
-
-// UnpackAddressEmptyCodeError is the Go binding used to decode the provided
-// error data into the corresponding Go error struct.
-//
-// Solidity: error AddressEmptyCode(address target)
-func (liquidLaneLifiExecutor *LiquidLaneLifiExecutor) UnpackAddressEmptyCodeError(raw []byte) (*LiquidLaneLifiExecutorAddressEmptyCode, error) {
-	out := new(LiquidLaneLifiExecutorAddressEmptyCode)
-	if err := liquidLaneLifiExecutor.abi.UnpackIntoInterface(out, "AddressEmptyCode", raw); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// LiquidLaneLifiExecutorFailedCall represents a FailedCall error raised by the LiquidLaneLifiExecutor contract.
-type LiquidLaneLifiExecutorFailedCall struct {
-}
-
-// ErrorID returns the hash of canonical representation of the error's signature.
-//
-// Solidity: error FailedCall()
-func LiquidLaneLifiExecutorFailedCallErrorID() common.Hash {
-	return common.HexToHash("0xd6bda27508c0fb6d8a39b4b122878dab26f731a7d4e4abe711dd3731899052a4")
-}
-
-// UnpackFailedCallError is the Go binding used to decode the provided
-// error data into the corresponding Go error struct.
-//
-// Solidity: error FailedCall()
-func (liquidLaneLifiExecutor *LiquidLaneLifiExecutor) UnpackFailedCallError(raw []byte) (*LiquidLaneLifiExecutorFailedCall, error) {
-	out := new(LiquidLaneLifiExecutorFailedCall)
-	if err := liquidLaneLifiExecutor.abi.UnpackIntoInterface(out, "FailedCall", raw); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-// LiquidLaneLifiExecutorInsufficientBalance represents a InsufficientBalance error raised by the LiquidLaneLifiExecutor contract.
-type LiquidLaneLifiExecutorInsufficientBalance struct {
-	Balance *big.Int
-	Needed  *big.Int
-}
-
-// ErrorID returns the hash of canonical representation of the error's signature.
-//
-// Solidity: error InsufficientBalance(uint256 balance, uint256 needed)
-func LiquidLaneLifiExecutorInsufficientBalanceErrorID() common.Hash {
-	return common.HexToHash("0xcf4791818fba6e019216eb4864093b4947f674afada5d305e57d598b641dad1d")
-}
-
-// UnpackInsufficientBalanceError is the Go binding used to decode the provided
-// error data into the corresponding Go error struct.
-//
-// Solidity: error InsufficientBalance(uint256 balance, uint256 needed)
-func (liquidLaneLifiExecutor *LiquidLaneLifiExecutor) UnpackInsufficientBalanceError(raw []byte) (*LiquidLaneLifiExecutorInsufficientBalance, error) {
-	out := new(LiquidLaneLifiExecutorInsufficientBalance)
-	if err := liquidLaneLifiExecutor.abi.UnpackIntoInterface(out, "InsufficientBalance", raw); err != nil {
-		return nil, err
-	}
-	return out, nil
 }
 
 // LiquidLaneLifiExecutorInvalidInitialization represents a InvalidInitialization error raised by the LiquidLaneLifiExecutor contract.

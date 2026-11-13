@@ -1,8 +1,6 @@
 package rfq
 
 import (
-	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -38,9 +36,6 @@ func TestParseConfig_Defaults(t *testing.T) {
 	}
 	if cfg.PollInterval != defaultPollInterval {
 		t.Fatalf("pollInterval = %s, want %s", cfg.PollInterval, defaultPollInterval)
-	}
-	if cfg.QuoteTimeout != defaultQuoteTimeout {
-		t.Fatalf("quoteTimeout = %s, want %s", cfg.QuoteTimeout, defaultQuoteTimeout)
 	}
 	if cfg.OrderLimit != defaultOrderLimit {
 		t.Fatalf("orderLimit = %d, want %d", cfg.OrderLimit, defaultOrderLimit)
@@ -195,7 +190,6 @@ func TestParseConfig_Overrides(t *testing.T) {
 	cfg, err := parseCfg(t, minimalConfig+`
 listenAddr: ":9000"
 pollIntervalMs: 1500
-quoteTimeoutMs: 700
 orderLimit: 5
 reactor: "0x0000000000000000000000000000000000000030"
 `+oneAdapter)
@@ -203,7 +197,7 @@ reactor: "0x0000000000000000000000000000000000000030"
 		t.Fatalf("parseConfig: %v", err)
 	}
 	if cfg.ListenAddr != ":9000" ||
-		cfg.PollInterval != 1500*time.Millisecond || cfg.QuoteTimeout != 700*time.Millisecond || cfg.OrderLimit != 5 {
+		cfg.PollInterval != 1500*time.Millisecond || cfg.OrderLimit != 5 {
 		t.Fatalf("overrides not applied: %+v", cfg)
 	}
 	if cfg.Reactor == [20]byte{} {
@@ -270,69 +264,6 @@ executor: "not-an-address"
 		t.Run(name, func(t *testing.T) {
 			if _, err := parseCfg(t, body); err == nil {
 				t.Fatalf("expected an error for %q", name)
-			}
-		})
-	}
-}
-
-func TestQuoteOnlyDoesNotStartExecution(t *testing.T) {
-	cfg, err := parseCfg(t, minimalConfig+"solverMode: internal\nquoteOnly: true\n")
-	if err != nil || !cfg.QuoteOnly {
-		t.Fatalf("quoteOnly config: %+v %v", cfg, err)
-	}
-	ctx, cancel := context.WithCancel(t.Context())
-	done := make(chan struct{})
-	s := &Solver{cfg: cfg} // No executor: entering the fill path would panic.
-	go func() { defer close(done); s.runExecution(ctx) }()
-	select {
-	case <-done:
-		t.Fatal("quote-only execution returned before shutdown")
-	case <-time.After(10 * time.Millisecond):
-	}
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("quote-only shutdown blocked")
-	}
-}
-
-func TestLocalRecipeExecutorSelectsMode(t *testing.T) {
-	const recipe = `recipeExecutors: ["0x0000000000000000000000000000000000000043"]
-curator: {url: https://curator.example/api/v1}
-`
-	for _, tc := range []struct {
-		name, text, want string
-		merkle           bool
-	}{
-		{name: "singular adapter is unsupported", text: `adapter: "0x0000000000000000000000000000000000000042"`, want: "field adapter not found"},
-		{name: "adapters preserve native mode", text: oneAdapter},
-		{name: "recipe selects connector mode", text: recipe, merkle: true},
-		{name: "obsolete state directory", text: recipe + "stateDir: /persistent/rfq-merkle\n", want: "field stateDir not found"},
-		{name: "adapters and recipe executor conflict", text: recipe + oneAdapter, want: "mutually exclusive"},
-		{name: "zero executor", text: `recipeExecutors: ["0x0000000000000000000000000000000000000000"]`, want: "recipeExecutor"},
-		{name: "bad executor", text: `recipeExecutors: [no]`, want: "recipeExecutor"},
-		{name: "no curator", text: `recipeExecutors: ["0x0000000000000000000000000000000000000043"]`, want: "curator"},
-		{name: "quote only needs no execution source", text: `recipeExecutors: ["0x0000000000000000000000000000000000000043"]
-quoteOnly: true
-`, merkle: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg, err := parseCfg(t, minimalConfig+tc.text)
-			if tc.want != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.want) {
-					t.Fatalf("want %s, got %v", tc.want, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if (len(cfg.RecipeExecutors) > 0) != tc.merkle {
-				t.Fatalf("wrong mode: %+v", cfg)
-			}
-			if tc.merkle && (len(cfg.Adapters) > 0 || !cfg.usesDiscounts()) {
-				t.Fatal("recipe mode must use signed connector discounts without adapters")
 			}
 		})
 	}

@@ -7,7 +7,7 @@ SHELL := bash
 .DEFAULT_GOAL := help
 
 # Pinned codegen tool versions.
-ABIGEN_VERSION           ?= v1.17.10
+ABIGEN_VERSION           ?= v1.17.8
 GOLANGCI_LINT_VERSION    ?= v2.15.0
 GENQLIENT_VERSION        ?= v0.8.1
 GQLFETCH_VERSION         ?= v0.7.0
@@ -15,7 +15,7 @@ GENQLIENT_X_TOOLS_VERSION ?= v0.52.0
 PROMTOOL                 ?= promtool
 # Java openapi-generator (downloaded on demand by hack/openapi-generator-cli.sh). 7.12.0 is the floor:
 # it ingests OpenAPI 3.1 (the RFQ backend spec); 5.4.0/7.0.1 fail on it.
-OPENAPI_GENERATOR_VERSION ?= 7.27.0
+OPENAPI_GENERATOR_VERSION ?= 7.26.0
 
 # Foundry build output to vendor ABIs from (sibling rfq repo by default).
 FORGE_OUT ?= ../rfq/out
@@ -23,15 +23,11 @@ FORGE_OUT ?= ../rfq/out
 # the universal delegator, and the vault/ERC4626 interfaces live there and are built standalone
 # (`cd ../rfq/lib/core-mirror && forge build`).
 CORE_MIRROR_OUT ?= ../rfq/lib/core-mirror/out
-# Merkle policy and recipe interfaces come from the adapters Foundry build.
-ADAPTERS_OUT ?= ../adapters/out
-# Pinned sibling builds for the test-only canonical RFQ outer-fill artifact.
-RFQ_FIXTURE_ROOT ?= ../rfq
-ADAPTERS_FIXTURE_ROOT ?= ../adapters
-FIXTURE_SOLC ?= solc
-# Production 3F OpenAPI contract, matching schema-sources.json.
-OPENAPI_URL ?= https://bf.3f.xyz/docs/openapi.json
+# Live 3F OpenAPI spec (Sepolia dev).
+OPENAPI_URL ?= https://bf.dev.gcp.3f.xyz/docs/openapi.json
 # RFQ backend OpenAPI spec. The backend serves it at /api/v1/openapi.json (hono-openapi, runtime).
+# NOTE: the temp railway deployment is currently behind the repo (pre adapter/protocolSignature
+# rename); point this at a backend running current code, or regenerate in-repo (see docs/RFQ-PLAN.md).
 RFQ_OPENAPI_URL ?= https://swap.symbiotic.fi/api/v1/openapi.json
 # Discount listing/resolution lives on the backend's internal API. Its document is published from the
 # PUBLIC prefix (the endpoints stay unrouted there), so it can be vendored and drift-checked like any
@@ -44,17 +40,14 @@ LIFI_OPENAPI_URL ?= https://order-dev.li.fi/docs
 UNISWAPX_OPENAPI_URL ?= https://raw.githubusercontent.com/Uniswap/uniswapx-service/main/swagger.json
 MORPHO_GRAPHQL_URL ?= https://api.morpho.org/graphql
 # RedStone's public Atom OEV integration guide — the only public contract-of-record for the OEV
-# WebSocket (the zod schema they shared directly is not published anywhere). The raw-markdown repo is
-# gone, so this is the rendered Docusaurus page; hack/docusaurus-article-extract.py keeps its text.
-REDSTONE_GUIDE_URL       ?= https://docs.redstone.finance/docs/stage2-capital-efficiency/atom/integration-guide/
+# WebSocket (the zod schema they shared directly is not published anywhere).
+REDSTONE_GUIDE_URL       ?= https://raw.githubusercontent.com/RedStone-Finance-UI/redstone-docs/main/docs/stage2-capital-efficiency/atom/integration-guide.md
 
 # Contracts whose ABIs are vendored via refresh-abi. ABIS come from the rfq Foundry build; the
 # CORE_MIRROR_ABIS (the 3F ThreeFAdapter, LiquidLane adapter, adapter factory, universal delegator,
 # and vault/ERC4626 interfaces) come from the core-mirror build, since they aren't in rfq/out.
 ABIS := IRequest IVaultController IWhitelist Executor Reactor LiquidLaneLifiExecutor LiquidLaneUniswapXExecutor
 CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IAdapterFactory IVaultV2 IERC4626 FrontendLiquidityLens
-ADAPTERS_DEPENDENCY_ABIS := IThreeFPositionManager IThreeFUnderlyingAsset
-ADAPTERS_ABIS := IRecipeCapability IThreeFPolicy LiquidLaneConnector $(ADAPTERS_DEPENDENCY_ABIS)
 # api/abi/UniversalDelegator.json is hand-vendored to a minimal {limitOf} ABI (the full contract has
 # an overloaded deallocateAll that abigen rejects, and the solver only reads limitOf) — like Multicall3.
 # FrontendLiquidityLens is sourced from the same core build, including its LiquidLane batch getter.
@@ -70,10 +63,7 @@ ADAPTERS_ABIS := IRecipeCapability IThreeFPolicy LiquidLaneConnector $(ADAPTERS_
 # at the call site, not at runtime.
 BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
             IVaultController:3f/vaultcontroller IWhitelist:3f/whitelist \
-            IThreeFPositionManager:3f/positionmanager IThreeFUnderlyingAsset:3f/underlyingasset \
-            IRecipeCapability:merkle/recipecapability IThreeFPolicy:merkle/threefpolicy \
-            LiquidLaneAdapter:liquidlane/adapter LiquidLaneConnector:liquidlane/connector \
-            Executor:rfq/executor Reactor:rfq/reactor \
+            LiquidLaneAdapter:liquidlane/adapter Executor:rfq/executor Reactor:rfq/reactor \
             LiquidLaneLifiExecutor:lifi/executor LiquidLaneUniswapXExecutor:uniswapx/executor \
             ILifiInputSettler:lifi/inputsettler \
             IAdapterFactory:adapterfactory UniversalDelegator:delegator IVaultV2:vaultv2 IERC4626:erc4626 \
@@ -117,73 +107,63 @@ tools: ## Install pinned codegen + lint tools
 .PHONY: refresh-abi
 refresh-abi: ## Re-vendor ABIs from the rfq + core-mirror Foundry builds (FORGE_OUT=..., CORE_MIRROR_OUT=...)
 	@mkdir -p api/abi
-	@set -euo pipefail; stage="$$(mktemp -d api/abi/.refresh.XXXXXX)"; \
-		trap 'rm -rf "$$stage"' EXIT; \
-		vendor() { jq -e '.abi | if type == "array" and length > 0 then . else error("invalid ABI") end' "$$2/$$1.sol/$$1.json" > "$$stage/$$1.json"; }; \
-		for c in $(ABIS); do vendor "$$c" "$(FORGE_OUT)"; done; \
-		for c in $(CORE_MIRROR_ABIS); do vendor "$$c" "$(CORE_MIRROR_OUT)"; done; \
-		for file in "$$stage"/*.json; do mv "$$file" "api/abi/$${file##*/}"; done
-
-.PHONY: refresh-merkle-abi
-refresh-merkle-abi: ## Project solver-used Merkle ABI entries from Foundry artifacts (ADAPTERS_OUT=...)
-	@mkdir -p api/abi
-	@set -euo pipefail; stage="$$(mktemp -d api/abi/.refresh.XXXXXX)"; \
-		trap 'rm -rf "$$stage"' EXIT; \
-		for c in $(ADAPTERS_ABIS); do \
-			src="$(ADAPTERS_OUT)/$$c.sol/$$c.json"; \
-			case " $(ADAPTERS_DEPENDENCY_ABIS) " in *" $$c "*) src="$(ADAPTERS_OUT)/IThreeFAdapterDependencies.sol/$$c.json" ;; esac; \
-			jq -e --arg contract "$$c" -f hack/merkle-abi.jq "$$src" | \
-				jq -e 'if type == "array" and length > 0 then . else error("invalid ABI projection") end' > "$$stage/$$c.json"; \
-		done; \
-		for file in "$$stage"/*.json; do mv "$$file" "api/abi/$${file##*/}"; done
-
-# Fetch/extract into a sibling temporary file. An upstream/pipeline failure never replaces a contract.
-define refresh_openapi
-	@mkdir -p openapi
-	@set -euo pipefail; tmp="$$(mktemp openapi/.refresh.XXXXXX)"; \
-		trap 'rm -f "$$tmp"' EXIT; \
-		curl -fsSL --max-time 90 -A 'vault-solver' "$(1)" | $(3) | \
-			jq -e 'if type == "object" and (.openapi | type == "string") and (.paths | type == "object") then . else error("invalid OpenAPI document") end' > "$$tmp"; \
-		mv "$$tmp" "$(2)"
-endef
+	@for c in $(ABIS); do \
+		src="$(FORGE_OUT)/$$c.sol/$$c.json"; \
+		if [[ ! -f "$$src" ]]; then echo "missing $$src (run forge build in $(FORGE_OUT)/..)"; exit 1; fi; \
+		jq '.abi' "$$src" > "api/abi/$$c.json"; \
+		echo "vendored api/abi/$$c.json"; \
+	done
+	@for c in $(CORE_MIRROR_ABIS); do \
+		src="$(CORE_MIRROR_OUT)/$$c.sol/$$c.json"; \
+		if [[ ! -f "$$src" ]]; then echo "missing $$src (run forge build in $(CORE_MIRROR_OUT)/..)"; exit 1; fi; \
+		jq '.abi' "$$src" > "api/abi/$$c.json"; \
+		echo "vendored api/abi/$$c.json (core-mirror)"; \
+	done
 
 .PHONY: refresh-openapi
 refresh-openapi: ## Re-pull the live 3F OpenAPI spec
-	$(call refresh_openapi,$(OPENAPI_URL),openapi/3f-bf.openapi.json,cat)
+	@mkdir -p openapi
+	curl -fsSL "$(OPENAPI_URL)" | jq . > openapi/3f-bf.openapi.json
+	@echo "vendored openapi/3f-bf.openapi.json"
 
 .PHONY: refresh-rfq-openapi
 refresh-rfq-openapi: ## Re-pull the RFQ backend OpenAPI spec (RFQ_OPENAPI_URL=...)
-	$(call refresh_openapi,$(RFQ_OPENAPI_URL),openapi/rfq-backend.openapi.json,cat)
+	@mkdir -p openapi
+	curl -fsSL "$(RFQ_OPENAPI_URL)" | jq . > openapi/rfq-backend.openapi.json
+	@echo "vendored openapi/rfq-backend.openapi.json (verify field names — see docs/RFQ-PLAN.md)"
 
 .PHONY: refresh-rfq-internal-openapi
 refresh-rfq-internal-openapi: ## Re-pull the RFQ backend internal OpenAPI spec (RFQ_INTERNAL_OPENAPI_URL=...)
-	$(call refresh_openapi,$(RFQ_INTERNAL_OPENAPI_URL),openapi/rfq-backend-internal.openapi.json,cat)
+	@mkdir -p openapi
+	curl -fsSL "$(RFQ_INTERNAL_OPENAPI_URL)" | jq . > openapi/rfq-backend-internal.openapi.json
+	@echo "vendored openapi/rfq-backend-internal.openapi.json"
 
 .PHONY: refresh-lifi-openapi
 refresh-lifi-openapi: ## Re-pull the LI.FI order-server OpenAPI spec (LIFI_OPENAPI_URL=...)
-	$(call refresh_openapi,$(LIFI_OPENAPI_URL),openapi/lifi-order.openapi.json,python3 hack/scalar-openapi-extract.py)
+	@mkdir -p openapi
+	curl -fsSL "$(LIFI_OPENAPI_URL)" | python3 hack/scalar-openapi-extract.py > openapi/lifi-order.openapi.json
+	@echo "vendored openapi/lifi-order.openapi.json (extracted from the Scalar /docs page)"
 
 .PHONY: refresh-uniswapx-openapi
 refresh-uniswapx-openapi: ## Re-pull the UniswapX order-pool OpenAPI spec
-	$(call refresh_openapi,$(UNISWAPX_OPENAPI_URL),openapi/uniswapx-service.openapi.json,cat)
+	@mkdir -p openapi
+	curl -fsSL "$(UNISWAPX_OPENAPI_URL)" | jq . > openapi/uniswapx-service.openapi.json
+	@echo "vendored openapi/uniswapx-service.openapi.json"
 
 .PHONY: refresh-redstone-guide
 refresh-redstone-guide: ## Re-pull RedStone's public Atom OEV integration guide (REDSTONE_GUIDE_URL=...)
 	@mkdir -p openapi
-	@set -euo pipefail; tmp="$$(mktemp openapi/.refresh.XXXXXX)"; \
-		trap 'rm -f "$$tmp"' EXIT; \
-		curl -fsSL --max-time 90 "$(REDSTONE_GUIDE_URL)" | python3 hack/docusaurus-article-extract.py > "$$tmp"; \
-		test -s "$$tmp"; \
-		mv "$$tmp" openapi/redstone-oev-atom-integration-guide.md
+	curl -fsSL "$(REDSTONE_GUIDE_URL)" > openapi/redstone-oev-atom-integration-guide.md
+	@echo "vendored openapi/redstone-oev-atom-integration-guide.md"
 
 .PHONY: refresh-morpho-graphql-schema
 refresh-morpho-graphql-schema: ## Re-pull the live Morpho GraphQL schema SDL (MORPHO_GRAPHQL_URL=...)
 	@mkdir -p api/graphql/morpho
-	@set -euo pipefail; tmp="$$(mktemp api/graphql/morpho/.refresh.XXXXXX)"; \
+	@tmp="$$(mktemp)"; \
 		trap 'rm -f "$$tmp"' EXIT; \
 		go run github.com/suessflorian/gqlfetch/gqlfetch@$(GQLFETCH_VERSION) \
 			-endpoint "$(MORPHO_GRAPHQL_URL)" > "$$tmp"; \
-		python3 -c 'from pathlib import Path; import sys; path = Path(sys.argv[1]); text = path.read_text().strip(); assert "type Query" in text, "invalid GraphQL schema"; path.write_text(text + "\n")' "$$tmp"; \
+		python3 -c 'from pathlib import Path; import sys; path = Path(sys.argv[1]); path.write_text(path.read_text().rstrip() + "\n")' "$$tmp"; \
 		mv "$$tmp" api/graphql/morpho/schema.graphql
 	@echo "vendored api/graphql/morpho/schema.graphql"
 
@@ -261,7 +241,7 @@ refresh-uniswapx-client: ## Generate the UniswapX order-pool client from the ven
 .PHONY: refresh-morpho-graphql-client
 refresh-morpho-graphql-client: ## Generate the Morpho GraphQL client (genqlient) from the vendored schema + operations
 	@mkdir -p api/morphographql
-	@set -euo pipefail; tmp="$$(mktemp -d)"; \
+	@tmp="$$(mktemp -d)"; \
 		trap 'rm -rf "$$tmp"' EXIT; \
 		cd "$$tmp"; \
 		go mod init genqlient-runner >/dev/null 2>&1; \
@@ -285,14 +265,8 @@ build: ## Build the binary
 
 .PHONY: test
 test: ## Run tests with race detector + coverage (hermetic only; fork/live suites are tag-gated out)
-	python3 -m unittest discover -s hack -p 'test_*.py'
+	python3 -m unittest discover -s hack -p 'test_scalar_openapi_extract.py'
 	go test -race -cover ./...
-
-.PHONY: test-tooling
-test-tooling: ## Check schema registration and refresh failures without live APIs
-	python3 hack/check-schema-drift.py --check-coverage --report /dev/null
-	python3 hack/test-schema-coverage.py
-	python3 hack/test-refresh.py
 
 # Local-only OEV integration suite — build-tagged, skipped by the default `test` + CI.
 .PHONY: test-oev-live
@@ -303,21 +277,6 @@ test-oev-live: ## OEV live checks — Morpho API discovery plus optional Sepolia
 test-txmanager-anvil: ## Exercise fee replacement, nonce reuse and independent replica contention against Anvil
 	@command -v anvil >/dev/null
 	go test -race -tags integration -run TestAnvil -v ./internal/txmanager
-
-.PHONY: refresh-rfq-merkle-fixture
-refresh-rfq-merkle-fixture: ## Re-vendor pinned canonical EVM fixture artifacts (requires sibling Foundry builds + solc 0.8.28)
-	python3 internal/solvers/merkle/rfq/testdata/outer-fill/generate.py --rfq-root "$(RFQ_FIXTURE_ROOT)" --adapters-root "$(ADAPTERS_FIXTURE_ROOT)" --solc "$(FIXTURE_SOLC)"
-
-.PHONY: test-rfq-merkle-anvil
-test-rfq-merkle-anvil: ## Execute canonical RFQ outer settlement boundaries on local Anvil
-	@command -v anvil >/dev/null
-	go test -race -tags integration -run '^TestAnvilConnectorOuterFillCanonicalBoundaries$$' -v ./internal/solvers/merkle/rfq
-
-.PHONY: test-merkle-sdk-anvil
-test-merkle-sdk-anvil: ## Exercise RAM SDK ownership and canonical settlement on local Anvil
-	@command -v anvil >/dev/null
-	go test -race -tags integration -run TestAnvil -v github.com/symbioticfi/merkle-executor/sdk/transaction
-	go test -race -tags integration -run TestSDKRAM -v ./internal/solvers/merkle
 
 .PHONY: format
 format: ## Run golangci-lint with autofix

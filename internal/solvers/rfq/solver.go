@@ -14,9 +14,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/vault-solver/internal/chain"
-	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability"
-	merklerfq "github.com/symbioticfi/vault-solver/internal/solvers/merkle/rfq"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"gopkg.in/yaml.v3"
 
@@ -42,13 +40,9 @@ type Solver struct {
 	cfg         *Config
 	server      *server
 	exec        *executionService
-	merkle      *merklerfq.Solver
 	log         logr.Logger
 	reportFatal func(error)
 }
-
-func (s *Solver) RequiresTxManager() bool       { return s.merkle == nil }
-func (s *Solver) RequiresMerkleTxManager() bool { return s.merkle != nil }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
@@ -87,31 +81,12 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	// the fill loop looks it up by quote id to link the two traces (spec §12).
 	links := observability.NewSpanLinks()
 	exec.links = links
-	var merkle *merklerfq.Solver
-	if len(cfg.RecipeExecutors) > 0 {
-		merkle, err = merklerfq.New(cfg.merkleConfig(), deps)
-		if err != nil {
-			return nil, err
-		}
-		quotes.reservations = func(_ string, inventory []solverInventory) liquidlane.CapacityReservations {
-			return merkle.Reservations(inventory)
-		}
-		manager, err := deps.MerkleTxManager()
-		if err != nil {
-			return nil, err
-		}
-		quotes.laneAvailable = manager.Ready
-		quotes.acceptsConnector = merkle.AcceptsConnector
-		quotes.acceptsRoute = merkle.AcceptsRoute
-	}
 	return &Solver{
-		merkle: merkle,
-		cfg:    cfg,
-		exec:   exec,
+		cfg:  cfg,
+		exec: exec,
 		server: &server{
 			sharedSecret: secret,
 			quotes:       quotes,
-			quoteTimeout: cfg.QuoteTimeout,
 			metrics:      metrics,
 			links:        links,
 		},
@@ -148,7 +123,6 @@ func buildServices(
 	quotes := &quoteService{
 		tokenMetadata:    tokenMetadata,
 		discountsEnabled: cfg.usesDiscounts(),
-		recipeExecutors:  cfg.RecipeExecutors,
 		chainID:          chainID,
 		executor:         cfg.Executor,
 		laneAvailable:    laneAvailable,
@@ -197,16 +171,11 @@ func (s *Solver) ShutdownPreparationTimeout() time.Duration {
 // Run serves the quote HTTP API until ctx is cancelled, then shuts it down gracefully, alongside the
 // backend order-poll + fill loop. The filler is poll-only (no push/notify endpoint).
 func (s *Solver) Run(ctx context.Context) error {
-	if s.merkle != nil {
-		if err := s.merkle.Initialize(ctx); err != nil {
-			return errors.Errorf("rfq: initialize recipe executor: %w", err)
-		}
-	}
 	// Resolve each recovery adapter's vault + collateral once at startup (config carries only adapter
 	// addresses; both are fixed for the adapter's lifetime) and hand the resolved set to recovery. Runs
 	// before the poll loop and the quote server, so there's no concurrent reader of exec.vaults. A
 	// transport failure aborts startup; a per-adapter revert leaves that entry unresolved (skipped).
-	if !s.cfg.QuoteOnly && len(s.cfg.Adapters) > 0 {
+	if len(s.cfg.Adapters) > 0 {
 		resolved, err := s.exec.reader.resolveVaults(ctx, s.cfg.Adapters)
 		if err != nil {
 			startupErr := errors.Errorf("rfq: resolve recovery vaults: %w", err)
@@ -276,9 +245,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	execDone := make(chan struct{})
 	go func() {
 		defer close(execDone)
-		if err := s.runExecution(execCtx); err != nil && execCtx.Err() == nil {
-			errCh <- err
-		}
+		s.exec.run(execCtx)
 	}()
 
 	var runErr error
@@ -286,7 +253,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	case <-ctx.Done():
 		runErr = ctx.Err()
 	case err := <-errCh:
-		runErr = errors.Errorf("rfq: solver failed: %w", err)
+		runErr = errors.Errorf("rfq: quote server failed: %w", err)
 		if s.reportFatal != nil && ctx.Err() == nil {
 			s.reportFatal(runErr)
 		}
@@ -304,17 +271,4 @@ func (s *Solver) Run(ctx context.Context) error {
 	}
 	<-execDone
 	return runErr
-}
-
-// runExecution keeps quote-only deployments out of the order journal and transaction path.
-func (s *Solver) runExecution(ctx context.Context) error {
-	if s.cfg.QuoteOnly {
-		<-ctx.Done()
-		return ctx.Err()
-	}
-	if s.merkle != nil {
-		return s.merkle.Run(ctx)
-	}
-	s.exec.run(ctx)
-	return ctx.Err()
 }

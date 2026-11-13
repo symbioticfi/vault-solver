@@ -33,12 +33,10 @@ type rawConfig struct {
 }
 
 type rawOrderServerConfig struct {
-	BaseURL        string `yaml:"baseUrl"`
-	WSURL          string `yaml:"wsUrl"`
-	APIKeyEnv      string `yaml:"apiKeyEnv"`
-	HTTPTimeout    string `yaml:"httpTimeout"`
-	WSReadTimeout  string `yaml:"wsReadTimeout"`
-	WSWriteTimeout string `yaml:"wsWriteTimeout"`
+	BaseURL     string `yaml:"baseUrl"`
+	WSURL       string `yaml:"wsUrl"`
+	APIKeyEnv   string `yaml:"apiKeyEnv"`
+	HTTPTimeout string `yaml:"httpTimeout"`
 }
 
 type rawStrategyConfig struct {
@@ -67,12 +65,10 @@ type Config struct {
 }
 
 type OrderServerConfig struct {
-	BaseURL        string
-	WSURL          string
-	APIKeyEnv      string
-	HTTPTimeout    time.Duration
-	WSReadTimeout  time.Duration
-	WSWriteTimeout time.Duration
+	BaseURL     string
+	WSURL       string
+	APIKeyEnv   string
+	HTTPTimeout time.Duration
 }
 
 type StrategyConfig struct {
@@ -82,8 +78,6 @@ type StrategyConfig struct {
 
 const (
 	defaultHTTPTimeout       = 10 * time.Second
-	defaultWSReadTimeout     = 60 * time.Second
-	defaultWSWriteTimeout    = 10 * time.Second
 	defaultQuoteInterval     = 30 * time.Second
 	defaultQuoteTTL          = 36 * time.Second
 	defaultBlockPollInterval = time.Second
@@ -135,14 +129,6 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	wsReadTimeout, err := parse.Duration(raw.OrderServer.WSReadTimeout, defaultWSReadTimeout, "orderServer.wsReadTimeout")
-	if err != nil {
-		return nil, err
-	}
-	wsWriteTimeout, err := parse.Duration(raw.OrderServer.WSWriteTimeout, defaultWSWriteTimeout, "orderServer.wsWriteTimeout")
-	if err != nil {
-		return nil, err
-	}
 	quoteRefreshMode := parse.OrDefault(raw.QuoteRefreshMode, defaultQuoteRefreshMode)
 	if quoteRefreshMode != quoteRefreshModeInterval && quoteRefreshMode != quoteRefreshModeBlock {
 		return nil, errors.Errorf("quoteRefreshMode: must be %q or %q, got %q",
@@ -189,12 +175,10 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	}
 	return &Config{
 		OrderServer: OrderServerConfig{
-			BaseURL:        raw.OrderServer.BaseURL,
-			WSURL:          raw.OrderServer.WSURL,
-			APIKeyEnv:      apiKeyEnv,
-			HTTPTimeout:    httpTimeout,
-			WSReadTimeout:  wsReadTimeout,
-			WSWriteTimeout: wsWriteTimeout,
+			BaseURL:     raw.OrderServer.BaseURL,
+			WSURL:       raw.OrderServer.WSURL,
+			APIKeyEnv:   apiKeyEnv,
+			HTTPTimeout: httpTimeout,
 		},
 		InputSettler:     inputSettler,
 		OutputSettler:    outputSettler,

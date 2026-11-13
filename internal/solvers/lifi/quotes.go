@@ -214,7 +214,7 @@ func (s *Solver) shouldRefreshQuotes(ctx context.Context, state *quoteState, las
 	needsRenewal := state.needsRenewal(s.wallNow())
 	block, err := s.reader.latestBlockNumber(ctx)
 	if err != nil {
-		observability.ErrorUnlessCanceled(ctx, err, "quote refresh: read latest block")
+		observability.Log(ctx).Error(err, "quote refresh: read latest block")
 		return needsRenewal
 	}
 	if block == *lastBlock && !needsRenewal {
@@ -249,13 +249,13 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	chainTime, err := s.now(ctx)
 	if err != nil {
 		s.observeQuoteBuildRejections(ctx, nil, nil, "chain_time_error")
-		observability.ErrorUnlessCanceled(ctx, err, "quote refresh: read latest block time")
+		observability.Log(ctx).Error(err, "quote refresh: read latest block time")
 		return
 	}
 	snapshotSet, err := s.reader.quoteSnapshots(ctx, routes, s.cfg.Executor)
 	if err != nil {
 		s.observeQuoteBuildRejections(ctx, nil, nil, "snapshot_error")
-		observability.ErrorUnlessCanceled(ctx, err, "quote refresh: read routes")
+		observability.Log(ctx).Error(err, "quote refresh: read routes")
 		return
 	}
 	maxFeePerGas := new(big.Int)
@@ -263,7 +263,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		maxFeePerGas, err = s.readMaxFeePerGas(ctx)
 		if err != nil {
 			s.observeQuoteBuildRejections(ctx, nil, nil, "gas_price_error")
-			observability.ErrorUnlessCanceled(ctx, err, "quote refresh: read max fee per gas")
+			observability.Log(ctx).Error(err, "quote refresh: read max fee per gas")
 			return
 		}
 	}
@@ -295,7 +295,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	})
 	if err != nil {
 		s.observeQuoteBuildRejections(ctx, inventory, nil, "strategy_error")
-		observability.ErrorUnlessCanceled(ctx, err, "quote refresh: strategy")
+		observability.Log(ctx).Error(err, "quote refresh: strategy")
 		return
 	}
 	// Failure affects attribution only: preserve the same inventory/strategy/publication path.
@@ -340,7 +340,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	}
 	removed, err := s.reconcileQuotes(ctx, state, out.Quotes, inventory, serverTime)
 	if err != nil {
-		observability.ErrorUnlessCanceled(ctx, err, "quote refresh: submit quotes", "quotes", len(out.Quotes))
+		observability.Log(ctx).Error(err, "quote refresh: submit quotes", "quotes", len(out.Quotes))
 		return
 	}
 	s.observeQuoteRefresh(state)
