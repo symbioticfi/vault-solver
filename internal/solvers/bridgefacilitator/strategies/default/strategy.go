@@ -88,7 +88,7 @@ func (s *Strategy) DecideOffers(
 				continue
 			}
 			expectedReturn := offerReturn(principal, st.snapshot.MinYieldPpm, auction)
-			if expectedReturn == nil || (held != nil && !c.stale(principal, expectedReturn, st.snapshot.MinYieldPpm, auction)) {
+			if expectedReturn == nil || (held != nil && !c.stale(principal, expectedReturn, st.snapshot.MinYieldPpm)) {
 				continue
 			}
 			offers = append(offers, types.OfferExecution{
@@ -130,12 +130,12 @@ type candidate struct {
 }
 
 // stale reports whether the adapter would post different terms now: a larger principal fits, or the
-// open offer's price fails the current adapter/auction bounds or sits above the current target.
-func (c candidate) stale(principal, target, floor *big.Int, auction types.AuctionSnapshot) bool {
+// open offer's price fails the adapter's current min-yield floor or sits above the current target.
+func (c candidate) stale(principal, target, floor *big.Int) bool {
 	if principal.Cmp(c.held) > 0 {
 		return true
 	}
-	return c.heldReturn != nil && (types.ValidateYield(c.heldReturn, c.held, floor, auction.MaxRateBps, auction.RateBasisSeconds) != nil || c.heldReturn.Cmp(target) > 0)
+	return c.heldReturn != nil && (!types.MeetsMinYield(c.heldReturn, c.held, floor) || c.heldReturn.Cmp(target) > 0)
 }
 
 // rankEligibleAdapters filters adapters eligible to offer on the auction (matching collateral, and no
@@ -234,22 +234,15 @@ func cloneBig(n *big.Int) *big.Int {
 
 var _ types.Strategy = (*Strategy)(nil)
 
-// offerReturn respects both floors, retaining the partial-consumption margin on the adapter floor.
+// offerReturn adds the partial-consumption margin to the on-chain floor, bounded by the auction cap.
 // With no floor it uses the auction rate; nil means this principal cannot produce a valid paid offer.
 func offerReturn(principal, floor *big.Int, auction types.AuctionSnapshot) *big.Int {
 	maxRate, basis := auction.MaxRateBps, auction.RateBasisSeconds
-	minimum, maximum, err := types.AuctionReturnBounds(principal, maxRate, basis)
-	if err != nil {
-		return nil
-	}
 	expectedReturn := types.PartialSafeMinYieldReturn(principal, floor)
 	if expectedReturn.Sign() <= 0 {
-		expectedReturn = maximum
-	} else if expectedReturn.Cmp(maximum) > 0 && types.MeetsMinYield(maximum, principal, floor) {
-		expectedReturn = maximum
-	}
-	if expectedReturn.Cmp(minimum) < 0 {
-		expectedReturn = minimum
+		expectedReturn = types.ExpectedReturn(principal, maxRate, basis)
+	} else if maxReturn := types.ExpectedReturn(principal, maxRate, basis); maxReturn.Sign() > 0 && expectedReturn.Cmp(maxReturn) > 0 && types.MeetsMinYield(maxReturn, principal, floor) {
+		expectedReturn = maxReturn
 	}
 	if types.ValidateYield(expectedReturn, principal, floor, maxRate, basis) != nil {
 		return nil

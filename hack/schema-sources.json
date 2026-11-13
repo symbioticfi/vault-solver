@@ -22,7 +22,7 @@
       "vendored": "openapi/3f-bf.openapi.json",
       "mode": "auto",
       "fetch": "json",
-      "url": "https://bf.3f.xyz/docs/openapi.json",
+      "url": "https://bf.dev.gcp.3f.xyz/docs/openapi.json",
       "refresh": "make refresh-openapi && make refresh-3f-client"
     },
     {
@@ -31,10 +31,6 @@
       "mode": "auto",
       "fetch": "json",
       "url": "https://swap.symbiotic.fi/api/v1/openapi.json",
-      "expectedDrift": {
-        "reason": "Vendored from rfq-backend stage (its contract as of 0217e67, merged in symbioticfi/rfq-backend#430), which vault-solver stage reads since symbioticfi/vault-solver#221: recipes, recipeExecutor, discountPrecision. swap.symbiotic.fi serves rfq-backend main, which lacks them and adds solver discounts (rfq-backend#450). Re-vendor from the live URL once rfq-backend stage is promoted to main, then drop this entry.",
-        "liveDigest": "sha256:f8e0e1b1b03d3b64c43195b33e36530dcbc0b0fa5d9b8557a7a8fe08ea965a85"
-      },
       "refresh": "make refresh-rfq-openapi && make refresh-rfq-client",
       "note": "Discount listing/resolution is NOT here \u2014 it lives on the internal surface (entry below). Generation passes `--type-mappings null=interface{}` because this spec has a property whose whole schema is `{type: null}`, which openapi-generator otherwise renders as the uncompilable Go type `nil`."
     },
@@ -44,10 +40,6 @@
       "mode": "auto",
       "fetch": "json",
       "url": "https://swap.symbiotic.fi/api/v1/openapi-internal.json",
-      "expectedDrift": {
-        "reason": "Vendored from rfq-backend stage (its contract as of 0217e67, merged in symbioticfi/rfq-backend#430), which vault-solver stage reads since symbioticfi/vault-solver#221: recipes, recipeExecutor, discountPrecision. swap.symbiotic.fi serves rfq-backend main, which lacks them and adds solver discounts (rfq-backend#450). Re-vendor from the live URL once rfq-backend stage is promoted to main, then drop this entry.",
-        "liveDigest": "sha256:d15458e2913f7a30ff5894ef245ef2d00031c71845c4b8b55a9dcc6dca7c2ef4"
-      },
       "refresh": "make refresh-rfq-internal-openapi && make refresh-rfq-internal-client",
       "note": "Discount listing/resolution lives on /api-internal/v1. The backend publishes this document from the PUBLIC prefix (the endpoints themselves stay unrouted there), so it can be vendored and drift-checked while the API remains unreachable from outside. Going unwatched is how the hex-to-decimal discount nonce change reached production unnoticed."
     },
@@ -80,10 +72,10 @@
       "name": "RedStone Atom OEV integration guide (public docs)",
       "vendored": "openapi/redstone-oev-atom-integration-guide.md",
       "mode": "auto",
-      "fetch": "docusaurus-html",
-      "url": "https://docs.redstone.finance/docs/stage2-capital-efficiency/atom/integration-guide/",
+      "fetch": "text",
+      "url": "https://raw.githubusercontent.com/RedStone-Finance-UI/redstone-docs/main/docs/stage2-capital-efficiency/atom/integration-guide.md",
       "refresh": "make refresh-redstone-guide",
-      "note": "RedStone's public contract-of-record for the Atom OEV WebSocket: it documents all five ops (subscribe/unsubscribe/auction/solve/liquidation-result), the auction timeout rules and the liquidations-mode positions payload. The zod file is richer but private, so this is the only RedStone surface we can diff automatically \u2014 watch it for wire-contract changes. RedStone's raw-markdown docs repo is gone, so this is the rendered docs page reduced to its article text by hack/docusaurus-article-extract.py."
+      "note": "RedStone's public contract-of-record for the Atom OEV WebSocket: it documents all five ops (subscribe/unsubscribe/auction/solve/liquidation-result), the auction timeout rules and the liquidations-mode positions payload. The zod file is richer but private, so this is the only RedStone surface we can diff automatically \u2014 watch it for wire-contract changes."
     },
     {
       "name": "RedStone Atom OEV WebSocket (zod)",

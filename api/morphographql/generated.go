@@ -303,18 +303,14 @@ func (v *__MorphoDiscoverMarketsInput) GetFirst() int { return v.First }
 
 // __MorphoPositionsByMarketInput is used internally by genqlient
 type __MorphoPositionsByMarketInput struct {
-	Ids    []string `json:"ids"`
-	Chains []int    `json:"chains"`
-	First  int      `json:"first"`
-	Skip   int      `json:"skip"`
-	MaxHf  *float64 `json:"maxHf"`
+	Ids   []string `json:"ids"`
+	First int      `json:"first"`
+	Skip  int      `json:"skip"`
+	MaxHf *float64 `json:"maxHf"`
 }
 
 // GetIds returns __MorphoPositionsByMarketInput.Ids, and is useful for accessing the field via an interface.
 func (v *__MorphoPositionsByMarketInput) GetIds() []string { return v.Ids }
-
-// GetChains returns __MorphoPositionsByMarketInput.Chains, and is useful for accessing the field via an interface.
-func (v *__MorphoPositionsByMarketInput) GetChains() []int { return v.Chains }
 
 // GetFirst returns __MorphoPositionsByMarketInput.First, and is useful for accessing the field via an interface.
 func (v *__MorphoPositionsByMarketInput) GetFirst() int { return v.First }
@@ -389,8 +385,8 @@ func MorphoDiscoverMarkets(
 
 // The query executed by MorphoPositionsByMarket.
 const MorphoPositionsByMarket_Operation = `
-query MorphoPositionsByMarket ($ids: [String!]!, $chains: [Int!]!, $first: Int!, $skip: Int!, $maxHf: Float) {
-	marketPositions(first: $first, skip: $skip, orderBy: HealthFactor, orderDirection: Asc, where: {marketUniqueKey_in:$ids,chainId_in:$chains,healthFactor_lte:$maxHf}) {
+query MorphoPositionsByMarket ($ids: [String!]!, $first: Int!, $skip: Int!, $maxHf: Float) {
+	marketPositions(first: $first, skip: $skip, orderBy: HealthFactor, orderDirection: Asc, where: {marketUniqueKey_in:$ids,healthFactor_lte:$maxHf}) {
 		items {
 			user {
 				address
@@ -412,7 +408,6 @@ func MorphoPositionsByMarket(
 	ctx_ context.Context,
 	client_ graphql.Client,
 	ids []string,
-	chains []int,
 	first int,
 	skip int,
 	maxHf *float64,
@@ -421,11 +416,10 @@ func MorphoPositionsByMarket(
 		OpName: "MorphoPositionsByMarket",
 		Query:  MorphoPositionsByMarket_Operation,
 		Variables: &__MorphoPositionsByMarketInput{
-			Ids:    ids,
-			Chains: chains,
-			First:  first,
-			Skip:   skip,
-			MaxHf:  maxHf,
+			Ids:   ids,
+			First: first,
+			Skip:  skip,
+			MaxHf: maxHf,
 		},
 	}
 

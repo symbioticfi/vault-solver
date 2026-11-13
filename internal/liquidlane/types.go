@@ -44,10 +44,6 @@ type Route struct {
 type Inventory struct {
 	Route
 
-	// A nonzero RecipeExecutor selects the connector surface; zero means native adapter.
-	RecipeExecutor    common.Address `json:"-"`
-	DiscountPrecision int64          `json:"-"`
-
 	MaxAssets *big.Int `json:"maxAssets"`
 	MaxRate   *big.Int `json:"maxRate"`
 	// AdapterMinDiscount is the adapter's current minimum accepted discount in parts per million.
@@ -72,9 +68,8 @@ type Inventory struct {
 // LiquidLane quoting strategy. Candidates sharing Route.ID are mutually
 // exclusive direct/private alternatives for the same physical route.
 type QuoteCandidate struct {
-	DiscountPrecision int64       `json:"-"`
-	ID                CandidateID `json:"id"`
-	Route             Route       `json:"route"`
+	ID    CandidateID `json:"id"`
+	Route Route       `json:"route"`
 
 	Rate         *big.Int `json:"rate"`
 	MaxAmountIn  *big.Int `json:"maxAmountIn"`
@@ -100,13 +95,13 @@ func (i Inventory) PayoutDiscount() *big.Int {
 
 // ExactPricing reports whether the candidate carries the adapter's price and payout discount.
 func (c QuoteCandidate) ExactPricing() bool {
-	return validPricingPrecision(c.Price, c.Discount, c.PricingPrecision())
+	return validPricing(c.Price, c.Discount)
 }
 
 // AmountOutFor returns the candidate's output for amountIn, before its MaxAmountOut cap.
 func (c QuoteCandidate) AmountOutFor(amountIn *big.Int) *big.Int {
 	if c.ExactPricing() {
-		return DiscountedAmountOutPrecision(amountIn, c.Price, c.Discount, c.Route.TokenInDecimals, c.Route.TokenOutDecimals, c.PricingPrecision())
+		return DiscountedAmountOut(amountIn, c.Price, c.Discount, c.Route.TokenInDecimals, c.Route.TokenOutDecimals)
 	}
 	return AmountOutForRate(amountIn, c.Rate, c.Route.TokenInDecimals, c.Route.TokenOutDecimals)
 }
@@ -114,8 +109,8 @@ func (c QuoteCandidate) AmountOutFor(amountIn *big.Int) *big.Int {
 // AmountInFor returns the smallest input whose output reaches amountOut.
 func (c QuoteCandidate) AmountInFor(amountOut *big.Int) *big.Int {
 	if c.ExactPricing() {
-		return MinAmountInForDiscountedAmountOutPrecision(
-			amountOut, c.Price, c.Discount, c.Route.TokenInDecimals, c.Route.TokenOutDecimals, c.PricingPrecision(),
+		return MinAmountInForDiscountedAmountOut(
+			amountOut, c.Price, c.Discount, c.Route.TokenInDecimals, c.Route.TokenOutDecimals,
 		)
 	}
 	return MinAmountInForAmountOut(amountOut, c.Rate, c.Route.TokenInDecimals, c.Route.TokenOutDecimals)
@@ -243,12 +238,4 @@ func CloneHash(h *common.Hash) *common.Hash {
 	}
 	out := *h
 	return &out
-}
-
-// PricingPrecision defaults native adapters to ppm.
-func (c QuoteCandidate) PricingPrecision() int64 {
-	if c.DiscountPrecision == 0 {
-		return DiscountPrecision
-	}
-	return c.DiscountPrecision
 }

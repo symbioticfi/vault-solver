@@ -35,11 +35,11 @@ func (s *Solver) refreshLoop(ctx context.Context, routes []liquidlane.Route) err
 			return ctx.Err()
 		case <-s.refreshCh:
 			if err := s.refreshQuoteState(ctx, routes); err != nil {
-				observability.ErrorUnlessCanceled(ctx, err, "requested quote state refresh failed")
+				observability.Log(ctx).Error(err, "requested quote state refresh failed")
 			}
 		case <-ticker.C:
 			if err := s.refreshQuoteState(ctx, routes); err != nil {
-				observability.ErrorUnlessCanceled(ctx, err, "quote state refresh failed")
+				observability.Log(ctx).Error(err, "quote state refresh failed")
 			}
 		}
 		// Only the already published, policy-filtered inventory can extend log metadata.
@@ -76,7 +76,7 @@ func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Rout
 	s.chainTime.Store(now.Unix())
 	discountRoutes, discountErr := s.quoteRoutesWithDiscounts(ctx, routes, now)
 	if discountErr != nil {
-		observability.ErrorUnlessCanceled(ctx, discountErr, "refresh advertised discount routes")
+		observability.Log(ctx).Error(discountErr, "refresh advertised discount routes")
 	}
 	decisionRoutes := discountRoutes.routes
 	listed := discountRoutes.listed

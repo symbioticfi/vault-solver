@@ -38,44 +38,6 @@ func testAuction(id int64, requested int64) types.AuctionSnapshot {
 	}
 }
 
-func TestStrategyRespectsAuctionMinimum(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		principal int64
-		floorPpm  int64
-		maxAPR    float64
-		basis     int64
-		want      int64
-	}{
-		{"auction floor above adapter", 100_000_000, 100, 100, types.YearSeconds, 250_000},
-		{"eight percent adapter floor", 100_000_000, 80_000, 1000, types.YearSeconds, 8_000_100},
-		{"adapter floor above auction ceiling", 100_000_000, 80_000, 700, types.YearSeconds, 0},
-		{"daily auction basis", 365_000_000, 1, 100, 86_400, 2500},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			adapter := testAdapter(1, tc.principal)
-			adapter.MinYieldPpm = big.NewInt(tc.floorPpm)
-			auction := testAuction(1, tc.principal)
-			auction.MaxRateBps, auction.RateBasisSeconds = tc.maxAPR, tc.basis
-			result, err := New().DecideOffers(t.Context(), types.OfferInput{
-				Adapters: []types.AdapterSnapshot{adapter}, Auctions: []types.AuctionSnapshot{auction},
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if tc.want == 0 {
-				if len(result.Offers) != 0 {
-					t.Fatalf("unexpected offer: %+v", result.Offers)
-				}
-				return
-			}
-			if len(result.Offers) != 1 || result.Offers[0].ExpectedReturn.Int64() != tc.want {
-				t.Fatalf("offers = %+v, want expectedReturn %d", result.Offers, tc.want)
-			}
-		})
-	}
-}
-
 func TestStrategyEveryAdapterOffersFullRequest(t *testing.T) {
 	a1 := testAdapter(1, 50_000_000)  // capacity 50M, below the request
 	a2 := testAdapter(2, 180_000_000) // capacity 180M, above the request
@@ -238,7 +200,7 @@ func TestStrategyPricesPartialConsumeMarginAboveFloor(t *testing.T) {
 	a := testAdapter(1, principal)
 	a.MinYieldPpm = big.NewInt(190)
 	auction := testAuction(10, principal)
-	auction.MaxRateBps = 3 // headroom above the 1.9 bps adapter floor; auction floor is 0.75 bps
+	auction.MaxRateBps = 200 // plenty of headroom above the 1.9 bps floor
 	input := types.OfferInput{
 		Now:      time.Unix(0, 0),
 		Adapters: []types.AdapterSnapshot{a},
@@ -384,12 +346,8 @@ func TestStrategyRepricesOpenOffer(t *testing.T) {
 			if tc.floorPpm > 0 {
 				adapter.MinYieldPpm = big.NewInt(tc.floorPpm)
 			}
-			auction := testAuction(10, principal)
-			if tc.floorPpm > 0 {
-				auction.MaxRateBps = 2 // auction floor stays below the adapter floor
-			}
 			out, err := New().DecideOffers(t.Context(), types.OfferInput{
-				Adapters: []types.AdapterSnapshot{adapter}, Auctions: []types.AuctionSnapshot{auction},
+				Adapters: []types.AdapterSnapshot{adapter}, Auctions: []types.AuctionSnapshot{testAuction(10, principal)},
 				LiveOffers: []types.LiveOffer{{AdapterID: adapter.ID, AuctionID: 10, Principal: big.NewInt(principal), ExpectedReturn: tc.liveReturn, Open: tc.open}},
 			})
 			if err != nil {

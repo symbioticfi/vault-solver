@@ -61,7 +61,7 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 	method := request.boundedMethod
 	ctx, requestTrace := t.beginTrace(req.Context(), request)
 	nullFallback := len(t.endpoints) > 1 && request.nullFallback
-	pendingLookup := request.pendingLookup
+	pendingLookup := isPendingLookupMethod(request.rawMethod)
 	requestObservation := t.metrics.beginRequest(t.role, method)
 
 	var (
@@ -83,12 +83,6 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		attempt := req.Clone(attemptCtx)
 		attempt.URL = ep
 		attempt.Host = ep.Host
-		// net/http authenticates the primary before RoundTrip; every endpoint owns its credentials.
-		attempt.Header.Del("Authorization")
-		if ep.User != nil {
-			password, _ := ep.User.Password()
-			attempt.SetBasicAuth(ep.User.Username(), password)
-		}
 		observability.InjectTraceHeaders(attemptCtx, attempt.Header)
 		if pendingLookup {
 			attempt.Header.Set(erpcRetryEmptyHeader, "false")
@@ -102,7 +96,7 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 		var inspectedOutcome *rpcOutcome
 		if err == nil && !unavailableHTTPStatus(resp.StatusCode) {
 			if nullFallback && i < len(t.endpoints)-1 && resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				unavailable, inspectedBody, inspectErr := inspectNullRPCResult(resp, request)
+				unavailable, inspectedBody, inspectErr := hasNullRPCResult(resp, request.requestID)
 				if inspectErr != nil || unavailable {
 					_ = resp.Body.Close()
 					cancel()
@@ -120,11 +114,7 @@ func (t *fallbackTransport) RoundTrip(req *http.Request) (*http.Response, error)
 						"method", request.rawMethod, "err", lastErr.Error())
 					continue
 				}
-				truncated := len(inspectedBody) > rpcResponseObservationLimit
-				if truncated {
-					inspectedBody = inspectedBody[:rpcResponseObservationLimit]
-				}
-				outcome := classifyRPCResponse(method, resp.StatusCode, inspectedBody, truncated, nil)
+				outcome := classifyRPCResponse(method, resp.StatusCode, inspectedBody, false, nil)
 				inspectedOutcome = &outcome
 			}
 			// Keep the attempt context alive until the rpc layer finishes reading the body. Metrics
@@ -172,10 +162,8 @@ type rpcRequestInfo struct {
 	boundedMethod string
 	rawMethod     string
 	// requestID is the trimmed raw JSON-RPC id, empty for batches and unparsable bodies.
-	requestID     string
-	nullFallback  bool
-	pendingLookup bool
-	batch         map[string]bool // exact request IDs mapped to receipt/header null sensitivity
+	requestID    string
+	nullFallback bool
 }
 
 func inspectRPCRequest(body []byte) rpcRequestInfo {
@@ -184,7 +172,7 @@ func inspectRPCRequest(body []byte) rpcRequestInfo {
 		return rpcRequestInfo{boundedMethod: "unknown"}
 	}
 	if trimmed[0] == '[' {
-		return inspectRPCBatch(trimmed)
+		return rpcRequestInfo{boundedMethod: "batch"}
 	}
 	var request struct {
 		JSONRPC string          `json:"jsonrpc"`
@@ -198,7 +186,6 @@ func inspectRPCRequest(body []byte) rpcRequestInfo {
 		boundedMethod: boundedRPCMethodName(request.Method),
 		rawMethod:     request.Method,
 		requestID:     string(bytes.TrimSpace(request.ID)),
-		pendingLookup: isPendingLookupMethod(request.Method),
 	}
 	if request.JSONRPC != jsonRPCVersion || len(request.ID) == 0 ||
 		bytes.Equal(bytes.TrimSpace(request.ID), []byte("null")) {
@@ -441,6 +428,22 @@ func endpointAttemptTimeout(ctx context.Context, endpointsLeft int, timeout time
 	return min(timeout, remaining/time.Duration(endpointsLeft))
 }
 
+// isHTTPURL reports whether raw is an http(s) URL — the schemes the fallback transport (and thus the
+// per-attempt timeout) supports.
+func isHTTPURL(raw string) bool {
+	u, err := url.Parse(raw)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https")
+}
+
+// rpcTransport labels a non-HTTP endpoint for chain.rpc.transport. Anything that is not a websocket
+// URL reaches the node over a local IPC socket.
+func rpcTransport(raw string) string {
+	if u, err := url.Parse(raw); err == nil && (u.Scheme == "ws" || u.Scheme == "wss") {
+		return rpcTransportWS
+	}
+	return rpcTransportIPC
+}
+
 // parseHTTPEndpoints validates that every URL is HTTP(S) (the only scheme the fallback transport
 // supports) and returns the parsed endpoints in order, dropping duplicates so the same endpoint is
 // never tried twice in a fallover sweep.
@@ -453,7 +456,7 @@ func parseHTTPEndpoints(urls []string) ([]*url.URL, error) {
 			return nil, errors.Errorf("chain: invalid rpc url %q: %w", raw, err)
 		}
 		if u.Scheme != "http" && u.Scheme != "https" {
-			return nil, errors.Errorf("chain: rpc supports http(s) only, got %q", raw)
+			return nil, errors.Errorf("chain: rpc fallback supports http(s) only, got %q", raw)
 		}
 		if key := u.String(); !seen[key] {
 			seen[key] = true
