@@ -15,6 +15,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 	"github.com/symbioticfi/vault-solver/internal/observability"
+	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
@@ -26,6 +27,7 @@ import (
 type quoteService struct {
 	recipeExecutors []common.Address
 	acceptsRoute    func(executor, connector, account, asset common.Address) bool
+	resolveRoute    func(hint, connector, rwa, asset common.Address) (executor, account common.Address, ok bool)
 	pairRoutes      atomic.Pointer[[]liquidlane.Route] // immutable configured adapter directions, optional background observation only
 	chainID         int64
 	tokenMetadata   *chain.Decimals
@@ -153,6 +155,12 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 		}
 		q = &scoped
 	}
+	if qs.resolveRoute != nil {
+		q, err = qs.resolveInventory(q)
+		if err != nil {
+			return quoteDecision{outcome: quoteDecisionError}, &badRequestError{err}
+		}
+	}
 	parsed, err := q.toStrategy(qs.chainID, qs.recipeExecutors)
 	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, &badRequestError{errors.Errorf("parse request: %w", err)}
@@ -239,6 +247,50 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 		response: response,
 		outcome:  quoteDecisionQuoted,
 	}, nil
+}
+
+// resolveInventory fills route identities from the immutable local cache without
+// changing the caller's request or the backend's recipe-specific capacity.
+func (qs *quoteService) resolveInventory(q *quoteRequest) (*quoteRequest, error) {
+	scoped := *q
+	scoped.Adapters = make([]quoteAdapter, 0, len(q.Adapters))
+	rwa, err := parse.Address(q.TokenIn, "tokenIn")
+	if err != nil {
+		return nil, err
+	}
+	for i, item := range q.Adapters {
+		venue, err := parse.Address(item.Adapter, idxField(i, "adapter"))
+		if err != nil {
+			return nil, err
+		}
+		asset, err := parse.Address(item.Asset, idxField(i, "asset"))
+		if err != nil {
+			return nil, err
+		}
+		var hint common.Address
+		if item.RecipeExecutor != "" {
+			hint, err = parse.NonZeroAddress(item.RecipeExecutor, idxField(i, "recipeExecutor"))
+			if err != nil {
+				return nil, err
+			}
+		}
+		executor, account, ok := qs.resolveRoute(hint, venue, rwa, asset)
+		if !ok {
+			continue
+		}
+		if item.Account != "" {
+			provided, err := parse.NonZeroAddress(item.Account, idxField(i, "account"))
+			if err != nil {
+				return nil, err
+			}
+			if provided != account {
+				continue
+			}
+		}
+		item.RecipeExecutor, item.Account = executor.Hex(), account.Hex()
+		scoped.Adapters = append(scoped.Adapters, item)
+	}
+	return &scoped, nil
 }
 
 // snapshotCandidates prices backend discounts or reads direct adapters as the rfq.quote.snapshot stage.

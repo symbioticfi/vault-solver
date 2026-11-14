@@ -135,6 +135,28 @@ func TestAwardSizingOnlyUsesSignedTuple(t *testing.T) {
 	}
 }
 
+func TestPrepareRequiresCapacityHintForAmbiguousRecipes(t *testing.T) {
+	for _, hint := range []string{"", common.HexToAddress("0x43").Hex()} {
+		t.Run("hint="+hint, func(t *testing.T) {
+			fixture := connectorExecutionFixture(t, connectorDiscountFixture())
+			order, _, backend := connectorExecutionAward(fixture.workflow.caller)
+			s := &Solver{recipeExecutors: []common.Address{fixture.reader.recipeExecutor}, workflow: fixture.workflow, backend: backend, spends: newSpendLedger()}
+			if err := s.Initialize(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			s.routes[common.HexToAddress("0x44")] = s.routes[fixture.reader.recipeExecutor]
+			listed := []discounts.ListItem{{Adapter: vlt.Hex(), RecipeExecutor: hint, TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"}}
+			intent, err := s.prepare(t.Context(), awardRow(t, order), listed)
+			if err != nil || (intent != nil) != (hint != "") {
+				t.Fatalf("intent=%+v err=%v", intent, err)
+			}
+			if hint == "" && fixture.reader.outerCalls != 0 {
+				t.Fatal("ambiguous capacity reached settlement simulation")
+			}
+		})
+	}
+}
+
 func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	fixture := connectorExecutionFixture(t, connectorDiscountFixture())
 	order, _, backend := connectorExecutionAward(fixture.workflow.caller)
@@ -143,7 +165,7 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	backend.rows = []rfqbackend.OrdersResponseOrdersInner{awardRow(t, order), next}
 	backend.listed = &discounts.List{Discounts: []discounts.ListItem{
 		{Adapter: common.HexToAddress("0x01").Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "99999"},
-		{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: common.HexToAddress("0x43").Hex()},
+		{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"},
 	}}
 	sender := &fakeSender{}
 	s := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender, spends: newSpendLedger()}

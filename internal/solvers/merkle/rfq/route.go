@@ -13,6 +13,7 @@ import (
 
 type recipeRoute struct {
 	connector, account, asset common.Address
+	tokens                    map[common.Address]struct{} // immutable after publication
 }
 
 // Initialize publishes verified payment routes together. Quotes keep declining
@@ -67,9 +68,47 @@ func (s *Solver) buildRoutes(ctx context.Context) (map[common.Address]recipeRout
 		if state.Account != snapshot.Account || state.Asset != asset {
 			return nil, errors.New("recipe payment connector account or asset mismatch")
 		}
-		routes[snapshot.Executor] = recipeRoute{connector: venue, account: state.Account, asset: asset}
+		actions, err := recipes.ManagedActions(recipe, tree)
+		if err != nil {
+			return nil, err
+		}
+		tokens := make(map[common.Address]struct{})
+		for _, action := range actions {
+			token, err := connectorActionToken(action, venue)
+			if err != nil {
+				return nil, err
+			}
+			if token != (common.Address{}) {
+				tokens[token] = struct{}{}
+			}
+		}
+		routes[snapshot.Executor] = recipeRoute{connector: venue, account: state.Account, asset: asset, tokens: tokens}
 	}
 	return routes, nil
+}
+
+// ResolveRoute uses only the published startup cache. A capacity hint must name
+// a compatible configured recipe. Without a hint the compatible route must be
+// unique: capacities measured for different recipes are not interchangeable.
+func (s *Solver) ResolveRoute(hint, connector, rwa, asset common.Address) (executor, account common.Address, ok bool) {
+	s.routesMu.RLock()
+	defer s.routesMu.RUnlock()
+	for candidate, route := range s.routes {
+		if hint != (common.Address{}) && hint != candidate {
+			continue
+		}
+		if route.connector != connector || route.asset != asset {
+			continue
+		}
+		if _, supported := route.tokens[rwa]; !supported {
+			continue
+		}
+		if ok {
+			return common.Address{}, common.Address{}, false
+		}
+		executor, account, ok = candidate, route.account, true
+	}
+	return executor, account, ok
 }
 
 // AcceptsRoute binds backend inventory to a locally configured, verified recipe.

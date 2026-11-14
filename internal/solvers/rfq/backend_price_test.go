@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math/big"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -59,6 +60,58 @@ func TestDiscountQuoteUsesBackendSnapshotWithoutRPC(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestConnectorQuoteResolvesLocalIdentitiesWithoutRPC(t *testing.T) {
+	executor := common.HexToAddress("0x43")
+	for _, tc := range []struct {
+		name, account, hint string
+		available           bool
+		reserved            int64
+		want                int
+	}{
+		{"derive both", "", "", true, 0, http.StatusOK},
+		{"validate supplied identities", vlt.Hex(), executor.Hex(), true, 0, http.StatusOK},
+		{"conflicting account", tIn.Hex(), "", true, 0, http.StatusNoContent},
+		{"unconfigured hint", "", tIn.Hex(), true, 0, http.StatusNoContent},
+		{"missing or ambiguous cached route", "", "", false, 0, http.StatusNoContent},
+		{"shared account reservation", "", "", true, 10_000_000, http.StatusNoContent},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := testServer()
+			s.quotes.reader = nil // Any quote-time RPC access fails the test.
+			s.quotes.recipeExecutors = []common.Address{executor}
+			s.quotes.discountsEnabled = true
+			s.quotes.resolveRoute = func(hint, venue, rwa, asset common.Address) (common.Address, common.Address, bool) {
+				ok := tc.available && (hint == (common.Address{}) || hint == executor) && venue == vlt && rwa == tIn && asset == tOut
+				return executor, vlt, ok
+			}
+			body := validQuoteBody()
+			id := common.HexToHash("0x1234").Hex()
+			entry := &body.Adapters[0]
+			entry.Account, entry.RecipeExecutor = tc.account, tc.hint
+			entry.DiscountID, entry.DiscountPrecision = &id, "100000000"
+			original := body
+			original.Adapters = append([]quoteAdapter(nil), body.Adapters...)
+			s.quotes.reservations = func(_ string, rows []solverInventory) liquidlane.CapacityReservations {
+				if len(rows) != 1 || rows[0].Vault != vlt || rows[0].RecipeExecutor != executor || rows[0].BlockNumber != 1 {
+					t.Fatal("lost cached identities or backend observation block")
+				}
+				return liquidlane.CapacityReservations{liquidlane.NewCapacityID(1, vlt, tOut): big.NewInt(tc.reserved)}
+			}
+			decision, err := s.quotes.quote(t.Context(), &body)
+			if err != nil || (decision.response != nil) != (tc.want == http.StatusOK) {
+				t.Fatalf("quote=%+v err=%v", decision, err)
+			}
+			if !reflect.DeepEqual(body, original) {
+				t.Fatal("cache resolution modified the caller's payload")
+			}
+			rr := do(t, s.handler(), http.MethodPost, "/quote", testSecret, body)
+			if rr.Code != tc.want {
+				t.Fatalf("status=%d want=%d body=%s", rr.Code, tc.want, rr.Body.String())
+			}
+		})
 	}
 }
 

@@ -103,6 +103,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		quotes.laneAvailable = manager.Ready
 		quotes.acceptsConnector = merkle.AcceptsConnector
 		quotes.acceptsRoute = merkle.AcceptsRoute
+		quotes.resolveRoute = merkle.ResolveRoute
 	}
 	return &Solver{
 		merkle: merkle,

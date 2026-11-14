@@ -98,30 +98,12 @@ func assembleConnectorRoute(recipe recipes.Recipe, tree *recipes.Tree, venue, to
 		return assembledConnector{}, err
 	}
 	for _, action := range managed {
-		if action.Leaf.Target != venue {
-			continue
-		}
-		if len(action.Leaf.Data) < 164 || !bytes.Equal(action.Leaf.Data[:4], data[:4]) {
-			continue
-		}
-
-		if !bytes.Equal(action.Leaf.Data[4:36], common.LeftPadBytes([]byte{128}, 32)) {
-			return assembledConnector{}, errors.New("connector swap tuple offset must be 128")
-		}
-		if err = action.Pinned(4, 32); err != nil {
+		boundToken, err := connectorActionToken(action, venue)
+		if err != nil {
 			return assembledConnector{}, err
 		}
-		if value, err := action.Field(132); err == nil {
-			if value.Source != recipes.Literal || value.Value.Cmp(new(big.Int).SetBytes(token[:])) != 0 {
-				continue
-			}
-		} else {
-			if err := action.Pinned(132, 32); err != nil {
-				return assembledConnector{}, err
-			}
-			if common.BytesToAddress(action.Leaf.Data[132:164]) != token {
-				continue
-			}
+		if boundToken != token {
+			continue
 		}
 		actions[action.Key] = data
 	}
@@ -134,6 +116,36 @@ func assembleConnectorRoute(recipe recipes.Recipe, tree *recipes.Tree, venue, to
 		return assembledConnector{}, err
 	}
 	return assembledConnector{inner, leaves}, nil
+}
+
+// connectorActionToken identifies a swap's statically committed RWA. Unrelated
+// actions and dynamically selected tokens cannot advertise a cached route.
+func connectorActionToken(action recipes.ManagedAction, venue common.Address) (common.Address, error) {
+	if action.Leaf.Target != venue || len(action.Leaf.Data) < 164 || !bytes.Equal(action.Leaf.Data[:4], connectorBinding.GetABI().Methods["swap"].ID) {
+		return common.Address{}, nil
+	}
+	if !bytes.Equal(action.Leaf.Data[4:36], common.LeftPadBytes([]byte{128}, 32)) {
+		return common.Address{}, errors.New("connector swap tuple offset must be 128")
+	}
+	if err := action.Pinned(4, 32); err != nil {
+		return common.Address{}, err
+	}
+	var token *big.Int
+	if value, err := action.Field(132); err == nil {
+		if value.Source != recipes.Literal {
+			return common.Address{}, nil
+		}
+		token = value.Value
+	} else {
+		if err := action.Pinned(132, 32); err != nil {
+			return common.Address{}, err
+		}
+		token = new(big.Int).SetBytes(action.Leaf.Data[132:164])
+	}
+	if token == nil || token.Sign() <= 0 || token.BitLen() > 160 {
+		return common.Address{}, errors.New("invalid connector swap token")
+	}
+	return common.BigToAddress(token), nil
 }
 
 type permissionSource interface {

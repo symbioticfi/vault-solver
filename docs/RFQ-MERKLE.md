@@ -18,11 +18,17 @@ checks its account and output asset, and requires the recipe caller to be the RF
 Executor. The connector must be registered as version `2` in the Reactor's Liquid
 Lane adapter factory (version `1` is a native adapter).
 
-Backend quote requests carry capacity, price, token decimals, account, discount precision
-and the `recipeExecutor` whose funding capacity was measured. The solver accepts only
-executors in its local list, and checks their connector, account and output asset.
+Backend quote requests carry capacity, price, token decimals and discount precision.
+The solver derives `account` from the verified startup route cache and selects a
+configured recipe whose connector, RWA swap permission and output asset match.
+This selection performs no quote-time RPC or permission-service calls. A supplied
+`account` must agree with the cache. `recipeExecutor` is optional when exactly one
+cached recipe supports the route; if several do, it must identify the recipe whose
+capacity was measured. Untagged ambiguous capacity is declined rather than assigned
+to an arbitrary recipe. Supplied executor hints must match a cached compatible route.
 The backend maps each connector to a `recipeExecutors` list, and measures each recipe
-against the requested RWA. Fill construction checks the RWA's pinned swap permission.
+against the requested RWA. Award selection uses the same cached resolver; fill
+construction then checks fresh permissions, state and the complete outer settlement.
 The SDK retrieves original recipe bytes at the executor's known `recipeBlock`.
 Execution verifies current permissions and the complete outer fill; recipes remain unchanged.
 
@@ -104,7 +110,7 @@ only a canonical owned inclusion or revert releases the signer fence. Restart
 loses intent and transaction tracking while the transaction may still execute.
 Settle old work before upgrading and use one active process per signer.
 
-Quote inventory must match the verified recipe connector, account and asset.
+Quote inventory must match the verified recipe connector, RWA, account and asset.
 Quoting stays available during a fill; execution remains sequential. Before
 submission, the awarded output is reserved against its physical account/asset
 capacity. Other capacity and the unreserved remainder stay quotable. Ambiguous

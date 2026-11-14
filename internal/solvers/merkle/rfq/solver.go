@@ -18,6 +18,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/observability"
+	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"gopkg.in/yaml.v3"
 )
@@ -212,9 +213,15 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	}
 	for _, item := range listed {
 		venue := common.HexToAddress(item.Adapter)
-		recipeExecutor := common.HexToAddress(item.RecipeExecutor)
-		route, configured := s.recipeRoute(recipeExecutor)
-		if !configured || route.connector != venue || common.HexToAddress(item.TokenToRedeem) != order.Request.TokenIn || common.HexToAddress(item.Collateral) != token {
+		var hint common.Address
+		if item.RecipeExecutor != "" {
+			hint, err = parse.NonZeroAddress(item.RecipeExecutor, "recipeExecutor")
+			if err != nil {
+				return nil, err
+			}
+		}
+		recipeExecutor, _, configured := s.ResolveRoute(hint, venue, order.Request.TokenIn, token)
+		if !configured || common.HexToAddress(item.TokenToRedeem) != order.Request.TokenIn || common.HexToAddress(item.Collateral) != token {
 			continue
 		}
 		id, err := hexutil.Decode(item.DiscountID)
