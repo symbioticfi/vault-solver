@@ -129,7 +129,8 @@ routes the callback through the manager and simulates the complete RFQ fill; mis
 or delayed grants reject the route. Direct RFQ Executor callers also remain supported.
 Both the dedicated approval instruction and ordinary ERC-20 approval calls are supported.
 Discovery authenticates the current permission tree before resolving the latter's token,
-spender and Input1 amount binding.
+spender and amount binding. It accepts direct Input1 and the compiler's guarded
+`Input1 * min(1, Input0)` form when the recipe first asserts `Input0 >= 1`.
 The backend advertises its capacity estimate from recipe reads, without an executor in
 its quote request. The solver applies current policy budgets and shared reservations.
 Recipes keep their original format: the SDK retrieves publication bytes at the

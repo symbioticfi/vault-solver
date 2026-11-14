@@ -16,6 +16,10 @@ the list contains the funding recipes.
 The EOA must be an authorized caller of the RFQ Executor. The solver derives each
 payment connector from the original recipe's output-token approval using input 1,
 checks its account and output asset, and authenticates the recipe's on-chain caller.
+Payment can bind Input1 directly or use the compiler's exact
+`Input1 * min(1, Input0) / 1` expression with a preceding `1 <= Input0` assertion.
+Discovery recognizes that committed form locally; it does not evaluate arbitrary
+arithmetic or add quote-time reads.
 For an AccessManager caller, grant the RFQ Executor a role with zero execution delay
 for the RecipeExecutor's `execute(bytes[],bytes[],uint256[],bytes[])` selector.
 The SDK checks `canCall` at the pinned block and wraps the unchanged recipe calldata

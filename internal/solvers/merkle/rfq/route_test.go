@@ -3,6 +3,7 @@ package rfq
 import (
 	"context"
 	"math/big"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -131,6 +132,71 @@ func TestConfiguredExecutorWithManagedPaymentApproval(t *testing.T) {
 				t.Fatal("managed approval did not identify the payment connector")
 			}
 		})
+	}
+}
+
+func TestPaymentConnectorRecognizesGuardedInputPayment(t *testing.T) {
+	for _, managed := range []bool{false, true} {
+		for _, tc := range []struct {
+			name    string
+			mutate  func([][]byte)
+			invalid bool
+		}{
+			{name: "positive input guard"},
+			{name: "missing positivity check", mutate: func(steps [][]byte) {
+				steps[0] = connectorDeltaBinary(t, recipes.LessOrEqual, big.NewInt(0), connectorDeltaOperand(recipes.Input, 0))
+			}, invalid: true},
+			{name: "different guard input", mutate: func(steps [][]byte) {
+				steps[1] = connectorDeltaBinary(t, recipes.Min, big.NewInt(1), connectorDeltaOperand(recipes.Input, 2))
+			}, invalid: true},
+			{name: "unbounded multiplier", mutate: func(steps [][]byte) { steps[1][0] = recipes.Max }, invalid: true},
+			{name: "larger multiplier", mutate: func(steps [][]byte) {
+				steps[1] = connectorDeltaBinary(t, recipes.Min, big.NewInt(2), connectorDeltaOperand(recipes.Input, 0))
+			}, invalid: true},
+			{name: "different payment input", mutate: func(steps [][]byte) { steps[2][32] = 0 }, invalid: true},
+			{name: "different divisor", mutate: func(steps [][]byte) { steps[2][96] = 2 }, invalid: true},
+		} {
+			t.Run(tc.name+"/managed="+strconv.FormatBool(managed), func(t *testing.T) {
+				fixture := connectorExecutionFixture(t, connectorDiscountFixture())
+				tree, err := recipes.DecodeTree(fixture.workflow.source.(connectorExecutionPermissions).raw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				word := connectorDeltaType(t, "uint256")
+				mul, err := (abi.Arguments{{Type: word}, {Type: word}, {Type: word}}).Pack(connectorDeltaOperand(recipes.Input, 1), connectorDeltaOperand(recipes.Result, 1), big.NewInt(1))
+				if err != nil {
+					t.Fatal(err)
+				}
+				steps := [][]byte{
+					connectorDeltaBinary(t, recipes.LessOrEqual, big.NewInt(1), connectorDeltaOperand(recipes.Input, 0)),
+					connectorDeltaBinary(t, recipes.Min, big.NewInt(1), connectorDeltaOperand(recipes.Input, 0)),
+					append([]byte{recipes.MulDiv}, mul...),
+				}
+				var data []byte
+				if managed {
+					binding := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(36), 224), connectorDeltaOperand(recipes.Result, 2))
+					data, err = (abi.Arguments{{Type: word}, {Type: connectorDeltaType(t, "bytes32[]")}, {Type: connectorDeltaType(t, "uint256[][]")}}).Pack(big.NewInt(1), [][32]byte{fixture.reader.approvalHash}, [][]*big.Int{{binding}})
+					steps = append(steps, append([]byte{recipes.Manage}, data...))
+				} else {
+					data, err = (abi.Arguments{{Type: word}, {Type: connectorDeltaType(t, "address")}, {Type: connectorDeltaType(t, "address")}, {Type: connectorDeltaType(t, "bytes32")}}).Pack(connectorDeltaOperand(recipes.Result, 2), tOut, vlt, fixture.reader.approvalHash)
+					steps = append(steps, append([]byte{recipes.Approve}, data...))
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tc.mutate != nil {
+					tc.mutate(steps)
+				}
+				venue, asset, err := paymentConnector(recipes.Recipe{Steps: steps}, tree)
+				if tc.invalid {
+					if err == nil {
+						t.Fatal("non-exact payment approval accepted")
+					}
+				} else if err != nil || venue != vlt || asset != tOut {
+					t.Fatalf("guarded payment route=(%s,%s): %v", venue, asset, err)
+				}
+			})
+		}
 	}
 }
 
