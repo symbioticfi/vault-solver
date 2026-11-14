@@ -45,7 +45,7 @@
       "fetch": "json",
       "url": "https://swap.symbiotic.fi/api/v1/openapi-internal.json",
       "expectedDrift": {
-        "reason": "Vendored from rfq-backend stage (its contract as of 0217e67, merged in symbioticfi/rfq-backend#430), which vault-solver stage reads since symbioticfi/vault-solver#221: recipes, recipeExecutor, discountPrecision. swap.symbiotic.fi serves rfq-backend main, which lacks them and adds solver discounts (rfq-backend#450). Re-vendor from the live URL once rfq-backend stage is promoted to main, then drop this entry.",
+        "reason": "Vendored from symbioticfi/rfq-backend#482 at d253625: explicit native/connector discountPrecision on discount listing and resolution; redundant payout aliases and recipeExecutor/account wire metadata removed. swap.symbiotic.fi still serves rfq-backend main without this metadata. Re-vendor from the live URL after backend promotion, then drop this entry. Live digest rechecked on 2026-11-14.",
         "liveDigest": "sha256:d15458e2913f7a30ff5894ef245ef2d00031c71845c4b8b55a9dcc6dca7c2ef4"
       },
       "refresh": "make refresh-rfq-internal-openapi && make refresh-rfq-internal-client",

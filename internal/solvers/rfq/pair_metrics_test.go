@@ -108,7 +108,6 @@ func TestUnsupportedRequestsDoNotCreatePairSeries(t *testing.T) {
 	}
 	routes := []liquidlane.Route{liquidlane.NewRoute(1, vlt, common.Address{}, tIn, tOut, 18, 6)}
 	srv.quotes.pairRoutes.Store(&routes)
-	reader := srv.quotes.reader.(*fakeQuoteCandidateReader)
 	for i := range 100 {
 		body := validQuoteBody()
 		body.TokenIn = common.BigToAddress(big.NewInt(int64(1000 + i))).Hex()
@@ -116,9 +115,6 @@ func TestUnsupportedRequestsDoNotCreatePairSeries(t *testing.T) {
 		do(t, srv.handler(), http.MethodPost, "/quote", testSecret, body)
 	}
 	requirePairSeries(t, reg, 0)
-	if len(reader.queries) != 0 {
-		t.Fatalf("unsupported requests read candidates: %d", len(reader.queries))
-	}
 }
 
 func TestPairAssignmentDedupAndOwnedReceipt(t *testing.T) {

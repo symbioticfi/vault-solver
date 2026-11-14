@@ -2,7 +2,6 @@ package rfq
 
 import (
 	"context"
-	"math/big"
 	"strings"
 	"testing"
 	"time"
@@ -12,18 +11,16 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
 
-	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability"
+	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 )
 
-// blockingCandidateReader fails with the context's error once it is done.
-type blockingCandidateReader struct{}
+// blockingQuoteStrategy waits for the request deadline like a remote strategy.
+type blockingQuoteStrategy struct{ types.Strategy }
 
-func (blockingCandidateReader) readQuoteCandidates(
-	ctx context.Context, _ []solverInventory, _, _ common.Address, _ *big.Int, _ pendingReservations,
-) ([]liquidlane.QuoteCandidate, error) {
+func (blockingQuoteStrategy) DecideQuote(ctx context.Context, _ types.QuoteInput) (types.QuoteOutput, error) {
 	<-ctx.Done()
-	return nil, errors.Errorf("multicall: %w", ctx.Err())
+	return types.QuoteOutput{}, errors.Errorf("strategy: %w", ctx.Err())
 }
 
 // lineLogger records every line its logger writes.
@@ -63,7 +60,7 @@ func TestQuoteCancelLogs(t *testing.T) {
 		ctx, cancel := context.WithCancel(observability.WithLogger(t.Context(), log))
 		cancel()
 		srv := testServer()
-		srv.quotes.reader = blockingCandidateReader{}
+		srv.quotes.strategy = blockingQuoteStrategy{}
 		if _, err := srv.handleQuote(ctx, &quoteInput{Secret: testSecret, Body: validQuoteBody()}); err == nil {
 			t.Fatal("expected quote failure")
 		}
@@ -72,7 +69,7 @@ func TestQuoteCancelLogs(t *testing.T) {
 	t.Run("slow dependency", func(t *testing.T) {
 		log, lines := lineLogger()
 		srv := testServer()
-		srv.quotes.reader = blockingCandidateReader{}
+		srv.quotes.strategy = blockingQuoteStrategy{}
 		srv.quoteTimeout = time.Millisecond
 		ctx := observability.WithLogger(t.Context(), log)
 		if _, err := srv.handleQuote(ctx, &quoteInput{Secret: testSecret, Body: validQuoteBody()}); err == nil {

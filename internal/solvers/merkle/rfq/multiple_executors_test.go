@@ -27,41 +27,19 @@ func TestMultipleExecutorsShareRouting(t *testing.T) {
 	workflow.source = multiRecipeSource{first.reader.recipeExecutor: first.workflow.source, second.reader.recipeExecutor: second.workflow.source}
 	_, _, backend := connectorExecutionAward(workflow.caller)
 	s := &Solver{recipeExecutors: []common.Address{first.reader.recipeExecutor, second.reader.recipeExecutor}, workflow: &workflow, backend: backend}
-	if err := s.Initialize(t.Context()); err != nil || !s.AcceptsConnector(vlt) {
+	if err := s.Initialize(t.Context()); err != nil {
 		t.Fatalf("routes: %v", err)
 	}
-	for _, executor := range s.recipeExecutors {
-		if !s.AcceptsRoute(executor, vlt, first.reader.recipeAccount, tOut) {
-			t.Fatalf("missing executor %s", executor)
-		}
-	}
-	if s.AcceptsRoute(common.HexToAddress("0xbad"), vlt, first.reader.recipeAccount, tOut) || s.AcceptsRoute(second.reader.recipeExecutor, vlt, common.HexToAddress("0xbad"), tOut) {
-		t.Fatal("accepted an unconfigured route")
+	if len(s.routes) != 2 {
+		t.Fatal("did not initialize both configured executors")
 	}
 	order, _, _ := connectorExecutionAward(workflow.caller)
-	listing := discounts.ListItem{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: second.reader.recipeExecutor.Hex()}
+	listing := discounts.ListItem{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"}
 	wrongRWA := listing
 	wrongRWA.TokenToRedeem = common.HexToAddress("0xbad").Hex()
-	wrongRWA.RecipeExecutor = first.reader.recipeExecutor.Hex()
 	intent, err := s.prepare(t.Context(), awardRow(t, order), []discounts.ListItem{wrongRWA, listing})
-	if err != nil || intent == nil {
-		t.Fatalf("prepare second executor: %v", err)
-	}
-	values, err := executorBinding.GetABI().Methods["fill"].Inputs.Unpack(intent.Data[4:])
-	if err != nil {
-		t.Fatal(err)
-	}
-	encoded, err := executorCallsArgs.Unpack(values[4].([]byte))
-	if err != nil {
-		t.Fatal(err)
-	}
-	calls := *abi.ConvertType(encoded[0], new([]executorCall)).(*[]executorCall)
-	if len(calls) != 1 || calls[0].Target != second.reader.recipeExecutor {
-		t.Fatal("used the wrong executor")
-	}
-	listing.RecipeExecutor = common.HexToAddress("0xbad").Hex()
-	if unconfigured, err := s.prepare(t.Context(), awardRow(t, order), []discounts.ListItem{listing}); err != nil || unconfigured != nil {
-		t.Fatalf("used unconfigured executor: %v", err)
+	if err != nil || intent != nil {
+		t.Fatalf("ambiguous local recipes reached fill: %v", err)
 	}
 }
 

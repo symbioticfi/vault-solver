@@ -315,7 +315,8 @@ through the context.
 |---|---|---|
 | `POST /quote` | `TraceHandler` (server span) | continues the backend's trace; `request.id` and `quote.id` set in `handleQuote` |
 | `rfq.quote` | `quoteService.quote` | `adapter.address` set here when the chosen plan's legs share one adapter; a bad request or a no-quote outcome is a `declined` event, not an error |
-| `rfq.quote.snapshot` | `snapshotCandidates` | chain read |
+| `rfq.quote.snapshot` | `snapshotCandidates` | local snapshot pricing and reservations; no RPC |
+| `rfq.quote.accounts` | `refreshNativeQuoteAdapters` | startup/background native account discovery; backend HTTP and uncached account RPC inside, never a child of a quote |
 | `rfq.quote.decide` | `decideQuote` | strategy stage |
 | `rfq.execution.sync` | `executionService.syncOnce` | root per poll cycle; parents won-order reservation (`rfq.order.resolve`/`rfq.order.plan`) and submitted-order reconciliation |
 | `rfq.execution.poll` | `pollOpenOrders` | backend HTTP inside |

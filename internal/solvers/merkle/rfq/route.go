@@ -8,11 +8,13 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/erc20"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
 type recipeRoute struct {
 	connector, account, asset common.Address
+	tokens                    map[common.Address]struct{} // immutable after publication
 }
 
 // Initialize publishes verified payment routes together. Quotes keep declining
@@ -37,21 +39,16 @@ func (s *Solver) Initialize(ctx context.Context) error {
 }
 
 func (s *Solver) buildRoutes(ctx context.Context) (map[common.Address]recipeRoute, error) {
-	identities, err := recipes.DiscoverExecutors(ctx, s.workflow.chain, s.recipeExecutors)
-	if err != nil {
-		return nil, err
-	}
-	accounts := make([]common.Address, len(s.recipeExecutors))
-	for i, executor := range s.recipeExecutors {
-		accounts[i] = identities[executor].Account
-	}
-	prepared, err := recipes.DiscoverBatch(ctx, s.workflow.chain, s.recipeExecutors, accounts, s.workflow.caller, recipes.PreparationOptions{ChainID: s.workflow.chainID})
+	prepared, err := s.workflow.discoverRecipes(ctx, s.recipeExecutors)
 	if err != nil {
 		return nil, err
 	}
 	routes := make(map[common.Address]recipeRoute, len(prepared))
 	for _, member := range prepared {
 		snapshot, recipe := member.Snapshot, member.Recipe
+		if _, err := recipes.RouteExecution(ctx, s.workflow.chain, snapshot, s.workflow.caller, recipeexecutor.NewRecipeExecutor().PackExecute(nil, nil, nil, nil)); err != nil {
+			return nil, err
+		}
 		tree, err := s.workflow.permissionTree(ctx, snapshot)
 		if err != nil {
 			return nil, err
@@ -67,35 +64,75 @@ func (s *Solver) buildRoutes(ctx context.Context) (map[common.Address]recipeRout
 		if state.Account != snapshot.Account || state.Asset != asset {
 			return nil, errors.New("recipe payment connector account or asset mismatch")
 		}
-		routes[snapshot.Executor] = recipeRoute{connector: venue, account: state.Account, asset: asset}
+		actions, err := recipes.ManagedActions(recipe, tree)
+		if err != nil {
+			return nil, err
+		}
+		tokens := make(map[common.Address]struct{})
+		for _, action := range actions {
+			token, err := connectorActionToken(action, venue)
+			if err != nil {
+				return nil, err
+			}
+			if token != (common.Address{}) {
+				tokens[token] = struct{}{}
+			}
+		}
+		routes[snapshot.Executor] = recipeRoute{connector: venue, account: state.Account, asset: asset, tokens: tokens}
 	}
 	return routes, nil
 }
 
-// AcceptsRoute binds backend inventory to a locally configured, verified recipe.
-// The RWA-specific swap permission is verified again when building the fill.
-func (s *Solver) AcceptsRoute(executor, connector, account, asset common.Address) bool {
-	route, ok := s.recipeRoute(executor)
-	return ok && route.connector == connector && route.account == account && route.asset == asset
-}
-
-// AcceptsConnector reports whether a published route pays through connector.
-func (s *Solver) AcceptsConnector(connector common.Address) bool {
+// ResolveRoute selects a unique compatible recipe using only the startup cache.
+// Ambiguous routes decline rather than assigning capacity to an arbitrary recipe.
+func (s *Solver) ResolveRoute(connector, rwa, asset common.Address) (executor, account common.Address, ok bool) {
 	s.routesMu.RLock()
 	defer s.routesMu.RUnlock()
-	for _, route := range s.routes {
-		if route.connector == connector {
-			return true
+	for candidate, route := range s.routes {
+		if route.connector != connector || route.asset != asset {
+			continue
 		}
+		if _, supported := route.tokens[rwa]; !supported {
+			continue
+		}
+		if ok {
+			return common.Address{}, common.Address{}, false
+		}
+		executor, account, ok = candidate, route.account, true
 	}
-	return false
+	return executor, account, ok
 }
 
-func (s *Solver) recipeRoute(executor common.Address) (recipeRoute, bool) {
-	s.routesMu.RLock()
-	defer s.routesMu.RUnlock()
-	route, ok := s.routes[executor]
-	return route, ok
+// Each vault may have its own AccessManager. Keep the authenticated on-chain
+// caller in SDK snapshots and batch discovery for recipes sharing that caller.
+func (w *connectorWorkflow) discoverRecipes(ctx context.Context, executors []common.Address) ([]recipes.PreparedRecipe, error) {
+	identities, err := recipes.DiscoverExecutors(ctx, w.chain, executors)
+	if err != nil {
+		return nil, err
+	}
+	groups := make(map[common.Address][]common.Address)
+	var callers []common.Address
+	for _, executor := range executors {
+		caller := identities[executor].Caller
+		if _, exists := groups[caller]; !exists {
+			callers = append(callers, caller)
+		}
+		groups[caller] = append(groups[caller], executor)
+	}
+	var prepared []recipes.PreparedRecipe
+	for _, caller := range callers {
+		members := groups[caller]
+		accounts := make([]common.Address, len(members))
+		for i, executor := range members {
+			accounts[i] = identities[executor].Account
+		}
+		batch, err := recipes.DiscoverBatch(ctx, w.chain, members, accounts, caller, recipes.PreparationOptions{ChainID: w.chainID})
+		if err != nil {
+			return nil, err
+		}
+		prepared = append(prepared, batch...)
+	}
+	return prepared, nil
 }
 
 func paymentConnector(recipe recipes.Recipe, tree *recipes.Tree) (venue, asset common.Address, err error) {

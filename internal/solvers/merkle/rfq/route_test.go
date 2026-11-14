@@ -22,7 +22,7 @@ func TestConfiguredExecutorDerivesPaymentConnector(t *testing.T) {
 	}{
 		{name: "configured executor"},
 		{name: "wrong executor", mutate: func(s *Solver) { s.recipeExecutors[0] = common.HexToAddress("0xbad") }, want: ""},
-		{name: "wrong caller", mutate: func(s *Solver) { s.workflow.caller = common.HexToAddress("0xbad") }, want: "caller mismatch"},
+		{name: "wrong caller", mutate: func(s *Solver) { s.workflow.caller = common.HexToAddress("0xbad") }, want: "caller"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := connectorExecutionFixture(t, connectorDiscountFixture())
@@ -40,12 +40,58 @@ func TestConfiguredExecutorDerivesPaymentConnector(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !s.AcceptsConnector(vlt) || !s.AcceptsRoute(fixture.reader.recipeExecutor, vlt, fixture.reader.recipeAccount, tOut) {
+			if executor, account, ok := s.ResolveRoute(vlt, tIn, tOut); !ok || executor != fixture.reader.recipeExecutor || account != fixture.reader.recipeAccount {
 				t.Fatal("wrong recipe connector")
 			}
 			reads := fixture.reader.identityReads
 			if err := s.Initialize(t.Context()); err != nil || fixture.reader.identityReads != reads {
 				t.Fatalf("initialize repeated discovery: %v", err)
+			}
+		})
+	}
+}
+
+func TestCachedRouteResolutionWithoutRPC(t *testing.T) {
+	fixture := connectorExecutionFixture(t, connectorDiscountFixture())
+	s := &Solver{recipeExecutors: []common.Address{fixture.reader.recipeExecutor}, workflow: fixture.workflow}
+	if err := s.Initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	s.workflow.chain, s.workflow.source = nil, nil
+	for _, tc := range []struct {
+		name              string
+		venue, rwa, asset common.Address
+		want              bool
+	}{
+		{"derive identities", vlt, tIn, tOut, true},
+		{"wrong RWA", vlt, tOut, tOut, false},
+		{"wrong connector", tIn, tIn, tOut, false},
+		{"wrong output", vlt, tIn, tIn, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			executor, account, ok := s.ResolveRoute(tc.venue, tc.rwa, tc.asset)
+			if ok != tc.want || (ok && (executor != fixture.reader.recipeExecutor || account != fixture.reader.recipeAccount)) {
+				t.Fatalf("route=(%s,%s,%t)", executor, account, ok)
+			}
+		})
+	}
+}
+
+func TestCachedRouteResolutionRequiresUniqueRWA(t *testing.T) {
+	first, second := common.HexToAddress("0x43"), common.HexToAddress("0x44")
+	for name, sameRWA := range map[string]bool{"different RWA": false, "same RWA": true} {
+		t.Run(name, func(t *testing.T) {
+			otherToken := tOut
+			if sameRWA {
+				otherToken = tIn
+			}
+			s := &Solver{routes: map[common.Address]recipeRoute{
+				first:  {connector: vlt, account: vlt, asset: tOut, tokens: map[common.Address]struct{}{tIn: {}}},
+				second: {connector: vlt, account: vlt, asset: tOut, tokens: map[common.Address]struct{}{otherToken: {}}},
+			}}
+			executor, account, ok := s.ResolveRoute(vlt, tIn, tOut)
+			if ok == sameRWA || (ok && (executor != first || account != vlt)) {
+				t.Fatalf("route=(%s,%s,%t)", executor, account, ok)
 			}
 		})
 	}
@@ -81,7 +127,7 @@ func TestConfiguredExecutorWithManagedPaymentApproval(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !s.AcceptsConnector(vlt) || !s.AcceptsRoute(fixture.reader.recipeExecutor, vlt, fixture.reader.recipeAccount, tOut) {
+			if executor, account, ok := s.ResolveRoute(vlt, tIn, tOut); !ok || executor != fixture.reader.recipeExecutor || account != fixture.reader.recipeAccount {
 				t.Fatal("managed approval did not identify the payment connector")
 			}
 		})
@@ -102,7 +148,8 @@ func TestInitializeDoesNotBlockRouteReads(t *testing.T) {
 	<-reader.entered
 	declined := make(chan bool, 1)
 	go func() {
-		declined <- !s.AcceptsConnector(vlt) && !s.AcceptsRoute(fixture.reader.recipeExecutor, vlt, fixture.reader.recipeAccount, tOut)
+		_, _, resolved := s.ResolveRoute(vlt, tIn, tOut)
+		declined <- !resolved
 	}()
 	select {
 	case ok := <-declined:
@@ -116,7 +163,7 @@ func TestInitializeDoesNotBlockRouteReads(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if !s.AcceptsConnector(vlt) {
+	if _, _, ok := s.ResolveRoute(vlt, tIn, tOut); !ok {
 		t.Fatal("route not published")
 	}
 }

@@ -212,9 +212,8 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	}
 	for _, item := range listed {
 		venue := common.HexToAddress(item.Adapter)
-		recipeExecutor := common.HexToAddress(item.RecipeExecutor)
-		route, configured := s.recipeRoute(recipeExecutor)
-		if !configured || route.connector != venue || common.HexToAddress(item.TokenToRedeem) != order.Request.TokenIn || common.HexToAddress(item.Collateral) != token {
+		recipeExecutor, _, configured := s.ResolveRoute(venue, order.Request.TokenIn, token)
+		if !configured || common.HexToAddress(item.TokenToRedeem) != order.Request.TokenIn || common.HexToAddress(item.Collateral) != token {
 			continue
 		}
 		id, err := hexutil.Decode(item.DiscountID)

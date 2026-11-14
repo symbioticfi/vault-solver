@@ -96,6 +96,11 @@ that fills the orders it is awarded, settling on-chain through the adapter. Each
 `quoteTimeoutMs` (default 900, below the backend's 1000 ms solver timeout) so a slow dependency is logged
 as a failed quote rather than dropped as a backend disconnect.
 
+Quote inventory describes each adapter's payout token with `asset` and
+`assetDecimals`, separately from the RWA's `tokenInDecimals`. `discountPrecision`
+is explicit for native adapters (`1000000`) and connectors (`100000000`).
+Account and recipe identities come from local configuration and verified chain metadata.
+
 It runs either in `external` mode (the open-source filler; quoting and filling scoped to the operator's
 own adapters) or `internal` mode (Symbiotic-internal; adds the private discounts flow). The caller EOA
 must be an authorized caller of the RFQ `Executor` (its `setCallers` allowlist, granted by the owner).
@@ -117,7 +122,11 @@ The committed permission must admit the supplied calldata length and signature
 framing, and the complete outer fill must simulate successfully. Existing Curator
 templates with fixed 65-byte fields require compatible permissions for other lengths.
 It consumes awarded `/orders` and signed backend terms without aggregating adapter liquidity.
-The solver derives the payment connector from its locally configured RecipeExecutor.
+The solver derives the payment connector and execution caller from its locally configured
+RecipeExecutor. If its caller is an OpenZeppelin AccessManager, that manager must grant
+the RFQ Executor immediate access to the recipe's execution selector. The solver then
+routes the callback through the manager and simulates the complete RFQ fill; missing
+or delayed grants reject the route. Direct RFQ Executor callers also remain supported.
 Both the dedicated approval instruction and ordinary ERC-20 approval calls are supported.
 Discovery authenticates the current permission tree before resolving the latter's token,
 spender and Input1 amount binding.
@@ -180,14 +189,24 @@ filled orders without claiming a peer fill. Attempt history is local and is lost
 The next fresh request can reuse its unused nonce. Reservations are local to the process and are not restored
 after a restart.
 
-Discount-backed `/quote` requests use the backend's `price` (undiscounted oracle
-price scaled by `1e18`), `tokenInDecimals`, `account`, `maxAssets`, and observation
-block. The native adapter's vault and the connector's account identify shared
-reservations. Discount-only quotes make no RPC calls and preserve the contract's
-two rounding steps. Missing pricing metadata rejects the request without an RPC
-fallback. Direct adapter quotes retain their chain reads, and awarded orders still
-use current chain state and complete-fill simulation. Coordinate backend and solver
-rollout for the new fields.
+All supported `/quote` paths use the backend's `price` (undiscounted oracle
+price scaled by `1e18`), `tokenInDecimals`, `maxAssets`, and observation block.
+Configured native adapter accounts and Merkle routes come from the verified startup
+cache. Merkle mode selects exactly one recipe matching the connector, RWA and payout
+token; multiple matches are declined. The backend supplies one conservative capacity
+per connector/discount, bounded by every applicable recipe alternative.
+Neither `account` nor `recipeExecutor` is a backend request field.
+The native adapter's vault and the connector's account identify shared reservations.
+Native external, native discounted, and connector discounted quotes make no RPC
+calls, including metadata warming, and preserve the contract's two rounding steps.
+Native solvers without an adapter list discover accounts at startup and refresh
+new accounts every `pollIntervalMs` outside requests, including in `quoteOnly` mode.
+Unresolved routes decline until cached; background failures retain known accounts.
+Missing pricing metadata rejects the request. Awarded orders still use current
+state, authorization checks, and complete-fill simulation. Connector quotes require
+a signed discount; unsigned connector quotes are unsupported.
+Coordinate backend and solver rollout: this schema removes the staged route hints
+and payout aliases, so versions expecting or sending those fields must be updated together.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).

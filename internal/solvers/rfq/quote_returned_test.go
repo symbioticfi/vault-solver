@@ -147,7 +147,7 @@ func TestQuoteResponseReturnedRequiresSuccessfulWrite(t *testing.T) {
 }
 
 func TestQuoteDirectionScopeRequiresValidatedCandidates(t *testing.T) {
-	for _, mode := range []string{"quoted", "strategy declined", "no inventory", "candidate error"} {
+	for _, mode := range []string{"quoted", "strategy declined", "no inventory", "invalid snapshot"} {
 		t.Run(mode, func(t *testing.T) {
 			srv := testServer()
 			body := validQuoteBody()
@@ -156,11 +156,11 @@ func TestQuoteDirectionScopeRequiresValidatedCandidates(t *testing.T) {
 				srv.quotes.strategy = &inputRecordingStrategy{quoteOut: types.QuoteOutput{Decision: types.DecisionDecline}}
 			case "no inventory":
 				body.Adapters = nil
-			case "candidate error":
-				srv.quotes.reader = failingQuoteReader{}
+			case "invalid snapshot":
+				body.Adapters[0].Price = ""
 			}
 			decision, err := srv.quotes.quote(t.Context(), &body)
-			if (err != nil) != (mode == "candidate error") {
+			if (err != nil) != (mode == "invalid snapshot") {
 				t.Fatalf("quote error=%v", err)
 			}
 			want := mode == "quoted" || mode == "strategy declined"

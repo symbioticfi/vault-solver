@@ -3,6 +3,7 @@ package rfq
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -35,7 +36,8 @@ import (
 // Exercise factory route publication, account authentication and quote allocation.
 func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.T) {
 	rpcServer := rpc.NewServer()
-	if err := rpcServer.RegisterName("eth", newMerkleQuoteRPC(t)); err != nil {
+	routeRPC := newMerkleQuoteRPC(t)
+	if err := rpcServer.RegisterName("eth", routeRPC); err != nil {
 		t.Fatal(err)
 	}
 	defer rpcServer.Stop()
@@ -54,7 +56,7 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 	if err := manager.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	curator := httptest.NewServer(http.HandlerFunc(serveMerkleQuoteTree))
+	curator := httptest.NewServer(http.HandlerFunc(routeRPC.serveTree))
 	defer curator.Close()
 	t.Setenv("RFQ_BACKEND_SHARED_SECRET", "test-secret")
 	text := minimalConfig + "recipeExecutors: ['0x0000000000000000000000000000000000000043']\ncurator: {url: " + curator.URL + "}\n"
@@ -74,13 +76,11 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 		t.Fatal(err)
 	}
 	s := built.(*Solver)
-	s.server.quotes.reader = nil // All-discount quotes must use authenticated backend inventory.
 	body := validQuoteBody()
 	body.Amount = "456000000000000"
 	id := "0x" + strings.Repeat("ab", 32)
 	body.Adapters[0].DiscountID = &id
 	body.Adapters[0].DiscountPrecision = "100000000"
-	body.Adapters[0].RecipeExecutor = common.HexToAddress("0x43").Hex()
 	// A shared backend response also lists native adapters for other solvers.
 	body.Adapters = append(body.Adapters, quoteAdapter{Adapter: common.HexToAddress("0xbad").Hex(), Asset: tOut.Hex(), BlockNumber: "1", MaxAssets: "1000", Discount: "0"})
 	// Quotes decline until the verified routes are published.
@@ -103,18 +103,13 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 	}
 	for _, tc := range []struct {
 		block, capacity string
-		wrongAccount    bool
 		quoted          bool
 	}{
-		{"7", "456", false, true},
-		{"999", "456", false, true},
-		{"7", "900", true, false},
-		{"999", "900", true, false},
+		{"7", "456", true},
+		{"999", "456", true},
+		{"7", "900", true},
+		{"999", "900", true},
 	} {
-		body.Adapters[0].Account = vlt.Hex()
-		if tc.wrongAccount {
-			body.Adapters[0].Account = common.HexToAddress("0xbad").Hex()
-		}
 		body.Adapters[0].BlockNumber, body.Adapters[0].MaxAssets = tc.block, tc.capacity
 		decision, err := s.server.quotes.quote(t.Context(), &body)
 		if err != nil || (decision.response != nil) != tc.quoted {
@@ -155,6 +150,7 @@ type merkleQuoteRPC struct {
 
 	recipe recipes.Recipe
 	hash   common.Hash
+	leaf   recipes.Leaf
 }
 
 func newMerkleQuoteRPC(t *testing.T) *merkleQuoteRPC {
@@ -171,17 +167,39 @@ func newMerkleQuoteRPC(t *testing.T) *merkleQuoteRPC {
 	if err != nil {
 		t.Fatal(err)
 	}
+	swap := connector.NewLiquidLaneConnector().PackSwap(connector.ILiquidLaneConnectorDiscountSwap{
+		Discount:         connector.ILiquidLaneConnectorDiscount{TokenToRedeem: tIn, Discount: new(big.Int), Nonce: new(big.Int), Deadline: new(big.Int)},
+		ProtocolDeadline: new(big.Int),
+	}, nil, common.HexToAddress("0x10"), new(big.Int))
+	leaf := recipes.Leaf{Target: vlt, Value: new(big.Int), Data: swap, DataMask: make([]byte, len(swap))}
+	leaf.Hash, err = recipes.HashLeaf(leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
 	input := new(big.Int).Or(new(big.Int).Lsh(new(big.Int).SetUint64(uint64(recipes.Input)), 216), big.NewInt(1))
-	data, err := (abi.Arguments{{Type: uintType}, {Type: addressType}, {Type: addressType}, {Type: hashType}}).Pack(input, tOut, vlt, common.HexToHash("0x1234"))
+	data, err := (abi.Arguments{{Type: uintType}, {Type: addressType}, {Type: addressType}, {Type: hashType}}).Pack(input, tOut, vlt, leaf.Hash)
 	if err != nil {
 		t.Fatal(err)
 	}
 	recipe := recipes.Recipe{Steps: [][]byte{append([]byte{recipes.Approve}, data...)}}
+	hashesType, err := abi.NewType("bytes32[]", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindingsType, err := abi.NewType("uint256[][]", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	managed, err := (abi.Arguments{{Type: uintType}, {Type: hashesType}, {Type: bindingsType}}).Pack(big.NewInt(1), [][32]byte{leaf.Hash}, [][]*big.Int{{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipe.Steps = append(recipe.Steps, append([]byte{recipes.Manage}, managed...))
 	hash, err := recipes.HashRecipe(recipe)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &merkleQuoteRPC{recipe: recipe, hash: hash}
+	return &merkleQuoteRPC{recipe: recipe, hash: hash, leaf: leaf}
 }
 
 func (s *merkleQuoteRPC) Call(_ context.Context, args map[string]any, block string, _ *map[string]any) (hexutil.Bytes, error) {
@@ -219,7 +237,7 @@ func (s *merkleQuoteRPC) read(to common.Address, data []byte, block string) ([]b
 	}
 	if to == vlt {
 		if bytes.Equal(data, merkleaccount.NewMerkleAccount().PackRoot()) {
-			return common.HexToHash("0x1234").Bytes(), nil
+			return s.leaf.Hash.Bytes(), nil
 		}
 		if bytes.Equal(data, merkleaccount.NewMerkleAccount().PackAdapter()) {
 			return common.LeftPadBytes(merkleQuoteAdapter.Bytes(), 32), nil
@@ -256,11 +274,16 @@ func (s *merkleQuoteRPC) read(to common.Address, data []byte, block string) ([]b
 
 var merkleQuoteAdapter = common.HexToAddress("0xad")
 
-// A one-leaf bundle whose leaf is the account root; the plain approval recipe has no managed calls.
-func serveMerkleQuoteTree(w http.ResponseWriter, _ *http.Request) {
-	scope := `"chainId":"1","adapter":"` + strings.ToLower(merkleQuoteAdapter.Hex()) + `","account":"` + strings.ToLower(vlt.Hex()) + `","root":"` + common.HexToHash("0x1234").Hex() + `"`
+// The swap leaf commits the RWA used for local recipe selection.
+func (s *merkleQuoteRPC) serveTree(w http.ResponseWriter, _ *http.Request) {
+	scope := `"chainId":"1","adapter":"` + strings.ToLower(merkleQuoteAdapter.Hex()) + `","account":"` + strings.ToLower(vlt.Hex()) + `","root":"` + s.leaf.Hash.Hex() + `"`
+	leaf, err := json.Marshal(map[string]any{"hash": s.leaf.Hash.Hex(), "target": s.leaf.Target.Hex(), "value": "0", "data": hexutil.Encode(s.leaf.Data), "dataMask": hexutil.Encode(s.leaf.DataMask), "proof": []string{}})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(`{"bundle":{` + scope + `,"leaves":["` + common.HexToHash("0x1234").Hex() + `"],"metadata":{` + scope + `,"leaves":[]}}}`))
+	_, _ = w.Write([]byte(`{"bundle":{` + scope + `,"leaves":["` + s.leaf.Hash.Hex() + `"],"metadata":{` + scope + `,"leaves":[` + string(leaf) + `]}}}`))
 }
 
 func (s *merkleQuoteRPC) GetLogs(context.Context, map[string]any) ([]types.Log, error) {

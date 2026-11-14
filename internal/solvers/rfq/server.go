@@ -124,12 +124,7 @@ func (s *server) handleQuote(ctx context.Context, in *quoteInput) (*quoteOutput,
 	}
 	decision, err := s.quotes.quote(quoteCtx, &in.Body)
 	cancel()
-	// Only a positive, on-chain-validated decision may extend optional log metadata.
-	if err == nil && decision.response != nil && s.quotes.warmMetadata != nil {
-		s.quotes.warmMetadata([]common.Address{
-			common.HexToAddress(in.Body.TokenIn), common.HexToAddress(in.Body.TokenOut),
-		})
-	}
+
 	var bad *badRequestError
 	if errors.As(err, &bad) {
 		decision.outcome = quoteDecisionBadRequest

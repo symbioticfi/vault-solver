@@ -1,8 +1,6 @@
 package rfq
 
 import (
-	"math/big"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -122,14 +120,14 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 	quotes, _ := buildServices(cfg, 1, st, nil, nil, func() bool { return true }, nil, logr.Discard())
 	// buildServices wires real dependencies; swap in test fakes. The default strategy prices the tOut
 	// asset-group at 1.000000 USDC.
-	quotes.reader = &fakeQuoteCandidateReader{out: map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}}
+	quotes.resolveRoute = func(_, _, _ common.Address, _ int) (common.Address, common.Address, bool) {
+		return common.Address{}, vlt, true
+	}
 	quotes.strategy = newDefaultTestStrategy()
 
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
-	rogueAdapter := quoteAdapter{
-		Adapter: rogue.Hex(), Asset: tOut.Hex(), AssetDecimals: 6,
-		BlockNumber: "1", MaxAssets: "10000000", Discount: "0", // not scoped → must be dropped
-	}
+	rogueAdapter := validQuoteBody().Adapters[0]
+	rogueAdapter.Adapter = rogue.Hex() // Not scoped: must be dropped.
 
 	// (1) Request offering ONLY the non-configured adapter ⇒ declined (nil → HTTP 204).
 	onlyRogue := validQuoteBody()
@@ -155,18 +153,5 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 	}
 	if decision.response.AmountOut != "1000000" {
 		t.Fatalf("amountOut = %s, want quote through the configured adapter", decision.response.AmountOut)
-	}
-}
-
-func TestBuildServicesUsesConfiguredRecipeExecutor(t *testing.T) {
-	cfg, err := parseCfg(t, minimalConfig+`recipeExecutors: ["0x0000000000000000000000000000000000000043"]
-quoteOnly: true
-`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	quotes, _ := buildServices(cfg, 1, newStore(time.Now), nil, nil, func() bool { return true }, nil, logr.Discard())
-	if !slices.Equal(quotes.recipeExecutors, cfg.RecipeExecutors) || !quotes.discountsEnabled {
-		t.Fatal("local recipe configuration did not reach quote service")
 	}
 }

@@ -326,18 +326,13 @@
             "items": {
               "type": "object",
               "properties": {
-                "account": {
-                  "type": "string",
-                  "pattern": "^0x[a-fA-F0-9]{40}$"
-                },
-                "recipeExecutor": {
-                  "description": "Configured solver executor for the current funding recipe.",
-                  "type": "string",
-                  "pattern": "^0x[a-fA-F0-9]{40}$"
-                },
                 "discountPrecision": {
+                  "description": "Discount denominator: 1000000 for native adapters, 100000000 for connectors.",
                   "type": "string",
-                  "const": "100000000"
+                  "enum": [
+                    "1000000",
+                    "100000000"
+                  ]
                 },
                 "discountId": {
                   "type": "string",
@@ -546,6 +541,13 @@
                 "type": "string",
                 "pattern": "^0x[a-fA-F0-9]{64}$"
               },
+              "discountPrecision": {
+                "type": "string",
+                "enum": [
+                  "1000000",
+                  "100000000"
+                ]
+              },
               "discount": {
                 "type": "object",
                 "required": [
@@ -622,6 +624,13 @@
                     "discountId": {
                       "type": "string",
                       "pattern": "^0x[a-fA-F0-9]{64}$"
+                    },
+                    "discountPrecision": {
+                      "type": "string",
+                      "enum": [
+                        "1000000",
+                        "100000000"
+                      ]
                     },
                     "discount": {
                       "type": "object",

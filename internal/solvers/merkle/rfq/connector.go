@@ -98,30 +98,12 @@ func assembleConnectorRoute(recipe recipes.Recipe, tree *recipes.Tree, venue, to
 		return assembledConnector{}, err
 	}
 	for _, action := range managed {
-		if action.Leaf.Target != venue {
-			continue
-		}
-		if len(action.Leaf.Data) < 164 || !bytes.Equal(action.Leaf.Data[:4], data[:4]) {
-			continue
-		}
-
-		if !bytes.Equal(action.Leaf.Data[4:36], common.LeftPadBytes([]byte{128}, 32)) {
-			return assembledConnector{}, errors.New("connector swap tuple offset must be 128")
-		}
-		if err = action.Pinned(4, 32); err != nil {
+		boundToken, err := connectorActionToken(action, venue)
+		if err != nil {
 			return assembledConnector{}, err
 		}
-		if value, err := action.Field(132); err == nil {
-			if value.Source != recipes.Literal || value.Value.Cmp(new(big.Int).SetBytes(token[:])) != 0 {
-				continue
-			}
-		} else {
-			if err := action.Pinned(132, 32); err != nil {
-				return assembledConnector{}, err
-			}
-			if common.BytesToAddress(action.Leaf.Data[132:164]) != token {
-				continue
-			}
+		if boundToken != token {
+			continue
 		}
 		actions[action.Key] = data
 	}
@@ -134,6 +116,36 @@ func assembleConnectorRoute(recipe recipes.Recipe, tree *recipes.Tree, venue, to
 		return assembledConnector{}, err
 	}
 	return assembledConnector{inner, leaves}, nil
+}
+
+// connectorActionToken identifies a swap's statically committed RWA. Unrelated
+// actions and dynamically selected tokens cannot advertise a cached route.
+func connectorActionToken(action recipes.ManagedAction, venue common.Address) (common.Address, error) {
+	if action.Leaf.Target != venue || len(action.Leaf.Data) < 164 || !bytes.Equal(action.Leaf.Data[:4], connectorBinding.GetABI().Methods["swap"].ID) {
+		return common.Address{}, nil
+	}
+	if !bytes.Equal(action.Leaf.Data[4:36], common.LeftPadBytes([]byte{128}, 32)) {
+		return common.Address{}, errors.New("connector swap tuple offset must be 128")
+	}
+	if err := action.Pinned(4, 32); err != nil {
+		return common.Address{}, err
+	}
+	var token *big.Int
+	if value, err := action.Field(132); err == nil {
+		if value.Source != recipes.Literal {
+			return common.Address{}, nil
+		}
+		token = value.Value
+	} else {
+		if err := action.Pinned(132, 32); err != nil {
+			return common.Address{}, err
+		}
+		token = new(big.Int).SetBytes(action.Leaf.Data[132:164])
+	}
+	if token == nil || token.Sign() <= 0 || token.BitLen() > 160 {
+		return common.Address{}, errors.New("invalid connector swap token")
+	}
+	return common.BigToAddress(token), nil
 }
 
 type permissionSource interface {
@@ -218,11 +230,7 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if w.signer == (common.Address{}) {
 		return builtConnector{}, errors.New("connector fill requires a host signer")
 	}
-	identities, err := recipes.DiscoverExecutors(ctx, w.chain, []common.Address{selected.Executor})
-	if err != nil {
-		return builtConnector{}, errors.Errorf("discover connector executor: %w", err)
-	}
-	prepared, err := recipes.DiscoverBatch(ctx, w.chain, []common.Address{selected.Executor}, []common.Address{identities[selected.Executor].Account}, w.caller, recipes.PreparationOptions{ChainID: w.chainID})
+	prepared, err := w.discoverRecipes(ctx, []common.Address{selected.Executor})
 	if err != nil {
 		return builtConnector{}, errors.Errorf("discover connector recipe: %w", err)
 	}
@@ -266,7 +274,11 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 	if err != nil {
 		return builtConnector{}, errors.Errorf("assemble connector recipe: %w", err)
 	}
-	calls, err := executorCallsArgs.Pack([]executorCall{{Target: snapshot.Executor, Value: new(big.Int), Data: assembled.Calldata}})
+	routed, err := recipes.RouteExecution(ctx, w.chain, snapshot, w.caller, assembled.Calldata)
+	if err != nil {
+		return builtConnector{}, err
+	}
+	calls, err := executorCallsArgs.Pack([]executorCall{{Target: routed.Executor, Value: new(big.Int), Data: routed.Data}})
 	if err != nil {
 		return builtConnector{}, errors.Errorf("encode recipe call: %w", err)
 	}
@@ -287,7 +299,7 @@ func (w *connectorWorkflow) build(ctx context.Context, order executor.IReactorOr
 		_, err := w.chain.CallContract(ctx, ethereum.CallMsg{From: w.signer, To: &w.caller, Data: bytes.Clone(calldata), Gas: request.GasLimit}, request.BlockNumber)
 		return err
 	}
-	if err := recipes.ValidatePreparedBatchWithSimulation(ctx, w.chain, prepared, []recipes.ExecutorCall{{Executor: snapshot.Executor, Data: assembled.Calldata}}, [][]common.Hash{assembled.Leaves}, w.caller, simulate, w.maxGas); err != nil {
+	if err := recipes.ValidatePreparedBatchWithSimulation(ctx, w.chain, prepared, []recipes.ExecutorCall{{Executor: snapshot.Executor, Data: assembled.Calldata}}, [][]common.Hash{assembled.Leaves}, snapshot.Caller, simulate, w.maxGas); err != nil {
 		return builtConnector{}, errors.Errorf("validate outer RFQ recipe fill: %w", err)
 	}
 	return builtConnector{Calldata: calldata, ValidUntil: terms.ValidUntil, State: state}, nil
