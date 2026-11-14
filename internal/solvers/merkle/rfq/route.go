@@ -148,7 +148,7 @@ func paymentConnector(recipe recipes.Recipe, tree *recipes.Tree) (venue, asset c
 		return nil
 	}
 	for _, slot := range inspection.Slots {
-		if slot.Operation != recipes.Approve || slot.Amount.Source != recipes.Input || slot.Amount.Value == nil || slot.Amount.Value.Cmp(big.NewInt(1)) != 0 {
+		if slot.Operation != recipes.Approve || !paymentInput(recipe, slot.Amount, slot.StepIndex) {
 			continue
 		}
 		if err := selectPayment(slot.Token, slot.Spender); err != nil {
@@ -165,7 +165,7 @@ func paymentConnector(recipe recipes.Recipe, tree *recipes.Tree) (venue, asset c
 			continue
 		}
 		amount, err := action.Field(36)
-		if err != nil || amount.Source != recipes.Input || amount.Value.Cmp(big.NewInt(1)) != 0 {
+		if err != nil || !paymentInput(recipe, amount, action.Slot.StepIndex) {
 			continue
 		}
 		if action.Slot.Gate.Source != recipes.Literal || action.Slot.Gate.Value.Cmp(big.NewInt(1)) != 0 {
@@ -182,4 +182,45 @@ func paymentConnector(recipe recipes.Recipe, tree *recipes.Tree) (venue, asset c
 		return venue, asset, errors.New("recipe payment approval from input 1 missing")
 	}
 	return venue, asset, nil
+}
+
+// The compiler guards payment with Input1 * min(1, Input0) / 1.
+// Recognize only that exact form, with a preceding assertion that Input0 >= 1.
+// No chain reads or arbitrary numerical evaluation are needed for discovery.
+func paymentInput(recipe recipes.Recipe, amount recipes.Value, before uint) bool {
+	if amount.Source == recipes.Input && amount.Value != nil && amount.Value.Cmp(big.NewInt(1)) == 0 {
+		return true
+	}
+	product, productIndex := paymentResult(recipe, amount, before, recipes.MulDiv, 97)
+	if product == nil || !paymentOperand(product[1:33], recipes.Input, 1) || !paymentOperand(product[65:97], recipes.Literal, 1) {
+		return false
+	}
+	guard := recipes.Value{Source: product[37], Value: new(big.Int).SetBytes(product[38:65])}
+	minimum, _ := paymentResult(recipe, guard, productIndex, recipes.Min, 65)
+	if minimum == nil || !paymentOperand(minimum[1:33], recipes.Literal, 1) || !paymentOperand(minimum[33:65], recipes.Input, 0) {
+		return false
+	}
+	for _, step := range recipe.Steps[:before] {
+		if len(step) >= 65 && step[0] == recipes.LessOrEqual && paymentOperand(step[1:33], recipes.Literal, 1) && paymentOperand(step[33:65], recipes.Input, 0) {
+			return true
+		}
+	}
+	return false
+}
+
+func paymentResult(recipe recipes.Recipe, value recipes.Value, before uint, operation byte, size int) ([]byte, uint) {
+	if value.Source != recipes.Result || value.Value == nil || !value.Value.IsUint64() || value.Value.Uint64() >= uint64(before) || value.Value.Uint64() >= uint64(len(recipe.Steps)) {
+		return nil, 0
+	}
+	index := uint(value.Value.Uint64())
+	step := recipe.Steps[index]
+	if len(step) < size || step[0] != operation {
+		return nil, 0
+	}
+	return step, index
+}
+
+// Match the protocol's uint8(word >> 216) and uint216(word), ignoring its upper four bytes.
+func paymentOperand(word []byte, source byte, value int64) bool {
+	return word[4] == source && new(big.Int).SetBytes(word[5:]).Cmp(big.NewInt(value)) == 0
 }
