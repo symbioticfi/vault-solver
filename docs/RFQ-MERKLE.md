@@ -30,8 +30,8 @@ Lane adapter factory (version `1` is a native adapter).
 Backend quote requests carry capacity, price, token decimals and discount precision.
 The solver derives account and recipe identities from the verified startup route cache.
 Exactly one configured recipe must match the connector, RWA swap permission and output
-asset; missing or ambiguous routes are declined. Selection performs no quote-time RPC
-or permission-service calls, and account/recipe identities are absent from backend
+asset; missing or ambiguous routes are declined. All supported RFQ quote paths (native external, native discounted and connector
+discounted) perform no quote-time RPC, metadata warming or permission-service calls, and account/recipe identities are absent from backend
 requests. The backend maps each connector to a `recipeExecutors` list and measures
 each recipe against the requested RWA. It emits one capacity per connector/discount,
 bounded by the lowest applicable recipe capacity, including zero; a failed recipe

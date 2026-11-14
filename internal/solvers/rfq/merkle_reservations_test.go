@@ -76,7 +76,6 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 		t.Fatal(err)
 	}
 	s := built.(*Solver)
-	s.server.quotes.reader = nil // All-discount quotes must use authenticated backend inventory.
 	body := validQuoteBody()
 	body.Amount = "456000000000000"
 	id := "0x" + strings.Repeat("ab", 32)

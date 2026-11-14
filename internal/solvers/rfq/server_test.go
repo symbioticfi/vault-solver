@@ -24,12 +24,11 @@ func testServer() *server {
 	clk := func() time.Time { return time.Unix(0, 0) }
 	q := &quoteService{
 		chainID: 1,
-		resolveRoute: func(_, _, _ common.Address) (common.Address, common.Address, bool) {
+		resolveRoute: func(_, _, _ common.Address, _ int) (common.Address, common.Address, bool) {
 			return common.Address{}, vlt, true
 		},
 		executor:      execAddr,
 		laneAvailable: func() bool { return true },
-		reader:        &fakeQuoteCandidateReader{out: map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}},
 		strategy:      newDefaultTestStrategy(),
 		strategyName:  defaultStrategyName,
 		log:           logr.Discard(),
@@ -241,10 +240,8 @@ func TestServer_QuoteBelowMinAmountNoContent(t *testing.T) {
 
 func TestServer_QuoteWhitelist(t *testing.T) {
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
-	rogueAdapter := quoteAdapter{
-		Adapter: rogue.Hex(), Asset: tOut.Hex(), AssetDecimals: 6,
-		BlockNumber: "1", MaxAssets: "10000000", Discount: "0",
-	}
+	rogueAdapter := validQuoteBody().Adapters[0]
+	rogueAdapter.Adapter = rogue.Hex()
 	cases := map[string]struct {
 		whitelist adapterWhitelist
 		adapters  []quoteAdapter // nil keeps validQuoteBody's single vlt adapter
@@ -303,7 +300,7 @@ func TestServerConnectorDerivesLocalExecutor(t *testing.T) {
 	srv.quotes.recipeExecutors = []common.Address{executor}
 	srv.quotes.discountsEnabled = true
 	srv.quotes.acceptsConnector = func(adapter common.Address) bool { return adapter == vlt }
-	srv.quotes.resolveRoute = func(venue, _, asset common.Address) (common.Address, common.Address, bool) {
+	srv.quotes.resolveRoute = func(venue, _, asset common.Address, _ int) (common.Address, common.Address, bool) {
 		return executor, vlt, venue == vlt && asset == tOut
 	}
 	body := validQuoteBody()

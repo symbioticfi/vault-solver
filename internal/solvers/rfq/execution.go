@@ -100,6 +100,7 @@ type fillReader interface {
 	// (config carries only adapter addresses).
 	resolveVaults(ctx context.Context, vaults []recoveryVault) ([]recoveryVault, error)
 	setQuoteAdapters(resolved []recoveryVault)
+	warmQuoteAdapters(ctx context.Context, adapters []common.Address) error
 	validateDirectAuthorization(ctx context.Context, executor common.Address, vaults []recoveryVault) error
 }
 

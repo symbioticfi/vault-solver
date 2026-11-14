@@ -2,7 +2,6 @@ package rfq
 
 import (
 	"encoding/json"
-	"math/big"
 	"net/http"
 	"testing"
 
@@ -39,8 +38,7 @@ minAmountsIn:
 			srv.quotes.tokenPolicy = cfg.TokenPolicy
 			srv.quotes.minAmountsIn = cfg.MinAmountsIn
 			// Simulated adapter price of $1 per mGLO; token decimals remain 18 -> 6.
-			reader := &fakeQuoteCandidateReader{out: map[common.Address]*big.Int{usdc: big.NewInt(1_000_000)}}
-			srv.quotes.reader = reader
+
 			body := validQuoteBody()
 			body.TokenIn, body.TokenOut, body.Amount = mglo.Hex(), usdc.Hex(), tc.amount
 			body.Adapters[0].Asset, body.Adapters[0].Discount = usdc.Hex(), tc.discount
@@ -50,9 +48,6 @@ minAmountsIn:
 				t.Fatalf("status = %d, want %d (body %s)", rr.Code, tc.wantStatus, rr.Body.String())
 			}
 			if tc.wantStatus == http.StatusNoContent {
-				if len(reader.queries) != 0 {
-					t.Fatal("below-minimum request reached the chain reader")
-				}
 				return
 			}
 			var response quoteResponse

@@ -27,11 +27,10 @@ import (
 type quoteService struct {
 	recipeExecutors []common.Address
 	acceptsRoute    func(executor, connector, account, asset common.Address) bool
-	resolveRoute    func(connector, rwa, asset common.Address) (executor, account common.Address, ok bool)
+	resolveRoute    func(connector, rwa, asset common.Address, assetDecimals int) (executor, account common.Address, ok bool)
 	pairRoutes      atomic.Pointer[[]liquidlane.Route] // immutable configured adapter directions, optional background observation only
 	chainID         int64
 	tokenMetadata   *chain.Decimals
-	warmMetadata    func([]common.Address) // optional lifecycle-owned background enrichment; assigned before HTTP starts
 	executor        common.Address
 	// laneAvailable is safe for concurrent use and reports sender initialization. A busy lane does not
 	// block quoting: pending fills are accounted through reservations instead. It is sampled before
@@ -47,7 +46,6 @@ type quoteService struct {
 	// map (or a nil map) has no minimum.
 	discountsEnabled bool
 	minAmountsIn     map[common.Address]*big.Int
-	reader           quoteCandidateReader
 	strategy         types.Strategy
 	strategyName     string // registry key, reported as the strategy.name span attribute
 	log              logr.Logger
@@ -210,7 +208,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 		observability.Log(ctx).V(1).Info("declining quote: no viable LiquidLane candidates", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
 	}
-	// Only existing on-chain candidate validation establishes a known directed inventory pair.
+	// Cached route validation and the authenticated snapshot establish a known inventory pair.
 	// This is not a promise that the requested amount/strategy can be quoted.
 	knownDirection = true
 	input := newQuoteInput(qs.chainID, qs.executor, req, candidates, nil, requireSingleRoute, qs.now())
@@ -267,11 +265,8 @@ func (qs *quoteService) resolveInventory(q *quoteRequest) (*quoteRequest, error)
 		if err != nil {
 			return nil, err
 		}
-		executor, account, ok := qs.resolveRoute(venue, rwa, asset)
+		executor, account, ok := qs.resolveRoute(venue, rwa, asset, item.AssetDecimals)
 		if !ok {
-			if len(qs.recipeExecutors) == 0 {
-				scoped.Adapters = append(scoped.Adapters, item)
-			}
 			continue
 		}
 		item.Account = account.Hex()
@@ -284,36 +279,26 @@ func (qs *quoteService) resolveInventory(q *quoteRequest) (*quoteRequest, error)
 	return &scoped, nil
 }
 
-// snapshotCandidates prices backend discounts or reads direct adapters as the rfq.quote.snapshot stage.
+// snapshotCandidates prices the backend snapshot and subtracts local reservations without I/O.
 func (qs *quoteService) snapshotCandidates(
 	ctx context.Context, inv []solverInventory, req strategyRequest,
 ) (candidates []liquidlane.QuoteCandidate, err error) {
-	ctx, end := tracer.Start(ctx, "rfq.quote.snapshot")
+	_, end := tracer.Start(ctx, "rfq.quote.snapshot")
 	defer func() { end(err) }()
-	var pending pendingReservations
+	inv = slices.DeleteFunc(slices.Clone(inv), func(item solverInventory) bool {
+		return item.TokenIn != req.TokenIn || item.TokenOut != req.TokenOut || item.Vault == (common.Address{})
+	})
+	var reservations liquidlane.CapacityReservations
 	if qs.reservations != nil {
-		pending = func(inventory []solverInventory) liquidlane.CapacityReservations {
-			return qs.reservations("", inventory)
+		reservations = qs.reservations("", inv)
+	}
+	allocated := liquidgreedy.AllocateInventoryCapacity(inv, reservations, 0)
+	for _, item := range allocated {
+		if candidate := liquidgreedy.NewQuoteCandidate(item, item.MaxAssets); candidate != nil {
+			candidates = append(candidates, *candidate)
 		}
 	}
-	// Discount quotes use the backend's complete snapshot; fill planning still reads current state.
-	if !slices.ContainsFunc(inv, func(item solverInventory) bool { return item.DiscountID == nil || item.Vault == (common.Address{}) }) {
-		inv = slices.DeleteFunc(slices.Clone(inv), func(item solverInventory) bool {
-			return item.TokenIn != req.TokenIn || item.TokenOut != req.TokenOut
-		})
-		var reservations liquidlane.CapacityReservations
-		if pending != nil {
-			reservations = pending(inv)
-		}
-		allocated := liquidgreedy.AllocateInventoryCapacity(inv, reservations, 0)
-		for _, item := range allocated {
-			if candidate := liquidgreedy.NewQuoteCandidate(item, item.MaxAssets); candidate != nil {
-				candidates = append(candidates, *candidate)
-			}
-		}
-		return candidates, nil
-	}
-	return qs.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount, pending)
+	return candidates, nil
 }
 
 // decideQuote runs the strategy as the rfq.quote.decide stage.

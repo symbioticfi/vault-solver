@@ -128,24 +128,6 @@ type countingStrategy struct {
 	quoteCalls int
 }
 
-type countingQuoteReader struct {
-	quoteCandidateReader
-
-	calls int
-}
-
-func (r *countingQuoteReader) readQuoteCandidates(
-	ctx context.Context,
-	inventory []solverInventory,
-	tokenIn common.Address,
-	tokenOut common.Address,
-	amountIn *big.Int,
-	pending pendingReservations,
-) ([]liquidlane.QuoteCandidate, error) {
-	r.calls++
-	return r.quoteCandidateReader.readQuoteCandidates(ctx, inventory, tokenIn, tokenOut, amountIn, pending)
-}
-
 type laneFlippingStrategy struct {
 	types.Strategy
 
@@ -166,18 +148,16 @@ func TestQuoteDeclinesBeforePlanningWhenLaneNotReady(t *testing.T) {
 	ready.Store(false)
 
 	srv := testServer()
-	reader := &countingQuoteReader{quoteCandidateReader: srv.quotes.reader}
 	strategy := &countingStrategy{Strategy: srv.quotes.strategy}
 	srv.quotes.laneAvailable = ready.Load
-	srv.quotes.reader = reader
 	srv.quotes.strategy = strategy
 
 	rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, validQuoteBody())
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("quote status = %d, want 204 (body %s)", rr.Code, rr.Body.String())
 	}
-	if reader.calls != 0 || strategy.quoteCalls != 0 {
-		t.Fatalf("non-ready lane performed reader=%d strategy=%d calls, want none", reader.calls, strategy.quoteCalls)
+	if strategy.quoteCalls != 0 {
+		t.Fatalf("non-ready lane performed strategy=%d calls, want none", strategy.quoteCalls)
 	}
 }
 
@@ -186,9 +166,7 @@ func TestQuoteDeclinesWhenLaneBecomesBusyDuringPlanning(t *testing.T) {
 	ready.Store(true)
 
 	srv := testServer()
-	reader := &countingQuoteReader{quoteCandidateReader: srv.quotes.reader}
 	srv.quotes.laneAvailable = ready.Load
-	srv.quotes.reader = reader
 	srv.quotes.strategy = &laneFlippingStrategy{
 		Strategy: srv.quotes.strategy,
 		ready:    &ready,
@@ -197,9 +175,6 @@ func TestQuoteDeclinesWhenLaneBecomesBusyDuringPlanning(t *testing.T) {
 	rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, validQuoteBody())
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("quote status = %d, want 204 after lane pause (body %s)", rr.Code, rr.Body.String())
-	}
-	if reader.calls != 1 {
-		t.Fatalf("candidate reader calls = %d, want one completed planning read", reader.calls)
 	}
 }
 

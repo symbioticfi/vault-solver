@@ -41,6 +41,7 @@ type Resolved struct {
 // ListItem is one currently advertised private discount.
 type ListItem struct {
 	DiscountID         string
+	DiscountPrecision  string
 	Adapter            string
 	TokenToRedeem      string
 	Collateral         string
@@ -157,6 +158,7 @@ func (c *Client) ListDiscounts(ctx context.Context) (*List, error) {
 		}
 		out.Discounts = append(out.Discounts, ListItem{
 			DiscountID:         d.GetDiscountId(),
+			DiscountPrecision:  d.GetDiscountPrecision(),
 			Adapter:            d.GetAdapter(),
 			TokenToRedeem:      d.GetTokenToRedeem(),
 			Collateral:         d.GetCollateral(),

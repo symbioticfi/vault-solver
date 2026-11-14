@@ -12,14 +12,13 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 )
 
-func TestDiscountQuoteUsesBackendSnapshotWithoutRPC(t *testing.T) {
-	for _, precision := range []int64{1_000_000, 100_000_000} {
-		for _, reserved := range []int64{0, 8_000_000, 9_000_000} {
+func TestQuoteUsesBackendSnapshotWithoutRPC(t *testing.T) {
+	for _, precision := range []int64{0, 1_000_000, 100_000_000} {
+		for _, reserved := range []int64{0, 8_000_000, 9_000_000, 10_000_000} {
 			t.Run(big.NewInt(precision).String()+"/reserved"+big.NewInt(reserved).String(), func(t *testing.T) {
 				s := testServer()
 				s.quotes.discountsEnabled = true
-				// Any chain-reader access panics and makes the HTTP assertion fail.
-				s.quotes.reader = nil
+				// The quote service has no RPC reader; all candidate data comes from this snapshot.
 				body := validQuoteBody()
 				id := common.HexToHash("0x1234").Hex()
 				decimals := 18
@@ -27,14 +26,19 @@ func TestDiscountQuoteUsesBackendSnapshotWithoutRPC(t *testing.T) {
 				entry.Account = vlt.Hex()
 				entry.TokenInDecimals = &decimals
 				entry.Price = "1234567890123456789"
-				entry.DiscountID = &id
-				entry.Discount = big.NewInt(precision / 20).String()
+				if precision != 0 {
+					entry.DiscountID = &id
+				}
+				entry.Discount = "50000"
+				if precision == 100_000_000 {
+					entry.Discount = "5000000"
+				}
 				entry.BlockNumber = "42"
 				if precision == 100_000_000 {
 					s.quotes.recipeExecutors = []common.Address{common.HexToAddress("0x43")}
 					entry.DiscountPrecision = "100000000"
 					entry.RecipeExecutor = common.HexToAddress("0x43").Hex()
-					s.quotes.resolveRoute = func(_, _, _ common.Address) (common.Address, common.Address, bool) {
+					s.quotes.resolveRoute = func(_, _, _ common.Address, _ int) (common.Address, common.Address, bool) {
 						return common.HexToAddress("0x43"), vlt, true
 					}
 				}
@@ -45,7 +49,7 @@ func TestDiscountQuoteUsesBackendSnapshotWithoutRPC(t *testing.T) {
 					return liquidlane.CapacityReservations{liquidlane.NewCapacityID(1, vlt, tOut): big.NewInt(reserved)}
 				}
 				rr := do(t, s.handler(), http.MethodPost, "/quote", testSecret, body)
-				if reserved == 9_000_000 {
+				if reserved == 10_000_000 || (reserved == 9_000_000 && precision != 0) {
 					if rr.Code != http.StatusNoContent {
 						t.Fatalf("overcommitted discounted quote: %d %s", rr.Code, rr.Body.String())
 					}
@@ -58,8 +62,12 @@ func TestDiscountQuoteUsesBackendSnapshotWithoutRPC(t *testing.T) {
 				if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
 					t.Fatal(err)
 				}
-				if response.AmountOut != "1172838" {
-					t.Fatalf("quote output=%s, want the exact two-step payout 1172838", response.AmountOut)
+				want := "1172838" // Exact two-step floor of the discounted oracle payout.
+				if reserved == 9_000_000 {
+					want = "1000000" // Native direct routes can absorb uncovered input.
+				}
+				if response.AmountOut != want {
+					t.Fatalf("quote output=%s, want %s", response.AmountOut, want)
 				}
 			})
 		}
@@ -80,10 +88,9 @@ func TestConnectorQuoteResolvesLocalIdentitiesWithoutRPC(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := testServer()
-			s.quotes.reader = nil // Any quote-time RPC access fails the test.
 			s.quotes.recipeExecutors = []common.Address{executor}
 			s.quotes.discountsEnabled = true
-			s.quotes.resolveRoute = func(venue, rwa, asset common.Address) (common.Address, common.Address, bool) {
+			s.quotes.resolveRoute = func(venue, rwa, asset common.Address, _ int) (common.Address, common.Address, bool) {
 				ok := tc.available && venue == vlt && rwa == tIn && asset == tOut
 				return executor, vlt, ok
 			}
@@ -127,7 +134,7 @@ func TestDiscountQuoteRequiresBackendPricing(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			entry := base
 			change(&entry)
-			if _, err := entry.parse(0, 1, tIn, common.Address{}); err == nil || !strings.Contains(err.Error(), "discounted quote") {
+			if _, err := entry.parse(0, 1, tIn, common.Address{}); err == nil || !strings.Contains(err.Error(), "quote requires") {
 				t.Fatalf("invalid pricing accepted: %v", err)
 			}
 		})
@@ -139,11 +146,10 @@ func TestRepeatedConnectorInventoryQuotesOneSharedBalance(t *testing.T) {
 		t.Run(maximum, func(t *testing.T) {
 			s := testServer()
 			s.quotes.recipeExecutors = []common.Address{common.HexToAddress("0x43"), common.HexToAddress("0x44")}
-			s.quotes.resolveRoute = func(_, _, _ common.Address) (common.Address, common.Address, bool) {
+			s.quotes.resolveRoute = func(_, _, _ common.Address, _ int) (common.Address, common.Address, bool) {
 				return common.HexToAddress("0x43"), vlt, true
 			}
 			s.quotes.discountsEnabled = true
-			s.quotes.reader = nil
 			body := validQuoteBody()
 			entry := &body.Adapters[0]
 			id, decimals := common.HexToHash("0x1234").Hex(), 18
@@ -165,18 +171,35 @@ func TestRepeatedConnectorInventoryQuotesOneSharedBalance(t *testing.T) {
 	}
 }
 
-func TestUncachedNativeDiscountUsesExistingReader(t *testing.T) {
+func TestUncachedNativeQuoteDeclinesWithoutRPC(t *testing.T) {
 	s := testServer()
 	s.quotes.discountsEnabled = true
 	s.quotes.resolveRoute = (&reader{}).cachedQuoteRoute
-	counted := &countingQuoteReader{quoteCandidateReader: s.quotes.reader}
-	s.quotes.reader = counted
 	body := validQuoteBody()
 	body.Adapters[0].Account = ""
 	id := common.HexToHash("0x1234").Hex()
 	body.Adapters[0].DiscountID = &id
 	response := do(t, s.handler(), http.MethodPost, "/quote", testSecret, body)
-	if response.Code != http.StatusOK || counted.calls != 1 {
-		t.Fatalf("uncached native quote = %d, reader calls = %d: %s", response.Code, counted.calls, response.Body.String())
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("uncached native quote = %d: %s", response.Code, response.Body.String())
+	}
+}
+
+func TestNativeQuoteRequiresSnapshotPricing(t *testing.T) {
+	for name, change := range map[string]func(*quoteAdapter){
+		"missing price":    func(v *quoteAdapter) { v.Price = "" },
+		"zero price":       func(v *quoteAdapter) { v.Price = "0" },
+		"overflow price":   func(v *quoteAdapter) { v.Price = new(big.Int).Lsh(big.NewInt(1), 256).String() },
+		"missing decimals": func(v *quoteAdapter) { v.TokenInDecimals = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := testServer()
+			body := validQuoteBody()
+			change(&body.Adapters[0])
+			response := do(t, s.handler(), http.MethodPost, "/quote", testSecret, body)
+			if response.Code != http.StatusBadRequest {
+				t.Fatalf("invalid snapshot accepted: %d %s", response.Code, response.Body.String())
+			}
+		})
 	}
 }

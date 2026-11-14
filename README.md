@@ -189,7 +189,7 @@ filled orders without claiming a peer fill. Attempt history is local and is lost
 The next fresh request can reuse its unused nonce. Reservations are local to the process and are not restored
 after a restart.
 
-Discount-backed `/quote` requests use the backend's `price` (undiscounted oracle
+All supported `/quote` paths use the backend's `price` (undiscounted oracle
 price scaled by `1e18`), `tokenInDecimals`, `maxAssets`, and observation block.
 Configured native adapter accounts and Merkle routes come from the verified startup
 cache. Merkle mode selects exactly one recipe matching the connector, RWA and payout
@@ -197,10 +197,14 @@ token; multiple matches are declined. The backend supplies one conservative capa
 per connector/discount, bounded by every applicable recipe alternative.
 Neither `account` nor `recipeExecutor` is a backend request field.
 The native adapter's vault and the connector's account identify shared reservations.
-Cached discount-only quotes make no RPC calls and preserve the contract's two
-rounding steps. Unknown native adapter accounts follow the existing chain-reader
-path. Missing pricing metadata rejects the request. Direct adapter quotes retain
-chain reads, and awarded orders still use current state and complete-fill simulation.
+Native external, native discounted, and connector discounted quotes make no RPC
+calls, including metadata warming, and preserve the contract's two rounding steps.
+Native solvers without an adapter list discover accounts at startup and refresh
+new accounts every `pollIntervalMs` outside requests, including in `quoteOnly` mode.
+Unresolved routes decline until cached; background failures retain known accounts.
+Missing pricing metadata rejects the request. Awarded orders still use current
+state, authorization checks, and complete-fill simulation. Connector quotes require
+a signed discount; unsigned connector quotes are unsupported.
 Coordinate backend and solver rollout: this schema removes the staged route hints
 and payout aliases, so versions expecting or sending those fields must be updated together.
 Design, config, and roadmap:

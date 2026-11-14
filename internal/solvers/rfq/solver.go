@@ -104,7 +104,9 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		quotes.laneAvailable = manager.Ready
 		quotes.acceptsConnector = merkle.AcceptsConnector
 		quotes.acceptsRoute = merkle.AcceptsRoute
-		quotes.resolveRoute = merkle.ResolveRoute
+		quotes.resolveRoute = func(connector, rwa, asset common.Address, _ int) (common.Address, common.Address, bool) {
+			return merkle.ResolveRoute(connector, rwa, asset)
+		}
 	}
 	return &Solver{
 		merkle: merkle,
@@ -158,7 +160,6 @@ func buildServices(
 		whitelist:        quoteWhitelist,
 		tokenPolicy:      cfg.TokenPolicy,
 		minAmountsIn:     cfg.MinAmountsIn,
-		reader:           rdr,
 		strategy:         quoteStrategy,
 		strategyName:     cfg.Strategy.Name,
 		log:              log,
@@ -230,9 +231,7 @@ func (s *Solver) Run(ctx context.Context) error {
 
 	metadataCtx, stopMetadata := context.WithCancel(ctx)
 	defer stopMetadata()
-	s.server.quotes.warmMetadata = func(tokens []common.Address) {
-		s.server.quotes.tokenMetadata.WarmMetadataAsync(metadataCtx, tokens, observability.Log(metadataCtx).WithValues("chainId", s.server.quotes.chainID))
-	}
+
 	var metadataTokens []common.Address
 	for token := range s.cfg.TokenPolicy.SingleRouteTokens() {
 		metadataTokens = append(metadataTokens, token)
@@ -242,6 +241,14 @@ func (s *Solver) Run(ctx context.Context) error {
 	}
 	s.server.quotes.tokenMetadata.WarmMetadataAsync(metadataCtx, metadataTokens, observability.Log(metadataCtx).WithValues("chainId", s.server.quotes.chainID))
 	s.warmPairRoutes(metadataCtx)
+	if s.merkle == nil && s.cfg.usesDiscounts() && len(s.cfg.Adapters) == 0 {
+		if err := s.refreshNativeQuoteAdapters(metadataCtx); err != nil {
+			return errors.Errorf("rfq: initialize quote accounts: %w", err)
+		}
+		cacheDone := make(chan struct{})
+		go func() { defer close(cacheDone); s.refreshNativeQuoteAdaptersLoop(metadataCtx) }()
+		defer func() { stopMetadata(); <-cacheDone }()
+	}
 
 	observability.Log(ctx).Info("starting",
 		"listenAddr", s.cfg.ListenAddr,

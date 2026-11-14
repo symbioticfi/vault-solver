@@ -121,18 +121,20 @@ func TestUnresolvedQuoteAdaptersSkipsStartupMetadata(t *testing.T) {
 func TestCachedNativeQuoteRoute(t *testing.T) {
 	adapter, account := common.HexToAddress("0xa1"), common.HexToAddress("0xb1")
 	r := &reader{} // No RPC client: route resolution must remain local.
-	r.setQuoteAdapters([]recoveryVault{{Adapter: adapter, Vault: account, TokenOut: tOut}})
+	r.setQuoteAdapters([]recoveryVault{{Adapter: adapter, Vault: account, TokenOut: tOut, TokenOutDecimals: 6}})
 	for _, tc := range []struct {
 		name           string
 		adapter, asset common.Address
+		decimals       int
 		want           bool
 	}{
-		{"configured adapter", adapter, tOut, true},
-		{"unknown adapter", common.HexToAddress("0xa2"), tOut, false},
-		{"wrong payout asset", adapter, tIn, false},
+		{"configured adapter", adapter, tOut, 6, true},
+		{"unknown adapter", common.HexToAddress("0xa2"), tOut, 6, false},
+		{"wrong payout asset", adapter, tIn, 6, false},
+		{"wrong payout decimals", adapter, tOut, 18, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			executor, gotAccount, ok := r.cachedQuoteRoute(tc.adapter, tIn, tc.asset)
+			executor, gotAccount, ok := r.cachedQuoteRoute(tc.adapter, tIn, tc.asset, tc.decimals)
 			if ok != tc.want || executor != (common.Address{}) || (ok && gotAccount != account) {
 				t.Fatalf("route = %s/%s/%t", executor, gotAccount, ok)
 			}

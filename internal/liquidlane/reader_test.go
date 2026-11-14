@@ -134,6 +134,36 @@ func TestReaderResolveAdaptersFailsClosedForConfiguredAdapterMetadata(t *testing
 	}
 }
 
+// Discovery must isolate an unresolved route while strict configured startup still fails above.
+func TestReaderDiscoverAdaptersSkipsInvalidMetadata(t *testing.T) {
+	good, bad := testReaderRoute(1), testReaderRoute(2)
+	for _, stage := range []string{"vault", "asset", "decimals"} {
+		t.Run(stage, func(t *testing.T) {
+			vaults := []chain.CallResult{successOutput(t, "vault", good.Vault), successOutput(t, "vault", bad.Vault)}
+			assets := []chain.CallResult{successAssetOutput(t, good.TokenOut), successAssetOutput(t, bad.TokenOut)}
+			dec := decimalsReader(fixedDecimals{good.TokenOut: 6, bad.TokenOut: 18})
+			switch stage {
+			case "vault":
+				vaults[1] = chain.CallResult{}
+				assets = assets[:1]
+			case "asset":
+				assets[1] = chain.CallResult{}
+			case "decimals":
+				dec = selectiveDecimals{values: fixedDecimals{good.TokenOut: 6}, token: bad.TokenOut, err: errors.New("decimals unavailable")}
+			}
+			backend := &scriptedLiquidLaneBackend{latest: [][]chain.CallResult{vaults, assets}}
+			r := &Reader{chain: backend, log: logr.Discard(), dec: dec}
+			resolved, err := r.DiscoverAdapters(t.Context(), []common.Address{good.Adapter, bad.Adapter})
+			if err != nil || len(resolved) != 1 || resolved[0].Adapter != good.Adapter || resolved[0].Vault != good.Vault || resolved[0].TokenOutDecimals != 6 {
+				t.Fatalf("discovery = %+v, error = %v", resolved, err)
+			}
+			if len(backend.latest) != 0 {
+				t.Fatal("discovery did not use the batched metadata reads")
+			}
+		})
+	}
+}
+
 func TestReaderResolveRoutesFailsClosedForConfiguredAdapterRoutes(t *testing.T) {
 	route := testReaderRoute(1)
 	decimalsErr := errors.New("temporary token decimals failure")
