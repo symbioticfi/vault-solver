@@ -153,7 +153,7 @@ func TestReaderDiscoverAdaptersSkipsInvalidMetadata(t *testing.T) {
 			}
 			backend := &scriptedLiquidLaneBackend{latest: [][]chain.CallResult{vaults, assets}}
 			r := &Reader{chain: backend, log: logr.Discard(), dec: dec}
-			resolved, err := r.DiscoverAdapters(t.Context(), []common.Address{good.Adapter, bad.Adapter})
+			resolved, err := r.DiscoverAdapters(t.Context(), []common.Address{good.Adapter, bad.Adapter, good.Adapter})
 			if err != nil || len(resolved) != 1 || resolved[0].Adapter != good.Adapter || resolved[0].Vault != good.Vault || resolved[0].TokenOutDecimals != 6 {
 				t.Fatalf("discovery = %+v, error = %v", resolved, err)
 			}

@@ -40,7 +40,7 @@ func TestConfiguredExecutorDerivesPaymentConnector(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !s.AcceptsConnector(vlt) || !s.AcceptsRoute(fixture.reader.recipeExecutor, vlt, fixture.reader.recipeAccount, tOut) {
+			if executor, account, ok := s.ResolveRoute(vlt, tIn, tOut); !ok || executor != fixture.reader.recipeExecutor || account != fixture.reader.recipeAccount {
 				t.Fatal("wrong recipe connector")
 			}
 			reads := fixture.reader.identityReads
@@ -127,7 +127,7 @@ func TestConfiguredExecutorWithManagedPaymentApproval(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !s.AcceptsConnector(vlt) || !s.AcceptsRoute(fixture.reader.recipeExecutor, vlt, fixture.reader.recipeAccount, tOut) {
+			if executor, account, ok := s.ResolveRoute(vlt, tIn, tOut); !ok || executor != fixture.reader.recipeExecutor || account != fixture.reader.recipeAccount {
 				t.Fatal("managed approval did not identify the payment connector")
 			}
 		})
@@ -149,7 +149,7 @@ func TestInitializeDoesNotBlockRouteReads(t *testing.T) {
 	declined := make(chan bool, 1)
 	go func() {
 		_, _, resolved := s.ResolveRoute(vlt, tIn, tOut)
-		declined <- !resolved && !s.AcceptsConnector(vlt) && !s.AcceptsRoute(fixture.reader.recipeExecutor, vlt, fixture.reader.recipeAccount, tOut)
+		declined <- !resolved
 	}()
 	select {
 	case ok := <-declined:
@@ -163,7 +163,7 @@ func TestInitializeDoesNotBlockRouteReads(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if !s.AcceptsConnector(vlt) {
+	if _, _, ok := s.ResolveRoute(vlt, tIn, tOut); !ok {
 		t.Fatal("route not published")
 	}
 }

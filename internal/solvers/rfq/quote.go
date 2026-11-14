@@ -15,33 +15,33 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 	"github.com/symbioticfi/vault-solver/internal/observability"
-	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
+// quoteRouteResolver returns only verified local identities; an unresolved or
+// ambiguous route declines without I/O.
+type quoteRouteResolver func(venue, rwa, asset common.Address, assetDecimals int) (executor, account common.Address, ok bool)
+
 // quoteService prices backend RFQ requests by handing filtered candidates to the strategy. It is safe
 // for concurrent use (the HTTP server serves quotes in parallel): its dependencies are individually
 // synchronized, and its optional configured route slice is published atomically once.
 type quoteService struct {
-	recipeExecutors []common.Address
-	acceptsRoute    func(executor, connector, account, asset common.Address) bool
-	resolveRoute    func(connector, rwa, asset common.Address, assetDecimals int) (executor, account common.Address, ok bool)
-	pairRoutes      atomic.Pointer[[]liquidlane.Route] // immutable configured adapter directions, optional background observation only
-	chainID         int64
-	tokenMetadata   *chain.Decimals
-	executor        common.Address
+	resolveRoute  quoteRouteResolver
+	pairRoutes    atomic.Pointer[[]liquidlane.Route] // immutable configured adapter directions, optional background observation only
+	chainID       int64
+	tokenMetadata *chain.Decimals
+	executor      common.Address
 	// laneAvailable is safe for concurrent use and reports sender initialization. A busy lane does not
 	// block quoting: pending fills are accounted through reservations instead. It is sampled before
 	// and after quote planning so work is declined whenever either check observes a nonce conflict.
 	laneAvailable func() bool
 	// reservations returns the liquidity held by won, unfinished orders against a resolved
 	// inventory; nil means none.
-	reservations     func(excludedOrderID string, inventory []solverInventory) liquidlane.CapacityReservations
-	acceptsConnector func(common.Address) bool // optional published recipe connectors; may change after start
-	whitelist        adapterWhitelist          // nil disables adapter filtering
-	tokenPolicy      tokenpolicy.Policy
+	reservations func(excludedOrderID string, inventory []solverInventory) liquidlane.CapacityReservations
+	whitelist    adapterWhitelist // nil disables adapter filtering
+	tokenPolicy  tokenpolicy.Policy
 	// minAmountsIn holds per-input-token minimum request sizes in base units; a token absent from the
 	// map (or a nil map) has no minimum.
 	discountsEnabled bool
@@ -50,17 +50,6 @@ type quoteService struct {
 	strategyName     string // registry key, reported as the strategy.name span attribute
 	log              logr.Logger
 	now              func() time.Time
-}
-
-type quoteCandidateReader interface {
-	readQuoteCandidates(
-		ctx context.Context,
-		inventory []solverInventory,
-		tokenIn common.Address,
-		tokenOut common.Address,
-		amountIn *big.Int,
-		pending pendingReservations,
-	) ([]liquidlane.QuoteCandidate, error)
 }
 
 // pendingReservations returns the capacity won orders hold against the given resolved inventory.
@@ -141,25 +130,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 		decision.pairInScope = knownDirection
 		decision.metricPairInScope = knownDirection || configuredDirection
 	}()
-	// A recipe process serves only its committed payment connector. Filter before
-	// parsing so unrelated native entries in a shared backend response stay out.
-	if len(qs.recipeExecutors) > 0 && qs.acceptsConnector != nil {
-		scoped := *q
-		scoped.Adapters = nil
-		for _, item := range q.Adapters {
-			if qs.acceptsConnector(common.HexToAddress(item.Adapter)) {
-				scoped.Adapters = append(scoped.Adapters, item)
-			}
-		}
-		q = &scoped
-	}
-	if qs.resolveRoute != nil {
-		q, err = qs.resolveInventory(q)
-		if err != nil {
-			return quoteDecision{outcome: quoteDecisionError}, &badRequestError{err}
-		}
-	}
-	parsed, err := q.toStrategy(qs.chainID, qs.recipeExecutors)
+	parsed, err := q.toStrategy(qs.chainID, qs.resolveRoute)
 	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, &badRequestError{errors.Errorf("parse request: %w", err)}
 	}
@@ -183,14 +154,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 		return quoteDecision{outcome: quoteDecisionBelowMinimum}, nil
 	}
 	req, inv := parsed.req, qs.whitelist.filter(parsed.inv)
-	if qs.acceptsRoute != nil {
-		inv = slices.DeleteFunc(slices.Clone(inv), func(item solverInventory) bool {
-			return !qs.acceptsRoute(item.RecipeExecutor, item.Adapter, item.Vault, item.TokenOut)
-		})
-	}
-	if len(qs.recipeExecutors) > 0 {
-		inv = bestRouteInventory(inv)
-	}
+	inv = bestRouteInventory(inv)
 	if !qs.discountsEnabled {
 		inv = slices.DeleteFunc(slices.Clone(inv), func(item solverInventory) bool { return item.DiscountID != nil })
 	}
@@ -200,10 +164,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 	}
 
 	requireSingleRoute := qs.tokenPolicy.RequiresSingleRoute(req.TokenIn)
-	candidates, err := qs.snapshotCandidates(ctx, inv, req)
-	if err != nil {
-		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: read LiquidLane candidates: %w", err)
-	}
+	candidates := qs.snapshotCandidates(ctx, inv, req)
 	if len(candidates) == 0 {
 		observability.Log(ctx).V(1).Info("declining quote: no viable LiquidLane candidates", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
@@ -247,44 +208,12 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 	}, nil
 }
 
-// resolveInventory fills route identities from the immutable local cache without
-// changing the caller's request or the backend's capacity bound.
-func (qs *quoteService) resolveInventory(q *quoteRequest) (*quoteRequest, error) {
-	scoped := *q
-	scoped.Adapters = make([]quoteAdapter, 0, len(q.Adapters))
-	rwa, err := parse.Address(q.TokenIn, "tokenIn")
-	if err != nil {
-		return nil, err
-	}
-	for i, item := range q.Adapters {
-		venue, err := parse.Address(item.Adapter, idxField(i, "adapter"))
-		if err != nil {
-			return nil, err
-		}
-		asset, err := parse.Address(item.Asset, idxField(i, "asset"))
-		if err != nil {
-			return nil, err
-		}
-		executor, account, ok := qs.resolveRoute(venue, rwa, asset, item.AssetDecimals)
-		if !ok {
-			continue
-		}
-		item.Account = account.Hex()
-		item.RecipeExecutor = ""
-		if executor != (common.Address{}) {
-			item.RecipeExecutor = executor.Hex()
-		}
-		scoped.Adapters = append(scoped.Adapters, item)
-	}
-	return &scoped, nil
-}
-
 // snapshotCandidates prices the backend snapshot and subtracts local reservations without I/O.
 func (qs *quoteService) snapshotCandidates(
 	ctx context.Context, inv []solverInventory, req strategyRequest,
-) (candidates []liquidlane.QuoteCandidate, err error) {
+) (candidates []liquidlane.QuoteCandidate) {
 	_, end := tracer.Start(ctx, "rfq.quote.snapshot")
-	defer func() { end(err) }()
+	defer end(nil)
 	inv = slices.DeleteFunc(slices.Clone(inv), func(item solverInventory) bool {
 		return item.TokenIn != req.TokenIn || item.TokenOut != req.TokenOut || item.Vault == (common.Address{})
 	})
@@ -298,7 +227,7 @@ func (qs *quoteService) snapshotCandidates(
 			candidates = append(candidates, *candidate)
 		}
 	}
-	return candidates, nil
+	return candidates
 }
 
 // decideQuote runs the strategy as the rfq.quote.decide stage.
@@ -320,7 +249,7 @@ func (qs *quoteService) canQuote() bool {
 // lowerAddr renders an address as lowercase hex; RFQ backend payloads use lowercase addresses.
 func lowerAddr(a common.Address) string { return strings.ToLower(a.Hex()) }
 
-// Recipes funding the same swap are alternatives, not additional liquidity.
+// Repeated snapshots of one swap are alternatives, not additional liquidity.
 // Keep the largest eligible snapshot for each physical route and discount.
 func bestRouteInventory(inventory []solverInventory) []solverInventory {
 	out := make([]solverInventory, 0, len(inventory))

@@ -102,8 +102,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 			return nil, err
 		}
 		quotes.laneAvailable = manager.Ready
-		quotes.acceptsConnector = merkle.AcceptsConnector
-		quotes.acceptsRoute = merkle.AcceptsRoute
 		quotes.resolveRoute = func(connector, rwa, asset common.Address, _ int) (common.Address, common.Address, bool) {
 			return merkle.ResolveRoute(connector, rwa, asset)
 		}
@@ -152,7 +150,6 @@ func buildServices(
 	quotes := &quoteService{
 		tokenMetadata:    tokenMetadata,
 		discountsEnabled: cfg.usesDiscounts(),
-		recipeExecutors:  cfg.RecipeExecutors,
 		chainID:          chainID,
 		executor:         cfg.Executor,
 		laneAvailable:    laneAvailable,
@@ -208,7 +205,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	// Resolve each configured adapter's vault + collateral once at startup (config carries only adapter
 	// addresses; both are fixed for the adapter's lifetime) for quotes and recovery. Runs
 	// before the poll loop and the quote server, so there's no concurrent reader of exec.vaults. A
-	// transport failure aborts startup; a per-adapter revert leaves that entry unresolved (skipped).
+	// transport failure or unresolved configured metadata aborts startup.
 	if len(s.cfg.Adapters) > 0 {
 		resolved, err := s.exec.reader.resolveVaults(ctx, s.cfg.Adapters)
 		if err != nil {

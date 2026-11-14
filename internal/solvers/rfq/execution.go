@@ -91,7 +91,14 @@ type executionService struct {
 
 // fillReader is the on-chain surface used to assemble fill-time strategy inputs.
 type fillReader interface {
-	quoteCandidateReader
+	readQuoteCandidates(
+		ctx context.Context,
+		inventory []solverInventory,
+		tokenIn common.Address,
+		tokenOut common.Address,
+		amountIn *big.Int,
+		pending pendingReservations,
+	) ([]liquidlane.QuoteCandidate, error)
 	latestBlock(ctx context.Context) (uint64, time.Time, error)
 	readPermissionedVaultInventories(
 		ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,

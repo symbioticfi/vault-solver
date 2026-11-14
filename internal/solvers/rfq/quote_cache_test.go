@@ -11,9 +11,9 @@ import (
 	"github.com/go-errors/errors"
 )
 
-func TestNativeQuoteDiscoveryFiltersAndDeduplicatesAdapters(t *testing.T) {
+func TestNativeQuoteDiscoveryFiltersAdapters(t *testing.T) {
 	backend := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{
-		{Adapter: vlt.Hex()}, {Adapter: vlt.Hex()}, {Adapter: tIn.Hex(), DiscountPrecision: "100000000"},
+		{Adapter: vlt.Hex()}, {Adapter: tIn.Hex(), DiscountPrecision: "100000000"},
 		{Adapter: "invalid"}, {Adapter: (common.Address{}).Hex()},
 	}}}
 	warmer := &recordingQuoteWarmer{fakeRecoveryReader: &fakeRecoveryReader{}}

@@ -27,16 +27,11 @@ func TestMultipleExecutorsShareRouting(t *testing.T) {
 	workflow.source = multiRecipeSource{first.reader.recipeExecutor: first.workflow.source, second.reader.recipeExecutor: second.workflow.source}
 	_, _, backend := connectorExecutionAward(workflow.caller)
 	s := &Solver{recipeExecutors: []common.Address{first.reader.recipeExecutor, second.reader.recipeExecutor}, workflow: &workflow, backend: backend}
-	if err := s.Initialize(t.Context()); err != nil || !s.AcceptsConnector(vlt) {
+	if err := s.Initialize(t.Context()); err != nil {
 		t.Fatalf("routes: %v", err)
 	}
-	for _, executor := range s.recipeExecutors {
-		if !s.AcceptsRoute(executor, vlt, first.reader.recipeAccount, tOut) {
-			t.Fatalf("missing executor %s", executor)
-		}
-	}
-	if s.AcceptsRoute(common.HexToAddress("0xbad"), vlt, first.reader.recipeAccount, tOut) || s.AcceptsRoute(second.reader.recipeExecutor, vlt, common.HexToAddress("0xbad"), tOut) {
-		t.Fatal("accepted an unconfigured route")
+	if len(s.routes) != 2 {
+		t.Fatal("did not initialize both configured executors")
 	}
 	order, _, _ := connectorExecutionAward(workflow.caller)
 	listing := discounts.ListItem{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"}

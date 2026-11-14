@@ -95,7 +95,7 @@ func TestConnectorAccessManagerRoute(t *testing.T) {
 				t.Fatal("awarded recipe changed or outer fill not simulated")
 			}
 			s := &Solver{recipeExecutors: []common.Address{f.reader.recipeExecutor}, workflow: f.workflow}
-			if err := s.Initialize(t.Context()); err != nil || !s.AcceptsConnector(vlt) {
+			if err := s.Initialize(t.Context()); err != nil {
 				t.Fatalf("manager route discovery: %v", err)
 			}
 			executor, account, ok := s.ResolveRoute(vlt, tIn, tOut)

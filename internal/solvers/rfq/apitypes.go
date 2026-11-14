@@ -2,7 +2,6 @@ package rfq
 
 import (
 	"math/big"
-	"slices"
 	"strconv"
 	"time"
 
@@ -32,11 +31,8 @@ type quoteRequest struct {
 }
 
 // quoteAdapter is one adapter inventory entry the backend offers for the request.
-// Account and RecipeExecutor are populated locally and are absent from the wire.
 type quoteAdapter struct {
-	RecipeExecutor    string  `json:"-"`
 	DiscountPrecision string  `json:"discountPrecision,omitempty"`
-	Account           string  `json:"-"`
 	Price             string  `json:"price,omitempty" pattern:"^[0-9]+$" doc:"Undiscounted oracle price scaled by 1e18; required for every quote"`
 	TokenInDecimals   *int    `json:"tokenInDecimals,omitempty" minimum:"0" maximum:"255"`
 	Adapter           string  `json:"adapter" pattern:"^0x[a-fA-F0-9]{40}$"`
@@ -44,9 +40,8 @@ type quoteAdapter struct {
 	AssetDecimals     int     `json:"assetDecimals" minimum:"0" maximum:"255"`
 	MaxAssets         string  `json:"maxAssets" pattern:"^[0-9]+$"`
 	DiscountID        *string `json:"discountId,omitempty" pattern:"^0x[a-fA-F0-9]{64}$"`
-	// Discount (ppm) is what the adapter takes off this entry's payout: the signed discount of a
-	// discountId entry, otherwise the adapter's minDiscount. The adapter pays at most
-	// floor(getAmountOut(amountIn) * (1e6 - discount) / 1e6).
+	// Discount is the signed value or native minDiscount at this entry's precision.
+	// Payout is floor(getAmountOut(amountIn) * (precision - discount) / precision).
 	Discount string `json:"discount" pattern:"^[0-9]+$"`
 	// BlockNumber is the block maxAssets was read at.
 	BlockNumber string `json:"blockNumber" pattern:"^[0-9]+$"`
@@ -79,7 +74,7 @@ type parsedQuote struct {
 // toStrategy validates and parses the request. A non-nil error is a malformed payload (→ 400). A nil
 // result with nil error means the request is well-formed but not quotable here — wrong chain or no
 // adapters — and the caller replies 204.
-func (q *quoteRequest) toStrategy(chainID int64, recipeExecutors []common.Address) (*parsedQuote, error) {
+func (q *quoteRequest) toStrategy(chainID int64, resolve quoteRouteResolver) (*parsedQuote, error) {
 	// Schema-level validation (malformed → 400).
 	if q.Type != quoteTypeExactInput {
 		return nil, errors.Errorf("type must be %q", quoteTypeExactInput)
@@ -110,25 +105,17 @@ func (q *quoteRequest) toStrategy(chainID int64, recipeExecutors []common.Addres
 	}
 	inv := make([]solverInventory, 0, len(q.Adapters))
 	for i := range q.Adapters {
-		recipeExecutor := common.Address{}
-		if q.Adapters[i].RecipeExecutor != "" {
-			var err error
-			recipeExecutor, err = parse.NonZeroAddress(q.Adapters[i].RecipeExecutor, idxField(i, "recipeExecutor"))
-			if err != nil || !slices.Contains(recipeExecutors, recipeExecutor) {
-				return nil, errors.New("inventory recipeExecutor is not configured")
-			}
-		} else if len(recipeExecutors) > 0 {
-			return nil, errors.New("connector inventory requires recipeExecutor")
+		entry, err := q.Adapters[i].parse(i, q.TokenInChainID, tokenIn, resolve)
+		if err != nil {
+			return nil, err
 		}
-		entry, perr := q.Adapters[i].parse(i, q.TokenInChainID, tokenIn, recipeExecutor)
-		if perr != nil {
-			return nil, perr
+		if entry.Vault != (common.Address{}) {
+			inv = append(inv, entry)
 		}
-		inv = append(inv, entry)
 	}
 
 	// Quote-logic checks (well-formed but not for us → 204).
-	if q.TokenInChainID != chainID || q.TokenOutChainID != chainID || len(q.Adapters) == 0 {
+	if q.TokenInChainID != chainID || q.TokenOutChainID != chainID || len(inv) == 0 {
 		return nil, nil
 	}
 	return &parsedQuote{
@@ -143,7 +130,7 @@ func (q *quoteRequest) toStrategy(chainID int64, recipeExecutors []common.Addres
 	}, nil
 }
 
-func (v *quoteAdapter) parse(index int, chainID int64, tokenIn, recipeExecutor common.Address) (solverInventory, error) {
+func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address, resolve quoteRouteResolver) (solverInventory, error) {
 	adapter, err := parse.Address(v.Adapter, idxField(index, "adapter"))
 	if err != nil {
 		return solverInventory{}, err
@@ -154,6 +141,13 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn, recipeExecutor c
 	}
 	if v.AssetDecimals < 0 || v.AssetDecimals > 255 {
 		return solverInventory{}, errors.Errorf("adapters[%d].assetDecimals out of range: %d", index, v.AssetDecimals)
+	}
+	if resolve == nil {
+		return solverInventory{}, nil
+	}
+	recipeExecutor, account, ok := resolve(adapter, tokenIn, asset, v.AssetDecimals)
+	if !ok || account == (common.Address{}) {
+		return solverInventory{}, nil
 	}
 	maxAssets, err := parseUint256(v.MaxAssets, idxField(index, "maxAssets"))
 	if err != nil {
@@ -184,19 +178,11 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn, recipeExecutor c
 	if err != nil {
 		return solverInventory{}, errors.Errorf("%s: invalid block number %q", idxField(index, "blockNumber"), v.BlockNumber)
 	}
-	account := common.Address{}
-	var price *big.Int
-	if v.Account != "" {
-		account, err = parse.NonZeroAddress(v.Account, idxField(index, "account"))
-		if err != nil {
-			return solverInventory{}, err
-		}
-	}
 	if v.TokenInDecimals == nil || *v.TokenInDecimals < 0 || *v.TokenInDecimals > 255 {
 		return solverInventory{}, errors.Errorf("%s: quote requires token decimals", idxField(index, "tokenInDecimals"))
 	}
 	inputDecimals := *v.TokenInDecimals
-	price, err = parseUint256(v.Price, idxField(index, "price"))
+	price, err := parseUint256(v.Price, idxField(index, "price"))
 	if err != nil || price.Sign() <= 0 || price.BitLen() > 256 {
 		return solverInventory{}, errors.Errorf("%s: quote requires a positive uint256 price", idxField(index, "price"))
 	}

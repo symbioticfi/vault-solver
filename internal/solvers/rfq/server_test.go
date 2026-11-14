@@ -23,10 +23,8 @@ func testServer() *server {
 	execAddr := common.HexToAddress("0x0000000000000000000000000000000000000010")
 	clk := func() time.Time { return time.Unix(0, 0) }
 	q := &quoteService{
-		chainID: 1,
-		resolveRoute: func(_, _, _ common.Address, _ int) (common.Address, common.Address, bool) {
-			return common.Address{}, vlt, true
-		},
+		chainID:       1,
+		resolveRoute:  testNativeQuoteRoute,
 		executor:      execAddr,
 		laneAvailable: func() bool { return true },
 		strategy:      newDefaultTestStrategy(),
@@ -40,6 +38,16 @@ func testServer() *server {
 	}
 }
 
+func testNativeQuoteRoute(_, _, _ common.Address, _ int) (executor, account common.Address, ok bool) {
+	return common.Address{}, vlt, true
+}
+
+func testConnectorQuoteRoute(executor common.Address) quoteRouteResolver {
+	return func(_, _, _ common.Address, _ int) (common.Address, common.Address, bool) {
+		return executor, vlt, true
+	}
+}
+
 func validQuoteBody() quoteRequest {
 	decimals := 18
 	return quoteRequest{
@@ -50,7 +58,7 @@ func validQuoteBody() quoteRequest {
 		QuoteID: "22222222-2222-4222-8222-222222222222",
 		Adapters: []quoteAdapter{{
 			Adapter: vlt.Hex(), Asset: tOut.Hex(), AssetDecimals: 6,
-			Account: vlt.Hex(), Price: "1000000000000000000", TokenInDecimals: &decimals,
+			Price: "1000000000000000000", TokenInDecimals: &decimals,
 			BlockNumber: "1", MaxAssets: "10000000", Discount: "0",
 		}},
 	}
@@ -111,7 +119,6 @@ func TestServer_QuoteOK(t *testing.T) {
 
 func TestServer_QuoteOmitsRemovedFields(t *testing.T) {
 	body := validQuoteBody()
-	body.Adapters[0].RecipeExecutor = common.HexToAddress("0x43").Hex()
 	raw, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
@@ -297,9 +304,7 @@ func TestServer_QuoteWhitelist(t *testing.T) {
 func TestServerConnectorDerivesLocalExecutor(t *testing.T) {
 	srv := testServer()
 	executor := common.HexToAddress("0x43")
-	srv.quotes.recipeExecutors = []common.Address{executor}
 	srv.quotes.discountsEnabled = true
-	srv.quotes.acceptsConnector = func(adapter common.Address) bool { return adapter == vlt }
 	srv.quotes.resolveRoute = func(venue, _, asset common.Address, _ int) (common.Address, common.Address, bool) {
 		return executor, vlt, venue == vlt && asset == tOut
 	}

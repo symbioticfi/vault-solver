@@ -43,9 +43,10 @@ explicitly carry precision `1000000`; connector precision remains `100000000`.
 The vendored discount API reports precision in listing and resolution outside the
 signed terms; listing retains `collateral` / `collateralDecimals` for payout metadata.
 
-The host enriches a request copy with account and recipe identities from the verified
-startup cache, including statically committed RWA swap permissions, without quote-time
-RPC or HTTP reads. Merkle routes must match a unique configured recipe; ambiguous
+The parser resolves account and recipe identities directly into typed inventory from
+the verified startup cache, including statically committed RWA swap permissions,
+without quote-time RPC or HTTP reads. The wire request remains unchanged; no identity
+strings or repeated route checks are needed after this lookup. Merkle routes must match a unique configured recipe; ambiguous
 routes are declined. Award selection uses the same resolver before fresh fill validation.
 The backend emits one conservative capacity per connector/discount, taking the lowest
 of the requesting solver's applicable recipe alternatives, including zero. It suppresses

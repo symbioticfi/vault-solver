@@ -23,16 +23,14 @@ func (s *Solver) refreshNativeQuoteAdapters(ctx context.Context) (err error) {
 		return errors.New("discover quote adapters: empty response")
 	}
 	adapters := make([]common.Address, 0, len(listed.Discounts))
-	seen := make(map[common.Address]bool)
 	for _, item := range listed.Discounts {
 		if item.DiscountPrecision == "100000000" || !common.IsHexAddress(item.Adapter) {
 			continue
 		}
 		adapter := common.HexToAddress(item.Adapter)
-		if adapter == (common.Address{}) || seen[adapter] {
+		if adapter == (common.Address{}) {
 			continue
 		}
-		seen[adapter] = true
 		adapters = append(adapters, adapter)
 	}
 	return s.exec.reader.warmQuoteAdapters(ctx, adapters)

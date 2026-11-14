@@ -135,32 +135,6 @@ func (w *connectorWorkflow) discoverRecipes(ctx context.Context, executors []com
 	return prepared, nil
 }
 
-// AcceptsRoute binds backend inventory to a locally configured, verified recipe.
-// The RWA-specific swap permission is verified again when building the fill.
-func (s *Solver) AcceptsRoute(executor, connector, account, asset common.Address) bool {
-	route, ok := s.recipeRoute(executor)
-	return ok && route.connector == connector && route.account == account && route.asset == asset
-}
-
-// AcceptsConnector reports whether a published route pays through connector.
-func (s *Solver) AcceptsConnector(connector common.Address) bool {
-	s.routesMu.RLock()
-	defer s.routesMu.RUnlock()
-	for _, route := range s.routes {
-		if route.connector == connector {
-			return true
-		}
-	}
-	return false
-}
-
-func (s *Solver) recipeRoute(executor common.Address) (recipeRoute, bool) {
-	s.routesMu.RLock()
-	defer s.routesMu.RUnlock()
-	route, ok := s.routes[executor]
-	return route, ok
-}
-
 func paymentConnector(recipe recipes.Recipe, tree *recipes.Tree) (venue, asset common.Address, err error) {
 	inspection, err := recipes.Inspect(recipe)
 	if err != nil {
