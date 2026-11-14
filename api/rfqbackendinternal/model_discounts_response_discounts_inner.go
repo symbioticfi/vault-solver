@@ -21,13 +21,17 @@ var _ MappedNullable = &DiscountsResponseDiscountsInner{}
 type DiscountsResponseDiscountsInner struct {
 	Account *string `json:"account,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
 	// Configured solver executor for the current funding recipe.
-	RecipeExecutor     *string `json:"recipeExecutor,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	DiscountPrecision  *string `json:"discountPrecision,omitempty"`
-	DiscountId         string  `json:"discountId" validate:"regexp=^0x[a-fA-F0-9]{64}$"`
-	Adapter            string  `json:"adapter" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	TokenToRedeem      string  `json:"tokenToRedeem" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Collateral         string  `json:"collateral" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	CollateralDecimals int64   `json:"collateralDecimals"`
+	RecipeExecutor *string `json:"recipeExecutor,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	// Discount denominator: 1000000 for native adapters, 100000000 for connectors.
+	DiscountPrecision *string `json:"discountPrecision,omitempty"`
+	// Token paid out by this adapter; matches collateral. Named after LiquidLaneConnector.outputAsset.
+	OutputAsset         *string `json:"outputAsset,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	OutputAssetDecimals *int64  `json:"outputAssetDecimals,omitempty"`
+	DiscountId          string  `json:"discountId" validate:"regexp=^0x[a-fA-F0-9]{64}$"`
+	Adapter             string  `json:"adapter" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	TokenToRedeem       string  `json:"tokenToRedeem" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	Collateral          string  `json:"collateral" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	CollateralDecimals  int64   `json:"collateralDecimals"`
 	// Signed integer in the contract domain: native adapters use 1000000; connectors report discountPrecision=100000000. Payout is floor(getAmountOut(tokenToRedeem, amountIn) * (precision - discount) / precision).
 	Discount  string `json:"discount" validate:"regexp=^\\d+$"`
 	Signer    string `json:"signer" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
@@ -161,6 +165,70 @@ func (o *DiscountsResponseDiscountsInner) HasDiscountPrecision() bool {
 // SetDiscountPrecision gets a reference to the given string and assigns it to the DiscountPrecision field.
 func (o *DiscountsResponseDiscountsInner) SetDiscountPrecision(v string) {
 	o.DiscountPrecision = &v
+}
+
+// GetOutputAsset returns the OutputAsset field value if set, zero value otherwise.
+func (o *DiscountsResponseDiscountsInner) GetOutputAsset() string {
+	if o == nil || IsNil(o.OutputAsset) {
+		var ret string
+		return ret
+	}
+	return *o.OutputAsset
+}
+
+// GetOutputAssetOk returns a tuple with the OutputAsset field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *DiscountsResponseDiscountsInner) GetOutputAssetOk() (*string, bool) {
+	if o == nil || IsNil(o.OutputAsset) {
+		return nil, false
+	}
+	return o.OutputAsset, true
+}
+
+// HasOutputAsset returns a boolean if a field has been set.
+func (o *DiscountsResponseDiscountsInner) HasOutputAsset() bool {
+	if o != nil && !IsNil(o.OutputAsset) {
+		return true
+	}
+
+	return false
+}
+
+// SetOutputAsset gets a reference to the given string and assigns it to the OutputAsset field.
+func (o *DiscountsResponseDiscountsInner) SetOutputAsset(v string) {
+	o.OutputAsset = &v
+}
+
+// GetOutputAssetDecimals returns the OutputAssetDecimals field value if set, zero value otherwise.
+func (o *DiscountsResponseDiscountsInner) GetOutputAssetDecimals() int64 {
+	if o == nil || IsNil(o.OutputAssetDecimals) {
+		var ret int64
+		return ret
+	}
+	return *o.OutputAssetDecimals
+}
+
+// GetOutputAssetDecimalsOk returns a tuple with the OutputAssetDecimals field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *DiscountsResponseDiscountsInner) GetOutputAssetDecimalsOk() (*int64, bool) {
+	if o == nil || IsNil(o.OutputAssetDecimals) {
+		return nil, false
+	}
+	return o.OutputAssetDecimals, true
+}
+
+// HasOutputAssetDecimals returns a boolean if a field has been set.
+func (o *DiscountsResponseDiscountsInner) HasOutputAssetDecimals() bool {
+	if o != nil && !IsNil(o.OutputAssetDecimals) {
+		return true
+	}
+
+	return false
+}
+
+// SetOutputAssetDecimals gets a reference to the given int64 and assigns it to the OutputAssetDecimals field.
+func (o *DiscountsResponseDiscountsInner) SetOutputAssetDecimals(v int64) {
+	o.OutputAssetDecimals = &v
 }
 
 // GetDiscountId returns the DiscountId field value
@@ -422,6 +490,12 @@ func (o DiscountsResponseDiscountsInner) ToMap() (map[string]interface{}, error)
 	if !IsNil(o.DiscountPrecision) {
 		toSerialize["discountPrecision"] = o.DiscountPrecision
 	}
+	if !IsNil(o.OutputAsset) {
+		toSerialize["outputAsset"] = o.OutputAsset
+	}
+	if !IsNil(o.OutputAssetDecimals) {
+		toSerialize["outputAssetDecimals"] = o.OutputAssetDecimals
+	}
 	toSerialize["discountId"] = o.DiscountId
 	toSerialize["adapter"] = o.Adapter
 	toSerialize["tokenToRedeem"] = o.TokenToRedeem
@@ -461,6 +535,8 @@ func (o *DiscountsResponseDiscountsInner) UnmarshalJSON(data []byte) (err error)
 		delete(additionalProperties, "account")
 		delete(additionalProperties, "recipeExecutor")
 		delete(additionalProperties, "discountPrecision")
+		delete(additionalProperties, "outputAsset")
+		delete(additionalProperties, "outputAssetDecimals")
 		delete(additionalProperties, "discountId")
 		delete(additionalProperties, "adapter")
 		delete(additionalProperties, "tokenToRedeem")

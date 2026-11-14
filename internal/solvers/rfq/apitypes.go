@@ -33,16 +33,18 @@ type quoteRequest struct {
 
 // quoteAdapter is one adapter inventory entry the backend offers for the request.
 type quoteAdapter struct {
-	RecipeExecutor    string  `json:"recipeExecutor,omitempty" pattern:"^0x[a-fA-F0-9]{40}$"`
-	DiscountPrecision string  `json:"discountPrecision,omitempty"`
-	Account           string  `json:"account,omitempty"`
-	Price             string  `json:"price,omitempty" pattern:"^[0-9]+$" doc:"Undiscounted oracle price scaled by 1e18; required for signed-discount quotes"`
-	TokenInDecimals   *int    `json:"tokenInDecimals,omitempty" minimum:"0" maximum:"255"`
-	Adapter           string  `json:"adapter" pattern:"^0x[a-fA-F0-9]{40}$"`
-	Asset             string  `json:"asset" pattern:"^0x[a-fA-F0-9]{40}$"`
-	AssetDecimals     int     `json:"assetDecimals" minimum:"0" maximum:"255"`
-	MaxAssets         string  `json:"maxAssets" pattern:"^[0-9]+$"`
-	DiscountID        *string `json:"discountId,omitempty" pattern:"^0x[a-fA-F0-9]{64}$"`
+	RecipeExecutor      string  `json:"recipeExecutor,omitempty" pattern:"^0x[a-fA-F0-9]{40}$"`
+	DiscountPrecision   string  `json:"discountPrecision,omitempty"`
+	Account             string  `json:"account,omitempty"`
+	Price               string  `json:"price,omitempty" pattern:"^[0-9]+$" doc:"Undiscounted oracle price scaled by 1e18; required for signed-discount quotes"`
+	TokenInDecimals     *int    `json:"tokenInDecimals,omitempty" minimum:"0" maximum:"255"`
+	Adapter             string  `json:"adapter" pattern:"^0x[a-fA-F0-9]{40}$"`
+	Asset               string  `json:"asset" pattern:"^0x[a-fA-F0-9]{40}$"`
+	AssetDecimals       int     `json:"assetDecimals" minimum:"0" maximum:"255"`
+	OutputAsset         string  `json:"outputAsset,omitempty" pattern:"^0x[a-fA-F0-9]{40}$" doc:"Payout token; when supplied, must match asset"`
+	OutputAssetDecimals *int    `json:"outputAssetDecimals,omitempty" minimum:"0" maximum:"255" doc:"Payout token decimals; when supplied, must match assetDecimals"`
+	MaxAssets           string  `json:"maxAssets" pattern:"^[0-9]+$"`
+	DiscountID          *string `json:"discountId,omitempty" pattern:"^0x[a-fA-F0-9]{64}$"`
 	// Discount (ppm) is what the adapter takes off this entry's payout: the signed discount of a
 	// discountId entry, otherwise the adapter's minDiscount. The adapter pays at most
 	// floor(getAmountOut(amountIn) * (1e6 - discount) / 1e6).
@@ -153,6 +155,18 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn, recipeExecutor c
 	}
 	if v.AssetDecimals < 0 || v.AssetDecimals > 255 {
 		return solverInventory{}, errors.Errorf("adapters[%d].assetDecimals out of range: %d", index, v.AssetDecimals)
+	}
+	if v.OutputAsset != "" {
+		outputAsset, err := parse.Address(v.OutputAsset, idxField(index, "outputAsset"))
+		if err != nil {
+			return solverInventory{}, err
+		}
+		if outputAsset != asset {
+			return solverInventory{}, errors.Errorf("adapters[%d].outputAsset must match asset", index)
+		}
+	}
+	if v.OutputAssetDecimals != nil && *v.OutputAssetDecimals != v.AssetDecimals {
+		return solverInventory{}, errors.Errorf("adapters[%d].outputAssetDecimals must match assetDecimals", index)
 	}
 	maxAssets, err := parseUint256(v.MaxAssets, idxField(index, "maxAssets"))
 	if err != nil {

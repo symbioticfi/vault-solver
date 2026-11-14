@@ -45,6 +45,16 @@ failure excludes that entry; missing metadata is a malformed request, with no ch
 fallback. Direct adapter quotes keep their current chain reads. Fill planning still
 re-reads state and simulates execution.
 
+Adapter quote metadata additionally accepts optional `outputAsset` and
+`outputAssetDecimals` aliases for `asset` and `assetDecimals`, matching the
+connector's `outputAsset` name. Provided aliases must agree with the existing
+payout fields, including a provided zero-decimal value. They do not replace
+`tokenInDecimals`. Native inventories may explicitly carry precision `1000000`;
+connector precision remains `100000000`. The vendored discount API exposes the
+same payout metadata and both precisions in listing and resolution; these are
+response metadata outside the signed `discount` object. Pricing and signature
+encoding are unchanged, and old payloads remain accepted.
+
 ---
 
 ## 2. How it maps onto the framework

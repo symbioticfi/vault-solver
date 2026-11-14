@@ -107,6 +107,48 @@ func TestServer_QuoteOK(t *testing.T) {
 	}
 }
 
+func TestServer_QuotePayoutMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		asset    string
+		decimals int
+		want     int
+	}{
+		{"matching payout with different RWA decimals", tOut.Hex(), 6, http.StatusOK},
+		{"wrong payout token", tIn.Hex(), 6, http.StatusBadRequest},
+		{"wrong payout decimals", tOut.Hex(), 18, http.StatusBadRequest},
+		{"zero decimals is present", tOut.Hex(), 0, http.StatusBadRequest},
+		{"invalid decimals", tOut.Hex(), 256, http.StatusUnprocessableEntity},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(validQuoteBody())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(raw, &body); err != nil {
+				t.Fatal(err)
+			}
+			entry := body["adapters"].([]any)[0].(map[string]any)
+			entry["outputAsset"], entry["outputAssetDecimals"] = tc.asset, tc.decimals
+			entry["discountPrecision"] = "1000000"
+			rr := do(t, testServer().handler(), http.MethodPost, "/quote", testSecret, body)
+			if rr.Code != tc.want {
+				t.Fatalf("status=%d, want %d: %s", rr.Code, tc.want, rr.Body.String())
+			}
+			if tc.want == http.StatusOK {
+				var quote quoteResponse
+				if err := json.Unmarshal(rr.Body.Bytes(), &quote); err != nil {
+					t.Fatal(err)
+				}
+				if quote.AmountOut != "1000000" {
+					t.Fatalf("payout=%s, want 1000000", quote.AmountOut)
+				}
+			}
+		})
+	}
+}
+
 func TestServer_QuotePricesEachEntryAtItsDiscount(t *testing.T) {
 	discountID := "0x00000000000000000000000000000000000000000000000000000000000000ab"
 	withDiscount := func(discount string, discountBacked bool) quoteRequest {

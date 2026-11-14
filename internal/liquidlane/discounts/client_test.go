@@ -21,6 +21,7 @@ func TestClientResolveSingle(t *testing.T) {
 		w.Header().Set("X-Request-Id", "discount-http-attempt")
 		_, _ = w.Write([]byte(`{` +
 			`"discountId":"0x` + hash64 + `",` +
+			`"discountPrecision":"100000000","outputAsset":"0x0000000000000000000000000000000000000002","outputAssetDecimals":6,` +
 			`"discount":{"adapter":"0x0000000000000000000000000000000000000abc",` +
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
 			`"discount":"123","signer":"0x0000000000000000000000000000000000000aaa",` +
@@ -56,6 +57,7 @@ func TestClientResolveBatchSingleEntryAccepted(t *testing.T) {
 		w.Header().Set("X-Request-Id", "discount-http-attempt")
 		_, _ = w.Write([]byte(`{` +
 			`"discounts":[{"discountId":"0x` + hash64 + `",` +
+			`"discountPrecision":"1000000","outputAsset":"0x0000000000000000000000000000000000000002","outputAssetDecimals":6,` +
 			`"discount":{"adapter":"0x0000000000000000000000000000000000000abc",` +
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
 			`"discount":"123","signer":"0x0000000000000000000000000000000000000aaa",` +

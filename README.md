@@ -96,6 +96,13 @@ that fills the orders it is awarded, settling on-chain through the adapter. Each
 `quoteTimeoutMs` (default 900, below the backend's 1000 ms solver timeout) so a slow dependency is logged
 as a failed quote rather than dropped as a backend disconnect.
 
+Quote inventory accepts `outputAsset` and `outputAssetDecimals`, using the
+LiquidLaneConnector payout-token name. They must match the existing `asset` and
+`assetDecimals` fields when provided; older payloads may omit them. The RWA's
+`tokenInDecimals` remains separate. `discountPrecision` is explicit for both native
+adapters (`1000000`) and connectors (`100000000`). Deploy this solver version
+before a backend that sends the payout metadata fields.
+
 It runs either in `external` mode (the open-source filler; quoting and filling scoped to the operator's
 own adapters) or `internal` mode (Symbiotic-internal; adds the private discounts flow). The caller EOA
 must be an authorized caller of the RFQ `Executor` (its `setCallers` allowlist, granted by the owner).
