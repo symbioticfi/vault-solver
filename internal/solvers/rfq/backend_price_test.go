@@ -34,10 +34,13 @@ func TestDiscountQuoteUsesBackendSnapshotWithoutRPC(t *testing.T) {
 					s.quotes.recipeExecutors = []common.Address{common.HexToAddress("0x43")}
 					entry.DiscountPrecision = "100000000"
 					entry.RecipeExecutor = common.HexToAddress("0x43").Hex()
+					s.quotes.resolveRoute = func(_, _, _ common.Address) (common.Address, common.Address, bool) {
+						return common.HexToAddress("0x43"), vlt, true
+					}
 				}
 				s.quotes.reservations = func(_ string, rows []solverInventory) liquidlane.CapacityReservations {
 					if len(rows) != 1 || rows[0].Vault != vlt || rows[0].BlockNumber != 42 {
-						t.Fatal("lost backend account or observation block")
+						t.Fatal("lost cached account or backend observation block")
 					}
 					return liquidlane.CapacityReservations{liquidlane.NewCapacityID(1, vlt, tOut): big.NewInt(reserved)}
 				}
@@ -66,31 +69,27 @@ func TestDiscountQuoteUsesBackendSnapshotWithoutRPC(t *testing.T) {
 func TestConnectorQuoteResolvesLocalIdentitiesWithoutRPC(t *testing.T) {
 	executor := common.HexToAddress("0x43")
 	for _, tc := range []struct {
-		name, account, hint string
-		available           bool
-		reserved            int64
-		want                int
+		name      string
+		available bool
+		reserved  int64
+		want      int
 	}{
-		{"derive both", "", "", true, 0, http.StatusOK},
-		{"validate supplied identities", vlt.Hex(), executor.Hex(), true, 0, http.StatusOK},
-		{"conflicting account", tIn.Hex(), "", true, 0, http.StatusNoContent},
-		{"unconfigured hint", "", tIn.Hex(), true, 0, http.StatusNoContent},
-		{"missing or ambiguous cached route", "", "", false, 0, http.StatusNoContent},
-		{"shared account reservation", "", "", true, 10_000_000, http.StatusNoContent},
+		{"derive both", true, 0, http.StatusOK},
+		{"missing or ambiguous cached route", false, 0, http.StatusNoContent},
+		{"shared account reservation", true, 10_000_000, http.StatusNoContent},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := testServer()
 			s.quotes.reader = nil // Any quote-time RPC access fails the test.
 			s.quotes.recipeExecutors = []common.Address{executor}
 			s.quotes.discountsEnabled = true
-			s.quotes.resolveRoute = func(hint, venue, rwa, asset common.Address) (common.Address, common.Address, bool) {
-				ok := tc.available && (hint == (common.Address{}) || hint == executor) && venue == vlt && rwa == tIn && asset == tOut
+			s.quotes.resolveRoute = func(venue, rwa, asset common.Address) (common.Address, common.Address, bool) {
+				ok := tc.available && venue == vlt && rwa == tIn && asset == tOut
 				return executor, vlt, ok
 			}
 			body := validQuoteBody()
 			id := common.HexToHash("0x1234").Hex()
 			entry := &body.Adapters[0]
-			entry.Account, entry.RecipeExecutor = tc.account, tc.hint
 			entry.DiscountID, entry.DiscountPrecision = &id, "100000000"
 			original := body
 			original.Adapters = append([]quoteAdapter(nil), body.Adapters...)
@@ -123,7 +122,6 @@ func TestDiscountQuoteRequiresBackendPricing(t *testing.T) {
 		"missing price":    func(v *quoteAdapter) { v.Price = "" },
 		"zero price":       func(v *quoteAdapter) { v.Price = "0" },
 		"overflow price":   func(v *quoteAdapter) { v.Price = new(big.Int).Lsh(big.NewInt(1), 256).String() },
-		"missing account":  func(v *quoteAdapter) { v.Account = "" },
 		"missing decimals": func(v *quoteAdapter) { v.TokenInDecimals = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -136,11 +134,14 @@ func TestDiscountQuoteRequiresBackendPricing(t *testing.T) {
 	}
 }
 
-func TestOverlappingRecipeExecutorsQuoteOneSharedBalance(t *testing.T) {
+func TestRepeatedConnectorInventoryQuotesOneSharedBalance(t *testing.T) {
 	for _, maximum := range []string{"1000000", "2000000"} {
 		t.Run(maximum, func(t *testing.T) {
 			s := testServer()
 			s.quotes.recipeExecutors = []common.Address{common.HexToAddress("0x43"), common.HexToAddress("0x44")}
+			s.quotes.resolveRoute = func(_, _, _ common.Address) (common.Address, common.Address, bool) {
+				return common.HexToAddress("0x43"), vlt, true
+			}
 			s.quotes.discountsEnabled = true
 			s.quotes.reader = nil
 			body := validQuoteBody()
@@ -148,9 +149,9 @@ func TestOverlappingRecipeExecutorsQuoteOneSharedBalance(t *testing.T) {
 			id, decimals := common.HexToHash("0x1234").Hex(), 18
 			entry.Account, entry.TokenInDecimals, entry.Price = vlt.Hex(), &decimals, "1234567890123456789"
 			entry.DiscountID, entry.Discount, entry.DiscountPrecision = &id, "5000000", "100000000"
-			entry.RecipeExecutor, entry.MaxAssets = s.quotes.recipeExecutors[0].Hex(), "1000000"
+			entry.MaxAssets = "1000000"
 			other := *entry
-			other.RecipeExecutor, other.MaxAssets = s.quotes.recipeExecutors[1].Hex(), maximum
+			other.MaxAssets = maximum
 			body.Adapters = append(body.Adapters, other)
 			rr := do(t, s.handler(), http.MethodPost, "/quote", testSecret, body)
 			want := http.StatusNoContent
@@ -161,5 +162,21 @@ func TestOverlappingRecipeExecutorsQuoteOneSharedBalance(t *testing.T) {
 				t.Fatalf("overlapping capacity: status=%d want=%d body=%s", rr.Code, want, rr.Body.String())
 			}
 		})
+	}
+}
+
+func TestUncachedNativeDiscountUsesExistingReader(t *testing.T) {
+	s := testServer()
+	s.quotes.discountsEnabled = true
+	s.quotes.resolveRoute = (&reader{}).cachedQuoteRoute
+	counted := &countingQuoteReader{quoteCandidateReader: s.quotes.reader}
+	s.quotes.reader = counted
+	body := validQuoteBody()
+	body.Adapters[0].Account = ""
+	id := common.HexToHash("0x1234").Hex()
+	body.Adapters[0].DiscountID = &id
+	response := do(t, s.handler(), http.MethodPost, "/quote", testSecret, body)
+	if response.Code != http.StatusOK || counted.calls != 1 {
+		t.Fatalf("uncached native quote = %d, reader calls = %d: %s", response.Code, counted.calls, response.Body.String())
 	}
 }

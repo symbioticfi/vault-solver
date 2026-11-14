@@ -35,33 +35,30 @@ payout), and RFQ's external `asset` field is the shared `tokenOut`. Pricing leg 
 `/discounts` flow). Both are in scope for full parity — discount legs are built in **P3** (§4), after
 the direct path is solid; they are sequenced last, not dropped.
 
-Discount-only `/quote` requests are priced from the backend snapshot without RPC:
-each signed entry requires `price` (the undiscounted `1e18` oracle price),
-`tokenInDecimals`, and `account` in addition to capacity, discount and observation
-block. `account` identifies the shared vault/account capacity for reservations.
-Merkle quote inventory may omit `account` and, for a unique compatible route,
-`recipeExecutor`: the host enriches a request copy from the existing startup cache,
-including the statically committed RWA swap permissions. It performs no additional
-RPC or HTTP reads. A provided account must match; a provided executor binds the
-advertised capacity to that configured compatible recipe. Multiple compatible
-recipes require this hint, otherwise their untagged capacity is declined. Award
-selection uses the same resolver before fresh fill validation. Native inventory
-retains its existing account requirement.
-The quote stage allocates the advertised capacity after reservations and uses the
-shared exact-pricing helpers to preserve both contract floors. Backend pricing
-failure excludes that entry; missing metadata is a malformed request, with no chain
-fallback. Direct adapter quotes keep their current chain reads. Fill planning still
-re-reads state and simulates execution.
+Discount-only `/quote` requests use the backend snapshot: each signed entry requires
+`price` (the undiscounted `1e18` oracle price), `tokenInDecimals`, capacity, discount
+and observation block. `asset` / `assetDecimals` describe the payout token; there
+are no payout aliases or backend account/recipe hints. Native inventories may
+explicitly carry precision `1000000`; connector precision remains `100000000`.
+The vendored discount API reports precision in listing and resolution outside the
+signed terms; listing retains `collateral` / `collateralDecimals` for payout metadata.
 
-Adapter quote metadata additionally accepts optional `outputAsset` and
-`outputAssetDecimals` aliases for `asset` and `assetDecimals`, matching the
-connector's `outputAsset` name. Provided aliases must agree with the existing
-payout fields, including a provided zero-decimal value. They do not replace
-`tokenInDecimals`. Native inventories may explicitly carry precision `1000000`;
-connector precision remains `100000000`. The vendored discount API exposes the
-same payout metadata and both precisions in listing and resolution; these are
-response metadata outside the signed `discount` object. Pricing and signature
-encoding are unchanged, and old payloads remain accepted.
+The host enriches a request copy with account and recipe identities from the verified
+startup cache, including statically committed RWA swap permissions, without quote-time
+RPC or HTTP reads. Merkle routes must match a unique configured recipe; ambiguous
+routes are declined. Award selection uses the same resolver before fresh fill validation.
+The backend emits one conservative capacity per connector/discount, taking the lowest
+of the requesting solver's applicable recipe alternatives, including zero. It suppresses
+connector capacity after a failed recipe read. Configured native adapters resolve their
+account metadata at startup even in quote-only mode; unknown native adapters retain
+the existing chain-reader path.
+
+The quote stage allocates advertised capacity after shared account/asset reservations
+and preserves both contract floors. Backend pricing failure excludes that entry;
+missing pricing metadata is malformed. Direct adapter quotes keep their current chain
+reads. Fill planning re-reads state and simulates execution. Roll out the paired backend
+and solver schema changes together: an older solver requires route hints, and the
+new solver schema rejects removed fields.
 
 ---
 
@@ -681,7 +678,7 @@ specifications when this contract changes. Deploy these generated clients with
 the backend header-only contract so resolve-union decoding no longer requires the
 removed body field.
 
-Merkle connector acquisition is owned by `internal/solvers/merkle/rfq`, as described in [RFQ-MERKLE.md](RFQ-MERKLE.md). The backend uses an optional `recipeExecutors` list for each connector: absent means native adapter; present means connector. It estimates capacity from recipe reads and checks current roles with batched RPC calls, without scanning historical block ranges or fetching curator permission trees. Advertised maxAssets is a read estimate; exact ordered funding and settlement are validated by the solver's complete outer fill simulation. It supplies `maxAssets`, price, token decimals and discount precision in quote inventory; account and measured `recipeExecutor` remain compatible optional route hints. The solver chooses native behavior from local `adapters` configuration or Merkle behavior from local `recipeExecutors`; configuring both fails startup. Merkle mode derives each payment connector from its committed recipe and shares the existing Merkle fill component. Overlapping recipes use one account/asset capacity within each quote, and awards select a configured executor with the matching connector and RWA. The solver resolves account and a unique compatible executor from its startup cache, including pinned RWA swap permissions, without quote-time I/O. Ambiguous recipe-specific capacity requires a matching executor hint. Connector quote admission verifies supplied identities against this cached route. Pending signed work holds the signer fence; confirmed fills persist account/asset inclusion watermarks that reject older quote snapshots (see RFQ-MERKLE.md). The Merkle execution path reads the unchanged original recipe from `SetRecipe` only at the executor's known publication block, fetches the existing permission tree, verifies current roles and simulates the complete outer RFQ fill. It uses the shared chain reader without a separate publication indexer URL. The recipe commits one signed swap with the awarded amount and payment as inputs 0 and 1; no capacity metadata or embedded proofs are added. Include that asset's original issuer grants when redemption is required; route failures never fall back to custody.
+Merkle connector acquisition is owned by `internal/solvers/merkle/rfq`, as described in [RFQ-MERKLE.md](RFQ-MERKLE.md). The backend uses an optional `recipeExecutors` list for each connector: absent means native adapter; present means connector. It estimates capacity from recipe reads and checks current roles with batched RPC calls, without scanning historical block ranges or fetching curator permission trees. Advertised maxAssets is a read estimate; exact ordered funding and settlement are validated by the solver's complete outer fill simulation. It supplies `maxAssets`, price, token decimals and discount precision in quote inventory; account and recipe identities stay internal to backend capacity filtering and local solver caches. The solver chooses native behavior from local `adapters` configuration or Merkle behavior from local `recipeExecutors`; configuring both fails startup. Merkle mode derives each payment connector from its committed recipe and shares the existing Merkle fill component. Overlapping recipes use one account/asset capacity within each quote, and awards select a configured executor with the matching connector and RWA. The solver resolves account and a unique compatible executor from its startup cache, including pinned RWA swap permissions, without quote-time I/O. Multiple compatible cached recipes are declined. Backend quote and liquidity capacities use the minimum across applicable recipe alternatives; failed capacity reads suppress the connector. Pending signed work holds the signer fence; confirmed fills persist account/asset inclusion watermarks that reject older quote snapshots (see RFQ-MERKLE.md). The Merkle execution path reads the unchanged original recipe from `SetRecipe` only at the executor's known publication block, fetches the existing permission tree, verifies current roles and simulates the complete outer RFQ fill. It uses the shared chain reader without a separate publication indexer URL. The recipe commits one signed swap with the awarded amount and payment as inputs 0 and 1; no capacity metadata or embedded proofs are added. Include that asset's original issuer grants when redemption is required; route failures never fall back to custody.
 
 ### Optional token log metadata
 

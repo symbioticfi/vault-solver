@@ -22,8 +22,6 @@ var _ MappedNullable = &ResolveDiscountResponseOneOf{}
 type ResolveDiscountResponseOneOf struct {
 	DiscountId           string                               `json:"discountId" validate:"regexp=^0x[a-fA-F0-9]{64}$"`
 	DiscountPrecision    *string                              `json:"discountPrecision,omitempty"`
-	OutputAsset          *string                              `json:"outputAsset,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	OutputAssetDecimals  *int64                               `json:"outputAssetDecimals,omitempty"`
 	Discount             ResolveDiscountResponseOneOfDiscount `json:"discount"`
 	SignerSignature      string                               `json:"signerSignature" validate:"regexp=^0x[a-fA-F0-9]+$"`
 	ProtocolDeadline     int64                                `json:"protocolDeadline"`
@@ -109,70 +107,6 @@ func (o *ResolveDiscountResponseOneOf) HasDiscountPrecision() bool {
 // SetDiscountPrecision gets a reference to the given string and assigns it to the DiscountPrecision field.
 func (o *ResolveDiscountResponseOneOf) SetDiscountPrecision(v string) {
 	o.DiscountPrecision = &v
-}
-
-// GetOutputAsset returns the OutputAsset field value if set, zero value otherwise.
-func (o *ResolveDiscountResponseOneOf) GetOutputAsset() string {
-	if o == nil || IsNil(o.OutputAsset) {
-		var ret string
-		return ret
-	}
-	return *o.OutputAsset
-}
-
-// GetOutputAssetOk returns a tuple with the OutputAsset field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *ResolveDiscountResponseOneOf) GetOutputAssetOk() (*string, bool) {
-	if o == nil || IsNil(o.OutputAsset) {
-		return nil, false
-	}
-	return o.OutputAsset, true
-}
-
-// HasOutputAsset returns a boolean if a field has been set.
-func (o *ResolveDiscountResponseOneOf) HasOutputAsset() bool {
-	if o != nil && !IsNil(o.OutputAsset) {
-		return true
-	}
-
-	return false
-}
-
-// SetOutputAsset gets a reference to the given string and assigns it to the OutputAsset field.
-func (o *ResolveDiscountResponseOneOf) SetOutputAsset(v string) {
-	o.OutputAsset = &v
-}
-
-// GetOutputAssetDecimals returns the OutputAssetDecimals field value if set, zero value otherwise.
-func (o *ResolveDiscountResponseOneOf) GetOutputAssetDecimals() int64 {
-	if o == nil || IsNil(o.OutputAssetDecimals) {
-		var ret int64
-		return ret
-	}
-	return *o.OutputAssetDecimals
-}
-
-// GetOutputAssetDecimalsOk returns a tuple with the OutputAssetDecimals field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *ResolveDiscountResponseOneOf) GetOutputAssetDecimalsOk() (*int64, bool) {
-	if o == nil || IsNil(o.OutputAssetDecimals) {
-		return nil, false
-	}
-	return o.OutputAssetDecimals, true
-}
-
-// HasOutputAssetDecimals returns a boolean if a field has been set.
-func (o *ResolveDiscountResponseOneOf) HasOutputAssetDecimals() bool {
-	if o != nil && !IsNil(o.OutputAssetDecimals) {
-		return true
-	}
-
-	return false
-}
-
-// SetOutputAssetDecimals gets a reference to the given int64 and assigns it to the OutputAssetDecimals field.
-func (o *ResolveDiscountResponseOneOf) SetOutputAssetDecimals(v int64) {
-	o.OutputAssetDecimals = &v
 }
 
 // GetDiscount returns the Discount field value
@@ -285,12 +219,6 @@ func (o ResolveDiscountResponseOneOf) ToMap() (map[string]interface{}, error) {
 	if !IsNil(o.DiscountPrecision) {
 		toSerialize["discountPrecision"] = o.DiscountPrecision
 	}
-	if !IsNil(o.OutputAsset) {
-		toSerialize["outputAsset"] = o.OutputAsset
-	}
-	if !IsNil(o.OutputAssetDecimals) {
-		toSerialize["outputAssetDecimals"] = o.OutputAssetDecimals
-	}
 	toSerialize["discount"] = o.Discount
 	toSerialize["signerSignature"] = o.SignerSignature
 	toSerialize["protocolDeadline"] = o.ProtocolDeadline
@@ -344,8 +272,6 @@ func (o *ResolveDiscountResponseOneOf) UnmarshalJSON(data []byte) (err error) {
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "discountId")
 		delete(additionalProperties, "discountPrecision")
-		delete(additionalProperties, "outputAsset")
-		delete(additionalProperties, "outputAssetDecimals")
 		delete(additionalProperties, "discount")
 		delete(additionalProperties, "signerSignature")
 		delete(additionalProperties, "protocolDeadline")

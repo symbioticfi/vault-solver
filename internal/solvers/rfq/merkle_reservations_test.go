@@ -104,18 +104,13 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 	}
 	for _, tc := range []struct {
 		block, capacity string
-		wrongAccount    bool
 		quoted          bool
 	}{
-		{"7", "456", false, true},
-		{"999", "456", false, true},
-		{"7", "900", true, false},
-		{"999", "900", true, false},
+		{"7", "456", true},
+		{"999", "456", true},
+		{"7", "900", true},
+		{"999", "900", true},
 	} {
-		body.Adapters[0].Account = vlt.Hex()
-		if tc.wrongAccount {
-			body.Adapters[0].Account = common.HexToAddress("0xbad").Hex()
-		}
 		body.Adapters[0].BlockNumber, body.Adapters[0].MaxAssets = tc.block, tc.capacity
 		decision, err := s.server.quotes.quote(t.Context(), &body)
 		if err != nil || (decision.response != nil) != tc.quoted {

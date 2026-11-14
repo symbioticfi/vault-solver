@@ -96,12 +96,10 @@ that fills the orders it is awarded, settling on-chain through the adapter. Each
 `quoteTimeoutMs` (default 900, below the backend's 1000 ms solver timeout) so a slow dependency is logged
 as a failed quote rather than dropped as a backend disconnect.
 
-Quote inventory accepts `outputAsset` and `outputAssetDecimals`, using the
-LiquidLaneConnector payout-token name. They must match the existing `asset` and
-`assetDecimals` fields when provided; older payloads may omit them. The RWA's
-`tokenInDecimals` remains separate. `discountPrecision` is explicit for both native
-adapters (`1000000`) and connectors (`100000000`). Deploy this solver version
-before a backend that sends the payout metadata fields.
+Quote inventory describes each adapter's payout token with `asset` and
+`assetDecimals`, separately from the RWA's `tokenInDecimals`. `discountPrecision`
+is explicit for native adapters (`1000000`) and connectors (`100000000`).
+Account and recipe identities come from local configuration and verified chain metadata.
 
 It runs either in `external` mode (the open-source filler; quoting and filling scoped to the operator's
 own adapters) or `internal` mode (Symbiotic-internal; adds the private discounts flow). The caller EOA
@@ -192,18 +190,19 @@ The next fresh request can reuse its unused nonce. Reservations are local to the
 after a restart.
 
 Discount-backed `/quote` requests use the backend's `price` (undiscounted oracle
-price scaled by `1e18`), `tokenInDecimals`, `account`, `maxAssets`, and observation
-block. Merkle mode resolves `account` from its verified startup cache, so the
-backend may omit it. It also selects the configured `recipeExecutor` locally when
-only one cached recipe matches the connector, RWA and payout token. If multiple
-recipes match, the backend must retain the executor hint for its measured capacity;
-untagged ambiguous entries are declined. Supplied identities must match the cache.
-The native adapter's vault and the connector's account identify shared
-reservations. Discount-only quotes make no RPC calls and preserve the contract's
-two rounding steps. Missing pricing metadata rejects the request without an RPC
-fallback. Direct adapter quotes retain their chain reads, and awarded orders still
-use current chain state and complete-fill simulation. Coordinate backend and solver
-rollout for the new fields.
+price scaled by `1e18`), `tokenInDecimals`, `maxAssets`, and observation block.
+Configured native adapter accounts and Merkle routes come from the verified startup
+cache. Merkle mode selects exactly one recipe matching the connector, RWA and payout
+token; multiple matches are declined. The backend supplies one conservative capacity
+per connector/discount, bounded by every applicable recipe alternative.
+Neither `account` nor `recipeExecutor` is a backend request field.
+The native adapter's vault and the connector's account identify shared reservations.
+Cached discount-only quotes make no RPC calls and preserve the contract's two
+rounding steps. Unknown native adapter accounts follow the existing chain-reader
+path. Missing pricing metadata rejects the request. Direct adapter quotes retain
+chain reads, and awarded orders still use current state and complete-fill simulation.
+Coordinate backend and solver rollout: this schema removes the staged route hints
+and payout aliases, so versions expecting or sending those fields must be updated together.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).

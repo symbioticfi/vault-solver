@@ -98,7 +98,7 @@ func TestConnectorAccessManagerRoute(t *testing.T) {
 			if err := s.Initialize(t.Context()); err != nil || !s.AcceptsConnector(vlt) {
 				t.Fatalf("manager route discovery: %v", err)
 			}
-			executor, account, ok := s.ResolveRoute(common.Address{}, vlt, tIn, tOut)
+			executor, account, ok := s.ResolveRoute(vlt, tIn, tOut)
 			if !ok || executor != f.reader.recipeExecutor || account != f.reader.recipeAccount {
 				t.Fatal("manager route did not publish cached quote identities")
 			}

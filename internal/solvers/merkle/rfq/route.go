@@ -83,16 +83,12 @@ func (s *Solver) buildRoutes(ctx context.Context) (map[common.Address]recipeRout
 	return routes, nil
 }
 
-// ResolveRoute uses only the published startup cache. A capacity hint must name
-// a compatible configured recipe. Without a hint the compatible route must be
-// unique: capacities measured for different recipes are not interchangeable.
-func (s *Solver) ResolveRoute(hint, connector, rwa, asset common.Address) (executor, account common.Address, ok bool) {
+// ResolveRoute selects a unique compatible recipe using only the startup cache.
+// Ambiguous routes decline rather than assigning capacity to an arbitrary recipe.
+func (s *Solver) ResolveRoute(connector, rwa, asset common.Address) (executor, account common.Address, ok bool) {
 	s.routesMu.RLock()
 	defer s.routesMu.RUnlock()
 	for candidate, route := range s.routes {
-		if hint != (common.Address{}) && hint != candidate {
-			continue
-		}
 		if route.connector != connector || route.asset != asset {
 			continue
 		}

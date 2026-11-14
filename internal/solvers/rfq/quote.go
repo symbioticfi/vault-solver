@@ -27,7 +27,7 @@ import (
 type quoteService struct {
 	recipeExecutors []common.Address
 	acceptsRoute    func(executor, connector, account, asset common.Address) bool
-	resolveRoute    func(hint, connector, rwa, asset common.Address) (executor, account common.Address, ok bool)
+	resolveRoute    func(connector, rwa, asset common.Address) (executor, account common.Address, ok bool)
 	pairRoutes      atomic.Pointer[[]liquidlane.Route] // immutable configured adapter directions, optional background observation only
 	chainID         int64
 	tokenMetadata   *chain.Decimals
@@ -250,7 +250,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 }
 
 // resolveInventory fills route identities from the immutable local cache without
-// changing the caller's request or the backend's recipe-specific capacity.
+// changing the caller's request or the backend's capacity bound.
 func (qs *quoteService) resolveInventory(q *quoteRequest) (*quoteRequest, error) {
 	scoped := *q
 	scoped.Adapters = make([]quoteAdapter, 0, len(q.Adapters))
@@ -267,27 +267,18 @@ func (qs *quoteService) resolveInventory(q *quoteRequest) (*quoteRequest, error)
 		if err != nil {
 			return nil, err
 		}
-		var hint common.Address
-		if item.RecipeExecutor != "" {
-			hint, err = parse.NonZeroAddress(item.RecipeExecutor, idxField(i, "recipeExecutor"))
-			if err != nil {
-				return nil, err
-			}
-		}
-		executor, account, ok := qs.resolveRoute(hint, venue, rwa, asset)
+		executor, account, ok := qs.resolveRoute(venue, rwa, asset)
 		if !ok {
+			if len(qs.recipeExecutors) == 0 {
+				scoped.Adapters = append(scoped.Adapters, item)
+			}
 			continue
 		}
-		if item.Account != "" {
-			provided, err := parse.NonZeroAddress(item.Account, idxField(i, "account"))
-			if err != nil {
-				return nil, err
-			}
-			if provided != account {
-				continue
-			}
+		item.Account = account.Hex()
+		item.RecipeExecutor = ""
+		if executor != (common.Address{}) {
+			item.RecipeExecutor = executor.Hex()
 		}
-		item.RecipeExecutor, item.Account = executor.Hex(), account.Hex()
 		scoped.Adapters = append(scoped.Adapters, item)
 	}
 	return &scoped, nil
@@ -306,7 +297,7 @@ func (qs *quoteService) snapshotCandidates(
 		}
 	}
 	// Discount quotes use the backend's complete snapshot; fill planning still reads current state.
-	if !slices.ContainsFunc(inv, func(item solverInventory) bool { return item.DiscountID == nil }) {
+	if !slices.ContainsFunc(inv, func(item solverInventory) bool { return item.DiscountID == nil || item.Vault == (common.Address{}) }) {
 		inv = slices.DeleteFunc(slices.Clone(inv), func(item solverInventory) bool {
 			return item.TokenIn != req.TokenIn || item.TokenOut != req.TokenOut
 		})

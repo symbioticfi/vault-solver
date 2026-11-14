@@ -40,7 +40,6 @@ type Resolved struct {
 
 // ListItem is one currently advertised private discount.
 type ListItem struct {
-	RecipeExecutor     string
 	DiscountID         string
 	Adapter            string
 	TokenToRedeem      string
@@ -157,7 +156,6 @@ func (c *Client) ListDiscounts(ctx context.Context) (*List, error) {
 			return nil, errors.Errorf("private discounts: list: blockNumber: invalid decimal %q", d.GetBlockNumber())
 		}
 		out.Discounts = append(out.Discounts, ListItem{
-			RecipeExecutor:     d.GetRecipeExecutor(),
 			DiscountID:         d.GetDiscountId(),
 			Adapter:            d.GetAdapter(),
 			TokenToRedeem:      d.GetTokenToRedeem(),

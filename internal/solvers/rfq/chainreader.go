@@ -133,6 +133,12 @@ func (r *reader) readQuoteCandidates(
 	return append(liquidgreedy.NormalizeOracleInventory(amountIn, allocated, quotes), connectorCandidates...), nil
 }
 
+// cachedQuoteRoute resolves a configured native adapter without quote-time I/O.
+func (r *reader) cachedQuoteRoute(adapter, _, asset common.Address) (executor, account common.Address, found bool) {
+	resolved, ok := r.quoteAdapters[adapter]
+	return common.Address{}, resolved.Vault, ok && resolved.Vault != (common.Address{}) && resolved.TokenOut == asset
+}
+
 func (r *reader) setQuoteAdapters(resolved []recoveryVault) {
 	r.quoteAdapters = resolvedQuoteAdapters(resolved)
 }

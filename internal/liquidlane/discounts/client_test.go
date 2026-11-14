@@ -21,7 +21,7 @@ func TestClientResolveSingle(t *testing.T) {
 		w.Header().Set("X-Request-Id", "discount-http-attempt")
 		_, _ = w.Write([]byte(`{` +
 			`"discountId":"0x` + hash64 + `",` +
-			`"discountPrecision":"100000000","outputAsset":"0x0000000000000000000000000000000000000002","outputAssetDecimals":6,` +
+			`"discountPrecision":"100000000",` +
 			`"discount":{"adapter":"0x0000000000000000000000000000000000000abc",` +
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
 			`"discount":"123","signer":"0x0000000000000000000000000000000000000aaa",` +
@@ -57,7 +57,7 @@ func TestClientResolveBatchSingleEntryAccepted(t *testing.T) {
 		w.Header().Set("X-Request-Id", "discount-http-attempt")
 		_, _ = w.Write([]byte(`{` +
 			`"discounts":[{"discountId":"0x` + hash64 + `",` +
-			`"discountPrecision":"1000000","outputAsset":"0x0000000000000000000000000000000000000002","outputAssetDecimals":6,` +
+			`"discountPrecision":"1000000",` +
 			`"discount":{"adapter":"0x0000000000000000000000000000000000000abc",` +
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
 			`"discount":"123","signer":"0x0000000000000000000000000000000000000aaa",` +
@@ -110,7 +110,7 @@ func TestClientListDiscounts(t *testing.T) {
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
 			`"collateral":"0x0000000000000000000000000000000000000c01","collateralDecimals":6,` +
 			`"discount":"10","signer":"0x0000000000000000000000000000000000000aaa","deadline":1900000000,` +
-			`"blockNumber":"123","maxAssets":"5000","recipeExecutor":"0x0000000000000000000000000000000000000043"}]}`))
+			`"blockNumber":"123","maxAssets":"5000"}]}`))
 	}))
 	defer srv.Close()
 
@@ -125,7 +125,7 @@ func TestClientListDiscounts(t *testing.T) {
 		t.Fatalf("request ID = %q, want response header", resp.RequestID)
 	}
 	if len(resp.Discounts) != 1 || resp.Discounts[0].CollateralDecimals != 6 ||
-		resp.Discounts[0].MaxAssets != "5000" || resp.Discounts[0].Deadline != 1900000000 || resp.Discounts[0].RecipeExecutor != "0x0000000000000000000000000000000000000043" {
+		resp.Discounts[0].MaxAssets != "5000" || resp.Discounts[0].Deadline != 1900000000 {
 		t.Fatalf("discounts = %+v", resp.Discounts)
 	}
 }

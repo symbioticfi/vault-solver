@@ -23,7 +23,10 @@ func testServer() *server {
 	execAddr := common.HexToAddress("0x0000000000000000000000000000000000000010")
 	clk := func() time.Time { return time.Unix(0, 0) }
 	q := &quoteService{
-		chainID:       1,
+		chainID: 1,
+		resolveRoute: func(_, _, _ common.Address) (common.Address, common.Address, bool) {
+			return common.Address{}, vlt, true
+		},
 		executor:      execAddr,
 		laneAvailable: func() bool { return true },
 		reader:        &fakeQuoteCandidateReader{out: map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}},
@@ -107,45 +110,21 @@ func TestServer_QuoteOK(t *testing.T) {
 	}
 }
 
-func TestServer_QuotePayoutMetadata(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		asset    string
-		decimals int
-		want     int
-	}{
-		{"matching payout with different RWA decimals", tOut.Hex(), 6, http.StatusOK},
-		{"wrong payout token", tIn.Hex(), 6, http.StatusBadRequest},
-		{"wrong payout decimals", tOut.Hex(), 18, http.StatusBadRequest},
-		{"zero decimals is present", tOut.Hex(), 0, http.StatusBadRequest},
-		{"invalid decimals", tOut.Hex(), 256, http.StatusUnprocessableEntity},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			raw, err := json.Marshal(validQuoteBody())
-			if err != nil {
-				t.Fatal(err)
-			}
-			var body map[string]any
-			if err := json.Unmarshal(raw, &body); err != nil {
-				t.Fatal(err)
-			}
-			entry := body["adapters"].([]any)[0].(map[string]any)
-			entry["outputAsset"], entry["outputAssetDecimals"] = tc.asset, tc.decimals
-			entry["discountPrecision"] = "1000000"
-			rr := do(t, testServer().handler(), http.MethodPost, "/quote", testSecret, body)
-			if rr.Code != tc.want {
-				t.Fatalf("status=%d, want %d: %s", rr.Code, tc.want, rr.Body.String())
-			}
-			if tc.want == http.StatusOK {
-				var quote quoteResponse
-				if err := json.Unmarshal(rr.Body.Bytes(), &quote); err != nil {
-					t.Fatal(err)
-				}
-				if quote.AmountOut != "1000000" {
-					t.Fatalf("payout=%s, want 1000000", quote.AmountOut)
-				}
-			}
-		})
+func TestServer_QuoteOmitsRemovedFields(t *testing.T) {
+	body := validQuoteBody()
+	body.Adapters[0].RecipeExecutor = common.HexToAddress("0x43").Hex()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := do(t, testServer().handler(), http.MethodGet, "/openapi.json", "", nil)
+	for _, field := range []string{"outputAsset", "outputAssetDecimals", "account", "recipeExecutor"} {
+		if strings.Contains(string(raw), `"`+field+`"`) || strings.Contains(spec.Body.String(), `"`+field+`"`) {
+			t.Fatalf("removed field %s remains on wire", field)
+		}
+	}
+	if rr := do(t, testServer().handler(), http.MethodPost, "/quote", testSecret, body); rr.Code != http.StatusOK {
+		t.Fatalf("asset-only quote=%d %s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -318,37 +297,21 @@ func TestServer_QuoteWhitelist(t *testing.T) {
 	}
 }
 
-func TestServerConnectorRequiresConfiguredWireExecutor(t *testing.T) {
+func TestServerConnectorDerivesLocalExecutor(t *testing.T) {
 	srv := testServer()
-	srv.quotes.recipeExecutors = []common.Address{common.HexToAddress("0x43")}
+	executor := common.HexToAddress("0x43")
+	srv.quotes.recipeExecutors = []common.Address{executor}
 	srv.quotes.discountsEnabled = true
 	srv.quotes.acceptsConnector = func(adapter common.Address) bool { return adapter == vlt }
+	srv.quotes.resolveRoute = func(venue, _, asset common.Address) (common.Address, common.Address, bool) {
+		return executor, vlt, venue == vlt && asset == tOut
+	}
 	body := validQuoteBody()
 	id := "0x" + strings.Repeat("ab", 32)
 	body.Adapters[0].DiscountID = &id
 	body.Adapters[0].DiscountPrecision = "100000000"
-	body.Adapters[0].RecipeExecutor = common.HexToAddress("0x43").Hex()
-	body.Adapters = append(body.Adapters, quoteAdapter{Adapter: common.HexToAddress("0xbad").Hex(), Asset: tOut.Hex(), BlockNumber: "1", MaxAssets: "1000", Discount: "0"})
-	rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, body)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("local recipe quote = %d: %s", rr.Code, rr.Body.String())
-	}
-	// The HTTP schema must reject an upstream attempt to pick an execution target.
-	raw, err := json.Marshal(body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	injected := strings.Replace(string(raw), `"recipeExecutor":"0x0000000000000000000000000000000000000043"`, `"recipeExecutor":"0x000000000000000000000000000000000000dead"`, 1)
-	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/quote", strings.NewReader(injected))
-	req.Header.Set(sharedSecretHeader, testSecret)
-	rr = httptest.NewRecorder()
-	srv.handler().ServeHTTP(rr, req)
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("wire executor = %d: %s", rr.Code, rr.Body.String())
-	}
-	spec := do(t, srv.handler(), http.MethodGet, "/openapi.json", "", nil)
-	if !strings.Contains(spec.Body.String(), `"recipeExecutor"`) {
-		t.Fatal("executor missing from quote schema")
+	if rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, body); rr.Code != http.StatusOK {
+		t.Fatalf("local recipe quote=%d %s", rr.Code, rr.Body.String())
 	}
 }
 

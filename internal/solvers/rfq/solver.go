@@ -79,6 +79,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	quotes, exec := buildServices(
 		cfg, chainID, st, rdr, deps.TxManager, deps.TxManager.Available, quoteStrategy, log,
 	)
+	quotes.resolveRoute = rdr.cachedQuoteRoute
 	exec.metrics = metrics
 	if metrics != nil {
 		exec.orderPollObserver = metrics.orderPollObserver
@@ -203,11 +204,11 @@ func (s *Solver) Run(ctx context.Context) error {
 			return errors.Errorf("rfq: initialize recipe executor: %w", err)
 		}
 	}
-	// Resolve each recovery adapter's vault + collateral once at startup (config carries only adapter
-	// addresses; both are fixed for the adapter's lifetime) and hand the resolved set to recovery. Runs
+	// Resolve each configured adapter's vault + collateral once at startup (config carries only adapter
+	// addresses; both are fixed for the adapter's lifetime) for quotes and recovery. Runs
 	// before the poll loop and the quote server, so there's no concurrent reader of exec.vaults. A
 	// transport failure aborts startup; a per-adapter revert leaves that entry unresolved (skipped).
-	if !s.cfg.QuoteOnly && len(s.cfg.Adapters) > 0 {
+	if len(s.cfg.Adapters) > 0 {
 		resolved, err := s.exec.reader.resolveVaults(ctx, s.cfg.Adapters)
 		if err != nil {
 			startupErr := errors.Errorf("rfq: resolve recovery vaults: %w", err)
@@ -217,7 +218,7 @@ func (s *Solver) Run(ctx context.Context) error {
 		}
 		s.exec.vaults = resolved
 		s.exec.reader.setQuoteAdapters(resolved)
-		if s.cfg.restrictsToAdapters() {
+		if !s.cfg.QuoteOnly && s.cfg.restrictsToAdapters() {
 			if err := s.exec.reader.validateDirectAuthorization(ctx, s.cfg.Executor, resolved); err != nil {
 				startupErr := errors.Errorf("rfq: validate direct authorization: %w", err)
 				observability.Log(ctx).Error(startupErr, "external adapter authorization failed",

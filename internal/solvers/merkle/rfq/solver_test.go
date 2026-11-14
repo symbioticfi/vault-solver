@@ -135,28 +135,6 @@ func TestAwardSizingOnlyUsesSignedTuple(t *testing.T) {
 	}
 }
 
-func TestPrepareRequiresCapacityHintForAmbiguousRecipes(t *testing.T) {
-	for _, hint := range []string{"", common.HexToAddress("0x43").Hex()} {
-		t.Run("hint="+hint, func(t *testing.T) {
-			fixture := connectorExecutionFixture(t, connectorDiscountFixture())
-			order, _, backend := connectorExecutionAward(fixture.workflow.caller)
-			s := &Solver{recipeExecutors: []common.Address{fixture.reader.recipeExecutor}, workflow: fixture.workflow, backend: backend, spends: newSpendLedger()}
-			if err := s.Initialize(t.Context()); err != nil {
-				t.Fatal(err)
-			}
-			s.routes[common.HexToAddress("0x44")] = s.routes[fixture.reader.recipeExecutor]
-			listed := []discounts.ListItem{{Adapter: vlt.Hex(), RecipeExecutor: hint, TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"}}
-			intent, err := s.prepare(t.Context(), awardRow(t, order), listed)
-			if err != nil || (intent != nil) != (hint != "") {
-				t.Fatalf("intent=%+v err=%v", intent, err)
-			}
-			if hint == "" && fixture.reader.outerCalls != 0 {
-				t.Fatal("ambiguous capacity reached settlement simulation")
-			}
-		})
-	}
-}
-
 func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	fixture := connectorExecutionFixture(t, connectorDiscountFixture())
 	order, _, backend := connectorExecutionAward(fixture.workflow.caller)
@@ -216,7 +194,7 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	}
 	// A different award waits for canonical settlement, then starts on the same single lane.
 	backend.rows = append(backend.rows, next)
-	backend.listed = &discounts.List{Discounts: []discounts.ListItem{{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: common.HexToAddress("0x43").Hex()}}}
+	backend.listed = &discounts.List{Discounts: []discounts.ListItem{{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"}}}
 	backend.discount = connectorDiscountFixture()
 	sender.result = nil
 	sender.before = nil
@@ -260,7 +238,7 @@ func TestPrepareCountsHeaderLatencyAgainstDeadline(t *testing.T) {
 	}
 	f.reader.headerDelay = 250 * time.Millisecond
 	f.reader.headerStarted = time.Time{}
-	intent, err := s.prepare(t.Context(), awardRow(t, order), []discounts.ListItem{{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: common.HexToAddress("0x43").Hex()}})
+	intent, err := s.prepare(t.Context(), awardRow(t, order), []discounts.ListItem{{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"}})
 	if err != nil || intent == nil {
 		t.Fatalf("prepare: intent=%v err=%v", intent, err)
 	}
@@ -298,7 +276,7 @@ func TestSubmissionErrorRetainsOnlySignedWork(t *testing.T) {
 			fixture := connectorExecutionFixture(t, connectorDiscountFixture())
 			order, _, backend := connectorExecutionAward(fixture.workflow.caller)
 			backend.rows = []rfqbackend.OrdersResponseOrdersInner{awardRow(t, order)}
-			backend.listed = &discounts.List{Discounts: []discounts.ListItem{{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900", RecipeExecutor: common.HexToAddress("0x43").Hex()}}}
+			backend.listed = &discounts.List{Discounts: []discounts.ListItem{{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"}}}
 			sender := &fakeSender{unsigned: unsigned, submitErr: context.DeadlineExceeded}
 			s := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender, spends: newSpendLedger()}
 			if err := s.Initialize(t.Context()); err != nil {

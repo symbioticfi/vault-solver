@@ -57,30 +57,27 @@ func TestCachedRouteResolutionWithoutRPC(t *testing.T) {
 	if err := s.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	// All chain and permission-source access is unavailable after initialization.
 	s.workflow.chain, s.workflow.source = nil, nil
 	for _, tc := range []struct {
-		name                    string
-		hint, venue, rwa, asset common.Address
-		want                    bool
+		name              string
+		venue, rwa, asset common.Address
+		want              bool
 	}{
-		{"derive both", common.Address{}, vlt, tIn, tOut, true},
-		{"matching capacity binding", fixture.reader.recipeExecutor, vlt, tIn, tOut, true},
-		{"wrong RWA", common.Address{}, vlt, tOut, tOut, false},
-		{"wrong connector", common.Address{}, tIn, tIn, tOut, false},
-		{"wrong output", common.Address{}, vlt, tIn, tIn, false},
-		{"unconfigured hint", common.HexToAddress("0xbad"), vlt, tIn, tOut, false},
+		{"derive identities", vlt, tIn, tOut, true},
+		{"wrong RWA", vlt, tOut, tOut, false},
+		{"wrong connector", tIn, tIn, tOut, false},
+		{"wrong output", vlt, tIn, tIn, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			executor, account, ok := s.ResolveRoute(tc.hint, tc.venue, tc.rwa, tc.asset)
+			executor, account, ok := s.ResolveRoute(tc.venue, tc.rwa, tc.asset)
 			if ok != tc.want || (ok && (executor != fixture.reader.recipeExecutor || account != fixture.reader.recipeAccount)) {
-				t.Fatalf("route=(%s,%s,%t), want resolved=%t", executor, account, ok, tc.want)
+				t.Fatalf("route=(%s,%s,%t)", executor, account, ok)
 			}
 		})
 	}
 }
 
-func TestCachedRouteResolutionRequiresUnambiguousCapacity(t *testing.T) {
+func TestCachedRouteResolutionRequiresUniqueRWA(t *testing.T) {
 	first, second := common.HexToAddress("0x43"), common.HexToAddress("0x44")
 	for name, sameRWA := range map[string]bool{"different RWA": false, "same RWA": true} {
 		t.Run(name, func(t *testing.T) {
@@ -92,12 +89,9 @@ func TestCachedRouteResolutionRequiresUnambiguousCapacity(t *testing.T) {
 				first:  {connector: vlt, account: vlt, asset: tOut, tokens: map[common.Address]struct{}{tIn: {}}},
 				second: {connector: vlt, account: vlt, asset: tOut, tokens: map[common.Address]struct{}{otherToken: {}}},
 			}}
-			for _, hint := range []common.Address{{}, first, second} {
-				executor, account, ok := s.ResolveRoute(hint, vlt, tIn, tOut)
-				want := hint == first || (hint == (common.Address{}) && !sameRWA) || (hint == second && sameRWA)
-				if ok != want || (ok && (account != vlt || (hint != (common.Address{}) && executor != hint))) {
-					t.Fatalf("sameRWA=%t hint=%s route=(%s,%s,%t)", sameRWA, hint, executor, account, ok)
-				}
+			executor, account, ok := s.ResolveRoute(vlt, tIn, tOut)
+			if ok == sameRWA || (ok && (executor != first || account != vlt)) {
+				t.Fatalf("route=(%s,%s,%t)", executor, account, ok)
 			}
 		})
 	}
@@ -154,7 +148,7 @@ func TestInitializeDoesNotBlockRouteReads(t *testing.T) {
 	<-reader.entered
 	declined := make(chan bool, 1)
 	go func() {
-		_, _, resolved := s.ResolveRoute(common.Address{}, vlt, tIn, tOut)
+		_, _, resolved := s.ResolveRoute(vlt, tIn, tOut)
 		declined <- !resolved && !s.AcceptsConnector(vlt) && !s.AcceptsRoute(fixture.reader.recipeExecutor, vlt, fixture.reader.recipeAccount, tOut)
 	}()
 	select {

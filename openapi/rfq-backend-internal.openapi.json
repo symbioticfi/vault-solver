@@ -326,15 +326,6 @@
             "items": {
               "type": "object",
               "properties": {
-                "account": {
-                  "type": "string",
-                  "pattern": "^0x[a-fA-F0-9]{40}$"
-                },
-                "recipeExecutor": {
-                  "description": "Configured solver executor for the current funding recipe.",
-                  "type": "string",
-                  "pattern": "^0x[a-fA-F0-9]{40}$"
-                },
                 "discountPrecision": {
                   "description": "Discount denominator: 1000000 for native adapters, 100000000 for connectors.",
                   "type": "string",
@@ -342,16 +333,6 @@
                     "1000000",
                     "100000000"
                   ]
-                },
-                "outputAsset": {
-                  "description": "Token paid out by this adapter; matches collateral. Named after LiquidLaneConnector.outputAsset.",
-                  "type": "string",
-                  "pattern": "^0x[a-fA-F0-9]{40}$"
-                },
-                "outputAssetDecimals": {
-                  "type": "integer",
-                  "minimum": 0,
-                  "maximum": 255
                 },
                 "discountId": {
                   "type": "string",
@@ -567,15 +548,6 @@
                   "100000000"
                 ]
               },
-              "outputAsset": {
-                "type": "string",
-                "pattern": "^0x[a-fA-F0-9]{40}$"
-              },
-              "outputAssetDecimals": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 255
-              },
               "discount": {
                 "type": "object",
                 "required": [
@@ -659,15 +631,6 @@
                         "1000000",
                         "100000000"
                       ]
-                    },
-                    "outputAsset": {
-                      "type": "string",
-                      "pattern": "^0x[a-fA-F0-9]{40}$"
-                    },
-                    "outputAssetDecimals": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 255
                     },
                     "discount": {
                       "type": "object",

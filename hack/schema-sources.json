@@ -45,7 +45,7 @@
       "fetch": "json",
       "url": "https://swap.symbiotic.fi/api/v1/openapi-internal.json",
       "expectedDrift": {
-        "reason": "Vendored from symbioticfi/rfq-backend#482 at b430411: explicit native/connector discountPrecision and outputAsset/outputAssetDecimals on discount listing and resolution, alongside staged recipeExecutor/account metadata. swap.symbiotic.fi still serves rfq-backend main without this metadata. Re-vendor from the live URL after backend promotion, then drop this entry. Live digest rechecked on 2026-11-14.",
+        "reason": "Vendored from symbioticfi/rfq-backend#482 at d253625: explicit native/connector discountPrecision on discount listing and resolution; redundant payout aliases and recipeExecutor/account wire metadata removed. swap.symbiotic.fi still serves rfq-backend main without this metadata. Re-vendor from the live URL after backend promotion, then drop this entry. Live digest rechecked on 2026-11-14.",
         "liveDigest": "sha256:d15458e2913f7a30ff5894ef245ef2d00031c71845c4b8b55a9dcc6dca7c2ef4"
       },
       "refresh": "make refresh-rfq-internal-openapi && make refresh-rfq-internal-client",

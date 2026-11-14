@@ -28,16 +28,15 @@ The connector must be registered as version `2` in the Reactor's Liquid
 Lane adapter factory (version `1` is a native adapter).
 
 Backend quote requests carry capacity, price, token decimals and discount precision.
-The solver derives `account` from the verified startup route cache and selects a
-configured recipe whose connector, RWA swap permission and output asset match.
-This selection performs no quote-time RPC or permission-service calls. A supplied
-`account` must agree with the cache. `recipeExecutor` is optional when exactly one
-cached recipe supports the route; if several do, it must identify the recipe whose
-capacity was measured. Untagged ambiguous capacity is declined rather than assigned
-to an arbitrary recipe. Supplied executor hints must match a cached compatible route.
-The backend maps each connector to a `recipeExecutors` list, and measures each recipe
-against the requested RWA. Award selection uses the same cached resolver; fill
-construction then checks fresh permissions, state and the complete outer settlement.
+The solver derives account and recipe identities from the verified startup route cache.
+Exactly one configured recipe must match the connector, RWA swap permission and output
+asset; missing or ambiguous routes are declined. Selection performs no quote-time RPC
+or permission-service calls, and account/recipe identities are absent from backend
+requests. The backend maps each connector to a `recipeExecutors` list and measures
+each recipe against the requested RWA. It emits one capacity per connector/discount,
+bounded by the lowest applicable recipe capacity, including zero; a failed recipe
+read suppresses connector capacity. Award selection uses the same cached resolver;
+fill construction checks fresh permissions, state and the complete outer settlement.
 The SDK retrieves original recipe bytes at the executor's known `recipeBlock`.
 Execution verifies current permissions and the complete outer fill; recipes remain unchanged.
 
