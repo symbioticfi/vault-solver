@@ -17,13 +17,13 @@ jobs:
 
       - name: Validate rate alerts with pinned promtool
         run: |
-          archive="$RUNNER_TEMP/prometheus-3.15.1.linux-amd64.tar.gz"
+          archive="$RUNNER_TEMP/prometheus-3.16.0.linux-amd64.tar.gz"
           curl --fail --location --retry 3 --output "$archive" \
-            https://github.com/prometheus/prometheus/releases/download/v3.15.1/prometheus-3.15.1.linux-amd64.tar.gz
-          printf '%s  %s\n' 6a726885328ad9efebbf36e876ce2fb6225468a71fd1e7ce3ba666d5f4d97a84 "$archive" \
+            https://github.com/prometheus/prometheus/releases/download/v3.16.0/prometheus-3.16.0.linux-amd64.tar.gz
+          printf '%s  %s\n' 68727009472a2c02e1ff7f062fd5b3e637285bffc8fc2d340c76fb449d6e0f34 "$archive" \
             | sha256sum --check
-          tar -xzf "$archive" --directory="$RUNNER_TEMP" prometheus-3.15.1.linux-amd64/promtool
-          make test-alerts PROMTOOL="$RUNNER_TEMP/prometheus-3.15.1.linux-amd64/promtool"
+          tar -xzf "$archive" --directory="$RUNNER_TEMP" prometheus-3.16.0.linux-amd64/promtool
+          make test-alerts PROMTOOL="$RUNNER_TEMP/prometheus-3.16.0.linux-amd64/promtool"
 
   build-test:
     runs-on: ubuntu-latest

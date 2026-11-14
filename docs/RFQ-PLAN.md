@@ -725,3 +725,13 @@ proof. This never delays serving or adds arbitrary input RPCs. Policy gates dire
 zero liquidity does not invalidate a resolved structural route. No counter reset, learned request
 registry or token cap is introduced. Cardinality follows supported route history × fixed outcomes,
 not quote IDs/count. Replica-local award observations are not globally unique economic wins.
+
+### Per-vault Merkle authority
+
+Merkle RFQ recipes may name a per-vault OpenZeppelin AccessManager as their caller.
+The RFQ integration groups discovery by the authenticated on-chain caller and uses
+SDK `recipes.RouteExecution` to require an immediate RFQ Executor grant and wrap
+execution. The entire Reactor fill remains the simulation and admission boundary.
+This changes no generic framework, native adapter path, recipe bytes or permissions.
+The implementation and focused authorization tests are complete; deployment and
+operator role grants remain explicit setup steps.

@@ -22,7 +22,7 @@ func TestConfiguredExecutorDerivesPaymentConnector(t *testing.T) {
 	}{
 		{name: "configured executor"},
 		{name: "wrong executor", mutate: func(s *Solver) { s.recipeExecutors[0] = common.HexToAddress("0xbad") }, want: ""},
-		{name: "wrong caller", mutate: func(s *Solver) { s.workflow.caller = common.HexToAddress("0xbad") }, want: "caller mismatch"},
+		{name: "wrong caller", mutate: func(s *Solver) { s.workflow.caller = common.HexToAddress("0xbad") }, want: "caller"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := connectorExecutionFixture(t, connectorDiscountFixture())

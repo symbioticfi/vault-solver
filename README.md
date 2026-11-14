@@ -124,7 +124,11 @@ The committed permission must admit the supplied calldata length and signature
 framing, and the complete outer fill must simulate successfully. Existing Curator
 templates with fixed 65-byte fields require compatible permissions for other lengths.
 It consumes awarded `/orders` and signed backend terms without aggregating adapter liquidity.
-The solver derives the payment connector from its locally configured RecipeExecutor.
+The solver derives the payment connector and execution caller from its locally configured
+RecipeExecutor. If its caller is an OpenZeppelin AccessManager, that manager must grant
+the RFQ Executor immediate access to the recipe's execution selector. The solver then
+routes the callback through the manager and simulates the complete RFQ fill; missing
+or delayed grants reject the route. Direct RFQ Executor callers also remain supported.
 Both the dedicated approval instruction and ordinary ERC-20 approval calls are supported.
 Discovery authenticates the current permission tree before resolving the latter's token,
 spender and Input1 amount binding.
