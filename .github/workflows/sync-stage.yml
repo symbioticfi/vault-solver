@@ -3,8 +3,8 @@ name: sync-stage
 # Opens the stage -> main promotion PR on demand. It is a no-op when stage has nothing new or a
 # promotion PR is already open.
 #
-# SYNC_PR_TOKEN is optional. With the repository token, explicitly dispatch CI for
-# the promotion head so checks do not depend on approving the bot-created PR run.
+# SYNC_PR_TOKEN is optional. With the repository token, a maintainer must approve
+# the resulting pull_request workflow runs before their CI checks can start.
 on:
   workflow_dispatch:
 
@@ -17,7 +17,6 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-      actions: write
     steps:
       - name: Open stage -> main PR
         env:
@@ -44,6 +43,6 @@ jobs:
           echo "opened ${url}" | tee -a "${GITHUB_STEP_SUMMARY}"
 
           if [ "$USE_REPOSITORY_TOKEN" = "true" ]; then
-            gh workflow run ci.yml --repo "$REPO" --ref stage
-            echo "dispatched CI for stage" | tee -a "${GITHUB_STEP_SUMMARY}"
+            echo "Approve the promotion PR's workflow runs to start its required CI checks." \
+              | tee -a "${GITHUB_STEP_SUMMARY}"
           fi
