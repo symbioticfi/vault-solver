@@ -2,8 +2,8 @@
 
 The `merkle` solver consumes the independently versioned
 `github.com/symbioticfi/merkle-executor/sdk` module pinned in go.mod.
-The current pin is `180ee8dec197cc5219aaf5650b1ef006df05ff09`
-(`v0.0.0-20261109092900-180ee8dec197`).
+The current pin is `fa0376ed1575ddd9493739fddfc0751a0ee2b77e`
+(`v0.0.0-20261115054724-fa0376ed1575`).
 The SDK implements recipe/tree/proof/role checks,
 pinned runtime assembly, simulation, canonical receipts and RAM settlement tasks.
 It also exposes opt-in off-chain providers, RPC, signing and the shared transaction
@@ -12,7 +12,11 @@ lookup, so importing or constructing SDK components never implicitly reads the
 process environment.
 
 `keeper.Planner.PrepareExecution` returns the same execution-plan format for direct
-calls and EIP-7702 batches across executors. The SDK detects delegation, simulates
+calls, AccessManager forwarding and EIP-7702 batches across executors.
+The 3F host supplies the authenticated recipe `Caller` separately from its EOA
+`Sender`. The SDK verifies the immediate grant, simulates the exact forwarded
+transaction and encodes it; same-executor batches use manager `multicall` of
+`execute` calls, requiring only the inner execute grant. The SDK detects delegation, simulates
 the complete plan and retains detailed construction results. The host submits the
 prepared transaction without another simulation. Signed transactions retain their exact
 identity and process-local transaction ownership through in-process retries. All batch members
@@ -22,7 +26,8 @@ Generic planning, external RFQ admission and signing share `txManager.maxGas`
 (default 16,777,216), further bounded by the current block gas limit.
 
 Awarded LiquidLane connector orders run in the separate [`rfq-merkle` solver](RFQ-MERKLE.md).
-Its RecipeExecutor caller is the RFQ Executor contract, so it must not be included in
+Its RecipeExecutor caller is the RFQ Executor contract or its AccessManager,
+so it must not be included in
 `merkle.strategies`, whose caller is the process EOA. These integrations use the common SDK; workers configured
 in one process use its transaction manager. Their liquidity and scheduling remain integration-owned.
 `internal/merklehost.Curator` supplies their shared permission-service settings and
@@ -144,7 +149,9 @@ Malformed simulation results, failed recipe checks and RPC failures remain error
 RFQ admits its exact inner call through the same identity, role and canonical-pin
 checks but simulates the complete outer fill from the actual signer using
 `ValidatePreparedBatchWithSimulation`. It supplies no numerical witness and uses
-successful awarded settlement as its work condition. No nested result probe or
+successful awarded settlement as its work condition. `recipes.RouteExecution`
+provides the same AccessManager authorization and wrapping used by 3F; the entire
+RFQ fill, including that wrapper, remains the simulated transaction. No nested result probe or
 RFQ code-override capability is required.
 Signed retries continue reconciling the exact retained transaction identities.
 The recipe's own checks define the on-chain completion conditions; this host does

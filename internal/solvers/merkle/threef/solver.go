@@ -106,9 +106,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		return nil, errors.Errorf("3f executor identity discovery: %w", err)
 	}
 	target := identity[address]
-	if target.Caller != deps.Signer.Address() {
-		return nil, errors.New("3f executor caller differs from the process signer")
-	}
 	strategy := keeper.Strategy{Config: keeper.Config{Name: address.Hex(), Executor: address.Hex(), Account: target.Account.Hex(), Interval: pollInterval}}
 	api, err := newClient(cfg.apiConfig())
 	if err != nil {
@@ -124,7 +121,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(1, 16<<20), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: deps.Signer.Address(), Confirmations: manager.Confirmations(), MaxGas: deps.MaxGas}
+	planner := &keeper.Planner{PermissionSource: source, RecipeCache: recipes.NewRecipeCache(1, 16<<20), Chain: deps.Chain, ChainID: deps.Chain.ChainID(), Caller: target.Caller, Sender: deps.Signer.Address(), Confirmations: manager.Confirmations(), MaxGas: deps.MaxGas}
 	k := &keeper.Keeper{Planner: &mintPlanning{Planner: planner, runtime: runtime}, Strategies: []keeper.Strategy{strategy}, Mode: cfg.Mode, OperationTimeout: operationTimeout, Log: deps.Log.WithName(Name)}
 	if cfg.Mode == "send" {
 		k.Sender = manager.Sender(Name)

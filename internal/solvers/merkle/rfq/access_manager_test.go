@@ -109,3 +109,23 @@ func TestConnectorAccessManagerRoute(t *testing.T) {
 		})
 	}
 }
+
+func TestConnectorAccessManagerKeepsFullFillAdmission(t *testing.T) {
+	for _, name := range []string{"outer revert", "reorg during fill"} {
+		t.Run(name, func(t *testing.T) {
+			f := connectorExecutionFixture(t, connectorDiscountFixture())
+			f.reader.recipeCaller = common.HexToAddress("0xacce55")
+			f.workflow.chain = &accessManagerReader{connectorExecutionReader: f.reader, immediate: true}
+			if name == "outer revert" {
+				f.reader.outerErr = errors.New("Reactor output shortfall")
+			} else {
+				f.reader.reorgDuringFill = true
+			}
+			order, selected, backend := connectorExecutionAward(f.workflow.caller)
+			built, err := f.workflow.build(t.Context(), order, nil, selected, backend)
+			if err == nil || len(built.Calldata) != 0 || f.reader.outerCalls != 1 {
+				t.Fatalf("invalid manager fill admitted: outerCalls=%d err=%v", f.reader.outerCalls, err)
+			}
+		})
+	}
+}

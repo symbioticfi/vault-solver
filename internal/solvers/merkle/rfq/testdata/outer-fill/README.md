@@ -11,6 +11,9 @@ The full path executes unmodified canonical implementation runtime:
 - Adapters `RecipeExecutor`, `MerkleAccount`, and `LiquidLaneConnector`:
   symbioticfi/adapters `beaf24c50835fbbe181e3135a64285de2aca1315` (the source of
   the unchanged connector and recipe contract surfaces).
+- OpenZeppelin `AccessManager`: the canonical artifact from the exact SDK revision
+  pinned in `go.mod`, vendored as `access-manager.json` by the same regeneration
+  command. Its source path and compiler are recorded in that artifact.
 
 `artifacts.json` contains the canonical Foundry creation bytecode, complete ABIs,
 compiler settings and source Keccak hashes. The canonical implementations are
@@ -38,7 +41,9 @@ Tests require a valid whole fill to simulate without changing state and then
 actually mine with the expected input/output balances. Other cases must reach
 the complete outer `eth_call` and fail on invalid discount economics, signatures,
 cash missing before settlement simulation, and an EOA missing from Executor's
-caller allowlist. Go fixtures retain recipe discovery, mask, role, reorg and RAM
+caller allowlist. Manager cases also require a complete fill to simulate and mine,
+reject invalid signatures through the manager, and reject a revoked grant before
+simulation. Go fixtures retain recipe discovery, mask, role, reorg and RAM
 ownership edge coverage.
 
 Offline canonical-fixture regeneration uses built artifacts from clean checkouts at the pinned

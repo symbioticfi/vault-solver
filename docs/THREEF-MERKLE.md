@@ -25,7 +25,13 @@ to start when it is unset. The Curator permission service needs no API credentia
 
 The account is the maker. A dedicated, 3F-approved BF EOA and API key serve one
 curator/default account. The executor's account and caller are discovered together at a
-pinned block; its account must be the default maker and caller must match the process signer.
+pinned block; its account must be the default maker. The caller may be the process
+signer or an OpenZeppelin AccessManager. For AccessManager execution, grant the
+process signer immediate (zero-delay) permission for `RecipeExecutor.execute`.
+The SDK keeps the manager as the authenticated recipe caller and the EOA as the
+transaction sender, then forwards through `AccessManager.execute`. Missing or
+delayed grants prevent offers and mint execution; no scheduling is performed.
+No additional configuration field is required.
 Set `THREEF_POLICY` to the deployed policy. Its `account()` must match the executor
 account at startup and at each offer snapshot. Every execution group must charge
 that same policy. The chain comes from the host configuration. Use
@@ -96,7 +102,9 @@ Offer discovery and sizing do not call Curator or decode a permission bundle.
 They use the configured policy, auction metadata, on-chain asset resolution and
 native policy eligibility simulation. Before each API mutation, shared SDK
 discovery authenticates fresh account, caller, recipe and root metadata. The host
-rechecks every committed leaf role and closes both original and fresh block pins.
+rechecks every committed leaf role. The shared SDK also checks the sender's immediate
+AccessManager execution grant at the fresh block before any offer creation or
+cancellation. Both original and fresh block pins close after these reads.
 This offer-only authorization needs no executable mint. Curator is needed only to prepare execution
 with the actual permission data and Merkle proofs. Configure the executor recipe
 to support the policy's enabled funding pairs; additional recipe-specific amount
@@ -202,7 +210,10 @@ optional 3F dispatch in `merkle` and no dependency on `bridgefacilitator` strate
 Tests retain API wire/identity/bounds checks, ambiguous-POST retry identity,
 reservations, cancellation, aggregate authorizations, lease expiry, alternative curator
 guards and canonical receipt evidence. Dedicated startup tests cover mainnet and Sepolia,
-shared caller discovery, configured policy/account binding, grouped recipes, cross-account rejection, reorgs, invalid accounts and failure before API mutation. Multi-auction tests cover shared cash, separate pair budgets, partial remaining capacity, RAM retry identity and cancellation isolation.
+shared caller/sender discovery, configured policy/account binding, grouped recipes,
+cross-account rejection, reorgs, invalid accounts and failure before API mutation.
+AccessManager tests cover immediate, missing, delayed and revoked grants, RPC and
+decode failures, and reorgs after permission reads. Multi-auction tests cover shared cash, separate pair budgets, partial remaining capacity, RAM retry identity and cancellation isolation.
 Regression tests also cover committed funding gates, exact raw JSON rate periods,
 offers without a permission service, on-chain pair discovery, historical filtering, negative membership memoization,
 full auction scans before bidding, maintenance before optional RPC failure and zero-budget

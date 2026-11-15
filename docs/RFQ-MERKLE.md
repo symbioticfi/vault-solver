@@ -147,9 +147,10 @@ complete outer simulation, immediate/missing/delayed AccessManager grants, revok
 roles, reorgs, RAM intent retention, sequential
 admission and retries without new API terms. `make test-rfq-merkle-anvil` executes
 the complete outer fill against pinned canonical Reactor, Executor, RecipeExecutor,
-MerkleAccount and LiquidLaneConnector bytecode with real EIP-712 signatures. It
+MerkleAccount, LiquidLaneConnector and OpenZeppelin AccessManager bytecode with real EIP-712 signatures. It
 checks successful simulation and mined settlement, invalid signed economics,
-funding lost after the capacity observation, and an unauthorized sending EOA.
+funding lost after the capacity observation, an unauthorized sending EOA, and
+manager-routed settlement with missing authorization or invalid signatures.
 The fixture substitutes only external ERC20s, registries and the price feed; proxy
 administration and deployment are outside its scope. Bytecode provenance and the
 offline regeneration command are in `internal/solvers/merkle/rfq/testdata/outer-fill/`.

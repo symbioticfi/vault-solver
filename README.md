@@ -1123,7 +1123,10 @@ described in [the 3F Merkle runbook](docs/THREEF-MERKLE.md). The generic `merkle
 solver rejects the `threeF` field. The policy and executor must use the same maker account.
 Offers use that policy's live budgets, the account's idle cash and 3F auction asset data,
 without fetching Curator permissions. Curator supplies permission data and proofs
-only for mint execution. The executor uses the process signer; its recipe must support
+only for mint execution. The recipe caller may be the process signer or an
+AccessManager granting that signer immediate `RecipeExecutor.execute` permission.
+The solver rechecks this grant before submitting offers and uses the shared SDK
+for forwarded mint simulation and execution. Its recipe must support
 the enabled policy pairs and supplies request/principal/yield inputs; inactive groups receive zero principal. Gates and fixed funding calls remain curator-owned. One RAM workflow and the SDK transaction manager serialize all markets. Automatic offers reserve existing commitments
 and use account idle cash; simulation never submits or cancels API offers.
 Both 3F solvers honor the on-chain minimum and the auction APR bounds. Since the API
