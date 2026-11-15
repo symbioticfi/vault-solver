@@ -2,14 +2,14 @@
 
 The `merkle` solver consumes the independently versioned
 `github.com/symbioticfi/merkle-executor/sdk` module pinned in go.mod.
-The current pin is `fa0376ed1575ddd9493739fddfc0751a0ee2b77e`
-(`v0.0.0-20261115054724-fa0376ed1575`).
+The current pin is `8cd0fd2abb20748ba8d420f54384798677f8a407`
+(`v0.0.0-20261115090659-8cd0fd2abb20`).
 The SDK implements recipe/tree/proof/role checks,
 pinned runtime assembly, simulation, canonical receipts and RAM settlement tasks.
 It also exposes opt-in off-chain providers, RPC, signing and the shared transaction
-manager used by both services. Hosts explicitly supply credential
-lookup, so importing or constructing SDK components never implicitly reads the
-process environment.
+manager used by both services. Hosts supply transport and signing dependencies;
+authenticated integration clients remain host-owned. Importing or constructing SDK
+components never implicitly reads the process environment.
 
 `keeper.Planner.PrepareExecution` returns the same execution-plan format for direct
 calls, AccessManager forwarding and EIP-7702 batches across executors.

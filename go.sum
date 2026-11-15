@@ -215,8 +215,8 @@ github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWD
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
 github.com/supranational/blst v0.3.17 h1:OyduggShfN3CWEDdrqChEUZyt1iIsVAFApTKSzqoxAo=
 github.com/supranational/blst v0.3.17/go.mod h1:jZJtfjgudtNl4en1tzwPIV3KjUnQUvG3/j+w+fVonLw=
-github.com/symbioticfi/merkle-executor/sdk v0.0.0-20261115061356-6180a215d68c h1:bZxjZGXtoU9gVqUvnR5lQYJWthaEPrB1c5xWAFJqbTc=
-github.com/symbioticfi/merkle-executor/sdk v0.0.0-20261115061356-6180a215d68c/go.mod h1:JBMRSswmXpZ1PxLXKScT/3zbvuSCHhdbTqbNfqU5kik=
+github.com/symbioticfi/merkle-executor/sdk v0.0.0-20261115090659-8cd0fd2abb20 h1:448mRIlse00OuGcGuuLqzpm9yh+Q90lsuK8Dg3hzjyM=
+github.com/symbioticfi/merkle-executor/sdk v0.0.0-20261115090659-8cd0fd2abb20/go.mod h1:Lh0m+1xwUb3oh+usK5eiRRtQC/DJJEzNwm+xqM/kS/E=
 github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7 h1:epCh84lMvA70Z7CTTCmYQn2CKbY8j86K7/FAIr141uY=
 github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7/go.mod h1:q4W45IWZaF22tdD+VEXcAWRA037jwmWEB5VWYORlTpc=
 github.com/tklauser/go-sysconf v0.4.0 h1:7H0uAN+7RkwWRaxhYXDLqa5V3LPrJeV8wmD9dRUgPQU=
