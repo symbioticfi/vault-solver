@@ -44,20 +44,20 @@ LIFI_OPENAPI_URL ?= https://order-dev.li.fi/docs
 UNISWAPX_OPENAPI_URL ?= https://raw.githubusercontent.com/Uniswap/uniswapx-service/main/swagger.json
 MORPHO_GRAPHQL_URL ?= https://api.morpho.org/graphql
 # RedStone's public Atom OEV integration guide — the only public contract-of-record for the OEV
-# WebSocket (the zod schema they shared directly is not published anywhere).
-REDSTONE_GUIDE_URL       ?= https://raw.githubusercontent.com/RedStone-Finance-UI/redstone-docs/main/docs/stage2-capital-efficiency/atom/integration-guide.md
+# WebSocket (the zod schema they shared directly is not published anywhere). The raw-markdown repo is
+# gone, so this is the rendered Docusaurus page; hack/docusaurus-article-extract.py keeps its text.
+REDSTONE_GUIDE_URL       ?= https://docs.redstone.finance/docs/stage2-capital-efficiency/atom/integration-guide/
 
 # Contracts whose ABIs are vendored via refresh-abi. ABIS come from the rfq Foundry build; the
 # CORE_MIRROR_ABIS (the 3F ThreeFAdapter, LiquidLane adapter, adapter factory, universal delegator,
 # and vault/ERC4626 interfaces) come from the core-mirror build, since they aren't in rfq/out.
 ABIS := IRequest IVaultController IWhitelist Executor Reactor LiquidLaneLifiExecutor LiquidLaneUniswapXExecutor
-CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IAdapterFactory IVaultV2 IERC4626
-ADAPTERS_ABIS := IRecipeCapability IThreeFPolicy LiquidLaneConnector
+CORE_MIRROR_ABIS := ThreeFAdapter LiquidLaneAdapter IAdapterFactory IVaultV2 IERC4626 FrontendLiquidityLens
+ADAPTERS_DEPENDENCY_ABIS := IThreeFPositionManager IThreeFUnderlyingAsset
+ADAPTERS_ABIS := IRecipeCapability IThreeFPolicy LiquidLaneConnector $(ADAPTERS_DEPENDENCY_ABIS)
 # api/abi/UniversalDelegator.json is hand-vendored to a minimal {limitOf} ABI (the full contract has
 # an overloaded deallocateAll that abigen rejects, and the solver only reads limitOf) — like Multicall3.
-# api/abi/FrontendLiquidityLens.json is likewise hand-vendored to the two overloaded getMaxAssets views
-# (getMaxAssets(adapter) for 3F, getMaxAssets(adapter,tokenToRedeem) for LiquidLane) — the core lens that
-# replaces each adapter's own getMaxAssets with a cross-adapter deallocation-cascade estimate.
+# FrontendLiquidityLens is sourced from the same core build, including its LiquidLane batch getter.
 
 # Contract:relpath mapping for Go bindings. Each contract gets its own package (the leaf dir) so
 # shared ABI structs (e.g. the `Offer` tuple in both the adapter and IRequest) don't collide.
@@ -70,6 +70,7 @@ ADAPTERS_ABIS := IRecipeCapability IThreeFPolicy LiquidLaneConnector
 # at the call site, not at runtime.
 BINDINGS_V2 := ThreeFAdapter:3f/adapter IRequest:3f/request \
             IVaultController:3f/vaultcontroller IWhitelist:3f/whitelist \
+            IThreeFPositionManager:3f/positionmanager IThreeFUnderlyingAsset:3f/underlyingasset \
             IRecipeCapability:merkle/recipecapability IThreeFPolicy:merkle/threefpolicy \
             LiquidLaneAdapter:liquidlane/adapter LiquidLaneConnector:liquidlane/connector \
             Executor:rfq/executor Reactor:rfq/reactor \
@@ -130,6 +131,7 @@ refresh-merkle-abi: ## Project solver-used Merkle ABI entries from Foundry artif
 		trap 'rm -rf "$$stage"' EXIT; \
 		for c in $(ADAPTERS_ABIS); do \
 			src="$(ADAPTERS_OUT)/$$c.sol/$$c.json"; \
+			case " $(ADAPTERS_DEPENDENCY_ABIS) " in *" $$c "*) src="$(ADAPTERS_OUT)/IThreeFAdapterDependencies.sol/$$c.json" ;; esac; \
 			jq -e --arg contract "$$c" -f hack/merkle-abi.jq "$$src" | \
 				jq -e 'if type == "array" and length > 0 then . else error("invalid ABI projection") end' > "$$stage/$$c.json"; \
 		done; \
@@ -170,7 +172,7 @@ refresh-redstone-guide: ## Re-pull RedStone's public Atom OEV integration guide 
 	@mkdir -p openapi
 	@set -euo pipefail; tmp="$$(mktemp openapi/.refresh.XXXXXX)"; \
 		trap 'rm -f "$$tmp"' EXIT; \
-		curl -fsSL --max-time 90 "$(REDSTONE_GUIDE_URL)" > "$$tmp"; \
+		curl -fsSL --max-time 90 "$(REDSTONE_GUIDE_URL)" | python3 hack/docusaurus-article-extract.py > "$$tmp"; \
 		test -s "$$tmp"; \
 		mv "$$tmp" openapi/redstone-oev-atom-integration-guide.md
 
@@ -283,7 +285,7 @@ build: ## Build the binary
 
 .PHONY: test
 test: ## Run tests with race detector + coverage (hermetic only; fork/live suites are tag-gated out)
-	python3 -m unittest discover -s hack -p 'test_scalar_openapi_extract.py'
+	python3 -m unittest discover -s hack -p 'test_*.py'
 	go test -race -cover ./...
 
 .PHONY: test-tooling
@@ -311,10 +313,11 @@ test-rfq-merkle-anvil: ## Execute canonical RFQ outer settlement boundaries on l
 	@command -v anvil >/dev/null
 	go test -race -tags integration -run '^TestAnvilConnectorOuterFillCanonicalBoundaries$$' -v ./internal/solvers/merkle/rfq
 
-.PHONY: test-merklesender-anvil
-test-merklesender-anvil: ## Exercise SDK journal persistence, replacement, restart and signer ownership on local Anvil
+.PHONY: test-merkle-sdk-anvil
+test-merkle-sdk-anvil: ## Exercise RAM SDK ownership and canonical settlement on local Anvil
 	@command -v anvil >/dev/null
-	go test -race -tags integration -run TestSDKJournal -v ./internal/merklesender
+	go test -race -tags integration -run TestAnvil -v github.com/symbioticfi/merkle-executor/sdk/transaction
+	go test -race -tags integration -run TestSDKRAM -v ./internal/solvers/merkle
 
 .PHONY: format
 format: ## Run golangci-lint with autofix

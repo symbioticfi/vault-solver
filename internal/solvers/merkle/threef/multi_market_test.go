@@ -68,12 +68,12 @@ func TestOneExecutorAcceptsDistinctGuardedMarkets(t *testing.T) {
 }
 func TestSingleExecutorConfigurationHasNoArrayAlias(t *testing.T) {
 	raw := `mode: simulate
-stateDir: state/threef-merkle
 executor: "0x0000000000000000000000000000000000000010"
+policy: "0x0000000000000000000000000000000000000050"
 curator:
   url: http://127.0.0.1:1/api/v1
 url: https://bf.3f.xyz
-apiKeyEnv: THREEF_CURATOR_API_KEY
+apiKeyEnv: THREEF_API_KEY
 broker: "0x0000000000000000000000000000000000000040"
 `
 	if _, err := parseConfig(configNode(t, raw)); err != nil {
@@ -134,17 +134,24 @@ func TestGlobalLeaseSelectionZerosEveryInactiveMarket(t *testing.T) {
 	chain := marketReads(t, s, r, tr, func(_ context.Context, msg ethereum.CallMsg, _ *big.Int) ([]byte, error) {
 		return requestABI.GetABI().Methods["mintAuthorization"].Outputs.Pack(big.NewInt(12), big.NewInt(5))
 	})
-	p := mintProvider{API: api, Chain: chain, Now: func() time.Time { return now }}
-	out, err := p.PrepareRecipe(t.Context(), s, r, tr, nil)
+	p := mintProvider{Policy: fixturePolicy(t), API: api, Chain: chain, Now: func() time.Time { return now }}
+	outputs, err := p.PrepareRecipe(t.Context(), s, r, tr, nil)
+	var out provider.Output
+	if len(outputs) == 1 {
+		out = outputs[0]
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	if out.Inputs[markets[0].RequestInput] != new(big.Int).SetBytes(second.Bytes()).String() || out.Inputs[markets[1].RequestInput] != "0" || out.Inputs[markets[1].PrincipalInput] != "0" || out.Inputs[markets[1].YieldInput] != "0" {
+	if out.Inputs[markets[0].RequestInput] != new(big.Int).SetBytes(second.Bytes()).String() || out.Inputs[markets[1].RequestInput] != "0" || out.Inputs[uint(markets[1].Principal.Value.Uint64())] != "0" || out.Inputs[uint(markets[1].Yield.Value.Uint64())] != "0" {
 		t.Fatalf("global earliest lease or inactive input isolation failed: %+v", out.Inputs)
 	}
 	// Equal deadlines use canonical request address, independent of API ordering.
 	api.offers[0].MintDeadline = *wire.NewNullableString(&early)
-	out, err = p.PrepareRecipe(t.Context(), s, r, tr, nil)
+	outputs, err = p.PrepareRecipe(t.Context(), s, r, tr, nil)
+	if len(outputs) == 1 {
+		out = outputs[0]
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +222,7 @@ func TestMarketsCanShareRequestInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	recipe.Steps[last] = append([]byte{recipes.Manage}, packed...)
-	requirements, err := (&mintProvider{}).RecipeRequirements(snapshot, recipe, tree)
+	requirements, err := (&mintProvider{Policy: fixturePolicy(t)}).RecipeRequirements(snapshot, recipe, tree)
 	if err != nil {
 		t.Fatal(err)
 	}

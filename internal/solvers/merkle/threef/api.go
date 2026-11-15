@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,6 +63,10 @@ func newClient(cfg apiConfig) (*apiClient, error) {
 	if err := validateAPIConfig(cfg); err != nil {
 		return nil, err
 	}
+	// Fail at startup instead of on every request; the key is re-read per request, never kept.
+	if _, err := apiKey(cfg.APIKeyEnv); err != nil {
+		return nil, err
+	}
 	c := threef.NewConfiguration()
 	c.Servers = threef.ServerConfigurations{{URL: strings.TrimRight(cfg.URL, "/") + c.Servers[0].URL}}
 	c.HTTPClient = &http.Client{Timeout: requestTimeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }, Transport: boundedTransport{keyEnv: cfg.APIKeyEnv}}
@@ -74,7 +79,7 @@ func (c *apiClient) Identity(ctx context.Context, account common.Address) error 
 	identity, response, err := c.c.FacilitatorAPI.AdminControllerGetFacilitatorOfferAddressV1(ctx).XApiKey("").Execute()
 	closeResponse(response)
 	if err != nil {
-		return apiError(ctx, "read identity", response)
+		return apiError(ctx, "read identity", response, err)
 	}
 	if identity == nil || !matches(identity.Facilitator, c.broker) || !matches(identity.OfferAddress, account) || account == (common.Address{}) {
 		return errors.New("3f broker or default maker mismatch")
@@ -82,7 +87,7 @@ func (c *apiClient) Identity(ctx context.Context, account common.Address) error 
 	makers, response, err := c.c.FacilitatorAPI.AdminControllerListMakersV1(ctx).XApiKey("").Execute()
 	closeResponse(response)
 	if err != nil {
-		return apiError(ctx, "read enrolled makers", response)
+		return apiError(ctx, "read enrolled makers", response, err)
 	}
 	var found bool
 	for _, maker := range makers {
@@ -106,7 +111,7 @@ func (c *apiClient) Offers(ctx context.Context) ([]threef.OfferDto, error) {
 	rows, response, err := c.c.OfferAPI.OfferControllerGetV1(ctx).Maker(lower(c.broker)).Execute()
 	closeResponse(response)
 	if err != nil {
-		return nil, apiError(ctx, "list offers", response)
+		return nil, apiError(ctx, "list offers", response, err)
 	}
 	if rows == nil || len(rows) > 4096 {
 		return nil, errors.New("3f invalid or oversized offers response")
@@ -123,7 +128,7 @@ func (c *apiClient) Auctions(ctx context.Context) ([]threef.AuctionDto, error) {
 	rows, response, err := c.c.AuctionAPI.AuctionControllerListV1(ctx).Scope("all").Execute()
 	defer closeResponse(response)
 	if err != nil {
-		return nil, apiError(ctx, "list auctions", response)
+		return nil, apiError(ctx, "list auctions", response, err)
 	}
 	// The generated response keeps a fresh copy of its body. Preserve exact rate numbers from it.
 	var raw []map[string]json.RawMessage
@@ -165,16 +170,20 @@ func (c *apiClient) Auctions(ctx context.Context) ([]threef.AuctionDto, error) {
 	return rows, nil
 }
 
-// Create sends exactly one request. Its caller must journal the immutable DTO before invoking it.
+// Create sends exactly one request. Its caller must retain the immutable DTO in RAM before invoking it.
 func (c *apiClient) Create(ctx context.Context, dto threef.CreateOfferDto) (*threef.CreateOfferResponseDto, error) {
-	if validateID(dto.AuctionId) != nil || !matches(dto.Maker, c.broker) || !validUint(dto.Amount, true) || !validUint(dto.ExpectedReturn, false) || !validUint(dto.Nonce, false) || !validUint(dto.Expiration, true) || dto.UseCallback || dto.ChainId != nil || dto.ExecutionMode != nil || dto.Signature != nil || dto.PushAuthorizationSignature != nil || dto.AuthorizationDeadline != nil || len(dto.AdditionalProperties) > 0 {
+	nonce, nonceErr := uintAmount(dto.Nonce)
+	if nonceErr != nil || !nonce.IsInt64() {
+		return nil, errors.New("3f offer nonce must be a nonnegative int64")
+	}
+	if validateID(dto.AuctionId) != nil || !matches(dto.Maker, c.broker) || !validUint(dto.Amount, true) || !validUint(dto.ExpectedReturn, false) || !validUint(dto.Expiration, true) || dto.UseCallback || dto.ChainId != nil || dto.ExecutionMode != nil || dto.Signature != nil || dto.PushAuthorizationSignature != nil || dto.AuthorizationDeadline != nil || len(dto.AdditionalProperties) > 0 {
 		return nil, errors.New("3f invalid unsigned PUSH offer")
 	}
 	dto.Maker = lower(c.broker)
 	result, response, err := c.c.OfferAPI.OfferControllerCreateV1(ctx).CreateOfferDto(dto).Execute()
 	closeResponse(response)
 	if err != nil {
-		return nil, apiError(ctx, "create offer", response)
+		return nil, apiError(ctx, "create offer", response, err)
 	}
 	if result == nil || validateID(result.Id) != nil {
 		return nil, errors.New("3f invalid created offer ID")
@@ -190,7 +199,7 @@ func (c *apiClient) Cancel(ctx context.Context, id uint64) (*threef.CancelOfferR
 	row, response, err := c.c.OfferAPI.OfferControllerGetByIdV1(ctx, float32(id)).Maker(lower(c.broker)).Execute()
 	closeResponse(response)
 	if err != nil {
-		return nil, apiError(ctx, "read offer before cancellation", response)
+		return nil, apiError(ctx, "read offer before cancellation", response, err)
 	}
 	if row == nil || validateOffer(*row) != nil || row.Id != float32(id) || row.Status != "SUBMITTED" || row.ExecutionMode != "PUSH" {
 		return nil, errors.New("3f only unaccepted PUSH offers can be cancelled")
@@ -199,7 +208,7 @@ func (c *apiClient) Cancel(ctx context.Context, id uint64) (*threef.CancelOfferR
 	result, response, err := c.c.OfferAPI.OfferControllerCancelV1(ctx).CancelOfferDto(dto).Execute()
 	closeResponse(response)
 	if err != nil {
-		return nil, apiError(ctx, "cancel offer", response)
+		return nil, apiError(ctx, "cancel offer", response, err)
 	}
 	if result == nil || result.Id != float32(id) || result.Status != "CANCELLED" {
 		return nil, errors.New("3f invalid cancelled offer response")
@@ -259,14 +268,22 @@ func matches(value string, expected common.Address) bool {
 }
 func lower(value common.Address) string { return strings.ToLower(value.Hex()) }
 
+func apiKey(env string) (string, error) {
+	key := os.Getenv(env)
+	if key == "" || strings.ContainsAny(key, "\r\n") {
+		return "", errors.Errorf("3f API key in %s is missing or invalid", env)
+	}
+	return key, nil
+}
+
 type boundedTransport struct{ keyEnv string }
 
 func (t boundedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone := req.Clone(req.Context())
 	if t.keyEnv != "" {
-		key := os.Getenv(t.keyEnv)
-		if key == "" || strings.ContainsAny(key, "\r\n") {
-			return nil, errors.New("3f API key is missing or invalid")
+		key, err := apiKey(t.keyEnv)
+		if err != nil {
+			return nil, err
 		}
 		// Generated methods may insert a noncanonical lowercase empty header.
 		for name := range clone.Header {
@@ -294,14 +311,41 @@ func (t boundedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return response, nil
 }
 
-func apiError(ctx context.Context, operation string, response *http.Response) error {
+type apiStatusError struct {
+	status    int
+	operation string
+}
+
+func (e *apiStatusError) Error() string {
+	return "3f " + e.operation + ": HTTP status " + strconv.Itoa(e.status)
+}
+
+func apiError(ctx context.Context, operation string, response *http.Response, err error) error {
 	if ctx.Err() != nil {
 		return errors.Errorf("3f %s: %w", operation, ctx.Err())
 	}
-	if response != nil {
-		return errors.Errorf("3f %s: HTTP status %d", operation, response.StatusCode)
+	if response == nil {
+		// Keep the cause but drop url.Error's request URL from the message.
+		var urlErr *url.Error
+		if errors.As(err, &urlErr) {
+			err = urlErr.Err
+		}
+		return errors.Errorf("3f %s failed: %w", operation, err)
 	}
-	return errors.Errorf("3f %s failed", operation)
+	return &apiStatusError{status: response.StatusCode, operation: operation}
+}
+
+func definiteRejection(err error) bool {
+	var failure *apiStatusError
+	if !errors.As(err, &failure) {
+		return false
+	}
+	switch failure.status {
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
+		return true
+	default:
+		return false
+	}
 }
 
 func closeResponse(response *http.Response) {

@@ -14,6 +14,7 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/vaultv2"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 const (
@@ -95,11 +96,21 @@ func (r *Reader) TokenMetadata() *chain.Decimals {
 }
 
 func (r *Reader) ResolveAdapters(ctx context.Context, adapters []common.Address) ([]Adapter, error) {
+	return r.resolveAdapters(ctx, adapters, false)
+}
+
+// DiscoverAdapters resolves unconfigured identities in batches. Invalid contract
+// metadata skips only that adapter so it can retry on a later discovery poll;
+// transport or malformed aggregate responses still fail the refresh.
+func (r *Reader) DiscoverAdapters(ctx context.Context, adapters []common.Address) ([]Adapter, error) {
+	return r.resolveAdapters(ctx, adapters, true)
+}
+
+func (r *Reader) resolveAdapters(ctx context.Context, adapters []common.Address, discover bool) ([]Adapter, error) {
 	adapters = dedupeAddresses(adapters)
 	if len(adapters) == 0 {
 		return nil, nil
 	}
-
 	vaultCalls := make([]chain.Call, len(adapters))
 	for i, a := range adapters {
 		vaultCalls[i] = chain.Call{Target: a, AllowFailure: true, Data: llAdapter.PackVault()}
@@ -109,79 +120,78 @@ func (r *Reader) ResolveAdapters(ctx context.Context, adapters []common.Address)
 		return nil, err
 	}
 	if len(vaultResults) != len(vaultCalls) {
-		return nil, errors.Errorf(
-			"liquidlane: vault multicall: got %d results, want %d",
-			len(vaultResults),
-			len(vaultCalls),
-		)
+		return nil, errors.Errorf("liquidlane: vault multicall: got %d results, want %d", len(vaultResults), len(vaultCalls))
 	}
-
-	out := make([]Adapter, len(adapters))
-	assetCalls := make([]chain.Call, len(adapters))
-	for i := range adapters {
-		out[i].Adapter = adapters[i]
-		if !vaultResults[i].Success {
-			return nil, errors.Errorf("liquidlane: resolve adapter %s vault: call failed", adapters[i].Hex())
+	resolved := make([]Adapter, 0, len(adapters))
+	assetCalls := make([]chain.Call, 0, len(adapters))
+	for i, adapter := range adapters {
+		vault, vaultErr := resolveAdapterVault(adapter, vaultResults[i])
+		if vaultErr != nil {
+			if !discover {
+				return nil, vaultErr
+			}
+			observability.Log(ctx).V(1).Info("skipping unresolved adapter", "adapter", adapter.Hex(), "error", vaultErr.Error())
+			continue
 		}
-		vault, unpackErr := llAdapter.UnpackVault(vaultResults[i].ReturnData)
-		if unpackErr != nil {
-			return nil, errors.Errorf("liquidlane: resolve adapter %s vault: %w", adapters[i].Hex(), unpackErr)
-		}
-		if vault == (common.Address{}) {
-			return nil, errors.Errorf("liquidlane: resolve adapter %s vault: zero address", adapters[i].Hex())
-		}
-		out[i].Vault = vault
-		assetCalls[i] = chain.Call{Target: out[i].Vault, AllowFailure: true, Data: erc4626b.PackAsset()}
+		resolved = append(resolved, Adapter{Adapter: adapter, Vault: vault})
+		assetCalls = append(assetCalls, chain.Call{Target: vault, AllowFailure: true, Data: erc4626b.PackAsset()})
+	}
+	if len(resolved) == 0 {
+		return nil, nil
 	}
 	assetResults, err := r.chain.Multicall(ctx, assetCalls)
 	if err != nil {
 		return nil, err
 	}
 	if len(assetResults) != len(assetCalls) {
-		return nil, errors.Errorf(
-			"liquidlane: asset multicall: got %d results, want %d",
-			len(assetResults),
-			len(assetCalls),
-		)
+		return nil, errors.Errorf("liquidlane: asset multicall: got %d results, want %d", len(assetResults), len(assetCalls))
 	}
-
-	for i := range out {
-		if !assetResults[i].Success {
-			return nil, errors.Errorf(
-				"liquidlane: resolve adapter %s vault %s asset: call failed",
-				out[i].Adapter.Hex(),
-				out[i].Vault.Hex(),
-			)
+	out := make([]Adapter, 0, len(resolved))
+	for i, adapter := range resolved {
+		metadata, metadataErr := r.resolveAdapterAsset(ctx, adapter, assetResults[i])
+		if metadataErr != nil {
+			if !discover {
+				return nil, metadataErr
+			}
+			observability.Log(ctx).V(1).Info("skipping unresolved adapter", "adapter", adapter.Adapter.Hex(), "error", metadataErr.Error())
+			continue
 		}
-		asset, unpackErr := erc4626b.UnpackAsset(assetResults[i].ReturnData)
-		if unpackErr != nil {
-			return nil, errors.Errorf(
-				"liquidlane: resolve adapter %s vault %s asset: %w",
-				out[i].Adapter.Hex(),
-				out[i].Vault.Hex(),
-				unpackErr,
-			)
-		}
-		if asset == (common.Address{}) {
-			return nil, errors.Errorf(
-				"liquidlane: resolve adapter %s vault %s asset: zero address",
-				out[i].Adapter.Hex(),
-				out[i].Vault.Hex(),
-			)
-		}
-		out[i].TokenOut = asset
-		decimals, decimalsErr := r.dec.Get(ctx, asset)
-		if decimalsErr != nil {
-			return nil, errors.Errorf(
-				"liquidlane: resolve adapter %s tokenOut %s decimals: %w",
-				out[i].Adapter.Hex(),
-				asset.Hex(),
-				decimalsErr,
-			)
-		}
-		out[i].TokenOutDecimals = decimals
+		out = append(out, metadata)
 	}
 	return out, nil
+}
+
+func resolveAdapterVault(adapter common.Address, result chain.CallResult) (common.Address, error) {
+	if !result.Success {
+		return common.Address{}, errors.Errorf("liquidlane: resolve adapter %s vault: call failed", adapter.Hex())
+	}
+	vault, err := llAdapter.UnpackVault(result.ReturnData)
+	if err != nil {
+		return common.Address{}, errors.Errorf("liquidlane: resolve adapter %s vault: %w", adapter.Hex(), err)
+	}
+	if vault == (common.Address{}) {
+		return common.Address{}, errors.Errorf("liquidlane: resolve adapter %s vault: zero address", adapter.Hex())
+	}
+	return vault, nil
+}
+
+func (r *Reader) resolveAdapterAsset(ctx context.Context, adapter Adapter, result chain.CallResult) (Adapter, error) {
+	if !result.Success {
+		return Adapter{}, errors.Errorf("liquidlane: resolve adapter %s vault %s asset: call failed", adapter.Adapter.Hex(), adapter.Vault.Hex())
+	}
+	asset, err := erc4626b.UnpackAsset(result.ReturnData)
+	if err != nil {
+		return Adapter{}, errors.Errorf("liquidlane: resolve adapter %s vault %s asset: %w", adapter.Adapter.Hex(), adapter.Vault.Hex(), err)
+	}
+	if asset == (common.Address{}) {
+		return Adapter{}, errors.Errorf("liquidlane: resolve adapter %s vault %s asset: zero address", adapter.Adapter.Hex(), adapter.Vault.Hex())
+	}
+	decimals, err := r.dec.Get(ctx, asset)
+	if err != nil {
+		return Adapter{}, errors.Errorf("liquidlane: resolve adapter %s tokenOut %s decimals: %w", adapter.Adapter.Hex(), asset.Hex(), err)
+	}
+	adapter.TokenOut, adapter.TokenOutDecimals = asset, decimals
+	return adapter, nil
 }
 
 func (r *Reader) ResolveRoutes(ctx context.Context, adapters []common.Address) ([]Route, error) {
@@ -326,7 +336,7 @@ func (r *Reader) readInventory(ctx context.Context, routes []Route, keepZero boo
 			chain.Call{Target: route.Adapter, AllowFailure: true, Data: llAdapter.PackGetAmountOut(route.TokenIn, probe)},
 		)
 	}
-	res, err := r.chain.Multicall(ctx, calls)
+	res, err := r.inventoryCalls(ctx, routes, calls)
 	if err != nil {
 		return nil, err
 	}
@@ -362,6 +372,70 @@ func (r *Reader) readInventory(ctx context.Context, routes []Route, keepZero boo
 		inventory.AdapterMinDiscount = CloneBig(minDiscount)
 		inventory.Price = price
 		out = append(out, inventory)
+	}
+	return out, nil
+}
+
+// inventoryCalls keeps capacity calculation in the lens and reads all inventory in one latest
+// Multicall. Each adapter's token batch performs the shared sweep/cascade only once.
+func (r *Reader) inventoryCalls(ctx context.Context, routes []Route, calls []chain.Call) ([]chain.CallResult, error) {
+	if r.lens == (common.Address{}) {
+		return r.chain.Multicall(ctx, calls)
+	}
+	type lensBatch struct {
+		adapter common.Address
+		tokens  []common.Address
+		slots   []int
+	}
+	var batches []lensBatch
+	byAdapter := make(map[common.Address]int, len(routes))
+	for i, route := range routes {
+		index, ok := byAdapter[route.Adapter]
+		if !ok {
+			index = len(batches)
+			byAdapter[route.Adapter] = index
+			batches = append(batches, lensBatch{adapter: route.Adapter})
+		}
+		batches[index].tokens = append(batches[index].tokens, route.TokenIn)
+		batches[index].slots = append(batches[index].slots, i*inventoryReadsPerRoute+1)
+	}
+	batchCalls := make([]chain.Call, 0, len(calls)+len(batches)-len(routes))
+	for _, batch := range batches {
+		batchCalls = append(batchCalls, chain.Call{
+			Target: r.lens, AllowFailure: true, Data: lensB.PackGetMaxAssetsBatch(batch.adapter, batch.tokens),
+		})
+	}
+	slots := make([]int, 0, len(calls)-len(routes))
+	for i, call := range calls {
+		if i%inventoryReadsPerRoute != 1 {
+			batchCalls = append(batchCalls, call)
+			slots = append(slots, i)
+		}
+	}
+	results, err := r.chain.Multicall(ctx, batchCalls)
+	if err != nil {
+		return nil, err
+	}
+	if len(results) != len(batchCalls) {
+		return nil, errors.Errorf("liquidlane: inventory lens multicall: got %d results, want %d", len(results), len(batchCalls))
+	}
+	out := make([]chain.CallResult, len(calls))
+	for i, slot := range slots {
+		out[slot] = results[len(batches)+i]
+	}
+	for i, batch := range batches {
+		if !results[i].Success {
+			continue
+		}
+		capacities, unpackErr := lensB.UnpackGetMaxAssetsBatch(results[i].ReturnData)
+		if unpackErr != nil || len(capacities) != len(batch.tokens) {
+			continue
+		}
+		for j, capacity := range capacities {
+			if capacity.Success && capacity.MaxAssets != nil {
+				out[batch.slots[j]] = chain.CallResult{Success: true, ReturnData: capacity.MaxAssets.FillBytes(make([]byte, 32))}
+			}
+		}
 	}
 	return out, nil
 }

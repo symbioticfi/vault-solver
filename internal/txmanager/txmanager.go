@@ -1635,6 +1635,9 @@ func (m *Manager) signAndSend(
 	if !existingLifecycle && (isNonceConsumedError(sendErr) || isPendingNonceCollision(sendErr)) {
 		return signed, sendErr // Return the attempted identity without owning the competing transaction.
 	}
+	if revert := relaySimulationRevert(sendErr); revert != nil {
+		return nil, errors.Errorf("broadcast rejected before acceptance: %w", revert)
+	}
 	if isDefiniteBroadcastRejection(sendErr) {
 		return nil, errors.Errorf("broadcast rejected before acceptance: %w", sendErr)
 	}

@@ -21,6 +21,7 @@ var _ MappedNullable = &ResolveDiscountResponseOneOf{}
 // ResolveDiscountResponseOneOf struct for ResolveDiscountResponseOneOf
 type ResolveDiscountResponseOneOf struct {
 	DiscountId           string                               `json:"discountId" validate:"regexp=^0x[a-fA-F0-9]{64}$"`
+	DiscountPrecision    *string                              `json:"discountPrecision,omitempty"`
 	Discount             ResolveDiscountResponseOneOfDiscount `json:"discount"`
 	SignerSignature      string                               `json:"signerSignature" validate:"regexp=^0x[a-fA-F0-9]+$"`
 	ProtocolDeadline     int64                                `json:"protocolDeadline"`
@@ -74,6 +75,38 @@ func (o *ResolveDiscountResponseOneOf) GetDiscountIdOk() (*string, bool) {
 // SetDiscountId sets field value
 func (o *ResolveDiscountResponseOneOf) SetDiscountId(v string) {
 	o.DiscountId = v
+}
+
+// GetDiscountPrecision returns the DiscountPrecision field value if set, zero value otherwise.
+func (o *ResolveDiscountResponseOneOf) GetDiscountPrecision() string {
+	if o == nil || IsNil(o.DiscountPrecision) {
+		var ret string
+		return ret
+	}
+	return *o.DiscountPrecision
+}
+
+// GetDiscountPrecisionOk returns a tuple with the DiscountPrecision field value if set, nil otherwise
+// and a boolean to check if the value has been set.
+func (o *ResolveDiscountResponseOneOf) GetDiscountPrecisionOk() (*string, bool) {
+	if o == nil || IsNil(o.DiscountPrecision) {
+		return nil, false
+	}
+	return o.DiscountPrecision, true
+}
+
+// HasDiscountPrecision returns a boolean if a field has been set.
+func (o *ResolveDiscountResponseOneOf) HasDiscountPrecision() bool {
+	if o != nil && !IsNil(o.DiscountPrecision) {
+		return true
+	}
+
+	return false
+}
+
+// SetDiscountPrecision gets a reference to the given string and assigns it to the DiscountPrecision field.
+func (o *ResolveDiscountResponseOneOf) SetDiscountPrecision(v string) {
+	o.DiscountPrecision = &v
 }
 
 // GetDiscount returns the Discount field value
@@ -183,6 +216,9 @@ func (o ResolveDiscountResponseOneOf) MarshalJSON() ([]byte, error) {
 func (o ResolveDiscountResponseOneOf) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["discountId"] = o.DiscountId
+	if !IsNil(o.DiscountPrecision) {
+		toSerialize["discountPrecision"] = o.DiscountPrecision
+	}
 	toSerialize["discount"] = o.Discount
 	toSerialize["signerSignature"] = o.SignerSignature
 	toSerialize["protocolDeadline"] = o.ProtocolDeadline
@@ -235,6 +271,7 @@ func (o *ResolveDiscountResponseOneOf) UnmarshalJSON(data []byte) (err error) {
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
 		delete(additionalProperties, "discountId")
+		delete(additionalProperties, "discountPrecision")
 		delete(additionalProperties, "discount")
 		delete(additionalProperties, "signerSignature")
 		delete(additionalProperties, "protocolDeadline")

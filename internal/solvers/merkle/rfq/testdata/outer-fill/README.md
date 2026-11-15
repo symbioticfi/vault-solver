@@ -7,10 +7,13 @@ at test time. Run `make test-rfq-merkle-anvil` with `anvil` on PATH.
 The full path executes unmodified canonical implementation runtime:
 
 - RFQ `Reactor` and `Executor`: symbioticfi/rfq
-  `de6dbd617bf3c1e8b4120419cbe5800efae7d410` (the source of the vendored RFQ ABI).
+  `425944096ad0ee06955e4de93c2380d0e8eb8764` (the source of the vendored RFQ ABI).
 - Adapters `RecipeExecutor`, `MerkleAccount`, and `LiquidLaneConnector`:
   symbioticfi/adapters `beaf24c50835fbbe181e3135a64285de2aca1315` (the source of
   the unchanged connector and recipe contract surfaces).
+- OpenZeppelin `AccessManager`: the canonical artifact from the exact SDK revision
+  pinned in `go.mod`, vendored as `access-manager.json` by the same regeneration
+  command. Its source path and compiler are recorded in that artifact.
 
 `artifacts.json` contains the canonical Foundry creation bytecode, complete ABIs,
 compiler settings and source Keccak hashes. The canonical implementations are
@@ -24,20 +27,26 @@ factory/root/oracle registries plus a constant-price feed. The EOA request,
 protocol order, connector discount and discount-swap signatures are real ECDSA
 EIP-712 signatures checked by the canonical contracts. The recipe commits the
 three exact balance deltas and its swap leaf has real mask/proof/role enforcement.
-The unused committed Query supplies approval/swap permission preimages. Capacity runs the
-empty funding prefix over existing account cash through the SDK code override; no contract
-capacity or executor-binding extension is deployed.
-No Solidity settlement, signature, economics, permission or capacity logic is
-mocked in Go.
+The unused committed Query supplies approval/swap permission preimages.
+No Solidity settlement, signature, economics or permission logic is mocked in Go.
+
+The complete unchanged outer fill simulates from the host signer at a pinned
+block and the original gas budget through an ordinary `eth_call`. Shared SDK
+admission checks the inner recipe/call identity, fresh metadata and roles, and
+closes original/fresh block pins around that simulation. RFQ supplies no numerical
+witness and uses successful signed award settlement as its work condition, so no
+inner return data, code override or probe artifact is needed.
 
 Tests require a valid whole fill to simulate without changing state and then
 actually mine with the expected input/output balances. Other cases must reach
-the complete outer `eth_call` and fail on invalid discount economics, cash lost
-between the pinned capacity observation and latest-state settlement, and an EOA
-missing from Executor's caller allowlist. The earlier Go fake tests retain
-recipe discovery, mask, role, reorg and persistence edge coverage.
+the complete outer `eth_call` and fail on invalid discount economics, signatures,
+cash missing before settlement simulation, and an EOA missing from Executor's
+caller allowlist. Manager cases also require a complete fill to simulate and mine,
+reject invalid signatures through the manager, and reject a revoked grant before
+simulation. Go fixtures retain recipe discovery, mask, role, reorg and RAM
+ownership edge coverage.
 
-Offline regeneration uses built artifacts from clean checkouts at the pinned
+Offline canonical-fixture regeneration uses built artifacts from clean checkouts at the pinned
 revisions plus Solidity 0.8.28 for the small external fixture:
 
 ```sh

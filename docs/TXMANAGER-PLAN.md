@@ -59,7 +59,9 @@ Ordinary receipt callbacks carry the same detached `Result.Attempts` snapshot as
 delivery. Passive callbacks identify only their observed owned hash, without retaining signed bytes
 or duplicating a request's whole attempt list into every queued observation.
 Gas estimation execution failures wrap `ExecutionRevertError`, preserving the original error and
-decoded RPC revert bytes when supplied. The integration decodes protocol errors, reconciles current
+decoded RPC revert bytes when supplied. A write relay's pre-admission simulation revert (MEV Blocker's
+"Failed in pending block with: Reverted") wraps it too, with no data: the bytes were not admitted, so
+the lane is released immediately. The integration decodes protocol errors, reconciles current
 business state and chooses log severity. The manager logs estimate transport/RPC availability failures
 at Error, but does not page on execution reverts before integration reconciliation.
 

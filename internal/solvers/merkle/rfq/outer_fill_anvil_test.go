@@ -7,8 +7,10 @@ import (
 	"context"
 	"crypto/ecdsa"
 	"encoding/json"
+	"io"
 	"math/big"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"strconv"
@@ -32,12 +34,22 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 )
 
-// All five contracts on the settlement path execute their pinned canonical bytecode.
+// All settlement contracts, including AccessManager, execute pinned canonical bytecode.
 // Only ERC20s, factories/root/oracle registries and the price feed are fixture contracts.
 func TestAnvilConnectorOuterFillCanonicalBoundaries(t *testing.T) {
-	for _, name := range []string{"valid fill", "bad signed terms", "bad discount signature", "bad order signature", "insufficient funding at simulation", "unauthorized EOA"} {
+	for _, name := range []string{"valid fill", "bad signed terms", "bad discount signature", "bad order signature", "insufficient funding at simulation", "native recipe check", "unauthorized EOA", "manager fill", "manager invalid signature", "manager revoked"} {
 		t.Run(name, func(t *testing.T) {
 			f := newOuterFillEVM(t)
+			if strings.HasPrefix(name, "manager ") {
+				manager := f.deploy("AccessManager", f.signer)
+				f.send(f.signer, f.selected.Executor, "RecipeExecutor", "setCaller", manager)
+				selector := [4]byte(recipeBinding.GetABI().Methods["execute"].ID)
+				f.send(f.signer, manager, "AccessManager", "setTargetFunctionRole", f.selected.Executor, [][4]byte{selector}, uint64(2))
+				f.send(f.signer, manager, "AccessManager", "grantRole", uint64(2), f.workflow.caller, uint32(0))
+				if name == "manager revoked" {
+					f.send(f.signer, manager, "AccessManager", "revokeRole", uint64(2), f.workflow.caller)
+				}
+			}
 			if name == "bad signed terms" {
 				f.backend.discount.Discount.Discount = "0" // Valid signatures, below the connector's current minimum.
 				signOuterFillDiscount(t, f.key, f.backend.discount)
@@ -50,22 +62,39 @@ func TestAnvilConnectorOuterFillCanonicalBoundaries(t *testing.T) {
 				signature[0] ^= 1
 				f.backend.discount.ProtocolSignature = hexutil.Encode(signature)
 			}
-			if name == "bad order signature" {
+			if name == "bad order signature" || name == "manager invalid signature" {
 				f.protocolSignature[0] ^= 1
 			}
 			if name == "insufficient funding at simulation" {
 				// Backend capacity was advertised, then cash disappears before
 				// latest-state settlement simulation. The outer transaction must still fail.
-				f.reader.beforeOuter = func() { f.send(f.signer, tOut, "FixtureToken", "burn", f.account, big.NewInt(90)) }
+				f.reader.beforeOuter = func() {
+					// Mutate the observed head's cash without mining a later block.
+					slot := crypto.Keccak256Hash(common.LeftPadBytes(f.account.Bytes(), 32), make([]byte, 32))
+					f.rpcCall("anvil_setStorageAt", tOut, slot, common.Hash{})
+				}
+			}
+			if name == "native recipe check" {
+				// Funding remains valid, but the committed post-swap balance cap must fail.
+				recipe := recipes.CloneRecipe(f.recipe)
+				recipe.Steps = append(recipe.Steps, connectorDeltaBinary(t, recipes.LessOrEqual, connectorDeltaOperand(recipes.Result, 12), connectorDeltaOperand(recipes.Literal, 99)))
+				f.send(f.signer, f.selected.Executor, "RecipeExecutor", "setRecipe", recipe.Queries, recipe.Steps)
 			}
 			if name == "unauthorized EOA" {
 				f.workflow.signer = common.HexToAddress("0x8888")
 			}
-			data, _, err := f.workflow.build(t.Context(), f.order, f.protocolSignature, f.selected, f.backend)
+			built, err := f.workflow.build(t.Context(), f.order, f.protocolSignature, f.selected, f.backend)
+			data := built.Calldata
+			if name == "manager revoked" {
+				if err == nil || !strings.Contains(err.Error(), "immediate") || f.reader.outerCalls != 0 {
+					t.Fatalf("revoked grant reached full settlement: %v", err)
+				}
+				return
+			}
 			if f.reader.outerCalls != 1 {
 				t.Fatalf("full settlement was not simulated: calls=%d err=%v", f.reader.outerCalls, err)
 			}
-			if name != "valid fill" {
+			if name != "valid fill" && name != "manager fill" {
 				if err == nil || len(data) != 0 || len(f.reader.revertData) < 4 {
 					t.Fatalf("canonical settlement accepted %s: data=%x revert=%x err=%v", name, data, f.reader.revertData, err)
 				}
@@ -78,8 +107,14 @@ func TestAnvilConnectorOuterFillCanonicalBoundaries(t *testing.T) {
 				if name == "bad discount signature" {
 					f.assertRevert("LiquidLaneConnector", "InvalidSignature")
 				}
-				if name == "bad order signature" {
+				if name == "bad order signature" || name == "manager invalid signature" {
 					f.assertRevert("Reactor", "InvalidProtocolSignature")
+				}
+				if name == "native recipe check" {
+					f.assertRevert("RecipeExecutor", "CheckFailed")
+					if f.balance(tOut, f.account).Int64() != 90 {
+						t.Fatal("native recipe rejection changed account cash")
+					}
 				}
 				if name == "insufficient funding at simulation" {
 					reason, err := abi.UnpackRevert(f.reader.revertData)
@@ -91,6 +126,9 @@ func TestAnvilConnectorOuterFillCanonicalBoundaries(t *testing.T) {
 					t.Fatal("failed simulation leaked Reactor funding")
 				}
 				return
+			}
+			if err != nil || len(f.reader.outerReturn) != 0 {
+				t.Fatalf("complete fill with empty return rejected: return=%x err=%v", f.reader.outerReturn, err)
 			}
 			if !bytes.Equal(data, f.reader.outerData) || f.balance(tOut, f.account).Int64() != 90 || f.balance(tIn, f.signer).Int64() != 100 {
 				t.Fatal("simulation changed state or differed from submitted bytes")
@@ -119,6 +157,7 @@ type outerFillEVM struct {
 	recipient         common.Address
 	workflow          *connectorWorkflow
 	reader            *outerFillEVMReader
+	recipe            recipes.Recipe
 	order             executor.IReactorOrder
 	protocolSignature []byte
 	selected          selectedRoute
@@ -126,26 +165,36 @@ type outerFillEVM struct {
 }
 
 type outerFillEVMReader struct {
-	*ethclient.Client
-
+	client      *ethclient.Client
 	caller      common.Address
 	beforeOuter func()
 	outerCalls  int
 	outerData   []byte
+	outerReturn []byte
 	revertData  []byte
 }
 
 func (r *outerFillEVMReader) CallContract(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
-	outer := msg.To != nil && *msg.To == r.caller && bytes.HasPrefix(msg.Data, executorBinding.GetABI().Methods["fill1"].ID)
+	outer := msg.To != nil && *msg.To == r.caller && bytes.HasPrefix(msg.Data, executorBinding.GetABI().Methods["fill"].ID)
 	if outer {
 		r.outerCalls++
 		r.outerData = bytes.Clone(msg.Data)
+		if block == nil || msg.Gas == 0 {
+			return nil, errors.New("outer settlement simulation lost its block or gas budget")
+		}
+		header, err := r.client.HeaderByNumber(ctx, block)
+		if err != nil || header == nil || msg.Gas != min(header.GasLimit, uint64(16_777_216)) {
+			return nil, errors.New("outer settlement simulation did not use bounded transaction gas budget")
+		}
 		if r.beforeOuter != nil {
 			r.beforeOuter()
 			r.beforeOuter = nil
 		}
 	}
-	data, err := r.Client.CallContract(ctx, msg, block)
+	data, err := r.client.CallContract(ctx, msg, block)
+	if outer {
+		r.outerReturn = bytes.Clone(data)
+	}
 	if outer && err != nil {
 		var revert rpc.DataError
 		if errors.As(err, &revert) {
@@ -155,6 +204,10 @@ func (r *outerFillEVMReader) CallContract(ctx context.Context, msg ethereum.Call
 		}
 	}
 	return data, err
+}
+
+func (r *outerFillEVMReader) HeaderByNumber(ctx context.Context, block *big.Int) (*types.Header, error) {
+	return r.client.HeaderByNumber(ctx, block)
 }
 
 type outerFillPermissions []byte
@@ -178,6 +231,15 @@ func newOuterFillEVM(t *testing.T) *outerFillEVM {
 		t.Fatal(err)
 	}
 	f.artifacts = catalog.Contracts
+	raw, err = os.ReadFile("testdata/outer-fill/access-manager.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manager outerFillArtifact
+	if err := json.Unmarshal(raw, &manager); err != nil {
+		t.Fatal(err)
+	}
+	f.artifacts["AccessManager"] = manager
 	for name, artifact := range f.artifacts {
 		parsed, err := abi.JSON(bytes.NewReader(artifact.ABI))
 		if err != nil {
@@ -250,6 +312,7 @@ func newOuterFillEVM(t *testing.T) *outerFillEVM {
 		t.Fatal(err)
 	}
 	recipe, tree, permissions := connectorCommittedFunding(t, leaf, f.account, caller, tOut, tIn)
+	f.recipe = recipe
 	f.send(f.signer, world, "FixtureWorld", "setRoot", f.account, tree.Root)
 	f.send(f.signer, f.account, "MerkleAccount", "acceptRoot", tree.Root)
 	for _, permission := range tree.Leaves {
@@ -257,8 +320,8 @@ func newOuterFillEVM(t *testing.T) *outerFillEVM {
 	}
 	f.send(f.signer, recipeExecutor, "RecipeExecutor", "setRecipe", recipe.Queries, recipe.Steps)
 
-	f.reader = &outerFillEVMReader{Client: client, caller: caller}
-	f.workflow = &connectorWorkflow{chain: f.reader, chainID: big.NewInt(1), connector: vlt, source: outerFillPermissions(permissions), caller: caller, signer: f.signer}
+	f.reader = &outerFillEVMReader{client: client, caller: caller}
+	f.workflow = &connectorWorkflow{chain: f.reader, chainID: big.NewInt(1), source: outerFillPermissions(permissions), caller: caller, signer: f.signer}
 	f.order, f.selected, f.backend = connectorExecutionAward(caller)
 	f.selected.Executor = recipeExecutor
 	f.order.Request.AmountIn = big.NewInt(100)
@@ -429,7 +492,7 @@ func startOuterFillAnvil(t *testing.T) (*rpc.Client, *ethclient.Client) {
 	})
 	endpoint := "http://127.0.0.1:" + strconv.Itoa(port)
 	for range 100 {
-		client, err := rpc.DialContext(t.Context(), endpoint)
+		client, err := rpc.DialOptions(t.Context(), endpoint, rpc.WithHTTPClient(&http.Client{Transport: ordinaryFillRPC{http.DefaultTransport}}))
 		if err == nil {
 			var chainID string
 			if err := client.CallContext(t.Context(), &chainID, "eth_chainId"); err == nil {
@@ -453,5 +516,30 @@ func (r *outerFillEVMReader) FilterLogs(ctx context.Context, query ethereum.Filt
 	if query.FromBlock == nil || query.ToBlock == nil || query.FromBlock.Cmp(query.ToBlock) != 0 || len(query.Addresses) != 1 {
 		return nil, errors.New("recipe publication requires one known block and executor")
 	}
-	return r.Client.FilterLogs(ctx, query)
+	return r.client.FilterLogs(ctx, query)
+}
+
+// The canonical fixture permits only ordinary eth_call, so any state override fails the integration.
+type ordinaryFillRPC struct{ http.RoundTripper }
+
+func (r ordinaryFillRPC) RoundTrip(request *http.Request) (*http.Response, error) {
+	body, err := io.ReadAll(request.Body)
+	if err != nil {
+		return nil, err
+	}
+	if err := request.Body.Close(); err != nil {
+		return nil, err
+	}
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	var call struct {
+		Method string            `json:"method"`
+		Params []json.RawMessage `json:"params"`
+	}
+	if err := json.Unmarshal(body, &call); err != nil {
+		return nil, err
+	}
+	if call.Method == "eth_call" && len(call.Params) != 2 {
+		return nil, errors.New("outer fill fixture rejects code or state override RPC")
+	}
+	return r.RoundTripper.RoundTrip(request)
 }

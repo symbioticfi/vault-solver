@@ -98,7 +98,8 @@ func (f *fakeRecoveryReader) resolveVaults(_ context.Context, vaults []recoveryV
 	return vaults, nil
 }
 
-func (f *fakeRecoveryReader) setQuoteAdapters([]recoveryVault) { f.setCalls++ }
+func (f *fakeRecoveryReader) setQuoteAdapters([]recoveryVault)                          { f.setCalls++ }
+func (f *fakeRecoveryReader) warmQuoteAdapters(context.Context, []common.Address) error { return nil }
 
 func (f *fakeRecoveryReader) validateDirectAuthorization(
 	context.Context, common.Address, []recoveryVault,

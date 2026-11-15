@@ -1,13 +1,10 @@
 package threef
 
 import (
-	"encoding/json"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/vault-solver/internal/merklehost"
 	"github.com/symbioticfi/vault-solver/internal/parse"
@@ -20,8 +17,8 @@ const operationTimeout = 30 * time.Second
 
 type config struct {
 	Mode      string             `yaml:"mode"`
-	StateDir  string             `yaml:"stateDir"`
 	Executor  string             `yaml:"executor"`
+	Policy    string             `yaml:"policy"`
 	Curator   merklehost.Curator `yaml:"curator"`
 	URL       string             `yaml:"url"`
 	APIKeyEnv string             `yaml:"apiKeyEnv"`
@@ -40,14 +37,16 @@ func parseConfig(node yaml.Node) (config, error) {
 	if cfg.Mode != "simulate" && cfg.Mode != "send" {
 		return config{}, errors.New("threef-merkle mode must be send or simulate")
 	}
-	if cfg.StateDir == "" {
-		return config{}, errors.New("threef-merkle stateDir is required")
-	}
 	executor, err := parse.NonZeroAddress(cfg.Executor, "executor")
 	if err != nil {
 		return config{}, err
 	}
 	cfg.Executor = executor.Hex()
+	policy, err := parse.NonZeroAddress(cfg.Policy, "policy")
+	if err != nil {
+		return config{}, err
+	}
+	cfg.Policy = policy.Hex()
 	broker, err := parse.NonZeroAddress(cfg.Broker, "broker")
 	if err != nil {
 		return config{}, err
@@ -60,17 +59,4 @@ func parseConfig(node yaml.Node) (config, error) {
 		return config{}, err
 	}
 	return cfg, nil
-}
-func strategyRevision(strategy keeper.Config, cfg config, caller common.Address) (string, error) {
-	raw, err := json.Marshal(struct {
-		Policy   string             `json:"policy"`
-		Strategy keeper.Config      `json:"strategy"`
-		Curator  merklehost.Curator `json:"curator"`
-		API      apiConfig          `json:"api"`
-		Caller   common.Address     `json:"caller"`
-	}{"1", strategy, cfg.Curator, cfg.apiConfig(), caller})
-	if err != nil {
-		return "", errors.Errorf("threef-merkle strategy identity: %w", err)
-	}
-	return crypto.Keccak256Hash(raw).Hex(), nil
 }

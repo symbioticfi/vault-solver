@@ -7,6 +7,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/vault-solver/api/threef"
+	threefrates "github.com/symbioticfi/vault-solver/internal/threef"
 )
 
 var uintPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
@@ -66,39 +67,36 @@ func minimumReturn(principal, rate *big.Int) *big.Int {
 }
 
 func fitsTerms(m offerMarket, principal, yield *big.Int, auction threef.AuctionDto) (bool, error) {
-	if principal.BitLen() > 128 || yield.BitLen() > 128 || principal.Cmp(m.MaxPrincipal) > 0 || yield.Cmp(minimumReturn(principal, m.MinimumYield1e8)) < 0 {
+	if principal.Sign() <= 0 || yield.Sign() <= 0 || principal.BitLen() > 128 || yield.BitLen() > 128 || principal.Cmp(m.MaxPrincipal) > 0 || yield.Cmp(minimumReturn(principal, m.MinimumYield1e8)) < 0 {
 		return false, nil
 	}
-	basis, err := rateBasis(auction)
+	minimum, maximum, err := auctionReturnBounds(principal, auction)
 	if err != nil {
 		return false, err
+	}
+	return yield.Cmp(minimum) >= 0 && yield.Cmp(maximum) <= 0, nil
+}
+
+func auctionReturnBounds(principal *big.Int, auction threef.AuctionDto) (minimum, maximum *big.Int, err error) {
+	basis, err := rateBasis(auction)
+	if err != nil {
+		return nil, nil, err
 	}
 	// The HTTP boundary preserves the original JSON number before DTO float decoding.
 	// Never reconstruct an economic limit from the generated float32 value.
 	exact, present := auction.AdditionalProperties[exactMaxRateKey]
 	if !present {
-		if value, _ := auction.GetMaxRateOk(); value != nil {
-			return false, errors.New("3F auction maxRate lacks exact decimal source")
-		}
-		return true, nil
+		return nil, nil, errors.New("3F auction maxRate lacks exact decimal source")
 	}
 	text, ok := exact.(string)
 	if !ok || len(text) > 128 || !ratePattern.MatchString(text) {
-		return false, errors.New("3F auction maxRate is not an exact nonnegative decimal")
+		return nil, nil, errors.New("3F auction maxRate is not an exact nonnegative decimal")
 	}
 	rate, ok := new(big.Rat).SetString(text)
 	if !ok {
-		return false, errors.New("3F auction maxRate is invalid")
+		return nil, nil, errors.New("3F auction maxRate is invalid")
 	}
-	left := new(big.Int).Mul(yield, new(big.Int).Mul(big.NewInt(10000), rate.Denom()))
-	right := new(big.Int).Mul(principal, rate.Num())
-	// The policy floor remains yield/principal; the auction ceiling is annual
-	// when its API supplies a rate period. Compare both sides with integer math.
-	if basis.Sign() > 0 {
-		left.Mul(left, big.NewInt(31536000))
-		right.Mul(right, basis)
-	}
-	return left.Cmp(right) <= 0, nil
+	return threefrates.ReturnBounds(principal, rate, basis.Int64())
 }
 
 // rateBasis uses the raw API period before generated float32 conversion.

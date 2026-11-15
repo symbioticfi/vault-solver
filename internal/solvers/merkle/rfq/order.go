@@ -12,7 +12,7 @@ import (
 )
 
 var executorBinding = executor.NewExecutor()
-var orderTupleArgs = abi.Arguments{{Type: executorBinding.GetABI().Methods["fill1"].Inputs[0].Type}}
+var orderTupleArgs = abi.Arguments{{Type: executorBinding.GetABI().Methods["fill"].Inputs[0].Type}}
 
 func decodeOrder(row rfqbackend.OrdersResponseOrdersInner, filler common.Address) (executor.IReactorOrder, []byte, error) {
 	var order executor.IReactorOrder

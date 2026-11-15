@@ -322,8 +322,9 @@ curator source and runtime policy version for recovery. Complete original-code
 simulation and canonical block fences remain mandatory. The shared lens replays
 authenticated state-changing prefixes before later numerical reads; unresolved
 provider outputs, future input sources and executor self-queries fail closed.
-The host registers the SDK's `providers/aave` capacity provider before generic
-recipe input derivation. It replays authenticated supply prefixes and reads Aave
+The host registers the SDK's `providers/aave` capacity provider; the planner
+derives deterministic recipe inputs directly. It replays authenticated supply
+prefixes and reads Aave
 capacity through a pinned eth_call code override; the committed recipe chooses
 the actual amount and enforces its health floor. The implementation is shared
 with the executor daemon; vault-solver contains no Aave sizing implementation.
@@ -332,16 +333,30 @@ selecting such a leaf for recipe execution remains unsupported.
 
 The immutable SDK also classifies successful original execution results using the
 authenticated recipe: all Manage gates closed with no Call or Approve work is idle.
-Request IDs and bound arguments do not supply readiness policy. Unsigned admission
-rechecks the gates; malformed results, reverts and closing canonical-check failures
+Request IDs and bound arguments do not supply readiness policy. Unsigned saved plans
+are prepared again against current state; malformed results, reverts and closing canonical-check failures
 remain errors. The existing signed journal recovery path remains unchanged, and
 on-chain completion assertions remain part of the recipe rather than host protocol
 recognition.
 
+Self-contained state-driven recipes use the SDK's automatic atomic batching;
+external providers prepare distinct inputs for each execution. The host supplies
+its existing code-override transport and pins the same SDK as the standalone
+executor, without a second loop or batching policy. `PrepareExecution` returns one
+plan for direct calls or cross-executor batches, detecting the shared signer's
+EIP-7702 delegation. Submission does not repeat preparation simulation. The 3F
+lease check closes preparation; signed recovery does not repeat it. One execution
+journal holds every member until its receipt is durable. Configured executor order
+is priority, not a withdrawal cash reservation.
+
 The host's SDK transport continues to use the existing shared transaction manager's
 owner fence and persistence callbacks; it contains no copied sender or nonce engine.
 The SDK batch engine uses the existing HTTP fallback/tracing path with strict response
-identity validation. All solvers use HTTP(S) chain RPC endpoints. Vault-side LL/3F pricing,
+identity validation. Compatible pinned getters use one Multicall3 `eth_call` as a
+JSON-RPC object. Caller-sensitive, gas-limited or different-block calls stay separate,
+with at most eight HTTP requests in flight; only groups containing other RPC methods
+use JSON arrays. Singleton reads always use an object. No gas-estimation round trip
+or failed-aggregate retry is added. All solvers use HTTP(S) chain RPC endpoints. Vault-side LL/3F pricing,
 discounts and auction/order business logic stay in their existing integration packages; they are not implicitly
 wired through the Merkle host. Executor-daemon Merkl/CoW provider integration remains
 owned by merkle-executor.

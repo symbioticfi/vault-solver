@@ -159,18 +159,26 @@ func (s *Solver) Run(ctx context.Context) error {
 		"adapters", len(s.targets),
 		"apiBaseUrl", s.cfg.APIBaseURL,
 		"discover", s.cfg.Intervals.Discover.String(),
+		"redeem", s.cfg.Redeem,
 	)
 
 	discoverT := time.NewTicker(s.cfg.Intervals.Discover)
-	redeemT := time.NewTicker(s.cfg.Intervals.RedeemPoll)
 	reconcileT := time.NewTicker(s.cfg.Intervals.Reconcile)
 	defer discoverT.Stop()
-	defer redeemT.Stop()
 	defer reconcileT.Stop()
+	// A nil channel never fires, so a disabled redeem loop drops out of the select.
+	var redeemC <-chan time.Time
+	if s.cfg.Redeem {
+		redeemT := time.NewTicker(s.cfg.Intervals.RedeemPoll)
+		defer redeemT.Stop()
+		redeemC = redeemT.C
+	}
 
 	// Run one pass immediately rather than waiting a full interval.
 	s.discoverAndOffer(ctx)
-	s.redeemAll(ctx)
+	if s.cfg.Redeem {
+		s.redeemAll(ctx)
+	}
 
 	for {
 		select {
@@ -181,7 +189,7 @@ func (s *Solver) Run(ctx context.Context) error {
 				observability.Log(ctx).Error(err, "refresh adapters; keeping last-known-good targets")
 			}
 			s.discoverAndOffer(ctx)
-		case <-redeemT.C:
+		case <-redeemC:
 			s.redeemAll(ctx)
 		case <-reconcileT.C:
 			s.reconcile(ctx)

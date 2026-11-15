@@ -72,6 +72,8 @@ type TxManagerConfig struct {
 	Confirmations uint64 `yaml:"confirmations"`
 	// MaxFeeGwei is the required absolute EIP-1559 max fee per gas.
 	MaxFeeGwei float64 `yaml:"maxFeeGwei"`
+	// MaxGas bounds Merkle planning and signing; native transaction policy is unchanged.
+	MaxGas uint64 `yaml:"maxGas"`
 	// BroadcastTimeoutMs bounds one transaction submission RPC call independently of replacement cadence.
 	BroadcastTimeoutMs int `yaml:"broadcastTimeoutMs"`
 	// AccountPollIntervalMs controls signer balance and nonce telemetry refresh cadence.

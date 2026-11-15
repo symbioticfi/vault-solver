@@ -43,7 +43,7 @@ go test -race -cover ./...
 golangci-lint run
 make test-tooling
 make test-txmanager-anvil
-make test-merklesender-anvil
+make test-merkle-sdk-anvil
 make test-rfq-merkle-anvil
 ```
 

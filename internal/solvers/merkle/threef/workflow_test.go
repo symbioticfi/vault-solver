@@ -5,11 +5,18 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"strconv"
+	"strings"
 	"testing"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/accessmanager"
+	accountbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	executorbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
+	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/threef"
@@ -33,6 +40,7 @@ func offerPassFixture(t *testing.T) (*offerWorkflow, *fakeClient, offerPassData)
 	}
 	b, client, m := testBot(t)
 	m.Account, m.Executor, m.RecipeHash, m.Asset, m.UnderlyingAsset = pin.Account, pin.Executor, pin.RecipeHash, markets[0].Asset, markets[0].UnderlyingAsset
+	m.Policy = markets[0].Policy
 	m.Budget, m.AvailableCash, m.MinimumYield1e8 = big.NewInt(45), big.NewInt(123), big.NewInt(2_000_000)
 	client.auctions = nil
 	return &offerWorkflow{bot: b}, client, offerPassData{pin, recipe, tree, markets, m}
@@ -54,6 +62,41 @@ func eligibilityReads(t *testing.T, pin provider.Snapshot, recipe recipes.Recipe
 	}
 }
 
+func TestOfferPassRecoveryRechecksNativeMembership(t *testing.T) {
+	for _, allowed := range []bool{true, false} {
+		t.Run(strconv.FormatBool(allowed), func(t *testing.T) {
+			w, client, data := offerPassFixture(t)
+			request := common.HexToAddress("0x1000000000000000000000000000000000000001")
+			auction := testAuction(data.market, 1, request)
+			auction.AdditionalProperties[exactMaxRateKey] = "1000"
+			client.createErr = errors.New("HTTP 500")
+			if err := w.bot.Tick(t.Context(), data.market, []threef.AuctionDto{auction}); err == nil {
+				t.Fatal("missing initial POST failure")
+			}
+			client.createErr = nil
+			checks := 0
+			chain := eligibilityReads(t, data.pin, data.recipe, data.tree, func(ethereum.CallMsg) error {
+				checks++
+				if !allowed {
+					return policyRevertError{}
+				}
+				return nil
+			})
+			err := w.evaluate(t.Context(), chain, data.pin, data.markets, []threef.AuctionDto{auction}, nil, nil)
+			if (err == nil) != allowed || checks != 1 {
+				t.Fatalf("recovery membership checks=%d err=%v", checks, err)
+			}
+			want := 1
+			if allowed {
+				want = 2
+			}
+			if len(client.created) != want {
+				t.Fatalf("got %d attempts, want %d", len(client.created), want)
+			}
+		})
+	}
+}
+
 func TestOfferPassSkipsHistoricalAndForeignFundingAuctions(t *testing.T) {
 	w, c, data := offerPassFixture(t)
 	pin, recipe, tree, markets, m := data.pin, data.recipe, data.tree, data.markets, data.market
@@ -64,7 +107,7 @@ func TestOfferPassSkipsHistoricalAndForeignFundingAuctions(t *testing.T) {
 	auctions := []threef.AuctionDto{historical, testAuction(foreign, 2, common.HexToAddress("0x102"))}
 	calls := 0
 	chain := eligibilityReads(t, pin, recipe, tree, func(ethereum.CallMsg) error { calls++; return policyRevertError{} })
-	if err := w.evaluate(t.Context(), chain, pin, recipe, markets, auctions, nil); err != nil {
+	if err := w.evaluate(t.Context(), chain, pin, markets, auctions, c.offers, nil); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 0 || len(c.created) != 0 {
@@ -73,7 +116,7 @@ func TestOfferPassSkipsHistoricalAndForeignFundingAuctions(t *testing.T) {
 }
 
 func TestOfferPassMemoizesNegativeMembershipPerPin(t *testing.T) {
-	w, _, data := offerPassFixture(t)
+	w, c, data := offerPassFixture(t)
 	pin, recipe, tree, markets, m := data.pin, data.recipe, data.tree, data.markets, data.market
 	auctions := []threef.AuctionDto{}
 	for i := 1; i <= 50; i++ {
@@ -81,7 +124,7 @@ func TestOfferPassMemoizesNegativeMembershipPerPin(t *testing.T) {
 	}
 	calls := 0
 	chain := eligibilityReads(t, pin, recipe, tree, func(ethereum.CallMsg) error { calls++; return policyRevertError{} })
-	if err := w.evaluate(t.Context(), chain, pin, recipe, markets, auctions, nil); err != nil {
+	if err := w.evaluate(t.Context(), chain, pin, markets, auctions, c.offers, nil); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 {
@@ -90,7 +133,7 @@ func TestOfferPassMemoizesNegativeMembershipPerPin(t *testing.T) {
 	pin.BlockNumber = big.NewInt(11)
 	// A later pin must observe membership again, including prior negative results.
 	chain = eligibilityReads(t, pin, recipe, tree, func(ethereum.CallMsg) error { calls++; return policyRevertError{} })
-	if err := w.evaluate(t.Context(), chain, pin, recipe, markets, auctions, nil); err != nil {
+	if err := w.evaluate(t.Context(), chain, pin, markets, auctions, c.offers, nil); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 2 {
@@ -115,7 +158,7 @@ func TestOfferPassMaintainsCommitmentBeforeOptionalAuctionFailure(t *testing.T) 
 		}
 		return nil
 	})
-	if err := w.evaluate(t.Context(), chain, pin, recipe, markets, auctions, nil); err != nil {
+	if err := w.evaluate(t.Context(), chain, pin, markets, auctions, c.offers, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(c.cancelled) != 1 || optionalCalls != 0 {
@@ -126,7 +169,7 @@ func TestOfferPassMaintainsCommitmentBeforeOptionalAuctionFailure(t *testing.T) 
 func TestOfferPassChecksAllUnansweredAuctions(t *testing.T) {
 	for _, count := range []int{1, 257} {
 		t.Run(fmt.Sprintf("auctions%d", count), func(t *testing.T) {
-			w, _, data := offerPassFixture(t)
+			w, c, data := offerPassFixture(t)
 			auctions := make([]threef.AuctionDto, 0, count)
 			for i := 1; i <= count; i++ {
 				auctions = append(auctions, testAuction(data.market, float32(i), common.BigToAddress(big.NewInt(int64(100+i)))))
@@ -136,7 +179,7 @@ func TestOfferPassChecksAllUnansweredAuctions(t *testing.T) {
 				calls++
 				return policyRevertError{}
 			})
-			if err := w.evaluate(t.Context(), chain, data.pin, data.recipe, data.markets, auctions, nil); err != nil {
+			if err := w.evaluate(t.Context(), chain, data.pin, data.markets, auctions, c.offers, nil); err != nil {
 				t.Fatal(err)
 			}
 			if calls != count {
@@ -161,7 +204,7 @@ func TestOfferPassChecksAllCandidatesBeforePosting(t *testing.T) {
 			t.Fatalf("posted before checking all auctions: %d eligibility checks", calls)
 		}
 	}
-	if err := w.evaluate(t.Context(), chain, data.pin, data.recipe, data.markets, auctions, nil); err != nil {
+	if err := w.evaluate(t.Context(), chain, data.pin, data.markets, auctions, c.offers, nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(c.created) != 1 || c.created[0].AuctionId != 1 {
@@ -186,7 +229,7 @@ func TestOfferPassSkipsAuctionsAlreadyAnsweredByMaker(t *testing.T) {
 		}
 		return policyRevertError{}
 	})
-	if err := w.evaluate(t.Context(), chain, data.pin, data.recipe, data.markets, auctions, nil); err != nil {
+	if err := w.evaluate(t.Context(), chain, data.pin, data.markets, auctions, c.offers, nil); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 {
@@ -201,7 +244,7 @@ func TestOfferPassRechecksSnapshotAfterOptionalEligibility(t *testing.T) {
 	chain := eligibilityReads(t, data.pin, data.recipe, data.tree, func(ethereum.CallMsg) error { return nil })
 	checks := 0
 	changed := errors.New("snapshot changed")
-	err := w.evaluate(t.Context(), chain, data.pin, data.recipe, data.markets, []threef.AuctionDto{auction}, func(context.Context) error {
+	err := w.evaluate(t.Context(), chain, data.pin, data.markets, []threef.AuctionDto{auction}, c.offers, func(context.Context) error {
 		checks++
 		if checks > 1 {
 			return changed
@@ -222,10 +265,225 @@ func TestOfferPassMemoizesPositiveMembershipPerPin(t *testing.T) {
 	calls := 0
 	chain := eligibilityReads(t, data.pin, data.recipe, data.tree, func(ethereum.CallMsg) error { calls++; return nil })
 	validations := 0
-	if err := w.evaluate(t.Context(), chain, data.pin, data.recipe, data.markets, auctions, func(context.Context) error { validations++; return nil }); err != nil {
+	if err := w.evaluate(t.Context(), chain, data.pin, data.markets, auctions, c.offers, func(context.Context) error { validations++; return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 1 || validations != 2 || len(c.created) != 0 {
 		t.Fatalf("positive membership/stage repeated or floor bypassed: calls=%d validations=%d created=%d", calls, validations, len(c.created))
+	}
+}
+
+type offerTestChain struct {
+	readFunc
+
+	header   *types.Header
+	logs     []types.Log
+	headerFn func(*big.Int) (*types.Header, error)
+}
+
+func (c offerTestChain) HeaderByHash(context.Context, common.Hash) (*types.Header, error) {
+	return c.header, nil
+}
+func (c offerTestChain) HeaderByNumber(_ context.Context, block *big.Int) (*types.Header, error) {
+	if c.headerFn != nil {
+		return c.headerFn(block)
+	}
+	return c.header, nil
+}
+func (c offerTestChain) FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error) {
+	return c.logs, nil
+}
+
+func TestOfferTickAuthenticatesWithoutPermissionServiceOrMint(t *testing.T) {
+	for _, change := range []string{"valid", "account", "caller", "recipe", "recipe block", "root", "role", "role before POST", "role before cancel", "original reorg", "fresh reorg", "role read failure", "pin read failure", "manager allowed", "manager denied", "manager delayed", "manager inconsistent grant", "manager revoked before POST", "manager revoked before cancel", "manager read failure", "manager malformed response", "manager reorg"} {
+		t.Run(change, func(t *testing.T) {
+			w, client, data := offerPassFixture(t)
+			pin, recipe, market := data.pin, data.recipe, data.markets[0]
+			pin.Caller = common.HexToAddress("0xcafe")
+			sender := pin.Caller
+			forwarded := strings.HasPrefix(change, "manager ")
+			if forwarded {
+				sender = common.HexToAddress("0x5eade7")
+			}
+			original := &types.Header{Number: pin.BlockNumber, Time: pin.Timestamp, Difficulty: new(big.Int)}
+			fresh := types.CopyHeader(original)
+			fresh.Number = new(big.Int).Add(original.Number, big.NewInt(1))
+			executor := executorbinding.NewRecipeExecutor().GetABI()
+			account := accountbinding.NewMerkleAccount().GetABI()
+			hash, err := recipes.HashRecipe(recipe)
+			if err != nil {
+				t.Fatal(err)
+			}
+			event := executor.Events["SetRecipe"]
+			encoded, err := event.Inputs.NonIndexed().Pack(recipe.Queries, recipe.Steps)
+			if err != nil {
+				t.Fatal(err)
+			}
+			log := types.Log{Address: pin.Executor, BlockNumber: pin.BlockNumber.Uint64(), BlockHash: original.Hash(), Topics: []common.Hash{event.ID, hash}, Data: encoded}
+			manager, collateral := common.HexToAddress("0x91"), common.HexToAddress("0x92")
+			auction := testAuction(data.market, 1, common.HexToAddress("0x101"))
+			auction.Asset.Set(&threef.ResolvedAssetDto{PositionManager: manager.Hex()})
+			auction.AdditionalProperties[exactMaxRateKey] = "10000"
+			client.auctions = []threef.AuctionDto{auction}
+			if change == "role before cancel" || change == "manager revoked before cancel" {
+				row := testOffer(data.market, 1, "SUBMITTED", "100")
+				row.RequestId = auction.RequestId
+				client.offers = []threef.OfferDto{row}
+			}
+			base := eligibilityReads(t, pin, recipe, data.tree, func(ethereum.CallMsg) error { return nil })
+			chain := offerTestChain{logs: []types.Log{log}}
+			heads, roleReads, managerReads := 0, 0, 0
+			chain.headerFn = func(block *big.Int) (*types.Header, error) {
+				if block == nil {
+					heads++
+					if heads == 1 {
+						return original, nil
+					}
+					return fresh, nil
+				}
+				header := original
+				if block.Cmp(fresh.Number) == 0 {
+					header = fresh
+				}
+				if change == "manager reorg" && managerReads > 0 {
+					reorganized := types.CopyHeader(header)
+					reorganized.Extra = []byte{1}
+					return reorganized, nil
+				}
+				if roleReads > 0 {
+					if change == "pin read failure" {
+						return nil, errors.New("header unavailable")
+					}
+					if change == "original reorg" && block.Cmp(original.Number) == 0 || change == "fresh reorg" && block.Cmp(fresh.Number) == 0 {
+						reorganized := types.CopyHeader(header)
+						reorganized.Extra = []byte{1}
+						return reorganized, nil
+					}
+				}
+				return header, nil
+			}
+			chain.readFunc = func(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
+				switch *msg.To {
+				case pin.Caller:
+					managerReads++
+					manager := accessmanager.NewAccessManager()
+					expected := manager.PackCanCall(sender, pin.Executor, [4]byte(executor.Methods["execute"].ID))
+					if !forwarded || !bytes.Equal(msg.Data, expected) || block.Cmp(fresh.Number) != 0 {
+						t.Fatal("incorrect AccessManager authorization identity, selector or fresh block")
+					}
+					if change == "manager read failure" {
+						return nil, errors.New("manager unavailable")
+					}
+					if change == "manager malformed response" {
+						return []byte{1}, nil
+					}
+					allowed, delay := true, uint32(0)
+					switch change {
+					case "manager denied":
+						allowed = false
+					case "manager delayed":
+						allowed, delay = false, 60
+					case "manager inconsistent grant":
+						delay = 60
+					case "manager revoked before POST":
+						allowed = heads < 3
+					case "manager revoked before cancel":
+						allowed = heads < 2
+					}
+					return manager.GetABI().Methods["canCall"].Outputs.Pack(allowed, delay)
+				case pin.Executor:
+					method, err := executor.MethodById(msg.Data)
+					if err != nil {
+						return nil, err
+					}
+					modified := block.Cmp(fresh.Number) == 0
+					switch method.Name {
+					case "account", "caller":
+						value := pin.Account
+						if method.Name == "caller" {
+							value = pin.Caller
+						}
+						if modified && change == method.Name {
+							value = common.HexToAddress("0xbad")
+						}
+						return method.Outputs.Pack(value)
+					case "recipeHash":
+						value := hash
+						if modified && change == "recipe" {
+							value = common.HexToHash("0xbad")
+						}
+						return method.Outputs.Pack(value)
+					case "recipeBlock":
+						value := pin.BlockNumber
+						if modified && change == "recipe block" {
+							value = fresh.Number
+						}
+						return method.Outputs.Pack(value)
+					default:
+						t.Fatal("offer authorization attempted mint execution")
+					}
+				case pin.Account:
+					if method, err := account.MethodById(msg.Data); err == nil {
+						switch method.Name {
+						case "root":
+							value := pin.Root
+							if block.Cmp(fresh.Number) == 0 && change == "root" {
+								value = common.HexToHash("0xbad")
+							}
+							return method.Outputs.Pack(value)
+						case "hasRole":
+							roleReads++
+							if block.Cmp(fresh.Number) != 0 {
+								t.Fatal("offer leaf roles lost fresh block pin")
+							}
+							if change == "role read failure" {
+								return nil, errors.New("role unavailable")
+							}
+							allowed := true
+							switch change {
+							case "role":
+								allowed = false
+							case "role before POST":
+								allowed = heads < 3
+							case "role before cancel":
+								allowed = heads < 2
+							}
+							return method.Outputs.Pack(allowed)
+						}
+					}
+				case manager:
+					return positionManagerABI.GetABI().Methods["assets"].Outputs.Pack(collateral, common.Address{})
+				case collateral:
+					return underlyingAssetABI.GetABI().Methods["underlying"].Outputs.Pack(market.UnderlyingAsset)
+				}
+				return base(ctx, msg, block)
+			}
+			// No PermissionSource or mint authorization exists before the first offer.
+			w.planner = &keeper.Planner{Chain: chain, ChainID: pin.ChainID, Caller: pin.Caller, Sender: sender}
+			w.strategy.Config.Executor, w.strategy.Config.Account = pin.Executor.Hex(), pin.Account.Hex()
+			w.policy, w.api = market.Policy, client
+			err = w.Tick(t.Context())
+			if change == "valid" || change == "manager allowed" {
+				if err != nil || len(client.created) != 1 || client.created[0].Amount != "45" {
+					t.Fatalf("policy capacity was not offered: %+v, err=%v", client.created, err)
+				}
+				inspection, err := recipes.Inspect(recipe)
+				if err != nil {
+					t.Fatal(err)
+				}
+				leaves := 0
+				for _, slot := range inspection.Slots {
+					leaves += len(slot.Leaves)
+				}
+				if forwarded && managerReads != 2 || !forwarded && managerReads != 0 {
+					t.Fatalf("authorization was not checked before each offer mutation: reads=%d", managerReads)
+				}
+				if roleReads != 2*leaves {
+					t.Fatalf("all recipe leaves must be authorized before every mutation: reads=%d, leaves=%d", roleReads, leaves)
+				}
+			} else if err == nil || len(client.created) != 0 || len(client.cancelled) != 0 {
+				t.Fatalf("changed authorization caused side effects: created=%v cancelled=%v err=%v", client.created, client.cancelled, err)
+			}
+		})
 	}
 }

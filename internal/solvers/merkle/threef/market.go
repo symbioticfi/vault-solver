@@ -19,6 +19,24 @@ type observation struct {
 }
 
 func observe(ctx context.Context, chain provider.Reader, snapshot provider.Snapshot, recipe recipes.Recipe, market mintMarket) (observation, error) {
+	observed, err := observePolicy(ctx, chain, snapshot, market)
+	if err != nil {
+		return observation{}, err
+	}
+	// Execution additionally obeys the committed recipe's principal bounds.
+	for _, step := range recipe.Steps {
+		if len(step) != 65 || step[0] != recipes.LessOrEqual || market.Principal.Source != recipes.Input || step[5] != recipes.Input || new(big.Int).SetBytes(step[6:33]).Cmp(market.Principal.Value) != 0 || step[37] != recipes.Literal {
+			continue
+		}
+		value := new(big.Int).SetBytes(step[38:65])
+		if value.Cmp(observed.MaxPrincipal) < 0 {
+			observed.MaxPrincipal = value
+		}
+	}
+	return observed, nil
+}
+
+func observePolicy(ctx context.Context, chain provider.Reader, snapshot provider.Snapshot, market mintMarket) (observation, error) {
 	call := func(to common.Address, data []byte) ([]byte, error) {
 		raw, err := chain.CallContract(ctx, ethereum.CallMsg{To: &to, Data: data}, snapshot.BlockNumber)
 		if err != nil {
@@ -54,16 +72,6 @@ func observe(ctx context.Context, chain provider.Reader, snapshot provider.Snaps
 		return observation{}, err
 	}
 	ceiling := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1))
-	// Bounds constrain offer capacity; the accepted authorization still selects mint amounts.
-	for _, step := range recipe.Steps {
-		if len(step) != 65 || step[0] != recipes.LessOrEqual || step[5] != recipes.Input || new(big.Int).SetBytes(step[6:33]).Uint64() != uint64(market.PrincipalInput) || step[37] != recipes.Literal {
-			continue
-		}
-		value := new(big.Int).SetBytes(step[38:65])
-		if value.Cmp(ceiling) < 0 {
-			ceiling = value
-		}
-	}
 	return observation{Market: market, Budget: budget, MinimumYield: minimum, AvailableCash: cash, MaxPrincipal: ceiling}, nil
 }
 

@@ -3,6 +3,7 @@ package lifi
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -176,6 +177,7 @@ func TestOrderFeedDisconnectLogLevel(t *testing.T) {
 		name      string
 		closeCode int
 		status    int
+		reset     bool
 		ready     bool
 		wantInfo  bool
 	}{
@@ -185,7 +187,9 @@ func TestOrderFeedDisconnectLogLevel(t *testing.T) {
 		{name: "no status", closeCode: websocket.CloseNoStatusReceived, ready: true, wantInfo: true},
 		{name: "service restart", closeCode: websocket.CloseServiceRestart, ready: true, wantInfo: true},
 		{name: "try again later", closeCode: websocket.CloseTryAgainLater, ready: true, wantInfo: true},
+		{name: "connection reset", reset: true, ready: true, wantInfo: true},
 		{name: "early EOF"},
+		{name: "early connection reset", reset: true},
 		{name: "early normal closure", closeCode: websocket.CloseNormalClosure},
 		{name: "early no status", closeCode: websocket.CloseNoStatusReceived},
 		{name: "early restart", closeCode: websocket.CloseServiceRestart},
@@ -207,6 +211,13 @@ func TestOrderFeedDisconnectLogLevel(t *testing.T) {
 				}
 				defer conn.Close()
 				<-readStarted
+				if tc.reset {
+					// Closing with linger 0 sends a TCP RST instead of a FIN, as Cloudflare does.
+					if err := conn.UnderlyingConn().(*net.TCPConn).SetLinger(0); err != nil {
+						t.Error(err)
+					}
+					return
+				}
 				if tc.closeCode != 0 {
 					if err := conn.WriteControl(websocket.CloseMessage,
 						websocket.FormatCloseMessage(tc.closeCode, ""), time.Now().Add(time.Second)); err != nil {

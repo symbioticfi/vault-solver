@@ -8,7 +8,10 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+	accountbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/threef"
@@ -23,48 +26,43 @@ type mintPlanning struct {
 	runtime *mintProvider
 }
 
-func (p *mintPlanning) Validate(ctx context.Context, plan keeper.Plan) error {
-	if err := p.Planner.Validate(ctx, plan); err != nil {
-		return err
+func (p *mintPlanning) PrepareExecution(ctx context.Context, strategies []keeper.Strategy) (keeper.ExecutionPlan, error) {
+	plan, err := p.Planner.PrepareExecution(ctx, strategies)
+	if err != nil {
+		return plan, err
 	}
-	if len(plan.Outputs) != 1 {
-		return errors.New("3f plan requires one provider")
+	for _, member := range plan.Members {
+		if len(member.Plan.Outputs) != 1 || len(member.Plan.Outputs[0]) != 1 {
+			return keeper.ExecutionPlan{}, errors.New("3f plan requires one provider")
+		}
+		if err := p.runtime.ValidateLease(ctx, member.Plan.Snapshot, member.Plan.Outputs[0][0]); err != nil {
+			return keeper.ExecutionPlan{}, err
+		}
 	}
-	if err := p.runtime.ValidateLease(ctx, plan.Snapshot, plan.Outputs[0]); err != nil {
-		return err
-	}
-	return nil
+	return plan, nil
 }
 
 type offerWorkflow struct {
 	planner  *keeper.Planner
 	strategy keeper.Strategy
-	api      *apiClient
-	bot      *offerBot
+	policy   common.Address
+	api      interface {
+		Auctions(context.Context) ([]threef.AuctionDto, error)
+	}
+	bot *offerBot
 }
 
 func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	ctx, end := tracer.Start(ctx, "threef-merkle.offers.tick", observability.AttrAdapter.String(w.strategy.Config.Account))
 	defer func() { end(err) }()
 	p := w.planner
-	snapshot, recipe, err := recipes.DiscoverForAccount(ctx, p.Chain, common.HexToAddress(w.strategy.Config.Executor), common.HexToAddress(w.strategy.Config.Account), nil)
+	prepared, err := recipes.DiscoverBatch(ctx, p.Chain, []common.Address{common.HexToAddress(w.strategy.Config.Executor)}, []common.Address{common.HexToAddress(w.strategy.Config.Account)}, p.Caller, recipes.PreparationOptions{ChainID: p.ChainID, Cache: p.RecipeCache})
 	if err != nil {
 		return err
 	}
-	raw, err := p.PermissionSource.PermissionTree(ctx, p.ChainID, snapshot)
-	if err != nil {
-		return err
-	}
-	tree, err := recipes.DecodeTree(raw)
-	if err != nil {
-		return err
-	}
-	if tree.ChainID == nil || tree.ChainID.Cmp(p.ChainID) != 0 || tree.Root != snapshot.Root || tree.Account != nil && *tree.Account != snapshot.Account {
-		return errors.New("3f permission scope mismatch")
-	}
+	snapshot, recipe := prepared[0].Snapshot, prepared[0].Recipe
 	pin := provider.Snapshot{ChainID: new(big.Int).Set(p.ChainID), BlockNumber: new(big.Int).SetUint64(snapshot.BlockNumber), BlockHash: snapshot.BlockHash, Timestamp: snapshot.Timestamp, Executor: snapshot.Executor, Account: snapshot.Account, Caller: snapshot.Caller, RecipeHash: snapshot.RecipeHash, Root: snapshot.Root}
-	markets, err := inspect(pin, recipe, tree)
-	if err != nil {
+	if err := verifyPolicyAccount(ctx, p.Chain, w.policy, pin.Account, pin.BlockNumber); err != nil {
 		return err
 	}
 	auctions, err := w.api.Auctions(ctx)
@@ -76,6 +74,14 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	}
 	// Consider unanswered auctions in stable oldest-first order.
 	sort.SliceStable(auctions, func(i, j int) bool { return auctions[i].Id < auctions[j].Id })
+	offers, err := w.bot.readOffers(ctx, pin.Account)
+	if err != nil {
+		return err
+	}
+	markets, err := discoverMarkets(ctx, p.Chain, pin, w.policy, auctions, offers)
+	if err != nil {
+		return err
+	}
 	// Every managed role participates, including the recipe's funding sources.
 	inspection, err := recipes.Inspect(recipe)
 	if err != nil {
@@ -85,24 +91,80 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	for _, slot := range inspection.Slots {
 		leaves = append(leaves, slot.Leaves...)
 	}
-	if err := recipes.VerifyRoles(ctx, p.Chain, snapshot, leaves); err != nil {
-		return err
-	}
-	if err := recipes.ValidateSnapshot(ctx, p.Chain, snapshot, p.Caller); err != nil {
-		return err
-	}
-	return w.evaluate(ctx, p.Chain, pin, recipe, markets, auctions, func(ctx context.Context) error {
-		return recipes.ValidateSnapshot(ctx, p.Chain, snapshot, p.Caller)
+	return w.evaluate(ctx, p.Chain, pin, markets, auctions, offers, func(ctx context.Context) error {
+		return w.validateOfferAuthorization(ctx, prepared[0], leaves)
 	})
+}
+
+// Offers precede mint authorization, so full mint simulation cannot admit them.
+// Reauthenticate the committed recipe and all roles without inventing mint data.
+func (w *offerWorkflow) validateOfferAuthorization(ctx context.Context, original recipes.PreparedRecipe, leaves []common.Hash) error {
+	p := w.planner
+	fresh, err := recipes.DiscoverBatch(ctx, p.Chain, []common.Address{original.Snapshot.Executor}, []common.Address{original.Snapshot.Account}, p.Caller, recipes.PreparationOptions{ChainID: p.ChainID, Cache: p.RecipeCache})
+	if err != nil {
+		return err
+	}
+	a, b := original.Snapshot, fresh[0].Snapshot
+	if a.Executor != b.Executor || a.Account != b.Account || a.Caller != b.Caller || a.RecipeHash != b.RecipeHash || a.RecipeBlock != b.RecipeBlock || a.Root != b.Root || a.BlockNumber > b.BlockNumber {
+		return errors.New("3f offer authorization changed; prepare again")
+	}
+	binding := accountbinding.NewMerkleAccount()
+	requests := make([]protocolio.ReadRequest, len(leaves))
+	for i, leaf := range leaves {
+		requests[i] = protocolio.ContractRead(b.Account, binding.PackHasRole(leaf, b.Executor), new(big.Int).SetUint64(b.BlockNumber), true)
+	}
+	roles, err := protocolio.ReadGroup(ctx, p.Chain, requests...)
+	if err != nil {
+		return err
+	}
+	for i := range leaves {
+		result := roles.At(i)
+		if result.Err != nil {
+			return errors.Errorf("3f read offer leaf role: %w", result.Err)
+		}
+		allowed, err := binding.UnpackHasRole(result.Data)
+		if err != nil {
+			return errors.Errorf("3f decode offer leaf role: %w", err)
+		}
+		if !allowed {
+			return errors.New("3f executor lacks offer leaf role")
+		}
+	}
+	sender := p.Sender
+	if sender == (common.Address{}) {
+		sender = p.Caller
+	}
+	// Offers have no mint inputs yet. Check the execution grant without simulating
+	// an invented mint; the shared planner validates the actual forwarded mint later.
+	if _, err := recipes.RouteExecution(ctx, p.Chain, b, sender, recipeexecutor.NewRecipeExecutor().PackExecute(nil, nil, nil, nil)); err != nil {
+		return errors.Errorf("3f offer execution authorization: %w", err)
+	}
+	// Close both pins after authorization reads, including the original policy/cash pin.
+	pins := []recipes.Snapshot{a, b}
+	requests = make([]protocolio.ReadRequest, len(pins))
+	for i, pin := range pins {
+		requests[i] = protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: new(big.Int).SetUint64(pin.BlockNumber)}
+	}
+	headers, err := protocolio.ReadGroup(ctx, p.Chain, requests...)
+	if err != nil {
+		return err
+	}
+	for i, pin := range pins {
+		result := headers.At(i)
+		if result.Err != nil {
+			return errors.Errorf("3f close offer block pin: %w", result.Err)
+		}
+		header := result.Header
+		if header == nil || header.Number == nil || !header.Number.IsUint64() || header.Number.Uint64() != pin.BlockNumber || header.Hash() != pin.BlockHash {
+			return errors.New("3f offer authorization block was reorganized")
+		}
+	}
+	return nil
 }
 
 // evaluate is owned by Run. Every membership result, including rejection,
 // belongs to this exact pin and is discarded after the pass.
-func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin provider.Snapshot, recipe recipes.Recipe, markets []mintMarket, auctions []threef.AuctionDto, validate func(context.Context) error) error {
-	offers, err := w.bot.readOffers(ctx, pin.Account)
-	if err != nil {
-		return err
-	}
+func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin provider.Snapshot, markets []mintMarket, auctions []threef.AuctionDto, offers []threef.OfferDto, validate func(context.Context) error) error {
 	if len(offers) > 4096 || len(auctions) > 4096 {
 		return errors.New("3F offer inventory exceeds 4096-row bound")
 	}
@@ -116,6 +178,10 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 	}
 	observations := make([]observation, len(markets))
 	memberships := make([]map[common.Address]bool, len(markets))
+	var pending []*intent
+	if w.bot.Send {
+		pending = w.bot.pending
+	}
 	check := func(i int, request common.Address) error {
 		if _, known := memberships[i][request]; known {
 			return nil
@@ -134,19 +200,26 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 			}
 		}
 		observed := observations[i]
-		market := offerMarket{ChainID: pin.ChainID.Uint64(), Account: pin.Account, Executor: pin.Executor, RecipeHash: pin.RecipeHash, Asset: observed.Market.Asset, UnderlyingAsset: observed.Market.UnderlyingAsset, Budget: observed.Budget, MinimumYield1e8: observed.MinimumYield, MaxPrincipal: observed.MaxPrincipal, AvailableCash: observed.AvailableCash, EligibleRequests: memberships[i]}
+		market := offerMarket{ChainID: pin.ChainID.Uint64(), Account: pin.Account, Executor: pin.Executor, Policy: observed.Market.Policy, RecipeHash: pin.RecipeHash, Asset: observed.Market.Asset, UnderlyingAsset: observed.Market.UnderlyingAsset, Budget: observed.Budget, MinimumYield1e8: observed.MinimumYield, MaxPrincipal: observed.MaxPrincipal, AvailableCash: observed.AvailableCash, EligibleRequests: memberships[i]}
 		return w.bot.tickInventory(ctx, market, auctions, offers, create)
 	}
 	// Existing commitments are maintained before any optional new-bid simulation.
 	// A mutation invalidates the shared inventory and ends this pass immediately.
 	for i, market := range markets {
-		observed, err := observe(ctx, chain, pin, recipe, market)
+		observed, err := observePolicy(ctx, chain, pin, market)
 		if err != nil {
 			return err
 		}
 		observations[i] = observed
 		memberships[i] = make(map[common.Address]bool)
 		if observed.Budget.Sign() > 0 {
+			for _, previous := range pending {
+				if previous.OfferID == 0 && previous.Policy == market.Policy && previous.Asset == market.Asset && previous.UnderlyingAsset == market.UnderlyingAsset {
+					if err := check(i, previous.Request); err != nil {
+						return err
+					}
+				}
+			}
 			for _, offer := range live {
 				if offer.asset != market.Asset {
 					continue

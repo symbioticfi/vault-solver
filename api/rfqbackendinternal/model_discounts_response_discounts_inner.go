@@ -19,9 +19,7 @@ var _ MappedNullable = &DiscountsResponseDiscountsInner{}
 
 // DiscountsResponseDiscountsInner struct for DiscountsResponseDiscountsInner
 type DiscountsResponseDiscountsInner struct {
-	Account *string `json:"account,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	// Configured solver executor for the current funding recipe.
-	RecipeExecutor     *string `json:"recipeExecutor,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	// Discount denominator: 1000000 for native adapters, 100000000 for connectors.
 	DiscountPrecision  *string `json:"discountPrecision,omitempty"`
 	DiscountId         string  `json:"discountId" validate:"regexp=^0x[a-fA-F0-9]{64}$"`
 	Adapter            string  `json:"adapter" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
@@ -65,70 +63,6 @@ func NewDiscountsResponseDiscountsInner(discountId string, adapter string, token
 func NewDiscountsResponseDiscountsInnerWithDefaults() *DiscountsResponseDiscountsInner {
 	this := DiscountsResponseDiscountsInner{}
 	return &this
-}
-
-// GetAccount returns the Account field value if set, zero value otherwise.
-func (o *DiscountsResponseDiscountsInner) GetAccount() string {
-	if o == nil || IsNil(o.Account) {
-		var ret string
-		return ret
-	}
-	return *o.Account
-}
-
-// GetAccountOk returns a tuple with the Account field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *DiscountsResponseDiscountsInner) GetAccountOk() (*string, bool) {
-	if o == nil || IsNil(o.Account) {
-		return nil, false
-	}
-	return o.Account, true
-}
-
-// HasAccount returns a boolean if a field has been set.
-func (o *DiscountsResponseDiscountsInner) HasAccount() bool {
-	if o != nil && !IsNil(o.Account) {
-		return true
-	}
-
-	return false
-}
-
-// SetAccount gets a reference to the given string and assigns it to the Account field.
-func (o *DiscountsResponseDiscountsInner) SetAccount(v string) {
-	o.Account = &v
-}
-
-// GetRecipeExecutor returns the RecipeExecutor field value if set, zero value otherwise.
-func (o *DiscountsResponseDiscountsInner) GetRecipeExecutor() string {
-	if o == nil || IsNil(o.RecipeExecutor) {
-		var ret string
-		return ret
-	}
-	return *o.RecipeExecutor
-}
-
-// GetRecipeExecutorOk returns a tuple with the RecipeExecutor field value if set, nil otherwise
-// and a boolean to check if the value has been set.
-func (o *DiscountsResponseDiscountsInner) GetRecipeExecutorOk() (*string, bool) {
-	if o == nil || IsNil(o.RecipeExecutor) {
-		return nil, false
-	}
-	return o.RecipeExecutor, true
-}
-
-// HasRecipeExecutor returns a boolean if a field has been set.
-func (o *DiscountsResponseDiscountsInner) HasRecipeExecutor() bool {
-	if o != nil && !IsNil(o.RecipeExecutor) {
-		return true
-	}
-
-	return false
-}
-
-// SetRecipeExecutor gets a reference to the given string and assigns it to the RecipeExecutor field.
-func (o *DiscountsResponseDiscountsInner) SetRecipeExecutor(v string) {
-	o.RecipeExecutor = &v
 }
 
 // GetDiscountPrecision returns the DiscountPrecision field value if set, zero value otherwise.
@@ -413,12 +347,6 @@ func (o DiscountsResponseDiscountsInner) MarshalJSON() ([]byte, error) {
 
 func (o DiscountsResponseDiscountsInner) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
-	if !IsNil(o.Account) {
-		toSerialize["account"] = o.Account
-	}
-	if !IsNil(o.RecipeExecutor) {
-		toSerialize["recipeExecutor"] = o.RecipeExecutor
-	}
 	if !IsNil(o.DiscountPrecision) {
 		toSerialize["discountPrecision"] = o.DiscountPrecision
 	}
@@ -458,8 +386,6 @@ func (o *DiscountsResponseDiscountsInner) UnmarshalJSON(data []byte) (err error)
 	additionalProperties := make(map[string]interface{})
 
 	if err = json.Unmarshal(data, &additionalProperties); err == nil {
-		delete(additionalProperties, "account")
-		delete(additionalProperties, "recipeExecutor")
 		delete(additionalProperties, "discountPrecision")
 		delete(additionalProperties, "discountId")
 		delete(additionalProperties, "adapter")

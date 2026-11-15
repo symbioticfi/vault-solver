@@ -15,7 +15,7 @@ For RFQ, copy [the Merkle config](../config/rfq-merkle.example.yaml) to an
 operator-local file and set `chain.chainId` to `11155111`, Sepolia read/write RPCs,
 the Sepolia RFQ backend and matching Curator backend including `/api/v1`.
 `config.executor` is a separately deployed RFQ Executor authorized for the filler;
-`config.recipeExecutor` is the curator's RecipeExecutor whose caller is that RFQ
+`config.recipeExecutors` lists the curator's RecipeExecutors whose caller is that RFQ
 Executor. Neither address is provided by this basis. Configure the same
 RecipeExecutor binding under the exact connector in the RFQ backend's
 `solvers[].adapters[]` entry. Keep the existing complete outer fill simulation.

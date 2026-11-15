@@ -20,9 +20,10 @@ push path; orders are found exclusively by polling the backend.
 - **Poller** — every `pollInterval`, `GET /orders?filler=<executor>&orderStatus=open` from the
   backend, then drives each order through `queued → submitting → submitted → {filled|expired|failed}`.
 - **Execution** — builds `Executor.fill(Order, protocolSig, Swap[], DiscountSwapInput[], bytes)` and
-  sends it; the `Executor` calls the `Reactor`, which calls back into `Executor.execute()` to run the
-  adapter `swap`s and satisfy the order's outputs. Each on-chain `Swap`'s `vault` slot is set to the
-  leg's **adapter** address.
+  sends it; `Reactor` validates and funds the input arrays, then calls `Executor.execute()`.
+  The solver encodes direct swaps followed by discounted swaps in the `Call[]` payload;
+  Executor runs only those calls, without adapter-version dispatch, then permits Reactor to collect outputs.
+  Each input carries its funding **adapter** address. The Executor has one full `fill` entrypoint.
 - **State** — in-memory only: `orders` (state machine) and `attempts`.
 
 The `/quote` request inventory (`adapters[]`) still matches the TS `solverQuoteRequestSchema`, but the
@@ -34,15 +35,40 @@ payout), and RFQ's external `asset` field is the shared `tokenOut`. Pricing leg 
 `/discounts` flow). Both are in scope for full parity — discount legs are built in **P3** (§4), after
 the direct path is solid; they are sequenced last, not dropped.
 
-Discount-only `/quote` requests are priced from the backend snapshot without RPC:
-each signed entry requires `price` (the undiscounted `1e18` oracle price),
-`tokenInDecimals`, and `account` in addition to capacity, discount and observation
-block. `account` identifies the shared vault/account capacity for reservations.
-The quote stage allocates the advertised capacity after reservations and uses the
-shared exact-pricing helpers to preserve both contract floors. Backend pricing
-failure excludes that entry; missing metadata is a malformed request, with no chain
-fallback. Direct adapter quotes keep their current chain reads. Fill planning still
-re-reads state and simulates execution.
+All supported `/quote` requests use the backend snapshot: every entry requires
+`price` (the undiscounted `1e18` oracle price), `tokenInDecimals`, capacity, discount
+and observation block. `asset` / `assetDecimals` describe the payout token; there
+are no payout aliases or backend account/recipe hints. Native inventories may
+explicitly carry precision `1000000`; connector precision remains `100000000`.
+The vendored discount API reports precision in listing and resolution outside the
+signed terms; listing retains `collateral` / `collateralDecimals` for payout metadata.
+
+The parser resolves account and recipe identities directly into typed inventory from
+the verified startup cache, including statically committed RWA swap permissions,
+without quote-time RPC or HTTP reads. The wire request remains unchanged; no identity
+strings or repeated route checks are needed after this lookup. Merkle routes must match a unique configured recipe; ambiguous
+routes are declined. Award selection uses the same resolver before fresh fill validation.
+The backend emits one conservative capacity per connector/discount, taking the lowest
+of the requesting solver's applicable recipe alternatives, including zero. It suppresses
+connector capacity after a failed recipe read. Configured native adapters resolve their
+account metadata at startup even in quote-only mode. Native discount solvers without
+an adapter list discover accounts from the discount listing before serving and refresh
+new accounts every `pollIntervalMs`, including in quote-only mode. The Run-owned
+discovery loop publishes immutable cache maps under an RWMutex; request goroutines
+only read them. Invalid discovered metadata skips only its adapter; valid siblings
+are cached and unresolved accounts retry next poll. Known identities persist across
+refresh failures. Initial infrastructure failures abort startup; later failures retain
+the last cache. Configured-adapter startup remains strict. The backend client supports concurrent
+execution and discovery requests without mutable per-request state.
+
+The quote stage allocates advertised capacity after shared account/asset reservations
+and preserves both contract floors. Backend pricing failure excludes that entry;
+missing pricing metadata is malformed. Native external, native discounted and connector
+discounted quotes have no RPC reader or quote-triggered metadata warming. Native
+routes validate payout asset and decimals against cached chain metadata. Unsigned
+connector quotes remain unsupported. Fill planning re-reads state and simulates
+execution. Roll out the paired backend and solver schema changes together: an older solver requires route hints, and the
+new solver schema rejects removed fields.
 
 ---
 
@@ -88,6 +114,9 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   handler context so quote logs carry it), an access log line (method/route/status/duration), the
   request histogram above, a 1 MiB inbound body cap, and panic→500 recovery (the recovered panic is logged at
   Error, so it reaches the Sentry sink). The `http.Server` also sets read/write/idle timeouts.
+- **Quote timeout** — handler contexts drop server cancellation (`WithoutCancel`), so a canceled quote
+  means the backend hung up and logs at V(1). `quoteTimeoutMs` (default 900) sits below the backend's
+  `RFQ_SOLVER_TIMEOUT_MS` (1000) so a slow dependency hits our deadline first and logs `quote failed` at Error.
 - Backend orders and private discount requests reuse the middleware's context/header ID; background
   calls generate one with the same helper. The transport injects it without changing timeouts or
   retry behavior, and adapter errors retain it through wrapping. The shared discount client accepts
@@ -130,7 +159,8 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   existing deadline. A later indexed peer fill retires it at Info rather than turning it into a
   failed order. `order/nonce_retry_exhausted` counts the first exhausted transition; only subsequent
   evidenced backend or local deadline expiry advances `order/expired_after_nonce_retries`, once.
-  Execution-reverted gas estimates enter `estimate_reverted` for backend reconciliation before
+  Execution-reverted gas estimates, and write-relay simulation reverts the txmanager reports as
+  dataless `ExecutionRevertError`s, enter `estimate_reverted` for backend reconciliation before
   severity or retry decisions. Indexed peer completion takes precedence over every estimate error.
   The generated Reactor and Executor bindings decode canonical error payloads: `ExpiredRequest`
   expires the order, while known setup, authorization and input-validation errors
@@ -193,8 +223,8 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   records the terminal result before `Run` returns; the framework's bounded txmanager drain remains the hard
   stop for an unresolved lifecycle.
 - **Quotes follow sender readiness, not lane idleness.** `/quote` preserves pure request validation, then returns
-  the normal no-quote `204` before chain reads or strategy work until the sender is initialized
-  (`txmanager.Available`). A queued or pending fill does not block quoting; its liquidity is subtracted
+  the normal no-quote `204` before snapshot pricing or strategy work until the sender is initialized
+  (`txmanager.Available`). In native execution, a queued or pending fill does not block quoting; its liquidity is subtracted
   through reservations instead. Sender availability is checked again after strategy planning so a pass that observes
   a readiness change is discarded before its response.
 - **Won orders reserve liquidity until they finish.** The store owns a `liquidlane.CapacityLedger` keyed by
@@ -355,6 +385,7 @@ solvers:
       executor:             "0x…"                       # Executor (bot EOA is an authorized caller — setCallers allowlist)
       reactor:              "0x…"
       pollIntervalMs: 3000
+      quoteTimeoutMs: 900
       orderLimit: 20
       maxNonceRetries: 3                         # separate signed/transient-estimate retry budgets; 0 disables
       solverMode: external                              # "external" (default) | "internal" — see below
@@ -412,8 +443,8 @@ dropping features.
 0. **(done)** Vendor RFQ ABIs: `Executor`/`Reactor` from `../rfq/out`, and `LiquidLaneAdapter`/
    `UniversalDelegator`/`IVaultV2`/`IERC4626` from a standalone `core-mirror` build →
    `api/bindings/rfq/` + `api/bindings/{delegator,vaultv2,erc4626}`. CGO-free build holds.
-1. **(done) Quote path** — `config.go`, bindings, route-specific amount quote reads (`paused`,
-   `getMaxAssets`, `getAmountOut`, `minDiscount`; decimals cached), `strategy` pricing + discount + leg selection (direct legs), Huma HTTP server (`/quote`,
+1. **(done) Quote path** — `config.go`, bindings, backend snapshot pricing with locally cached
+   routes, `strategy` pricing + discount + leg selection (direct legs), Huma HTTP server (`/quote`,
    `/health`, `/openapi.json` + `/docs`, shared-secret auth), in-memory store. Unit-tested (pricing
    golden numbers, config, httptest server).
 2. **(done) Execution** — backend client (`/orders`), **poll-only** loop + order state machine
@@ -479,8 +510,14 @@ dropping features.
 12. **(done) Late receipt metrics** — immutable receipt observers record successful owned fill metrics
    without reopening backend-terminal orders or changing reservations/retries. Normal and late observations
    share the manager's bounded process-local hash deduplication; reverted receipts record no fill amounts.
+13. **(done) RPC-free quotes** — price native external/direct, native discounted and connector
+   discounted entries from backend snapshot metadata and verified cached account/recipe identities.
+   Local reservations preserve shared liquidity and exact rounding. Discover unconfigured native
+   accounts outside requests, isolate invalid identities and retry them. Remove quote-triggered
+   metadata warming; retain fresh fill checks and complete settlement simulation. Unit/race and
+   canonical Anvil checks cover these boundaries.
 
-**Reads are multicall-batched** end to end: amount-specific strategy evaluation uses the shared
+**Fill reads are multicall-batched**: amount-specific fill strategy evaluation uses the shared
 per-route fill-quote batch (`paused`, `getMaxAssets`, `getAmountOut`, `minDiscount`), while inventory
 refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault` and collateral `asset` are resolved once at startup (from
 `adapter.vault()` / `vault.asset()`), not re-read per fill plan, so there are no per-read round-trips.
@@ -543,10 +580,11 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   below the adapter's current minimum is dropped, since the adapter reverts it; a direct leg prices at the
   higher of its entry's discount and the current minimum. The field is required and replaces `maxRate`, so
   this solver and symbioticfi/rfq-backend#403 deploy together.
-- **Quote latency** — `/quote` is synchronous in the backend's fan-out, so keep it cheap: pricing is
-  one `getAmountOut` multicall, and `tokenIn` decimals are read once and cached. A warm quote is a
-  single multicall; only the first quote for a not-yet-seen `tokenIn` adds a one-off `decimals` read.
-  Keep it that way — don't add per-quote chain reads outside that one multicall.
+- **Quote latency** — `/quote` is synchronous in the backend's fan-out and performs no RPC calls.
+  Price, decimals, capacity, discount and observation block come from its authenticated backend
+  snapshot; account/recipe identities come from the verified local cache. Pricing and reservation
+  allocation are local, including the two contract floors. Optional token metadata warms only
+  outside requests. Fresh chain reads and full settlement simulation remain at fill time.
 
 ### Parity with the current TS filler
 
@@ -628,6 +666,13 @@ generated from, and refreshed with `make refresh-rfq-openapi` (`RFQ_OPENAPI_URL=
   `createOpenApiDocument` and `createInternalOpenApiDocument` exports, or refresh them
   from a backend running that source. The daily drift check compares the vendored
   documents with the URLs registered in `hack/schema-sources.json`.
+- vault-solver `stage` vendors the rfq-backend `stage` contract, while `swap.symbiotic.fi` serves
+  rfq-backend `main`. Since symbioticfi/rfq-backend#430 (recipes, `recipeExecutor`,
+  `discountPrecision`, read here since #221) the two differ, and prod also has solver discounts
+  (symbioticfi/rfq-backend#450) that backend `stage` does not. Both registry entries carry an
+  `expectedDrift` digest of today's prod documents, so the daily check stays quiet only while prod is
+  unchanged. Once rfq-backend `stage` is promoted, re-vendor from the live URLs, regenerate both clients and
+  remove the entries.
 - **Generated Go client (`api/rfqbackend/`).** The spec now carries `components` schemas with `$ref`s
   (the earlier hono-openapi all-inlined limitation is fixed), so the client is generated with the Java
   **openapi-generator** (`make refresh-rfq-client`) — the only generator that ingests this OpenAPI 3.1
@@ -650,14 +695,15 @@ specifications when this contract changes. Deploy these generated clients with
 the backend header-only contract so resolve-union decoding no longer requires the
 removed body field.
 
-Merkle connector acquisition is owned by `internal/solvers/merkle/rfq`, as described in [RFQ-MERKLE.md](RFQ-MERKLE.md). The backend uses an explicit optional recipeExecutor binding for each adapter: absent means native adapter; present means connector. It estimates capacity from recipe reads and checks current roles with batched RPC calls, without scanning historical block ranges or fetching curator permission trees. Advertised maxAssets is a read estimate; exact ordered funding and settlement are validated by the solver's complete outer fill simulation. It supplies `maxAssets`, account and discount precision in quote inventory, without `recipeExecutor`. The solver chooses native behavior from local `adapters` configuration or Merkle behavior from local `recipeExecutor`; configuring both fails startup. Merkle mode derives its payment connector from the committed recipe and shares the existing Merkle fill component. Missing executors fail closed. Regular connector quote admission consumes backend capacity, clips it by current `remainingAssets` and subtracts account/asset reservations. The Merkle execution path reads the unchanged original recipe from `SetRecipe` only at the executor's known publication block, fetches the existing permission tree, verifies current roles and simulates the complete outer RFQ fill. It uses the shared chain reader without a separate publication indexer URL. The recipe commits one signed swap with the awarded amount and payment as inputs 0 and 1; no capacity metadata or embedded proofs are added. Include that asset's original issuer grants when redemption is required; route failures never fall back to custody.
+Merkle connector acquisition is owned by `internal/solvers/merkle/rfq`, as described in [RFQ-MERKLE.md](RFQ-MERKLE.md). The backend uses an optional `recipeExecutors` list for each connector: absent means native adapter; present means connector. It estimates capacity from recipe reads and checks current roles with batched RPC calls, without scanning historical block ranges or fetching curator permission trees. Advertised maxAssets is a read estimate; exact ordered funding and settlement are validated by the solver's complete outer fill simulation. It supplies `maxAssets`, price, token decimals and discount precision in quote inventory; account and recipe identities stay internal to backend capacity filtering and local solver caches. The solver chooses native behavior from local `adapters` configuration or Merkle behavior from local `recipeExecutors`; configuring both fails startup. Merkle mode derives each payment connector from its committed recipe and shares the existing Merkle fill component. Overlapping recipes use one account/asset capacity within each quote, and awards select a configured executor with the matching connector and RWA. The solver resolves account and a unique compatible executor from its startup cache, including pinned RWA swap permissions, without quote-time I/O. Multiple compatible cached recipes are declined. Backend quote and liquidity capacities use the minimum across applicable recipe alternatives; failed capacity reads suppress the connector. Pending signed work holds the signer fence; confirmed fills persist account/asset inclusion watermarks that reject older quote snapshots (see RFQ-MERKLE.md). The Merkle execution path reads the unchanged original recipe from `SetRecipe` only at the executor's known publication block, fetches the existing permission tree, verifies current roles and simulates the complete outer RFQ fill. It uses the shared chain reader without a separate publication indexer URL. The recipe commits one signed swap with the awarded amount and payment as inputs 0 and 1; no capacity metadata or embedded proofs are added. Include that asset's original issuer grants when redemption is required; route failures never fall back to custody.
 
 ### Optional token log metadata
 
-RFQ shares the existing chain metadata cache. Only a positive quote decision, after adapter/asset and
-input decimals validation, can schedule new metadata; rejected arbitrary inputs cannot. Reads are
-asynchronous under a cancellable solver lifetime context, not the HTTP request. Missing metadata
-remains unknown and cannot change quoting. Optional metadata does not determine pair metric eligibility. Startup warm-up is also asynchronous and cancellable.
+RFQ shares the existing chain metadata cache. Startup warms tokens from trusted
+configuration and resolved adapters asynchronously under the cancellable solver
+lifetime context. A quote never schedules metadata work, including after a positive
+decision. Missing metadata remains unknown and cannot change quoting or pair
+metric eligibility.
 
 ### Coarse transport metrics and pair events
 
@@ -694,3 +740,13 @@ proof. This never delays serving or adds arbitrary input RPCs. Policy gates dire
 zero liquidity does not invalidate a resolved structural route. No counter reset, learned request
 registry or token cap is introduced. Cardinality follows supported route history × fixed outcomes,
 not quote IDs/count. Replica-local award observations are not globally unique economic wins.
+
+### Per-vault Merkle authority
+
+Merkle RFQ recipes may name a per-vault OpenZeppelin AccessManager as their caller.
+The RFQ integration groups discovery by the authenticated on-chain caller and uses
+SDK `recipes.RouteExecution` to require an immediate RFQ Executor grant and wrap
+execution. The entire Reactor fill remains the simulation and admission boundary.
+This changes no generic framework, native adapter path, recipe bytes or permissions.
+The implementation and focused authorization tests are complete; deployment and
+operator role grants remain explicit setup steps.

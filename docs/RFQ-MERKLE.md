@@ -1,36 +1,56 @@
 # RFQ orders through Merkle recipes
 
 `rfq-filler` selects its path from local configuration: the existing `adapters`
-list preserves native quoting and fills; `recipeExecutor` selects Merkle
+list preserves native quoting and fills; `recipeExecutors` selects Merkle
 quoting and fills. Setting both fails before startup. The execution implementation
 is shared with the execution-only `rfq-merkle` plugin in `internal/solvers/merkle/rfq`.
 It polls awarded `/api/v1/orders?filler=…&orderStatus=open`, obtains signed terms
 from the backend discounts API, and builds:
 
-`EOA → RFQ Executor → RecipeExecutor → MerkleAccount → LiquidLaneConnector`.
+`EOA → RFQ Executor → AccessManager → RecipeExecutor → MerkleAccount → LiquidLaneConnector`.
+A recipe whose caller is the RFQ Executor uses the direct path.
 
 Use [the example config](../config/rfq-merkle.example.yaml). Configure the RFQ
-`executor` and a separate `recipeExecutor`; they identify different contracts.
-The EOA must be an authorized caller of the RFQ Executor. The solver derives its
+`executor` and a `recipeExecutors: [...]` list. The first is the RFQ filler;
+the list contains the funding recipes.
+The EOA must be an authorized caller of the RFQ Executor. The solver derives each
 payment connector from the original recipe's output-token approval using input 1,
-checks its account and output asset, and requires the recipe caller to be the RFQ
-Executor. The connector must be registered as version `2` in the Reactor's Liquid
+checks its account and output asset, and authenticates the recipe's on-chain caller.
+For an AccessManager caller, grant the RFQ Executor a role with zero execution delay
+for the RecipeExecutor's `execute(bytes[],bytes[],uint256[],bytes[])` selector.
+The SDK checks `canCall` at the pinned block and wraps the unchanged recipe calldata
+in `AccessManager.execute(recipeExecutor, calldata)`. Missing or delayed grants
+reject route initialization and fill construction. A later revocation also fails the
+complete outer simulation. Recipe grants on the MerkleAccount remain assigned to
+the RecipeExecutor, not to the manager or RFQ Executor. No manager address is added
+to solver configuration: it is the recipe's authenticated caller.
+The connector must be registered as version `2` in the Reactor's Liquid
 Lane adapter factory (version `1` is a native adapter).
 
-Backend quote requests carry capacity, price, token decimals, account and discount precision, without
-`recipeExecutor`. Neither quote requests nor discount listings select the execution
-target. The backend keeps its own matching executor binding for capacity reads and
-routing; operators must configure the same executor on both sides. The SDK retrieves
-original recipe bytes at the executor's known `recipeBlock`. Execution verifies current
-permissions and the complete outer fill. Recipes remain unchanged.
+Backend quote requests carry capacity, price, token decimals and discount precision.
+The solver derives account and recipe identities from the verified startup route cache.
+Exactly one configured recipe must match the connector, RWA swap permission and output
+asset; missing or ambiguous routes are declined. All supported RFQ quote paths (native external, native discounted and connector
+discounted) perform no quote-time RPC, metadata warming or permission-service calls, and account/recipe identities are absent from backend
+requests. The backend maps each connector to a `recipeExecutors` list and measures
+each recipe against the requested RWA. It emits one capacity per connector/discount,
+bounded by the lowest applicable recipe capacity, including zero; a failed recipe
+read suppresses connector capacity. Award selection uses the same cached resolver;
+fill construction checks fresh permissions, state and the complete outer settlement.
+The SDK retrieves original recipe bytes at the executor's known `recipeBlock`.
+Execution verifies current permissions and the complete outer fill; recipes remain unchanged.
 
-Merkle fills require a durable `stateDir` and curator permission service. With
-`quoteOnly: true`, `rfq-filler` opens no execution journal and needs no curator URL.
-Both plugins derive one payment connector from the configured `recipeExecutor`;
-there is no separate connector list. Use one order poller per RFQ Executor/filler
-identity; a second process for quotes must set `quoteOnly: true`.
-Polling is every three seconds;
-each iteration has a thirty-second context and fetches at most 100 open orders.
+Merkle fills require the curator permission service and keep their active intent
+in RAM. `stateDir` is removed and rejected. With `quoteOnly: true`, `rfq-filler`
+needs no curator URL. All configured recipes share one fill owner and the host
+transaction manager.
+Quote capacity is grouped by account and funding asset, not executor. Overlapping
+recipes are alternatives; they cannot multiply that balance within a quote.
+Use one order poller per RFQ Executor/filler identity; a second process for quotes must
+set `quoteOnly: true`.
+Polling is every three seconds. Once a pending fill settles, the loop checks the
+next award immediately; pending work and uncertain failures use the normal cadence.
+Each iteration has a thirty-second context and fetches at most 100 open orders.
 Curator HTTP limits are ten seconds and 2 MiB. Secret configuration contains
 environment variable names. The execution-only plugin has no quote server. Native RFQ mode keeps its existing
 configurable polling limits.
@@ -61,10 +81,21 @@ call data and proofs come from the existing curator permission-tree service.
 otherwise its configured issuer calls execute before the complete outer fill succeeds.
 It simulates the complete outer RFQ fill from the EOA so Reactor funding, recipe
 authorization and output settlement are checked together.
+The shared external-simulation admission path authenticates the inner call, fresh
+metadata and roles, then runs that exact outer fill at the supplied pinned block
+and transaction gas budget before closing both original and fresh block pins.
+RFQ supplies no numerical result witness. The awarded fill's complete settlement
+is its work condition; generic inner `HasWork` classification is not required.
+A successful fill can therefore use existing RFQ Executor inventory even when an
+inner Manage gate is closed, provided every committed recipe check and the full
+signed award still succeeds. Generic recipe paths retain numerical witness and
+result-based readiness validation. RFQ requires ordinary `eth_call` only; it does
+not fetch recipe bytecode or install a nested return-data probe.
 
 The host puts the awarded connector amount and unchanged signed terms in
 `discountSwapInputs`. It forwards the SDK-assembled `RecipeExecutor.execute`
-calldata in the original `executorData` `Call[]`; no RFQ-specific recipe tuple or
+calldata, optionally wrapped through its AccessManager, in the original
+`executorData` `Call[]`; no RFQ-specific recipe tuple or
 funding reconstruction is used.
 
 The host preserves upstream discount integers and signature bytes. It checks ABI
@@ -79,14 +110,30 @@ The current canonical `LLExecuting` recipe requires an exact payout, so an order
 whose required output excludes connector surplus remains unsupported. Multiple
 output tokens and split connector routes also remain unsupported.
 
-Only one fill is admitted at a time. Its intent is fsynced before admission; the
-SDK journal persists each signed original and replacement before broadcast through
-the shared txmanager. The earlier order/discount deadline bounds unsigned sending
-and replacement. Signed recovery restores the lane fence during construction,
-reconciles the original bytes without fetching new terms, and releases ownership
-only after canonical confirmed inclusion or revert is acknowledged. A prepared
-unsigned intent is rebuilt from fresh orders on restart. Mount an exclusive durable
-directory, and never run independent processes with the same signer.
+Only one fill is admitted at a time. Its awarded order, immutable calldata and
+deadline stay in RAM through ambiguous submission. Each signed original and
+replacement is captured before broadcast through the process transaction manager.
+The earlier order/discount deadline bounds unsigned sending and replacement.
+Resumption observes the same signed attempts and nonce without fetching new terms;
+only a canonical owned inclusion or revert releases the signer fence. Restart
+loses intent and transaction tracking while the transaction may still execute.
+Settle old work before upgrading and use one active process per signer.
+
+Quote inventory must match the verified recipe connector, RWA, account and asset.
+Quoting stays available during a fill; execution remains sequential. Before
+submission, the awarded output is reserved against its physical account/asset
+capacity. Other capacity and the unreserved remainder stay quotable. Ambiguous
+submissions keep that reservation, including the gap after sender release and
+before the fill loop records its canonical receipt. Unsigned failures and canonical
+reverts release it. Confirmed spends remain subtracted from older inventory until
+that capacity's snapshots reflect inclusion. Confirmed details compact after fresh
+inventory or the signed deadline; an inclusion watermark prevents later stale
+snapshots from reopening that capacity. Pending reservations survive their deadlines
+until the signed outcome is known.
+Completed award IDs are retained until their signed chain deadlines, preventing
+a still-listed award from being filled twice. Reservations, watermarks and completed
+IDs are RAM only and are lost on process exit. SDK lifecycle readiness keeps the
+quote service in rotation while the transaction lane is occupied.
 
 The RFQ bridge ABI comes from [RFQ PR 25](https://github.com/symbioticfi/rfq/pull/25),
 commit `de6dbd617bf3c1e8b4120419cbe5800efae7d410`. Connector and RecipeExecutor use the unchanged canonical adapters contract surface.
@@ -96,12 +143,14 @@ extension, extra recipe metadata or separate funding configuration. Missing exec
 invalid backend capacity fail closed; execution still requires the full outer settlement simulation.
 
 Tests cover signed award sizing, route capacity, unchanged recipe/permissions,
-complete outer simulation, revoked roles, reorgs, intent persistence, sequential
-admission and recovery without new API terms. `make test-rfq-merkle-anvil` executes
+complete outer simulation, immediate/missing/delayed AccessManager grants, revoked
+roles, reorgs, RAM intent retention, sequential
+admission and retries without new API terms. `make test-rfq-merkle-anvil` executes
 the complete outer fill against pinned canonical Reactor, Executor, RecipeExecutor,
-MerkleAccount and LiquidLaneConnector bytecode with real EIP-712 signatures. It
+MerkleAccount, LiquidLaneConnector and OpenZeppelin AccessManager bytecode with real EIP-712 signatures. It
 checks successful simulation and mined settlement, invalid signed economics,
-funding lost after the capacity observation, and an unauthorized sending EOA.
+funding lost after the capacity observation, an unauthorized sending EOA, and
+manager-routed settlement with missing authorization or invalid signatures.
 The fixture substitutes only external ERC20s, registries and the price feed; proxy
 administration and deployment are outside its scope. Bytecode provenance and the
 offline regeneration command are in `internal/solvers/merkle/rfq/testdata/outer-fill/`.

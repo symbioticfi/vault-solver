@@ -10,6 +10,7 @@
     (.type == "event" and .name == "Consume") or
     (.type == "function" and (.name == "account" or .name == "remainingAssets" or
       .name == "minYieldPerRequest" or .name == "consume"))
+  elif $contract == "IThreeFPositionManager" or $contract == "IThreeFUnderlyingAsset" then .type == "function"
   elif $contract == "IRecipeCapability" then .type == "function" and .name == "execute"
   else error("unknown Merkle ABI projection")
   end

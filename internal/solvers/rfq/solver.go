@@ -14,6 +14,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/vault-solver/internal/chain"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	merklerfq "github.com/symbioticfi/vault-solver/internal/solvers/merkle/rfq"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
@@ -46,6 +47,9 @@ type Solver struct {
 	reportFatal func(error)
 }
 
+func (s *Solver) RequiresTxManager() bool       { return s.merkle == nil }
+func (s *Solver) RequiresMerkleTxManager() bool { return s.merkle != nil }
+
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
 	if err != nil {
@@ -75,6 +79,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	quotes, exec := buildServices(
 		cfg, chainID, st, rdr, deps.TxManager, deps.TxManager.Available, quoteStrategy, log,
 	)
+	quotes.resolveRoute = rdr.cachedQuoteRoute
 	exec.metrics = metrics
 	if metrics != nil {
 		exec.orderPollObserver = metrics.orderPollObserver
@@ -84,10 +89,21 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	links := observability.NewSpanLinks()
 	exec.links = links
 	var merkle *merklerfq.Solver
-	if cfg.RecipeExecutor != (common.Address{}) {
+	if len(cfg.RecipeExecutors) > 0 {
 		merkle, err = merklerfq.New(cfg.merkleConfig(), deps)
 		if err != nil {
 			return nil, err
+		}
+		quotes.reservations = func(_ string, inventory []solverInventory) liquidlane.CapacityReservations {
+			return merkle.Reservations(inventory)
+		}
+		manager, err := deps.MerkleTxManager()
+		if err != nil {
+			return nil, err
+		}
+		quotes.laneAvailable = manager.Ready
+		quotes.resolveRoute = func(connector, rwa, asset common.Address, _ int) (common.Address, common.Address, bool) {
+			return merkle.ResolveRoute(connector, rwa, asset)
 		}
 	}
 	return &Solver{
@@ -97,6 +113,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		server: &server{
 			sharedSecret: secret,
 			quotes:       quotes,
+			quoteTimeout: cfg.QuoteTimeout,
 			metrics:      metrics,
 			links:        links,
 		},
@@ -133,7 +150,6 @@ func buildServices(
 	quotes := &quoteService{
 		tokenMetadata:    tokenMetadata,
 		discountsEnabled: cfg.usesDiscounts(),
-		recipeExecutor:   cfg.RecipeExecutor,
 		chainID:          chainID,
 		executor:         cfg.Executor,
 		laneAvailable:    laneAvailable,
@@ -141,7 +157,6 @@ func buildServices(
 		whitelist:        quoteWhitelist,
 		tokenPolicy:      cfg.TokenPolicy,
 		minAmountsIn:     cfg.MinAmountsIn,
-		reader:           rdr,
 		strategy:         quoteStrategy,
 		strategyName:     cfg.Strategy.Name,
 		log:              log,
@@ -183,17 +198,15 @@ func (s *Solver) ShutdownPreparationTimeout() time.Duration {
 // backend order-poll + fill loop. The filler is poll-only (no push/notify endpoint).
 func (s *Solver) Run(ctx context.Context) error {
 	if s.merkle != nil {
-		venue, err := s.merkle.Initialize(ctx)
-		if err != nil {
+		if err := s.merkle.Initialize(ctx); err != nil {
 			return errors.Errorf("rfq: initialize recipe executor: %w", err)
 		}
-		s.server.quotes.whitelist = adapterWhitelist{venue: true}
 	}
-	// Resolve each recovery adapter's vault + collateral once at startup (config carries only adapter
-	// addresses; both are fixed for the adapter's lifetime) and hand the resolved set to recovery. Runs
+	// Resolve each configured adapter's vault + collateral once at startup (config carries only adapter
+	// addresses; both are fixed for the adapter's lifetime) for quotes and recovery. Runs
 	// before the poll loop and the quote server, so there's no concurrent reader of exec.vaults. A
-	// transport failure aborts startup; a per-adapter revert leaves that entry unresolved (skipped).
-	if !s.cfg.QuoteOnly && len(s.cfg.Adapters) > 0 {
+	// transport failure or unresolved configured metadata aborts startup.
+	if len(s.cfg.Adapters) > 0 {
 		resolved, err := s.exec.reader.resolveVaults(ctx, s.cfg.Adapters)
 		if err != nil {
 			startupErr := errors.Errorf("rfq: resolve recovery vaults: %w", err)
@@ -203,7 +216,7 @@ func (s *Solver) Run(ctx context.Context) error {
 		}
 		s.exec.vaults = resolved
 		s.exec.reader.setQuoteAdapters(resolved)
-		if s.cfg.restrictsToAdapters() {
+		if !s.cfg.QuoteOnly && s.cfg.restrictsToAdapters() {
 			if err := s.exec.reader.validateDirectAuthorization(ctx, s.cfg.Executor, resolved); err != nil {
 				startupErr := errors.Errorf("rfq: validate direct authorization: %w", err)
 				observability.Log(ctx).Error(startupErr, "external adapter authorization failed",
@@ -215,9 +228,7 @@ func (s *Solver) Run(ctx context.Context) error {
 
 	metadataCtx, stopMetadata := context.WithCancel(ctx)
 	defer stopMetadata()
-	s.server.quotes.warmMetadata = func(tokens []common.Address) {
-		s.server.quotes.tokenMetadata.WarmMetadataAsync(metadataCtx, tokens, observability.Log(metadataCtx).WithValues("chainId", s.server.quotes.chainID))
-	}
+
 	var metadataTokens []common.Address
 	for token := range s.cfg.TokenPolicy.SingleRouteTokens() {
 		metadataTokens = append(metadataTokens, token)
@@ -227,6 +238,14 @@ func (s *Solver) Run(ctx context.Context) error {
 	}
 	s.server.quotes.tokenMetadata.WarmMetadataAsync(metadataCtx, metadataTokens, observability.Log(metadataCtx).WithValues("chainId", s.server.quotes.chainID))
 	s.warmPairRoutes(metadataCtx)
+	if s.merkle == nil && s.cfg.usesDiscounts() && len(s.cfg.Adapters) == 0 {
+		if err := s.refreshNativeQuoteAdapters(metadataCtx); err != nil {
+			return errors.Errorf("rfq: initialize quote accounts: %w", err)
+		}
+		cacheDone := make(chan struct{})
+		go func() { defer close(cacheDone); s.refreshNativeQuoteAdaptersLoop(metadataCtx) }()
+		defer func() { stopMetadata(); <-cacheDone }()
+	}
 
 	observability.Log(ctx).Info("starting",
 		"listenAddr", s.cfg.ListenAddr,
@@ -304,12 +323,4 @@ func (s *Solver) runExecution(ctx context.Context) error {
 	}
 	s.exec.run(ctx)
 	return ctx.Err()
-}
-
-// Close releases the Merkle execution journal, when this process uses a recipe.
-func (s *Solver) Close() error {
-	if s.merkle != nil {
-		return s.merkle.Close()
-	}
-	return nil
 }

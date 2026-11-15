@@ -26,6 +26,16 @@ func fixture(t *testing.T) (provider.Snapshot, recipes.Recipe, *recipes.Tree) {
 	return loadFixture(t, "testdata/3f-executing.json")
 }
 
+func fixturePolicy(t *testing.T) common.Address {
+	t.Helper()
+	s, r, tree := fixture(t)
+	markets, err := inspect(s, r, tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return markets[0].Policy
+}
+
 func loadFixture(t *testing.T, path string) (provider.Snapshot, recipes.Recipe, *recipes.Tree) {
 	t.Helper()
 	raw, err := os.ReadFile(path)
@@ -59,19 +69,24 @@ func TestLatestAdaptersRecipe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(markets) != 1 || markets[0].PrincipalInput != 1 || markets[0].YieldInput != 2 || markets[0].RequestInput != 0 {
+	if len(markets) != 1 || uint(markets[0].Principal.Value.Uint64()) != 1 || uint(markets[0].Yield.Value.Uint64()) != 2 || markets[0].RequestInput != 0 {
 		t.Fatalf("latest adapters recipe has unexpected markets: %+v", markets)
 	}
 }
 
 type fakeAPI struct {
 	offers      []wire.OfferDto
+	auctions    []wire.AuctionDto
 	identityErr error
 	calls       int
 	onOffers    func()
 }
 
 func (f *fakeAPI) Identity(context.Context, common.Address) error { f.calls++; return f.identityErr }
+func (f *fakeAPI) Auctions(context.Context) ([]wire.AuctionDto, error) {
+	f.calls++
+	return f.auctions, nil
+}
 func (f *fakeAPI) Offers(context.Context) ([]wire.OfferDto, error) {
 	f.calls++
 	if f.onOffers != nil {
@@ -136,8 +151,12 @@ func TestAggregateAuthorizationLeaseAndPreparationAreReadOnly(t *testing.T) {
 		}
 		return requestABI.GetABI().Methods["mintAuthorization"].Outputs.Pack(big.NewInt(12), big.NewInt(5))
 	})
-	runtime := &mintProvider{API: api, Chain: chain, Now: func() time.Time { return now }}
-	out, err := runtime.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil)
+	runtime := &mintProvider{Policy: fixturePolicy(t), API: api, Chain: chain, Now: func() time.Time { return now }}
+	outputs, err := runtime.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil)
+	var out provider.Output
+	if len(outputs) == 1 {
+		out = outputs[0]
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +214,7 @@ func TestMintRejectsMalformedLeaseAndAuthorization(t *testing.T) {
 				}
 				return requestABI.GetABI().Methods["mintAuthorization"].Outputs.Pack(tc.principal, tc.yield)
 			})
-			p := mintProvider{API: api, Chain: chain, Now: func() time.Time { return time.Unix(1000, 0) }}
+			p := mintProvider{Policy: fixturePolicy(t), API: api, Chain: chain, Now: func() time.Time { return time.Unix(1000, 0) }}
 			if _, err := p.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil); err == nil {
 				t.Fatal("invalid mint became executable")
 			}
@@ -242,8 +261,12 @@ func TestMintSkipsIneligibleEarlierRequests(t *testing.T) {
 				}
 				return chain(ctx, msg, block)
 			})
-			p := mintProvider{API: api, Chain: withPolicy, Now: func() time.Time { return now }}
-			out, err := p.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil)
+			p := mintProvider{Policy: fixturePolicy(t), API: api, Chain: withPolicy, Now: func() time.Time { return now }}
+			outputs, err := p.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil)
+			var out provider.Output
+			if len(outputs) == 1 {
+				out = outputs[0]
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -261,18 +284,13 @@ func TestConfirmedMintRequiresCanonicalReceiptAndPolicyDebit(t *testing.T) {
 		t.Fatal(err)
 	}
 	market := markets[0]
-	record := mint{Request: common.HexToAddress("0x123"), Policy: market.Policy, Asset: market.Asset, UnderlyingAsset: market.UnderlyingAsset, Principal: "12", Deadline: time.Unix(2000, 0)}
-	data, err := json.Marshal(record)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := provider.Output{Data: data}
-	p := mintProvider{}
-	if _, err := p.Advance(t.Context(), snapshot, out, nil); err == nil {
+	record := mint{Request: common.HexToAddress("0x123"), Policy: market.Policy, Asset: market.Asset, UnderlyingAsset: market.UnderlyingAsset, Principal: big.NewInt(12), Deadline: time.Unix(2000, 0)}
+	out := provider.Output{Task: &record}
+	if _, err := out.Task.Advance(t.Context(), snapshot); err == nil {
 		t.Fatal("unconfirmed mint accepted")
 	}
 	snapshot.Execution = &provider.Execution{TxHash: common.HexToHash("0xabc"), BlockHash: common.HexToHash("0xdef"), BlockNumber: big.NewInt(12)}
-	if _, err := p.Advance(t.Context(), snapshot, out, nil); err == nil {
+	if _, err := out.Task.Advance(t.Context(), snapshot); err == nil {
 		t.Fatal("missing debit accepted")
 	}
 	event := policySchema.Events["Consume"]
@@ -281,13 +299,13 @@ func TestConfirmedMintRequiresCanonicalReceiptAndPolicyDebit(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot.Execution.Logs = []types.Log{{Address: market.Policy, Topics: []common.Hash{event.ID, common.BytesToHash(market.Asset.Bytes()), common.BytesToHash(market.UnderlyingAsset.Bytes())}, Data: packed, TxHash: snapshot.Execution.TxHash, BlockHash: snapshot.Execution.BlockHash, BlockNumber: 12}}
-	result, err := p.Advance(t.Context(), snapshot, out, nil)
+	result, err := out.Task.Advance(t.Context(), snapshot)
 	if err != nil || !result.Done {
 		t.Fatalf("canonical confirmed debit rejected: %+v %v", result, err)
 	}
 	snapshot.Execution.Logs = append(snapshot.Execution.Logs, snapshot.Execution.Logs[0])
 	snapshot.Execution.Logs[1].Index = 1
-	if _, err := p.Advance(t.Context(), snapshot, out, nil); err == nil {
+	if _, err := out.Task.Advance(t.Context(), snapshot); err == nil {
 		t.Fatal("ambiguous duplicate debit accepted")
 	}
 }

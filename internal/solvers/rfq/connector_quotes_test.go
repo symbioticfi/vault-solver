@@ -10,11 +10,10 @@ func TestConnectorQuoteWireRequiresExplicitScaleAndSignedTerms(t *testing.T) {
 	id := "0x1111111111111111111111111111111111111111111111111111111111111111"
 	base := quoteAdapter{DiscountPrecision: "100000000", Adapter: "0x1111111111111111111111111111111111111111", Asset: "0x2222222222222222222222222222222222222222", BlockNumber: "1", MaxAssets: "73", Discount: "1000001", DiscountID: &id, AssetDecimals: 6}
 	decimals := 18
-	base.Account = vlt.Hex()
 	base.Price = "1000000000000000000"
 	base.TokenInDecimals = &decimals
 	executor := common.HexToAddress("0x4444444444444444444444444444444444444444")
-	parsed, err := base.parse(0, 1, common.HexToAddress("0x3333333333333333333333333333333333333333"), executor)
+	parsed, err := base.parse(0, 1, common.HexToAddress("0x3333333333333333333333333333333333333333"), testConnectorQuoteRoute(executor))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +27,7 @@ func TestConnectorQuoteWireRequiresExplicitScaleAndSignedTerms(t *testing.T) {
 	} {
 		bad := base
 		change(&bad)
-		if _, err := bad.parse(0, 1, common.Address{}, executor); err == nil {
+		if _, err := bad.parse(0, 1, common.Address{}, testConnectorQuoteRoute(executor)); err == nil {
 			t.Fatalf("accepted malformed connector %+v", bad)
 		}
 	}
@@ -37,7 +36,7 @@ func TestConnectorQuoteWireRequiresExplicitScaleAndSignedTerms(t *testing.T) {
 func TestAdapterModeRejectsConnectorInventory(t *testing.T) {
 	id := "0x1111111111111111111111111111111111111111111111111111111111111111"
 	entry := quoteAdapter{DiscountPrecision: "100000000", Adapter: common.HexToAddress("0x42").Hex(), Asset: common.HexToAddress("0x32").Hex(), BlockNumber: "1", MaxAssets: "100", Discount: "1000001", DiscountID: &id}
-	if _, err := entry.parse(0, 1, common.HexToAddress("0x31"), common.Address{}); err == nil {
+	if _, err := entry.parse(0, 1, common.HexToAddress("0x31"), testNativeQuoteRoute); err == nil {
 		t.Fatal("native solver accepted connector precision")
 	}
 }

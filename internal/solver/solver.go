@@ -14,6 +14,7 @@ import (
 	"github.com/go-logr/logr"
 	"gopkg.in/yaml.v3"
 
+	merkletransaction "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/parse"
@@ -21,14 +22,16 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
-// Deps are the shared services every solver receives. The txmanager is shared so solvers never
-// race on the sending account's nonce.
+// Deps are the shared services every solver receives. Native solvers share txmanager;
+// Merkle factories explicitly request their SDK manager.
 type Deps struct {
-	Chain     *chain.Client
-	TxManager *txmanager.Manager
-	Signer    signer.Signer
-	Log       logr.Logger
-	Metrics   *observability.Metrics
+	Chain           *chain.Client
+	TxManager       *txmanager.Manager
+	MerkleTxManager func() (*merkletransaction.Manager, error)
+	MaxGas          uint64 // Merkle planning and signing budget; zero selects the SDK default.
+	Signer          signer.Signer
+	Log             logr.Logger
+	Metrics         *observability.Metrics
 	// ReportFatal cancels the process runtime before a solver finishes draining accepted work.
 	// The solver must still return the reported error from Run.
 	ReportFatal func(error)
@@ -46,6 +49,12 @@ type Solver interface {
 func RequiresTxManager(s Solver) bool {
 	requirer, ok := s.(interface{ RequiresTxManager() bool })
 	return !ok || requirer.RequiresTxManager()
+}
+
+// RequiresMerkleTxManager reports whether a worker explicitly uses SDK transaction execution.
+func RequiresMerkleTxManager(s Solver) bool {
+	requirer, ok := s.(interface{ RequiresMerkleTxManager() bool })
+	return ok && requirer.RequiresMerkleTxManager()
 }
 
 // ShutdownPreparer optionally reports how long a solver may keep admitting work after cancellation

@@ -7,7 +7,7 @@ import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parent
 SOURCES = {
-    'rfq': 'de6dbd617bf3c1e8b4120419cbe5800efae7d410',
+    'rfq': '425944096ad0ee06955e4de93c2380d0e8eb8764',
     'adapters': 'beaf24c50835fbbe181e3135a64285de2aca1315',
 }
 p = argparse.ArgumentParser()
@@ -33,3 +33,10 @@ fixture = subprocess.run([a.solc, '--combined-json', 'abi,bin', '--optimize', st
 for name, raw in json.loads(fixture.stdout)['contracts'].items():
     artifacts[name.split(':')[-1]] = {'abi': raw['abi'], 'bytecode': '0x' + raw['bin']}
 (ROOT / 'artifacts.json').write_text(json.dumps({'revisions': SOURCES, 'contracts': artifacts}, indent=2) + '\n')
+
+# Reuse the canonical OpenZeppelin artifact from the exact SDK version in go.mod.
+sdk = pathlib.Path(subprocess.check_output(
+    ['go', 'list', '-m', '-f', '{{.Dir}}', 'github.com/symbioticfi/merkle-executor/sdk'],
+    text=True,
+).strip())
+(ROOT / 'access-manager.json').write_bytes((sdk / 'recipes/testdata/anvil/AccessManager.json').read_bytes())
