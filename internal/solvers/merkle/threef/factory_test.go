@@ -31,7 +31,7 @@ func (factorySigner) SignTx(context.Context, *types.Transaction, *big.Int) (*typ
 
 func TestFactoryDiscoversSharedSignerAndOwnsRAMRuntime(t *testing.T) {
 	t.Setenv("THREEF_API_KEY", "test-key")
-	for _, mode := range []string{"valid", "send", "caller mismatch", "reorg", "zero account", "policy mismatch", "zero policy account", "sepolia"} {
+	for _, mode := range []string{"valid", "send", "access manager", "reorg", "zero account", "policy mismatch", "zero policy account", "sepolia"} {
 		t.Run(mode, func(t *testing.T) {
 			target, account, caller := common.HexToAddress("0x10"), common.HexToAddress("0x20"), common.HexToAddress("0x30")
 			header := &types.Header{Number: big.NewInt(12), Difficulty: new(big.Int)}
@@ -113,7 +113,7 @@ func TestFactoryDiscoversSharedSignerAndOwnsRAMRuntime(t *testing.T) {
 							a := account
 							if m.Name == "caller" {
 								a = caller
-								if mode == "caller mismatch" {
+								if mode == "access manager" {
 									a = common.HexToAddress("0x40")
 								}
 							} else if mode == "zero account" {
@@ -159,11 +159,19 @@ func TestFactoryDiscoversSharedSignerAndOwnsRAMRuntime(t *testing.T) {
 				t.Fatal(err)
 			}
 			built, err := factory(configNode(t, raw), solver.Deps{Chain: client, Signer: owner, MerkleTxManager: func() (*txmanager.Manager, error) { return manager, nil }, MaxGas: 2_000_000, Log: logr.Discard()})
-			if mode == "valid" || mode == "send" || mode == "sepolia" {
+			if mode == "valid" || mode == "send" || mode == "sepolia" || mode == "access manager" {
 				if err != nil {
 					t.Fatal(err)
 				}
 				current := built.(*Solver)
+				planner := current.keeper.Planner.(*mintPlanning)
+				expectedCaller := caller
+				if mode == "access manager" {
+					expectedCaller = common.HexToAddress("0x40")
+				}
+				if planner.Caller != expectedCaller || planner.Sender != caller || current.offers.planner != planner.Planner {
+					t.Fatal("mint and offer workflows lost the authenticated caller or transaction sender")
+				}
 				if current.RequiresTxManager() || current.Name() != Name || current.RequiresMerkleTxManager() != (mode == "send") || len(current.keeper.Strategies[0].Providers) != 1 || current.offers.bot.Send != (mode == "send") || getters != 2 || current.keeper.Planner.(*mintPlanning).PermissionSource == nil || current.keeper.Planner.(*mintPlanning).RecipeCache == nil || current.keeper.Planner.(*mintPlanning).MaxGas != 2_000_000 || current.keeper.Strategies[0].Config.Account != account.Hex() {
 					t.Fatal("host failed shared SDK integration")
 				}

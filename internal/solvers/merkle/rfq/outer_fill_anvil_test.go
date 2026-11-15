@@ -34,12 +34,22 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 )
 
-// All five contracts on the settlement path execute their pinned canonical bytecode.
+// All settlement contracts, including AccessManager, execute pinned canonical bytecode.
 // Only ERC20s, factories/root/oracle registries and the price feed are fixture contracts.
 func TestAnvilConnectorOuterFillCanonicalBoundaries(t *testing.T) {
-	for _, name := range []string{"valid fill", "bad signed terms", "bad discount signature", "bad order signature", "insufficient funding at simulation", "native recipe check", "unauthorized EOA"} {
+	for _, name := range []string{"valid fill", "bad signed terms", "bad discount signature", "bad order signature", "insufficient funding at simulation", "native recipe check", "unauthorized EOA", "manager fill", "manager invalid signature", "manager revoked"} {
 		t.Run(name, func(t *testing.T) {
 			f := newOuterFillEVM(t)
+			if strings.HasPrefix(name, "manager ") {
+				manager := f.deploy("AccessManager", f.signer)
+				f.send(f.signer, f.selected.Executor, "RecipeExecutor", "setCaller", manager)
+				selector := [4]byte(recipeBinding.GetABI().Methods["execute"].ID)
+				f.send(f.signer, manager, "AccessManager", "setTargetFunctionRole", f.selected.Executor, [][4]byte{selector}, uint64(2))
+				f.send(f.signer, manager, "AccessManager", "grantRole", uint64(2), f.workflow.caller, uint32(0))
+				if name == "manager revoked" {
+					f.send(f.signer, manager, "AccessManager", "revokeRole", uint64(2), f.workflow.caller)
+				}
+			}
 			if name == "bad signed terms" {
 				f.backend.discount.Discount.Discount = "0" // Valid signatures, below the connector's current minimum.
 				signOuterFillDiscount(t, f.key, f.backend.discount)
@@ -52,7 +62,7 @@ func TestAnvilConnectorOuterFillCanonicalBoundaries(t *testing.T) {
 				signature[0] ^= 1
 				f.backend.discount.ProtocolSignature = hexutil.Encode(signature)
 			}
-			if name == "bad order signature" {
+			if name == "bad order signature" || name == "manager invalid signature" {
 				f.protocolSignature[0] ^= 1
 			}
 			if name == "insufficient funding at simulation" {
@@ -75,10 +85,16 @@ func TestAnvilConnectorOuterFillCanonicalBoundaries(t *testing.T) {
 			}
 			built, err := f.workflow.build(t.Context(), f.order, f.protocolSignature, f.selected, f.backend)
 			data := built.Calldata
+			if name == "manager revoked" {
+				if err == nil || !strings.Contains(err.Error(), "immediate") || f.reader.outerCalls != 0 {
+					t.Fatalf("revoked grant reached full settlement: %v", err)
+				}
+				return
+			}
 			if f.reader.outerCalls != 1 {
 				t.Fatalf("full settlement was not simulated: calls=%d err=%v", f.reader.outerCalls, err)
 			}
-			if name != "valid fill" {
+			if name != "valid fill" && name != "manager fill" {
 				if err == nil || len(data) != 0 || len(f.reader.revertData) < 4 {
 					t.Fatalf("canonical settlement accepted %s: data=%x revert=%x err=%v", name, data, f.reader.revertData, err)
 				}
@@ -91,7 +107,7 @@ func TestAnvilConnectorOuterFillCanonicalBoundaries(t *testing.T) {
 				if name == "bad discount signature" {
 					f.assertRevert("LiquidLaneConnector", "InvalidSignature")
 				}
-				if name == "bad order signature" {
+				if name == "bad order signature" || name == "manager invalid signature" {
 					f.assertRevert("Reactor", "InvalidProtocolSignature")
 				}
 				if name == "native recipe check" {
@@ -215,6 +231,15 @@ func newOuterFillEVM(t *testing.T) *outerFillEVM {
 		t.Fatal(err)
 	}
 	f.artifacts = catalog.Contracts
+	raw, err = os.ReadFile("testdata/outer-fill/access-manager.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manager outerFillArtifact
+	if err := json.Unmarshal(raw, &manager); err != nil {
+		t.Fatal(err)
+	}
+	f.artifacts["AccessManager"] = manager
 	for name, artifact := range f.artifacts {
 		parsed, err := abi.JSON(bytes.NewReader(artifact.ABI))
 		if err != nil {

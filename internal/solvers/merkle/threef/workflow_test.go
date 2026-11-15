@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"math/big"
 	"strconv"
+	"strings"
 	"testing"
 
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/accessmanager"
 	accountbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	executorbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
@@ -293,11 +295,16 @@ func (c offerTestChain) FilterLogs(context.Context, ethereum.FilterQuery) ([]typ
 }
 
 func TestOfferTickAuthenticatesWithoutPermissionServiceOrMint(t *testing.T) {
-	for _, change := range []string{"valid", "account", "caller", "recipe", "recipe block", "root", "role", "role before POST", "role before cancel", "original reorg", "fresh reorg", "role read failure", "pin read failure"} {
+	for _, change := range []string{"valid", "account", "caller", "recipe", "recipe block", "root", "role", "role before POST", "role before cancel", "original reorg", "fresh reorg", "role read failure", "pin read failure", "manager allowed", "manager denied", "manager delayed", "manager inconsistent grant", "manager revoked before POST", "manager revoked before cancel", "manager read failure", "manager malformed response", "manager reorg"} {
 		t.Run(change, func(t *testing.T) {
 			w, client, data := offerPassFixture(t)
 			pin, recipe, market := data.pin, data.recipe, data.markets[0]
 			pin.Caller = common.HexToAddress("0xcafe")
+			sender := pin.Caller
+			forwarded := strings.HasPrefix(change, "manager ")
+			if forwarded {
+				sender = common.HexToAddress("0x5eade7")
+			}
 			original := &types.Header{Number: pin.BlockNumber, Time: pin.Timestamp, Difficulty: new(big.Int)}
 			fresh := types.CopyHeader(original)
 			fresh.Number = new(big.Int).Add(original.Number, big.NewInt(1))
@@ -318,14 +325,14 @@ func TestOfferTickAuthenticatesWithoutPermissionServiceOrMint(t *testing.T) {
 			auction.Asset.Set(&threef.ResolvedAssetDto{PositionManager: manager.Hex()})
 			auction.AdditionalProperties[exactMaxRateKey] = "10000"
 			client.auctions = []threef.AuctionDto{auction}
-			if change == "role before cancel" {
+			if change == "role before cancel" || change == "manager revoked before cancel" {
 				row := testOffer(data.market, 1, "SUBMITTED", "100")
 				row.RequestId = auction.RequestId
 				client.offers = []threef.OfferDto{row}
 			}
 			base := eligibilityReads(t, pin, recipe, data.tree, func(ethereum.CallMsg) error { return nil })
 			chain := offerTestChain{logs: []types.Log{log}}
-			heads, roleReads := 0, 0
+			heads, roleReads, managerReads := 0, 0, 0
 			chain.headerFn = func(block *big.Int) (*types.Header, error) {
 				if block == nil {
 					heads++
@@ -337,6 +344,11 @@ func TestOfferTickAuthenticatesWithoutPermissionServiceOrMint(t *testing.T) {
 				header := original
 				if block.Cmp(fresh.Number) == 0 {
 					header = fresh
+				}
+				if change == "manager reorg" && managerReads > 0 {
+					reorganized := types.CopyHeader(header)
+					reorganized.Extra = []byte{1}
+					return reorganized, nil
 				}
 				if roleReads > 0 {
 					if change == "pin read failure" {
@@ -352,6 +364,33 @@ func TestOfferTickAuthenticatesWithoutPermissionServiceOrMint(t *testing.T) {
 			}
 			chain.readFunc = func(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
 				switch *msg.To {
+				case pin.Caller:
+					managerReads++
+					manager := accessmanager.NewAccessManager()
+					expected := manager.PackCanCall(sender, pin.Executor, [4]byte(executor.Methods["execute"].ID))
+					if !forwarded || !bytes.Equal(msg.Data, expected) || block.Cmp(fresh.Number) != 0 {
+						t.Fatal("incorrect AccessManager authorization identity, selector or fresh block")
+					}
+					if change == "manager read failure" {
+						return nil, errors.New("manager unavailable")
+					}
+					if change == "manager malformed response" {
+						return []byte{1}, nil
+					}
+					allowed, delay := true, uint32(0)
+					switch change {
+					case "manager denied":
+						allowed = false
+					case "manager delayed":
+						allowed, delay = false, 60
+					case "manager inconsistent grant":
+						delay = 60
+					case "manager revoked before POST":
+						allowed = heads < 3
+					case "manager revoked before cancel":
+						allowed = heads < 2
+					}
+					return manager.GetABI().Methods["canCall"].Outputs.Pack(allowed, delay)
 				case pin.Executor:
 					method, err := executor.MethodById(msg.Data)
 					if err != nil {
@@ -420,11 +459,11 @@ func TestOfferTickAuthenticatesWithoutPermissionServiceOrMint(t *testing.T) {
 				return base(ctx, msg, block)
 			}
 			// No PermissionSource or mint authorization exists before the first offer.
-			w.planner = &keeper.Planner{Chain: chain, ChainID: pin.ChainID, Caller: pin.Caller}
+			w.planner = &keeper.Planner{Chain: chain, ChainID: pin.ChainID, Caller: pin.Caller, Sender: sender}
 			w.strategy.Config.Executor, w.strategy.Config.Account = pin.Executor.Hex(), pin.Account.Hex()
 			w.policy, w.api = market.Policy, client
 			err = w.Tick(t.Context())
-			if change == "valid" {
+			if change == "valid" || change == "manager allowed" {
 				if err != nil || len(client.created) != 1 || client.created[0].Amount != "45" {
 					t.Fatalf("policy capacity was not offered: %+v, err=%v", client.created, err)
 				}
@@ -435,6 +474,9 @@ func TestOfferTickAuthenticatesWithoutPermissionServiceOrMint(t *testing.T) {
 				leaves := 0
 				for _, slot := range inspection.Slots {
 					leaves += len(slot.Leaves)
+				}
+				if forwarded && managerReads != 2 || !forwarded && managerReads != 0 {
+					t.Fatalf("authorization was not checked before each offer mutation: reads=%d", managerReads)
 				}
 				if roleReads != 2*leaves {
 					t.Fatalf("all recipe leaves must be authorized before every mutation: reads=%d, leaves=%d", roleReads, leaves)

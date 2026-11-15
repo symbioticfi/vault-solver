@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	accountbinding "github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
@@ -129,7 +130,16 @@ func (w *offerWorkflow) validateOfferAuthorization(ctx context.Context, original
 			return errors.New("3f executor lacks offer leaf role")
 		}
 	}
-	// Close both pins after role reads, including the original policy/cash pin.
+	sender := p.Sender
+	if sender == (common.Address{}) {
+		sender = p.Caller
+	}
+	// Offers have no mint inputs yet. Check the execution grant without simulating
+	// an invented mint; the shared planner validates the actual forwarded mint later.
+	if _, err := recipes.RouteExecution(ctx, p.Chain, b, sender, recipeexecutor.NewRecipeExecutor().PackExecute(nil, nil, nil, nil)); err != nil {
+		return errors.Errorf("3f offer execution authorization: %w", err)
+	}
+	// Close both pins after authorization reads, including the original policy/cash pin.
 	pins := []recipes.Snapshot{a, b}
 	requests = make([]protocolio.ReadRequest, len(pins))
 	for i, pin := range pins {
