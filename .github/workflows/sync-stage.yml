@@ -3,8 +3,9 @@ name: sync-stage
 # Opens the stage -> main promotion PR on demand. It is a no-op when stage has nothing new or a
 # promotion PR is already open.
 #
-# SYNC_PR_TOKEN is optional. With the repository token, a maintainer must approve
-# the resulting pull_request workflow runs before their CI checks can start.
+# SYNC_PR_TOKEN is a fine-grained token for this repo with contents: read and pull-requests: write.
+# github.token cannot be used: the repo does not let Actions open PRs, and PRs opened with it would not
+# trigger ci.
 on:
   workflow_dispatch:
 
@@ -14,17 +15,18 @@ permissions:
 jobs:
   open-pr:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: write
     steps:
       - name: Open stage -> main PR
         env:
-          GH_TOKEN: ${{ secrets.SYNC_PR_TOKEN || github.token }}
-          USE_REPOSITORY_TOKEN: ${{ secrets.SYNC_PR_TOKEN == '' }}
+          GH_TOKEN: ${{ secrets.SYNC_PR_TOKEN }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::SYNC_PR_TOKEN secret is not set"
+            exit 1
+          fi
+
           ahead=$(gh api "repos/${REPO}/compare/main...stage" --jq .ahead_by)
           if [ "${ahead}" -eq 0 ]; then
             echo "stage has no commits missing from main" | tee -a "${GITHUB_STEP_SUMMARY}"
@@ -41,8 +43,3 @@ jobs:
             --title "chore: merge stage into main" \
             --body "Promotes ${ahead} commit(s) from stage to main.")
           echo "opened ${url}" | tee -a "${GITHUB_STEP_SUMMARY}"
-
-          if [ "$USE_REPOSITORY_TOKEN" = "true" ]; then
-            echo "Approve the promotion PR's workflow runs to start its required CI checks." \
-              | tee -a "${GITHUB_STEP_SUMMARY}"
-          fi
