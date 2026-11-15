@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
   workflow_call: # reusable entrypoint: an external deploy/infra workflow can gate on build/test/lint
 
 permissions:
