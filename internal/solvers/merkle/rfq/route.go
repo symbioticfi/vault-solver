@@ -16,6 +16,8 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
+var errRoutesNotListed = errors.New("no usable quote-only connector routes listed yet")
+
 type recipeRoute struct {
 	connector, account, asset common.Address
 	tokens                    map[common.Address]struct{} // immutable after publication
@@ -51,7 +53,7 @@ func (s *Solver) DiscoverRoutes(ctx context.Context, retry time.Duration) {
 			return
 		}
 		log := observability.Log(ctx)
-		if attempt == 0 {
+		if attempt == 0 && !errors.Is(err, errRoutesNotListed) {
 			log.Error(err, "RFQ Merkle route discovery failed; quotes decline while it retries")
 		} else {
 			log.V(1).Info("RFQ Merkle route discovery retry failed", "attempt", attempt, "reason", err.Error())
@@ -124,6 +126,9 @@ func (s *Solver) buildRoutes(ctx context.Context) (map[common.Address]recipeRout
 			}
 		}
 		routes[snapshot.Executor] = recipeRoute{connector: venue, account: state.Account, asset: asset, tokens: tokens}
+	}
+	if s.workflow.source == nil && len(routes) == 0 {
+		return nil, errRoutesNotListed
 	}
 	return routes, nil
 }

@@ -75,7 +75,9 @@ connector quotes remain unsupported. Fill planning re-reads state and simulates
 execution. Either rollout order works with the compatibility backend: it retries
 only an exact old-solver rejection of the added native snapshot fields; the new
 solver accepts the old native envelope. Removed staged route hints are not
-reintroduced. Merkle routes require the new backend and solver before activation.
+reintroduced. Merkle routes require the new backend and solver before activation. Quote-only
+route discovery leaves an empty or unusable backend catalog unpublished and
+retryable; expected empty listings stay at debug log level until routes appear.
 
 ---
 
