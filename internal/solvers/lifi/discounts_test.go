@@ -191,7 +191,7 @@ func testDiscountListItem(
 	maxAssets int64,
 	deadline time.Time,
 ) discounts.ListItem {
-	return discounts.ListItem{
+	return discounts.ListItem{DiscountPrecision: "1000000",
 		DiscountID: testDiscountID,
 		Adapter:    direct.Adapter.Hex(), TokenToRedeem: direct.TokenIn.Hex(), Collateral: direct.TokenOut.Hex(),
 		CollateralDecimals: direct.TokenOutDecimals, Deadline: deadline.Unix(),
@@ -204,7 +204,7 @@ func testResolvedDiscount(
 	discount int64,
 	deadline time.Time,
 ) *discounts.Resolved {
-	return &discounts.Resolved{
+	return &discounts.Resolved{DiscountPrecision: "1000000",
 		DiscountID: testDiscountID,
 		Discount: discounts.Terms{
 			Adapter: direct.Adapter.Hex(), TokenToRedeem: direct.TokenIn.Hex(), Discount: big.NewInt(discount).String(),

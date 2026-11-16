@@ -49,9 +49,8 @@ type SignedTerms struct {
 }
 
 func ParseOffer(item ListItem) (*Offer, error) {
-	// Older native listings omit the optional precision. Explicit connector or unknown
-	// domains must never reach native pricing or adapter.vault() resolution.
-	if item.DiscountPrecision != "" && item.DiscountPrecision != "1000000" {
+	// The backend identifies the domain for every deployment, including older adapters.
+	if item.DiscountPrecision != "1000000" {
 		return nil, errors.Errorf("discountPrecision: unsupported native adapter precision %q", item.DiscountPrecision)
 	}
 	id, err := parseHash(item.DiscountID, "discountId")
@@ -98,6 +97,9 @@ func ParseOffer(item ListItem) (*Offer, error) {
 func ParseSigned(resolved *Resolved) (*Signed, error) {
 	if resolved == nil {
 		return nil, errors.New("resolved discount is nil")
+	}
+	if resolved.DiscountPrecision != "1000000" {
+		return nil, errors.Errorf("discountPrecision: unsupported native adapter precision %q", resolved.DiscountPrecision)
 	}
 	id, err := parseHash(resolved.DiscountID, "discountId")
 	if err != nil {

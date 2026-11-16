@@ -59,7 +59,7 @@ func validQuoteBody() quoteRequest {
 		Adapters: []quoteAdapter{{
 			Adapter: vlt.Hex(), Asset: tOut.Hex(), AssetDecimals: 6,
 			Price: "1000000000000000000", TokenInDecimals: &decimals,
-			BlockNumber: "1", MaxAssets: "10000000", Discount: "0",
+			BlockNumber: "1", MaxAssets: "10000000", Discount: "0", DiscountPrecision: "1000000",
 		}},
 	}
 }
@@ -337,6 +337,23 @@ func TestQuoteRequiresCapacityObservationBlock(t *testing.T) {
 			rr := do(t, testServer().handler(), http.MethodPost, "/quote", testSecret, body)
 			if rr.Code != http.StatusUnprocessableEntity {
 				t.Fatalf("status = %d, want 422 for %s blockNumber: %s", rr.Code, name, rr.Body.String())
+			}
+		})
+	}
+}
+
+func TestServerNativeQuoteRequiresExplicitPrecision(t *testing.T) {
+	for _, precision := range []string{"", "100000000", "10000"} {
+		t.Run("precision_"+precision, func(t *testing.T) {
+			body := validQuoteBody()
+			body.Adapters[0].DiscountPrecision = precision
+			rr := do(t, testServer().handler(), http.MethodPost, "/quote", testSecret, body)
+			want := http.StatusUnprocessableEntity
+			if precision == "100000000" {
+				want = http.StatusBadRequest
+			}
+			if rr.Code != want {
+				t.Fatalf("status = %d, want %d: %s", rr.Code, want, rr.Body.String())
 			}
 		})
 	}
