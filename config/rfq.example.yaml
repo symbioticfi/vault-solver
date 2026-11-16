@@ -94,7 +94,7 @@ solvers:
       # recipeExecutors: ["0x..."]
       # stateDir: /persistent/rfq-merkle
       # curator: {url: https://curator.example.invalid/api/v1}
-      # See rfq-merkle.example.yaml. quoteOnly needs no stateDir or curator service.
+      # See rfq-merkle.example.yaml. quoteOnly still needs curator.url for route discovery.
       # LiquidLane adapter instances this filler serves — the concrete per-token adapters (not the
       # factory). Each adapter's vault + asset are resolved on-chain at startup. In `external` mode
       # these scope quoting/filling and are required; the Executor must additionally be an authorized

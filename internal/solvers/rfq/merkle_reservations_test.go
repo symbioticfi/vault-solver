@@ -123,6 +123,37 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 			t.Fatalf("pending quote HTTP status = %d, want %d: %s", response.Code, status, response.Body.String())
 		}
 	}
+
+	// Quote-only uses the same recipe permissions without a signing dependency.
+	// No discount-list scan is needed to identify the configured connector.
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unexpected backend lookup", http.StatusServiceUnavailable)
+	}))
+	defer backend.Close()
+	quoteText := strings.Replace(text, "https://rfq-backend.example", backend.URL, 1) + "quoteOnly: true\n"
+	if err := yaml.Unmarshal([]byte(quoteText), &node); err != nil {
+		t.Fatal(err)
+	}
+	quoted, err := factory(*node.Content[0], solver.Deps{Chain: client, Log: logr.Discard(),
+		MerkleTxManager: func() (*merkletransaction.Manager, error) { return merkleManager, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	quoteOnly := quoted.(*Solver)
+	if quoteOnly.merkle.RequiresMerkleTxManager() {
+		t.Fatal("quote-only initialized a fill sender")
+	}
+	if err := quoteOnly.merkle.Initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if response := do(t, quoteOnly.server.handler(), http.MethodPost, "/quote", "test-secret", body); response.Code != http.StatusOK {
+		t.Fatalf("quote-only recipe route = %d: %s", response.Code, response.Body.String())
+	}
+	body.TokenIn = common.HexToAddress("0xbad").Hex()
+	if response := do(t, quoteOnly.server.handler(), http.MethodPost, "/quote", "test-secret", body); response.Code != http.StatusNoContent {
+		t.Fatalf("quote-only accepted unpermitted RWA = %d: %s", response.Code, response.Body.String())
+	}
 }
 
 // Only the submission RPCs are stubbed; route authentication still uses the real chain client.
