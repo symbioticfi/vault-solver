@@ -75,14 +75,15 @@ func New(cfg Config, deps solver.Deps) (*Solver, error) {
 		return nil, errors.New("rfq-merkle requires the host chain, signer and transaction manager")
 	}
 	s := &Solver{spends: newSpendLedger(), recipeExecutors: cfg.RecipeExecutors, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), caller: cfg.Executor, maxGas: deps.MaxGas}}
-	if cfg.QuoteOnly {
-		return s, nil
-	}
 	source, err := cfg.Curator.PermissionSource(deps.Chain)
 	if err != nil {
 		return nil, err
 	}
-	s.workflow.source, s.workflow.signer = source, deps.Signer.Address()
+	s.workflow.source = source
+	if cfg.QuoteOnly {
+		return s, nil
+	}
+	s.workflow.signer = deps.Signer.Address()
 	manager, err := deps.MerkleTxManager()
 	if err != nil {
 		return nil, err

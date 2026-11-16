@@ -113,7 +113,7 @@ and underlying authorization error.
 Configure `rfq-filler` with the existing `adapters` list for native
 pricing and fills, or with `recipeExecutors` for Merkle connector pricing and fills.
 Setting both fails startup. The Merkle mode uses `curator` for permissions and keeps pending execution in RAM;
-`quoteOnly: true` needs no curator service. See its
+`quoteOnly: true` also requires `curator.url` to discover permitted routes at startup, but does not submit fills. See its
 [configuration](config/rfq-merkle.example.yaml) and [runbook](docs/RFQ-MERKLE.md).
 Configured native `adapters` scope both quoting and filling in either solver mode.
 Native discount discovery requires `discountPrecision: "1000000"`; missing or other

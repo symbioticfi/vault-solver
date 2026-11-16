@@ -285,9 +285,14 @@ curator: {url: https://curator.example/api/v1}
 		{name: "zero executor", text: `recipeExecutors: ["0x0000000000000000000000000000000000000000"]`, want: "recipeExecutor"},
 		{name: "bad executor", text: `recipeExecutors: [no]`, want: "recipeExecutor"},
 		{name: "no curator", text: `recipeExecutors: ["0x0000000000000000000000000000000000000043"]`, want: "curator"},
-		{name: "quote only needs no execution source", text: `recipeExecutors: ["0x0000000000000000000000000000000000000043"]
+		{name: "quote only requires curator", text: `recipeExecutors: ["0x0000000000000000000000000000000000000043"]
 quoteOnly: true
-`, merkle: true},
+`, want: "curator"},
+		{name: "quote only rejects invalid curator", text: `recipeExecutors: ["0x0000000000000000000000000000000000000043"]
+quoteOnly: true
+curator: {url: invalid}
+`, want: "curator"},
+		{name: "quote only with curator", text: recipe + "quoteOnly: true\n", merkle: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg, err := parseCfg(t, minimalConfig+tc.text)

@@ -55,10 +55,8 @@ func (c Config) Validate() error {
 	if err := permissions.ValidateURL(c.BackendURL); err != nil {
 		return errors.Errorf("backendUrl: %w", err)
 	}
-	if !c.QuoteOnly {
-		if err := permissions.ValidateURL(c.Curator.URL); err != nil {
-			return errors.Errorf("curator: %w", err)
-		}
+	if err := permissions.ValidateURL(c.Curator.URL); err != nil {
+		return errors.Errorf("curator: %w", err)
 	}
 	return nil
 }

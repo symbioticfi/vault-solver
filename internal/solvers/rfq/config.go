@@ -48,7 +48,7 @@ type rawStrategyConfig struct {
 type Config struct {
 	// RecipeExecutors selects connector pricing and Merkle fills instead of native adapters.
 	RecipeExecutors []common.Address
-	// Curator provides the Merkle permission tree for full execution.
+	// Curator provides the Merkle permission tree for route discovery and execution.
 	Curator merklehost.Curator
 	// QuoteOnly serves pricing for a separately operated filler without polling or submitting orders.
 	QuoteOnly bool

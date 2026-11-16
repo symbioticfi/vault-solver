@@ -11,9 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 )
 
 func TestConfiguredExecutorDerivesPaymentConnector(t *testing.T) {
@@ -180,104 +178,4 @@ func (r *blockingLogsReader) FilterLogs(ctx context.Context, query ethereum.Filt
 	close(r.entered)
 	<-r.release
 	return r.connectorExecutionReader.FilterLogs(ctx, query)
-}
-
-// venueErrorReader fails every read of one venue, standing in for a native adapter or an RPC outage.
-type venueErrorReader struct {
-	*connectorExecutionReader
-
-	venue common.Address
-	err   error
-}
-
-func (r *venueErrorReader) CallContract(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
-	if msg.To != nil && *msg.To == r.venue {
-		return nil, r.err
-	}
-	return r.connectorExecutionReader.CallContract(ctx, msg, block)
-}
-
-type revertError struct{}
-
-func (revertError) Error() string  { return "execution reverted" }
-func (revertError) ErrorCode() int { return 3 }
-
-// Quote-only routes skip the curator tree: listed connectors paying from the recipe account.
-func TestQuoteOnlyRoutesFromDiscountListWithoutCurator(t *testing.T) {
-	fixture := connectorExecutionFixture(t, connectorDiscountFixture())
-	fixture.workflow.source = nil
-	listed := []discounts.ListItem{
-		{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex()},
-		{Adapter: vlt.Hex(), TokenToRedeem: common.HexToAddress("0x77").Hex(), Collateral: tIn.Hex()},   // not the connector asset
-		{Adapter: common.HexToAddress("0xbad").Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex()}, // native adapter
-	}
-	native := common.HexToAddress("0xbad")
-	reader := &venueErrorReader{connectorExecutionReader: fixture.reader, venue: native, err: revertError{}}
-	fixture.workflow.chain = reader
-	s := &Solver{recipeExecutors: []common.Address{fixture.reader.recipeExecutor}, workflow: fixture.workflow, backend: &fakeBackend{listed: &discounts.List{Discounts: listed}}}
-	// A transport failure on a listed venue must fail discovery so it is retried, not drop the route.
-	reader.err = errors.New("connection reset")
-	if err := s.Initialize(t.Context()); err == nil || s.routes != nil {
-		t.Fatalf("transient venue read published routes: %v", err)
-	}
-	reader.err = revertError{}
-	if err := s.Initialize(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	for _, tc := range []struct {
-		name       string
-		venue, rwa common.Address
-		want       bool
-	}{
-		{"listed RWA", vlt, tIn, true},
-		{"RWA listed for another asset", vlt, common.HexToAddress("0x77"), false},
-		{"native adapter", native, tIn, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			executor, account, ok := s.ResolveRoute(tc.venue, tc.rwa, tOut)
-			if ok != tc.want || (ok && (executor != fixture.reader.recipeExecutor || account != fixture.reader.recipeAccount)) {
-				t.Fatalf("route=(%s,%s,%t)", executor, account, ok)
-			}
-		})
-	}
-}
-
-type flakyListBackend struct {
-	*fakeBackend
-
-	failures int
-}
-
-func (b *flakyListBackend) listDiscounts(ctx context.Context) (*discounts.List, error) {
-	if b.failures > 0 {
-		b.failures--
-		return nil, errors.New("backend unavailable")
-	}
-	return b.fakeBackend.listDiscounts(ctx)
-}
-
-// A quote-only startup outage delays route publication instead of stopping the process.
-func TestDiscoverRoutesRetriesUntilPublished(t *testing.T) {
-	fixture := connectorExecutionFixture(t, connectorDiscountFixture())
-	fixture.workflow.source = nil
-	backend := &flakyListBackend{fakeBackend: &fakeBackend{listed: &discounts.List{Discounts: []discounts.ListItem{{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex()}}}}, failures: 2}
-	s := &Solver{recipeExecutors: []common.Address{fixture.reader.recipeExecutor}, workflow: fixture.workflow, backend: backend}
-	s.DiscoverRoutes(t.Context(), time.Millisecond)
-	if backend.failures != 0 {
-		t.Fatalf("discovery stopped with %d failures left", backend.failures)
-	}
-	if _, _, ok := s.ResolveRoute(vlt, tIn, tOut); !ok {
-		t.Fatal("routes not published after retry")
-	}
-
-	ctx, cancel := context.WithCancel(t.Context())
-	down := &Solver{recipeExecutors: s.recipeExecutors, workflow: fixture.workflow, backend: &flakyListBackend{fakeBackend: &fakeBackend{}, failures: 1 << 30}}
-	done := make(chan struct{})
-	go func() { defer close(done); down.DiscoverRoutes(ctx, time.Millisecond) }()
-	cancel()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("discovery ignored cancellation")
-	}
 }
