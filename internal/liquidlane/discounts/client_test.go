@@ -46,7 +46,7 @@ func TestClientResolveSingle(t *testing.T) {
 		res.Discount.Deadline != 1900000000 {
 		t.Fatalf("discount terms = %+v", res.Discount)
 	}
-	if res.SignerSignature != "0xdead" || res.ProtocolSignature != "0xbeef" || res.ProtocolDeadline != 1900000001 {
+	if res.DiscountPrecision != "100000000" || res.SignerSignature != "0xdead" || res.ProtocolSignature != "0xbeef" || res.ProtocolDeadline != 1900000001 {
 		t.Fatalf("resolved = %+v", res)
 	}
 }
@@ -73,7 +73,7 @@ func TestClientResolveBatchSingleEntryAccepted(t *testing.T) {
 	if res.RequestID != "discount-http-attempt" {
 		t.Fatalf("request ID = %q, want response header", res.RequestID)
 	}
-	if res.Discount.Adapter != "0x0000000000000000000000000000000000000abc" || res.SignerSignature != "0xdead" {
+	if res.DiscountPrecision != "1000000" || res.Discount.Adapter != "0x0000000000000000000000000000000000000abc" || res.SignerSignature != "0xdead" {
 		t.Fatalf("resolved from batch = %+v", res)
 	}
 }

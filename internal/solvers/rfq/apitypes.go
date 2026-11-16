@@ -32,7 +32,7 @@ type quoteRequest struct {
 
 // quoteAdapter is one adapter inventory entry the backend offers for the request.
 type quoteAdapter struct {
-	DiscountPrecision string  `json:"discountPrecision,omitempty"`
+	DiscountPrecision string  `json:"discountPrecision" enum:"1000000,100000000"`
 	Price             string  `json:"price,omitempty" pattern:"^[0-9]+$" doc:"Undiscounted oracle price scaled by 1e18; required for every quote"`
 	TokenInDecimals   *int    `json:"tokenInDecimals,omitempty" minimum:"0" maximum:"255"`
 	Adapter           string  `json:"adapter" pattern:"^0x[a-fA-F0-9]{40}$"`
@@ -168,7 +168,7 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address, r
 			return solverInventory{}, errors.Errorf("adapters[%d]: connector requires signed discount and precision 100000000", index)
 		}
 		precision = 100_000_000
-	} else if v.DiscountPrecision != "" && v.DiscountPrecision != "1000000" {
+	} else if v.DiscountPrecision != "1000000" {
 		return solverInventory{}, errors.Errorf("adapters[%d]: invalid adapter discount precision", index)
 	}
 	if discount.Cmp(big.NewInt(precision)) > 0 || (recipeExecutor != (common.Address{}) && discount.Cmp(big.NewInt(precision)) == 0) {

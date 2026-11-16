@@ -115,6 +115,10 @@ pricing and fills, or with `recipeExecutors` for Merkle connector pricing and fi
 Setting both fails startup. The Merkle mode uses `curator` for permissions and keeps pending execution in RAM;
 `quoteOnly: true` needs no curator service. See its
 [configuration](config/rfq-merkle.example.yaml) and [runbook](docs/RFQ-MERKLE.md).
+Configured native `adapters` scope both quoting and filling in either solver mode.
+Native discount discovery requires `discountPrecision: "1000000"`; missing or other
+precision values are rejected. The backend supplies this metadata for older adapters too.
+Connector discounts require precision `100000000` and the configured Merkle path.
 [Sepolia setup](docs/SEPOLIA.md) identifies the shared basis and the actual
 curator-created instances required before starting a solver.
 They preserve backend signature bytes, including ERC-1271 wallet signatures.
@@ -434,8 +438,8 @@ the configured lookback cutoff.
 
 In internal mode, advertised LiquidLane routes are resolved on-chain and checked against their advertised
 asset and decimals, current physical capacity, adapter minimum discount, token policy, and configured
-gas feeds. Configured adapters scope quoting when present; fill-time discount recovery remains unrestricted,
-matching RFQ solver-mode semantics. A selected discount is resolved again immediately before simulation and
+gas feeds. Configured adapters scope quoting when present; UniswapX fill-time discount recovery remains
+unrestricted. A selected discount is resolved again immediately before simulation and
 encoded as a typed `discountSwap`; its adapter, token, output floor, signatures, and expiry window are
 checked fail-closed. Quotes and fills price every leg as the adapter pays it: the oracle price read with
 the inventory and the signed discount (or the adapter minimum for direct routes), floored in the adapter's

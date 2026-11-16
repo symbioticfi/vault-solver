@@ -32,6 +32,7 @@ type Terms struct {
 type Resolved struct {
 	RequestID         string
 	DiscountID        string
+	DiscountPrecision string
 	Discount          Terms
 	SignerSignature   string
 	ProtocolDeadline  int64
@@ -116,6 +117,7 @@ func resolvedFromSingle(requestID string, s *rfqbackendinternal.ResolveDiscountR
 	return &Resolved{
 		RequestID:         requestID,
 		DiscountID:        s.GetDiscountId(),
+		DiscountPrecision: s.GetDiscountPrecision(),
 		Discount:          termsFromModel(s.GetDiscount()),
 		SignerSignature:   s.GetSignerSignature(),
 		ProtocolDeadline:  s.GetProtocolDeadline(),

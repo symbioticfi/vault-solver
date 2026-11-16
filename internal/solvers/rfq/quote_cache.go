@@ -24,7 +24,7 @@ func (s *Solver) refreshNativeQuoteAdapters(ctx context.Context) (err error) {
 	}
 	adapters := make([]common.Address, 0, len(listed.Discounts))
 	for _, item := range listed.Discounts {
-		if item.DiscountPrecision == "100000000" || !common.IsHexAddress(item.Adapter) {
+		if item.DiscountPrecision != "1000000" || !common.IsHexAddress(item.Adapter) {
 			continue
 		}
 		adapter := common.HexToAddress(item.Adapter)

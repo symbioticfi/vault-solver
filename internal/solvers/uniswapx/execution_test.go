@@ -119,7 +119,7 @@ func TestStartFillEncodesResolvedDiscountRoute(t *testing.T) {
 		list: &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{
 			testDiscountOffer(route, now.Add(time.Minute), "100"),
 		}},
-		resolved: &liquiddiscounts.Resolved{
+		resolved: &liquiddiscounts.Resolved{DiscountPrecision: "1000000",
 			DiscountID: testDiscountID,
 			Discount: liquiddiscounts.Terms{
 				Adapter: route.Adapter.Hex(), TokenToRedeem: route.TokenIn.Hex(), Discount: "0",
@@ -269,7 +269,7 @@ func TestStartFillRepricesPartialDiscountLeg(t *testing.T) {
 		list: &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{
 			testDiscountOffer(discountRoute, now.Add(time.Minute), "100"),
 		}},
-		resolved: &liquiddiscounts.Resolved{
+		resolved: &liquiddiscounts.Resolved{DiscountPrecision: "1000000",
 			DiscountID: testDiscountID,
 			Discount: liquiddiscounts.Terms{
 				Adapter: discountRoute.Adapter.Hex(), TokenToRedeem: discountRoute.TokenIn.Hex(), Discount: "0",

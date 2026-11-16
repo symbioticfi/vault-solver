@@ -83,7 +83,7 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 	body.Adapters[0].DiscountID = &id
 	body.Adapters[0].DiscountPrecision = "100000000"
 	// A shared backend response also lists native adapters for other solvers.
-	body.Adapters = append(body.Adapters, quoteAdapter{Adapter: common.HexToAddress("0xbad").Hex(), Asset: tOut.Hex(), BlockNumber: "1", MaxAssets: "1000", Discount: "0"})
+	body.Adapters = append(body.Adapters, quoteAdapter{DiscountPrecision: "1000000", Adapter: common.HexToAddress("0xbad").Hex(), Asset: tOut.Hex(), BlockNumber: "1", MaxAssets: "1000", Discount: "0"})
 	// Quotes decline until the verified routes are published.
 	if decision, err := s.server.quotes.quote(t.Context(), &body); err != nil || decision.response != nil {
 		t.Fatalf("quote before route publication = %+v %v", decision, err)

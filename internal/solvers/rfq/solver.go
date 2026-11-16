@@ -137,13 +137,7 @@ func buildServices(
 	quoteStrategy types.Strategy,
 	log logr.Logger,
 ) (*quoteService, *executionService) {
-	// The quote and execution paths scope to adapters independently. Quoting uses quoteScopesToAdapters()
-	// so an internal-mode filler with configured adapters advertises quotes only for its own adapter
-	// universe; execution uses restrictsToAdapters() (external-only) so internal-mode discount recovery can
-	// still fill through any advertised adapter. Both predicates imply non-empty Adapters when true, so a
-	// wired whitelist is never empty.
-	quoteWhitelist := buildAdapterWhitelist(cfg.quoteScopesToAdapters(), cfg.Adapters)
-	execWhitelist := buildAdapterWhitelist(cfg.restrictsToAdapters(), cfg.Adapters)
+	whitelist := buildAdapterWhitelist(cfg.restrictsToAdapters(), cfg.Adapters)
 
 	var tokenMetadata *chain.Decimals
 	if rdr != nil {
@@ -156,7 +150,7 @@ func buildServices(
 		executor:         cfg.Executor,
 		laneAvailable:    laneAvailable,
 		reservations:     st.pendingReservations,
-		whitelist:        quoteWhitelist,
+		whitelist:        whitelist,
 		tokenPolicy:      cfg.TokenPolicy,
 		minAmountsIn:     cfg.MinAmountsIn,
 		strategy:         quoteStrategy,
@@ -172,7 +166,7 @@ func buildServices(
 		maxNonceRetries:  cfg.MaxNonceRetries,
 		pollInterval:     cfg.PollInterval,
 		vaults:           cfg.Adapters,
-		whitelist:        execWhitelist,
+		whitelist:        whitelist,
 		tokenPolicy:      cfg.TokenPolicy,
 		discountsEnabled: cfg.usesDiscounts(),
 		backend:          newBackendClient(cfg.BackendURL),
@@ -219,7 +213,7 @@ func (s *Solver) Run(ctx context.Context) error {
 		}
 		s.exec.vaults = resolved
 		s.exec.reader.setQuoteAdapters(resolved)
-		if !s.cfg.QuoteOnly && s.cfg.restrictsToAdapters() {
+		if !s.cfg.QuoteOnly && s.cfg.SolverMode == solverModeExternal {
 			if err := s.exec.reader.validateDirectAuthorization(ctx, s.cfg.Executor, resolved); err != nil {
 				startupErr := errors.Errorf("rfq: validate direct authorization: %w", err)
 				observability.Log(ctx).Error(startupErr, "external adapter authorization failed",

@@ -217,6 +217,11 @@ discount, never a rate: its listing carries each discount's ppm, and every RFQ `
 
 For signed discounts:
 
+The backend supplies explicit `discountPrecision` for both listings and resolved terms,
+including older deployments. Native offer and signature parsing requires `1000000`;
+missing metadata and connector precision `100000000` cannot enter native pricing or reads.
+The configured connector execution path separately requires `100000000`.
+
 1. Treat HTTP `nonce` values as base-10 uint256 strings, parse them into `*big.Int`, and reject hex,
    signs, non-digits, and values wider than 256 bits. The EIP-712 value remains the same uint256.
 2. List and validate advertised offers for quote construction, pricing them from the signed `discount`

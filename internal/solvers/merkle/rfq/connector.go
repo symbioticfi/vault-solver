@@ -41,6 +41,9 @@ func parseConnectorDiscount(r *discounts.Resolved, id common.Hash, venue, token 
 	if r == nil {
 		return connectorTerms{}, errors.New("connector discount is nil")
 	}
+	if r.DiscountPrecision != "100000000" {
+		return connectorTerms{}, errors.Errorf("connector discount precision: expected 100000000, got %q", r.DiscountPrecision)
+	}
 	rawID, err := hexutil.Decode(r.DiscountID)
 	if err != nil || len(rawID) != 32 || common.BytesToHash(rawID) != id {
 		return connectorTerms{}, errors.New("connector discount id does not match selected route")
