@@ -215,8 +215,9 @@ Release the backend and this solver together. Quote requests retain the complete
 pricing snapshot without a legacy retry. This solver requires explicit discount
 precision in quotes and signed-discount responses; mixed backend/solver versions
 are unsupported. Resume quote traffic on the new versions and enable Merkle routes
-only after both rollouts complete. Keep the previous indexer database until the
-new backfill passes the backend cutover gate.
+only after both rollouts complete. Merge and deploy the indexer first, wait for
+its database to finish syncing, then merge the backend. Keep the previous indexer
+release and database for rollback.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).
