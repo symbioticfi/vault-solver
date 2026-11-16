@@ -954,7 +954,7 @@ func TestDiscountSkipLogsCarryTraceIDOnce(t *testing.T) {
 	s := &Solver{
 		log: funcr.NewJSON(func(entry string) { lines = append(lines, entry) }, funcr.Options{Verbosity: 1}),
 		discounts: &fakeDiscountClient{listed: &discounts.List{Discounts: []discounts.ListItem{
-			{DiscountID: testDiscountID, Discount: "not-a-number"},
+			{DiscountPrecision: "1000000", DiscountID: testDiscountID, Discount: "not-a-number"},
 		}}},
 	}
 

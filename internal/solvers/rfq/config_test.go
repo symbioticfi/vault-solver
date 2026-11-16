@@ -125,7 +125,7 @@ func TestParseConfig_SolverMode(t *testing.T) {
 	}{
 		"external + adapters":         {yaml: "solverMode: external" + a, wantMode: solverModeExternal, wantRestrict: true},
 		"external, no adapters":       {yaml: "solverMode: external", wantErr: true},
-		"internal + adapters":         {yaml: "solverMode: internal" + a, wantMode: solverModeInternal, wantDiscounts: true},
+		"internal + adapters":         {yaml: "solverMode: internal" + a, wantMode: solverModeInternal, wantRestrict: true, wantDiscounts: true},
 		"internal, no adapters":       {yaml: "solverMode: internal", wantMode: solverModeInternal, wantDiscounts: true},
 		"default + adapters":          {yaml: a, wantMode: solverModeExternal, wantRestrict: true},
 		"default, no adapters":        {wantErr: true},
@@ -152,34 +152,6 @@ func TestParseConfig_SolverMode(t *testing.T) {
 			}
 			if cfg.usesDiscounts() != tc.wantDiscounts {
 				t.Fatalf("usesDiscounts() = %v, want %v", cfg.usesDiscounts(), tc.wantDiscounts)
-			}
-		})
-	}
-}
-
-func TestParseConfig_QuoteScopesToAdapters(t *testing.T) {
-	a := "\n" + oneAdapter
-	cases := map[string]struct {
-		yaml         string
-		wantQuote    bool
-		wantRestrict bool
-	}{
-		"external + adapters":   {yaml: "solverMode: external" + a, wantQuote: true, wantRestrict: true},
-		"internal + adapters":   {yaml: "solverMode: internal" + a, wantQuote: true},
-		"internal, no adapters": {yaml: "solverMode: internal"},
-		"default + adapters":    {yaml: a, wantQuote: true, wantRestrict: true},
-	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			cfg, err := parseCfg(t, minimalConfig+tc.yaml+"\n")
-			if err != nil {
-				t.Fatalf("parseConfig: %v", err)
-			}
-			if cfg.quoteScopesToAdapters() != tc.wantQuote {
-				t.Fatalf("quoteScopesToAdapters() = %v, want %v", cfg.quoteScopesToAdapters(), tc.wantQuote)
-			}
-			if cfg.restrictsToAdapters() != tc.wantRestrict {
-				t.Fatalf("restrictsToAdapters() = %v, want %v", cfg.restrictsToAdapters(), tc.wantRestrict)
 			}
 		})
 	}

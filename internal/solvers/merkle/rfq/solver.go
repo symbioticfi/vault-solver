@@ -211,6 +211,9 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 		return nil, errors.New("order expired")
 	}
 	for _, item := range listed {
+		if item.DiscountPrecision != "100000000" {
+			continue
+		}
 		venue := common.HexToAddress(item.Adapter)
 		recipeExecutor, _, configured := s.ResolveRoute(venue, order.Request.TokenIn, token)
 		if !configured || common.HexToAddress(item.TokenToRedeem) != order.Request.TokenIn || common.HexToAddress(item.Collateral) != token {

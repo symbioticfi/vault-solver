@@ -28,6 +28,9 @@ The connector must be registered as version `2` in the Reactor's Liquid
 Lane adapter factory (version `1` is a native adapter).
 
 Backend quote requests carry capacity, price, token decimals and discount precision.
+Connector quotes, discount listings and resolved terms require explicit precision
+`100000000`, validated against the locally configured connector path. Missing or native
+precision does not select a different execution path.
 The solver derives account and recipe identities from the verified startup route cache.
 Exactly one configured recipe must match the connector, RWA swap permission and output
 asset; missing or ambiguous routes are declined. All supported RFQ quote paths (native external, native discounted and connector
