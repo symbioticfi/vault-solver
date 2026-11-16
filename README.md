@@ -210,9 +210,7 @@ pricing through the existing reader, with the same shared-capacity reservations.
 Partially supplied or invalid pricing is rejected; connector quotes always require
 a complete snapshot. Awarded orders still use current
 state, authorization checks, and complete-fill simulation. Connector quotes require
-a signed discount; unsigned connector quotes are unsupported. Quote-only Merkle
-discovery keeps retrying through an empty or unusable backend discount catalog,
-so a later usable listing becomes quotable without restarting the process.
+a signed discount; unsigned connector quotes are unsupported.
 Deploy the compatibility backend and solver before enabling Merkle routes. The
 compatibility backend retries the native legacy envelope only after an older
 solver rejects the added snapshot fields; this solver accepts the legacy envelope
