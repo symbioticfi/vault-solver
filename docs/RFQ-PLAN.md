@@ -68,11 +68,11 @@ missing pricing metadata is malformed. Native external, native discounted and co
 discounted quotes have no RPC reader or quote-triggered metadata warming. Native
 routes validate payout asset and decimals against cached chain metadata. Unsigned
 connector quotes remain unsupported. Fill planning re-reads state and simulates
-execution. Deploy the compatibility backend first: it retries only an exact
-old-solver rejection of added native snapshot fields. The new solver requires
-explicit native precision in quotes, discovery and discount resolution and does
-not infer it from an old backend. Removed staged route hints are not reintroduced.
-Activate Merkle routes only after the compatible backend and solver are running.
+execution. Release the backend and solver together without a legacy quote
+fallback. The solver requires explicit native precision in quotes, discovery and
+discount resolution and does not infer it from an old backend. Mixed versions are
+unsupported. Removed staged route hints are not reintroduced. Resume quote traffic
+on the new versions and activate Merkle routes only after both rollouts complete.
 
 ---
 

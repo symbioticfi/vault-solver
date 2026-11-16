@@ -211,13 +211,12 @@ Unresolved routes decline until cached; background failures retain known account
 Missing pricing metadata rejects the request. Awarded orders still use current
 state, authorization checks, and complete-fill simulation. Connector quotes require
 a signed discount; unsigned connector quotes are unsupported.
-Deploy the compatibility backend before this solver. The backend retries the
-native legacy envelope only after an older solver rejects the added snapshot
-fields, preserving native quotes during the upgrade. This solver requires explicit
-discount precision in quotes and signed-discount responses; an older backend
-without those fields is not supported. Enable Merkle routes only after both are
-updated. Keep the previous indexer database until the new backfill passes the
-backend cutover gate.
+Release the backend and this solver together. Quote requests retain the complete
+pricing snapshot without a legacy retry. This solver requires explicit discount
+precision in quotes and signed-discount responses; mixed backend/solver versions
+are unsupported. Resume quote traffic on the new versions and enable Merkle routes
+only after both rollouts complete. Keep the previous indexer database until the
+new backfill passes the backend cutover gate.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).
