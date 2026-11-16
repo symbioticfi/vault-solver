@@ -459,7 +459,9 @@ dropping features.
    discount-swap encoding (`IReactorDiscountSwapInput` from the resolved signed discount) wired into
    `Executor.fill`, discount-aware strategy selection (legs price off the adapter quote at their discount), and
    discount inventories in fill planning. Direct + discount fills now match the TS filler. Unit-tested
-   (discount-leg selection, discount fill resolves + encodes).
+   (discount-leg selection, discount fill resolves + encodes). Native advertised-offer parsing rejects
+   connector/unknown discount precision before adapter resolution; mixed backend listings preserve
+   valid native candidates. Missing precision retains compatibility with older native listings.
 4. **(done) Adapter whitelist** — port of TS filler PR #54: quoting/filling restricted to the
    configured `vaults[].adapter` set (originally `adapterWhitelistEnabled`; now auto-enabled by
    `solverMode: external` when `adapters` is non-empty — see §3),
@@ -623,9 +625,13 @@ A few **intentional, non-fund-moving divergences** remain, by design:
   (not `vault`): `discountTerms`/`discountListItem` parse `json:"adapter"`; the on-chain
   `Discount.vault` slot is then filled from that adapter address (positional binding name unchanged).
   A wrong tag here silently zero-fills and breaks every fill, so these are pinned by tests.
-- **Fill-time discount filter** — matches TS exactly: keep discounts where the adapter is
-  whitelisted, `tokenToRedeem == tokenIn`, and the adapter is not already permissioned; the
-  `asset == tokenOut` check is left to the strategy evaluator (no extra collateral pre-filter).
+- **Fill-time discount filter** — native recovery first accepts only native discount domains:
+  `discountPrecision` must be `1000000`, or absent for older native listings. Connector (`100000000`)
+  and unknown domains are rejected per offer before any `adapter.vault()` read, so they cannot abort
+  native fills from a mixed backend listing. It then keeps discounts where the adapter is whitelisted,
+  `tokenToRedeem == tokenIn`, and the adapter is not already permissioned; the `asset == tokenOut`
+  check is left to the strategy evaluator (no extra collateral pre-filter). Connector execution remains
+  owned by the configured Merkle recipe path.
 - **Adapter whitelist** — ports TS PR #54: the whitelist is the configured `vaults[].adapter` set
   (the Go config analogue of the TS deployment manifest's `vaults`). It was originally gated by an
   explicit `adapterWhitelistEnabled` flag (the TS `RFQ_FILLER_ADAPTER_WHITELIST_ENABLED` env); that flag

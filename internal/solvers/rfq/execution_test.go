@@ -638,6 +638,37 @@ func TestExecution_DiscountInventoriesSkipsExpired(t *testing.T) {
 	}
 }
 
+func TestExecution_DiscountInventoriesExcludeConnectors(t *testing.T) {
+	for _, discount := range []string{"0", "500", "1000000"} {
+		t.Run(discount, func(t *testing.T) {
+			nativeID := "0x00000000000000000000000000000000000000000000000000000000000000a1"
+			connector := common.HexToAddress("0x00000000000000000000000000000000000000aa")
+			be := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{
+				{
+					DiscountID:        "0x00000000000000000000000000000000000000000000000000000000000000a2",
+					DiscountPrecision: "100000000", Adapter: connector.Hex(), TokenToRedeem: tIn.Hex(),
+					Collateral: tOut.Hex(), CollateralDecimals: 6, Discount: discount,
+					Deadline: 4_102_444_800, MaxAssets: "10000000",
+				},
+				{
+					DiscountID: nativeID, DiscountPrecision: "1000000", Adapter: vlt.Hex(),
+					TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), CollateralDecimals: 6,
+					Discount: "500", Deadline: 4_102_444_800, MaxAssets: "10000000",
+				},
+			}}}
+			e := newExec(t, newStore(func() time.Time { return time.Unix(0, 0) }), be, &fakeTxm{})
+			// Internal recovery accepts unconfigured native adapters, but must not treat a
+			// connector as one merely because its discount fits the native numeric range.
+			e.whitelist = nil
+			inventory := e.discountInventories(t.Context(), tIn, nil)
+			if len(inventory) != 1 || inventory[0].Adapter != vlt || inventory[0].DiscountID == nil ||
+				inventory[0].DiscountID.Hex() != nativeID {
+				t.Fatalf("native recovery inventory = %+v, want only native discount %s", inventory, nativeID)
+			}
+		})
+	}
+}
+
 func TestExecution_MissingFillPlanFails(t *testing.T) {
 	_, be := fillFixtures(t)
 	st := newStore(func() time.Time { return time.Unix(0, 0) })

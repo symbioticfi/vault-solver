@@ -12,7 +12,7 @@ import (
 
 const maxUint48 = int64(1<<48 - 1)
 
-// Offer is one validated advertised discount. It is safe to pass into solver candidate construction.
+// Offer is one validated native-adapter discount. It is safe to pass into native solver candidate construction.
 type Offer struct {
 	DiscountID         common.Hash
 	Adapter            common.Address
@@ -49,6 +49,11 @@ type SignedTerms struct {
 }
 
 func ParseOffer(item ListItem) (*Offer, error) {
+	// Older native listings omit the optional precision. Explicit connector or unknown
+	// domains must never reach native pricing or adapter.vault() resolution.
+	if item.DiscountPrecision != "" && item.DiscountPrecision != "1000000" {
+		return nil, errors.Errorf("discountPrecision: unsupported native adapter precision %q", item.DiscountPrecision)
+	}
 	id, err := parseHash(item.DiscountID, "discountId")
 	if err != nil {
 		return nil, err

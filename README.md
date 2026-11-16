@@ -115,6 +115,9 @@ pricing and fills, or with `recipeExecutors` for Merkle connector pricing and fi
 Setting both fails startup. The Merkle mode uses `curator` for permissions and keeps pending execution in RAM;
 `quoteOnly: true` needs no curator service. See its
 [configuration](config/rfq-merkle.example.yaml) and [runbook](docs/RFQ-MERKLE.md).
+Native fill recovery ignores connector discounts in mixed backend listings. It accepts
+`discountPrecision: "1000000"` (or absent for older native listings); connector discounts
+with precision `100000000` require the Merkle path.
 [Sepolia setup](docs/SEPOLIA.md) identifies the shared basis and the actual
 curator-created instances required before starting a solver.
 They preserve backend signature bytes, including ERC-1271 wallet signatures.

@@ -25,6 +25,38 @@ func TestParseOffer(t *testing.T) {
 	}
 }
 
+func TestParseOfferRequiresNativeDiscountPrecision(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		precision string
+		discount  string
+		wantError bool
+	}{
+		{name: "legacy native", discount: "500"},
+		{name: "explicit native", precision: "1000000", discount: "500"},
+		{name: "connector zero", precision: "100000000", discount: "0", wantError: true},
+		{name: "connector below native limit", precision: "100000000", discount: "500", wantError: true},
+		{name: "connector at native limit", precision: "100000000", discount: "1000000", wantError: true},
+		{name: "unknown precision", precision: "10000", discount: "500", wantError: true},
+		{name: "malformed precision", precision: "native", discount: "500", wantError: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			offer, err := ParseOffer(ListItem{
+				DiscountID: "0x" + hash64, DiscountPrecision: tt.precision,
+				Adapter:            "0x0000000000000000000000000000000000000abc",
+				TokenToRedeem:      "0x0000000000000000000000000000000000000def",
+				Collateral:         "0x0000000000000000000000000000000000000c01",
+				CollateralDecimals: 6, Discount: tt.discount,
+				Deadline: 1_900_000_000, MaxAssets: "5000",
+			})
+			if (err != nil) != tt.wantError {
+				t.Fatalf("ParseOffer precision %q discount %q: offer=%+v err=%v; want error %v",
+					tt.precision, tt.discount, offer, err, tt.wantError)
+			}
+		})
+	}
+}
+
 func TestParseOfferRejectsInvalidDiscount(t *testing.T) {
 	item := ListItem{
 		DiscountID:         "0x" + hash64,
