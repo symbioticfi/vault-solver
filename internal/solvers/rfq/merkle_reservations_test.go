@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -348,5 +349,92 @@ func TestNativeFactoryDoesNotConfigureMerkleTransactions(t *testing.T) {
 	}
 	if calls != 0 || !solver.RequiresTxManager(built) || solver.RequiresMerkleTxManager(built) {
 		t.Fatal("native RFQ configured the Merkle transaction manager")
+	}
+}
+
+// Quote-only Merkle needs no curator: it keeps serving through a backend outage and publishes
+// routes from the listed connectors once the discount list is reachable.
+func TestFactoryQuoteOnlyMerkleRoutesWithoutCurator(t *testing.T) {
+	rpcServer := rpc.NewServer()
+	if err := rpcServer.RegisterName("eth", newMerkleQuoteRPC(t)); err != nil {
+		t.Fatal(err)
+	}
+	defer rpcServer.Stop()
+	httpServer := httptest.NewServer(rpcServer)
+	defer httpServer.Close()
+	client, err := chain.Dial(t.Context(), []string{httpServer.URL}, "", common.HexToAddress("0x66").Hex(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	signing, err := signer.NewFromHexKey(strings.Repeat("1", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var backendUp atomic.Bool
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !backendUp.Load() || r.URL.Path != "/api-internal/v1/discounts" {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"protocol":"0x0000000000000000000000000000000000000045","discounts":[{"discountId":"0x` + strings.Repeat("ab", 32) +
+			`","adapter":"` + vlt.Hex() + `","tokenToRedeem":"` + tIn.Hex() + `","collateral":"` + tOut.Hex() +
+			`","collateralDecimals":18,"discountPrecision":"100000000","discount":"0","signer":"0x0000000000000000000000000000000000000aaa","deadline":4102444800,"blockNumber":"7","maxAssets":"900"}]}`))
+	}))
+	defer backend.Close()
+	t.Setenv("RFQ_BACKEND_SHARED_SECRET", "test-secret")
+	merkleManager, err := merkletransaction.New(pendingQuoteChain{client}, signing, big.NewInt(1), merkletransaction.Config{MaxFeeGwei: 100, ShutdownTimeout: time.Millisecond}, logr.Discard())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := merkleManager.Initialize(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	text := strings.Replace(minimalConfig, "https://rfq-backend.example", backend.URL, 1) + "quoteOnly: true\nrecipeExecutors: ['0x0000000000000000000000000000000000000043']\n"
+	var node yaml.Node
+	if err := yaml.Unmarshal([]byte(text), &node); err != nil {
+		t.Fatal(err)
+	}
+	built, err := factory(*node.Content[0], solver.Deps{Chain: client, MerkleTxManager: func() (*merkletransaction.Manager, error) { return merkleManager, nil }, Log: logr.Discard()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := built.(*Solver)
+	if s.merkle.RequiresMerkleTxManager() {
+		t.Fatal("quote-only Merkle configured a fill sender")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	managerDone := make(chan struct{})
+	go func() { defer close(managerDone); merkleManager.Start(ctx) }()
+	execDone := make(chan error, 1)
+	go func() { execDone <- s.runExecution(ctx) }()
+	t.Cleanup(func() { cancel(); <-managerDone })
+
+	body := validQuoteBody()
+	body.Amount = "456000000000000"
+	id := "0x" + strings.Repeat("ab", 32)
+	body.Adapters[0].DiscountID = &id
+	body.Adapters[0].DiscountPrecision = "100000000"
+	quoteStatus := func() int { return do(t, s.server.handler(), http.MethodPost, "/quote", "test-secret", body).Code }
+	select {
+	case err := <-execDone:
+		t.Fatalf("quote-only execution stopped during backend outage: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if status := quoteStatus(); status != http.StatusNoContent {
+		t.Fatalf("quote before route discovery = %d, want decline", status)
+	}
+	backendUp.Store(true)
+	deadline := time.Now().Add(10 * time.Second)
+	for quoteStatus() != http.StatusOK {
+		if time.Now().After(deadline) {
+			t.Fatal("quote-only routes were not published after the backend recovered")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	cancel()
+	if err := <-execDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("quote-only shutdown = %v", err)
 	}
 }

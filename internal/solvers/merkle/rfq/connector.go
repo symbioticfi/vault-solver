@@ -175,6 +175,9 @@ func (w *connectorWorkflow) permissionTree(ctx context.Context, snapshot recipes
 	return tree, nil
 }
 
+// errNotConnector marks a venue whose account or output asset does not decode as a connector's.
+var errNotConnector = errors.New("not a connector")
+
 func (w *connectorWorkflow) state(ctx context.Context, venue common.Address, block *big.Int) (connectorState, error) {
 	var account, asset common.Address
 	call := func(data []byte) ([]byte, error) {
@@ -186,7 +189,7 @@ func (w *connectorWorkflow) state(ctx context.Context, venue common.Address, blo
 	}
 	account, err = connectorBinding.UnpackAccount(raw)
 	if err != nil || account == (common.Address{}) {
-		return connectorState{}, errors.New("invalid connector account")
+		return connectorState{}, errors.Errorf("invalid connector account: %w", errNotConnector)
 	}
 	raw, err = call(connectorBinding.PackOutputAsset())
 	if err != nil {
@@ -194,7 +197,7 @@ func (w *connectorWorkflow) state(ctx context.Context, venue common.Address, blo
 	}
 	asset, err = connectorBinding.UnpackOutputAsset(raw)
 	if err != nil || asset == (common.Address{}) {
-		return connectorState{}, errors.New("invalid connector outputAsset")
+		return connectorState{}, errors.Errorf("invalid connector outputAsset: %w", errNotConnector)
 	}
 	return connectorState{Account: account, Asset: asset}, nil
 }

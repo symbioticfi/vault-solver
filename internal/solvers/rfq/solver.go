@@ -30,6 +30,8 @@ const (
 	Name                       = "rfq-filler"
 	quoteServerShutdownTimeout = 5 * time.Second
 	orderPollOperation         = "order_poll"
+	// merkleRouteRetry matches the Merkle fill loop's polling cadence.
+	merkleRouteRetry = 3 * time.Second
 )
 
 //nolint:gochecknoinits // self-registration with the solver framework is the intended plugin pattern.
@@ -197,7 +199,8 @@ func (s *Solver) ShutdownPreparationTimeout() time.Duration {
 // Run serves the quote HTTP API until ctx is cancelled, then shuts it down gracefully, alongside the
 // backend order-poll + fill loop. The filler is poll-only (no push/notify endpoint).
 func (s *Solver) Run(ctx context.Context) error {
-	if s.merkle != nil {
+	// Quote-only Merkle discovery retries in runExecution; quotes decline until routes are published.
+	if s.merkle != nil && !s.cfg.QuoteOnly {
 		if err := s.merkle.Initialize(ctx); err != nil {
 			return errors.Errorf("rfq: initialize recipe executor: %w", err)
 		}
@@ -315,6 +318,9 @@ func (s *Solver) Run(ctx context.Context) error {
 // runExecution keeps quote-only deployments out of the order journal and transaction path.
 func (s *Solver) runExecution(ctx context.Context) error {
 	if s.cfg.QuoteOnly {
+		if s.merkle != nil {
+			s.merkle.DiscoverRoutes(ctx, merkleRouteRetry)
+		}
 		<-ctx.Done()
 		return ctx.Err()
 	}
