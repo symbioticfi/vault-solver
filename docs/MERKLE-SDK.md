@@ -14,7 +14,8 @@ components never implicitly reads the process environment.
 The standalone Curator **Redeem USN to USDC** automation runs in the generic
 `merkle` solver. Add its executor address to `strategies`; neither a new provider
 nor a template ID belongs in the host configuration. The recipe reads the account's
-live USN balance, approves that amount and calls the permitted Noon redeemer.
+live USN balance, approves that amount and calls the permitted Noon redeemer: three
+instructions with no unused USDC balance reads or receipt-delta calculation.
 Empty balances are idle. The sUSN request and claim remain independent executors;
 the claim can supply USN for a later redemption run. Issuer eligibility, treasury
 liquidity and other native requirements must pass full execution simulation.
