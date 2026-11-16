@@ -99,7 +99,7 @@ func TestResolveSelectedBindsFreshTermsToExactPhysicalQuote(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	base := testPhysicalInventory()
 	id := common.HexToHash(testOfferID)
-	provider := &fakeProvider{resolved: &Resolved{
+	provider := &fakeProvider{resolved: &Resolved{DiscountPrecision: "1000000",
 		DiscountID: testOfferID,
 		Discount: Terms{
 			Adapter: base.Adapter.Hex(), TokenToRedeem: base.TokenIn.Hex(), Discount: "100000",

@@ -38,7 +38,7 @@ the direct path is solid; they are sequenced last, not dropped.
 All supported `/quote` requests use the backend snapshot: every entry requires
 `price` (the undiscounted `1e18` oracle price), `tokenInDecimals`, capacity, discount
 and observation block. `asset` / `assetDecimals` describe the payout token; there
-are no payout aliases or backend account/recipe hints. Native inventories may
+are no payout aliases or backend account/recipe hints. Native inventories must
 explicitly carry precision `1000000`; connector precision remains `100000000`.
 The vendored discount API reports precision in listing and resolution outside the
 signed terms; listing retains `collateral` / `collateralDecimals` for payout metadata.
@@ -396,8 +396,8 @@ solvers:
 ```
 
 **`solverMode` — the single internal/external knob (default `external`).** The backend discounts API is
-available only to **internal Symbiotic** solvers, so one mode flag drives both the discount-API gate and the
-adapter whitelist:
+available only to **internal Symbiotic** solvers. The mode controls access to discounts; the configured
+adapter list scopes both quoting and filling:
 
 - **`external`** (default — the open-source filler external parties run): **never touches the discounts
   API** — filters discount inventory before quoting, skips `GET /discounts` in fill planning, never calls `POST /discounts` at fill (a surfacing discount
@@ -406,15 +406,15 @@ adapter whitelist:
   polling, every configured adapter must directly authorize the executor through `owner`, `marketMaker`,
   or `isFiller`; startup fails otherwise and emits a structured error with mode, executor, configured
   adapters, and the underlying authorization reason.
-- **`internal`**: uses **public discounts** (`GET`/`POST /discounts`). Its optional `adapters` scope the quote
-  path and add permissioned inventory to fill planning; discount recovery during execution remains unrestricted.
+- **`internal`**: uses **public discounts** (`GET`/`POST /discounts`). Its optional `adapters` scope both quotes and fills
+  and add permissioned inventory to fill planning. With no list, it discovers native adapters from discounts.
   Direct and signed-discount candidates are **deduped** (`discountInventories` drops a discount whose adapter is
   already in the configured/permissioned set).
 
-Both behaviours are **derived from `solverMode` on demand** — no redundant config fields. `Config` exposes
-`usesDiscounts()` (`mode == internal`), `restrictsToAdapters()` (external execution with configured
-adapters), and `quoteScopesToAdapters()` (either mode with configured adapters). `buildServices` uses those
-facts to wire the discount gate and the two path-specific adapter scopes. Covered by
+These behaviours are derived from mode and the configured adapter list — no redundant config fields. `Config` exposes
+`usesDiscounts()` (native internal mode or Merkle configuration) and `restrictsToAdapters()`
+(either mode with configured adapters). `buildServices` wires the same configured adapter scope
+to quotes and fills; the execution path is chosen from local native/Merkle configuration. Covered by
 `discounts_disabled_test.go`, `config_test.go`
 (`TestParseConfig_SolverMode`), and `solver_test.go` (`TestBuildServices_WhitelistWiring`).
 
@@ -422,14 +422,11 @@ The signing key is the framework `signer` (the caller EOA); `chain.rpcUrl/chainI
 The per-quote adapter inventories arrive in the `/quote` request body (`adapters[]`); the `adapters`
 list serves two purposes:
 
-- **Adapter whitelist** — scoping is per-path. The **quote** path scopes to the configured `adapters`
-  whenever `adapters` is non-empty, in **both** `external` and `internal` mode (`quoteScopesToAdapters`):
-  non-configured adapters in a `/quote` request are dropped (none left ⇒ 204), so an `internal`-mode
-  filler advertises quotes only for its own adapter universe (e.g. a per-solver adapter). The **execution**
-  path scopes to the configured `adapters` only in `external` mode (`restrictsToAdapters`): there backend
-  discounts with a non-configured adapter are ignored during fill planning. `internal` mode never restricts
-  filling — discount-driven planning may legitimately route through any advertised adapter — so with no
-  `adapters` configured an `internal` filler quotes and fills through every advertised adapter.
+- **Adapter whitelist** — both quoting and filling are scoped whenever `adapters` is non-empty,
+  in either mode. Non-configured adapters in a `/quote` request are dropped (none left ⇒ 204),
+  and their discounts are ignored before any native adapter resolution at fill time.
+  An internal filler without a configured list discovers only offers explicitly marked with native
+  precision `1000000`. Connector metadata cannot select the native path or override local routing.
 - **Fill planning**: it bounds the candidate adapter universe the fill-time multicall scans
   (direct inventories are whitelisted by construction).
 
@@ -459,10 +456,12 @@ dropping features.
    discount-swap encoding (`IReactorDiscountSwapInput` from the resolved signed discount) wired into
    `Executor.fill`, discount-aware strategy selection (legs price off the adapter quote at their discount), and
    discount inventories in fill planning. Direct + discount fills now match the TS filler. Unit-tested
-   (discount-leg selection, discount fill resolves + encodes).
+   (discount-leg selection, discount fill resolves + encodes). Native advertised-offer parsing rejects
+   missing, connector, or unknown discount precision before adapter resolution; mixed backend listings preserve
+   valid native candidates. Resolution also requires explicit precision matching the configured execution path.
 4. **(done) Adapter whitelist** — port of TS filler PR #54: quoting/filling restricted to the
    configured `vaults[].adapter` set (originally `adapterWhitelistEnabled`; now auto-enabled by
-   `solverMode: external` when `adapters` is non-empty — see §3),
+   a non-empty `adapters` list in either solver mode — see §3),
    fill-time discounts filtered by the same set, and a guard that fails the order when a
    backend-resolved discount's adapter differs from the quoted strategy leg's adapter (no tx is
    sent; a still-open order is re-armed and re-evaluated next poll, matching the TS lifecycle).
@@ -623,23 +622,20 @@ A few **intentional, non-fund-moving divergences** remain, by design:
   (not `vault`): `discountTerms`/`discountListItem` parse `json:"adapter"`; the on-chain
   `Discount.vault` slot is then filled from that adapter address (positional binding name unchanged).
   A wrong tag here silently zero-fills and breaks every fill, so these are pinned by tests.
-- **Fill-time discount filter** — matches TS exactly: keep discounts where the adapter is
-  whitelisted, `tokenToRedeem == tokenIn`, and the adapter is not already permissioned; the
-  `asset == tokenOut` check is left to the strategy evaluator (no extra collateral pre-filter).
-- **Adapter whitelist** — ports TS PR #54: the whitelist is the configured `vaults[].adapter` set
-  (the Go config analogue of the TS deployment manifest's `vaults`). It was originally gated by an
-  explicit `adapterWhitelistEnabled` flag (the TS `RFQ_FILLER_ADAPTER_WHITELIST_ENABLED` env); that flag
-  has since been folded into **`solverMode`** (§3), and scoping is now per-path. The **quote** whitelist
-  is enabled whenever `adapters` is non-empty in either mode (`quoteScopesToAdapters`); the **execution**
-  whitelist (fill-time discount filtering) is `external`-only (`restrictsToAdapters`). Enforcement points:
-  `/quote` adapter filtering (none left ⇒ 204) — quote-scoped; fill-time discount filtering — execution-scoped;
-  and the unconditional fill-time resolved-discount ↔ strategy-leg adapter equality check (mismatch ⇒
-  order failed, no tx; while the backend still lists the order open it is re-armed on the next poll
-  and the discount re-resolved, so a transient mis-resolution self-heals — same lifecycle as TS).
-  Deliberate divergences: the Go default profile is **`external`**, which **requires `adapters`** (an empty
-  list is rejected at startup — no discounts fallback) and scopes quoting/filling to them; and Go rejects
-  zero-address `adapters` entries at startup (the TS manifest schema does not), so a placeholder config
-  cannot put `address(0)` on the whitelist.
+- **Fill-time discount filter** — native recovery first accepts only native discount domains:
+  `discountPrecision` must be `1000000`, including for older native adapters. Missing, connector (`100000000`),
+  and unknown domains are rejected per offer before any `adapter.vault()` read, so they cannot abort
+  native fills from a mixed backend listing. It then keeps discounts where the adapter is whitelisted,
+  `tokenToRedeem == tokenIn`, and the adapter is not already permissioned; the `asset == tokenOut`
+  check is left to the strategy evaluator (no extra collateral pre-filter). Connector execution remains
+  owned by the configured Merkle recipe path.
+- **Adapter whitelist** — the configured `adapters` set scopes both quotes and fills in either mode.
+  This deliberately tightens the older TS recovery behavior: an internal filler with configured adapters
+  no longer searches unrelated advertised venues. Internal fillers with no list retain native discount
+  discovery, filtered by explicit precision before on-chain resolution. External mode still requires
+  adapters and direct authorization; internal mode can use signed discounts without direct authorization.
+  The fill-time resolved-discount ↔ strategy-leg adapter equality check remains unconditional:
+  mismatch fails the order before submission; an open order can be re-evaluated on a later poll.
 - **`requestId`/`quoteId`** carry `format:"uuid"` to mirror the TS `z.uuid()` inbound validation.
 - **Validation status code** — Huma returns **422** on schema violations vs the TS filler's **400**
   (see §2). The reject is identical; only the code differs.
@@ -696,6 +692,11 @@ the backend header-only contract so resolve-union decoding no longer requires th
 removed body field.
 
 Merkle connector acquisition is owned by `internal/solvers/merkle/rfq`, as described in [RFQ-MERKLE.md](RFQ-MERKLE.md). The backend uses an optional `recipeExecutors` list for each connector: absent means native adapter; present means connector. It estimates capacity from recipe reads and checks current roles with batched RPC calls, without scanning historical block ranges or fetching curator permission trees. Advertised maxAssets is a read estimate; exact ordered funding and settlement are validated by the solver's complete outer fill simulation. It supplies `maxAssets`, price, token decimals and discount precision in quote inventory; account and recipe identities stay internal to backend capacity filtering and local solver caches. The solver chooses native behavior from local `adapters` configuration or Merkle behavior from local `recipeExecutors`; configuring both fails startup. Merkle mode derives each payment connector from its committed recipe and shares the existing Merkle fill component. Overlapping recipes use one account/asset capacity within each quote, and awards select a configured executor with the matching connector and RWA. The solver resolves account and a unique compatible executor from its startup cache, including pinned RWA swap permissions, without quote-time I/O. Multiple compatible cached recipes are declined. Backend quote and liquidity capacities use the minimum across applicable recipe alternatives; failed capacity reads suppress the connector. Pending signed work holds the signer fence; confirmed fills persist account/asset inclusion watermarks that reject older quote snapshots (see RFQ-MERKLE.md). The Merkle execution path reads the unchanged original recipe from `SetRecipe` only at the executor's known publication block, fetches the existing permission tree, verifies current roles and simulates the complete outer RFQ fill. It uses the shared chain reader without a separate publication indexer URL. The recipe commits one signed swap with the awarded amount and payment as inputs 0 and 1; no capacity metadata or embedded proofs are added. Include that asset's original issuer grants when redemption is required; route failures never fall back to custody.
+
+Quote-only Merkle deployments use that same startup discovery and require `curator.url`
+for read-only permission access. Initialization errors abort startup; there is no separate
+backend-list discovery or retry loop. Quote-only construction skips the fill signer and sender
+after creating the permission source, so quotes and fills share the same permitted routes.
 
 ### Optional token log metadata
 

@@ -75,14 +75,15 @@ func New(cfg Config, deps solver.Deps) (*Solver, error) {
 		return nil, errors.New("rfq-merkle requires the host chain, signer and transaction manager")
 	}
 	s := &Solver{spends: newSpendLedger(), recipeExecutors: cfg.RecipeExecutors, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), caller: cfg.Executor, maxGas: deps.MaxGas}}
-	if cfg.QuoteOnly {
-		return s, nil
-	}
 	source, err := cfg.Curator.PermissionSource(deps.Chain)
 	if err != nil {
 		return nil, err
 	}
-	s.workflow.source, s.workflow.signer = source, deps.Signer.Address()
+	s.workflow.source = source
+	if cfg.QuoteOnly {
+		return s, nil
+	}
+	s.workflow.signer = deps.Signer.Address()
 	manager, err := deps.MerkleTxManager()
 	if err != nil {
 		return nil, err
@@ -211,6 +212,9 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 		return nil, errors.New("order expired")
 	}
 	for _, item := range listed {
+		if item.DiscountPrecision != "100000000" {
+			continue
+		}
 		venue := common.HexToAddress(item.Adapter)
 		recipeExecutor, _, configured := s.ResolveRoute(venue, order.Request.TokenIn, token)
 		if !configured || common.HexToAddress(item.TokenToRedeem) != order.Request.TokenIn || common.HexToAddress(item.Collateral) != token {

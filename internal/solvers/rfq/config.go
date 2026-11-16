@@ -48,7 +48,7 @@ type rawStrategyConfig struct {
 type Config struct {
 	// RecipeExecutors selects connector pricing and Merkle fills instead of native adapters.
 	RecipeExecutors []common.Address
-	// Curator provides the Merkle permission tree for full execution.
+	// Curator provides the Merkle permission tree for route discovery and execution.
 	Curator merklehost.Curator
 	// QuoteOnly serves pricing for a separately operated filler without polling or submitting orders.
 	QuoteOnly bool
@@ -82,10 +82,10 @@ type Config struct {
 	// without spending this budget. Every retry re-fetches the executable order and discount signatures.
 	MaxNonceRetries int
 	// SolverMode is the deployment profile operators set: "external" (default) or "internal". It drives
-	// the discount-API gate and adapter scoping (see usesDiscounts / restrictsToAdapters / quoteScopesToAdapters):
+	// the discount-API gate (see usesDiscounts); configured adapters scope both quoting and filling:
 	//   - external: never calls the internal-only discounts API; adapters are REQUIRED and scope quoting AND filling.
-	//   - internal: uses public discounts; adapters (optional) scope the QUOTE path only, while filling stays
-	//     unrestricted so discount-driven recovery legs through any advertised adapter still execute.
+	//   - internal: uses public discounts; adapters (optional) scope both quotes and fills.
+	//     Without a list, native adapters are discovered from the backend's discounts.
 	SolverMode string
 	// TokenPolicy scopes quoted input tokens and enforces single-route fills in permissioned mode.
 	TokenPolicy tokenpolicy.Policy
@@ -95,7 +95,7 @@ type Config struct {
 	// equal to the minimum still quotes. A token absent from the map has no minimum. Address keys make
 	// the lookup checksum/case-insensitive.
 	MinAmountsIn map[common.Address]*big.Int
-	// Adapters is the configured LiquidLane adapter universe: in external mode the set quoting/filling is
+	// Adapters is the configured LiquidLane adapter universe: in either mode the set quoting/filling is
 	// scoped to, and the candidate universe used to build each fresh fill plan. Config carries only adapter addresses;
 	// each entry's Vault (adapter.vault()) and Asset (vault.asset()) are resolved on-chain at startup
 	// (see reader.resolveVaults) and are fixed for the adapter's lifetime. Empty disables direct fill planning.
@@ -246,16 +246,8 @@ func (c *Config) usesDiscounts() bool {
 	return c.SolverMode == solverModeInternal || len(c.RecipeExecutors) > 0
 }
 
-// restrictsToAdapters reports whether the EXECUTION path (order filling, incl. discount-leg recovery) is
-// scoped to the configured Adapters: external mode with at least one adapter. parseConfig requires external
-// to have adapters; the len check guards hand-built Configs.
+// restrictsToAdapters scopes both quotes and fills whenever an adapter list is configured.
 func (c *Config) restrictsToAdapters() bool {
-	return c.SolverMode == solverModeExternal && len(c.Adapters) > 0
-}
-
-// quoteScopesToAdapters reports whether the QUOTE path is scoped to the configured Adapters. It scopes in
-// both modes whenever Adapters is non-empty, while execution scoping stays external-only.
-func (c *Config) quoteScopesToAdapters() bool {
 	return len(c.Adapters) > 0
 }
 
