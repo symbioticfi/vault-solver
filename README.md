@@ -1115,6 +1115,11 @@ simulations with all Manage gates closed and no Call or Approve work wait withou
 sending; malformed results and failed simulations remain errors. A zero request ID
 does not imply waiting when a separate recipe gate authorizes the action.
 
+Curator's standalone **Redeem USN to USDC** automation uses this generic `merkle`
+solver: configure its executor address in `strategies`. It redeems the account's
+live USN balance and remains idle when empty. The preceding sUSN request and claim
+are separate automations; Noon issuer access and liquidity must still pass simulation.
+
 The independent `threef-merkle` solver runs native 3F API-key PUSH offers with a
 dedicated curator BF, a MerkleAccount maker and guarded account-side minting.
 Configure one recipe `executor`, `policy: ${THREEF_POLICY}`, one broker and an API-key environment reference using
