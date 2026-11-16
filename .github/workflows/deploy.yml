@@ -62,9 +62,39 @@ jobs:
     runs-on: ubuntu-latest
     environment: deploy
     steps:
+      # The workflow's own token cannot dispatch workflows in another repository, so the job mints a
+      # GitHub App installation token with Actions: write on symbioticfi/vault-solver-deploy only,
+      # revoked when the job ends.
+      - name: Check GitHub App settings
+        env:
+          APP_CLIENT_ID: ${{ vars.APP_CLIENT_ID }}
+          APP_PRIVATE_KEY_SET: ${{ secrets.APP_PRIVATE_KEY != '' }}
+        run: |
+          ok=true
+          if [ -z "$APP_CLIENT_ID" ]; then
+            echo "::error::APP_CLIENT_ID is not set: add the client ID of the GitHub App with Actions: write on vault-solver-deploy as a variable of the deploy environment"
+            ok=false
+          fi
+          if [ "$APP_PRIVATE_KEY_SET" != true ]; then
+            echo "::error::APP_PRIVATE_KEY is not set: add that GitHub App's private key as a secret of the deploy environment"
+            ok=false
+          fi
+          if [ "$ok" != true ]; then
+            exit 1
+          fi
+
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app-token
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          owner: symbioticfi
+          repositories: vault-solver-deploy
+          permission-actions: write
+
       - name: Trigger deploy
         env:
-          GH_TOKEN: ${{ secrets.DEPLOY_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           IMAGE_TAG: ${{ github.sha }}
           DIGEST: ${{ needs.image.outputs.digest }}
           REF_NAME: ${{ github.ref_name }}
