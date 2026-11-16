@@ -35,6 +35,14 @@ func TestFactoryPlansCuratorNoonRedemption(t *testing.T) {
 	if hash, err := recipes.HashRecipe(recipe); err != nil || hash != fixture.RecipeHash {
 		t.Fatal("frontend recipe commitment changed", err)
 	}
+	if len(recipe.Queries) != 1 || len(recipe.Steps) != 3 {
+		t.Fatal("standalone redemption must only read USN, approve and redeem")
+	}
+	for i, want := range []uint8{recipes.Read, recipes.Manage, recipes.Manage} {
+		if len(recipe.Steps[i]) == 0 || recipe.Steps[i][0] != want {
+			t.Fatalf("step %d must have opcode %d", i, want)
+		}
+	}
 	tree, err := recipes.DecodeTree(raw)
 	if err != nil {
 		t.Fatal(err)
