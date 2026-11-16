@@ -32,8 +32,8 @@ type quoteRequest struct {
 
 // quoteAdapter is one adapter inventory entry the backend offers for the request.
 type quoteAdapter struct {
-	DiscountPrecision string  `json:"discountPrecision,omitempty"`
-	Price             string  `json:"price,omitempty" pattern:"^[0-9]+$" doc:"Undiscounted oracle price scaled by 1e18; required for snapshot-priced quotes"`
+	DiscountPrecision string  `json:"discountPrecision" enum:"1000000,100000000"`
+	Price             string  `json:"price,omitempty" pattern:"^[0-9]+$" doc:"Undiscounted oracle price scaled by 1e18; required for every quote"`
 	TokenInDecimals   *int    `json:"tokenInDecimals,omitempty" minimum:"0" maximum:"255"`
 	Adapter           string  `json:"adapter" pattern:"^0x[a-fA-F0-9]{40}$"`
 	Asset             string  `json:"asset" pattern:"^0x[a-fA-F0-9]{40}$"`
@@ -168,7 +168,7 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address, r
 			return solverInventory{}, errors.Errorf("adapters[%d]: connector requires signed discount and precision 100000000", index)
 		}
 		precision = 100_000_000
-	} else if v.DiscountPrecision != "" && v.DiscountPrecision != "1000000" {
+	} else if v.DiscountPrecision != "1000000" {
 		return solverInventory{}, errors.Errorf("adapters[%d]: invalid adapter discount precision", index)
 	}
 	if discount.Cmp(big.NewInt(precision)) > 0 || (recipeExecutor != (common.Address{}) && discount.Cmp(big.NewInt(precision)) == 0) {
@@ -178,24 +178,17 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address, r
 	if err != nil {
 		return solverInventory{}, errors.Errorf("%s: invalid block number %q", idxField(index, "blockNumber"), v.BlockNumber)
 	}
-	// The pre-snapshot backend omits all three fields. Only native routes support
-	// this envelope; their pricing is read through the existing chain reader.
-	legacy := recipeExecutor == (common.Address{}) && v.Price == "" && v.TokenInDecimals == nil && v.DiscountPrecision == ""
-	if !legacy && (v.TokenInDecimals == nil || *v.TokenInDecimals < 0 || *v.TokenInDecimals > 255) {
+	if v.TokenInDecimals == nil || *v.TokenInDecimals < 0 || *v.TokenInDecimals > 255 {
 		return solverInventory{}, errors.Errorf("%s: quote requires token decimals", idxField(index, "tokenInDecimals"))
 	}
-	var inputDecimals int
-	var price *big.Int
-	if !legacy {
-		inputDecimals = *v.TokenInDecimals
-		price, err = parseUint256(v.Price, idxField(index, "price"))
-		if err != nil || price.Sign() <= 0 || price.BitLen() > 256 {
-			return solverInventory{}, errors.Errorf("%s: quote requires a positive uint256 price", idxField(index, "price"))
-		}
+	inputDecimals := *v.TokenInDecimals
+	price, err := parseUint256(v.Price, idxField(index, "price"))
+	if err != nil || price.Sign() <= 0 || price.BitLen() > 256 {
+		return solverInventory{}, errors.Errorf("%s: quote requires a positive uint256 price", idxField(index, "price"))
 	}
 
 	route := liquidlane.NewRoute(chainID, adapter, account, tokenIn, asset, inputDecimals, v.AssetDecimals)
-	// Modern quotes use the backend pricing snapshot; fills revalidate current state.
+	// All quotes use the backend pricing snapshot; fills revalidate current state.
 	inventory := liquidlane.DirectInventory(route, maxAssets, nil)
 	inventory.AdapterMinDiscount = discount
 	if discountID != nil {

@@ -41,6 +41,9 @@ func parseConnectorDiscount(r *discounts.Resolved, id common.Hash, venue, token 
 	if r == nil {
 		return connectorTerms{}, errors.New("connector discount is nil")
 	}
+	if r.DiscountPrecision != "100000000" {
+		return connectorTerms{}, errors.Errorf("connector discount precision: expected 100000000, got %q", r.DiscountPrecision)
+	}
 	rawID, err := hexutil.Decode(r.DiscountID)
 	if err != nil || len(rawID) != 32 || common.BytesToHash(rawID) != id {
 		return connectorTerms{}, errors.New("connector discount id does not match selected route")
@@ -175,9 +178,6 @@ func (w *connectorWorkflow) permissionTree(ctx context.Context, snapshot recipes
 	return tree, nil
 }
 
-// errNotConnector marks a venue whose account or output asset does not decode as a connector's.
-var errNotConnector = errors.New("not a connector")
-
 func (w *connectorWorkflow) state(ctx context.Context, venue common.Address, block *big.Int) (connectorState, error) {
 	var account, asset common.Address
 	call := func(data []byte) ([]byte, error) {
@@ -189,7 +189,7 @@ func (w *connectorWorkflow) state(ctx context.Context, venue common.Address, blo
 	}
 	account, err = connectorBinding.UnpackAccount(raw)
 	if err != nil || account == (common.Address{}) {
-		return connectorState{}, errors.Errorf("invalid connector account: %w", errNotConnector)
+		return connectorState{}, errors.New("invalid connector account")
 	}
 	raw, err = call(connectorBinding.PackOutputAsset())
 	if err != nil {
@@ -197,7 +197,7 @@ func (w *connectorWorkflow) state(ctx context.Context, venue common.Address, blo
 	}
 	asset, err = connectorBinding.UnpackOutputAsset(raw)
 	if err != nil || asset == (common.Address{}) {
-		return connectorState{}, errors.Errorf("invalid connector outputAsset: %w", errNotConnector)
+		return connectorState{}, errors.New("invalid connector outputAsset")
 	}
 	return connectorState{Account: account, Asset: asset}, nil
 }

@@ -28,7 +28,6 @@ type quoteRouteResolver func(venue, rwa, asset common.Address, assetDecimals int
 // for concurrent use (the HTTP server serves quotes in parallel): its dependencies are individually
 // synchronized, and its optional configured route slice is published atomically once.
 type quoteService struct {
-	legacyReader  quoteCandidateReader // used only for pre-snapshot native backend requests
 	resolveRoute  quoteRouteResolver
 	pairRoutes    atomic.Pointer[[]liquidlane.Route] // immutable configured adapter directions, optional background observation only
 	chainID       int64
@@ -51,10 +50,6 @@ type quoteService struct {
 	strategyName     string // registry key, reported as the strategy.name span attribute
 	log              logr.Logger
 	now              func() time.Time
-}
-
-type quoteCandidateReader interface {
-	readQuoteCandidates(ctx context.Context, inventory []solverInventory, tokenIn common.Address, tokenOut common.Address, amountIn *big.Int, pending pendingReservations) ([]liquidlane.QuoteCandidate, error)
 }
 
 // pendingReservations returns the capacity won orders hold against the given resolved inventory.
@@ -169,10 +164,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 	}
 
 	requireSingleRoute := qs.tokenPolicy.RequiresSingleRoute(req.TokenIn)
-	candidates, err := qs.snapshotCandidates(ctx, inv, req)
-	if err != nil {
-		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: read legacy candidates: %w", err)
-	}
+	candidates := qs.snapshotCandidates(ctx, inv, req)
 	if len(candidates) == 0 {
 		observability.Log(ctx).V(1).Info("declining quote: no viable LiquidLane candidates", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
@@ -216,26 +208,15 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 	}, nil
 }
 
-// snapshotCandidates prices complete backend snapshots without I/O. Legacy native
-// envelopes use the existing chain reader until their backend is upgraded.
+// snapshotCandidates prices the backend snapshot and subtracts local reservations without I/O.
 func (qs *quoteService) snapshotCandidates(
 	ctx context.Context, inv []solverInventory, req strategyRequest,
-) (candidates []liquidlane.QuoteCandidate, err error) {
-	ctx, end := tracer.Start(ctx, "rfq.quote.snapshot")
-	defer func() { end(err) }()
+) (candidates []liquidlane.QuoteCandidate) {
+	_, end := tracer.Start(ctx, "rfq.quote.snapshot")
+	defer end(nil)
 	inv = slices.DeleteFunc(slices.Clone(inv), func(item solverInventory) bool {
 		return item.TokenIn != req.TokenIn || item.TokenOut != req.TokenOut || item.Vault == (common.Address{})
 	})
-	if slices.ContainsFunc(inv, func(item solverInventory) bool { return item.Price == nil }) {
-		if qs.legacyReader == nil {
-			return nil, errors.New("legacy native quote reader unavailable")
-		}
-		var pending pendingReservations
-		if qs.reservations != nil {
-			pending = func(rows []solverInventory) liquidlane.CapacityReservations { return qs.reservations("", rows) }
-		}
-		return qs.legacyReader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount, pending)
-	}
 	var reservations liquidlane.CapacityReservations
 	if qs.reservations != nil {
 		reservations = qs.reservations("", inv)
@@ -246,7 +227,7 @@ func (qs *quoteService) snapshotCandidates(
 			candidates = append(candidates, *candidate)
 		}
 	}
-	return candidates, nil
+	return candidates
 }
 
 // decideQuote runs the strategy as the rfq.quote.decide stage.

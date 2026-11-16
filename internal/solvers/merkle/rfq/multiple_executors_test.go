@@ -34,7 +34,7 @@ func TestMultipleExecutorsShareRouting(t *testing.T) {
 		t.Fatal("did not initialize both configured executors")
 	}
 	order, _, _ := connectorExecutionAward(workflow.caller)
-	listing := discounts.ListItem{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"}
+	listing := discounts.ListItem{DiscountPrecision: "100000000", Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"}
 	wrongRWA := listing
 	wrongRWA.TokenToRedeem = common.HexToAddress("0xbad").Hex()
 	intent, err := s.prepare(t.Context(), awardRow(t, order), []discounts.ListItem{wrongRWA, listing})

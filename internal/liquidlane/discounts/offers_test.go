@@ -19,7 +19,7 @@ func TestMatchInventoriesScopesCapsAndPricesSignedDiscount(t *testing.T) {
 	base := testPhysicalInventory()
 	listed := &List{Discounts: []ListItem{
 		testOffer(base, "2000", now.Add(time.Minute)),
-		{
+		{DiscountPrecision: "1000000",
 			DiscountID: testOfferID,
 			Adapter:    common.HexToAddress("0xdead").Hex(), TokenToRedeem: base.TokenIn.Hex(),
 			Collateral: base.TokenOut.Hex(), CollateralDecimals: base.TokenOutDecimals,
@@ -286,7 +286,7 @@ func testInventoryWithMinDiscount(inventory liquidlane.Inventory, minDiscount *b
 }
 
 func testOffer(base liquidlane.Inventory, maxAssets string, deadline time.Time) ListItem {
-	return ListItem{
+	return ListItem{DiscountPrecision: "1000000",
 		DiscountID: testOfferID,
 		Adapter:    base.Adapter.Hex(), TokenToRedeem: base.TokenIn.Hex(), Collateral: base.TokenOut.Hex(),
 		CollateralDecimals: base.TokenOutDecimals, Discount: "100000", Deadline: deadline.Unix(),

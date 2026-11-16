@@ -185,7 +185,7 @@ func (f *connectorReadFake) CallContract(_ context.Context, m ethereum.CallMsg, 
 }
 
 func connectorDiscountFixture() *discounts.Resolved {
-	return &discounts.Resolved{
+	return &discounts.Resolved{DiscountPrecision: "100000000",
 		DiscountID:      common.HexToHash("0x42").Hex(),
 		Discount:        discounts.Terms{Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "2000000", Signer: common.HexToAddress("0x44").Hex(), Protocol: common.HexToAddress("0x45").Hex(), Nonce: "17", Deadline: 4102444800},
 		SignerSignature: "0x" + strings.Repeat("ab", 65), ProtocolSignature: "0x" + strings.Repeat("cd", 65), ProtocolDeadline: 4102444801,
@@ -199,6 +199,9 @@ func TestConnectorDiscountPreservesUpstreamTerms(t *testing.T) {
 		want   string
 	}{
 		{"unchanged", func(*discounts.Resolved) {}, ""},
+		{"missing precision", func(r *discounts.Resolved) { r.DiscountPrecision = "" }, "precision"},
+		{"native precision", func(r *discounts.Resolved) { r.DiscountPrecision = "1000000" }, "precision"},
+		{"unknown precision", func(r *discounts.Resolved) { r.DiscountPrecision = "10000" }, "precision"},
 		{"uint256 overflow", func(r *discounts.Resolved) { r.Discount.Nonce = new(big.Int).Lsh(big.NewInt(1), 256).String() }, "nonce"},
 		{"uint48 overflow", func(r *discounts.Resolved) { r.ProtocolDeadline = 1 << 48 }, "deadline"},
 		{"malformed signer signature", func(r *discounts.Resolved) { r.SignerSignature = "0xgg" }, "signerSignature"},

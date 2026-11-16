@@ -115,8 +115,12 @@ and underlying authorization error.
 Configure `rfq-filler` with the existing `adapters` list for native
 pricing and fills, or with `recipeExecutors` for Merkle connector pricing and fills.
 Setting both fails startup. The Merkle mode uses `curator` for permissions and keeps pending execution in RAM;
-`quoteOnly: true` needs no curator service. See its
+`quoteOnly: true` also requires `curator.url` to discover permitted routes at startup, but does not submit fills. See its
 [configuration](config/rfq-merkle.example.yaml) and [runbook](docs/RFQ-MERKLE.md).
+Configured native `adapters` scope both quoting and filling in either solver mode.
+Native discount discovery requires `discountPrecision: "1000000"`; missing or other
+precision values are rejected. The backend supplies this metadata for older adapters too.
+Connector discounts require precision `100000000` and the configured Merkle path.
 [Sepolia setup](docs/SEPOLIA.md) identifies the shared basis and the actual
 curator-created instances required before starting a solver.
 They preserve backend signature bytes, including ERC-1271 wallet signatures.
@@ -191,7 +195,7 @@ filled orders without claiming a peer fill. Attempt history is local and is lost
 The next fresh request can reuse its unused nonce. Reservations are local to the process and are not restored
 after a restart.
 
-Snapshot-priced `/quote` paths use the backend's `price` (undiscounted oracle
+All supported `/quote` paths use the backend's `price` (undiscounted oracle
 price scaled by `1e18`), `tokenInDecimals`, `maxAssets`, and observation block.
 Configured native adapter accounts and Merkle routes come from the verified startup
 cache. Merkle mode selects exactly one recipe matching the connector, RWA and payout
@@ -204,19 +208,16 @@ calls, including metadata warming, and preserve the contract's two rounding step
 Native solvers without an adapter list discover accounts at startup and refresh
 new accounts every `pollIntervalMs` outside requests, including in `quoteOnly` mode.
 Unresolved routes decline until cached; background failures retain known accounts.
-An older backend may omit `price`, `tokenInDecimals` and `discountPrecision`
-together for native adapters. Only that legacy envelope uses current on-chain
-pricing through the existing reader, with the same shared-capacity reservations.
-Partially supplied or invalid pricing is rejected; connector quotes always require
-a complete snapshot. Awarded orders still use current
+Missing pricing metadata rejects the request. Awarded orders still use current
 state, authorization checks, and complete-fill simulation. Connector quotes require
 a signed discount; unsigned connector quotes are unsupported.
-Deploy the compatibility backend and solver before enabling Merkle routes. The
-compatibility backend retries the native legacy envelope only after an older
-solver rejects the added snapshot fields; this solver accepts the legacy envelope
-from an older backend. Either upgrade order preserves native quotes. Modern
-snapshot requests remain RPC-free. Keep the previous indexer database available
-until the new database has completed backfill and passed the backend cutover gate.
+Deploy the compatibility backend before this solver. The backend retries the
+native legacy envelope only after an older solver rejects the added snapshot
+fields, preserving native quotes during the upgrade. This solver requires explicit
+discount precision in quotes and signed-discount responses; an older backend
+without those fields is not supported. Enable Merkle routes only after both are
+updated. Keep the previous indexer database until the new backfill passes the
+backend cutover gate.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).
@@ -444,8 +445,8 @@ the configured lookback cutoff.
 
 In internal mode, advertised LiquidLane routes are resolved on-chain and checked against their advertised
 asset and decimals, current physical capacity, adapter minimum discount, token policy, and configured
-gas feeds. Configured adapters scope quoting when present; fill-time discount recovery remains unrestricted,
-matching RFQ solver-mode semantics. A selected discount is resolved again immediately before simulation and
+gas feeds. Configured adapters scope quoting when present; UniswapX fill-time discount recovery remains
+unrestricted. A selected discount is resolved again immediately before simulation and
 encoded as a typed `discountSwap`; its adapter, token, output floor, signatures, and expiry window are
 checked fail-closed. Quotes and fills price every leg as the adapter pays it: the oracle price read with
 the inventory and the signed discount (or the adapter minimum for direct routes), floored in the adapter's

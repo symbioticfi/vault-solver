@@ -13,8 +13,9 @@ import (
 
 func TestNativeQuoteDiscoveryFiltersAdapters(t *testing.T) {
 	backend := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{
-		{Adapter: vlt.Hex()}, {Adapter: tIn.Hex(), DiscountPrecision: "100000000"},
-		{Adapter: "invalid"}, {Adapter: (common.Address{}).Hex()},
+		{Adapter: vlt.Hex(), DiscountPrecision: "1000000"}, {Adapter: tIn.Hex(), DiscountPrecision: "100000000"},
+		{Adapter: "invalid", DiscountPrecision: "1000000"}, {Adapter: (common.Address{}).Hex(), DiscountPrecision: "1000000"},
+		{Adapter: tOut.Hex()}, {Adapter: tOut.Hex(), DiscountPrecision: "10000"},
 	}}}
 	warmer := &recordingQuoteWarmer{fakeRecoveryReader: &fakeRecoveryReader{}}
 	s := &Solver{exec: &executionService{backend: backend, reader: warmer}}
@@ -45,7 +46,7 @@ func (r *recordingQuoteWarmer) warmQuoteAdapters(_ context.Context, adapters []c
 }
 
 func TestNativeQuoteDiscoveryRefreshesOutsideRequestsAndStops(t *testing.T) {
-	backend := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{{Adapter: vlt.Hex()}}}}
+	backend := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{{Adapter: vlt.Hex(), DiscountPrecision: "1000000"}}}}
 	warmer := &recordingQuoteWarmer{fakeRecoveryReader: &fakeRecoveryReader{}, notified: make(chan struct{}, 1)}
 	s := &Solver{cfg: &Config{PollInterval: time.Millisecond}, exec: &executionService{backend: backend, reader: warmer}}
 	ctx, cancel := context.WithCancel(t.Context())

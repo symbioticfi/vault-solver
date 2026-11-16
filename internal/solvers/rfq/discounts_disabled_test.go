@@ -16,7 +16,7 @@ import (
 func TestExecution_DiscountsDisabled_RecoverySkipsListDiscounts(t *testing.T) {
 	_, be := fillFixtures(t)
 	st := newStore(func() time.Time { return time.Unix(0, 0) }) // empty store → forces recovery
-	be.discounts = &discountsResponse{Discounts: []discountListItem{{
+	be.discounts = &discountsResponse{Discounts: []discountListItem{{DiscountPrecision: "1000000",
 		DiscountID: "0x00000000000000000000000000000000000000000000000000000000000000ab",
 		Adapter:    vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), CollateralDecimals: 6,
 		Discount: "500", MaxAssets: "10000000",

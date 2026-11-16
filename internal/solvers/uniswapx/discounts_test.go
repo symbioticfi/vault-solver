@@ -136,7 +136,7 @@ func TestResolveDiscountRevalidatesSelectedTerms(t *testing.T) {
 	}
 	validResolved := func() *liquiddiscounts.Resolved {
 		deadline := now.Add(time.Minute).Unix()
-		return &liquiddiscounts.Resolved{
+		return &liquiddiscounts.Resolved{DiscountPrecision: "1000000",
 			DiscountID: testDiscountID,
 			Discount: liquiddiscounts.Terms{
 				Adapter: route.Adapter.Hex(), TokenToRedeem: route.TokenIn.Hex(), Discount: "0",
@@ -218,7 +218,7 @@ func testDiscountOffer(
 	deadline time.Time,
 	maxAssets string,
 ) liquiddiscounts.ListItem {
-	return liquiddiscounts.ListItem{
+	return liquiddiscounts.ListItem{DiscountPrecision: "1000000",
 		DiscountID: testDiscountID, Adapter: route.Adapter.Hex(), TokenToRedeem: route.TokenIn.Hex(),
 		Collateral: route.TokenOut.Hex(), CollateralDecimals: route.TokenOutDecimals,
 		Discount: "0", Signer: common.HexToAddress("0x5555555555555555555555555555555555555555").Hex(),

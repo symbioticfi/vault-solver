@@ -28,6 +28,9 @@ The connector must be registered as version `2` in the Reactor's Liquid
 Lane adapter factory (version `1` is a native adapter).
 
 Backend quote requests carry capacity, price, token decimals and discount precision.
+Connector quotes, discount listings and resolved terms require explicit precision
+`100000000`, validated against the locally configured connector path. Missing or native
+precision does not select a different execution path.
 The solver derives account and recipe identities from the verified startup route cache.
 Exactly one configured recipe must match the connector, RWA swap permission and output
 asset; missing or ambiguous routes are declined. All supported RFQ quote paths (native external, native discounted and connector
@@ -40,9 +43,12 @@ fill construction checks fresh permissions, state and the complete outer settlem
 The SDK retrieves original recipe bytes at the executor's known `recipeBlock`.
 Execution verifies current permissions and the complete outer fill; recipes remain unchanged.
 
-Merkle fills require the curator permission service and keep their active intent
-in RAM. `stateDir` is removed and rejected. With `quoteOnly: true`, `rfq-filler`
-needs no curator URL. All configured recipes share one fill owner and the host
+Both full and `quoteOnly` Merkle deployments require `curator.url`: they use the same
+startup discovery to verify the configured recipe's connector and permitted RWA tokens.
+Discovery failure aborts startup. Quote-only mode reads permissions without a fill signer
+or sender, and does not poll orders. It does not discover routes from backend discount listings.
+Merkle fills keep their active intent in RAM; `stateDir` is removed and rejected.
+All configured recipes share one fill owner and the host
 transaction manager.
 Quote capacity is grouped by account and funding asset, not executor. Overlapping
 recipes are alternatives; they cannot multiply that balance within a quote.
