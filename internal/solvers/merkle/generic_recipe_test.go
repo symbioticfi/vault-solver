@@ -127,12 +127,27 @@ type genericRecipeHost struct {
 
 func newGenericRecipeHost(t *testing.T, ready, requestID uint64, simulation string) *genericRecipeHost {
 	t.Helper()
+	return newRecipeHost(t, ready, requestID, simulation, nil)
+}
+
+type recipeHostFixture struct {
+	recipe           recipes.Recipe
+	tree             *recipes.Tree
+	adapter, account common.Address
+	results          func(uint64) []*big.Int
+}
+
+func newRecipeHost(t *testing.T, ready, requestID uint64, simulation string, fixture *recipeHostFixture) *genericRecipeHost {
+	t.Helper()
 	host := &genericRecipeHost{}
 	host.ready.Store(ready)
 	adapter := common.HexToAddress("0x100")
 	executor, account, caller := common.HexToAddress("0x10"), common.HexToAddress("0x20"), common.HexToAddress("0x30")
 	header := &types.Header{Number: big.NewInt(12), Difficulty: new(big.Int), GasLimit: 30_000_000}
 	recipe, leaf := genericManagedRecipe(t)
+	if fixture != nil {
+		recipe, account, adapter = fixture.recipe, fixture.account, fixture.adapter
+	}
 	recipeHash, err := recipes.HashRecipe(recipe)
 	if err != nil {
 		t.Fatal(err)
@@ -140,6 +155,20 @@ func newGenericRecipeHost(t *testing.T, ready, requestID uint64, simulation stri
 	root := leaf.Hash
 	leaves := []any{map[string]any{"hash": leaf.Hash.Hex(), "target": leaf.Target.Hex(), "value": "0", "data": hexutil.Encode(leaf.Data), "dataMask": hexutil.Encode(leaf.DataMask), "proof": []string{}}}
 	hashes := []common.Hash{leaf.Hash}
+	if fixture != nil {
+		root = fixture.tree.Root
+		leaves, hashes = nil, nil
+		for _, leaf := range fixture.tree.Leaves {
+			leaves = append(leaves, map[string]any{"hash": leaf.Hash.Hex(), "target": leaf.Target.Hex(), "value": "0", "data": hexutil.Encode(leaf.Data), "dataMask": hexutil.Encode(leaf.DataMask), "proof": leaf.Proof})
+			hashes = append(hashes, leaf.Hash)
+		}
+	}
+	resultsFor := func(remaining uint64) []*big.Int {
+		if fixture != nil {
+			return fixture.results(remaining)
+		}
+		return []*big.Int{new(big.Int).SetUint64(remaining), new(big.Int).SetUint64(requestID), new(big.Int)}
+	}
 	if simulation == "payable metadata" {
 		payable := leaf
 		payable.Value = big.NewInt(1)
@@ -226,7 +255,7 @@ func newGenericRecipeHost(t *testing.T, ready, requestID uint64, simulation stri
 			if simulation == "malformed" {
 				return []byte{1}
 			}
-			return genericPack(t, method.Outputs, []*big.Int{new(big.Int).SetUint64(host.ready.Load()), new(big.Int).SetUint64(requestID), new(big.Int)})
+			return genericPack(t, method.Outputs, resultsFor(host.ready.Load()))
 		case "multicall":
 			return nil
 		default:
@@ -306,7 +335,7 @@ func newGenericRecipeHost(t *testing.T, ready, requestID uint64, simulation stri
 						if host.ready.Load() > uint64(i) {
 							remaining = host.ready.Load() - uint64(i)
 						}
-						results[i] = genericPack(t, executorABI.Methods["execute"].Outputs, []*big.Int{new(big.Int).SetUint64(remaining), new(big.Int).SetUint64(requestID), new(big.Int)})
+						results[i] = genericPack(t, executorABI.Methods["execute"].Outputs, resultsFor(remaining))
 					}
 					response["result"] = hexutil.Bytes(genericPack(t, probeOutput, results))
 					break

@@ -11,6 +11,16 @@ manager used by both services. Hosts supply transport and signing dependencies;
 authenticated integration clients remain host-owned. Importing or constructing SDK
 components never implicitly reads the process environment.
 
+The standalone Curator **Redeem USN to USDC** automation runs in the generic
+`merkle` solver. Add its executor address to `strategies`; neither a new provider
+nor a template ID belongs in the host configuration. The recipe reads the account's
+live USN balance, approves that amount and calls the permitted Noon redeemer.
+Empty balances are idle. The sUSN request and claim remain independent executors;
+the claim can supply USN for a later redemption run. Issuer eligibility, treasury
+liquidity and other native requirements must pass full execution simulation.
+`TestFactoryPlansCuratorNoonRedemption` checks the retained frontend output against
+the pinned SDK, including idle and failed-issuer cases.
+
 `keeper.Planner.PrepareExecution` returns the same execution-plan format for direct
 calls, AccessManager forwarding and EIP-7702 batches across executors.
 The 3F host supplies the authenticated recipe `Caller` separately from its EOA
