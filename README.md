@@ -104,8 +104,10 @@ Account and recipe identities come from local configuration and verified chain m
 It runs either in `external` mode (the open-source filler; quoting and filling scoped to the operator's
 own adapters) or `internal` mode (Symbiotic-internal; adds the private discounts flow). The caller EOA
 must be an authorized caller of the RFQ `Executor` (its `setCallers` allowlist, granted by the owner).
-Use the generic-call Executor from RFQ PR #25 together with this filler: it encodes all
-adapter swaps explicitly. An older Executor would execute those swaps twice.
+Native mode uses the deployed Executor callback that executes its swap arrays;
+extra callback calls remain empty. Merkle mode uses the generic-call Executor and
+encodes its recipe calls explicitly. Keep each deployment on its matching mode;
+upgrading the solver does not require replacing native adapters or Executors.
 External mode also fails startup unless that executor has direct `owner`/`marketMaker`/`isFiller`
 authorization on every configured adapter; the fatal startup log includes the executor, configured adapters,
 and underlying authorization error.
@@ -209,8 +211,13 @@ Unresolved routes decline until cached; background failures retain known account
 Missing pricing metadata rejects the request. Awarded orders still use current
 state, authorization checks, and complete-fill simulation. Connector quotes require
 a signed discount; unsigned connector quotes are unsupported.
-Coordinate backend and solver rollout: this schema removes the staged route hints
-and payout aliases, so versions expecting or sending those fields must be updated together.
+Deploy the compatibility backend before this solver. The backend retries the
+native legacy envelope only after an older solver rejects the added snapshot
+fields, preserving native quotes during the upgrade. This solver requires explicit
+discount precision in quotes and signed-discount responses; an older backend
+without those fields is not supported. Enable Merkle routes only after both are
+updated. Keep the previous indexer database until the new backfill passes the
+backend cutover gate.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).

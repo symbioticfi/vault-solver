@@ -21,8 +21,9 @@ push path; orders are found exclusively by polling the backend.
   backend, then drives each order through `queued → submitting → submitted → {filled|expired|failed}`.
 - **Execution** — builds `Executor.fill(Order, protocolSig, Swap[], DiscountSwapInput[], bytes)` and
   sends it; `Reactor` validates and funds the input arrays, then calls `Executor.execute()`.
-  The solver encodes direct swaps followed by discounted swaps in the `Call[]` payload;
-  Executor runs only those calls, without adapter-version dispatch, then permits Reactor to collect outputs.
+  Native mode leaves the `Call[]` payload empty because deployed native Executors
+  execute the direct and discounted input arrays. Merkle mode separately encodes
+  recipe calls for the generic-call Executor. Both then permit Reactor to collect outputs.
   Each input carries its funding **adapter** address. The Executor has one full `fill` entrypoint.
 - **State** — in-memory only: `orders` (state machine) and `attempts`.
 
@@ -67,8 +68,11 @@ missing pricing metadata is malformed. Native external, native discounted and co
 discounted quotes have no RPC reader or quote-triggered metadata warming. Native
 routes validate payout asset and decimals against cached chain metadata. Unsigned
 connector quotes remain unsupported. Fill planning re-reads state and simulates
-execution. Roll out the paired backend and solver schema changes together: an older solver requires route hints, and the
-new solver schema rejects removed fields.
+execution. Deploy the compatibility backend first: it retries only an exact
+old-solver rejection of added native snapshot fields. The new solver requires
+explicit native precision in quotes, discovery and discount resolution and does
+not infer it from an old backend. Removed staged route hints are not reintroduced.
+Activate Merkle routes only after the compatible backend and solver are running.
 
 ---
 

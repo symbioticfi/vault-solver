@@ -55,8 +55,7 @@ func TestEncodeFill_Selector(t *testing.T) {
 	}
 }
 
-func TestEncodeFill_ExplicitSwapCalls(t *testing.T) {
-	adapterABI := adapterBinding.GetABI()
+func TestEncodeFill_NativeSwapsExecuteOnlyFromInputArrays(t *testing.T) {
 	direct := directSwaps(&fillPlan{Legs: []fillLeg{
 		{Adapter: vlt, AmountIn: big.NewInt(11), AmountOut: big.NewInt(9)},
 		{Adapter: common.HexToAddress("0x1234"), AmountIn: big.NewInt(7), AmountOut: big.NewInt(5)},
@@ -101,34 +100,8 @@ func TestEncodeFill_ExplicitSwapCalls(t *testing.T) {
 				t.Fatal(err)
 			}
 			calls := *abi.ConvertType(decoded[0], new([]executorCall)).(*[]executorCall)
-			if len(calls) != len(tc.direct)+len(tc.discounted) {
-				t.Fatalf("calls: %d", len(calls))
-			}
-			for i, call := range calls {
-				if call.Value.Sign() != 0 {
-					t.Fatal("unexpected native value")
-				}
-				method, err := adapterABI.MethodById(call.Data[:4])
-				if err != nil {
-					t.Fatal(err)
-				}
-				args, err := method.Inputs.Unpack(call.Data[4:])
-				if err != nil {
-					t.Fatal(err)
-				}
-				if i < len(tc.direct) {
-					want := tc.direct[i]
-					got := *abi.ConvertType(args[0], new(executor.ILiquidLaneAdapterSwap)).(*executor.ILiquidLaneAdapterSwap)
-					if method.Sig != "swap((address,address,uint256,uint256))" || call.Target != want.Adapter || !reflect.DeepEqual(got, want.Swap) {
-						t.Fatal("direct swap call differs from funding input")
-					}
-				} else {
-					want := tc.discounted[i-len(tc.direct)]
-					got := *abi.ConvertType(args[0], new(executor.ILiquidLaneAdapterDiscountSwap)).(*executor.ILiquidLaneAdapterDiscountSwap)
-					if method.Sig != "swap(((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256)" || call.Target != want.Adapter || !reflect.DeepEqual(got, want.DiscountSwap) || !bytes.Equal(args[1].([]byte), want.ProtocolSignature) || args[2].(common.Address) != want.Recipient || args[3].(*big.Int).Cmp(want.AmountIn) != 0 {
-						t.Fatal("discounted swap call differs from funding input or signed terms")
-					}
-				}
+			if len(calls) != 0 {
+				t.Fatalf("native Executor already executes swap arrays; extra calls would execute %d swaps twice", len(calls))
 			}
 		})
 	}
