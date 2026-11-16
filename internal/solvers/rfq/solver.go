@@ -150,6 +150,7 @@ func buildServices(
 		tokenMetadata = rdr.ll.TokenMetadata()
 	}
 	quotes := &quoteService{
+		legacyReader:     rdr,
 		tokenMetadata:    tokenMetadata,
 		discountsEnabled: cfg.usesDiscounts(),
 		chainID:          chainID,

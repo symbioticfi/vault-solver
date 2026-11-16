@@ -21,8 +21,9 @@ push path; orders are found exclusively by polling the backend.
   backend, then drives each order through `queued → submitting → submitted → {filled|expired|failed}`.
 - **Execution** — builds `Executor.fill(Order, protocolSig, Swap[], DiscountSwapInput[], bytes)` and
   sends it; `Reactor` validates and funds the input arrays, then calls `Executor.execute()`.
-  The solver encodes direct swaps followed by discounted swaps in the `Call[]` payload;
-  Executor runs only those calls, without adapter-version dispatch, then permits Reactor to collect outputs.
+  Native mode leaves the `Call[]` payload empty because deployed native Executors
+  execute the direct and discounted input arrays. Merkle mode separately encodes
+  recipe calls for the generic-call Executor. Both then permit Reactor to collect outputs.
   Each input carries its funding **adapter** address. The Executor has one full `fill` entrypoint.
 - **State** — in-memory only: `orders` (state machine) and `attempts`.
 
@@ -35,7 +36,7 @@ payout), and RFQ's external `asset` field is the shared `tokenOut`. Pricing leg 
 `/discounts` flow). Both are in scope for full parity — discount legs are built in **P3** (§4), after
 the direct path is solid; they are sequenced last, not dropped.
 
-All supported `/quote` requests use the backend snapshot: every entry requires
+Modern `/quote` requests use the backend snapshot: every entry requires
 `price` (the undiscounted `1e18` oracle price), `tokenInDecimals`, capacity, discount
 and observation block. `asset` / `assetDecimals` describe the payout token; there
 are no payout aliases or backend account/recipe hints. Native inventories may
@@ -63,12 +64,18 @@ execution and discovery requests without mutable per-request state.
 
 The quote stage allocates advertised capacity after shared account/asset reservations
 and preserves both contract floors. Backend pricing failure excludes that entry;
-missing pricing metadata is malformed. Native external, native discounted and connector
-discounted quotes have no RPC reader or quote-triggered metadata warming. Native
+partially supplied or invalid pricing metadata is malformed. Native external,
+native discounted and connector discounted snapshot requests perform no RPC reads.
+For rolling compatibility with main's backend, a native entry omitting all three
+new fields (`price`, `tokenInDecimals`, `discountPrecision`) is priced by the
+existing chain reader. Shared account/asset reservations and current minimum
+discount checks still apply; no connector entry can use this fallback. Native
 routes validate payout asset and decimals against cached chain metadata. Unsigned
 connector quotes remain unsupported. Fill planning re-reads state and simulates
-execution. Roll out the paired backend and solver schema changes together: an older solver requires route hints, and the
-new solver schema rejects removed fields.
+execution. Either rollout order works with the compatibility backend: it retries
+only an exact old-solver rejection of the added native snapshot fields; the new
+solver accepts the old native envelope. Removed staged route hints are not
+reintroduced. Merkle routes require the new backend and solver before activation.
 
 ---
 
@@ -580,7 +587,7 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   below the adapter's current minimum is dropped, since the adapter reverts it; a direct leg prices at the
   higher of its entry's discount and the current minimum. The field is required and replaces `maxRate`, so
   this solver and symbioticfi/rfq-backend#403 deploy together.
-- **Quote latency** — `/quote` is synchronous in the backend's fan-out and performs no RPC calls.
+- **Quote latency** — modern `/quote` is synchronous in the backend's fan-out and performs no RPC calls.
   Price, decimals, capacity, discount and observation block come from its authenticated backend
   snapshot; account/recipe identities come from the verified local cache. Pricing and reservation
   allocation are local, including the two contract floors. Optional token metadata warms only

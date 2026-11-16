@@ -7,14 +7,12 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
-	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/adapter"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 )
 
 var (
 	executorBinding   = executor.NewExecutor()
 	executorABI       = mustExecutorABI()
-	adapterBinding    = adapter.NewLiquidLaneAdapter()
 	executorCallsArgs = executorCallArguments()
 )
 
@@ -73,34 +71,16 @@ func decodeOrder(encoded []byte) (executor.IReactorOrder, error) {
 	return *out, nil
 }
 
-// Reactor funds the input arrays; Executor runs the corresponding calls in this order.
+// Native Executors execute swapInputs and discountSwapInputs themselves. Extra calls
+// must stay empty: repeating those swaps in executorData spends the input twice.
+// Merkle RFQ builds explicit recipe calls in its separate execution path.
 func encodeFill(
 	order executor.IReactorOrder,
 	protocolSig []byte,
 	swaps []executor.IReactorSwapInput,
 	discountSwaps []executor.IReactorDiscountSwapInput,
 ) ([]byte, error) {
-	calls := make([]executorCall, 0, len(swaps)+len(discountSwaps))
-	for _, input := range swaps {
-		data, err := adapterBinding.TryPackSwap(adapter.ILiquidLaneAdapterSwap(input.Swap))
-		if err != nil {
-			return nil, errors.Errorf("encode adapter swap: %w", err)
-		}
-		calls = append(calls, executorCall{Target: input.Adapter, Value: new(big.Int), Data: data})
-	}
-	for _, input := range discountSwaps {
-		discount := adapter.ILiquidLaneAdapterDiscountSwap{
-			Discount:         adapter.ILiquidLaneAdapterDiscount(input.DiscountSwap.Discount),
-			SignerSignature:  input.DiscountSwap.SignerSignature,
-			ProtocolDeadline: input.DiscountSwap.ProtocolDeadline,
-		}
-		data, err := adapterBinding.TryPackSwap0(discount, input.ProtocolSignature, input.Recipient, input.AmountIn)
-		if err != nil {
-			return nil, errors.Errorf("encode discounted adapter swap: %w", err)
-		}
-		calls = append(calls, executorCall{Target: input.Adapter, Value: new(big.Int), Data: data})
-	}
-	executorData, err := executorCallsArgs.Pack(calls)
+	executorData, err := executorCallsArgs.Pack([]executorCall{})
 	if err != nil {
 		return nil, errors.Errorf("encode executor calls: %w", err)
 	}

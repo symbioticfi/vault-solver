@@ -104,8 +104,10 @@ Account and recipe identities come from local configuration and verified chain m
 It runs either in `external` mode (the open-source filler; quoting and filling scoped to the operator's
 own adapters) or `internal` mode (Symbiotic-internal; adds the private discounts flow). The caller EOA
 must be an authorized caller of the RFQ `Executor` (its `setCallers` allowlist, granted by the owner).
-Use the generic-call Executor from RFQ PR #25 together with this filler: it encodes all
-adapter swaps explicitly. An older Executor would execute those swaps twice.
+Native mode uses the deployed Executor callback that executes its swap arrays;
+extra callback calls remain empty. Merkle mode uses the generic-call Executor and
+encodes its recipe calls explicitly. Keep each deployment on its matching mode;
+upgrading the solver does not require replacing native adapters or Executors.
 External mode also fails startup unless that executor has direct `owner`/`marketMaker`/`isFiller`
 authorization on every configured adapter; the fatal startup log includes the executor, configured adapters,
 and underlying authorization error.
@@ -189,7 +191,7 @@ filled orders without claiming a peer fill. Attempt history is local and is lost
 The next fresh request can reuse its unused nonce. Reservations are local to the process and are not restored
 after a restart.
 
-All supported `/quote` paths use the backend's `price` (undiscounted oracle
+Snapshot-priced `/quote` paths use the backend's `price` (undiscounted oracle
 price scaled by `1e18`), `tokenInDecimals`, `maxAssets`, and observation block.
 Configured native adapter accounts and Merkle routes come from the verified startup
 cache. Merkle mode selects exactly one recipe matching the connector, RWA and payout
@@ -202,11 +204,19 @@ calls, including metadata warming, and preserve the contract's two rounding step
 Native solvers without an adapter list discover accounts at startup and refresh
 new accounts every `pollIntervalMs` outside requests, including in `quoteOnly` mode.
 Unresolved routes decline until cached; background failures retain known accounts.
-Missing pricing metadata rejects the request. Awarded orders still use current
+An older backend may omit `price`, `tokenInDecimals` and `discountPrecision`
+together for native adapters. Only that legacy envelope uses current on-chain
+pricing through the existing reader, with the same shared-capacity reservations.
+Partially supplied or invalid pricing is rejected; connector quotes always require
+a complete snapshot. Awarded orders still use current
 state, authorization checks, and complete-fill simulation. Connector quotes require
 a signed discount; unsigned connector quotes are unsupported.
-Coordinate backend and solver rollout: this schema removes the staged route hints
-and payout aliases, so versions expecting or sending those fields must be updated together.
+Deploy the compatibility backend and solver before enabling Merkle routes. The
+compatibility backend retries the native legacy envelope only after an older
+solver rejects the added snapshot fields; this solver accepts the legacy envelope
+from an older backend. Either upgrade order preserves native quotes. Modern
+snapshot requests remain RPC-free. Keep the previous indexer database available
+until the new database has completed backfill and passed the backend cutover gate.
 Design, config, and roadmap:
 [`docs/RFQ-PLAN.md`](docs/RFQ-PLAN.md) · example
 [`config/rfq.example.yaml`](config/rfq.example.yaml).

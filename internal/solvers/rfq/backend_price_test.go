@@ -17,7 +17,8 @@ func TestQuoteUsesBackendSnapshotWithoutRPC(t *testing.T) {
 			t.Run(big.NewInt(precision).String()+"/reserved"+big.NewInt(reserved).String(), func(t *testing.T) {
 				s := testServer()
 				s.quotes.discountsEnabled = true
-				// The quote service has no RPC reader; all candidate data comes from this snapshot.
+				// A legacy-reader invocation would return no candidates and fail this quote.
+				s.quotes.legacyReader = &fakeQuoteCandidateReader{}
 				body := validQuoteBody()
 				id := common.HexToHash("0x1234").Hex()
 				decimals := 18
