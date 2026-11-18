@@ -90,7 +90,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	exec.links = links
 	var merkle *merklerfq.Solver
 	if len(cfg.RecipeExecutors) > 0 {
-		merkle, err = merklerfq.New(cfg.merkleConfig(), deps)
+		merkle, err = merklerfq.New(cfg.merkleConfig(), deps, metrics.observeOrderPoll)
 		if err != nil {
 			return nil, err
 		}
