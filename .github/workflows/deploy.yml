@@ -3,7 +3,7 @@ name: build & deploy
 on:
   push:
     branches: [stage, main]
-  # Redeploy the head of stage or main by hand
+  # Redeploy the head of main by hand
   workflow_dispatch:
 
 permissions:
@@ -14,7 +14,7 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   image:
-    if: github.ref_name == 'stage' || github.ref_name == 'main'
+    if: github.ref == 'refs/heads/main'
     environment: deploy
     needs: ci
     runs-on: ubuntu-latest
@@ -97,9 +97,7 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           IMAGE_TAG: ${{ github.sha }}
           DIGEST: ${{ needs.image.outputs.digest }}
-          REF_NAME: ${{ github.ref_name }}
         run: |
-          workflow=$([ "$REF_NAME" = "main" ] && echo deploy_prod.yml || echo deploy_stage.yml)
-          gh workflow run "$workflow" \
+          gh workflow run deploy_prod.yml \
             --repo symbioticfi/vault-solver-deploy --ref main \
             -f image_tag="$IMAGE_TAG" -f digest="$DIGEST"
