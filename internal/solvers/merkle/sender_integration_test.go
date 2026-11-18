@@ -105,8 +105,13 @@ func TestSDKRAMSenderReplacementAndReorg(t *testing.T) {
 		t.Fatal(err)
 	}
 	mine()
-	if result, err := sender.Poll(t.Context()); result != nil || err != nil || !sender.Busy() {
+	result, err := sender.Poll(t.Context())
+	if result != nil || !sender.Busy() || engine.Available() || engine.LaneReady() {
 		t.Fatalf("unconfirmed transaction released: %+v %v", result, err)
+	}
+	// The mined nonce may advance before the owned receipt has enough confirmations.
+	if err != nil && !errors.Is(err, txmanager.ErrNonceConsumed) {
+		t.Fatalf("unexpected unconfirmed observation: %v", err)
 	}
 	var reverted bool
 	if err := chain.Client().CallContext(t.Context(), &reverted, "evm_revert", snapshot); err != nil || !reverted {
@@ -114,7 +119,7 @@ func TestSDKRAMSenderReplacementAndReorg(t *testing.T) {
 	}
 	// A receipt sweep may precede mining while its later nonce read follows it.
 	// That execution-unknown result remains valid after the local reorg.
-	result, err := sender.Poll(t.Context())
+	result, err = sender.Poll(t.Context())
 	if result != nil || !sender.Busy() || engine.Available() || engine.LaneReady() {
 		t.Fatalf("reorg released ownership: %+v %v", result, err)
 	}
