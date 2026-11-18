@@ -1,7 +1,7 @@
 /*
 BF API Reference
 
-BP subdomain API documentation for bf.dev.gcp.3f.xyz
+BP subdomain API documentation for bf.3f.xyz  ## API versions  V1 and v2 share the endpoint list below. Choose **v1** in the server selector for `/v1/...`, or choose **v2** and enter a supported chain ID for `/v2/chains/{chainId}/...`. Request examples update with your selection. The `X-3F-Chain-Id` response header identifies the backend that served the request.  Payloads and EIP-712 versions are unchanged. Use the requested chain’s contracts and credentials; example addresses and chain IDs are illustrative. Guardian HTTP signatures still use the internal `/v1/...` path, including its query string. `/v2/chains/{chainId}/v1/...` remains a compatibility alias.
 
 API version: 0.0.1
 */
@@ -72,7 +72,7 @@ func (a *AuctionAPIService) AuctionControllerGetByIdV1Execute(r ApiAuctionContro
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/v1/auction/{id}"
+	localVarPath := localBasePath + "/auction/{id}"
 	localVarPath = strings.Replace(localVarPath, "{"+"id"+"}", url.PathEscape(parameterValueToString(r.id, "id")), -1)
 
 	localVarHeaderParams := make(map[string]string)
@@ -197,7 +197,7 @@ func (a *AuctionAPIService) AuctionControllerListV1Execute(r ApiAuctionControlle
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/v1/auction"
+	localVarPath := localBasePath + "/auction"
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}

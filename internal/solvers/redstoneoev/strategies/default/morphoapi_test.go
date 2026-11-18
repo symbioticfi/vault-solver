@@ -24,9 +24,10 @@ var (
 )
 
 type positionsGraphQLVars struct {
-	IDs   []string `json:"ids"`
-	First int      `json:"first"`
-	Skip  int      `json:"skip"`
+	Chains []int    `json:"chains"`
+	IDs    []string `json:"ids"`
+	First  int      `json:"first"`
+	Skip   int      `json:"skip"`
 }
 
 type positionsGraphQLRequest struct {
@@ -212,7 +213,7 @@ func TestMorphoClientPositions(t *testing.T) {
 		srv := newJSONServer(t, http.StatusOK, `{"data":{"marketPositions":{"items":[`+item+`]}}}`)
 		defer srv.Close()
 		maxHF := 1.3
-		got, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), []common.Hash{apiMktA}, 10, &maxHF)
+		got, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), 1, []common.Hash{apiMktA}, 10, &maxHF)
 		if err != nil {
 			t.Fatalf("PositionsByMarket: %v", err)
 		}
@@ -234,7 +235,7 @@ func TestMorphoClientPositions(t *testing.T) {
 		srv := newJSONServer(t, http.StatusOK, body)
 		defer srv.Close()
 
-		got, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), []common.Hash{apiMktA}, 10, nil)
+		got, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), 1, []common.Hash{apiMktA}, 10, nil)
 		if err != nil {
 			t.Fatalf("PositionsByMarket: %v", err)
 		}
@@ -268,7 +269,7 @@ func TestMorphoClientPositions(t *testing.T) {
 		for i := range ids {
 			ids[i] = common.BigToHash(big.NewInt(int64(i + 1)))
 		}
-		if _, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), ids, 10_000, nil); err != nil {
+		if _, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), 1, ids, 10_000, nil); err != nil {
 			t.Fatalf("PositionsByMarket: %v", err)
 		}
 		if len(calls) != 2 {
@@ -307,7 +308,7 @@ func TestMorphoClientPositions(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		got, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), []common.Hash{apiMktA}, maxPositionsPage+1, nil)
+		got, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), 1, []common.Hash{apiMktA}, maxPositionsPage+1, nil)
 		if err != nil {
 			t.Fatalf("PositionsByMarket: %v", err)
 		}
@@ -333,7 +334,7 @@ func TestMorphoClientPositions(t *testing.T) {
 				hf = "1.01"
 				chunkBorrower = common.HexToAddress("0x0000000000000000000000000000000000000002")
 			}
-			chunkItem := `{"user":{"address":"` + chunkBorrower.Hex() + `"},"market":{"marketId":"` + apiMktA.Hex() + `"},"state":{"borrowShares":"1","collateral":"1"},"healthFactor":` + hf + `}`
+			chunkItem := `{"user":{"address":"` + chunkBorrower.Hex() + `"},"market":{"marketId":"` + req.Variables.IDs[0] + `"},"state":{"borrowShares":"1","collateral":"1"},"healthFactor":` + hf + `}`
 			_, _ = io.WriteString(w, `{"data":{"marketPositions":{"items":[`+chunkItem+`]}}}`)
 		}))
 		defer srv.Close()
@@ -342,7 +343,7 @@ func TestMorphoClientPositions(t *testing.T) {
 		for i := range ids {
 			ids[i] = common.BigToHash(big.NewInt(int64(i + 1)))
 		}
-		got, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), ids, 1, nil)
+		got, err := newTestMorphoClient(srv.URL).PositionsByMarket(context.Background(), 1, ids, 1, nil)
 		if err != nil {
 			t.Fatalf("PositionsByMarket: %v", err)
 		}
@@ -350,4 +351,29 @@ func TestMorphoClientPositions(t *testing.T) {
 			t.Fatalf("global top risk was not selected after chunk merge: %+v", got)
 		}
 	})
+}
+
+func TestMorphoClientPositionsUsesConfiguredChain(t *testing.T) {
+	borrower := common.HexToAddress("0x629d764eC8563AFA701709B52c1a215e865632dE")
+	var request struct {
+		Query     string               `json:"query"`
+		Variables positionsGraphQLVars `json:"variables"`
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		_, _ = io.WriteString(w, `{"data":{"marketPositions":{"items":[{
+			"user":{"address":"`+borrower.Hex()+`"},"market":{"marketId":"`+apiMktA.Hex()+`"},"healthFactor":1.2
+		}]}}}`)
+	}))
+	defer server.Close()
+	got, err := newTestMorphoClient(server.URL).PositionsByMarket(t.Context(), 11155111, []common.Hash{apiMktA}, 10, nil)
+	if err != nil || len(got) != 1 || got[0].Borrower != borrower {
+		t.Fatalf("positions = %+v, err %v", got, err)
+	}
+	if len(request.Variables.Chains) != 1 || request.Variables.Chains[0] != 11155111 || !strings.Contains(request.Query, "chainId_in") {
+		t.Fatalf("borrower request missing configured chain: %+v", request)
+	}
 }

@@ -73,7 +73,7 @@ type discountPricingPair struct {
 }
 
 func (p *discountPricingPair) list(maxAssets *big.Int) {
-	p.listed = &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{{
+	p.listed = &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{{DiscountPrecision: "1000000",
 		DiscountID: p.id.Hex(), Adapter: p.route.Adapter.Hex(), TokenToRedeem: p.route.TokenIn.Hex(),
 		Collateral: p.route.TokenOut.Hex(), CollateralDecimals: 6, Discount: p.discount.String(),
 		Deadline: p.now.Add(time.Hour).Unix(), MaxAssets: maxAssets.String(),

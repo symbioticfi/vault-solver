@@ -2,7 +2,6 @@ package discounts
 
 import (
 	"math/big"
-	"strconv"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -13,7 +12,7 @@ import (
 
 const maxUint48 = int64(1<<48 - 1)
 
-// Offer is one validated advertised discount. It is safe to pass into solver candidate construction.
+// Offer is one validated native-adapter discount. It is safe to pass into native solver candidate construction.
 type Offer struct {
 	DiscountID         common.Hash
 	Adapter            common.Address
@@ -25,7 +24,7 @@ type Offer struct {
 	Discount  *big.Int
 	Deadline  int64
 	MaxAssets *big.Int
-	// BlockNumber is the block MaxAssets was read at; zero when the backend did not report it.
+	// BlockNumber is the block MaxAssets was read at.
 	BlockNumber uint64
 }
 
@@ -50,6 +49,10 @@ type SignedTerms struct {
 }
 
 func ParseOffer(item ListItem) (*Offer, error) {
+	// The backend identifies the domain for every deployment, including older adapters.
+	if item.DiscountPrecision != "1000000" {
+		return nil, errors.Errorf("discountPrecision: unsupported native adapter precision %q", item.DiscountPrecision)
+	}
 	id, err := parseHash(item.DiscountID, "discountId")
 	if err != nil {
 		return nil, err
@@ -83,23 +86,20 @@ func ParseOffer(item ListItem) (*Offer, error) {
 	if item.Deadline <= 0 {
 		return nil, errors.New("deadline: must be positive")
 	}
-	var blockNumber uint64
-	if item.BlockNumber != "" {
-		if blockNumber, err = strconv.ParseUint(item.BlockNumber, 10, 64); err != nil {
-			return nil, errors.Errorf("blockNumber: invalid decimal %q", item.BlockNumber)
-		}
-	}
 	return &Offer{
 		DiscountID: id, Adapter: adapter, TokenToRedeem: tokenToRedeem,
 		Collateral: collateral, CollateralDecimals: item.CollateralDecimals,
 		Discount: discount, Deadline: item.Deadline,
-		MaxAssets: maxAssets, BlockNumber: blockNumber,
+		MaxAssets: maxAssets, BlockNumber: item.BlockNumber,
 	}, nil
 }
 
 func ParseSigned(resolved *Resolved) (*Signed, error) {
 	if resolved == nil {
 		return nil, errors.New("resolved discount is nil")
+	}
+	if resolved.DiscountPrecision != "1000000" {
+		return nil, errors.Errorf("discountPrecision: unsupported native adapter precision %q", resolved.DiscountPrecision)
 	}
 	id, err := parseHash(resolved.DiscountID, "discountId")
 	if err != nil {

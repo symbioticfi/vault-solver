@@ -48,6 +48,9 @@ quoteRefreshMode: block
 	if cfg.OrderServer.HTTPTimeout != defaultHTTPTimeout {
 		t.Fatalf("httpTimeout = %s", cfg.OrderServer.HTTPTimeout)
 	}
+	if cfg.OrderServer.WSReadTimeout != defaultWSReadTimeout || cfg.OrderServer.WSWriteTimeout != defaultWSWriteTimeout {
+		t.Fatalf("websocket budgets = %s/%s", cfg.OrderServer.WSReadTimeout, cfg.OrderServer.WSWriteTimeout)
+	}
 	if cfg.QuoteInterval != 45*time.Second {
 		t.Fatalf("quoteInterval = %s", cfg.QuoteInterval)
 	}
@@ -76,6 +79,41 @@ quoteRefreshMode: block
 	}
 	if _, err := newStrategy(cfg.Strategy); err != nil {
 		t.Fatalf("newStrategy: %v", err)
+	}
+}
+
+func TestParseConfigWebSocketBudgets(t *testing.T) {
+	base := `
+orderServer:
+  baseUrl: https://order.example
+  wsUrl: wss://order.example
+  apiKeyEnv: LIFI_SOLVER_API_KEY
+  wsReadTimeout: READ
+  wsWriteTimeout: WRITE
+inputSettler: "0x2222222222222222222222222222222222222222"
+outputSettler: "0x3333333333333333333333333333333333333333"
+executor: "0x4444444444444444444444444444444444444444"
+adapters:
+  - "0x5555555555555555555555555555555555555555"
+`
+	for _, tc := range []struct {
+		name, read, write, wantErr string
+	}{
+		{name: "configured", read: "45s", write: "2s"},
+		{name: "zero read", read: "0s", write: "2s", wantErr: "orderServer.wsReadTimeout"},
+		{name: "negative write", read: "45s", write: "-1s", wantErr: "orderServer.wsWriteTimeout"},
+		{name: "invalid read", read: "never", write: "2s", wantErr: "orderServer.wsReadTimeout"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := strings.NewReplacer("READ", tc.read, "WRITE", tc.write).Replace(base)
+			cfg, err := parseConfig(parseYAMLNode(t, raw))
+			if tc.wantErr == "" && err != nil || tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+				t.Fatalf("parseConfig error = %v, want %q", err, tc.wantErr)
+			}
+			if err == nil && (cfg.OrderServer.WSReadTimeout != 45*time.Second || cfg.OrderServer.WSWriteTimeout != 2*time.Second) {
+				t.Fatalf("websocket budgets = %s/%s", cfg.OrderServer.WSReadTimeout, cfg.OrderServer.WSWriteTimeout)
+			}
+		})
 	}
 }
 

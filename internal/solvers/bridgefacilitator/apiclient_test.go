@@ -33,6 +33,9 @@ func (fakeSigner) SignTx(
 func TestAPIClient_ListOffers_SignedPerAdapter(t *testing.T) {
 	var gotMaker, gotAuth, gotKey, gotDeadline, gotChainID string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/offer" {
+			t.Errorf("offer path = %q, want /v1/offer", r.URL.Path)
+		}
 		gotMaker = r.URL.Query().Get("maker")
 		gotDeadline = r.URL.Query().Get("deadline")
 		gotChainID = r.URL.Query().Get("chainId")

@@ -2,12 +2,16 @@ package main
 
 import (
 	"context"
+	"io"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/spf13/cobra"
+	merkletransaction "github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/symbioticfi/vault-solver/internal/chain"
@@ -41,7 +45,7 @@ func newRunCmd() *cobra.Command {
 
 // runBot wires the dependency graph and runs the selected solver until ctx is cancelled. The log
 // level is resolved from config, overridden by the --debug flag when it was explicitly set.
-func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool) error {
+func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool) (err error) {
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -152,18 +156,35 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		ShutdownTimeout:      time.Duration(cfg.TxManager.ShutdownTimeoutMs) * time.Millisecond,
 		Horizon:              horizonConfig(cfg.TxManager.Horizon),
 	}, txMetrics, log)
+	merkleTransactions := sync.OnceValues(func() (*merkletransaction.Manager, error) {
+		manager, err := merkletransaction.New(chainClient, sgnr, chainClient.ChainID(), merkletransaction.Config{
+			Confirmations:       cfg.TxManager.Confirmations,
+			MaxFeeGwei:          cfg.TxManager.MaxFeeGwei,
+			MaxGas:              cfg.TxManager.MaxGas,
+			ReplacementInterval: time.Duration(cfg.TxManager.ReplacementIntervalMs) * time.Millisecond,
+			ShutdownTimeout:     time.Duration(cfg.TxManager.ShutdownTimeoutMs) * time.Millisecond,
+		}, log)
+		if err != nil {
+			return nil, errors.Errorf("configure Merkle transaction manager: %w", err)
+		}
+		return manager, nil
+	})
 	runCtx, reportFatal := context.WithCancelCause(ctx)
 	defer reportFatal(nil)
 
-	// Build every configured solver. Transaction-sending solvers share the single nonce-serialized
-	// txManager so they never race on nonces.
+	// Native solvers share txManager; Merkle factories explicitly request the SDK manager.
 	deps := solver.Deps{
-		Chain: chainClient, TxManager: txm, Signer: sgnr, Log: log, Metrics: metrics,
+		Chain: chainClient, TxManager: txm, MerkleTxManager: merkleTransactions, MaxGas: cfg.TxManager.MaxGas, Signer: sgnr, Log: log, Metrics: metrics,
 		ReportFatal: reportFatal,
 	}
 	solvers := make([]solver.Solver, 0, len(cfg.Solvers))
 	solverLogs := make([]logr.Logger, 0, len(cfg.Solvers))
+	// Registered before the sender drain defer: close persistent resources only
+	// after accepted transaction lifecycles stop invoking callbacks.
+	var closers []io.Closer
+	defer func() { err = errors.Join(err, closeSolvers(closers)) }()
 	requiresTxManager := false
+	requiresMerkleTxManager := false
 	for _, sc := range cfg.Solvers {
 		solverDeps := deps
 		if len(cfg.Solvers) > 1 {
@@ -173,9 +194,13 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		if err != nil {
 			return err
 		}
+		if closer, ok := slv.(io.Closer); ok {
+			closers = append(closers, closer)
+		}
 		solvers = append(solvers, slv)
 		solverLogs = append(solverLogs, solverDeps.Log)
 		requiresTxManager = requiresTxManager || solver.RequiresTxManager(slv)
+		requiresMerkleTxManager = requiresMerkleTxManager || solver.RequiresMerkleTxManager(slv)
 	}
 	if requiresTxManager {
 		if err := cfg.ValidateTxManager(); err != nil {
@@ -186,6 +211,25 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		}
 		if err := txm.Initialize(runCtx); err != nil {
 			return errors.Errorf("initialize tx manager: %w", err)
+		}
+	}
+
+	var merkleTxm *merkletransaction.Manager
+	if requiresMerkleTxManager {
+		merkleTxm, err = merkleTransactions()
+		if err != nil {
+			return err
+		}
+		if err := cfg.ValidateTxManager(); err != nil {
+			return errors.Errorf("invalid config %q: %w", configPath, err)
+		}
+		merkleMetrics, err := merkletransaction.NewMetrics(prometheus.WrapRegistererWithPrefix("solver_bot_merkle_", metrics.Registerer()))
+		if err != nil {
+			return errors.Errorf("register Merkle transaction metrics: %w", err)
+		}
+		merkleTxm.Metrics = merkleMetrics
+		if err := merkleTxm.Initialize(runCtx); err != nil {
+			return errors.Errorf("initialize Merkle transaction manager: %w", err)
 		}
 	}
 
@@ -218,6 +262,11 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		}
 	}
 	g, gctx := errgroup.WithContext(runCtx)
+	if requiresMerkleTxManager {
+		done := make(chan struct{})
+		go func() { defer close(done); merkleTxm.Start(gctx) }()
+		defer func() { <-done }()
+	}
 	var background sync.WaitGroup
 	var laneStateChanged <-chan struct{}
 	laneAvailable := func() bool { return true }
@@ -227,6 +276,10 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		laneAvailable = txm.Available
 	}
 	background.Go(func() {
+		if requiresMerkleTxManager {
+			watchMerkleReadiness(gctx, merkleTxm.Ready, health.SetReady)
+			return
+		}
 		defer unsubscribe()
 		// Subscribe before reading current availability, so initialization cannot complete between a
 		// stale snapshot and subscription. Cancellation drops readiness for every solver.
@@ -290,6 +343,22 @@ func watchReadiness(
 	}
 }
 
+func watchMerkleReadiness(ctx context.Context, ready func() bool, setReady func(bool)) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		if ctx.Err() != nil {
+			setReady(false)
+			return
+		}
+		setReady(ready())
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+		}
+	}
+}
+
 func monitorTransactionDrain(
 	shutdown <-chan struct{},
 	solversDone <-chan struct{},
@@ -329,4 +398,14 @@ func horizonConfig(c config.HorizonFeeConfig) txmanager.HorizonConfig {
 		GasHeadroomBps:            c.GasHeadroomBps,
 		FallbackGasHeadroomBps:    c.FallbackGasHeadroomBps,
 	}
+}
+
+func closeSolvers(closers []io.Closer) error {
+	var failures []error
+	for _, closer := range slices.Backward(closers) {
+		if err := closer.Close(); err != nil {
+			failures = append(failures, errors.Errorf("close solver resources: %w", err))
+		}
+	}
+	return errors.Join(failures...)
 }

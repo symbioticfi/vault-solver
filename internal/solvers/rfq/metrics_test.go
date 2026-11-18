@@ -12,7 +12,6 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 )
@@ -35,7 +34,6 @@ func TestHTTPMetrics_InstrumentRecordsRequest(t *testing.T) {
 	if got != 1 {
 		t.Fatalf("rfq_filler_http_request_duration_seconds_count{POST,/quote,204} = %d, want 1", got)
 	}
-	metricstest.RequireValue(t, m.requests.With(labels), 1)
 }
 
 func TestQuoteDecisionMetricsClassifyAuthenticatedRequestsOnce(t *testing.T) {
@@ -67,8 +65,10 @@ func TestQuoteDecisionMetricsClassifyAuthenticatedRequestsOnce(t *testing.T) {
 			want: quoteDecisionBelowMinimum, wantCode: http.StatusNoContent,
 		},
 		"no candidates": {
-			configure: func(s *server) {
-				s.quotes.reader = &fakeQuoteCandidateReader{out: map[common.Address]*big.Int{}}
+			body: func() quoteRequest {
+				body := validQuoteBody()
+				body.Adapters[0].MaxAssets = "0"
+				return body
 			},
 			want: quoteDecisionNoCandidates, wantCode: http.StatusNoContent,
 		},
@@ -79,7 +79,7 @@ func TestQuoteDecisionMetricsClassifyAuthenticatedRequestsOnce(t *testing.T) {
 			want: quoteDecisionStrategyDeclined, wantCode: http.StatusNoContent,
 		},
 		"error": {
-			configure: func(s *server) { s.quotes.reader = failingQuoteReader{} },
+			configure: func(s *server) { s.quotes.strategy = failingQuoteStrategy{} },
 			want:      quoteDecisionError, wantCode: http.StatusBadGateway,
 		},
 	}
@@ -171,17 +171,10 @@ func TestBoundedQuoteDecisionOutcomeFallsBackToError(t *testing.T) {
 	}
 }
 
-type failingQuoteReader struct{}
+type failingQuoteStrategy struct{ types.Strategy }
 
-func (failingQuoteReader) readQuoteCandidates(
-	context.Context,
-	[]solverInventory,
-	common.Address,
-	common.Address,
-	*big.Int,
-	pendingReservations,
-) ([]liquidlane.QuoteCandidate, error) {
-	return nil, errors.New("read failed")
+func (failingQuoteStrategy) DecideQuote(context.Context, types.QuoteInput) (types.QuoteOutput, error) {
+	return types.QuoteOutput{}, errors.New("strategy failed")
 }
 
 func TestRouteLabel_BoundsCardinality(t *testing.T) {

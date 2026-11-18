@@ -1,7 +1,7 @@
 /*
 BF API Reference
 
-BP subdomain API documentation for bf.dev.gcp.3f.xyz
+BP subdomain API documentation for bf.3f.xyz  ## API versions  V1 and v2 share the endpoint list below. Choose **v1** in the server selector for `/v1/...`, or choose **v2** and enter a supported chain ID for `/v2/chains/{chainId}/...`. Request examples update with your selection. The `X-3F-Chain-Id` response header identifies the backend that served the request.  Payloads and EIP-712 versions are unchanged. Use the requested chain’s contracts and credentials; example addresses and chain IDs are illustrative. Guardian HTTP signatures still use the internal `/v1/...` path, including its query string. `/v2/chains/{chainId}/v1/...` remains a compatibility alias.
 
 API version: 0.0.1
 */
@@ -70,7 +70,7 @@ func (a *FacilitatorAPIService) AdminControllerDisableMakerV1Execute(r ApiAdminC
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/v1/facilitator/makers/disable"
+	localVarPath := localBasePath + "/facilitator/makers/disable"
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -179,7 +179,7 @@ func (a *FacilitatorAPIService) AdminControllerEnrollMakerV1Execute(r ApiAdminCo
 		return nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/v1/facilitator/makers"
+	localVarPath := localBasePath + "/facilitator/makers"
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -292,7 +292,7 @@ const signature = await walletClient.signTypedData(
 )
 ```
 
-Submit the resulting signature in the request body `signature` field and encode `deadline` as a decimal string. The current implementation only accepts `chainId = 1`.
+Submit the resulting signature in the request body `signature` field and encode `deadline` as a decimal string. `chainId` must equal this deployment's chain ID; the example uses Ethereum mainnet (`1`).
 
 	@param ctx context.Context - for authentication, logging, cancellation, deadlines, tracing, etc. Passed from http.Request or context.Background().
 	@return ApiAdminControllerGenerateKeyV1Request
@@ -320,7 +320,7 @@ func (a *FacilitatorAPIService) AdminControllerGenerateKeyV1Execute(r ApiAdminCo
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/v1/facilitator/generate-key"
+	localVarPath := localBasePath + "/facilitator/generate-key"
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -432,7 +432,7 @@ func (a *FacilitatorAPIService) AdminControllerGetFacilitatorOfferAddressV1Execu
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/v1/facilitator/offer-address"
+	localVarPath := localBasePath + "/facilitator/offer-address"
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -540,7 +540,7 @@ func (a *FacilitatorAPIService) AdminControllerListMakersV1Execute(r ApiAdminCon
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/v1/facilitator/makers"
+	localVarPath := localBasePath + "/facilitator/makers"
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}
@@ -657,7 +657,7 @@ func (a *FacilitatorAPIService) AdminControllerSetFacilitatorOfferAddressV1Execu
 		return localVarReturnValue, nil, &GenericOpenAPIError{error: err.Error()}
 	}
 
-	localVarPath := localBasePath + "/v1/facilitator/offer-address"
+	localVarPath := localBasePath + "/facilitator/offer-address"
 
 	localVarHeaderParams := make(map[string]string)
 	localVarQueryParams := url.Values{}

@@ -3,6 +3,8 @@ name: build & deploy
 on:
   push:
     branches: [stage, main]
+  # Redeploy the head of stage or main by hand
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -12,11 +14,12 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   image:
+    if: github.ref_name == 'stage' || github.ref_name == 'main'
     environment: deploy
     needs: ci
     runs-on: ubuntu-latest
     outputs:
-      digest: ${{ steps.digest.outputs.digest }}
+      digest: ${{ steps.existing.outputs.digest || steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # pin@v7.0.1
 
@@ -25,16 +28,24 @@ jobs:
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # pin@v4.4.1
 
-      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # pin@v4.7.0
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # pin@v4.8.0
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
+      # Tags are immutable, so a re-run or manual dispatch reuses the commit's image
+      - id: existing
+        env:
+          IMAGE: symbioticfi/vault-solver:${{ github.sha }}
+        run: |
+          if digest=$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' | jq -er .digest); then
+            echo "::notice::$IMAGE already exists, deploying $digest"
+            echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          fi
+
       - id: build
+        if: steps.existing.outputs.digest == ''
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # pin@v7.4.0
-        # Tags are immutable, so a re-run for an already pushed commit fails to push.
-        # The digest step below falls back to the existing image so the deploy still dispatches.
-        continue-on-error: true
         with:
           context: .
           file: deploy/Dockerfile
@@ -45,23 +56,6 @@ jobs:
             VERSION=${{ github.ref_name }}
             COMMIT=${{ github.sha }}
             DATE=${{ steps.meta.outputs.date }}
-
-      - id: digest
-        env:
-          BUILD_OUTCOME: ${{ steps.build.outcome }}
-          BUILD_DIGEST: ${{ steps.build.outputs.digest }}
-          IMAGE: symbioticfi/vault-solver:${{ github.sha }}
-        run: |
-          if [ "$BUILD_OUTCOME" = "success" ]; then
-            echo "digest=$BUILD_DIGEST" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if ! digest=$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' | jq -er .digest); then
-            echo "::error::build failed and $IMAGE does not exist"
-            exit 1
-          fi
-          echo "::warning::build failed; $IMAGE already exists, deploying $digest"
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
   dispatch:
     needs: image

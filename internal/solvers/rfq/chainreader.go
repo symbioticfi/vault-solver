@@ -4,6 +4,7 @@ import (
 	"context"
 	"maps"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -17,10 +18,11 @@ import (
 
 // reader is the RFQ adapter over the shared LiquidLane read surface.
 type reader struct {
-	ll            *liquidlane.Reader
-	chain         *chain.Client
-	chainID       int64
-	quoteAdapters map[common.Address]recoveryVault // assigned once before the quote server starts
+	ll              *liquidlane.Reader
+	chain           *chain.Client
+	chainID         int64
+	quoteAdaptersMu sync.RWMutex
+	quoteAdapters   map[common.Address]recoveryVault // immutable snapshots; startup and discovery refresh publish under the mutex
 }
 
 func newReader(c *chain.Client, log logr.Logger, liquidityLens common.Address) *reader {
@@ -69,28 +71,37 @@ func (r *reader) readQuoteCandidates(
 	pending pendingReservations,
 ) ([]liquidlane.QuoteCandidate, error) {
 	matching := make([]liquidlane.Inventory, 0, len(inventory))
+	connectorInventory := make([]liquidlane.Inventory, 0)
 	for _, item := range inventory {
 		if item.TokenIn == tokenIn && item.TokenOut == tokenOut {
-			matching = append(matching, item)
+			if item.RecipeExecutor != (common.Address{}) {
+				connectorInventory = append(connectorInventory, item)
+			} else {
+				matching = append(matching, item)
+			}
 		}
 	}
-	if len(matching) == 0 {
-		return nil, nil
+	connectorCandidates, err := r.readConnectorCandidates(ctx, connectorInventory, tokenIn, tokenOut, amountIn, pending)
+	if err != nil {
+		return nil, err
 	}
-	metadata := r.quoteAdapters
+	if len(matching) == 0 {
+		return connectorCandidates, nil
+	}
+	metadata := r.cachedQuoteAdapters()
 	unknown := unresolvedQuoteAdapters(matching, metadata)
 	if len(unknown) > 0 {
 		resolved, err := r.ll.ResolveAdapters(ctx, unknown)
 		if err != nil {
 			return nil, errors.Errorf("resolve quote adapters: %w", err)
 		}
-		metadata = make(map[common.Address]recoveryVault, len(r.quoteAdapters)+len(resolved))
-		maps.Copy(metadata, r.quoteAdapters)
+		metadata = make(map[common.Address]recoveryVault, len(metadata)+len(resolved))
+		maps.Copy(metadata, r.cachedQuoteAdapters())
 		for _, adapter := range resolved {
 			metadata[adapter.Adapter] = adapter
 		}
 	}
-	matching, err := applyResolvedQuoteAdapters(r.chainID, matching, metadata)
+	matching, err = applyResolvedQuoteAdapters(r.chainID, matching, metadata)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +118,7 @@ func (r *reader) readQuoteCandidates(
 	}
 	allocated := liquidgreedy.AllocateInventoryCapacity(matching, reservations, 0)
 	if len(allocated) == 0 {
-		return nil, nil
+		return connectorCandidates, nil
 	}
 	routes := make([]liquidlane.Route, 0, len(allocated))
 	seen := make(map[liquidlane.RouteID]bool, len(allocated))
@@ -121,11 +132,49 @@ func (r *reader) readQuoteCandidates(
 	if err != nil {
 		return nil, err
 	}
-	return liquidgreedy.NormalizeOracleInventory(amountIn, allocated, quotes), nil
+	return append(liquidgreedy.NormalizeOracleInventory(amountIn, allocated, quotes), connectorCandidates...), nil
+}
+
+// cachedQuoteRoute resolves a configured native adapter without quote-time I/O.
+func (r *reader) cachedQuoteRoute(adapter, _, asset common.Address, assetDecimals int) (executor, account common.Address, found bool) {
+	resolved, ok := r.cachedQuoteAdapters()[adapter]
+	return common.Address{}, resolved.Vault, ok && resolved.Vault != (common.Address{}) && resolved.TokenOut == asset && resolved.TokenOutDecimals == assetDecimals
+}
+
+func (r *reader) cachedQuoteAdapters() map[common.Address]recoveryVault {
+	r.quoteAdaptersMu.RLock()
+	defer r.quoteAdaptersMu.RUnlock()
+	return r.quoteAdapters
 }
 
 func (r *reader) setQuoteAdapters(resolved []recoveryVault) {
-	r.quoteAdapters = resolvedQuoteAdapters(resolved)
+	r.quoteAdaptersMu.Lock()
+	defer r.quoteAdaptersMu.Unlock()
+	next := make(map[common.Address]recoveryVault, len(r.quoteAdapters)+len(resolved))
+	maps.Copy(next, r.quoteAdapters)
+	maps.Copy(next, resolvedQuoteAdapters(resolved))
+	r.quoteAdapters = next
+}
+
+// warmQuoteAdapters runs only at startup or in the discovery loop. Immutable
+// adapter identities stay cached; failed entries remain unquotable and retry later.
+func (r *reader) warmQuoteAdapters(ctx context.Context, adapters []common.Address) error {
+	known := r.cachedQuoteAdapters()
+	unknown := make([]common.Address, 0, len(adapters))
+	for _, adapter := range adapters {
+		if _, ok := known[adapter]; !ok {
+			unknown = append(unknown, adapter)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	resolved, err := r.ll.DiscoverAdapters(ctx, unknown)
+	if err != nil {
+		return errors.Errorf("warm quote adapters: %w", err)
+	}
+	r.setQuoteAdapters(resolved)
+	return nil
 }
 
 func unresolvedQuoteAdapters(

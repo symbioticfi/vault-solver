@@ -1,0 +1,20 @@
+[
+  {
+    "type": "function",
+    "name": "assets",
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "collateralAsset",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "debtAsset",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "stateMutability": "view"
+  }
+]

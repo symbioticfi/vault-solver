@@ -10,6 +10,10 @@ This document is the source of truth for the build. It captures the agreed scope
 architecture, and decisions. See `3F_BRIDGE_FACILITATOR_INTEGRATION.md` (sibling
 repo root) §4 for the functional blueprint of the 3F solver.
 
+The native MerkleAccount API-key PUSH workflow is a separate `threef-merkle` solver,
+with 1..256 recipe executors, one shared sender and one broker/default maker. See [THREEF-MERKLE.md](THREEF-MERKLE.md).
+It does not use this adapter solver's discovery, signatures or liquidity strategies.
+
 ---
 
 ## 1. Scope
@@ -21,7 +25,8 @@ repo root) §4 for the functional blueprint of the 3F solver.
   bindings) **and its 3F onboarding**. In the new model each adapter is deployed and registered with 3F
   **as a facilitator by its own vault creator**, who then sets this solver's signer as the adapter's
   **EIP-1271 signer**. The bot registers nothing with 3F and holds no API key.
-- **Target networks:** 3F Sepolia dev (`chainId 11155111`) and Ethereum mainnet (`chainId 1`).
+- **Target networks:** Ethereum mainnet (`chainId 1`) by default; 3F Sepolia dev
+  (`chainId 11155111`) requires explicit API, RPC and contract configuration.
 
 ---
 
@@ -164,21 +169,26 @@ Two-stage decode keeps solver config encapsulated. The generic layer reads only
 `solver.name` to pick the impl and keeps `solver.config` as a deferred `yaml.Node`;
 the chosen solver decodes it into its own typed struct.
 
+Schema refresh, drift monitoring, the annotated example and opt-in live checks use production
+3F by default. API adapters combine the configured origin with the generated schema's default
+server path (`/v1`); the schema owns endpoint paths.
+
 ```yaml
-chain: { rpcUrl, writeRpcUrl?, chainId, rpcFallbackUrls?, wsUrl? }
+chain: { rpcUrl, writeRpcUrl?, chainId, rpcFallbackUrls? } # HTTP(S) endpoints
 signer: { keyEnv: SOLVER_PRIVATE_KEY }     # the EIP-1271 signer every served adapter trusts
 txManager: { confirmations: 2, maxFeeGwei, broadcastTimeoutMs, replacementIntervalMs, pendingTimeoutMs, shutdownTimeoutMs, horizon }
 
 solvers:
   - name: 3f-bridge-facilitator             # ← registry key: selects the impl
     config:                                  # ← opaque to framework; typed by the 3F package
-      apiBaseUrl: https://bf.dev.gcp.3f.xyz
+      apiBaseUrl: https://bf.3f.xyz
       strategy:
         name: default                        # default local strategy, or webhook
         config: {}
       adapterFactory: "0x…factory"             # used when adapters is omitted; max 2,000 entities
       # adapters:                               # optional exclusive override; factory is not queried
       #   - "0x…adapterA"
+      redeem: true                            # optional (default false: no redeem loop)
       redeemBatchSize: 10                     # optional (default 10)
       httpTimeout: 30s                        # optional
       intervals: { discover: 5m, redeemPoll: 5m, reconcile: 15m }
@@ -290,7 +300,7 @@ eligible adapter offer the **full requested amount** within its own capacity, in
    adapter's offer, live or new, never shrinks another's on the same auction. Commitments are tracked per
    adapter across the pass, initialized from live offer principals and slots, including auctions absent
    from the current listing. Each
-   offer is **priced at the adapter's `minYieldPerRequest` floor plus a partial-consumption margin** of
+   offer is **priced at the higher of the auction minimum and the adapter's `minYieldPerRequest` floor plus a partial-consumption margin** of
    `max(2, ceil(principal/1e6))` base units (~1 ppm). A floor-exact offer reverts `TooLowYield` whenever
    the keeper consumes it partially, because `consume()` pro-rates the return with floor division while
    the floor check rounds up (mainnet tx `0xc637…8386`: 30,000.035 USDC at the 190 ppm floor consumed at
@@ -300,10 +310,13 @@ eligible adapter offer the **full requested amount** within its own capacity, in
    auction's max rate but the max rate itself clears the floor, the offer is priced at the max rate
    (keeping the margin that fits); a pair whose floor exceeds the max rate is skipped. The submission
    loop re-checks every strategy's offers (default and webhook) against the exact `minYieldPerRequest`
-   before signing, so no path posts a sub-floor offer the fill would revert.
+   and auction bounds before signing. 3F requires at least a quarter of the lowest ramp APR but only
+   exposes the current maximum. Both native and Merkle solvers conservatively use `maxRate / 4`
+   as the minimum. This can exceed the true minimum as the ramp increases. Missing or invalid rates
+   cannot be priced. The minimum return rounds up; the maximum rounds down.
    From 3F's APR switch (23 Oct 2026) `maxRate` is an annual rate and every auction carries
    `rateBasisSeconds` (a year for new auctions, the old settlement delay for ones created before);
-   `expectedReturn` covers that basis, so the max-rate cap is scaled by `basis / year`
+   `expectedReturn` covers that basis, so both auction bounds are scaled by `basis / year`
    (`types.ExpectedReturn`, `types.ValidateYield`). A response without the field is pre-switch and keeps
    the per-term pricing; a negative field skips the auction.
    The on-chain `minYieldPerRequest` floor is compared to the raw `expectedReturn` exactly as the
@@ -418,7 +431,7 @@ Tracked TODOs and known gaps — each a scoped follow-up; none block release.
   custom strategy or the built-in `webhook` strategy. The strategy returns principal and expected
   return; the solver only signs and submits the returned offer.
 - **Offer cancellation.** `OfferControllerCancelV1` not wired — needs offer-id↔auction state.
-- **WS live-log subscription** (`chain.wsUrl`) — config field present but unused; the poll-based reconcile/redeem path is sufficient for v0.
+- **Chain transport** — HTTP(S) RPC only. The unused `chain.wsUrl` option and WebSocket/IPC RPC path were removed; reconcile/redeem remains poll-based.
 - **Resolved: pre-sign redeem estimation budget.** `redeem` still submits without a request
   deadline or supplied gas limit. The shared manager now bounds initial estimation and its fallback
   by one finite read budget; an unsigned timeout returns before the lane admits new work

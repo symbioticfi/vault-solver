@@ -4,6 +4,8 @@
 bin/
 dist/
 .tools/
+go.work
+go.work.sum
 
 # Secrets / local config — never bake into an image.
 *.local.yaml

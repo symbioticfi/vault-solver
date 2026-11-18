@@ -7,7 +7,7 @@ import (
 )
 
 func TestParseOffer(t *testing.T) {
-	offer, err := ParseOffer(ListItem{
+	offer, err := ParseOffer(ListItem{DiscountPrecision: "1000000",
 		DiscountID:         "0x" + hash64,
 		Adapter:            "0x0000000000000000000000000000000000000abc",
 		TokenToRedeem:      "0x0000000000000000000000000000000000000def",
@@ -25,8 +25,40 @@ func TestParseOffer(t *testing.T) {
 	}
 }
 
+func TestParseOfferRequiresNativeDiscountPrecision(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		precision string
+		discount  string
+		wantError bool
+	}{
+		{name: "missing precision", discount: "500", wantError: true},
+		{name: "explicit native", precision: "1000000", discount: "500"},
+		{name: "connector zero", precision: "100000000", discount: "0", wantError: true},
+		{name: "connector below native limit", precision: "100000000", discount: "500", wantError: true},
+		{name: "connector at native limit", precision: "100000000", discount: "1000000", wantError: true},
+		{name: "unknown precision", precision: "10000", discount: "500", wantError: true},
+		{name: "malformed precision", precision: "native", discount: "500", wantError: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			offer, err := ParseOffer(ListItem{
+				DiscountID: "0x" + hash64, DiscountPrecision: tt.precision,
+				Adapter:            "0x0000000000000000000000000000000000000abc",
+				TokenToRedeem:      "0x0000000000000000000000000000000000000def",
+				Collateral:         "0x0000000000000000000000000000000000000c01",
+				CollateralDecimals: 6, Discount: tt.discount,
+				Deadline: 1_900_000_000, MaxAssets: "5000",
+			})
+			if (err != nil) != tt.wantError {
+				t.Fatalf("ParseOffer precision %q discount %q: offer=%+v err=%v; want error %v",
+					tt.precision, tt.discount, offer, err, tt.wantError)
+			}
+		})
+	}
+}
+
 func TestParseOfferRejectsInvalidDiscount(t *testing.T) {
-	item := ListItem{
+	item := ListItem{DiscountPrecision: "1000000",
 		DiscountID:         "0x" + hash64,
 		Adapter:            "0x0000000000000000000000000000000000000abc",
 		TokenToRedeem:      "0x0000000000000000000000000000000000000def",
@@ -46,7 +78,7 @@ func TestParseOfferRejectsInvalidDiscount(t *testing.T) {
 }
 
 func TestParseOfferRejectsMalformedIDAndExpiredShape(t *testing.T) {
-	item := ListItem{
+	item := ListItem{DiscountPrecision: "1000000",
 		DiscountID:         "0x01",
 		Adapter:            "0x0000000000000000000000000000000000000abc",
 		TokenToRedeem:      "0x0000000000000000000000000000000000000def",
@@ -72,7 +104,7 @@ func TestParseOfferRejectsMalformedIDAndExpiredShape(t *testing.T) {
 }
 
 func TestParseSigned(t *testing.T) {
-	parsed, err := ParseSigned(&Resolved{
+	parsed, err := ParseSigned(&Resolved{DiscountPrecision: "1000000",
 		DiscountID: "0x" + hash64,
 		Discount: Terms{
 			Adapter:       "0x0000000000000000000000000000000000000abc",
@@ -99,7 +131,7 @@ func TestParseSignedAcceptsDecimalUint256Nonce(t *testing.T) {
 		new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 256), big.NewInt(1)).String(),
 	} {
 		t.Run(nonce, func(t *testing.T) {
-			parsed, err := ParseSigned(&Resolved{
+			parsed, err := ParseSigned(&Resolved{DiscountPrecision: "1000000",
 				DiscountID: "0x" + hash64,
 				Discount: Terms{
 					Adapter:       "0x0000000000000000000000000000000000000abc",
@@ -133,7 +165,7 @@ func TestParseUint256DecimalRejectsInvalidValues(t *testing.T) {
 }
 
 func TestParseSignedAcceptsZeroAndRejectsOutOfRangeDiscount(t *testing.T) {
-	resolved := &Resolved{
+	resolved := &Resolved{DiscountPrecision: "1000000",
 		DiscountID: "0x" + hash64,
 		Discount: Terms{
 			Adapter:       "0x0000000000000000000000000000000000000abc",
@@ -149,5 +181,26 @@ func TestParseSignedAcceptsZeroAndRejectsOutOfRangeDiscount(t *testing.T) {
 	resolved.Discount.Discount = "1000001"
 	if _, err := ParseSigned(resolved); err == nil {
 		t.Fatal("expected out-of-range discount error")
+	}
+}
+
+func TestParseSignedRequiresNativePrecision(t *testing.T) {
+	for _, precision := range []string{"1000000", "", "100000000", "10000"} {
+		t.Run("precision_"+precision, func(t *testing.T) {
+			resolved := &Resolved{
+				DiscountID: "0x" + hash64, DiscountPrecision: precision,
+				Discount: Terms{
+					Adapter:       "0x0000000000000000000000000000000000000abc",
+					TokenToRedeem: "0x0000000000000000000000000000000000000def",
+					Discount:      "0", Signer: "0x0000000000000000000000000000000000000aaa",
+					Protocol: "0x0000000000000000000000000000000000000bbb", Nonce: "2", Deadline: 1_900_000_000,
+				},
+				SignerSignature: "0xdead", ProtocolDeadline: 1_900_000_001, ProtocolSignature: "0xbeef",
+			}
+			_, err := ParseSigned(resolved)
+			if (err != nil) != (precision != "1000000") {
+				t.Fatalf("precision %q: %v", precision, err)
+			}
+		})
 	}
 }

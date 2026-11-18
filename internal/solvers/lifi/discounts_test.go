@@ -21,6 +21,7 @@ type fakeDiscountClient struct {
 	listCalls    int
 	resolveCalls int
 	listErr      error
+	resolveErr   error
 }
 
 func (f *fakeDiscountClient) ListDiscounts(context.Context) (*discounts.List, error) {
@@ -30,7 +31,7 @@ func (f *fakeDiscountClient) ListDiscounts(context.Context) (*discounts.List, er
 
 func (f *fakeDiscountClient) Resolve(context.Context, string) (*discounts.Resolved, error) {
 	f.resolveCalls++
-	return f.resolved, nil
+	return f.resolved, f.resolveErr
 }
 
 func TestFillDiscountQuotesUsesFreshSignedTerms(t *testing.T) {
@@ -190,7 +191,7 @@ func testDiscountListItem(
 	maxAssets int64,
 	deadline time.Time,
 ) discounts.ListItem {
-	return discounts.ListItem{
+	return discounts.ListItem{DiscountPrecision: "1000000",
 		DiscountID: testDiscountID,
 		Adapter:    direct.Adapter.Hex(), TokenToRedeem: direct.TokenIn.Hex(), Collateral: direct.TokenOut.Hex(),
 		CollateralDecimals: direct.TokenOutDecimals, Deadline: deadline.Unix(),
@@ -203,7 +204,7 @@ func testResolvedDiscount(
 	discount int64,
 	deadline time.Time,
 ) *discounts.Resolved {
-	return &discounts.Resolved{
+	return &discounts.Resolved{DiscountPrecision: "1000000",
 		DiscountID: testDiscountID,
 		Discount: discounts.Terms{
 			Adapter: direct.Adapter.Hex(), TokenToRedeem: direct.TokenIn.Hex(), Discount: big.NewInt(discount).String(),

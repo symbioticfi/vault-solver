@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -31,6 +33,8 @@ type orderMessage struct {
 
 type orderFeed struct {
 	url           string
+	readTimeout   time.Duration
+	writeTimeout  time.Duration
 	apiKey        string
 	connected     atomic.Bool // watchOnce writes; Prometheus scrapes read concurrently.
 	recoveryReady atomic.Bool // connection recovery writes; Prometheus scrapes read concurrently.
@@ -41,8 +45,8 @@ type orderFeedConnectionHooks struct {
 	whileConnected func(context.Context) // Concurrent with reads and joined on disconnect.
 }
 
-func newOrderFeed(url, apiKey string) *orderFeed {
-	return &orderFeed{url: url, apiKey: apiKey}
+func newOrderFeed(cfg OrderServerConfig, apiKey string) *orderFeed {
+	return &orderFeed{url: cfg.WSURL, apiKey: apiKey, readTimeout: cfg.WSReadTimeout, writeTimeout: cfg.WSWriteTimeout}
 }
 
 func (f *orderFeed) run(
@@ -59,11 +63,7 @@ func (f *orderFeed) run(
 		if ready {
 			backoff = initialWSBackoff
 		}
-		var closeErr *websocket.CloseError
-		if ready && errors.As(err, &closeErr) && (closeErr.Code == websocket.CloseNormalClosure ||
-			closeErr.Code == websocket.CloseGoingAway || closeErr.Code == websocket.CloseNoStatusReceived ||
-			closeErr.Code == websocket.CloseAbnormalClosure || closeErr.Code == websocket.CloseServiceRestart ||
-			closeErr.Code == websocket.CloseTryAgainLater) {
+		if ready && normalDisconnect(err) {
 			observability.Log(ctx).Info(
 				"order feed disconnected; reconnecting", "error", err.Error(), "backoff", backoff.String())
 		} else {
@@ -81,6 +81,21 @@ func (f *orderFeed) run(
 			backoff = maxWSBackoff
 		}
 	}
+}
+
+// normalDisconnect reports whether a ready connection ended the way servers routinely end
+// them: a benign close frame, or the bare EOF and TCP reset Cloudflare uses to drop idle sockets.
+func normalDisconnect(err error) bool {
+	var closeErr *websocket.CloseError
+	if errors.As(err, &closeErr) {
+		switch closeErr.Code {
+		case websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived,
+			websocket.CloseAbnormalClosure, websocket.CloseServiceRestart, websocket.CloseTryAgainLater:
+			return true
+		}
+		return false
+	}
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, syscall.ECONNRESET)
 }
 
 func (f *orderFeed) watchOnce(
@@ -119,6 +134,19 @@ func (f *orderFeed) watchOnce(
 		// leave readiness set for the next scrape or reconnect.
 		f.recoveryReady.Store(false)
 	}()
+	refreshReadDeadline := func() error { return conn.SetReadDeadline(time.Now().Add(f.readTimeout)) }
+	if err := refreshReadDeadline(); err != nil {
+		return false, errors.Errorf("set websocket read deadline: %w", err)
+	}
+	// Control handlers run in the reader goroutine. Application and control heartbeats both prove
+	// liveness; all pong writes are bounded, so a peer that stops reading cannot pin this connection.
+	conn.SetPongHandler(func(string) error { return refreshReadDeadline() })
+	conn.SetPingHandler(func(data string) error {
+		if err := refreshReadDeadline(); err != nil {
+			return err
+		}
+		return conn.WriteControl(websocket.PongMessage, []byte(data), time.Now().Add(f.writeTimeout))
+	})
 	if hooks.beforeRead != nil {
 		hooks.beforeRead(connectionCtx)
 	}
@@ -132,10 +160,16 @@ func (f *orderFeed) watchOnce(
 		if err != nil {
 			return false, errors.Errorf("read websocket: %w", err)
 		}
+		if err := refreshReadDeadline(); err != nil {
+			return false, errors.Errorf("refresh websocket read deadline: %w", err)
+		}
 		if messageType != websocket.TextMessage {
 			continue
 		}
 		if pong, ok := pongFor(msg); ok {
+			if err := conn.SetWriteDeadline(time.Now().Add(f.writeTimeout)); err != nil {
+				return false, errors.Errorf("set websocket pong deadline: %w", err)
+			}
 			if err := conn.WriteMessage(websocket.TextMessage, pong); err != nil {
 				return false, errors.Errorf("write websocket pong: %w", err)
 			}

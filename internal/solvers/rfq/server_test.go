@@ -24,9 +24,9 @@ func testServer() *server {
 	clk := func() time.Time { return time.Unix(0, 0) }
 	q := &quoteService{
 		chainID:       1,
+		resolveRoute:  testNativeQuoteRoute,
 		executor:      execAddr,
 		laneAvailable: func() bool { return true },
-		reader:        &fakeQuoteCandidateReader{out: map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}},
 		strategy:      newDefaultTestStrategy(),
 		strategyName:  defaultStrategyName,
 		log:           logr.Discard(),
@@ -38,7 +38,18 @@ func testServer() *server {
 	}
 }
 
+func testNativeQuoteRoute(_, _, _ common.Address, _ int) (executor, account common.Address, ok bool) {
+	return common.Address{}, vlt, true
+}
+
+func testConnectorQuoteRoute(executor common.Address) quoteRouteResolver {
+	return func(_, _, _ common.Address, _ int) (common.Address, common.Address, bool) {
+		return executor, vlt, true
+	}
+}
+
 func validQuoteBody() quoteRequest {
+	decimals := 18
 	return quoteRequest{
 		RequestID: "11111111-1111-4111-8111-111111111111", TokenInChainID: 1, TokenOutChainID: 1,
 		Swapper: "0x0000000000000000000000000000000000000099",
@@ -47,7 +58,8 @@ func validQuoteBody() quoteRequest {
 		QuoteID: "22222222-2222-4222-8222-222222222222",
 		Adapters: []quoteAdapter{{
 			Adapter: vlt.Hex(), Asset: tOut.Hex(), AssetDecimals: 6,
-			MaxAssets: "10000000", Discount: "0",
+			Price: "1000000000000000000", TokenInDecimals: &decimals,
+			BlockNumber: "1", MaxAssets: "10000000", Discount: "0", DiscountPrecision: "1000000",
 		}},
 	}
 }
@@ -102,6 +114,23 @@ func TestServer_QuoteOK(t *testing.T) {
 	}
 	if resp.Filler != "0x0000000000000000000000000000000000000010" {
 		t.Fatalf("filler = %s, want lowercased executor", resp.Filler)
+	}
+}
+
+func TestServer_QuoteOmitsRemovedFields(t *testing.T) {
+	body := validQuoteBody()
+	raw, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := do(t, testServer().handler(), http.MethodGet, "/openapi.json", "", nil)
+	for _, field := range []string{"outputAsset", "outputAssetDecimals", "account", "recipeExecutor"} {
+		if strings.Contains(string(raw), `"`+field+`"`) || strings.Contains(spec.Body.String(), `"`+field+`"`) {
+			t.Fatalf("removed field %s remains on wire", field)
+		}
+	}
+	if rr := do(t, testServer().handler(), http.MethodPost, "/quote", testSecret, body); rr.Code != http.StatusOK {
+		t.Fatalf("asset-only quote=%d %s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -218,10 +247,8 @@ func TestServer_QuoteBelowMinAmountNoContent(t *testing.T) {
 
 func TestServer_QuoteWhitelist(t *testing.T) {
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
-	rogueAdapter := quoteAdapter{
-		Adapter: rogue.Hex(), Asset: tOut.Hex(), AssetDecimals: 6,
-		MaxAssets: "10000000", Discount: "0",
-	}
+	rogueAdapter := validQuoteBody().Adapters[0]
+	rogueAdapter.Adapter = rogue.Hex()
 	cases := map[string]struct {
 		whitelist adapterWhitelist
 		adapters  []quoteAdapter // nil keeps validQuoteBody's single vlt adapter
@@ -269,6 +296,64 @@ func TestServer_QuoteWhitelist(t *testing.T) {
 			}
 			if resp.AmountOut == "" {
 				t.Fatalf("quote response missing amountOut: %+v", resp)
+			}
+		})
+	}
+}
+
+func TestServerConnectorDerivesLocalExecutor(t *testing.T) {
+	srv := testServer()
+	executor := common.HexToAddress("0x43")
+	srv.quotes.discountsEnabled = true
+	srv.quotes.resolveRoute = func(venue, _, asset common.Address, _ int) (common.Address, common.Address, bool) {
+		return executor, vlt, venue == vlt && asset == tOut
+	}
+	body := validQuoteBody()
+	id := "0x" + strings.Repeat("ab", 32)
+	body.Adapters[0].DiscountID = &id
+	body.Adapters[0].DiscountPrecision = "100000000"
+	if rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, body); rr.Code != http.StatusOK {
+		t.Fatalf("local recipe quote=%d %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestQuoteRequiresCapacityObservationBlock(t *testing.T) {
+	for name, block := range map[string]any{"missing": nil, "empty": "", "malformed": "0x7b"} {
+		t.Run(name, func(t *testing.T) {
+			encoded, err := json.Marshal(validQuoteBody())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(encoded, &body); err != nil {
+				t.Fatal(err)
+			}
+			adapter := body["adapters"].([]any)[0].(map[string]any)
+			if block == nil {
+				delete(adapter, "blockNumber")
+			} else {
+				adapter["blockNumber"] = block
+			}
+			rr := do(t, testServer().handler(), http.MethodPost, "/quote", testSecret, body)
+			if rr.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want 422 for %s blockNumber: %s", rr.Code, name, rr.Body.String())
+			}
+		})
+	}
+}
+
+func TestServerNativeQuoteRequiresExplicitPrecision(t *testing.T) {
+	for _, precision := range []string{"", "100000000", "10000"} {
+		t.Run("precision_"+precision, func(t *testing.T) {
+			body := validQuoteBody()
+			body.Adapters[0].DiscountPrecision = precision
+			rr := do(t, testServer().handler(), http.MethodPost, "/quote", testSecret, body)
+			want := http.StatusUnprocessableEntity
+			if precision == "100000000" {
+				want = http.StatusBadRequest
+			}
+			if rr.Code != want {
+				t.Fatalf("status = %d, want %d: %s", rr.Code, want, rr.Body.String())
 			}
 		})
 	}

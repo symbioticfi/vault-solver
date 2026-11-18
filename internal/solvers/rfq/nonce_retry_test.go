@@ -105,7 +105,7 @@ func TestExecutionNonceRetryRefreshesDiscountCalldata(t *testing.T) {
 	st.now = func() time.Time { return now }
 	be.order.OrderStatus = "open"
 	id := common.HexToHash("0xab")
-	be.discount = &resolveDiscountResponse{
+	be.discount = &resolveDiscountResponse{DiscountPrecision: "1000000",
 		DiscountID: id.Hex(),
 		Discount: discountTerms{
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",

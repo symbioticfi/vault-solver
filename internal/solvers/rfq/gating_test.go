@@ -128,24 +128,6 @@ type countingStrategy struct {
 	quoteCalls int
 }
 
-type countingQuoteReader struct {
-	quoteCandidateReader
-
-	calls int
-}
-
-func (r *countingQuoteReader) readQuoteCandidates(
-	ctx context.Context,
-	inventory []solverInventory,
-	tokenIn common.Address,
-	tokenOut common.Address,
-	amountIn *big.Int,
-	pending pendingReservations,
-) ([]liquidlane.QuoteCandidate, error) {
-	r.calls++
-	return r.quoteCandidateReader.readQuoteCandidates(ctx, inventory, tokenIn, tokenOut, amountIn, pending)
-}
-
 type laneFlippingStrategy struct {
 	types.Strategy
 
@@ -166,18 +148,16 @@ func TestQuoteDeclinesBeforePlanningWhenLaneNotReady(t *testing.T) {
 	ready.Store(false)
 
 	srv := testServer()
-	reader := &countingQuoteReader{quoteCandidateReader: srv.quotes.reader}
 	strategy := &countingStrategy{Strategy: srv.quotes.strategy}
 	srv.quotes.laneAvailable = ready.Load
-	srv.quotes.reader = reader
 	srv.quotes.strategy = strategy
 
 	rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, validQuoteBody())
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("quote status = %d, want 204 (body %s)", rr.Code, rr.Body.String())
 	}
-	if reader.calls != 0 || strategy.quoteCalls != 0 {
-		t.Fatalf("non-ready lane performed reader=%d strategy=%d calls, want none", reader.calls, strategy.quoteCalls)
+	if strategy.quoteCalls != 0 {
+		t.Fatalf("non-ready lane performed strategy=%d calls, want none", strategy.quoteCalls)
 	}
 }
 
@@ -186,9 +166,7 @@ func TestQuoteDeclinesWhenLaneBecomesBusyDuringPlanning(t *testing.T) {
 	ready.Store(true)
 
 	srv := testServer()
-	reader := &countingQuoteReader{quoteCandidateReader: srv.quotes.reader}
 	srv.quotes.laneAvailable = ready.Load
-	srv.quotes.reader = reader
 	srv.quotes.strategy = &laneFlippingStrategy{
 		Strategy: srv.quotes.strategy,
 		ready:    &ready,
@@ -197,9 +175,6 @@ func TestQuoteDeclinesWhenLaneBecomesBusyDuringPlanning(t *testing.T) {
 	rr := do(t, srv.handler(), http.MethodPost, "/quote", testSecret, validQuoteBody())
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("quote status = %d, want 204 after lane pause (body %s)", rr.Code, rr.Body.String())
-	}
-	if reader.calls != 1 {
-		t.Fatalf("candidate reader calls = %d, want one completed planning read", reader.calls)
 	}
 }
 
@@ -343,11 +318,11 @@ func TestQuoteNormalizesDiscountRateWithInputDecimals(t *testing.T) {
 		t.Fatalf("candidates = %d, want one", len(strategy.quoteInput.Candidates))
 	}
 	candidate := strategy.quoteInput.Candidates[0]
-	// The adapter quote for 1e18 at the on-chain tokenIn decimals (18, not the backend's 0) is
+	// The backend price and tokenIn decimals reproduce the adapter's two rounding steps:
 	// 1000000; the signed 200 ppm discount pays floor(1000000 * 0.9998) = 999800 for it.
 	if candidate.Route.TokenInDecimals != 18 ||
 		candidate.Rate.Cmp(mustBig(t, "999800000000000000")) != 0 ||
-		candidate.MaxAmountIn.Cmp(mustBig(t, "10002000400080016003")) != 0 {
+		candidate.MaxAmountIn.Cmp(mustBig(t, "10002001999999999999")) != 0 {
 		t.Fatalf("candidate = %+v, want the 18-decimal payout rate at the signed discount", candidate)
 	}
 }

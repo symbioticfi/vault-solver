@@ -27,7 +27,7 @@ txManager:
 solvers:
   - name: 3f-bridge-facilitator
     config:
-      apiBaseUrl: https://bf.dev.gcp.3f.xyz
+      apiBaseUrl: https://bf.3f.xyz
       answer: 42
 `
 
@@ -94,7 +94,7 @@ txManager:
   maxFeeGwei: 100
 solvers:
   - name: 3f-bridge-facilitator
-    config: {apiBaseUrl: https://bf.dev.gcp.3f.xyz}
+    config: {apiBaseUrl: https://bf.3f.xyz}
   - name: rfq-filler
     config: {backendUrl: https://rfq.example}
 `
@@ -143,7 +143,7 @@ func TestLoad_TwoStageSolverDecode(t *testing.T) {
 	if err := cfg.Solvers[0].Config.Decode(&sub); err != nil {
 		t.Fatalf("decode solver.config: %v", err)
 	}
-	if sub.APIBaseURL != "https://bf.dev.gcp.3f.xyz" || sub.Answer != 42 {
+	if sub.APIBaseURL != "https://bf.3f.xyz" || sub.Answer != 42 {
 		t.Fatalf("unexpected decoded solver config: %+v", sub)
 	}
 }

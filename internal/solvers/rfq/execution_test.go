@@ -98,7 +98,8 @@ func (f *fakeRecoveryReader) resolveVaults(_ context.Context, vaults []recoveryV
 	return vaults, nil
 }
 
-func (f *fakeRecoveryReader) setQuoteAdapters([]recoveryVault) { f.setCalls++ }
+func (f *fakeRecoveryReader) setQuoteAdapters([]recoveryVault)                          { f.setCalls++ }
+func (f *fakeRecoveryReader) warmQuoteAdapters(context.Context, []common.Address) error { return nil }
 
 func (f *fakeRecoveryReader) validateDirectAuthorization(
 	context.Context, common.Address, []recoveryVault,
@@ -208,7 +209,7 @@ func discountFillPlan(h common.Hash) *types.FillPlan {
 // liquidity, so a discount leg is attributable and can be reserved.
 func offerDiscountCandidate(e *executionService, be *fakeBackend, id common.Hash) {
 	e.vaults = nil
-	be.discounts = &discountsResponse{Discounts: []discountListItem{{
+	be.discounts = &discountsResponse{Discounts: []discountListItem{{DiscountPrecision: "1000000",
 		DiscountID: id.Hex(), Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
 		Collateral: tOut.Hex(), CollateralDecimals: 6,
 		Discount: "500", Deadline: 4_102_444_800,
@@ -430,7 +431,7 @@ func TestExecution_IncludedUnconfirmedStaysSubmitted(t *testing.T) {
 func TestExecution_DiscountFill(t *testing.T) {
 	st, be := fillFixtures(t)
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
-	be.discount = &resolveDiscountResponse{
+	be.discount = &resolveDiscountResponse{DiscountPrecision: "1000000",
 		DiscountID: h.Hex(),
 		Discount: discountTerms{
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
@@ -471,13 +472,13 @@ func TestExecution_DiscountOnlyRecovery_EmptyVaults(t *testing.T) {
 
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
 	// Backend offers a live discount redeemable against tIn with collateral == tOut (the order's output).
-	be.discounts = &discountsResponse{Discounts: []discountListItem{{
+	be.discounts = &discountsResponse{Discounts: []discountListItem{{DiscountPrecision: "1000000",
 		DiscountID: h.Hex(), Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
 		Collateral: tOut.Hex(), CollateralDecimals: 6,
 		Discount: "500", Deadline: 4_102_444_800,
 		MaxAssets: "10000000", // 1e7 liquidity, rate 1.0 → 1000000 out ≥ 900000 required
 	}}}
-	be.discount = &resolveDiscountResponse{
+	be.discount = &resolveDiscountResponse{DiscountPrecision: "1000000",
 		DiscountID: h.Hex(),
 		Discount: discountTerms{
 			Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Discount: "500",
@@ -518,7 +519,7 @@ func TestExecution_DiscountLegPricedFromAdapterQuote(t *testing.T) {
 	_, be := fillFixtures(t)
 	st := newStore(func() time.Time { return time.Unix(0, 0) })
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
-	be.discounts = &discountsResponse{Discounts: []discountListItem{{
+	be.discounts = &discountsResponse{Discounts: []discountListItem{{DiscountPrecision: "1000000",
 		DiscountID: h.Hex(), Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
 		Collateral: tOut.Hex(), CollateralDecimals: 6,
 		Discount: "500", Deadline: 4_102_444_800,
@@ -546,7 +547,7 @@ func TestExecution_DiscountAdapterMismatchFails(t *testing.T) {
 	// Strategy quotes a discount leg through vlt, but the backend resolves the discount to a
 	// different adapter — the fill must be aborted without a tx.
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
-	be.discount = &resolveDiscountResponse{
+	be.discount = &resolveDiscountResponse{DiscountPrecision: "1000000",
 		DiscountID: h.Hex(),
 		Discount: discountTerms{
 			Adapter:       "0x00000000000000000000000000000000000000aa", // not the quoted leg's adapter
@@ -594,10 +595,10 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 	rogueID := "0x00000000000000000000000000000000000000000000000000000000000000a2"
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
 	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{
-		{DiscountID: listedID, Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
+		{DiscountPrecision: "1000000", DiscountID: listedID, Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
 			CollateralDecimals: 6, Discount: "500", Deadline: 4_102_444_800,
 			MaxAssets: "10000000"},
-		{DiscountID: rogueID, Adapter: rogue.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
+		{DiscountPrecision: "1000000", DiscountID: rogueID, Adapter: rogue.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
 			CollateralDecimals: 6, Discount: "500", Deadline: 4_102_444_800,
 			MaxAssets: "10000000"},
 	}}}
@@ -622,7 +623,7 @@ func TestExecution_DiscountInventoriesWhitelist(t *testing.T) {
 }
 
 func TestExecution_DiscountInventoriesSkipsExpired(t *testing.T) {
-	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{{
+	be := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{{DiscountPrecision: "1000000",
 		DiscountID: "0x00000000000000000000000000000000000000000000000000000000000000a1",
 		Adapter:    vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(),
 		CollateralDecimals: 6, Discount: "500", Deadline: 1,
@@ -634,6 +635,37 @@ func TestExecution_DiscountInventoriesSkipsExpired(t *testing.T) {
 	e.whitelist = buildAdapterWhitelist(true, []recoveryVault{{Adapter: vlt}})
 	if out := e.discountInventories(context.Background(), tIn, nil); len(out) != 0 {
 		t.Fatalf("expired discount inventories = %+v", out)
+	}
+}
+
+func TestExecution_DiscountInventoriesExcludeConnectors(t *testing.T) {
+	for _, discount := range []string{"0", "500", "1000000"} {
+		t.Run(discount, func(t *testing.T) {
+			nativeID := "0x00000000000000000000000000000000000000000000000000000000000000a1"
+			connector := common.HexToAddress("0x00000000000000000000000000000000000000aa")
+			be := &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{
+				{
+					DiscountID:        "0x00000000000000000000000000000000000000000000000000000000000000a2",
+					DiscountPrecision: "100000000", Adapter: connector.Hex(), TokenToRedeem: tIn.Hex(),
+					Collateral: tOut.Hex(), CollateralDecimals: 6, Discount: discount,
+					Deadline: 4_102_444_800, MaxAssets: "10000000",
+				},
+				{
+					DiscountID: nativeID, DiscountPrecision: "1000000", Adapter: vlt.Hex(),
+					TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), CollateralDecimals: 6,
+					Discount: "500", Deadline: 4_102_444_800, MaxAssets: "10000000",
+				},
+			}}}
+			e := newExec(t, newStore(func() time.Time { return time.Unix(0, 0) }), be, &fakeTxm{})
+			// A discount-only filler can discover native adapters, but must not treat a
+			// connector as one merely because its discount fits the native numeric range.
+			e.whitelist = nil
+			inventory := e.discountInventories(t.Context(), tIn, nil)
+			if len(inventory) != 1 || inventory[0].Adapter != vlt || inventory[0].DiscountID == nil ||
+				inventory[0].DiscountID.Hex() != nativeID {
+				t.Fatalf("native recovery inventory = %+v, want only native discount %s", inventory, nativeID)
+			}
+		})
 	}
 }
 
@@ -805,11 +837,11 @@ func TestExecutionRetriesAbandonedFillAfterPollInterval(t *testing.T) {
 // snapshot rule applies to capacities that offer a discount alternative too.
 func TestExecution_DiscountInventoriesCarrySnapshotBlock(t *testing.T) {
 	_, be := fillFixtures(t)
-	be.discounts = &discountsResponse{Discounts: []discountListItem{{
+	be.discounts = &discountsResponse{Discounts: []discountListItem{{DiscountPrecision: "1000000",
 		DiscountID: "0x00000000000000000000000000000000000000000000000000000000000000ab",
 		Adapter:    vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), CollateralDecimals: 6,
 		Discount: "500", Deadline: 4_102_444_800, MaxAssets: "10000000",
-		BlockNumber: "4242",
+		BlockNumber: 4242,
 	}}}
 	e := newExec(t, newStore(func() time.Time { return time.Unix(0, 0) }), be, &fakeTxm{})
 

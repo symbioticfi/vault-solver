@@ -151,7 +151,7 @@ func TestBackendClient_ListDiscounts(t *testing.T) {
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
 			`"collateral":"0x0000000000000000000000000000000000000c01","collateralDecimals":6,` +
 			`"discount":"10","signer":"0x0000000000000000000000000000000000000aaa","deadline":1900000000,` +
-			`"maxRate":"1000000","maxAssets":"5000"}]}`))
+			`"blockNumber":"123","maxAssets":"5000"}]}`))
 	}))
 	defer srv.Close()
 

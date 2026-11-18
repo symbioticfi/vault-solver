@@ -3,20 +3,17 @@ package rfq
 import (
 	"bytes"
 	"math/big"
+	"reflect"
 	"testing"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 )
 
-// fillSignature is the canonical signature of the mixed fill overload; pinning its selector guards
-// against accidentally encoding a different fill overload. It mirrors the selector string in the TS
-// filler's encodeExecutorFill (executor.ts): the order carries protocol-authorized outputs,
-// swapInputs carry (adapter, (recipient,tokenIn,amountIn, amountOut)); discountSwapInputs carry
-// (adapter, ((tokenToRedeem,discount,signer,protocol,nonce,deadline),sig,protocolDeadline),
-// protocolSig,recipient,amountIn).
+// Pin the full funding ABI independently of the generated binding.
 const fillSignature = "fill(((address,uint256,(address,uint256,address)[],uint256,uint256,address),bytes,address,address,(address,uint256,address)[])," +
 	"bytes,(address,(address,address,uint256,uint256))[]," +
 	"(address,((address,uint256,address,address,uint256,uint48),bytes,uint48),bytes,address,uint256)[],bytes)"
@@ -42,19 +39,71 @@ func sampleOrder() executor.IReactorOrder {
 	}
 }
 
-func TestEncodeFill_SelectorMatchesMixedOverload(t *testing.T) {
+func TestEncodeFill_Selector(t *testing.T) {
 	want := crypto.Keccak256([]byte(fillSignature))[:4]
 
 	swaps := directSwaps(&fillPlan{Legs: []fillLeg{{
 		Adapter: vlt, AmountIn: big.NewInt(1_000000000000000000), AmountOut: big.NewInt(900000),
 	}}}, tIn, common.HexToAddress("0x0000000000000000000000000000000000000010"))
 
-	data, err := encodeFill(sampleOrder(), []byte{0xaa, 0xbb}, swaps, nil, emptyExecutorData)
+	data, err := encodeFill(sampleOrder(), []byte{0xaa, 0xbb}, swaps, nil)
 	if err != nil {
 		t.Fatalf("encodeFill: %v", err)
 	}
 	if len(data) < 4 || !bytes.Equal(data[:4], want) {
 		t.Fatalf("selector = %x, want %x (wrong fill overload?)", data[:4], want)
+	}
+}
+
+func TestEncodeFill_NativeSwapsExecuteOnlyFromInputArrays(t *testing.T) {
+	direct := directSwaps(&fillPlan{Legs: []fillLeg{
+		{Adapter: vlt, AmountIn: big.NewInt(11), AmountOut: big.NewInt(9)},
+		{Adapter: common.HexToAddress("0x1234"), AmountIn: big.NewInt(7), AmountOut: big.NewInt(5)},
+	}}, tIn, sampleOrder().Filler)
+	discounted := []executor.IReactorDiscountSwapInput{{
+		Adapter: common.HexToAddress("0x5678"),
+		DiscountSwap: executor.ILiquidLaneAdapterDiscountSwap{
+			Discount: executor.ILiquidLaneAdapterDiscount{
+				TokenToRedeem: tIn, Discount: big.NewInt(1234), Signer: vlt,
+				Protocol: sampleOrder().Request.Protocol, Nonce: big.NewInt(42), Deadline: big.NewInt(1000),
+			},
+			SignerSignature: []byte{0xaa, 0xbb}, ProtocolDeadline: big.NewInt(999),
+		},
+		ProtocolSignature: []byte{0xcc, 0xdd}, Recipient: sampleOrder().Filler, AmountIn: big.NewInt(13),
+	}}
+	for _, tc := range []struct {
+		name       string
+		direct     []executor.IReactorSwapInput
+		discounted []executor.IReactorDiscountSwapInput
+	}{
+		{"empty", nil, nil},
+		{"direct", direct, nil},
+		{"discounted", nil, discounted},
+		{"mixed", direct, discounted},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := encodeFill(sampleOrder(), []byte{0x12}, tc.direct, tc.discounted)
+			if err != nil {
+				t.Fatal(err)
+			}
+			values, err := executorABI.Methods["fill"].Inputs.Unpack(data[4:])
+			if err != nil {
+				t.Fatal(err)
+			}
+			gotDirect := *abi.ConvertType(values[2], new([]executor.IReactorSwapInput)).(*[]executor.IReactorSwapInput)
+			gotDiscounted := *abi.ConvertType(values[3], new([]executor.IReactorDiscountSwapInput)).(*[]executor.IReactorDiscountSwapInput)
+			if (len(tc.direct) > 0 && !reflect.DeepEqual(gotDirect, tc.direct)) || (len(tc.discounted) > 0 && !reflect.DeepEqual(gotDiscounted, tc.discounted)) {
+				t.Fatal("funding inputs changed")
+			}
+			decoded, err := executorCallsArgs.Unpack(values[4].([]byte))
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := *abi.ConvertType(decoded[0], new([]executorCall)).(*[]executorCall)
+			if len(calls) != 0 {
+				t.Fatalf("native Executor already executes swap arrays; extra calls would execute %d swaps twice", len(calls))
+			}
+		})
 	}
 }
 

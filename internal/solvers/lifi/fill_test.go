@@ -10,7 +10,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/executor"
 	"github.com/symbioticfi/vault-solver/api/bindings/lifi/inputsettler"
@@ -18,6 +17,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/testutil/swapcalls"
 )
 
 type fakeLifiReader struct {
@@ -125,40 +125,23 @@ func (f fakeLifiReader) latestBlockTime(context.Context) (time.Time, error) {
 	return time.Unix(1_700_000_000, 0), nil
 }
 
-func unpackFinaliseCalldata(t *testing.T, calldata []byte) (
-	executor.IInputSettlerStandardOrder,
-	[]executor.ILiquidLaneLifiExecutorFillRoute,
-	[]executor.ILiquidLaneLifiExecutorDiscountRoute,
-) {
+func unpackFinaliseCalldata(t *testing.T, calldata []byte) (executor.IInputSettlerStandardOrder, []swapcalls.Direct, []swapcalls.Discount) {
 	t.Helper()
-	if len(calldata) < 4 {
-		t.Fatalf("finalise calldata length = %d, want at least 4", len(calldata))
-	}
-	if got := hexutil.Encode(calldata[:4]); got != "0xd24f1d03" {
-		t.Fatalf("finalise selector = %s, want 0xd24f1d03", got)
-	}
-	executorABI, err := executor.LiquidLaneLifiExecutorMetaData.ParseABI()
+	parsed, err := executor.LiquidLaneLifiExecutorMetaData.ParseABI()
 	if err != nil {
-		t.Fatalf("parse executor ABI: %v", err)
+		t.Fatal(err)
 	}
-	method := executorABI.Methods["finaliseWithCurrentTimestamp"]
+	method, err := parsed.MethodById(calldata)
+	if err != nil || method.RawName != "finaliseWithCurrentTimestamp" {
+		t.Fatalf("unexpected method: %v", err)
+	}
 	args, err := method.Inputs.Unpack(calldata[4:])
 	if err != nil {
-		t.Fatalf("unpack finaliseWithCurrentTimestamp: %v", err)
+		t.Fatal(err)
 	}
-	if len(args) != 3 {
-		t.Fatalf("finalise arguments = %d, want order, routes, and discountRoutes", len(args))
-	}
-	order := *abi.ConvertType(
-		args[0], new(executor.IInputSettlerStandardOrder),
-	).(*executor.IInputSettlerStandardOrder)
-	directRoutes := *abi.ConvertType(
-		args[1], new([]executor.ILiquidLaneLifiExecutorFillRoute),
-	).(*[]executor.ILiquidLaneLifiExecutorFillRoute)
-	discountRoutes := *abi.ConvertType(
-		args[2], new([]executor.ILiquidLaneLifiExecutorDiscountRoute),
-	).(*[]executor.ILiquidLaneLifiExecutorDiscountRoute)
-	return order, directRoutes, discountRoutes
+	order := *abi.ConvertType(args[0], new(executor.IInputSettlerStandardOrder)).(*executor.IInputSettlerStandardOrder)
+	calls := swapcalls.Decode(t, args[1])
+	return order, calls.Routes, calls.DiscountRoutes
 }
 
 func TestBuildFillCalldata(t *testing.T) {
@@ -176,7 +159,7 @@ func TestBuildFillCalldata(t *testing.T) {
 		}},
 	}
 
-	calldata, err := buildFillCalldata(*submitted, orderID, plan, nil)
+	calldata, err := buildFillCalldata(cfg.Executor, *submitted, orderID, plan, nil)
 	if err != nil {
 		t.Fatalf("buildFillCalldata: %v", err)
 	}
@@ -211,9 +194,9 @@ func TestBuildExecutorRoutesRejectsInputMismatch(t *testing.T) {
 		MinAmountOut:      big.NewInt(80),
 	}}}
 
-	_, _, err := buildExecutorRoutes(order, plan, nil)
+	_, err := buildExecutorCalls(common.Address{19: 1}, order, plan, nil)
 	if err == nil || !strings.Contains(err.Error(), "input sum 99 does not match order input 100") {
-		t.Fatalf("buildExecutorRoutes() error = %v", err)
+		t.Fatalf("buildExecutorCalls() error = %v", err)
 	}
 }
 
@@ -250,7 +233,7 @@ func TestBuildFillCalldataSplitsDirectAndResolvedPrivateDiscount(t *testing.T) {
 	}
 
 	calldata, err := buildFillCalldata(
-		*submitted,
+		cfg.Executor, *submitted,
 		common.HexToHash("0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"),
 		plan,
 		map[common.Hash]*discounts.Signed{discountID: resolved},

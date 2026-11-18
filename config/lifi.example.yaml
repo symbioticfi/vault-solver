@@ -75,6 +75,10 @@ solvers:
         # Deployment convention: one key per executor; all processes using it share its reputation.
         apiKeyEnv: LIFI_SOLVER_API_KEY
         # httpTimeout: 10s
+        # Reconnect an open feed with no messages/control heartbeats within this budget.
+        # wsReadTimeout: 60s
+        # Bound application and WebSocket control pong writes.
+        # wsWriteTimeout: 10s
 
       # Mirrors RFQ deployment profiles. "external" (default) uses only direct filler-authorized
       # adapters. "internal" also uses the shared private-discounts API; the URL is required then.

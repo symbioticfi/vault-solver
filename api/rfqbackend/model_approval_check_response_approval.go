@@ -20,7 +20,7 @@ var _ MappedNullable = &ApprovalCheckResponseApproval{}
 // ApprovalCheckResponseApproval Unsigned approve(Reactor, maxUint256) transaction, or null when allowance covers the requested amount.
 type ApprovalCheckResponseApproval struct {
 	To                   string `json:"to" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Data                 string `json:"data" validate:"regexp=^0x[a-fA-F0-9]+$"`
+	Data                 string `json:"data" validate:"regexp=^0x(?:[a-fA-F0-9]{2})*$"`
 	Value                string `json:"value"`
 	AdditionalProperties map[string]interface{}
 }
