@@ -272,7 +272,7 @@ func TestExecution_OrderTraceDeclinesRefusedFill(t *testing.T) {
 	rec := tracetest.Install(t)
 	st, be := fillFixtures(t)
 	h := common.HexToHash("0x00000000000000000000000000000000000000000000000000000000000000ab")
-	be.discount = &resolveDiscountResponse{DiscountPrecision: "1000000",
+	be.discount = &resolveDiscountResponse{
 		DiscountID: h.Hex(),
 		Discount: discountTerms{
 			Adapter:       "0x00000000000000000000000000000000000000aa", // not the quoted leg's adapter

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -51,7 +52,13 @@ func TestRFQPairMetricsCountFinalHTTPResults(t *testing.T) {
 				t.Fatal(err)
 			}
 			srv := testServer()
-
+			metadataCalls := 0
+			srv.quotes.warmMetadata = func(tokens []common.Address) {
+				metadataCalls++
+				if len(tokens) != 2 || tokens[0] != tIn || tokens[1] != tOut {
+					t.Errorf("unexpected trusted metadata tokens: %v", tokens)
+				}
+			}
 			srv.metrics = m
 			body := validQuoteBody()
 			if tc.change != nil {
@@ -90,6 +97,13 @@ func TestRFQPairMetricsCountFinalHTTPResults(t *testing.T) {
 				t.Fatalf("status=%d want=%d body=%s", response.Code, tc.status, response.Body)
 			}
 
+			wantMetadataCalls := 0
+			if tc.result == "returned" {
+				wantMetadataCalls = 1
+			}
+			if metadataCalls != wantMetadataCalls {
+				t.Fatalf("metadata calls=%d want=%d", metadataCalls, wantMetadataCalls)
+			}
 			metricstest.RequireFamilyValue(t, reg, "solver_bot_quote_results_total", map[string]string{"solver": Name, "result": tc.result, "reason": tc.reason}, 1)
 			families, err := reg.Gather()
 			if err != nil {
@@ -168,7 +182,7 @@ func TestRFQPairMetricsObserveTransportFailures(t *testing.T) {
 				srv.quotes.strategy = panicStrategy{}
 			}
 			if tc.backendError {
-				srv.quotes.strategy = failingQuoteStrategy{}
+				srv.quotes.reader = failingQuoteReader{}
 			}
 			body, err := json.Marshal(validQuoteBody())
 			if err != nil {

@@ -21,7 +21,6 @@ func TestClientResolveSingle(t *testing.T) {
 		w.Header().Set("X-Request-Id", "discount-http-attempt")
 		_, _ = w.Write([]byte(`{` +
 			`"discountId":"0x` + hash64 + `",` +
-			`"discountPrecision":"100000000",` +
 			`"discount":{"adapter":"0x0000000000000000000000000000000000000abc",` +
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
 			`"discount":"123","signer":"0x0000000000000000000000000000000000000aaa",` +
@@ -46,7 +45,7 @@ func TestClientResolveSingle(t *testing.T) {
 		res.Discount.Deadline != 1900000000 {
 		t.Fatalf("discount terms = %+v", res.Discount)
 	}
-	if res.DiscountPrecision != "100000000" || res.SignerSignature != "0xdead" || res.ProtocolSignature != "0xbeef" || res.ProtocolDeadline != 1900000001 {
+	if res.SignerSignature != "0xdead" || res.ProtocolSignature != "0xbeef" || res.ProtocolDeadline != 1900000001 {
 		t.Fatalf("resolved = %+v", res)
 	}
 }
@@ -57,7 +56,6 @@ func TestClientResolveBatchSingleEntryAccepted(t *testing.T) {
 		w.Header().Set("X-Request-Id", "discount-http-attempt")
 		_, _ = w.Write([]byte(`{` +
 			`"discounts":[{"discountId":"0x` + hash64 + `",` +
-			`"discountPrecision":"1000000",` +
 			`"discount":{"adapter":"0x0000000000000000000000000000000000000abc",` +
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
 			`"discount":"123","signer":"0x0000000000000000000000000000000000000aaa",` +
@@ -73,7 +71,7 @@ func TestClientResolveBatchSingleEntryAccepted(t *testing.T) {
 	if res.RequestID != "discount-http-attempt" {
 		t.Fatalf("request ID = %q, want response header", res.RequestID)
 	}
-	if res.DiscountPrecision != "1000000" || res.Discount.Adapter != "0x0000000000000000000000000000000000000abc" || res.SignerSignature != "0xdead" {
+	if res.Discount.Adapter != "0x0000000000000000000000000000000000000abc" || res.SignerSignature != "0xdead" {
 		t.Fatalf("resolved from batch = %+v", res)
 	}
 }
@@ -108,9 +106,9 @@ func TestClientListDiscounts(t *testing.T) {
 			`"protocol":"0x0000000000000000000000000000000000000bbb","discounts":[` +
 			`{"discountId":"0x` + hash64 + `","adapter":"0x0000000000000000000000000000000000000abc",` +
 			`"tokenToRedeem":"0x0000000000000000000000000000000000000def",` +
-			`"collateral":"0x0000000000000000000000000000000000000c01","collateralDecimals":6,"discountPrecision":"1000000",` +
+			`"collateral":"0x0000000000000000000000000000000000000c01","collateralDecimals":6,` +
 			`"discount":"10","signer":"0x0000000000000000000000000000000000000aaa","deadline":1900000000,` +
-			`"blockNumber":"123","maxAssets":"5000"}]}`))
+			`"maxRate":"1000000","maxAssets":"5000"}]}`))
 	}))
 	defer srv.Close()
 
@@ -125,7 +123,7 @@ func TestClientListDiscounts(t *testing.T) {
 		t.Fatalf("request ID = %q, want response header", resp.RequestID)
 	}
 	if len(resp.Discounts) != 1 || resp.Discounts[0].CollateralDecimals != 6 ||
-		resp.Discounts[0].MaxAssets != "5000" || resp.Discounts[0].Deadline != 1900000000 || resp.Discounts[0].DiscountPrecision != "1000000" {
+		resp.Discounts[0].MaxAssets != "5000" || resp.Discounts[0].Deadline != 1900000000 {
 		t.Fatalf("discounts = %+v", resp.Discounts)
 	}
 }

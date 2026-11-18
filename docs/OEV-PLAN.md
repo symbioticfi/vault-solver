@@ -188,8 +188,6 @@ state accounting. The GraphQL wire binding is generated from the full vendored M
 `api/graphql/morpho/operations/*.graphql` into `api/morphographql`, with
 `api/graphql/morpho/operations.json` recording the exact generated query strings. The hand-written Morpho API
 adapter is OEV-local because it parses directly into the OEV monitor snapshot.
-Both market and borrower discovery queries carry the configured runtime chain.
-The API applies the requested chain and market filters before returning borrower rows.
 
 | File | Responsibility |
 |---|---|
@@ -470,31 +468,15 @@ later consume those results; the bid remains solver-bounded off-chain (spec §8)
 
 ### The `SymbioticOevSolver` contract
 
-The on-chain settlement contract is the OEV `SymbioticOevSolver` in rfq `src/oev/`: a Morpho liquidation callback with a native Liquid Lane exit and signed generic exits. Its constructor
-pins the native adapter, Morpho, Redstone Executor and `AUTH_SIGNER`.
+The on-chain settlement contract is the OEV `SymbioticOevSolver` in rfq `src/oev/`: a single-adapter router
+(Morpho-only on-chain) whose constructor pins ONE immutable `LiquidLaneAdapter` and one `AUTH_SIGNER`.
 The Executor calls `liquidate(bid, solver, operationData)`. The callback verifies the default-strategy
 callback auth (`auctionKey`, `bidAmount`, `minBundleProfit`, `deadline`, and capped legs), marks
 `auctionKey` used, then processes legs fail-soft. The deadline is solver-local replay protection for the
 callback auth (`now + strategy.config.bid.authTtlMs`, default 60s); the auction's sub-second `timeoutMs` remains an
 off-chain send gate.
 
-Each leg carries `marketId`, `borrower`, `maxSeizeAssets`, a loan-denominated `minProfit`,
-`collateralRecipient` and `calls` (`{target, value, data}[]`). The last two fields must both be empty
-for a native exit or both supplied for a generic exit. Authorization hashes the entire leg including
-these fields, binding recipe calldata and funding destinations.
-
-A generic exit transfers the actual seized collateral to `collateralRecipient` and executes the signed
-calls in order, including `RecipeExecutor.execute`. The recipe must account for live funding because
-collateral can be clamped below `maxSeizeAssets`. The callback still measures actual loan-token gains,
-approves actual Morpho repayment and requires the signed profit floor. A failed recipe rolls back its
-leg; it cannot authorize bid payment using expected proceeds. There is no recipe-version or protocol
-dispatch inside the generic path.
-
-The built-in strategy continues to choose native Liquid Lane exits and now encodes empty recipient/calls
-fields. A webhook strategy can return the new `operationData` tuple with assembled recipe calls and a
-matching callback signature. The host submits that data unchanged. Automatic discovery/pricing of Merkle
-exit routes is not added to the native strategy. Deploy the callback and updated tuple encoder together.
-
+Each leg carries `marketId`, `borrower`, `maxSeizeAssets`, and a loan-denominated `minProfit`.
 `SymbioticOevSolver` is a no-preview callback: it reads immutable Morpho market params, clamps the signed
 max seize by the borrower's live collateral, calls `Morpho.liquidate`, and lets `onMorphoLiquidate`
 validate economics from actual `repaidAssets`. Morpho is invoked with `try/catch`, so a
@@ -748,9 +730,6 @@ conservative fallback because no cached route state means the solver cannot pric
 ---
 
 ## 10. TODO / refinements
-
-- [x] **Chain-scoped borrower discovery.** Generated query variables filter borrowers
-  by runtime chain and requested market before risk sorting/truncation.
 
 - **Keep calibrating predictor constants from real settlements.** The default strategy logs predicted
   route/gas; tune constants above worst observed successful settlements.

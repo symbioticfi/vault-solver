@@ -10,10 +10,13 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 )
 
+// executorBinding (abigen --v2) packs fill() via TryPackFill; executorABI is parsed only for tuple
+// reflection (decoding the backend's order tuple), which the Pack helpers don't expose. fill() is
+// overloaded 3×; PackFill is the mixed order+protocolSig+swaps+discountSwaps overload we build — the
+// golden selector test pins it.
 var (
-	executorBinding   = executor.NewExecutor()
-	executorABI       = mustExecutorABI()
-	executorCallsArgs = executorCallArguments()
+	executorBinding = executor.NewExecutor()
+	executorABI     = mustExecutorABI()
 )
 
 func mustExecutorABI() abi.ABI {
@@ -27,6 +30,10 @@ func mustExecutorABI() abi.ABI {
 // orderTupleArgs decodes the backend's `encodedOrder` — an ABI-encoded single Order tuple, identical
 // to fill()'s first argument type.
 var orderTupleArgs = abi.Arguments{{Type: fillOrderType()}}
+
+// emptyExecutorData is abi.encode(ExecutorCall[]) for an empty call list — the executorData a direct
+// fill passes (the Executor decodes it to a (target,value,data)[] and runs no extra calls).
+var emptyExecutorData = encodeEmptyExecutorData()
 
 func fillOrderType() abi.Type {
 	m, ok := executorABI.Methods["fill"]
@@ -43,7 +50,7 @@ type executorCall struct {
 	Data   []byte
 }
 
-func executorCallArguments() abi.Arguments {
+func encodeEmptyExecutorData() []byte {
 	t, err := abi.NewType("tuple[]", "", []abi.ArgumentMarshaling{
 		{Name: "target", Type: "address"},
 		{Name: "value", Type: "uint256"},
@@ -52,7 +59,11 @@ func executorCallArguments() abi.Arguments {
 	if err != nil {
 		panic("rfq: build executorData type: " + err.Error())
 	}
-	return abi.Arguments{{Type: t}}
+	data, err := abi.Arguments{{Type: t}}.Pack([]executorCall{})
+	if err != nil {
+		panic("rfq: pack empty executorData: " + err.Error())
+	}
+	return data
 }
 
 // decodeOrder decodes a backend-provided ABI-encoded Reactor order into the typed struct fill expects.
@@ -71,19 +82,15 @@ func decodeOrder(encoded []byte) (executor.IReactorOrder, error) {
 	return *out, nil
 }
 
-// Native Executors execute swapInputs and discountSwapInputs themselves. Extra calls
-// must stay empty: repeating those swaps in executorData spends the input twice.
-// Merkle RFQ builds explicit recipe calls in its separate execution path.
+// encodeFill builds Executor.fill(order, protocolSig, swapInputs, discountSwapInputs, executorData)
+// calldata for the mixed overload.
 func encodeFill(
 	order executor.IReactorOrder,
 	protocolSig []byte,
 	swaps []executor.IReactorSwapInput,
 	discountSwaps []executor.IReactorDiscountSwapInput,
+	executorData []byte,
 ) ([]byte, error) {
-	executorData, err := executorCallsArgs.Pack([]executorCall{})
-	if err != nil {
-		return nil, errors.Errorf("encode executor calls: %w", err)
-	}
 	data, err := executorBinding.TryPackFill(order, protocolSig, swaps, discountSwaps, executorData)
 	if err != nil {
 		return nil, errors.Errorf("encode fill: %w", err)

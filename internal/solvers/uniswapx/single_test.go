@@ -224,7 +224,7 @@ func TestSingleInternalReplacesDiscountAndEncodesOnlyReplacement(t *testing.T) {
 			}
 			provider := &replacingDiscountProvider{failedID: failedID, fakeDiscountProvider: &fakeDiscountProvider{
 				list: &liquiddiscounts.List{Discounts: []liquiddiscounts.ListItem{first, second}},
-				resolved: &liquiddiscounts.Resolved{DiscountPrecision: "1000000", DiscountID: second.DiscountID,
+				resolved: &liquiddiscounts.Resolved{DiscountID: second.DiscountID,
 					Discount: liquiddiscounts.Terms{Adapter: fixture.route.Adapter.Hex(), TokenToRedeem: fixture.route.TokenIn.Hex(),
 						Discount: "0", Signer: common.HexToAddress("0x05").Hex(), Protocol: common.HexToAddress("0x06").Hex(),
 						Nonce: "1", Deadline: fixture.now.Add(time.Minute).Unix()},

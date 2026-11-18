@@ -873,7 +873,7 @@ func TestOrderFeedDialCarriesTraceparent(t *testing.T) {
 		_ = conn.Close()
 	}))
 	defer server.Close()
-	feed := newTestOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
+	feed := newOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
 
 	_, err := feed.watchOnce(t.Context(), orderFeedConnectionHooks{}, func(context.Context, orderMessage) {})
 	if err == nil {
@@ -954,7 +954,7 @@ func TestDiscountSkipLogsCarryTraceIDOnce(t *testing.T) {
 	s := &Solver{
 		log: funcr.NewJSON(func(entry string) { lines = append(lines, entry) }, funcr.Options{Verbosity: 1}),
 		discounts: &fakeDiscountClient{listed: &discounts.List{Discounts: []discounts.ListItem{
-			{DiscountPrecision: "1000000", DiscountID: testDiscountID, Discount: "not-a-number"},
+			{DiscountID: testDiscountID, Discount: "not-a-number"},
 		}}},
 	}
 

@@ -1,6 +1,7 @@
 package rfq
 
 import (
+	"math/big"
 	"strings"
 	"testing"
 	"time"
@@ -47,7 +48,11 @@ func TestRunExternalFailsForUnauthorizedConfiguredAdapter(t *testing.T) {
 	}
 }
 
-// TestBuildServices_WhitelistWiring pins the configured scope on both quote and execution services.
+// TestBuildServices_WhitelistWiring pins that solver mode actually reaches both services with the correct
+// per-path scoping: reverting the factory wiring (leaving a whitelist nil) would silently let a filler
+// quote/fill through adapters it isn't scoped to. The quote and execution paths scope independently —
+// quoting follows quoteScopesToAdapters() (external + internal-with-adapters), execution follows
+// restrictsToAdapters() (external only) — so the two whitelists are asserted separately.
 func TestBuildServices_WhitelistWiring(t *testing.T) {
 	listed := common.HexToAddress("0x0000000000000000000000000000000000000042")
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
@@ -80,11 +85,14 @@ func TestBuildServices_WhitelistWiring(t *testing.T) {
 		t.Fatal("token policy was not wired to both quote and execution services")
 	}
 
-	// Internal + configured adapters ⇒ both paths use the same configured scope.
+	// Internal + configured adapters ⇒ the QUOTE path scopes to the configured adapters, but execution
+	// stays unrestricted (nil) so discount recovery can fill through any advertised adapter.
 	cfg.SolverMode = solverModeInternal
 	quotes, exec = buildServices(cfg, 1, st, nil, nil, func() bool { return true }, nil, logr.Discard())
 	scopedToConfigured(t, "quote", quotes.whitelist)
-	scopedToConfigured(t, "execution", exec.whitelist)
+	if exec.whitelist != nil {
+		t.Fatalf("internal mode: execution whitelist = %v, want nil (filling stays unrestricted)", exec.whitelist)
+	}
 
 	// Internal + no adapters ⇒ neither path scopes (both nil): the filler quotes/fills off discounts only.
 	cfg.Adapters = nil
@@ -98,7 +106,8 @@ func TestBuildServices_WhitelistWiring(t *testing.T) {
 // filler built (via buildServices, the real wiring path) from an INTERNAL-mode config with one configured
 // adapter must drop a request adapter it isn't scoped to at quote time, while still quoting through its
 // own configured adapter. This pins the feature through the config→service wiring rather than a hand-set
-// whitelist.
+// whitelist, so reverting quoteScopesToAdapters() (or rewiring the quote whitelist to restrictsToAdapters)
+// fails here.
 func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 	clk := func() time.Time { return time.Unix(0, 0) }
 	st := newStore(clk)
@@ -112,14 +121,14 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 	quotes, _ := buildServices(cfg, 1, st, nil, nil, func() bool { return true }, nil, logr.Discard())
 	// buildServices wires real dependencies; swap in test fakes. The default strategy prices the tOut
 	// asset-group at 1.000000 USDC.
-	quotes.resolveRoute = func(_, _, _ common.Address, _ int) (common.Address, common.Address, bool) {
-		return common.Address{}, vlt, true
-	}
+	quotes.reader = &fakeQuoteCandidateReader{out: map[common.Address]*big.Int{tOut: big.NewInt(1_000000)}}
 	quotes.strategy = newDefaultTestStrategy()
 
 	rogue := common.HexToAddress("0x00000000000000000000000000000000000000aa")
-	rogueAdapter := validQuoteBody().Adapters[0]
-	rogueAdapter.Adapter = rogue.Hex() // Not scoped: must be dropped.
+	rogueAdapter := quoteAdapter{
+		Adapter: rogue.Hex(), Asset: tOut.Hex(), AssetDecimals: 6,
+		MaxAssets: "10000000", Discount: "0", // not scoped → must be dropped
+	}
 
 	// (1) Request offering ONLY the non-configured adapter ⇒ declined (nil → HTTP 204).
 	onlyRogue := validQuoteBody()
@@ -145,24 +154,5 @@ func TestBuildServices_InternalModeQuoteScoping(t *testing.T) {
 	}
 	if decision.response.AmountOut != "1000000" {
 		t.Fatalf("amountOut = %s, want quote through the configured adapter", decision.response.AmountOut)
-	}
-}
-
-func TestBuildServices_InternalFillScopesDiscounts(t *testing.T) {
-	now := func() time.Time { return time.Unix(1, 0) }
-	cfg := &Config{SolverMode: solverModeInternal, Adapters: []recoveryVault{{Adapter: vlt}}}
-	_, exec := buildServices(cfg, 1, newStore(now), nil, nil, nil, nil, logr.Discard())
-	exec.now = now
-	exec.backend = &fakeBackend{discounts: &discountsResponse{Discounts: []discountListItem{
-		{DiscountID: "0x" + strings.Repeat("a", 64), DiscountPrecision: "1000000", Adapter: vlt.Hex(),
-			TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), Discount: "500", Deadline: 100, MaxAssets: "1000"},
-		{DiscountID: "0x" + strings.Repeat("b", 64), DiscountPrecision: "1000000", Adapter: common.HexToAddress("0xaa").Hex(),
-			TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), Discount: "500", Deadline: 100, MaxAssets: "1000"},
-		{DiscountID: "0x" + strings.Repeat("c", 64), DiscountPrecision: "100000000", Adapter: common.HexToAddress("0xbb").Hex(),
-			TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), Discount: "500", Deadline: 100, MaxAssets: "1000"},
-	}}}
-	inventory := exec.discountInventories(t.Context(), tIn, nil)
-	if len(inventory) != 1 || inventory[0].Adapter != vlt {
-		t.Fatalf("fill inventory = %+v, want only configured native adapter", inventory)
 	}
 }

@@ -33,12 +33,11 @@ func NewLogger(debug bool) (logr.Logger, func()) {
 	}
 	// Optional Sentry sink: when SENTRY_DSN is set, tee Error+ entries to Sentry. Disabled otherwise.
 	sentrySink, flushSentry := initSentry()
-	zl = zl.WithOptions(zap.WrapCore(func(core zapcore.Core) zapcore.Core {
-		if sentrySink != nil {
-			core = zapcore.NewTee(core, sentrySink)
-		}
-		return &redactingCore{core}
-	}))
+	if sentrySink != nil {
+		zl = zl.WithOptions(zap.WrapCore(func(core zapcore.Core) zapcore.Core {
+			return zapcore.NewTee(core, sentrySink)
+		}))
+	}
 	return zapr.NewLogger(zl), func() { _ = zl.Sync(); flushSentry() }
 }
 

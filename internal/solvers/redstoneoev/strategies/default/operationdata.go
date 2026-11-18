@@ -79,9 +79,6 @@ func callbackAuthDigest(chainID *big.Int, callback, executor common.Address, aut
 
 func validateOperationLegs(legs []selectedLeg) error {
 	for i, leg := range legs {
-		if (leg.CollateralRecipient == (common.Address{})) != (len(leg.Calls) == 0) {
-			return errors.Errorf("operationData: leg %d requires both collateral recipient and exit calls", i)
-		}
 		if leg.MarketId == (common.Hash{}) {
 			return errors.Errorf("operationData: invalid leg %d marketId", i)
 		}
@@ -145,10 +142,6 @@ func callbackLegComponents() []abi.ArgumentMarshaling {
 		{Name: "borrower", Type: "address"},
 		{Name: "maxSeizeAssets", Type: "uint256"},
 		{Name: "minProfit", Type: "uint256"},
-		{Name: "collateralRecipient", Type: "address"},
-		{Name: "calls", Type: "tuple[]", Components: []abi.ArgumentMarshaling{
-			{Name: "target", Type: "address"}, {Name: "value", Type: "uint256"}, {Name: "data", Type: "bytes"},
-		}},
 	}
 }
 

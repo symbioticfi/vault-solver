@@ -396,7 +396,7 @@ RFQ and UniswapX code on 2026-07-20.)
 | 4 | `EXACT_OUTPUT` | Hard-rejected at validation | UniswapX prices the concrete requested output with current capacity and optional gas, returning the required input — §2.1, §5 |
 | 5 | Order ingestion | Polls own backend `GET /orders`, decodes the Symbiotic Reactor order from the backend payload | Polls Uniswap `GET /orders?filler=<executor>` (≤6 RPS); **net-new V2 Dutch order codec + Permit2 witness EIP-712 + cosignature recovery** (`order.go`, the riskiest unit — P2) — §3.3, §4.2 |
 | 6 | Pre-fill validation | Order-deadline + strategy↔order binding checks | Those **plus**: cosignature recovers to the swapper-authorized per-order `cosigner`, `exclusiveFiller == our executor`, decay window still fillable, resolved output at current block ≥ quoted floor — §6 |
-| 7 | Settlement call | `Executor.fill(order, protocolSig, swaps[], discountSwaps[], executorData)` on our Reactor | `LiquidLaneUniswapXExecutor.execute(SignedOrder, Call[])` → Uniswap reactor `executeWithCallback` → callback routes through direct `swap` or signed `discountSwap`; native output is declined in v1 — §7 |
+| 7 | Settlement call | `Executor.fill(order, protocolSig, swaps[], discountSwaps[], executorData)` on our Reactor | `LiquidLaneUniswapXExecutor.execute(SignedOrder, FillCall)` → Uniswap reactor `executeWithCallback` → callback routes through direct `swap` or signed `discountSwap`; native output is declined in v1 — §7 |
 | 8 | Failure economics | Failed fill ⇒ order re-armed next poll; no external penalty | **Fade penalty regime**: fail-closed gates before gas, local breaker, honor `blockUntilTimestamp`, quote only what inventory certainly fills — §6 |
 | 9 | Private discounts | Offer discovery, fill-time signed resolution, and `discountSwap` calldata | Reuse shared discovery, route matching, candidate construction, and fresh-term validation; keep resolve timing and executor calldata inside UniswapX; implemented across P3/P5 |
 
@@ -606,15 +606,8 @@ the deadline discharges the obligation. This includes another filler's soft over
 filler, including our executor, or any final non-filled state for an obligation observed live or recovered
 after a runtime poll gap is a local fade. An already-terminal miss discovered only by initial startup history
 reconciliation is logged and terminalized without opening a fresh local breaker. An order that is still
-`open` is normal while the public Dutch decay runs: within `orderServer.openGrace` (default `30s`) past
-the deadline it is attributed to API lag, kept pending, and logged once at info, without failing the sweep for
-other obligations; past the grace it counts as missed. Such an order is almost always a miss, so exclusive
-quoting pauses while any obligation sits in the grace (fail-closed, at most `openGrace`). An absent own fill
-cannot shortcut the grace, because another filler's timely soft override also discharges the obligation and
-is visible only through the API. A miss is not revisited if the API reports a timely fill later: a lag beyond
-`openGrace` costs one `breaker.window`. Missing/unknown API data or an unreadable receipt makes
-exclusive state unknown and blocks quotes without opening the breaker; the next successful reconciliation
-retries it.
+`open`, missing/unknown API data, or an unreadable receipt makes exclusive state unknown and blocks quotes
+without opening the breaker; the next successful reconciliation retries it.
 
 **Hard-quote phase** is run and cosigned by Uniswap; **we do not host it**. The same webhook receives both
 indicative and hard RFQs, and the quoter cannot distinguish them. A fresh `quoteId` is generated for each
@@ -662,11 +655,7 @@ On the ≤500ms path, mirroring `rfq`'s "one multicall, decimals cached" discipl
    enumerates route combinations; any produced
    output above the signed requirement remains executor surplus. No ladder, amount range, or allocation is published. `default` retains no quote route;
    `single` retains the selected source as a bounded preference.
-5. Bound decision work by `quoteServer.httpTimeout`, any earlier caller deadline, and the snapshot's
-   remaining lifetime. A leading observed chain clock shortens that lifetime. Cancellation or expiry,
-   including a cooperative strategy returning `ctx.Err()`, is an expected empty `204` decline.
-   Before publishing the result, recheck snapshot expiry (equality is expired), the snapshot pointer,
-   quote epoch, reservation revision, and every blocking condition.
+5. Before publishing the result, recheck the snapshot pointer, quote epoch, and every blocking condition.
    Any reservation change, breaker activation, exclusive-state change, unavailable txmanager nonce lane, or
    snapshot replacement during strategy execution turns the result into a decline. Ordinary sender
    occupancy does not block quotes.
@@ -708,9 +697,9 @@ Existing workflow outcome labels are retained: semantic reasons map to `declined
 planner reasons to `declined_strategy`, exactly once. A shared LiquidLane `QuoteMetrics` helper now
 records final HTTP results separately using `solver_bot_quote_results_total{solver,result,reason}`.
 Incoming is the sum of these results, without a separate incoming/rejection counter.
-Metric reason labels normalize hyphens to underscores; structured log reasons and
+Metric reason labels normalize legacy hyphens to underscores; structured log reasons and existing
 workflow outcomes retain their values. `returned/none` requires successful encoding; write failure is `response_write_error`, panic
-`internal_error`. Workflow quote decisions measure selection before the HTTP write.
+`internal_error`. Legacy selected-before-write metrics keep their production meaning.
 
 ### Optional token log metadata
 
@@ -808,8 +797,7 @@ is economic, not just gas:
   opens an independent local fade breaker: Uniswap still counts the original quoter as faded once exclusivity
   expires unfilled. An already-terminal miss found only during initial startup recovery is retained and
   logged without starting a new local penalty window. Consequently, an unrelated or late successful fill
-  cannot clear a live/runtime-recovered timed breaker. An `open` order pauses exclusive quoting and stays
-  pending through `orderServer.openGrace`, then counts as missed. An unknown status or unknown receipt
+  cannot clear a live/runtime-recovered timed breaker. An `open` order, unknown status, or unknown receipt
   time invalidates quotes and retries reconciliation without guessing fade. The trusted
   `blockUntilTimestamp` remains the authoritative external penalty window.
 
@@ -817,19 +805,35 @@ is economic, not just gas:
 
 ## 7. On-chain settlement contract — `LiquidLaneUniswapXExecutor.sol`
 
-The RFQ repository owns this callback. `execute(SignedOrder, Call[])` is caller-gated and passes
-only the call list through `executeWithCallback`. The authenticated `reactorCallback` runs the calls
-in order, grants output allowances and forwards native output to the immutable Reactor.
+The contract belongs in the canonical RFQ contracts repository. It is UniswapX-specific (no multi-venue
+abstraction):
 
-Vault-solver builds explicit ERC-20 transfer/swap pairs in selected-plan order. Direct and discounted
-swap encoding is shared with LI.FI. There are no route structs, version checks or overloaded entrypoints
-in the callback ABI. A caller can also supply transfers followed by RecipeExecutor calls; the built-in
-UniswapX strategy still selects native Liquid Lane routes. The Reactor enforces aggregate outputs.
-The solver continues to reject native output because its route discovery prices ERC-20 outputs.
-
-The owner-managed caller list, proxy storage, startup authorization checks and retained-surplus
-behavior are unchanged. Deploy the callback implementation and its regenerated solver bindings together.
-The contract does not expose its Reactor immutable, so deployment configuration must match it.
+- `reactorCallback(ResolvedOrder[] calldata, bytes calldata callbackData)` — guarded `msg.sender == reactor`;
+  routes each resolved order's input through the `LiquidLaneAdapter` named in `callbackData`, approves outputs
+  back to the reactor.
+- **Native-ETH output is unsupported in v1.** LiquidLane routes settle an ERC-20 vault asset, so the quote
+  server and order validation currently reject zero-address output.
+- `execute(SignedOrder, FillCall)` — caller-gated entrypoint matching the RFQ executor's owner-managed
+  `setCallers` model; the executor contract is a transparent proxy, while the Reactor-facing filler address
+  remains stable and the implementation's Reactor address is immutable.
+- `FillCall.routes[]` carries only adapter, input amount, and required output. Typed `discountRoutes[]`
+  carry adapter, input amount, and the signed discount/protocol terms; they intentionally have no duplicate
+  `minAmountOut` field. The caller selects adapters, and the executor carries no second on-chain adapter
+  allowlist. Any positive difference between resolved and routed input remains in the executor as filler
+  surplus. This makes calldata planned in one block safe when an exact-output V2 Dutch input increases before
+  execution, without timestamp prediction or waiting for `decayEndTime`. Direct adapters enforce their
+  requested output, discount adapters enforce signed terms, and the Reactor atomically enforces aggregate
+  order outputs. Pricing, capacity, and gas policy remain off-chain in the strategy.
+- Owner-managed caller list and no sweep entrypoint. The published ABI exposes indexed `callers(uint256)`
+  reads, but no caller-membership helper or Reactor getter. Startup scans those indexed entries with a safety
+  bound and fails unless it finds the tx-sending EOA; it also validates executor bytecode. External mode
+  additionally validates configured adapter authorization; internal mode filters unauthorized direct routes
+  from each snapshot. Deployment must still bind the implementation to the expected Reactor out of band
+  because that immutable cannot be read through the published ABI.
+- ABI vendored → `api/bindings/uniswapx/`; executor calldata packed via abigen `--v2` (never
+  `abi.Pack("...")`).
+- Contract coverage includes mock-Reactor Forge tests. The integration harness also carries a captured-order
+  mainnet-Reactor replay; a self-cosigned canonical-Reactor test remains P6.
 
 **Optional follow-up — native output (not a launch blocker).** Canonical UniswapX Reactors accept native
 output from a callback executor (see Uniswap's
@@ -925,9 +929,6 @@ in the owning repository and the integration harness pins the resulting revision
 - [x] **Bounded quote rejection diagnostics.** Split existing semantic validation reasons; retain
   protocol/chain acceptance, raw-body/semantic HTTP behavior and workflow aggregate labels. Capture
   homogeneous planner failures without classifying every nil as insufficient capacity (§5).
-- [x] **Decision lifetime.** Request/budget/snapshot cancellation and final expiry checks prevent a
-  slow or cancellation-ignoring strategy from publishing a stale positive quote; chain skew and exact
-  expiry boundaries have deterministic regression coverage.
 - [ ] **P4 — Quote webhook completion.** The bounded server, local strategy pricing, health,
   readiness, metrics, phase-agnostic `v1`/`v2` and zero-swapper handling, empty-`204` decline, ingress-owned
   source-IP authentication, native-output decline, and request tests exist. Replay a captured Beta payload

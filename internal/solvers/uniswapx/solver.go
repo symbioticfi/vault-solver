@@ -67,7 +67,6 @@ type Solver struct {
 	localBlockUntil       atomic.Int64
 	exclusiveBlockUntil   atomic.Int64
 	exclusiveStateUnknown atomic.Bool
-	exclusiveOpenInGrace  atomic.Bool
 	warmupUntil           atomic.Int64
 	lastExclusivePoll     atomic.Int64
 	refreshCh             chan struct{}

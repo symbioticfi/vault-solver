@@ -4,7 +4,6 @@ package discounts
 import (
 	"context"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -32,7 +31,6 @@ type Terms struct {
 type Resolved struct {
 	RequestID         string
 	DiscountID        string
-	DiscountPrecision string
 	Discount          Terms
 	SignerSignature   string
 	ProtocolDeadline  int64
@@ -42,7 +40,6 @@ type Resolved struct {
 // ListItem is one currently advertised private discount.
 type ListItem struct {
 	DiscountID         string
-	DiscountPrecision  string
 	Adapter            string
 	TokenToRedeem      string
 	Collateral         string
@@ -51,8 +48,8 @@ type ListItem struct {
 	Signer             string
 	Deadline           int64
 	MaxAssets          string
-	// BlockNumber is the block maxAssets was read at.
-	BlockNumber uint64
+	// BlockNumber is the block maxAssets was read at; empty when the backend does not report it.
+	BlockNumber string
 }
 
 // List projects discount data and the X-Request-Id header into solver-owned types.
@@ -117,7 +114,6 @@ func resolvedFromSingle(requestID string, s *rfqbackendinternal.ResolveDiscountR
 	return &Resolved{
 		RequestID:         requestID,
 		DiscountID:        s.GetDiscountId(),
-		DiscountPrecision: s.GetDiscountPrecision(),
 		Discount:          termsFromModel(s.GetDiscount()),
 		SignerSignature:   s.GetSignerSignature(),
 		ProtocolDeadline:  s.GetProtocolDeadline(),
@@ -154,13 +150,8 @@ func (c *Client) ListDiscounts(ctx context.Context) (*List, error) {
 	out.Discounts = make([]ListItem, 0, len(gen))
 	for i := range gen {
 		d := &gen[i]
-		blockNumber, err := strconv.ParseUint(d.GetBlockNumber(), 10, 64)
-		if err != nil {
-			return nil, errors.Errorf("private discounts: list: blockNumber: invalid decimal %q", d.GetBlockNumber())
-		}
 		out.Discounts = append(out.Discounts, ListItem{
 			DiscountID:         d.GetDiscountId(),
-			DiscountPrecision:  d.GetDiscountPrecision(),
 			Adapter:            d.GetAdapter(),
 			TokenToRedeem:      d.GetTokenToRedeem(),
 			Collateral:         d.GetCollateral(),
@@ -169,7 +160,7 @@ func (c *Client) ListDiscounts(ctx context.Context) (*List, error) {
 			Signer:             d.GetSigner(),
 			Deadline:           d.GetDeadline(),
 			MaxAssets:          d.GetMaxAssets(),
-			BlockNumber:        blockNumber,
+			BlockNumber:        d.GetBlockNumber(),
 		})
 	}
 	return out, nil

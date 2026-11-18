@@ -215,7 +215,7 @@ func (s *Solver) processOrderUsingReservations(
 		return orderProcessingResult{outcome: orderProcessingInvalidPlan, err: err}
 	}
 	s.logFillPlan(ctx, order, orderID, plan)
-	calldata, err := buildFillCalldata(s.cfg.Executor, *order, orderID, plan, prepared.signedDiscounts)
+	calldata, err := buildFillCalldata(*order, orderID, plan, prepared.signedDiscounts)
 	if err != nil {
 		observability.Log(ctx).Error(err, "order fill: build calldata", "orderId", order.OrderID, "quoteId", order.QuoteID)
 		return orderProcessingResult{outcome: orderProcessingInvalidPlan, err: err}

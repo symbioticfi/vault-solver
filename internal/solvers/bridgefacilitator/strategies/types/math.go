@@ -5,7 +5,6 @@ import (
 	"math/big"
 
 	"github.com/go-errors/errors"
-	threefrates "github.com/symbioticfi/vault-solver/internal/threef"
 )
 
 // PpmPerBps scales a basis-point rate to parts per million (1 bps = 100 ppm).
@@ -16,26 +15,34 @@ const yieldPpmScale = 1_000_000
 
 // YearSeconds is 3F's APR basis (365-day year, simple interest). An auction's maxRate is an APR and its
 // expectedReturn covers rateBasisSeconds, so a per-term rate is just basis == YearSeconds.
-const YearSeconds = threefrates.YearSeconds
+const YearSeconds int64 = 31_536_000
 
 // Read-only big.Int constants for the yield math, hoisted out of the per-offer hot path.
 var (
 	bigYieldPpmScale = big.NewInt(yieldPpmScale)
 	bigCeilBias      = big.NewInt(yieldPpmScale - 1) // for ceil(x/1e6) = (x + 1e6-1) / 1e6
+	bigYearSeconds   = big.NewInt(YearSeconds)
+	bigPpmYear       = new(big.Int).Mul(bigYieldPpmScale, bigYearSeconds)
 )
 
-// AuctionReturnBounds keeps native API rate precision in whole ppm before applying
-// the same auction bounds as the Merkle solver.
-func AuctionReturnBounds(principal *big.Int, maxRateBps float64, basisSeconds int64) (minimum, maximum *big.Int, err error) {
-	ratePpm := math.Round(maxRateBps * PpmPerBps)
-	if math.IsNaN(ratePpm) || math.IsInf(ratePpm, 0) || ratePpm <= 0 || ratePpm >= math.MaxInt64 {
-		return nil, nil, errors.New("invalid 3F auction maxRate")
+// rateBasis maps an auction's rateBasisSeconds to the factor applied to its maxRate. After the switch
+// every auction carries one (a year, or the settlement delay for auctions created before it) and maxRate
+// is an APR; API responses from before the switch carry none and quote maxRate per term, which is the
+// same as an annual rate over a full year.
+func rateBasis(basisSeconds int64) *big.Int {
+	if basisSeconds <= 0 {
+		return bigYearSeconds
 	}
-	return threefrates.ReturnBounds(principal, big.NewRat(int64(ratePpm), 100), basisSeconds)
+	return big.NewInt(basisSeconds)
 }
 
-// ValidateYield checks the adapter's raw on-chain yield floor and both auction APR
-// bounds, converted using rateBasisSeconds. It also validates webhook offers.
+// ValidateYield checks that expectedReturn on principal is acceptable to BOTH the adapter's on-chain
+// minYieldPerRequest floor and the 3F auction's max rate, in exact integer ppm — so the offer can't
+// revert on-chain (below floor) nor be rejected by the auction (above maxRate). Yield is compared the way
+// the contract computes it, floor(expectedReturn*1e6/principal), which for integer bounds is equivalent
+// to the exact integer comparisons below. The floor is checked on the raw expectedReturn, exactly as the
+// contract does; only the maxRate bound is scaled by basisSeconds/year. A zero/absent floor or maxRate
+// skips that bound; nil or non-positive amounts are rejected.
 func ValidateYield(expectedReturn, principal, minYieldPpm *big.Int, maxRateBps float64, basisSeconds int64) error {
 	// Reject a non-positive return: a 0 yield (what the pricing helpers produce when floor and maxRate are
 	// both 0, or on dust principals) is never a real offer, so the pair is skipped rather than offered.
@@ -45,15 +52,14 @@ func ValidateYield(expectedReturn, principal, minYieldPpm *big.Int, maxRateBps f
 	if !MeetsMinYield(expectedReturn, principal, minYieldPpm) {
 		return errors.Errorf("yield below minYieldPerRequest floor %s ppm", minYieldPpm)
 	}
-	minimum, maximum, err := AuctionReturnBounds(principal, maxRateBps, basisSeconds)
-	if err != nil {
-		return err
-	}
-	if expectedReturn.Cmp(minimum) < 0 {
-		return errors.Errorf("yield below auction minimum at %g bps", maxRateBps/4)
-	}
-	if expectedReturn.Cmp(maximum) > 0 {
-		return errors.Errorf("yield above auction maxRate %g bps", maxRateBps)
+	// maxRate has tenths-of-a-bps precision, so maxRateBps*100 is a whole ppm value; round off float noise.
+	if maxRatePpm := int64(math.Round(maxRateBps * PpmPerBps)); maxRatePpm > 0 {
+		scaled := new(big.Int).Mul(expectedReturn, bigYieldPpmScale)
+		scaled.Mul(scaled, bigYearSeconds)
+		bound := new(big.Int).Mul(principal, big.NewInt(maxRatePpm))
+		if scaled.Cmp(bound.Mul(bound, rateBasis(basisSeconds))) > 0 {
+			return errors.Errorf("yield above auction maxRate %g bps", maxRateBps)
+		}
 	}
 	return nil
 }
@@ -63,11 +69,13 @@ func ValidateYield(expectedReturn, principal, minYieldPpm *big.Int, maxRateBps f
 // precision so rateBps*100 is whole ppm; the math is exact integer — a big.Float path drifts by 1 wei
 // for principals above ~2^64.
 func ExpectedReturn(principal *big.Int, rateBps float64, basisSeconds int64) *big.Int {
-	_, maximum, err := AuctionReturnBounds(principal, rateBps, basisSeconds)
-	if err != nil {
+	ratePpm := int64(math.Round(rateBps * PpmPerBps))
+	if principal == nil || principal.Sign() <= 0 || ratePpm <= 0 {
 		return new(big.Int)
 	}
-	return maximum
+	num := new(big.Int).Mul(principal, big.NewInt(ratePpm))
+	num.Mul(num, rateBasis(basisSeconds))
+	return num.Quo(num, bigPpmYear)
 }
 
 // MinYieldReturn is the smallest expectedReturn on principal that clears the adapter's

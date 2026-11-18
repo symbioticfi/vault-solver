@@ -19,9 +19,10 @@ var _ MappedNullable = &QuoteRequestOutputsInner{}
 
 // QuoteRequestOutputsInner struct for QuoteRequestOutputsInner
 type QuoteRequestOutputsInner struct {
-	Token                string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	Recipient            string `json:"recipient" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
-	PortionBps           *int64 `json:"portionBps,omitempty"`
+	Token string `json:"token" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	// Defaults to swapper when omitted for backward compatibility.
+	Recipient            *string `json:"recipient,omitempty" validate:"regexp=^0x[a-fA-F0-9]{40}$"`
+	PortionBps           *int64  `json:"portionBps,omitempty"`
 	AdditionalProperties map[string]interface{}
 }
 
@@ -31,10 +32,9 @@ type _QuoteRequestOutputsInner QuoteRequestOutputsInner
 // This constructor will assign default values to properties that have it defined,
 // and makes sure properties required by API are set, but the set of arguments
 // will change when the set of required properties is changed
-func NewQuoteRequestOutputsInner(token string, recipient string) *QuoteRequestOutputsInner {
+func NewQuoteRequestOutputsInner(token string) *QuoteRequestOutputsInner {
 	this := QuoteRequestOutputsInner{}
 	this.Token = token
-	this.Recipient = recipient
 	return &this
 }
 
@@ -70,28 +70,36 @@ func (o *QuoteRequestOutputsInner) SetToken(v string) {
 	o.Token = v
 }
 
-// GetRecipient returns the Recipient field value
+// GetRecipient returns the Recipient field value if set, zero value otherwise.
 func (o *QuoteRequestOutputsInner) GetRecipient() string {
-	if o == nil {
+	if o == nil || IsNil(o.Recipient) {
 		var ret string
 		return ret
 	}
-
-	return o.Recipient
+	return *o.Recipient
 }
 
-// GetRecipientOk returns a tuple with the Recipient field value
+// GetRecipientOk returns a tuple with the Recipient field value if set, nil otherwise
 // and a boolean to check if the value has been set.
 func (o *QuoteRequestOutputsInner) GetRecipientOk() (*string, bool) {
-	if o == nil {
+	if o == nil || IsNil(o.Recipient) {
 		return nil, false
 	}
-	return &o.Recipient, true
+	return o.Recipient, true
 }
 
-// SetRecipient sets field value
+// HasRecipient returns a boolean if a field has been set.
+func (o *QuoteRequestOutputsInner) HasRecipient() bool {
+	if o != nil && !IsNil(o.Recipient) {
+		return true
+	}
+
+	return false
+}
+
+// SetRecipient gets a reference to the given string and assigns it to the Recipient field.
 func (o *QuoteRequestOutputsInner) SetRecipient(v string) {
-	o.Recipient = v
+	o.Recipient = &v
 }
 
 // GetPortionBps returns the PortionBps field value if set, zero value otherwise.
@@ -137,7 +145,9 @@ func (o QuoteRequestOutputsInner) MarshalJSON() ([]byte, error) {
 func (o QuoteRequestOutputsInner) ToMap() (map[string]interface{}, error) {
 	toSerialize := map[string]interface{}{}
 	toSerialize["token"] = o.Token
-	toSerialize["recipient"] = o.Recipient
+	if !IsNil(o.Recipient) {
+		toSerialize["recipient"] = o.Recipient
+	}
 	if !IsNil(o.PortionBps) {
 		toSerialize["portionBps"] = o.PortionBps
 	}

@@ -2,6 +2,7 @@ package rfq
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"math/big"
 	"net/http"
@@ -10,16 +11,25 @@ import (
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 )
 
+type unvalidatedErrorReader struct{}
+
+func (unvalidatedErrorReader) readQuoteCandidates(context.Context, []solverInventory, common.Address, common.Address, *big.Int, pendingReservations) ([]liquidlane.QuoteCandidate, error) {
+	return nil, errors.New("unsupported 0x0000000000000000000000000000000000009999 amount=123456789")
+}
+
 func TestQuoteDetailRequiresValidatedDirection(t *testing.T) {
-	for _, mode := range []string{"wrong chain", "lane unavailable", "below minimum", "policy", "missing adapters", "reverse", "unknown token", "invalid snapshot", "supported decline"} {
+	for _, mode := range []string{"wrong chain", "lane unavailable", "below minimum", "policy", "missing adapters", "reverse", "unknown token", "candidate error", "supported decline"} {
 		t.Run(mode, func(t *testing.T) {
 			srv := testServer()
 			body := validQuoteBody()
+			initialReader := srv.quotes.reader.(*fakeQuoteCandidateReader)
 			log, events := rfqObservationLogger(t)
 			srv.quotes.log = log
 			switch mode {
@@ -37,8 +47,8 @@ func TestQuoteDetailRequiresValidatedDirection(t *testing.T) {
 				body.TokenOut = common.HexToAddress("0x9999").Hex()
 			case "reverse":
 				body.TokenIn, body.TokenOut = body.TokenOut, body.TokenIn
-			case "invalid snapshot":
-				body.Adapters[0].Price = ""
+			case "candidate error":
+				srv.quotes.reader = unvalidatedErrorReader{}
 			case "supported decline":
 				srv.quotes.strategy = &inputRecordingStrategy{quoteOut: types.QuoteOutput{Decision: types.DecisionDecline}}
 			}
@@ -51,7 +61,12 @@ func TestQuoteDetailRequiresValidatedDirection(t *testing.T) {
 			r.Header.Set(requestIDHeader, "scope-operation-id")
 			w := httptest.NewRecorder()
 			srv.handler().ServeHTTP(w, r)
-
+			switch mode {
+			case "wrong chain", "lane unavailable", "below minimum", "policy", "missing adapters":
+				if len(initialReader.queries) != 0 {
+					t.Fatalf("early refusal added candidate I/O: %v", initialReader.queries)
+				}
+			}
 			resultCount := 0
 			for _, event := range *events {
 				if mode != "supported decline" {
@@ -75,8 +90,8 @@ func TestQuoteDetailRequiresValidatedDirection(t *testing.T) {
 					}
 				}
 			}
-			if resultCount != 1 || (mode != "invalid snapshot" && w.Code != http.StatusNoContent) ||
-				(mode == "invalid snapshot" && w.Code != http.StatusBadRequest) {
+			if resultCount != 1 || (mode != "candidate error" && w.Code != http.StatusNoContent) ||
+				(mode == "candidate error" && w.Code != http.StatusBadGateway) {
 				t.Fatalf("status=%d decision events=%d", w.Code, resultCount)
 			}
 		})

@@ -125,8 +125,8 @@ func TestValidateYield(t *testing.T) {
 		{"zero expectedReturn, no floor no max", big.NewInt(0), big.NewInt(amount), big.NewInt(0), 0, 0, true},
 		{"nil principal", big.NewInt(1), nil, big190, 3, 0, true},
 		{"zero principal", big.NewInt(1), big.NewInt(0), big190, 3, 0, true},
-		{"no adapter floor, below auction floor", big.NewInt(1), big.NewInt(amount), big.NewInt(0), 3, 0, true},
-		{"no maxRate (unresolved)", big.NewInt(114098544), big.NewInt(amount), big190, 0, 0, true},
+		{"no floor, under max", big.NewInt(1), big.NewInt(amount), big.NewInt(0), 3, 0, false},
+		{"no maxRate (unresolved), clears floor", big.NewInt(114098544), big.NewInt(amount), big190, 0, 0, false},
 		// APR auctions: 300 ppm APR over a 1-day basis caps at floor(amount*300/1e6/365) = 493576.
 		{"1-day basis, at max", big.NewInt(493576), big.NewInt(amount), big.NewInt(0), 3, 86_400, false},
 		{"1-day basis, above max", big.NewInt(493577), big.NewInt(amount), big.NewInt(0), 3, 86_400, true},
@@ -137,30 +137,6 @@ func TestValidateYield(t *testing.T) {
 			err := ValidateYield(c.er, c.amount, c.minPpm, c.maxBps, c.basis)
 			if (err != nil) != c.wantErr {
 				t.Fatalf("ValidateYield = %v, wantErr=%v", err, c.wantErr)
-			}
-		})
-	}
-}
-
-func TestValidateYieldAuctionMinimum(t *testing.T) {
-	for _, tc := range []struct {
-		name      string
-		principal int64
-		yield     int64
-		basis     int64
-		wantErr   bool
-	}{
-		{"reported one bps offer", 100_000_000, 10_000, YearSeconds, true},
-		{"quarter of maximum", 100_000_000, 250_000, YearSeconds, false},
-		{"rounded minimum", 100_001, 251, YearSeconds, false},
-		{"below rounded minimum", 100_001, 250, YearSeconds, true},
-		{"daily minimum", 365_000_000, 2500, 86_400, false},
-		{"below daily minimum", 365_000_000, 2499, 86_400, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := ValidateYield(big.NewInt(tc.yield), big.NewInt(tc.principal), nil, 100, tc.basis)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("ValidateYield = %v, wantErr=%v", err, tc.wantErr)
 			}
 		})
 	}

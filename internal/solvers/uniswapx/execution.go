@@ -12,7 +12,6 @@ import (
 	uxexecutor "github.com/symbioticfi/vault-solver/api/bindings/uniswapx/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
-	"github.com/symbioticfi/vault-solver/internal/liquidlane/execution"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
@@ -355,19 +354,13 @@ func (s *Solver) buildExecutorCalldata(
 	ctx, end := tracer.Start(ctx, "uniswapx.fill.build")
 	defer func() { end(err) }()
 
-	calls := make([]uxexecutor.IExecutorCall, 0, 2*len(plan.Routes))
+	fillRoutes := make([]uxexecutor.ILiquidLaneUniswapXExecutorFillRoute, 0, len(plan.Routes))
+	discountRoutes := make([]uxexecutor.ILiquidLaneUniswapXExecutorDiscountRoute, 0, len(plan.Routes))
 	for _, route := range plan.Routes {
-		funding, err := execution.Transfer(order.TokenIn, route.Adapter, route.AmountIn)
-		if err != nil {
-			return nil, time.Time{}, err
-		}
-		calls = append(calls, uxexecutor.IExecutorCall(funding))
 		if route.DiscountID == nil {
-			swap, err := execution.Swap(route.Adapter, order.Executor, order.TokenIn, route.AmountIn, route.MinAmountOut)
-			if err != nil {
-				return nil, time.Time{}, err
-			}
-			calls = append(calls, uxexecutor.IExecutorCall(swap))
+			fillRoutes = append(fillRoutes, uxexecutor.ILiquidLaneUniswapXExecutorFillRoute{
+				Adapter: route.Adapter, AmountIn: route.AmountIn, AmountOut: route.MinAmountOut,
+			})
 			continue
 		}
 		selectedRoute, ok := findRoute(routes, route.RouteID)
@@ -417,14 +410,25 @@ func (s *Solver) buildExecutorCalldata(
 			"discountPpm", signed.Terms.Discount.String(),
 			"protocolDeadline", signed.ProtocolDeadline,
 		)
-		swap, err := execution.Discount(signed, order.Executor, route.AmountIn)
-		if err != nil {
-			return nil, time.Time{}, err
-		}
-		calls = append(calls, uxexecutor.IExecutorCall(swap))
+		discountRoutes = append(discountRoutes, uxexecutor.ILiquidLaneUniswapXExecutorDiscountRoute{
+			Adapter: route.Adapter, AmountIn: route.AmountIn,
+			DiscountSwap: uxexecutor.ILiquidLaneAdapterDiscountSwap{
+				Discount: uxexecutor.ILiquidLaneAdapterDiscount{
+					TokenToRedeem: signed.Terms.TokenToRedeem,
+					Discount:      signed.Terms.Discount,
+					Signer:        signed.Terms.Signer,
+					Protocol:      signed.Terms.Protocol,
+					Nonce:         signed.Terms.Nonce,
+					Deadline:      signed.Terms.Deadline,
+				},
+				SignerSignature: signed.SignerSignature, ProtocolDeadline: signed.ProtocolDeadline,
+			},
+			ProtocolSignature: signed.ProtocolSignature,
+		})
 	}
 	data, err = uniswapXExecutor.TryPackExecute(
-		uxexecutor.UniswapXSignedOrder{Order: order.Encoded, Sig: order.Signature}, calls,
+		uxexecutor.UniswapXSignedOrder{Order: order.Encoded, Sig: order.Signature},
+		uxexecutor.ILiquidLaneUniswapXExecutorFillCall{Routes: fillRoutes, DiscountRoutes: discountRoutes},
 	)
 	return data, discountValidUntil, err
 }

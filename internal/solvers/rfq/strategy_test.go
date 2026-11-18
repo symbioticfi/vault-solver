@@ -152,9 +152,10 @@ func TestQuoteRejectsWebhookMultiLegPlanForPermissionedScope(t *testing.T) {
 	quoteServer.quotes.tokenPolicy = testPermissionedPolicy(t, tIn)
 	quoteServer.quotes.strategy = webhookstrategy.New(client)
 	request := validQuoteBody()
-	other := request.Adapters[0]
-	other.Adapter = "0x0000000000000000000000000000000000000004"
-	request.Adapters = append(request.Adapters, other)
+	request.Adapters = append(request.Adapters, quoteAdapter{
+		Adapter: "0x0000000000000000000000000000000000000004", Asset: tOut.Hex(), AssetDecimals: 6,
+		MaxAssets: "10000000", Discount: "0",
+	})
 
 	decision, err := quoteServer.quotes.quote(t.Context(), &request)
 	if err == nil || !strings.Contains(err.Error(), "single-route input requires exactly one leg") {

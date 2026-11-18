@@ -14,9 +14,7 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/vault-solver/internal/chain"
-	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/observability"
-	merklerfq "github.com/symbioticfi/vault-solver/internal/solvers/merkle/rfq"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"gopkg.in/yaml.v3"
 
@@ -42,13 +40,9 @@ type Solver struct {
 	cfg         *Config
 	server      *server
 	exec        *executionService
-	merkle      *merklerfq.Solver
 	log         logr.Logger
 	reportFatal func(error)
 }
-
-func (s *Solver) RequiresTxManager() bool       { return s.merkle == nil }
-func (s *Solver) RequiresMerkleTxManager() bool { return s.merkle != nil }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
@@ -79,7 +73,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	quotes, exec := buildServices(
 		cfg, chainID, st, rdr, deps.TxManager, deps.TxManager.Available, quoteStrategy, log,
 	)
-	quotes.resolveRoute = rdr.cachedQuoteRoute
 	exec.metrics = metrics
 	if metrics != nil {
 		exec.orderPollObserver = metrics.orderPollObserver
@@ -88,32 +81,12 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	// the fill loop looks it up by quote id to link the two traces (spec §12).
 	links := observability.NewSpanLinks()
 	exec.links = links
-	var merkle *merklerfq.Solver
-	if len(cfg.RecipeExecutors) > 0 {
-		merkle, err = merklerfq.New(cfg.merkleConfig(), deps)
-		if err != nil {
-			return nil, err
-		}
-		quotes.reservations = func(_ string, inventory []solverInventory) liquidlane.CapacityReservations {
-			return merkle.Reservations(inventory)
-		}
-		manager, err := deps.MerkleTxManager()
-		if err != nil {
-			return nil, err
-		}
-		quotes.laneAvailable = manager.Ready
-		quotes.resolveRoute = func(connector, rwa, asset common.Address, _ int) (common.Address, common.Address, bool) {
-			return merkle.ResolveRoute(connector, rwa, asset)
-		}
-	}
 	return &Solver{
-		merkle: merkle,
-		cfg:    cfg,
-		exec:   exec,
+		cfg:  cfg,
+		exec: exec,
 		server: &server{
 			sharedSecret: secret,
 			quotes:       quotes,
-			quoteTimeout: cfg.QuoteTimeout,
 			metrics:      metrics,
 			links:        links,
 		},
@@ -135,7 +108,13 @@ func buildServices(
 	quoteStrategy types.Strategy,
 	log logr.Logger,
 ) (*quoteService, *executionService) {
-	whitelist := buildAdapterWhitelist(cfg.restrictsToAdapters(), cfg.Adapters)
+	// The quote and execution paths scope to adapters independently. Quoting uses quoteScopesToAdapters()
+	// so an internal-mode filler with configured adapters advertises quotes only for its own adapter
+	// universe; execution uses restrictsToAdapters() (external-only) so internal-mode discount recovery can
+	// still fill through any advertised adapter. Both predicates imply non-empty Adapters when true, so a
+	// wired whitelist is never empty.
+	quoteWhitelist := buildAdapterWhitelist(cfg.quoteScopesToAdapters(), cfg.Adapters)
+	execWhitelist := buildAdapterWhitelist(cfg.restrictsToAdapters(), cfg.Adapters)
 
 	var tokenMetadata *chain.Decimals
 	if rdr != nil {
@@ -148,9 +127,10 @@ func buildServices(
 		executor:         cfg.Executor,
 		laneAvailable:    laneAvailable,
 		reservations:     st.pendingReservations,
-		whitelist:        whitelist,
+		whitelist:        quoteWhitelist,
 		tokenPolicy:      cfg.TokenPolicy,
 		minAmountsIn:     cfg.MinAmountsIn,
+		reader:           rdr,
 		strategy:         quoteStrategy,
 		strategyName:     cfg.Strategy.Name,
 		log:              log,
@@ -164,7 +144,7 @@ func buildServices(
 		maxNonceRetries:  cfg.MaxNonceRetries,
 		pollInterval:     cfg.PollInterval,
 		vaults:           cfg.Adapters,
-		whitelist:        whitelist,
+		whitelist:        execWhitelist,
 		tokenPolicy:      cfg.TokenPolicy,
 		discountsEnabled: cfg.usesDiscounts(),
 		backend:          newBackendClient(cfg.BackendURL),
@@ -191,15 +171,10 @@ func (s *Solver) ShutdownPreparationTimeout() time.Duration {
 // Run serves the quote HTTP API until ctx is cancelled, then shuts it down gracefully, alongside the
 // backend order-poll + fill loop. The filler is poll-only (no push/notify endpoint).
 func (s *Solver) Run(ctx context.Context) error {
-	if s.merkle != nil {
-		if err := s.merkle.Initialize(ctx); err != nil {
-			return errors.Errorf("rfq: initialize recipe executor: %w", err)
-		}
-	}
-	// Resolve each configured adapter's vault + collateral once at startup (config carries only adapter
-	// addresses; both are fixed for the adapter's lifetime) for quotes and recovery. Runs
+	// Resolve each recovery adapter's vault + collateral once at startup (config carries only adapter
+	// addresses; both are fixed for the adapter's lifetime) and hand the resolved set to recovery. Runs
 	// before the poll loop and the quote server, so there's no concurrent reader of exec.vaults. A
-	// transport failure or unresolved configured metadata aborts startup.
+	// transport failure aborts startup; a per-adapter revert leaves that entry unresolved (skipped).
 	if len(s.cfg.Adapters) > 0 {
 		resolved, err := s.exec.reader.resolveVaults(ctx, s.cfg.Adapters)
 		if err != nil {
@@ -210,7 +185,7 @@ func (s *Solver) Run(ctx context.Context) error {
 		}
 		s.exec.vaults = resolved
 		s.exec.reader.setQuoteAdapters(resolved)
-		if !s.cfg.QuoteOnly && s.cfg.SolverMode == solverModeExternal {
+		if s.cfg.restrictsToAdapters() {
 			if err := s.exec.reader.validateDirectAuthorization(ctx, s.cfg.Executor, resolved); err != nil {
 				startupErr := errors.Errorf("rfq: validate direct authorization: %w", err)
 				observability.Log(ctx).Error(startupErr, "external adapter authorization failed",
@@ -222,7 +197,9 @@ func (s *Solver) Run(ctx context.Context) error {
 
 	metadataCtx, stopMetadata := context.WithCancel(ctx)
 	defer stopMetadata()
-
+	s.server.quotes.warmMetadata = func(tokens []common.Address) {
+		s.server.quotes.tokenMetadata.WarmMetadataAsync(metadataCtx, tokens, observability.Log(metadataCtx).WithValues("chainId", s.server.quotes.chainID))
+	}
 	var metadataTokens []common.Address
 	for token := range s.cfg.TokenPolicy.SingleRouteTokens() {
 		metadataTokens = append(metadataTokens, token)
@@ -232,14 +209,6 @@ func (s *Solver) Run(ctx context.Context) error {
 	}
 	s.server.quotes.tokenMetadata.WarmMetadataAsync(metadataCtx, metadataTokens, observability.Log(metadataCtx).WithValues("chainId", s.server.quotes.chainID))
 	s.warmPairRoutes(metadataCtx)
-	if s.merkle == nil && s.cfg.usesDiscounts() && len(s.cfg.Adapters) == 0 {
-		if err := s.refreshNativeQuoteAdapters(metadataCtx); err != nil {
-			return errors.Errorf("rfq: initialize quote accounts: %w", err)
-		}
-		cacheDone := make(chan struct{})
-		go func() { defer close(cacheDone); s.refreshNativeQuoteAdaptersLoop(metadataCtx) }()
-		defer func() { stopMetadata(); <-cacheDone }()
-	}
 
 	observability.Log(ctx).Info("starting",
 		"listenAddr", s.cfg.ListenAddr,
@@ -276,9 +245,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	execDone := make(chan struct{})
 	go func() {
 		defer close(execDone)
-		if err := s.runExecution(execCtx); err != nil && execCtx.Err() == nil {
-			errCh <- err
-		}
+		s.exec.run(execCtx)
 	}()
 
 	var runErr error
@@ -286,7 +253,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	case <-ctx.Done():
 		runErr = ctx.Err()
 	case err := <-errCh:
-		runErr = errors.Errorf("rfq: solver failed: %w", err)
+		runErr = errors.Errorf("rfq: quote server failed: %w", err)
 		if s.reportFatal != nil && ctx.Err() == nil {
 			s.reportFatal(runErr)
 		}
@@ -304,17 +271,4 @@ func (s *Solver) Run(ctx context.Context) error {
 	}
 	<-execDone
 	return runErr
-}
-
-// runExecution keeps quote-only deployments out of the order journal and transaction path.
-func (s *Solver) runExecution(ctx context.Context) error {
-	if s.cfg.QuoteOnly {
-		<-ctx.Done()
-		return ctx.Err()
-	}
-	if s.merkle != nil {
-		return s.merkle.Run(ctx)
-	}
-	s.exec.run(ctx)
-	return ctx.Err()
 }

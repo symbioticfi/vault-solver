@@ -407,7 +407,7 @@ func (s *store) reserved(orderID string) bool {
 // can plan its own replacement. Before a fill is confirmed its reservation is always subtracted.
 // After, a snapshot read before the inclusion block still subtracts the spend, whether or not the
 // backend has since reported the order filled, while one read at or after it does not, since it
-// already reflects the fill. Missing capacities retain their reservations.
+// already reflects the fill. A snapshot with an unknown block subtracts only orders still active.
 func (s *store) pendingReservations(excludedOrderID string, inventory []solverInventory) liquidlane.CapacityReservations {
 	blocks := snapshotBlocks(inventory)
 	s.mu.Lock()
@@ -421,17 +421,25 @@ func (s *store) pendingReservations(excludedOrderID string, inventory []solverIn
 			return true
 		}
 		block, known := blocks[capacityID]
-		return !known || block < rec.IncludedAt
+		if !known || block == 0 {
+			return rec.Status.active()
+		}
+		return block < rec.IncludedAt
 	})
 }
 
-// snapshotBlocks is the oldest observation block per capacity.
+// snapshotBlocks is the oldest reported snapshot block per capacity; zero when any item's is unknown.
 func snapshotBlocks(inventory []solverInventory) map[liquidlane.CapacityID]uint64 {
 	blocks := make(map[liquidlane.CapacityID]uint64, len(inventory))
 	for _, item := range inventory {
 		capacityID := liquidlane.RouteCapacityID(item.Route)
 		block, seen := blocks[capacityID]
-		if !seen || item.BlockNumber < block {
+		switch {
+		case !seen:
+			blocks[capacityID] = item.BlockNumber
+		case block == 0:
+			// unknown stays unknown
+		case item.BlockNumber == 0 || item.BlockNumber < block:
 			blocks[capacityID] = item.BlockNumber
 		}
 	}

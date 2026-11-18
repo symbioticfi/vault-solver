@@ -51,15 +51,6 @@ func TestParseConfig_RedeemBatchSizeDefaults(t *testing.T) {
 	}
 }
 
-func TestParseConfig_RedeemDefaultsOff(t *testing.T) {
-	if mustParse(t, oneTarget).Redeem {
-		t.Fatal("redeem should default to false")
-	}
-	if !mustParse(t, oneTarget+"redeem: true\n").Redeem {
-		t.Fatal("redeem: true not honored")
-	}
-}
-
 func TestParseConfig_RedeemBatchSizeOverride(t *testing.T) {
 	cfg := mustParse(t, oneTarget+"redeemBatchSize: 3\n")
 	if cfg.RedeemBatchSize != 3 {

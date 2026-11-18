@@ -44,7 +44,6 @@ func TestParseConfigDefaultsAndSources(t *testing.T) {
 		cfg.QuoteServer.RefreshInterval != defaultRefreshInterval ||
 		cfg.QuoteServer.QuoteTTL != defaultQuoteTTL ||
 		cfg.OrderServer.PollInterval != defaultPollInterval ||
-		cfg.OrderServer.OpenGrace != defaultOpenGrace ||
 		cfg.Strategy.Name != defaultStrategyName ||
 		cfg.SolverMode != solverModeExternal ||
 		cfg.usesDiscounts() {
@@ -233,9 +232,6 @@ func TestParseConfigRejectsUnsafeOrderPolling(t *testing.T) {
 		"exclusive source disabled": strings.Replace(validUniswapXConfig, "exclusiveV2: true", "exclusiveV2: false", 1),
 		"polls faster than 6 RPS": strings.Replace(
 			validUniswapXConfig, "apiKeyEnv: UNISWAP_API_KEY", "apiKeyEnv: UNISWAP_API_KEY\n  pollInterval: 166ms", 1,
-		),
-		"non-positive open status grace": strings.Replace(
-			validUniswapXConfig, "apiKeyEnv: UNISWAP_API_KEY", "apiKeyEnv: UNISWAP_API_KEY\n  openGrace: 0s", 1,
 		),
 	}
 	for name, raw := range tests {

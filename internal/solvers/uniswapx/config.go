@@ -21,7 +21,6 @@ const (
 	defaultListenAddress    = ":42080"
 	defaultHTTPTimeout      = 450 * time.Millisecond
 	defaultPollInterval     = time.Second
-	defaultOpenGrace        = 30 * time.Second
 	defaultRefreshInterval  = 12 * time.Second
 	defaultQuoteTTL         = 30 * time.Second
 	defaultSelectionTTL     = 10 * time.Minute
@@ -70,7 +69,6 @@ type rawOrderServerConfig struct {
 	APIKeyEnv    string                `yaml:"apiKeyEnv"`
 	PollInterval string                `yaml:"pollInterval"`
 	HTTPTimeout  string                `yaml:"httpTimeout"`
-	OpenGrace    string                `yaml:"openGrace"`
 	Beta         bool                  `yaml:"beta"`
 	Sources      rawOrderSourcesConfig `yaml:"sources"`
 }
@@ -128,7 +126,6 @@ type OrderServerConfig struct {
 	APIKeyEnv    string
 	PollInterval time.Duration
 	HTTPTimeout  time.Duration
-	OpenGrace    time.Duration
 	Beta         bool
 	Sources      OrderSourcesConfig
 }
@@ -221,10 +218,6 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	openGrace, err := parse.Duration(raw.OrderServer.OpenGrace, defaultOpenGrace, "orderServer.openGrace")
-	if err != nil {
-		return nil, err
-	}
 	if raw.OrderServer.APIKeyEnv == "" {
 		return nil, errors.New("orderServer.apiKeyEnv is required")
 	}
@@ -286,8 +279,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		},
 		OrderServer: OrderServerConfig{
 			BaseURL: raw.OrderServer.BaseURL, APIKeyEnv: raw.OrderServer.APIKeyEnv,
-			PollInterval: pollInterval, HTTPTimeout: orderHTTPTimeout, OpenGrace: openGrace,
-			Beta: raw.OrderServer.Beta, Sources: sources,
+			PollInterval: pollInterval, HTTPTimeout: orderHTTPTimeout, Beta: raw.OrderServer.Beta, Sources: sources,
 		},
 		Discounts: discountConfig,
 		Gas:       gas,

@@ -1,4 +1,0 @@
-# DevOps owns CI/CD configuration and container images
-/.github/ @symbioticfi/devops
-Dockerfile* @symbioticfi/devops
-*.Dockerfile @symbioticfi/devops

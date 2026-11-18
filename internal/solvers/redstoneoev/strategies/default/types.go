@@ -8,7 +8,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
 
-	"github.com/symbioticfi/vault-solver/internal/liquidlane/execution"
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/morpho"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
@@ -48,12 +47,10 @@ type SizingParams struct {
 
 // selectedLeg is one sized Morpho liquidation selected by the strategy.
 type selectedLeg struct {
-	MarketId            common.Hash
-	Borrower            common.Address
-	MaxSeizeAssets      *big.Int
-	MinProfit           *big.Int
-	CollateralRecipient common.Address
-	Calls               []execution.Call
+	MarketId       common.Hash
+	Borrower       common.Address
+	MaxSeizeAssets *big.Int
+	MinProfit      *big.Int
 }
 
 type legHint struct {

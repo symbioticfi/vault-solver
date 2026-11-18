@@ -16,7 +16,6 @@ import (
 // rawConfig mirrors the YAML shape; strings are parsed into typed values in parse().
 type rawConfig struct {
 	APIBaseURL        string            `yaml:"apiBaseUrl"`
-	Redeem            bool              `yaml:"redeem"`
 	RedeemBatchSize   int               `yaml:"redeemBatchSize"`
 	Adapters          *[]string         `yaml:"adapters"`
 	AdapterFactory    string            `yaml:"adapterFactory"`
@@ -41,8 +40,6 @@ type rawIntervals struct {
 // Config is the validated, typed solver configuration.
 type Config struct {
 	APIBaseURL string
-	// Redeem enables the redeem loop (finalizing repaid Requests back to the vault). Off by default.
-	Redeem bool
 	// RedeemBatchSize caps how many Requests are redeemed in a single redeem() call (gas bound).
 	RedeemBatchSize int
 	// HTTPTimeout bounds every 3F API call so a hung request can't stall the single solver loop
@@ -171,7 +168,6 @@ func parseConfig(node yaml.Node) (*Config, error) {
 
 	return &Config{
 		APIBaseURL:        raw.APIBaseURL,
-		Redeem:            raw.Redeem,
 		RedeemBatchSize:   redeemBatch,
 		HTTPTimeout:       httpTimeout,
 		OfferExpiryBuffer: offerExpiryBuffer,

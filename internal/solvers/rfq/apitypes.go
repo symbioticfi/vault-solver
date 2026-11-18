@@ -32,19 +32,17 @@ type quoteRequest struct {
 
 // quoteAdapter is one adapter inventory entry the backend offers for the request.
 type quoteAdapter struct {
-	DiscountPrecision string  `json:"discountPrecision" enum:"1000000,100000000"`
-	Price             string  `json:"price,omitempty" pattern:"^[0-9]+$" doc:"Undiscounted oracle price scaled by 1e18; required for every quote"`
-	TokenInDecimals   *int    `json:"tokenInDecimals,omitempty" minimum:"0" maximum:"255"`
-	Adapter           string  `json:"adapter" pattern:"^0x[a-fA-F0-9]{40}$"`
-	Asset             string  `json:"asset" pattern:"^0x[a-fA-F0-9]{40}$"`
-	AssetDecimals     int     `json:"assetDecimals" minimum:"0" maximum:"255"`
-	MaxAssets         string  `json:"maxAssets" pattern:"^[0-9]+$"`
-	DiscountID        *string `json:"discountId,omitempty" pattern:"^0x[a-fA-F0-9]{64}$"`
-	// Discount is the signed value or native minDiscount at this entry's precision.
-	// Payout is floor(getAmountOut(amountIn) * (precision - discount) / precision).
+	Adapter       string  `json:"adapter" pattern:"^0x[a-fA-F0-9]{40}$"`
+	Asset         string  `json:"asset" pattern:"^0x[a-fA-F0-9]{40}$"`
+	AssetDecimals int     `json:"assetDecimals" minimum:"0" maximum:"255"`
+	MaxAssets     string  `json:"maxAssets" pattern:"^[0-9]+$"`
+	DiscountID    *string `json:"discountId,omitempty" pattern:"^0x[a-fA-F0-9]{64}$"`
+	// Discount (ppm) is what the adapter takes off this entry's payout: the signed discount of a
+	// discountId entry, otherwise the adapter's minDiscount. The adapter pays at most
+	// floor(getAmountOut(amountIn) * (1e6 - discount) / 1e6).
 	Discount string `json:"discount" pattern:"^[0-9]+$"`
-	// BlockNumber is the block maxAssets was read at.
-	BlockNumber string `json:"blockNumber" pattern:"^[0-9]+$"`
+	// BlockNumber is the block maxAssets was read at. Optional until every backend reports it.
+	BlockNumber *string `json:"blockNumber,omitempty" pattern:"^[0-9]+$"`
 }
 
 // quoteResponse is the filler → backend quote (POST /quote 200).
@@ -74,7 +72,7 @@ type parsedQuote struct {
 // toStrategy validates and parses the request. A non-nil error is a malformed payload (→ 400). A nil
 // result with nil error means the request is well-formed but not quotable here — wrong chain or no
 // adapters — and the caller replies 204.
-func (q *quoteRequest) toStrategy(chainID int64, resolve quoteRouteResolver) (*parsedQuote, error) {
+func (q *quoteRequest) toStrategy(chainID int64) (*parsedQuote, error) {
 	// Schema-level validation (malformed → 400).
 	if q.Type != quoteTypeExactInput {
 		return nil, errors.Errorf("type must be %q", quoteTypeExactInput)
@@ -105,17 +103,15 @@ func (q *quoteRequest) toStrategy(chainID int64, resolve quoteRouteResolver) (*p
 	}
 	inv := make([]solverInventory, 0, len(q.Adapters))
 	for i := range q.Adapters {
-		entry, err := q.Adapters[i].parse(i, q.TokenInChainID, tokenIn, resolve)
-		if err != nil {
-			return nil, err
+		entry, perr := q.Adapters[i].parse(i, q.TokenInChainID, tokenIn)
+		if perr != nil {
+			return nil, perr
 		}
-		if entry.Vault != (common.Address{}) {
-			inv = append(inv, entry)
-		}
+		inv = append(inv, entry)
 	}
 
 	// Quote-logic checks (well-formed but not for us → 204).
-	if q.TokenInChainID != chainID || q.TokenOutChainID != chainID || len(inv) == 0 {
+	if q.TokenInChainID != chainID || q.TokenOutChainID != chainID || len(q.Adapters) == 0 {
 		return nil, nil
 	}
 	return &parsedQuote{
@@ -130,7 +126,7 @@ func (q *quoteRequest) toStrategy(chainID int64, resolve quoteRouteResolver) (*p
 	}, nil
 }
 
-func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address, resolve quoteRouteResolver) (solverInventory, error) {
+func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address) (solverInventory, error) {
 	adapter, err := parse.Address(v.Adapter, idxField(index, "adapter"))
 	if err != nil {
 		return solverInventory{}, err
@@ -141,13 +137,6 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address, r
 	}
 	if v.AssetDecimals < 0 || v.AssetDecimals > 255 {
 		return solverInventory{}, errors.Errorf("adapters[%d].assetDecimals out of range: %d", index, v.AssetDecimals)
-	}
-	if resolve == nil {
-		return solverInventory{}, nil
-	}
-	recipeExecutor, account, ok := resolve(adapter, tokenIn, asset, v.AssetDecimals)
-	if !ok || account == (common.Address{}) {
-		return solverInventory{}, nil
 	}
 	maxAssets, err := parseUint256(v.MaxAssets, idxField(index, "maxAssets"))
 	if err != nil {
@@ -162,45 +151,25 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address, r
 	if err != nil {
 		return solverInventory{}, err
 	}
-	precision := liquidlane.DiscountPrecision
-	if recipeExecutor != (common.Address{}) {
-		if v.DiscountPrecision != "100000000" || discountID == nil {
-			return solverInventory{}, errors.Errorf("adapters[%d]: connector requires signed discount and precision 100000000", index)
+	if discount.Cmp(big.NewInt(liquidlane.DiscountPrecision)) > 0 {
+		return solverInventory{}, errors.Errorf("%s: must be <= %d", idxField(index, "discount"), liquidlane.DiscountPrecision)
+	}
+	var blockNumber uint64
+	if v.BlockNumber != nil && *v.BlockNumber != "" {
+		blockNumber, err = strconv.ParseUint(*v.BlockNumber, 10, 64)
+		if err != nil {
+			return solverInventory{}, errors.Errorf("%s: invalid block number %q", idxField(index, "blockNumber"), *v.BlockNumber)
 		}
-		precision = 100_000_000
-	} else if v.DiscountPrecision != "1000000" {
-		return solverInventory{}, errors.Errorf("adapters[%d]: invalid adapter discount precision", index)
 	}
-	if discount.Cmp(big.NewInt(precision)) > 0 || (recipeExecutor != (common.Address{}) && discount.Cmp(big.NewInt(precision)) == 0) {
-		return solverInventory{}, errors.Errorf("%s: must be <= %d", idxField(index, "discount"), precision)
-	}
-	blockNumber, err := strconv.ParseUint(v.BlockNumber, 10, 64)
-	if err != nil {
-		return solverInventory{}, errors.Errorf("%s: invalid block number %q", idxField(index, "blockNumber"), v.BlockNumber)
-	}
-	if v.TokenInDecimals == nil || *v.TokenInDecimals < 0 || *v.TokenInDecimals > 255 {
-		return solverInventory{}, errors.Errorf("%s: quote requires token decimals", idxField(index, "tokenInDecimals"))
-	}
-	inputDecimals := *v.TokenInDecimals
-	price, err := parseUint256(v.Price, idxField(index, "price"))
-	if err != nil || price.Sign() <= 0 || price.BitLen() > 256 {
-		return solverInventory{}, errors.Errorf("%s: quote requires a positive uint256 price", idxField(index, "price"))
-	}
-
-	route := liquidlane.NewRoute(chainID, adapter, account, tokenIn, asset, inputDecimals, v.AssetDecimals)
-	// All quotes use the backend pricing snapshot; fills revalidate current state.
+	route := liquidlane.NewRoute(chainID, adapter, common.Address{}, tokenIn, asset, 0, v.AssetDecimals)
+	// Amount-specific adapter quotes price each entry; see NormalizeOracleInventory.
 	inventory := liquidlane.DirectInventory(route, maxAssets, nil)
 	inventory.AdapterMinDiscount = discount
 	if discountID != nil {
 		inventory = liquidlane.DiscountInventory(route, maxAssets, nil, *discountID, time.Time{})
 		inventory.Discount = discount
 	}
-	if recipeExecutor != (common.Address{}) {
-		inventory.DiscountPrecision = precision
-		inventory.RecipeExecutor = recipeExecutor
-	}
 	inventory.BlockNumber = blockNumber
-	inventory.Price = price
 	return inventory, nil
 }
 

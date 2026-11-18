@@ -48,8 +48,7 @@ type backendOut struct {
 }
 
 // backendClient is a thin adapter over the generated rfqbackend client for filler-facing orders plus
-// the shared private-discounts client. Safe for concurrent use by execution and background quote-account discovery;
-// the client stores no mutable request state.
+// the shared private-discounts client. Used from the single execution goroutine.
 type backendClient struct {
 	api       *rfqbackend.APIClient
 	discounts *discounts.Client

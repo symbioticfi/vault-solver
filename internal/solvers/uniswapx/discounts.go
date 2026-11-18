@@ -166,10 +166,6 @@ func (s *Solver) resolveAdvertisedAdapters(
 	if err == nil {
 		return routes
 	}
-	if observability.Canceled(ctx, err) {
-		observability.Log(ctx).V(1).Info("advertised adapter resolution canceled", "error", err.Error())
-		return nil
-	}
 	if len(adapters) == 1 {
 		observability.Log(ctx).Error(err, "skip unresolved advertised discount adapter", "adapter", adapters[0].Hex())
 		return nil
@@ -180,7 +176,7 @@ func (s *Solver) resolveAdvertisedAdapters(
 	for _, adapter := range adapters {
 		adapterRoutes, err := s.reader.resolveRoutes(ctx, []common.Address{adapter})
 		if err != nil {
-			observability.ErrorUnlessCanceled(ctx, err, "skip unresolved advertised discount adapter", "adapter", adapter.Hex())
+			observability.Log(ctx).Error(err, "skip unresolved advertised discount adapter", "adapter", adapter.Hex())
 			continue
 		}
 		resolved = append(resolved, adapterRoutes...)

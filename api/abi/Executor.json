@@ -6,6 +6,16 @@
         "name": "reactor",
         "type": "address",
         "internalType": "address"
+      },
+      {
+        "name": "owner",
+        "type": "address",
+        "internalType": "address"
+      },
+      {
+        "name": "initCallers",
+        "type": "address[]",
+        "internalType": "address[]"
       }
     ],
     "stateMutability": "nonpayable"
@@ -136,7 +146,7 @@
         ]
       },
       {
-        "name": "",
+        "name": "swapInputs",
         "type": "tuple[]",
         "internalType": "struct IReactor.SwapInput[]",
         "components": [
@@ -175,7 +185,7 @@
         ]
       },
       {
-        "name": "",
+        "name": "discountSwapInputs",
         "type": "tuple[]",
         "internalType": "struct IReactor.DiscountSwapInput[]",
         "components": [
@@ -502,17 +512,309 @@
   },
   {
     "type": "function",
-    "name": "initialize",
+    "name": "fill",
     "inputs": [
       {
-        "name": "owner",
-        "type": "address",
-        "internalType": "address"
+        "name": "order",
+        "type": "tuple",
+        "internalType": "struct IReactor.Order",
+        "components": [
+          {
+            "name": "request",
+            "type": "tuple",
+            "internalType": "struct IReactor.Request",
+            "components": [
+              {
+                "name": "tokenIn",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amountIn",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "outputs",
+                "type": "tuple[]",
+                "internalType": "struct IReactor.Output[]",
+                "components": [
+                  {
+                    "name": "token",
+                    "type": "address",
+                    "internalType": "address"
+                  },
+                  {
+                    "name": "amount",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                  },
+                  {
+                    "name": "recipient",
+                    "type": "address",
+                    "internalType": "address"
+                  }
+                ]
+              },
+              {
+                "name": "deadline",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "nonce",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "protocol",
+                "type": "address",
+                "internalType": "address"
+              }
+            ]
+          },
+          {
+            "name": "swapperSignature",
+            "type": "bytes",
+            "internalType": "bytes"
+          },
+          {
+            "name": "swapper",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "filler",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "outputs",
+            "type": "tuple[]",
+            "internalType": "struct IReactor.Output[]",
+            "components": [
+              {
+                "name": "token",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "recipient",
+                "type": "address",
+                "internalType": "address"
+              }
+            ]
+          }
+        ]
       },
       {
-        "name": "initCallers",
-        "type": "address[]",
-        "internalType": "address[]"
+        "name": "protocolSignature",
+        "type": "bytes",
+        "internalType": "bytes"
+      },
+      {
+        "name": "swapInputs",
+        "type": "tuple[]",
+        "internalType": "struct IReactor.SwapInput[]",
+        "components": [
+          {
+            "name": "adapter",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "swap",
+            "type": "tuple",
+            "internalType": "struct ILiquidLaneAdapter.Swap",
+            "components": [
+              {
+                "name": "recipient",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "tokenIn",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amountIn",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "amountOut",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "executorData",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "fill",
+    "inputs": [
+      {
+        "name": "order",
+        "type": "tuple",
+        "internalType": "struct IReactor.Order",
+        "components": [
+          {
+            "name": "request",
+            "type": "tuple",
+            "internalType": "struct IReactor.Request",
+            "components": [
+              {
+                "name": "tokenIn",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amountIn",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "outputs",
+                "type": "tuple[]",
+                "internalType": "struct IReactor.Output[]",
+                "components": [
+                  {
+                    "name": "token",
+                    "type": "address",
+                    "internalType": "address"
+                  },
+                  {
+                    "name": "amount",
+                    "type": "uint256",
+                    "internalType": "uint256"
+                  },
+                  {
+                    "name": "recipient",
+                    "type": "address",
+                    "internalType": "address"
+                  }
+                ]
+              },
+              {
+                "name": "deadline",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "nonce",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "protocol",
+                "type": "address",
+                "internalType": "address"
+              }
+            ]
+          },
+          {
+            "name": "swapperSignature",
+            "type": "bytes",
+            "internalType": "bytes"
+          },
+          {
+            "name": "swapper",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "filler",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "outputs",
+            "type": "tuple[]",
+            "internalType": "struct IReactor.Output[]",
+            "components": [
+              {
+                "name": "token",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amount",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "recipient",
+                "type": "address",
+                "internalType": "address"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "protocolSignature",
+        "type": "bytes",
+        "internalType": "bytes"
+      },
+      {
+        "name": "swapInput",
+        "type": "tuple",
+        "internalType": "struct IReactor.SwapInput",
+        "components": [
+          {
+            "name": "adapter",
+            "type": "address",
+            "internalType": "address"
+          },
+          {
+            "name": "swap",
+            "type": "tuple",
+            "internalType": "struct ILiquidLaneAdapter.Swap",
+            "components": [
+              {
+                "name": "recipient",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "tokenIn",
+                "type": "address",
+                "internalType": "address"
+              },
+              {
+                "name": "amountIn",
+                "type": "uint256",
+                "internalType": "uint256"
+              },
+              {
+                "name": "amountOut",
+                "type": "uint256",
+                "internalType": "uint256"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "executorData",
+        "type": "bytes",
+        "internalType": "bytes"
       }
     ],
     "outputs": [],
@@ -563,19 +865,6 @@
     ],
     "outputs": [],
     "stateMutability": "nonpayable"
-  },
-  {
-    "type": "event",
-    "name": "Initialized",
-    "inputs": [
-      {
-        "name": "version",
-        "type": "uint64",
-        "indexed": false,
-        "internalType": "uint64"
-      }
-    ],
-    "anonymous": false
   },
   {
     "type": "event",
@@ -643,17 +932,7 @@
   },
   {
     "type": "error",
-    "name": "InvalidInitialization",
-    "inputs": []
-  },
-  {
-    "type": "error",
     "name": "NotCaller",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "NotInitializing",
     "inputs": []
   },
   {

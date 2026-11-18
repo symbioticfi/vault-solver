@@ -364,33 +364,28 @@
   },
   {
     "type": "error",
-    "name": "AddressEmptyCode",
+    "name": "ECDSAInvalidSignature",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "ECDSAInvalidSignatureLength",
     "inputs": [
       {
-        "name": "target",
-        "type": "address",
-        "internalType": "address"
+        "name": "length",
+        "type": "uint256",
+        "internalType": "uint256"
       }
     ]
   },
   {
     "type": "error",
-    "name": "FailedCall",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "InsufficientBalance",
+    "name": "ECDSAInvalidSignatureS",
     "inputs": [
       {
-        "name": "balance",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "needed",
-        "type": "uint256",
-        "internalType": "uint256"
+        "name": "s",
+        "type": "bytes32",
+        "internalType": "bytes32"
       }
     ]
   },
@@ -402,11 +397,6 @@
   {
     "type": "error",
     "name": "InvalidAuth",
-    "inputs": []
-  },
-  {
-    "type": "error",
-    "name": "InvalidExit",
     "inputs": []
   },
   {
