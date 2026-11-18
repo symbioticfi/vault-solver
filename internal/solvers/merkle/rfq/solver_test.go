@@ -27,6 +27,7 @@ var tOut = common.HexToAddress("0x32")
 
 type fakeBackend struct {
 	discount *discounts.Resolved
+	resolved map[string]*discounts.Resolved
 	rows     []rfqbackend.OrdersResponseOrdersInner
 	listed   *discounts.List
 	reads    int
@@ -40,8 +41,11 @@ func (b *fakeBackend) listDiscounts(context.Context) (*discounts.List, error) {
 	b.reads++
 	return b.listed, nil
 }
-func (b *fakeBackend) resolveDiscount(context.Context, string) (*discounts.Resolved, error) {
+func (b *fakeBackend) resolveDiscount(_ context.Context, id string) (*discounts.Resolved, error) {
 	b.reads++
+	if b.resolved != nil {
+		return b.resolved[id], nil
+	}
 	return b.discount, nil
 }
 
@@ -151,7 +155,7 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 		if s.intent == nil || !bytes.Equal(s.intent.Data, req.Data) || s.intent.Deadline.IsZero() {
 			t.Fatal("fill admitted before RAM intent")
 		}
-		if reserved := s.Reservations(nil)[s.intent.Spend.CapacityID]; reserved == nil || reserved.Cmp(big.NewInt(456)) != 0 {
+		if reserved := s.Reservations(nil)[liquidlane.NewCapacityID(1, fixture.reader.recipeAccount, tOut)]; reserved == nil || reserved.Cmp(big.NewInt(456)) != 0 {
 			t.Fatal("fill admitted before reserving its signed output")
 		}
 	}
@@ -174,7 +178,7 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	}
 	sender.result = fillResult()
 	sender.duringPoll = func() {
-		if reserved := s.Reservations(nil)[s.intent.Spend.CapacityID]; reserved == nil || reserved.Cmp(big.NewInt(456)) != 0 {
+		if reserved := s.Reservations(nil)[liquidlane.NewCapacityID(1, fixture.reader.recipeAccount, tOut)]; reserved == nil || reserved.Cmp(big.NewInt(456)) != 0 {
 			t.Fatal("manager release lost the spend before canonical accounting")
 		}
 	}

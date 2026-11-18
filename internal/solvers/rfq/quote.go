@@ -36,8 +36,8 @@ type quoteService struct {
 	// laneAvailable is safe for concurrent use and reports sender initialization. A busy lane does not
 	// block quoting: pending fills are accounted through reservations instead. It is sampled before
 	// and after quote planning so work is declined whenever either check observes a nonce conflict.
-	laneAvailable      func() bool
-	requireSingleRoute bool // Merkle settlement can pay the award from only one connector.
+	laneAvailable       func() bool
+	requireFullCoverage bool // Merkle recipes settle the exact discounted payout on each leg.
 	// reservations returns the liquidity held by won, unfinished orders against a resolved
 	// inventory; nil means none.
 	reservations func(excludedOrderID string, inventory []solverInventory) liquidlane.CapacityReservations
@@ -164,15 +164,8 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
 	}
 
-	requireSingleRoute := qs.requireSingleRoute || qs.tokenPolicy.RequiresSingleRoute(req.TokenIn)
+	requireSingleRoute := qs.tokenPolicy.RequiresSingleRoute(req.TokenIn)
 	candidates := qs.snapshotCandidates(ctx, inv, req)
-	if qs.requireSingleRoute {
-		// A connector prices the entire input with its signed discount. A
-		// custom strategy cannot make an oversized input fit by lowering output.
-		candidates = slices.DeleteFunc(candidates, func(candidate liquidlane.QuoteCandidate) bool {
-			return candidate.MaxAmountIn.Cmp(req.Amount) < 0
-		})
-	}
 	if len(candidates) == 0 {
 		observability.Log(ctx).V(1).Info("declining quote: no viable LiquidLane candidates", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
@@ -181,6 +174,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 	// This is not a promise that the requested amount/strategy can be quoted.
 	knownDirection = true
 	input := newQuoteInput(qs.chainID, qs.executor, req, candidates, nil, requireSingleRoute, qs.now())
+	input.RequireFullCoverage = qs.requireFullCoverage
 	out, err := qs.decideQuote(ctx, input)
 	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: strategy: %w", err)

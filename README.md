@@ -115,7 +115,8 @@ and underlying authorization error.
 Configure `rfq-filler` with the existing `adapters` list for native
 pricing and fills, or with `recipeExecutors` for Merkle connector pricing and fills.
 Setting both fails startup. The Merkle mode uses `curator` for permissions and keeps pending execution in RAM;
-Each quote must fit one connector. `quoteOnly: true` still requires `curator.url` to discover permitted routes at
+One award can use multiple connectors, with capacity shared by funding account and asset.
+`quoteOnly: true` still requires `curator.url` to discover permitted routes at
 startup and serves quotes independently of the fill transaction manager. See its
 [configuration](config/rfq-merkle.example.yaml) and [runbook](docs/RFQ-MERKLE.md).
 Configured native `adapters` scope both quoting and filling in either solver mode.

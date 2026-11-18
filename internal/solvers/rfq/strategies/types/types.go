@@ -36,10 +36,11 @@ type QuoteInput struct {
 	TokenOut common.Address
 	AmountIn *big.Int
 
-	RequiredAmountOut  *big.Int
-	RequireSingleRoute bool
-	Candidates         []liquidlane.QuoteCandidate
-	Now                time.Time
+	RequiredAmountOut   *big.Int
+	RequireSingleRoute  bool
+	RequireFullCoverage bool
+	Candidates          []liquidlane.QuoteCandidate
+	Now                 time.Time
 }
 
 type QuoteOutput struct {

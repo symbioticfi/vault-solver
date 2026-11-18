@@ -36,7 +36,7 @@ func FillPlanFromQuote(input types.QuoteInput, out types.QuoteOutput) (*types.Fi
 	seen := make(map[string]bool, len(out.Legs))
 	usedRoutes := make(map[liquidlane.RouteID]bool, len(out.Legs))
 	for i, leg := range out.Legs {
-		candidate, err := validateLeg(input.TokenOut, candidates, seen, leg, i)
+		candidate, err := validateLeg(input.TokenOut, candidates, seen, leg, i, input.RequireFullCoverage)
 		if err != nil {
 			return nil, err
 		}
@@ -98,6 +98,7 @@ func validateLeg(
 	seen map[string]bool,
 	leg types.QuoteLeg,
 	index int,
+	requireFullCoverage bool,
 ) (liquidlane.QuoteCandidate, error) {
 	if seen[leg.CandidateID] {
 		return liquidlane.QuoteCandidate{}, errors.Errorf("duplicate candidate %q", leg.CandidateID)
@@ -123,12 +124,15 @@ func validateLeg(
 	if candidate.Rate == nil || candidate.Rate.Sign() <= 0 {
 		return liquidlane.QuoteCandidate{}, errors.Errorf("candidate %q has invalid rate", leg.CandidateID)
 	}
-	achievable := liquidlane.AmountOutForRate(
-		leg.AmountIn,
-		candidate.Rate,
-		candidate.Route.TokenInDecimals,
-		candidate.Route.TokenOutDecimals,
-	)
+	var achievable *big.Int
+	if requireFullCoverage {
+		if candidate.MaxAmountIn == nil || leg.AmountIn.Cmp(candidate.MaxAmountIn) > 0 {
+			return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d exceeds candidate maxAmountIn", index)
+		}
+		achievable = candidate.AmountOutFor(leg.AmountIn)
+	} else {
+		achievable = liquidlane.AmountOutForRate(leg.AmountIn, candidate.Rate, candidate.Route.TokenInDecimals, candidate.Route.TokenOutDecimals)
+	}
 	if leg.AmountOut.Cmp(achievable) > 0 {
 		return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d exceeds output achievable at candidate rate", index)
 	}

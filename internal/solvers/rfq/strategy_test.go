@@ -148,32 +148,16 @@ func TestQuoteRejectsWebhookMultiLegPlanForSingleRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	for _, mode := range []string{"permissioned token", "merkle connector"} {
-		t.Run(mode, func(t *testing.T) {
-			quoteServer := testServer()
-			request := validQuoteBody()
-			if mode == "permissioned token" {
-				quoteServer.quotes.tokenPolicy = testPermissionedPolicy(t, tIn)
-			} else {
-				quoteServer.quotes.requireSingleRoute = true
-				quoteServer.quotes.discountsEnabled = true
-				quoteServer.quotes.resolveRoute = testConnectorQuoteRoute(common.HexToAddress("0x41"))
-				discountID := common.HexToHash("0x42").Hex()
-				request.Adapters[0].DiscountPrecision = "100000000"
-				request.Adapters[0].DiscountID = &discountID
-			}
-			quoteServer.quotes.strategy = webhookstrategy.New(client)
-			other := request.Adapters[0]
-			other.Adapter = "0x0000000000000000000000000000000000000004"
-			request.Adapters = append(request.Adapters, other)
+	quoteServer := testServer()
+	quoteServer.quotes.tokenPolicy = testPermissionedPolicy(t, tIn)
+	quoteServer.quotes.strategy = webhookstrategy.New(client)
+	request := validQuoteBody()
+	other := request.Adapters[0]
+	other.Adapter = "0x0000000000000000000000000000000000000004"
+	request.Adapters = append(request.Adapters, other)
 
-			decision, err := quoteServer.quotes.quote(t.Context(), &request)
-			if err == nil || !strings.Contains(err.Error(), "single-route input requires exactly one leg") {
-				t.Fatalf("quote error = %v, want single-route rejection", err)
-			}
-			if decision.response != nil {
-				t.Fatalf("quote response = %+v, want nil", decision.response)
-			}
-		})
+	decision, err := quoteServer.quotes.quote(t.Context(), &request)
+	if err == nil || !strings.Contains(err.Error(), "single-route input requires exactly one leg") || decision.response != nil {
+		t.Fatalf("quote = %+v, err = %v, want single-route rejection", decision.response, err)
 	}
 }

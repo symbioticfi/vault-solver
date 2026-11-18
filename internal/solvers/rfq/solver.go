@@ -99,7 +99,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		quotes.reservations = func(_ string, inventory []solverInventory) liquidlane.CapacityReservations {
 			return merkle.Reservations(inventory)
 		}
-		quotes.requireSingleRoute = true
+		quotes.requireFullCoverage = true
 		if cfg.QuoteOnly {
 			quotes.laneAvailable = func() bool { return true }
 		} else {

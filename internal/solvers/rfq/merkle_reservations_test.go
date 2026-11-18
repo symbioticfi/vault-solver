@@ -124,8 +124,7 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 		}
 	}
 
-	// Independent recipe accounts each cap payout at 300 base units. An
-	// award cannot be settled by adding the two advertised capacities.
+	// Each independent account covers only part of the requested input.
 	routes := s.server.quotes.resolveRoute
 	s.server.quotes.resolveRoute = func(connector, rwa, asset common.Address, decimals int) (common.Address, common.Address, bool) {
 		if connector == common.HexToAddress("0x44") {
@@ -142,8 +141,21 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 	other.DiscountID = &otherID
 	split.Adapters = append(split.Adapters, other)
 	decision, err := s.server.quotes.quote(t.Context(), &split)
+	if err != nil || decision.response == nil {
+		t.Fatalf("independent connector capacities should cover a split quote: %+v %v", decision.response, err)
+	}
+
+	// The same two offers cannot multiply a shared funding account's capacity.
+	s.server.quotes.resolveRoute = func(connector, rwa, asset common.Address, decimals int) (common.Address, common.Address, bool) {
+		recipe, account, ok := routes(common.HexToAddress(split.Adapters[0].Adapter), rwa, asset, decimals)
+		if connector == common.HexToAddress(other.Adapter) {
+			recipe = common.HexToAddress("0x45")
+		}
+		return recipe, account, ok
+	}
+	decision, err = s.server.quotes.quote(t.Context(), &split)
 	if err != nil || decision.response != nil {
-		t.Fatalf("connector quote exceeds one route's capacity: %+v %v", decision.response, err)
+		t.Fatalf("shared account cannot fund the split quote: %+v %v", decision.response, err)
 	}
 
 	// Quote-only uses the same recipe permissions without a signing dependency.
