@@ -45,8 +45,8 @@ Execution verifies current permissions and the complete outer fill; recipes rema
 
 Both full and `quoteOnly` Merkle deployments require `curator.url`: they use the same
 startup discovery to verify the configured recipe's connector and permitted RWA tokens.
-Discovery failure aborts startup. Quote-only mode reads permissions without a fill signer
-or sender, and does not poll orders. It does not discover routes from backend discount listings.
+Discovery failure aborts startup. Quote-only mode reads permissions without starting
+the shared fill transaction manager or polling orders. It does not discover routes from backend discount listings.
 Merkle fills keep their active intent in RAM; `stateDir` is removed and rejected.
 All configured recipes share one fill owner and the host
 transaction manager.
@@ -62,16 +62,17 @@ environment variable names. The execution-only plugin has no quote server. Nativ
 configurable polling limits.
 
 The signed order tuple supplies the entire input and sum of output payments.
-Discounts for the recipe-derived connector are tried in discount-ID order, and one must
-cover the complete award using the backend's advertised capacity, clipped by the current
-`remainingAssets(token)` policy budget. Capacity calculation belongs to the backend: it
-estimates funding from the configured recipe's reads and checks current roles with batched RPC calls.
-The advertised `maxAssets` is an estimate; ordered withdrawals and shared liquidity
-are checked by the solver's complete outer settlement simulation before admission.
-The regular RFQ quote path consumes the backend capacity and price and subtracts shared
-account/asset reservations without RPC reads. The solver does not reconstruct capacity or
-require extra recipe queries. No market pricing, splits or adapter/Merkle liquidity aggregation occurs.
-An upstream source must award compatible orders; this solver does not publish quotes.
+The solver tries a single connector first. When it needs multiple connectors, it sizes
+legs using the shared Liquid Lane allocator and the backend's advertised capacity,
+clipped by each connector's current `remainingAssets(token)` policy budget and
+shared account/asset capacity. Each leg uses its own exact on-chain payout, and the
+legs must cover the signed input and output together. Capacity calculation belongs
+to the backend. It estimates funding from each recipe's reads and checks current
+roles with batched RPC calls. The complete outer settlement simulation checks ordered
+withdrawals and shared liquidity before submission.
+The quote path consumes the backend capacity and price and subtracts shared
+account/asset reservations without RPC reads. The execution-only plugin consumes awards
+from the backend.
 The wall-clock observation is sampled before the header RPC; its latency consumes the unsigned submission deadline, including
 when the chain clock is ahead of the host.
 
@@ -79,8 +80,8 @@ The SDK reads the committed `recipeHash` and `recipeBlock` at the pinned block,
 retrieves `SetRecipe` only from that publication block and executor, and checks its body
 against the current commitment. No historical block range is scanned. It reads the active root, authenticates the curator
 tree, verifies masks/proofs and roles, and checks the canonical snapshot around
-simulation. The host fills the matching connector swap's signed terms and supplies amountIn
-and awarded payment as Inputs 0 and 1. Recipe gates, additional actions and balance
+simulation. Each recipe uses its leg's signed terms, input amount and exact connector
+payout. The amounts are Inputs 0 and 1. Recipe gates, additional actions and balance
 checks remain curator-owned. The recipe and permission publication formats are unchanged;
 call data and proofs come from the existing curator permission-tree service.
 `LLExecuting` retains acquired inventory when its redemption leaves are empty;
@@ -98,11 +99,10 @@ signed award still succeeds. Generic recipe paths retain numerical witness and
 result-based readiness validation. RFQ requires ordinary `eth_call` only; it does
 not fetch recipe bytecode or install a nested return-data probe.
 
-The host puts the awarded connector amount and unchanged signed terms in
-`discountSwapInputs`. It forwards the SDK-assembled `RecipeExecutor.execute`
-calldata, optionally wrapped through its AccessManager, in the original
-`executorData` `Call[]`; no RFQ-specific recipe tuple or
-funding reconstruction is used.
+The host puts each connector amount and its unchanged signed terms in
+`discountSwapInputs`. The `executorData` `Call[]` contains each SDK-assembled
+`RecipeExecutor.execute` call, optionally wrapped by that recipe's AccessManager.
+All legs settle atomically in the same Reactor fill.
 
 The host preserves upstream discount integers and signature bytes. It checks ABI
 framing and route identity; signatures and discount economics are enforced by the
@@ -112,9 +112,8 @@ contract-wallet bytes. The SDK verifies the leaf, mask and proof; the committed
 calldata length, offsets and pinned fields must admit the supplied signatures.
 Existing fixed 65-byte templates need compatible permissions for other lengths.
 The complete outer fill simulation must still succeed before admission.
-The current canonical `LLExecuting` recipe requires an exact payout, so an order
-whose required output excludes connector surplus remains unsupported. Multiple
-output tokens and split connector routes also remain unsupported.
+The canonical `LLExecuting` recipe checks the exact payout for each leg.
+An order can pay multiple recipients in the same output token.
 
 Only one fill is admitted at a time. Its awarded order, immutable calldata and
 deadline stay in RAM through ambiguous submission. Each signed original and
@@ -127,7 +126,7 @@ Settle old work before upgrading and use one active process per signer.
 
 Quote inventory must match the verified recipe connector, RWA, account and asset.
 Quoting stays available during a fill; execution remains sequential. Before
-submission, the awarded output is reserved against its physical account/asset
+submission, each connector payout is reserved against its funding account/asset
 capacity. Other capacity and the unreserved remainder stay quotable. Ambiguous
 submissions keep that reservation, including the gap after sender release and
 before the fill loop records its canonical receipt. Unsigned failures and canonical
@@ -157,6 +156,8 @@ MerkleAccount, LiquidLaneConnector and OpenZeppelin AccessManager bytecode with 
 checks successful simulation and mined settlement, invalid signed economics,
 funding lost after the capacity observation, an unauthorized sending EOA, and
 manager-routed settlement with missing authorization or invalid signatures.
+It also checks a signed two-connector fill through distinct AccessManagers and
+atomic rollback when the second grant is revoked.
 The fixture substitutes only external ERC20s, registries and the price feed; proxy
 administration and deployment are outside its scope. Bytecode provenance and the
 offline regeneration command are in `internal/solvers/merkle/rfq/testdata/outer-fill/`.

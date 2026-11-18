@@ -26,23 +26,51 @@ var tIn = common.HexToAddress("0x31")
 var tOut = common.HexToAddress("0x32")
 
 type fakeBackend struct {
-	discount *discounts.Resolved
-	rows     []rfqbackend.OrdersResponseOrdersInner
-	listed   *discounts.List
-	reads    int
+	discount  *discounts.Resolved
+	resolved  map[string]*discounts.Resolved
+	rows      []rfqbackend.OrdersResponseOrdersInner
+	ordersErr error
+	listed    *discounts.List
+	reads     int
 }
 
 func (b *fakeBackend) orders(context.Context, string) ([]rfqbackend.OrdersResponseOrdersInner, error) {
 	b.reads++
-	return b.rows, nil
+	return b.rows, b.ordersErr
 }
 func (b *fakeBackend) listDiscounts(context.Context) (*discounts.List, error) {
 	b.reads++
 	return b.listed, nil
 }
-func (b *fakeBackend) resolveDiscount(context.Context, string) (*discounts.Resolved, error) {
+func (b *fakeBackend) resolveDiscount(_ context.Context, id string) (*discounts.Resolved, error) {
 	b.reads++
+	if b.resolved != nil {
+		return b.resolved[id], nil
+	}
 	return b.discount, nil
+}
+
+func TestEmptyOrderPollReportsOnlySuccess(t *testing.T) {
+	backend := &fakeBackend{}
+	var observed []time.Time
+	s := &Solver{
+		routes: make(map[common.Address]recipeRoute), backend: backend,
+		workflow: &connectorWorkflow{caller: vlt}, sender: &fakeSender{},
+		observeOrderPoll: func(at time.Time) { observed = append(observed, at) },
+	}
+	if err := s.tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(observed) != 1 || observed[0].IsZero() {
+		t.Fatalf("empty successful poll observations = %v", observed)
+	}
+	backend.ordersErr = errors.New("backend unavailable")
+	if err := s.tick(t.Context()); !errors.Is(err, backend.ordersErr) {
+		t.Fatalf("failed poll returned %v, want %v", err, backend.ordersErr)
+	}
+	if len(observed) != 1 {
+		t.Fatalf("failed poll recorded success: %v", observed)
+	}
 }
 
 type fakeSender struct {
@@ -151,7 +179,7 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 		if s.intent == nil || !bytes.Equal(s.intent.Data, req.Data) || s.intent.Deadline.IsZero() {
 			t.Fatal("fill admitted before RAM intent")
 		}
-		if reserved := s.Reservations(nil)[s.intent.Spend.CapacityID]; reserved == nil || reserved.Cmp(big.NewInt(456)) != 0 {
+		if reserved := s.Reservations(nil)[liquidlane.NewCapacityID(1, fixture.reader.recipeAccount, tOut)]; reserved == nil || reserved.Cmp(big.NewInt(456)) != 0 {
 			t.Fatal("fill admitted before reserving its signed output")
 		}
 	}
@@ -174,7 +202,7 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	}
 	sender.result = fillResult()
 	sender.duringPoll = func() {
-		if reserved := s.Reservations(nil)[s.intent.Spend.CapacityID]; reserved == nil || reserved.Cmp(big.NewInt(456)) != 0 {
+		if reserved := s.Reservations(nil)[liquidlane.NewCapacityID(1, fixture.reader.recipeAccount, tOut)]; reserved == nil || reserved.Cmp(big.NewInt(456)) != 0 {
 			t.Fatal("manager release lost the spend before canonical accounting")
 		}
 	}

@@ -113,6 +113,27 @@ func TestFillPlanFromQuoteRejectsOutputAboveCandidateRate(t *testing.T) {
 	}
 }
 
+func TestFillPlanFromQuoteRequiresConnectorInputCapacity(t *testing.T) {
+	tokenIn := common.HexToAddress("0x01")
+	tokenOut := common.HexToAddress("0x02")
+	route := liquidlane.NewRoute(1, common.HexToAddress("0x03"), common.HexToAddress("0x04"), tokenIn, tokenOut, 18, 18)
+	id := liquidlane.NewCandidateID(route, nil)
+	input := types.QuoteInput{
+		TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(100), RequireFullCoverage: true,
+		Candidates: []liquidlane.QuoteCandidate{{
+			ID: id, Route: route, Rate: big.NewInt(1_000_000_000_000_000_000),
+			MaxAmountIn: big.NewInt(99), MaxAmountOut: big.NewInt(99),
+		}},
+	}
+	out := types.QuoteOutput{
+		Decision: types.DecisionQuote, QuotedAmountOut: big.NewInt(99),
+		Legs: []types.QuoteLeg{{CandidateID: string(id), AmountIn: big.NewInt(100), AmountOut: big.NewInt(99)}},
+	}
+	if _, err := FillPlanFromQuote(input, out); err == nil {
+		t.Fatal("strategy cannot allocate more input than a connector can execute")
+	}
+}
+
 func TestFillPlanFromQuoteRejectsRepeatedRoute(t *testing.T) {
 	tokenIn := common.HexToAddress("0x01")
 	tokenOut := common.HexToAddress("0x02")

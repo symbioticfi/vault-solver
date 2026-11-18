@@ -36,7 +36,8 @@ type quoteService struct {
 	// laneAvailable is safe for concurrent use and reports sender initialization. A busy lane does not
 	// block quoting: pending fills are accounted through reservations instead. It is sampled before
 	// and after quote planning so work is declined whenever either check observes a nonce conflict.
-	laneAvailable func() bool
+	laneAvailable       func() bool
+	requireFullCoverage bool // Merkle recipes settle the exact discounted payout on each leg.
 	// reservations returns the liquidity held by won, unfinished orders against a resolved
 	// inventory; nil means none.
 	reservations func(excludedOrderID string, inventory []solverInventory) liquidlane.CapacityReservations
@@ -173,6 +174,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 	// This is not a promise that the requested amount/strategy can be quoted.
 	knownDirection = true
 	input := newQuoteInput(qs.chainID, qs.executor, req, candidates, nil, requireSingleRoute, qs.now())
+	input.RequireFullCoverage = qs.requireFullCoverage
 	out, err := qs.decideQuote(ctx, input)
 	if err != nil {
 		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: strategy: %w", err)
@@ -240,7 +242,7 @@ func (qs *quoteService) decideQuote(
 }
 
 // canQuote fails closed when the lane-state dependency was not wired. Production construction
-// always supplies the txmanager predicate; keeping the nil case closed prevents a future alternate
+// supplies a readiness predicate; keeping the nil case closed prevents a future alternate
 // constructor from silently advertising obligations it cannot fill.
 func (qs *quoteService) canQuote() bool {
 	return qs.laneAvailable != nil && qs.laneAvailable()

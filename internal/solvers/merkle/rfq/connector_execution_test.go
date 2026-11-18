@@ -17,6 +17,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 )
 
@@ -38,7 +39,7 @@ func TestConnectorBuildSimulatesCompleteAwardedOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	calldata, until := built.Calldata, built.ValidUntil
-	if built.State.Account != chain.recipeAccount || built.State.Asset != tOut || chain.identityReads != 2 {
+	if built.Amounts[liquidlane.NewCapacityID(1, chain.recipeAccount, tOut)] == nil || chain.identityReads != 2 {
 		t.Fatal("build did not return its single pinned connector identity")
 	}
 	if !until.Equal(time.Unix(4102444800, 0)) {

@@ -268,6 +268,9 @@ func runBot(ctx context.Context, configPath string, debugFlag, debugFlagSet bool
 		defer func() { <-done }()
 	}
 	var background sync.WaitGroup
+	if requiresMerkleTxManager && !requiresTxManager {
+		background.Go(func() { txm.MonitorAccount(gctx) })
+	}
 	var laneStateChanged <-chan struct{}
 	laneAvailable := func() bool { return true }
 	unsubscribe := func() {}

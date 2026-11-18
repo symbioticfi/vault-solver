@@ -47,8 +47,10 @@ type Solver struct {
 	reportFatal func(error)
 }
 
-func (s *Solver) RequiresTxManager() bool       { return s.merkle == nil }
-func (s *Solver) RequiresMerkleTxManager() bool { return s.merkle != nil }
+func (s *Solver) RequiresTxManager() bool { return s.merkle == nil }
+func (s *Solver) RequiresMerkleTxManager() bool {
+	return s.merkle != nil && !s.cfg.QuoteOnly
+}
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	cfg, err := parseConfig(raw)
@@ -90,18 +92,23 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	exec.links = links
 	var merkle *merklerfq.Solver
 	if len(cfg.RecipeExecutors) > 0 {
-		merkle, err = merklerfq.New(cfg.merkleConfig(), deps)
+		merkle, err = merklerfq.New(cfg.merkleConfig(), deps, metrics.observeOrderPoll)
 		if err != nil {
 			return nil, err
 		}
 		quotes.reservations = func(_ string, inventory []solverInventory) liquidlane.CapacityReservations {
 			return merkle.Reservations(inventory)
 		}
-		manager, err := deps.MerkleTxManager()
-		if err != nil {
-			return nil, err
+		quotes.requireFullCoverage = true
+		if cfg.QuoteOnly {
+			quotes.laneAvailable = func() bool { return true }
+		} else {
+			manager, err := deps.MerkleTxManager()
+			if err != nil {
+				return nil, err
+			}
+			quotes.laneAvailable = manager.Ready
 		}
-		quotes.laneAvailable = manager.Ready
 		quotes.resolveRoute = func(connector, rwa, asset common.Address, _ int) (common.Address, common.Address, bool) {
 			return merkle.ResolveRoute(connector, rwa, asset)
 		}

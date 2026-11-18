@@ -125,7 +125,7 @@ func TestWebhookStrategyDecodesLowerCamelResponse(t *testing.T) {
 	}
 }
 
-func TestQuoteRejectsWebhookMultiLegPlanForPermissionedScope(t *testing.T) {
+func TestQuoteRejectsWebhookMultiLegPlanForSingleRoute(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -157,10 +157,7 @@ func TestQuoteRejectsWebhookMultiLegPlanForPermissionedScope(t *testing.T) {
 	request.Adapters = append(request.Adapters, other)
 
 	decision, err := quoteServer.quotes.quote(t.Context(), &request)
-	if err == nil || !strings.Contains(err.Error(), "single-route input requires exactly one leg") {
-		t.Fatalf("quote error = %v, want single-route rejection", err)
-	}
-	if decision.response != nil {
-		t.Fatalf("quote response = %+v, want nil", decision.response)
+	if err == nil || !strings.Contains(err.Error(), "single-route input requires exactly one leg") || decision.response != nil {
+		t.Fatalf("quote = %+v, err = %v, want single-route rejection", decision.response, err)
 	}
 }

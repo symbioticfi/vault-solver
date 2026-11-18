@@ -43,8 +43,18 @@ the complete outer `eth_call` and fail on invalid discount economics, signatures
 cash missing before settlement simulation, and an EOA missing from Executor's
 caller allowlist. Manager cases also require a complete fill to simulate and mine,
 reject invalid signatures through the manager, and reject a revoked grant before
-simulation. Go fixtures retain recipe discovery, mask, role, reorg and RAM
-ownership edge coverage.
+simulation. A split order requires two connectors with distinct AccessManagers,
+checks both balance changes in one transaction, and verifies rollback when the
+second grant is revoked. Go fixtures retain recipe discovery, mask, role, reorg
+and RAM ownership edge coverage.
+
+Set `RFQ_OUTER_FILL_DEPLOYMENT` to a JSON file with `Proxy`, `Implementation`,
+`Reactor`, `ProxyCode`, and `ImplementationCode` to run the split test with
+deployed Executor runtime. Take the proxy and Reactor addresses from the deployment
+configuration and read the proxy's ERC-1967 implementation slot and both runtime
+bytecodes at the same block. The test installs those bytes and the implementation
+slot on Anvil. It uses locally initialized roles, the fixture Reactor at the
+configured address, and fixture assets and liquidity.
 
 Offline canonical-fixture regeneration uses built artifacts from clean checkouts at the pinned
 revisions plus Solidity 0.8.28 for the small external fixture:

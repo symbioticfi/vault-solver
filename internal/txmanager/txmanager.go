@@ -429,10 +429,13 @@ func (m *Manager) Initialize(ctx context.Context) error {
 	return err
 }
 
-func (m *Manager) monitorAccount(ctx context.Context) {
+// MonitorAccount publishes periodic signer balance and nonce snapshots independently of sending.
+func (m *Manager) MonitorAccount(ctx context.Context) {
+	m.metrics.bindAccount(m.signer.Address())
 	if m.metrics == nil || !m.supportsAccountBalance() {
 		return
 	}
+	ctx = observability.WithLogger(ctx, m.log)
 	m.refreshAccount(ctx)
 	ticker := time.NewTicker(m.cfg.AccountPollInterval)
 	defer ticker.Stop()
@@ -516,11 +519,10 @@ func (m *Manager) Start(ctx context.Context) {
 	// The worker's own context carries the manager logger; per-request contexts replace it with the
 	// job's solver-stamped one below.
 	ctx = observability.WithLogger(ctx, m.log)
-	m.metrics.bindAccount(m.signer.Address())
 	accountMonitorDone := make(chan struct{})
 	go func() {
 		defer close(accountMonitorDone)
-		m.monitorAccount(ctx)
+		m.MonitorAccount(ctx)
 	}()
 	defer func() { <-accountMonitorDone }()
 	lateObserverDone := make(chan struct{})

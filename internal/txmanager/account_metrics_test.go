@@ -238,7 +238,7 @@ func (b *accountSnapshotTestBackend) PendingNonceAt(context.Context, common.Addr
 	return 0, errors.New("write endpoint must not serve telemetry")
 }
 
-func TestAccountRefreshPrefersReadEndpointSnapshot(t *testing.T) {
+func TestAccountMonitorUsesReadEndpointWithoutStartingSender(t *testing.T) {
 	backend := &accountSnapshotTestBackend{accountMetricsBackend: &accountMetricsBackend{
 		mockBackend: newMockBackend(), balance: big.NewInt(1),
 	}}
@@ -247,12 +247,16 @@ func TestAccountRefreshPrefersReadEndpointSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	metrics.account.now = func() time.Time { return time.Unix(5, 0) }
+	ctx, stop := context.WithTimeout(t.Context(), time.Second)
+	defer stop()
+	metrics.account.now = func() time.Time {
+		stop()
+		return time.Unix(5, 0)
+	}
 	sgnr := mustSigner(t)
-	metrics.bindAccount(sgnr.Address())
 	manager := NewWithMetrics(backend, sgnr, big.NewInt(11155111), Config{}, metrics, logr.Discard())
 
-	manager.refreshAccount(t.Context())
+	manager.MonitorAccount(ctx)
 
 	want := accountSnapshot{balanceWei: 7, latestNonce: 21, pendingNonce: 22, refreshedAt: 5}
 	if got := gatherAccountSnapshot(t, reg); got != want {
