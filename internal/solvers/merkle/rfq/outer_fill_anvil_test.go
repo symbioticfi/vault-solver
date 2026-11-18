@@ -31,7 +31,9 @@ import (
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
 // All settlement contracts, including AccessManager, execute pinned canonical bytecode.
@@ -153,6 +155,7 @@ type outerFillEVM struct {
 	artifacts         map[string]outerFillArtifact
 	abis              map[string]abi.ABI
 	signer, account   common.Address
+	world, reactor    common.Address
 	key               *ecdsa.PrivateKey
 	recipient         common.Address
 	workflow          *connectorWorkflow
@@ -216,7 +219,7 @@ func (p outerFillPermissions) PermissionTree(context.Context, *big.Int, recipes.
 	return bytes.Clone(p), nil
 }
 
-func newOuterFillEVM(t *testing.T) *outerFillEVM {
+func newOuterFillEVM(t *testing.T, deployed ...*capturedExecutor) *outerFillEVM {
 	t.Helper()
 	rc, client := startOuterFillAnvil(t)
 	f := &outerFillEVM{t: t, rpc: rc, client: client, account: common.HexToAddress("0x21"), recipient: common.HexToAddress("0x55"), abis: make(map[string]abi.ABI)}
@@ -258,13 +261,51 @@ func newOuterFillEVM(t *testing.T) *outerFillEVM {
 	for _, token := range []common.Address{tIn, tOut} {
 		f.materialize("FixtureToken", token)
 	}
-	world := f.deploy("FixtureWorld", tOut)
-	f.materialize("MerkleAccount", f.account, world, world, world, world)
-	f.materialize("LiquidLaneConnector", vlt, world, world, world)
-	reactor := f.deploy("Reactor", world)
+	f.world = f.deploy("FixtureWorld", tOut)
 	caller := common.HexToAddress("0x1000") // Outside the Osaka precompile address range.
-	f.materialize("Executor", caller, reactor)
+	if len(deployed) > 0 && deployed[0] != nil {
+		// Use the unmodified deployed proxy and implementation at their actual
+		// addresses. This Anvil fixture supplies the Reactor and funding state.
+		contract := deployed[0]
+		caller, f.reactor = contract.Proxy, contract.Reactor
+		f.materialize("Reactor", f.reactor, f.world)
+		f.rpcCall("anvil_setCode", caller, hexutil.Encode(contract.ProxyCode))
+		f.rpcCall("anvil_setCode", contract.Implementation, hexutil.Encode(contract.ImplementationCode))
+		f.rpcCall("anvil_setStorageAt", caller, "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc", common.BytesToHash(contract.Implementation.Bytes()))
+	} else {
+		f.reactor = f.deploy("Reactor", f.world)
+		f.materialize("Executor", caller, f.reactor)
+	}
 	f.send(f.signer, caller, "Executor", "initialize", f.signer, []common.Address{f.signer})
+	f.reader = &outerFillEVMReader{client: client, caller: caller}
+	f.workflow = &connectorWorkflow{chain: f.reader, chainID: big.NewInt(1), caller: caller, signer: f.signer}
+	first := f.addConnector(f.account, vlt, 90, *connectorDiscountID())
+	f.recipe = first.Recipe
+	f.workflow.source = outerFillPermissions(first.Permissions)
+	f.send(f.signer, tIn, "FixtureToken", "mint", f.signer, big.NewInt(100))
+	f.send(f.signer, tIn, "FixtureToken", "approve", f.reactor, big.NewInt(100))
+	f.order, f.selected, f.backend = connectorExecutionAward(caller)
+	f.selected.Executor = first.Executor
+	f.order.Request.AmountIn = big.NewInt(100)
+	f.order.Request.Protocol, f.order.Swapper = f.signer, f.signer
+	f.order.Outputs[0].Amount, f.order.Outputs[0].Recipient = big.NewInt(90), f.recipient
+	f.backend.discount = first.Discount
+	f.protocolSignature = signOuterFillOrder(t, key, f.reactor, &f.order)
+	return f
+}
+
+type outerFillConnector struct {
+	Executor    common.Address
+	Recipe      recipes.Recipe
+	Permissions []byte
+	Discount    *discounts.Resolved
+}
+
+func (f *outerFillEVM) addConnector(account, venue common.Address, funding int64, id common.Hash) outerFillConnector {
+	t, caller, world := f.t, f.workflow.caller, f.world
+	t.Helper()
+	f.materialize("MerkleAccount", account, world, world, world, world)
+	f.materialize("LiquidLaneConnector", venue, world, world, world)
 	addressArgs := abi.Arguments{{Type: connectorDeltaType(t, "address")}}
 	admin, err := addressArgs.Pack(f.signer)
 	if err != nil {
@@ -274,29 +315,28 @@ func newOuterFillEVM(t *testing.T) *outerFillEVM {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.send(f.signer, f.account, "MerkleAccount", "initialize", uint64(1), f.signer, accountInit)
-	connectorInit, err := (abi.Arguments{{Type: connectorDeltaType(t, "address")}, {Type: connectorDeltaType(t, "address")}}).Pack(f.account, tOut)
+	f.send(f.signer, account, "MerkleAccount", "initialize", uint64(1), f.signer, accountInit)
+	connectorInit, err := (abi.Arguments{{Type: connectorDeltaType(t, "address")}, {Type: connectorDeltaType(t, "address")}}).Pack(account, tOut)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.send(f.signer, vlt, "LiquidLaneConnector", "initialize", uint64(2), f.signer, connectorInit)
-	f.rpcCall("anvil_setBalance", f.account, "0x10000000000000000000")
-	f.rpcCall("anvil_impersonateAccount", f.account)
-	f.send(f.signer, world, "FixtureWorld", "setOracle", vlt, tIn)
-	f.send(f.account, vlt, "LiquidLaneConnector", "addTokenToRedeem", tIn, world)
-	f.send(f.account, vlt, "LiquidLaneConnector", "setMaxAssetsPerDuration", tIn, big.NewInt(1000), big.NewInt(86400))
-	f.send(f.account, vlt, "LiquidLaneConnector", "setSigner", f.signer)
-	f.send(f.account, vlt, "LiquidLaneConnector", "setMinDiscount", tIn, big.NewInt(10000000))
-	recipeExecutor := f.deploy("RecipeExecutor", f.signer, f.account)
+	f.send(f.signer, venue, "LiquidLaneConnector", "initialize", uint64(2), f.signer, connectorInit)
+	f.rpcCall("anvil_setBalance", account, "0x10000000000000000000")
+	f.rpcCall("anvil_impersonateAccount", account)
+	f.send(f.signer, world, "FixtureWorld", "setOracle", venue, tIn)
+	f.send(account, venue, "LiquidLaneConnector", "addTokenToRedeem", tIn, world)
+	f.send(account, venue, "LiquidLaneConnector", "setMaxAssetsPerDuration", tIn, big.NewInt(1000), big.NewInt(86400))
+	f.send(account, venue, "LiquidLaneConnector", "setSigner", f.signer)
+	f.send(account, venue, "LiquidLaneConnector", "setMinDiscount", tIn, big.NewInt(10000000))
+	recipeExecutor := f.deploy("RecipeExecutor", f.signer, account)
 	f.send(f.signer, recipeExecutor, "RecipeExecutor", "setCaller", caller)
-	f.send(f.signer, tOut, "FixtureToken", "mint", f.account, big.NewInt(90))
-	f.send(f.signer, tIn, "FixtureToken", "mint", f.signer, big.NewInt(100))
-	f.send(f.signer, tIn, "FixtureToken", "approve", reactor, big.NewInt(100))
-	f.send(f.account, tOut, "FixtureToken", "approve", vlt, big.NewInt(90))
+	f.send(f.signer, tOut, "FixtureToken", "mint", account, big.NewInt(funding))
+	f.send(account, tOut, "FixtureToken", "approve", venue, big.NewInt(funding))
 	resolved := connectorDiscountFixture()
+	resolved.DiscountID, resolved.Discount.Adapter = id.Hex(), venue.Hex()
 	resolved.Discount.Discount, resolved.Discount.Signer, resolved.Discount.Protocol = "10000000", f.signer.Hex(), f.signer.Hex()
-	signOuterFillDiscount(t, key, resolved)
-	terms, err := parseConnectorDiscount(resolved, *connectorDiscountID(), vlt, tIn)
+	signOuterFillDiscount(t, f.key, resolved)
+	terms, err := parseConnectorDiscount(resolved, id, venue, tIn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,30 +346,20 @@ func newOuterFillEVM(t *testing.T) *outerFillEVM {
 			mask[i] = 255
 		}
 	}
-	leaf := recipes.Leaf{Target: vlt, Value: new(big.Int), Data: data, DataMask: mask}
+	leaf := recipes.Leaf{Target: venue, Value: new(big.Int), Data: data, DataMask: mask}
 	leaf.Hash, err = recipes.HashLeaf(leaf)
 	if err != nil {
 		t.Fatal(err)
 	}
-	recipe, tree, permissions := connectorCommittedFunding(t, leaf, f.account, caller, tOut, tIn)
-	f.recipe = recipe
-	f.send(f.signer, world, "FixtureWorld", "setRoot", f.account, tree.Root)
-	f.send(f.signer, f.account, "MerkleAccount", "acceptRoot", tree.Root)
+	recipe, tree, permissions := connectorCommittedFunding(t, leaf, account, caller, tOut, tIn)
+	f.send(f.signer, world, "FixtureWorld", "setRoot", account, tree.Root)
+	f.send(f.signer, account, "MerkleAccount", "acceptRoot", tree.Root)
 	for _, permission := range tree.Leaves {
-		f.send(f.signer, f.account, "MerkleAccount", "grantRole", permission.Hash, recipeExecutor)
+		f.send(f.signer, account, "MerkleAccount", "grantRole", permission.Hash, recipeExecutor)
 	}
 	f.send(f.signer, recipeExecutor, "RecipeExecutor", "setRecipe", recipe.Queries, recipe.Steps)
 
-	f.reader = &outerFillEVMReader{client: client, caller: caller}
-	f.workflow = &connectorWorkflow{chain: f.reader, chainID: big.NewInt(1), source: outerFillPermissions(permissions), caller: caller, signer: f.signer}
-	f.order, f.selected, f.backend = connectorExecutionAward(caller)
-	f.selected.Executor = recipeExecutor
-	f.order.Request.AmountIn = big.NewInt(100)
-	f.order.Request.Protocol, f.order.Swapper = f.signer, f.signer
-	f.order.Outputs[0].Amount, f.order.Outputs[0].Recipient = big.NewInt(90), f.recipient
-	f.backend.discount = resolved
-	f.protocolSignature = signOuterFillOrder(t, key, reactor, &f.order)
-	return f
+	return outerFillConnector{Executor: recipeExecutor, Recipe: recipe, Permissions: permissions, Discount: resolved}
 }
 
 func (f *outerFillEVM) rpcCall(method string, args ...any) {
@@ -375,8 +405,12 @@ func (f *outerFillEVM) send(from, to common.Address, contract, method string, ar
 	f.transact(from, &to, data)
 }
 
-func (f *outerFillEVM) transact(from common.Address, to *common.Address, data []byte) *types.Receipt {
+func (f *outerFillEVM) transact(from common.Address, to *common.Address, data []byte, want ...uint64) *types.Receipt {
 	f.t.Helper()
+	wantStatus := types.ReceiptStatusSuccessful
+	if len(want) > 0 {
+		wantStatus = want[0]
+	}
 	args := map[string]any{"from": from, "data": hexutil.Encode(data), "gas": "0x1c9c380"}
 	if to != nil {
 		args["to"] = *to
@@ -390,8 +424,8 @@ func (f *outerFillEVM) transact(from common.Address, to *common.Address, data []
 	for {
 		receipt, err := f.client.TransactionReceipt(ctx, hash)
 		if err == nil {
-			if receipt.Status != types.ReceiptStatusSuccessful {
-				f.t.Fatalf("fixture transaction reverted: hash=%s to=%v data=%x receipt=%+v", hash, to, data[:min(len(data), 4)], receipt)
+			if receipt.Status != wantStatus {
+				f.t.Fatalf("unexpected fixture transaction status: hash=%s to=%v data=%x receipt=%+v", hash, to, data[:min(len(data), 4)], receipt)
 			}
 			return receipt
 		}
@@ -432,8 +466,8 @@ func signOuterFillDiscount(t *testing.T, key *ecdsa.PrivateKey, resolved *discou
 	t.Helper()
 	discount := apitypes.TypedDataMessage{"tokenToRedeem": tIn.Hex(), "discount": resolved.Discount.Discount, "signer": resolved.Discount.Signer, "protocol": resolved.Discount.Protocol, "nonce": resolved.Discount.Nonce, "deadline": strconv.FormatInt(resolved.Discount.Deadline, 10)}
 	types := apitypes.Types{"Discount": {{Name: "tokenToRedeem", Type: "address"}, {Name: "discount", Type: "uint256"}, {Name: "signer", Type: "address"}, {Name: "protocol", Type: "address"}, {Name: "nonce", Type: "uint256"}, {Name: "deadline", Type: "uint48"}}, "DiscountSwap": {{Name: "discount", Type: "Discount"}, {Name: "signerSignature", Type: "bytes"}, {Name: "protocolDeadline", Type: "uint48"}}}
-	resolved.SignerSignature = hexutil.Encode(signOuterFillTyped(t, key, "LiquidLaneConnector", vlt, types, "Discount", discount))
-	resolved.ProtocolSignature = hexutil.Encode(signOuterFillTyped(t, key, "LiquidLaneConnector", vlt, types, "DiscountSwap", apitypes.TypedDataMessage{"discount": discount, "signerSignature": resolved.SignerSignature, "protocolDeadline": strconv.FormatInt(resolved.ProtocolDeadline, 10)}))
+	resolved.SignerSignature = hexutil.Encode(signOuterFillTyped(t, key, "LiquidLaneConnector", common.HexToAddress(resolved.Discount.Adapter), types, "Discount", discount))
+	resolved.ProtocolSignature = hexutil.Encode(signOuterFillTyped(t, key, "LiquidLaneConnector", common.HexToAddress(resolved.Discount.Adapter), types, "DiscountSwap", apitypes.TypedDataMessage{"discount": discount, "signerSignature": resolved.SignerSignature, "protocolDeadline": strconv.FormatInt(resolved.ProtocolDeadline, 10)}))
 }
 
 func signOuterFillOrder(t *testing.T, key *ecdsa.PrivateKey, reactor common.Address, order *executor.IReactorOrder) []byte {
@@ -542,4 +576,113 @@ func (r ordinaryFillRPC) RoundTrip(request *http.Request) (*http.Response, error
 		return nil, errors.New("outer fill fixture rejects code or state override RPC")
 	}
 	return r.RoundTripper.RoundTrip(request)
+}
+
+type capturedExecutor struct {
+	Proxy              common.Address `json:"Proxy"`
+	Implementation     common.Address `json:"Implementation"`
+	Reactor            common.Address `json:"Reactor"`
+	ProxyCode          hexutil.Bytes  `json:"ProxyCode"`
+	ImplementationCode hexutil.Bytes  `json:"ImplementationCode"`
+}
+
+type splitPermissions map[common.Address][]byte
+
+func (p splitPermissions) PermissionTree(_ context.Context, _ *big.Int, snapshot recipes.Snapshot) ([]byte, error) {
+	return bytes.Clone(p[snapshot.Account]), nil
+}
+
+func TestAnvilSplitConnectorOrder(t *testing.T) {
+	var deployed *capturedExecutor
+	if path := os.Getenv("RFQ_OUTER_FILL_DEPLOYMENT"); path != "" {
+		data, err := os.ReadFile(path) //nolint:gosec // The integration test runner chooses its local runtime fixture.
+		if err != nil {
+			t.Fatal(err)
+		}
+		deployed = new(capturedExecutor)
+		if err := json.Unmarshal(data, deployed); err != nil {
+			t.Fatal(err)
+		}
+		if deployed.Proxy == (common.Address{}) || deployed.Implementation == (common.Address{}) || deployed.Reactor == (common.Address{}) ||
+			len(deployed.ProxyCode) == 0 || len(deployed.ImplementationCode) == 0 {
+			t.Fatal("incomplete configured Executor runtime")
+		}
+		t.Logf("Configured Executor %s, implementation %s, Reactor %s", deployed.Proxy, deployed.Implementation, deployed.Reactor)
+	}
+	for _, name := range []string{"settlement", "second grant revoked"} {
+		t.Run(name, func(t *testing.T) {
+			f := newOuterFillEVM(t, deployed)
+			secondAccount, secondVenue := common.HexToAddress("0x22"), common.HexToAddress("0x44")
+			secondID := common.HexToHash("0x44")
+			second := f.addConnector(secondAccount, secondVenue, 35, secondID)
+			f.workflow.source = splitPermissions{f.account: []byte(f.workflow.source.(outerFillPermissions)), secondAccount: second.Permissions}
+			f.backend.resolved = map[string]*discounts.Resolved{f.selected.DiscountID.Hex(): f.backend.discount, secondID.Hex(): second.Discount}
+			managers := make([]common.Address, 0, 2)
+			for _, recipe := range []common.Address{f.selected.Executor, second.Executor} {
+				manager := f.deploy("AccessManager", f.signer)
+				f.send(f.signer, recipe, "RecipeExecutor", "setCaller", manager)
+				selector := [4]byte(recipeBinding.GetABI().Methods["execute"].ID)
+				f.send(f.signer, manager, "AccessManager", "setTargetFunctionRole", recipe, [][4]byte{selector}, uint64(2))
+				f.send(f.signer, manager, "AccessManager", "grantRole", uint64(2), f.workflow.caller, uint32(0))
+				managers = append(managers, manager)
+			}
+			f.order.Outputs[0].Amount = big.NewInt(89)
+			f.protocolSignature = signOuterFillOrder(t, f.key, f.reactor, &f.order)
+			row := awardRow(t, f.order)
+			signature := hexutil.Encode(f.protocolSignature)
+			row.ProtocolSignature = &signature
+			listed := []discounts.ListItem{
+				{DiscountID: f.selected.DiscountID.Hex(), Adapter: vlt.Hex(), MaxAssets: "54"},
+				{DiscountID: secondID.Hex(), Adapter: secondVenue.Hex(), MaxAssets: "35"},
+			}
+			for i := range listed {
+				listed[i].DiscountPrecision, listed[i].Discount = "100000000", "10000000"
+				listed[i].TokenToRedeem, listed[i].Collateral, listed[i].CollateralDecimals = tIn.Hex(), tOut.Hex(), 6
+				listed[i].Deadline = f.backend.discount.Discount.Deadline
+			}
+			solver := &Solver{recipeExecutors: []common.Address{f.selected.Executor, second.Executor}, workflow: f.workflow, backend: f.backend, spends: newSpendLedger()}
+			if err := solver.Initialize(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			singleRoute, err := tokenpolicy.New(tokenpolicy.Permissioned, []common.Address{tIn})
+			if err != nil {
+				t.Fatal(err)
+			}
+			solver.tokenPolicy = singleRoute
+			if intent, err := solver.prepare(t.Context(), row, listed); intent != nil || err != nil {
+				t.Fatalf("token policy should decline a split-only award: intent=%v err=%v", intent, err)
+			}
+			solver.tokenPolicy = tokenpolicy.Policy{}
+			intent, err := solver.prepare(t.Context(), row, listed)
+			if err != nil || intent == nil || f.reader.outerCalls != 1 {
+				t.Fatalf("split preparation did not simulate the full signed award once: simulations=%d err=%v", f.reader.outerCalls, err)
+			}
+			for i, account := range []common.Address{f.account, secondAccount} {
+				amount := intent.Spend.Amounts[liquidlane.NewCapacityID(1, account, tOut)]
+				if amount == nil || amount.Int64() != []int64{54, 35}[i] {
+					t.Fatalf("split funding amount for %s: %v", account, amount)
+				}
+			}
+			if f.balance(tIn, f.signer).Int64() != 100 || f.balance(tOut, f.recipient).Sign() != 0 {
+				t.Fatal("split simulation persisted token transfers")
+			}
+			if name == "second grant revoked" {
+				f.send(f.signer, managers[1], "AccessManager", "revokeRole", uint64(2), f.workflow.caller)
+				f.transact(f.signer, &intent.To, intent.Data, types.ReceiptStatusFailed)
+				if f.balance(tIn, f.signer).Int64() != 100 || f.balance(tOut, f.account).Int64() != 90 ||
+					f.balance(tIn, f.account).Sign() != 0 || f.balance(tOut, secondAccount).Int64() != 35 ||
+					f.balance(tOut, f.recipient).Sign() != 0 {
+					t.Fatal("failure of the second leg left partial settlement")
+				}
+				return
+			}
+			receipt := f.transact(f.signer, &intent.To, intent.Data)
+			if f.balance(tIn, f.account).Int64() != 61 || f.balance(tIn, secondAccount).Int64() != 39 ||
+				f.balance(tOut, f.account).Int64() != 36 || f.balance(tOut, secondAccount).Sign() != 0 ||
+				f.balance(tOut, f.recipient).Int64() != 89 || f.balance(tIn, f.signer).Sign() != 0 {
+				t.Fatal("split fill did not atomically settle the signed input and output")
+			}
+			t.Logf("split fill used %d gas", receipt.GasUsed)
+		})
+	}
 }

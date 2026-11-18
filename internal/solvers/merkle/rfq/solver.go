@@ -19,6 +19,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
+	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -46,6 +47,7 @@ type fillIntent struct {
 
 type Solver struct {
 	recipeExecutors  []common.Address
+	tokenPolicy      tokenpolicy.Policy
 	routes           map[common.Address]recipeRoute
 	routesMu         sync.RWMutex
 	spends           *spendLedger
@@ -78,6 +80,7 @@ func New(cfg Config, deps solver.Deps, observeOrderPoll func(time.Time)) (*Solve
 	s := &Solver{
 		spends:           newSpendLedger(),
 		recipeExecutors:  cfg.RecipeExecutors,
+		tokenPolicy:      cfg.TokenPolicy,
 		backend:          newBackendClient(cfg.BackendURL),
 		observeOrderPoll: observeOrderPoll,
 		workflow:         &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), caller: cfg.Executor, maxGas: deps.MaxGas},
@@ -205,6 +208,9 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	if err != nil {
 		return nil, err
 	}
+	if !s.tokenPolicy.Allows(order.Request.TokenIn) {
+		return nil, nil
+	}
 	observed := time.Now()
 	header, err := s.workflow.chain.HeaderByNumber(ctx, nil)
 	if err != nil {
@@ -221,12 +227,13 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	if order.Request.Deadline.Cmp(new(big.Int).SetUint64(header.Time)) <= 0 {
 		return nil, errors.New("order expired")
 	}
+	var routes []advertisedConnector
 	for _, item := range listed {
 		if item.DiscountPrecision != "100000000" {
 			continue
 		}
 		venue := common.HexToAddress(item.Adapter)
-		recipeExecutor, _, configured := s.ResolveRoute(venue, order.Request.TokenIn, token)
+		recipeExecutor, account, configured := s.ResolveRoute(venue, order.Request.TokenIn, token)
 		if !configured || common.HexToAddress(item.TokenToRedeem) != order.Request.TokenIn || common.HexToAddress(item.Collateral) != token {
 			continue
 		}
@@ -238,21 +245,49 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 		if !ok || maximum.Sign() < 0 || maximum.BitLen() > 256 {
 			return nil, errors.New("invalid connector maxAssets")
 		}
-		built, err := s.workflow.build(ctx, order, signature, selectedRoute{Venue: venue, Executor: recipeExecutor, DiscountID: common.BytesToHash(id), MaxAssets: maximum}, s.backend)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			observability.Log(ctx).V(1).Info("connector route unavailable", "connector", venue.Hex(), "reason", err.Error())
-			continue
+		if maximum.Sign() > 0 {
+			routes = append(routes, advertisedConnector{
+				Venue: venue, Executor: recipeExecutor, DiscountID: common.BytesToHash(id), MaxAssets: maximum,
+				Account: account, Offer: item,
+			})
 		}
+	}
+	intentFor := func(built builtConnector) (*fillIntent, error) {
 		deadline, ok := liquidlane.SubmissionDeadline(minTime(time.Unix(order.Request.Deadline.Int64(), 0), built.ValidUntil), chainTime, observed, time.Now())
 		if !ok {
 			return nil, errors.New("fill deadline elapsed during preparation")
 		}
-		return &fillIntent{OrderID: row.OrderId, To: s.workflow.caller, Data: built.Calldata, Deadline: deadline, Spend: fillSpend{CapacityID: liquidlane.NewCapacityID(s.workflow.chainID.Int64(), built.State.Account, token), Amount: required, Deadline: order.Request.Deadline.Int64()}}, nil
+		return &fillIntent{
+			OrderID: row.OrderId, To: s.workflow.caller, Data: built.Calldata, Deadline: deadline,
+			Spend: fillSpend{Amounts: built.Amounts, Deadline: order.Request.Deadline.Int64()},
+		}, nil
 	}
-	return nil, nil
+	for _, route := range routes {
+		// Keep an executable single-connector fill when one can settle the award.
+		if route.MaxAssets.Cmp(required) < 0 {
+			continue
+		}
+		built, err := s.workflow.build(ctx, order, signature, route.selectedRoute, s.backend)
+		if err == nil {
+			return intentFor(built)
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		observability.Log(ctx).V(1).Info("connector route unavailable", "connector", route.Venue.Hex(), "reason", err.Error())
+	}
+	if s.tokenPolicy.RequiresSingleRoute(order.Request.TokenIn) {
+		return nil, nil
+	}
+	legs, err := s.splitLegs(ctx, order.Request, token, required, header.Number, chainTime, routes)
+	if err != nil || len(legs) == 0 {
+		return nil, err
+	}
+	built, err := s.workflow.buildFill(ctx, order, signature, legs, s.backend)
+	if err != nil {
+		return nil, err
+	}
+	return intentFor(built)
 }
 
 func (s *Solver) poll(ctx context.Context) (err error) {

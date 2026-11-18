@@ -76,6 +76,9 @@ func solveQuote(
 ) (*types.QuoteOutput, error) {
 	maxRoutes := len(candidates)
 	inputPolicy := strategies.AbsorbUncoveredInput
+	if input.RequireFullCoverage {
+		inputPolicy = strategies.RejectUncoveredInput
+	}
 	if input.RequireSingleRoute {
 		maxRoutes = 1
 	}

@@ -311,7 +311,7 @@ refresh-rfq-merkle-fixture: ## Re-vendor pinned canonical EVM fixture artifacts 
 .PHONY: test-rfq-merkle-anvil
 test-rfq-merkle-anvil: ## Execute canonical RFQ outer settlement boundaries on local Anvil
 	@command -v anvil >/dev/null
-	go test -race -tags integration -run '^TestAnvilConnectorOuterFillCanonicalBoundaries$$' -v ./internal/solvers/merkle/rfq
+	go test -race -tags integration -run '^TestAnvil(ConnectorOuterFillCanonicalBoundaries|SplitConnectorOrder)$$' -v ./internal/solvers/merkle/rfq
 
 .PHONY: test-merkle-sdk-anvil
 test-merkle-sdk-anvil: ## Exercise RAM SDK ownership and canonical settlement on local Anvil

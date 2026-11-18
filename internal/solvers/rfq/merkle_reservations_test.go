@@ -124,6 +124,40 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 		}
 	}
 
+	// Each independent account covers only part of the requested input.
+	routes := s.server.quotes.resolveRoute
+	s.server.quotes.resolveRoute = func(connector, rwa, asset common.Address, decimals int) (common.Address, common.Address, bool) {
+		if connector == common.HexToAddress("0x44") {
+			return common.HexToAddress("0x45"), common.HexToAddress("0x46"), true
+		}
+		return routes(connector, rwa, asset, decimals)
+	}
+	split := body
+	split.Adapters = append([]quoteAdapter(nil), body.Adapters[:1]...)
+	split.Adapters[0].MaxAssets = "300"
+	other := split.Adapters[0]
+	other.Adapter = common.HexToAddress("0x44").Hex()
+	otherID := common.HexToHash("0xabcd").Hex()
+	other.DiscountID = &otherID
+	split.Adapters = append(split.Adapters, other)
+	decision, err := s.server.quotes.quote(t.Context(), &split)
+	if err != nil || decision.response == nil {
+		t.Fatalf("independent connector capacities should cover a split quote: %+v %v", decision.response, err)
+	}
+
+	// The same two offers cannot multiply a shared funding account's capacity.
+	s.server.quotes.resolveRoute = func(connector, rwa, asset common.Address, decimals int) (common.Address, common.Address, bool) {
+		recipe, account, ok := routes(common.HexToAddress(split.Adapters[0].Adapter), rwa, asset, decimals)
+		if connector == common.HexToAddress(other.Adapter) {
+			recipe = common.HexToAddress("0x45")
+		}
+		return recipe, account, ok
+	}
+	decision, err = s.server.quotes.quote(t.Context(), &split)
+	if err != nil || decision.response != nil {
+		t.Fatalf("shared account cannot fund the split quote: %+v %v", decision.response, err)
+	}
+
 	// Quote-only uses the same recipe permissions without a signing dependency.
 	// No discount-list scan is needed to identify the configured connector.
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -134,14 +168,12 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 	if err := yaml.Unmarshal([]byte(quoteText), &node); err != nil {
 		t.Fatal(err)
 	}
-	quoted, err := factory(*node.Content[0], solver.Deps{Chain: client, Log: logr.Discard(),
-		MerkleTxManager: func() (*merkletransaction.Manager, error) { return merkleManager, nil },
-	})
+	quoted, err := factory(*node.Content[0], solver.Deps{Chain: client, Log: logr.Discard()})
 	if err != nil {
 		t.Fatal(err)
 	}
 	quoteOnly := quoted.(*Solver)
-	if quoteOnly.merkle.RequiresMerkleTxManager() {
+	if quoteOnly.RequiresTxManager() || quoteOnly.RequiresMerkleTxManager() {
 		t.Fatal("quote-only initialized a fill sender")
 	}
 	if err := quoteOnly.merkle.Initialize(t.Context()); err != nil {
@@ -336,7 +368,7 @@ func TestRFQTransactionManagerFollowsExecutionMode(t *testing.T) {
 	if !native.RequiresTxManager() || native.RequiresMerkleTxManager() {
 		t.Fatal("native RFQ must retain the existing transaction manager")
 	}
-	merkle := &Solver{merkle: &merklerfq.Solver{}}
+	merkle := &Solver{cfg: &Config{}, merkle: &merklerfq.Solver{}}
 	if merkle.RequiresTxManager() || !merkle.RequiresMerkleTxManager() {
 		t.Fatal("Merkle RFQ must use only the SDK transaction manager")
 	}

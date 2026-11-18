@@ -9,8 +9,7 @@ import (
 )
 
 type fillSpend struct {
-	CapacityID liquidlane.CapacityID
-	Amount     *big.Int
+	Amounts    liquidlane.CapacityReservations
 	IncludedAt uint64
 	Deadline   int64 // Original signed chain deadline.
 }
@@ -27,12 +26,19 @@ func newSpendLedger() *spendLedger {
 }
 
 func (l *spendLedger) reserve(id string, spend fillSpend) error {
-	if id == "" || spend.CapacityID == "" || spend.Amount == nil || spend.Amount.Sign() <= 0 || spend.Amount.BitLen() > 256 || spend.Deadline <= 0 {
+	if id == "" || len(spend.Amounts) == 0 || spend.Deadline <= 0 {
 		return errors.New("RFQ fill has no valid spend")
 	}
+	amounts := make(liquidlane.CapacityReservations, len(spend.Amounts))
+	for capacityID, amount := range spend.Amounts {
+		if capacityID == "" || amount == nil || amount.Sign() <= 0 || amount.BitLen() > 256 {
+			return errors.New("RFQ fill has no valid spend")
+		}
+		amounts[capacityID] = new(big.Int).Set(amount)
+	}
+	spend.Amounts = amounts
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	spend.Amount = new(big.Int).Set(spend.Amount)
 	l.spends[id] = spend
 	return nil
 }
@@ -78,7 +84,9 @@ func (l *spendLedger) expire(chainTime int64) {
 	for id, deadline := range l.completed {
 		if deadline <= chainTime {
 			if spend, found := l.spends[id]; found && spend.IncludedAt != 0 {
-				l.watermarks[spend.CapacityID] = max(l.watermarks[spend.CapacityID], spend.IncludedAt)
+				for capacityID := range spend.Amounts {
+					l.watermarks[capacityID] = max(l.watermarks[capacityID], spend.IncludedAt)
+				}
 				delete(l.spends, id)
 			}
 			delete(l.completed, id)
@@ -108,14 +116,19 @@ func (s *Solver) Reservations(inventory []liquidlane.Inventory) liquidlane.Capac
 	defer s.spends.mu.Unlock()
 	reserved := make(liquidlane.CapacityReservations)
 	for id, spend := range s.spends.spends {
-		block, known := blocks[spend.CapacityID]
-		if spend.IncludedAt != 0 && known && block >= spend.IncludedAt {
-			// Keep a watermark after pruning so later older snapshots cannot reuse spent cash.
-			s.spends.watermarks[spend.CapacityID] = max(s.spends.watermarks[spend.CapacityID], spend.IncludedAt)
-			delete(s.spends.spends, id)
-			continue
+		for capacityID, amount := range spend.Amounts {
+			block, known := blocks[capacityID]
+			if spend.IncludedAt != 0 && known && block >= spend.IncludedAt {
+				// Keep a watermark so later older snapshots cannot reuse spent cash.
+				s.spends.watermarks[capacityID] = max(s.spends.watermarks[capacityID], spend.IncludedAt)
+				delete(spend.Amounts, capacityID)
+				continue
+			}
+			reserved.Add(capacityID, amount)
 		}
-		reserved.Add(spend.CapacityID, spend.Amount)
+		if len(spend.Amounts) == 0 {
+			delete(s.spends.spends, id)
+		}
 	}
 	for capacityID, block := range blocks {
 		if block < s.spends.watermarks[capacityID] {

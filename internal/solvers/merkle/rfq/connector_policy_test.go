@@ -15,7 +15,7 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/erc4626"
 )
 
-func connectorDeltaRecipe(t *testing.T, hash common.Hash, account, recipient, asset, rwa common.Address, approval ...common.Hash) recipes.Recipe {
+func connectorDeltaRecipe(t *testing.T, hash common.Hash, account, recipient, asset, rwa common.Address, approval ...recipes.Leaf) recipes.Recipe {
 	t.Helper()
 	uintType := connectorDeltaType(t, "uint256")
 	manage, err := (abi.Arguments{{Type: uintType}, {Type: connectorDeltaType(t, "bytes32[]")}, {Type: connectorDeltaType(t, "uint256[][]")}}).Pack(
@@ -45,7 +45,7 @@ func connectorDeltaRecipe(t *testing.T, hash common.Hash, account, recipient, as
 	}
 	if len(approval) > 0 {
 		args := abi.Arguments{{Type: uintType}, {Type: connectorDeltaType(t, "address")}, {Type: connectorDeltaType(t, "address")}, {Type: connectorDeltaType(t, "bytes32")}}
-		raw, err := args.Pack(input(1), asset, vlt, approval[0])
+		raw, err := args.Pack(input(1), asset, common.BytesToAddress(approval[0].Data[4:36]), approval[0].Hash)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -89,7 +89,7 @@ func connectorDeltaQuery(t *testing.T, token, owner common.Address) []byte {
 
 func connectorCommittedFunding(t *testing.T, leaf recipes.Leaf, account, recipient, asset, rwa common.Address) (recipes.Recipe, *recipes.Tree, []byte) {
 	t.Helper()
-	data := erc20binding.NewERC20().PackApprove(vlt, new(big.Int))
+	data := erc20binding.NewERC20().PackApprove(leaf.Target, new(big.Int))
 	mask := make([]byte, len(data))
 	for i := 36; i < 68; i++ {
 		mask[i] = 255
@@ -108,7 +108,7 @@ func connectorCommittedFunding(t *testing.T, leaf recipes.Leaf, account, recipie
 	leaf.Proof = []common.Hash{approve.Hash}
 	approve.Proof = []common.Hash{leaf.Hash}
 	tree := &recipes.Tree{Root: root, ChainID: big.NewInt(1), Account: &account, Leaves: []recipes.Leaf{approve, leaf}}
-	recipe := connectorDeltaRecipe(t, leaf.Hash, account, recipient, asset, rwa, approve.Hash)
+	recipe := connectorDeltaRecipe(t, leaf.Hash, account, recipient, asset, rwa, approve)
 	entries := []map[string]any{}
 	for _, l := range tree.Leaves {
 		text := []string{}

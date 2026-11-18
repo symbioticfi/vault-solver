@@ -7,6 +7,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/merklehost"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
+	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -16,6 +17,7 @@ type Config struct {
 	BackendURL      string
 	Executor        common.Address
 	Curator         merklehost.Curator
+	TokenPolicy     tokenpolicy.Policy
 }
 
 func parseConfig(node yaml.Node) (Config, error) {

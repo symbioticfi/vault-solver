@@ -252,5 +252,5 @@ func (c *Config) restrictsToAdapters() bool {
 }
 
 func (c *Config) merkleConfig() merklerfq.Config {
-	return merklerfq.Config{BackendURL: c.BackendURL, Executor: c.Executor, RecipeExecutors: c.RecipeExecutors, Curator: c.Curator, QuoteOnly: c.QuoteOnly}
+	return merklerfq.Config{BackendURL: c.BackendURL, Executor: c.Executor, RecipeExecutors: c.RecipeExecutors, Curator: c.Curator, QuoteOnly: c.QuoteOnly, TokenPolicy: c.TokenPolicy}
 }
