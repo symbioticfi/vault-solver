@@ -45,8 +45,8 @@ Execution verifies current permissions and the complete outer fill; recipes rema
 
 Both full and `quoteOnly` Merkle deployments require `curator.url`: they use the same
 startup discovery to verify the configured recipe's connector and permitted RWA tokens.
-Discovery failure aborts startup. Quote-only mode reads permissions without a fill signer
-or sender, and does not poll orders. It does not discover routes from backend discount listings.
+Discovery failure aborts startup. Quote-only mode reads permissions without starting
+the shared fill transaction manager or polling orders. It does not discover routes from backend discount listings.
 Merkle fills keep their active intent in RAM; `stateDir` is removed and rejected.
 All configured recipes share one fill owner and the host
 transaction manager.

@@ -63,7 +63,9 @@ the last cache. Configured-adapter startup remains strict. The backend client su
 execution and discovery requests without mutable per-request state.
 
 The quote stage allocates advertised capacity after shared account/asset reservations
-and preserves both contract floors. Backend pricing failure excludes that entry;
+and preserves both contract floors. Merkle quotes require one connector to cover the
+whole award, enforced for both the default and webhook strategies. Backend pricing
+failure excludes that entry;
 missing pricing metadata is malformed. Native external, native discounted and connector
 discounted quotes have no RPC reader or quote-triggered metadata warming. Native
 routes validate payout asset and decimals against cached chain metadata. Unsigned
