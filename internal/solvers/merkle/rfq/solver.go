@@ -46,15 +46,16 @@ type fillIntent struct {
 }
 
 type Solver struct {
-	recipeExecutors []common.Address
-	tokenPolicy     tokenpolicy.Policy
-	routes          map[common.Address]recipeRoute
-	routesMu        sync.RWMutex
-	spends          *spendLedger
-	workflow        *connectorWorkflow
-	backend         orderBackend
-	sender          keeper.Sender
-	intent          *fillIntent // Only Run accesses the intent; the sender reads its deadline at admission.
+	recipeExecutors  []common.Address
+	tokenPolicy      tokenpolicy.Policy
+	routes           map[common.Address]recipeRoute
+	routesMu         sync.RWMutex
+	spends           *spendLedger
+	workflow         *connectorWorkflow
+	backend          orderBackend
+	observeOrderPoll func(time.Time)
+	sender           keeper.Sender
+	intent           *fillIntent // Only Run accesses the intent; the sender reads its deadline at admission.
 }
 
 func (*Solver) Name() string                    { return Name }
@@ -65,18 +66,25 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
-	return New(cfg, deps)
+	return New(cfg, deps, nil)
 }
 
 // New shares the Merkle fill path with the RFQ quote server.
-func New(cfg Config, deps solver.Deps) (*Solver, error) {
+func New(cfg Config, deps solver.Deps, observeOrderPoll func(time.Time)) (*Solver, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 	if deps.Chain == nil || (!cfg.QuoteOnly && (deps.Signer == nil || deps.MerkleTxManager == nil)) {
 		return nil, errors.New("rfq-merkle requires the host chain, signer and transaction manager")
 	}
-	s := &Solver{spends: newSpendLedger(), recipeExecutors: cfg.RecipeExecutors, tokenPolicy: cfg.TokenPolicy, backend: newBackendClient(cfg.BackendURL), workflow: &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), caller: cfg.Executor, maxGas: deps.MaxGas}}
+	s := &Solver{
+		spends:           newSpendLedger(),
+		recipeExecutors:  cfg.RecipeExecutors,
+		tokenPolicy:      cfg.TokenPolicy,
+		backend:          newBackendClient(cfg.BackendURL),
+		observeOrderPoll: observeOrderPoll,
+		workflow:         &connectorWorkflow{chain: deps.Chain, chainID: deps.Chain.ChainID(), caller: cfg.Executor, maxGas: deps.MaxGas},
+	}
 	source, err := cfg.Curator.PermissionSource(deps.Chain)
 	if err != nil {
 		return nil, err
@@ -142,6 +150,9 @@ func (s *Solver) tick(ctx context.Context) (err error) {
 	rows, err := s.backend.orders(ctx, strings.ToLower(s.workflow.caller.Hex()))
 	if err != nil {
 		return err
+	}
+	if s.observeOrderPoll != nil {
+		s.observeOrderPoll(time.Now())
 	}
 	if len(rows) == 0 {
 		return nil
