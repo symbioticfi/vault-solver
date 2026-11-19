@@ -53,6 +53,8 @@ the same nonce; nonce handling does not coordinate their liquidity or off-chain 
 | `redstone-oev` | RedStone OEV liquidations | [plan](docs/OEV-PLAN.md) | [yaml](config/redstone-oev.example.yaml) |
 | `lifi-samechain` | LI.FI same-chain intents over LiquidLane | [plan](docs/LIFI-PLAN.md) | [yaml](config/lifi.example.yaml) |
 | `uniswapx-filler` | UniswapX V2 RFQ quoting and LiquidLane filling | [plan](docs/UNISWAPX-PLAN.md) | [yaml](config/uniswapx.example.yaml) |
+| `lifi-merkle` | LI.FI same-chain intents through Merkle recipes | [plan](docs/MERKLE-FILLERS.md) | [yaml](config/lifi-merkle.example.yaml) |
+| `uniswapx-merkle` | UniswapX V2 RFQ quoting and filling through Merkle recipes | [plan](docs/MERKLE-FILLERS.md) | [yaml](config/uniswapx-merkle.example.yaml) |
 
 The Merkle 3F solver retries uncertain offer submissions with the original nonce and terms.
 New offers use random positive 63-bit nonces to fit 3F's off-chain storage.
@@ -149,7 +151,7 @@ invalid capacity fail closed. Each recipe handles one asset and includes its iss
 redemption is required.
 
 For the complete current frontend RWA catalog, export its recipe test matrix and run
-`LL_RECIPE_MATRIX_PATH=/tmp/liquid-lane.json go test ./internal/solvers/merkle/rfq`.
+`LL_RECIPE_MATRIX_PATH=/tmp/liquid-lane.json go test ./internal/liquidlane/connector`.
 This checks payment discovery and SDK assembly for every exported asset and native-redemption
 variant, with account cash and optional synchronous funding. Live liquidity and issuer
 eligibility remain execution-time requirements.
@@ -330,6 +332,10 @@ scheduling are out of scope. Dutch (`0x01`) and exclusive Dutch (`0xe1`) orders 
 admission and logged as unsupported. Fully valid feed orders routed to another origin or output chain are
 expected noise and logged at info; malformed identifiers and operational failures remain errors.
 `solverMode: external` serves direct filler-authorized adapters.
+The separate `lifi-merkle` solver runs the same quoting and order intake and settles orders through
+a Merkle-funded connector on the SDK transaction lane, one fill at a time. It is configured with `recipeExecutors`
+and `curator` and has no `adapters`, `solverMode` or `gas` settings; `lifi-samechain` rejects those two fields. See
+[Merkle fillers](docs/MERKLE-FILLERS.md) and the [configuration](config/lifi-merkle.example.yaml).
 `solverMode: internal` also enables signed private discounts through the shared backend. `tokensToQuote` uses the same `all`,
 `permissioned`, and `permissionless` scopes as RFQ; permissioned inputs must execute through one physical
 route. The order-server REST/WS endpoints are explicit required config. When `gas:` is configured, each
@@ -367,7 +373,11 @@ routes remain usable. `discounts.baseUrl` supports HTTP for backends within loca
 RFQ and LI.FI, as well as HTTPS. `orderServer.baseUrl` still requires HTTPS outside loopback. In internal
 mode `adapters` is optional: a non-empty list scopes quotes and direct fills, while fill-time signed-discount
 recovery may use any adapter advertised by the backend. Without a list the solver quotes and fills
-discount-only. Every fill is simulated again immediately before submission. The wall-clock anchor for
+discount-only. The separate `uniswapx-merkle` solver runs the same quoting and order intake and settles
+orders through a Merkle-funded connector on the SDK transaction lane, one fill at a time. It is configured with
+`recipeExecutors` and `curator` and has no `adapters`, `solverMode` or `gas` settings; `uniswapx-filler` rejects
+those two fields. See
+[Merkle fillers](docs/MERKLE-FILLERS.md) and the [configuration](config/uniswapx-merkle.example.yaml). Every fill is simulated again immediately before submission. The wall-clock anchor for
 a fill is captured before reading chain time, so RPC and planning latency consume the order's remaining
 validity instead of extending it.
 
@@ -1180,7 +1190,8 @@ Local integration checks require Anvil on `PATH`: `make test-txmanager-anvil`,
 `make test-merkle-sdk-anvil`, and `make test-rfq-merkle-anvil`. They separately exercise the unchanged native transaction engine, RAM SDK ownership,
 and canonical RFQ settlement without live services.
 
-Merkle integrations use the same SDK transaction implementation as merkle-executor.
+Merkle integrations, including the recipe mode of `rfq-filler` and the `uniswapx-merkle` and `lifi-merkle` solvers,
+use the same SDK transaction implementation as merkle-executor.
 Native integrations retain `internal/txmanager`, including their fee policy, retries,
 telemetry and shutdown behavior. Deploy each solver process with its own signer.
 The SDK host lifecycle and Merkle metrics are described in [the integration guide](docs/MERKLE-SDK.md).

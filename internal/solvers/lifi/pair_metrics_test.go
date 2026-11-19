@@ -45,7 +45,7 @@ func pairSeriesCount(t *testing.T, reg *prometheus.Registry) int {
 func newPairTestSolver(t *testing.T) (*Solver, *prometheus.Registry) {
 	t.Helper()
 	reg := prometheus.NewRegistry()
-	m, err := newLIFIMetrics(reg, nil, "")
+	m, err := newLIFIMetrics(Name, reg, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

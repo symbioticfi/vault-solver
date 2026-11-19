@@ -1589,7 +1589,7 @@ func TestOrderWorkerRetriesReservationBlockedOrderAfterPartialRelease(t *testing
 		lifiOrderStatusDeposited,
 	)
 	reg := prometheus.NewRegistry()
-	metrics, err := newLIFIMetrics(reg, nil, "")
+	metrics, err := newLIFIMetrics(Name, reg, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -124,6 +124,15 @@ func TestParseConfigRejectsLegacySolverAddress(t *testing.T) {
 	}
 }
 
+// Recipe settings belong to the separate lifi-merkle solver.
+func TestParseConfigRejectsMerkleSettings(t *testing.T) {
+	for _, field := range []string{"recipeExecutors", "curator"} {
+		if _, err := parseConfig(parseYAMLNode(t, field+": {}")); err == nil || !strings.Contains(err.Error(), field) {
+			t.Fatalf("%s: err = %v", field, err)
+		}
+	}
+}
+
 func TestParseConfigTokenScope(t *testing.T) {
 	const base = `
 orderServer:

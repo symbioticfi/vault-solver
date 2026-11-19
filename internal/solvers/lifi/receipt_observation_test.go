@@ -22,7 +22,7 @@ func TestLateFillReceiptRecordsMetricsAfterWorkerReleasedOrder(t *testing.T) {
 	solver := newProcessTestSolver(fixture.cfg, fixture.caller, txm, strategy,
 		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited)
 	reg := prometheus.NewRegistry()
-	solver.metrics, err = newLIFIMetrics(reg, nil, "")
+	solver.metrics, err = newLIFIMetrics(Name, reg, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestOrdinaryFillReceiptRecordsSuccessOnce(t *testing.T) {
 			solver := newProcessTestSolver(fixture.cfg, fixture.caller, txm, strategy,
 				fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited)
 			reg := prometheus.NewRegistry()
-			solver.metrics, err = newLIFIMetrics(reg, nil, "")
+			solver.metrics, err = newLIFIMetrics(Name, reg, nil, "")
 			if err != nil {
 				t.Fatal(err)
 			}

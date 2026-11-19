@@ -9,6 +9,7 @@ import (
 	"github.com/go-errors/errors"
 	"gopkg.in/yaml.v3"
 
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/internal/merklehost"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 	"github.com/symbioticfi/vault-solver/internal/solver"
@@ -227,7 +228,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		cfg.Adapters = append(cfg.Adapters, recoveryVault{Adapter: adapter})
 	}
 	if len(raw.RecipeExecutors) > 0 {
-		cfg.RecipeExecutors, err = merklerfq.ParseRecipeExecutors(raw.RecipeExecutors)
+		cfg.RecipeExecutors, err = connector.ParseRecipeExecutors(raw.RecipeExecutors)
 		if err != nil {
 			return nil, err
 		}

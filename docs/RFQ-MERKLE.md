@@ -4,6 +4,11 @@
 list preserves native quoting and fills; `recipeExecutors` selects Merkle
 quoting and fills. Setting both fails before startup. The execution implementation
 is shared with the execution-only `rfq-merkle` plugin in `internal/solvers/merkle/rfq`.
+Protocol-neutral connector logic lives in `internal/liquidlane/connector`: recipe route
+discovery, signed-discount framing, recipe assembly, SDK admission of the outer simulation
+and the RAM spend ledger. The signer lane, its single in-flight fill and discount selection
+live in `internal/solvers/merkle/filler`, shared with the UniswapX and LI.FI Merkle fillers
+([overview](MERKLE-FILLERS.md)). The RFQ package keeps the order feed and the Executor `fill` envelope.
 It polls awarded `/api/v1/orders?filler=…&orderStatus=open`, obtains signed terms
 from the backend discounts API, and builds:
 

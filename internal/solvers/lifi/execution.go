@@ -827,7 +827,7 @@ func (s *Solver) runOrderWorker(
 				go awaitFill(result.fill, completions)
 				return
 			}
-			if result.retryable || result.depositNotVisible {
+			if result.retryable || result.depositNotVisible || result.retrySoon {
 				if retryErr := scheduleNonceRetry(orderCtx, order, time.Time{}); retryErr != nil {
 					attemptErr = retryErr
 				}
@@ -837,7 +837,7 @@ func (s *Solver) runOrderWorker(
 				nonceRetries.finish(order)
 			}
 		}
-		if result.depositNotVisible {
+		if result.depositNotVisible || result.retrySoon {
 			err := depositRetries.schedule(order, retryNow())
 			if err == nil {
 				return
@@ -854,8 +854,19 @@ func (s *Solver) runOrderWorker(
 				)
 				return
 			}
-			observability.Decline(orderCtx, "order_skipped", "deposit did not become visible within retry bounds")
-			observability.Log(orderCtx).Info("order skipped: deposit did not become visible within retry bounds",
+			reason := "deposit did not become visible within retry bounds"
+			if result.retrySoon {
+				reason = "fill dependencies did not recover within retry bounds"
+			}
+			observability.Decline(orderCtx, "order_skipped", reason)
+			if result.retrySoon {
+				// The retries logged at debug; a dependency that stayed down is worth an error.
+				observability.Log(orderCtx).Error(result.err, "order skipped: "+reason,
+					"orderId", order.OrderID, "onChainOrderId", order.OnChainOrderID, "quoteId", order.QuoteID,
+					"reason", err.Error())
+				return
+			}
+			observability.Log(orderCtx).Info("order skipped: "+reason,
 				"orderId", order.OrderID,
 				"onChainOrderId", order.OnChainOrderID,
 				"quoteId", order.QuoteID,
@@ -904,8 +915,11 @@ func (s *Solver) runOrderWorker(
 		// logger while that span is still open rather than logging through a closed one.
 		filledLog := observability.Log(filledCtx)
 		completionErr := s.completeFill(filledCtx, &pending, completion)
-		if completion.result.Outcome.NonceUncertain() && ctx.Err() == nil &&
-			!errors.Is(completion.result.Err, txmanager.ErrRequestObsolete) {
+		uncertain := completion.result.Outcome.NonceUncertain() && !errors.Is(completion.result.Err, txmanager.ErrRequestObsolete)
+		// A reverted fill leaves its order open: where the fill path asks for it, re-read the
+		// order status and plan it again, like a fill whose nonce outcome is unknown.
+		reverted := completion.result.Outcome == txmanager.OutcomeReverted && s.fillPath().retryReverted(completion.fill.order)
+		if (uncertain || reverted) && ctx.Err() == nil {
 			retry, reconcileErr := s.reconcileUncertainFill(filledCtx, completion.fill)
 			if reconcileErr != nil {
 				completionErr = reconcileErr

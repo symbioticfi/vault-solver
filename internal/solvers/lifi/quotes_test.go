@@ -56,7 +56,7 @@ func TestRefreshQuotesWithoutGasAccounting(t *testing.T) {
 	cfg.Gas = nil
 	strategy := &recordingQuoteStrategy{}
 	reg := prometheus.NewRegistry()
-	metrics, err := newLIFIMetrics(reg, nil, "")
+	metrics, err := newLIFIMetrics(Name, reg, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,7 @@ func TestQuoteStateRetriesWithdrawalAfterServerFailure(t *testing.T) {
 
 func TestLIFIMetricsRecordSuccessfulRefresh(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	metrics, err := newLIFIMetrics(reg, newTestOrderFeed("", ""), "")
+	metrics, err := newLIFIMetrics(Name, reg, newTestOrderFeed("", ""), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,7 +398,7 @@ func TestSuspendQuotesPublishesRetiredQuoteMetrics(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	metrics, err := newLIFIMetrics(prometheus.NewRegistry(), nil, "")
+	metrics, err := newLIFIMetrics(Name, prometheus.NewRegistry(), nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

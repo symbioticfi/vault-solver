@@ -269,7 +269,7 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 		TokenIn: tokenIn, TokenOut: tokenOut,
 		RequireSingleRoute: state.singleRouteFor[tokenIn],
 		Inventory:          state.inventory,
-		Reservations:       s.capacity.Snapshot(),
+		Reservations:       s.fillPath().reservations(state),
 		GasSnapshot:        state.gasSnapshot, GasPrices: state.gasPrices,
 		MaxFeePerGas: state.maxFeePerGas, ChainTime: state.chainTime, QuoteExpiresAt: state.expiresAt,
 		Trace: declines.trace(decisionTrace),
@@ -328,7 +328,7 @@ func declinedQuote(response quoteResponse, reason quoteDeclineReason) quoteRespo
 
 func (s *Solver) quoteBlocked(now int64) bool {
 	return s.timeBasedBlockUntil() > now ||
-		(s.txm != nil && !s.txm.Available()) ||
+		!s.fillPath().laneAvailable() ||
 		!s.exclusiveDeliveryHealthy()
 }
 

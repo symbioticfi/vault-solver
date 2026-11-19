@@ -36,9 +36,13 @@ type preparedFill struct {
 }
 
 type orderProcessingResult struct {
-	fill                 *pendingFill
-	blockedOn            map[liquidlane.CapacityID]bool
-	depositNotVisible    bool
+	fill              *pendingFill
+	blockedOn         map[liquidlane.CapacityID]bool
+	depositNotVisible bool
+	// retrySoon defers the order to the bounded timed retry also used for deposits that are not
+	// visible yet: a dependency of the fill failed, not the order. Outside recovery, retryable
+	// alone waits for the next feed reconnect.
+	retrySoon            bool
 	retryable            bool
 	recoveryAttemptLimit int
 	outcome              orderProcessingOutcome
@@ -136,6 +140,17 @@ func (s *Solver) processOrderUsingReservations(
 		"amountIn", bigString(order.AmountIn),
 		"requiredAmountOut", bigString(order.OutputAmount),
 	)
+	return s.fillPath().fillOrder(ctx, routes, order, orderID, reservations)
+}
+
+// fillAdapterOrder plans the opened order on current adapter state and submits its fill.
+func (s *Solver) fillAdapterOrder(
+	ctx context.Context,
+	routes []route,
+	order *submittedOrder,
+	orderID common.Hash,
+	reservations *liquidlane.CapacityReservations,
+) orderProcessingResult {
 	prepared, err := s.prepareFill(ctx, routes, order, orderID, reservations)
 	if err != nil {
 		observability.Log(ctx).Error(err, "order fill: prepare current state",

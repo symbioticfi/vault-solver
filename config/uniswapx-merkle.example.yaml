@@ -1,0 +1,67 @@
+# uniswapx-merkle: UniswapX quoter and filler settling through a Merkle-funded LiquidLaneConnector.
+# Supply deployed addresses; the pending fill is held in RAM. See docs/MERKLE-FILLERS.md.
+chain:
+  rpcUrl: ${ETH_RPC_URL_MAINNET}
+  writeRpcUrl: ${WRITE_RPC_URL}
+  chainId: 1
+
+signer:
+  keyEnv: SOLVER_PRIVATE_KEY     # executor caller key; membership is checked at startup
+
+txManager:
+  confirmations: 2
+  maxFeeGwei: 50
+
+observability:
+  addr: ":9090"
+
+solvers:
+  - name: uniswapx-merkle
+    config:
+      reactor: "0x00000011F84B9aa48e5f8aA8B9897600006289Be"
+      # Advertised filler. It is the recipe's caller (directly or through its AccessManager)
+      # and the pinned recipient of the connector payment.
+      executor: ${UNISWAPX_EXECUTOR}
+
+      # The recipes that fund fills. This solver has no adapters, solverMode or gas settings;
+      # adapter-backed fills are the separate uniswapx-filler solver.
+      recipeExecutors: ["0x0000000000000000000000000000000000000043"]
+      curator:
+        url: https://curator.example.invalid/api/v1
+
+      discounts:                 # required: connector fills are discount-backed
+        baseUrl: ${RFQ_BACKEND_URL} # advertises connector discounts with precision 100000000
+        httpTimeout: 2s
+        minimumValidity: 15s
+
+      tokensToQuote: permissioned
+      permissionedTokens:
+        - ${TOKEN_TO_REDEEM}
+
+      quoteServer:
+        listenAddress: ":42080"
+        httpTimeout: 450ms
+        refreshInterval: 12s
+        quoteTtl: 30s
+
+      orderServer:
+        baseUrl: https://api.uniswap.org/v2
+        apiKeyEnv: UNISWAPX_ORDER_API_KEY
+        pollInterval: 1s
+        sources:
+          exclusiveV2: true
+          publicV2: false
+
+      breaker:
+        maxFailures: 3
+        window: 5m
+
+      strategy:
+        # single settles each order through one connector. default may split an order across up to
+        # three connectors, but only for tokens outside the permissioned scope (tokensToQuote: all or
+        # permissionless): permissioned tokens are always single-route.
+        name: single
+        config:
+          priceBufferBps: 20
+          inventoryReserveBps: 500
+          executionDeadlineBuffer: 12s

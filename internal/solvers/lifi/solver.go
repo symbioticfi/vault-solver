@@ -21,6 +21,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
+	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/filler"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
 
@@ -39,6 +40,8 @@ func init() {
 }
 
 type Solver struct {
+	// name is the registered solver this engine runs as.
+	name          string
 	cfg           *Config
 	chainID       int64
 	reader        chainReader
@@ -49,15 +52,17 @@ type Solver struct {
 	orders        *orderClient
 	feed          *orderFeed
 	txm           txSender
-	log           logr.Logger
-	now           func(context.Context) (time.Time, error)
-	maxFeePerGas  func(context.Context) (*big.Int, error)
-	wallNow       func() time.Time
-	txLaneState   transactionLaneState
-	capacity      liquidlane.CapacityLedger
-	quoteRefresh  chan struct{}
-	discounts     discounts.Provider
-	metrics       *lifiMetrics
+	// settlement is the fill path behind quoting and order intake; nil settles through adapters.
+	settlement   settlement
+	log          logr.Logger
+	now          func(context.Context) (time.Time, error)
+	maxFeePerGas func(context.Context) (*big.Int, error)
+	wallNow      func() time.Time
+	txLaneState  transactionLaneState
+	capacity     liquidlane.CapacityLedger
+	quoteRefresh chan struct{}
+	discounts    discounts.Provider
+	metrics      *lifiMetrics
 
 	pairRoutes atomic.Pointer[pairRouteScope] // optional current proof; never used for trading
 }
@@ -95,12 +100,24 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
+	return newSolver(Name, cfg, nil, deps)
+}
+
+// NewRecipeSolver builds the LI.FI engine as the solver called name: it quotes the connector
+// discounts advertised for the recipes in lane and settles opened orders through them on the
+// SDK transaction manager. cfg comes from ParseRecipeConfig.
+func NewRecipeSolver(name string, cfg *Config, lane filler.Config, deps solver.Deps) (solver.Solver, error) {
+	return newSolver(name, cfg, &lane, deps)
+}
+
+// newSolver builds the engine; a nil lane settles through native adapters.
+func newSolver(name string, cfg *Config, lane *filler.Config, deps solver.Deps) (*Solver, error) {
 	apiKey := os.Getenv(cfg.OrderServer.APIKeyEnv)
 	if apiKey == "" {
-		return nil, errors.Errorf("%s: order server api key env %q is empty", Name, cfg.OrderServer.APIKeyEnv)
+		return nil, errors.Errorf("%s: order server api key env %q is empty", name, cfg.OrderServer.APIKeyEnv)
 	}
 
-	log := deps.Log.WithName(Name)
+	log := deps.Log.WithName(name)
 	chainID := deps.Chain.ChainID().Int64()
 	strategy, err := newStrategy(cfg.Strategy)
 	if err != nil {
@@ -113,12 +130,13 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	feed := newOrderFeed(cfg.OrderServer, apiKey)
 	var metrics *lifiMetrics
 	if deps.Metrics != nil {
-		metrics, err = newLIFIMetrics(deps.Metrics.Registerer(), feed, cfg.Strategy.Name)
+		metrics, err = newLIFIMetrics(name, deps.Metrics.Registerer(), feed, cfg.Strategy.Name)
 		if err != nil {
 			return nil, err
 		}
 	}
 	result := &Solver{
+		name:          name,
 		cfg:           cfg,
 		chainID:       chainID,
 		reader:        reader,
@@ -127,27 +145,46 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		caller:        deps.Signer.Address(),
 		orders:        newOrderClient(cfg.OrderServer.BaseURL, apiKey, cfg.OrderServer.HTTPTimeout, chainID),
 		feed:          feed,
-		txm:           deps.TxManager,
 		log:           log,
 		now:           reader.latestBlockTime,
-		maxFeePerGas:  deps.TxManager.MaxFeePerGas,
 		wallNow:       time.Now,
-		txLaneState:   deps.TxManager,
 		metrics:       metrics,
 	}
 	if cfg.usesDiscounts() {
 		result.discounts = discounts.NewClient(cfg.DiscountsURL)
 	}
+	if lane == nil {
+		result.txm, result.maxFeePerGas, result.txLaneState = deps.TxManager, deps.TxManager.MaxFeePerGas, deps.TxManager
+		return result, nil
+	}
+	// The SDK lane owns signing; the native manager stays unused and uninitialized.
+	recipes, err := newRecipeSettlement(result, *lane, deps)
+	if err != nil {
+		return nil, err
+	}
+	result.settlement, result.txLaneState = recipes, recipeLane{recipes.lane}
 	return result, nil
 }
 
-func (s *Solver) Name() string { return Name }
+// Name is the registered solver the engine runs as; an engine built directly is the adapter solver.
+func (s *Solver) Name() string {
+	if s.name == "" {
+		return Name
+	}
+	return s.name
+}
 
 func (s *Solver) ShutdownPreparationTimeout() time.Duration {
 	return 2 * s.cfg.OrderServer.HTTPTimeout
 }
 
+func (s *Solver) RequiresTxManager() bool       { return !s.fillPath().onMerkleLane() }
+func (s *Solver) RequiresMerkleTxManager() bool { return s.fillPath().onMerkleLane() }
+
 func (s *Solver) Run(ctx context.Context) error {
+	if err := s.fillPath().initialize(ctx); err != nil {
+		return err
+	}
 	routes, err := s.reader.resolveRoutes(ctx, s.cfg.Adapters)
 	if err != nil {
 		startupErr := errors.Errorf("lifi: resolve routes: %w", err)
@@ -155,7 +192,7 @@ func (s *Solver) Run(ctx context.Context) error {
 			"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
 		return startupErr
 	}
-	if len(routes) == 0 {
+	if len(routes) == 0 && !s.fillPath().onMerkleLane() {
 		startupErr := errors.New("lifi: no quoteable routes resolved from configured adapters")
 		observability.Log(ctx).Error(startupErr, "adapter resolution failed",
 			"solverMode", s.cfg.SolverMode, "executor", s.cfg.Executor.Hex(), "adapters", s.cfg.Adapters)
