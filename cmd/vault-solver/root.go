@@ -10,6 +10,7 @@ import (
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/merkle"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/merkle/rfq"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/merkle/threef"
+	_ "github.com/symbioticfi/vault-solver/internal/solvers/merkle/uniswapx"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/rfq"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx"

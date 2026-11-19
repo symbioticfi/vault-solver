@@ -73,7 +73,7 @@ func (s *Solver) fillLoop(
 				s.retry(order.Hash, time.Now(), false)
 				continue
 			}
-			if !s.txm.Available() {
+			if !s.fillPath().laneAvailable() {
 				s.endFillPlanning()
 				s.retry(order.Hash, time.Now(), false)
 				observability.Log(orderCtx).V(1).Info(
@@ -100,7 +100,7 @@ func (s *Solver) fillLoop(
 				)
 				continue
 			}
-			fill, err := s.startFill(orderCtx, routes, order, now, chainObservedAt)
+			fill, err := s.fillPath().startFill(orderCtx, routes, order, now, chainObservedAt)
 			s.endFillPlanning()
 			if err != nil {
 				s.retry(order.Hash, now, errors.Is(err, errFillPreflight))
@@ -517,6 +517,7 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 	// A completed transaction may have spent liquidity; retire the cache before releasing it.
 	s.invalidateQuotes()
 	s.clearPendingReservations(ctx, order.Hash)
+	s.fillPath().fillSettled()
 	if result.NotAdmitted {
 		// The lane refusing a fill is an expected outcome, not a failure of this fill.
 		observability.Decline(ctx, "fill_not_admitted", errorReason(result.Err))

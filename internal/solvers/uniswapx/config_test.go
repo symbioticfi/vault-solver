@@ -270,8 +270,11 @@ func TestParseConfigRejectsLegacyLimitSource(t *testing.T) {
 }
 
 func TestParseConfigRejectsUnknownFields(t *testing.T) {
-	if _, err := parseConfig(uniswapXConfigNode(t, validUniswapXConfig+"unknown: true\n")); err == nil {
-		t.Fatal("expected strict decode rejection")
+	// Recipe settings belong to the separate uniswapx-merkle solver.
+	for _, field := range []string{"unknown: true\n", "recipeExecutors: []\n", "curator: {url: https://curator.example}\n"} {
+		if _, err := parseConfig(uniswapXConfigNode(t, validUniswapXConfig+field)); err == nil {
+			t.Fatalf("%q: expected strict decode rejection", field)
+		}
 	}
 }
 

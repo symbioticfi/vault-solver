@@ -24,6 +24,7 @@ import (
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
+	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/filler"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 )
@@ -36,6 +37,8 @@ const orderQueueCapacity = 256
 func init() { solver.Register(Name, factory) }
 
 type Solver struct {
+	// name is the registered solver this engine runs as.
+	name          string
 	cfg           *Config
 	chainID       int64
 	solverAddress common.Address
@@ -43,9 +46,11 @@ type Solver struct {
 	reader        chainReader
 	tokenMetadata *chain.Decimals
 	// Resolved once before serving; immutable structural adapter directions, including zero liquidity.
-	metricRoutes  []liquidlane.Route
-	strategy      types.Strategy
-	txm           transactionManager
+	metricRoutes []liquidlane.Route
+	strategy     types.Strategy
+	txm          transactionManager
+	// settlement is the fill path behind quoting and order intake; nil settles through adapters.
+	settlement    settlement
 	confirmations uint64
 	orders        orderPoller
 	discounts     liquiddiscounts.Provider
@@ -152,11 +157,23 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	if err != nil {
 		return nil, err
 	}
+	return newSolver(Name, cfg, nil, deps)
+}
+
+// NewRecipeSolver builds the UniswapX engine as the solver called name: it quotes the
+// connector discounts advertised for the recipes in lane and settles accepted orders through
+// them on the SDK transaction manager. cfg comes from ParseRecipeConfig.
+func NewRecipeSolver(name string, cfg *Config, lane filler.Config, deps solver.Deps) (solver.Solver, error) {
+	return newSolver(name, cfg, &lane, deps)
+}
+
+// newSolver builds the engine; a nil lane settles through native adapters.
+func newSolver(name string, cfg *Config, lane *filler.Config, deps solver.Deps) (*Solver, error) {
 	orderKey := os.Getenv(cfg.OrderServer.APIKeyEnv)
 	if orderKey == "" {
 		return nil, errors.New("UniswapX order API key env must be non-empty")
 	}
-	log := deps.Log.WithName(Name)
+	log := deps.Log.WithName(name)
 	reader, err := newReader(deps.Chain, log, cfg.Gas, cfg.LiquidityLens)
 	if err != nil {
 		return nil, err
@@ -170,6 +187,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		discountClient = liquiddiscounts.NewClient(cfg.Discounts.BaseURL)
 	}
 	s := &Solver{
+		name:              name,
 		cfg:               cfg,
 		chainID:           deps.Chain.ChainID().Int64(),
 		solverAddress:     deps.Signer.Address(),
@@ -178,7 +196,6 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		tokenMetadata:     reader.snapshots.TokenMetadata(),
 		strategy:          strategy,
 		txm:               deps.TxManager,
-		confirmations:     deps.TxManager.Confirmations(),
 		orders:            newOrderClient(cfg.OrderServer, orderKey),
 		discounts:         discountClient,
 		links:             observability.NewSpanLinks(),
@@ -193,6 +210,21 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		exclusiveUntil:    make(map[common.Hash]trackedExclusive),
 		exclusiveTerminal: make(map[common.Hash]time.Time),
 	}
+	if lane != nil {
+		// The SDK lane owns signing; the native manager stays unused and uninitialized.
+		s.txm = nil
+		recipes, err := newRecipeSettlement(s, *lane, deps)
+		if err != nil {
+			return nil, err
+		}
+		manager, err := deps.MerkleTxManager()
+		if err != nil {
+			return nil, err
+		}
+		s.settlement, s.confirmations = recipes, manager.Confirmations()
+	} else {
+		s.confirmations = deps.TxManager.Confirmations()
+	}
 	if deps.Metrics != nil {
 		s.metrics, err = newUniswapXMetrics(deps.Metrics.Registerer(), s, cfg.Strategy.Name)
 		if err != nil {
@@ -203,9 +235,21 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	return s, nil
 }
 
-func (s *Solver) Name() string { return Name }
+// Name is the registered solver the engine runs as; an engine built directly is the adapter solver.
+func (s *Solver) Name() string {
+	if s.name == "" {
+		return Name
+	}
+	return s.name
+}
+
+func (s *Solver) RequiresTxManager() bool       { return !s.fillPath().onMerkleLane() }
+func (s *Solver) RequiresMerkleTxManager() bool { return s.fillPath().onMerkleLane() }
 
 func (s *Solver) Run(ctx context.Context) error {
+	if err := s.fillPath().initialize(ctx); err != nil {
+		return err
+	}
 	routes, err := s.reader.resolveRoutes(ctx, s.cfg.Adapters)
 	if err != nil {
 		startupErr := errors.Errorf("resolve routes: %w", err)
