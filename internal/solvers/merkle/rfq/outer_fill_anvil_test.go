@@ -32,7 +32,10 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector/connectortest"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/filler"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
@@ -44,12 +47,12 @@ func TestAnvilConnectorOuterFillCanonicalBoundaries(t *testing.T) {
 			f := newOuterFillEVM(t)
 			if strings.HasPrefix(name, "manager ") {
 				manager := f.deploy("AccessManager", f.signer)
-				f.send(f.signer, f.selected.Executor, "RecipeExecutor", "setCaller", manager)
+				f.send(f.signer, f.selected.RecipeExecutor, "RecipeExecutor", "setCaller", manager)
 				selector := [4]byte(recipeBinding.GetABI().Methods["execute"].ID)
-				f.send(f.signer, manager, "AccessManager", "setTargetFunctionRole", f.selected.Executor, [][4]byte{selector}, uint64(2))
-				f.send(f.signer, manager, "AccessManager", "grantRole", uint64(2), f.workflow.caller, uint32(0))
+				f.send(f.signer, manager, "AccessManager", "setTargetFunctionRole", f.selected.RecipeExecutor, [][4]byte{selector}, uint64(2))
+				f.send(f.signer, manager, "AccessManager", "grantRole", uint64(2), f.workflow.Filler, uint32(0))
 				if name == "manager revoked" {
-					f.send(f.signer, manager, "AccessManager", "revokeRole", uint64(2), f.workflow.caller)
+					f.send(f.signer, manager, "AccessManager", "revokeRole", uint64(2), f.workflow.Filler)
 				}
 			}
 			if name == "bad signed terms" {
@@ -79,13 +82,13 @@ func TestAnvilConnectorOuterFillCanonicalBoundaries(t *testing.T) {
 			if name == "native recipe check" {
 				// Funding remains valid, but the committed post-swap balance cap must fail.
 				recipe := recipes.CloneRecipe(f.recipe)
-				recipe.Steps = append(recipe.Steps, connectorDeltaBinary(t, recipes.LessOrEqual, connectorDeltaOperand(recipes.Result, 12), connectorDeltaOperand(recipes.Literal, 99)))
-				f.send(f.signer, f.selected.Executor, "RecipeExecutor", "setRecipe", recipe.Queries, recipe.Steps)
+				recipe.Steps = append(recipe.Steps, connectortest.DeltaBinary(t, recipes.LessOrEqual, connectortest.DeltaOperand(recipes.Result, 12), connectortest.DeltaOperand(recipes.Literal, 99)))
+				f.send(f.signer, f.selected.RecipeExecutor, "RecipeExecutor", "setRecipe", recipe.Queries, recipe.Steps)
 			}
 			if name == "unauthorized EOA" {
-				f.workflow.signer = common.HexToAddress("0x8888")
+				f.workflow.Signer = common.HexToAddress("0x8888")
 			}
-			built, err := f.workflow.build(t.Context(), f.order, f.protocolSignature, f.selected, f.backend)
+			built, err := buildFill(t.Context(), f.workflow, f.order, f.protocolSignature, []filler.Leg{{Source: f.selected}}, f.backend)
 			data := built.Calldata
 			if name == "manager revoked" {
 				if err == nil || !strings.Contains(err.Error(), "immediate") || f.reader.outerCalls != 0 {
@@ -135,7 +138,7 @@ func TestAnvilConnectorOuterFillCanonicalBoundaries(t *testing.T) {
 			if !bytes.Equal(data, f.reader.outerData) || f.balance(tOut, f.account).Int64() != 90 || f.balance(tIn, f.signer).Int64() != 100 {
 				t.Fatal("simulation changed state or differed from submitted bytes")
 			}
-			receipt := f.transact(f.signer, &f.workflow.caller, data)
+			receipt := f.transact(f.signer, &f.workflow.Filler, data)
 			if receipt.Status != types.ReceiptStatusSuccessful || len(receipt.Logs) == 0 || f.balance(tOut, f.recipient).Int64() != 90 || f.balance(tOut, f.account).Sign() != 0 || f.balance(tIn, f.account).Int64() != 100 || f.balance(tIn, f.signer).Sign() != 0 {
 				t.Fatalf("canonical fill did not settle balances: receipt=%+v", receipt)
 			}
@@ -158,12 +161,12 @@ type outerFillEVM struct {
 	world, reactor    common.Address
 	key               *ecdsa.PrivateKey
 	recipient         common.Address
-	workflow          *connectorWorkflow
+	workflow          *connector.Workflow
 	reader            *outerFillEVMReader
 	recipe            recipes.Recipe
 	order             executor.IReactorOrder
 	protocolSignature []byte
-	selected          selectedRoute
+	selected          filler.Source
 	backend           *fakeBackend
 }
 
@@ -278,14 +281,14 @@ func newOuterFillEVM(t *testing.T, deployed ...*capturedExecutor) *outerFillEVM 
 	}
 	f.send(f.signer, caller, "Executor", "initialize", f.signer, []common.Address{f.signer})
 	f.reader = &outerFillEVMReader{client: client, caller: caller}
-	f.workflow = &connectorWorkflow{chain: f.reader, chainID: big.NewInt(1), caller: caller, signer: f.signer}
-	first := f.addConnector(f.account, vlt, 90, *connectorDiscountID())
+	f.workflow = &connector.Workflow{Chain: f.reader, ChainID: big.NewInt(1), Filler: caller, Signer: f.signer}
+	first := f.addConnector(f.account, vlt, 90, *connectortest.DiscountID())
 	f.recipe = first.Recipe
-	f.workflow.source = outerFillPermissions(first.Permissions)
+	f.workflow.Source = outerFillPermissions(first.Permissions)
 	f.send(f.signer, tIn, "FixtureToken", "mint", f.signer, big.NewInt(100))
 	f.send(f.signer, tIn, "FixtureToken", "approve", f.reactor, big.NewInt(100))
 	f.order, f.selected, f.backend = connectorExecutionAward(caller)
-	f.selected.Executor = first.Executor
+	f.selected.RecipeExecutor = first.Executor
 	f.order.Request.AmountIn = big.NewInt(100)
 	f.order.Request.Protocol, f.order.Swapper = f.signer, f.signer
 	f.order.Outputs[0].Amount, f.order.Outputs[0].Recipient = big.NewInt(90), f.recipient
@@ -302,21 +305,21 @@ type outerFillConnector struct {
 }
 
 func (f *outerFillEVM) addConnector(account, venue common.Address, funding int64, id common.Hash) outerFillConnector {
-	t, caller, world := f.t, f.workflow.caller, f.world
+	t, caller, world := f.t, f.workflow.Filler, f.world
 	t.Helper()
 	f.materialize("MerkleAccount", account, world, world, world, world)
 	f.materialize("LiquidLaneConnector", venue, world, world, world)
-	addressArgs := abi.Arguments{{Type: connectorDeltaType(t, "address")}}
+	addressArgs := abi.Arguments{{Type: connectortest.DeltaType(t, "address")}}
 	admin, err := addressArgs.Pack(f.signer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	accountInit, err := (abi.Arguments{{Type: connectorDeltaType(t, "address")}, {Type: connectorDeltaType(t, "bytes")}}).Pack(world, admin)
+	accountInit, err := (abi.Arguments{{Type: connectortest.DeltaType(t, "address")}, {Type: connectortest.DeltaType(t, "bytes")}}).Pack(world, admin)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.send(f.signer, account, "MerkleAccount", "initialize", uint64(1), f.signer, accountInit)
-	connectorInit, err := (abi.Arguments{{Type: connectorDeltaType(t, "address")}, {Type: connectorDeltaType(t, "address")}}).Pack(account, tOut)
+	connectorInit, err := (abi.Arguments{{Type: connectortest.DeltaType(t, "address")}, {Type: connectortest.DeltaType(t, "address")}}).Pack(account, tOut)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -332,15 +335,15 @@ func (f *outerFillEVM) addConnector(account, venue common.Address, funding int64
 	f.send(f.signer, recipeExecutor, "RecipeExecutor", "setCaller", caller)
 	f.send(f.signer, tOut, "FixtureToken", "mint", account, big.NewInt(funding))
 	f.send(account, tOut, "FixtureToken", "approve", venue, big.NewInt(funding))
-	resolved := connectorDiscountFixture()
+	resolved := connectortest.DiscountFixture()
 	resolved.DiscountID, resolved.Discount.Adapter = id.Hex(), venue.Hex()
 	resolved.Discount.Discount, resolved.Discount.Signer, resolved.Discount.Protocol = "10000000", f.signer.Hex(), f.signer.Hex()
 	signOuterFillDiscount(t, f.key, resolved)
-	terms, err := parseConnectorDiscount(resolved, id, venue, tIn)
+	terms, err := connector.ParseDiscount(resolved, id, venue, tIn)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, mask := connectorSignatureTemplate(terms, caller, new(big.Int))
+	data, mask := connectortest.SignatureTemplate(terms.Swap, terms.Signature, caller, new(big.Int))
 	for _, offset := range []int{100, 164} { // Runtime awarded amount and signed discount ratio.
 		for i := offset; i < offset+32; i++ {
 			mask[i] = 255
@@ -351,7 +354,7 @@ func (f *outerFillEVM) addConnector(account, venue common.Address, funding int64
 	if err != nil {
 		t.Fatal(err)
 	}
-	recipe, tree, permissions := connectorCommittedFunding(t, leaf, account, caller, tOut, tIn)
+	recipe, tree, permissions := connectortest.CommittedFunding(t, leaf, account, caller, tOut, tIn)
 	f.send(f.signer, world, "FixtureWorld", "setRoot", account, tree.Root)
 	f.send(f.signer, account, "MerkleAccount", "acceptRoot", tree.Root)
 	for _, permission := range tree.Leaves {
@@ -615,15 +618,15 @@ func TestAnvilSplitConnectorOrder(t *testing.T) {
 			secondAccount, secondVenue := common.HexToAddress("0x22"), common.HexToAddress("0x44")
 			secondID := common.HexToHash("0x44")
 			second := f.addConnector(secondAccount, secondVenue, 35, secondID)
-			f.workflow.source = splitPermissions{f.account: []byte(f.workflow.source.(outerFillPermissions)), secondAccount: second.Permissions}
+			f.workflow.Source = splitPermissions{f.account: []byte(f.workflow.Source.(outerFillPermissions)), secondAccount: second.Permissions}
 			f.backend.resolved = map[string]*discounts.Resolved{f.selected.DiscountID.Hex(): f.backend.discount, secondID.Hex(): second.Discount}
 			managers := make([]common.Address, 0, 2)
-			for _, recipe := range []common.Address{f.selected.Executor, second.Executor} {
+			for _, recipe := range []common.Address{f.selected.RecipeExecutor, second.Executor} {
 				manager := f.deploy("AccessManager", f.signer)
 				f.send(f.signer, recipe, "RecipeExecutor", "setCaller", manager)
 				selector := [4]byte(recipeBinding.GetABI().Methods["execute"].ID)
 				f.send(f.signer, manager, "AccessManager", "setTargetFunctionRole", recipe, [][4]byte{selector}, uint64(2))
-				f.send(f.signer, manager, "AccessManager", "grantRole", uint64(2), f.workflow.caller, uint32(0))
+				f.send(f.signer, manager, "AccessManager", "grantRole", uint64(2), f.workflow.Filler, uint32(0))
 				managers = append(managers, manager)
 			}
 			f.order.Outputs[0].Amount = big.NewInt(89)
@@ -640,7 +643,25 @@ func TestAnvilSplitConnectorOrder(t *testing.T) {
 				listed[i].TokenToRedeem, listed[i].Collateral, listed[i].CollateralDecimals = tIn.Hex(), tOut.Hex(), 6
 				listed[i].Deadline = f.backend.discount.Discount.Deadline
 			}
-			solver := &Solver{recipeExecutors: []common.Address{f.selected.Executor, second.Executor}, workflow: f.workflow, backend: f.backend, spends: newSpendLedger()}
+			solver := &Solver{
+				Engine: &filler.Engine{
+					Routes:   connector.NewRoutes(f.workflow, []common.Address{f.selected.RecipeExecutor, second.Executor}),
+					Workflow: f.workflow, Spends: connector.NewSpendLedger(),
+					// The split prices each connector from the tokens' on-chain decimals.
+					Decimals: func(ctx context.Context, token common.Address) (int, error) {
+						data, err := f.abis["FixtureToken"].Pack("decimals")
+						if err != nil {
+							return 0, err
+						}
+						raw, err := f.client.CallContract(ctx, ethereum.CallMsg{To: &token, Data: data}, nil)
+						if err != nil {
+							return 0, err
+						}
+						return int(new(big.Int).SetBytes(raw).Int64()), nil
+					},
+				},
+				backend: f.backend,
+			}
 			if err := solver.Initialize(t.Context()); err != nil {
 				t.Fatal(err)
 			}
@@ -667,8 +688,8 @@ func TestAnvilSplitConnectorOrder(t *testing.T) {
 				t.Fatal("split simulation persisted token transfers")
 			}
 			if name == "second grant revoked" {
-				f.send(f.signer, managers[1], "AccessManager", "revokeRole", uint64(2), f.workflow.caller)
-				f.transact(f.signer, &intent.To, intent.Data, types.ReceiptStatusFailed)
+				f.send(f.signer, managers[1], "AccessManager", "revokeRole", uint64(2), f.workflow.Filler)
+				f.transact(f.signer, &f.workflow.Filler, intent.Data, types.ReceiptStatusFailed)
 				if f.balance(tIn, f.signer).Int64() != 100 || f.balance(tOut, f.account).Int64() != 90 ||
 					f.balance(tIn, f.account).Sign() != 0 || f.balance(tOut, secondAccount).Int64() != 35 ||
 					f.balance(tOut, f.recipient).Sign() != 0 {
@@ -676,7 +697,7 @@ func TestAnvilSplitConnectorOrder(t *testing.T) {
 				}
 				return
 			}
-			receipt := f.transact(f.signer, &intent.To, intent.Data)
+			receipt := f.transact(f.signer, &f.workflow.Filler, intent.Data)
 			if f.balance(tIn, f.account).Int64() != 61 || f.balance(tIn, secondAccount).Int64() != 39 ||
 				f.balance(tOut, f.account).Int64() != 36 || f.balance(tOut, secondAccount).Sign() != 0 ||
 				f.balance(tOut, f.recipient).Int64() != 89 || f.balance(tIn, f.signer).Sign() != 0 {

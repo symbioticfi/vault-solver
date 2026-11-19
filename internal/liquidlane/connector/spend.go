@@ -1,4 +1,4 @@
-package rfq
+package connector
 
 import (
 	"math/big"
@@ -8,31 +8,48 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 )
 
-type fillSpend struct {
+// Spend is one fill's payments against physical account/asset capacities; a fill split across
+// connectors spends from each funding account.
+type Spend struct {
 	Amounts    liquidlane.CapacityReservations
 	IncludedAt uint64
 	Deadline   int64 // Original signed chain deadline.
 }
 
-type spendLedger struct {
+// Total is the fill's payment summed over its capacities.
+func (s Spend) Total() *big.Int {
+	total := new(big.Int)
+	for _, amount := range s.Amounts {
+		total.Add(total, amount)
+	}
+	return total
+}
+
+// SpendLedger keeps pending and canonical connector spends in RAM until upstream
+// capacity snapshots reflect them. A nil ledger reserves nothing.
+type SpendLedger struct {
 	mu         sync.Mutex
-	spends     map[string]fillSpend
+	spends     map[string]Spend
 	watermarks map[liquidlane.CapacityID]uint64
 	completed  map[string]int64
 }
 
-func newSpendLedger() *spendLedger {
-	return &spendLedger{spends: make(map[string]fillSpend), watermarks: make(map[liquidlane.CapacityID]uint64), completed: make(map[string]int64)}
+func NewSpendLedger() *SpendLedger {
+	return &SpendLedger{spends: make(map[string]Spend), watermarks: make(map[liquidlane.CapacityID]uint64), completed: make(map[string]int64)}
 }
 
-func (l *spendLedger) reserve(id string, spend fillSpend) error {
+// Reserve records the spend of a fill before its submission.
+func (l *SpendLedger) Reserve(id string, spend Spend) error {
+	if l == nil {
+		return nil
+	}
 	if id == "" || len(spend.Amounts) == 0 || spend.Deadline <= 0 {
-		return errors.New("RFQ fill has no valid spend")
+		return errors.New("fill has no valid spend")
 	}
 	amounts := make(liquidlane.CapacityReservations, len(spend.Amounts))
 	for capacityID, amount := range spend.Amounts {
 		if capacityID == "" || amount == nil || amount.Sign() <= 0 || amount.BitLen() > 256 {
-			return errors.New("RFQ fill has no valid spend")
+			return errors.New("fill has no valid spend")
 		}
 		amounts[capacityID] = new(big.Int).Set(amount)
 	}
@@ -43,13 +60,18 @@ func (l *spendLedger) reserve(id string, spend fillSpend) error {
 	return nil
 }
 
-func (l *spendLedger) release(id string) {
+// Release drops the spend of a fill that failed unsigned or reverted canonically.
+func (l *SpendLedger) Release(id string) {
+	if l == nil {
+		return
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.spends, id)
 }
 
-func (l *spendLedger) finalized(id string) bool {
+// Finalized reports whether a fill was canonically included and its signed deadline has not passed.
+func (l *SpendLedger) Finalized(id string) bool {
 	if l == nil {
 		return false
 	}
@@ -59,14 +81,15 @@ func (l *spendLedger) finalized(id string) bool {
 	return found
 }
 
-func (l *spendLedger) include(id string, spend fillSpend) error {
+// Include records the canonical inclusion block of a fill.
+func (l *SpendLedger) Include(id string, spend Spend) error {
 	if l == nil {
 		return nil
 	}
 	if spend.IncludedAt == 0 {
-		return errors.New("RFQ fill has no inclusion block")
+		return errors.New("fill has no inclusion block")
 	}
-	if err := l.reserve(id, spend); err != nil {
+	if err := l.Reserve(id, spend); err != nil {
 		return err
 	}
 	l.mu.Lock()
@@ -75,7 +98,8 @@ func (l *spendLedger) include(id string, spend fillSpend) error {
 	return nil
 }
 
-func (l *spendLedger) expire(chainTime int64) {
+// Expire compacts completed fills whose signed deadline passed, keeping an inclusion watermark.
+func (l *SpendLedger) Expire(chainTime int64) {
 	if l == nil {
 		return
 	}
@@ -96,8 +120,8 @@ func (l *spendLedger) expire(chainTime int64) {
 
 // Reservations subtracts pending spends and canonical spends absent from each
 // capacity's oldest snapshot. An unrelated route remains available while a fill runs.
-func (s *Solver) Reservations(inventory []liquidlane.Inventory) liquidlane.CapacityReservations {
-	if s.spends == nil {
+func (l *SpendLedger) Reservations(inventory []liquidlane.Inventory) liquidlane.CapacityReservations {
+	if l == nil {
 		return nil
 	}
 	blocks := make(map[liquidlane.CapacityID]uint64, len(inventory))
@@ -112,26 +136,26 @@ func (s *Solver) Reservations(inventory []liquidlane.Inventory) liquidlane.Capac
 			maximums[capacityID] = item.MaxAssets
 		}
 	}
-	s.spends.mu.Lock()
-	defer s.spends.mu.Unlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	reserved := make(liquidlane.CapacityReservations)
-	for id, spend := range s.spends.spends {
+	for id, spend := range l.spends {
 		for capacityID, amount := range spend.Amounts {
 			block, known := blocks[capacityID]
 			if spend.IncludedAt != 0 && known && block >= spend.IncludedAt {
 				// Keep a watermark so later older snapshots cannot reuse spent cash.
-				s.spends.watermarks[capacityID] = max(s.spends.watermarks[capacityID], spend.IncludedAt)
+				l.watermarks[capacityID] = max(l.watermarks[capacityID], spend.IncludedAt)
 				delete(spend.Amounts, capacityID)
 				continue
 			}
 			reserved.Add(capacityID, amount)
 		}
 		if len(spend.Amounts) == 0 {
-			delete(s.spends.spends, id)
+			delete(l.spends, id)
 		}
 	}
 	for capacityID, block := range blocks {
-		if block < s.spends.watermarks[capacityID] {
+		if block < l.watermarks[capacityID] {
 			reserved.Add(capacityID, maximums[capacityID])
 		}
 	}

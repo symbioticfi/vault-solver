@@ -1,4 +1,4 @@
-package rfq
+package connector
 
 import (
 	"bytes"
@@ -12,7 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
-	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/connector"
+	binding "github.com/symbioticfi/vault-solver/api/bindings/liquidlane/connector"
 )
 
 func TestFrontendRecipeCatalog(t *testing.T) {
@@ -64,7 +64,7 @@ func TestFrontendRecipeCatalog(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var signed connector.ILiquidLaneConnectorDiscountSwap
+			var signed binding.ILiquidLaneConnectorDiscountSwap
 			var signature []byte
 			for _, action := range actions {
 				if action.Leaf.Target != common.HexToAddress(row.Connector) {
@@ -74,12 +74,12 @@ func TestFrontendRecipeCatalog(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				signed = *abi.ConvertType(values[0], new(connector.ILiquidLaneConnectorDiscountSwap)).(*connector.ILiquidLaneConnectorDiscountSwap)
+				signed = *abi.ConvertType(values[0], new(binding.ILiquidLaneConnectorDiscountSwap)).(*binding.ILiquidLaneConnectorDiscountSwap)
 				signature = values[1].([]byte)
 			}
 			signed.Discount.TokenToRedeem = common.HexToAddress(row.Rwa)
 			before, _ := recipes.HashRecipe(recipe)
-			result, err := assembleConnectorRoute(recipe, tree, common.HexToAddress(row.Connector), common.HexToAddress(row.Rwa), common.HexToAddress("0x10"), big.NewInt(100), big.NewInt(90), signed, signature)
+			result, err := assembleRoute(recipe, tree, common.HexToAddress(row.Connector), common.HexToAddress(row.Rwa), common.HexToAddress("0x10"), big.NewInt(100), big.NewInt(90), signed, signature)
 			if err != nil {
 				t.Fatal(err)
 			}

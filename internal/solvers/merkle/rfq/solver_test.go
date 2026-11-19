@@ -9,21 +9,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/filler"
+	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/filler/fillertest"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector/connectortest"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"gopkg.in/yaml.v3"
 )
 
-var vlt = common.HexToAddress("0x42")
-var tIn = common.HexToAddress("0x31")
-var tOut = common.HexToAddress("0x32")
+var vlt, tIn, tOut = connectortest.Venue, connectortest.TokenIn, connectortest.TokenOut
 
 type fakeBackend struct {
 	discount  *discounts.Resolved
@@ -53,10 +55,10 @@ func (b *fakeBackend) resolveDiscount(_ context.Context, id string) (*discounts.
 func TestEmptyOrderPollReportsOnlySuccess(t *testing.T) {
 	backend := &fakeBackend{}
 	var observed []time.Time
+	workflow := connectorExecutionFixture(t, connectortest.DiscountFixture()).workflow
 	s := &Solver{
-		routes: make(map[common.Address]recipeRoute), backend: backend,
-		workflow: &connectorWorkflow{caller: vlt}, sender: &fakeSender{},
-		observeOrderPoll: func(at time.Time) { observed = append(observed, at) },
+		Engine:  &filler.Engine{Workflow: workflow, Routes: connector.NewRoutes(workflow, []common.Address{common.HexToAddress("0x43")}), Sender: &fillertest.Sender{}},
+		backend: backend, observeOrderPoll: func(at time.Time) { observed = append(observed, at) },
 	}
 	if err := s.tick(t.Context()); err != nil {
 		t.Fatal(err)
@@ -71,45 +73,6 @@ func TestEmptyOrderPollReportsOnlySuccess(t *testing.T) {
 	if len(observed) != 1 {
 		t.Fatalf("failed poll recorded success: %v", observed)
 	}
-}
-
-type fakeSender struct {
-	busy       bool
-	request    transaction.ExecutionRequest
-	result     *transaction.ExecutionResult
-	submitErr  error
-	pollErr    error
-	before     func(transaction.ExecutionRequest)
-	duringPoll func()
-	submits    int
-	polls      int
-	unsigned   bool
-}
-
-func (s *fakeSender) Busy() bool { return s.busy }
-func (s *fakeSender) Submit(_ context.Context, req transaction.ExecutionRequest) error {
-	if s.before != nil {
-		s.before(req)
-	}
-	s.submits++
-	s.request = req
-	s.busy = !s.unsigned
-	return s.submitErr
-}
-func (s *fakeSender) Poll(context.Context) (*transaction.ExecutionResult, error) {
-	s.polls++
-	if s.result != nil && s.pollErr == nil {
-		s.busy = false
-		if s.duringPoll != nil {
-			s.duringPoll()
-		}
-	}
-	return s.result, s.pollErr
-}
-
-func fillResult() *transaction.ExecutionResult {
-	hash := common.HexToHash("0x77")
-	return &transaction.ExecutionResult{Hash: hash, Execution: &provider.Execution{TxHash: hash, BlockNumber: big.NewInt(8), BlockHash: common.HexToHash("0x78")}}
 }
 
 func awardRow(t *testing.T, order executor.IReactorOrder) rfqbackend.OrdersResponseOrdersInner {
@@ -164,22 +127,22 @@ func TestAwardSizingOnlyUsesSignedTuple(t *testing.T) {
 }
 
 func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
-	fixture := connectorExecutionFixture(t, connectorDiscountFixture())
-	order, _, backend := connectorExecutionAward(fixture.workflow.caller)
+	fixture := connectorExecutionFixture(t, connectortest.DiscountFixture())
+	order, _, backend := connectorExecutionAward(fixture.workflow.Filler)
 	next := awardRow(t, order)
 	next.OrderId = "next-award"
 	backend.rows = []rfqbackend.OrdersResponseOrdersInner{awardRow(t, order), next}
 	backend.listed = &discounts.List{Discounts: []discounts.ListItem{
-		{DiscountPrecision: "100000000", Adapter: common.HexToAddress("0x01").Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "99999"},
-		{DiscountPrecision: "100000000", Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"},
+		{DiscountPrecision: "100000000", Adapter: common.HexToAddress("0x01").Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: "99999"},
+		{DiscountPrecision: "100000000", Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: "900"},
 	}}
-	sender := &fakeSender{}
-	s := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender, spends: newSpendLedger()}
-	sender.before = func(req transaction.ExecutionRequest) {
-		if s.intent == nil || !bytes.Equal(s.intent.Data, req.Data) || s.intent.Deadline.IsZero() {
+	sender := &fillertest.Sender{}
+	s := &Solver{Engine: &filler.Engine{Routes: connector.NewRoutes(fixture.workflow, []common.Address{common.HexToAddress("0x43")}), Workflow: fixture.workflow, Sender: sender, Spends: connector.NewSpendLedger()}, backend: backend}
+	sender.Before = func(req transaction.ExecutionRequest) {
+		if s.Pending() == nil || !bytes.Equal(s.Pending().Data, req.Data) || s.Pending().Deadline.IsZero() {
 			t.Fatal("fill admitted before RAM intent")
 		}
-		if reserved := s.Reservations(nil)[liquidlane.NewCapacityID(1, fixture.reader.recipeAccount, tOut)]; reserved == nil || reserved.Cmp(big.NewInt(456)) != 0 {
+		if reserved := s.Reservations(nil)[liquidlane.NewCapacityID(1, fixture.reader.RecipeAccount, tOut)]; reserved == nil || reserved.Cmp(big.NewInt(456)) != 0 {
 			t.Fatal("fill admitted before reserving its signed output")
 		}
 	}
@@ -189,47 +152,47 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	if err := s.tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if fixture.reader.outerCalls != 1 || sender.polls != 0 || sender.request.To != fixture.workflow.caller || !sender.Busy() {
+	if fixture.reader.OuterCalls != 1 || sender.Polls != 0 || sender.Request.To != fixture.workflow.Filler || !sender.Busy() {
 		t.Fatal("award split, unconfigured venue used or pending work released")
 	}
-	reads, request, intent := backend.reads, sender.request, *s.intent
+	reads, request, intent := backend.reads, sender.Request, *s.Pending()
 	backend.rows, backend.listed, backend.discount = nil, nil, nil // Signed terms may disappear.
 	if err := s.tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if backend.reads != reads || sender.submits != 1 || !reflect.DeepEqual(intent, *s.intent) {
+	if backend.reads != reads || sender.Submits != 1 || !reflect.DeepEqual(intent, *s.Pending()) {
 		t.Fatal("pending fill was rebuilt or its deadline changed")
 	}
-	sender.result = fillResult()
-	sender.duringPoll = func() {
-		if reserved := s.Reservations(nil)[liquidlane.NewCapacityID(1, fixture.reader.recipeAccount, tOut)]; reserved == nil || reserved.Cmp(big.NewInt(456)) != 0 {
+	sender.Result = fillertest.Confirmed()
+	sender.DuringPoll = func() {
+		if reserved := s.Reservations(nil)[liquidlane.NewCapacityID(1, fixture.reader.RecipeAccount, tOut)]; reserved == nil || reserved.Cmp(big.NewInt(456)) != 0 {
 			t.Fatal("manager release lost the spend before canonical accounting")
 		}
 	}
 	if err := s.tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if backend.reads != reads || !reflect.DeepEqual(request, sender.request) || sender.submits != 1 || s.intent != nil || sender.Busy() {
+	if backend.reads != reads || !reflect.DeepEqual(request, sender.Request) || sender.Submits != 1 || s.Pending() != nil || sender.Busy() {
 		t.Fatal("canonical fill was rebuilt or its ownership was not released")
 	}
-	if !s.spends.finalized("award") {
+	if !s.Spends.Finalized("award") {
 		t.Fatal("canonical accounting did not remember the completed award")
 	}
 	backend.rows = []rfqbackend.OrdersResponseOrdersInner{awardRow(t, order), awardRow(t, order)}
 	backend.listed = &discounts.List{}
-	if err := s.tick(t.Context()); err != nil || sender.submits != 1 {
+	if err := s.tick(t.Context()); err != nil || sender.Submits != 1 {
 		t.Fatal("completed award was submitted again", err)
 	}
 	// A different award waits for canonical settlement, then starts on the same single lane.
 	backend.rows = append(backend.rows, next)
-	backend.listed = &discounts.List{Discounts: []discounts.ListItem{{DiscountPrecision: "100000000", Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"}}}
-	backend.discount = connectorDiscountFixture()
-	sender.result = nil
-	sender.before = nil
-	if err := s.tick(t.Context()); err != nil || sender.submits != 2 || s.intent == nil || s.intent.OrderID != next.OrderId {
+	backend.listed = &discounts.List{Discounts: []discounts.ListItem{{DiscountPrecision: "100000000", Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: "900"}}}
+	backend.discount = connectortest.DiscountFixture()
+	sender.Result = nil
+	sender.Before = nil
+	if err := s.tick(t.Context()); err != nil || sender.Submits != 2 || s.Pending() == nil || s.Pending().OrderID != next.OrderId {
 		t.Fatal("next award did not start after the first completed", err)
 	}
-	if err := s.tick(t.Context()); err != nil || sender.submits != 2 {
+	if err := s.tick(t.Context()); err != nil || sender.Submits != 2 {
 		t.Fatal("pending second award admitted parallel work", err)
 	}
 }
@@ -237,17 +200,17 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 func TestWholeAwardRequiresVenueAndAdvertisedCapacity(t *testing.T) {
 	for _, capacity := range []string{"advertised", "onchain"} {
 		t.Run(capacity, func(t *testing.T) {
-			f := connectorExecutionFixture(t, connectorDiscountFixture())
-			order, selected, backend := connectorExecutionAward(f.workflow.caller)
+			f := connectorExecutionFixture(t, connectortest.DiscountFixture())
+			order, selected, backend := connectorExecutionAward(f.workflow.Filler)
 			if capacity == "advertised" {
 				selected.MaxAssets = big.NewInt(455)
 			} else {
-				f.reader.remaining = big.NewInt(455)
+				f.reader.Remaining = big.NewInt(455)
 			}
-			if _, err := f.workflow.build(t.Context(), order, nil, selected, backend); err == nil || !strings.Contains(err.Error(), "whole award") {
+			if _, err := buildFill(t.Context(), f.workflow, order, nil, []filler.Leg{{Source: selected}}, backend); err == nil || !strings.Contains(err.Error(), "whole award") {
 				t.Fatalf("capacity accepted: %v", err)
 			}
-			if f.reader.outerCalls != 0 {
+			if f.reader.OuterCalls != 0 {
 				t.Fatal("underfunded award simulated or submitted")
 			}
 		})
@@ -255,72 +218,49 @@ func TestWholeAwardRequiresVenueAndAdvertisedCapacity(t *testing.T) {
 }
 
 func TestPrepareCountsHeaderLatencyAgainstDeadline(t *testing.T) {
-	f := connectorExecutionFixture(t, connectorDiscountFixture())
+	f := connectorExecutionFixture(t, connectortest.DiscountFixture())
 	chainTime := time.Now().Add(time.Hour).Truncate(time.Second)
-	f.reader.header.Time = uint64(chainTime.Unix())
-	order, _, backend := connectorExecutionAward(f.workflow.caller)
+	f.reader.Header.Time = uint64(chainTime.Unix())
+	order, _, backend := connectorExecutionAward(f.workflow.Filler)
 	order.Request.Deadline = big.NewInt(chainTime.Add(10 * time.Second).Unix())
-	s := Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: f.workflow, backend: backend}
+	s := Solver{Engine: &filler.Engine{Routes: connector.NewRoutes(f.workflow, []common.Address{common.HexToAddress("0x43")}), Workflow: f.workflow}, backend: backend}
 	if err := s.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	f.reader.headerDelay = 250 * time.Millisecond
-	f.reader.headerStarted = time.Time{}
-	intent, err := s.prepare(t.Context(), awardRow(t, order), []discounts.ListItem{{DiscountPrecision: "100000000", Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"}})
+	f.reader.HeaderDelay = 250 * time.Millisecond
+	f.reader.HeaderStarted = time.Time{}
+	intent, err := s.prepare(t.Context(), awardRow(t, order), []discounts.ListItem{{DiscountPrecision: "100000000", Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: "900"}})
 	if err != nil || intent == nil {
 		t.Fatalf("prepare: intent=%v err=%v", intent, err)
 	}
-	if intent.Deadline.After(f.reader.headerStarted.Add(10*time.Second + 100*time.Millisecond)) {
-		t.Fatalf("header latency extended deadline: got %v, header started %v", intent.Deadline, f.reader.headerStarted)
-	}
-}
-
-func TestUncertainFillKeepsIntent(t *testing.T) {
-	for _, tc := range []struct {
-		name   string
-		result *transaction.ExecutionResult
-		err    error
-	}{
-		{"pending", nil, nil},
-		{"cancelled wait", nil, context.Canceled},
-		{"canonical check fails", nil, errors.New("reorg")},
-		{"invalid execution identity", &transaction.ExecutionResult{Hash: common.HexToHash("0x77")}, nil},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			intent := &fillIntent{OrderID: "owned", To: vlt, Data: []byte{1}, Deadline: time.Now()}
-			sender := &fakeSender{busy: true, result: tc.result, pollErr: tc.err}
-			s := &Solver{sender: sender, intent: intent}
-			_ = s.tick(t.Context())
-			if s.intent != intent || sender.submits != 0 || sender.polls != 1 {
-				t.Fatal("uncertain work lost ownership")
-			}
-		})
+	if intent.Deadline.After(f.reader.HeaderStarted.Add(10*time.Second + 100*time.Millisecond)) {
+		t.Fatalf("header latency extended deadline: got %v, header started %v", intent.Deadline, f.reader.HeaderStarted)
 	}
 }
 
 func TestSubmissionErrorRetainsOnlySignedWork(t *testing.T) {
 	for _, unsigned := range []bool{false, true} {
 		t.Run(map[bool]string{false: "signed ambiguity", true: "before signing"}[unsigned], func(t *testing.T) {
-			fixture := connectorExecutionFixture(t, connectorDiscountFixture())
-			order, _, backend := connectorExecutionAward(fixture.workflow.caller)
+			fixture := connectorExecutionFixture(t, connectortest.DiscountFixture())
+			order, _, backend := connectorExecutionAward(fixture.workflow.Filler)
 			backend.rows = []rfqbackend.OrdersResponseOrdersInner{awardRow(t, order)}
-			backend.listed = &discounts.List{Discounts: []discounts.ListItem{{DiscountPrecision: "100000000", Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"}}}
-			sender := &fakeSender{unsigned: unsigned, submitErr: context.DeadlineExceeded}
-			s := &Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: fixture.workflow, backend: backend, sender: sender, spends: newSpendLedger()}
+			backend.listed = &discounts.List{Discounts: []discounts.ListItem{{DiscountPrecision: "100000000", Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: "900"}}}
+			sender := &fillertest.Sender{Unsigned: unsigned, SubmitErr: context.DeadlineExceeded}
+			s := &Solver{Engine: &filler.Engine{Routes: connector.NewRoutes(fixture.workflow, []common.Address{common.HexToAddress("0x43")}), Workflow: fixture.workflow, Sender: sender, Spends: connector.NewSpendLedger()}, backend: backend}
 			if err := s.Initialize(t.Context()); err != nil {
 				t.Fatal(err)
 			}
-			if err := s.tick(t.Context()); !errors.Is(err, context.DeadlineExceeded) || (s.intent == nil) != unsigned {
-				t.Fatalf("signed ownership changed: intent=%v err=%v", s.intent, err)
+			if err := s.tick(t.Context()); !errors.Is(err, context.DeadlineExceeded) || (s.Pending() == nil) != unsigned {
+				t.Fatalf("signed ownership changed: intent=%v err=%v", s.Pending(), err)
 			}
-			capacityID := liquidlane.NewCapacityID(1, fixture.reader.recipeAccount, tOut)
+			capacityID := liquidlane.NewCapacityID(1, fixture.reader.RecipeAccount, tOut)
 			reserved := s.Reservations(nil)[capacityID]
 			if unsigned && len(s.Reservations(nil)) != 0 || !unsigned && (reserved == nil || reserved.Cmp(big.NewInt(456)) != 0) {
 				t.Fatal("submission error released signed capacity or retained an unsigned reservation")
 			}
 			if !unsigned {
 				reads := backend.reads
-				if err := s.tick(t.Context()); err != nil || backend.reads != reads || sender.submits != 1 {
+				if err := s.tick(t.Context()); err != nil || backend.reads != reads || sender.Submits != 1 {
 					t.Fatal("ambiguous signed fill was rebuilt", err)
 				}
 			}
@@ -360,50 +300,22 @@ curator: {url: https://curator.example/api/v1}
 	}
 }
 
-// A completed fill advances directly to the next award; pending work uses polling.
-func TestRunContinuesToNextAwardAfterConfirmation(t *testing.T) {
-	f := connectorExecutionFixture(t, connectorDiscountFixture())
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	s := &Solver{
-		recipeExecutors: []common.Address{f.reader.recipeExecutor},
-		workflow:        f.workflow,
-		backend:         &nextAwardBackend{cancel: cancel},
-		sender:          &fakeSender{busy: true, result: fillResult()},
-		intent:          &fillIntent{OrderID: "pending"},
-	}
-	if err := s.Run(ctx); !errors.Is(err, context.Canceled) {
-		t.Fatal("confirmed fill waited for the polling timer before next award", err)
-	}
-}
-
-type nextAwardBackend struct {
-	fakeBackend
-
-	cancel context.CancelFunc
-}
-
-func (b *nextAwardBackend) orders(context.Context, string) ([]rfqbackend.OrdersResponseOrdersInner, error) {
-	b.cancel()
-	return nil, nil
-}
-
 func TestPrepareRequiresConnectorPrecision(t *testing.T) {
 	for _, precision := range []string{"", "1000000", "10000"} {
 		t.Run("precision_"+precision, func(t *testing.T) {
-			f := connectorExecutionFixture(t, connectorDiscountFixture())
-			order, _, backend := connectorExecutionAward(f.workflow.caller)
-			s := Solver{recipeExecutors: []common.Address{common.HexToAddress("0x43")}, workflow: f.workflow, backend: backend, spends: newSpendLedger()}
+			f := connectorExecutionFixture(t, connectortest.DiscountFixture())
+			order, _, backend := connectorExecutionAward(f.workflow.Filler)
+			s := Solver{Engine: &filler.Engine{Routes: connector.NewRoutes(f.workflow, []common.Address{common.HexToAddress("0x43")}), Workflow: f.workflow, Spends: connector.NewSpendLedger()}, backend: backend}
 			if err := s.Initialize(t.Context()); err != nil {
 				t.Fatal(err)
 			}
 			item := discounts.ListItem{DiscountPrecision: precision, Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
-				Collateral: tOut.Hex(), DiscountID: connectorDiscountID().Hex(), MaxAssets: "900"}
+				Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: "900"}
 			intent, err := s.prepare(t.Context(), awardRow(t, order), []discounts.ListItem{item})
 			if err != nil || intent != nil {
 				t.Fatalf("precision %q: intent=%v err=%v", precision, intent, err)
 			}
-			if f.reader.outerCalls != 0 {
+			if f.reader.OuterCalls != 0 {
 				t.Fatal("wrong-domain discount reached simulation")
 			}
 		})

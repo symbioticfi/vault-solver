@@ -70,9 +70,15 @@ func (m *PairMetrics) Standing(chainID int64, in, out common.Address, result, re
 func (m *PairMetrics) ReceiptObserver(chainID int64, in, out common.Address) func(context.Context, txmanager.Result) {
 	return func(_ context.Context, result txmanager.Result) {
 		if result.Receipt != nil && result.Receipt.Status == types.ReceiptStatusSuccessful {
-			m.observe(chainID, in, out, "fill", "mined_success", "none")
+			m.MinedFill(chainID, in, out)
 		}
 	}
+}
+
+// MinedFill records one successful mined fill of the pair, for fill paths that settle outside
+// the native transaction manager.
+func (m *PairMetrics) MinedFill(chainID int64, in, out common.Address) {
+	m.observe(chainID, in, out, "fill", "mined_success", "none")
 }
 
 func (m *PairMetrics) observe(chainID int64, in, out common.Address, event, result, reason string) {
