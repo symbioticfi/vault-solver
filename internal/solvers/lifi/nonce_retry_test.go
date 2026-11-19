@@ -31,7 +31,7 @@ func TestOrderWorkerRetriesUncertainNonceWithoutFeedReplay(t *testing.T) {
 			solver, routes, order, txm := fixture.solver, fixture.routes, fixture.order, fixture.txm
 			reg := prometheus.NewRegistry()
 			var err error
-			solver.metrics, err = newLIFIMetrics(reg, nil, "")
+			solver.metrics, err = newLIFIMetrics(Name, reg, nil, "")
 			if err != nil {
 				t.Fatal(err)
 			}

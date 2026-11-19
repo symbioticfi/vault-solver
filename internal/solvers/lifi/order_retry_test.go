@@ -45,7 +45,7 @@ func TestOrderWorkerCapacityAdmissionSignals(t *testing.T) {
 			rec := tracetest.Install(t)
 			log, logs := tracetest.CaptureLogs(t, 1)
 			reg := prometheus.NewRegistry()
-			metrics, err := newLIFIMetrics(reg, nil, "")
+			metrics, err := newLIFIMetrics(Name, reg, nil, "")
 			if err != nil {
 				t.Fatal(err)
 			}

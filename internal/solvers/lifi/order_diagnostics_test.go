@@ -95,7 +95,7 @@ func TestOrderRejectionDiagnostics(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reg := prometheus.NewRegistry()
-			metrics, err := newLIFIMetrics(reg, nil, "")
+			metrics, err := newLIFIMetrics(Name, reg, nil, "")
 			if err != nil {
 				t.Fatal(err)
 			}

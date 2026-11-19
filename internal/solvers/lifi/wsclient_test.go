@@ -513,7 +513,7 @@ func TestOrderFeedMetricsLifecycle(t *testing.T) {
 	defer server.Close()
 
 	feed := newTestOrderFeed("ws"+strings.TrimPrefix(server.URL, "http"), "")
-	metrics, err := newLIFIMetrics(prometheus.NewRegistry(), feed, "")
+	metrics, err := newLIFIMetrics(Name, prometheus.NewRegistry(), feed, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -567,7 +567,7 @@ func TestOrderFeedMetricsLifecycle(t *testing.T) {
 }
 
 func TestOrderRecoveryReadyMetricNilFeed(t *testing.T) {
-	metrics, err := newLIFIMetrics(prometheus.NewRegistry(), nil, "")
+	metrics, err := newLIFIMetrics(Name, prometheus.NewRegistry(), nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

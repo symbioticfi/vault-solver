@@ -14,6 +14,8 @@ RFQ, LI.FI, OEV, UniswapX, and any new solver that consumes `LiquidLaneAdapter` 
 | `internal/liquidlane/strategies/single` | whole-request single-source comparison using the shared task/result contract and greedy calculations |
 | `internal/liquidlane/gas` | shared optional Chainlink token/native facts plus neutral acquire/allocate/deallocate/unknown route prediction from current adapter/vault state |
 | `internal/liquidlane/discounts` | signed-discount HTTP client, live-offer filtering, route matching, fill-quote construction, and fresh-signature validation |
+| `internal/liquidlane/connector` | Merkle-funded connector swaps: recipe route discovery and cache, connector discount framing, recipe assembly, connector inventory, outer-simulation admission, and the RAM spend ledger |
+| `internal/solvers/merkle/filler` | Shared runtime of the protocol Merkle fillers ([MERKLE-FILLERS.md](MERKLE-FILLERS.md)): config, single-fill signer lane on the SDK transaction manager, connector discount selection, callback-funded swap flow |
 | `internal/solvers/<name>` | cadence, caches, strategy inputs, economics, protocol messages, calldata, and execution |
 
 The generic framework must not know about LiquidLane. Protocol execution is never shared: RFQ, LI.FI,

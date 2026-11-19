@@ -15,7 +15,7 @@ import (
 )
 
 func TestLIFIOrderQueueMetricsCollectLiveOwnerState(t *testing.T) {
-	metrics, err := newLIFIMetrics(prometheus.NewRegistry(), nil, "")
+	metrics, err := newLIFIMetrics(Name, prometheus.NewRegistry(), nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestLIFIOrderQueueMetricsIncludeBlockedInboxDelivery(t *testing.T) {
 
 func TestLIFIOrderQueueMetricsConcurrentCollection(t *testing.T) {
 	registry := prometheus.NewRegistry()
-	metrics, err := newLIFIMetrics(registry, nil, "")
+	metrics, err := newLIFIMetrics(Name, registry, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +171,7 @@ func TestLIFIOrderQueueMetricsConcurrentCollection(t *testing.T) {
 
 func TestLIFIMetricsRecordOnlyBoundedOrderSignals(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	metrics, err := newLIFIMetrics(reg, nil, "")
+	metrics, err := newLIFIMetrics(Name, reg, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

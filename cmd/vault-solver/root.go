@@ -8,6 +8,7 @@ import (
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/lifi"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/merkle"
+	_ "github.com/symbioticfi/vault-solver/internal/solvers/merkle/lifi"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/merkle/rfq"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/merkle/threef"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/merkle/uniswapx"

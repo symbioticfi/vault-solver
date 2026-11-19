@@ -631,7 +631,7 @@ func TestOrderWorkerRetriesDepositPropagation(t *testing.T) {
 				test.statuses[0],
 			)
 			reg := prometheus.NewRegistry()
-			metrics, err := newLIFIMetrics(reg, nil, "")
+			metrics, err := newLIFIMetrics(Name, reg, nil, "")
 			if err != nil {
 				t.Fatalf("newLIFIMetrics: %v", err)
 			}
@@ -702,7 +702,7 @@ func TestOrderWorkerMetersDepositRetryExpiryFromTimer(t *testing.T) {
 		lifiOrderStatusNone,
 	)
 	reg := prometheus.NewRegistry()
-	metrics, err := newLIFIMetrics(reg, nil, "")
+	metrics, err := newLIFIMetrics(Name, reg, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1069,7 +1069,7 @@ func TestOrderRecoveryBoundsPersistentWebhookDecodeFailure(t *testing.T) {
 	)
 	solver.orders = newOrderClient(orderServer.URL, "test-key", time.Second, 11155111)
 	operationReg := prometheus.NewRegistry()
-	operationMetrics, err := newLIFIMetrics(operationReg, nil, "")
+	operationMetrics, err := newLIFIMetrics(Name, operationReg, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1281,7 +1281,7 @@ func orderWorkerUncertainNonceReleasesReservationWithoutSuccess(t *testing.T, ou
 	solver := newProcessTestSolver(fixture.cfg, fixture.caller, txm, strategy,
 		fixture.tokenIn, fixture.tokenOut, fixture.adapter, lifiOrderStatusDeposited)
 	reg := prometheus.NewRegistry()
-	solver.metrics, err = newLIFIMetrics(reg, nil, "")
+	solver.metrics, err = newLIFIMetrics(Name, reg, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1386,7 +1386,7 @@ func TestOrderRecoverySkipsUndecodableOrder(t *testing.T) {
 	defer server.Close()
 
 	registry := prometheus.NewRegistry()
-	metrics, err := newLIFIMetrics(registry, nil, "")
+	metrics, err := newLIFIMetrics(Name, registry, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

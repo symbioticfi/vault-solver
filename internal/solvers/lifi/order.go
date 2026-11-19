@@ -59,6 +59,8 @@ type submittedOrder struct {
 	// retry queues so the worker's processing span continues that trace on the detached work
 	// context (spec §6.4).
 	span trace.SpanContext
+	// reverts counts this order's fills that reverted on chain; only the order worker touches it.
+	reverts int
 
 	Order        inputsettler.StandardOrder
 	InputSettler common.Address

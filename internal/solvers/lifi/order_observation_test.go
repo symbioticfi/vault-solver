@@ -39,7 +39,7 @@ func TestMatchedOrderAdmissionObservation(t *testing.T) {
 				}
 			})
 			reg := prometheus.NewRegistry()
-			m, err := newLIFIMetrics(reg, nil, "")
+			m, err := newLIFIMetrics(Name, reg, nil, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -123,7 +123,7 @@ func TestMatchedAdmissionExcludesDropsAndKeepsBoundedLabels(t *testing.T) {
 		t.Fatal("full queue counted an admission")
 	}
 	reg := prometheus.NewRegistry()
-	m, err := newLIFIMetrics(reg, nil, "")
+	m, err := newLIFIMetrics(Name, reg, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +169,7 @@ func TestWebSocketCannotForgeRecoveryOwnership(t *testing.T) {
 		t.Fatal("wire input forged recovery provenance")
 	}
 	reg := prometheus.NewRegistry()
-	m, err := newLIFIMetrics(reg, nil, "")
+	m, err := newLIFIMetrics(Name, reg, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

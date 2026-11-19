@@ -222,7 +222,9 @@ func (m *lifiMetrics) trackOrderQueue(queue orderQueue, snapshot func() orderQue
 	}
 }
 
+// newLIFIMetrics labels the engine's metrics with name, the registered solver it runs as.
 func newLIFIMetrics(
+	name string,
 	reg prometheus.Registerer,
 	feed *orderFeed,
 	strategyName string,
@@ -244,11 +246,11 @@ func newLIFIMetrics(
 			Event: "queue_drop", Outcomes: []string{string(queue)},
 		})
 	}
-	workflow, err := observability.NewWorkflowMetrics(reg, Name, spec)
+	workflow, err := observability.NewWorkflowMetrics(reg, name, spec)
 	if err != nil {
 		return nil, err
 	}
-	pairs, err := liquidlane.NewPairMetrics(reg, Name, boundedStandingQuoteReason)
+	pairs, err := liquidlane.NewPairMetrics(reg, name, boundedStandingQuoteReason)
 	if err != nil {
 		return nil, err
 	}
@@ -283,10 +285,13 @@ func newLIFIMetrics(
 		orderQueueMetrics: orderQueueMetrics,
 		fillAmounts:       liquidlane.NewFillMetrics(workflow),
 	}
+	// The protocol gauges carry the solver too, so both solvers of a protocol can share a
+	// process or a namespace without mixing their series.
+	labeled := prometheus.WrapRegistererWith(prometheus.Labels{"solver": name}, reg)
 	for _, collector := range []prometheus.Collector{
 		m.quotes, m.orderFeedConnected, m.orderRecoveryReady, m.orderQueueMetrics,
 	} {
-		if err := reg.Register(collector); err != nil {
+		if err := labeled.Register(collector); err != nil {
 			return nil, errors.Errorf("lifi: register metric: %w", err)
 		}
 	}
