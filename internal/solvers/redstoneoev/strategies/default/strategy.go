@@ -40,6 +40,7 @@ type Strategy struct {
 	maxAge        time.Duration
 	log           logr.Logger
 	tracer        *observability.Tracer
+	balanceReads  observability.Retries
 }
 
 type decisionState struct {
@@ -180,10 +181,12 @@ func (s *Strategy) refreshState(ctx context.Context) {
 	callbackNative, err := s.reader.ReadNativeBalance(ctx, s.callback)
 	callbackUpdatedAt := time.Now()
 	if err != nil {
-		observability.Log(ctx).Error(
-			err, "read callback balance failed; keeping last cached balance", "callback", s.callback.Hex())
+		s.balanceReads.Fail(
+			ctx, err, "read callback balance failed; keeping last cached balance", "callback", s.callback.Hex())
 		callbackNative = prev.CallbackNative
 		callbackUpdatedAt = prev.CallbackUpdatedAt
+	} else {
+		s.balanceReads.Ok(ctx)
 	}
 	s.state.store(decisionState{
 		CallbackNative:    callbackNative,

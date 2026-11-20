@@ -74,6 +74,10 @@ type Solver struct {
 	// links remembers each submitted offer's span so the later redeem and the API's offer listing can
 	// point back at it (spec §12). Process-local and best effort; a miss changes nothing.
 	links *observability.SpanLinks
+	// Retried reads of the discover and reconcile passes; a failure keeps the last known state.
+	auctionListings observability.Retries
+	offerListings   observability.Retries
+	exposureReads   observability.Retries
 }
 
 func deduplicateAdapters(adapters []common.Address) []common.Address {
@@ -180,13 +184,16 @@ func (s *Solver) Run(ctx context.Context) error {
 		s.redeemAll(ctx)
 	}
 
+	var adapterRefreshes observability.Retries
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-discoverT.C:
 			if err := s.refreshTargetsAndHydrate(ctx); err != nil {
-				observability.Log(ctx).Error(err, "refresh adapters; keeping last-known-good targets")
+				adapterRefreshes.Fail(ctx, err, "refresh adapters; keeping last-known-good targets")
+			} else {
+				adapterRefreshes.Ok(ctx)
 			}
 			s.discoverAndOffer(ctx)
 		case <-redeemC:
@@ -209,14 +216,15 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 
 	now := time.Now()
 	complete := true
+	listed := true
 	for _, t := range targets {
 		offers, err := s.api.listOffers(ctx, t.Adapter)
 		if err != nil {
-			complete = false
+			complete, listed = false, false
 			if stageErr == nil {
 				stageErr = err
 			}
-			observability.Log(ctx).Error(err, "reconcile offers: list offers", "adapter", t.Adapter.Hex())
+			s.offerListings.Fail(ctx, err, "reconcile offers: list offers", "adapter", t.Adapter.Hex())
 			continue
 		}
 		live := make(map[int64]offerState)
@@ -291,6 +299,9 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 		}
 		s.offers.reconcileAdapter(t.Adapter, live)
 	}
+	if listed {
+		s.offerListings.Ok(ctx)
+	}
 	return complete
 }
 
@@ -333,9 +344,10 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 	if err != nil {
 		passErr = err
 		observeRefresh(observability.ExternalOperationError)
-		observability.Log(ctx).Error(err, "discover: list auctions")
+		s.auctionListings.Fail(ctx, err, "discover: list auctions")
 		return
 	}
+	s.auctionListings.Ok(ctx)
 	auctions = s.validAuctions(ctx, auctions)
 	observability.Log(ctx).V(1).Info("discovered auctions", "count", len(auctions))
 
@@ -348,7 +360,7 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		st, lerr := s.reader.liquidityAndExposure(ctx, t.Adapter)
 		if lerr != nil {
 			liquidityReadsFailed++
-			observability.Log(ctx).Error(lerr, "offer: liquidity/exposure", "adapter", t.Adapter.Hex())
+			s.exposureReads.Fail(ctx, lerr, "offer: liquidity/exposure", "adapter", t.Adapter.Hex())
 			continue
 		}
 		s.offers.dropFunded(t.Adapter, st.requests)
@@ -357,6 +369,9 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 			"maxAssets", st.maxAssets.String(), "minAssets", st.minAssets.String(),
 			"minYieldPpm", st.minYieldPpm.String())
 		offerings = append(offerings, &adapterOffering{target: t, st: st})
+	}
+	if liquidityReadsFailed == 0 {
+		s.exposureReads.Ok(ctx)
 	}
 	now := time.Now()
 	s.offers.pruneExpired(now)
@@ -539,7 +554,7 @@ func (s *Solver) reconcile(ctx context.Context) {
 		st, err := s.reader.liquidityAndExposure(ctx, t.Adapter)
 		if err != nil {
 			complete = false
-			observability.Log(ctx).Error(err, "reconcile", "adapter", t.Adapter.Hex())
+			s.exposureReads.Fail(ctx, err, "reconcile", "adapter", t.Adapter.Hex())
 			continue
 		}
 		successfulReads++
@@ -548,6 +563,9 @@ func (s *Solver) reconcile(ctx context.Context) {
 			"openRequests", st.openCount, "fundable", st.fundable.String())
 	}
 	s.observeTargetDerivedState(threeFStateActiveRequests, totalOpen, complete)
+	if complete {
+		s.exposureReads.Ok(ctx)
+	}
 	outcome := observability.ExternalOperationSuccess
 	switch {
 	case len(s.targets) != 0 && successfulReads == 0:

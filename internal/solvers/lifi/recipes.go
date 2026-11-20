@@ -74,9 +74,10 @@ func (r *recipeSettlement) quoteSource(ctx context.Context, _ []route, _ time.Ti
 	s := r.s
 	listed, err := s.discounts.ListDiscounts(ctx)
 	if err != nil {
-		observability.ErrorUnlessCanceled(ctx, err, "connector discounts: list for quote")
+		s.retries.discountLists.Fail(ctx, err, "connector discounts: list for quote")
 		return quoteSource{degraded: true, discountErr: err}, nil
 	}
+	s.retries.discountLists.Ok(ctx)
 	inventory, skipped, err := r.lane.Inventory(ctx, listed.Discounts)
 	if err != nil {
 		// Keep the published quotes, like a failed adapter snapshot.

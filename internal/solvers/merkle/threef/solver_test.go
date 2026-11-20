@@ -33,7 +33,7 @@ func TestLogMintIteration(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			core, logs := observer.New(zap.DebugLevel)
 			ctx := observability.WithLogger(t.Context(), zapr.NewLogger(zap.New(core)))
-			logMintIteration(ctx, tc.err)
+			logMintIteration(ctx, tc.err, nil)
 			entries := logs.All()
 			if len(entries) != 1 || entries[0].Level != tc.level {
 				t.Fatalf("got logs %+v, want one %s entry", entries, tc.level)
@@ -48,9 +48,24 @@ func TestLogMintIteration(t *testing.T) {
 func TestLogMintIterationIgnoresSuccessAndShutdown(t *testing.T) {
 	core, logs := observer.New(zap.DebugLevel)
 	ctx := observability.WithLogger(t.Context(), zapr.NewLogger(zap.New(core)))
-	logMintIteration(ctx, nil)
-	logMintIteration(ctx, context.Canceled)
+	logMintIteration(ctx, nil, nil)
+	logMintIteration(ctx, context.Canceled, nil)
 	if logs.Len() != 0 {
 		t.Fatalf("unexpected logs: %+v", logs.All())
+	}
+}
+
+// In simulate mode nothing is sent, so a failing mint is retried and stays out of Sentry.
+func TestLogMintIterationRetriesInSimulateMode(t *testing.T) {
+	core, logs := observer.New(zap.DebugLevel)
+	ctx := observability.WithLogger(t.Context(), zapr.NewLogger(zap.New(core)))
+	retries := &observability.Retries{}
+	logMintIteration(ctx, errors.New("simulate: execution reverted"), retries)
+	logMintIteration(ctx, nil, retries)
+	logMintIteration(ctx, errors.New("simulate: execution reverted"), retries)
+	for _, entry := range logs.All() {
+		if entry.Level != zap.InfoLevel {
+			t.Fatalf("a retried mint failure was logged at %s", entry.Level)
+		}
 	}
 }

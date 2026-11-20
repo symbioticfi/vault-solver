@@ -156,10 +156,12 @@ func (s *Solver) suspendQuotes(ctx context.Context, state *quoteState) {
 	defer func() { timer.Finish(ctx, outcome) }()
 
 	backoff := initialQuoteSuspensionBackoff
+	var retries observability.Retries
 	for {
 		var removed int
 		removed, err = s.reconcileQuotes(ctx, state, nil, nil, s.wallNow())
 		if err == nil {
+			retries.Ok(ctx)
 			outcome = observability.ExternalOperationSuccess
 			s.observeQuoteRefresh(state)
 			if removed > 0 {
@@ -170,7 +172,7 @@ func (s *Solver) suspendQuotes(ctx context.Context, state *quoteState) {
 		if ctx.Err() != nil {
 			return
 		}
-		observability.Log(ctx).Error(err, "quote suspension: expire active quotes; retrying", "backoff", backoff.String())
+		retries.Fail(ctx, err, "quote suspension: expire active quotes; retrying", "backoff", backoff.String())
 		if !waitForRetry(ctx, backoff) {
 			return
 		}
@@ -214,9 +216,10 @@ func (s *Solver) shouldRefreshQuotes(ctx context.Context, state *quoteState, las
 	needsRenewal := state.needsRenewal(s.wallNow())
 	block, err := s.reader.latestBlockNumber(ctx)
 	if err != nil {
-		observability.ErrorUnlessCanceled(ctx, err, "quote refresh: read latest block")
+		s.retries.blockReads.Fail(ctx, err, "quote refresh: read latest block")
 		return needsRenewal
 	}
+	s.retries.blockReads.Ok(ctx)
 	if block == *lastBlock && !needsRenewal {
 		return false
 	}
@@ -249,13 +252,13 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	chainTime, err := s.now(ctx)
 	if err != nil {
 		s.observeQuoteBuildRejections(ctx, nil, nil, "chain_time_error")
-		observability.ErrorUnlessCanceled(ctx, err, "quote refresh: read latest block time")
+		s.retries.refreshes.Fail(ctx, err, "quote refresh: read latest block time")
 		return
 	}
 	source, err := s.fillPath().quoteSource(ctx, routes, chainTime)
 	if err != nil {
 		s.observeQuoteBuildRejections(ctx, nil, nil, "snapshot_error")
-		observability.ErrorUnlessCanceled(ctx, err, "quote refresh: read routes")
+		s.retries.refreshes.Fail(ctx, err, "quote refresh: read routes")
 		return
 	}
 	maxFeePerGas := new(big.Int)
@@ -263,7 +266,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		maxFeePerGas, err = s.readMaxFeePerGas(ctx)
 		if err != nil {
 			s.observeQuoteBuildRejections(ctx, nil, nil, "gas_price_error")
-			observability.ErrorUnlessCanceled(ctx, err, "quote refresh: read max fee per gas")
+			s.retries.refreshes.Fail(ctx, err, "quote refresh: read max fee per gas")
 			return
 		}
 	}
@@ -336,9 +339,10 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	}
 	removed, err := s.reconcileQuotes(ctx, state, out.Quotes, inventory, serverTime)
 	if err != nil {
-		observability.ErrorUnlessCanceled(ctx, err, "quote refresh: submit quotes", "quotes", len(out.Quotes))
+		s.retries.refreshes.Fail(ctx, err, "quote refresh: submit quotes", "quotes", len(out.Quotes))
 		return
 	}
+	s.retries.refreshes.Ok(ctx)
 	s.observeQuoteRefresh(state)
 	outcome = observability.ExternalOperationSuccess
 	if source.degraded {

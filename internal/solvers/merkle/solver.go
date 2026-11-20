@@ -32,12 +32,19 @@ func (s *Solver) RequiresMerkleTxManager() bool { return s.keeper.Mode == "send"
 func (s *Solver) Run(ctx context.Context) error {
 	ticker := time.NewTicker(defaultPollInterval)
 	defer ticker.Stop()
+	// Only simulate mode retries the whole plan; in send mode a failure can be a submitted transaction.
+	var ticks *observability.Retries
+	if s.keeper.Sender == nil {
+		ticks = &observability.Retries{}
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := s.keeper.Tick(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			observability.Log(ctx).Error(err, "merkle workflow iteration failed")
+		if err := s.keeper.Tick(ctx); err == nil {
+			ticks.Ok(ctx)
+		} else if !errors.Is(err, context.Canceled) {
+			ticks.Fail(ctx, err, "merkle workflow iteration failed")
 		}
 		select {
 		case <-ctx.Done():

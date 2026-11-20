@@ -28,9 +28,10 @@ func (s *Solver) quoteDiscountInventories(
 	}
 	listed, err := s.discounts.ListDiscounts(ctx)
 	if err != nil {
-		observability.ErrorUnlessCanceled(ctx, err, "private discounts: list for quote")
+		s.retries.discountLists.Fail(ctx, err, "private discounts: list for quote")
 		return nil, true, err
 	}
+	s.retries.discountLists.Ok(ctx)
 	inventory, issues := discounts.MatchInventories(listed, bases, discounts.MatchOptions{Now: now})
 	s.logDiscountIssues(ctx, issues)
 	return inventory, len(issues) > 0, nil

@@ -526,6 +526,7 @@ func (s *Solver) recoverOrdersUntilSuccess(
 	defer func() { timer.Finish(ctx, outcome) }()
 
 	backoff := initialOrderRecoveryBackoff
+	var retries observability.Retries
 	recovered := make(map[string]bool)
 	successfulSweeps := 0
 	for {
@@ -541,6 +542,7 @@ func (s *Solver) recoverOrdersUntilSuccess(
 			)
 			if result.discovered == 0 && inbox.tryEndRecovery(result.processedGen) {
 				outcome = observability.ExternalOperationSuccess
+				retries.Ok(ctx)
 				observability.Log(ctx).Info(
 					"order recovery completed", "listedOrders", result.listed, "seenOrders", len(recovered))
 				return true
@@ -555,7 +557,7 @@ func (s *Solver) recoverOrdersUntilSuccess(
 			return false
 		}
 		recovered = make(map[string]bool)
-		observability.Log(ctx).Error(err, "order recovery failed; retrying", "backoff", backoff.String())
+		retries.Fail(ctx, err, "order recovery failed; retrying", "backoff", backoff.String())
 		if !waitForRetry(ctx, backoff) {
 			return false
 		}
