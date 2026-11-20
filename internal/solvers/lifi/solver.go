@@ -65,6 +65,14 @@ type Solver struct {
 	metrics      *lifiMetrics
 
 	pairRoutes atomic.Pointer[pairRouteScope] // optional current proof; never used for trading
+	retries    quoteRetries
+}
+
+// quoteRetries are the quote loop's retried operations; a failure leaves the quotes as they are.
+type quoteRetries struct {
+	blockReads    observability.Retries
+	refreshes     observability.Retries
+	discountLists observability.Retries
 }
 
 type chainReader interface {

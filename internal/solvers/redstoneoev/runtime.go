@@ -64,8 +64,10 @@ func (s *Solver) opsLoop(ctx context.Context) {
 }
 
 func (s *Solver) refreshStateAndLog(ctx context.Context) {
-	if err := s.refreshStateWithBoundaryRetry(ctx); err != nil && ctx.Err() == nil {
-		observability.Log(ctx).Error(err, "state refresh failed; keeping cache")
+	if err := s.refreshStateWithBoundaryRetry(ctx); err == nil {
+		s.stateRefreshes.Ok(ctx)
+	} else if ctx.Err() == nil {
+		s.stateRefreshes.Fail(ctx, err, "state refresh failed; keeping cache")
 	}
 }
 

@@ -179,15 +179,15 @@ func TestOrderFeedDisconnectLogLevel(t *testing.T) {
 		status    int
 		reset     bool
 		ready     bool
-		wantInfo  bool
+		routine   bool // routine disconnects log at Info; the rest count as retried failures
 	}{
-		{name: "normal closure", closeCode: websocket.CloseNormalClosure, ready: true, wantInfo: true},
-		{name: "going away", closeCode: websocket.CloseGoingAway, ready: true, wantInfo: true},
-		{name: "unexpected EOF", ready: true, wantInfo: true},
-		{name: "no status", closeCode: websocket.CloseNoStatusReceived, ready: true, wantInfo: true},
-		{name: "service restart", closeCode: websocket.CloseServiceRestart, ready: true, wantInfo: true},
-		{name: "try again later", closeCode: websocket.CloseTryAgainLater, ready: true, wantInfo: true},
-		{name: "connection reset", reset: true, ready: true, wantInfo: true},
+		{name: "normal closure", closeCode: websocket.CloseNormalClosure, ready: true, routine: true},
+		{name: "going away", closeCode: websocket.CloseGoingAway, ready: true, routine: true},
+		{name: "unexpected EOF", ready: true, routine: true},
+		{name: "no status", closeCode: websocket.CloseNoStatusReceived, ready: true, routine: true},
+		{name: "service restart", closeCode: websocket.CloseServiceRestart, ready: true, routine: true},
+		{name: "try again later", closeCode: websocket.CloseTryAgainLater, ready: true, routine: true},
+		{name: "connection reset", reset: true, ready: true, routine: true},
 		{name: "early EOF"},
 		{name: "early connection reset", reset: true},
 		{name: "early normal closure", closeCode: websocket.CloseNormalClosure},
@@ -246,9 +246,9 @@ func TestOrderFeedDisconnectLogLevel(t *testing.T) {
 				}
 				close(readStarted)
 			}}, func(context.Context, orderMessage) {})
-			_, info := event["level"]
-			if event == nil || info != tc.wantInfo || event["error"] == nil || event["backoff"] != "1s" {
-				t.Fatalf("disconnect log = %v, want Info=%v with error and backoff", event, tc.wantInfo)
+			_, retried := event["failures"]
+			if event == nil || retried == tc.routine || event["error"] == nil || event["backoff"] != "1s" {
+				t.Fatalf("disconnect log = %v, want routine=%v with error and backoff", event, tc.routine)
 			}
 		})
 	}
@@ -283,9 +283,9 @@ func TestOrderFeedBackoffResetsOnlyAfterRecovery(t *testing.T) {
 		}
 		backoff, _ := fields["backoff"].(string)
 		backoffs = append(backoffs, backoff)
-		_, info := fields["level"]
-		if info != (len(backoffs) == 3) {
-			t.Errorf("disconnect %d Info=%v", len(backoffs), info)
+		_, retried := fields["failures"]
+		if retried != (len(backoffs) < 3) {
+			t.Errorf("disconnect %d retried=%v", len(backoffs), retried)
 		}
 		if len(backoffs) == 3 {
 			cancel()

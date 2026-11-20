@@ -269,12 +269,13 @@ func (e *Engine) Tick(ctx context.Context, next Next) (err error) {
 	if e.Sender.Busy() {
 		return errors.New("fill sender has work without a fill owner")
 	}
+	// Initialize and next only read, and the next tick retries them; Poll and Submit act on a fill.
 	if err := e.Initialize(ctx); err != nil {
-		return err
+		return observability.Retryable(err)
 	}
 	intent, err := next(ctx)
 	if err != nil || intent == nil {
-		return err
+		return observability.Retryable(err)
 	}
 	return e.Submit(ctx, intent)
 }
@@ -287,12 +288,19 @@ func (e *Engine) Run(ctx context.Context, next Next) error {
 	}
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
+	var reads observability.Retries
 	for {
 		pending := e.Pending() != nil
 		run, cancel := context.WithTimeout(ctx, operationTimeout)
 		err := e.Tick(run, next)
 		cancel()
-		if err != nil && ctx.Err() == nil {
+		switch {
+		case err == nil:
+			reads.Ok(ctx)
+		case ctx.Err() != nil:
+		case observability.IsRetryable(err):
+			reads.Fail(ctx, err, "Merkle fill iteration failed")
+		default:
 			observability.Log(ctx).Error(err, "Merkle fill iteration failed")
 		}
 		if pending && e.Pending() == nil && err == nil {

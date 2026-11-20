@@ -33,17 +33,28 @@ func (s *Solver) RequiresMerkleTxManager() bool { return s.keeper.Mode == "send"
 func (s *Solver) Run(ctx context.Context) error {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
+	var offers observability.Retries
+	var mints *observability.Retries // nil in send mode, where a failure can be a submitted mint
+	if s.keeper.Sender == nil {
+		mints = &observability.Retries{}
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		logMintIteration(ctx, s.keeper.Tick(ctx))
+		logMintIteration(ctx, s.keeper.Tick(ctx), mints)
 
 		if s.keeper.Sender == nil || !s.keeper.Sender.Busy() {
 			run, cancel := context.WithTimeout(ctx, operationTimeout)
 			err := s.offers.Tick(run)
 			cancel()
-			if err != nil && !errors.Is(err, context.Canceled) {
+			switch {
+			case err == nil:
+				offers.Ok(ctx)
+			case errors.Is(err, context.Canceled):
+			case observability.IsRetryable(err):
+				offers.Fail(ctx, err, "3f offer iteration failed")
+			default:
 				observability.Log(ctx).Error(err, "3f offer iteration failed")
 			}
 		}
@@ -55,8 +66,11 @@ func (s *Solver) Run(ctx context.Context) error {
 	}
 }
 
-func logMintIteration(ctx context.Context, err error) {
+// logMintIteration logs a keeper tick. Simulate mode passes retries, since nothing is sent and the
+// next tick retries the whole plan; send mode passes nil and logs every failure at Error.
+func logMintIteration(ctx context.Context, err error, retries *observability.Retries) {
 	if err == nil {
+		retries.Ok(ctx)
 		return
 	}
 	if mintIterationWaiting(err) {
@@ -65,7 +79,7 @@ func logMintIteration(ctx context.Context, err error) {
 		}
 		return
 	}
-	observability.Log(ctx).Error(err, "3f mint iteration failed")
+	retries.Fail(ctx, err, "3f mint iteration failed")
 }
 
 func mintIterationWaiting(err error) bool {

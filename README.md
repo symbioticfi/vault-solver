@@ -825,6 +825,12 @@ the backend change that removes the duplicate body field.
 Sentry groups these diagnosed errors by `(solver, message, reason_code)`; other errors retain
 `(solver, message)`. Dynamic identifiers remain event context. No additional log sites are introduced.
 
+Failures that a solver loop retries on its next attempt (API and RPC polls, state and quote
+refreshes, listings, websocket reconnects, and the read steps of Merkle iterations) are logged at
+Info until the operation has failed on consecutive attempts for two minutes. Then one Error reports it, and the first success logs
+`retried operation recovered`. A one-off failure never reaches Sentry, and an outage reaches it once.
+Other errors, such as fills, transaction broadcasts and 3F mints in send mode, reach Sentry every time.
+
 ### Metrics
 
 The [txmanager metric reference](docs/TXMANAGER-PLAN.md#metrics) covers transaction outcomes, admission,

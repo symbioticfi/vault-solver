@@ -16,9 +16,12 @@ func (s *Solver) orderLoop(ctx context.Context, out chan<- *resolvedOrder) error
 	defer close(out)
 	ticker := time.NewTicker(s.cfg.OrderServer.PollInterval)
 	defer ticker.Stop()
+	var polls observability.Retries
 	for {
-		if err := s.pollOrders(ctx, out); err != nil && !errors.Is(err, context.Canceled) {
-			observability.Log(ctx).Error(err, "order poll failed")
+		if err := s.pollOrders(ctx, out); err == nil {
+			polls.Ok(ctx)
+		} else if !errors.Is(err, context.Canceled) {
+			polls.Fail(ctx, err, "order poll failed")
 		}
 		select {
 		case <-ctx.Done():

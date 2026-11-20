@@ -83,6 +83,11 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
   so `log.Error` lines only for conditions that should page; expected skips go to `V(1)`.
   Where a context cancel (shutdown, reconnect, client disconnect) leaves nothing half done, log with
   `observability.ErrorUnlessCanceled` so the cancel drops to `V(1)` while deadlines stay at Error.
+  A failure that a loop retries on its next attempt (a poll, a refresh, a reconnect) goes through
+  that operation's `observability.Retries`: `Fail` logs at Info until the operation has failed
+  consecutively for two minutes, then once at Error; `Ok` on success ends the streak. Where one
+  iteration mixes such reads with one-shot work, mark the reads with `observability.Retryable`.
+  Never route one-shot errors (a fill, a broadcast, a reorg) through it: those reach Sentry every time.
   **Log through `observability.Log(ctx)` wherever a context is in hand** — the context stores the
   *base* logger and `Log` returns it stamped with the current span's `trace_id`/`span_id`, memoised
   per span. To narrow the logger for a scope, store it with

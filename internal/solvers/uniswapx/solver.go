@@ -92,6 +92,9 @@ type Solver struct {
 	failureTimes      []time.Time
 	metrics           *uniswapXMetrics
 	operations        uniswapXOperationObservers
+	// Retried operations of the quote refresh, whose failures leave the refresh degraded.
+	discountRefreshes observability.Retries
+	batchResolutions  observability.Retries
 }
 
 type chainReader interface {
