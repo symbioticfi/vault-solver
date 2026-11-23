@@ -42,7 +42,8 @@ type apiMonitor struct {
 	monitorPoll time.Duration
 	tracer      *observability.Tracer
 
-	snap atomic.Pointer[snapshot]
+	snap      atomic.Pointer[snapshot]
+	refreshes observability.Retries
 }
 
 func newAPIMonitor(
@@ -117,7 +118,7 @@ func (m *apiMonitor) refresh(ctx context.Context) {
 
 	apiMarkets, err := m.api.DiscoverMarketData(ctx, m.chainID, []common.Address{loan}, redeemable)
 	if err != nil {
-		observability.Log(ctx).Error(err, "morpho API market refresh failed; keeping cache")
+		m.refreshes.Fail(ctx, err, "morpho API market refresh failed; keeping cache")
 		return
 	}
 	apiSnap := m.apiMarketSnapshot(apiMarkets, loan, redeemable)
@@ -133,7 +134,7 @@ func (m *apiMonitor) refresh(ctx context.Context) {
 	}
 	apiPositions, err := m.api.PositionsByMarket(ctx, m.chainID, ids, m.maxPositions, &m.maxHF)
 	if err != nil {
-		observability.Log(ctx).Error(err, "morpho API position refresh failed; keeping cache")
+		m.refreshes.Fail(ctx, err, "morpho API position refresh failed; keeping cache")
 		return
 	}
 	positions := apiPositionsSnapshot(apiPositions, apiSnap.markets)
@@ -142,6 +143,7 @@ func (m *apiMonitor) refresh(ctx context.Context) {
 		markets: apiSnap.markets, prices: apiSnap.prices, positions: positions,
 		block: apiSnap.block, blockTime: apiSnap.blockTime, updatedAt: time.Now(),
 	})
+	m.refreshes.Ok(ctx)
 }
 
 func adapterMarketScope(adapter types.AdapterSnapshot) (common.Address, []common.Address, bool) {

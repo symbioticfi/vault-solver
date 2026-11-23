@@ -100,17 +100,22 @@ func (w *wsClient) Run(ctx context.Context) error {
 	ctx = observability.WithLogger(ctx, w.log)
 
 	backoff := w.cfg.BackoffInitial
+	var reconnects observability.Retries
 	for {
 		start := time.Now()
 		err := w.serveOnce(ctx)
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err != nil {
-			observability.Log(ctx).Error(err, "ws connection ended; reconnecting")
+		// A connection that was healthy for a while resets the backoff and ends a failure streak.
+		healthy := time.Since(start) > w.cfg.BackoffMax
+		if healthy {
+			reconnects.Ok(ctx)
 		}
-		// Reset backoff if the last connection was healthy for a while.
-		if time.Since(start) > w.cfg.BackoffMax {
+		if err != nil {
+			reconnects.Fail(ctx, err, "ws connection ended; reconnecting")
+		}
+		if healthy {
 			backoff = w.cfg.BackoffInitial
 		}
 		select {

@@ -66,6 +66,7 @@ type Solver struct {
 	// Admission happens on the WS reader before spawning; at most one decision runs.
 	auctionBusy    atomic.Bool
 	auctionWorkers sync.WaitGroup
+	stateRefreshes observability.Retries // the ops loop's refresh; startup failures stay Error
 }
 
 // Name identifies the solver.

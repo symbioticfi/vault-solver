@@ -87,6 +87,7 @@ type executionService struct {
 	// sending is set while the submitter handles orders. The poll loop reserves won orders itself
 	// only then; an idle submitter reserves them through its own plan on the wake that follows.
 	sending atomic.Bool
+	polls   observability.Retries
 }
 
 // fillReader is the on-chain surface used to assemble fill-time strategy inputs.
@@ -140,12 +141,10 @@ func (e *executionService) syncOnce(ctx context.Context) {
 	defer func() { end(err) }()
 
 	err = e.pollOpenOrders(ctx)
-	switch {
-	case err == nil:
-	case observability.Canceled(ctx, err):
-		observability.Log(ctx).V(1).Info("poll open orders", "error", err.Error())
-	default:
-		backendErrorLogger(observability.Log(ctx), err).Error(err, "poll open orders")
+	if err == nil {
+		e.polls.Ok(ctx)
+	} else {
+		e.polls.Fail(ctx, err, "poll open orders", backendErrorValues(err)...)
 	}
 	if ctx.Err() != nil {
 		return // shutting down: reconciling with a dead context would only log a failure per order

@@ -55,6 +55,13 @@ type offerWorkflow struct {
 func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	ctx, end := tracer.Start(ctx, "threef-merkle.offers.tick", observability.AttrAdapter.String(w.strategy.Config.Account))
 	defer func() { end(err) }()
+	// The reads before evaluate are retried by the next tick; evaluate can post offers.
+	evaluating := false
+	defer func() {
+		if !evaluating {
+			err = observability.Retryable(err)
+		}
+	}()
 	p := w.planner
 	prepared, err := recipes.DiscoverBatch(ctx, p.Chain, []common.Address{common.HexToAddress(w.strategy.Config.Executor)}, []common.Address{common.HexToAddress(w.strategy.Config.Account)}, p.Caller, recipes.PreparationOptions{ChainID: p.ChainID, Cache: p.RecipeCache})
 	if err != nil {
@@ -91,6 +98,7 @@ func (w *offerWorkflow) Tick(ctx context.Context) (err error) {
 	for _, slot := range inspection.Slots {
 		leaves = append(leaves, slot.Leaves...)
 	}
+	evaluating = true
 	return w.evaluate(ctx, p.Chain, pin, markets, auctions, offers, func(ctx context.Context) error {
 		return w.validateOfferAuthorization(ctx, prepared[0], leaves)
 	})

@@ -39,13 +39,16 @@ func (s *Solver) refreshNativeQuoteAdapters(ctx context.Context) (err error) {
 func (s *Solver) refreshNativeQuoteAdaptersLoop(ctx context.Context) {
 	ticker := time.NewTicker(s.cfg.PollInterval)
 	defer ticker.Stop()
+	var discoveries observability.Retries
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			if err := s.refreshNativeQuoteAdapters(ctx); err != nil {
-				observability.ErrorUnlessCanceled(ctx, err, "quote account discovery failed")
+				discoveries.Fail(ctx, err, "quote account discovery failed")
+			} else {
+				discoveries.Ok(ctx)
 			}
 		}
 	}

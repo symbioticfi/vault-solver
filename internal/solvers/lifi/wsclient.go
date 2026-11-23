@@ -55,6 +55,7 @@ func (f *orderFeed) run(
 	handle func(context.Context, orderMessage),
 ) error {
 	backoff := initialWSBackoff
+	var reconnects observability.Retries
 	for {
 		ready, err := f.watchOnce(ctx, hooks, handle)
 		if ctx.Err() != nil {
@@ -62,12 +63,13 @@ func (f *orderFeed) run(
 		}
 		if ready {
 			backoff = initialWSBackoff
+			reconnects.Ok(ctx)
 		}
 		if ready && normalDisconnect(err) {
 			observability.Log(ctx).Info(
 				"order feed disconnected; reconnecting", "error", err.Error(), "backoff", backoff.String())
 		} else {
-			observability.Log(ctx).Error(err, "order feed disconnected; reconnecting", "backoff", backoff.String())
+			reconnects.Fail(ctx, err, "order feed disconnected; reconnecting", "backoff", backoff.String())
 		}
 		timer := time.NewTimer(backoff)
 		select {

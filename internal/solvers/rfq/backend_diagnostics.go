@@ -55,9 +55,13 @@ func backendError(ctx context.Context, err error) error {
 // Preserve backend correlation in ordinary logs as well as the Sentry sink, including
 // background polling where no inbound request logger exists.
 func backendErrorLogger(log logr.Logger, err error) logr.Logger {
+	return log.WithValues(backendErrorValues(err)...)
+}
+
+func backendErrorValues(err error) []any {
 	var diagnostic *backendRequestError
 	if errors.As(err, &diagnostic) {
-		return log.WithValues("backendRequestId", diagnostic.RequestID(), "reason_code", diagnostic.ReasonCode())
+		return []any{"backendRequestId", diagnostic.RequestID(), "reason_code", diagnostic.ReasonCode()}
 	}
-	return log
+	return nil
 }

@@ -164,6 +164,9 @@ func (s *Solver) resolveAdvertisedAdapters(
 ) []liquidlane.Route {
 	routes, err := s.reader.resolveRoutes(ctx, adapters)
 	if err == nil {
+		if len(adapters) > 1 {
+			s.batchResolutions.Ok(ctx)
+		}
 		return routes
 	}
 	if observability.Canceled(ctx, err) {
@@ -174,7 +177,7 @@ func (s *Solver) resolveAdvertisedAdapters(
 		observability.Log(ctx).Error(err, "skip unresolved advertised discount adapter", "adapter", adapters[0].Hex())
 		return nil
 	}
-	observability.Log(ctx).Error(err, "batch advertised adapter resolution failed; retry individually")
+	s.batchResolutions.Fail(ctx, err, "batch advertised adapter resolution failed; retry individually")
 
 	var resolved []liquidlane.Route
 	for _, adapter := range adapters {

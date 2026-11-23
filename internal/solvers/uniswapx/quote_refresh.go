@@ -29,17 +29,22 @@ type quoteState struct {
 func (s *Solver) refreshLoop(ctx context.Context, routes []liquidlane.Route) error {
 	ticker := time.NewTicker(s.cfg.QuoteServer.RefreshInterval)
 	defer ticker.Stop()
+	var refreshes observability.Retries
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-s.refreshCh:
 			if err := s.refreshQuoteState(ctx, routes); err != nil {
-				observability.ErrorUnlessCanceled(ctx, err, "requested quote state refresh failed")
+				refreshes.Fail(ctx, err, "requested quote state refresh failed")
+			} else {
+				refreshes.Ok(ctx)
 			}
 		case <-ticker.C:
 			if err := s.refreshQuoteState(ctx, routes); err != nil {
-				observability.ErrorUnlessCanceled(ctx, err, "quote state refresh failed")
+				refreshes.Fail(ctx, err, "quote state refresh failed")
+			} else {
+				refreshes.Ok(ctx)
 			}
 		}
 		// Only the already published, policy-filtered inventory can extend log metadata.
@@ -84,7 +89,9 @@ func (s *Solver) refreshAdapterQuoteState(
 ) (observability.ExternalOperationOutcome, error) {
 	discountRoutes, discountErr := s.quoteRoutesWithDiscounts(ctx, routes, now)
 	if discountErr != nil {
-		observability.ErrorUnlessCanceled(ctx, discountErr, "refresh advertised discount routes")
+		s.discountRefreshes.Fail(ctx, discountErr, "refresh advertised discount routes")
+	} else {
+		s.discountRefreshes.Ok(ctx)
 	}
 	degraded := discountErr != nil || !discountRoutes.complete
 	decisionRoutes := discountRoutes.routes
