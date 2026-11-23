@@ -92,9 +92,9 @@ func TestInventoryDropsOffersTheConnectorContradicts(t *testing.T) {
 	}
 }
 
-func TestInventoryRejectsReorganizedBlock(t *testing.T) {
+func TestInventoryRejectsInvalidBlock(t *testing.T) {
 	chain, offer := inventoryFixture(t)
-	chain.Header.Number = nil
+	chain.Header.Number = new(big.Int).Lsh(big.NewInt(1), 64)
 	if _, _, err := ReadInventory(t.Context(), chain, 1, []Offer{offer}); err == nil {
 		t.Fatal("invalid block accepted")
 	}

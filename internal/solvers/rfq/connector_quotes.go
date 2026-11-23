@@ -82,10 +82,6 @@ func (r *reader) readConnectorCandidates(
 		item.BlockNumber = read.BlockNumber
 		current = append(current, item)
 	}
-	canonical, err := r.chain.HeaderByNumber(ctx, block)
-	if err != nil || canonical == nil || canonical.Number == nil || canonical.Number.Cmp(block) != 0 || canonical.Hash() != header.Hash() {
-		return nil, errors.New("connector quote block reorganized")
-	}
 	var reservations liquidlane.CapacityReservations
 	if pending != nil {
 		reservations = pending(current)

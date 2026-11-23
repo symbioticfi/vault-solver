@@ -110,7 +110,7 @@ func TestRecipeQuotesUseConnectorInventory(t *testing.T) {
 		t.Fatalf("inventory = %+v", item)
 	}
 	// A read that fails for the whole inventory keeps the published state.
-	f.chain.Header.Number = nil
+	f.chain.Header.Number = new(big.Int).Lsh(big.NewInt(1), 64)
 	if err := f.solver.refreshQuoteState(t.Context(), nil); err == nil || f.solver.quoteState.Load() != state {
 		t.Fatal("failed inventory read replaced the published quote state")
 	}
