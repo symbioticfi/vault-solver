@@ -124,8 +124,6 @@ type Chain struct {
 	IdentityReads                                               int
 	OuterData                                                   []byte
 	OuterErr                                                    error
-	ReorgDuringFill                                             bool
-	ReorgBeforeDiscovery                                        bool
 	HeaderDelay                                                 time.Duration
 	HeaderStarted                                               time.Time
 }
@@ -219,9 +217,6 @@ func (r *Chain) CallContract(_ context.Context, msg ethereum.CallMsg, block *big
 		r.OuterCalls++
 		r.OuterGas = msg.Gas
 		r.OuterData = bytes.Clone(msg.Data)
-		if r.ReorgDuringFill {
-			r.Header.Extra = []byte("new canonical hash")
-		}
 		return nil, r.OuterErr
 	}
 	if *msg.To == r.venue() && (bytes.Equal(msg.Data, connectorBinding.PackAccount()) || bytes.Equal(msg.Data, connectorBinding.PackOutputAsset())) {
@@ -231,11 +226,7 @@ func (r *Chain) CallContract(_ context.Context, msg ethereum.CallMsg, block *big
 		return nil, errors.New("metadata read escaped recipe snapshot")
 	}
 	if *msg.To == r.venue() {
-		result, err := r.connectorRead(msg.Data)
-		if r.ReorgBeforeDiscovery && bytes.Equal(msg.Data[:4], connectorBinding.PackOutputAsset()[:4]) {
-			r.Header.Extra = []byte("new binding block")
-		}
-		return result, err
+		return r.connectorRead(msg.Data)
 	}
 	if *msg.To == r.RecipeExecutor {
 		contractABI := recipeBinding.GetABI()

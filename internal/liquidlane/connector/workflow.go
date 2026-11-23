@@ -275,9 +275,9 @@ func (w *Workflow) payment(ctx context.Context, request Request, terms Terms, bl
 }
 
 // Validate admits the complete outer settlement transaction that carries every leg's Call.
-// The SDK authenticates each inner call against its recipe's own caller and pins around the
-// unchanged outer simulation, which runs from the signer against the filler at the pinned
-// block and gas budget.
+// The SDK authenticates each inner call against its recipe's own caller at one fresh head and
+// runs the unchanged outer simulation from the signer against the filler at that block and
+// gas budget.
 func (w *Workflow) Validate(ctx context.Context, calldata []byte, legs ...Prepared) error {
 	members := make([]recipes.PreparedRecipe, len(legs))
 	inner := make([]recipes.ExecutorCall, len(legs))
