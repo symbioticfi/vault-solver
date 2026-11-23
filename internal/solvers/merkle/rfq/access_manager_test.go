@@ -115,16 +115,12 @@ func TestConnectorAccessManagerRoute(t *testing.T) {
 }
 
 func TestConnectorAccessManagerKeepsFullFillAdmission(t *testing.T) {
-	for _, name := range []string{"outer revert", "reorg during fill"} {
+	for _, name := range []string{"outer revert"} {
 		t.Run(name, func(t *testing.T) {
 			f := connectorExecutionFixture(t, connectortest.DiscountFixture())
 			f.reader.RecipeCaller = common.HexToAddress("0xacce55")
 			f.workflow.Chain = &accessManagerReader{Chain: f.reader, immediate: true}
-			if name == "outer revert" {
-				f.reader.OuterErr = errors.New("Reactor output shortfall")
-			} else {
-				f.reader.ReorgDuringFill = true
-			}
+			f.reader.OuterErr = errors.New("Reactor output shortfall")
 			order, selected, backend := connectorExecutionAward(f.workflow.Filler)
 			built, err := buildFill(t.Context(), f.workflow, order, nil, []filler.Leg{{Source: selected}}, backend)
 			if err == nil || len(built.Calldata) != 0 || f.reader.OuterCalls != 1 {

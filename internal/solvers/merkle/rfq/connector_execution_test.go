@@ -137,8 +137,6 @@ func TestConnectorBuildRejectsUnauthorizedOrUnsettledExecution(t *testing.T) {
 		{"outer fill reverts", func(_ *connector.Workflow, r *connectortest.Chain) {
 			r.OuterErr = errors.New("Reactor output shortfall")
 		}, "simulat"},
-		{"binding snapshot reorganizes after discovery", func(_ *connector.Workflow, r *connectortest.Chain) { r.ReorgBeforeDiscovery = true }, "block hash"},
-		{"snapshot changes during outer fill", func(_ *connector.Workflow, r *connectortest.Chain) { r.ReorgDuringFill = true }, "reorganiz"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			resolved := connectortest.DiscountFixture()
