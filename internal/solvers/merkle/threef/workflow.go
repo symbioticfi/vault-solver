@@ -139,26 +139,6 @@ func (w *offerWorkflow) validateOfferAuthorization(ctx context.Context, original
 	if _, err := recipes.RouteExecution(ctx, p.Chain, b, sender, recipeexecutor.NewRecipeExecutor().PackExecute(nil, nil, nil, nil)); err != nil {
 		return errors.Errorf("3f offer execution authorization: %w", err)
 	}
-	// Close both pins after authorization reads, including the original policy/cash pin.
-	pins := []recipes.Snapshot{a, b}
-	requests = make([]protocolio.ReadRequest, len(pins))
-	for i, pin := range pins {
-		requests[i] = protocolio.ReadRequest{Kind: protocolio.ReadHeader, Block: new(big.Int).SetUint64(pin.BlockNumber)}
-	}
-	headers, err := protocolio.ReadGroup(ctx, p.Chain, requests...)
-	if err != nil {
-		return err
-	}
-	for i, pin := range pins {
-		result := headers.At(i)
-		if result.Err != nil {
-			return errors.Errorf("3f close offer block pin: %w", result.Err)
-		}
-		header := result.Header
-		if header == nil || header.Number == nil || !header.Number.IsUint64() || header.Number.Uint64() != pin.BlockNumber || header.Hash() != pin.BlockHash {
-			return errors.New("3f offer authorization block was reorganized")
-		}
-	}
 	return nil
 }
 

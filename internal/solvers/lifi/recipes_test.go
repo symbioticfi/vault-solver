@@ -219,7 +219,7 @@ func TestRecipeQuotesUseConnectorInventory(t *testing.T) {
 		t.Fatalf("inventory = %+v", item)
 	}
 	// A read that fails for the whole inventory is an error, so the published quotes stay.
-	f.chain.Header.Number = nil
+	f.chain.Header.Number = new(big.Int).Lsh(big.NewInt(1), 64)
 	if _, err := f.solver.fillPath().quoteSource(t.Context(), nil, time.Now()); err == nil {
 		t.Fatal("failed inventory read published an empty inventory")
 	}

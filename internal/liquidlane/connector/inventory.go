@@ -49,7 +49,8 @@ type Offer struct {
 // does not constrain a quote; capacity is the advertised funding clipped by the connector's
 // remaining budget. An offer its connector contradicts or cannot price is dropped and reported
 // in skipped, next to the inventory that priced; err reports a read that leaves no inventory to
-// trust at all (the block, a reorganization, cancellation).
+// trust at all (the block, cancellation). The block is not re-checked against the canonical
+// chain: inventory only feeds quotes that are re-simulated at a fresh head and enforced on-chain.
 func ReadInventory(ctx context.Context, chain recipes.Reader, chainID int64, offers []Offer) (inventory []liquidlane.Inventory, skipped, err error) {
 	if len(offers) == 0 {
 		return nil, nil, nil
@@ -76,10 +77,6 @@ func ReadInventory(ctx context.Context, chain recipes.Reader, chainID int64, off
 		if item != nil {
 			inventory = append(inventory, *item)
 		}
-	}
-	canonical, err := chain.HeaderByNumber(ctx, block)
-	if err != nil || canonical == nil || canonical.Number == nil || canonical.Number.Cmp(block) != 0 || canonical.Hash() != header.Hash() {
-		return nil, nil, errors.New("connector inventory block reorganized")
 	}
 	return inventory, errors.Join(dropped...), nil
 }

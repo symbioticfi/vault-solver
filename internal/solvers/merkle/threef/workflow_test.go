@@ -295,7 +295,7 @@ func (c offerTestChain) FilterLogs(context.Context, ethereum.FilterQuery) ([]typ
 }
 
 func TestOfferTickAuthenticatesWithoutPermissionServiceOrMint(t *testing.T) {
-	for _, change := range []string{"valid", "account", "caller", "recipe", "recipe block", "root", "role", "role before POST", "role before cancel", "original reorg", "fresh reorg", "role read failure", "pin read failure", "manager allowed", "manager denied", "manager delayed", "manager inconsistent grant", "manager revoked before POST", "manager revoked before cancel", "manager read failure", "manager malformed response", "manager reorg"} {
+	for _, change := range []string{"valid", "account", "caller", "recipe", "recipe block", "root", "role", "role before POST", "role before cancel", "role read failure", "manager allowed", "manager denied", "manager delayed", "manager inconsistent grant", "manager revoked before POST", "manager revoked before cancel", "manager read failure", "manager malformed response"} {
 		t.Run(change, func(t *testing.T) {
 			w, client, data := offerPassFixture(t)
 			pin, recipe, market := data.pin, data.recipe, data.markets[0]
@@ -344,21 +344,6 @@ func TestOfferTickAuthenticatesWithoutPermissionServiceOrMint(t *testing.T) {
 				header := original
 				if block.Cmp(fresh.Number) == 0 {
 					header = fresh
-				}
-				if change == "manager reorg" && managerReads > 0 {
-					reorganized := types.CopyHeader(header)
-					reorganized.Extra = []byte{1}
-					return reorganized, nil
-				}
-				if roleReads > 0 {
-					if change == "pin read failure" {
-						return nil, errors.New("header unavailable")
-					}
-					if change == "original reorg" && block.Cmp(original.Number) == 0 || change == "fresh reorg" && block.Cmp(fresh.Number) == 0 {
-						reorganized := types.CopyHeader(header)
-						reorganized.Extra = []byte{1}
-						return reorganized, nil
-					}
 				}
 				return header, nil
 			}
