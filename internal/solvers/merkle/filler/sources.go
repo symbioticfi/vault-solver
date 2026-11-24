@@ -92,13 +92,13 @@ func (e *Engine) Inventory(ctx context.Context, listed []discounts.ListItem) (in
 	return inventory, errors.Join(append(dropped, unread)...), nil
 }
 
-// unreserved is the source's advertised funding less what this lane has spent from that
-// account and the listing does not reflect yet.
-func (e *Engine) unreserved(source Source, tokenOut common.Address) *big.Int {
+// Unreserved is the source's advertised funding less other awards' reservations
+// and spends its listing has yet to reflect.
+func (e *Engine) Unreserved(source Source, tokenOut common.Address, orderID string) *big.Int {
 	capacity := liquidlane.NewCapacityID(e.Workflow.ChainID.Int64(), source.Account, tokenOut)
-	reserved := e.Spends.Reservations([]liquidlane.Inventory{{
+	reserved := e.Spends.ReservationsExcluding([]liquidlane.Inventory{{
 		CapacityID: capacity, MaxAssets: source.MaxAssets, BlockNumber: source.Listing.BlockNumber,
-	}})[capacity]
+	}}, orderID)[capacity]
 	if reserved == nil {
 		return source.MaxAssets
 	}

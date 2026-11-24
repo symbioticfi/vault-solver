@@ -26,6 +26,8 @@ import (
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/api/bindings/multicall3"
 	"github.com/symbioticfi/vault-solver/internal/chain"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	connectorledger "github.com/symbioticfi/vault-solver/internal/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	merklerfq "github.com/symbioticfi/vault-solver/internal/solvers/merkle/rfq"
@@ -150,6 +152,25 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 			t.Fatalf("pending quote HTTP status = %d, want %d: %s", response.Code, status, response.Body.String())
 		}
 	}
+
+	_, quoteAccount, quoteRouteFound := s.merkle.ResolveRoute(common.HexToAddress(body.Adapters[0].Adapter), common.HexToAddress(body.TokenIn), tOut)
+	if !quoteRouteFound {
+		t.Fatal("fixture quote route is missing")
+	}
+	capacity := liquidlane.NewCapacityID(1, quoteAccount, tOut)
+	spend := connectorledger.Spend{Amounts: liquidlane.CapacityReservations{capacity: big.NewInt(1)}, Deadline: time.Now().Add(time.Minute).Unix()}
+	if err := s.merkle.Spends.ReserveQueued("queued", spend); err != nil {
+		t.Fatal(err)
+	}
+	body.Adapters[0].MaxAssets = "456"
+	if response := do(t, s.server.handler(), http.MethodPost, "/quote", "test-secret", body); response.Code != http.StatusNoContent {
+		t.Fatalf("quote used a queued award's reserved capacity: %d", response.Code)
+	}
+	body.Adapters[0].MaxAssets = "457"
+	if response := do(t, s.server.handler(), http.MethodPost, "/quote", "test-secret", body); response.Code != http.StatusOK {
+		t.Fatalf("quote could not use the unreserved remainder: %d", response.Code)
+	}
+	s.merkle.Spends.PruneQueued(nil)
 
 	quoteClock := s.server.quotes.now
 	s.server.quotes.now = func() time.Time { return time.Now().Add(3 * time.Minute) }

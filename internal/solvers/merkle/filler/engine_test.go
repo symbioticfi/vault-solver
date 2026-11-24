@@ -174,9 +174,11 @@ func TestRunContinuesToNextFillAfterConfirmation(t *testing.T) {
 	e := testEngine(t, &fillertest.Sender{IsBusy: true, Result: fillertest.Confirmed()})
 	e.Spends = nil
 	e.intent.Store(&Intent{OrderID: "pending"})
-	err := e.Run(ctx, func(context.Context) (*Intent, error) {
-		cancel()
-		return nil, nil
+	err := e.Run(ctx, func(ctx context.Context) error {
+		return e.Tick(ctx, func(context.Context) (*Intent, error) {
+			cancel()
+			return nil, nil
+		})
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal("confirmed fill waited for the polling timer before the next one", err)
@@ -197,9 +199,11 @@ func TestRunLogsOrderIDForPendingFillFailure(t *testing.T) {
 	e := testEngine(t, &fillertest.Sender{IsBusy: true, PollErr: transaction.ErrNonceConsumed})
 	e.intent.Store(&Intent{OrderID: "pending-order"})
 
-	err := e.Run(ctx, func(context.Context) (*Intent, error) {
-		t.Fatal("fetched new work while a fill was unresolved")
-		return nil, nil
+	err := e.Run(ctx, func(ctx context.Context) error {
+		return e.Tick(ctx, func(context.Context) (*Intent, error) {
+			t.Fatal("fetched new work while a fill was unresolved")
+			return nil, nil
+		})
 	})
 	if !errors.Is(err, context.Canceled) || !strings.Contains(failure, `"orderId"="pending-order"`) {
 		t.Fatalf("pending fill failure log = %q, run error = %v", failure, err)

@@ -35,6 +35,58 @@ func TestPendingFillDoesNotDisableQuotesForUnspentCapacity(t *testing.T) {
 	}
 }
 
+func TestQueuedReservationBecomesSubmittedAndThenCanonical(t *testing.T) {
+	ledger := NewSpendLedger()
+	queued := testSpend()
+	queued.IncludedAt = 0
+	if err := ledger.ReserveQueued("award", queued); err != nil {
+		t.Fatal(err)
+	}
+	if len(ledger.ReservationsExcluding(nil, "award")) != 0 {
+		t.Fatal("award could not use its own virtual reservation")
+	}
+	actual := queued
+	actual.Amounts = liquidlane.CapacityReservations{testCapacityID(): big.NewInt(110)}
+	if err := ledger.Reserve("award", actual); err != nil {
+		t.Fatal(err)
+	}
+	if got := ledger.Reservations(nil)[testCapacityID()]; got == nil || got.Int64() != 110 {
+		t.Fatalf("submitted spend must replace the estimate, got %v", got)
+	}
+	ledger.Release("award")
+	if got := ledger.Reservations(nil)[testCapacityID()]; got == nil || got.Int64() != 100 {
+		t.Fatalf("open award lost its virtual reservation, got %v", got)
+	}
+	actual.IncludedAt = 8
+	if err := ledger.Include("award", actual); err != nil {
+		t.Fatal(err)
+	}
+	if ledger.Queued("award") || len(ledger.Reservations(spendInventory(8))) != 0 {
+		t.Fatal("confirmed fill remained virtually reserved against a fresh snapshot")
+	}
+}
+
+func TestQueuedExpiryKeepsSubmittedSpend(t *testing.T) {
+	ledger := NewSpendLedger()
+	spend := testSpend()
+	spend.IncludedAt = 0
+	for _, id := range []string{"pending", "queued"} {
+		if err := ledger.ReserveQueued(id, spend); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ledger.Reserve("pending", spend); err != nil {
+		t.Fatal(err)
+	}
+	ledger.Expire(spend.Deadline)
+	if ledger.Queued("pending") || ledger.Queued("queued") {
+		t.Fatal("expired awards stayed queued")
+	}
+	if got := ledger.Reservations(nil)[testCapacityID()]; got == nil || got.Int64() != 100 {
+		t.Fatalf("signed spend lost its reservation at the deadline, got %v", got)
+	}
+}
+
 func TestFreshSnapshotPrunesSpendWithoutReopeningOlderInventory(t *testing.T) {
 	ledger := NewSpendLedger()
 	if err := ledger.Include("award", testSpend()); err != nil {

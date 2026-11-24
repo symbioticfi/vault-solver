@@ -59,9 +59,9 @@ Quote capacity is grouped by account and funding asset, not executor. Overlappin
 recipes are alternatives; they cannot multiply that balance within a quote.
 Use one order poller per RFQ Executor/filler identity; a second process for quotes must
 set `quoteOnly: true`.
-Polling is every three seconds. Once a pending fill settles, the loop checks the
-next award immediately; pending work and uncertain failures use the normal cadence.
-Each iteration has a thirty-second context and fetches at most 100 open orders.
+The loop polls awards every three seconds, including while a fill is pending. It
+fetches all open-order pages in batches of 100 within the iteration's thirty-second
+context. A settled fill advances immediately to the next award.
 Curator HTTP limits are ten seconds and 2 MiB. Secret configuration contains
 environment variable names. The execution-only plugin has no quote server. Native RFQ mode keeps its existing
 configurable polling limits.
@@ -130,24 +130,27 @@ loses intent and transaction tracking while the transaction may still execute.
 Settle old work before upgrading and use one active process per signer.
 
 Quote inventory must match the verified recipe connector, RWA, account and asset.
-Execution remains sequential. Quotes can continue during a fill for up to two
-minutes after the last successful award poll. Before submission, each connector
-payout is reserved against its funding account/asset
-capacity. Other capacity and the unreserved remainder stay quotable. Ambiguous
-submissions keep that reservation, including the gap after sender release and
-before the fill loop records its canonical receipt. Unsigned failures and canonical
-reverts release it. Confirmed spends remain subtracted from older inventory until
-that capacity's snapshots reflect inclusion. Confirmed details compact after fresh
-inventory or the signed deadline; an inclusion watermark prevents later stale
-snapshots from reopening that capacity. Pending reservations survive their deadlines
-until the signed outcome is known.
+Execution submits one fill at a time. On each successful poll, the solver estimates
+payouts for queued awards and reserves them against the funding account and asset.
+Quotes use other capacity and the unreserved remainder. Submission replans and
+simulates the fill with fresh terms while excluding the award's own reservation.
+The submitted spend replaces its queued estimate in quote accounting. Ambiguous
+submissions keep the signed spend until settlement. If submission fails unsigned or
+the transaction reverts, the queued estimate applies while the award is still open.
+A complete poll releases queued awards that leave the feed. The chain clock expires
+queued awards at the signed deadline, while unresolved signed spends keep their
+reservation. Confirmed spends remain subtracted from older inventory until that
+capacity's snapshots reflect inclusion. An inclusion watermark prevents later stale
+snapshots from reopening spent capacity.
 Completed award IDs are retained until their signed chain deadlines, preventing
 a still-listed award from being filled twice. Reservations, watermarks and completed
 IDs are RAM only and are lost on process exit. A sending deployment needs a ready
-SDK manager and a recent successful award poll to quote. A pending receipt or an
-unavailable order feed can make the poll stale. The next successful poll resumes
-quoting. Check `solver_bot_workflow_last_event_timestamp{event="order_poll",outcome="success"}`
-for the affected pod. Pending fill errors include the order ID for receipt investigation.
+SDK manager and a successful award refresh within the last two minutes to quote.
+Receipt tracking continues alongside award intake. An unavailable order feed can
+make the refresh stale. Losing the sender ticket without a canonical receipt pauses
+quotes and retains the unresolved spend. Check
+`solver_bot_workflow_last_event_timestamp{event="order_poll",outcome="success"}` for
+the affected pod. Pending fill errors include the order ID for receipt investigation.
 Quote-only deployments serve independently of the award poll.
 
 The RFQ bridge ABI comes from [RFQ PR 25](https://github.com/symbioticfi/rfq/pull/25),

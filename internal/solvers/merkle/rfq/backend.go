@@ -25,14 +25,34 @@ func newBackendClient(url string) *backendClient {
 }
 
 func (b *backendClient) orders(ctx context.Context, filler string) ([]rfqbackend.OrdersResponseOrdersInner, error) {
-	result, response, err := b.api.RFQAPI.ApiV1OrdersGet(ctx).Filler(filler).OrderStatus("open").Limit(100).Execute()
-	if response != nil && response.Body != nil {
-		_ = response.Body.Close()
+	var rows []rfqbackend.OrdersResponseOrdersInner
+	cursor := ""
+	seen := make(map[string]bool)
+	for {
+		request := b.api.RFQAPI.ApiV1OrdersGet(ctx).Filler(filler).OrderStatus("open").Limit(100)
+		if cursor != "" {
+			request = request.Cursor(cursor)
+		}
+		result, response, err := request.Execute()
+		if response != nil && response.Body != nil {
+			_ = response.Body.Close()
+		}
+		if err != nil {
+			return nil, errors.Errorf("rfq-merkle: list awarded orders: %w", err)
+		}
+		if result == nil || result.Orders == nil {
+			return nil, errors.New("rfq-merkle: missing awarded orders")
+		}
+		rows = append(rows, result.Orders...)
+		cursor = result.GetCursor()
+		if cursor == "" {
+			return rows, nil
+		}
+		if seen[cursor] {
+			return nil, errors.New("rfq-merkle: repeated awarded orders cursor")
+		}
+		seen[cursor] = true
 	}
-	if err != nil || result == nil {
-		return nil, errors.New("rfq-merkle: list awarded orders failed")
-	}
-	return result.Orders, nil
 }
 
 func (b *backendClient) resolveDiscount(ctx context.Context, id string) (*discounts.Resolved, error) {

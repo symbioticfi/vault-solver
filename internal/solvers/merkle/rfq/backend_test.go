@@ -34,6 +34,46 @@ func TestBackendReadsAwardedExecutableOrders(t *testing.T) {
 	}
 }
 
+func TestBackendReadsAllAwardPages(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		repeat bool
+	}{
+		{name: "complete snapshot"},
+		{name: "repeated cursor", repeat: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Query().Get("cursor") {
+				case "":
+					_, _ = w.Write([]byte(`{"orders":[{"orderId":"first"}],"cursor":"page-two"}`))
+				case "page-two":
+					if tc.repeat {
+						_, _ = w.Write([]byte(`{"orders":[],"cursor":"page-two"}`))
+						return
+					}
+					_, _ = w.Write([]byte(`{"orders":[{"orderId":"second"}],"cursor":null}`))
+				default:
+					t.Error("unexpected award cursor")
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			rows, err := newBackendClient(server.URL).orders(t.Context(), vlt.Hex())
+			if tc.repeat {
+				if err == nil || len(rows) != 0 {
+					t.Fatalf("partial result escaped repeated cursor: %v %v", rows, err)
+				}
+				return
+			}
+			if err != nil || len(rows) != 2 || rows[0].OrderId != "first" || rows[1].OrderId != "second" {
+				t.Fatalf("incomplete award snapshot: %v %v", rows, err)
+			}
+		})
+	}
+}
+
 func TestBackendRefusesRedirects(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/unexpected" {

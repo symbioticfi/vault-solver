@@ -18,7 +18,8 @@ import (
 type Leg struct {
 	Source
 
-	AmountIn *big.Int
+	AmountIn  *big.Int
+	AmountOut *big.Int // Estimated payout used for queued reservations.
 }
 
 // Split plans amountIn across at most maxRoutes of the routes' connectors when no single one
@@ -26,7 +27,7 @@ type Leg struct {
 // reservations are charged once per funding account and output asset. It returns nil when the
 // connectors cannot pay minAmountOut together, and an error when that may be only because a
 // connector could not be priced.
-func (e *Engine) Split(ctx context.Context, routes []Source, amountIn, minAmountOut *big.Int, maxRoutes int, at Observation) ([]Leg, error) {
+func (e *Engine) Split(ctx context.Context, routes []Source, amountIn, minAmountOut *big.Int, maxRoutes int, at Observation, orderID string) ([]Leg, error) {
 	distinct := make(map[common.Address]bool)
 	for _, route := range routes {
 		distinct[route.Venue] = true
@@ -45,7 +46,7 @@ func (e *Engine) Split(ctx context.Context, routes []Source, amountIn, minAmount
 		return nil, errors.Errorf("price connectors for a split: %w", err)
 	}
 	inventory = greedy.FilterLiveInventory(inventory, at.Chain)
-	available := greedy.AllocateInventoryCapacity(inventory, e.Reservations(inventory), 0)
+	available := greedy.AllocateInventoryCapacity(inventory, e.Spends.ReservationsExcluding(inventory, orderID), 0)
 	candidates := make([]liquidlane.QuoteCandidate, 0, len(available))
 	executors := make(map[liquidlane.RouteID]common.Address, len(available))
 	for _, item := range available {
@@ -69,8 +70,9 @@ func (e *Engine) Split(ctx context.Context, routes []Source, amountIn, minAmount
 	for _, allocation := range solution.Allocations {
 		c := allocation.Candidate
 		legs = append(legs, Leg{
-			Venue: c.Route.Adapter, RecipeExecutor: executors[c.Route.ID], DiscountID: *c.DiscountID, MaxAssets: c.MaxAmountOut,
-			AmountIn: allocation.AmountIn,
+			Venue: c.Route.Adapter, RecipeExecutor: executors[c.Route.ID],
+			Account: c.Route.Vault, DiscountID: *c.DiscountID, MaxAssets: c.MaxAmountOut,
+			AmountIn: allocation.AmountIn, AmountOut: allocation.AmountOut,
 		})
 	}
 	return legs, nil

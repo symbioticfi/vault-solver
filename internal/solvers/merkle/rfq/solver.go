@@ -3,7 +3,6 @@ package rfq
 
 import (
 	"context"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -62,39 +61,32 @@ func New(cfg Config, deps solver.Deps, observeOrderPoll func(time.Time)) (*Solve
 	return &Solver{Engine: engine, backend: newBackendClient(cfg.BackendURL), tokenPolicy: cfg.TokenPolicy, observeOrderPoll: observeOrderPoll}, nil
 }
 
-func (s *Solver) Run(ctx context.Context) error { return s.Engine.Run(ctx, s.next) }
+func (s *Solver) Run(ctx context.Context) error { return s.Engine.Run(ctx, s.tick) }
 
-func (s *Solver) tick(ctx context.Context) error { return s.Tick(ctx, s.next) }
+func (s *Solver) tick(ctx context.Context) error {
+	wasPending := s.Pending() != nil
+	err := s.Tick(ctx, s.next)
+	if !wasPending || s.Pending() == nil || ctx.Err() != nil {
+		return err
+	}
+	_, _, pollErr := s.pollAwards(ctx, false)
+	return errors.Join(err, pollErr)
+}
 
-// CanQuote requires both a ready sender and a recent successful award poll.
+// CanQuote requires a healthy execution lane and a recent successful award refresh.
 func (s *Solver) CanQuote(now time.Time) bool {
 	lastPoll := s.lastOrderPoll.Load()
-	return lastPoll != nil && now.Sub(*lastPoll) < filler.ConfirmationPatience && s.Ready()
+	return lastPoll != nil && now.Sub(*lastPoll) < filler.ConfirmationPatience && s.Ready() && !s.Stalled()
 }
 
 // next returns the first awarded order that a configured connector can settle.
 func (s *Solver) next(ctx context.Context) (*filler.Intent, error) {
-	rows, err := s.backend.orders(ctx, strings.ToLower(s.Workflow.Filler.Hex()))
+	rows, listed, err := s.pollAwards(ctx, true)
 	if err != nil {
 		return nil, err
-	}
-	now := time.Now()
-	s.lastOrderPoll.Store(&now)
-	if s.observeOrderPoll != nil {
-		s.observeOrderPoll(now)
-	}
-	if len(rows) == 0 {
-		return nil, nil
-	}
-	listed, err := s.backend.listDiscounts(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if listed == nil {
-		return nil, errors.New("missing connector discount inventory")
 	}
 	for _, row := range rows {
-		intent, err := s.prepare(ctx, row, listed.Discounts)
+		intent, err := s.prepare(ctx, row, listed)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -153,6 +145,7 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	}
 	for _, route := range routes {
 		// Keep an executable single-connector fill when one can settle the award.
+		route.MaxAssets = s.Unreserved(route, token, row.OrderId)
 		if route.MaxAssets.Cmp(required) < 0 {
 			continue
 		}
@@ -168,7 +161,7 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	if s.tokenPolicy.RequiresSingleRoute(order.Request.TokenIn) {
 		return nil, nil
 	}
-	legs, err := s.Split(ctx, routes, order.Request.AmountIn, required, len(routes), observed)
+	legs, err := s.Split(ctx, routes, order.Request.AmountIn, required, len(routes), observed, row.OrderId)
 	if err != nil || len(legs) == 0 {
 		return nil, err
 	}

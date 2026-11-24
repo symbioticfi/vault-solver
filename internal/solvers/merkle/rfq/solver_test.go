@@ -143,10 +143,10 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	order, _, backend := connectorExecutionAward(fixture.workflow.Filler)
 	next := awardRow(t, order)
 	next.OrderId = "next-award"
-	backend.rows = []rfqbackend.OrdersResponseOrdersInner{awardRow(t, order), next}
+	backend.rows = []rfqbackend.OrdersResponseOrdersInner{awardRow(t, order)}
 	backend.listed = &discounts.List{Discounts: []discounts.ListItem{
 		{DiscountPrecision: "100000000", Adapter: common.HexToAddress("0x01").Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: "99999"},
-		{DiscountPrecision: "100000000", Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: "900"},
+		{DiscountPrecision: "100000000", Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: "1000"},
 	}}
 	sender := &fillertest.Sender{}
 	s := &Solver{Engine: &filler.Engine{Routes: connector.NewRoutes(fixture.workflow, []common.Address{common.HexToAddress("0x43")}), Workflow: fixture.workflow, Sender: sender, Spends: connector.NewSpendLedger()}, backend: backend}
@@ -173,16 +173,15 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	if err := s.tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if backend.reads != reads || sender.Submits != 1 || !reflect.DeepEqual(intent, *s.Pending()) {
+	if backend.reads != reads+1 || sender.Submits != 1 || !reflect.DeepEqual(intent, *s.Pending()) {
 		t.Fatal("pending fill was rebuilt or its deadline changed")
 	}
-	lastOrderPoll := *s.lastOrderPoll.Load()
 	sender.PollErr = transaction.ErrNonceConsumed
-	if err := s.tick(t.Context()); !errors.Is(err, transaction.ErrNonceConsumed) || s.Pending() == nil || backend.reads != reads {
-		t.Fatal("unconfirmed fill lost ownership or read a new award", err)
+	if err := s.tick(t.Context()); !errors.Is(err, transaction.ErrNonceConsumed) || s.Pending() == nil || backend.reads != reads+2 {
+		t.Fatal("unconfirmed fill lost ownership or stopped award polling", err)
 	}
-	if s.CanQuote(lastOrderPoll.Add(filler.ConfirmationPatience)) {
-		t.Fatal("quotes stayed available while the fill prevented new award polls")
+	if !s.CanQuote(time.Now()) {
+		t.Fatal("receipt uncertainty stopped quotes despite a successful award poll")
 	}
 	sender.PollErr = nil
 	sender.Result = fillertest.Confirmed()
@@ -194,7 +193,7 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	if err := s.tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if backend.reads != reads || !reflect.DeepEqual(request, sender.Request) || sender.Submits != 1 || s.Pending() != nil || sender.Busy() {
+	if backend.reads != reads+2 || !reflect.DeepEqual(request, sender.Request) || sender.Submits != 1 || s.Pending() != nil || sender.Busy() {
 		t.Fatal("canonical fill was rebuilt or its ownership was not released")
 	}
 	if !s.Spends.Finalized("award") {
@@ -207,7 +206,7 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	}
 	// A different award waits for canonical settlement, then starts on the same single lane.
 	backend.rows = append(backend.rows, next)
-	backend.listed = &discounts.List{Discounts: []discounts.ListItem{{DiscountPrecision: "100000000", Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: "900"}}}
+	backend.listed = &discounts.List{Discounts: []discounts.ListItem{{DiscountPrecision: "100000000", Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: "1000"}}}
 	backend.discount = connectortest.DiscountFixture()
 	sender.Result = nil
 	sender.Before = nil
@@ -216,6 +215,86 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	}
 	if err := s.tick(t.Context()); err != nil || sender.Submits != 2 {
 		t.Fatal("pending second award admitted parallel work", err)
+	}
+}
+
+func TestPendingFillKeepsPollingAndReservesNewAward(t *testing.T) {
+	fixture := connectorExecutionFixture(t, connectortest.DiscountFixture())
+	order, _, backend := connectorExecutionAward(fixture.workflow.Filler)
+	first, second := awardRow(t, order), awardRow(t, order)
+	second.OrderId = "second-award"
+	listing := discounts.ListItem{
+		DiscountPrecision: connector.PrecisionText, Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
+		Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: "1000",
+	}
+	backend.rows = []rfqbackend.OrdersResponseOrdersInner{first}
+	backend.listed = &discounts.List{Discounts: []discounts.ListItem{listing}}
+	sender := &fillertest.Sender{}
+	s := &Solver{
+		Engine: &filler.Engine{
+			Routes:   connector.NewRoutes(fixture.workflow, []common.Address{fixture.reader.RecipeExecutor}),
+			Workflow: fixture.workflow, Sender: sender, Spends: connector.NewSpendLedger(),
+			LaneReady: func() bool { return true },
+		},
+		backend: backend,
+	}
+	if err := s.tick(t.Context()); err != nil || s.Pending() == nil {
+		t.Fatalf("first fill: pending=%v err=%v", s.Pending(), err)
+	}
+	backend.rows = append(backend.rows, second)
+	sender.PollErr = transaction.ErrNonceConsumed
+	if err := s.tick(t.Context()); !errors.Is(err, transaction.ErrNonceConsumed) {
+		t.Fatalf("receipt poll: %v", err)
+	}
+	capacity := liquidlane.NewCapacityID(1, fixture.reader.RecipeAccount, tOut)
+	if reserved := s.Reservations(nil)[capacity]; reserved == nil || reserved.Int64() != 912 {
+		t.Fatalf("reserve both 456-unit awards, got %v", reserved)
+	}
+	if sender.Submits != 1 || fixture.reader.OuterCalls != 1 || s.Pending().OrderID != first.OrderId {
+		t.Fatal("queued award reached simulation or signer before settlement")
+	}
+
+	backend.ordersErr = errors.New("orders feed unavailable")
+	if err := s.tick(t.Context()); !errors.Is(err, backend.ordersErr) || !errors.Is(err, transaction.ErrNonceConsumed) {
+		t.Fatalf("poll and receipt errors: %v", err)
+	}
+	if reserved := s.Reservations(nil)[capacity]; reserved == nil || reserved.Int64() != 912 {
+		t.Fatalf("failed poll released known awards, got %v", reserved)
+	}
+	backend.ordersErr = nil
+	backend.rows = []rfqbackend.OrdersResponseOrdersInner{first}
+	if err := s.tick(t.Context()); !errors.Is(err, transaction.ErrNonceConsumed) {
+		t.Fatalf("receipt poll: %v", err)
+	}
+	if reserved := s.Reservations(nil)[capacity]; reserved == nil || reserved.Int64() != 456 {
+		t.Fatalf("release only the award that left the feed, got %v", reserved)
+	}
+
+	backend.rows = append(backend.rows, second)
+	if err := s.tick(t.Context()); !errors.Is(err, transaction.ErrNonceConsumed) {
+		t.Fatalf("requeued award poll: %v", err)
+	}
+	sender.PollErr = nil
+	sender.Result = fillertest.Confirmed()
+	if err := s.tick(t.Context()); err != nil || sender.Submits != 1 || s.Pending() != nil {
+		t.Fatalf("settling the first fill changed sequencing: submits=%d pending=%v err=%v", sender.Submits, s.Pending(), err)
+	}
+	sender.Result = nil
+	if err := s.tick(t.Context()); err != nil || sender.Submits != 2 || s.Pending() == nil || s.Pending().OrderID != second.OrderId {
+		t.Fatalf("reserved award did not reach the signer: submits=%d pending=%v err=%v", sender.Submits, s.Pending(), err)
+	}
+	if reserved := s.Reservations(nil)[capacity]; reserved == nil || reserved.Int64() != 912 {
+		t.Fatalf("promotion double-counted the queued award, got %v", reserved)
+	}
+
+	// Losing the sender ticket without a receipt means the lane cannot progress.
+	sender.IsBusy = false
+	sender.PollErr = transaction.ErrNonceConsumed
+	if err := s.tick(t.Context()); !errors.Is(err, filler.ErrLaneStalled) || !errors.Is(err, transaction.ErrNonceConsumed) {
+		t.Fatalf("lost sender ticket: %v", err)
+	}
+	if s.CanQuote(time.Now()) || s.Pending() == nil || sender.Submits != 2 {
+		t.Fatal("stalled lane accepted more work or released unresolved ownership")
 	}
 }
 
@@ -260,7 +339,7 @@ func TestPrepareCountsHeaderLatencyAgainstDeadline(t *testing.T) {
 	}
 }
 
-func TestSubmissionErrorRetainsOnlySignedWork(t *testing.T) {
+func TestSubmissionErrorPreservesOpenAwardReservation(t *testing.T) {
 	for _, unsigned := range []bool{false, true} {
 		t.Run(map[bool]string{false: "signed ambiguity", true: "before signing"}[unsigned], func(t *testing.T) {
 			fixture := connectorExecutionFixture(t, connectortest.DiscountFixture())
@@ -277,14 +356,21 @@ func TestSubmissionErrorRetainsOnlySignedWork(t *testing.T) {
 			}
 			capacityID := liquidlane.NewCapacityID(1, fixture.reader.RecipeAccount, tOut)
 			reserved := s.Reservations(nil)[capacityID]
-			if unsigned && len(s.Reservations(nil)) != 0 || !unsigned && (reserved == nil || reserved.Cmp(big.NewInt(456)) != 0) {
-				t.Fatal("submission error released signed capacity or retained an unsigned reservation")
+			if reserved == nil || reserved.Int64() != 456 {
+				t.Fatalf("open award lost its reservation: %v", reserved)
 			}
-			if !unsigned {
-				reads := backend.reads
-				if err := s.tick(t.Context()); err != nil || backend.reads != reads || sender.Submits != 1 {
-					t.Fatal("ambiguous signed fill was rebuilt", err)
-				}
+
+			reads := backend.reads
+			backend.rows = nil
+			if err := s.tick(t.Context()); err != nil || backend.reads != reads+1 || sender.Submits != 1 {
+				t.Fatal("worker stopped polling or rebuilt an absent award", err)
+			}
+			reserved = s.Reservations(nil)[capacityID]
+			switch {
+			case unsigned && reserved != nil:
+				t.Fatalf("absent unsigned award retained %v", reserved)
+			case !unsigned && (reserved == nil || reserved.Int64() != 456):
+				t.Fatalf("absent award released its signed spend: %v", reserved)
 			}
 		})
 	}
