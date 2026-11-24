@@ -80,6 +80,13 @@ func (s *Solver) quote(ctx context.Context, r request, indicative bool) (quoteRe
 	if err != nil {
 		return quoteResponse{}, err
 	}
+	if wait := time.Until(s.cfg.Timing.submitAt(inclusion)); wait > 0 {
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return quoteResponse{}, decline("signature_pending")
+		}
+	}
 	// The sender stops submitting once the target slot has passed: a later inclusion would
 	// date the deadline too early for the coordinator.
 	done, err := s.lane.execute(ctx, s.background(), call, time.Unix(int64(inclusion), 0))

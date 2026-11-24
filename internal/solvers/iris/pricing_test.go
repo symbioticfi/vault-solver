@@ -62,8 +62,15 @@ func TestScheduleTargetsTheFirstReachableSlot(t *testing.T) {
 			inclusion, deadline := timing.schedule(time.Unix(int64(tt.now), 0), head)
 			equal(t, tt.wantInclusion, inclusion)
 			equal(t, tt.wantInclusion+120, deadline)
+			// Never send before the slot preceding the target, so it cannot land early.
+			submit := timing.submitAt(inclusion)
+			equal(t, int64(inclusion-12), submit.Unix())
+			equal(t, tt.name == "next slot is too close", submit.After(time.Unix(int64(tt.now), 0)), "wait")
 		})
 	}
+	// A fractional lead past a slot boundary moves to the next slot instead of truncating.
+	inclusion, _ := timing.schedule(time.Unix(int64(head+10), int64(500*time.Millisecond)), head)
+	equal(t, head+24, inclusion)
 	timing.ResponseSlack = 2 * time.Second
 	_, deadline := timing.schedule(time.Unix(int64(head+1), 0), head)
 	equal(t, head+12+122, deadline)

@@ -69,7 +69,7 @@ func decodeMarket(prepared recipes.PreparedRecipe, tree *recipes.Tree, iris comm
 		return Market{}, errors.New("sign leaf domain is not the configured Iris")
 	}
 	size := new(big.Int).SetBytes(data[signBufferOffset-32 : signBufferOffset])
-	if !size.IsInt64() || size.Int64() <= quoteWords*32 || int(size.Int64()) > len(data)-signBufferOffset {
+	if !size.IsInt64() || size.Int64() < quoteWords*32 || int(size.Int64()) > len(data)-signBufferOffset {
 		return Market{}, errors.New("sign buffer must hold the Quote words and market data")
 	}
 	buffer := data[signBufferOffset : signBufferOffset+int(size.Int64())]

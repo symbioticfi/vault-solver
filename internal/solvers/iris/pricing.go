@@ -64,12 +64,19 @@ func (p Pricing) bond(requirement *big.Int) *big.Int {
 // deadline from that slot, so the quote reaches the coordinator with about quoteTtl left.
 func (t Timing) schedule(now time.Time, headTimestamp uint64) (inclusion, deadline uint64) {
 	step := uint64(t.BlockTime / time.Second)
-	earliest := uint64(now.Add(t.SubmitLead).Unix())
+	// Round up: truncating to whole seconds would shorten the lead by up to a second.
+	earliest := uint64(now.Add(t.SubmitLead).Add(time.Second - 1).Unix())
 	inclusion = headTimestamp + step
 	if earliest > inclusion {
 		inclusion += (earliest - inclusion + step - 1) / step * step
 	}
 	return inclusion, inclusion + uint64((t.QuoteTTL+t.ResponseSlack)/time.Second)
+}
+
+// submitAt is when the slot before inclusion starts. Sending earlier could land the signature
+// a slot early, which puts the deadline past the coordinator's window.
+func (t Timing) submitAt(inclusion uint64) time.Time {
+	return time.Unix(int64(inclusion), 0).Add(-t.BlockTime)
 }
 
 // fresh reports whether the coordinator still accepts the deadline: it must lie within the
