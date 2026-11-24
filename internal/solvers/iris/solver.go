@@ -1,0 +1,347 @@
+// Package iris answers IRIS RFQ quote requests for one Merkle account. The account is the
+// Iris solver: its iris-signing recipes presign each quote on-chain (ERC-1271) before the
+// quote is returned. See docs/IRIS-PLAN.md.
+package iris
+
+import (
+	"context"
+	"crypto/subtle"
+	"encoding/json"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"os"
+	"slices"
+	"sync/atomic"
+	"time"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
+	"github.com/symbioticfi/merkle-executor/sdk/permissions"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	"golang.org/x/sync/errgroup"
+	"gopkg.in/yaml.v3"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
+	"github.com/symbioticfi/vault-solver/internal/solver"
+)
+
+const (
+	Name = "iris"
+	// maxConfirmations keeps the receipt within one slot of inclusion; deeper confirmation
+	// would date every deadline too early for the coordinator.
+	maxConfirmations = 1
+	shutdownTimeout  = 5 * time.Second
+)
+
+var executorBinding = recipeexecutor.NewRecipeExecutor()
+
+var tracer = observability.NewTracer("github.com/symbioticfi/vault-solver/internal/solvers/iris", Name)
+
+//nolint:gochecknoinits // Self-registration is the solver plugin contract.
+func init() { solver.Register(Name, factory) }
+
+// chainReader is the chain surface the solver reads; *chain.Client satisfies it.
+type chainReader interface {
+	recipes.Reader
+}
+
+// Solver serves the coordinator webhook. The market index is replaced whole by the refresh
+// loop and read lock-free; on-chain signing is serialized by the lane.
+type Solver struct {
+	cfg       Config
+	chain     chainReader
+	chainID   *big.Int
+	signer    common.Address
+	maxGas    uint64
+	source    *permissions.Source
+	lane      *lane
+	authValue string
+	metrics   *metrics
+
+	markets atomic.Pointer[marketIndex]
+	// runCtx is the Run context: lane polling outlives the request that started it.
+	runCtx atomic.Pointer[context.Context]
+	// built holds the on-chain words the index was decoded from; only the refresh loop uses it.
+	built []common.Hash
+}
+
+func (*Solver) Name() string                  { return Name }
+func (*Solver) RequiresTxManager() bool       { return false }
+func (*Solver) RequiresMerkleTxManager() bool { return true }
+
+func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
+	cfg, err := parseConfig(raw)
+	if err != nil {
+		return nil, err
+	}
+	if deps.Chain == nil || deps.Signer == nil || deps.MerkleTxManager == nil {
+		return nil, errors.New("iris requires the host chain, signer and Merkle transaction manager")
+	}
+	source, err := cfg.Curator.PermissionSource(deps.Chain)
+	if err != nil {
+		return nil, err
+	}
+	manager, err := deps.MerkleTxManager()
+	if err != nil {
+		return nil, err
+	}
+	if manager.Confirmations() > maxConfirmations {
+		return nil, errors.Errorf("iris requires txManager.confirmations <= %d", maxConfirmations)
+	}
+	s := &Solver{
+		cfg: cfg, chain: deps.Chain, chainID: deps.Chain.ChainID(), signer: deps.Signer.Address(), maxGas: deps.MaxGas,
+		source: source, lane: newLane(manager.Sender(Name), manager.Ready, cfg.Timing.PollInterval),
+		metrics: newMetrics(deps.Metrics),
+	}
+	if s.authValue = os.Getenv(cfg.Server.AuthValueEnv); s.authValue == "" {
+		return nil, errors.Errorf("server.authValueEnv: %s is empty", cfg.Server.AuthValueEnv)
+	}
+	return s, nil
+}
+
+func (s *Solver) background() context.Context {
+	if ctx := s.runCtx.Load(); ctx != nil {
+		return *ctx
+	}
+	return context.Background()
+}
+
+// Run discovers the account's markets, then serves quotes and refreshes the index until ctx ends.
+func (s *Solver) Run(ctx context.Context) error {
+	s.runCtx.Store(&ctx)
+	if err := s.refresh(ctx); err != nil {
+		return errors.Errorf("discover iris markets: %w", err)
+	}
+	server := s.newServer(ctx)
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", server.Addr)
+	if err != nil {
+		return errors.Errorf("listen %s: %w", server.Addr, err)
+	}
+	group, ctx := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		if err := server.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
+			return errors.Errorf("serve iris quotes: %w", err)
+		}
+		return nil
+	})
+	group.Go(func() error {
+		ticker := time.NewTicker(s.cfg.RefreshInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), shutdownTimeout)
+				defer cancel()
+				return server.Shutdown(shutdown)
+			case <-ticker.C:
+				if err := s.refresh(ctx); err != nil {
+					observability.ErrorUnlessCanceled(ctx, err, "iris market refresh failed; keeping previous markets")
+				}
+			}
+		}
+	})
+	return group.Wait()
+}
+
+// refresh rebuilds the market index from the configured executors. Every executor must
+// serve the configured account through one shared caller that admits the signer, and every
+// recipe must be an iris-signing program.
+func (s *Solver) refresh(ctx context.Context) (err error) {
+	ctx, end := tracer.Start(ctx, "iris.discover")
+	defer func() { end(err) }()
+	if s.built != nil {
+		current, err := s.recipeState(ctx)
+		if err != nil {
+			return err
+		}
+		if slices.Equal(current, s.built) {
+			return nil
+		}
+	}
+	executors := s.cfg.RecipeExecutors
+	identities, err := recipes.DiscoverExecutors(ctx, s.chain, executors)
+	if err != nil {
+		return err
+	}
+	caller := identities[executors[0]].Caller
+	accounts := make([]common.Address, len(executors))
+	for i, executor := range executors {
+		identity := identities[executor]
+		if identity.Account != s.cfg.Account || identity.Caller != caller {
+			return errors.Errorf("executor %s must serve account %s through caller %s", executor.Hex(), s.cfg.Account.Hex(), caller.Hex())
+		}
+		accounts[i] = identity.Account
+	}
+	prepared, err := recipes.DiscoverBatch(ctx, s.chain, executors, accounts, caller, recipes.PreparationOptions{ChainID: s.chainID})
+	if err != nil {
+		return err
+	}
+	trees := make(map[common.Hash]*recipes.Tree)
+	markets := make([]Market, 0, len(prepared))
+	for _, member := range prepared {
+		snapshot := member.Snapshot
+		if _, err := recipes.RouteExecution(ctx, s.chain, snapshot, s.signer, executorBinding.PackExecute(nil, nil, nil, nil)); err != nil {
+			return errors.Errorf("executor %s does not admit the signer: %w", snapshot.Executor.Hex(), err)
+		}
+		tree, ok := trees[snapshot.Root]
+		if !ok {
+			if tree, err = s.permissionTree(ctx, snapshot); err != nil {
+				return err
+			}
+			trees[snapshot.Root] = tree
+		}
+		market, err := decodeMarket(member, tree, s.cfg.Iris, s.chainID)
+		if err != nil {
+			return errors.Errorf("executor %s: %w", snapshot.Executor.Hex(), err)
+		}
+		markets = append(markets, market)
+	}
+	index := newMarketIndex(markets)
+	s.markets.Store(&index)
+	s.built = snapshotWords(prepared)
+	observability.Log(ctx).Info("iris markets discovered", "markets", len(markets))
+	return nil
+}
+
+// recipeState reads, in one multicall at latest, everything the SDK compares before admitting
+// a prepared recipe: each executor's caller, recipe hash and recipe block, then the account
+// root (the executor's account is immutable). Equal words mean the recipe bodies and the
+// permission tree the index was decoded from are unchanged.
+func (s *Solver) recipeState(ctx context.Context) ([]common.Hash, error) {
+	requests := make([]protocolio.ReadRequest, 0, 3*len(s.cfg.RecipeExecutors)+1)
+	for _, executor := range s.cfg.RecipeExecutors {
+		for _, data := range [][]byte{executorBinding.PackCaller(), executorBinding.PackRecipeHash(), executorBinding.PackRecipeBlock()} {
+			requests = append(requests, protocolio.ContractRead(executor, data, nil, true))
+		}
+	}
+	requests = append(requests, protocolio.ContractRead(s.cfg.Account, accountBinding.PackRoot(), nil, true))
+	reads, err := protocolio.ReadGroup(ctx, s.chain, requests...)
+	if err != nil {
+		return nil, errors.Errorf("read recipe state: %w", err)
+	}
+	words := make([]common.Hash, len(requests))
+	for i := range requests {
+		data, err := reads.At(i).CallData()
+		if err != nil {
+			return nil, errors.Errorf("read recipe state: %w", err)
+		}
+		if len(data) != common.HashLength {
+			return nil, errors.New("read recipe state: malformed word")
+		}
+		words[i] = common.Hash(data)
+	}
+	return words, nil
+}
+
+// snapshotWords encodes the discovery snapshots in recipeState's layout. It uses the
+// snapshots the index was built from, so a lagging read during discovery cannot mask a change.
+func snapshotWords(prepared []recipes.PreparedRecipe) []common.Hash {
+	words := make([]common.Hash, 0, 3*len(prepared)+1)
+	for _, member := range prepared {
+		snapshot := member.Snapshot
+		words = append(words, common.BytesToHash(snapshot.Caller.Bytes()), snapshot.RecipeHash, common.BigToHash(new(big.Int).SetUint64(snapshot.RecipeBlock)))
+	}
+	return append(words, prepared[0].Snapshot.Root)
+}
+
+func (s *Solver) permissionTree(ctx context.Context, snapshot recipes.Snapshot) (*recipes.Tree, error) {
+	raw, err := s.source.PermissionTree(ctx, s.chainID, snapshot)
+	if err != nil {
+		return nil, errors.Errorf("permission tree: %w", err)
+	}
+	tree, err := recipes.DecodeTree(raw)
+	if err != nil {
+		return nil, errors.Errorf("permission tree: %w", err)
+	}
+	if tree.Root != snapshot.Root || tree.ChainID == nil || tree.ChainID.Cmp(s.chainID) != 0 || tree.Account == nil || *tree.Account != snapshot.Account {
+		return nil, errors.New("permission tree scope mismatch")
+	}
+	return tree, nil
+}
+
+func (s *Solver) newServer(ctx context.Context) *http.Server {
+	// Handlers inherit the solver logger; cancellation is dropped so Shutdown drains them.
+	handlerCtx := context.WithoutCancel(ctx)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /quote", s.handle(false))
+	mux.HandleFunc("POST /quote/indicative", s.handle(true))
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	timeout := s.cfg.Timing.ResponseBudget + time.Second
+	return &http.Server{
+		Addr: s.cfg.Server.ListenAddress, Handler: observability.TraceHandler(mux, func(r *http.Request) string { return r.URL.Path }),
+		BaseContext:       func(net.Listener) context.Context { return handlerCtx },
+		ReadHeaderTimeout: 2 * time.Second, ReadTimeout: timeout, WriteTimeout: timeout, IdleTimeout: 30 * time.Second,
+	}
+}
+
+func (s *Solver) handle(indicative bool) http.HandlerFunc {
+	kind := "firm"
+	if indicative {
+		kind = "indicative"
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
+		outcome := "error"
+		defer func() { s.metrics.observe(kind, outcome, time.Since(started)) }()
+		if s.authValue == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get(s.cfg.Server.AuthHeader)), []byte(s.authValue)) != 1 {
+			outcome = "unauthorized"
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var body quoteRequest
+		if err := json.NewDecoder(io.LimitReader(r.Body, maxRequestBytes)).Decode(&body); err != nil {
+			outcome = "invalid_request"
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), s.cfg.Timing.ResponseBudget)
+		defer cancel()
+		response, err := s.serve(ctx, body, indicative)
+		var refused *declined
+		switch {
+		case err == nil:
+			outcome = "quoted"
+			writeJSON(ctx, w, http.StatusOK, response)
+		case errors.As(err, &refused):
+			outcome = refused.reason
+			reason := declineReason{Venue: refused.venue, Reason: refused.reason}
+			if refused.rate != nil {
+				reason.Rate = refused.rate.String()
+			}
+			writeJSON(ctx, w, http.StatusNotFound, declineBody{Reasons: []declineReason{reason}})
+		default:
+			observability.ErrorUnlessCanceled(ctx, err, "iris quote failed", "requestId", body.RequestID, "kind", kind)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}
+}
+
+func (s *Solver) serve(ctx context.Context, body quoteRequest, indicative bool) (response quoteResponse, err error) {
+	ctx, end := tracer.Start(ctx, "iris.quote", observability.AttrOrderID.String(body.RequestID))
+	defer func() {
+		var refused *declined
+		if errors.As(err, &refused) {
+			observability.Decline(ctx, "declined", refused.Error())
+			end(nil)
+			return
+		}
+		end(err)
+	}()
+	r, err := parseRequest(body, s.chainID, indicative)
+	if err != nil {
+		return quoteResponse{}, &declined{venue: "solver", reason: "invalid_request", cause: err}
+	}
+	return s.quote(ctx, r, indicative)
+}
+
+func writeJSON(ctx context.Context, w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		observability.ErrorUnlessCanceled(ctx, err, "write iris response")
+	}
+}

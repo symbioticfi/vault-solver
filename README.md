@@ -55,6 +55,7 @@ the same nonce; nonce handling does not coordinate their liquidity or off-chain 
 | `uniswapx-filler` | UniswapX V2 RFQ quoting and LiquidLane filling | [plan](docs/UNISWAPX-PLAN.md) | [yaml](config/uniswapx.example.yaml) |
 | `lifi-merkle` | LI.FI same-chain intents through Merkle recipes | [plan](docs/MERKLE-FILLERS.md) | [yaml](config/lifi-merkle.example.yaml) |
 | `uniswapx-merkle` | UniswapX V2 RFQ quoting and filling through Merkle recipes | [plan](docs/MERKLE-FILLERS.md) | [yaml](config/uniswapx-merkle.example.yaml) |
+| `iris` | IRIS fixed-rate solver quotes signed by a Merkle account | [plan](docs/IRIS-PLAN.md) | [yaml](config/iris.example.yaml) |
 
 The Merkle 3F solver retries uncertain offer submissions with the original nonce and terms.
 New offers use random positive 63-bit nonces to fit 3F's off-chain storage.
@@ -486,6 +487,37 @@ orders and secondary-DEX routes are not supported. Design,
 config, onboarding, and deployment prerequisites:
 [`docs/UNISWAPX-PLAN.md`](docs/UNISWAPX-PLAN.md) · example
 [`config/uniswapx.example.yaml`](config/uniswapx.example.yaml).
+
+### IRIS Solver — `iris`
+
+Answers the [IRIS](https://docs.iris.credit) RFQ coordinator for one Merkle account, which is
+the registered IRIS solver. The account signs quotes through ERC-1271, so there is no quote
+signing key: each firm quote is presigned on-chain by the account's `iris-signing` recipe
+before it is returned, and Iris pulls the bond from the account at `take`.
+
+- Markets are not configured. Each `recipeExecutors` entry holds one `iris-signing` recipe,
+  and the solver reads the market (tokens, venue, market data, BLM, bond LLTV, overdue terms)
+  from its sign leaf. Every executor must serve `account` through one caller that admits the
+  signer. Every `refreshInterval` the solver re-reads each executor's recipe hash and block
+  and the account root in one call, and rediscovers markets only when one changed.
+- `POST /quote` prices the request from the `pricing` table, sizes the bond from the BLM
+  (plus `bondBufferBps`), checks the account's debt-token balance, simulates the recipe (its
+  limits decide what may be signed), sends it, and returns the quote once the receipt shows
+  the digest is valid and the Iris allowance covers the bond. The signature field is 65 zero
+  bytes. One quote is signed at a time; others decline with `solver_busy`.
+- `POST /quote/indicative` returns the same terms unsigned. Declines are `404` with a
+  `reasons` entry, such as `no_market`, `rate_above_max_fixed_rate` (with the rate) or
+  `insufficient_bond_balance`.
+- The quote deadline must reach the coordinator about 120 s ahead, so the solver dates it
+  from the slot the signature targets (`timing`) and declines a quote mined in a later slot.
+  This needs `txManager.confirmations` of at most 1 and an IRIS response timeout above
+  `timing.responseBudget` (the IRIS default is 5 s).
+- `server.authHeader` and `server.authValueEnv` are required, because every firm request
+  costs gas. Put the same header in the IRIS registry entry's `headers`.
+- Metrics: `iris_quote_requests_total{kind,outcome}` and `iris_quote_duration_seconds{kind}`.
+
+Design and open items: [`docs/IRIS-PLAN.md`](docs/IRIS-PLAN.md) · example
+[`config/iris.example.yaml`](config/iris.example.yaml).
 
 ### Strategies
 

@@ -1,0 +1,48 @@
+# IRIS solver for one Merkle account. Markets come from the account's iris-signing recipes;
+# supply deployed addresses. The signer must be the executors' caller (or hold an immediate
+# AccessManager grant). Pending work is held in RAM.
+chain:
+  rpcUrl: ${ETH_RPC_URL_MAINNET}
+  writeRpcUrl: ${WRITE_RPC_URL}
+  chainId: 1
+signer:
+  keyEnv: SOLVER_PRIVATE_KEY
+txManager:
+  # The quote is returned only after the signing transaction is mined; deeper confirmation
+  # would expire the deadline window, so the solver refuses more than 1.
+  confirmations: 1
+  maxFeeGwei: 50
+observability:
+  addr: ":9090"
+solvers:
+  - name: iris
+    config:
+      iris: "0x77310475712D7a127D694B3e9D186d9f4a423bd9"
+      account: "0x0000000000000000000000000000000000000ACC" # the Merkle account registered as IRIS solver
+      recipeExecutors: ["0x00000000000000000000000000000000000000E0"] # one iris-signing recipe per market
+      curator:
+        url: https://curator.example.invalid/api/v1
+      refreshInterval: 1m
+      server:
+        listenAddress: ":42090"
+        # The registry entry's headers authenticate the coordinator.
+        authHeader: x-api-key
+        authValueEnv: IRIS_WEBHOOK_KEY
+      pricing:
+        # WAD rates, multiples of 1e14. The most specific matching rule wins.
+        defaultFixedRate: "60000000000000000"
+        rates:
+          - debtToken: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+            venueId: 1
+            fixedRate: "55000000000000000"
+        bondBufferBps: 0
+        maxBond: "50000000000" # per quote, debt-token units
+      timing:
+        blockTime: 12s
+        submitLead: 2s
+        responseSlack: 0s
+        quoteTtl: 2m
+        deadlineWindow: 5s
+        # Needs the IRIS coordinator timeout raised above this for our endpoint.
+        responseBudget: 25s
+        pollInterval: 500ms
