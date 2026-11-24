@@ -1220,7 +1220,9 @@ See [the RFQ Merkle runbook](docs/RFQ-MERKLE.md) and [configuration](config/rfq-
 
 Local integration checks require Anvil on `PATH`: `make test-txmanager-anvil`,
 `make test-merkle-sdk-anvil`, and `make test-rfq-merkle-anvil`. They separately exercise the unchanged native transaction engine, RAM SDK ownership,
-and canonical RFQ settlement without live services.
+and canonical RFQ settlement without live services. `make test-iris-fork` runs the `iris`
+solver end to end against a mainnet fork (set `ETH_RPC_URL_MAINNET`): quotes, the borrower's
+`take` on the deployed Iris, and settlement back to the account.
 
 Merkle integrations, including the recipe mode of `rfq-filler` and the `uniswapx-merkle` and `lifi-merkle` solvers,
 use the same SDK transaction implementation as merkle-executor.

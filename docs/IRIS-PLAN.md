@@ -105,9 +105,12 @@ Floating-rate aware pricing (venue rate plus spread and a duration premium) is �
   about 120 s ahead when the coordinator reads the response. The solver targets the next
   slot that the transaction can make: `inclusion = head timestamp + k * blockTime`, the
   first slot at least `submitLead` from now, and signs `deadline = inclusion + 120 +
-  responseSlack`. A receipt in a later block makes the deadline too short; that quote is
-  declined after the fact (the digest stays harmless: it expires and its allowance share
-  is bounded by the recipe cap).
+  responseSlack`. The lead is rounded up to whole seconds. When the target skips the next
+  slot, the solver waits until the slot before the target starts before sending, so the
+  signature cannot land a slot early (which would put the deadline past the window). A
+  receipt in a later block makes the deadline too short; that quote is declined after the
+  fact (the digest stays harmless: it expires and its allowance share is bounded by the
+  recipe cap).
 - Budget. A request handler waits at most `responseBudget` for the receipt. With 12 s
   mainnet slots this needs IRIS to raise our coordinator timeout to roughly 25-30 s.
 - Exposure. The recipe caps Iris's allowance at `maxPendingBond`; posted bonds are bounded
@@ -126,7 +129,8 @@ recipe as an IRIS market only when:
   and one Approve slot whose token is the leaf's debt token and whose spender is Iris;
 - the domain separator equals `keccak256(abi.encode(DOMAIN_TYPEHASH, chainId, iris))`;
 - buffer word 0 is the Quote type hash, word 2 (`solver`) is the account, and the plan
-  hashes the trailing market data into word 19 and then the 20-word struct;
+  hashes the trailing market data (empty for Aave V3) into word 19 and then the 20-word
+  struct;
 - Quote words 1, 3, 7, 8, 9, 10, 13, 15, 17 and 18 are bound to inputs 0 to 9 in that order
   and no other word is masked or bound.
 
@@ -141,14 +145,48 @@ caller.
   adapters `BuildRecipe` script (`testdata/iris-signing.json`) and its rejections; pricing
   table; slot and deadline selection; indicative pricing and declines against a fake chain;
   lane ownership and stall against a fake sender; handler authentication and declines.
-- Integration (§10): an anvil mainnet fork with the real Iris, an `iris-signing` recipe
-  and a `take` that consumes the signed quote.
+- Fork (`make test-iris-fork`, build tag `integration`, needs `ETH_RPC_URL_MAINNET`): anvil forks
+  mainnet and the test runs the built binary from a YAML config against the deployed Iris,
+  its default BLM, WETH and USDC on Aave V3. It plays the coordinator and the borrower: it
+  posts to the solver's endpoints and sends the borrower's `take`. The account and its
+  executors run the pinned adapters bytecode; the recipes come from the adapters
+  `BuildRecipe` script (`testdata/fork/generate.py`).
+
+### 8.1 Fork test checklist
+
+1. Setup: the account accepts a root holding the sign, approval and settlement leaves;
+   each executor holds its role, recipe and caller; the account holds USDC.
+2. Startup: the binary discovers one market (WETH/USDC, Aave V3, empty data, mainnet BLM)
+   from the curator bundle and serves `/healthz`.
+3. Auth: a request without the configured header gets 401.
+4. Indicative quote: the bond equals the BLM requirement read independently, plus the
+   buffer; nothing is sent on-chain.
+5. Firm quote: a 65-byte zero signature and a deadline inside the coordinator window.
+6. Coordinator checks, reproduced: the digest computed independently from the Iris domain
+   is valid through `isValidSignature`, and the account's balance and Iris allowance cover
+   the bond.
+7. Take: the borrower's `take` with the zero signature opens the loan with the account as
+   solver, pulls the bond from the account, pays the receiver and uses the nonce.
+8. Replay: the same quote cannot be taken twice.
+9. Recipe limits: debt above `maxDebt` and duration above `maxDuration` decline with
+   `recipe_rejected` and send nothing.
+10. Solver declines: rate above `maxFixedRate`, a venue bitmap without the market's venue,
+    and an account that cannot fund the bond.
+11. One lane: of two concurrent firm requests one is signed and one gets `solver_busy`.
+12. Recipe changes: unchanged refreshes skip discovery; `setRecipe` triggers it; a caller
+    change keeps the old index, quotes decline until it is restored, then sign again.
+13. Expiry: a signed quote taken after its deadline reverts.
+14. Settlement: after maturity and the borrower's repayment, the `iris-settlement` recipe
+    claims the account's Iris balance and withdraws its bond back to the account.
+
+Left to onboarding: the coordinator itself (delivery, its timeout, its off-chain check of
+the zero signature and the registry headers).
 
 ## 9. Build phases
 
 1. Plan, config, digest, market decoding, pricing (this change).
 2. Discovery, quote flow, lane, HTTP server, metrics (this change).
-3. Fork test against the deployed Iris; README and example config polish.
+3. Fork test against the deployed Iris (done); README and example config polish.
 4. Settlement automation through `iris-settlement` (claims and excess bond).
 5. Floating-rate aware pricing and exposure budgets.
 
@@ -168,8 +206,7 @@ caller.
 - [x] Discovery and market index refresh.
 - [x] Quote flow: funding, simulation, send, confirmation.
 - [x] HTTP server, indicative endpoint, metrics.
-- [ ] Discovery and the on-chain sign path are only unit-tested in parts; the fork test covers them.
-- [ ] Fork test with the real Iris.
+- [x] Fork test with the real Iris (§8.1); also covers the `iris-settlement` recipe.
 - [ ] Settlement automation (`iris-settlement`).
 - [ ] Floating-rate pricing.
 

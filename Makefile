@@ -327,6 +327,15 @@ test-rfq-merkle-anvil: ## Execute canonical RFQ outer settlement boundaries on l
 	@command -v anvil >/dev/null
 	go test -race -tags integration -run '^TestAnvil(ConnectorOuterFillCanonicalBoundaries|SplitConnectorOrder)$$' -v ./internal/solvers/merkle/rfq
 
+.PHONY: test-iris-fork
+test-iris-fork: ## Run the IRIS solver end to end against a mainnet fork (needs ETH_RPC_URL_MAINNET)
+	@command -v anvil >/dev/null
+	go test -tags integration -run TestForkIrisEndToEnd -failfast -v -timeout 15m ./internal/solvers/iris
+
+.PHONY: refresh-iris-fork-fixture
+refresh-iris-fork-fixture: ## Rebuild the IRIS fork-test recipes with the adapters BuildRecipe script (needs ETH_RPC_URL_MAINNET)
+	python3 internal/solvers/iris/testdata/fork/generate.py --adapters-root "$(ADAPTERS_FIXTURE_ROOT)"
+
 .PHONY: test-merkle-sdk-anvil
 test-merkle-sdk-anvil: ## Exercise RAM SDK ownership and canonical settlement on local Anvil
 	@command -v anvil >/dev/null
