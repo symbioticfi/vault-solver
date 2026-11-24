@@ -8,6 +8,8 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
@@ -36,9 +38,6 @@ type Solver struct {
 	// observeOrderPoll reports the same successful refresh that keeps quotes available.
 	observeOrderPoll func(time.Time)
 	lastAwardRefresh atomic.Pointer[time.Time]
-	// Only the RFQ loop receives from this channel. The SDK submitter owns the
-	// sender until it publishes the result, so receipt polling waits for it.
-	submitting <-chan error
 }
 
 func (*Solver) Name() string                    { return Name }
@@ -64,47 +63,7 @@ func New(cfg Config, deps solver.Deps, observeOrderPoll func(time.Time)) (*Solve
 	return &Solver{Engine: engine, backend: newBackendClient(cfg.BackendURL), tokenPolicy: cfg.TokenPolicy, observeOrderPoll: observeOrderPoll}, nil
 }
 
-func (s *Solver) Run(ctx context.Context) error {
-	defer func() {
-		if s.submitting != nil {
-			<-s.submitting
-			s.submitting = nil
-		}
-	}()
-	return s.Engine.Run(ctx, func(run context.Context) error { return s.tick(run, ctx) })
-}
-
-func (s *Solver) tick(ctx, lifecycle context.Context) error {
-	var laneErr error
-	if s.submitting != nil {
-		select {
-		case laneErr = <-s.submitting:
-			s.submitting = nil
-		default:
-		}
-	}
-	if s.submitting == nil && laneErr == nil && s.Pending() != nil {
-		outcome, err := s.Poll(ctx)
-		if outcome != nil || ctx.Err() != nil {
-			return err
-		}
-		laneErr = err
-	}
-	canSubmit := s.submitting == nil && s.Pending() == nil && laneErr == nil
-	if canSubmit && s.Sender.Busy() {
-		return errors.New("fill sender has work without a fill owner")
-	}
-	batch, err := s.pollAwards(ctx, canSubmit)
-	if err != nil || !canSubmit {
-		return errors.Join(laneErr, err)
-	}
-	intent, err := s.next(ctx, batch)
-	if err != nil || intent == nil {
-		return err
-	}
-	s.submitting, err = s.SubmitAsync(lifecycle, intent)
-	return err
-}
+func (s *Solver) Run(ctx context.Context) error { return s.Engine.Run(ctx, s.pollAwards) }
 
 // CanQuote requires a healthy execution lane and a recent successful award refresh.
 func (s *Solver) CanQuote(now time.Time) bool {
@@ -112,25 +71,8 @@ func (s *Solver) CanQuote(now time.Time) bool {
 	return lastPoll != nil && now.Sub(*lastPoll) < filler.ConfirmationPatience && s.Ready() && !s.Stalled()
 }
 
-// next returns the first awarded order that a configured connector can settle.
-func (s *Solver) next(ctx context.Context, batch awardBatch) (*filler.Intent, error) {
-	for _, row := range batch.rows {
-		intent, err := s.prepare(ctx, row, batch.listings, batch.observed)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			observability.Log(ctx).V(1).Info("RFQ award not executable", "orderId", row.OrderId, "reason", err.Error())
-			continue
-		}
-		if intent != nil {
-			return intent, nil
-		}
-	}
-	return nil, nil
-}
-
-func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrdersInner, listed []discounts.ListItem, observed filler.Observation) (*filler.Intent, error) {
+// planAward uses the same routes for a queued estimate and a simulated fill.
+func (s *Solver) planAward(ctx context.Context, row rfqbackend.OrdersResponseOrdersInner, listed []discounts.ListItem, observed filler.Observation, reserve bool) (*filler.Intent, error) {
 	order, signature, err := decodeOrder(row, s.Workflow.Filler)
 	if err != nil {
 		return nil, err
@@ -155,7 +97,18 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 			routes = append(routes, source)
 		}
 	}
-	intentFor := func(built builtFill) (*filler.Intent, error) {
+	plan := func(legs []filler.Leg) (*filler.Intent, error) {
+		if reserve {
+			amounts := make(liquidlane.CapacityReservations, len(legs))
+			for _, leg := range legs {
+				amounts.Add(liquidlane.NewCapacityID(s.Workflow.ChainID.Int64(), leg.Account, token), leg.AmountOut)
+			}
+			return nil, s.Spends.ReserveQueued(row.OrderId, connector.Spend{Amounts: amounts, Deadline: expiry.Unix()})
+		}
+		built, err := buildFill(ctx, s.Workflow, order, signature, legs, s.backend)
+		if err != nil {
+			return nil, err
+		}
 		deadline, ok := observed.SubmissionDeadline(expiry, built.ValidUntil)
 		if !ok {
 			return nil, errors.New("fill deadline elapsed during preparation")
@@ -171,9 +124,9 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 		if route.MaxAssets.Cmp(required) < 0 {
 			continue
 		}
-		built, err := buildFill(ctx, s.Workflow, order, signature, []filler.Leg{{Source: route}}, s.backend)
-		if err == nil {
-			return intentFor(built)
+		intent, err := plan([]filler.Leg{{Source: route, AmountOut: required}})
+		if reserve || err == nil {
+			return intent, err
 		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -187,9 +140,5 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	if err != nil || len(legs) == 0 {
 		return nil, err
 	}
-	built, err := buildFill(ctx, s.Workflow, order, signature, legs, s.backend)
-	if err != nil {
-		return nil, err
-	}
-	return intentFor(built)
+	return plan(legs)
 }

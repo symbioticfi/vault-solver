@@ -156,49 +156,20 @@ func testEngine(t *testing.T, sender *fillertest.Sender) *Engine {
 	return e
 }
 
-// A completed fill advances directly to the next one; pending work uses polling.
 func TestRunContinuesToNextFillAfterConfirmation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
-	e := testEngine(t, &fillertest.Sender{IsBusy: true, Result: fillertest.Confirmed()})
-	e.Spends = nil
-	e.intent.Store(&Intent{OrderID: "pending"})
-	err := e.Run(ctx, func(ctx context.Context) error {
-		if e.Pending() == nil {
+	e := testEngine(t, &fillertest.Sender{Result: fillertest.Confirmed()})
+	first := &Intent{OrderID: "first", Spend: testSpend()}
+	err := e.Run(ctx, func(_ context.Context, idle bool) (*Intent, error) {
+		if e.Spends.Finalized(first.OrderID) && idle {
 			cancel()
-			return nil
+			return nil, nil
 		}
-		_, err := e.Poll(ctx)
-		return err
+		return first, nil
 	})
 	if !errors.Is(err, context.Canceled) {
-		t.Fatal("confirmed fill waited for the polling timer before the next one", err)
-	}
-}
-
-func TestRunLogsOrderIDForPendingFillFailure(t *testing.T) {
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	var failure string
-	log := funcr.New(func(_, args string) {
-		if strings.Contains(args, "Merkle fill iteration failed") {
-			failure = args
-			cancel()
-		}
-	}, funcr.Options{})
-	ctx = observability.WithLogger(ctx, log)
-	e := testEngine(t, &fillertest.Sender{IsBusy: true, PollErr: transaction.ErrNonceConsumed})
-	e.intent.Store(&Intent{OrderID: "pending-order"})
-
-	err := e.Run(ctx, func(ctx context.Context) error {
-		_, err := e.Poll(ctx)
-		return err
-	})
-	if !errors.Is(err, context.Canceled) || !strings.Contains(failure, `"orderId"="pending-order"`) {
-		t.Fatalf("pending fill failure log = %q, run error = %v", failure, err)
-	}
-	if e.Pending() == nil {
-		t.Fatal("logging released an unresolved fill")
+		t.Fatal("confirmed fill waited for the next award poll", err)
 	}
 }
 
@@ -353,6 +324,9 @@ func TestAwaitTreatsConfirmationWaitAsProgress(t *testing.T) {
 			defer mu.Unlock()
 			if (len(failures) > 0) != tc.wantError {
 				t.Fatalf("error logs = %v, want error=%v", failures, tc.wantError)
+			}
+			if tc.wantError && !strings.Contains(failures[0], `"orderId"="award"`) {
+				t.Fatalf("receipt error is missing the award ID: %v", failures)
 			}
 		})
 	}

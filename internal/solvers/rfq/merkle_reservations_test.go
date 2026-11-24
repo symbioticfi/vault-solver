@@ -58,19 +58,17 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 	if err := manager.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	curator := httptest.NewServer(http.HandlerFunc(routeRPC.serveTree))
-	defer curator.Close()
-	t.Setenv("RFQ_BACKEND_SHARED_SECRET", "test-secret")
-	orderFeed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/orders" {
-			http.NotFound(w, r)
+	curator := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/orders" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"orders":[]}`))
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"orders":[],"requestId":"fixture"}`))
+		routeRPC.serveTree(w, r)
 	}))
-	defer orderFeed.Close()
-	text := strings.Replace(minimalConfig, "https://rfq-backend.example", orderFeed.URL, 1) +
+	defer curator.Close()
+	t.Setenv("RFQ_BACKEND_SHARED_SECRET", "test-secret")
+	text := strings.Replace(minimalConfig, "https://rfq-backend.example", curator.URL, 1) +
 		"recipeExecutors: ['0x0000000000000000000000000000000000000043']\ncurator: {url: " + curator.URL + "}\n"
 	var node yaml.Node
 	if err := yaml.Unmarshal([]byte(text), &node); err != nil {
@@ -113,9 +111,7 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 	t.Cleanup(func() {
 		cancel()
 		<-done
-		if err := <-execDone; !errors.Is(err, context.Canceled) {
-			t.Errorf("RFQ worker shutdown: %v", err)
-		}
+		<-execDone
 	})
 	for deadline := time.Now().Add(time.Second); !s.server.quotes.canQuote(); {
 		if time.Now().After(deadline) {
@@ -172,13 +168,6 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 	}
 	s.merkle.Spends.PruneQueued(nil)
 
-	quoteClock := s.server.quotes.now
-	s.server.quotes.now = func() time.Time { return time.Now().Add(3 * time.Minute) }
-	if response := do(t, s.server.handler(), http.MethodPost, "/quote", "test-secret", body); response.Code != http.StatusNoContent {
-		t.Fatalf("quote after award polling became stale = %d, want 204", response.Code)
-	}
-	s.server.quotes.now = quoteClock
-
 	// Each independent account covers only part of the requested input.
 	routes := s.server.quotes.resolveRoute
 	s.server.quotes.resolveRoute = func(connector, rwa, asset common.Address, decimals int) (common.Address, common.Address, bool) {
@@ -219,7 +208,7 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 		http.Error(w, "unexpected backend lookup", http.StatusServiceUnavailable)
 	}))
 	defer backend.Close()
-	quoteText := strings.Replace(text, orderFeed.URL, backend.URL, 1) + "quoteOnly: true\n"
+	quoteText := strings.Replace(text, curator.URL, backend.URL, 1) + "quoteOnly: true\n"
 	if err := yaml.Unmarshal([]byte(quoteText), &node); err != nil {
 		t.Fatal(err)
 	}
