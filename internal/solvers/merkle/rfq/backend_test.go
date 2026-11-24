@@ -17,7 +17,9 @@ func TestBackendReadsAwardedExecutableOrders(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		if r.URL.Path != "/api/v1/orders" || r.Method != http.MethodGet || r.URL.Query().Get("filler") != strings.ToLower(order.Filler.Hex()) || r.URL.Query().Get("orderStatus") != "open" || r.URL.Query().Get("limit") != "100" {
+		query := r.URL.Query()
+		if r.URL.Path != "/api/v1/orders" || r.Method != http.MethodGet || query.Get("filler") != strings.ToLower(order.Filler.Hex()) ||
+			query.Get("orderStatus") != "open" || query.Get("limit") != "100" || query.Get("sortKey") != "createdAt" || query.Get("sort") != "asc" {
 			t.Errorf("unexpected awarded-order request: %s %s", r.Method, r.URL)
 		}
 		w.Header().Set("Content-Type", "application/json")

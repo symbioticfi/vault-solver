@@ -29,7 +29,7 @@ func (b *backendClient) orders(ctx context.Context, filler string) ([]rfqbackend
 	cursor := ""
 	seen := make(map[string]bool)
 	for {
-		request := b.api.RFQAPI.ApiV1OrdersGet(ctx).Filler(filler).OrderStatus("open").Limit(100)
+		request := b.api.RFQAPI.ApiV1OrdersGet(ctx).Filler(filler).OrderStatus("open").SortKey("createdAt").Sort("asc").Limit(100)
 		if cursor != "" {
 			request = request.Cursor(cursor)
 		}

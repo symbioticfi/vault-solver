@@ -56,9 +56,6 @@ type Outcome struct {
 	Reverted bool
 }
 
-// Next returns the next executable fill, or nil when nothing is ready.
-type Next func(ctx context.Context) (*Intent, error)
-
 // Engine owns one settlement contract's Merkle fill lane. At most one fill is in flight:
 // an admitted intent owns the signer lane until its canonical receipt is returned.
 type Engine struct {
@@ -79,7 +76,7 @@ type Engine struct {
 	Decimals Decimals
 
 	intent atomic.Pointer[Intent]
-	// stalled is set once Await finds the sender dropped the intent's transaction.
+	// stalled is set when the driver finds the sender dropped the intent's transaction.
 	stalled atomic.Bool
 }
 
@@ -169,6 +166,28 @@ func (e *Engine) deadline() time.Time {
 // captured before submission because a timeout may follow a send; a submission error keeps
 // ownership whenever the sender does.
 func (e *Engine) Submit(ctx context.Context, intent *Intent) error {
+	if err := e.reserve(intent); err != nil {
+		return err
+	}
+	return e.send(ctx, intent)
+}
+
+// SubmitAsync reserves the spend before starting the SDK submission. The driver
+// must wait for the result before polling the sender.
+func (e *Engine) SubmitAsync(ctx context.Context, intent *Intent) (<-chan error, error) {
+	if err := e.reserve(intent); err != nil {
+		return nil, err
+	}
+	result := make(chan error, 1)
+	go func() {
+		run, cancel := context.WithTimeout(ctx, operationTimeout)
+		defer cancel()
+		result <- e.send(run, intent)
+	}()
+	return result, nil
+}
+
+func (e *Engine) reserve(intent *Intent) error {
 	if !e.intent.CompareAndSwap(nil, intent) {
 		return ErrBusy
 	}
@@ -176,6 +195,10 @@ func (e *Engine) Submit(ctx context.Context, intent *Intent) error {
 		e.intent.CompareAndSwap(intent, nil)
 		return err
 	}
+	return nil
+}
+
+func (e *Engine) send(ctx context.Context, intent *Intent) error {
 	err := e.Sender.Submit(ctx, transaction.ExecutionRequest{To: e.Workflow.Filler, Data: intent.Data})
 	if err != nil && !e.Sender.Busy() && e.intent.CompareAndSwap(intent, nil) {
 		e.Spends.Release(intent.OrderID)
@@ -262,7 +285,7 @@ func (e *Engine) Await(ctx context.Context) (*Outcome, error) {
 }
 
 // Tick advances the lane once: it polls the pending fill, or asks next for a new one.
-func (e *Engine) Tick(ctx context.Context, next Next) (err error) {
+func (e *Engine) Tick(ctx context.Context, next func(context.Context) error) (err error) {
 	ctx, end := tracer.Start(ctx, e.Name+".poll", observability.AttrSolver.String(e.Name))
 	defer func() { end(err) }()
 	if e.Pending() != nil {
@@ -279,11 +302,7 @@ func (e *Engine) Tick(ctx context.Context, next Next) (err error) {
 	if err := e.Initialize(ctx); err != nil {
 		return err
 	}
-	intent, err := next(ctx)
-	if err != nil || intent == nil {
-		return err
-	}
-	return e.Submit(ctx, intent)
+	return next(ctx)
 }
 
 // Run drives a pull-based filler until ctx ends. A settled fill advances straight to the

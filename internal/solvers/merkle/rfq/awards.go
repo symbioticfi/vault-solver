@@ -14,8 +14,13 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/filler"
 )
 
-// pollAwards runs on the same goroutine that polls receipts and submits fills.
-// Quotes read the spend ledger under its own lock.
+func (s *Solver) refreshAwards(ctx context.Context) error {
+	_, _, err := s.pollAwards(ctx, false)
+	return err
+}
+
+// The RFQ loop plans reservations and polls receipts. SDK submission runs
+// independently, and quotes read the spend ledger under its own lock.
 func (s *Solver) pollAwards(ctx context.Context, forSubmission bool) (_ []rfqbackend.OrdersResponseOrdersInner, _ []discounts.ListItem, err error) {
 	rows, err := s.backend.orders(ctx, strings.ToLower(s.Workflow.Filler.Hex()))
 	if err != nil {
@@ -27,7 +32,7 @@ func (s *Solver) pollAwards(ctx context.Context, forSubmission bool) (_ []rfqbac
 	}
 	defer func() {
 		if err == nil {
-			s.lastOrderPoll.Store(&polledAt)
+			s.lastAwardRefresh.Store(&polledAt)
 		}
 	}()
 	open := make(map[string]bool, len(rows))

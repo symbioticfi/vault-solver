@@ -59,9 +59,10 @@ Quote capacity is grouped by account and funding asset, not executor. Overlappin
 recipes are alternatives; they cannot multiply that balance within a quote.
 Use one order poller per RFQ Executor/filler identity; a second process for quotes must
 set `quoteOnly: true`.
-The loop polls awards every three seconds, including while a fill is pending. It
-fetches all open-order pages in batches of 100 within the iteration's thirty-second
-context. A settled fill advances immediately to the next award.
+The loop polls awards on a three-second cadence while the SDK signs and confirms
+the current fill. It fetches all open-order pages in creation order, oldest first,
+in batches of 100 within the iteration's thirty-second context. A settled fill
+advances immediately to the next executable award.
 Curator HTTP limits are ten seconds and 2 MiB. Secret configuration contains
 environment variable names. The execution-only plugin has no quote server. Native RFQ mode keeps its existing
 configurable polling limits.

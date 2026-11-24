@@ -35,7 +35,10 @@ type Solver struct {
 	tokenPolicy tokenpolicy.Policy
 	// observeOrderPoll reports every successful read of the awarded orders.
 	observeOrderPoll func(time.Time)
-	lastOrderPoll    atomic.Pointer[time.Time]
+	lastAwardRefresh atomic.Pointer[time.Time]
+	// Only the RFQ loop receives from this channel. The SDK submitter owns the
+	// sender until it publishes the result, so receipt polling waits for it.
+	submitting <-chan error
 }
 
 func (*Solver) Name() string                    { return Name }
@@ -61,21 +64,46 @@ func New(cfg Config, deps solver.Deps, observeOrderPoll func(time.Time)) (*Solve
 	return &Solver{Engine: engine, backend: newBackendClient(cfg.BackendURL), tokenPolicy: cfg.TokenPolicy, observeOrderPoll: observeOrderPoll}, nil
 }
 
-func (s *Solver) Run(ctx context.Context) error { return s.Engine.Run(ctx, s.tick) }
+func (s *Solver) Run(ctx context.Context) error {
+	defer func() {
+		if s.submitting != nil {
+			<-s.submitting
+			s.submitting = nil
+		}
+	}()
+	return s.Engine.Run(ctx, func(run context.Context) error { return s.tick(run, ctx) })
+}
 
-func (s *Solver) tick(ctx context.Context) error {
+func (s *Solver) tick(ctx, lifecycle context.Context) error {
+	if s.submitting != nil {
+		select {
+		case err := <-s.submitting:
+			s.submitting = nil
+			if err != nil {
+				return errors.Join(err, s.refreshAwards(ctx))
+			}
+		default:
+			return s.refreshAwards(ctx)
+		}
+	}
 	wasPending := s.Pending() != nil
-	err := s.Tick(ctx, s.next)
+	err := s.Tick(ctx, func(run context.Context) error {
+		intent, err := s.next(run)
+		if err != nil || intent == nil {
+			return err
+		}
+		s.submitting, err = s.SubmitAsync(lifecycle, intent)
+		return err
+	})
 	if !wasPending || s.Pending() == nil || ctx.Err() != nil {
 		return err
 	}
-	_, _, pollErr := s.pollAwards(ctx, false)
-	return errors.Join(err, pollErr)
+	return errors.Join(err, s.refreshAwards(ctx))
 }
 
 // CanQuote requires a healthy execution lane and a recent successful award refresh.
 func (s *Solver) CanQuote(now time.Time) bool {
-	lastPoll := s.lastOrderPoll.Load()
+	lastPoll := s.lastAwardRefresh.Load()
 	return lastPoll != nil && now.Sub(*lastPoll) < filler.ConfirmationPatience && s.Ready() && !s.Stalled()
 }
 
