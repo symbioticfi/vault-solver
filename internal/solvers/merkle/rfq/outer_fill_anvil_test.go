@@ -669,15 +669,15 @@ func TestAnvilSplitConnectorOrder(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			solver.tokenPolicy = singleRoute
-			if intent, err := solver.prepare(t.Context(), row, listed); intent != nil || err != nil {
-				t.Fatalf("token policy should decline a split-only award: intent=%v err=%v", intent, err)
-			}
-			solver.tokenPolicy = tokenpolicy.Policy{}
 			observed, err := solver.Observe(t.Context())
 			if err != nil {
 				t.Fatal(err)
 			}
+			solver.tokenPolicy = singleRoute
+			if intent, err := solver.prepare(t.Context(), row, listed, observed); intent != nil || err != nil {
+				t.Fatalf("token policy should decline a split-only award: intent=%v err=%v", intent, err)
+			}
+			solver.tokenPolicy = tokenpolicy.Policy{}
 			if err := solver.reserveAward(t.Context(), row, listed, observed); err != nil {
 				t.Fatal(err)
 			}
@@ -685,7 +685,7 @@ func TestAnvilSplitConnectorOrder(t *testing.T) {
 			if f.reader.outerCalls != 0 {
 				t.Fatal("reserving the split award simulated its fill")
 			}
-			intent, err := solver.prepare(t.Context(), row, listed)
+			intent, err := solver.prepare(t.Context(), row, listed, observed)
 			if err != nil || intent == nil || f.reader.outerCalls != 1 {
 				t.Fatalf("split preparation did not simulate the full signed award once: simulations=%d err=%v", f.reader.outerCalls, err)
 			}

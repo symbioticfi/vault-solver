@@ -41,7 +41,7 @@ func TestMultipleExecutorsShareRouting(t *testing.T) {
 	listing := discounts.ListItem{DiscountPrecision: "100000000", Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: "900"}
 	wrongRWA := listing
 	wrongRWA.TokenToRedeem = common.HexToAddress("0xbad").Hex()
-	intent, err := s.prepare(t.Context(), awardRow(t, order), []discounts.ListItem{wrongRWA, listing})
+	intent, err := prepareAtHead(t, s, awardRow(t, order), []discounts.ListItem{wrongRWA, listing})
 	if err != nil || intent != nil {
 		t.Fatalf("ambiguous local recipes reached fill: %v", err)
 	}

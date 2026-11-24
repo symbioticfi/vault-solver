@@ -33,7 +33,7 @@ type Solver struct {
 
 	backend     orderBackend
 	tokenPolicy tokenpolicy.Policy
-	// observeOrderPoll reports every successful read of the awarded orders.
+	// observeOrderPoll reports the same successful refresh that keeps quotes available.
 	observeOrderPoll func(time.Time)
 	lastAwardRefresh atomic.Pointer[time.Time]
 	// Only the RFQ loop receives from this channel. The SDK submitter owns the
@@ -75,30 +75,35 @@ func (s *Solver) Run(ctx context.Context) error {
 }
 
 func (s *Solver) tick(ctx, lifecycle context.Context) error {
+	var laneErr error
 	if s.submitting != nil {
 		select {
-		case err := <-s.submitting:
+		case laneErr = <-s.submitting:
 			s.submitting = nil
-			if err != nil {
-				return errors.Join(err, s.refreshAwards(ctx))
-			}
 		default:
-			return s.refreshAwards(ctx)
 		}
 	}
-	wasPending := s.Pending() != nil
-	err := s.Tick(ctx, func(run context.Context) error {
-		intent, err := s.next(run)
-		if err != nil || intent == nil {
+	if s.submitting == nil && laneErr == nil && s.Pending() != nil {
+		outcome, err := s.Poll(ctx)
+		if outcome != nil || ctx.Err() != nil {
 			return err
 		}
-		s.submitting, err = s.SubmitAsync(lifecycle, intent)
-		return err
-	})
-	if !wasPending || s.Pending() == nil || ctx.Err() != nil {
+		laneErr = err
+	}
+	canSubmit := s.submitting == nil && s.Pending() == nil && laneErr == nil
+	if canSubmit && s.Sender.Busy() {
+		return errors.New("fill sender has work without a fill owner")
+	}
+	batch, err := s.pollAwards(ctx, canSubmit)
+	if err != nil || !canSubmit {
+		return errors.Join(laneErr, err)
+	}
+	intent, err := s.next(ctx, batch)
+	if err != nil || intent == nil {
 		return err
 	}
-	return errors.Join(err, s.refreshAwards(ctx))
+	s.submitting, err = s.SubmitAsync(lifecycle, intent)
+	return err
 }
 
 // CanQuote requires a healthy execution lane and a recent successful award refresh.
@@ -108,13 +113,9 @@ func (s *Solver) CanQuote(now time.Time) bool {
 }
 
 // next returns the first awarded order that a configured connector can settle.
-func (s *Solver) next(ctx context.Context) (*filler.Intent, error) {
-	rows, listed, err := s.pollAwards(ctx, true)
-	if err != nil {
-		return nil, err
-	}
-	for _, row := range rows {
-		intent, err := s.prepare(ctx, row, listed)
+func (s *Solver) next(ctx context.Context, batch awardBatch) (*filler.Intent, error) {
+	for _, row := range batch.rows {
+		intent, err := s.prepare(ctx, row, batch.listings, batch.observed)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
@@ -129,7 +130,7 @@ func (s *Solver) next(ctx context.Context) (*filler.Intent, error) {
 	return nil, nil
 }
 
-func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrdersInner, listed []discounts.ListItem) (*filler.Intent, error) {
+func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrdersInner, listed []discounts.ListItem, observed filler.Observation) (*filler.Intent, error) {
 	order, signature, err := decodeOrder(row, s.Workflow.Filler)
 	if err != nil {
 		return nil, err
@@ -139,13 +140,6 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 		return nil, err
 	}
 	if !s.tokenPolicy.Allows(order.Request.TokenIn) {
-		return nil, nil
-	}
-	observed, err := s.Observe(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if s.Spends.Finalized(row.OrderId) {
 		return nil, nil
 	}
 	expiry := time.Unix(order.Request.Deadline.Int64(), 0)

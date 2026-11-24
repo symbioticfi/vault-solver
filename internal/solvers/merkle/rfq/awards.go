@@ -14,29 +14,30 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/filler"
 )
 
-func (s *Solver) refreshAwards(ctx context.Context) error {
-	_, _, err := s.pollAwards(ctx, false)
-	return err
+type awardBatch struct {
+	rows     []rfqbackend.OrdersResponseOrdersInner
+	listings []discounts.ListItem
+	observed filler.Observation
 }
 
 // The RFQ loop plans reservations and polls receipts. SDK submission runs
 // independently, and quotes read the spend ledger under its own lock.
-func (s *Solver) pollAwards(ctx context.Context, forSubmission bool) (_ []rfqbackend.OrdersResponseOrdersInner, _ []discounts.ListItem, err error) {
+func (s *Solver) pollAwards(ctx context.Context, forSubmission bool) (batch awardBatch, err error) {
 	rows, err := s.backend.orders(ctx, strings.ToLower(s.Workflow.Filler.Hex()))
 	if err != nil {
-		return nil, nil, err
+		return batch, err
 	}
 	polledAt := time.Now()
-	if s.observeOrderPoll != nil {
-		s.observeOrderPoll(polledAt)
-	}
 	defer func() {
 		if err == nil {
 			s.lastAwardRefresh.Store(&polledAt)
+			if s.observeOrderPoll != nil {
+				s.observeOrderPoll(polledAt)
+			}
 		}
 	}()
 	open := make(map[string]bool, len(rows))
-	var queued, unreserved []rfqbackend.OrdersResponseOrdersInner
+	var unreserved []rfqbackend.OrdersResponseOrdersInner
 	pending := s.Pending()
 	for _, row := range rows {
 		id := row.OrderId
@@ -47,40 +48,41 @@ func (s *Solver) pollAwards(ctx context.Context, forSubmission bool) (_ []rfqbac
 		if pending != nil && id == pending.OrderID || s.Spends.Finalized(id) {
 			continue
 		}
-		queued = append(queued, row)
+		batch.rows = append(batch.rows, row)
 		if !s.Spends.Queued(id) {
 			unreserved = append(unreserved, row)
 		}
 	}
 	s.Spends.PruneQueued(open)
-	if len(queued) == 0 {
-		return nil, nil, nil
+	if len(batch.rows) == 0 {
+		return batch, nil
 	}
 
-	observed, err := s.Observe(ctx)
+	batch.observed, err = s.Observe(ctx)
 	if err != nil {
-		return nil, nil, err
+		return batch, err
 	}
 	if !forSubmission && len(unreserved) == 0 {
-		return nil, nil, nil
+		return batch, nil
 	}
 
 	listed, err := s.backend.listDiscounts(ctx)
 	if err != nil {
-		return nil, nil, err
+		return batch, err
 	}
 	if listed == nil {
-		return nil, nil, errors.New("missing connector discount inventory")
+		return batch, errors.New("missing connector discount inventory")
 	}
+	batch.listings = listed.Discounts
 	for _, row := range unreserved {
-		if err := s.reserveAward(ctx, row, listed.Discounts, observed); err != nil {
+		if err := s.reserveAward(ctx, row, batch.listings, batch.observed); err != nil {
 			if ctx.Err() != nil {
-				return nil, nil, ctx.Err()
+				return batch, ctx.Err()
 			}
 			observability.Log(ctx).V(1).Info("RFQ award not reserved yet", "orderId", row.OrderId, "reason", err.Error())
 		}
 	}
-	return queued, listed.Discounts, nil
+	return batch, nil
 }
 
 // reserveAward allocates the signed payout without preparing or simulating the
@@ -90,7 +92,8 @@ func (s *Solver) reserveAward(ctx context.Context, row rfqbackend.OrdersResponse
 	if err != nil {
 		return err
 	}
-	if !s.tokenPolicy.Allows(order.Request.TokenIn) || order.Request.Deadline.Int64() <= observed.Chain.Unix() {
+	deadline := order.Request.Deadline.Int64()
+	if !s.tokenPolicy.Allows(order.Request.TokenIn) || deadline <= observed.Chain.Unix() {
 		return nil
 	}
 	token, required, err := orderTerms(order, s.Workflow.Filler)
@@ -98,15 +101,15 @@ func (s *Solver) reserveAward(ctx context.Context, row rfqbackend.OrdersResponse
 		return err
 	}
 	var routes []filler.Source
-	amounts := make(liquidlane.CapacityReservations)
+	spend := connector.Spend{Amounts: make(liquidlane.CapacityReservations), Deadline: deadline}
 	chainID := s.Workflow.ChainID.Int64()
 	for source, err := range s.Sources(listed, order.Request.TokenIn, token) {
 		if err != nil {
 			return err
 		}
 		if s.Unreserved(source, token, "").Cmp(required) >= 0 {
-			amounts.Add(liquidlane.NewCapacityID(chainID, source.Account, token), required)
-			return s.Spends.ReserveQueued(row.OrderId, connector.Spend{Amounts: amounts, Deadline: order.Request.Deadline.Int64()})
+			spend.Amounts.Add(liquidlane.NewCapacityID(chainID, source.Account, token), required)
+			return s.Spends.ReserveQueued(row.OrderId, spend)
 		}
 		routes = append(routes, source)
 	}
@@ -118,7 +121,7 @@ func (s *Solver) reserveAward(ctx context.Context, row rfqbackend.OrdersResponse
 		return err
 	}
 	for _, leg := range legs {
-		amounts.Add(liquidlane.NewCapacityID(chainID, leg.Account, token), leg.AmountOut)
+		spend.Amounts.Add(liquidlane.NewCapacityID(chainID, leg.Account, token), leg.AmountOut)
 	}
-	return s.Spends.ReserveQueued(row.OrderId, connector.Spend{Amounts: amounts, Deadline: order.Request.Deadline.Int64()})
+	return s.Spends.ReserveQueued(row.OrderId, spend)
 }

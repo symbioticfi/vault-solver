@@ -143,14 +143,6 @@ func (e *Engine) Reservations(inventory []liquidlane.Inventory) liquidlane.Capac
 // briefly looks the same.
 func (e *Engine) Stalled() bool { return e.stalled.Load() }
 
-func (e *Engine) markStalled(err error) error {
-	e.stalled.Store(true)
-	if err == nil {
-		return ErrLaneStalled
-	}
-	return errors.Errorf("%w: %w", ErrLaneStalled, err)
-}
-
 // Pending returns the fill that owns the lane, or nil.
 func (e *Engine) Pending() *Intent { return e.intent.Load() }
 
@@ -214,7 +206,17 @@ func (e *Engine) Poll(ctx context.Context) (outcome *Outcome, err error) {
 		return nil, nil
 	}
 	ctx, end := tracer.Start(ctx, e.Name+".fill", observability.AttrSolver.String(e.Name), observability.AttrOrderID.String(intent.OrderID))
-	defer func() { end(err) }()
+	defer func() {
+		if outcome == nil && !e.Sender.Busy() {
+			e.stalled.Store(true)
+			if err == nil {
+				err = ErrLaneStalled
+			} else {
+				err = errors.Errorf("%w: %w", ErrLaneStalled, err)
+			}
+		}
+		end(err)
+	}()
 	result, err := e.Sender.Poll(ctx)
 	if err != nil || result == nil {
 		return nil, err
@@ -255,8 +257,7 @@ func (e *Engine) Await(ctx context.Context) (*Outcome, error) {
 		if outcome != nil {
 			return outcome, nil
 		}
-		if e.Sender != nil && !e.Sender.Busy() {
-			err = e.markStalled(err)
+		if errors.Is(err, ErrLaneStalled) {
 			observability.Log(ctx).Error(err, "fill lane stalled; restart required")
 			return nil, err
 		}
@@ -284,27 +285,6 @@ func (e *Engine) Await(ctx context.Context) (*Outcome, error) {
 	}
 }
 
-// Tick advances the lane once: it polls the pending fill, or asks next for a new one.
-func (e *Engine) Tick(ctx context.Context, next func(context.Context) error) (err error) {
-	ctx, end := tracer.Start(ctx, e.Name+".poll", observability.AttrSolver.String(e.Name))
-	defer func() { end(err) }()
-	if e.Pending() != nil {
-		outcome, pollErr := e.Poll(ctx)
-		if outcome == nil && !e.Sender.Busy() {
-			return e.markStalled(pollErr)
-		}
-		err = pollErr
-		return err
-	}
-	if e.Sender.Busy() {
-		return errors.New("fill sender has work without a fill owner")
-	}
-	if err := e.Initialize(ctx); err != nil {
-		return err
-	}
-	return next(ctx)
-}
-
 // Run drives a pull-based filler until ctx ends. A settled fill advances straight to the
 // next one; pending work waits for the polling timer.
 func (e *Engine) Run(ctx context.Context, tick func(context.Context) error) error {
@@ -315,9 +295,13 @@ func (e *Engine) Run(ctx context.Context, tick func(context.Context) error) erro
 	defer ticker.Stop()
 	for {
 		pending := e.Pending()
-		run, cancel := context.WithTimeout(ctx, operationTimeout)
-		err := tick(run)
-		cancel()
+		err := func() (err error) {
+			run, cancel := context.WithTimeout(ctx, operationTimeout)
+			defer cancel()
+			run, end := tracer.Start(run, e.Name+".poll", observability.AttrSolver.String(e.Name))
+			defer func() { end(err) }()
+			return tick(run)
+		}()
 		if err != nil && ctx.Err() == nil {
 			log := observability.Log(ctx)
 			if pending != nil {

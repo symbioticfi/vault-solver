@@ -41,6 +41,15 @@ func NewSpendLedger() *SpendLedger {
 
 // Reserve records the spend of a fill before its submission.
 func (l *SpendLedger) Reserve(id string, spend Spend) error {
+	return l.reserve(id, spend, false)
+}
+
+// ReserveQueued holds an award before submission. A submitted spend takes precedence.
+func (l *SpendLedger) ReserveQueued(id string, spend Spend) error {
+	return l.reserve(id, spend, true)
+}
+
+func (l *SpendLedger) reserve(id string, spend Spend, queued bool) error {
 	if l == nil {
 		return nil
 	}
@@ -50,7 +59,11 @@ func (l *SpendLedger) Reserve(id string, spend Spend) error {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.spends[id] = spend
+	if queued {
+		l.queued[id] = spend
+	} else {
+		l.spends[id] = spend
+	}
 	return nil
 }
 
@@ -67,22 +80,6 @@ func copySpend(id string, spend Spend) (Spend, error) {
 	}
 	spend.Amounts = amounts
 	return spend, nil
-}
-
-// ReserveQueued holds an award before submission. A submitted or completed fill
-// takes precedence when both entries exist.
-func (l *SpendLedger) ReserveQueued(id string, spend Spend) error {
-	if l == nil {
-		return nil
-	}
-	spend, err := copySpend(id, spend)
-	if err != nil {
-		return err
-	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.queued[id] = spend
-	return nil
 }
 
 // Queued reports whether an award already has a virtual reservation.

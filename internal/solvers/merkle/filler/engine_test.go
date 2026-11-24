@@ -101,10 +101,7 @@ func TestUncertainFillKeepsIntent(t *testing.T) {
 			intent := &Intent{OrderID: "owned", Data: []byte{1}, Deadline: time.Now()}
 			sender := &fillertest.Sender{IsBusy: true, Result: tc.result, PollErr: tc.err}
 			e := pendingEngine(sender, intent)
-			_ = e.Tick(t.Context(), func(context.Context) error {
-				t.Fatal("pending lane asked for new work")
-				return nil
-			})
+			_, _ = e.Poll(t.Context())
 			if e.Pending() != intent || sender.Submits != 0 || sender.Polls != 1 {
 				t.Fatal("uncertain work lost ownership")
 			}
@@ -138,14 +135,6 @@ func TestSubmitOwnsTheLaneUntilSettlement(t *testing.T) {
 	}
 }
 
-func TestTickRefusesUnownedSenderWork(t *testing.T) {
-	e := pendingEngine(&fillertest.Sender{IsBusy: true}, nil)
-	err := e.Tick(t.Context(), func(context.Context) error { return nil })
-	if err == nil {
-		t.Fatal("busy sender without an owner was accepted")
-	}
-}
-
 func testWorkflow(t *testing.T) *connector.Workflow {
 	t.Helper()
 	filler := common.HexToAddress("0x10")
@@ -175,10 +164,12 @@ func TestRunContinuesToNextFillAfterConfirmation(t *testing.T) {
 	e.Spends = nil
 	e.intent.Store(&Intent{OrderID: "pending"})
 	err := e.Run(ctx, func(ctx context.Context) error {
-		return e.Tick(ctx, func(context.Context) error {
+		if e.Pending() == nil {
 			cancel()
 			return nil
-		})
+		}
+		_, err := e.Poll(ctx)
+		return err
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal("confirmed fill waited for the polling timer before the next one", err)
@@ -200,10 +191,8 @@ func TestRunLogsOrderIDForPendingFillFailure(t *testing.T) {
 	e.intent.Store(&Intent{OrderID: "pending-order"})
 
 	err := e.Run(ctx, func(ctx context.Context) error {
-		return e.Tick(ctx, func(context.Context) error {
-			t.Fatal("fetched new work while a fill was unresolved")
-			return nil
-		})
+		_, err := e.Poll(ctx)
+		return err
 	})
 	if !errors.Is(err, context.Canceled) || !strings.Contains(failure, `"orderId"="pending-order"`) {
 		t.Fatalf("pending fill failure log = %q, run error = %v", failure, err)
