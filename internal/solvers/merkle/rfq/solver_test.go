@@ -60,6 +60,7 @@ func TestEmptyOrderPollReportsOnlySuccess(t *testing.T) {
 		Engine:  &filler.Engine{Workflow: workflow, Routes: connector.NewRoutes(workflow, []common.Address{common.HexToAddress("0x43")}), Sender: &fillertest.Sender{}},
 		backend: backend, observeOrderPoll: func(at time.Time) { observed = append(observed, at) },
 	}
+	s.LaneReady = func() bool { return true }
 	if err := s.tick(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -72,6 +73,17 @@ func TestEmptyOrderPollReportsOnlySuccess(t *testing.T) {
 	}
 	if len(observed) != 1 {
 		t.Fatalf("failed poll recorded success: %v", observed)
+	}
+	if s.CanQuote(observed[0].Add(filler.ConfirmationPatience)) {
+		t.Fatal("failed poll kept stale quotes available")
+	}
+
+	backend.ordersErr = nil
+	if err := s.tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(observed) != 2 || !s.CanQuote(observed[1]) {
+		t.Fatalf("successful poll did not resume quotes: %v", observed)
 	}
 }
 
@@ -138,6 +150,7 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	}}
 	sender := &fillertest.Sender{}
 	s := &Solver{Engine: &filler.Engine{Routes: connector.NewRoutes(fixture.workflow, []common.Address{common.HexToAddress("0x43")}), Workflow: fixture.workflow, Sender: sender, Spends: connector.NewSpendLedger()}, backend: backend}
+	s.LaneReady = func() bool { return true }
 	sender.Before = func(req transaction.ExecutionRequest) {
 		if s.Pending() == nil || !bytes.Equal(s.Pending().Data, req.Data) || s.Pending().Deadline.IsZero() {
 			t.Fatal("fill admitted before RAM intent")
@@ -163,6 +176,15 @@ func TestPollerRetainsWholeAwardAndOwnsOnlyOneFill(t *testing.T) {
 	if backend.reads != reads || sender.Submits != 1 || !reflect.DeepEqual(intent, *s.Pending()) {
 		t.Fatal("pending fill was rebuilt or its deadline changed")
 	}
+	lastOrderPoll := *s.lastOrderPoll.Load()
+	sender.PollErr = transaction.ErrNonceConsumed
+	if err := s.tick(t.Context()); !errors.Is(err, transaction.ErrNonceConsumed) || s.Pending() == nil || backend.reads != reads {
+		t.Fatal("unconfirmed fill lost ownership or read a new award", err)
+	}
+	if s.CanQuote(lastOrderPoll.Add(filler.ConfirmationPatience)) {
+		t.Fatal("quotes stayed available while the fill prevented new award polls")
+	}
+	sender.PollErr = nil
 	sender.Result = fillertest.Confirmed()
 	sender.DuringPoll = func() {
 		if reserved := s.Reservations(nil)[liquidlane.NewCapacityID(1, fixture.reader.RecipeAccount, tOut)]; reserved == nil || reserved.Cmp(big.NewInt(456)) != 0 {

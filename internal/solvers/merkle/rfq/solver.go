@@ -4,6 +4,7 @@ package rfq
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -35,6 +36,7 @@ type Solver struct {
 	tokenPolicy tokenpolicy.Policy
 	// observeOrderPoll reports every successful read of the awarded orders.
 	observeOrderPoll func(time.Time)
+	lastOrderPoll    atomic.Pointer[time.Time]
 }
 
 func (*Solver) Name() string                    { return Name }
@@ -64,14 +66,22 @@ func (s *Solver) Run(ctx context.Context) error { return s.Engine.Run(ctx, s.nex
 
 func (s *Solver) tick(ctx context.Context) error { return s.Tick(ctx, s.next) }
 
+// CanQuote requires both a ready sender and a recent successful award poll.
+func (s *Solver) CanQuote(now time.Time) bool {
+	lastPoll := s.lastOrderPoll.Load()
+	return lastPoll != nil && now.Sub(*lastPoll) < filler.ConfirmationPatience && s.Ready()
+}
+
 // next returns the first awarded order that a configured connector can settle.
 func (s *Solver) next(ctx context.Context) (*filler.Intent, error) {
 	rows, err := s.backend.orders(ctx, strings.ToLower(s.Workflow.Filler.Hex()))
 	if err != nil {
 		return nil, err
 	}
+	now := time.Now()
+	s.lastOrderPoll.Store(&now)
 	if s.observeOrderPoll != nil {
-		s.observeOrderPoll(time.Now())
+		s.observeOrderPoll(now)
 	}
 	if len(rows) == 0 {
 		return nil, nil

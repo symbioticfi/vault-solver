@@ -130,8 +130,9 @@ loses intent and transaction tracking while the transaction may still execute.
 Settle old work before upgrading and use one active process per signer.
 
 Quote inventory must match the verified recipe connector, RWA, account and asset.
-Quoting stays available during a fill; execution remains sequential. Before
-submission, each connector payout is reserved against its funding account/asset
+Execution remains sequential. Quotes can continue during a fill for up to two
+minutes after the last successful award poll. Before submission, each connector
+payout is reserved against its funding account/asset
 capacity. Other capacity and the unreserved remainder stay quotable. Ambiguous
 submissions keep that reservation, including the gap after sender release and
 before the fill loop records its canonical receipt. Unsigned failures and canonical
@@ -142,8 +143,12 @@ snapshots from reopening that capacity. Pending reservations survive their deadl
 until the signed outcome is known.
 Completed award IDs are retained until their signed chain deadlines, preventing
 a still-listed award from being filled twice. Reservations, watermarks and completed
-IDs are RAM only and are lost on process exit. SDK lifecycle readiness keeps the
-quote service in rotation while the transaction lane is occupied.
+IDs are RAM only and are lost on process exit. A sending deployment needs a ready
+SDK manager and a recent successful award poll to quote. A pending receipt or an
+unavailable order feed can make the poll stale. The next successful poll resumes
+quoting. Check `solver_bot_workflow_last_event_timestamp{event="order_poll",outcome="success"}`
+for the affected pod. Pending fill errors include the order ID for receipt investigation.
+Quote-only deployments serve independently of the award poll.
 
 The RFQ bridge ABI comes from [RFQ PR 25](https://github.com/symbioticfi/rfq/pull/25),
 commit `de6dbd617bf3c1e8b4120419cbe5800efae7d410`. Connector and RecipeExecutor use the unchanged canonical adapters contract surface.

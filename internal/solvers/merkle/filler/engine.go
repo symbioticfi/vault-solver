@@ -20,9 +20,9 @@ import (
 const (
 	pollInterval     = 3 * time.Second
 	operationTimeout = 30 * time.Second
-	// confirmationPatience is how long a consumed nonce without a confirmed receipt is treated as
+	// ConfirmationPatience is how long a consumed nonce without a confirmed receipt is treated as
 	// an included fill awaiting its confirmations rather than as a failure worth an error log.
-	confirmationPatience = 2 * time.Minute
+	ConfirmationPatience = 2 * time.Minute
 )
 
 var tracer = observability.NewTracer("github.com/symbioticfi/vault-solver/internal/solvers/merkle/filler", "")
@@ -245,7 +245,7 @@ func (e *Engine) Await(ctx context.Context) (*Outcome, error) {
 		}
 		switch {
 		case err == nil || ctx.Err() != nil:
-		case awaitingConfirmations && time.Since(included) < confirmationPatience:
+		case awaitingConfirmations && time.Since(included) < ConfirmationPatience:
 			observability.Log(ctx).V(1).Info("fill included; awaiting confirmations")
 		default:
 			observability.Log(ctx).Error(err, "fill poll failed")
@@ -288,14 +288,18 @@ func (e *Engine) Run(ctx context.Context, next Next) error {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	for {
-		pending := e.Pending() != nil
+		pending := e.Pending()
 		run, cancel := context.WithTimeout(ctx, operationTimeout)
 		err := e.Tick(run, next)
 		cancel()
 		if err != nil && ctx.Err() == nil {
-			observability.Log(ctx).Error(err, "Merkle fill iteration failed")
+			log := observability.Log(ctx)
+			if pending != nil {
+				log = log.WithValues("orderId", pending.OrderID)
+			}
+			log.Error(err, "Merkle fill iteration failed")
 		}
-		if pending && e.Pending() == nil && err == nil {
+		if pending != nil && e.Pending() == nil && err == nil {
 			continue
 		}
 		select {

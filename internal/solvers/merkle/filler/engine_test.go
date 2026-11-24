@@ -183,6 +183,32 @@ func TestRunContinuesToNextFillAfterConfirmation(t *testing.T) {
 	}
 }
 
+func TestRunLogsOrderIDForPendingFillFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	var failure string
+	log := funcr.New(func(_, args string) {
+		if strings.Contains(args, "Merkle fill iteration failed") {
+			failure = args
+			cancel()
+		}
+	}, funcr.Options{})
+	ctx = observability.WithLogger(ctx, log)
+	e := testEngine(t, &fillertest.Sender{IsBusy: true, PollErr: transaction.ErrNonceConsumed})
+	e.intent.Store(&Intent{OrderID: "pending-order"})
+
+	err := e.Run(ctx, func(context.Context) (*Intent, error) {
+		t.Fatal("fetched new work while a fill was unresolved")
+		return nil, nil
+	})
+	if !errors.Is(err, context.Canceled) || !strings.Contains(failure, `"orderId"="pending-order"`) {
+		t.Fatalf("pending fill failure log = %q, run error = %v", failure, err)
+	}
+	if e.Pending() == nil {
+		t.Fatal("logging released an unresolved fill")
+	}
+}
+
 func TestSourcesSelectConfiguredConnectorDiscounts(t *testing.T) {
 	e := testEngine(t, nil)
 	if e.Sends() || e.Ready() {

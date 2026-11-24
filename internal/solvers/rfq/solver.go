@@ -103,11 +103,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		if cfg.QuoteOnly {
 			quotes.laneAvailable = func() bool { return true }
 		} else {
-			manager, err := deps.MerkleTxManager()
-			if err != nil {
-				return nil, err
-			}
-			quotes.laneAvailable = manager.Ready
+			quotes.laneAvailable = func() bool { return merkle.CanQuote(quotes.now()) }
 		}
 		quotes.resolveRoute = func(connector, rwa, asset common.Address, _ int) (common.Address, common.Address, bool) {
 			return merkle.ResolveRoute(connector, rwa, asset)

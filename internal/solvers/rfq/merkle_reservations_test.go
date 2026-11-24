@@ -59,7 +59,17 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 	curator := httptest.NewServer(http.HandlerFunc(routeRPC.serveTree))
 	defer curator.Close()
 	t.Setenv("RFQ_BACKEND_SHARED_SECRET", "test-secret")
-	text := minimalConfig + "recipeExecutors: ['0x0000000000000000000000000000000000000043']\ncurator: {url: " + curator.URL + "}\n"
+	orderFeed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/v1/orders" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"orders":[],"requestId":"fixture"}`))
+	}))
+	defer orderFeed.Close()
+	text := strings.Replace(minimalConfig, "https://rfq-backend.example", orderFeed.URL, 1) +
+		"recipeExecutors: ['0x0000000000000000000000000000000000000043']\ncurator: {url: " + curator.URL + "}\n"
 	var node yaml.Node
 	if err := yaml.Unmarshal([]byte(text), &node); err != nil {
 		t.Fatal(err)
@@ -90,10 +100,27 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 	if err := s.merkle.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+	if response := do(t, s.server.handler(), http.MethodPost, "/quote", "test-secret", body); response.Code != http.StatusNoContent {
+		t.Fatalf("quote before first successful award poll = %d, want 204", response.Code)
+	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
+	execDone := make(chan error, 1)
 	go func() { defer close(done); merkleManager.Start(ctx) }()
-	t.Cleanup(func() { cancel(); <-done })
+	go func() { execDone <- s.runExecution(ctx) }()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		if err := <-execDone; !errors.Is(err, context.Canceled) {
+			t.Errorf("RFQ worker shutdown: %v", err)
+		}
+	})
+	for deadline := time.Now().Add(time.Second); !s.server.quotes.canQuote(); {
+		if time.Now().After(deadline) {
+			t.Fatal("quotes stayed unavailable after a successful award poll")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	sender := merkleManager.Sender("rfq-merkle")
 	if err := sender.Submit(t.Context(), merkletransaction.ExecutionRequest{To: common.HexToAddress("0x10")}); err != nil {
 		t.Fatal(err)
@@ -123,6 +150,13 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 			t.Fatalf("pending quote HTTP status = %d, want %d: %s", response.Code, status, response.Body.String())
 		}
 	}
+
+	quoteClock := s.server.quotes.now
+	s.server.quotes.now = func() time.Time { return time.Now().Add(3 * time.Minute) }
+	if response := do(t, s.server.handler(), http.MethodPost, "/quote", "test-secret", body); response.Code != http.StatusNoContent {
+		t.Fatalf("quote after award polling became stale = %d, want 204", response.Code)
+	}
+	s.server.quotes.now = quoteClock
 
 	// Each independent account covers only part of the requested input.
 	routes := s.server.quotes.resolveRoute
@@ -164,7 +198,7 @@ func TestFactoryQuotesAuthenticateMerkleRouteWhileTransactionPending(t *testing.
 		http.Error(w, "unexpected backend lookup", http.StatusServiceUnavailable)
 	}))
 	defer backend.Close()
-	quoteText := strings.Replace(text, "https://rfq-backend.example", backend.URL, 1) + "quoteOnly: true\n"
+	quoteText := strings.Replace(text, orderFeed.URL, backend.URL, 1) + "quoteOnly: true\n"
 	if err := yaml.Unmarshal([]byte(quoteText), &node); err != nil {
 		t.Fatal(err)
 	}
