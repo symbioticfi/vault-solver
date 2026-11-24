@@ -9,6 +9,7 @@ import (
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/internal/parse"
 )
 
@@ -164,10 +165,10 @@ func (v *quoteAdapter) parse(index int, chainID int64, tokenIn common.Address, r
 	}
 	precision := liquidlane.DiscountPrecision
 	if recipeExecutor != (common.Address{}) {
-		if v.DiscountPrecision != "100000000" || discountID == nil {
-			return solverInventory{}, errors.Errorf("adapters[%d]: connector requires signed discount and precision 100000000", index)
+		if v.DiscountPrecision != connector.PrecisionText || discountID == nil {
+			return solverInventory{}, errors.Errorf("adapters[%d]: connector requires signed discount and precision %s", index, connector.PrecisionText)
 		}
-		precision = 100_000_000
+		precision = connector.Precision
 	} else if v.DiscountPrecision != "1000000" {
 		return solverInventory{}, errors.Errorf("adapters[%d]: invalid adapter discount precision", index)
 	}

@@ -600,6 +600,18 @@ and are unrelated to LI.FI account or fill authorization.
 
 ### 5.4 Config block (sketch)
 
+Merkle recipes: the separate `lifi-merkle` solver (`internal/solvers/merkle/lifi`: registration and config)
+runs this package as its engine and settles each order through a Merkle-funded `LiquidLaneConnector`. Quoting,
+order intake and the retry queues are shared. The engine has one `settlement` seam (`settlement.go`):
+`adapterSettlement` is the `lifi-samechain` path described in this plan; `recipeSettlement` (`recipes.go`)
+supplies the quote inventory (advertised connector discounts), quote reservations (the Merkle lane's spend
+ledger) and the fill (the shared Merkle lane on the SDK transaction manager, one fill at a time, through one
+connector or split across up to three under the same token rules as adapter fills, no `gas`). The engine does not branch on configuration, and `lifi-samechain` rejects `recipeExecutors`
+and `curator`. An order arriving while the lane is busy waits for the pending
+fill. Unlike native fills, the complete `finaliseWithCurrentTimestamp` call is simulated before submission.
+Setup, settlement and limits are in [MERKLE-FILLERS.md](MERKLE-FILLERS.md); the profile is
+[`config/lifi-merkle.example.yaml`](../config/lifi-merkle.example.yaml).
+
 ```yaml
 solvers:
   - name: lifi-samechain

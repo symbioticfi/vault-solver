@@ -252,7 +252,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 		observability.ErrorUnlessCanceled(ctx, err, "quote refresh: read latest block time")
 		return
 	}
-	snapshotSet, err := s.reader.quoteSnapshots(ctx, routes, s.cfg.Executor)
+	source, err := s.fillPath().quoteSource(ctx, routes, chainTime)
 	if err != nil {
 		s.observeQuoteBuildRejections(ctx, nil, nil, "snapshot_error")
 		observability.ErrorUnlessCanceled(ctx, err, "quote refresh: read routes")
@@ -267,11 +267,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 			return
 		}
 	}
-	direct := filterQuoteInventory(snapshotSet.Direct, s.cfg.TokenPolicy)
-	discountBases := filterQuoteInventory(snapshotSet.Physical, s.cfg.TokenPolicy)
-	inventory := append([]liquidlane.Inventory(nil), direct...)
-	discountInventory, discountDegraded, discountErr := s.quoteDiscountInventories(ctx, discountBases, chainTime)
-	inventory = append(inventory, discountInventory...)
+	inventory, direct, discountBases := source.inventory, source.direct, source.discountBases
 	var metadataTokens []common.Address
 	for _, item := range inventory {
 		metadataTokens = append(metadataTokens, item.TokenIn, item.TokenOut)
@@ -279,15 +275,15 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	if s.warmMetadata != nil {
 		s.warmMetadata(metadataTokens)
 	}
-	reservations := s.capacity.Snapshot()
+	reservations := s.fillPath().reservations(inventory)
 	serverTime := s.wallNow()
 	out, err := s.decideQuotes(ctx, types.QuoteInput{
 		Solver:            s.cfg.Executor,
 		Inventory:         inventory,
 		Reservations:      reservations,
-		SingleRouteTokens: s.cfg.TokenPolicy.SingleRouteTokens(),
-		GasSnapshot:       snapshotSet.GasSnapshot,
-		GasPrices:         snapshotSet.GasPrices,
+		SingleRouteTokens: source.singleRouteTokens,
+		GasSnapshot:       source.gasSnapshot,
+		GasPrices:         source.gasPrices,
 		MaxFeePerGas:      maxFeePerGas,
 		ChainTime:         chainTime,
 		ServerTime:        serverTime,
@@ -300,7 +296,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	}
 	// Failure affects attribution only: preserve the same inventory/strategy/publication path.
 	var unavailableDiscounts []liquidlane.Inventory
-	if discountErr != nil {
+	if source.discountErr != nil {
 		unavailableDiscounts = discountBases
 	}
 	s.observeQuoteBuildRejections(ctx, inventory, out.Quotes, "", unavailableDiscounts...)
@@ -345,7 +341,7 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	}
 	s.observeQuoteRefresh(state)
 	outcome = observability.ExternalOperationSuccess
-	if discountDegraded {
+	if source.degraded {
 		outcome = observability.ExternalOperationDegraded
 	}
 	observability.Log(ctx).Info(

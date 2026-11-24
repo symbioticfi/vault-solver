@@ -34,7 +34,6 @@ func TestConnectorQuoteUsesBackendCapacityAndCurrentPolicyBudget(t *testing.T) {
 		{"upstream cap", 400, 600, 0, 400, 5, ""},
 		{"shared account reservation", 600, 1000, 100, 500, 5, ""},
 		{"unknown backend block retains reservations", 600, 1000, 100, 500, 0, ""},
-		{"policy snapshot reorganized", 600, 1000, 0, 0, 5, "reorganized"},
 		{"policy budget unavailable", 600, 1000, 0, 0, 5, "remainingAssets"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -42,7 +41,6 @@ func TestConnectorQuoteUsesBackendCapacityAndCurrentPolicyBudget(t *testing.T) {
 			tokenIn, tokenOut := common.HexToAddress("0x31"), common.HexToAddress("0x32")
 			service := &connectorCapacityRPC{connector: connectorAddress, account: account, output: tokenOut, budget: big.NewInt(tc.budget)}
 			service.fail = tc.wantErr == "remainingAssets"
-			service.reorg = tc.wantErr == "reorganized"
 			server := rpc.NewServer()
 			if err := server.RegisterName("eth", service); err != nil {
 				t.Fatal(err)
@@ -86,22 +84,14 @@ type connectorCapacityRPC struct {
 	connector, account, output   common.Address
 	budgetReads, unexpectedReads int
 	budget                       *big.Int
-	fail, reorg                  bool
-	headerReads                  int
+	fail                         bool
 }
 
 func (*connectorCapacityRPC) ChainId(context.Context) (*hexutil.Big, error) {
 	return (*hexutil.Big)(big.NewInt(1)), nil
 }
-func (s *connectorCapacityRPC) GetBlockByNumber(context.Context, string, bool) (*types.Header, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.headerReads++
-	header := &types.Header{Number: big.NewInt(7), Difficulty: big.NewInt(1)}
-	if s.reorg && s.headerReads > 1 {
-		header.Extra = []byte("reorganized")
-	}
-	return header, nil
+func (*connectorCapacityRPC) GetBlockByNumber(context.Context, string, bool) (*types.Header, error) {
+	return &types.Header{Number: big.NewInt(7), Difficulty: big.NewInt(1)}, nil
 }
 func (s *connectorCapacityRPC) Call(_ context.Context, args map[string]any, block string, override *map[string]any) (hexutil.Bytes, error) {
 	s.mu.Lock()

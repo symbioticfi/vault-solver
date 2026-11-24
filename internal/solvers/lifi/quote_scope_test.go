@@ -25,7 +25,7 @@ func TestStandingQuoteGlobalFailureExcludesForbiddenPolicyPair(t *testing.T) {
 	cfg.Gas = nil
 	cfg.TokenPolicy = testTokenPolicy(t, tokenpolicy.Permissioned, allowed.TokenIn)
 	reg := prometheus.NewRegistry()
-	m, err := newLIFIMetrics(reg, nil, "")
+	m, err := newLIFIMetrics(Name, reg, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestStandingQuoteGlobalFailureExcludesForbiddenPolicyPair(t *testing.T) {
 
 func TestStandingQuoteMetricsHaveNoPairDimensions(t *testing.T) {
 	reg := prometheus.NewRegistry()
-	m, err := newLIFIMetrics(reg, nil, "")
+	m, err := newLIFIMetrics(Name, reg, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

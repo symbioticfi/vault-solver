@@ -92,15 +92,15 @@ func newUniswapXMetrics(
 			Outcomes: []string{"won", exclusiveOutcomeSettledInTime, exclusiveOutcomeMissed},
 		},
 	)
-	workflow, err := observability.NewWorkflowMetrics(reg, Name, spec)
+	workflow, err := observability.NewWorkflowMetrics(reg, solver.Name(), spec)
 	if err != nil {
 		return nil, err
 	}
-	traffic, err := liquidlane.NewQuoteMetrics(reg, Name, boundedQuoteRejectionReason)
+	traffic, err := liquidlane.NewQuoteMetrics(reg, solver.Name(), boundedQuoteRejectionReason)
 	if err != nil {
 		return nil, err
 	}
-	pairs, err := liquidlane.NewPairMetrics(reg, Name, boundedQuoteRejectionReason)
+	pairs, err := liquidlane.NewPairMetrics(reg, solver.Name(), boundedQuoteRejectionReason)
 	if err != nil {
 		return nil, err
 	}
@@ -169,8 +169,11 @@ func newUniswapXMetrics(
 		m.quoteTime, m.exclusiveOutstanding, m.exclusiveDeadline, m.blockUntil, m.ready,
 		m.quoteRefresh, m.exclusivePoll, m.pendingFills,
 	}
+	// The protocol gauges carry the solver too, so both solvers of a protocol can share a
+	// process or a namespace without mixing their series.
+	labeled := prometheus.WrapRegistererWith(prometheus.Labels{"solver": solver.Name()}, reg)
 	for _, collector := range collectors {
-		if err := reg.Register(collector); err != nil {
+		if err := labeled.Register(collector); err != nil {
 			return nil, errors.Errorf("uniswapx: register metric: %w", err)
 		}
 	}

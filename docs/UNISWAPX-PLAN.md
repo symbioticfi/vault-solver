@@ -308,7 +308,19 @@ indirection (read with `os.Getenv` at point of use, never stored in the parsed c
 and `observability` use the shared framework schema. The
 [transaction settings](TXMANAGER-PLAN.md#3-configuration-and-time-budgets) have UniswapX-specific values
 in the example, not a separate schema. The current profile is
-[`config/uniswapx.example.yaml`](../config/uniswapx.example.yaml); the abbreviated shape is:
+[`config/uniswapx.example.yaml`](../config/uniswapx.example.yaml); the abbreviated shape is below.
+
+Merkle recipes: the separate `uniswapx-merkle` solver (`internal/solvers/merkle/uniswapx`: registration and
+config) runs this package as its engine and settles each order through a Merkle-funded `LiquidLaneConnector`.
+Quoting, order intake, retries, the breaker and exclusivity accounting are shared. The engine has one
+`settlement` seam (`settlement.go`): `adapterSettlement` is the `uniswapx-filler` path described in this plan;
+`recipeSettlement` (`recipes.go`) supplies the quote inventory (advertised connector discounts), quote
+reservations (the Merkle lane's spend ledger) and the fill (the shared Merkle lane on the SDK transaction
+manager, one fill at a time, one connector or a split across up to three under the same strategy and token
+rules as adapter fills, no `gas`). The engine does not branch on configuration, and
+`uniswapx-filler` rejects `recipeExecutors` and `curator`. Setup, settlement and limits are in
+[MERKLE-FILLERS.md](MERKLE-FILLERS.md); the profile is
+[`config/uniswapx-merkle.example.yaml`](../config/uniswapx-merkle.example.yaml).
 
 ```yaml
 chain: { rpcUrl: "${ETH_RPC_URL_MAINNET}", writeRpcUrl: "${WRITE_RPC_URL}", chainId: 1 }

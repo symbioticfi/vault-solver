@@ -34,20 +34,29 @@ const (
 	solverModeInternal      = "internal"
 )
 
+// RawEngineConfig is the configuration every UniswapX solver shares, whatever settles its
+// orders: the protocol contracts, the token scope, the quote and order servers, the discount
+// service, the breaker and the strategy. Each solver inlines it into its own config.
+type RawEngineConfig struct {
+	Reactor       string               `yaml:"reactor"`
+	Executor      string               `yaml:"executor"`
+	TokensToQuote string               `yaml:"tokensToQuote"`
+	Permissioned  []string             `yaml:"permissionedTokens"`
+	QuoteServer   rawQuoteServerConfig `yaml:"quoteServer"`
+	OrderServer   rawOrderServerConfig `yaml:"orderServer"`
+	Discounts     *rawDiscountConfig   `yaml:"discounts"`
+	Breaker       rawBreakerConfig     `yaml:"breaker"`
+	Strategy      rawStrategyConfig    `yaml:"strategy"`
+}
+
+// rawConfig is the uniswapx-filler config: the shared engine settling through native adapters.
 type rawConfig struct {
-	Reactor       string                   `yaml:"reactor"`
-	Executor      string                   `yaml:"executor"`
+	RawEngineConfig `yaml:",inline"`
+
 	LiquidityLens string                   `yaml:"liquidityLens"`
 	Adapters      []string                 `yaml:"adapters"`
 	SolverMode    string                   `yaml:"solverMode"`
-	TokensToQuote string                   `yaml:"tokensToQuote"`
-	Permissioned  []string                 `yaml:"permissionedTokens"`
-	QuoteServer   rawQuoteServerConfig     `yaml:"quoteServer"`
-	OrderServer   rawOrderServerConfig     `yaml:"orderServer"`
-	Discounts     *rawDiscountConfig       `yaml:"discounts"`
 	Gas           *liquidlanegas.RawConfig `yaml:"gas"`
-	Breaker       rawBreakerConfig         `yaml:"breaker"`
-	Strategy      rawStrategyConfig        `yaml:"strategy"`
 }
 
 type rawDiscountConfig struct {
@@ -153,6 +162,59 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err := solver.DecodeStrict(node, &raw); err != nil {
 		return nil, err
 	}
+	cfg, err := raw.parse()
+	if err != nil {
+		return nil, err
+	}
+	if raw.LiquidityLens != "" {
+		if cfg.LiquidityLens, err = parse.NonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
+			return nil, err
+		}
+	}
+	if cfg.Adapters, err = parseAddressList(raw.Adapters, "adapters"); err != nil {
+		return nil, err
+	}
+	cfg.SolverMode = parse.OrDefault(raw.SolverMode, defaultSolverMode)
+	switch {
+	case cfg.SolverMode != solverModeExternal && cfg.SolverMode != solverModeInternal:
+		return nil, errors.Errorf("solverMode: must be %q or %q, got %q", solverModeExternal, solverModeInternal, cfg.SolverMode)
+	case cfg.SolverMode == solverModeExternal && len(cfg.Adapters) == 0:
+		return nil, errors.New(`solverMode "external" requires at least one adapters entry`)
+	case cfg.SolverMode == solverModeInternal && cfg.Discounts == nil:
+		return nil, errors.New("discounts is required in internal solverMode")
+	case cfg.SolverMode == solverModeExternal && cfg.Discounts != nil:
+		return nil, errors.New("discounts requires internal solverMode")
+	}
+	if raw.Gas != nil {
+		gas, err := liquidlanegas.ParseConfig(*raw.Gas)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Gas = &gas
+	}
+	return cfg, nil
+}
+
+// ParseRecipeConfig resolves the engine config of a solver that settles through connector
+// recipes. Such a solver is discount-backed, its sender pays gas, and its quotes are priced
+// from connector inventory, which the webhook wire shape does not carry.
+func ParseRecipeConfig(raw RawEngineConfig) (*Config, error) {
+	cfg, err := raw.parse()
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Discounts == nil {
+		return nil, errors.New("discounts is required")
+	}
+	if cfg.Strategy.Name == types.WebhookName {
+		return nil, errors.New("the webhook strategy does not support connector recipes")
+	}
+	cfg.SolverMode = solverModeInternal
+	return cfg, nil
+}
+
+// parse resolves the settings every UniswapX solver shares.
+func (raw RawEngineConfig) parse() (*Config, error) {
 	reactor, err := parse.NonZeroAddress(raw.Reactor, "reactor")
 	if err != nil {
 		return nil, err
@@ -160,28 +222,6 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	executor, err := parse.NonZeroAddress(raw.Executor, "executor")
 	if err != nil {
 		return nil, err
-	}
-	var liquidityLens common.Address
-	if raw.LiquidityLens != "" {
-		if liquidityLens, err = parse.NonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
-			return nil, err
-		}
-	}
-	adapters, err := parseAddressList(raw.Adapters, "adapters")
-	if err != nil {
-		return nil, err
-	}
-	solverMode := parse.OrDefault(raw.SolverMode, defaultSolverMode)
-	if solverMode != solverModeExternal && solverMode != solverModeInternal {
-		return nil, errors.Errorf(
-			"solverMode: must be %q or %q, got %q",
-			solverModeExternal,
-			solverModeInternal,
-			solverMode,
-		)
-	}
-	if solverMode == solverModeExternal && len(adapters) == 0 {
-		return nil, errors.New(`solverMode "external" requires at least one adapters entry`)
 	}
 	policy, err := tokenpolicy.Parse(raw.TokensToQuote, raw.Permissioned)
 	if err != nil {
@@ -242,23 +282,9 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if !sources.ExclusiveV2 {
 		return nil, errors.New("orderServer.sources.exclusiveV2 must be enabled while quote server is enabled")
 	}
-	if solverMode == solverModeInternal && raw.Discounts == nil {
-		return nil, errors.New("discounts is required in internal solverMode")
-	}
-	if solverMode == solverModeExternal && raw.Discounts != nil {
-		return nil, errors.New("discounts requires internal solverMode")
-	}
 	discountConfig, err := parseDiscountConfig(raw.Discounts)
 	if err != nil {
 		return nil, err
-	}
-	var gas *liquidlanegas.OracleConfig
-	if raw.Gas != nil {
-		parsed, gasErr := liquidlanegas.ParseConfig(*raw.Gas)
-		if gasErr != nil {
-			return nil, gasErr
-		}
-		gas = &parsed
 	}
 	breaker, err := parseBreakerConfig(raw.Breaker)
 	if err != nil {
@@ -276,8 +302,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		return nil, errors.New("quoteServer.maxSelections must be positive")
 	}
 	return &Config{
-		Reactor: reactor, Executor: executor, LiquidityLens: liquidityLens,
-		Adapters: adapters, SolverMode: solverMode, TokenPolicy: policy,
+		Reactor: reactor, Executor: executor, TokenPolicy: policy,
 		QuoteServer: QuoteServerConfig{
 			SelectionTTL: selectionTTL, MaxSelections: maxSelections,
 			ListenAddress:   parse.OrDefault(raw.QuoteServer.ListenAddress, defaultListenAddress),
@@ -290,7 +315,6 @@ func parseConfig(node yaml.Node) (*Config, error) {
 			Beta: raw.OrderServer.Beta, Sources: sources,
 		},
 		Discounts: discountConfig,
-		Gas:       gas,
 		Breaker:   breaker,
 		Strategy:  StrategyConfig{Name: parse.OrDefault(raw.Strategy.Name, defaultStrategyName), Config: raw.Strategy.Config},
 	}, nil

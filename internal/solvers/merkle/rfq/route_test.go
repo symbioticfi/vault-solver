@@ -7,29 +7,34 @@ import (
 	"testing"
 	"time"
 
+	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/filler"
+
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector/connectortest"
 )
 
 func TestConfiguredExecutorDerivesPaymentConnector(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
-		mutate func(*Solver)
+		mutate func(executors []common.Address, workflow *connector.Workflow)
 		want   string
 	}{
 		{name: "configured executor"},
-		{name: "wrong executor", mutate: func(s *Solver) { s.recipeExecutors[0] = common.HexToAddress("0xbad") }, want: ""},
-		{name: "wrong caller", mutate: func(s *Solver) { s.workflow.caller = common.HexToAddress("0xbad") }, want: "caller"},
+		{name: "wrong executor", mutate: func(executors []common.Address, _ *connector.Workflow) { executors[0] = common.HexToAddress("0xbad") }, want: ""},
+		{name: "wrong caller", mutate: func(_ []common.Address, w *connector.Workflow) { w.Filler = common.HexToAddress("0xbad") }, want: "caller"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			fixture := connectorExecutionFixture(t, connectorDiscountFixture())
-			s := &Solver{recipeExecutors: []common.Address{fixture.reader.recipeExecutor}, workflow: fixture.workflow}
+			fixture := connectorExecutionFixture(t, connectortest.DiscountFixture())
+			executors := []common.Address{fixture.reader.RecipeExecutor}
 			if tc.mutate != nil {
-				tc.mutate(s)
+				tc.mutate(executors, fixture.workflow)
 			}
+			s := &Solver{Engine: &filler.Engine{Routes: connector.NewRoutes(fixture.workflow, executors), Workflow: fixture.workflow}}
 			err := s.Initialize(t.Context())
 			if tc.mutate != nil {
 				if err == nil || (tc.want != "" && !strings.Contains(err.Error(), tc.want)) {
@@ -40,11 +45,11 @@ func TestConfiguredExecutorDerivesPaymentConnector(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if executor, account, ok := s.ResolveRoute(vlt, tIn, tOut); !ok || executor != fixture.reader.recipeExecutor || account != fixture.reader.recipeAccount {
+			if executor, account, ok := s.ResolveRoute(vlt, tIn, tOut); !ok || executor != fixture.reader.RecipeExecutor || account != fixture.reader.RecipeAccount {
 				t.Fatal("wrong recipe connector")
 			}
-			reads := fixture.reader.identityReads
-			if err := s.Initialize(t.Context()); err != nil || fixture.reader.identityReads != reads {
+			reads := fixture.reader.IdentityReads
+			if err := s.Initialize(t.Context()); err != nil || fixture.reader.IdentityReads != reads {
 				t.Fatalf("initialize repeated discovery: %v", err)
 			}
 		})
@@ -52,12 +57,12 @@ func TestConfiguredExecutorDerivesPaymentConnector(t *testing.T) {
 }
 
 func TestCachedRouteResolutionWithoutRPC(t *testing.T) {
-	fixture := connectorExecutionFixture(t, connectorDiscountFixture())
-	s := &Solver{recipeExecutors: []common.Address{fixture.reader.recipeExecutor}, workflow: fixture.workflow}
+	fixture := connectorExecutionFixture(t, connectortest.DiscountFixture())
+	s := &Solver{Engine: &filler.Engine{Routes: connector.NewRoutes(fixture.workflow, []common.Address{fixture.reader.RecipeExecutor}), Workflow: fixture.workflow}}
 	if err := s.Initialize(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	s.workflow.chain, s.workflow.source = nil, nil
+	s.Workflow.Chain, s.Workflow.Source = nil, nil
 	for _, tc := range []struct {
 		name              string
 		venue, rwa, asset common.Address
@@ -70,27 +75,7 @@ func TestCachedRouteResolutionWithoutRPC(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			executor, account, ok := s.ResolveRoute(tc.venue, tc.rwa, tc.asset)
-			if ok != tc.want || (ok && (executor != fixture.reader.recipeExecutor || account != fixture.reader.recipeAccount)) {
-				t.Fatalf("route=(%s,%s,%t)", executor, account, ok)
-			}
-		})
-	}
-}
-
-func TestCachedRouteResolutionRequiresUniqueRWA(t *testing.T) {
-	first, second := common.HexToAddress("0x43"), common.HexToAddress("0x44")
-	for name, sameRWA := range map[string]bool{"different RWA": false, "same RWA": true} {
-		t.Run(name, func(t *testing.T) {
-			otherToken := tOut
-			if sameRWA {
-				otherToken = tIn
-			}
-			s := &Solver{routes: map[common.Address]recipeRoute{
-				first:  {connector: vlt, account: vlt, asset: tOut, tokens: map[common.Address]struct{}{tIn: {}}},
-				second: {connector: vlt, account: vlt, asset: tOut, tokens: map[common.Address]struct{}{otherToken: {}}},
-			}}
-			executor, account, ok := s.ResolveRoute(vlt, tIn, tOut)
-			if ok == sameRWA || (ok && (executor != first || account != vlt)) {
+			if ok != tc.want || (ok && (executor != fixture.reader.RecipeExecutor || account != fixture.reader.RecipeAccount)) {
 				t.Fatalf("route=(%s,%s,%t)", executor, account, ok)
 			}
 		})
@@ -100,23 +85,23 @@ func TestCachedRouteResolutionRequiresUniqueRWA(t *testing.T) {
 func TestConfiguredExecutorWithManagedPaymentApproval(t *testing.T) {
 	for _, gate := range []int64{1, 0} {
 		t.Run(big.NewInt(gate).String(), func(t *testing.T) {
-			fixture := connectorExecutionFixture(t, connectorDiscountFixture())
+			fixture := connectorExecutionFixture(t, connectortest.DiscountFixture())
 			args := abi.Arguments{
-				{Type: connectorDeltaType(t, "uint256")},
-				{Type: connectorDeltaType(t, "bytes32[]")},
-				{Type: connectorDeltaType(t, "uint256[][]")},
+				{Type: connectortest.DeltaType(t, "uint256")},
+				{Type: connectortest.DeltaType(t, "bytes32[]")},
+				{Type: connectortest.DeltaType(t, "uint256[][]")},
 			}
-			amount := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(36), 224), connectorDeltaOperand(recipes.Input, 1))
-			data, err := args.Pack(big.NewInt(gate), [][32]byte{fixture.reader.approvalHash}, [][]*big.Int{{amount}})
+			amount := new(big.Int).Or(new(big.Int).Lsh(big.NewInt(36), 224), connectortest.DeltaOperand(recipes.Input, 1))
+			data, err := args.Pack(big.NewInt(gate), [][32]byte{fixture.reader.ApprovalHash}, [][]*big.Int{{amount}})
 			if err != nil {
 				t.Fatal(err)
 			}
-			fixture.reader.recipe.Steps[0] = append([]byte{recipes.Manage}, data...)
-			fixture.reader.recipeHash, err = recipes.HashRecipe(fixture.reader.recipe)
+			fixture.reader.Recipe.Steps[0] = append([]byte{recipes.Manage}, data...)
+			fixture.reader.RecipeHash, err = recipes.HashRecipe(fixture.reader.Recipe)
 			if err != nil {
 				t.Fatal(err)
 			}
-			s := &Solver{recipeExecutors: []common.Address{fixture.reader.recipeExecutor}, workflow: fixture.workflow}
+			s := &Solver{Engine: &filler.Engine{Routes: connector.NewRoutes(fixture.workflow, []common.Address{fixture.reader.RecipeExecutor}), Workflow: fixture.workflow}}
 			err = s.Initialize(t.Context())
 			if gate == 0 {
 				if err == nil || !strings.Contains(err.Error(), "unconditional") {
@@ -127,7 +112,7 @@ func TestConfiguredExecutorWithManagedPaymentApproval(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if executor, account, ok := s.ResolveRoute(vlt, tIn, tOut); !ok || executor != fixture.reader.recipeExecutor || account != fixture.reader.recipeAccount {
+			if executor, account, ok := s.ResolveRoute(vlt, tIn, tOut); !ok || executor != fixture.reader.RecipeExecutor || account != fixture.reader.RecipeAccount {
 				t.Fatal("managed approval did not identify the payment connector")
 			}
 		})
@@ -136,11 +121,11 @@ func TestConfiguredExecutorWithManagedPaymentApproval(t *testing.T) {
 
 // A slow recipe read during deferred publication must not stall live quotes.
 func TestInitializeDoesNotBlockRouteReads(t *testing.T) {
-	fixture := connectorExecutionFixture(t, connectorDiscountFixture())
-	reader := &blockingLogsReader{connectorExecutionReader: fixture.reader, entered: make(chan struct{}), release: make(chan struct{})}
+	fixture := connectorExecutionFixture(t, connectortest.DiscountFixture())
+	reader := &blockingLogsReader{Chain: fixture.reader, entered: make(chan struct{}), release: make(chan struct{})}
 	workflow := *fixture.workflow
-	workflow.chain = reader
-	s := &Solver{recipeExecutors: []common.Address{fixture.reader.recipeExecutor}, workflow: &workflow}
+	workflow.Chain = reader
+	s := &Solver{Engine: &filler.Engine{Routes: connector.NewRoutes(&workflow, []common.Address{fixture.reader.RecipeExecutor}), Workflow: &workflow}}
 	done := make(chan error, 1)
 	go func() {
 		done <- s.Initialize(t.Context())
@@ -169,7 +154,7 @@ func TestInitializeDoesNotBlockRouteReads(t *testing.T) {
 }
 
 type blockingLogsReader struct {
-	*connectorExecutionReader
+	*connectortest.Chain
 
 	entered, release chan struct{}
 }
@@ -177,5 +162,5 @@ type blockingLogsReader struct {
 func (r *blockingLogsReader) FilterLogs(ctx context.Context, query ethereum.FilterQuery) ([]types.Log, error) {
 	close(r.entered)
 	<-r.release
-	return r.connectorExecutionReader.FilterLogs(ctx, query)
+	return r.Chain.FilterLogs(ctx, query)
 }

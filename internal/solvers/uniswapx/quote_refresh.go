@@ -74,15 +74,24 @@ func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Rout
 		return err
 	}
 	s.chainTime.Store(now.Unix())
+	outcome, err = s.fillPath().refreshQuoteState(ctx, routes, epoch, now)
+	return err
+}
+
+// refreshAdapterQuoteState publishes the adapter inventory read at chain time now.
+func (s *Solver) refreshAdapterQuoteState(
+	ctx context.Context, routes []liquidlane.Route, epoch uint64, now time.Time,
+) (observability.ExternalOperationOutcome, error) {
 	discountRoutes, discountErr := s.quoteRoutesWithDiscounts(ctx, routes, now)
 	if discountErr != nil {
 		observability.ErrorUnlessCanceled(ctx, discountErr, "refresh advertised discount routes")
 	}
+	degraded := discountErr != nil || !discountRoutes.complete
 	decisionRoutes := discountRoutes.routes
 	listed := discountRoutes.listed
 	current, err := s.reader.quoteSnapshot(ctx, decisionRoutes, s.cfg.Executor)
 	if err != nil {
-		return err
+		return observability.ExternalOperationError, err
 	}
 	if s.cfg.usesDiscounts() {
 		current.Direct = directInventoriesForAdapters(current.Direct, s.cfg.Adapters)
@@ -94,39 +103,37 @@ func (s *Solver) refreshQuoteState(ctx context.Context, routes []liquidlane.Rout
 	if s.cfg.Gas != nil {
 		maxFee, err = s.txm.MaxFeePerGas(ctx)
 		if err != nil {
-			return err
+			return observability.ExternalOperationError, err
 		}
 	}
 	serverNow := time.Now()
-	if s.publishQuoteState(epoch, &quoteState{
+	if !s.publishQuoteState(epoch, &quoteState{
 		routes:      slices.Clone(decisionRoutes),
 		inventory:   current.Direct,
 		gasSnapshot: current.GasSnapshot, gasPrices: current.GasPrices,
 		maxFeePerGas: maxFee, chainTime: now, expiresAt: serverNow.Add(s.cfg.QuoteServer.QuoteTTL),
 		singleRouteFor: s.cfg.TokenPolicy.SingleRouteTokens(),
 	}) {
-		outcome = observability.ExternalOperationSuccess
-		if discountErr != nil || !discountRoutes.complete {
-			outcome = observability.ExternalOperationDegraded
-		}
-		if s.metrics != nil {
-			s.metrics.quoteRefresh.Set(float64(time.Now().Unix()))
-		}
-		observability.Log(ctx).V(1).Info(
-			"quote state refreshed",
-			"epoch", epoch,
-			"routes", len(decisionRoutes),
-			"inventory", len(current.Direct),
-			"physicalInventory", len(current.Physical),
-			"gasAccounting", s.cfg.Gas != nil,
-			"maxFeePerGas", maxFee.String(),
-			"expiresAt", serverNow.Add(s.cfg.QuoteServer.QuoteTTL),
-		)
-	} else {
-		outcome = observability.ExternalOperationSkipped
 		observability.Log(ctx).V(1).Info("quote state refresh discarded", "epoch", epoch)
+		return observability.ExternalOperationSkipped, nil
 	}
-	return nil
+	if s.metrics != nil {
+		s.metrics.quoteRefresh.Set(float64(time.Now().Unix()))
+	}
+	observability.Log(ctx).V(1).Info(
+		"quote state refreshed",
+		"epoch", epoch,
+		"routes", len(decisionRoutes),
+		"inventory", len(current.Direct),
+		"physicalInventory", len(current.Physical),
+		"gasAccounting", s.cfg.Gas != nil,
+		"maxFeePerGas", maxFee.String(),
+		"expiresAt", serverNow.Add(s.cfg.QuoteServer.QuoteTTL),
+	)
+	if degraded {
+		return observability.ExternalOperationDegraded, nil
+	}
+	return observability.ExternalOperationSuccess, nil
 }
 
 func (s *Solver) publishQuoteState(epoch uint64, state *quoteState) bool {

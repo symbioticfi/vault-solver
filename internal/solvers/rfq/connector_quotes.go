@@ -10,10 +10,11 @@ import (
 
 	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	liquidconnector "github.com/symbioticfi/vault-solver/internal/liquidlane/connector"
 	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 )
 
-const connectorDiscountPrecision int64 = 100_000_000
+const connectorDiscountPrecision = liquidconnector.Precision
 
 // readConnectorCandidates reads the explicit backend connector catalog through its canonical
 // contract surface. Reactor delivers tokenIn during the atomic fill, so an empty connector
@@ -35,105 +36,51 @@ func (r *reader) readConnectorCandidates(
 	}
 	block := header.Number
 	binding := connector.NewLiquidLaneConnector()
-	call := func(address common.Address, data []byte) ([]byte, error) {
-		return r.chain.CallContract(ctx, ethereum.CallMsg{To: &address, Data: data}, block)
-	}
 	inDecimals, err := r.ll.TokenDecimals(ctx, tokenIn)
 	if err != nil {
 		return nil, errors.Errorf("connector tokenIn decimals: %w", err)
 	}
 	current := make([]liquidlane.Inventory, 0, len(inventory))
 	for _, item := range inventory {
-		if item.DiscountID == nil || item.Discount == nil || item.DiscountPrecision != connectorDiscountPrecision {
+		if item.DiscountID == nil || item.Discount == nil || item.DiscountPrecision != connectorDiscountPrecision ||
+			item.Discount.Sign() < 0 || item.Discount.Cmp(big.NewInt(connectorDiscountPrecision)) >= 0 {
 			continue
 		}
-		domainData, err := call(item.Adapter, binding.PackEip712Domain())
-		if err != nil {
-			return nil, errors.Errorf("connector eip712Domain: %w", err)
-		}
-		domain, err := binding.UnpackEip712Domain(domainData)
-		if err != nil || domain.Fields != [1]byte{0x0f} || domain.Name != "LiquidLaneConnector" || domain.Version != "1" || domain.ChainId == nil || domain.ChainId.Cmp(big.NewInt(r.chainID)) != 0 || domain.VerifyingContract != item.Adapter || domain.Salt != [32]byte{} || len(domain.Extensions) != 0 {
-			return nil, errors.New("invalid connector domain")
-		}
-		outputData, err := call(item.Adapter, binding.PackOutputAsset())
-		if err != nil {
-			return nil, errors.Errorf("connector outputAsset: %w", err)
-		}
-		output, err := binding.UnpackOutputAsset(outputData)
-		if err != nil || output != tokenOut {
-			return nil, errors.New("connector outputAsset mismatch")
-		}
-		outDecimals, err := r.ll.TokenDecimals(ctx, output)
+		outDecimals, err := r.ll.TokenDecimals(ctx, tokenOut)
 		if err != nil {
 			return nil, errors.Errorf("connector output decimals: %w", err)
 		}
 		if outDecimals != item.TokenOutDecimals {
 			return nil, errors.New("connector output decimals mismatch")
 		}
-		accountData, err := call(item.Adapter, binding.PackAccount())
+		// One quote fails closed on any connector that cannot be read or contradicts the backend.
+		read, err := liquidconnector.Offer{
+			Venue: item.Adapter, RecipeExecutor: item.RecipeExecutor, Account: item.Vault, TokenIn: tokenIn, TokenOut: tokenOut,
+			TokenInDecimals: inDecimals, TokenOutDecimals: outDecimals, DiscountID: *item.DiscountID, Discount: item.Discount,
+			MaxAssets: item.MaxAssets, BlockNumber: item.BlockNumber, ValidUntil: item.ValidUntil,
+		}.Read(ctx, r.chain, r.chainID, block)
 		if err != nil {
-			return nil, errors.Errorf("connector account: %w", err)
+			return nil, errors.Errorf("connector %w", err)
 		}
-		account, err := binding.UnpackAccount(accountData)
-		if err != nil || account == (common.Address{}) || account != item.Vault {
-			return nil, errors.New("connector account mismatch")
-		}
-		capacityData, err := call(item.Adapter, binding.PackRemainingAssets(tokenIn))
-		if err != nil {
-			return nil, errors.Errorf("connector remainingAssets: %w", err)
-		}
-		capacity, err := binding.UnpackRemainingAssets(capacityData)
-		if err != nil {
-			return nil, errors.Errorf("connector remainingAssets decode: %w", err)
-		}
-		minData, err := call(item.Adapter, binding.PackMinDiscount(tokenIn))
-		if err != nil {
-			return nil, errors.Errorf("connector minDiscount: %w", err)
-		}
-		minimum, err := binding.UnpackMinDiscount(minData)
-		if err != nil {
-			return nil, errors.Errorf("connector minDiscount decode: %w", err)
-		}
-		if item.Discount.Cmp(minimum) < 0 || item.Discount.Sign() < 0 || item.Discount.Cmp(big.NewInt(connectorDiscountPrecision)) >= 0 {
-			continue
-		}
-		probe, ok := liquidlane.OraclePriceProbe(inDecimals, outDecimals)
-		if !ok {
-			return nil, errors.New("connector oracle decimals unsupported")
-		}
-		priceData, err := call(item.Adapter, binding.PackGetAmountOut(tokenIn, probe))
-		if err != nil {
-			return nil, errors.Errorf("connector getAmountOut: %w", err)
-		}
-		price, err := binding.UnpackGetAmountOut(priceData)
-		if err != nil {
-			return nil, errors.Errorf("connector price decode: %w", err)
+		if read == nil {
+			continue // The connector's current minimum discount outbids the signed one.
 		}
 		// Also require the actual requested-amount oracle read to succeed (including freshness).
-		amountData, err := call(item.Adapter, binding.PackGetAmountOut(tokenIn, amountIn))
+		amountData, err := r.chain.CallContract(ctx, ethereum.CallMsg{To: &item.Adapter, Data: binding.PackGetAmountOut(tokenIn, amountIn)}, block)
 		if err != nil {
 			return nil, errors.Errorf("connector getAmountOut amount: %w", err)
 		}
 		gross, err := binding.UnpackGetAmountOut(amountData)
-		if err != nil || gross.Cmp(liquidlane.AmountOutForRate(amountIn, price, inDecimals, outDecimals)) != 0 {
+		if err != nil || gross.Cmp(liquidlane.AmountOutForRate(amountIn, read.Price, inDecimals, outDecimals)) != 0 {
 			return nil, errors.New("connector oracle quote mismatch")
 		}
 		item.TokenInDecimals = inDecimals
-		item.Vault = account
-		item.CapacityID = liquidlane.NewCapacityID(r.chainID, account, output)
-		item.Price = price
-		if capacity.Cmp(item.MaxAssets) < 0 {
-			item.MaxAssets = capacity
-		}
+		item.CapacityID = read.CapacityID
+		item.Price = read.Price
+		item.MaxAssets = read.MaxAssets
 		// Backend funding remains as old as its observation, even when policy was read now.
-		if item.BlockNumber > block.Uint64() {
-			item.BlockNumber = block.Uint64()
-		}
+		item.BlockNumber = read.BlockNumber
 		current = append(current, item)
-	}
-	canonical, err := r.chain.HeaderByNumber(ctx, block)
-	if err != nil || canonical == nil || canonical.Number == nil || canonical.Number.Cmp(block) != 0 || canonical.Hash() != header.Hash() {
-		return nil, errors.New("connector quote block reorganized")
 	}
 	var reservations liquidlane.CapacityReservations
 	if pending != nil {

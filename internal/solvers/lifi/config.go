@@ -14,22 +14,31 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 )
 
+// RawEngineConfig is the configuration every LI.FI solver shares, whatever settles its
+// orders: the order server, the settlement contracts, the token scope, the standing-quote
+// cadence, the discount service and the strategy. Each solver inlines it into its own config.
+type RawEngineConfig struct {
+	OrderServer        rawOrderServerConfig `yaml:"orderServer"`
+	InputSettler       string               `yaml:"inputSettler"`
+	OutputSettler      string               `yaml:"outputSettler"`
+	Executor           string               `yaml:"executor"`
+	TokensToQuote      string               `yaml:"tokensToQuote"`
+	PermissionedTokens []string             `yaml:"permissionedTokens"`
+	QuoteIntervalMs    int                  `yaml:"quoteIntervalMs"`
+	QuoteTTL           string               `yaml:"quoteTtl"`
+	QuoteRefreshMode   string               `yaml:"quoteRefreshMode"`
+	DiscountsURL       string               `yaml:"privateDiscountsUrl"`
+	Strategy           rawStrategyConfig    `yaml:"strategy"`
+}
+
+// rawConfig is the lifi-samechain config: the shared engine settling through native adapters.
 type rawConfig struct {
-	OrderServer        rawOrderServerConfig     `yaml:"orderServer"`
-	InputSettler       string                   `yaml:"inputSettler"`
-	OutputSettler      string                   `yaml:"outputSettler"`
-	Executor           string                   `yaml:"executor"`
-	LiquidityLens      string                   `yaml:"liquidityLens"`
-	Adapters           []string                 `yaml:"adapters"`
-	TokensToQuote      string                   `yaml:"tokensToQuote"`
-	PermissionedTokens []string                 `yaml:"permissionedTokens"`
-	QuoteIntervalMs    int                      `yaml:"quoteIntervalMs"`
-	QuoteTTL           string                   `yaml:"quoteTtl"`
-	QuoteRefreshMode   string                   `yaml:"quoteRefreshMode"`
-	SolverMode         string                   `yaml:"solverMode"`
-	DiscountsURL       string                   `yaml:"privateDiscountsUrl"`
-	Gas                *liquidlanegas.RawConfig `yaml:"gas"`
-	Strategy           rawStrategyConfig        `yaml:"strategy"`
+	RawEngineConfig `yaml:",inline"`
+
+	LiquidityLens string                   `yaml:"liquidityLens"`
+	Adapters      []string                 `yaml:"adapters"`
+	SolverMode    string                   `yaml:"solverMode"`
+	Gas           *liquidlanegas.RawConfig `yaml:"gas"`
 }
 
 type rawOrderServerConfig struct {
@@ -89,6 +98,7 @@ const (
 	defaultBlockPollInterval = time.Second
 	defaultQuoteRefreshMode  = quoteRefreshModeBlock
 	defaultStrategyName      = "default"
+	webhookStrategyName      = "webhook"
 	defaultSolverMode        = solverModeExternal
 )
 
@@ -104,7 +114,57 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if err := solver.DecodeStrict(node, &raw); err != nil {
 		return nil, err
 	}
+	cfg, err := raw.parse()
+	if err != nil {
+		return nil, err
+	}
+	if raw.LiquidityLens != "" {
+		if cfg.LiquidityLens, err = parse.NonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
+			return nil, err
+		}
+	}
+	if cfg.Adapters, err = parseAdapters(raw.Adapters); err != nil {
+		return nil, err
+	}
+	cfg.SolverMode = parse.OrDefault(raw.SolverMode, defaultSolverMode)
+	switch {
+	case cfg.SolverMode != solverModeExternal && cfg.SolverMode != solverModeInternal:
+		return nil, errors.Errorf("solverMode: must be %q or %q, got %q", solverModeExternal, solverModeInternal, cfg.SolverMode)
+	case cfg.SolverMode == solverModeInternal && cfg.DiscountsURL == "":
+		return nil, errors.New("privateDiscountsUrl is required in internal solverMode")
+	case cfg.SolverMode == solverModeExternal && cfg.DiscountsURL != "":
+		return nil, errors.New("privateDiscountsUrl requires internal solverMode")
+	}
+	if raw.Gas != nil {
+		gas, err := liquidlanegas.ParseConfig(*raw.Gas)
+		if err != nil {
+			return nil, err
+		}
+		cfg.Gas = &gas
+	}
+	return cfg, nil
+}
 
+// ParseRecipeConfig resolves the engine config of a solver that settles through connector
+// recipes. Such a solver is discount-backed, its sender pays gas, and its quotes are priced
+// from connector inventory, which the webhook wire shape does not carry.
+func ParseRecipeConfig(raw RawEngineConfig) (*Config, error) {
+	cfg, err := raw.parse()
+	if err != nil {
+		return nil, err
+	}
+	if cfg.DiscountsURL == "" {
+		return nil, errors.New("privateDiscountsUrl is required")
+	}
+	if cfg.Strategy.Name == webhookStrategyName {
+		return nil, errors.New("the webhook strategy does not support connector recipes")
+	}
+	cfg.SolverMode = solverModeInternal
+	return cfg, nil
+}
+
+// parse resolves the settings every LI.FI solver shares.
+func (raw RawEngineConfig) parse() (*Config, error) {
 	inputSettler, err := parse.NonZeroAddress(raw.InputSettler, "inputSettler")
 	if err != nil {
 		return nil, err
@@ -114,16 +174,6 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		return nil, err
 	}
 	executor, err := parse.NonZeroAddress(raw.Executor, "executor")
-	if err != nil {
-		return nil, err
-	}
-	var liquidityLens common.Address
-	if raw.LiquidityLens != "" {
-		if liquidityLens, err = parse.NonZeroAddress(raw.LiquidityLens, "liquidityLens"); err != nil {
-			return nil, err
-		}
-	}
-	adapters, err := parseAdapters(raw.Adapters)
 	if err != nil {
 		return nil, err
 	}
@@ -159,8 +209,7 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if quoteTTL/2 < quoteInterval {
 		return nil, errors.Errorf("quoteTtl must be at least twice quote interval %s, got %s", quoteInterval, quoteTTL)
 	}
-	apiKeyEnv := raw.OrderServer.APIKeyEnv
-	if apiKeyEnv == "" {
+	if raw.OrderServer.APIKeyEnv == "" {
 		return nil, errors.New("orderServer.apiKeyEnv is required")
 	}
 	if raw.OrderServer.BaseURL == "" {
@@ -169,29 +218,11 @@ func parseConfig(node yaml.Node) (*Config, error) {
 	if raw.OrderServer.WSURL == "" {
 		return nil, errors.New("orderServer.wsUrl is required")
 	}
-	solverMode := parse.OrDefault(raw.SolverMode, defaultSolverMode)
-	if solverMode != solverModeExternal && solverMode != solverModeInternal {
-		return nil, errors.Errorf("solverMode: must be %q or %q, got %q", solverModeExternal, solverModeInternal, solverMode)
-	}
-	if solverMode == solverModeInternal && raw.DiscountsURL == "" {
-		return nil, errors.New("privateDiscountsUrl is required in internal solverMode")
-	}
-	if solverMode == solverModeExternal && raw.DiscountsURL != "" {
-		return nil, errors.New("privateDiscountsUrl requires internal solverMode")
-	}
-	var gas *liquidlanegas.OracleConfig
-	if raw.Gas != nil {
-		parsed, gasErr := liquidlanegas.ParseConfig(*raw.Gas)
-		if gasErr != nil {
-			return nil, gasErr
-		}
-		gas = &parsed
-	}
 	return &Config{
 		OrderServer: OrderServerConfig{
 			BaseURL:        raw.OrderServer.BaseURL,
 			WSURL:          raw.OrderServer.WSURL,
-			APIKeyEnv:      apiKeyEnv,
+			APIKeyEnv:      raw.OrderServer.APIKeyEnv,
 			HTTPTimeout:    httpTimeout,
 			WSReadTimeout:  wsReadTimeout,
 			WSWriteTimeout: wsWriteTimeout,
@@ -199,15 +230,11 @@ func parseConfig(node yaml.Node) (*Config, error) {
 		InputSettler:     inputSettler,
 		OutputSettler:    outputSettler,
 		Executor:         executor,
-		LiquidityLens:    liquidityLens,
-		Adapters:         adapters,
 		TokenPolicy:      tokenPolicy,
 		QuoteInterval:    quoteInterval,
 		QuoteTTL:         quoteTTL,
 		QuoteRefreshMode: quoteRefreshMode,
-		SolverMode:       solverMode,
 		DiscountsURL:     raw.DiscountsURL,
-		Gas:              gas,
 		Strategy: StrategyConfig{
 			Name:   parse.OrDefault(raw.Strategy.Name, defaultStrategyName),
 			Config: raw.Strategy.Config,
