@@ -33,7 +33,7 @@ func (r *reader) readConnectorCandidates(
 		return nil, errors.Errorf("connector quote block: %w", err)
 	}
 	if header == nil || header.Number == nil || !header.Number.IsUint64() {
-		return nil, errors.New("invalid connector quote block")
+		return nil, errors.Errorf("invalid connector quote block header %v", header)
 	}
 	block := header.Number
 	binding := connector.NewLiquidLaneConnector()
@@ -55,7 +55,8 @@ func (r *reader) readConnectorCandidates(
 			return nil, errors.Errorf("connector output decimals: %w", err)
 		}
 		if outDecimals != item.TokenOutDecimals {
-			return nil, errors.New("connector output decimals mismatch")
+			return nil, errors.Errorf("connector %s output decimals %d do not match backend decimals %d",
+				item.Adapter.Hex(), outDecimals, item.TokenOutDecimals)
 		}
 		// One quote fails closed on any connector that cannot be read or contradicts the backend.
 		read, err := liquidconnector.Offer{
@@ -77,8 +78,12 @@ func (r *reader) readConnectorCandidates(
 			return nil, errors.Errorf("connector getAmountOut amount: %w", err)
 		}
 		gross, err := binding.UnpackGetAmountOut(amountData)
-		if err != nil || gross.Cmp(liquidlane.AmountOutForRate(amountIn, read.Price, inDecimals, outDecimals)) != 0 {
-			return nil, errors.New("connector oracle quote mismatch")
+		if err != nil {
+			return nil, errors.Errorf("connector %s getAmountOut amount: %w", item.Adapter.Hex(), err)
+		}
+		if want := liquidlane.AmountOutForRate(amountIn, read.Price, inDecimals, outDecimals); gross.Cmp(want) != 0 {
+			return nil, errors.Errorf("connector %s oracle quote mismatch: getAmountOut %s, price %s implies %s",
+				item.Adapter.Hex(), gross, read.Price, want)
 		}
 		item.TokenInDecimals = inDecimals
 		item.CapacityID = read.CapacityID

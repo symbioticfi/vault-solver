@@ -215,16 +215,25 @@ func (e *executionService) expireUnsigned(ctx context.Context, o *orderRecord) b
 		}
 		return expired
 	}
-	e.markExpired(o.OrderID, common.Hash{}, "order deadline has passed")
+	e.markExpired(ctx, o.OrderID, common.Hash{}, deadlinePassed(o.RetryDeadline, e.now()))
 	return true
 }
 
 // markExpired observes the bounded order outcome only once, when expiry follows retry exhaustion.
-func (e *executionService) markExpired(orderID string, txHash common.Hash, reason string) {
+func (e *executionService) markExpired(ctx context.Context, orderID string, txHash common.Hash, reason string) {
+	observability.Decline(ctx, "fill_expired", reason)
+	observability.Log(ctx).Info("order expired", "reason", reason, "tx", txHash.Hex())
 	if e.store.markExpired(orderID, txHash, reason) {
 		e.metrics.observeExpiredAfterNonceRetries()
 	}
 }
+
+// deadlinePassed names an elapsed local order deadline and the time it was checked at.
+func deadlinePassed(deadline, now time.Time) string {
+	return "order deadline has passed: deadline " + formatTime(deadline) + " checked at " + formatTime(now)
+}
+
+func formatTime(t time.Time) string { return t.UTC().Format(time.RFC3339) }
 
 // expireQueued applies the deadline bound from the poll loop, so a queued order does not keep its
 // reservation past its deadline while the submitter is busy with another fill. An order the
@@ -246,16 +255,28 @@ func (e *executionService) reserveWon(ctx context.Context, o *orderRecord) {
 	if e.store.reserved(o.OrderID) || e.isInflight(o.OrderID) {
 		return
 	}
+	// Submission records every failure; these lines only explain why nothing was reserved yet.
+	notReserved := func(reason string) {
+		observability.Log(ctx).V(1).Info("won order not reserved yet; submission plans again",
+			"orderId", o.OrderID, "quoteId", o.QuoteID, "reason", reason)
+	}
 	exec, err := e.resolveExecutable(ctx, o)
-	if err != nil || exec == nil {
+	if err != nil {
+		notReserved("resolve executable order: " + err.Error())
+		return
+	}
+	if exec == nil {
+		notReserved("backend lists no open order for filler " + lowerAddr(e.executor))
 		return
 	}
 	order, err := decodeOrder(exec.encodedOrder)
 	if err != nil {
+		notReserved("decode order: " + err.Error())
 		return
 	}
 	outputToken, required, err := executableOrderTerms(exec, order, e.executor)
 	if err != nil {
+		notReserved("validate order: " + err.Error())
 		return
 	}
 	chainObservedAt := e.now()
@@ -266,8 +287,7 @@ func (e *executionService) reserveWon(ctx context.Context, o *orderRecord) {
 		e.boundByOrderDeadline(o.OrderID, order, chainTime, chainObservedAt)
 	}
 	if _, err := e.buildFillPlan(ctx, o.OrderID, exec, order, outputToken, required, chainBlock); err != nil {
-		observability.Log(ctx).V(1).Info("won order not reserved yet; submission plans again",
-			"orderId", o.OrderID, "quoteId", o.QuoteID, "err", err.Error())
+		notReserved("strategy fill plan: " + err.Error())
 	}
 }
 
@@ -386,7 +406,8 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	orderDeadline := time.Unix(order.Request.Deadline.Int64(), 0)
 	if !orderDeadline.After(chainTime) {
 		// Skip an already-expired order rather than spend gas on a fill the Reactor will revert.
-		e.fail(ctx, orderID, "order deadline has passed")
+		e.fail(ctx, orderID, "order deadline has passed: deadline "+formatTime(orderDeadline)+
+			" is not after chain time "+formatTime(chainTime))
 		return
 	}
 	e.boundByOrderDeadline(orderID, order, chainTime, chainObservedAt)
@@ -412,8 +433,7 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		wallNow := e.now()
 		e.fail(ctx, orderID, fmt.Sprintf(
 			"fill execution deadline elapsed before submission: %s %s, chain time %s, wall time %s, planning took %s",
-			source, deadline.UTC().Format(time.RFC3339), chainTime.UTC().Format(time.RFC3339),
-			wallNow.UTC().Format(time.RFC3339), wallNow.Sub(chainObservedAt)))
+			source, formatTime(deadline), formatTime(chainTime), formatTime(wallNow), wallNow.Sub(chainObservedAt)))
 		return
 	}
 
@@ -441,35 +461,36 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	if !res.NotAdmitted && errors.Is(res.Err, txmanager.ErrFeeLimitReached) {
 		// A ceiling stops this unsigned request, not the order's business execution. Retain
 		// backend reconciliation and the ordinary polling/deadline bounds without a failure alert.
-		observability.Decline(ctx, "fill_fee_limit", "transaction fee ceiling reached")
+		observability.Decline(ctx, "fill_fee_limit", "transaction fee ceiling reached: "+errString(res.Err))
 		e.store.markNonceUncertain(orderID, common.Hash{}, errString(res.Err), true)
-		observability.Log(ctx).Info("fill fee ceiling reached; reconciling order", "attempt", attempt)
+		observability.Log(ctx).Info("fill fee ceiling reached; reconciling order", "attempt", attempt, "cause", errString(res.Err))
 		e.reconcileTerminalStatus(ctx, orderID)
 		return
 	}
 	kind, revertName := classifyEstimateRevert(res.Err)
 	if kind == estimateRevertNonceUsed {
-		observability.Decline(ctx, "fill_nonce_used", "Reactor order nonce is already used")
+		observability.Decline(ctx, "fill_nonce_used", "Reactor order nonce is already used: "+errString(res.Err))
 		e.store.markNonceUsed(orderID, errString(res.Err))
-		observability.Log(ctx).Info("fill retired: Reactor order nonce already used", "attempt", attempt)
+		observability.Log(ctx).Info("fill retired: Reactor order nonce already used", "attempt", attempt, "cause", errString(res.Err))
 		return // Sending stops now; subsequent polling refines fill versus nonce invalidation.
 	}
 	if kind != estimateNotReverted {
 		// Backend terminal evidence takes precedence over simulation: a sibling may have filled
 		// this order. Setup errors stop; transient operations and undecoded races have a retry budget.
-		observability.Decline(ctx, "fill_estimate_reverted", "execution changed before admission")
+		observability.Decline(ctx, "fill_estimate_reverted", "fill estimate reverted with "+revertName+": "+errString(res.Err))
 		e.store.markEstimateReverted(orderID, kind, revertName, errString(res.Err))
-		observability.Log(ctx).Info("fill estimate reverted; reconciling order", "attempt", attempt, "revert", revertName)
+		observability.Log(ctx).Info("fill estimate reverted; reconciling order", "attempt", attempt, "revert", revertName,
+			"cause", errString(res.Err))
 		e.reconcileTerminalStatus(ctx, orderID)
 		return
 	}
 	if outcome.NonceUncertain() || outcome == txmanager.OutcomeReverted {
 		// A reverted transaction does not establish the business outcome: a sibling may have
 		// filled it first. Backend evidence decides terminal state or a bounded, rebuilt retry.
-		observability.Decline(ctx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
+		observability.Decline(ctx, "fill_nonce_uncertain", "transaction outcome "+string(outcome)+": "+errString(res.Err))
 		e.store.markNonceUncertain(orderID, res.Hash, errString(res.Err), outcome == txmanager.OutcomeNonceConflict)
 		observability.Log(ctx).Info("fill result requires order reconciliation", "attempt", attempt,
-			"tx", res.Hash.Hex(), "outcome", outcome)
+			"tx", res.Hash.Hex(), "outcome", outcome, "cause", errString(res.Err))
 		e.reconcileTerminalStatus(ctx, orderID)
 		return
 	}
@@ -629,15 +650,15 @@ func (e *executionService) sendFill(
 		return res, nil
 	}
 	if res.Outcome.NonceUncertain() || res.Outcome == txmanager.OutcomeReverted {
-		observability.Decline(submitCtx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
+		observability.Decline(submitCtx, "fill_nonce_uncertain", "transaction outcome "+string(res.Outcome)+": "+errString(res.Err))
 		return res, nil
 	}
 	if !res.NotAdmitted && errors.Is(res.Err, txmanager.ErrFeeLimitReached) {
-		observability.Decline(submitCtx, "fill_fee_limit", "transaction fee ceiling reached")
+		observability.Decline(submitCtx, "fill_fee_limit", "transaction fee ceiling reached: "+errString(res.Err))
 		return res, nil
 	}
 	if estimateExecutionReverted(res.Err) {
-		observability.Decline(submitCtx, "fill_estimate_reverted", "execution changed before admission")
+		observability.Decline(submitCtx, "fill_estimate_reverted", "fill estimate reverted: "+errString(res.Err))
 		return res, nil
 	}
 	err = res.Err // included-but-unconfirmed still carries the wait failure
@@ -679,6 +700,7 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 		return
 	}
 	if bo == nil {
+		observability.Log(ctx).V(1).Info("reconcile: backend has no record of order; retaining local status")
 		return
 	}
 	txHash := common.Hash{}
@@ -696,7 +718,7 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 			}
 		}
 	case "expired":
-		e.markExpired(orderID, txHash, "")
+		e.markExpired(ctx, orderID, txHash, "backend status expired")
 	case backendOrderStatusOpen:
 		local := e.store.order(orderID)
 		if local == nil || ctx.Err() != nil {
@@ -717,13 +739,17 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 		}
 		now := e.now()
 		if local.RetryDeadline.IsZero() || !now.Before(local.RetryDeadline) {
-			e.markExpired(orderID, local.TxHash, "order deadline has passed")
+			e.markExpired(ctx, orderID, local.TxHash, deadlinePassed(local.RetryDeadline, now))
 			return
 		}
 		retryAt := now.Add(e.pollInterval)
 		if exhausted || !retryAt.Before(local.RetryDeadline) {
 			// A retry needs room for another poll, but settlement remains observable until the
 			// actual deadline. In particular, a sibling fill may only reach the backend then.
+			if !exhausted {
+				observability.Log(ctx).V(1).Info("nonce retry skipped: next poll is not before the order deadline; observing backend",
+					"retryAt", retryAt, "deadline", local.RetryDeadline)
+			}
 			return
 		}
 		if e.store.scheduleNonceRetry(orderID, e.maxNonceRetries, retryAt,
@@ -1068,7 +1094,8 @@ func (e *executionService) isInflight(orderID string) bool {
 
 func executableFromBackend(bo *backendOrder) (*executable, error) {
 	if bo.EncodedOrder == nil || bo.ProtocolSignature == nil || bo.Deadline == nil || bo.Filler == nil {
-		return nil, errors.New("executable order payload incomplete")
+		return nil, errors.Errorf("executable order payload incomplete: encodedOrder=%t protocolSignature=%t deadline=%t filler=%t",
+			bo.EncodedOrder != nil, bo.ProtocolSignature != nil, bo.Deadline != nil, bo.Filler != nil)
 	}
 	if !common.IsHexAddress(*bo.Filler) {
 		return nil, errors.Errorf("invalid filler %q", *bo.Filler)
@@ -1103,24 +1130,29 @@ func executableOrderTerms(
 	expectedFiller common.Address,
 ) (common.Address, *big.Int, error) {
 	if order.Filler != expectedFiller {
-		return common.Address{}, nil, errors.New("signed order assigns a different filler")
+		return common.Address{}, nil, errors.Errorf("signed order assigns filler %s, not executor %s",
+			order.Filler.Hex(), expectedFiller.Hex())
 	}
 	if exec.filler != order.Filler {
-		return common.Address{}, nil, errors.New("backend filler does not match signed order")
+		return common.Address{}, nil, errors.Errorf("backend filler %s does not match signed order filler %s",
+			exec.filler.Hex(), order.Filler.Hex())
 	}
 	if order.Request.TokenIn == (common.Address{}) || order.Request.AmountIn == nil || order.Request.AmountIn.Sign() <= 0 {
-		return common.Address{}, nil, errors.New("signed order has invalid input")
+		return common.Address{}, nil, errors.Errorf("signed order has invalid input: tokenIn %s amountIn %v",
+			order.Request.TokenIn.Hex(), order.Request.AmountIn)
 	}
 	if order.Request.Deadline == nil || !order.Request.Deadline.IsInt64() ||
 		order.Request.Deadline.Sign() <= 0 {
-		return common.Address{}, nil, errors.New("signed order has invalid deadline")
+		return common.Address{}, nil, errors.Errorf("signed order has invalid deadline %v", order.Request.Deadline)
 	}
 	if exec.deadline != order.Request.Deadline.Int64() {
-		return common.Address{}, nil, errors.New("backend deadline does not match signed order")
+		return common.Address{}, nil, errors.Errorf("backend deadline %d does not match signed order deadline %s",
+			exec.deadline, order.Request.Deadline)
 	}
 	token, ok := singleOrderOutputToken(order.Outputs)
 	if !ok {
-		return common.Address{}, nil, errors.New("only single output-token orders are supported")
+		return common.Address{}, nil, errors.Errorf(
+			"only single output-token orders are supported: %d outputs need one shared non-zero token", len(order.Outputs))
 	}
 	required, err := sumOrderOutputs(order.Outputs)
 	if err != nil {
@@ -1152,7 +1184,7 @@ func sumOrderOutputs(outputs []executor.IReactorOutput) (*big.Int, error) {
 	total := new(big.Int)
 	for i, output := range outputs {
 		if output.Amount == nil || output.Amount.Sign() <= 0 {
-			return nil, errors.Errorf("signed order output %d has invalid amount", i)
+			return nil, errors.Errorf("signed order output %d has invalid amount %v", i, output.Amount)
 		}
 		if output.Recipient == (common.Address{}) {
 			return nil, errors.Errorf("signed order output %d has invalid recipient", i)
@@ -1164,20 +1196,21 @@ func sumOrderOutputs(outputs []executor.IReactorOutput) (*big.Int, error) {
 
 func matchBackendOutputs(backend []backendOut, signed []executor.IReactorOutput) error {
 	if len(backend) != len(signed) {
-		return errors.New("backend outputs do not match signed order")
+		return errors.Errorf("backend outputs do not match signed order: %d backend outputs, %d signed", len(backend), len(signed))
 	}
 	for i, output := range backend {
 		if !common.IsHexAddress(output.Token) || !common.IsHexAddress(output.Recipient) {
-			return errors.Errorf("backend output %d has invalid address", i)
+			return errors.Errorf("backend output %d has invalid address: token %q recipient %q", i, output.Token, output.Recipient)
 		}
 		amount, ok := new(big.Int).SetString(output.Amount, 10)
 		if !ok || amount.Sign() <= 0 {
-			return errors.Errorf("backend output %d has invalid amount", i)
+			return errors.Errorf("backend output %d has invalid amount %q", i, output.Amount)
 		}
 		if common.HexToAddress(output.Token) != signed[i].Token ||
 			common.HexToAddress(output.Recipient) != signed[i].Recipient ||
 			amount.Cmp(signed[i].Amount) != 0 {
-			return errors.Errorf("backend output %d does not match signed order", i)
+			return errors.Errorf("backend output %d (token %s, recipient %s, amount %s) does not match signed order (%s, %s, %s)",
+				i, output.Token, output.Recipient, amount, signed[i].Token.Hex(), signed[i].Recipient.Hex(), signed[i].Amount)
 		}
 	}
 	return nil
