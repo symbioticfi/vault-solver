@@ -3,19 +3,24 @@ package bridgefacilitator
 import (
 	"context"
 	"errors"
+	"fmt"
+	"maps"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
+	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies/types"
 )
 
 func TestDeduplicateAdapters_PreservesSourceOrder(t *testing.T) {
@@ -381,5 +386,51 @@ func TestRefreshTargetsAndHydrate_DiscoversFactoryEntityAfterEmptyStartup(t *tes
 	}
 	if got := listCalls.Load(); got != 1 {
 		t.Fatalf("listOffers calls = %d, want one hydration", got)
+	}
+}
+
+func TestSummarizeSkipsGroupsAndCaps(t *testing.T) {
+	var reasons []string
+	for i := range maxSkipExamples + 5 {
+		reasons = append(reasons, fmt.Sprintf("auction %d: status %q is not open or solvable", i, "settled"))
+	}
+	reasons = append(reasons, "auction 99 adapter 0xab: principal 50 is below minAssets 100")
+
+	checks, examples := summarizeSkips(reasons)
+	wantChecks := map[string]int{
+		"auction #: status # is not open or solvable":           maxSkipExamples + 5,
+		"auction # adapter #: principal # is below minAssets #": 1,
+	}
+	if !maps.Equal(checks, wantChecks) {
+		t.Fatalf("checks = %v, want %v", checks, wantChecks)
+	}
+	if len(examples) != maxSkipExamples+1 || examples[0] != reasons[0] || examples[maxSkipExamples] != "6 more" {
+		t.Fatalf("examples = %q, want the first %d reasons then \"6 more\"", examples, maxSkipExamples)
+	}
+	if reasons[maxSkipExamples] != fmt.Sprintf("auction %d: status %q is not open or solvable", maxSkipExamples, "settled") {
+		t.Fatal("summary overwrote the caller's reasons")
+	}
+
+	checks, examples = summarizeSkips(reasons[:2])
+	if len(checks) != 1 || len(examples) != 2 {
+		t.Fatalf("under the cap: checks = %v, examples = %q", checks, examples)
+	}
+}
+
+func TestDeclineSkipsLogsOnlyAtDebug(t *testing.T) {
+	skips := make([]types.OfferSkip, maxSkipExamples+3)
+	for i := range skips {
+		skips[i] = types.OfferSkip{AuctionID: int64(i), Reason: "maxRate is unresolved"}
+	}
+	for _, verbosity := range []int{0, 1} {
+		var lines []string
+		log := funcr.New(func(_, args string) { lines = append(lines, args) }, funcr.Options{Verbosity: verbosity})
+		declineSkips(observability.WithLogger(t.Context(), log), "auction_skipped", "auctions not offerable", skips)
+		switch {
+		case verbosity == 0 && len(lines) != 0:
+			t.Fatalf("debug off logged %q", lines)
+		case verbosity == 1 && (len(lines) != 1 || !strings.Contains(lines[0], `"3 more"`) || !strings.Contains(lines[0], `"auction #: maxRate is unresolved"=23`)):
+			t.Fatalf("debug on logged %q, want one capped summary", lines)
+		}
 	}
 }

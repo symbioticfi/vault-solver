@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"math/big"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -438,18 +439,45 @@ func (s *Solver) decideOffers(ctx context.Context, input types.OfferInput) (out 
 	return out, nil
 }
 
-// declineSkips writes every skip on one debug line and puts the count and first reason on the span
-// decline, so the cause survives with debug logging off without a log line per auction each pass.
+// declineSkips puts the count and first reason on the span decline, so the cause survives with debug
+// logging off, and, only when debug is on, logs one bounded summary line for the pass.
 func declineSkips(ctx context.Context, decision, msg string, skips []types.OfferSkip) {
 	if len(skips) == 0 {
+		return
+	}
+	observability.Decline(ctx, decision, fmt.Sprintf("%s: %d skipped, first %s", msg, len(skips), skips[0]))
+	debug := observability.Log(ctx).V(1)
+	if !debug.Enabled() {
 		return
 	}
 	reasons := make([]string, len(skips))
 	for i, skip := range skips {
 		reasons[i] = skip.String()
 	}
-	observability.Log(ctx).V(1).Info(msg, "decision", decision, "skips", reasons)
-	observability.Decline(ctx, decision, fmt.Sprintf("%s: %d skipped, first %s", msg, len(skips), reasons[0]))
+	checks, examples := summarizeSkips(reasons)
+	debug.Info(msg, "decision", decision, "skipped", len(skips), "checks", checks, "examples", examples)
+}
+
+// maxSkipExamples caps the reasons one summary line carries verbatim.
+const maxSkipExamples = 20
+
+// skipValues matches the values inside a reason (quoted text, hex, numbers), masked to group reasons
+// by the check that produced them.
+var skipValues = regexp.MustCompile(`"[^"]*"|0x[0-9a-fA-F]+|[0-9]+`)
+
+// summarizeSkips counts reasons per check and keeps the first maxSkipExamples verbatim, followed by
+// "N more" when some were left out.
+func summarizeSkips(reasons []string) (checks map[string]int, examples []string) {
+	checks = make(map[string]int)
+	for _, reason := range reasons {
+		checks[skipValues.ReplaceAllString(reason, "#")]++
+	}
+	n := min(len(reasons), maxSkipExamples)
+	examples = reasons[:n:n] // full slice: appending "N more" must not overwrite reasons[n]
+	if more := len(reasons) - n; more > 0 {
+		examples = append(examples, fmt.Sprintf("%d more", more))
+	}
+	return checks, examples
 }
 
 // offerOnAuction validates, signs and submits one strategy offer under its own auction span. A true
