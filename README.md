@@ -120,7 +120,8 @@ Setting both fails startup. The Merkle mode uses `curator` for permissions and k
 One award can use multiple connectors, with capacity shared by funding account and asset.
 A Merkle filler keeps polling for awards and reserving their payouts during signing and
 confirmation. It quotes against the unreserved balance and submits fills sequentially.
-Quoting starts after the first successful award poll and pauses if polling goes stale for two minutes.
+Quoting starts after the first completed reservation refresh and pauses if it goes stale for
+two minutes. Fill preparation has a separate timeout.
 `quoteOnly: true` still requires `curator.url` to discover permitted routes at
 startup and serves quotes independently of the fill transaction manager. See its
 [configuration](config/rfq-merkle.example.yaml) and [runbook](docs/RFQ-MERKLE.md).

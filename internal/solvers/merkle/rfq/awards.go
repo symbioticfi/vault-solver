@@ -7,25 +7,25 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/filler"
 )
 
 // The RFQ loop plans awards while the fill worker tracks its receipt.
-func (s *Solver) pollAwards(ctx context.Context, forSubmission bool) (_ *filler.Intent, err error) {
-	rows, err := s.backend.orders(ctx, strings.ToLower(s.Workflow.Filler.Hex()))
+func (s *Solver) pollAwards(ctx context.Context, forSubmission bool) (*filler.Intent, error) {
+	return s.pollAwardsWithin(ctx, forSubmission, filler.OperationTimeout)
+}
+
+func (s *Solver) pollAwardsWithin(ctx context.Context, forSubmission bool, budget time.Duration) (*filler.Intent, error) {
+	refresh, cancelRefresh := context.WithTimeout(ctx, budget)
+	defer cancelRefresh()
+	rows, err := s.backend.orders(refresh, strings.ToLower(s.Workflow.Filler.Hex()))
 	if err != nil {
 		return nil, err
 	}
 	polledAt := time.Now()
-	defer func() {
-		if err == nil {
-			s.lastAwardRefresh.Store(&polledAt)
-			if s.observeOrderPoll != nil {
-				s.observeOrderPoll(polledAt)
-			}
-		}
-	}()
 	open := make(map[string]bool, len(rows))
 	var queued, unreserved []rfqbackend.OrdersResponseOrdersInner
 	pending := s.Pending()
@@ -45,17 +45,41 @@ func (s *Solver) pollAwards(ctx context.Context, forSubmission bool) (_ *filler.
 	}
 	s.Spends.PruneQueued(open)
 	if len(queued) == 0 {
-		return nil, nil
+		return nil, s.markAwardRefresh(refresh, polledAt)
 	}
 
-	observed, err := s.Observe(ctx)
+	observed, err := s.Observe(refresh)
 	if err != nil {
 		return nil, err
 	}
-	if !forSubmission && len(unreserved) == 0 {
-		return nil, nil
+	var listed *discounts.List
+	var refreshErr error
+	if len(unreserved) != 0 {
+		listed, refreshErr = s.awardDiscounts(refresh)
+		if refreshErr == nil {
+			_, refreshErr = s.planAwards(refresh, unreserved, listed.Discounts, observed, true)
+		}
 	}
+	if refreshErr == nil {
+		refreshErr = s.markAwardRefresh(refresh, polledAt)
+	}
+	cancelRefresh()
+	if !forSubmission || ctx.Err() != nil {
+		return nil, errors.Join(refreshErr, ctx.Err())
+	}
+	prepare, cancelPrepare := context.WithTimeout(ctx, budget)
+	defer cancelPrepare()
+	if listed == nil {
+		listed, err = s.awardDiscounts(prepare)
+		if err != nil {
+			return nil, errors.Join(refreshErr, err)
+		}
+	}
+	intent, prepareErr := s.planAwards(prepare, queued, listed.Discounts, observed, false)
+	return intent, errors.Join(refreshErr, prepareErr)
+}
 
+func (s *Solver) awardDiscounts(ctx context.Context) (*discounts.List, error) {
 	listed, err := s.backend.listDiscounts(ctx)
 	if err != nil {
 		return nil, err
@@ -63,29 +87,42 @@ func (s *Solver) pollAwards(ctx context.Context, forSubmission bool) (_ *filler.
 	if listed == nil {
 		return nil, errors.New("missing connector discount inventory")
 	}
-	for _, row := range unreserved {
-		if _, err := s.planAward(ctx, row, listed.Discounts, observed, true); err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			observability.Log(ctx).V(1).Info("RFQ award not reserved yet", "orderId", row.OrderId, "reason", err.Error())
+	return listed, nil
+}
+
+func (s *Solver) markAwardRefresh(ctx context.Context, polledAt time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	s.lastAwardRefresh.Store(&polledAt)
+	if s.observeOrderPoll != nil {
+		s.observeOrderPoll(polledAt)
+	}
+	return nil
+}
+
+func (s *Solver) planAwards(ctx context.Context, rows []rfqbackend.OrdersResponseOrdersInner, listed []discounts.ListItem, observed filler.Observation, reserve bool) (*filler.Intent, error) {
+	price := s.prices.reader(observed.BlockHash, func(ctx context.Context, offers []discounts.ListItem) ([]liquidlane.Inventory, error, error) {
+		return s.InventoryAt(ctx, offers, observed.BlockNumber)
+	})
+	for _, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-	}
-	if !forSubmission {
-		return nil, nil
-	}
-	for _, row := range queued {
-		intent, err := s.planAward(ctx, row, listed.Discounts, observed, false)
+		intent, err := s.planAward(ctx, row, listed, observed, reserve, price)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			observability.Log(ctx).V(1).Info("RFQ award not executable", "orderId", row.OrderId, "reason", err.Error())
+			observability.Log(ctx).V(1).Info("RFQ award planning skipped", "orderId", row.OrderId, "reserve", reserve, "reason", err.Error())
 			continue
 		}
 		if intent != nil {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			return intent, nil
 		}
 	}
-	return nil, nil
+	return nil, ctx.Err()
 }

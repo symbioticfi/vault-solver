@@ -59,9 +59,11 @@ Quote capacity is grouped by account and funding asset, not executor. Overlappin
 recipes are alternatives; they cannot multiply that balance within a quote.
 Use one order poller per RFQ Executor/filler identity; a second process for quotes must
 set `quoteOnly: true`.
-The award loop polls every three seconds during signing and confirmation, reading all
-open-order pages oldest first in batches of 100 within a thirty-second timeout.
-A settled fill wakes the loop to submit the next executable award.
+The award loop polls every three seconds during signing and confirmation. Reading all
+open-order pages oldest first and refreshing reservations share a thirty-second timeout.
+Preparation gets its own thirty-second timeout after a usable snapshot is fetched.
+Split prices are reused for matching listings at the same observed block. A settled
+fill wakes the loop to submit the next executable award.
 Curator HTTP limits are ten seconds and 2 MiB. Secret configuration contains
 environment variable names. The execution-only plugin has no quote server. Native RFQ mode keeps its existing
 configurable polling limits.
@@ -140,7 +142,9 @@ Completed award IDs prevent resubmission until their signed deadlines. Reservati
 watermarks and completed IDs live in RAM.
 
 Sending deployments quote with a ready SDK manager and an award refresh within the
-last two minutes. Lost receipt ownership stops quoting and keeps the spend reserved.
+last two minutes. A completed reservation pass updates freshness before fill preparation.
+An incomplete pass keeps existing reservations and leaves freshness at its prior value.
+Lost receipt ownership stops quoting and keeps the spend reserved.
 Check `solver_bot_workflow_last_event_timestamp{event="order_poll",outcome="success"}`
 for the affected pod. Fill errors carry the order ID. Quote-only deployments serve
 independently of the award poll.

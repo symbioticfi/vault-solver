@@ -3,6 +3,7 @@ package rfq
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math/big"
 	"reflect"
 	"strings"
@@ -28,13 +29,14 @@ import (
 var vlt, tIn, tOut = connectortest.Venue, connectortest.TokenIn, connectortest.TokenOut
 
 type fakeBackend struct {
-	discount     *discounts.Resolved
-	resolved     map[string]*discounts.Resolved
-	rows         []rfqbackend.OrdersResponseOrdersInner
-	ordersErr    error
-	listed       *discounts.List
-	reads        int
-	beforeOrders func()
+	discount      *discounts.Resolved
+	resolved      map[string]*discounts.Resolved
+	rows          []rfqbackend.OrdersResponseOrdersInner
+	ordersErr     error
+	listed        *discounts.List
+	reads         int
+	beforeOrders  func()
+	beforeResolve func(context.Context) error
 }
 
 func (b *fakeBackend) orders(context.Context, string) ([]rfqbackend.OrdersResponseOrdersInner, error) {
@@ -48,8 +50,13 @@ func (b *fakeBackend) listDiscounts(context.Context) (*discounts.List, error) {
 	b.reads++
 	return b.listed, nil
 }
-func (b *fakeBackend) resolveDiscount(_ context.Context, id string) (*discounts.Resolved, error) {
+func (b *fakeBackend) resolveDiscount(ctx context.Context, id string) (*discounts.Resolved, error) {
 	b.reads++
+	if b.beforeResolve != nil {
+		if err := b.beforeResolve(ctx); err != nil {
+			return nil, err
+		}
+	}
 	if b.resolved != nil {
 		return b.resolved[id], nil
 	}
@@ -244,7 +251,7 @@ func prepareAtHead(t *testing.T, s *Solver, row rfqbackend.OrdersResponseOrdersI
 	if err != nil {
 		return nil, err
 	}
-	return s.planAward(t.Context(), row, listed, observed, false)
+	return s.planAward(t.Context(), row, listed, observed, false, s.Inventory)
 }
 
 func TestPrepareCountsHeaderLatencyAgainstDeadline(t *testing.T) {
@@ -280,6 +287,12 @@ func TestFailedOrderPollKeepsReservations(t *testing.T) {
 	if err := s.Submit(t.Context(), intent); !errors.Is(err, context.DeadlineExceeded) || s.Pending() != nil {
 		t.Fatalf("unsigned failure did not release signer ownership: %v", err)
 	}
+	backend.listed = nil // The held award only needs discounts for preparation.
+	refreshed := false
+	s.observeOrderPoll = func(time.Time) { refreshed = true }
+	if _, err := s.pollAwards(t.Context(), true); err == nil || !refreshed {
+		t.Fatalf("preparation's failed discount lookup should preserve the refresh: %v", err)
+	}
 	backend.rows = nil
 	backend.ordersErr = errors.New("orders feed unavailable")
 	if _, err := s.pollAwards(t.Context(), false); !errors.Is(err, backend.ordersErr) {
@@ -291,6 +304,77 @@ func TestFailedOrderPollKeepsReservations(t *testing.T) {
 	backend.ordersErr = nil
 	if _, err := s.pollAwards(t.Context(), false); err != nil || len(s.Reservations(nil)) != 0 {
 		t.Fatalf("complete poll did not release a closed award: %v", err)
+	}
+}
+
+func TestSlowSplitBacklogKeepsRefreshAndPreparationIndependent(t *testing.T) {
+	for _, slow := range []string{"reservation", "preparation"} {
+		t.Run(slow, func(t *testing.T) {
+			workflow, chains, provider := fillertest.WorkflowPair(t, [4]byte(executorBinding.GetABI().Methods["fill"].ID))
+			order, _, backend := connectorExecutionAward(workflow.Filler)
+			for i := range provider.Listed {
+				provider.Listed[i].MaxAssets = "100"
+			}
+			backend.listed, backend.resolved = &discounts.List{Discounts: provider.Listed}, provider.ResolvedByID
+			large := awardRow(t, order)
+			for i := range 32 {
+				large.OrderId = fmt.Sprintf("large-%d", i)
+				backend.rows = append(backend.rows, large)
+			}
+			order.Request.AmountIn, order.Outputs[0].Amount = big.NewInt(100), big.NewInt(98)
+			backend.rows = append(backend.rows, awardRow(t, order))
+			var reads int
+			s := &Solver{Engine: &filler.Engine{
+				Workflow: workflow, Spends: connector.NewSpendLedger(), LaneReady: func() bool { return true },
+				Routes: connector.NewRoutes(workflow, []common.Address{fillertest.RecipeExecutor, fillertest.SecondRecipeExecutor}),
+				Decimals: func(ctx context.Context, _ common.Address) (int, error) {
+					reads++
+					if reads == 1 && slow == "reservation" {
+						<-ctx.Done()
+						return 0, ctx.Err()
+					}
+					return 18, nil
+				},
+			}, backend: backend}
+			if err := s.Initialize(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if slow == "preparation" {
+				backend.beforeResolve = func(ctx context.Context) error {
+					if !s.CanQuote(time.Now()) {
+						t.Error("award refresh was not published before preparation")
+					}
+					<-ctx.Done()
+					return ctx.Err()
+				}
+			}
+			intent, err := s.pollAwardsWithin(t.Context(), true, 150*time.Millisecond)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatalf("expected %s timeout: %v", slow, err)
+			}
+			wantQuote := slow == "preparation"
+			if s.CanQuote(time.Now()) != wantQuote || (intent == nil) != wantQuote {
+				t.Fatalf("%s timeout coupled quote freshness and fill preparation: intent=%v", slow, intent)
+			}
+			wantReads := 4
+			if slow == "reservation" {
+				wantReads++ // The timed-out pricing read was retried with the preparation budget.
+			}
+			backend.beforeResolve = nil
+			if next, err := s.pollAwards(t.Context(), true); err != nil || next == nil || reads != wantReads {
+				t.Fatalf("unchanged split inventory was repriced across %d awards: reads=%d intent=%v err=%v", len(backend.rows), reads, next, err)
+			}
+			for _, change := range []func(){
+				func() { backend.listed.Discounts[0].MaxAssets = "99" },
+				func() { chains[0].Header.Extra = []byte{1} },
+			} {
+				change()
+				wantReads += 4
+				if _, err := s.pollAwards(t.Context(), false); err != nil || reads != wantReads {
+					t.Fatalf("changed split inventory must be read once: reads=%d want=%d err=%v", reads, wantReads, err)
+				}
+			}
+		})
 	}
 }
 

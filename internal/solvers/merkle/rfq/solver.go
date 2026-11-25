@@ -38,6 +38,8 @@ type Solver struct {
 	// observeOrderPoll reports the same successful refresh that keeps quotes available.
 	observeOrderPoll func(time.Time)
 	lastAwardRefresh atomic.Pointer[time.Time]
+	// Split pricing is owned by the award loop and scoped to its observed head.
+	prices splitPrices
 }
 
 func (*Solver) Name() string                    { return Name }
@@ -72,7 +74,7 @@ func (s *Solver) CanQuote(now time.Time) bool {
 }
 
 // planAward uses the same routes for a queued estimate and a simulated fill.
-func (s *Solver) planAward(ctx context.Context, row rfqbackend.OrdersResponseOrdersInner, listed []discounts.ListItem, observed filler.Observation, reserve bool) (*filler.Intent, error) {
+func (s *Solver) planAward(ctx context.Context, row rfqbackend.OrdersResponseOrdersInner, listed []discounts.ListItem, observed filler.Observation, reserve bool, price filler.InventoryReader) (*filler.Intent, error) {
 	order, signature, err := decodeOrder(row, s.Workflow.Filler)
 	if err != nil {
 		return nil, err
@@ -136,7 +138,7 @@ func (s *Solver) planAward(ctx context.Context, row rfqbackend.OrdersResponseOrd
 	if s.tokenPolicy.RequiresSingleRoute(order.Request.TokenIn) {
 		return nil, nil
 	}
-	legs, err := s.Split(ctx, routes, order.Request.AmountIn, required, len(routes), observed, row.OrderId)
+	legs, err := s.Split(ctx, routes, order.Request.AmountIn, required, len(routes), observed, row.OrderId, price)
 	if err != nil || len(legs) == 0 {
 		return nil, err
 	}

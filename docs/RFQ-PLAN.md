@@ -702,8 +702,9 @@ Merkle connector acquisition is owned by `internal/solvers/merkle/rfq` over the 
 Full Merkle RFQ deployments poll and reserve queued awards while the SDK transaction
 manager signs and reconciles the single in-flight fill. Queued payouts reduce quote capacity by
 funding account and output token. On submission, the prepared spend replaces that award's
-estimate. The quote path requires a ready manager and a successful award refresh within
-the last two minutes. A fresh award refresh resumes quotes.
+estimate. The quote path requires a ready manager and a completed reservation refresh
+within the last two minutes. Preparation uses a separate deadline. Both phases reuse
+complete split pricing reads while the observed block and connector listings match.
 
 Quote-only Merkle deployments use that same startup discovery and require `curator.url`
 for read-only permission access. Initialization errors abort startup; there is no separate

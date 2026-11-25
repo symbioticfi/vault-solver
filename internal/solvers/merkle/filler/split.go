@@ -27,7 +27,7 @@ type Leg struct {
 // reservations are charged once per funding account and output asset. It returns nil when the
 // connectors cannot pay minAmountOut together, and an error when that may be only because a
 // connector could not be priced.
-func (e *Engine) Split(ctx context.Context, routes []Source, amountIn, minAmountOut *big.Int, maxRoutes int, at Observation, orderID string) ([]Leg, error) {
+func (e *Engine) Split(ctx context.Context, routes []Source, amountIn, minAmountOut *big.Int, maxRoutes int, at Observation, orderID string, price InventoryReader) ([]Leg, error) {
 	distinct := make(map[common.Address]bool)
 	for _, route := range routes {
 		distinct[route.Venue] = true
@@ -41,7 +41,7 @@ func (e *Engine) Split(ctx context.Context, routes []Source, amountIn, minAmount
 		listings[i] = route.Listing
 	}
 	// The connector reads quotes are priced from, taken now.
-	inventory, skipped, err := e.Inventory(ctx, listings)
+	inventory, skipped, err := price(ctx, listings)
 	if err != nil {
 		return nil, errors.Errorf("price connectors for a split: %w", err)
 	}

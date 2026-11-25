@@ -184,7 +184,7 @@ func (e *Engine) prepareSwap(ctx context.Context, swap Swap, listed []discounts.
 		miss(source.Venue.Hex(), err)
 	}
 	if swap.MaxRoutes > 1 {
-		legs, err := e.Split(ctx, routes, swap.AmountIn, swap.MinAmountOut, swap.MaxRoutes, observed, "")
+		legs, err := e.Split(ctx, routes, swap.AmountIn, swap.MinAmountOut, swap.MaxRoutes, observed, "", e.Inventory)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}

@@ -674,18 +674,18 @@ func TestAnvilSplitConnectorOrder(t *testing.T) {
 				t.Fatal(err)
 			}
 			solver.tokenPolicy = singleRoute
-			if intent, err := solver.planAward(t.Context(), row, listed, observed, false); intent != nil || err != nil {
+			if intent, err := solver.planAward(t.Context(), row, listed, observed, false, solver.Inventory); intent != nil || err != nil {
 				t.Fatalf("token policy should decline a split-only award: intent=%v err=%v", intent, err)
 			}
 			solver.tokenPolicy = tokenpolicy.Policy{}
-			if _, err := solver.planAward(t.Context(), row, listed, observed, true); err != nil {
+			if _, err := solver.planAward(t.Context(), row, listed, observed, true, solver.Inventory); err != nil {
 				t.Fatal(err)
 			}
 			reserved := solver.Reservations(nil)
 			if f.reader.outerCalls != 0 {
 				t.Fatal("reserving the split award simulated its fill")
 			}
-			intent, err := solver.planAward(t.Context(), row, listed, observed, false)
+			intent, err := solver.planAward(t.Context(), row, listed, observed, false, solver.Inventory)
 			if err != nil || intent == nil || f.reader.outerCalls != 1 {
 				t.Fatalf("split preparation did not simulate the full signed award once: simulations=%d err=%v", f.reader.outerCalls, err)
 			}

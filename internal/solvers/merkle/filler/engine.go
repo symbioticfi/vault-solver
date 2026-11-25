@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	pollInterval     = 3 * time.Second
-	operationTimeout = 30 * time.Second
+	pollInterval = 3 * time.Second
+	// OperationTimeout bounds each phase of planning and submitting a fill.
+	OperationTimeout = 30 * time.Second
 	// ConfirmationPatience is how long a consumed nonce without a confirmed receipt is treated as
 	// an included fill awaiting its confirmations rather than as a failure worth an error log.
 	ConfirmationPatience = 2 * time.Minute
@@ -268,7 +269,8 @@ func (e *Engine) Await(ctx context.Context) (*Outcome, error) {
 	}
 }
 
-// Run polls for new awards while one worker owns submission and receipt tracking.
+// Run polls awards while one worker owns submission and receipt tracking. An
+// executable intent can accompany an error from the independent award refresh.
 func (e *Engine) Run(ctx context.Context, next func(context.Context, bool) (*Intent, error)) error {
 	if err := e.Initialize(ctx); err != nil {
 		return err
@@ -284,14 +286,14 @@ func (e *Engine) Run(ctx context.Context, next func(context.Context, bool) (*Int
 	for {
 		idle := fill == nil && e.Pending() == nil
 		intent, err := func() (_ *Intent, err error) {
-			run, cancel := context.WithTimeout(ctx, operationTimeout)
-			defer cancel()
-			run, end := tracer.Start(run, e.Name+".poll", observability.AttrSolver.String(e.Name))
+			run, end := tracer.Start(ctx, e.Name+".poll", observability.AttrSolver.String(e.Name))
 			defer func() { end(err) }()
 			return next(run, idle)
 		}()
-		if err == nil && idle && intent != nil {
-			fill, err = e.startFill(ctx, intent)
+		if idle && intent != nil && ctx.Err() == nil {
+			var startErr error
+			fill, startErr = e.startFill(ctx, intent)
+			err = errors.Join(err, startErr)
 		}
 		if err != nil && ctx.Err() == nil {
 			observability.Log(ctx).Error(err, "Merkle award iteration failed")
@@ -324,7 +326,7 @@ func (e *Engine) startFill(ctx context.Context, intent *Intent) (<-chan bool, er
 	done := make(chan bool, 1)
 	go func() {
 		log := observability.Log(ctx).WithValues("orderId", intent.OrderID)
-		send, cancel := context.WithTimeout(ctx, operationTimeout)
+		send, cancel := context.WithTimeout(ctx, OperationTimeout)
 		err := e.send(send, intent)
 		cancel()
 		if err != nil && ctx.Err() == nil {

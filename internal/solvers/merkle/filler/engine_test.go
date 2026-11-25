@@ -166,7 +166,7 @@ func TestRunContinuesToNextFillAfterConfirmation(t *testing.T) {
 			cancel()
 			return nil, nil
 		}
-		return first, nil
+		return first, errors.New("award reservation refresh timed out")
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal("confirmed fill waited for the next award poll", err)
