@@ -167,7 +167,7 @@ func TestAggregateAuthorizationLeaseAndPreparationAreReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	api.onOffers = func() { now = now.Add(100 * time.Second) }
-	if err := runtime.ValidateLease(t.Context(), snapshot, out); !errors.Is(err, provider.ErrNotReady) {
+	if err := runtime.ValidateLease(t.Context(), snapshot, out); !errors.Is(err, provider.ErrNotReady) || !strings.Contains(err.Error(), "earliest mint deadline") {
 		t.Fatalf("slow API consumed admission margin: %v", err)
 	}
 	api.onOffers = nil
@@ -178,10 +178,10 @@ func TestAggregateAuthorizationLeaseAndPreparationAreReadOnly(t *testing.T) {
 	}
 	now = now.Add(-100 * time.Second)
 	api.offers = nil
-	if err := runtime.ValidateLease(t.Context(), snapshot, out); !errors.Is(err, provider.ErrNotReady) {
+	if err := runtime.ValidateLease(t.Context(), snapshot, out); !errors.Is(err, provider.ErrNotReady) || !strings.Contains(err.Error(), "no AWAITING_MINT offer for request") {
 		t.Fatalf("revoked API lease: %v", err)
 	}
-	if _, err := runtime.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil); !errors.Is(err, provider.ErrNotReady) {
+	if _, err := runtime.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil); !errors.Is(err, provider.ErrNotReady) || !strings.Contains(err.Error(), "no AWAITING_MINT PUSH offer") {
 		t.Fatalf("no accepted offers must idle: %v", err)
 	}
 	// An unauthenticated recipe fails before any HTTP or onchain authorization read.

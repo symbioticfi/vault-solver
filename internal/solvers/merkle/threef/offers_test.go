@@ -807,3 +807,56 @@ func TestZeroBudgetCancellationRequiresDurableOwnership(t *testing.T) {
 		}
 	}
 }
+
+func TestCancelReasonNamesCondition(t *testing.T) {
+	request := common.HexToAddress("0x1000000000000000000000000000000000000001")
+	auction := testAuction(testMarket(), 1, request)
+	amount := big.NewInt(100000)
+	_, maximum, err := auctionReturnBounds(amount, auction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*offerMarket, *liveOffer, **intent, *big.Int, *big.Int)
+		want string
+	}{
+		{"fits", func(*offerMarket, *liveOffer, **intent, *big.Int, *big.Int) {}, ""},
+		{"not managed by this market", func(m *offerMarket, _ *liveOffer, _ **intent, _, _ *big.Int) {
+			m.EligibleRequests = map[common.Address]bool{}
+		}, ""},
+		{"recipe changed", func(m *offerMarket, _ *liveOffer, previous **intent, _, _ *big.Int) {
+			*previous = newIntent(*m, request, threef.CreateOfferDto{})
+			(*previous).RecipeHash = common.HexToHash("0x05")
+		}, "intent recipe hash " + common.HexToHash("0x05").Hex() + " no longer matches market recipe hash " + common.HexToHash("0x04").Hex()},
+		{"request no longer eligible", func(m *offerMarket, _ *liveOffer, previous **intent, _, _ *big.Int) {
+			*previous = newIntent(*m, request, threef.CreateOfferDto{})
+			m.EligibleRequests = map[common.Address]bool{}
+		}, "request " + request.Hex() + " is no longer eligible for this market"},
+		{"other funding asset", func(_ *offerMarket, offer *liveOffer, _ **intent, cash, _ *big.Int) {
+			offer.asset = common.HexToAddress("0x07")
+			cash.SetInt64(1 << 40)
+		}, ""},
+		{"cash shrank", func(_ *offerMarket, _ *liveOffer, _ **intent, cash, _ *big.Int) {
+			cash.SetInt64(900001)
+		}, "reserved cash 900001 exceeds available cash 900000"},
+		{"budget shrank", func(_ *offerMarket, _ *liveOffer, _ **intent, _, pair *big.Int) {
+			pair.SetInt64(1000001)
+		}, "reserved budget 1000001 exceeds policy budget 1000000"},
+		{"terms stale", func(_ *offerMarket, offer *liveOffer, _ **intent, _, _ *big.Int) {
+			offer.expectedReturn = new(big.Int).Add(maximum, big.NewInt(1))
+		}, "terms no longer fit: return " + new(big.Int).Add(maximum, big.NewInt(1)).String() + " exceeds auction maximum " + maximum.String()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := testMarket()
+			offer := liveOffer{dto: threef.OfferDto{RequestId: request.Hex()}, id: 12, auctionID: 1, asset: m.Asset, amount: amount, expectedReturn: maximum}
+			var previous *intent
+			cash, pair := big.NewInt(100000), big.NewInt(100000)
+			tc.edit(&m, &offer, &previous, cash, pair)
+			got, err := cancelReason(m, offer, previous, auction, cash, pair)
+			if err != nil || got != tc.want {
+				t.Fatalf("reason=%q err=%v, want %q", got, err, tc.want)
+			}
+		})
+	}
+}

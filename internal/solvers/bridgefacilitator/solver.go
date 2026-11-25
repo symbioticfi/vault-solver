@@ -244,7 +244,7 @@ func (s *Solver) reconcileOffers(ctx context.Context, targets []Target) bool {
 				continue
 			}
 			if !exp.After(now) {
-				observability.Decline(ctx, "offer_not_live", "offer expired")
+				observability.Decline(ctx, "offer_not_live", fmt.Sprintf("offer on auction %d expired at %s", int64(o.AuctionId), exp.UTC().Format(time.RFC3339)))
 				continue // valid, already-expired offer
 			}
 			principal, ok := new(big.Int).SetString(o.Amount, 10)
@@ -370,14 +370,20 @@ func (s *Solver) discoverAndOffer(ctx context.Context) {
 		refreshOutcome = observability.ExternalOperationDegraded
 	}
 	observeRefresh(refreshOutcome)
-	if len(offerings) == 0 || !offersComplete {
-		observability.Decline(ctx, "offer_skipped", "incomplete adapter or offer coverage")
-		return // incomplete live commitments cannot safely authorize another offer
+	switch {
+	case len(offerings) == 0:
+		observability.Decline(ctx, "offer_skipped",
+			fmt.Sprintf("no adapter snapshot: %d of %d liquidity reads failed", liquidityReadsFailed, len(s.targets)))
+		return
+	case !offersComplete:
+		// Incomplete live commitments cannot safely authorize another offer.
+		observability.Decline(ctx, "offer_skipped", "offer reconcile incomplete: a listing failed or an offer field was malformed")
+		return
 	}
 	input := s.buildOfferInput(ctx, auctions, offerings, now)
 	if len(input.Auctions) == 0 {
-		observability.Decline(ctx, "offer_skipped", "no open offerable auctions")
-		return // no open, offerable auctions this pass
+		observability.Decline(ctx, "offer_skipped", fmt.Sprintf("none of %d listed auctions is offerable", len(auctions)))
+		return
 	}
 	out, err := s.decideOffers(ctx, input)
 	if err != nil {

@@ -2,6 +2,7 @@ package threef
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"sort"
 	"strings"
@@ -258,6 +259,24 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 		if changed, err := run(selected.market, true); err != nil || changed {
 			return err
 		}
+	}
+	for i, observed := range observations {
+		if attempted[i] {
+			continue
+		}
+		var reason string
+		switch {
+		case observed.Budget.Sign() <= 0:
+			reason = "policy budget is 0"
+		case observed.AvailableCash.Sign() <= 0:
+			reason = "available cash is 0"
+		default:
+			reason = "no open, unblocked auction has an eligible request for this asset"
+		}
+		observability.Log(ctx).V(1).Info("3F market not bidding", "asset", observed.Market.Asset.Hex(),
+			"underlyingAsset", observed.Market.UnderlyingAsset.Hex(), "reason", reason)
+		observability.Decline(ctx, "market_skipped", fmt.Sprintf("market %s/%s: %s",
+			observed.Market.Asset.Hex(), observed.Market.UnderlyingAsset.Hex(), reason))
 	}
 	return nil
 }
