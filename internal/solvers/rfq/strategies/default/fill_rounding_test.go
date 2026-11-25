@@ -51,6 +51,31 @@ func TestBuildFillPlanSettlesAwardQuotedAtExactPayout(t *testing.T) {
 	}
 }
 
+func TestBuildFillPlanDirectSwapPaysCapacityBetweenRoundedPayouts(t *testing.T) {
+	route := liquidlane.NewRoute(1, vlt, vlt, tIn, tOut, 6, 6)
+	amountIn := big.NewInt(20_000_022)
+	capacity := big.NewInt(40_000_002)
+	source := liquidlane.DirectInventory(route, capacity, nil)
+	source.Price = big.NewInt(2_000_000_000_000_000_000)
+	source.AdapterMinDiscount = big.NewInt(1)
+	candidates := liquidgreedy.NormalizeOracleInventory(amountIn, []liquidlane.Inventory{source}, []liquidlane.FillQuote{{
+		Inventory: source, AmountIn: amountIn, GrossAmountOut: big.NewInt(40_000_044),
+		MaxAmountOut: big.NewInt(40_000_003), MinDiscount: source.AdapterMinDiscount,
+	}}, nil)
+	input := baseInput(candidates...)
+	input.AmountIn, input.RequiredAmountOut, input.RequireSingleRoute = amountIn, capacity, true
+
+	plan, err := New().BuildFillPlan(t.Context(), input)
+	if err != nil || plan == nil || len(plan.Legs) != 1 {
+		t.Fatalf("expected a direct fill at the output cap, got %+v, %v", plan, err)
+	}
+	leg := plan.Legs[0]
+	if leg.DiscountID != nil || leg.AmountIn.Cmp(amountIn) != 0 || leg.AmountOut.Cmp(capacity) != 0 ||
+		plan.QuotedAmountOut.Cmp(capacity) != 0 {
+		t.Fatalf("leg = %+v, total = %s; want full input and output capped at %s", leg, plan.QuotedAmountOut, capacity)
+	}
+}
+
 func TestBuildFillPlanPricesSplitLegsAtAdapterPayout(t *testing.T) {
 	for _, tc := range []struct {
 		name                   string

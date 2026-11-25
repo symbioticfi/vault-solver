@@ -245,7 +245,16 @@ func greedyFillAllocation(
 		if direct < 0 {
 			return nil
 		}
-		allocation[direct].amountIn.Add(allocation[direct].amountIn, remaining)
+		leg := &allocation[direct]
+		leg.amountIn.Add(leg.amountIn, remaining)
+		capacityID := liquidlane.RouteCapacityID(leg.candidate.quote.Route)
+		// Restore this leg's own reservation while retaining the other legs' reservations.
+		capacityLeft := new(big.Int).Sub(capacityLimits[capacityID], capacityUsed[capacityID])
+		capacityLeft.Add(capacityLeft, leg.reservedOutput)
+		capacity := minBig(capacityLeft, leg.candidate.capacity)
+		maxPayout := maxPayoutWithinCapacity(capacity, priceBufferBps, false)
+		leg.executableOutput = minBig(leg.candidate.quote.AmountOutFor(leg.amountIn), maxPayout)
+		leg.reservedOutput = applyBpsDown(leg.executableOutput, bpsDenominator-priceBufferBps)
 	}
 	return allocation
 }
@@ -375,18 +384,7 @@ func maxInputWithinCapacity(
 		quote.MaxAmountOut == nil || quote.MaxAmountOut.Sign() <= 0 {
 		return new(big.Int)
 	}
-	precision := big.NewInt(bpsDenominator)
-	buffer := big.NewInt(int64(priceBufferBps))
-	maxOutput := new(big.Int)
-	if quote.DiscountID != nil {
-		maxOutput.Mul(capacity, precision)
-		maxOutput.Div(maxOutput, new(big.Int).Add(precision, buffer))
-	} else {
-		maxOutput.Add(capacity, big.NewInt(1))
-		maxOutput.Mul(maxOutput, precision)
-		maxOutput.Sub(maxOutput, big.NewInt(1))
-		maxOutput.Div(maxOutput, new(big.Int).Sub(precision, buffer))
-	}
+	maxOutput := maxPayoutWithinCapacity(capacity, priceBufferBps, quote.DiscountID != nil)
 	// The last input within capacity is one unit below the first over it.
 	maxInput := quote.AmountInFor(new(big.Int).Add(maxOutput, big.NewInt(1)))
 	if maxInput.Sign() > 0 {
@@ -396,6 +394,17 @@ func maxInputWithinCapacity(
 		maxInput.Set(inputLimit)
 	}
 	return maxInput
+}
+
+func maxPayoutWithinCapacity(capacity *big.Int, priceBufferBps int, signedDiscount bool) *big.Int {
+	precision := big.NewInt(bpsDenominator)
+	if signedDiscount {
+		payout := new(big.Int).Mul(capacity, precision)
+		return payout.Div(payout, big.NewInt(int64(bpsDenominator+priceBufferBps)))
+	}
+	firstAboveCapacity := new(big.Int).Add(capacity, big.NewInt(1))
+	payout := liquidlane.MulDivUp(firstAboveCapacity, precision, big.NewInt(int64(bpsDenominator-priceBufferBps)))
+	return payout.Sub(payout, big.NewInt(1))
 }
 
 func reservedCapacityOutput(
