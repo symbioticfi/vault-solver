@@ -43,9 +43,9 @@ func (s *Solver) prepareFill(
 	routes []liquidlane.Route, now, observedAt time.Time, revision uint64,
 ) (preparedFill, error) {
 	tryPlan := func(plan *types.FillPlan) (preparedFill, error) {
-		reservations, ok := strategies.FillRouteReservations(plan.Routes)
-		if !ok {
-			return preparedFill{}, errors.New("strategy returned invalid capacity reservations")
+		reservations, err := strategies.FillRouteReservations(plan.Routes)
+		if err != nil {
+			return preparedFill{}, errors.Errorf("strategy returned invalid capacity reservations: %w", err)
 		}
 		if !s.setPendingReservations(ctx, order.Hash, reservations, revision) {
 			return preparedFill{}, declineFill(ctx, "fill_declined", "capacity changed during planning")

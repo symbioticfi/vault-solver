@@ -102,6 +102,12 @@ func solveExactInputQuote(
 			}
 		}
 		if direct < 0 {
+			task.Trace.Decline(
+				"quote", "uncovered-input-without-direct-leg",
+				"amountIn", amountIn.String(),
+				"remainingAmountIn", allocation.Remaining.String(),
+				"routes", len(allocation.Allocations),
+			)
 			return nil
 		}
 		allocation.Allocations[direct].AmountIn.Add(allocation.Allocations[direct].AmountIn, allocation.Remaining)

@@ -28,13 +28,14 @@ func (s *Solver) submitFill(
 	chainTime time.Time,
 	chainObservedAt time.Time,
 ) (*pendingFill, error) {
-	reservations, ok := fillPlanReservations(plan)
-	if !ok {
+	reservations, err := fillPlanReservations(plan)
+	if err != nil {
 		// Defensive: validateFillPlan normalizes every route before this point. Report it as the
 		// failure it is rather than ending the order's span clean.
-		observability.Log(ctx).Error(errFillPlanRejected, "order fill: reject strategy plan",
+		err = errors.Errorf("%w: %w", errFillPlanRejected, err)
+		observability.Log(ctx).Error(err, "order fill: reject strategy plan",
 			"orderId", order.OrderID, "quoteId", order.QuoteID)
-		return nil, errFillPlanRejected
+		return nil, err
 	}
 	status, err := s.reader.orderStatus(ctx, s.cfg.InputSettler, calldata.OrderID)
 	if err != nil {
@@ -256,9 +257,9 @@ func (s *Solver) completeFill(
 	return err
 }
 
-func fillPlanReservations(plan *types.FillPlan) (liquidlane.CapacityReservations, bool) {
-	if plan == nil || len(plan.Routes) == 0 {
-		return nil, false
+func fillPlanReservations(plan *types.FillPlan) (liquidlane.CapacityReservations, error) {
+	if plan == nil {
+		return nil, errors.New("no fill plan")
 	}
 	return liquidstrategies.FillRouteReservations(plan.Routes)
 }
