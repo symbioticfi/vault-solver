@@ -99,7 +99,8 @@ func (s *Solver) processOrderUsingReservations(
 	reservations *liquidlane.CapacityReservations,
 ) orderProcessingResult {
 	if !s.cfg.TokenPolicy.Allows(order.TokenIn) {
-		observability.Decline(ctx, "order_skipped", "input token is out of scope")
+		observability.Decline(ctx, "order_skipped", fmt.Sprintf("input token %s is out of %s token scope",
+			order.TokenIn.Hex(), s.cfg.TokenPolicy.Scope()))
 		observability.Log(ctx).V(1).Info("order skipped: input token out of scope",
 			"orderId", order.OrderID, "quoteId", order.QuoteID,
 			"tokenIn", order.TokenIn.Hex(), "scope", s.cfg.TokenPolicy.Scope())
@@ -126,7 +127,7 @@ func (s *Solver) processOrderUsingReservations(
 	}
 	reservationKey := orderID.Hex()
 	if pending != nil && pending.contains(reservationKey) {
-		observability.Decline(ctx, "order_skipped", "a fill for this order is already pending")
+		observability.Decline(ctx, "order_skipped", "a fill for on-chain order "+reservationKey+" is already pending")
 		observability.Log(ctx).V(1).Info("order skipped: already pending", "orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID)
 		return orderProcessingResult{outcome: orderProcessingNotActionable}
@@ -402,13 +403,13 @@ func (s *Solver) openedOrderID(ctx context.Context, order *submittedOrder) (comm
 		return common.Hash{}, err
 	}
 	if status == lifiOrderStatusNone {
-		observability.Decline(ctx, "order_deferred", "on-chain deposit is not visible yet")
+		observability.Decline(ctx, "order_deferred", fmt.Sprintf("on-chain order status is %d (none): deposit is not visible yet", status))
 		observability.Log(ctx).Info("on-chain order deposit is not visible yet", "orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID, "status", status)
 		return common.Hash{}, errOrderDepositNotVisible
 	}
 	if status == lifiOrderStatusClaimed || status == lifiOrderStatusRefunded {
-		observability.Decline(ctx, "order_skipped", "on-chain order is no longer fillable")
+		observability.Decline(ctx, "order_skipped", fmt.Sprintf("on-chain order status %d (claimed or refunded) is no longer fillable", status))
 		observability.Log(ctx).Info("order skipped: on-chain order is no longer fillable", "orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID, "status", status)
 		return common.Hash{}, errOrderNotFillable

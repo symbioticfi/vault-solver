@@ -178,7 +178,7 @@ func (f *orderFeed) watchOnce(
 
 		var envelope orderMessage
 		if err := json.Unmarshal(msg, &envelope); err != nil {
-			observability.Log(ctx).V(1).Info("order feed: non-json message ignored")
+			observability.Log(ctx).V(1).Info("order feed: non-json message ignored", "bytes", len(msg), "error", err.Error())
 			continue
 		}
 		if envelope.Event != orderSubmitEvent {

@@ -2,6 +2,7 @@ package lifi
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"sort"
 	"strconv"
@@ -139,6 +140,21 @@ func (s *Solver) transactionLaneReady() bool {
 	return s.txLaneState != nil && s.txLaneState.LaneReady()
 }
 
+// laneNotReadyReason names which half of LaneReady failed when the lane exposes it.
+func (s *Solver) laneNotReadyReason() string {
+	type laneDetail interface {
+		Available() bool
+		Idle() bool
+	}
+	if s.txLaneState == nil {
+		return "no transaction lane is configured"
+	}
+	if lane, ok := s.txLaneState.(laneDetail); ok {
+		return fmt.Sprintf("transaction lane is not ready: available %t, idle %t", lane.Available(), lane.Idle())
+	}
+	return "transaction lane is not ready"
+}
+
 func (s *Solver) subscribeTransactionLaneState() (<-chan struct{}, func()) {
 	if s.txLaneState == nil {
 		return nil, func() {}
@@ -236,9 +252,11 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	if !s.transactionLaneReady() {
 		s.observeQuoteBuildRejections(ctx, nil, types.QuoteOutput{}, "lane_unavailable")
 		outcome = observability.ExternalOperationSkipped
-		observability.Decline(ctx, "quotes_skipped", "transaction lane is unavailable")
+		reason := s.laneNotReadyReason()
+		observability.Decline(ctx, "quotes_skipped", reason)
 		observability.Log(ctx).V(1).Info(
 			"quote refresh skipped: transaction lane unavailable",
+			"reason", reason,
 			"activePairs", len(state.active),
 			"pendingFills", s.capacity.Len(),
 		)
@@ -324,9 +342,11 @@ func (s *Solver) refreshQuotes(ctx context.Context, routes []route, state *quote
 	if !s.transactionLaneReady() {
 		s.observeQuoteBuildRejections(ctx, inventory, types.QuoteOutput{}, "lane_unavailable")
 		outcome = observability.ExternalOperationSkipped
-		observability.Decline(ctx, "quotes_skipped", "transaction lane is unavailable")
+		reason := s.laneNotReadyReason()
+		observability.Decline(ctx, "quotes_skipped", reason)
 		observability.Log(ctx).V(1).Info(
 			"quote plan discarded: transaction lane unavailable",
+			"reason", reason,
 			"quotePairs", len(out.Quotes),
 			"quoteRanges", quoteRangeCount(out.Quotes),
 		)

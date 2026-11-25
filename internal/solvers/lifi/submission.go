@@ -43,13 +43,13 @@ func (s *Solver) submitFill(
 		return nil, errors.Errorf("read order status for %s: %w", calldata.OrderID.Hex(), err)
 	}
 	if status == lifiOrderStatusNone {
-		observability.Decline(ctx, "order_deferred", "on-chain deposit is not visible at submission")
+		observability.Decline(ctx, "order_deferred", fmt.Sprintf("on-chain order status is %d (none) at submission: deposit is not visible", status))
 		observability.Log(ctx).Info("on-chain order deposit is not visible at submission", "orderId", order.OrderID,
 			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID, "status", status)
 		return nil, errOrderDepositNotVisible
 	}
 	if status == lifiOrderStatusClaimed || status == lifiOrderStatusRefunded {
-		observability.Decline(ctx, "order_skipped", "on-chain order is no longer fillable at submission")
+		observability.Decline(ctx, "order_skipped", fmt.Sprintf("on-chain order status %d (claimed or refunded) is no longer fillable at submission", status))
 		observability.Log(ctx).Info("order skipped: on-chain order is no longer fillable at submission",
 			"orderId", order.OrderID, "onChainOrderId", calldata.OrderID.Hex(),
 			"quoteId", order.QuoteID, "status", status)
@@ -69,10 +69,14 @@ func (s *Solver) submitFill(
 			admissionNow,
 		)
 		if !deadlineValid {
-			observability.Decline(ctx, "fill_skipped", "execution deadline elapsed before submission")
+			observability.Decline(ctx, "fill_skipped", fmt.Sprintf(
+				"execution deadline %d is not after chain time %d advanced by planning time %s (wall time %d)",
+				calldata.Deadline.Unix(), chainTime.Unix(), admissionNow.Sub(chainObservedAt), admissionNow.Unix()))
 			observability.Log(ctx).Info("order skipped: execution deadline elapsed before submission",
 				"orderId", order.OrderID, "onChainOrderId", calldata.OrderID.Hex(),
-				"quoteId", order.QuoteID, "deadline", calldata.Deadline.Unix())
+				"quoteId", order.QuoteID, "deadline", calldata.Deadline.Unix(),
+				"chainTime", chainTime.Unix(), "planningElapsed", admissionNow.Sub(chainObservedAt),
+				"wallTime", admissionNow.Unix())
 			return nil, nil
 		}
 	}
@@ -218,12 +222,14 @@ func (s *Solver) completeFill(
 		return nil
 	}
 	if outcome.NonceUncertain() {
-		observability.Decline(ctx, "fill_nonce_uncertain", "transaction nonce result is uncertain")
+		observability.Decline(ctx, "fill_nonce_uncertain", fmt.Sprintf(
+			"transaction outcome %s leaves the nonce result uncertain: %v", outcome, completion.result.Err))
 		// The worker re-reads on-chain status and schedules eligible orders for fresh planning.
 		// This outcome carries no owned receipt and is never counted as a successful fill.
 		observability.Log(ctx).V(1).Info("order fill nonce uncertain; reconciling protocol status",
 			"orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
-			"quoteId", fill.order.QuoteID, "tx", completion.result.Hash.Hex())
+			"quoteId", fill.order.QuoteID, "tx", completion.result.Hash.Hex(),
+			"outcome", outcome, "reason", fmt.Sprint(completion.result.Err))
 		return nil
 	}
 	if outcome == txmanager.OutcomeConfirmed {
@@ -294,7 +300,7 @@ func (s *Solver) reconcileUncertainFill(ctx context.Context, fill *pendingFill) 
 	defer func() { end(err) }()
 	status, err := s.reader.orderStatus(ctx, s.cfg.InputSettler, fill.orderID)
 	if ctx.Err() != nil {
-		observability.Decline(ctx, "order_skipped", "nonce reconciliation canceled during shutdown")
+		observability.Decline(ctx, "order_skipped", fmt.Sprintf("nonce reconciliation canceled: %v", context.Cause(ctx)))
 		return false, nil
 	}
 	if err == nil {
@@ -302,7 +308,7 @@ func (s *Solver) reconcileUncertainFill(ctx context.Context, fill *pendingFill) 
 		case lifiOrderStatusNone, lifiOrderStatusDeposited:
 			return true, nil
 		case lifiOrderStatusClaimed, lifiOrderStatusRefunded:
-			observability.Decline(ctx, "fill_obsolete", "uncertain fill order settled on-chain")
+			observability.Decline(ctx, "fill_obsolete", fmt.Sprintf("uncertain fill order settled on-chain with status %d", status))
 			observability.Log(ctx).Info("order fill reconciled: order settled on-chain",
 				"orderId", fill.order.OrderID, "onChainOrderId", fill.orderID.Hex(),
 				"quoteId", fill.order.QuoteID, "status", status)

@@ -660,15 +660,15 @@ func (s *Solver) parseOrderMessage(
 		switch {
 		case errors.Is(err, errOrderForDifferentChain):
 			s.metrics.observeOrderParse("other_chain")
-			observability.Decline(ctx, "order_ignored", "order is for another chain")
+			observability.Decline(ctx, "order_ignored", err.Error())
 			observability.Log(ctx).Info("order feed: ignored order for another chain", append(fields, "reason", err.Error())...)
 		case errors.Is(err, errNativeInputUnsupported):
 			s.metrics.observeOrderParse("unsupported")
-			observability.Decline(ctx, "order_ignored", "native input is not supported")
+			observability.Decline(ctx, "order_ignored", err.Error())
 			observability.Log(ctx).Info("order feed: ignored unsupported order", append(fields, "reason", err.Error())...)
 		case errors.Is(err, errOrderUnsupported):
 			s.metrics.observeOrderParse("unsupported")
-			observability.Decline(ctx, "order_ignored", "order is not fillable by this solver")
+			observability.Decline(ctx, "order_ignored", err.Error())
 			observability.Log(ctx).V(1).Info("order feed: ignored unsupported order", append(fields, "reason", err.Error())...)
 		default:
 			// A message we cannot understand is a real failure, not an expected skip.
@@ -684,7 +684,8 @@ func (s *Solver) parseOrderMessage(
 	observability.SetAttributes(ctx, orderAttrs(order)...)
 	if isDutchAuctionContext(order.Output.Context) {
 		s.metrics.observeOrderParse("unsupported")
-		observability.Decline(ctx, "order_ignored", "Dutch auction orders are not supported")
+		observability.Decline(ctx, "order_ignored", "Dutch auction output context type "+
+			hexutil.Encode(order.Output.Context[:1])+" is not supported")
 		observability.Log(ctx).Info("order feed: ignored unsupported Dutch auction",
 			"event", msg.Event,
 			"orderId", order.OrderID,
@@ -790,7 +791,7 @@ func (s *Solver) runOrderWorker(
 				"quoteId", order.QuoteID, "capacity", orderRetryCapacity)
 			return err
 		}
-		observability.Decline(orderCtx, "order_skipped", "nonce reconciliation reached the order deadline")
+		observability.Decline(orderCtx, "order_skipped", err.Error())
 		observability.Log(orderCtx).Info("order skipped: nonce reconciliation reached the order deadline",
 			"orderId", order.OrderID, "onChainOrderId", order.OnChainOrderID,
 			"quoteId", order.QuoteID, "reason", err.Error())
@@ -858,7 +859,7 @@ func (s *Solver) runOrderWorker(
 			if result.retrySoon {
 				reason = "fill dependencies did not recover within retry bounds"
 			}
-			observability.Decline(orderCtx, "order_skipped", reason)
+			observability.Decline(orderCtx, "order_skipped", reason+": "+err.Error())
 			if result.retrySoon {
 				// The retries logged at debug; a dependency that stayed down is worth an error.
 				observability.Log(orderCtx).Error(result.err, "order skipped: "+reason,
@@ -1018,7 +1019,7 @@ func (s *Solver) runOrderWorker(
 			order, err := nonceRetries.popReady(retryNow())
 			if err != nil {
 				orderCtx := traces.context(ctx, order)
-				observability.Decline(orderCtx, "order_skipped", "nonce reconciliation reached the order deadline")
+				observability.Decline(orderCtx, "order_skipped", err.Error())
 				observability.Log(orderCtx).Info("order skipped: nonce reconciliation reached the order deadline",
 					"orderId", order.OrderID, "onChainOrderId", order.OnChainOrderID,
 					"quoteId", order.QuoteID, "reason", err.Error())
@@ -1034,9 +1035,7 @@ func (s *Solver) runOrderWorker(
 				orderCtx := traces.context(ctx, order)
 				s.metrics.observeOrderProcessing(orderProcessingNotActionable)
 				s.metrics.observeOrderQueueDrop(orderQueueDepositRetry, err)
-				observability.Decline(
-					orderCtx, "order_skipped", "deposit did not become visible within retry bounds",
-				)
+				observability.Decline(orderCtx, "order_skipped", err.Error())
 				observability.Log(orderCtx).Info(
 					"order skipped: deposit did not become visible within retry bounds",
 					"orderId", order.OrderID,

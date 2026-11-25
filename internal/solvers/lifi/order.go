@@ -101,13 +101,15 @@ func parseSubmittedOrder(data []byte, cfg *Config, chainID int64) (*submittedOrd
 	}
 
 	if !isFillableOrderStatus(event.Meta.OrderStatus) {
-		return nil, orderFieldError("lifi_unsupported_status", "meta.orderStatus", "unsupported order status", errOrderUnsupported)
+		return nil, orderFieldError("lifi_unsupported_status", "meta.orderStatus",
+			fmt.Sprintf("unsupported order status %.32q", event.Meta.OrderStatus), errOrderUnsupported)
 	}
 	if !isOnChainOrderEvent(event) {
 		if event.OrderType == "" {
 			return nil, orderFieldError("lifi_missing_order_type", "orderType", "missing orderType requires onChainOrderId and inputSettler", nil)
 		}
-		return nil, orderFieldError("lifi_unsupported_order_type", "orderType", "unsupported non-onchain order type", errOrderUnsupported)
+		return nil, orderFieldError("lifi_unsupported_order_type", "orderType",
+			fmt.Sprintf("unsupported non-onchain order type %.32q", event.OrderType), errOrderUnsupported)
 	}
 
 	// Classify by chain before reading any address: the feed carries every network LI.FI serves
@@ -129,7 +131,9 @@ func parseSubmittedOrder(data []byte, cfg *Config, chainID int64) (*submittedOrd
 	// Unknown settlers can use a different token identifier format. Classify them before
 	// decoding the protocol payload so their inputs cannot trigger our ERC-20 format alerts.
 	if inputSettler != cfg.InputSettler {
-		return nil, orderFieldError("unsupported_settler", "inputSettler", "inputSettler does not match configured settler", errOrderUnsupported)
+		return nil, orderFieldError("unsupported_settler", "inputSettler", fmt.Sprintf(
+			"inputSettler %s does not match configured settler %s", inputSettler.Hex(), cfg.InputSettler.Hex(),
+		), errOrderUnsupported)
 	}
 	if outputChainErr != nil {
 		return nil, outputChainErr
@@ -252,16 +256,18 @@ func parseStandardOrder(
 		return nil, err
 	}
 	if len(dto.Inputs) > 1 {
-		return nil, orderFieldError("unsupported_multiple_inputs", "order.inputs", "multiple inputs are not supported", errOrderUnsupported)
+		return nil, orderFieldError("unsupported_multiple_inputs", "order.inputs",
+			fmt.Sprintf("%d inputs: multiple inputs are not supported", len(dto.Inputs)), errOrderUnsupported)
 	}
 	if len(dto.Inputs) != 1 {
-		return nil, orderFieldError("lifi_input_count", "order.inputs", "expected 1 input", nil)
+		return nil, orderFieldError("lifi_input_count", "order.inputs", "expected 1 input, got 0", nil)
 	}
 	if len(dto.Outputs) > 1 {
-		return nil, orderFieldError("unsupported_multiple_outputs", "order.outputs", "multiple outputs are not supported", errOrderUnsupported)
+		return nil, orderFieldError("unsupported_multiple_outputs", "order.outputs",
+			fmt.Sprintf("%d outputs: multiple outputs are not supported", len(dto.Outputs)), errOrderUnsupported)
 	}
 	if len(dto.Outputs) != 1 {
-		return nil, orderFieldError("lifi_output_count", "order.outputs", "expected 1 output", nil)
+		return nil, orderFieldError("lifi_output_count", "order.outputs", "expected 1 output, got 0", nil)
 	}
 
 	nonce, err := parseUint(dto.Nonce, "order.nonce")
@@ -423,13 +429,17 @@ func validateOrderTarget(
 		if _, err := identifierAddress(order.Outputs[0].Oracle, "order.outputs[0].oracle"); err != nil {
 			return err
 		}
-		return orderFieldError("unsupported_settler", "order.outputs[0].oracle", "order.outputs[0].oracle does not match outputSettler", errOrderUnsupported)
+		return orderFieldError("unsupported_settler", "order.outputs[0].oracle", fmt.Sprintf(
+			"order.outputs[0].oracle %x does not match outputSettler %x", order.Outputs[0].Oracle, wantSettler,
+		), errOrderUnsupported)
 	}
 	if order.Outputs[0].Settler != wantSettler {
 		if _, err := identifierAddress(order.Outputs[0].Settler, "order.outputs[0].settler"); err != nil {
 			return err
 		}
-		return orderFieldError("unsupported_settler", "order.outputs[0].settler", "order.outputs[0].settler does not match outputSettler", errOrderUnsupported)
+		return orderFieldError("unsupported_settler", "order.outputs[0].settler", fmt.Sprintf(
+			"order.outputs[0].settler %x does not match outputSettler %x", order.Outputs[0].Settler, wantSettler,
+		), errOrderUnsupported)
 	}
 	return nil
 }

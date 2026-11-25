@@ -247,3 +247,28 @@ func TestStrategyDeclinedQuoteLogsStrategyReason(t *testing.T) {
 		t.Fatalf("rejection = %v, want strategy_declined with the strategy's reason", row)
 	}
 }
+
+type detailedLaneState struct{ available, idle bool }
+
+func (l detailedLaneState) LaneReady() bool                             { return l.available && l.idle }
+func (detailedLaneState) SubscribeLaneState() (<-chan struct{}, func()) { return nil, func() {} }
+func (l detailedLaneState) Available() bool                             { return l.available }
+func (l detailedLaneState) Idle() bool                                  { return l.idle }
+
+func TestLaneNotReadyReasonNamesFailedHalf(t *testing.T) {
+	tests := map[string]struct {
+		lane transactionLaneState
+		want string
+	}{
+		"no lane":   {want: "no transaction lane is configured"},
+		"busy lane": {lane: detailedLaneState{available: true}, want: "transaction lane is not ready: available true, idle false"},
+		"down lane": {lane: detailedLaneState{idle: true}, want: "transaction lane is not ready: available false, idle true"},
+	}
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			if got := (&Solver{txLaneState: tt.lane}).laneNotReadyReason(); got != tt.want {
+				t.Fatalf("reason = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
