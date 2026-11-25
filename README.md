@@ -437,8 +437,9 @@ signed-discount resolution, calldata construction, or preflight before the trans
 result rejected before the worker lifecycle does not count toward the local fill breaker and is reported as
 `solver_bot_txmanager_admission_rejections_total{label="uniswapx-fill"}` rather than a terminal fill
 failure. `GET /ready` exposes that state and
-also returns not-ready when the latest snapshot has no quotable inventory. A not-ready `503` body names the
-failed check (for example `not ready: startup warmup blocks quotes until <unix>, now <unix>`);
+also returns not-ready when the latest snapshot has no quotable inventory. The `503` body stays generic
+because the quote port is published to the order provider; the failed check is logged as `not ready`
+with a `reason` at debug level;
 `GET /health` and its probe-friendly alias `GET /healthz` remain liveness-only.
 
 Every valid exclusive order assigned to the executor is tracked through `decayStartTime`. After that

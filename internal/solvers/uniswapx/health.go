@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 // exclusiveDeliveryProblem names why exclusive order delivery cannot be trusted, or "" when it can.
@@ -58,9 +60,11 @@ func (s *Solver) readyProblem() string {
 	return ""
 }
 
-func (s *Solver) readyHandler(w http.ResponseWriter, _ *http.Request) {
+func (s *Solver) readyHandler(w http.ResponseWriter, r *http.Request) {
 	if problem := s.readyProblem(); problem != "" {
-		http.Error(w, "not ready: "+problem, http.StatusServiceUnavailable)
+		// The quote port is published to the order provider, so the reason stays in the logs.
+		observability.Log(r.Context()).V(1).Info("not ready", "reason", problem)
+		http.Error(w, "not ready", http.StatusServiceUnavailable)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
