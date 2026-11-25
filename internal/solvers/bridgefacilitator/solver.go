@@ -438,18 +438,23 @@ func (s *Solver) decideOffers(ctx context.Context, input types.OfferInput) (out 
 	return out, nil
 }
 
-// declineSkips writes every skip on one debug line and puts the count and first reason on the span
-// decline, so the cause survives with debug logging off without a log line per auction each pass.
+// declineSkips puts the count and first reason on the span decline, so the cause survives with debug
+// logging off, and, only when debug is on, logs one bounded summary line for the pass.
 func declineSkips(ctx context.Context, decision, msg string, skips []types.OfferSkip) {
 	if len(skips) == 0 {
+		return
+	}
+	observability.Decline(ctx, decision, fmt.Sprintf("%s: %d skipped, first %s", msg, len(skips), skips[0]))
+	debug := observability.Log(ctx).V(1)
+	if !debug.Enabled() {
 		return
 	}
 	reasons := make([]string, len(skips))
 	for i, skip := range skips {
 		reasons[i] = skip.String()
 	}
-	observability.Log(ctx).V(1).Info(msg, "decision", decision, "skips", reasons)
-	observability.Decline(ctx, decision, fmt.Sprintf("%s: %d skipped, first %s", msg, len(skips), reasons[0]))
+	checks, examples := observability.SummarizeReasons(reasons, observability.MaxReasonExamples)
+	debug.Info(msg, "decision", decision, "skipped", len(skips), "checks", checks, "examples", examples)
 }
 
 // offerOnAuction validates, signs and submits one strategy offer under its own auction span. A true

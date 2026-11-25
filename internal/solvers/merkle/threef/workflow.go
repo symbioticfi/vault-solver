@@ -163,13 +163,9 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 	if w.bot.Send {
 		pending = w.bot.pending
 	}
-	// One debug line per pass names every ineligible request and the policy's revert reason.
-	var ineligible []string
-	defer func() {
-		if len(ineligible) > 0 {
-			observability.Log(ctx).V(1).Info("3F requests ineligible", "requests", ineligible)
-		}
-	}()
+	// One debug line per pass names the ineligible requests and the policy's revert reasons.
+	ineligible := newSkipLog(ctx)
+	defer ineligible.flush("3F requests ineligible")
 	check := func(i int, request common.Address) error {
 		if _, known := memberships[i][request]; known {
 			return nil
@@ -179,7 +175,7 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 			return err
 		}
 		if err != nil {
-			ineligible = append(ineligible, fmt.Sprintf("market %s/%s: %v", markets[i].Asset.Hex(), markets[i].UnderlyingAsset.Hex(), err))
+			ineligible.addf("market %s/%s: %v", markets[i].Asset.Hex(), markets[i].UnderlyingAsset.Hex(), err)
 		}
 		memberships[i][request] = err == nil
 		return nil

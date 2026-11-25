@@ -180,17 +180,16 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 		return false, nil
 	}
 	// One debug line per pass, not per auction: most auctions are skipped every pass.
-	var skips []string
+	skips := newSkipLog(ctx)
 	defer func() {
-		if len(skips) > 0 {
-			observability.Log(ctx).V(1).Info("3F auctions skipped", "account", market.Account.Hex(), "skips", skips)
-			observability.Decline(ctx, "auction_skipped", fmt.Sprintf("%d skipped, first %s", len(skips), skips[0]))
+		if summary := skips.flush("3F auctions skipped", "account", market.Account.Hex()); summary != "" {
+			observability.Decline(ctx, "auction_skipped", summary)
 		}
 	}()
 	for _, auction := range auctions {
 		id, _ := dtoID(auction.Id) // indexAuctions already validated every ID.
 		skip := func(format string, args ...any) {
-			skips = append(skips, fmt.Sprintf("auction %d: ", id)+fmt.Sprintf(format, args...))
+			skips.addf("auction %d: "+format, append([]any{id}, args...)...)
 		}
 		if !strings.EqualFold(auction.Status, "open") && !strings.EqualFold(auction.Status, "solvable") {
 			skip("status %q is not open or solvable", auction.Status)
