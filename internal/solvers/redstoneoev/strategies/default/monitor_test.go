@@ -2,6 +2,7 @@ package defaultstrategy
 
 import (
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,7 +43,7 @@ func TestCandidatePriceSource(t *testing.T) {
 	var testMon testMonitor
 	testMon.log = logr.Discard()
 	testMon.snap.Store(snap)
-	testCands := testMon.candidates(auction, snap.markets[id].State.LastUpdate, types.AdapterSnapshot{})
+	testCands := testMon.candidates(auction, snap.markets[id].State.LastUpdate, types.AdapterSnapshot{}, nil)
 	if len(testCands) != 1 || testCands[0].price.Cmp(framePx) != 0 {
 		t.Fatalf("test monitor auction price = %+v, want %v", testCands, framePx)
 	}
@@ -103,21 +104,23 @@ func TestSnapshotFreshForAuction(t *testing.T) {
 		return &s
 	}
 	tests := []struct {
-		name string
-		snap *snapshot
-		want string
+		name   string
+		snap   *snapshot
+		want   string
+		detail string
 	}{
-		{"nil snapshot has no positions", nil, ""},
-		{"empty snapshot needs no epoch", &snapshot{}, ""},
-		{"positions need block", positioned(snapshot{}), skipStaleEpoch},
-		{"positions need block time", positioned(snapshot{block: 1}), skipStaleEpoch},
-		{"positions within auction lag are usable", positioned(snapshot{block: 1, blockTime: uint64(auctionAt / 1000)}), ""},
-		{"positions older than auction lag are stale", positioned(snapshot{block: 1, blockTime: uint64(auctionAt/1000) - uint64(snapshotMaxAuctionLag/time.Second) - 1}), skipStaleEpoch},
+		{"nil snapshot has no positions", nil, "", ""},
+		{"empty snapshot needs no epoch", &snapshot{}, "", ""},
+		{"positions need block", positioned(snapshot{}), skipStaleEpoch, "has no block (block 0, blockTime 0)"},
+		{"positions need block time", positioned(snapshot{block: 1}), skipStaleEpoch, "has no block (block 1, blockTime 0)"},
+		{"positions within auction lag are usable", positioned(snapshot{block: 1, blockTime: uint64(auctionAt / 1000)}), "", ""},
+		{"positions older than auction lag are stale", positioned(snapshot{block: 1, blockTime: uint64(auctionAt/1000) - uint64(snapshotMaxAuctionLag/time.Second) - 1}), skipStaleEpoch, "after snapshot block time"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := snapshotFreshForAuction(tc.snap, auction); got != tc.want {
-				t.Fatalf("snapshotFreshForAuction = %q, want %q", got, tc.want)
+			got := snapshotFreshForAuction(tc.snap, auction)
+			if got.code != tc.want || !strings.Contains(got.detail, tc.detail) {
+				t.Fatalf("snapshotFreshForAuction = %q, want code %q with detail containing %q", got, tc.want, tc.detail)
 			}
 		})
 	}

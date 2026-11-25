@@ -20,12 +20,14 @@ type evalItem struct {
 type priceLookup func(id common.Hash, info MarketInfo) *big.Int
 
 func candidatesFromAuction(log logr.Logger, snap *snapshot, auction types.AuctionSnapshot, nowTs uint64) []evalItem {
-	return candidatesFromAuctionWithAdapter(log, snap, auction, nowTs, types.AdapterSnapshot{})
+	return candidatesFromAuctionWithAdapter(log, snap, auction, nowTs, types.AdapterSnapshot{}, nil)
 }
 
-func candidatesFromAuctionWithAdapter(log logr.Logger, snap *snapshot, auction types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot) []evalItem {
+func candidatesFromAuctionWithAdapter(
+	log logr.Logger, snap *snapshot, auction types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot, tally *rejectTally,
+) []evalItem {
 	frame := auctionPrices(log, auction)
-	return candidatesFromSnapshot(snap, nowTs, adapter, func(_ common.Hash, info MarketInfo) *big.Int {
+	return candidatesFromSnapshot(snap, nowTs, adapter, tally, func(_ common.Hash, info MarketInfo) *big.Int {
 		return auctionPriceForMarket(frame, info)
 	})
 }
@@ -38,7 +40,8 @@ func auctionPriceForMarket(frame map[common.Address]*big.Int, info MarketInfo) *
 	return frame[oracle]
 }
 
-func candidatesFromSnapshot(snap *snapshot, nowTs uint64, adapter types.AdapterSnapshot, price priceLookup) []evalItem {
+// candidatesFromSnapshot records each market it drops in tally (nil-safe).
+func candidatesFromSnapshot(snap *snapshot, nowTs uint64, adapter types.AdapterSnapshot, tally *rejectTally, price priceLookup) []evalItem {
 	if snap == nil {
 		return nil
 	}
@@ -51,11 +54,14 @@ func candidatesFromSnapshot(snap *snapshot, nowTs uint64, adapter types.AdapterS
 		}
 		px := price(id, info)
 		if px == nil {
-			continue // no settlement price for this market's oracle
+			tally.add(id, nil, reject("no auction price for market oracle", "oracle %s, positions %d", info.Params.Oracle.Hex(), len(pos)))
+			continue
 		}
 		quote, ok := quoteForMarket(snap, adapter, adapterQuotes, id, info)
 		if !ok {
-			continue // adapter doesn't serve this market (or can't price it) -> can't size an exit
+			tally.add(id, nil, reject("adapter has no usable quote for collateral", "collateral %s, positions %d",
+				info.Params.CollateralToken.Hex(), len(pos)))
+			continue
 		}
 		accruedState := morpho.AccruedMarketState(info.State, nowTs)
 		info.State = accruedState

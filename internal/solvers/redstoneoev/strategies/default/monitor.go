@@ -76,8 +76,10 @@ func (m *apiMonitor) snapshot() *snapshot {
 }
 
 // candidates evaluates our tracked at-risk set at the auction price. RedStone's pushed positions are ignored.
-func (m *apiMonitor) candidates(auction types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot) []evalItem {
-	return candidatesFromAuctionWithAdapter(m.log, m.snapshot(), auction, nowTs, adapter)
+func (m *apiMonitor) candidates(
+	auction types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot, tally *rejectTally,
+) []evalItem {
+	return candidatesFromAuctionWithAdapter(m.log, m.snapshot(), auction, nowTs, adapter, tally)
 }
 
 func (m *apiMonitor) run(ctx context.Context) {
@@ -340,19 +342,20 @@ func snapshotHasPositions(snap *snapshot) bool {
 	return false
 }
 
-func snapshotFreshForAuction(snap *snapshot, auction types.AuctionSnapshot) string {
+func snapshotFreshForAuction(snap *snapshot, auction types.AuctionSnapshot) bidSkip {
 	if !snapshotHasPositions(snap) {
-		return ""
+		return bidSkip{}
 	}
 	if snap.block == 0 || snap.blockTime == 0 {
-		return skipStaleEpoch
+		return skipf(skipStaleEpoch, "position snapshot has no block (block %d, blockTime %d)", snap.block, snap.blockTime)
 	}
 	auctionTs := auction.Timestamp / 1000
 	if auctionTs <= 0 {
-		return ""
+		return bidSkip{}
 	}
 	if uint64(auctionTs) > snap.blockTime+uint64(snapshotMaxAuctionLag/time.Second) {
-		return skipStaleEpoch
+		return skipf(skipStaleEpoch, "auction time %d is more than %s after snapshot block time %d",
+			auctionTs, snapshotMaxAuctionLag, snap.blockTime)
 	}
-	return ""
+	return bidSkip{}
 }

@@ -313,10 +313,28 @@ func auctionBidContext(ctx context.Context, a AuctionMessage, start time.Time) (
 func (s *Solver) logSkip(ctx context.Context, d bidDecision) {
 	log := observability.Log(ctx)
 	if d.skipDetail != "" {
-		log.V(1).Info("no bid", "reason", d.skip, "strategyReason", d.skipDetail)
+		log.V(1).Info("no bid", "reason", d.skip, "detail", d.skipDetail)
 		return
 	}
 	log.V(1).Info("no bid", "reason", d.skip)
+}
+
+// strategySkip keeps the bounded code as the metric label. A free-form Reason (e.g. from a webhook)
+// that maps to strategy_skip becomes the detail when the strategy gave none.
+func strategySkip(out types.BidOutput) bidDecision {
+	code := types.BoundedSkipReason(out.Reason)
+	detail := out.Detail
+	if detail == "" && code != out.Reason {
+		detail = out.Reason
+	}
+	return bidDecision{skip: code, skipDetail: detail}
+}
+
+func (d bidDecision) declineReason() string {
+	if d.skipDetail == "" {
+		return d.skip
+	}
+	return d.skip + ": " + d.skipDetail
 }
 
 func (s *Solver) bidExpired(ctx context.Context, a AuctionMessage, start time.Time) bool {
@@ -366,13 +384,13 @@ func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowF
 		observability.AttrAuctionID.String(a.ID), observability.AttrStrategy.String(s.strategyLabel()))
 	defer func() {
 		if d.err == nil && d.skip != "" {
-			observability.Decline(ctx, "skipped", d.skip)
+			observability.Decline(ctx, "skipped", d.declineReason())
 		}
 		end(d.err)
 	}()
 	now := nowFn()
-	if tripped, _ := s.breaker.tripped(now); tripped {
-		return bidDecision{skip: "breaker"}
+	if tripped, why := s.breaker.tripped(now); tripped {
+		return bidDecision{skip: "breaker", skipDetail: why}
 	}
 	if skip := s.staleStateGate(ctx, now); skip != "" {
 		return bidDecision{skip: skip}
@@ -412,7 +430,7 @@ func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowF
 		return bidDecision{skip: "strategy_invalid", err: err}
 	}
 	if out.Decision == types.DecisionSkip {
-		return bidDecision{skip: types.BoundedSkipReason(out.Reason), skipDetail: out.Reason}
+		return strategySkip(out)
 	}
 	bidNative := cloneBig(out.BidAmount)
 	if s.bidCapExceeded(ctx, bidNative) {

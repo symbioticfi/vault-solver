@@ -746,8 +746,8 @@ func TestFullAuctionLifecycle(t *testing.T) {
 		t.Fatal("breaker should be tripped after 3 recorded failures within the window")
 	}
 	// buildBid (evaluated at the same wall clock as the hot path) must short-circuit to skip "breaker".
-	if d := s.buildBid(t.Context(), decodeAuction(t), time.Now); d.skip != "breaker" {
-		t.Fatalf("tripped breaker must skip the bid, got skip %q", d.skip)
+	if d := s.buildBid(t.Context(), decodeAuction(t), time.Now); d.skip != "breaker" || d.skipDetail != "failed-liquidation rate-limit" {
+		t.Fatalf("tripped breaker must skip the bid naming the rate limit, got skip %q detail %q", d.skip, d.skipDetail)
 	}
 
 	// 3) A fresh auction (new id so dedup can't mask it) is dropped by the breaker — nothing enqueued.
@@ -1199,6 +1199,30 @@ func TestBuildBidSkips(t *testing.T) {
 			}
 			if d := s.buildBid(t.Context(), frame, clock); d.skip != tc.want {
 				t.Fatalf("skip = %q, want %q", d.skip, tc.want)
+			}
+		})
+	}
+}
+
+func TestStrategySkipKeepsBoundedCodeAndDetail(t *testing.T) {
+	tests := []struct {
+		name       string
+		out        types.BidOutput
+		code       string
+		detail     string
+		declineMsg string
+	}{
+		{"standard code with detail", types.BidOutput{Reason: types.SkipReasonNoLegs, Detail: "adapter 0x1 is paused"},
+			types.SkipReasonNoLegs, "adapter 0x1 is paused", "no_legs: adapter 0x1 is paused"},
+		{"standard code alone", types.BidOutput{Reason: types.SkipReasonInFlight}, types.SkipReasonInFlight, "", "in_flight"},
+		{"free-form webhook reason", types.BidOutput{Reason: "spread too wide"},
+			types.SkipReasonStrategy, "spread too wide", "strategy_skip: spread too wide"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			d := strategySkip(tc.out)
+			if d.skip != tc.code || d.skipDetail != tc.detail || d.declineReason() != tc.declineMsg {
+				t.Fatalf("decision = %q/%q/%q, want %q/%q/%q", d.skip, d.skipDetail, d.declineReason(), tc.code, tc.detail, tc.declineMsg)
 			}
 		})
 	}
