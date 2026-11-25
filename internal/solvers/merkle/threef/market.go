@@ -82,7 +82,7 @@ var errIneligible = errors.New("3f request is not eligible for the pinned fundin
 // collateral underlying itself. No simulated authorization or balance is invented.
 func eligible(ctx context.Context, chain provider.Reader, snapshot provider.Snapshot, market mintMarket, request common.Address, minimum *big.Int) error {
 	principal := big.NewInt(1)
-	yield := new(big.Int).Quo(new(big.Int).Add(minimum, big.NewInt(99_999_999)), big.NewInt(100_000_000))
+	yield := minimumReturn(principal, minimum)
 	query, err := queryArgs.Pack(market.Policy, policyABI.PackRemainingAssets(market.Asset, market.UnderlyingAsset), []*big.Int{}, new(big.Int))
 	if err != nil {
 		return err

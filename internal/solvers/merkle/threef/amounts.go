@@ -57,13 +57,7 @@ func minInt(values ...*big.Int) *big.Int {
 }
 
 func minimumReturn(principal, rate *big.Int) *big.Int {
-	product := new(big.Int).Mul(principal, rate)
-	quotient, remainder := new(big.Int), new(big.Int)
-	quotient.QuoRem(product, big.NewInt(100000000), remainder)
-	if remainder.Sign() != 0 {
-		quotient.Add(quotient, big.NewInt(1))
-	}
-	return quotient
+	return threefrates.MinYieldReturn(principal, rate, 100_000_000)
 }
 
 func fitsTerms(m offerMarket, principal, yield *big.Int, auction threef.AuctionDto) (bool, error) {
