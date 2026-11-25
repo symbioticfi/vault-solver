@@ -1,12 +1,14 @@
 package redstoneoev
 
 import (
+	"context"
 	"math/big"
 	"slices"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies"
 	_ "github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/default"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
@@ -22,6 +24,7 @@ func newStrategy(cfg *Config, deps strategies.Deps) (types.Strategy, error) {
 }
 
 func (s *Solver) bidInput(
+	ctx context.Context,
 	a AuctionMessage,
 	now time.Time,
 	st cachedState,
@@ -35,7 +38,7 @@ func (s *Solver) bidInput(
 			Timestamp:     a.Timestamp,
 			TimeoutMs:     a.TimeoutMs,
 			RawPriceCount: len(a.Payload.Prices),
-			Prices:        auctionPricesForStrategy(a),
+			Prices:        auctionPricesForStrategy(ctx, a),
 		},
 		Adapter: cloneAdapterSnapshot(st.Adapter),
 		Context: types.BidContext{
@@ -53,14 +56,16 @@ func (s *Solver) bidInput(
 	}
 }
 
-func auctionPricesForStrategy(a AuctionMessage) []types.AuctionPrice {
+func auctionPricesForStrategy(ctx context.Context, a AuctionMessage) []types.AuctionPrice {
 	out := make([]types.AuctionPrice, 0, len(a.Payload.Prices))
 	for oracle, raw := range a.Payload.Prices {
 		if !common.IsHexAddress(oracle) {
+			observability.Log(ctx).V(1).Info("dropping auction price: oracle is not a hex address", "oracle", oracle)
 			continue
 		}
 		price, ok := new(big.Int).SetString(raw, 10)
 		if !ok || price.Sign() <= 0 {
+			observability.Log(ctx).V(1).Info("dropping auction price: not a positive integer", "oracle", oracle, "price", raw)
 			continue
 		}
 		out = append(out, types.AuctionPrice{Oracle: common.HexToAddress(oracle), Price: price})

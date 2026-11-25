@@ -117,3 +117,28 @@ func TestPreconditionSkipNamesTheFailedCheck(t *testing.T) {
 		})
 	}
 }
+
+func TestQuoteGapNamesWhyNoQuote(t *testing.T) {
+	coll := common.Address{0xc}
+	adapter := types.AdapterSnapshot{Address: common.Address{0xa}, LoanDecimals: 6}
+	tests := []struct {
+		name    string
+		adapter types.AdapterSnapshot
+		want    string
+	}{
+		{"no adapter", types.AdapterSnapshot{}, "no cached quote for the market"},
+		{"paused", types.AdapterSnapshot{Address: adapter.Address, Paused: true}, "adapter is paused"},
+		{"bad loan decimals", types.AdapterSnapshot{Address: adapter.Address, LoanDecimals: -1}, "adapter loan decimals -1 are invalid"},
+		{"not redeemable", adapter, "collateral is not redeemable by the adapter"},
+		{"zero max assets", types.AdapterSnapshot{Address: adapter.Address, Redeemable: []types.RedeemableSnapshot{
+			{Asset: coll, Decimals: 18, MaxRate: big.NewInt(1), MaxAssets: big.NewInt(0)},
+		}}, "got decimals 18, maxRate 1, maxAssets 0"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := quoteGap(tc.adapter, coll); !strings.Contains(got, tc.want) {
+				t.Fatalf("quoteGap = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

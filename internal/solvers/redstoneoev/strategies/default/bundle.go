@@ -93,7 +93,9 @@ func (e bundleEngine) selectNetBundle(scored []scoredLeg, rate *big.Int, laneSta
 		return e.bundleNetNativeForFeeds(b, rate, laneState, gasPrice, feedCount)
 	})
 	if none != "" {
-		return chosenBundle{}, skipf(skipGasUnprofitable, "no bundle from %d sized legs: %s", len(scored), none)
+		// The cause is structural (no leg fits); the code stays gas_unprofitable so the metric keeps its meaning.
+		return chosenBundle{}, skipf(skipGasUnprofitable, "structural, not gas: no bundle fits (no legs) from %d sized legs: %s",
+			len(scored), none)
 	}
 	bidNative := e.bundleBidNative(best.bundle, rate)
 	minNative := e.minBundleProfitNative(bidNative)

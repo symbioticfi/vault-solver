@@ -137,7 +137,7 @@ func TestMarketInfoFromAPI(t *testing.T) {
 		t.Fatalf("deriveMarketID: %v", err)
 	}
 
-	view, ok := marketInfoFromAPI(morphoMarket{
+	view, err := marketInfoFromAPI(morphoMarket{
 		MarketID: id,
 		Oracle:   oracle,
 		IRM:      irm,
@@ -158,8 +158,8 @@ func TestMarketInfoFromAPI(t *testing.T) {
 			Price:        "1000000000000000000000000000000000000",
 		},
 	})
-	if !ok {
-		t.Fatal("marketInfoFromAPI returned !ok")
+	if err != nil {
+		t.Fatalf("marketInfoFromAPI: %v", err)
 	}
 	if view.id != id || view.block != 123 || view.blockTime != 456 || view.price.String() != "1000000000000000000000000000000000000" {
 		t.Fatalf("bad id/block/blockTime/price: id=%s block=%d blockTime=%d price=%v",
@@ -211,30 +211,34 @@ func TestAPIMarketSnapshotKeepsLatestBlockOnly(t *testing.T) {
 }
 
 func TestAPIMarketAndPositionFailClosed(t *testing.T) {
-	if _, ok := marketInfoFromAPI(morphoMarket{
+	if _, err := marketInfoFromAPI(morphoMarket{
 		MarketID:        common.Hash{1},
 		CollateralAsset: &morphoAsset{Address: common.Address{2}},
-		State:           &morphoMarketState{BlockNumber: "bad"},
-	}); ok {
-		t.Fatal("bad market numbers must be rejected")
+		State:           &morphoMarketState{BlockNumber: "bad", SupplyAssets: "1", SupplyShares: "1", BorrowAssets: "1", BorrowShares: "1", Timestamp: "1"},
+		LLTV:            "-1",
+	}); err == nil || !strings.Contains(err.Error(), `lltv="-1", blockNumber="bad"`) {
+		t.Fatalf("bad market numbers must be rejected naming each field, got %v", err)
+	}
+	if _, err := marketInfoFromAPI(morphoMarket{MarketID: common.Hash{1}}); err == nil || err.Error() != "collateral asset is missing" {
+		t.Fatalf("missing collateral must be named, got %v", err)
 	}
 
-	if _, ok := positionStateFromAPI(morphoPosition{
+	if _, err := positionStateFromAPI(morphoPosition{
 		MarketID:     common.Hash{1},
 		Borrower:     common.Address{2},
 		BorrowShares: "not-a-number",
 		Collateral:   "10",
-	}); ok {
-		t.Fatal("bad position numbers must be rejected")
+	}); err == nil || !strings.Contains(err.Error(), `borrowShares "not-a-number"`) {
+		t.Fatalf("bad position numbers must be rejected naming the field, got %v", err)
 	}
 
-	pos, ok := positionStateFromAPI(morphoPosition{
+	pos, err := positionStateFromAPI(morphoPosition{
 		MarketID:     common.Hash{1},
 		Borrower:     common.Address{2},
 		BorrowShares: "11",
 		Collateral:   "22",
 	})
-	if !ok || pos.BorrowShares.Cmp(big.NewInt(11)) != 0 || pos.Collateral.Cmp(big.NewInt(22)) != 0 {
-		t.Fatalf("bad parsed position: %+v ok=%v", pos, ok)
+	if err != nil || pos.BorrowShares.Cmp(big.NewInt(11)) != 0 || pos.Collateral.Cmp(big.NewInt(22)) != 0 {
+		t.Fatalf("bad parsed position: %+v err=%v", pos, err)
 	}
 }

@@ -72,7 +72,7 @@ func TestLiveAPIMonitorSnapshotAndCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PositionsByMarket live API failed: %v", err)
 	}
-	positions := apiPositionsSnapshot(apiPositions, apiSnap.markets)
+	positions := apiPositionsSnapshot(logr.Discard(), apiPositions, apiSnap.markets)
 	if len(positions) == 0 {
 		t.Skip("live API returned no USDC/PAXG positions inside healthFactor <= 1.30 right now")
 	}

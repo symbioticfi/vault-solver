@@ -1,6 +1,7 @@
 package defaultstrategy
 
 import (
+	"fmt"
 	"math/big"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -59,8 +60,8 @@ func candidatesFromSnapshot(snap *snapshot, nowTs uint64, adapter types.AdapterS
 		}
 		quote, ok := quoteForMarket(snap, adapter, adapterQuotes, id, info)
 		if !ok {
-			tally.add(id, nil, reject("adapter has no usable quote for collateral", "collateral %s, positions %d",
-				info.Params.CollateralToken.Hex(), len(pos)))
+			tally.add(id, nil, reject("adapter has no usable quote for collateral", "collateral %s, positions %d: %s",
+				info.Params.CollateralToken.Hex(), len(pos), quoteGap(adapter, info.Params.CollateralToken)))
 			continue
 		}
 		accruedState := morpho.AccruedMarketState(info.State, nowTs)
@@ -87,6 +88,25 @@ func quoteForMarket(snap *snapshot, adapter types.AdapterSnapshot, adapterQuotes
 	}
 	quote, ok := snap.quotes[id]
 	return quote, ok
+}
+
+// quoteGap names why adapterQuotesByCollateral has no quote for collateral; only the rejection path calls it.
+func quoteGap(adapter types.AdapterSnapshot, collateral common.Address) string {
+	switch {
+	case adapter.Address == (common.Address{}):
+		return "no cached quote for the market"
+	case adapter.Paused:
+		return "adapter is paused"
+	case adapter.LoanDecimals < 0:
+		return fmt.Sprintf("adapter loan decimals %d are invalid", adapter.LoanDecimals)
+	}
+	for _, r := range adapter.Redeemable {
+		if r.Asset == collateral {
+			return fmt.Sprintf("redeemable needs decimals >= 0, maxRate > 0 and maxAssets > 0, got decimals %d, maxRate %v, maxAssets %v",
+				r.Decimals, r.MaxRate, r.MaxAssets)
+		}
+	}
+	return "collateral is not redeemable by the adapter"
 }
 
 func adapterQuotesByCollateral(adapter types.AdapterSnapshot) map[common.Address]AdapterQuote {
@@ -119,7 +139,7 @@ func auctionPrices(log logr.Logger, a types.AuctionSnapshot) map[common.Address]
 			continue
 		}
 		if p.Price == nil || p.Price.Sign() <= 0 {
-			log.V(1).Info("dropping unparseable auction price", "oracle", p.Oracle.Hex())
+			log.V(1).Info("dropping auction price: not positive", "oracle", p.Oracle.Hex(), "price", p.Price)
 			continue
 		}
 		out[p.Oracle] = new(big.Int).Set(p.Price)
