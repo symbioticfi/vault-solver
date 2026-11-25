@@ -582,6 +582,8 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   `getAmountOut` in one multicall and checks that they agree. When the token decimals make a price
   probe impossible, the order-sized result identifies the integer price directly. Fill sizing,
   payout and webhook validation then use the adapter's two floors at each leg's input amount.
+  When a direct leg absorbs remaining input, it reprices that final amount and caps the output
+  at the capacity left after the other legs' reservations.
   A signed discount below the adapter's current minimum is dropped, since the adapter reverts it.
   A direct leg prices at the
   higher of its entry's discount and the current minimum. The field is required and replaces `maxRate`, so
