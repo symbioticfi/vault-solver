@@ -149,7 +149,12 @@ func (e *executionService) reconcileEstimateRevert(ctx context.Context, local *o
 		return nil
 	}
 	retryAt := now.Add(e.pollInterval)
-	if retryAt.Before(local.RetryDeadline) && e.store.scheduleEstimateRetry(local.OrderID, e.maxNonceRetries, retryAt) {
+	if !retryAt.Before(local.RetryDeadline) {
+		observability.Log(ctx).V(1).Info("estimate retry skipped: next poll is not before the order deadline; observing backend",
+			"retryAt", retryAt, "deadline", local.RetryDeadline, "revert", local.EstimateErrorName)
+		return nil
+	}
+	if e.store.scheduleEstimateRetry(local.OrderID, e.maxNonceRetries, retryAt) {
 		observability.Log(ctx).V(1).Info("estimate revert retry scheduled", "retryAt", retryAt,
 			"revert", local.EstimateErrorName, "estimateRetries", local.EstimateRetries+1)
 	}

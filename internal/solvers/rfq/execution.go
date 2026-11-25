@@ -575,7 +575,7 @@ func (e *executionService) retireObsoleteOrder(
 	}
 	observability.Decline(ctx, "fill_obsolete", sendErr.Error())
 	observability.Log(ctx).Info("fill skipped: order no longer fillable",
-		"tx", res.Hash.Hex(), "outcome", res.Outcome)
+		"tx", res.Hash.Hex(), "outcome", res.Outcome, "cause", sendErr.Error())
 	e.store.markStatus(orderID, statusObsolete, res.Hash, sendErr.Error())
 	e.reconcileTerminalStatus(ctx, orderID)
 }
@@ -758,13 +758,15 @@ func (e *executionService) reconcileTerminalStatus(ctx context.Context, orderID 
 				"retryAt", retryAt, "tx", local.TxHash.Hex())
 		}
 	case "error", "cancelled", "unverified", "insufficient-funds":
-		observability.Decline(ctx, "fill_failed", "backend terminal status "+bo.OrderStatus)
+		reason := "backend terminal status " + bo.OrderStatus
+		observability.Decline(ctx, "fill_failed", reason)
 		status := statusFailed
 		if local := e.store.order(orderID); local != nil && local.TxHash == (common.Hash{}) {
 			// Unsigned preparation failures can be re-armed; a terminal backend decision cannot.
 			status = statusObsolete
 		}
-		e.store.markStatus(orderID, status, txHash, "backend terminal status "+bo.OrderStatus)
+		observability.Log(ctx).Info("order failed", "reason", reason, "status", status, "tx", txHash.Hex())
+		e.store.markStatus(orderID, status, txHash, reason)
 	default:
 		// The client tolerates a dropped or renamed field, so "" or a new value reaches here. Marking
 		// it failed would re-arm the order and re-submit a fill the backend may still consider live.
