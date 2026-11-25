@@ -114,7 +114,8 @@ func (s *Solver) planAwards(ctx context.Context, rows []rfqbackend.OrdersRespons
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			observability.Log(ctx).V(1).Info("RFQ award planning skipped", "orderId", row.OrderId, "reserve", reserve, "reason", err.Error())
+			// An awarded order left unfilled is money on the table: always say why.
+			observability.Log(ctx).Info("RFQ award skipped", "orderId", row.OrderId, "reserve", reserve, "reason", err.Error())
 			continue
 		}
 		if intent != nil {

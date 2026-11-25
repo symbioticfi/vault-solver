@@ -3,6 +3,7 @@ package filler
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"iter"
 	"math/big"
 	"slices"
@@ -204,6 +205,12 @@ func (e *Engine) Observe(ctx context.Context) (Observation, error) {
 	}
 	e.Spends.Expire(int64(header.Time))
 	return Observation{Chain: time.Unix(int64(header.Time), 0), Wall: wall, BlockHash: header.Hash(), BlockNumber: header.Number}, nil
+}
+
+// MissedDeadline says which limits a fill missed while it was being prepared.
+func (o Observation) MissedDeadline(expiry, validUntil time.Time) string {
+	return fmt.Sprintf("fill deadline elapsed during preparation: order expiry %d, signed terms valid until %d, chain time %d observed %s ago",
+		expiry.Unix(), validUntil.Unix(), o.Chain.Unix(), time.Since(o.Wall).Round(time.Millisecond))
 }
 
 // SubmissionDeadline converts the earliest chain-time limit into the lane's wall-clock deadline.

@@ -3,6 +3,8 @@ package rfq
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -73,7 +75,8 @@ func (s *Solver) CanQuote(now time.Time) bool {
 	return lastPoll != nil && now.Sub(*lastPoll) < filler.ConfirmationPatience && s.Ready() && !s.Stalled()
 }
 
-// planAward uses the same routes for a queued estimate and a simulated fill.
+// planAward uses the same routes for a queued estimate and a simulated fill. An award it cannot
+// plan returns an error naming the failed check; it never returns (nil, nil).
 func (s *Solver) planAward(ctx context.Context, row rfqbackend.OrdersResponseOrdersInner, listed []discounts.ListItem, observed filler.Observation, reserve bool, price filler.InventoryReader) (*filler.Intent, error) {
 	order, signature, err := decodeOrder(row, s.Workflow.Filler)
 	if err != nil {
@@ -84,20 +87,26 @@ func (s *Solver) planAward(ctx context.Context, row rfqbackend.OrdersResponseOrd
 		return nil, err
 	}
 	if !s.tokenPolicy.Allows(order.Request.TokenIn) {
-		return nil, nil
+		return nil, errors.Errorf("token policy disallows input token %s", order.Request.TokenIn.Hex())
 	}
 	expiry := time.Unix(order.Request.Deadline.Int64(), 0)
 	if !expiry.After(observed.Chain) {
-		return nil, errors.New("order expired")
+		return nil, errors.Errorf("order expired: deadline %d is not after chain time %d", expiry.Unix(), observed.Chain.Unix())
 	}
 	var routes []filler.Source
+	var reasons []string
 	for source, err := range s.Sources(listed, order.Request.TokenIn, token) {
 		if err != nil {
 			return nil, err
 		}
 		if source.MaxAssets.Sign() > 0 {
 			routes = append(routes, source)
+		} else {
+			reasons = append(reasons, source.Venue.Hex()+": advertises no capacity")
 		}
+	}
+	if len(routes) == 0 && len(reasons) == 0 {
+		reasons = append(reasons, fmt.Sprintf("no connector discount with a configured route and supported precision for %s -> %s", order.Request.TokenIn.Hex(), token.Hex()))
 	}
 	plan := func(legs []filler.Leg) (*filler.Intent, error) {
 		if reserve {
@@ -113,7 +122,7 @@ func (s *Solver) planAward(ctx context.Context, row rfqbackend.OrdersResponseOrd
 		}
 		deadline, ok := observed.SubmissionDeadline(expiry, built.ValidUntil)
 		if !ok {
-			return nil, errors.New("fill deadline elapsed during preparation")
+			return nil, errors.New(observed.MissedDeadline(expiry, built.ValidUntil))
 		}
 		return &filler.Intent{
 			OrderID: row.OrderId, Data: built.Calldata, Deadline: deadline,
@@ -124,6 +133,7 @@ func (s *Solver) planAward(ctx context.Context, row rfqbackend.OrdersResponseOrd
 		// Keep an executable single-connector fill when one can settle the award.
 		route.MaxAssets = s.Unreserved(route, token, row.OrderId)
 		if route.MaxAssets.Cmp(required) < 0 {
+			reasons = append(reasons, fmt.Sprintf("%s: unreserved %s below required %s", route.Venue.Hex(), route.MaxAssets, required))
 			continue
 		}
 		intent, err := plan([]filler.Leg{{Source: route, AmountOut: required}})
@@ -134,13 +144,15 @@ func (s *Solver) planAward(ctx context.Context, row rfqbackend.OrdersResponseOrd
 			return nil, ctx.Err()
 		}
 		observability.Log(ctx).V(1).Info("connector route unavailable", "connector", route.Venue.Hex(), "reason", err.Error())
+		reasons = append(reasons, route.Venue.Hex()+": "+err.Error())
 	}
+	summary := strings.Join(reasons, "; ")
 	if s.tokenPolicy.RequiresSingleRoute(order.Request.TokenIn) {
-		return nil, nil
+		return nil, errors.Errorf("no single connector settles the award and token policy requires a single route for %s [routes: %s]", order.Request.TokenIn.Hex(), summary)
 	}
 	legs, err := s.Split(ctx, routes, order.Request.AmountIn, required, len(routes), observed, row.OrderId, price)
-	if err != nil || len(legs) == 0 {
-		return nil, err
+	if err != nil {
+		return nil, errors.Errorf("%w [routes: %s]", err, summary)
 	}
 	return plan(legs)
 }

@@ -120,13 +120,13 @@ func TestSwapRejectsUnfillableOrders(t *testing.T) {
 		// reserved counts capacities the ledger held before the order arrived.
 		reserved int
 	}{
-		{name: "payment below order output", mutate: func(f *swapFixture) { f.swap.MinAmountOut = big.NewInt(491) }, want: "connector", is: ErrNotFillable},
-		{name: "missing output", mutate: func(f *swapFixture) { f.swap.MinAmountOut = nil }, want: "connector", is: ErrNotFillable},
-		{name: "expired", mutate: func(f *swapFixture) { f.swap.Expiry = time.Unix(7, 0) }, want: "expired", is: ErrNotFillable},
-		{name: "elapsed in wall time", mutate: func(f *swapFixture) { f.swap.Expiry = time.Unix(1000, 0) }, want: "deadline elapsed", is: ErrNotFillable, outer: 1},
-		{name: "nothing advertised", mutate: func(f *swapFixture) { f.discounts.Listed = nil }, want: "connector", is: ErrNotFillable},
-		{name: "native precision", mutate: func(f *swapFixture) { f.discounts.Listed[0].DiscountPrecision = "1000000" }, want: "connector", is: ErrNotFillable},
-		{name: "insufficient capacity", mutate: func(f *swapFixture) { f.discounts.Listed[0].MaxAssets = "489" }, want: "connector", is: ErrNotFillable},
+		{name: "payment below order output", mutate: func(f *swapFixture) { f.swap.MinAmountOut = big.NewInt(491) }, want: "connectors pay 490 below order output 491", is: ErrNotFillable},
+		{name: "missing output", mutate: func(f *swapFixture) { f.swap.MinAmountOut = nil }, want: "no output amount", is: ErrNotFillable},
+		{name: "expired", mutate: func(f *swapFixture) { f.swap.Expiry = time.Unix(7, 0) }, want: "expiry 7 is not after chain time 7", is: ErrNotFillable},
+		{name: "elapsed in wall time", mutate: func(f *swapFixture) { f.swap.Expiry = time.Unix(1000, 0) }, want: "order expiry 1000, signed terms valid until 4102444800", is: ErrNotFillable, outer: 1},
+		{name: "nothing advertised", mutate: func(f *swapFixture) { f.discounts.Listed = nil }, want: "no connector discount with a configured route", is: ErrNotFillable},
+		{name: "native precision", mutate: func(f *swapFixture) { f.discounts.Listed[0].DiscountPrecision = "1000000" }, want: "supported precision", is: ErrNotFillable},
+		{name: "insufficient capacity", mutate: func(f *swapFixture) { f.discounts.Listed[0].MaxAssets = "489" }, want: "insufficient capacity for the whole award; split: disabled, order allows 0 route(s)", is: ErrNotFillable},
 		{name: "recipe caller differs", mutate: func(f *swapFixture) { f.chain.RecipeCaller = common.HexToAddress("0x88") }, want: "prepare connector settlement"},
 		{name: "settlement reverts", mutate: func(f *swapFixture) { f.chain.OuterErr = errors.New("execution reverted") }, want: "simulation", is: ErrSimulation, outer: 1},
 		{name: "signed terms unavailable", mutate: func(f *swapFixture) { f.discounts.ResolveErr = errors.New("backend timeout") }, want: "backend timeout"},
@@ -140,7 +140,10 @@ func TestSwapRejectsUnfillableOrders(t *testing.T) {
 			if err := f.swaps.Spends.Include("earlier", connector.Spend{Amounts: liquidlane.CapacityReservations{capacity: big.NewInt(480)}, IncludedAt: 8, Deadline: 4102444800}); err != nil {
 				panic(err)
 			}
-		}, want: "connector", is: ErrNotFillable, reserved: 1},
+		}, want: "unreserved 420 below order output 480", is: ErrNotFillable, reserved: 1},
+		{name: "split with one connector", mutate: func(f *swapFixture) {
+			f.discounts.Listed[0].MaxAssets, f.swap.MaxRoutes = "489", 2
+		}, want: "a split needs two connectors, 1 distinct listed", is: ErrNotFillable},
 		{name: "refused before signing", mutate: func(f *swapFixture) {
 			f.sender.Unsigned, f.sender.SubmitErr = true, errors.New("gas estimation reverted")
 		}, want: "gas estimation", is: ErrSubmission, outer: 1, submits: 1},
@@ -239,7 +242,8 @@ func TestSwapSplitsAcrossConnectors(t *testing.T) {
 	t.Run("one route allowed", func(t *testing.T) {
 		swaps, chains, sender, swap := newPair(t)
 		swap.MaxRoutes = 1
-		if intent, err := swaps.Fill(t.Context(), swap, envelope); !errors.Is(err, ErrNotFillable) || intent != nil || sender.Submits != 0 || chains[0].OuterCalls != 0 {
+		if intent, err := swaps.Fill(t.Context(), swap, envelope); !errors.Is(err, ErrNotFillable) || intent != nil || sender.Submits != 0 || chains[0].OuterCalls != 0 ||
+			!strings.Contains(err.Error(), "split: disabled, order allows 1 route(s)") {
 			t.Fatalf("single-route order was split or filled: intent=%v err=%v", intent, err)
 		}
 	})
@@ -310,7 +314,7 @@ func TestSwapSplitsAcrossConnectors(t *testing.T) {
 		swaps, chains, sender, swap := newPair(t)
 		swap.MaxRoutes = 2
 		chains[1].Remaining = big.NewInt(400)
-		if intent, err := swaps.Fill(t.Context(), swap, envelope); !errors.Is(err, ErrNotFillable) || intent != nil || sender.Submits != 0 {
+		if intent, err := swaps.Fill(t.Context(), swap, envelope); !errors.Is(err, ErrNotFillable) || intent != nil || sender.Submits != 0 || !strings.Contains(err.Error(), "split found no allocation (2 of 2 connectors priced, 2 live, 2 with unreserved capacity, 2 quotable): liquidlane quote declined reason=insufficient-capacity") {
 			t.Fatalf("underfunded order was filled: intent=%v err=%v", intent, err)
 		}
 	})

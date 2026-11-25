@@ -12,6 +12,7 @@ import (
 
 	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/filler"
 	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/filler/fillertest"
+	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -422,11 +423,54 @@ func TestPrepareRequiresConnectorPrecision(t *testing.T) {
 			item := discounts.ListItem{DiscountPrecision: precision, Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
 				Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: "900"}
 			intent, err := prepareAtHead(t, &s, awardRow(t, order), []discounts.ListItem{item})
-			if err != nil || intent != nil {
+			if err == nil || intent != nil || !strings.Contains(err.Error(), "supported precision") {
 				t.Fatalf("precision %q: intent=%v err=%v", precision, intent, err)
 			}
 			if f.reader.OuterCalls != 0 {
 				t.Fatal("wrong-domain discount reached simulation")
+			}
+		})
+	}
+}
+
+func TestPlanAwardNamesTheFailedCheck(t *testing.T) {
+	allowOther, err := tokenpolicy.New(tokenpolicy.Permissioned, []common.Address{common.HexToAddress("0xbad")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	singleRoute, err := tokenpolicy.New(tokenpolicy.Permissioned, []common.Address{tIn})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		policy    tokenpolicy.Policy
+		maxAssets string
+		deadline  int64
+		want      string
+	}{
+		{name: "token policy", policy: allowOther, maxAssets: "900", want: "token policy disallows input token " + tIn.Hex()},
+		{name: "expired", maxAssets: "900", deadline: 1, want: "order expired: deadline 1 is not after chain time"},
+		{name: "below required on a single route", policy: singleRoute, maxAssets: "455",
+			want: "token policy requires a single route for " + tIn.Hex() + " [routes: " + vlt.Hex() + ": unreserved 455 below required 456]"},
+		{name: "no capacity, no split", maxAssets: "0",
+			want: "a split needs two connectors, 0 distinct listed [routes: " + vlt.Hex() + ": advertises no capacity]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := connectorExecutionFixture(t, connectortest.DiscountFixture())
+			order, _, backend := connectorExecutionAward(f.workflow.Filler)
+			if tc.deadline != 0 {
+				order.Request.Deadline = big.NewInt(tc.deadline)
+			}
+			s := Solver{Engine: &filler.Engine{Routes: connector.NewRoutes(f.workflow, []common.Address{common.HexToAddress("0x43")}), Workflow: f.workflow, Spends: connector.NewSpendLedger()}, backend: backend, tokenPolicy: tc.policy}
+			if err := s.Initialize(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			item := discounts.ListItem{DiscountPrecision: connector.PrecisionText, Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
+				Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: tc.maxAssets}
+			intent, err := prepareAtHead(t, &s, awardRow(t, order), []discounts.ListItem{item})
+			if err == nil || intent != nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("intent=%v err=%v, want %q", intent, err, tc.want)
 			}
 		})
 	}
