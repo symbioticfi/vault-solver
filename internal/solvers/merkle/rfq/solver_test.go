@@ -3,9 +3,11 @@ package rfq
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/big"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
+	"github.com/go-logr/logr/funcr"
 	"github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
@@ -24,6 +27,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector/connectortest"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"gopkg.in/yaml.v3"
 )
 
@@ -473,5 +477,31 @@ func TestPlanAwardNamesTheFailedCheck(t *testing.T) {
 				t.Fatalf("intent=%v err=%v, want %q", intent, err, tc.want)
 			}
 		})
+	}
+}
+
+func TestAwardSkipLogsAtInfoOnlyWhenTheReasonChanges(t *testing.T) {
+	var levels []string
+	ctx := observability.WithLogger(t.Context(), funcr.NewJSON(func(obj string) {
+		var line struct {
+			V      int    `json:"level"`
+			Reason string `json:"reason"`
+		}
+		if err := json.Unmarshal([]byte(obj), &line); err != nil {
+			t.Fatal(err)
+		}
+		levels = append(levels, fmt.Sprintf("v%d %s", line.V, line.Reason))
+	}, funcr.Options{Verbosity: 1}))
+	s, backend, _ := awardSolver(t, &fillertest.Sender{})
+	pass := awardPass{orderID: "award", reserve: true}
+	for _, reason := range []string{"below required", "below required", "expired", "expired"} {
+		s.logSkip(ctx, pass, reason)
+	}
+	if want := []string{"v0 below required", "v1 below required", "v0 expired", "v1 expired"}; !slices.Equal(levels, want) {
+		t.Fatalf("levels = %v, want %v", levels, want)
+	}
+	backend.rows = nil
+	if _, err := s.pollAwards(t.Context(), false); err != nil || len(s.skipped) != 0 {
+		t.Fatalf("complete poll kept skip state for a closed award: %v %v", s.skipped, err)
 	}
 }

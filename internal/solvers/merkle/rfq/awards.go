@@ -2,6 +2,7 @@ package rfq
 
 import (
 	"context"
+	"maps"
 	"strings"
 	"time"
 
@@ -44,6 +45,7 @@ func (s *Solver) pollAwardsWithin(ctx context.Context, forSubmission bool, budge
 		}
 	}
 	s.Spends.PruneQueued(open)
+	maps.DeleteFunc(s.skipped, func(pass awardPass, _ string) bool { return !open[pass.orderID] })
 	if len(queued) == 0 {
 		return nil, s.markAwardRefresh(refresh, polledAt)
 	}
@@ -101,6 +103,21 @@ func (s *Solver) markAwardRefresh(ctx context.Context, polledAt time.Time) error
 	return nil
 }
 
+// logSkip says why an awarded order was left unfilled at Info, which a skipped award always
+// deserves, but only when its reason changes: every poll repeats it otherwise.
+func (s *Solver) logSkip(ctx context.Context, pass awardPass, reason string) {
+	log := observability.Log(ctx)
+	if s.skipped[pass] == reason {
+		log = log.V(1)
+	} else {
+		if s.skipped == nil {
+			s.skipped = make(map[awardPass]string)
+		}
+		s.skipped[pass] = reason
+	}
+	log.Info("RFQ award skipped", "orderId", pass.orderID, "reserve", pass.reserve, "reason", reason)
+}
+
 func (s *Solver) planAwards(ctx context.Context, rows []rfqbackend.OrdersResponseOrdersInner, listed []discounts.ListItem, observed filler.Observation, reserve bool) (*filler.Intent, error) {
 	price := s.prices.reader(observed.BlockHash, func(ctx context.Context, offers []discounts.ListItem) ([]liquidlane.Inventory, error, error) {
 		return s.InventoryAt(ctx, offers, observed.BlockNumber)
@@ -114,10 +131,10 @@ func (s *Solver) planAwards(ctx context.Context, rows []rfqbackend.OrdersRespons
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			// An awarded order left unfilled is money on the table: always say why.
-			observability.Log(ctx).Info("RFQ award skipped", "orderId", row.OrderId, "reserve", reserve, "reason", err.Error())
+			s.logSkip(ctx, awardPass{row.OrderId, reserve}, err.Error())
 			continue
 		}
+		delete(s.skipped, awardPass{row.OrderId, reserve})
 		if intent != nil {
 			if err := ctx.Err(); err != nil {
 				return nil, err
