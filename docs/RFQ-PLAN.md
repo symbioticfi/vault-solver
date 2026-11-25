@@ -580,8 +580,12 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   `adapters[]` entry therefore carries `discount` instead of a rate: the signed discount on discount-backed
   entries and the adapter `minDiscount` on direct ones; fill-time discount inventory takes the signed
   discount from `/discounts`. `NormalizeOracleInventory` prices each leg from the live `getAmountOut` at the
-  order amount, `AmountOutAfterDiscount(GrossAmountOut, discount)`, converted to a rate whose round trip
-  floors, so a candidate never prices above the payout and gives up at most one unit. A signed discount
+  order amount. It keeps price and discount separate, like the quote, using `ImpliedPrice`: the smallest
+  oracle price at which `getAmountOut(amountIn)` returns the live gross. That price reproduces the
+  adapter payout exactly at the order amount and never exceeds the adapter's, so smaller legs are not
+  overpriced. An earlier version collapsed the payout into a floored rate; the round trip gave up one
+  unit, and since the award requires the exact quoted output, single-route fills whose amount hit that
+  floor were never plannable (mainnet mF-ONE award, 2026-11-25). A signed discount
   below the adapter's current minimum is dropped, since the adapter reverts it; a direct leg prices at the
   higher of its entry's discount and the current minimum. The field is required and replaces `maxRate`, so
   this solver and symbioticfi/rfq-backend#403 deploy together.

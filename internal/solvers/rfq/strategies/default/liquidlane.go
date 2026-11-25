@@ -13,40 +13,44 @@ import (
 
 func (s *Strategy) decideQuote(_ context.Context, input types.QuoteInput) (types.QuoteOutput, error) {
 	if len(input.Candidates) == 0 {
-		return decline(), nil
+		return decline("no quote candidates"), nil
 	}
-	out, err := solveQuote(input, input.Candidates)
+	out, reason, err := solveQuote(input, input.Candidates)
 	if err != nil {
 		return types.QuoteOutput{}, err
 	}
 	if out == nil {
-		return decline(), nil
+		return decline(reason), nil
 	}
 	return *out, nil
 }
 
 func (s *Strategy) buildFillPlan(_ context.Context, input types.FillInput) (*types.FillPlan, error) {
 	if len(input.Candidates) == 0 {
-		return nil, nil
+		return nil, errors.New("no fill candidates")
 	}
 	task, sources, err := rfqFillTask(input, input.Candidates)
 	if err != nil {
 		return nil, err
 	}
+	var lastDecline func() string
+	task.Trace, lastDecline = task.Trace.RecordDeclines()
 	solution, err := liquidgreedy.SolveFill(task)
-	if err != nil || solution == nil {
+	if err != nil {
 		return nil, err
+	}
+	if solution == nil {
+		return nil, errors.Errorf("no fill solution for amountIn %s over %d candidates: %s",
+			input.AmountIn, len(input.Candidates), lastDecline())
 	}
 	quotedAmountOut := solution.MaxAmountOut()
 	if input.RequiredAmountOut != nil && quotedAmountOut.Cmp(input.RequiredAmountOut) < 0 {
-		if input.RequireSingleRoute {
-			return nil, nil
-		}
-		return nil, errors.New("strategy output is below required amount out")
+		return nil, errors.Errorf("fill output %s is below required amount out %s (singleRoute=%t)",
+			quotedAmountOut, input.RequiredAmountOut, input.RequireSingleRoute)
 	}
 	routes := solution.Finalize(quotedAmountOut)
 	if len(routes) == 0 {
-		return nil, nil
+		return nil, errors.Errorf("fill solution for amountOut %s finalized no routes", quotedAmountOut)
 	}
 	legs := make([]types.FillLeg, 0, len(routes))
 	for _, route := range routes {
@@ -66,14 +70,15 @@ func (s *Strategy) buildFillPlan(_ context.Context, input types.FillInput) (*typ
 	}, nil
 }
 
-func decline() types.QuoteOutput {
-	return types.QuoteOutput{Decision: types.DecisionDecline, Reason: "no viable strategy"}
+func decline(reason string) types.QuoteOutput {
+	return types.QuoteOutput{Decision: types.DecisionDecline, Reason: reason}
 }
 
+// solveQuote returns the quote, or nil and the condition that declined it.
 func solveQuote(
 	input types.QuoteInput,
 	candidates []liquidlane.QuoteCandidate,
-) (*types.QuoteOutput, error) {
+) (*types.QuoteOutput, string, error) {
 	maxRoutes := len(candidates)
 	inputPolicy := strategies.AbsorbUncoveredInput
 	if input.RequireFullCoverage {
@@ -82,16 +87,21 @@ func solveQuote(
 	if input.RequireSingleRoute {
 		maxRoutes = 1
 	}
+	trace, lastDecline := strategies.DecisionTrace(nil).RecordDeclines()
 	solution, err := liquidgreedy.SolveQuote(strategies.QuoteTask{
 		ExactInput: input.AmountIn, Candidates: candidates, MaxRoutes: maxRoutes,
-		InputPolicy: inputPolicy,
+		InputPolicy: inputPolicy, Trace: trace,
 	})
-	if err != nil || solution == nil {
-		return nil, err
+	if err != nil {
+		return nil, "", err
+	}
+	if solution == nil {
+		return nil, "no quote solution: " + lastDecline(), nil
 	}
 	if input.RequireSingleRoute && input.RequiredAmountOut != nil &&
 		solution.AmountOut.Cmp(input.RequiredAmountOut) < 0 {
-		return nil, nil
+		return nil, "single-route output " + solution.AmountOut.String() +
+			" is below required amount out " + input.RequiredAmountOut.String(), nil
 	}
 	legs := make([]types.QuoteLeg, 0, len(solution.Allocations))
 	for _, leg := range solution.Allocations {
@@ -102,7 +112,7 @@ func solveQuote(
 	}
 	return &types.QuoteOutput{
 		Decision: types.DecisionQuote, QuotedAmountOut: liquidlane.CloneBig(solution.AmountOut), Legs: legs,
-	}, nil
+	}, "", nil
 }
 
 func rfqFillTask(
@@ -121,11 +131,9 @@ func rfqFillTask(
 		quotes = append(quotes, liquidlane.FillQuote{
 			Route: route, MaxAssets: liquidlane.CloneBig(candidate.MaxAmountOut),
 			MaxRate: liquidlane.CloneBig(candidate.Rate), DiscountID: liquidlane.CloneHash(candidate.DiscountID),
-			ValidUntil: candidate.ValidUntil,
-			AmountIn:   liquidlane.CloneBig(input.AmountIn),
-			MaxAmountOut: liquidlane.AmountOutForRate(
-				input.AmountIn, candidate.Rate, route.TokenInDecimals, route.TokenOutDecimals,
-			),
+			ValidUntil:   candidate.ValidUntil,
+			AmountIn:     liquidlane.CloneBig(input.AmountIn),
+			MaxAmountOut: candidate.AmountOutFor(input.AmountIn),
 		})
 	}
 	maxRoutes := len(quotes)

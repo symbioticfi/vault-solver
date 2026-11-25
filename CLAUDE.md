@@ -89,6 +89,15 @@ generic layer, stop — the abstraction is wrong. Generalize the mechanism inste
   `observability.WithLogger(ctx, log.WithValues(...))` and pass that context down. Never store an
   already trace-stamped logger: `Log` stamps at retrieval, so storing a stamped one duplicates the
   keys and pins the wrong `span_id`.
+- **Rejections name the exact failed condition (required, every solver, native and Merkle).** Every
+  quote decline, fill skip and order failure must log, and carry in its decline reason or returned
+  error, the check that failed and the values it compared (e.g. `fill output 167384002691 is below
+  required amount out 167384002692`). Never collapse distinct conditions into a generic message
+  ("not available", "no viable strategy", "not fillable"), and never return `(nil, nil)` from a
+  decision function to mean "rejected": return an error or reason that says why. The shared
+  LiquidLane solvers record their declines on `strategies.DecisionTrace`, which is debug-only; a
+  caller left without a solution wraps its trace with `RecordDeclines` and puts the last decline in
+  its reason, so the cause reaches production logs with debug off.
 - **Tracing:** spans are started at I/O boundaries, loop ticks, and pipeline stages through
   `observability.NewTracer`. End every span from a `defer` over a named error return, and record
   expected skips with `observability.Decline` plus `end(nil)` rather than an error status. Span names,

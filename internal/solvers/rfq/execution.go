@@ -383,7 +383,10 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 
 	selected, err := e.buildFillPlan(ctx, orderID, exec, order, outputToken, required, chainBlock)
 	if err != nil || selected == nil {
-		e.fail(ctx, orderID, "strategy fill plan: "+errString(err))
+		if err == nil {
+			err = errors.New("strategy returned no plan and no reason")
+		}
+		e.fail(ctx, orderID, "strategy fill plan: "+err.Error())
 		return
 	}
 	traceAdapter(ctx, selected.Legs)

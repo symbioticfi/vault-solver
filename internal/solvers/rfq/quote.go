@@ -179,7 +179,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: strategy: %w", err)
 	}
 	if out.Decision != types.DecisionQuote {
-		observability.Log(ctx).V(1).Info("declining quote: no viable strategy", "quoteId", q.QuoteID)
+		observability.Log(ctx).V(1).Info("declining quote: strategy declined", "quoteId", q.QuoteID, "reason", out.Reason)
 		return quoteDecision{outcome: quoteDecisionStrategyDeclined}, nil
 	}
 	plan, err := strategies.FillPlanFromQuote(input, out)
