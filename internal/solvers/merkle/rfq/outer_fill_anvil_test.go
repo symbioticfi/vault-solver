@@ -669,19 +669,34 @@ func TestAnvilSplitConnectorOrder(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			observed, err := solver.Observe(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
 			solver.tokenPolicy = singleRoute
-			if intent, err := solver.prepare(t.Context(), row, listed); intent != nil || err != nil {
+			if intent, err := solver.planAward(t.Context(), row, listed, observed, false, solver.Inventory); intent != nil || err != nil {
 				t.Fatalf("token policy should decline a split-only award: intent=%v err=%v", intent, err)
 			}
 			solver.tokenPolicy = tokenpolicy.Policy{}
-			intent, err := solver.prepare(t.Context(), row, listed)
+			if _, err := solver.planAward(t.Context(), row, listed, observed, true, solver.Inventory); err != nil {
+				t.Fatal(err)
+			}
+			reserved := solver.Reservations(nil)
+			if f.reader.outerCalls != 0 {
+				t.Fatal("reserving the split award simulated its fill")
+			}
+			intent, err := solver.planAward(t.Context(), row, listed, observed, false, solver.Inventory)
 			if err != nil || intent == nil || f.reader.outerCalls != 1 {
 				t.Fatalf("split preparation did not simulate the full signed award once: simulations=%d err=%v", f.reader.outerCalls, err)
 			}
 			for i, account := range []common.Address{f.account, secondAccount} {
-				amount := intent.Spend.Amounts[liquidlane.NewCapacityID(1, account, tOut)]
+				id := liquidlane.NewCapacityID(1, account, tOut)
+				amount := intent.Spend.Amounts[id]
 				if amount == nil || amount.Int64() != []int64{54, 35}[i] {
 					t.Fatalf("split funding amount for %s: %v", account, amount)
+				}
+				if hold := reserved[id]; hold == nil || hold.Cmp(amount) != 0 {
+					t.Fatalf("split reservation for %s: got %v, want %v", account, hold, amount)
 				}
 			}
 			if f.balance(tIn, f.signer).Int64() != 100 || f.balance(tOut, f.recipient).Sign() != 0 {

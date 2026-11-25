@@ -3,11 +3,13 @@ package rfq
 
 import (
 	"context"
-	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/vault-solver/api/rfqbackend"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
@@ -33,8 +35,11 @@ type Solver struct {
 
 	backend     orderBackend
 	tokenPolicy tokenpolicy.Policy
-	// observeOrderPoll reports every successful read of the awarded orders.
+	// observeOrderPoll reports the same successful refresh that keeps quotes available.
 	observeOrderPoll func(time.Time)
+	lastAwardRefresh atomic.Pointer[time.Time]
+	// Split pricing is owned by the award loop and scoped to its observed head.
+	prices splitPrices
 }
 
 func (*Solver) Name() string                    { return Name }
@@ -60,46 +65,16 @@ func New(cfg Config, deps solver.Deps, observeOrderPoll func(time.Time)) (*Solve
 	return &Solver{Engine: engine, backend: newBackendClient(cfg.BackendURL), tokenPolicy: cfg.TokenPolicy, observeOrderPoll: observeOrderPoll}, nil
 }
 
-func (s *Solver) Run(ctx context.Context) error { return s.Engine.Run(ctx, s.next) }
+func (s *Solver) Run(ctx context.Context) error { return s.Engine.Run(ctx, s.pollAwards) }
 
-func (s *Solver) tick(ctx context.Context) error { return s.Tick(ctx, s.next) }
-
-// next returns the first awarded order that a configured connector can settle.
-func (s *Solver) next(ctx context.Context) (*filler.Intent, error) {
-	rows, err := s.backend.orders(ctx, strings.ToLower(s.Workflow.Filler.Hex()))
-	if err != nil {
-		return nil, err
-	}
-	if s.observeOrderPoll != nil {
-		s.observeOrderPoll(time.Now())
-	}
-	if len(rows) == 0 {
-		return nil, nil
-	}
-	listed, err := s.backend.listDiscounts(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if listed == nil {
-		return nil, errors.New("missing connector discount inventory")
-	}
-	for _, row := range rows {
-		intent, err := s.prepare(ctx, row, listed.Discounts)
-		if err != nil {
-			if ctx.Err() != nil {
-				return nil, ctx.Err()
-			}
-			observability.Log(ctx).V(1).Info("RFQ award not executable", "orderId", row.OrderId, "reason", err.Error())
-			continue
-		}
-		if intent != nil {
-			return intent, nil
-		}
-	}
-	return nil, nil
+// CanQuote requires a healthy execution lane and a recent successful award refresh.
+func (s *Solver) CanQuote(now time.Time) bool {
+	lastPoll := s.lastAwardRefresh.Load()
+	return lastPoll != nil && now.Sub(*lastPoll) < filler.ConfirmationPatience && s.Ready() && !s.Stalled()
 }
 
-func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrdersInner, listed []discounts.ListItem) (*filler.Intent, error) {
+// planAward uses the same routes for a queued estimate and a simulated fill.
+func (s *Solver) planAward(ctx context.Context, row rfqbackend.OrdersResponseOrdersInner, listed []discounts.ListItem, observed filler.Observation, reserve bool, price filler.InventoryReader) (*filler.Intent, error) {
 	order, signature, err := decodeOrder(row, s.Workflow.Filler)
 	if err != nil {
 		return nil, err
@@ -109,13 +84,6 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 		return nil, err
 	}
 	if !s.tokenPolicy.Allows(order.Request.TokenIn) {
-		return nil, nil
-	}
-	observed, err := s.Observe(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if s.Spends.Finalized(row.OrderId) {
 		return nil, nil
 	}
 	expiry := time.Unix(order.Request.Deadline.Int64(), 0)
@@ -131,7 +99,18 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 			routes = append(routes, source)
 		}
 	}
-	intentFor := func(built builtFill) (*filler.Intent, error) {
+	plan := func(legs []filler.Leg) (*filler.Intent, error) {
+		if reserve {
+			amounts := make(liquidlane.CapacityReservations, len(legs))
+			for _, leg := range legs {
+				amounts.Add(liquidlane.NewCapacityID(s.Workflow.ChainID.Int64(), leg.Account, token), leg.AmountOut)
+			}
+			return nil, s.Spends.ReserveQueued(row.OrderId, connector.Spend{Amounts: amounts, Deadline: expiry.Unix()})
+		}
+		built, err := buildFill(ctx, s.Workflow, order, signature, legs, s.backend)
+		if err != nil {
+			return nil, err
+		}
 		deadline, ok := observed.SubmissionDeadline(expiry, built.ValidUntil)
 		if !ok {
 			return nil, errors.New("fill deadline elapsed during preparation")
@@ -143,12 +122,13 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	}
 	for _, route := range routes {
 		// Keep an executable single-connector fill when one can settle the award.
+		route.MaxAssets = s.Unreserved(route, token, row.OrderId)
 		if route.MaxAssets.Cmp(required) < 0 {
 			continue
 		}
-		built, err := buildFill(ctx, s.Workflow, order, signature, []filler.Leg{{Source: route}}, s.backend)
-		if err == nil {
-			return intentFor(built)
+		intent, err := plan([]filler.Leg{{Source: route, AmountOut: required}})
+		if reserve || err == nil {
+			return intent, err
 		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -158,13 +138,9 @@ func (s *Solver) prepare(ctx context.Context, row rfqbackend.OrdersResponseOrder
 	if s.tokenPolicy.RequiresSingleRoute(order.Request.TokenIn) {
 		return nil, nil
 	}
-	legs, err := s.Split(ctx, routes, order.Request.AmountIn, required, len(routes), observed)
+	legs, err := s.Split(ctx, routes, order.Request.AmountIn, required, len(routes), observed, row.OrderId, price)
 	if err != nil || len(legs) == 0 {
 		return nil, err
 	}
-	built, err := buildFill(ctx, s.Workflow, order, signature, legs, s.backend)
-	if err != nil {
-		return nil, err
-	}
-	return intentFor(built)
+	return plan(legs)
 }
