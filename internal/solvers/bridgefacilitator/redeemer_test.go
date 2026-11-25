@@ -2,6 +2,7 @@ package bridgefacilitator
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -179,4 +180,45 @@ func nonceOutcomeError(outcome txmanager.Outcome) error {
 		return txmanager.ErrNonceConflict
 	}
 	return txmanager.ErrNonceConsumed
+}
+
+func TestReadyToRedeemNamesScanGaps(t *testing.T) {
+	t.Parallel()
+
+	adapterAddr := common.HexToAddress("0x00000000000000000000000000000000000000a0")
+	request0 := common.HexToAddress("0x00000000000000000000000000000000000000b0")
+	request1 := common.HexToAddress("0x00000000000000000000000000000000000000b1")
+	request2 := common.HexToAddress("0x00000000000000000000000000000000000000b2")
+	c, stop := newMulticallFakeClient(t,
+		abiEncodeAggregate3Results(t, abiEncodeUint256(t, 4)),
+		abiEncodeAggregate3CallResults(t, []chain.CallResult{
+			{Success: true, ReturnData: abiEncodeAddress(t, request0)},
+			{Success: true, ReturnData: abiEncodeAddress(t, request1)},
+			{Success: false},
+			{Success: true, ReturnData: abiEncodeAddress(t, request2)},
+		}),
+		abiEncodeAggregate3CallResults(t, []chain.CallResult{
+			{Success: true, ReturnData: []byte{0x01}},
+			{Success: false},
+			{Success: true, ReturnData: abiEncodeBool(t, true)},
+		}),
+	)
+	defer stop()
+
+	ready, gaps, err := newReader(c, common.Address{}).readyToRedeem(t.Context(), adapterAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"requests(2) call failed", "canWithdraw on " + request0.Hex() + " malformed: ", "canWithdraw on " + request1.Hex() + " call failed"}
+	if len(ready) != 1 || ready[0] != request2 || len(gaps) != len(want) {
+		t.Fatalf("ready = %v, gaps = %q, want [%s] and prefixes %q", ready, gaps, request2.Hex(), want)
+	}
+	for i := range want {
+		if !strings.HasPrefix(gaps[i], want[i]) {
+			t.Fatalf("gaps = %q, want prefixes %q", gaps, want)
+		}
+	}
+	if got := gapSummary(append(gaps, "extra")); !strings.HasPrefix(got, "4 gaps: requests(2) call failed; ") || !strings.HasSuffix(got, "; ...") {
+		t.Fatalf("gapSummary = %q, want the count, first three and an ellipsis", got)
+	}
 }

@@ -72,7 +72,7 @@ func TestLiveAPIMonitorSnapshotAndCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PositionsByMarket live API failed: %v", err)
 	}
-	positions := apiPositionsSnapshot(apiPositions, apiSnap.markets)
+	positions := apiPositionsSnapshot(logr.Discard(), apiPositions, apiSnap.markets)
 	if len(positions) == 0 {
 		t.Skip("live API returned no USDC/PAXG positions inside healthFactor <= 1.30 right now")
 	}
@@ -100,7 +100,7 @@ func TestLiveAPIMonitorSnapshotAndCandidates(t *testing.T) {
 	oracle := apiSnap.markets[targetMarket].Params.Oracle
 	price := apiSnap.prices[targetMarket]
 	auction := types.AuctionSnapshot{Prices: []types.AuctionPrice{{Oracle: oracle, Price: price}}}
-	cands := mon.candidates(auction, apiSnap.blockTime, types.AdapterSnapshot{})
+	cands := mon.candidates(auction, apiSnap.blockTime, types.AdapterSnapshot{}, nil)
 	if len(cands) == 0 {
 		t.Fatal("apiMonitor.candidates returned no candidates for a snapshot position with matching oracle price")
 	}

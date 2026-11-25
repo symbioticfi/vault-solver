@@ -104,8 +104,11 @@ type PendingAuction struct {
 }
 
 type BidOutput struct {
-	Decision      Decision
-	Reason        string
+	Decision Decision
+	// Reason is the skip code; a standard SkipReason* stays a bounded metric label.
+	Reason string
+	// Detail names the failed check and the values it compared. It is logged, never a metric label.
+	Detail        string
 	BidAmount     *big.Int
 	OperationData []byte
 }

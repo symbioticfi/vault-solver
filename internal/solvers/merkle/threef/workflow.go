@@ -2,6 +2,7 @@ package threef
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"sort"
 	"strings"
@@ -162,6 +163,13 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 	if w.bot.Send {
 		pending = w.bot.pending
 	}
+	// One debug line per pass names every ineligible request and the policy's revert reason.
+	var ineligible []string
+	defer func() {
+		if len(ineligible) > 0 {
+			observability.Log(ctx).V(1).Info("3F requests ineligible", "requests", ineligible)
+		}
+	}()
 	check := func(i int, request common.Address) error {
 		if _, known := memberships[i][request]; known {
 			return nil
@@ -169,6 +177,9 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 		err := eligible(ctx, chain, pin, markets[i], request, observations[i].MinimumYield)
 		if err != nil && !errors.Is(err, errIneligible) {
 			return err
+		}
+		if err != nil {
+			ineligible = append(ineligible, fmt.Sprintf("market %s/%s: %v", markets[i].Asset.Hex(), markets[i].UnderlyingAsset.Hex(), err))
 		}
 		memberships[i][request] = err == nil
 		return nil
@@ -258,6 +269,24 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 		if changed, err := run(selected.market, true); err != nil || changed {
 			return err
 		}
+	}
+	for i, observed := range observations {
+		if attempted[i] {
+			continue
+		}
+		var reason string
+		switch {
+		case observed.Budget.Sign() <= 0:
+			reason = "policy budget is 0"
+		case observed.AvailableCash.Sign() <= 0:
+			reason = "available cash is 0"
+		default:
+			reason = "no open, unblocked auction has an eligible request for this asset"
+		}
+		observability.Log(ctx).V(1).Info("3F market not bidding", "asset", observed.Market.Asset.Hex(),
+			"underlyingAsset", observed.Market.UnderlyingAsset.Hex(), "reason", reason)
+		observability.Decline(ctx, "market_skipped", fmt.Sprintf("market %s/%s: %s",
+			observed.Market.Asset.Hex(), observed.Market.UnderlyingAsset.Hex(), reason))
 	}
 	return nil
 }

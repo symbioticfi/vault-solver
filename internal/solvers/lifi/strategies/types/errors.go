@@ -5,6 +5,10 @@ import "github.com/go-errors/errors"
 // ErrUnsupportedOutputContext marks an unsupported pricing format, not malformed known data.
 var ErrUnsupportedOutputContext = errors.New("unsupported output context")
 
+// ErrFillDeclined marks a strategy declining a well-formed order; the wrapping error names the
+// failed check and its values. The order worker treats it as an expected skip, not a failure.
+var ErrFillDeclined = errors.New("fill declined")
+
 type permanentFillDecisionError struct {
 	cause error
 }

@@ -167,7 +167,7 @@ func TestAggregateAuthorizationLeaseAndPreparationAreReadOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	api.onOffers = func() { now = now.Add(100 * time.Second) }
-	if err := runtime.ValidateLease(t.Context(), snapshot, out); !errors.Is(err, provider.ErrNotReady) {
+	if err := runtime.ValidateLease(t.Context(), snapshot, out); !errors.Is(err, provider.ErrNotReady) || !strings.Contains(err.Error(), "earliest mint deadline") {
 		t.Fatalf("slow API consumed admission margin: %v", err)
 	}
 	api.onOffers = nil
@@ -178,10 +178,10 @@ func TestAggregateAuthorizationLeaseAndPreparationAreReadOnly(t *testing.T) {
 	}
 	now = now.Add(-100 * time.Second)
 	api.offers = nil
-	if err := runtime.ValidateLease(t.Context(), snapshot, out); !errors.Is(err, provider.ErrNotReady) {
+	if err := runtime.ValidateLease(t.Context(), snapshot, out); !errors.Is(err, provider.ErrNotReady) || !strings.Contains(err.Error(), "no AWAITING_MINT offer for request") {
 		t.Fatalf("revoked API lease: %v", err)
 	}
-	if _, err := runtime.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil); !errors.Is(err, provider.ErrNotReady) {
+	if _, err := runtime.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil); !errors.Is(err, provider.ErrNotReady) || !strings.Contains(err.Error(), "no AWAITING_MINT PUSH offer") {
 		t.Fatalf("no accepted offers must idle: %v", err)
 	}
 	// An unauthenticated recipe fails before any HTTP or onchain authorization read.
@@ -226,6 +226,47 @@ type policyRevertError struct{}
 
 func (policyRevertError) Error() string  { return "execution reverted" }
 func (policyRevertError) ErrorData() any { return "0x1234" }
+
+type revertDataError struct{ data any }
+
+func (revertDataError) Error() string    { return "execution reverted" }
+func (e revertDataError) ErrorData() any { return e.data }
+
+func TestEligibleKeepsPolicyRevertReason(t *testing.T) {
+	stringType, err := abi.NewType("string", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason, err := abi.Arguments{{Type: stringType}}.Pack("pair not allowed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := common.HexToAddress("0x123456")
+	word := strings.Repeat("0", 63) + "1"
+	for _, tc := range []struct {
+		name string
+		data any
+		want string
+	}{
+		{"Error(string)", hexutil.Encode(append([]byte{0x08, 0xc3, 0x79, 0xa0}, reason...)), "pair not allowed"},
+		{"Panic(uint256)", "0x4e487b71" + strings.Repeat("0", 62) + "11", "arithmetic underflow or overflow"},
+		{"custom error", "0xdeadbeef" + word, "selector 0xdeadbeef args 0x" + word},
+		{"short payload", "0x1234", "revert data 0x1234"},
+		{"not hex", "nope", "undecodable revert data nope"},
+		{"not a string", 7, "7"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chain := readFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
+				return nil, revertDataError{tc.data}
+			})
+			err := eligible(t.Context(), chain, provider.Snapshot{}, mintMarket{}, request, new(big.Int))
+			want := "policy consume for request " + request.Hex() + " reverted: " + tc.want
+			if !errors.Is(err, errIneligible) || !strings.HasSuffix(err.Error(), want) {
+				t.Fatalf("err = %v, want errIneligible ending %q", err, want)
+			}
+		})
+	}
+}
 
 func TestMintSkipsIneligibleEarlierRequests(t *testing.T) {
 	for _, tc := range []struct {

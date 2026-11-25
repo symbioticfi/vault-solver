@@ -3,6 +3,7 @@ package types
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"time"
 
@@ -74,6 +75,22 @@ type LiveOffer struct {
 
 type OfferOutput struct {
 	Offers []OfferExecution
+	// Skips names, for each auction or adapter/auction pair passed over, the check that failed.
+	Skips []OfferSkip
+}
+
+// OfferSkip is one decline: AdapterID is empty when the auction itself was skipped.
+type OfferSkip struct {
+	AuctionID int64
+	AdapterID string
+	Reason    string
+}
+
+func (s OfferSkip) String() string {
+	if s.AdapterID == "" {
+		return fmt.Sprintf("auction %d: %s", s.AuctionID, s.Reason)
+	}
+	return fmt.Sprintf("auction %d adapter %s: %s", s.AuctionID, s.AdapterID, s.Reason)
 }
 
 // OfferExecution is the trusted strategy's execution output. The solver only signs and submits it.

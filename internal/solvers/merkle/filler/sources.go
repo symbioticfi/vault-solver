@@ -3,6 +3,7 @@ package filler
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"iter"
 	"math/big"
 	"slices"
@@ -122,7 +123,7 @@ type listedSource struct {
 func (m listedSource) offer(ctx context.Context, decimals Decimals) (connector.Offer, error) {
 	discount, ok := new(big.Int).SetString(m.Listing.Discount, 10)
 	if !ok {
-		return connector.Offer{}, errors.New("invalid connector discount")
+		return connector.Offer{}, errors.Errorf("invalid connector discount %q", m.Listing.Discount)
 	}
 	inDecimals, err := decimals(ctx, m.tokenIn)
 	if err != nil {
@@ -133,7 +134,7 @@ func (m listedSource) offer(ctx context.Context, decimals Decimals) (connector.O
 		return connector.Offer{}, errors.Errorf("tokenOut decimals: %w", err)
 	}
 	if outDecimals != m.Listing.CollateralDecimals {
-		return connector.Offer{}, errors.New("advertised output decimals mismatch")
+		return connector.Offer{}, errors.Errorf("advertised output decimals %d differ from token decimals %d", m.Listing.CollateralDecimals, outDecimals)
 	}
 	return connector.Offer{
 		Venue: m.Venue, RecipeExecutor: m.RecipeExecutor, Account: m.Account, TokenIn: m.tokenIn, TokenOut: m.tokenOut,
@@ -168,12 +169,12 @@ func (e *Engine) matches(listed []discounts.ListItem, pair func(tokenIn, tokenOu
 			}
 			id, err := hexutil.Decode(item.DiscountID)
 			if err != nil || len(id) != 32 {
-				yield(listedSource{}, errors.New("invalid connector discountId"))
+				yield(listedSource{}, errors.Errorf("invalid connector discountId %q from %s", item.DiscountID, venue.Hex()))
 				return
 			}
 			maximum, ok := new(big.Int).SetString(item.MaxAssets, 10)
 			if !ok || maximum.Sign() < 0 || maximum.BitLen() > 256 {
-				yield(listedSource{}, errors.New("invalid connector maxAssets"))
+				yield(listedSource{}, errors.Errorf("invalid connector maxAssets %q from %s", item.MaxAssets, venue.Hex()))
 				return
 			}
 			source := Source{Venue: venue, RecipeExecutor: recipeExecutor, Account: account, DiscountID: common.BytesToHash(id), MaxAssets: maximum, Listing: item}
@@ -182,6 +183,24 @@ func (e *Engine) matches(listed []discounts.ListItem, pair func(tokenIn, tokenOu
 			}
 		}
 	}
+}
+
+// Unmatched says why no listing for the pair became a source.
+func (e *Engine) Unmatched(listed []discounts.ListItem, tokenIn, tokenOut common.Address) string {
+	var pair, precision, unrouted int
+	for _, item := range listed {
+		if common.HexToAddress(item.TokenToRedeem) != tokenIn || common.HexToAddress(item.Collateral) != tokenOut {
+			continue
+		}
+		pair++
+		if item.DiscountPrecision != connector.PrecisionText {
+			precision++
+		} else if _, _, configured := e.ResolveRoute(common.HexToAddress(item.Adapter), tokenIn, tokenOut); !configured {
+			unrouted++
+		}
+	}
+	return fmt.Sprintf("%d connector discounts listed for %s -> %s: %d with precision other than %s, %d without a configured recipe route",
+		pair, tokenIn.Hex(), tokenOut.Hex(), precision, connector.PrecisionText, unrouted)
 }
 
 // Observation pins the chain time a fill is planned against.
@@ -204,6 +223,12 @@ func (e *Engine) Observe(ctx context.Context) (Observation, error) {
 	}
 	e.Spends.Expire(int64(header.Time))
 	return Observation{Chain: time.Unix(int64(header.Time), 0), Wall: wall, BlockHash: header.Hash(), BlockNumber: header.Number}, nil
+}
+
+// MissedDeadline says which limits a fill missed while it was being prepared.
+func (o Observation) MissedDeadline(expiry, validUntil time.Time) string {
+	return fmt.Sprintf("fill deadline elapsed during preparation: order expiry %d, signed terms valid until %d, chain time %d observed %s ago",
+		expiry.Unix(), validUntil.Unix(), o.Chain.Unix(), time.Since(o.Wall).Round(time.Millisecond))
 }
 
 // SubmissionDeadline converts the earliest chain-time limit into the lane's wall-clock deadline.

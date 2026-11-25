@@ -209,6 +209,10 @@ receipt classification remain in place.
 The current parser accepts only `Dutch_V2`. All strategies retain polling retries for declined plans and
 unavailable sources. Economic declines record `fill/declined` without opening the public preflight breaker;
 exclusive obligations remain independently tracked through terminal reconciliation.
+`DecideFill` declines by returning an error wrapping `types.ErrFillDeclined` that names the failed check
+(the local strategy puts the shared solver's last decline in it via `RecordDeclines`; a webhook `null`
+plan is its own reason), never `(nil, nil)`. The fill loop logs that reason, the per-source reasons of
+a single-source attempt, and any discount route refresh failure on the `order not fillable yet` line.
 
 ### 2.2 Reuse of the generic layer
 
@@ -715,6 +719,10 @@ an unknown decision, or differing decisions across attempted candidates/subprobl
 `strategy-declined`; the collector never presents the last candidate's reason as a universal failure.
 Errors and invalid returned quotes remain HTTP 503 with workflow outcome `error` and log/counter
 reason `strategy_error`. Successful strategy results ignore prior candidate declines.
+Every decline also carries an unbounded `detail` for the V(1) `quote declined` log (never a metric
+label): the exact failed check with its values, every recorded candidate decline, or which of the
+`blocked`/`state-changed` conditions fired. Pairs outside inventory scope keep their addresses out
+of the detail, as they do out of the request log fields.
 
 Existing workflow outcome labels are retained: semantic reasons map to `declined_invalid_request`,
 planner reasons to `declined_strategy`, exactly once. A shared LiquidLane `QuoteMetrics` helper now

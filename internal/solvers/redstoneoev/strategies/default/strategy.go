@@ -22,7 +22,7 @@ type monitorSource interface {
 	run(context.Context)
 	refresh(context.Context)
 	snapshot() *snapshot
-	candidates(auction types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot) []evalItem
+	candidates(auction types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot, tally *rejectTally) []evalItem
 }
 
 type Strategy struct {
@@ -199,47 +199,30 @@ func (s *Strategy) DecideBid(ctx context.Context, input types.BidInput) (types.B
 		ctx = observability.WithLogger(ctx, s.log)
 	}
 
-	if input.Adapter.Address != (common.Address{}) && input.Adapter.Address != s.adapter {
-		return skipBid(skipNoLegs), nil
-	}
-	if input.Context.Callback != s.callback {
-		return skipBid(skipNoLegs), nil
-	}
-	if !input.Adapter.Filler {
-		return skipBid(skipNoLegs), nil
-	}
-	if input.Adapter.Paused {
-		return skipBid(skipNoLegs), nil
-	}
-	snap := s.mon.snapshot()
-	if snap == nil || (s.maxAge > 0 && input.Now.Sub(snap.updatedAt) > s.maxAge) {
-		return skipBid(skipStaleState), nil
-	}
-	st, ok := s.state.load()
-	if !ok || !freshAt(st.CallbackUpdatedAt, input.Now, s.maxAge) {
-		return skipBid(skipStaleState), nil
-	}
-	if skip := snapshotFreshForAuction(snap, input.Auction); skip != "" {
-		return skipBid(skip), nil
+	st, skip := s.preconditionSkip(input)
+	if skip.code != "" {
+		return skip.bid(), nil
 	}
 	hasReservation := s.reservations.reconcile(input.PendingAuctions, input.Now, st.CallbackUpdatedAt)
 	// Every bundle shares this adapter's routing liquidity and potentially Morpho market state.
 	// Position-only reservations cannot authorize a second bundle against the same snapshot.
 	if len(input.PendingAuctions) > 0 || hasReservation {
-		return skipBid(types.SkipReasonInFlight), nil
+		return skipf(types.SkipReasonInFlight, "pending auctions %d, reservation held %t",
+			len(input.PendingAuctions), hasReservation).bid(), nil
 	}
 	nowTs := clampTsAt(input.Auction.Timestamp, input.Now)
-	scored := s.sizedLegs(ctx, s.candidates(ctx, input.Auction, nowTs, input.Adapter))
+	var rejected rejectTally
+	scored := s.sizedLegs(ctx, s.candidates(ctx, input.Auction, nowTs, input.Adapter, &rejected), &rejected)
 	if len(scored) == 0 {
-		return skipBid(skipNoLegs), nil
+		return skipf(skipNoLegs, "no liquidatable leg: %s", rejected.String()).bid(), nil
 	}
 	gasPrice := cloneBig(input.Context.MaxTxGasPrice)
 	priced, skip := s.pricedBundleFor(ctx, input, scored, gasPrice)
-	if skip != "" {
-		return types.BidOutput{Decision: types.DecisionSkip, Reason: skip}, nil
+	if skip.code != "" {
+		return skip.bid(), nil
 	}
-	if unaffordable := s.affordableBundle(ctx, input, priced, st, gasPrice); unaffordable != "" {
-		return skipBid(unaffordable), nil
+	if unaffordable := s.affordableBundle(ctx, input, priced, st, gasPrice); unaffordable.code != "" {
+		return unaffordable.bid(), nil
 	}
 	out, err := s.bidOutputFromBundle(input, priced)
 	if err != nil {
@@ -249,30 +232,63 @@ func (s *Strategy) DecideBid(ctx context.Context, input types.BidInput) (types.B
 	return out, nil
 }
 
+// preconditionSkip gates the auction on adapter identity and state freshness before any sizing work,
+// and returns the callback state it checked.
+func (s *Strategy) preconditionSkip(input types.BidInput) (decisionState, bidSkip) {
+	switch {
+	case input.Adapter.Address != (common.Address{}) && input.Adapter.Address != s.adapter:
+		return decisionState{}, skipf(skipNoLegs, "auction adapter %s is not the configured adapter %s", input.Adapter.Address.Hex(), s.adapter.Hex())
+	case input.Context.Callback != s.callback:
+		return decisionState{}, skipf(skipNoLegs, "auction callback %s is not the configured callback %s", input.Context.Callback.Hex(), s.callback.Hex())
+	case !input.Adapter.Filler:
+		return decisionState{}, skipf(skipNoLegs, "callback is not an authorized filler on adapter %s", s.adapter.Hex())
+	case input.Adapter.Paused:
+		return decisionState{}, skipf(skipNoLegs, "adapter %s is paused", s.adapter.Hex())
+	}
+	snap := s.mon.snapshot()
+	if snap == nil {
+		return decisionState{}, bidSkip{code: skipStaleState, detail: "position snapshot not loaded yet"}
+	}
+	if age := input.Now.Sub(snap.updatedAt); s.maxAge > 0 && age > s.maxAge {
+		return decisionState{}, skipf(skipStaleState, "position snapshot age %s exceeds max age %s", age, s.maxAge)
+	}
+	st, ok := s.state.load()
+	if !ok || st.CallbackUpdatedAt.IsZero() {
+		return st, bidSkip{code: skipStaleState, detail: "callback balance not loaded yet"}
+	}
+	if !freshAt(st.CallbackUpdatedAt, input.Now, s.maxAge) {
+		return st, skipf(skipStaleState, "callback balance age %s exceeds max age %s", input.Now.Sub(st.CallbackUpdatedAt), s.maxAge)
+	}
+	return st, snapshotFreshForAuction(snap, input.Auction)
+}
+
 func (s *Strategy) candidates(
-	ctx context.Context, a types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot,
+	ctx context.Context, a types.AuctionSnapshot, nowTs uint64, adapter types.AdapterSnapshot, tally *rejectTally,
 ) []evalItem {
 	_, end := s.tracer.Start(ctx, "oev.auction.candidates")
 	defer end(nil)
-	return s.mon.candidates(a, nowTs, adapter)
+	return s.mon.candidates(a, nowTs, adapter, tally)
 }
 
-func (s *Strategy) sizedLegs(ctx context.Context, cands []evalItem) []scoredLeg {
+func (s *Strategy) sizedLegs(ctx context.Context, cands []evalItem, tally *rejectTally) []scoredLeg {
 	_, end := s.tracer.Start(ctx, "oev.auction.size")
 	defer end(nil)
 	out := make([]scoredLeg, 0, len(cands))
 	for _, it := range cands {
-		if sized, ok := sizeLeg(it.cand, it.price, it.quote, it.accrued, s.cfg.Sizing); ok {
-			out = append(out, scoredLeg{
-				selectedLeg:       sized.leg,
-				settlementLoanOut: sized.settlementLoanOut,
-				collateral:        it.cand.Market.Params.CollateralToken,
-				profit:            sized.profit,
-				maxAssets:         it.quote.MaxAssets,
-				source:            it,
-				replay:            true,
-			})
+		sized, rej := sizeLeg(it.cand, it.price, it.quote, it.accrued, s.cfg.Sizing)
+		if rej != nil {
+			tally.add(it.cand.MarketID, &it.cand.Borrower, rej)
+			continue
 		}
+		out = append(out, scoredLeg{
+			selectedLeg:       sized.leg,
+			settlementLoanOut: sized.settlementLoanOut,
+			collateral:        it.cand.Market.Params.CollateralToken,
+			profit:            sized.profit,
+			maxAssets:         it.quote.MaxAssets,
+			source:            it,
+			replay:            true,
+		})
 	}
 	return out
 }
@@ -280,7 +296,7 @@ func (s *Strategy) sizedLegs(ctx context.Context, cands []evalItem) []scoredLeg 
 // pricedBundleFor chooses the bundle of legs to settle together and prices it, under oev.auction.bundle.
 func (s *Strategy) pricedBundleFor(
 	ctx context.Context, input types.BidInput, scored []scoredLeg, gasPrice *big.Int,
-) (pricedBundle, string) {
+) (pricedBundle, bidSkip) {
 	ctx, end := s.tracer.Start(ctx, "oev.auction.bundle")
 	defer end(nil)
 
@@ -289,26 +305,26 @@ func (s *Strategy) pricedBundleFor(
 	var (
 		b      chosenBundle
 		priced pricedBundle
-		skip   string
+		skip   bidSkip
 	)
 	if s.gasAccounting {
 		rate := validRate(input.Context.GasPrices.TokenOutPerNative(input.Adapter.Loan))
 		if rate == nil {
 			observability.Log(ctx).Info("bid skipped: loan/native gas rate unavailable",
 				"auctionId", input.Auction.ID, "scoredLegs", len(scored), "feedCount", feedCount)
-			return pricedBundle{}, skipGasUnprofitable
+			return pricedBundle{}, skipf(skipGasUnprofitable, "loan/native gas rate unavailable for loan %s", input.Adapter.Loan.Hex())
 		}
 		b, skip = s.engine.selectNetBundle(scored, rate, laneState, gasPrice, input.Context.GasLimit, feedCount)
-		if skip == "" {
+		if skip.code == "" {
 			priced = s.engine.priceBundle(b, rate, laneState, gasPrice, feedCount)
-		} else if skip == skipGasUnprofitable && len(b.legs) > 0 {
+		} else if skip.code == skipGasUnprofitable && len(b.legs) > 0 {
 			s.engine.logBundleEconomics(ctx, input.Auction.ID,
 				"bid skipped: bundle is not profitable after gas and bid",
 				b, rate, laneState, gasPrice, input.Context.GasLimit, feedCount, len(scored))
 		}
 	} else {
 		b, skip = s.engine.selectBundleWithGas(scored, laneState, input.Context.GasLimit, feedCount)
-		if skip == "" {
+		if skip.code == "" {
 			priced = s.engine.priceBundleWithoutGasAccounting(b, laneState, gasPrice, feedCount)
 		}
 	}
@@ -317,10 +333,10 @@ func (s *Strategy) pricedBundleFor(
 
 // affordableBundle is the economic gate on a priced bundle, under oev.auction.economics: the executor
 // deposit must cover the predicted settlement gas and the callback must be able to pay the bid. It
-// returns the skip reason, or "" when the bundle is affordable.
+// returns the skip, or the zero bidSkip when the bundle is affordable.
 func (s *Strategy) affordableBundle(
 	ctx context.Context, input types.BidInput, priced pricedBundle, st decisionState, gasPrice *big.Int,
-) string {
+) bidSkip {
 	ctx, end := s.tracer.Start(ctx, "oev.auction.economics")
 	defer end(nil)
 
@@ -333,7 +349,8 @@ func (s *Strategy) affordableBundle(
 			"gasUnits", priced.gas.Units,
 			"gasNative", priced.gasNative,
 			"gasPriceWei", gasPrice)
-		return types.SkipReasonDepositLow
+		return skipf(types.SkipReasonDepositLow, "executor deposit %v wei is below required %v wei",
+			input.Context.ExecutorDeposit, executorDepositRequired(input.Context.ExecutorMinDeposit, priced.gasNative))
 	}
 	availableCallback := orZero(st.CallbackNative)
 	if availableCallback.Cmp(priced.bidNative) < 0 {
@@ -341,9 +358,9 @@ func (s *Strategy) affordableBundle(
 			"auctionId", input.Auction.ID, "callback", s.callback.Hex(),
 			"callbackWei", st.CallbackNative,
 			"availableWei", availableCallback, "requiredWei", priced.bidNative)
-		return types.SkipReasonCallbackBalance
+		return skipf(types.SkipReasonCallbackBalance, "callback balance %v wei is below bid %v wei", availableCallback, priced.bidNative)
 	}
-	return ""
+	return bidSkip{}
 }
 
 func auctionFeedCount(a types.AuctionSnapshot) int {
@@ -351,10 +368,6 @@ func auctionFeedCount(a types.AuctionSnapshot) int {
 		return a.RawPriceCount
 	}
 	return len(a.Prices)
-}
-
-func skipBid(reason string) types.BidOutput {
-	return types.BidOutput{Decision: types.DecisionSkip, Reason: reason}
 }
 
 func (s *Strategy) bidOutputFromBundle(input types.BidInput, priced pricedBundle) (types.BidOutput, error) {

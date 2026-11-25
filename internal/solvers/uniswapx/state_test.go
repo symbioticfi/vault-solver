@@ -368,8 +368,8 @@ func TestOpenExclusiveOrderPendingThroughGraceThenMissed(t *testing.T) {
 	if blockedUntil == 0 {
 		t.Fatal("expired obligation in the same sweep did not trip the breaker")
 	}
-	if solver.exclusiveDeliveryHealthy() {
-		t.Fatal("exclusive quoting was not paused while an order is open inside grace")
+	if got := solver.exclusiveDeliveryProblem(time.Now()); got != "an exclusive order is still open after its exclusivity ended" {
+		t.Fatalf("exclusive quoting was not paused while an order is open inside grace: %q", got)
 	}
 	stillOpen := 0
 	for _, entry := range logs {
@@ -390,8 +390,8 @@ func TestOpenExclusiveOrderPendingThroughGraceThenMissed(t *testing.T) {
 	if solver.exclusiveBlockUntil.Load() <= blockedUntil {
 		t.Fatal("open order past grace did not open the exclusive breaker")
 	}
-	if !solver.exclusiveDeliveryHealthy() {
-		t.Fatal("grace pause outlived the open obligation")
+	if got := solver.exclusiveDeliveryProblem(time.Now()); got != "" {
+		t.Fatalf("grace pause outlived the open obligation: %q", got)
 	}
 }
 

@@ -58,14 +58,25 @@ func (r *reader) ReadExecutorState(ctx context.Context, executorAddr, signer com
 	if err != nil {
 		return ExecutorState{}, err
 	}
-	if !allSuccess(res, 3) {
-		return ExecutorState{}, errors.New("executor state read reverted")
+	if len(res) != 3 {
+		return ExecutorState{}, errors.Errorf("executor state read: got %d results, want 3", len(res))
 	}
-	nonce, nonceErr := executorB.UnpackNonces(res[0].ReturnData)
-	deposit, depositErr := executorB.UnpackDeposits(res[1].ReturnData)
-	locked, lockedErr := executorB.UnpackLocked(res[2].ReturnData)
-	if nonceErr != nil || depositErr != nil || lockedErr != nil {
-		return ExecutorState{}, errors.New("executor state decode failed")
+	for i, call := range []string{"nonces", "deposits", "locked"} {
+		if !res[i].Success {
+			return ExecutorState{}, errors.Errorf("executor %s.%s(%s) reverted", executorAddr.Hex(), call, signer.Hex())
+		}
+	}
+	nonce, err := executorB.UnpackNonces(res[0].ReturnData)
+	if err != nil {
+		return ExecutorState{}, errors.Errorf("decode executor nonces: %w", err)
+	}
+	deposit, err := executorB.UnpackDeposits(res[1].ReturnData)
+	if err != nil {
+		return ExecutorState{}, errors.Errorf("decode executor deposits: %w", err)
+	}
+	locked, err := executorB.UnpackLocked(res[2].ReturnData)
+	if err != nil {
+		return ExecutorState{}, errors.Errorf("decode executor locked: %w", err)
 	}
 	return ExecutorState{Nonce: nonce, Deposit: deposit, Locked: locked}, nil
 }

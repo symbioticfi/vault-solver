@@ -2,6 +2,7 @@ package defaultstrategy
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -28,27 +29,35 @@ func (s *Strategy) DecideQuotes(_ context.Context, input types.QuoteInput) (type
 	if input.ServerTime.After(validAfter) {
 		validAfter = input.ServerTime
 	}
-	groups := make(map[strategyPairKey][]liquidlane.Inventory)
+	liveInventory := liquidgreedy.FilterLiveInventory(input.Inventory, validAfter.Add(s.executionBuffer))
 	allocatedInventory := liquidgreedy.AllocateInventoryCapacity(
-		liquidgreedy.FilterLiveInventory(input.Inventory, validAfter.Add(s.executionBuffer)),
-		input.Reservations, s.cfg.InventoryReserveBps,
+		liveInventory, input.Reservations, s.cfg.InventoryReserveBps,
 	)
+	inputCounts, liveCounts := countByPair(input.Inventory), countByPair(liveInventory)
+	groups := make(map[strategyPairKey][]liquidlane.Inventory)
 	for _, item := range allocatedInventory {
-		key := strategyPairKey{
-			tokenIn: item.TokenIn, tokenOut: item.TokenOut,
-			inputDecimals: item.TokenInDecimals, outputDecimals: item.TokenOutDecimals,
-		}
+		key := pairKey(item)
 		groups[key] = append(groups[key], item)
 	}
 
-	keys := make([]strategyPairKey, 0, len(groups))
-	for key := range groups {
+	keys := make([]strategyPairKey, 0, len(inputCounts))
+	for key := range inputCounts {
 		keys = append(keys, key)
 	}
 	sort.Slice(keys, func(i, j int) bool { return pairLess(keys[i], keys[j]) })
 	out := types.QuoteOutput{Quotes: make([]types.Quote, 0, len(keys))}
+	decline := func(key strategyPairKey, format string, args ...any) {
+		out.Declines = append(out.Declines, types.QuoteDecline{
+			FromAsset: key.tokenIn, ToAsset: key.tokenOut, Reason: fmt.Sprintf(format, args...),
+		})
+	}
 	for _, key := range keys {
 		inventory := groups[key]
+		if len(inventory) == 0 {
+			decline(key, "no inventory with capacity: %d items, %d live past execution buffer, 0 with capacity left after reservations and reserve",
+				inputCounts[key], liveCounts[key])
+			continue
+		}
 		candidates := make([]liquidlane.QuoteCandidate, 0, len(inventory))
 		for _, item := range inventory {
 			candidate := liquidgreedy.NewQuoteCandidate(
@@ -58,6 +67,11 @@ func (s *Strategy) DecideQuotes(_ context.Context, input types.QuoteInput) (type
 			if candidate != nil {
 				candidates = append(candidates, *candidate)
 			}
+		}
+		if len(candidates) == 0 {
+			decline(key, "no quote candidate: %d items with capacity, all with zero buffered capacity or no positive rate",
+				len(inventory))
+			continue
 		}
 		pricing, err := liquidstrategies.NewGasPricing(
 			input.MaxFeePerGas, key.tokenOut, input.GasPrices, input.GasSnapshot, s.cfg.InventoryReserveBps,
@@ -71,14 +85,18 @@ func (s *Strategy) DecideQuotes(_ context.Context, input types.QuoteInput) (type
 			routeLimit = 1
 		}
 		ranges, used, err := s.buildQuoteRanges(candidates, routeLimit, pricing)
+		if errors.Is(err, errNoQuote) {
+			decline(key, "%v (%d items, %d live, %d with capacity, %d candidates, route limit %d)",
+				err, inputCounts[key], liveCounts[key], len(inventory), len(candidates), routeLimit)
+			continue
+		}
 		if err != nil {
 			return types.QuoteOutput{}, err
 		}
-		if len(ranges) == 0 {
-			continue
-		}
 		expiry := quoteExpiry(input.QuoteExpiresAt, s.executionBuffer, used)
 		if expiry <= input.ServerTime.Unix() {
+			decline(key, "quote expiry %d is not after server time %d (candidate validity less %s execution buffer)",
+				expiry, input.ServerTime.Unix(), s.executionBuffer)
 			continue
 		}
 		out.Quotes = append(out.Quotes, types.Quote{
@@ -88,6 +106,21 @@ func (s *Strategy) DecideQuotes(_ context.Context, input types.QuoteInput) (type
 		})
 	}
 	return out, nil
+}
+
+func pairKey(item liquidlane.Inventory) strategyPairKey {
+	return strategyPairKey{
+		tokenIn: item.TokenIn, tokenOut: item.TokenOut,
+		inputDecimals: item.TokenInDecimals, outputDecimals: item.TokenOutDecimals,
+	}
+}
+
+func countByPair(inventory []liquidlane.Inventory) map[strategyPairKey]int {
+	counts := make(map[strategyPairKey]int)
+	for _, item := range inventory {
+		counts[pairKey(item)]++
+	}
+	return counts
 }
 
 func pairLess(left, right strategyPairKey) bool {

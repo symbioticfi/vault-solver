@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -76,10 +77,14 @@ func (s *Solver) fillDiscountQuotes(
 	for i, candidate := range candidates {
 		g.Go(func() error {
 			if candidate.DiscountID == nil {
+				observability.Log(resolveCtx).V(1).Info("private discounts: ignored advertised candidate without a discount ID",
+					"routeId", candidate.ID)
 				return nil
 			}
 			baseQuote, ok := baseByRoute[candidate.ID]
 			if !ok {
+				s.logInvalidDiscount(resolveCtx, candidate.DiscountID.Hex(),
+					errors.Errorf("route %s has no direct fill quote to discount", candidate.ID))
 				return nil
 			}
 			selection := discounts.Selection{
@@ -99,6 +104,8 @@ func (s *Solver) fillDiscountQuotes(
 			}
 			maxAmountOut := liquidlane.AmountOutAfterDiscount(baseQuote.GrossAmountOut, signed.Terms.Discount)
 			if maxAmountOut.Sign() <= 0 {
+				s.logInvalidDiscount(resolveCtx, candidate.DiscountID.Hex(), errors.Errorf(
+					"discount %s leaves no output from gross amount out %s", signed.Terms.Discount, baseQuote.GrossAmountOut))
 				return nil
 			}
 			candidate.ValidUntil = discounts.ValidUntil(signed)

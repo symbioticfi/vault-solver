@@ -3,6 +3,7 @@ package threef
 import (
 	"context"
 	"crypto/rand"
+	"fmt"
 	"math"
 	"math/big"
 	"strconv"
@@ -96,6 +97,8 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 		return false, err
 	}
 	if !b.Send {
+		observability.Log(ctx).V(1).Info("3F offers left unchanged: send is disabled", "account", market.Account.Hex())
+		observability.Decline(ctx, "offer_skipped", "send is disabled")
 		return false, nil
 	}
 	pending, err := b.reconcileIntents(offers)
@@ -112,25 +115,14 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 		if offer.dto.Status != "SUBMITTED" {
 			continue
 		}
-		request := common.HexToAddress(offer.dto.RequestId)
-		previous := findIntent(pending, offer.id)
-		owned := previous != nil && previous.Executor == market.Executor && previous.Policy == market.Policy && previous.Asset == market.Asset && previous.UnderlyingAsset == market.UnderlyingAsset
-		if !owned && !market.EligibleRequests[request] {
-			continue
+		reason, reasonErr := cancelReason(market, offer, findIntent(pending, offer.id), byID[offer.auctionID], reserved, pairReserved)
+		if reasonErr != nil {
+			return false, reasonErr
 		}
-		cancel := owned && (!previous.matchesMarket(market) || !market.EligibleRequests[request])
-		if offer.asset != market.Asset && !cancel {
-			continue
-		}
-		cancel = cancel || (offer.asset == market.Asset && (reserved.Cmp(market.AvailableCash) > 0 || pairReserved.Cmp(market.Budget) > 0))
-		if offer.asset == market.Asset && market.EligibleRequests[request] {
-			fits, fitErr := fitsTerms(market, offer.amount, offer.expectedReturn, byID[offer.auctionID])
-			if fitErr != nil {
-				return false, fitErr
-			}
-			cancel = cancel || !fits
-		}
-		if cancel {
+		if reason != "" {
+			observability.Log(ctx).Info("cancelling 3F offer", "account", market.Account.Hex(),
+				"offerId", offer.id, "auctionId", offer.auctionID, "reason", reason)
+			observability.Decline(ctx, "offer_cancelled", fmt.Sprintf("offer %d on auction %d: %s", offer.id, offer.auctionID, reason))
 			response, cancelErr := b.Client.Cancel(ctx, offer.id)
 			if cancelErr != nil {
 				return false, errors.Errorf("cancel 3F submitted offer: %w", cancelErr)
@@ -156,15 +148,22 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 		// The original amount is already reserved; only other offers reduce
 		// the cash and pair budget available to replay this exact request.
 		available := new(big.Int).Add(capacity, amount)
-		if !exists || !market.EligibleRequests[previous.Request] || amount.Cmp(available) > 0 || amount.Cmp(market.MaxPrincipal) > 0 {
-			return false, errors.New("3F unresolved offer cannot be retried within current policy and cash limits")
+		switch {
+		case !exists:
+			return false, errors.Errorf("3F unresolved offer on auction %d cannot be retried: auction is no longer listed", auctionID)
+		case !market.EligibleRequests[previous.Request]:
+			return false, errors.Errorf("3F unresolved offer on auction %d cannot be retried: request %s is not eligible", auctionID, previous.Request.Hex())
+		case amount.Cmp(available) > 0:
+			return false, errors.Errorf("3F unresolved offer on auction %d cannot be retried: amount %s exceeds available cash and budget %s", auctionID, amount, available)
+		case amount.Cmp(market.MaxPrincipal) > 0:
+			return false, errors.Errorf("3F unresolved offer on auction %d cannot be retried: amount %s exceeds maxPrincipal %s", auctionID, amount, market.MaxPrincipal)
 		}
-		fits, err := fitsTerms(market, amount, yield, auction)
+		mismatch, err := termsMismatch(market, amount, yield, auction)
 		if err != nil {
 			return false, err
 		}
-		if !fits {
-			return false, errors.New("3F unresolved offer cannot be retried within current rate limits")
+		if mismatch != "" {
+			return false, errors.Errorf("3F unresolved offer on auction %d cannot be retried within current rate limits: %s", auctionID, mismatch)
 		}
 		return true, b.postIntent(ctx, market, previous, false)
 	}
@@ -173,18 +172,40 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 	}
 	remaining := capacity
 	if remaining.Sign() <= 0 {
+		observability.Log(ctx).V(1).Info("3F offer not created: no capacity", "account", market.Account.Hex(),
+			"budget", market.Budget.String(), "budgetReserved", pairReserved.String(),
+			"availableCash", market.AvailableCash.String(), "cashReserved", reserved.String())
+		observability.Decline(ctx, "offer_skipped", fmt.Sprintf("no capacity: budget %s (reserved %s), cash %s (reserved %s)",
+			market.Budget, pairReserved, market.AvailableCash, reserved))
 		return false, nil
 	}
+	// One debug line per pass, not per auction: most auctions are skipped every pass.
+	var skips []string
+	defer func() {
+		if len(skips) > 0 {
+			observability.Log(ctx).V(1).Info("3F auctions skipped", "account", market.Account.Hex(), "skips", skips)
+			observability.Decline(ctx, "auction_skipped", fmt.Sprintf("%d skipped, first %s", len(skips), skips[0]))
+		}
+	}()
 	for _, auction := range auctions {
+		id, _ := dtoID(auction.Id) // indexAuctions already validated every ID.
+		skip := func(format string, args ...any) {
+			skips = append(skips, fmt.Sprintf("auction %d: ", id)+fmt.Sprintf(format, args...))
+		}
 		if !strings.EqualFold(auction.Status, "open") && !strings.EqualFold(auction.Status, "solvable") {
+			skip("status %q is not open or solvable", auction.Status)
 			continue
 		}
-		id, _ := dtoID(auction.Id) // indexAuctions already validated every ID.
 		request, addressErr := address(auction.RequestId)
 		if addressErr != nil {
 			return false, addressErr
 		}
-		if blocked[id] || !market.EligibleRequests[request] {
+		if blocked[id] {
+			skip("account already has a live, cancelled or pending offer on it")
+			continue
+		}
+		if !market.EligibleRequests[request] {
+			skip("request %s is not eligible for this market", request.Hex())
 			continue
 		}
 		asset, assetErr := depositAsset(auction)
@@ -192,6 +213,7 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 			return false, assetErr
 		}
 		if asset != market.Asset {
+			skip("deposit asset %s does not match market asset %s", asset.Hex(), market.Asset.Hex())
 			continue
 		}
 		amountText, ok := auction.GetAmountRequestedOk()
@@ -204,6 +226,7 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 		}
 		amount := minInt(remaining, market.MaxPrincipal, requested)
 		if amount.Sign() <= 0 {
+			skip("amount is 0 (capacity %s, maxPrincipal %s, requested %s)", remaining, market.MaxPrincipal, requested)
 			continue
 		}
 		yield := minimumReturn(amount, market.MinimumYield1e8)
@@ -214,11 +237,12 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 		if yield.Cmp(auctionMinimum) < 0 {
 			yield = auctionMinimum
 		}
-		fits, fitErr := fitsTerms(market, amount, yield, auction)
+		mismatch, fitErr := termsMismatch(market, amount, yield, auction)
 		if fitErr != nil {
 			return false, fitErr
 		}
-		if !fits {
+		if mismatch != "" {
+			skip("%s", mismatch)
 			continue
 		}
 		// 3F stores nonces in 64 bits; positive int64 values fit signed and unsigned storage.
@@ -241,6 +265,39 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 		return true, b.postIntent(ctx, market, created, true)
 	}
 	return false, nil
+}
+
+// cancelReason names why a SUBMITTED offer must be withdrawn, "" to keep it. An offer is managed here
+// when this market owns its intent or its request is eligible for this market.
+func cancelReason(m offerMarket, offer liveOffer, previous *intent, auction threef.AuctionDto, cash, pair *big.Int) (string, error) {
+	request := common.HexToAddress(offer.dto.RequestId)
+	owned := previous != nil && previous.Executor == m.Executor && previous.Policy == m.Policy && previous.Asset == m.Asset && previous.UnderlyingAsset == m.UnderlyingAsset
+	eligibleRequest := m.EligibleRequests[request]
+	sameAsset := offer.asset == m.Asset
+	var mismatch string
+	if sameAsset && eligibleRequest {
+		var err error
+		if mismatch, err = termsMismatch(m, offer.amount, offer.expectedReturn, auction); err != nil {
+			return "", err
+		}
+	}
+	switch {
+	case !owned && !eligibleRequest:
+		return "", nil
+	case owned && !previous.matchesMarket(m):
+		return fmt.Sprintf("intent recipe hash %s no longer matches market recipe hash %s", previous.RecipeHash.Hex(), m.RecipeHash.Hex()), nil
+	case owned && !eligibleRequest:
+		return fmt.Sprintf("request %s is no longer eligible for this market", request.Hex()), nil
+	case !sameAsset:
+		return "", nil
+	case cash.Cmp(m.AvailableCash) > 0:
+		return fmt.Sprintf("reserved cash %s exceeds available cash %s", cash, m.AvailableCash), nil
+	case pair.Cmp(m.Budget) > 0:
+		return fmt.Sprintf("reserved budget %s exceeds policy budget %s", pair, m.Budget), nil
+	case mismatch != "":
+		return "terms no longer fit: " + mismatch, nil
+	}
+	return "", nil
 }
 
 func (b *offerBot) postIntent(ctx context.Context, market offerMarket, pending *intent, first bool) error {

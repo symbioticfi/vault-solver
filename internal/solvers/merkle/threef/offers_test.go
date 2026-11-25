@@ -462,17 +462,42 @@ func TestFitsTermsNativeAuthorizationBounds(t *testing.T) {
 	maximum := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1))
 	m.MaxPrincipal, m.MinimumYield1e8 = maximum, new(big.Int)
 	auction := threef.AuctionDto{AdditionalProperties: map[string]any{exactMaxRateKey: "10000"}}
-	fits, err := fitsTerms(m, maximum, maximum, auction)
-	if err != nil || !fits {
-		t.Fatalf("uint128 boundary rejected: %v %v", fits, err)
+	mismatch, err := termsMismatch(m, maximum, maximum, auction)
+	if err != nil || mismatch != "" {
+		t.Fatalf("uint128 boundary rejected: %q %v", mismatch, err)
 	}
 	tooLarge := new(big.Int).Add(maximum, big.NewInt(1))
 	m.MaxPrincipal = tooLarge
 	for _, pair := range [][2]*big.Int{{tooLarge, big.NewInt(1)}, {big.NewInt(1), tooLarge}} {
-		fits, err = fitsTerms(m, pair[0], pair[1], auction)
-		if err != nil || fits {
-			t.Fatalf("unexecutable native authorization accepted: %v %v", fits, err)
+		mismatch, err = termsMismatch(m, pair[0], pair[1], auction)
+		if err != nil || !strings.Contains(mismatch, "exceeds uint128") {
+			t.Fatalf("unexecutable native authorization accepted: %q %v", mismatch, err)
 		}
+	}
+}
+
+func TestTermsMismatchNamesBound(t *testing.T) {
+	m := testMarket()
+	m.MaxPrincipal, m.MinimumYield1e8 = big.NewInt(1000000000), big.NewInt(1000000)
+	auction := threef.AuctionDto{RateBasisSeconds: 31536000, AdditionalProperties: map[string]any{exactMaxRateKey: "1500"}}
+	for _, tc := range []struct {
+		name             string
+		principal, yield int64
+		want             string
+	}{
+		{"zero yield", 1000000000, 0, "principal 1000000000 and return 0 must be positive"},
+		{"above maxPrincipal", 1000000001, 150000000, "principal 1000000001 exceeds maxPrincipal 1000000000"},
+		{"below policy floor", 1000000000, 9999999, "return 9999999 is below policy minimum 10000000"},
+		{"below auction floor", 1000000000, 37499999, "return 37499999 is below auction minimum 37500000"},
+		{"above auction ceiling", 1000000000, 150000001, "return 150000001 exceeds auction maximum 150000000"},
+		{"fits", 1000000000, 150000000, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := termsMismatch(m, big.NewInt(tc.principal), big.NewInt(tc.yield), auction)
+			if err != nil || got != tc.want {
+				t.Fatalf("mismatch=%q err=%v, want %q", got, err, tc.want)
+			}
+		})
 	}
 }
 
@@ -504,9 +529,9 @@ func TestFitsTermsAuctionRateBasis(t *testing.T) {
 			m := testMarket()
 			m.MaxPrincipal, m.MinimumYield1e8 = big.NewInt(1000000000), new(big.Int)
 			auction := threef.AuctionDto{RateBasisSeconds: tc.basis, AdditionalProperties: map[string]any{exactMaxRateKey: "1500"}}
-			fits, err := fitsTerms(m, m.MaxPrincipal, big.NewInt(tc.yield), auction)
-			if fits != tc.wantFits || (err != nil) != tc.wantError {
-				t.Fatalf("fits=%v, err=%v", fits, err)
+			mismatch, err := termsMismatch(m, m.MaxPrincipal, big.NewInt(tc.yield), auction)
+			if fits := mismatch == "" && err == nil; fits != tc.wantFits || (err != nil) != tc.wantError {
+				t.Fatalf("mismatch=%q, err=%v", mismatch, err)
 			}
 		})
 	}
@@ -780,5 +805,58 @@ func TestZeroBudgetCancellationRequiresDurableOwnership(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestCancelReasonNamesCondition(t *testing.T) {
+	request := common.HexToAddress("0x1000000000000000000000000000000000000001")
+	auction := testAuction(testMarket(), 1, request)
+	amount := big.NewInt(100000)
+	_, maximum, err := auctionReturnBounds(amount, auction)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*offerMarket, *liveOffer, **intent, *big.Int, *big.Int)
+		want string
+	}{
+		{"fits", func(*offerMarket, *liveOffer, **intent, *big.Int, *big.Int) {}, ""},
+		{"not managed by this market", func(m *offerMarket, _ *liveOffer, _ **intent, _, _ *big.Int) {
+			m.EligibleRequests = map[common.Address]bool{}
+		}, ""},
+		{"recipe changed", func(m *offerMarket, _ *liveOffer, previous **intent, _, _ *big.Int) {
+			*previous = newIntent(*m, request, threef.CreateOfferDto{})
+			(*previous).RecipeHash = common.HexToHash("0x05")
+		}, "intent recipe hash " + common.HexToHash("0x05").Hex() + " no longer matches market recipe hash " + common.HexToHash("0x04").Hex()},
+		{"request no longer eligible", func(m *offerMarket, _ *liveOffer, previous **intent, _, _ *big.Int) {
+			*previous = newIntent(*m, request, threef.CreateOfferDto{})
+			m.EligibleRequests = map[common.Address]bool{}
+		}, "request " + request.Hex() + " is no longer eligible for this market"},
+		{"other funding asset", func(_ *offerMarket, offer *liveOffer, _ **intent, cash, _ *big.Int) {
+			offer.asset = common.HexToAddress("0x07")
+			cash.SetInt64(1 << 40)
+		}, ""},
+		{"cash shrank", func(_ *offerMarket, _ *liveOffer, _ **intent, cash, _ *big.Int) {
+			cash.SetInt64(900001)
+		}, "reserved cash 900001 exceeds available cash 900000"},
+		{"budget shrank", func(_ *offerMarket, _ *liveOffer, _ **intent, _, pair *big.Int) {
+			pair.SetInt64(1000001)
+		}, "reserved budget 1000001 exceeds policy budget 1000000"},
+		{"terms stale", func(_ *offerMarket, offer *liveOffer, _ **intent, _, _ *big.Int) {
+			offer.expectedReturn = new(big.Int).Add(maximum, big.NewInt(1))
+		}, "terms no longer fit: return " + new(big.Int).Add(maximum, big.NewInt(1)).String() + " exceeds auction maximum " + maximum.String()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := testMarket()
+			offer := liveOffer{dto: threef.OfferDto{RequestId: request.Hex()}, id: 12, auctionID: 1, asset: m.Asset, amount: amount, expectedReturn: maximum}
+			var previous *intent
+			cash, pair := big.NewInt(100000), big.NewInt(100000)
+			tc.edit(&m, &offer, &previous, cash, pair)
+			got, err := cancelReason(m, offer, previous, auction, cash, pair)
+			if err != nil || got != tc.want {
+				t.Fatalf("reason=%q err=%v, want %q", got, err, tc.want)
+			}
+		})
 	}
 }

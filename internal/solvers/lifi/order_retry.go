@@ -74,7 +74,7 @@ func (s *Solver) deferOrderForCapacity(
 ) (orderProcessingOutcome, error) {
 	err := retries.enqueueWithNonceRetry(order, generation, nonceRetries, now)
 	if errors.Is(err, errOrderNonceRetryExpired) {
-		observability.Decline(ctx, "order_skipped", "nonce reconciliation reached the order deadline")
+		observability.Decline(ctx, "order_skipped", err.Error())
 		observability.Log(ctx).Info("order skipped: nonce reconciliation reached the order deadline",
 			"orderId", order.OrderID, "onChainOrderId", order.OnChainOrderID,
 			"quoteId", order.QuoteID, "reason", err.Error())

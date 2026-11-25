@@ -231,7 +231,7 @@ func TestPriceQuoteRangeKeepsPositiveMinimumOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGasPricing: %v", err)
 	}
-	quoteRange, err := strategy.priceQuoteRange(
+	quoteRange, _, err := strategy.priceQuoteRange(
 		candidates, 1, big.NewInt(3), big.NewInt(4), pricing.MaxCost(1, 0), 1, pricing,
 	)
 	if err != nil {
@@ -652,7 +652,7 @@ func TestPriceQuoteRangeNeverOverquotesInteriorRouteTransition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGasPricing: %v", err)
 	}
-	quoteRange, err := strategy.priceQuoteRange(
+	quoteRange, _, err := strategy.priceQuoteRange(
 		candidates, 3, big.NewInt(6), big.NewInt(9), pricing.MaxCost(3, 2), 3, pricing,
 	)
 	if err != nil {
@@ -910,12 +910,7 @@ func TestDecideFillDoesNotDoubleSpendSharedVaultCapacity(t *testing.T) {
 		AmountIn: big.NewInt(1_000), OutputAmount: big.NewInt(900), ChainTime: time.Unix(1_800_000_000, 0),
 		MaxFeePerGas: big.NewInt(0), Quotes: quotes,
 	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
-	if plan != nil {
-		t.Fatalf("shared capacity was double counted: %+v", plan)
-	}
+	requireFillDecline(t, plan, err, "reason=insufficient-capacity")
 }
 
 func TestDecideQuotesUsesPrivateDiscountWithoutDirectCandidateAndClipsExpiry(t *testing.T) {
@@ -985,34 +980,61 @@ func TestDecideQuotesPublishesOnePairForDirectAndDiscount(t *testing.T) {
 	}
 }
 
-func TestDecideQuotesSkipsBelowMinAmount(t *testing.T) {
-	strategy, err := New(testStrategyConfig(Config{MinAmount: "1000001"}))
-	if err != nil {
-		t.Fatalf("New: %v", err)
+func TestDecideQuotesNamesDeclinedPairs(t *testing.T) {
+	tokenIn := common.HexToAddress("0x3333333333333333333333333333333333333333")
+	tokenOut := common.HexToAddress("0x4444444444444444444444444444444444444444")
+	chainTime := time.Unix(1_800_000_000, 0)
+	tests := map[string]struct {
+		minAmount  string
+		maxAssets  int64
+		validUntil time.Time
+		want       string
+	}{
+		"below minimum": {
+			minAmount: "1000001", maxAssets: 1_000_000,
+			want: "quote maximum 1000000 is below minimum amount 1000001",
+		},
+		"expired inventory": {
+			minAmount: "1", maxAssets: 1_000_000, validUntil: chainTime,
+			want: "no inventory with capacity: 1 items, 0 live past execution buffer",
+		},
+		"no capacity": {
+			minAmount: "1", maxAssets: 0,
+			want: "no inventory with capacity: 1 items, 1 live past execution buffer, 0 with capacity",
+		},
 	}
-
-	out, err := strategy.DecideQuotes(context.Background(), types.QuoteInput{
-		Solver:         common.HexToAddress("0x1111111111111111111111111111111111111111"),
-		ChainTime:      time.Unix(1_800_000_000, 0),
-		QuoteExpiresAt: time.Unix(1_800_000_090, 0),
-		MaxFeePerGas:   big.NewInt(0),
-		Inventory: []liquidlane.Inventory{{
-			Route: liquidlane.Route{
-				ID:               "route-1",
-				TokenIn:          common.HexToAddress("0x3333333333333333333333333333333333333333"),
-				TokenOut:         common.HexToAddress("0x4444444444444444444444444444444444444444"),
-				TokenInDecimals:  6,
-				TokenOutDecimals: 6,
-			},
-			MaxAssets: big.NewInt(1_000_000),
-			MaxRate:   big.NewInt(1_000_000_000_000_000_000),
-		}},
-	})
-	if err != nil {
-		t.Fatalf("DecideQuotes: %v", err)
-	}
-	if len(out.Quotes) != 0 {
-		t.Fatalf("quotes len = %d", len(out.Quotes))
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			strategy, err := New(testStrategyConfig(Config{MinAmount: tt.minAmount}))
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			out, err := strategy.DecideQuotes(context.Background(), types.QuoteInput{
+				Solver:         common.HexToAddress("0x1111111111111111111111111111111111111111"),
+				ChainTime:      chainTime,
+				QuoteExpiresAt: chainTime.Add(90 * time.Second),
+				MaxFeePerGas:   big.NewInt(0),
+				Inventory: []liquidlane.Inventory{{
+					Route: liquidlane.Route{
+						ID: "route-1", TokenIn: tokenIn, TokenOut: tokenOut,
+						TokenInDecimals: 6, TokenOutDecimals: 6,
+					},
+					MaxAssets:  big.NewInt(tt.maxAssets),
+					MaxRate:    big.NewInt(1_000_000_000_000_000_000),
+					ValidUntil: tt.validUntil,
+				}},
+			})
+			if err != nil {
+				t.Fatalf("DecideQuotes: %v", err)
+			}
+			if len(out.Quotes) != 0 || len(out.Declines) != 1 {
+				t.Fatalf("quotes = %+v, declines = %+v; want one decline", out.Quotes, out.Declines)
+			}
+			decline := out.Declines[0]
+			if decline.FromAsset != tokenIn || decline.ToAsset != tokenOut || !strings.Contains(decline.Reason, tt.want) {
+				t.Fatalf("decline = %+v, want %s -> %s naming %q", decline, tokenIn, tokenOut, tt.want)
+			}
+		})
 	}
 }
 
@@ -1088,12 +1110,7 @@ func TestDecideFillPermissionedTokenNeverAggregatesRoutes(t *testing.T) {
 		RequireSingleRoute: true,
 		ChainTime:          time.Unix(1_800_000_000, 0), MaxFeePerGas: big.NewInt(0), Quotes: quotes,
 	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
-	if plan != nil {
-		t.Fatalf("permissioned token must not aggregate routes, got %+v", plan)
-	}
+	requireFillDecline(t, plan, err, "maxRoutes=1")
 }
 
 func TestDecideFillSelectsBestRouteInsteadOfConfigOrder(t *testing.T) {
@@ -1259,13 +1276,14 @@ func TestDecideFillPrivateCapacityIncludesUpwardPriceBuffer(t *testing.T) {
 					MinDiscount:  big.NewInt(100_000),
 				}},
 			})
+			if !tt.wantFill {
+				requireFillDecline(t, plan, fillErr, "reason=insufficient-capacity")
+				return
+			}
 			if fillErr != nil {
 				t.Fatalf("DecideFill: %v", fillErr)
 			}
-			if (plan != nil) != tt.wantFill {
-				t.Fatalf("plan = %+v, wantFill = %v", plan, tt.wantFill)
-			}
-			if tt.wantFill && plan.Routes[0].ReservedAmountOut.String() != "9999" {
+			if plan.Routes[0].ReservedAmountOut.String() != "9999" {
 				t.Fatalf("private reservation = %s, want 9999", plan.Routes[0].ReservedAmountOut)
 			}
 		})
@@ -1299,12 +1317,7 @@ func TestDecideFillSubtractsPendingCapacityReservations(t *testing.T) {
 			MaxAmountOut: big.NewInt(100),
 		}},
 	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
-	if plan != nil {
-		t.Fatalf("plan = %+v, want pending reservation to leave insufficient capacity", plan)
-	}
+	requireFillDecline(t, plan, err, "reason=insufficient-capacity")
 }
 
 func TestDecideFillRequiresExecutionDeadlineBuffer(t *testing.T) {
@@ -1322,12 +1335,7 @@ func TestDecideFillRequiresExecutionDeadlineBuffer(t *testing.T) {
 		Expires: uint32(now.Add(30 * time.Second).Unix()), FillDeadline: uint32(now.Add(time.Minute).Unix()),
 		MaxFeePerGas: big.NewInt(0), Quotes: profitableFillQuotes(tokenIn, tokenOut),
 	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
-	if plan != nil {
-		t.Fatalf("expected near-expiry order to be skipped, got %+v", plan)
-	}
+	requireFillDecline(t, plan, err, "expires 1800000030 is not after chain time plus execution buffer 1800000030")
 }
 
 func TestDecideQuotesKeepsInventoryReserve(t *testing.T) {
@@ -1599,12 +1607,7 @@ func TestDecideFillRespectsExclusiveWindow(t *testing.T) {
 		MaxFeePerGas:  big.NewInt(0),
 		Quotes:        profitableFillQuotes(tokenIn, tokenOut),
 	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
-	if plan != nil {
-		t.Fatalf("expected skip during another solver's exclusive window, got %+v", plan)
-	}
+	requireFillDecline(t, plan, err, "until 1800000010, chain time 1800000000")
 
 	plan, err = strategy.DecideFill(context.Background(), types.FillInput{
 		Solver:        solver,
@@ -1681,11 +1684,14 @@ func TestOutputPricingSupportsOutputSettlerSimpleContexts(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parseOutputContext: %v", err)
 			}
-			got, ok := pricing.fill(solver, now, big.NewInt(1_000_000))
-			if ok != tt.fill {
-				t.Fatalf("fill = %v", ok)
+			got, err := pricing.fill(solver, now, big.NewInt(1_000_000))
+			if (err == nil) != tt.fill {
+				t.Fatalf("fill error = %v, want fill %v", err, tt.fill)
 			}
-			if !ok {
+			if err != nil {
+				if !errors.Is(err, types.ErrFillDeclined) {
+					t.Fatalf("fill error = %v, want ErrFillDeclined", err)
+				}
 				return
 			}
 			if got.String() != tt.want {
@@ -1750,11 +1756,13 @@ func TestDecideFillSkipsExpiredOrder(t *testing.T) {
 			AmountIn: big.NewInt(1_000_000), MaxAmountOut: big.NewInt(1_000_000),
 		}},
 	})
-	if err != nil {
-		t.Fatalf("DecideFill: %v", err)
-	}
-	if plan != nil {
-		t.Fatalf("expected expired skip, got %#v", plan)
+	requireFillDecline(t, plan, err, "is not after chain time plus execution buffer")
+}
+
+func requireFillDecline(t *testing.T, plan *types.FillPlan, err error, wantReason string) {
+	t.Helper()
+	if plan != nil || !errors.Is(err, types.ErrFillDeclined) || !strings.Contains(err.Error(), wantReason) {
+		t.Fatalf("DecideFill = %+v, %v; want ErrFillDeclined naming %q", plan, err, wantReason)
 	}
 }
 

@@ -122,7 +122,8 @@ func TestSubmitOwnsTheLaneUntilSettlement(t *testing.T) {
 	if err := e.Submit(t.Context(), first); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Submit(t.Context(), &Intent{OrderID: "second", Spend: testSpend()}); !errors.Is(err, ErrBusy) || sender.Submits != 1 {
+	if err := e.Submit(t.Context(), &Intent{OrderID: "second", Spend: testSpend()}); !errors.Is(err, ErrBusy) || sender.Submits != 1 ||
+		!strings.Contains(err.Error(), "order first owns the signer lane") {
 		t.Fatalf("second fill entered a busy lane: %v", err)
 	}
 	sender.Result = fillertest.Confirmed()

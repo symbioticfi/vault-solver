@@ -1,6 +1,7 @@
 package uniswapx
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 
@@ -10,10 +11,12 @@ import (
 // quoteStrategyDeclines observes existing terminal planning decisions independently of log level.
 // One request owns the collector. The mutex also permits a strategy to trace parallel candidates;
 // DecideQuote must join its workers before returning. Different candidate failures deliberately
-// retain the generic strategy decline: the last attempted route is not a reason for every route.
+// retain the generic strategy metric reason (the last attempted route is not a reason for every
+// route); the logged detail lists every decline instead.
 type quoteStrategyDeclines struct {
-	mu    sync.Mutex
-	value quoteDeclineReason
+	mu      sync.Mutex
+	value   quoteDeclineReason
+	details []string
 }
 
 func (d *quoteStrategyDeclines) trace(next strategies.DecisionTrace) strategies.DecisionTrace {
@@ -27,6 +30,7 @@ func (d *quoteStrategyDeclines) trace(next strategies.DecisionTrace) strategies.
 				}
 			}
 			d.mu.Lock()
+			d.details = append(d.details, formatDecline(fields))
 			if d.value == "" {
 				d.value = reason
 			} else if d.value != reason {
@@ -45,6 +49,27 @@ func (d *quoteStrategyDeclines) reason() quoteDeclineReason {
 		return quoteDeclineStrategy
 	}
 	return d.value
+}
+
+// detail lists every recorded decline for the quote log line.
+func (d *quoteStrategyDeclines) detail() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.details) == 0 {
+		return "strategy returned no quote without recording a decline"
+	}
+	return strings.Join(d.details, "; ")
+}
+
+func formatDecline(fields []any) string {
+	var b strings.Builder
+	for i := 0; i+1 < len(fields); i += 2 {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		fmt.Fprintf(&b, "%v=%v", fields[i], fields[i+1])
+	}
+	return b.String()
 }
 
 // Only these local planner decisions have established semantics. Never classify arbitrary
