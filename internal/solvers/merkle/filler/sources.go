@@ -16,6 +16,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 // Source is one advertised connector discount backed by a configured recipe.
@@ -221,8 +222,16 @@ func (e *Engine) Observe(ctx context.Context) (Observation, error) {
 	if header == nil || header.Number == nil || !header.Number.IsUint64() || header.Time > ^uint64(0)>>1 {
 		return Observation{}, errors.New("invalid chain header")
 	}
-	e.Spends.Expire(int64(header.Time))
-	return Observation{Chain: time.Unix(int64(header.Time), 0), Wall: wall, BlockHash: header.Hash(), BlockNumber: header.Number}, nil
+	chainTime := int64(header.Time)
+	for _, expired := range e.Spends.Expire(chainTime) {
+		kind := "completed fill"
+		if expired.Queued {
+			kind = "queued award"
+		}
+		observability.Log(ctx).V(1).Info("connector spend retired", "orderId", expired.ID, "kind", kind,
+			"reason", "signed deadline passed", "deadline", expired.Deadline, "chainTime", chainTime)
+	}
+	return Observation{Chain: time.Unix(chainTime, 0), Wall: wall, BlockHash: header.Hash(), BlockNumber: header.Number}, nil
 }
 
 // MissedDeadline says which limits a fill missed while it was being prepared.

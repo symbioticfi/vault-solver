@@ -3,6 +3,7 @@ package filler
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math/big"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
+	"github.com/go-logr/logr/funcr"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/erc4626"
@@ -18,6 +20,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector/connectortest"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/execution"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"github.com/symbioticfi/vault-solver/internal/solvers/merkle/filler/fillertest"
 )
@@ -318,4 +321,22 @@ func TestSwapSplitsAcrossConnectors(t *testing.T) {
 			t.Fatalf("underfunded order was filled: intent=%v err=%v", intent, err)
 		}
 	})
+}
+
+func TestObserveLogsRetiredSpends(t *testing.T) {
+	var lines []string
+	ctx := observability.WithLogger(t.Context(), funcr.NewJSON(func(obj string) { lines = append(lines, obj) }, funcr.Options{Verbosity: 1}))
+	f := newSwapFixture(t)
+	capacity := liquidlane.NewCapacityID(1, f.chain.RecipeAccount, connectortest.TokenOut)
+	if err := f.swaps.Spends.ReserveQueued("award", connector.Spend{Amounts: liquidlane.CapacityReservations{capacity: big.NewInt(1)}, Deadline: 5}); err != nil {
+		t.Fatal(err)
+	}
+	observed, err := f.swaps.Observe(ctx)
+	if err != nil || f.swaps.Spends.Queued("award") {
+		t.Fatalf("queued award outlived its deadline: %v", err)
+	}
+	want := fmt.Sprintf(`"msg":"connector spend retired","orderId":"award","kind":"queued award","reason":"signed deadline passed","deadline":5,"chainTime":%d`, observed.Chain.Unix())
+	if len(lines) != 1 || !strings.Contains(lines[0], want) {
+		t.Fatalf("logs = %v, want %s", lines, want)
+	}
 }
