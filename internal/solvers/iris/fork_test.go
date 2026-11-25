@@ -32,33 +32,40 @@ import (
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
 	"github.com/go-errors/errors"
+	"github.com/symbioticfi/merkle-executor/sdk/bindings/merkleaccount"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 
 	"github.com/symbioticfi/vault-solver/api/bindings/iris/blm"
 )
 
-// Mainnet addresses (iris-core deployments/1.json) and the fixture account the recipes in
-// testdata/fork/recipes.json were built for.
+// Mainnet addresses (iris-core deployments/1.json, Aave Core, Morpho Blue). The account is the
+// one testdata/ui/recipes.json was compiled for.
 var (
-	forkIris      = common.HexToAddress("0x77310475712D7a127D694B3e9D186d9f4a423bd9")
-	forkBlm       = common.HexToAddress("0xB0ffB27D9D7f160d588c669329F807e58aDd4eeF")
-	forkWETH      = common.HexToAddress("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2")
-	forkUSDC      = common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48")
-	forkAccount   = common.HexToAddress("0x0000000000000000000000000000000000ACC001")
-	forkAdmin     = forkAddress("iris-fork-admin")
-	forkBorrower  = forkAddress("iris-fork-borrower")
-	forkReceiver  = forkAddress("iris-fork-receiver")
-	forkKeeper    = forkAddress("iris-fork-keeper")
-	forkSignerKey = crypto.ToECDSAUnsafe(crypto.Keccak256([]byte("iris-fork-signer")))
-	forkSigner    = crypto.PubkeyToAddress(forkSignerKey.PublicKey)
+	forkIris     = fixtureIris
+	forkBlm      = common.HexToAddress("0xB0ffB27D9D7f160d588c669329F807e58aDd4eeF")
+	forkWstETH   = fixtureWstETH
+	forkUSDC     = fixtureUSDC
+	forkAavePool = common.HexToAddress("0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2")
+	forkAUSDC    = common.HexToAddress("0x98C23E9d8f34FEFb1B7BD6a91B7FF122F4e16F5c")
+	forkMorpho   = common.HexToAddress("0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb")
+	// forkMorphoMarket is the Morpho wstETH/USDC market id, the payload hash of the second offer.
+	forkMorphoMarket = common.HexToHash("0xb323495f7e4148be5643a4ea4a8221eef163e4bccfdedc2a6f4696baacbc86cc")
+	forkAccount      = fixtureAccount
+	forkAdmin        = forkAddress("iris-fork-admin")
+	forkBorrower     = forkAddress("iris-fork-borrower")
+	forkReceiver     = forkAddress("iris-fork-receiver")
+	forkKeeper       = forkAddress("iris-fork-keeper")
+	forkSignerKey    = crypto.ToECDSAUnsafe(crypto.Keccak256([]byte("iris-fork-signer")))
+	forkSigner       = crypto.PubkeyToAddress(forkSignerKey.PublicKey)
 )
 
 const (
 	forkAuthHeader = "x-api-key"
 	forkAuthValue  = "fork-webhook-key"
 	forkRate       = 60_000_000_000_000_000 // defaultFixedRate in the test config
-	forkBufferBps  = 1000
-	usdcBalances   = 9 // FiatToken balanceAndBlacklistStates slot
+	usdcBalances   = 9                      // FiatToken balanceAndBlacklistStates slot
+	wstETHBalances = 0                      // OpenZeppelin ERC20 _balances slot
+	keeperRole     = 2                      // AccessManager role allowed to call execute
 	// Fork reads fetch state upstream, so slots leave the sender a few seconds like mainnet does.
 	forkBlockTime = 4
 )
@@ -67,9 +74,10 @@ func forkAddress(label string) common.Address {
 	return common.BytesToAddress(crypto.Keccak256([]byte(label))[12:])
 }
 
-// TestForkIrisEndToEnd runs docs/IRIS-PLAN.md §8.1 in order. The test plays the IRIS
-// coordinator (posting to the solver's endpoints and re-running its on-chain checks) and the
-// borrower (taking, repaying); everything else is the real binary and the real Iris.
+// TestForkIrisEndToEnd runs docs/IRIS-PLAN.md §8.1 in order against the curator UI's own
+// permissions and recipes. The test plays the IRIS coordinator (posting to the solver's
+// endpoints and re-running its on-chain checks), the curator (allowance, claims) and the
+// borrower (taking, repaying); everything else is the real binary, contracts and Iris.
 func TestForkIrisEndToEnd(t *testing.T) {
 	endpoint := os.Getenv("ETH_RPC_URL_MAINNET")
 	if endpoint == "" {
@@ -79,14 +87,18 @@ func TestForkIrisEndToEnd(t *testing.T) {
 	f.setup()
 	f.startSolver()
 
-	var firm quoteResponse
-	var firmRequest quoteRequest
-	var pod common.Address
+	var firm, morphoFirm quoteResponse
+	var firmRequest, morphoRequest quoteRequest
+	var pod, morphoPod common.Address
 	// Steps share chain state; make test-iris-fork runs with -failfast.
-	t.Run("2 startup discovers the market", func(t *testing.T) {
+	t.Run("2 startup discovers both markets and skips the claim executor", func(t *testing.T) {
 		f.waitLog(t, "iris markets discovered", 1)
-		if !strings.Contains(f.logs.String(), `"markets": 1`) && !strings.Contains(f.logs.String(), `"markets":1`) {
-			t.Fatalf("expected one market:\n%s", f.logs.String())
+		logs := f.logs.String()
+		if !strings.Contains(logs, `"markets": 2`) && !strings.Contains(logs, `"markets":2`) {
+			t.Fatalf("expected two markets:\n%s", logs)
+		}
+		if !strings.Contains(logs, "iris executor skipped") || !strings.Contains(logs, f.claim.Hex()) {
+			t.Fatalf("claim executor not skipped:\n%s", logs)
 		}
 	})
 	t.Run("3 auth", func(t *testing.T) {
@@ -97,16 +109,16 @@ func TestForkIrisEndToEnd(t *testing.T) {
 			}
 		}
 	})
-	t.Run("4 indicative quote", func(t *testing.T) {
+	t.Run("4 indicative quote picks the market the request fits", func(t *testing.T) {
 		before := f.nonce(forkSigner)
-		r := f.request("indicative")
+		r := f.request("indicative") // 10k USDC for 30 days: above the Morpho market's caps
 		status, body := f.post(t, "/quote/indicative", r, forkAuthValue)
 		if status != http.StatusOK {
 			t.Fatalf("status %d: %s", status, body)
 		}
 		var q quoteResponse
 		mustJSON(t, body, &q)
-		if !q.Indicative || q.Signature != "" || q.Deadline != "" {
+		if !q.Indicative || q.Signature != "" || q.Deadline != "" || q.VenueID != "0" || q.Data != "0x" {
 			t.Fatalf("indicative shape: %+v", q)
 		}
 		if want := f.expectedBond(r, q); q.Bond != want.String() {
@@ -116,8 +128,9 @@ func TestForkIrisEndToEnd(t *testing.T) {
 			t.Fatal("indicative quote sent a transaction")
 		}
 	})
-	t.Run("5 firm quote", func(t *testing.T) {
-		before := f.nonce(forkSigner)
+	t.Run("5 firm quote funds the bond from Aave", func(t *testing.T) {
+		before, supplied := f.nonce(forkSigner), f.balance(forkAUSDC, forkAccount)
+		equal(t, new(big.Int), f.balance(forkUSDC, forkAccount), "account starts without cash")
 		firmRequest = f.request("firm")
 		status, body := f.post(t, "/quote", firmRequest, forkAuthValue)
 		received := time.Now().Unix()
@@ -128,21 +141,24 @@ func TestForkIrisEndToEnd(t *testing.T) {
 		if firm.Signature != hexutil.Encode(make([]byte, placeholderSignatureBytes)) {
 			t.Fatalf("signature %s", firm.Signature)
 		}
-		ahead := mustInt(t, firm.Deadline) - received
-		if ahead < 114 || ahead > 121 {
+		if ahead := mustInt(t, firm.Deadline) - received; ahead < 109 || ahead > 121 {
 			t.Fatalf("deadline %ds ahead of the response", ahead)
 		}
 		if f.nonce(forkSigner) != before+1 {
 			t.Fatal("firm quote must send exactly one transaction")
 		}
-		if want := f.expectedBond(firmRequest, firm); firm.Bond != want.String() {
-			t.Fatalf("bond %s, want %s", firm.Bond, want)
+		bond := f.expectedBond(firmRequest, firm)
+		equal(t, bond.String(), firm.Bond, "bond")
+		equal(t, bond, f.balance(forkUSDC, forkAccount), "the recipe withdrew exactly the bond")
+		// The aToken balance also accrues interest between the two reads.
+		drawn := new(big.Int).Sub(supplied, f.balance(forkAUSDC, forkAccount))
+		if drawn.Cmp(bond) > 0 || new(big.Int).Sub(bond, drawn).Cmp(big.NewInt(10_000)) > 0 {
+			t.Fatalf("Aave supply fell by %s for a %s bond", drawn, bond)
 		}
 	})
 	t.Run("6 coordinator checks", func(t *testing.T) {
 		quote := f.quote(t, firmRequest, firm)
-		digest := f.digest(t, quote)
-		raw := f.call(forkAccount, accountBinding.PackIsValidSignature(digest, make([]byte, placeholderSignatureBytes)))
+		raw := f.call(forkAccount, accountBinding.PackIsValidSignature(f.digest(t, quote), make([]byte, placeholderSignatureBytes)))
 		magic, err := accountBinding.UnpackIsValidSignature(raw)
 		must(t, err)
 		equal(t, erc1271Magic, magic)
@@ -151,59 +167,63 @@ func TestForkIrisEndToEnd(t *testing.T) {
 		}
 	})
 	t.Run("7 borrower takes the quote", func(t *testing.T) {
-		quote := f.quote(t, firmRequest, firm)
-		accountBefore, receiverBefore := f.balance(forkUSDC, forkAccount), f.balance(forkUSDC, forkReceiver)
-		receipt := f.send(forkBorrower, forkIris, f.pack("take", quote, make([]byte, placeholderSignatureBytes)))
-		take := f.iris.Events["Take"].ID
-		for _, l := range receipt.Logs {
-			if l.Address == forkIris && len(l.Topics) == 3 && l.Topics[0] == take {
-				pod = common.BytesToAddress(l.Topics[2].Bytes())
-			}
-		}
-		if pod == (common.Address{}) {
-			t.Fatal("no Take event")
-		}
-		equal(t, quote.Bond, f.position(pod).Bond)
-		equal(t, new(big.Int).Sub(accountBefore, quote.Bond), f.balance(forkUSDC, forkAccount))
-		equal(t, new(big.Int).Add(receiverBefore, quote.Debt), f.balance(forkUSDC, forkReceiver))
-		used, err := f.iris.Unpack("isQuoteNonceUsed", f.call(forkIris, f.pack("isQuoteNonceUsed", forkAccount, quote.Nonce)))
-		must(t, err)
-		ok(t, used[0].(bool), "nonce not used")
+		pod = f.take(t, f.quote(t, firmRequest, firm))
 	})
 	t.Run("8 replay reverts", func(t *testing.T) {
-		quote := f.quote(t, firmRequest, firm)
-		_, err := f.takeCall(quote)
+		_, err := f.takeCall(f.quote(t, firmRequest, firm))
 		f.expectRevert(t, err, "InvalidNonce()")
 	})
-	t.Run("9 recipe limits", func(t *testing.T) {
-		for name, mutate := range map[string]func(*quoteRequest){
-			"debt above maxDebt":         func(r *quoteRequest) { r.Debt = "60000000000" },
-			"duration above maxDuration": func(r *quoteRequest) { r.Duration = strconv.Itoa(100 * 86400) },
+	t.Run("9 per-market limits", func(t *testing.T) {
+		for name, tc := range map[string]struct {
+			mutate func(*quoteRequest)
+			reason string
+		}{
+			"debt above both caps":      {func(r *quoteRequest) { r.Debt = "25000000000" }, "above_market_limits"},
+			"debt above the Morpho cap": {func(r *quoteRequest) { r.VenueBitmap, r.Debt = "2", "6000000000" }, "above_market_limits"},
+			"tenor above both caps":     {func(r *quoteRequest) { r.Duration = strconv.Itoa(60 * 86400) }, "above_market_limits"},
+			"ceiling under the Morpho floor": {func(r *quoteRequest) {
+				r.VenueBitmap, r.Debt, r.Duration, r.MaxFixedRate = "2", "4000000000", strconv.Itoa(7*86400), "62000000000000000"
+			}, "rate_above_max_fixed_rate"},
 		} {
 			before := f.nonce(forkSigner)
 			r := f.request(name)
-			mutate(&r)
-			f.expectDecline(t, r, "recipe_rejected")
+			tc.mutate(&r)
+			f.expectDecline(t, r, tc.reason)
 			if f.nonce(forkSigner) != before {
 				t.Fatalf("%s: sent a transaction", name)
 			}
 		}
 	})
-	t.Run("10 solver declines", func(t *testing.T) {
-		r := f.request("rate")
-		r.MaxFixedRate = "50000000000000000"
-		f.expectDecline(t, r, "rate_above_max_fixed_rate")
-		r = f.request("venue")
-		r.VenueBitmap = "2"
+	t.Run("10 an open quote holds the cash the next one needs", func(t *testing.T) {
+		morphoRequest = f.request("morpho")
+		morphoRequest.VenueBitmap, morphoRequest.Debt, morphoRequest.Duration = "2", "4000000000", strconv.Itoa(7*86400)
+		// The Aave quote is taken but stays reserved until its deadline; its bond left the account.
+		f.expectDecline(t, morphoRequest, "insufficient_bond_balance")
+		f.setUSDC(forkAccount, big.NewInt(1_000e6))
+	})
+	t.Run("11 Morpho market quote at the curator floor", func(t *testing.T) {
+		status, body := f.post(t, "/quote", morphoRequest, forkAuthValue)
+		if status != http.StatusOK {
+			t.Fatalf("status %d: %s\n%s", status, body, f.logs.String())
+		}
+		mustJSON(t, body, &morphoFirm)
+		equal(t, "1", morphoFirm.VenueID)
+		equal(t, "65000000000000000", morphoFirm.FixedRate, "default rate raised to the 6.5% floor")
+		equal(t, hexutil.Encode(f.morphoMarket()), morphoFirm.Data)
+		equal(t, f.expectedBond(morphoRequest, morphoFirm).String(), morphoFirm.Bond)
+		morphoPod = f.take(t, f.quote(t, morphoRequest, morphoFirm))
+	})
+	t.Run("12 solver declines", func(t *testing.T) {
+		r := f.request("venue")
+		r.VenueBitmap = "4"
 		f.expectDecline(t, r, "no_market")
-		funded := f.balance(forkUSDC, forkAccount)
-		f.setUSDC(forkAccount, big.NewInt(1))
-		f.expectDecline(t, f.request("unfunded"), "insufficient_bond_balance")
-		f.setUSDC(forkAccount, funded)
+		f.approveIris(new(big.Int))
+		f.expectDecline(t, f.request("no allowance"), "insufficient_bond_allowance")
+		f.approveIris(big.NewInt(30_000e6))
 	})
 	var spare quoteResponse
 	var spareRequest quoteRequest
-	t.Run("11 one lane", func(t *testing.T) {
+	t.Run("13 one lane", func(t *testing.T) {
 		var wg sync.WaitGroup
 		results := make([]struct {
 			status int
@@ -230,26 +250,32 @@ func TestForkIrisEndToEnd(t *testing.T) {
 			t.Fatalf("second request: %d %s", other.status, other.body)
 		}
 	})
-	t.Run("12 recipe changes", func(t *testing.T) {
+	t.Run("14 recipe and keeper changes", func(t *testing.T) {
 		discovered := strings.Count(f.logs.String(), "iris markets discovered")
 		time.Sleep(3 * f.refresh)
 		equal(t, discovered, strings.Count(f.logs.String(), "iris markets discovered"), "unchanged state rediscovered")
 
-		f.send(forkAdmin, f.signing, executorBinding.PackSetRecipe(f.signingRecipe.Queries, f.signingRecipe.Steps))
+		f.setRecipe(f.aave, f.fixture.Offers[0].Recipe)
 		f.waitLog(t, "iris markets discovered", discovered+1)
 
-		f.send(forkAdmin, f.signing, executorBinding.PackSetCaller(forkKeeper))
+		f.send(forkAdmin, f.aave, executorBinding.PackSetCaller(forkKeeper))
 		f.waitLog(t, "iris market refresh failed", 1)
 		f.expectDecline(t, f.request("caller moved"), "recipe_rejected")
-		f.send(forkAdmin, f.signing, executorBinding.PackSetCaller(forkSigner))
+		f.send(forkAdmin, f.aave, executorBinding.PackSetCaller(f.manager))
+
+		// A keeper role change leaves the recipe state alone: the quote path checks it.
 		time.Sleep(2 * f.refresh)
-		status, body := f.post(t, "/quote", f.request("caller restored"), forkAuthValue)
+		f.sendABI(forkAdmin, f.manager, "AccessManager", "revokeRole", uint64(keeperRole), forkSigner)
+		f.expectDecline(t, f.request("signer revoked"), "recipe_rejected")
+		f.sendABI(forkAdmin, f.manager, "AccessManager", "grantRole", uint64(keeperRole), forkSigner, uint32(0))
+		time.Sleep(2 * f.refresh)
+		status, body := f.post(t, "/quote", f.request("keeper restored"), forkAuthValue)
 		if status != http.StatusOK {
-			t.Fatalf("after restoring the caller: %d %s", status, body)
+			t.Fatalf("after restoring the keeper: %d %s", status, body)
 		}
 	})
 	// Time moves past wall clock from here on, so the solver's firm path is no longer used.
-	t.Run("13 expired quote reverts", func(t *testing.T) {
+	t.Run("15 expired quote reverts", func(t *testing.T) {
 		quote := f.quote(t, spareRequest, spare)
 		_, err := f.takeCall(quote)
 		must(t, err) // takeable until the deadline
@@ -257,32 +283,35 @@ func TestForkIrisEndToEnd(t *testing.T) {
 		_, err = f.takeCall(quote)
 		f.expectRevert(t, err, "QuoteExpired()")
 	})
-	t.Run("14 settlement returns capital", func(t *testing.T) {
+	t.Run("16 settlement returns the bond and the proceeds", func(t *testing.T) {
 		quote := f.quote(t, firmRequest, firm)
 		f.warp(quote.Duration.Int64())
 		f.setUSDC(forkBorrower, big.NewInt(1_000_000e6))
 		f.send(forkBorrower, forkUSDC, erc20Binding.PackApprove(forkIris, math.MaxBig256))
 		f.send(forkBorrower, forkIris, f.pack("repay", pod))
 
-		out, err := f.iris.Unpack("claimable", f.call(forkIris, f.pack("claimable", forkUSDC, forkAccount)))
-		must(t, err)
-		claimable, bond := out[0].(*big.Int), f.position(pod).Bond
+		// The UI's claim recipe refuses a loan that is still open.
+		_, err := f.client.CallContract(f.ctx, ethereum.CallMsg{From: forkKeeper, To: &f.manager, Data: f.claimCall(t, morphoPod)}, nil)
+		f.expectRevert(t, err, "CheckFailed()")
+
+		bond := f.position(pod).Bond
 		if bond.Sign() == 0 {
 			t.Fatal("no bond left to withdraw")
 		}
-		prepared, err := recipes.DiscoverBatch(f.ctx, f.client, []common.Address{f.settlement}, []common.Address{forkAccount}, forkKeeper, recipes.PreparationOptions{ChainID: big.NewInt(1)})
-		must(t, err)
-		inputs := map[uint]string{0: claimable.String(), 1: "0", 2: pod.Big().String(), 3: bond.String()}
-		data, _, err := recipes.Assemble(prepared[0].Recipe, f.tree, inputs, nil, nil)
-		must(t, err)
 		before := f.balance(forkUSDC, forkAccount)
-		f.send(forkKeeper, f.settlement, data)
-		equal(t, new(big.Int).Add(before, new(big.Int).Add(claimable, bond)), f.balance(forkUSDC, forkAccount))
+		f.send(forkKeeper, f.manager, f.claimCall(t, pod))
+		equal(t, new(big.Int).Add(before, bond), f.balance(forkUSDC, forkAccount), "bond claimed")
 		equal(t, new(big.Int), f.position(pod).Bond)
-		out, err = f.iris.Unpack("claimable", f.call(forkIris, f.pack("claimable", forkUSDC, forkAccount)))
+
+		out, err := f.iris.Unpack("claimable", f.call(forkIris, f.pack("claimable", forkUSDC, forkAccount)))
 		must(t, err)
-		equal(t, new(big.Int), out[0].(*big.Int))
-		t.Logf("bond %s and Iris claim %s returned to the account", bond, claimable)
+		claimable := out[0].(*big.Int)
+		ok(t, claimable.Sign() > 0, "no solver proceeds")
+		before = f.balance(forkUSDC, forkAccount)
+		claim := f.permission("claim(address,uint256,address,address)", forkIris)
+		f.manage(claim, map[int]*big.Int{4: forkUSDC.Big(), 36: claimable})
+		equal(t, new(big.Int).Add(before, claimable), f.balance(forkUSDC, forkAccount), "proceeds claimed")
+		t.Logf("bond %s and proceeds %s returned to the account", bond, claimable)
 	})
 }
 
@@ -294,10 +323,10 @@ type forkEVM struct {
 	endpoint                  string
 	artifacts                 map[string]forkArtifact
 	abis                      map[string]abi.ABI
-	iris                      abi.ABI
-	fixture                   forkFixture
-	signing, settlement       common.Address
-	signingRecipe             recipes.Recipe
+	iris, pool                abi.ABI
+	fixture                   uiFixture
+	aave, morpho, claim       common.Address
+	manager                   common.Address
 	tree                      *recipes.Tree
 	bundle                    []byte
 	server, metrics           string
@@ -312,21 +341,10 @@ type forkArtifact struct {
 	Bytecode string          `json:"bytecode"`
 }
 
-type forkLeaf struct {
-	data, mask []byte
-	hash       common.Hash
-	target     common.Address
-}
-
-type forkFixture struct {
-	Signing    map[string]string `json:"signing"`
-	Settlement map[string]string `json:"settlement"`
-}
-
 func newForkEVM(t *testing.T, upstream string) *forkEVM {
 	t.Helper()
 	f := &forkEVM{t: t, ctx: t.Context(), abis: map[string]abi.ABI{}, refresh: 2 * time.Second,
-		collateral: new(big.Int).Mul(big.NewInt(20), big.NewInt(1e18)), debt: big.NewInt(10_000e6), maxRate: big.NewInt(8e16)}
+		collateral: new(big.Int).Mul(big.NewInt(10), big.NewInt(1e18)), debt: big.NewInt(10_000e6), maxRate: big.NewInt(8e16)}
 	port := freePort(t)
 	args := []string{"--fork-url", upstream, "--block-time", strconv.Itoa(forkBlockTime), "--port", strconv.Itoa(port), "--silent"}
 	if block := os.Getenv("IRIS_FORK_BLOCK"); block != "" {
@@ -352,18 +370,25 @@ func newForkEVM(t *testing.T, upstream string) *forkEVM {
 	}
 	mustJSON(t, mustRead(t, "../merkle/rfq/testdata/outer-fill/artifacts.json"), &catalog)
 	f.artifacts = catalog.Contracts
-	for _, name := range []string{"MerkleAccount", "RecipeExecutor", "FixtureWorld"} {
+	var manager forkArtifact
+	mustJSON(t, mustRead(t, "../merkle/rfq/testdata/outer-fill/access-manager.json"), &manager)
+	f.artifacts["AccessManager"] = manager
+	for _, name := range []string{"MerkleAccount", "RecipeExecutor", "FixtureWorld", "AccessManager"} {
 		parsed, err := abi.JSON(bytes.NewReader(f.artifacts[name].ABI))
 		must(t, err)
 		f.abis[name] = parsed
 	}
 	f.iris, err = abi.JSON(strings.NewReader(irisABI))
 	must(t, err)
-	mustJSON(t, mustRead(t, "testdata/fork/recipes.json"), &f.fixture)
+	f.pool, err = abi.JSON(strings.NewReader(poolABI))
+	must(t, err)
+	f.fixture = loadFixture(t)
 	return f
 }
 
-// setup is checklist item 1: the account, its executors, root, roles and funding.
+// setup is checklist item 1: the account with the UI's permission tree, one executor per
+// market and the claim executor behind one AccessManager keeper, the curator's allowance and
+// an Aave USDC position to fund bonds from.
 func (f *forkEVM) setup() {
 	t := f.t
 	for _, who := range []common.Address{forkAdmin, forkBorrower, forkKeeper, forkSigner} {
@@ -384,86 +409,136 @@ func (f *forkEVM) setup() {
 	init, err := abi.Arguments{{Type: address}, {Type: raw}}.Pack(world, admin)
 	must(t, err)
 	f.sendABI(forkAdmin, forkAccount, "MerkleAccount", "initialize", uint64(1), forkAdmin, init)
-	f.signing = f.deploy("RecipeExecutor", forkAdmin, forkAccount)
-	f.settlement = f.deploy("RecipeExecutor", forkAdmin, forkAccount)
-	f.send(forkAdmin, f.signing, executorBinding.PackSetCaller(forkSigner))
-	f.send(forkAdmin, f.settlement, executorBinding.PackSetCaller(forkKeeper))
 
-	leaves := map[common.Address][]forkLeaf{
-		f.signing: {f.leaf("sign", forkAccount), f.leaf("approval", forkUSDC)},
-		f.settlement: {
-			f.leaf("claimDebt", forkIris), f.leaf("claimCollateral", forkIris), f.leaf("withdrawBond", forkIris),
-		},
+	f.manager = f.deploy("AccessManager", forkAdmin)
+	f.aave = f.deploy("RecipeExecutor", forkAdmin, forkAccount)
+	f.morpho = f.deploy("RecipeExecutor", forkAdmin, forkAccount)
+	f.claim = f.deploy("RecipeExecutor", forkAdmin, forkAccount)
+	execute := [4]byte(executorBinding.GetABI().Methods["execute"].ID)
+	for _, executor := range []common.Address{f.aave, f.morpho, f.claim} {
+		f.send(forkAdmin, executor, executorBinding.PackSetCaller(f.manager))
+		f.sendABI(forkAdmin, f.manager, "AccessManager", "setTargetFunctionRole", executor, [][4]byte{execute}, uint64(keeperRole))
 	}
-	var all []forkLeaf
-	for _, group := range leaves {
-		all = append(all, group...)
+	for _, who := range []common.Address{forkSigner, forkKeeper} {
+		f.sendABI(forkAdmin, f.manager, "AccessManager", "grantRole", uint64(keeperRole), who, uint32(0))
 	}
-	f.buildTree(all)
+
+	f.tree = fixtureTree(t, f.fixture.Calls)
+	equal(t, f.fixture.Root, f.tree.Root, "UI root")
 	adapter, err := accountBinding.UnpackAdapter(f.call(forkAccount, accountBinding.PackAdapter()))
 	must(t, err)
 	f.bundle = f.curatorBundle(adapter)
 	f.sendABI(forkAdmin, world, "FixtureWorld", "setRoot", forkAccount, f.tree.Root)
 	f.send(forkAdmin, forkAccount, accountBinding.PackAcceptRoot(f.tree.Root))
-	for executor, group := range leaves {
-		for _, l := range group {
-			f.sendABI(forkAdmin, forkAccount, "MerkleAccount", "grantRole", l.hash, executor)
+
+	sign := f.permission("sign(bytes32,bytes,(uint256,uint256,uint256)[])", forkAccount)
+	withdraw := f.permission("withdraw(address,uint256,address)", forkAavePool)
+	grants := map[common.Address][]uiCall{
+		f.aave:   {sign, withdraw},
+		f.morpho: {sign, withdraw},
+		f.claim:  {f.permission("withdrawBond(address,uint256,address)", forkIris)},
+		// The curator's Operate actions.
+		forkAdmin: {f.permission("approve(address,uint256)", forkUSDC, forkIris), f.permission("claim(address,uint256,address,address)", forkIris)},
+	}
+	for who, calls := range grants {
+		for _, c := range calls {
+			f.send(forkAdmin, forkAccount, accountBinding.PackGrantRole(c.Hash, who))
 		}
 	}
-	f.signingRecipe = f.setRecipe(f.signing, f.fixture.Signing["recipe"])
-	f.setRecipe(f.settlement, f.fixture.Settlement["recipe"])
-
-	f.setUSDC(forkAccount, big.NewInt(100_000e6))
-	f.send(forkBorrower, forkWETH, hexutil.MustDecode("0xd0e30db0"), new(big.Int).Mul(f.collateral, big.NewInt(2)))
-	f.send(forkBorrower, forkWETH, erc20Binding.PackApprove(forkIris, math.MaxBig256))
-}
-
-func (f *forkEVM) leaf(name string, target common.Address) forkLeaf {
-	l := forkLeaf{data: hexutil.MustDecode(f.fixtureValue(name + "Data")), mask: hexutil.MustDecode(f.fixtureValue(name + "Mask")), target: target}
-	hash, err := recipes.HashLeaf(recipes.Leaf{Target: target, Value: new(big.Int), Data: l.data, DataMask: l.mask})
-	must(f.t, err)
-	equal(f.t, common.HexToHash(f.fixtureValue(name+"Leaf")), hash, name)
-	l.hash = hash
-	return l
-}
-
-func (f *forkEVM) fixtureValue(key string) string {
-	if v, found := f.fixture.Signing[key]; found {
-		return v
+	for i, executor := range []common.Address{f.aave, f.morpho} {
+		f.setRecipe(executor, f.fixture.Offers[i].Recipe)
 	}
-	v, found := f.fixture.Settlement[key]
-	ok(f.t, found, key)
-	return v
+	f.setRecipe(f.claim, f.fixture.BondClaim.Recipe)
+
+	// The reserve's aToken is its ninth word: the UI compiled the matching withdrawal reads.
+	reserve := f.call(forkAavePool, f.packPool("getReserveData", forkUSDC))
+	equal(t, forkAUSDC, common.BytesToAddress(reserve[8*32:9*32]), "Aave USDC aToken")
+
+	supply := big.NewInt(50_000e6)
+	f.setUSDC(forkAdmin, supply)
+	f.send(forkAdmin, forkUSDC, erc20Binding.PackApprove(forkAavePool, supply))
+	f.send(forkAdmin, forkAavePool, f.packPool("supply", forkUSDC, supply, forkAccount, uint16(0)))
+	f.approveIris(big.NewInt(30_000e6))
+
+	f.setBalance(forkWstETH, wstETHBalances, forkBorrower, new(big.Int).Mul(f.collateral, big.NewInt(3)))
+	f.send(forkBorrower, forkWstETH, erc20Binding.PackApprove(forkIris, math.MaxBig256))
 }
 
-// buildTree lays out the leaves like the curator and the SDK bundle check: sorted leaves at
-// the end of the array, sorted-pair hashing, proofs from sibling nodes.
-func (f *forkEVM) buildTree(leaves []forkLeaf) {
-	slices.SortFunc(leaves, func(a, b forkLeaf) int { return a.hash.Cmp(b.hash) })
-	nodes := make([]common.Hash, 2*len(leaves)-1)
-	for i, l := range leaves {
-		nodes[len(nodes)-1-i] = l.hash
+// permission returns the UI call with this signature on target, and spender as its first
+// argument when given.
+func (f *forkEVM) permission(fn string, target common.Address, spender ...common.Address) uiCall {
+	i := slices.IndexFunc(f.fixture.Calls, func(c uiCall) bool {
+		return c.Fn == fn && c.Target == target && (len(spender) == 0 || common.BytesToAddress(c.Data[4:36]) == spender[0])
+	})
+	ok(f.t, i >= 0, fn)
+	return f.fixture.Calls[i]
+}
+
+// manage runs one curator action through the account: the leaf with words written at their
+// calldata offsets.
+func (f *forkEVM) manage(c uiCall, words map[int]*big.Int) {
+	data := bytes.Clone(c.Data)
+	for offset, v := range words {
+		copy(data[offset:offset+32], common.BigToHash(v).Bytes())
 	}
-	for i := len(leaves) - 2; i >= 0; i-- {
-		a, b := nodes[2*i+1], nodes[2*i+2]
-		if a.Cmp(b) > 0 {
-			a, b = b, a
+	leaf := f.tree.Leaves[slices.IndexFunc(f.tree.Leaves, func(l recipes.Leaf) bool { return l.Hash == c.Hash })]
+	proof := make([][32]byte, len(leaf.Proof))
+	for i, p := range leaf.Proof {
+		proof[i] = p
+	}
+	f.send(forkAdmin, forkAccount, accountBinding.PackManage([]merkleaccount.IMerkleAccountAction{{
+		Target: c.Target, Value: new(big.Int), Data: data, DataMask: c.DataMask, Proof: proof,
+	}}))
+}
+
+// approveIris sets the curator's standing USDC allowance to Iris, as Operate does: reset, then set.
+func (f *forkEVM) approveIris(amount *big.Int) {
+	approve := f.permission("approve(address,uint256)", forkUSDC, forkIris)
+	f.manage(approve, map[int]*big.Int{36: new(big.Int)})
+	if amount.Sign() > 0 {
+		f.manage(approve, map[int]*big.Int{36: amount})
+	}
+	equal(f.t, amount, f.allowance(forkUSDC, forkAccount, forkIris), "Iris allowance")
+}
+
+// claimCall routes the UI bond-claim recipe for pod through the AccessManager, as its keeper does.
+func (f *forkEVM) claimCall(t *testing.T, pod common.Address) []byte {
+	t.Helper()
+	recipe, err := recipes.DecodeRecipe(f.fixture.BondClaim.Recipe)
+	must(t, err)
+	inner, _, err := recipes.Assemble(recipe, f.tree, map[uint]string{0: pod.Big().String()}, nil, nil)
+	must(t, err)
+	data, err := f.abis["AccessManager"].Pack("execute", f.claim, inner)
+	must(t, err)
+	return data
+}
+
+// take has the borrower take the quote and checks what moved.
+func (f *forkEVM) take(t *testing.T, quote blm.Quote) common.Address {
+	t.Helper()
+	accountBefore, receiverBefore := f.balance(forkUSDC, forkAccount), f.balance(forkUSDC, forkReceiver)
+	receipt := f.send(forkBorrower, forkIris, f.pack("take", quote, make([]byte, placeholderSignatureBytes)))
+	var pod common.Address
+	for _, l := range receipt.Logs {
+		if l.Address == forkIris && len(l.Topics) == 3 && l.Topics[0] == f.iris.Events["Take"].ID {
+			pod = common.BytesToAddress(l.Topics[2].Bytes())
 		}
-		nodes[i] = crypto.Keccak256Hash(a[:], b[:])
 	}
-	account := forkAccount
-	f.tree = &recipes.Tree{Root: nodes[0], ChainID: big.NewInt(1), Account: &account}
-	for i, l := range leaves {
-		var proof []common.Hash
-		for k := len(nodes) - 1 - i; k > 0; k = (k - 1) / 2 {
-			sibling := k + 1
-			if k%2 == 0 {
-				sibling = k - 1
-			}
-			proof = append(proof, nodes[sibling])
-		}
-		f.tree.Leaves = append(f.tree.Leaves, recipes.Leaf{Target: l.target, Value: new(big.Int), Data: l.data, DataMask: l.mask, Hash: l.hash, Proof: proof})
+	if pod == (common.Address{}) {
+		t.Fatal("no Take event")
 	}
+	equal(t, quote.Bond, f.position(pod).Bond)
+	equal(t, new(big.Int).Sub(accountBefore, quote.Bond), f.balance(forkUSDC, forkAccount))
+	equal(t, new(big.Int).Add(receiverBefore, quote.Debt), f.balance(forkUSDC, forkReceiver))
+	used, err := f.iris.Unpack("isQuoteNonceUsed", f.call(forkIris, f.pack("isQuoteNonceUsed", forkAccount, quote.Nonce)))
+	must(t, err)
+	ok(t, used[0].(bool), "nonce not used")
+	return pod
+}
+
+// morphoMarket is the wstETH/USDC market's payload, read from Morpho by the id the UI fixes.
+func (f *forkEVM) morphoMarket() []byte {
+	return f.call(forkMorpho, morphoBinding.PackIdToMarketParams(forkMorphoMarket))
 }
 
 func (f *forkEVM) curatorBundle(adapter common.Address) []byte {
@@ -486,11 +561,10 @@ func (f *forkEVM) curatorBundle(adapter common.Address) []byte {
 	return raw
 }
 
-func (f *forkEVM) setRecipe(executor common.Address, encoded string) recipes.Recipe {
-	recipe, err := recipes.DecodeRecipe(hexutil.MustDecode(encoded))
+func (f *forkEVM) setRecipe(executor common.Address, encoded []byte) {
+	recipe, err := recipes.DecodeRecipe(encoded)
 	must(f.t, err)
 	f.send(forkAdmin, executor, executorBinding.PackSetRecipe(recipe.Queries, recipe.Steps))
-	return recipe
 }
 
 func (f *forkEVM) startSolver() {
@@ -528,7 +602,8 @@ solvers:
     config:
       iris: "` + forkIris.Hex() + `"
       account: "` + forkAccount.Hex() + `"
-      recipeExecutors: ["` + f.signing.Hex() + `"]
+      morpho: "` + forkMorpho.Hex() + `"
+      recipeExecutors: ["` + f.aave.Hex() + `", "` + f.morpho.Hex() + `", "` + f.claim.Hex() + `"]
       curator:
         url: ` + curator.URL + `
       refreshInterval: ` + f.refresh.String() + `
@@ -538,13 +613,13 @@ solvers:
         authValueEnv: IRIS_FORK_WEBHOOK_KEY
       pricing:
         defaultFixedRate: "` + strconv.Itoa(forkRate) + `"
-        bondBufferBps: ` + strconv.Itoa(forkBufferBps) + `
         maxBond: "1000000000"
       timing:
         blockTime: ` + strconv.Itoa(forkBlockTime) + `s
         submitLead: 3s
         quoteTtl: 2m
-        deadlineWindow: 5s
+        # Mining a block that touches fresh mainnet state can take several seconds on a fork.
+        deadlineWindow: 10s
         responseBudget: 20s
         pollInterval: 200ms
 `
@@ -577,9 +652,9 @@ func (f *forkEVM) request(id string) quoteRequest {
 	return quoteRequest{
 		RequestID: id, QuoteID: id + "-" + strconv.Itoa(f.requests), ChainID: 1,
 		Borrower: forkBorrower.Hex(), Receiver: forkReceiver.Hex(),
-		CollateralToken: forkWETH.Hex(), Collateral: f.collateral.String(),
+		CollateralToken: forkWstETH.Hex(), Collateral: f.collateral.String(),
 		DebtToken: forkUSDC.Hex(), Debt: f.debt.String(), MaxFixedRate: f.maxRate.String(),
-		Duration: strconv.Itoa(30 * 86400), VenueBitmap: "1",
+		Duration: strconv.Itoa(30 * 86400), VenueBitmap: "3",
 	}
 }
 
@@ -628,14 +703,16 @@ func (f *forkEVM) quote(t *testing.T, r quoteRequest, q quoteResponse) blm.Quote
 	}
 }
 
+// expectedBond is the BLM requirement read independently, padded the way the UI recipe does:
+// r + ceil(r/4).
 func (f *forkEVM) expectedBond(r quoteRequest, q quoteResponse) *big.Int {
 	quote := f.quote(f.t, r, q)
 	quote.Bond, quote.Deadline, quote.Nonce = new(big.Int), new(big.Int), new(big.Int)
 	requirement, err := blmBinding.UnpackBondRequirement(f.call(forkBlm, blmBinding.PackBondRequirement(quote)))
 	must(f.t, err)
 	ok(f.t, requirement.Sign() > 0, "zero requirement")
-	bond := new(big.Int).Mul(requirement, big.NewInt(bpsDenominator+forkBufferBps))
-	return bond.Add(bond, big.NewInt(bpsDenominator-1)).Div(bond, big.NewInt(bpsDenominator))
+	quarter := new(big.Int).Add(requirement, big.NewInt(3))
+	return quarter.Div(quarter, big.NewInt(4)).Add(quarter, requirement)
 }
 
 // digest is computed independently of the solver: go-ethereum EIP-712 over the Iris domain,
@@ -703,6 +780,12 @@ func (f *forkEVM) expectRevert(t *testing.T, err error, signature string) {
 	}
 }
 
+func (f *forkEVM) packPool(method string, args ...any) []byte {
+	data, err := f.pool.Pack(method, args...)
+	must(f.t, err)
+	return data
+}
+
 func (f *forkEVM) pack(method string, args ...any) []byte {
 	data, err := f.iris.Pack(method, args...)
 	must(f.t, err)
@@ -728,9 +811,14 @@ func (f *forkEVM) allowance(token, owner, spender common.Address) *big.Int {
 }
 
 func (f *forkEVM) setUSDC(owner common.Address, amount *big.Int) {
-	slot := crypto.Keccak256Hash(common.LeftPadBytes(owner.Bytes(), 32), common.LeftPadBytes(big.NewInt(usdcBalances).Bytes(), 32))
-	f.rpcCall("anvil_setStorageAt", forkUSDC, slot, common.BigToHash(amount))
-	equal(f.t, amount, f.balance(forkUSDC, owner), "USDC balance slot")
+	f.setBalance(forkUSDC, usdcBalances, owner, amount)
+}
+
+// setBalance writes a token balance into its balances mapping at slot.
+func (f *forkEVM) setBalance(token common.Address, slot int64, owner common.Address, amount *big.Int) {
+	key := crypto.Keccak256Hash(common.LeftPadBytes(owner.Bytes(), 32), common.LeftPadBytes(big.NewInt(slot).Bytes(), 32))
+	f.rpcCall("anvil_setStorageAt", token, key, common.BigToHash(amount))
+	equal(f.t, amount, f.balance(token, owner), "balance slot")
 }
 
 func (f *forkEVM) nonce(who common.Address) uint64 {
@@ -753,7 +841,7 @@ func (f *forkEVM) warp(seconds int64) {
 func (f *forkEVM) deploy(name string, args ...any) common.Address {
 	constructor, err := f.abis[name].Pack("", args...)
 	must(f.t, err)
-	return f.transact(forkAdmin, nil, append(hexutil.MustDecode(f.artifacts[name].Bytecode), constructor...), nil).ContractAddress
+	return f.transact(forkAdmin, nil, append(hexutil.MustDecode(f.artifacts[name].Bytecode), constructor...)).ContractAddress
 }
 
 func (f *forkEVM) sendABI(from, to common.Address, contract, method string, args ...any) {
@@ -762,30 +850,24 @@ func (f *forkEVM) sendABI(from, to common.Address, contract, method string, args
 	f.send(from, to, data)
 }
 
-func (f *forkEVM) send(from, to common.Address, data []byte, value ...*big.Int) *types.Receipt {
-	var v *big.Int
-	if len(value) > 0 {
-		v = value[0]
-	}
-	return f.transact(from, &to, data, v)
+func (f *forkEVM) send(from, to common.Address, data []byte) *types.Receipt {
+	return f.transact(from, &to, data)
 }
 
-func (f *forkEVM) transact(from common.Address, to *common.Address, data []byte, value *big.Int) *types.Receipt {
+func (f *forkEVM) transact(from common.Address, to *common.Address, data []byte) *types.Receipt {
 	f.t.Helper()
 	args := map[string]any{"from": from, "data": hexutil.Encode(data), "gas": "0x1c9c380"}
 	if to != nil {
 		args["to"] = *to
 	}
-	if value != nil {
-		args["value"] = hexutil.EncodeBig(value)
-	}
 	var hash common.Hash
 	must(f.t, f.rpc.CallContext(f.ctx, &hash, "eth_sendTransaction", args))
-	for range 100 {
+	// Blocks that touch fresh mainnet state take a while to mine on a fork.
+	for range 300 {
 		receipt, err := f.client.TransactionReceipt(f.ctx, hash)
 		if err == nil {
 			if receipt.Status != types.ReceiptStatusSuccessful {
-				_, reason := f.client.CallContract(f.ctx, ethereum.CallMsg{From: from, To: to, Data: data, Value: value}, new(big.Int).Sub(receipt.BlockNumber, big.NewInt(1)))
+				_, reason := f.client.CallContract(f.ctx, ethereum.CallMsg{From: from, To: to, Data: data}, new(big.Int).Sub(receipt.BlockNumber, big.NewInt(1)))
 				f.t.Fatalf("transaction %s from %s reverted: %v", hash.Hex(), from.Hex(), reason)
 			}
 			return receipt
@@ -900,4 +982,10 @@ var irisABI = `[
 {"type":"event","name":"Take","anonymous":false,"inputs":[{"name":"caller","type":"address","indexed":true},{"name":"pod","type":"address","indexed":true},` +
 	strings.Replace(quoteTuple, `"type":"tuple"`, `"type":"tuple","indexed":false`, 1) +
 	`,{"name":"collateralIndex","type":"uint256","indexed":false},{"name":"debtIndex","type":"uint256","indexed":false}]}
+]`
+
+// poolABI is the slice of the Aave V3 pool the curator side needs.
+const poolABI = `[
+{"type":"function","name":"supply","stateMutability":"nonpayable","inputs":[{"name":"asset","type":"address"},{"name":"amount","type":"uint256"},{"name":"onBehalfOf","type":"address"},{"name":"referralCode","type":"uint16"}],"outputs":[]},
+{"type":"function","name":"getReserveData","stateMutability":"view","inputs":[{"name":"asset","type":"address"}],"outputs":[]}
 ]`

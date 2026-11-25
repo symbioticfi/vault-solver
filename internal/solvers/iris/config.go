@@ -25,8 +25,7 @@ const (
 	defaultResponseBudget  = 25 * time.Second
 	defaultPollInterval    = 500 * time.Millisecond
 	// rateStep is the Iris fixed-rate granularity (BP in Iris.sol).
-	rateStep       = 100_000_000_000_000
-	bpsDenominator = 10_000
+	rateStep = 100_000_000_000_000
 )
 
 var wad = big.NewInt(1e18)
@@ -34,6 +33,7 @@ var wad = big.NewInt(1e18)
 type rawConfig struct {
 	Iris            string             `yaml:"iris"`
 	Account         string             `yaml:"account"`
+	Morpho          string             `yaml:"morpho"`
 	RecipeExecutors []string           `yaml:"recipeExecutors"`
 	Curator         merklehost.Curator `yaml:"curator"`
 	RefreshInterval string             `yaml:"refreshInterval"`
@@ -51,7 +51,6 @@ type rawServer struct {
 type rawPricing struct {
 	DefaultFixedRate string    `yaml:"defaultFixedRate"`
 	Rates            []rawRate `yaml:"rates"`
-	BondBufferBps    uint64    `yaml:"bondBufferBps"`
 	MaxBond          string    `yaml:"maxBond"`
 }
 
@@ -74,8 +73,10 @@ type rawRate struct {
 
 // Config is the validated iris solver configuration.
 type Config struct {
-	Iris            common.Address
-	Account         common.Address
+	Iris    common.Address
+	Account common.Address
+	// Morpho recovers Morpho market payloads; markets with another payload need none.
+	Morpho          common.Address
 	RecipeExecutors []common.Address
 	Curator         merklehost.Curator
 	RefreshInterval time.Duration
@@ -109,6 +110,11 @@ func parseConfig(node yaml.Node) (Config, error) {
 	}
 	if cfg.Account, err = parse.NonZeroAddress(raw.Account, "account"); err != nil {
 		return Config{}, err
+	}
+	if raw.Morpho != "" {
+		if cfg.Morpho, err = parse.NonZeroAddress(raw.Morpho, "morpho"); err != nil {
+			return Config{}, err
+		}
 	}
 	seen := make(map[common.Address]bool, len(raw.RecipeExecutors))
 	for _, value := range raw.RecipeExecutors {
@@ -150,7 +156,7 @@ func parseConfig(node yaml.Node) (Config, error) {
 }
 
 func parsePricing(raw rawConfig) (Pricing, error) {
-	pricing := Pricing{BondBufferBps: raw.Pricing.BondBufferBps}
+	var pricing Pricing
 	var err error
 	if raw.Pricing.DefaultFixedRate != "" {
 		if pricing.Default, err = parseRate(raw.Pricing.DefaultFixedRate, "pricing.defaultFixedRate"); err != nil {
@@ -180,9 +186,6 @@ func parsePricing(raw rawConfig) (Pricing, error) {
 	}
 	if pricing.Default == nil && len(pricing.Rules) == 0 {
 		return Pricing{}, errors.New("pricing: defaultFixedRate or rates required")
-	}
-	if pricing.BondBufferBps > bpsDenominator {
-		return Pricing{}, errors.New("pricing.bondBufferBps: must be at most 10000")
 	}
 	if raw.Pricing.MaxBond != "" {
 		if pricing.MaxBond, err = parse.Big(raw.Pricing.MaxBond, "pricing.maxBond"); err != nil {

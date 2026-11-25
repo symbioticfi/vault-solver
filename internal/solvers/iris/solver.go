@@ -1,6 +1,6 @@
 // Package iris answers IRIS RFQ quote requests for one Merkle account. The account is the
-// Iris solver: its iris-signing recipes presign each quote on-chain (ERC-1271) before the
-// quote is returned. See docs/IRIS-PLAN.md.
+// Iris solver: its offer recipes, one per market, presign each quote on-chain (ERC-1271)
+// before the quote is returned. See docs/IRIS-PLAN.md.
 package iris
 
 import (
@@ -13,10 +13,12 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/bindings/recipeexecutor"
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
@@ -25,6 +27,7 @@ import (
 	"golang.org/x/sync/errgroup"
 	"gopkg.in/yaml.v3"
 
+	"github.com/symbioticfi/vault-solver/api/bindings/oev/morpho"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 )
@@ -37,7 +40,11 @@ const (
 	shutdownTimeout  = 5 * time.Second
 )
 
-var executorBinding = recipeexecutor.NewRecipeExecutor()
+var (
+	executorBinding = recipeexecutor.NewRecipeExecutor()
+	morphoBinding   = morpho.NewMorpho()
+	emptyDataHash   = crypto.Keccak256Hash(nil)
+)
 
 var tracer = observability.NewTracer("github.com/symbioticfi/vault-solver/internal/solvers/iris", Name)
 
@@ -67,6 +74,11 @@ type Solver struct {
 	runCtx atomic.Pointer[context.Context]
 	// built holds the on-chain words the index was decoded from; only the refresh loop uses it.
 	built []common.Hash
+
+	// firm admits one firm quote at a time; reservations hold the bonds of signed quotes.
+	firm         sync.Mutex
+	reservedMu   sync.Mutex
+	reservations []reservation
 }
 
 func (*Solver) Name() string                  { return Name }
@@ -148,8 +160,8 @@ func (s *Solver) Run(ctx context.Context) error {
 }
 
 // refresh rebuilds the market index from the configured executors. Every executor must
-// serve the configured account through one shared caller that admits the signer, and every
-// recipe must be an iris-signing program.
+// serve the configured account through one shared caller that admits the signer; an executor
+// whose recipe is not a usable offer program is skipped and logged.
 func (s *Solver) refresh(ctx context.Context) (err error) {
 	ctx, end := tracer.Start(ctx, "iris.discover")
 	defer func() { end(err) }()
@@ -194,17 +206,82 @@ func (s *Solver) refresh(ctx context.Context) (err error) {
 			}
 			trees[snapshot.Root] = tree
 		}
-		market, err := decodeMarket(member, tree, s.cfg.Iris, s.chainID)
+		market, err := s.admitMarket(member, tree)
 		if err != nil {
-			return errors.Errorf("executor %s: %w", snapshot.Executor.Hex(), err)
+			// One unusable executor must not take the account's other markets down with it.
+			observability.Log(ctx).Error(err, "iris executor skipped", "executor", snapshot.Executor.Hex())
+			continue
 		}
 		markets = append(markets, market)
+	}
+	if markets, err = s.withMarketData(ctx, markets); err != nil {
+		return err
+	}
+	if len(markets) == 0 {
+		return errors.New("no executor holds a usable offer recipe")
 	}
 	index := newMarketIndex(markets)
 	s.markets.Store(&index)
 	s.built = snapshotWords(prepared)
 	observability.Log(ctx).Info("iris markets discovered", "markets", len(markets))
 	return nil
+}
+
+// admitMarket decodes an executor's offer recipe and checks the configured timing fits the
+// recipe's deadline bound.
+func (s *Solver) admitMarket(member recipes.PreparedRecipe, tree *recipes.Tree) (Market, error) {
+	market, err := decodeMarket(member, tree, s.cfg.Iris, s.chainID)
+	if err != nil {
+		return Market{}, err
+	}
+	// A signature mined a slot before its target dates the deadline one slot further out.
+	if lifetime := s.cfg.Timing.QuoteTTL + s.cfg.Timing.ResponseSlack + s.cfg.Timing.BlockTime; lifetime > time.Duration(market.MaxLifetime)*time.Second {
+		return Market{}, errors.Errorf("timing needs a %s quote lifetime but the recipe allows %ds", lifetime, market.MaxLifetime)
+	}
+	return market, nil
+}
+
+// withMarketData fills each market's payload, the bytes whose hash the recipe fixes: empty for
+// pool venues, otherwise the Morpho market parameters (their hash is the Morpho market id), read
+// on-chain in one multicall. A market whose payload cannot be recovered is logged and dropped.
+func (s *Solver) withMarketData(ctx context.Context, markets []Market) ([]Market, error) {
+	var requests []protocolio.ReadRequest
+	var morpho []int
+	for i := range markets {
+		if markets[i].DataHash == emptyDataHash {
+			markets[i].Data = []byte{}
+			continue
+		}
+		if s.cfg.Morpho == (common.Address{}) {
+			continue
+		}
+		requests = append(requests, protocolio.ContractRead(s.cfg.Morpho, morphoBinding.PackIdToMarketParams(markets[i].DataHash), nil, true))
+		morpho = append(morpho, i)
+	}
+	if len(requests) > 0 {
+		reads, err := protocolio.ReadGroup(ctx, s.chain, requests...)
+		if err != nil {
+			return nil, errors.Errorf("read Morpho markets: %w", err)
+		}
+		for k, i := range morpho {
+			raw, err := reads.At(k).CallData()
+			if err != nil {
+				return nil, errors.Errorf("read Morpho markets: %w", err)
+			}
+			if params, err := morphoBinding.UnpackIdToMarketParams(raw); err == nil && crypto.Keccak256Hash(raw) == markets[i].DataHash &&
+				params.CollateralToken == markets[i].CollateralToken && params.LoanToken == markets[i].DebtToken {
+				markets[i].Data = raw
+			}
+		}
+	}
+	return slices.DeleteFunc(markets, func(m Market) bool {
+		if m.Data != nil {
+			return false
+		}
+		err := errors.Errorf("market payload %s is not a Morpho market for the recipe's tokens (morpho %s)", m.DataHash.Hex(), s.cfg.Morpho.Hex())
+		observability.Log(ctx).Error(err, "iris executor skipped", "executor", m.Executor.Hex())
+		return true
+	}), nil
 }
 
 // recipeState reads, in one multicall at latest, everything the SDK compares before admitting

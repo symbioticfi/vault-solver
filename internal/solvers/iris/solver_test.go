@@ -1,12 +1,14 @@
 package iris
 
 import (
+	"bytes"
 	"context"
 	"math/big"
 	"testing"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
@@ -92,6 +94,50 @@ func TestRefreshSkipsDiscoveryOnlyWhileRecipeStateIsUnchanged(t *testing.T) {
 			// The fake cannot serve discovery, so a changed word surfaces as a discovery error.
 			fails(t, err)
 			equal(t, built, s.built)
+		})
+	}
+}
+
+// morphoChain answers idToMarketParams with the given encoded parameters.
+type morphoChain struct {
+	fakeChain
+
+	params []byte
+}
+
+func (c *morphoChain) CallContract(_ context.Context, msg ethereum.CallMsg, _ *big.Int) ([]byte, error) {
+	if !bytes.HasPrefix(msg.Data, morphoBinding.PackIdToMarketParams([32]byte{})[:4]) {
+		return nil, errors.New("unexpected call")
+	}
+	return c.params, nil
+}
+
+func TestMarketDataRecoversThePayload(t *testing.T) {
+	morpho := Market{DataHash: crypto.Keccak256Hash(morphoMarketData(t)), CollateralToken: fixtureWstETH, DebtToken: fixtureUSDC}
+	other := morphoMarketData(t)
+	other[31] ^= 1 // a market with another loan token
+	tests := []struct {
+		name   string
+		market Market
+		morpho common.Address
+		params []byte
+		want   []byte
+	}{
+		{"pool venue", Market{DataHash: emptyDataHash}, common.Address{}, nil, []byte{}},
+		{"morpho market", morpho, common.HexToAddress("0xB0B0"), morphoMarketData(t), morphoMarketData(t)},
+		{"morpho not configured", morpho, common.Address{}, morphoMarketData(t), nil},
+		{"unknown market", morpho, common.HexToAddress("0xB0B0"), other, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := &Solver{cfg: Config{Morpho: tt.morpho}, chain: &morphoChain{params: tt.params}}
+			markets, err := s.withMarketData(context.Background(), []Market{tt.market})
+			must(t, err)
+			if tt.want == nil {
+				equal(t, 0, len(markets))
+				return
+			}
+			equal(t, tt.want, markets[0].Data)
 		})
 	}
 }

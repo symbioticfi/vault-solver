@@ -1,7 +1,10 @@
 package iris
 
 import (
+	"bytes"
 	"math/big"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -9,6 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
+	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
 func testQuote(m Market) Quote {
@@ -21,26 +25,48 @@ func testQuote(m Market) Quote {
 	}
 }
 
-// The account computes the digest from the recipe's sign buffer with the inputs bound
-// into it and the hash plan applied; the solver's digest must be the same hash.
+// The account computes the digest from the recipe's sign buffer with the inputs and the
+// recipe's constants bound into it; the solver's digest must be the same hash.
 func TestDigestMatchesTheAccountSignBuffer(t *testing.T) {
 	f := loadFixture(t)
-	prepared, tree := fixtureMarket(t, f)
+	prepared, tree := fixtureMarket(t, f, 1)
 	m, err := decodeMarket(prepared, tree, fixtureIris, big.NewInt(1))
 	must(t, err)
 	q := testQuote(m)
 
-	buffer := append([]byte(nil), f.SignData[signBufferOffset:signBufferOffset+quoteWords*32+len(m.Data)]...)
-	for i, w := range freeWords {
+	sign := f.Calls[slices.IndexFunc(f.Calls, func(c uiCall) bool { return strings.HasPrefix(c.Fn, "sign(") })]
+	buffer := bytes.Clone(sign.Data[signBufferOffset : signBufferOffset+quoteWords*32])
+	set := func(w int, v *big.Int) { copy(buffer[32*w:32*(w+1)], common.BigToHash(v).Bytes()) }
+	for i, w := range quoteInputs {
 		value, parsed := new(big.Int).SetString(q.inputs()[uint(i)], 10)
 		ok(t, parsed)
-		copy(buffer[32*w:32*(w+1)], common.BigToHash(value).Bytes())
+		set(w, value)
 	}
-	copy(buffer[32*dataHashWord:], crypto.Keccak256(buffer[quoteWords*32:]))
-	structHash := crypto.Keccak256(buffer[:quoteWords*32])
-	account := crypto.Keccak256Hash([]byte{0x19, 0x01}, m.Domain[:], structHash)
-
+	for w, v := range map[int]*big.Int{4: m.Blm.Big(), 5: m.CollateralToken.Big(), 6: m.DebtToken.Big(), 11: m.OverdueRate,
+		12: m.OverduePeriod, bondWord: q.Bond, 14: m.BondLltv, 16: new(big.Int).SetUint64(m.VenueID), 19: m.DataHash.Big()} {
+		set(w, v)
+	}
+	account := crypto.Keccak256Hash([]byte{0x19, 0x01}, m.Domain[:], crypto.Keccak256(buffer))
+	// The Morpho market id is the hash of the data the quote carries.
+	q.Data = morphoMarketData(t)
+	equal(t, m.DataHash, crypto.Keccak256Hash(q.Data))
 	equal(t, account, q.Digest(m.Domain))
+}
+
+// morphoMarketData is abi.encode(MarketParams) of the Morpho wstETH/USDC market (86% LLTV).
+func morphoMarketData(t *testing.T) []byte {
+	t.Helper()
+	raw, err := recipes.Arguments("address", "address", "address", "address", "uint256").Pack(
+		fixtureUSDC, fixtureWstETH, common.HexToAddress("0x48F7E36EB6B826B2dF4B2E630B62Cd25e89E40e2"),
+		common.HexToAddress("0x870aC11D48B15DB9a138Cf899d20F13F79Ba00BC"), big.NewInt(86e16))
+	must(t, err)
+	return raw
+}
+
+func TestPadBondMatchesTheRecipe(t *testing.T) {
+	for requirement, want := range map[int64]int64{1: 2, 4: 5, 5: 7, 30_000_000: 37_500_000, 30_000_001: 37_500_002} {
+		equal(t, big.NewInt(want), padBond(big.NewInt(requirement)), requirement)
+	}
 }
 
 func TestDigestMatchesAPITypes(t *testing.T) {
@@ -82,10 +108,10 @@ func TestDigestMatchesAPITypes(t *testing.T) {
 func TestInputsFollowTheRecipeOrder(t *testing.T) {
 	q := testQuote(Market{Account: common.HexToAddress("0xACC"), OverdueRate: new(big.Int), OverduePeriod: new(big.Int), BondLltv: new(big.Int)})
 	inputs := q.inputs()
-	equal(t, len(freeWords), len(inputs))
+	equal(t, len(quoteInputs), len(inputs))
 	want := []string{
 		new(big.Int).SetBytes(q.Borrower.Bytes()).String(), new(big.Int).SetBytes(q.Receiver.Bytes()).String(),
-		q.Collateral.String(), q.Debt.String(), q.FixedRate.String(), q.Duration.String(), q.Bond.String(),
+		q.Collateral.String(), q.Debt.String(), q.Duration.String(), q.FixedRate.String(),
 		q.VenueBitmap.String(), q.Deadline.String(), q.Nonce.String(),
 	}
 	for i, value := range want {

@@ -39,12 +39,6 @@ func TestRatePicksTheMostSpecificRule(t *testing.T) {
 	ok(t, Pricing{Rules: pricing.Rules[1:2]}.rate(Market{DebtToken: usdt}) == nil)
 }
 
-func TestBondBufferRoundsUp(t *testing.T) {
-	equal(t, big.NewInt(1000), Pricing{}.bond(big.NewInt(1000)))
-	equal(t, big.NewInt(1050), Pricing{BondBufferBps: 500}.bond(big.NewInt(1000)))
-	equal(t, big.NewInt(2), Pricing{BondBufferBps: 1}.bond(big.NewInt(1)))
-}
-
 func TestScheduleTargetsTheFirstReachableSlot(t *testing.T) {
 	timing := Timing{BlockTime: 12 * time.Second, SubmitLead: 2 * time.Second, QuoteTTL: 120 * time.Second}
 	head := uint64(1_800_000_000)
@@ -94,30 +88,34 @@ func TestFreshAcceptsOnlyTheFinalWindow(t *testing.T) {
 }
 
 func TestSelectMarketTakesTheLowestRateUnderTheCeiling(t *testing.T) {
-	a := Market{Executor: common.HexToAddress("0xA"), VenueID: 0}
-	b := Market{Executor: common.HexToAddress("0xB"), VenueID: 1}
+	limits := Market{MaxDebt: big.NewInt(1e12), MaxDuration: big.NewInt(1e9), MinFixedRate: big.NewInt(1e14)}
+	a, b := limits, limits
+	a.Executor, b.Executor, b.VenueID = common.HexToAddress("0xA"), common.HexToAddress("0xB"), 1
 	venueA, venueB := uint64(0), uint64(1)
 	s := &Solver{cfg: Config{Pricing: Pricing{Rules: []RateRule{
 		{VenueID: &venueA, FixedRate: big.NewInt(7e16)},
 		{VenueID: &venueB, FixedRate: big.NewInt(6e16)},
 	}}}}
 
-	m, rate, err := s.selectMarket([]Market{a, b}, big.NewInt(1e17))
+	ceiling := func(rate int64) request {
+		return request{Debt: big.NewInt(1e6), Duration: big.NewInt(86400), MaxFixedRate: big.NewInt(rate)}
+	}
+	m, rate, err := s.selectMarket([]Market{a, b}, ceiling(1e17))
 	must(t, err)
 	equal(t, b.Executor, m.Executor)
 	equal(t, big.NewInt(6e16), rate)
 
-	m, _, err = s.selectMarket([]Market{a, b}, big.NewInt(65e15))
+	m, _, err = s.selectMarket([]Market{a, b}, ceiling(65e15))
 	must(t, err)
 	equal(t, b.Executor, m.Executor)
 
-	_, _, err = s.selectMarket([]Market{a, b}, big.NewInt(5e16))
+	_, _, err = s.selectMarket([]Market{a, b}, ceiling(5e16))
 	var refused *declined
 	ok(t, errors.As(err, &refused), err)
 	equal(t, "rate_above_max_fixed_rate", refused.reason)
 	equal(t, big.NewInt(6e16), refused.rate)
 
-	_, _, err = s.selectMarket(nil, big.NewInt(1e17))
+	_, _, err = s.selectMarket(nil, ceiling(1e17))
 	ok(t, errors.As(err, &refused), err)
 	equal(t, "no_market", refused.reason)
 }

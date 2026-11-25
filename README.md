@@ -492,22 +492,27 @@ config, onboarding, and deployment prerequisites:
 
 Answers the [IRIS](https://docs.iris.credit) RFQ coordinator for one Merkle account, which is
 the registered IRIS solver. The account signs quotes through ERC-1271, so there is no quote
-signing key: each firm quote is presigned on-chain by the account's `iris-signing` recipe
-before it is returned, and Iris pulls the bond from the account at `take`.
+signing key: each firm quote is presigned on-chain by the account's offer recipe before it
+is returned, and Iris pulls the bond from the account at `take`.
 
-- Markets are not configured. Each `recipeExecutors` entry holds one `iris-signing` recipe,
-  and the solver reads the market (tokens, venue, market data, BLM, bond LLTV, overdue terms)
-  from its sign leaf. Every executor must serve `account` through one caller that admits the
-  signer. Every `refreshInterval` the solver re-reads each executor's recipe hash and block
-  and the account root in one call, and rediscovers markets only when one changed.
-- `POST /quote` prices the request from the `pricing` table, sizes the bond from the BLM
-  (plus `bondBufferBps`), checks the account's debt-token balance, simulates the recipe (its
-  limits decide what may be signed), sends it, and returns the quote once the receipt shows
-  the digest is valid and the Iris allowance covers the bond. The signature field is 65 zero
-  bytes. One quote is signed at a time; others decline with `solver_busy`.
+- Markets are not configured. Each `recipeExecutors` entry is one market's offer executor,
+  created in the curator UI (Automations, IRIS). The solver reads the market (tokens, venue,
+  payload hash, BLM, bond LLTV, overdue terms) and its limits (principal cap, tenor cap, APR
+  floor) from the recipe. Morpho market payloads are read from `morpho`. An executor whose
+  recipe is not an offer program is logged and skipped. Every executor must serve `account`
+  through one caller (the vault's AccessManager, or the signer) that admits the signer.
+  Every `refreshInterval` the solver re-reads each executor's recipe hash and block and the
+  account root in one call, and rediscovers markets only when one changed.
+- `POST /quote` picks the cheapest market whose caps admit the request, prices it from the
+  `pricing` table (raised to the market's APR floor), sizes the bond as the recipe does (BLM
+  requirement plus 25%, rounded up), checks the curator's Iris allowance covers it and every
+  quote still open, simulates the recipe (which draws any bond shortfall from the curator's
+  funding venues), sends it, and returns the quote once the receipt shows the digest is
+  valid. The signature field is 65 zero bytes. One quote is signed at a time; others decline
+  with `solver_busy`.
 - `POST /quote/indicative` returns the same terms unsigned. Declines are `404` with a
-  `reasons` entry, such as `no_market`, `rate_above_max_fixed_rate` (with the rate) or
-  `insufficient_bond_balance`.
+  `reasons` entry, such as `no_market`, `above_market_limits`, `rate_above_max_fixed_rate`
+  (with the rate), `insufficient_bond_allowance` or `insufficient_bond_balance`.
 - The quote deadline must reach the coordinator about 120 s ahead, so the solver dates it
   from the slot the signature targets (`timing`) and declines a quote mined in a later slot.
   This needs `txManager.confirmations` of at most 1 and an IRIS response timeout above
@@ -1221,8 +1226,10 @@ See [the RFQ Merkle runbook](docs/RFQ-MERKLE.md) and [configuration](config/rfq-
 Local integration checks require Anvil on `PATH`: `make test-txmanager-anvil`,
 `make test-merkle-sdk-anvil`, and `make test-rfq-merkle-anvil`. They separately exercise the unchanged native transaction engine, RAM SDK ownership,
 and canonical RFQ settlement without live services. `make test-iris-fork` runs the `iris`
-solver end to end against a mainnet fork (set `ETH_RPC_URL_MAINNET`): quotes, the borrower's
-`take` on the deployed Iris, and settlement back to the account.
+solver end to end against a mainnet fork (set `ETH_RPC_URL_MAINNET`) on the curator UI's own
+recipes: quotes on Aave and Morpho markets, bond funding from Aave, the borrower's `take` on
+the deployed Iris, and settlement back to the account. `make refresh-iris-fixture` recompiles
+those recipes from a curator-frontend checkout.
 
 Merkle integrations, including the recipe mode of `rfq-filler` and the `uniswapx-merkle` and `lifi-merkle` solvers,
 use the same SDK transaction implementation as merkle-executor.

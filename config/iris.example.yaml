@@ -1,6 +1,7 @@
-# IRIS solver for one Merkle account. Markets come from the account's iris-signing recipes;
-# supply deployed addresses. The signer must be the executors' caller (or hold an immediate
-# AccessManager grant). Pending work is held in RAM.
+# IRIS solver for one Merkle account. Markets come from the account's offer recipes, one
+# executor per market, created in the curator UI; supply deployed addresses. The signer must
+# be the executors' caller (or hold an immediate AccessManager grant). Pending work is held
+# in RAM.
 chain:
   rpcUrl: ${ETH_RPC_URL_MAINNET}
   writeRpcUrl: ${WRITE_RPC_URL}
@@ -19,7 +20,8 @@ solvers:
     config:
       iris: "0x77310475712D7a127D694B3e9D186d9f4a423bd9"
       account: "0x0000000000000000000000000000000000000ACC" # the Merkle account registered as IRIS solver
-      recipeExecutors: ["0x00000000000000000000000000000000000000E0"] # one iris-signing recipe per market
+      morpho: "0xBBBBBbbBBb9cC5e90e3b3Af64bdAF62C37EEFFCb" # recovers Morpho market payloads
+      recipeExecutors: ["0x00000000000000000000000000000000000000E0"] # one offer executor per market
       curator:
         url: https://curator.example.invalid/api/v1
       refreshInterval: 1m
@@ -29,13 +31,13 @@ solvers:
         authHeader: x-api-key
         authValueEnv: IRIS_WEBHOOK_KEY
       pricing:
-        # WAD rates, multiples of 1e14. The most specific matching rule wins.
+        # WAD rates, multiples of 1e14. The most specific matching rule wins; a rate below a
+        # market's APR floor is raised to the floor.
         defaultFixedRate: "60000000000000000"
         rates:
           - debtToken: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
             venueId: 1
             fixedRate: "55000000000000000"
-        bondBufferBps: 0
         maxBond: "50000000000" # per quote, debt-token units
       timing:
         blockTime: 12s

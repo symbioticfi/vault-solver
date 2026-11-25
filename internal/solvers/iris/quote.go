@@ -12,8 +12,8 @@ import (
 const (
 	// quoteWords is the EIP-712 encoding of Quote: the type hash and 19 fields, data hashed.
 	quoteWords = 20
-	// dataHashWord is the Quote word that holds keccak256(data).
-	dataHashWord = 19
+	// solverWord is the Quote word the sign leaf pins to the account.
+	solverWord = 2
 	// signBufferOffset is where the sign call's buffer contents start: selector, domain, two
 	// head offsets and the buffer length.
 	signBufferOffset = 4 + 4*32
@@ -26,9 +26,15 @@ var (
 			"uint256 collateral,uint256 debt,uint256 fixedRate,uint256 duration,uint256 overdueRate,uint256 overduePeriod," +
 			"uint256 bond,uint256 bondLltv,uint256 venueBitmap,uint256 venueId,uint256 deadline,uint256 nonce,bytes data)",
 	))
-	// freeWords are the Quote words the iris-signing recipe binds to inputs 0 to 9, in order:
-	// borrower, receiver, collateral, debt, fixedRate, duration, bond, venueBitmap, deadline, nonce.
-	freeWords = [...]int{1, 3, 7, 8, 9, 10, 13, 15, 17, 18}
+	// quoteInputs are the Quote words the offer recipe binds to inputs 0 to 8, in order:
+	// borrower, receiver, collateral, debt, duration, fixedRate, venueBitmap, deadline, nonce.
+	quoteInputs = [...]int{1, 3, 7, 8, 10, 9, 15, 17, 18}
+)
+
+const (
+	debtInput, durationInput, fixedRateInput, deadlineInput = 3, 4, 5, 7
+	// bondWord is the Quote word the recipe computes; the solver reproduces it with padBond.
+	bondWord = 13
 )
 
 // Quote is the Iris Quote a solver signs and a borrower takes.
@@ -68,11 +74,11 @@ func (q Quote) Digest(domain common.Hash) common.Hash {
 	return crypto.Keccak256Hash([]byte{0x19, 0x01}, domain[:], crypto.Keccak256(encoded))
 }
 
-// inputs returns the recipe inputs: the free Quote words as decimal strings.
+// inputs returns the recipe inputs: the keeper's Quote words as decimal strings.
 func (q Quote) inputs() map[uint]string {
 	words := q.words()
-	inputs := make(map[uint]string, len(freeWords))
-	for i, word := range freeWords {
+	inputs := make(map[uint]string, len(quoteInputs))
+	for i, word := range quoteInputs {
 		inputs[uint(i)] = words[word].Big().String()
 	}
 	return inputs

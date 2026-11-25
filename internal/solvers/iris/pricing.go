@@ -17,9 +17,8 @@ type RateRule struct {
 // Pricing is the v1 rate table: the most specific matching rule wins, earlier rules break
 // ties, and Default prices the rest. A nil result means the market is not quoted.
 type Pricing struct {
-	Default       *big.Int
-	Rules         []RateRule
-	BondBufferBps uint64
+	Default *big.Int
+	Rules   []RateRule
 	// MaxBond caps the bond of one quote in debt-token units; nil means no extra cap.
 	MaxBond *big.Int
 }
@@ -53,11 +52,11 @@ func (p Pricing) rate(m Market) *big.Int {
 	return best
 }
 
-// bond raises the BLM requirement by the configured buffer, rounding up.
-func (p Pricing) bond(requirement *big.Int) *big.Int {
-	scaled := new(big.Int).Mul(requirement, big.NewInt(int64(bpsDenominator+p.BondBufferBps)))
-	scaled.Add(scaled, big.NewInt(bpsDenominator-1))
-	return scaled.Div(scaled, big.NewInt(bpsDenominator))
+// padBond is the bond the offer recipe computes: the BLM requirement r plus a quarter, rounded
+// up, as r + (r+3)/4.
+func padBond(requirement *big.Int) *big.Int {
+	quarter := new(big.Int).Add(requirement, big.NewInt(3))
+	return quarter.Quo(quarter, big.NewInt(4)).Add(quarter, requirement)
 }
 
 // schedule places the signature in the first slot the transaction can make and dates the

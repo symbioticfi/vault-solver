@@ -28,6 +28,7 @@ ADAPTERS_OUT ?= ../adapters/out
 # Pinned sibling builds for the test-only canonical RFQ outer-fill artifact.
 RFQ_FIXTURE_ROOT ?= ../rfq
 ADAPTERS_FIXTURE_ROOT ?= ../adapters
+CURATOR_FRONTEND_ROOT ?= ../curator-frontend
 FIXTURE_SOLC ?= solc
 # Production 3F OpenAPI contract, matching schema-sources.json.
 OPENAPI_URL ?= https://bf.3f.xyz/docs/openapi.json
@@ -330,11 +331,11 @@ test-rfq-merkle-anvil: ## Execute canonical RFQ outer settlement boundaries on l
 .PHONY: test-iris-fork
 test-iris-fork: ## Run the IRIS solver end to end against a mainnet fork (needs ETH_RPC_URL_MAINNET)
 	@command -v anvil >/dev/null
-	go test -tags integration -run TestForkIrisEndToEnd -failfast -v -timeout 15m ./internal/solvers/iris
+	go test -tags integration -run TestForkIrisEndToEnd -failfast -v -timeout 18m ./internal/solvers/iris
 
-.PHONY: refresh-iris-fork-fixture
-refresh-iris-fork-fixture: ## Rebuild the IRIS fork-test recipes with the adapters BuildRecipe script (needs ETH_RPC_URL_MAINNET)
-	python3 internal/solvers/iris/testdata/fork/generate.py --adapters-root "$(ADAPTERS_FIXTURE_ROOT)"
+.PHONY: refresh-iris-fixture
+refresh-iris-fixture: ## Recompile the IRIS recipes with the curator UI (a curator-frontend checkout with pnpm install done)
+	python3 internal/solvers/iris/testdata/ui/generate.py --frontend-root "$(CURATOR_FRONTEND_ROOT)"
 
 .PHONY: test-merkle-sdk-anvil
 test-merkle-sdk-anvil: ## Exercise RAM SDK ownership and canonical settlement on local Anvil

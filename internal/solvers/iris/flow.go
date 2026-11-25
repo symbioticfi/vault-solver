@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"math/big"
+	"slices"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -50,9 +51,16 @@ func (s *Solver) quote(ctx context.Context, r request, indicative bool) (quoteRe
 	if index == nil {
 		return quoteResponse{}, decline("markets_unavailable")
 	}
-	market, rate, err := s.selectMarket(index.candidates(r.CollateralToken, r.DebtToken, r.VenueBitmap), r.MaxFixedRate)
+	market, rate, err := s.selectMarket(index.candidates(r.CollateralToken, r.DebtToken, r.VenueBitmap), r)
 	if err != nil {
 		return quoteResponse{}, err
+	}
+	// One firm quote at a time, so each one sees the capacity the previous one reserved.
+	if !indicative {
+		if !s.firm.TryLock() {
+			return quoteResponse{}, decline("solver_busy")
+		}
+		defer s.firm.Unlock()
 	}
 	q := Quote{
 		Borrower: r.Borrower, Solver: market.Account, Receiver: r.Receiver, Blm: market.Blm,
@@ -66,6 +74,9 @@ func (s *Solver) quote(ctx context.Context, r request, indicative bool) (quoteRe
 		return quoteResponse{}, errors.Errorf("read head: %w", err)
 	}
 	if q.Bond, err = s.bond(ctx, q, head.Number); err != nil {
+		return quoteResponse{}, err
+	}
+	if err := s.checkCapacity(ctx, market, q.Bond, head.Number); err != nil {
 		return quoteResponse{}, err
 	}
 	if indicative {
@@ -100,14 +111,18 @@ func (s *Solver) quote(ctx context.Context, r request, indicative bool) (quoteRe
 	select {
 	case outcome = <-done:
 	case <-ctx.Done():
+		// The signature may still land: hold its bond until the deadline.
+		s.reserve(q)
 		return quoteResponse{}, decline("signature_pending")
 	}
 	if outcome.err != nil {
+		s.reserve(q)
 		return quoteResponse{}, outcome.err
 	}
 	if outcome.result.Reverted {
 		return quoteResponse{}, decline("signature_reverted")
 	}
+	s.reserve(q)
 	if err := s.confirm(ctx, market, q, outcome.result.Execution.BlockNumber); err != nil {
 		return quoteResponse{}, err
 	}
@@ -117,15 +132,25 @@ func (s *Solver) quote(ctx context.Context, r request, indicative bool) (quoteRe
 	return newQuoteResponse(r, market, q, false), nil
 }
 
-// selectMarket picks the lowest-rate market at or below the borrower's ceiling.
-func (s *Solver) selectMarket(candidates []Market, maxFixedRate *big.Int) (Market, *big.Int, error) {
+// selectMarket picks the lowest-rate market whose recipe admits the request, at or below the
+// borrower's ceiling. A configured rate below the curator's floor is raised to the floor.
+func (s *Solver) selectMarket(candidates []Market, r request) (Market, *big.Int, error) {
 	var best Market
 	var bestRate, lowestAbove *big.Int
+	limited := false
 	for _, m := range candidates {
 		rate := s.cfg.Pricing.rate(m)
 		switch {
 		case rate == nil:
-		case rate.Cmp(maxFixedRate) > 0:
+			continue
+		case r.Debt.Cmp(m.MaxDebt) > 0 || r.Duration.Cmp(m.MaxDuration) > 0:
+			limited = true
+			continue
+		case rate.Cmp(m.MinFixedRate) < 0:
+			rate = m.MinFixedRate
+		}
+		switch {
+		case rate.Cmp(r.MaxFixedRate) > 0:
 			if lowestAbove == nil || rate.Cmp(lowestAbove) < 0 {
 				lowestAbove = rate
 			}
@@ -133,17 +158,18 @@ func (s *Solver) selectMarket(candidates []Market, maxFixedRate *big.Int) (Marke
 			best, bestRate = m, rate
 		}
 	}
-	if bestRate != nil {
+	switch {
+	case bestRate != nil:
 		return best, bestRate, nil
-	}
-	if lowestAbove != nil {
+	case lowestAbove != nil:
 		return Market{}, nil, &declined{venue: "solver", reason: "rate_above_max_fixed_rate", rate: lowestAbove}
+	case limited:
+		return Market{}, nil, decline("above_market_limits")
 	}
 	return Market{}, nil, decline("no_market")
 }
 
-// bond reads the BLM requirement for the exact quote, applies the buffer and checks the
-// account can fund it.
+// bond reads the BLM requirement for the exact quote and pads it the way the recipe does.
 func (s *Solver) bond(ctx context.Context, q Quote, block *big.Int) (*big.Int, error) {
 	raw, err := s.call(ctx, q.Blm, blmBinding.PackBondRequirement(q.binding()), block)
 	if err != nil {
@@ -156,18 +182,72 @@ func (s *Solver) bond(ctx context.Context, q Quote, block *big.Int) (*big.Int, e
 	if requirement.Sign() <= 0 {
 		return nil, decline("zero_bond_requirement")
 	}
-	bond := s.cfg.Pricing.bond(requirement)
+	bond := padBond(requirement)
 	if limit := s.cfg.Pricing.MaxBond; limit != nil && bond.Cmp(limit) > 0 {
 		return nil, decline("bond_above_limit")
 	}
-	balance, err := s.balance(ctx, q.DebtToken, q.Solver, block)
-	if err != nil {
-		return nil, err
-	}
-	if balance.Cmp(bond) < 0 {
-		return nil, decline("insufficient_bond_balance")
-	}
 	return bond, nil
+}
+
+// checkCapacity requires the Iris allowance to cover this bond and every outstanding one. The
+// recipe tops cash up only to this bond, so with offers outstanding the cash must already
+// cover them all; without any, the recipe's own funding check decides.
+func (s *Solver) checkCapacity(ctx context.Context, m Market, bond, block *big.Int) error {
+	reserved := s.reserved(m.DebtToken, time.Now())
+	need := new(big.Int).Add(reserved, bond)
+	raw, err := s.call(ctx, m.DebtToken, erc20Binding.PackAllowance(m.Account, m.Iris), block)
+	if err != nil {
+		return errors.Errorf("read Iris allowance: %w", err)
+	}
+	allowance, err := erc20Binding.UnpackAllowance(raw)
+	if err != nil {
+		return errors.Errorf("decode Iris allowance: %w", err)
+	}
+	if allowance.Cmp(need) < 0 {
+		return decline("insufficient_bond_allowance")
+	}
+	if reserved.Sign() == 0 {
+		return nil
+	}
+	balance, err := s.balance(ctx, m.DebtToken, m.Account, block)
+	if err != nil {
+		return err
+	}
+	if balance.Cmp(need) < 0 {
+		return decline("insufficient_bond_balance")
+	}
+	return nil
+}
+
+// reservation is the bond of a signed quote that may still be taken.
+type reservation struct {
+	token    common.Address
+	bond     *big.Int
+	deadline uint64
+}
+
+// reserve holds the quote's bond until its deadline.
+// shortcut: reservations live in memory and end at the deadline, not at take, so a restart
+// forgets them (quotes live quoteTtl) and a taken quote stays counted until it expires.
+// Track Take events if this caps capacity in practice.
+func (s *Solver) reserve(q Quote) {
+	s.reservedMu.Lock()
+	defer s.reservedMu.Unlock()
+	s.reservations = append(s.reservations, reservation{token: q.DebtToken, bond: q.Bond, deadline: q.Deadline.Uint64()})
+}
+
+// reserved drops expired reservations and sums the token's remaining bonds.
+func (s *Solver) reserved(token common.Address, now time.Time) *big.Int {
+	s.reservedMu.Lock()
+	defer s.reservedMu.Unlock()
+	total := new(big.Int)
+	s.reservations = slices.DeleteFunc(s.reservations, func(r reservation) bool { return int64(r.deadline) < now.Unix() })
+	for _, r := range s.reservations {
+		if r.token == token {
+			total.Add(total, r.bond)
+		}
+	}
+	return total
 }
 
 // prepareSign assembles the recipe execution and admits it with the SDK: the recipe and
@@ -195,8 +275,8 @@ func (s *Solver) prepareSign(ctx context.Context, m Market, q Quote) (recipes.Ex
 	return call, nil
 }
 
-// confirm checks, at the signing block, what the coordinator and Iris will check: the
-// digest is valid for the account, and the account's balance and Iris allowance cover the bond.
+// confirm checks, at the signing block, that the account accepts the quote digest: the
+// solver's Quote and the one the recipe signed are the same.
 func (s *Solver) confirm(ctx context.Context, m Market, q Quote, block *big.Int) error {
 	raw, err := s.call(ctx, m.Account, accountBinding.PackIsValidSignature(q.Digest(m.Domain), nil), block)
 	if err != nil {
@@ -208,24 +288,6 @@ func (s *Solver) confirm(ctx context.Context, m Market, q Quote, block *big.Int)
 	}
 	if magic != erc1271Magic {
 		return errors.New("signed digest differs from the quote digest")
-	}
-	raw, err = s.call(ctx, q.DebtToken, erc20Binding.PackAllowance(m.Account, m.Iris), block)
-	if err != nil {
-		return errors.Errorf("read Iris allowance: %w", err)
-	}
-	allowance, err := erc20Binding.UnpackAllowance(raw)
-	if err != nil {
-		return errors.Errorf("decode Iris allowance: %w", err)
-	}
-	if allowance.Cmp(q.Bond) < 0 {
-		return decline("insufficient_bond_allowance")
-	}
-	balance, err := s.balance(ctx, q.DebtToken, m.Account, block)
-	if err != nil {
-		return err
-	}
-	if balance.Cmp(q.Bond) < 0 {
-		return decline("insufficient_bond_balance")
 	}
 	return nil
 }
