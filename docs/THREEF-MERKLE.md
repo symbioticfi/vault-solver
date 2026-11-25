@@ -202,7 +202,9 @@ separate from live-provider approval, authenticated mainnet enrollment and minti
 All hand-written 3F Merkle logic lives in `internal/solvers/merkle/threef`:
 API transport/JSON admission, offer sizing and RAM intent reconciliation, policy snapshots,
 recipe input extraction and the mint provider. One Run goroutine evaluates guarded markets sequentially. Live commitment
-maintenance precedes a full scan of relevant unanswered auctions. One API client, planner, provider and RAM sender serve one executor strategy. The SDK keeper owns mint progress. It admits no new offer work
+maintenance precedes a full scan of relevant unanswered auctions. One API client, planner, provider and RAM sender serve one executor strategy. The SDK keeper owns mint progress.
+The mint provider logs the failed check at debug level before returning an idle result.
+The solver records an offer cancellation after the API confirms it. The keeper admits no new offer work
 while a signed recipe is pending. `transaction.Manager.Sender` uses the same SDK
 transaction engine as the generic recipe host. There is no
 optional 3F dispatch in `merkle` and no dependency on `bridgefacilitator` strategies.

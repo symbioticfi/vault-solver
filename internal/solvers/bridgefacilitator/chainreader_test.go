@@ -7,6 +7,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,28 +33,33 @@ func TestCollectRequests(t *testing.T) {
 	bad := chain.CallResult{Success: true, ReturnData: []byte{0x01}} // undecodable as an address
 
 	tests := []struct {
-		name         string
-		res          []chain.CallResult
-		expected     int
-		want         []common.Address
-		wantComplete bool
+		name     string
+		res      []chain.CallResult
+		expected int
+		want     []common.Address
+		wantGaps []string // prefixes, in order
 	}{
-		{"empty", nil, 0, nil, true},
-		{"all active", []chain.CallResult{ok(a0), ok(a1), ok(a2)}, 3, []common.Address{a0, a1, a2}, true},
-		{"failed middle slot retains valid suffix", []chain.CallResult{ok(a0), fail, ok(a2)}, 3, []common.Address{a0, a2}, false},
-		{"failed first slot retains valid suffix", []chain.CallResult{fail, ok(a0)}, 2, []common.Address{a0}, false},
-		{"undecodable slot retains valid suffix", []chain.CallResult{ok(a0), bad, ok(a1)}, 3, []common.Address{a0, a1}, false},
-		{"zero address is malformed", []chain.CallResult{ok(a0), ok(common.Address{}), ok(a1)}, 3, []common.Address{a0, a1}, false},
-		{"missing result", []chain.CallResult{ok(a0)}, 2, []common.Address{a0}, false},
-		{"extra result is ignored", []chain.CallResult{ok(a0), ok(a1)}, 1, []common.Address{a0}, false},
+		{"empty", nil, 0, nil, nil},
+		{"all active", []chain.CallResult{ok(a0), ok(a1), ok(a2)}, 3, []common.Address{a0, a1, a2}, nil},
+		{"failed middle slot retains valid suffix", []chain.CallResult{ok(a0), fail, ok(a2)}, 3, []common.Address{a0, a2}, []string{"requests(1) call failed"}},
+		{"failed first slot retains valid suffix", []chain.CallResult{fail, ok(a0)}, 2, []common.Address{a0}, []string{"requests(0) call failed"}},
+		{"undecodable slot retains valid suffix", []chain.CallResult{ok(a0), bad, ok(a1)}, 3, []common.Address{a0, a1}, []string{"requests(1) malformed: "}},
+		{"zero address is malformed", []chain.CallResult{ok(a0), ok(common.Address{}), ok(a1)}, 3, []common.Address{a0, a1}, []string{"requests(1) returned the zero address"}},
+		{"missing result", []chain.CallResult{ok(a0)}, 2, []common.Address{a0}, []string{"requests(i) returned 1 results, want 2"}},
+		{"extra result is ignored", []chain.CallResult{ok(a0), ok(a1)}, 1, []common.Address{a0}, []string{"requests(i) returned 2 results, want 1"}},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got, complete := collectRequests(tc.res, tc.expected)
-			if complete != tc.wantComplete {
-				t.Fatalf("complete = %v, want %v", complete, tc.wantComplete)
+			got, gaps := collectRequests(tc.res, tc.expected)
+			if len(gaps) != len(tc.wantGaps) {
+				t.Fatalf("gaps = %q, want prefixes %q", gaps, tc.wantGaps)
+			}
+			for i := range gaps {
+				if !strings.HasPrefix(gaps[i], tc.wantGaps[i]) {
+					t.Fatalf("gaps = %q, want prefixes %q", gaps, tc.wantGaps)
+				}
 			}
 			if len(got) != len(tc.want) {
 				t.Fatalf("collectRequests = %v (len %d), want %v (len %d)", got, len(got), tc.want, len(tc.want))

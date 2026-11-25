@@ -22,9 +22,10 @@ func (e *Engine) AwaitNative(ctx context.Context) txmanager.Result {
 	case err != nil:
 		return txmanager.Result{Outcome: txmanager.OutcomeAbandoned, Err: err}
 	case outcome == nil:
-		return txmanager.Result{Outcome: txmanager.OutcomeAbandoned, Err: errors.New("fill lane lost its transaction")}
+		return txmanager.Result{Outcome: txmanager.OutcomeAbandoned, Err: errors.New("fill lane lost its transaction: no fill was pending when its receipt was awaited")}
 	case outcome.Reverted:
-		return txmanager.Result{Hash: outcome.Hash, Attempts: []common.Hash{outcome.Hash}, Outcome: txmanager.OutcomeReverted, Err: errors.New("fill transaction reverted")}
+		return txmanager.Result{Hash: outcome.Hash, Attempts: []common.Hash{outcome.Hash}, Outcome: txmanager.OutcomeReverted,
+			Err: errors.Errorf("fill transaction %s reverted in block %d", outcome.Hash.Hex(), outcome.Block)}
 	default:
 		return txmanager.Result{Hash: outcome.Hash, Attempts: []common.Hash{outcome.Hash}, Outcome: txmanager.OutcomeConfirmed}
 	}

@@ -422,8 +422,8 @@ func TestAuctionRateBasisUsesExactJSONBeforeFloatRounding(t *testing.T) {
 			}
 			m := testMarket()
 			m.MaxPrincipal, m.MinimumYield1e8 = big.NewInt(31536000), new(big.Int)
-			fits, err := fitsTerms(m, m.MaxPrincipal, big.NewInt(tc.yield), rows[0])
-			if fits != tc.wantFits || (err != nil) != tc.wantError {
+			mismatch, err := termsMismatch(m, m.MaxPrincipal, big.NewInt(tc.yield), rows[0])
+			if fits := mismatch == "" && err == nil; fits != tc.wantFits || (err != nil) != tc.wantError {
 				t.Fatalf("fits=%v err=%v", fits, err)
 			}
 		})

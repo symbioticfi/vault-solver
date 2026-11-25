@@ -104,4 +104,7 @@ func TestExecutionEstimateRevertWithUnavailableBackendExpiresLocally(t *testing.
 	if txm.calls != 1 || st.order("o1").Status != statusExpired || st.reserved("o1") {
 		t.Fatalf("estimate reconciliation outlived deadline: sends=%d order=%+v", txm.calls, st.order("o1"))
 	}
+	if want := "order deadline has passed: deadline 2100-01-01T00:00:00Z checked at 2100-01-01T00:00:00Z"; st.order("o1").LastError != want {
+		t.Fatalf("expiry reason = %q, want %q", st.order("o1").LastError, want)
+	}
 }

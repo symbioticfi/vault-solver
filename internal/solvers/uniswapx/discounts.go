@@ -90,10 +90,13 @@ func (s *Solver) resolveAdvertisedRoutes(
 		}] = true
 	}
 	adapters := make(map[common.Address]bool)
-	skipped := 0
+	skipped, disallowed := 0, 0
 	for _, offer := range offers {
-		if !s.cfg.TokenPolicy.Allows(offer.TokenToRedeem) ||
-			filter.adapters != nil && !filter.adapters[offer.Adapter] ||
+		if !s.cfg.TokenPolicy.Allows(offer.TokenToRedeem) {
+			disallowed++
+			continue
+		}
+		if filter.adapters != nil && !filter.adapters[offer.Adapter] ||
 			filter.tokenIn != (common.Address{}) && offer.TokenToRedeem != filter.tokenIn ||
 			filter.tokenOut != (common.Address{}) && offer.Collateral != filter.tokenOut {
 			continue
@@ -113,6 +116,10 @@ func (s *Solver) resolveAdvertisedRoutes(
 	}
 	for key := range expected {
 		adapters[key.adapter] = true
+	}
+	if disallowed > 0 {
+		observability.Log(ctx).V(1).Info("ignore advertised discount routes whose input token policy disallows",
+			"disallowed", disallowed)
 	}
 	if skipped > 0 {
 		observability.Log(ctx).V(1).Info(
@@ -218,8 +225,11 @@ func (s *Solver) resolveDiscount(
 	physical []liquidlane.FillQuote,
 	now time.Time,
 ) (*liquiddiscounts.Signed, error) {
-	if s.discounts == nil || s.cfg.Discounts == nil || selection.DiscountID == (common.Hash{}) {
-		return nil, errors.New("discount route cannot be resolved")
+	if s.discounts == nil || s.cfg.Discounts == nil {
+		return nil, errors.Errorf("discount %s cannot be resolved: discounts are not configured", selection.DiscountID.Hex())
+	}
+	if selection.DiscountID == (common.Hash{}) {
+		return nil, errors.New("discount route cannot be resolved: discount id is zero")
 	}
 	requestCtx, cancel := context.WithTimeout(ctx, s.cfg.Discounts.HTTPTimeout)
 	defer cancel()

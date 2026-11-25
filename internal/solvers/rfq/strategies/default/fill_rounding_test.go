@@ -33,7 +33,7 @@ func TestBuildFillPlanSettlesAwardQuotedAtExactPayout(t *testing.T) {
 		Inventory: liquidlane.DirectInventory(route, capacity, nil), AmountIn: amountIn,
 		GrossAmountOut: gross, MaxAmountOut: required, MinDiscount: discount,
 	}
-	candidates := liquidgreedy.NormalizeOracleInventory(amountIn, []liquidlane.Inventory{source}, []liquidlane.FillQuote{physical})
+	candidates := liquidgreedy.NormalizeOracleInventory(amountIn, []liquidlane.Inventory{source}, []liquidlane.FillQuote{physical}, nil)
 	if len(candidates) != 1 {
 		t.Fatalf("candidates = %d, want 1", len(candidates))
 	}
@@ -82,7 +82,7 @@ func TestBuildFillPlanPricesSplitLegsAtAdapterPayout(t *testing.T) {
 					MaxAmountOut: big.NewInt(tc.gross - 1), MinDiscount: left.AdapterMinDiscount},
 				{Inventory: right, AmountIn: amountIn, GrossAmountOut: big.NewInt(tc.otherGross),
 					MaxAmountOut: big.NewInt(tc.otherGross), MinDiscount: right.AdapterMinDiscount},
-			})
+			}, nil)
 			input := baseInput(candidates...)
 			input.AmountIn, input.RequiredAmountOut = amountIn, big.NewInt(tc.total)
 			plan, err := New().BuildFillPlan(t.Context(), input)

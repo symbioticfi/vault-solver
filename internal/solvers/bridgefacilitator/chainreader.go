@@ -2,6 +2,7 @@ package bridgefacilitator
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 
 	"github.com/go-errors/errors"
@@ -361,60 +362,69 @@ func requestSlotCalls(adapterAddr common.Address, n int) []chain.Call {
 	return calls
 }
 
-// collectRequests decodes every valid requests(i) result while reporting whether the response was a
-// complete snapshot. A failed, malformed, zero, missing, or extra result makes the snapshot incomplete,
-// but does not prevent safe work on the valid subset.
-func collectRequests(res []chain.CallResult, expected int) ([]common.Address, bool) {
-	complete := len(res) == expected
+// collectRequests decodes every valid requests(i) result, with a gap naming each slot that keeps the
+// response from being a complete snapshot: a failed, malformed, or zero result, or a missing or extra one.
+// Gaps do not prevent safe work on the valid subset.
+func collectRequests(res []chain.CallResult, expected int) ([]common.Address, []string) {
+	var gaps []string
+	if len(res) != expected {
+		gaps = append(gaps, fmt.Sprintf("requests(i) returned %d results, want %d", len(res), expected))
+	}
 	if len(res) > expected {
 		res = res[:expected]
 	}
 	out := make([]common.Address, 0, len(res))
-	for _, rr := range res {
+	for i, rr := range res {
 		if !rr.Success {
-			complete = false
+			gaps = append(gaps, fmt.Sprintf("requests(%d) call failed", i))
 			continue
 		}
 		addr, err := bfAdapter.UnpackRequests(rr.ReturnData)
-		if err != nil || addr == (common.Address{}) {
-			complete = false
-			continue
+		switch {
+		case err != nil:
+			gaps = append(gaps, fmt.Sprintf("requests(%d) malformed: %v", i, err))
+		case addr == (common.Address{}):
+			gaps = append(gaps, fmt.Sprintf("requests(%d) returned the zero address", i))
+		default:
+			out = append(out, addr)
 		}
-		out = append(out, addr)
 	}
-	return out, complete
+	return out, gaps
 }
 
 // readyToRedeem returns the adapter's active Requests that are currently redeemable. It reads
 // requestsLength(), enumerates exactly that many requests(i), then batches every canWithdraw() into a
-// single multicall. The boolean reports whether every requested slot and canWithdraw result was present
-// and decodable; valid results are returned even when the snapshot is incomplete.
-func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) ([]common.Address, bool, error) {
+// single multicall. The gaps name every requested slot or canWithdraw result that was missing or
+// undecodable; valid results are returned even when there are gaps.
+func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) ([]common.Address, []string, error) {
 	lres, err := r.chain.Multicall(ctx, []chain.Call{{Target: adapterAddr, Data: bfAdapter.PackRequestsLength()}})
 	if err != nil {
-		return nil, false, err
+		return nil, nil, err
 	}
 	if len(lres) != 1 || !lres[0].Success {
-		return nil, false, errors.New("adapter.requestsLength() reverted")
+		return nil, nil, errors.New("adapter.requestsLength() reverted")
 	}
 	n, err := bfAdapter.UnpackRequestsLength(lres[0].ReturnData)
 	if err != nil {
-		return nil, false, errors.Errorf("adapter.requestsLength(): %w", err)
+		return nil, nil, errors.Errorf("adapter.requestsLength(): %w", err)
 	}
-	complete := n.IsInt64() && n.Sign() >= 0 && n.Int64() <= int64(maxRequests)
+	var gaps []string
+	if !n.IsInt64() || n.Sign() < 0 || n.Int64() > int64(maxRequests) {
+		gaps = append(gaps, fmt.Sprintf("requestsLength %s exceeds maxRequests %d", n, maxRequests))
+	}
 	count := clampCount(n)
 	if count == 0 {
-		return nil, complete, nil
+		return nil, gaps, nil
 	}
 
 	res, err := r.chain.Multicall(ctx, requestSlotCalls(adapterAddr, count))
 	if err != nil {
-		return nil, false, err
+		return nil, nil, err
 	}
-	reqs, slotsComplete := collectRequests(res, count)
-	complete = complete && slotsComplete
+	reqs, slotGaps := collectRequests(res, count)
+	gaps = append(gaps, slotGaps...)
 	if len(reqs) == 0 {
-		return nil, complete, nil
+		return nil, gaps, nil
 	}
 
 	calls := make([]chain.Call, len(reqs))
@@ -424,27 +434,27 @@ func (r *reader) readyToRedeem(ctx context.Context, adapterAddr common.Address) 
 	}
 	res, err = r.chain.Multicall(ctx, calls)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, err
 	}
 
 	ready := make([]common.Address, 0, len(reqs))
 	if len(res) != len(reqs) {
-		complete = false
+		gaps = append(gaps, fmt.Sprintf("canWithdraw returned %d results, want %d", len(res), len(reqs)))
 	}
 	resultCount := min(len(res), len(reqs))
 	for i, rr := range res[:resultCount] {
 		if !rr.Success {
-			complete = false
+			gaps = append(gaps, fmt.Sprintf("canWithdraw on %s call failed", reqs[i].Hex()))
 			continue
 		}
 		ok, derr := vc.UnpackCanWithdraw(rr.ReturnData)
 		if derr != nil {
-			complete = false
+			gaps = append(gaps, fmt.Sprintf("canWithdraw on %s malformed: %v", reqs[i].Hex(), derr))
 			continue
 		}
 		if ok {
 			ready = append(ready, reqs[i])
 		}
 	}
-	return ready, complete, nil
+	return ready, gaps, nil
 }

@@ -66,7 +66,7 @@ func decodeOrder(encoded []byte) (executor.IReactorOrder, error) {
 	}
 	out, ok := abi.ConvertType(vals[0], new(executor.IReactorOrder)).(*executor.IReactorOrder)
 	if !ok {
-		return executor.IReactorOrder{}, errors.New("decode order: type conversion failed")
+		return executor.IReactorOrder{}, errors.Errorf("decode order: cannot convert %T to IReactorOrder", vals[0])
 	}
 	return *out, nil
 }

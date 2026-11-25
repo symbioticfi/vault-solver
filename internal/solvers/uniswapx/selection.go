@@ -1,6 +1,7 @@
 package uniswapx
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -52,13 +53,21 @@ func (s *Solver) rememberSelection(response quoteResponse, now time.Time) {
 	}
 }
 
-func (s *Solver) preferredSource(order *resolvedOrder, now time.Time) liquidlane.CandidateID {
+// preferredSource returns the quoted source for order, or "" and why the selection does not apply.
+func (s *Solver) preferredSource(order *resolvedOrder, now time.Time) (liquidlane.CandidateID, string) {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	selection, exists := s.selections[order.QuoteID]
-	if !exists || !selection.expiresAt.After(now) || selection.tokenIn != order.TokenIn ||
-		selection.tokenOut != order.TokenOut || selection.amountIn != order.AmountIn.String() {
-		return ""
+	switch {
+	case !exists:
+		return "", "no quote selection remembered for quoteId"
+	case !selection.expiresAt.After(now):
+		return "", fmt.Sprintf("quote selection expired at %d, now %d", selection.expiresAt.Unix(), now.Unix())
+	case selection.tokenIn != order.TokenIn || selection.tokenOut != order.TokenOut:
+		return "", fmt.Sprintf("quote selection pair %s->%s differs from order pair %s->%s",
+			selection.tokenIn.Hex(), selection.tokenOut.Hex(), order.TokenIn.Hex(), order.TokenOut.Hex())
+	case selection.amountIn != order.AmountIn.String():
+		return "", fmt.Sprintf("quote selection amountIn %s differs from order amountIn %s", selection.amountIn, order.AmountIn)
 	}
-	return selection.candidate
+	return selection.candidate, ""
 }

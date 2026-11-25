@@ -2,6 +2,7 @@ package defaultstrategy
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"sort"
 
@@ -68,30 +69,50 @@ func (s *Strategy) DecideOffers(
 		}
 	}
 
-	var offers []types.OfferExecution
+	var out types.OfferOutput
 	for _, auction := range input.Auctions {
 		requested := auction.AmountRequested
 		if requested == nil || requested.Sign() <= 0 {
+			out.Skips = append(out.Skips, types.OfferSkip{AuctionID: auction.AuctionID,
+				Reason: fmt.Sprintf("amountRequested %v is not positive", requested)})
 			continue
 		}
 		// Adapters are independent makers: each offers the full request within its own capacity,
 		// regardless of what other adapters bid in this pass or already hold on the auction. An adapter
 		// whose open offer is stale (freed capacity lets it cover more, or its min-yield floor changed)
 		// re-posts it with the new terms; it never shrinks one.
-		for _, c := range rankEligibleAdapters(auction, order, live) {
+		ranked, skips := rankEligibleAdapters(auction, order, live)
+		out.Skips = append(out.Skips, skips...)
+		for _, c := range ranked {
 			st, held := c.st, c.held
-			principal := minBig(st.capacity(held), requested)
+			skip := func(format string, args ...any) {
+				out.Skips = append(out.Skips, types.OfferSkip{AuctionID: auction.AuctionID, AdapterID: st.snapshot.ID,
+					Reason: fmt.Sprintf(format, args...)})
+			}
+			capacity, noCapacity := st.capacity(held)
+			principal := minBig(capacity, requested)
 			if held != nil && principal.Cmp(held) < 0 {
 				principal = cloneBig(held)
 			}
-			if principal.Sign() <= 0 || st.belowMinAssets(principal) {
+			if principal.Sign() <= 0 {
+				skip("%s", noCapacity)
 				continue
 			}
-			expectedReturn := offerReturn(principal, st.snapshot.MinYieldPpm, auction)
-			if expectedReturn == nil || (held != nil && !c.stale(principal, expectedReturn, st.snapshot.MinYieldPpm, auction)) {
+			if st.belowMinAssets(principal) {
+				skip("principal %s is below minAssets %s", principal, st.snapshot.MinAssets)
 				continue
 			}
-			offers = append(offers, types.OfferExecution{
+			expectedReturn, err := offerReturn(principal, st.snapshot.MinYieldPpm, auction)
+			if err != nil {
+				skip("principal %s cannot be priced: %v", principal, err)
+				continue
+			}
+			if held != nil && !c.stale(principal, expectedReturn, st.snapshot.MinYieldPpm, auction) {
+				skip("open offer (principal %s, return %v) already matches target (principal %s, return %s)",
+					held, c.heldReturn, principal, expectedReturn)
+				continue
+			}
+			out.Offers = append(out.Offers, types.OfferExecution{
 				AuctionID:      auction.AuctionID,
 				Request:        auction.Request,
 				Maker:          st.snapshot.Adapter,
@@ -106,7 +127,7 @@ func (s *Strategy) DecideOffers(
 			}
 		}
 	}
-	return types.OfferOutput{Offers: offers}, nil
+	return out, nil
 }
 
 // liveKey identifies an adapter's live offer on a given auction.
@@ -140,27 +161,39 @@ func (c candidate) stale(principal, target, floor *big.Int, auction types.Auctio
 
 // rankEligibleAdapters filters adapters eligible to offer on the auction (matching collateral, and no
 // live offer on it unless that offer is open and of known size) and orders them by available capacity,
-// largest first. Capacity is computed once per adapter (not inside the comparator).
+// largest first, with a skip for each adapter it filters out. Capacity is computed once per adapter
+// (not inside the comparator).
 func rankEligibleAdapters(
 	auction types.AuctionSnapshot,
 	order []*adapterState,
 	live map[liveKey]liveOffer,
-) []candidate {
+) ([]candidate, []types.OfferSkip) {
 	type scored struct {
 		candidate
 
 		capacity *big.Int
 	}
 	eligible := make([]scored, 0, len(order))
+	var skips []types.OfferSkip
+	skip := func(st *adapterState, reason string) {
+		skips = append(skips, types.OfferSkip{AuctionID: auction.AuctionID, AdapterID: st.snapshot.ID, Reason: reason})
+	}
 	for _, st := range order {
 		if auction.DepositAsset != st.snapshot.Collateral {
+			skip(st, fmt.Sprintf("collateral %s does not match deposit asset %s", st.snapshot.Collateral.Hex(), auction.DepositAsset.Hex()))
 			continue
 		}
 		l, holds := live[liveKey{st.snapshot.ID, auction.AuctionID}]
-		if holds && (l.principal == nil || !l.open) {
-			continue // accepted already, or of unknown size: nothing to replace
+		switch {
+		case holds && l.principal == nil:
+			skip(st, "live offer has unknown principal")
+			continue
+		case holds && !l.open:
+			skip(st, fmt.Sprintf("live offer (principal %s) is already accepted", l.principal))
+			continue
 		}
-		eligible = append(eligible, scored{candidate{st, l.principal, l.expectedReturn}, st.capacity(l.principal)})
+		capacity, _ := st.capacity(l.principal)
+		eligible = append(eligible, scored{candidate{st, l.principal, l.expectedReturn}, capacity})
 	}
 	sort.SliceStable(eligible, func(i, j int) bool {
 		return eligible[i].capacity.Cmp(eligible[j].capacity) > 0
@@ -169,7 +202,7 @@ func rankEligibleAdapters(
 	for i := range eligible {
 		ranked[i] = eligible[i].candidate
 	}
-	return ranked
+	return ranked, skips
 }
 
 type adapterState struct {
@@ -182,36 +215,36 @@ type adapterState struct {
 // per-request ceiling (min(fundable, maxAssets); maxAssets 0 ⇒ reject-all) and its remaining budget
 // (fundable minus this pass's commitments), gated by the concurrency and min-request-size limits.
 // held is the live offer the request would replace: its principal and slot count as available.
-func (s *adapterState) capacity(held *big.Int) *big.Int {
-	if s.full(held != nil) || s.snapshot.Fundable == nil {
-		return new(big.Int)
+// A zero capacity comes with the reason naming the limit that produced it.
+func (s *adapterState) capacity(held *big.Int) (*big.Int, string) {
+	inFlight := s.snapshot.OpenCount + s.opened
+	if held != nil {
+		inFlight--
+	}
+	if s.snapshot.MaxConcurrent > 0 && inFlight >= s.snapshot.MaxConcurrent {
+		return new(big.Int), fmt.Sprintf("%d offers in flight reach maxConcurrent %d", inFlight, s.snapshot.MaxConcurrent)
+	}
+	if s.snapshot.Fundable == nil {
+		return new(big.Int), "fundable liquidity is unknown"
 	}
 	ceiling := new(big.Int).Set(s.snapshot.Fundable)
 	if s.snapshot.MaxAssets != nil {
 		ceiling = minBig(ceiling, s.snapshot.MaxAssets) // always-active ceiling; 0 ⇒ no bid
 	}
 	if ceiling.Sign() <= 0 {
-		return new(big.Int)
+		return new(big.Int), fmt.Sprintf("per-request ceiling is %s (fundable %s, maxAssets %v)", ceiling, s.snapshot.Fundable, s.snapshot.MaxAssets)
 	}
 	if s.snapshot.MinAssets != nil && ceiling.Cmp(s.snapshot.MinAssets) < 0 {
-		return new(big.Int) // capacity below the on-chain minimum request size
+		return new(big.Int), fmt.Sprintf("per-request ceiling %s is below minAssets %s", ceiling, s.snapshot.MinAssets)
 	}
 	budget := new(big.Int).Sub(s.snapshot.Fundable, s.committed)
 	if held != nil {
 		budget.Add(budget, held)
 	}
 	if budget.Sign() <= 0 {
-		return new(big.Int)
+		return new(big.Int), fmt.Sprintf("budget exhausted: fundable %s, committed %s, replaced %v", s.snapshot.Fundable, s.committed, held)
 	}
-	return minBig(ceiling, budget)
-}
-
-func (s *adapterState) full(replacing bool) bool {
-	opened := s.opened
-	if replacing {
-		opened--
-	}
-	return s.snapshot.MaxConcurrent > 0 && s.snapshot.OpenCount+opened >= s.snapshot.MaxConcurrent
+	return minBig(ceiling, budget), ""
 }
 
 func (s *adapterState) belowMinAssets(amount *big.Int) bool {
@@ -235,12 +268,12 @@ func cloneBig(n *big.Int) *big.Int {
 var _ types.Strategy = (*Strategy)(nil)
 
 // offerReturn respects both floors, retaining the partial-consumption margin on the adapter floor.
-// With no floor it uses the auction rate; nil means this principal cannot produce a valid paid offer.
-func offerReturn(principal, floor *big.Int, auction types.AuctionSnapshot) *big.Int {
+// With no floor it uses the auction rate; an error means this principal cannot produce a valid paid offer.
+func offerReturn(principal, floor *big.Int, auction types.AuctionSnapshot) (*big.Int, error) {
 	maxRate, basis := auction.MaxRateBps, auction.RateBasisSeconds
 	minimum, maximum, err := types.AuctionReturnBounds(principal, maxRate, basis)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	expectedReturn := types.PartialSafeMinYieldReturn(principal, floor)
 	if expectedReturn.Sign() <= 0 {
@@ -251,8 +284,8 @@ func offerReturn(principal, floor *big.Int, auction types.AuctionSnapshot) *big.
 	if expectedReturn.Cmp(minimum) < 0 {
 		expectedReturn = minimum
 	}
-	if types.ValidateYield(expectedReturn, principal, floor, maxRate, basis) != nil {
-		return nil
+	if err := types.ValidateYield(expectedReturn, principal, floor, maxRate, basis); err != nil {
+		return nil, err
 	}
-	return expectedReturn
+	return expectedReturn, nil
 }
