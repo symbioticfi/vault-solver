@@ -2,6 +2,7 @@ package lifi
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"time"
 
@@ -122,8 +123,9 @@ func (s *Solver) submitFill(
 		ObserveReceipt: observeReceipt,
 	})
 	if !accepted {
+		// SendAsync refuses only once ctx is done; every other admission failure is a result.
 		observability.Log(ctx).Info("order skipped: transaction submission canceled", "orderId", order.OrderID,
-			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID)
+			"onChainOrderId", calldata.OrderID.Hex(), "quoteId", order.QuoteID, "reason", context.Cause(ctx))
 		return nil, nil
 	}
 	if s.reserveWithoutRefresh(reservationKey, reservations) {
@@ -167,7 +169,7 @@ func (s *Solver) sendFill(
 	result, accepted = s.txm.SendAsync(ctx, request)
 	if !accepted {
 		// The lane refusing a fill is an expected shutdown outcome, not a failure of this fill.
-		observability.Decline(ctx, "fill_skipped", "transaction submission was not accepted")
+		observability.Decline(ctx, "fill_skipped", fmt.Sprintf("transaction submission was not accepted: %v", context.Cause(ctx)))
 	}
 	return result, accepted
 }

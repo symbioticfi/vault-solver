@@ -18,30 +18,18 @@ func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.
 		return nil, types.MarkPermanentFillDecisionError(errors.New("outputAmount: must be positive"))
 	}
 	if input.AmountIn.Cmp(s.minAmount) < 0 {
-		input.Trace.Decline(
-			"fill", "amount-below-minimum",
-			"amountIn", input.AmountIn.String(),
-			"minAmount", s.minAmount.String(),
-		)
-		return nil, nil
+		return nil, errors.Errorf("%w: amountIn %s is below minimum amount %s",
+			types.ErrFillDeclined, input.AmountIn, s.minAmount)
 	}
 	validAfter := input.ChainTime.Add(s.executionBuffer)
 	deadlineCutoff := uint32Time(validAfter)
 	if input.Expires != 0 && input.Expires <= deadlineCutoff {
-		input.Trace.Decline(
-			"fill", "expiry-too-close",
-			"expires", input.Expires,
-			"validAfter", validAfter,
-		)
-		return nil, nil
+		return nil, errors.Errorf("%w: expires %d is not after chain time plus execution buffer %d",
+			types.ErrFillDeclined, input.Expires, deadlineCutoff)
 	}
 	if input.FillDeadline != 0 && input.FillDeadline <= deadlineCutoff {
-		input.Trace.Decline(
-			"fill", "fill-deadline-too-close",
-			"fillDeadline", input.FillDeadline,
-			"validAfter", validAfter,
-		)
-		return nil, nil
+		return nil, errors.Errorf("%w: fillDeadline %d is not after chain time plus execution buffer %d",
+			types.ErrFillDeclined, input.FillDeadline, deadlineCutoff)
 	}
 	output, err := parseOutputContext(input.OutputAmount, input.OutputContext)
 	if err != nil {
@@ -62,42 +50,36 @@ func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.
 	if err != nil {
 		return nil, err
 	}
+	trace, lastDecline := input.Trace.RecordDeclines()
 	allocation, err := liquidgreedy.SolveFill(liquidstrategies.FillTask{
 		TokenIn: input.TokenIn, TokenOut: input.TokenOut, AmountIn: input.AmountIn,
 		Quotes: input.Quotes, Reservations: input.Reservations, ValidAfter: validAfter,
 		MaxRoutes: maxRoutes, PriceBufferBps: s.cfg.PriceBufferBps,
 		InventoryReserveBps: s.cfg.InventoryReserveBps,
 		GasPricing:          &gasPricing,
-		Trace:               input.Trace,
+		Trace:               trace,
 	})
-	if err != nil || allocation == nil {
+	if err != nil {
 		return nil, err
 	}
-	requiredAmountOut, ok := output.fill(input.Solver, input.ChainTime, allocation.MaxAmountOut())
-	if !ok {
-		input.Trace.Decline(
-			"fill", "output-condition-not-satisfied",
-			"requiredAmountOut", input.OutputAmount.String(),
-			"maxAmountOut", allocation.MaxAmountOut().String(),
-			"exclusive", output.exclusive,
-			"exclusiveUntil", output.startTime,
-		)
-		return nil, nil
+	if allocation == nil {
+		return nil, errors.Errorf("%w: no route allocation covers amountIn %s: %s",
+			types.ErrFillDeclined, input.AmountIn, lastDecline())
+	}
+	requiredAmountOut, err := output.fill(input.Solver, input.ChainTime, allocation.MaxAmountOut())
+	if err != nil {
+		return nil, err
 	}
 	routes := allocation.Finalize(requiredAmountOut)
 	if len(routes) == 0 {
-		input.Trace.Decline(
-			"fill", "finalization-failed",
-			"requiredAmountOut", requiredAmountOut.String(),
-			"maxAmountOut", allocation.MaxAmountOut().String(),
-		)
-		return nil, nil
+		return nil, errors.Errorf("%w: finalizing required amount out %s on max amount out %s yielded no routes",
+			types.ErrFillDeclined, requiredAmountOut, allocation.MaxAmountOut())
 	}
 	return &types.FillPlan{Routes: routes}, nil
 }
 
 // DecideFillWithoutReservations lets the LI.FI worker distinguish a capacity-blocked order from
-// any other terminal nil decision without issuing a second decision to external strategies.
+// any other decline without issuing a second decision to external strategies.
 func (s *Strategy) DecideFillWithoutReservations(
 	ctx context.Context,
 	input types.FillInput,

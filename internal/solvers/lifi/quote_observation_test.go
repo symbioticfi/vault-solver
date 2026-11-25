@@ -205,7 +205,7 @@ func TestStandingQuoteRejectionDetailsRequireCurrentDirection(t *testing.T) {
 	events, write := standingObservationLogger(t)
 	ctx := observability.WithLogger(t.Context(), funcr.NewJSON(write, funcr.Options{Verbosity: 1}))
 	inventory := []liquidlane.Inventory{{Route: r}, {Route: newRoute}, {Route: forbidden}}
-	s.observeQuoteBuildRejections(ctx, inventory, nil, "strategy_error")
+	s.observeQuoteBuildRejections(ctx, inventory, types.QuoteOutput{}, "strategy_error")
 	if len(*events) != 2 {
 		t.Fatalf("current supported rejection details=%v", *events)
 	}
@@ -215,13 +215,35 @@ func TestStandingQuoteRejectionDetailsRequireCurrentDirection(t *testing.T) {
 		}
 	}
 	// Fresh structural proof remains diagnostic at zero capacity; old inventory cannot renew it.
-	s.observeQuoteBuildRejections(ctx, nil, nil, "snapshot_error")
+	s.observeQuoteBuildRejections(ctx, nil, types.QuoteOutput{}, "snapshot_error")
 	if len(*events) != 4 {
 		t.Fatalf("fresh supported failure omitted: %v", *events)
 	}
 	s.pairRoutes.Store(nil)
-	s.observeQuoteBuildRejections(ctx, inventory, nil, "snapshot_error")
+	s.observeQuoteBuildRejections(ctx, inventory, types.QuoteOutput{}, "snapshot_error")
 	if len(*events) != 4 {
 		t.Fatal("withdrawn support reused old inventory")
+	}
+}
+
+func TestStrategyDeclinedQuoteLogsStrategyReason(t *testing.T) {
+	r := testQuoteRoute()
+	cfg := testLifiConfig()
+	cfg.TokenPolicy = testTokenPolicy(t, tokenpolicy.Permissioned, r.TokenIn)
+	s := &Solver{cfg: cfg}
+	s.cfg.QuoteTTL = time.Minute
+	s.setPairRoutes([]route{r})
+	events, write := standingObservationLogger(t)
+	ctx := observability.WithLogger(t.Context(), funcr.NewJSON(write, funcr.Options{Verbosity: 1}))
+	out := types.QuoteOutput{Declines: []types.QuoteDecline{{
+		FromAsset: r.TokenIn, ToAsset: r.TokenOut, Reason: "quote maximum 5 is below minimum amount 10",
+	}}}
+	s.observeQuoteBuildRejections(ctx, []liquidlane.Inventory{{Route: r}}, out, "")
+	if len(*events) != 1 {
+		t.Fatalf("events = %v, want one rejection", *events)
+	}
+	row := (*events)[0]
+	if row["reason"] != "strategy_declined" || row["detail"] != "quote maximum 5 is below minimum amount 10" {
+		t.Fatalf("rejection = %v, want strategy_declined with the strategy's reason", row)
 	}
 }
