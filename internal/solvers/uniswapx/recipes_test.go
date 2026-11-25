@@ -87,11 +87,11 @@ func TestRecipeModeUsesMerkleTransactionLane(t *testing.T) {
 		t.Fatal("recipe solver still requires the native transaction manager or lost its name")
 	}
 	native := &Solver{}
-	if !native.RequiresTxManager() || native.RequiresMerkleTxManager() || !native.fillPath().laneAvailable() || native.Name() != Name {
+	if !native.RequiresTxManager() || native.RequiresMerkleTxManager() || native.fillPath().laneBlockReason() != "" || native.Name() != Name {
 		t.Fatal("adapter solver changed its transaction lane or name")
 	}
-	if f.solver.fillPath().laneAvailable() {
-		t.Fatal("recipe lane without a ready manager accepts work")
+	if got := f.solver.fillPath().laneBlockReason(); got != "recipe transaction manager is not ready" {
+		t.Fatalf("unready recipe lane blocker = %q", got)
 	}
 }
 
@@ -127,8 +127,8 @@ func TestRecipeQuotesUseConnectorInventory(t *testing.T) {
 	f.lane.LaneReady = func() bool { return true }
 	f.sender.Result = fillertest.Confirmed()
 	f.sender.DuringPoll = func() {
-		if f.solver.fillPath().laneAvailable() || !f.solver.quoteBlocked(time.Now().Unix()) {
-			t.Error("quotes continued while the lane owned a fill")
+		if got := f.solver.quoteBlockReason(time.Now().Unix()); got != "recipe lane is filling order "+f.order.Hash.Hex() {
+			t.Errorf("pending fill quote blocker = %q", got)
 		}
 	}
 	fill, err := f.solver.fillPath().startFill(t.Context(), nil, f.order, time.Unix(1_000, 0), time.Now())
@@ -272,7 +272,7 @@ func TestRecipeFillDefersWhileLaneIsBusy(t *testing.T) {
 		t.Fatal("second order entered a busy lane", err)
 	}
 	f.lane.LaneReady = func() bool { return true }
-	if f.solver.fillPath().laneAvailable() || !f.solver.quoteBlocked(time.Now().Unix()) {
+	if f.solver.fillPath().laneBlockReason() == "" || !f.solver.quoteBlocked(time.Now().Unix()) {
 		t.Fatal("busy lane admits new fills or keeps quoting")
 	}
 }
@@ -358,8 +358,8 @@ func TestStalledRecipeLaneBlocksQuotesAndFills(t *testing.T) {
 	if !result.Outcome.NonceUncertain() || !f.lane.Stalled() {
 		t.Fatalf("result = %+v", result)
 	}
-	if f.solver.fillPath().laneAvailable() || !f.solver.quoteBlocked(time.Now().Unix()) {
-		t.Fatal("stalled lane keeps quoting or filling")
+	if got := f.solver.quoteBlockReason(time.Now().Unix()); got != "recipe lane stalled while filling order "+f.order.Hash.Hex() {
+		t.Fatalf("stalled fill quote blocker = %q", got)
 	}
 }
 

@@ -127,8 +127,8 @@ func canonicalErrorArguments(data []byte, decoded any) bool {
 // evidence, including peer completion, is handled first by the caller; an absent view waits.
 func (e *executionService) reconcileEstimateRevert(ctx context.Context, local *orderRecord) error {
 	if local.EstimateKind == estimateRevertExpired {
-		observability.Decline(ctx, "fill_expired", "Reactor request expired")
-		e.markExpired(local.OrderID, local.TxHash, "Reactor request expired")
+		e.markExpired(ctx, local.OrderID, local.TxHash, "fill estimate reverted with Reactor request expired: "+
+			errString(errors.New(local.LastError)))
 		return nil
 	}
 	if local.EstimateKind == estimateRevertFatal || local.EstimateRetries >= e.maxNonceRetries {
@@ -145,11 +145,16 @@ func (e *executionService) reconcileEstimateRevert(ctx context.Context, local *o
 	}
 	now := e.now()
 	if local.RetryDeadline.IsZero() || !now.Before(local.RetryDeadline) {
-		e.markExpired(local.OrderID, local.TxHash, "order deadline has passed")
+		e.markExpired(ctx, local.OrderID, local.TxHash, deadlinePassed(local.RetryDeadline, now))
 		return nil
 	}
 	retryAt := now.Add(e.pollInterval)
-	if retryAt.Before(local.RetryDeadline) && e.store.scheduleEstimateRetry(local.OrderID, e.maxNonceRetries, retryAt) {
+	if !retryAt.Before(local.RetryDeadline) {
+		observability.Log(ctx).V(1).Info("estimate retry skipped: next poll is not before the order deadline; observing backend",
+			"retryAt", retryAt, "deadline", local.RetryDeadline, "revert", local.EstimateErrorName)
+		return nil
+	}
+	if e.store.scheduleEstimateRetry(local.OrderID, e.maxNonceRetries, retryAt) {
 		observability.Log(ctx).V(1).Info("estimate revert retry scheduled", "retryAt", retryAt,
 			"revert", local.EstimateErrorName, "estimateRetries", local.EstimateRetries+1)
 	}

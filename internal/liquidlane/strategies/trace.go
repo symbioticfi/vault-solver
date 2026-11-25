@@ -43,10 +43,20 @@ func (trace DecisionTrace) RecordDeclines() (DecisionTrace, func() string) {
 }
 
 func formatEvent(message string, keyValues []any) string {
+	if fields := FormatFields(keyValues); fields != "" {
+		return message + " " + fields
+	}
+	return message
+}
+
+// FormatFields renders logr-style key/value pairs as "k=v k=v" for a reason string.
+func FormatFields(keyValues []any) string {
 	var b strings.Builder
-	b.WriteString(message)
 	for i := 0; i+1 < len(keyValues); i += 2 {
-		fmt.Fprintf(&b, " %v=%v", keyValues[i], keyValues[i+1])
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		fmt.Fprintf(&b, "%v=%v", keyValues[i], keyValues[i+1])
 	}
 	return b.String()
 }

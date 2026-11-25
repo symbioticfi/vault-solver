@@ -88,7 +88,7 @@ func (w *wsClient) Send(frame []byte) bool {
 	case w.send <- frame:
 		return true
 	default:
-		w.log.Info("ws send dropped (buffer full)")
+		w.log.Info("ws send dropped (buffer full)", "queued", len(w.send), "capacity", cap(w.send))
 		return false
 	}
 }

@@ -2,6 +2,7 @@ package lifi
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"time"
 
@@ -38,6 +39,7 @@ type preparedFill struct {
 type orderProcessingResult struct {
 	fill              *pendingFill
 	blockedOn         map[liquidlane.CapacityID]bool
+	capacityReason    string
 	depositNotVisible bool
 	// retrySoon defers the order to the bounded timed retry also used for deposits that are not
 	// visible yet: a dependency of the fill failed, not the order. Outside recovery, retryable
@@ -98,7 +100,8 @@ func (s *Solver) processOrderUsingReservations(
 	reservations *liquidlane.CapacityReservations,
 ) orderProcessingResult {
 	if !s.cfg.TokenPolicy.Allows(order.TokenIn) {
-		observability.Decline(ctx, "order_skipped", "input token is out of scope")
+		observability.Decline(ctx, "order_skipped", fmt.Sprintf("input token %s is out of %s token scope",
+			order.TokenIn.Hex(), s.cfg.TokenPolicy.Scope()))
 		observability.Log(ctx).V(1).Info("order skipped: input token out of scope",
 			"orderId", order.OrderID, "quoteId", order.QuoteID,
 			"tokenIn", order.TokenIn.Hex(), "scope", s.cfg.TokenPolicy.Scope())
@@ -125,7 +128,7 @@ func (s *Solver) processOrderUsingReservations(
 	}
 	reservationKey := orderID.Hex()
 	if pending != nil && pending.contains(reservationKey) {
-		observability.Decline(ctx, "order_skipped", "a fill for this order is already pending")
+		observability.Decline(ctx, "order_skipped", "a fill for on-chain order "+reservationKey+" is already pending")
 		observability.Log(ctx).V(1).Info("order skipped: already pending", "orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID)
 		return orderProcessingResult{outcome: orderProcessingNotActionable}
@@ -161,6 +164,9 @@ func (s *Solver) fillAdapterOrder(
 		return orderProcessingResult{outcome: orderProcessingNotActionable}
 	}
 	plan, err := s.decideFill(ctx, prepared.input)
+	if errors.Is(err, types.ErrFillDeclined) {
+		return s.handleFillDecline(ctx, order, orderID, prepared, err)
+	}
 	if err != nil {
 		s.logFillDecisionError(ctx, err, "order fill: strategy", order)
 		if !types.IsPermanentFillDecisionError(err) {
@@ -175,54 +181,6 @@ func (s *Solver) fillAdapterOrder(
 			return orderProcessingResult{outcome: orderProcessingStrategyDeclined}
 		}
 		return orderProcessingResult{outcome: orderProcessingStrategyDeclined, err: err}
-	}
-	if plan == nil {
-		observability.Log(ctx).V(1).Info(
-			"order fill strategy declined",
-			"orderId", order.OrderID,
-			"onChainOrderId", orderID.Hex(),
-			"quoteId", order.QuoteID,
-			"fillQuotes", len(prepared.input.Quotes),
-			"reservationDomains", len(prepared.input.Reservations),
-			"amountIn", bigString(order.AmountIn),
-			"requiredAmountOut", bigString(order.OutputAmount),
-		)
-		prober, probeOK := s.strategy.(reservationRetryProber)
-		if !probeOK || len(prepared.input.Reservations) == 0 {
-			observability.Decline(ctx, "fill_declined", "strategy returned no fill plan")
-			return orderProcessingResult{outcome: orderProcessingStrategyDeclined}
-		}
-		unreservedInput := prepared.input
-		unreservedInput.Reservations = nil
-		unreservedInput.Trace = s.decisionTrace(ctx,
-			"orderId", order.OrderID,
-			"onChainOrderId", orderID.Hex(),
-			"quoteId", order.QuoteID,
-			"reservationProbe", true,
-		)
-		unreservedPlan, err := prober.DecideFillWithoutReservations(ctx, unreservedInput)
-		if err != nil {
-			s.logFillDecisionError(ctx, err, "order fill: strategy without pending reservations", order)
-			return orderProcessingResult{outcome: orderProcessingStrategyDeclined, err: err}
-		}
-		if unreservedPlan == nil {
-			observability.Decline(ctx, "fill_declined", "strategy returned no fill plan")
-			return orderProcessingResult{outcome: orderProcessingStrategyDeclined}
-		}
-		if err := validateFillPlan(unreservedInput, unreservedPlan); err != nil {
-			observability.Log(ctx).Error(err, "order fill: reject strategy plan without pending reservations",
-				"orderId", order.OrderID, "quoteId", order.QuoteID)
-			return orderProcessingResult{outcome: orderProcessingInvalidPlan, err: err}
-		}
-		blockedOn := blockedPlanCapacityIDs(prepared.input.Reservations, unreservedPlan)
-		if len(blockedOn) == 0 {
-			observability.Decline(ctx, "fill_declined", "strategy returned no fill plan")
-			return orderProcessingResult{outcome: orderProcessingStrategyDeclined}
-		}
-		return orderProcessingResult{
-			blockedOn: blockedOn,
-			outcome:   orderProcessingCapacityDeferred,
-		}
 	}
 	if err := validateFillPlan(prepared.input, plan); err != nil {
 		observability.Log(ctx).Error(err, "order fill: reject strategy plan", "orderId", order.OrderID,
@@ -269,6 +227,78 @@ func (s *Solver) fillAdapterOrder(
 	return orderProcessingResult{fill: fill, outcome: orderProcessingSubmitted}
 }
 
+// handleFillDecline defers an order the strategy declined only because pending fills reserve the
+// capacity it needs, and otherwise records the strategy's reason as the order's decline.
+func (s *Solver) handleFillDecline(
+	ctx context.Context,
+	order *submittedOrder,
+	orderID common.Hash,
+	prepared *preparedFill,
+	declined error,
+) orderProcessingResult {
+	decline := func(reason string) orderProcessingResult {
+		observability.Decline(ctx, "fill_declined", reason)
+		observability.Log(ctx).V(1).Info(
+			"order fill strategy declined",
+			"orderId", order.OrderID,
+			"onChainOrderId", orderID.Hex(),
+			"quoteId", order.QuoteID,
+			"reason", reason,
+			"fillQuotes", len(prepared.input.Quotes),
+			"reservationDomains", len(prepared.input.Reservations),
+			"amountIn", bigString(order.AmountIn),
+			"requiredAmountOut", bigString(order.OutputAmount),
+		)
+		return orderProcessingResult{outcome: orderProcessingStrategyDeclined}
+	}
+	prober, probeOK := s.strategy.(reservationRetryProber)
+	if !probeOK || len(prepared.input.Reservations) == 0 {
+		return decline(declined.Error())
+	}
+	unreservedInput := prepared.input
+	unreservedInput.Reservations = nil
+	unreservedInput.Trace = s.decisionTrace(ctx,
+		"orderId", order.OrderID,
+		"onChainOrderId", orderID.Hex(),
+		"quoteId", order.QuoteID,
+		"reservationProbe", true,
+	)
+	unreservedPlan, err := prober.DecideFillWithoutReservations(ctx, unreservedInput)
+	err = namedFillDecline(unreservedPlan, err)
+	if errors.Is(err, types.ErrFillDeclined) {
+		return decline(fmt.Sprintf("declined with %d pending reservation domains (%v) and without them (%v)",
+			len(prepared.input.Reservations), declined, err))
+	}
+	if err != nil {
+		s.logFillDecisionError(ctx, err, "order fill: strategy without pending reservations", order)
+		return orderProcessingResult{outcome: orderProcessingStrategyDeclined, err: err}
+	}
+	if err := validateFillPlan(unreservedInput, unreservedPlan); err != nil {
+		observability.Log(ctx).Error(err, "order fill: reject strategy plan without pending reservations",
+			"orderId", order.OrderID, "quoteId", order.QuoteID)
+		return orderProcessingResult{outcome: orderProcessingInvalidPlan, err: err}
+	}
+	blockedOn := blockedPlanCapacityIDs(prepared.input.Reservations, unreservedPlan)
+	if len(blockedOn) == 0 {
+		return decline(fmt.Sprintf(
+			"%v; the %d-route plan without pending reservations uses none of the %d reserved capacity domains",
+			declined, len(unreservedPlan.Routes), len(prepared.input.Reservations)))
+	}
+	return orderProcessingResult{
+		blockedOn:      blockedOn,
+		capacityReason: declined.Error(),
+		outcome:        orderProcessingCapacityDeferred,
+	}
+}
+
+// namedFillDecline turns a strategy's nil plan with no error into a decline that says so.
+func namedFillDecline(plan *types.FillPlan, err error) error {
+	if plan == nil && err == nil {
+		return errors.Errorf("%w: strategy returned no plan and no reason", types.ErrFillDeclined)
+	}
+	return err
+}
+
 // decideFill runs the strategy as the lifi.order.plan stage. A strategy that does not handle this
 // order's output format is an expected skip, so the stage declines rather than erroring.
 func (s *Solver) decideFill(
@@ -276,14 +306,15 @@ func (s *Solver) decideFill(
 ) (plan *types.FillPlan, err error) {
 	ctx, end := tracer.Start(ctx, "lifi.order.plan", observability.AttrStrategy.String(s.cfg.Strategy.Name))
 	defer func() {
-		if expectedFillDecline(err) {
-			observability.Decline(ctx, "fill_declined", "strategy does not support this output context")
+		if expectedFillDecline(err) || errors.Is(err, types.ErrFillDeclined) {
+			observability.Decline(ctx, "fill_declined", err.Error())
 			end(nil)
 			return
 		}
 		end(err)
 	}()
-	return s.strategy.DecideFill(ctx, input)
+	plan, err = s.strategy.DecideFill(ctx, input)
+	return plan, namedFillDecline(plan, err)
 }
 
 // expectedFillDecline reports a strategy decision error that is an expected skip rather than a
@@ -374,13 +405,13 @@ func (s *Solver) openedOrderID(ctx context.Context, order *submittedOrder) (comm
 		return common.Hash{}, err
 	}
 	if status == lifiOrderStatusNone {
-		observability.Decline(ctx, "order_deferred", "on-chain deposit is not visible yet")
+		observability.Decline(ctx, "order_deferred", fmt.Sprintf("on-chain order status is %d (none): deposit is not visible yet", status))
 		observability.Log(ctx).Info("on-chain order deposit is not visible yet", "orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID, "status", status)
 		return common.Hash{}, errOrderDepositNotVisible
 	}
 	if status == lifiOrderStatusClaimed || status == lifiOrderStatusRefunded {
-		observability.Decline(ctx, "order_skipped", "on-chain order is no longer fillable")
+		observability.Decline(ctx, "order_skipped", fmt.Sprintf("on-chain order status %d (claimed or refunded) is no longer fillable", status))
 		observability.Log(ctx).Info("order skipped: on-chain order is no longer fillable", "orderId", order.OrderID,
 			"onChainOrderId", orderID.Hex(), "quoteId", order.QuoteID, "status", status)
 		return common.Hash{}, errOrderNotFillable
@@ -403,7 +434,8 @@ func (s *Solver) prepareFill(
 ) (*preparedFill, error) {
 	pairRoutes := routesForPair(routes, order.TokenIn, order.TokenOut)
 	if len(pairRoutes) == 0 {
-		observability.Decline(ctx, "order_skipped", "no configured route for the order pair")
+		observability.Decline(ctx, "order_skipped", fmt.Sprintf("no configured route for pair %s -> %s",
+			order.TokenIn.Hex(), order.TokenOut.Hex()))
 		observability.Log(ctx).V(1).Info("order skipped: no configured route for pair", "orderId", order.OrderID,
 			"quoteId", order.QuoteID, "tokenIn", order.TokenIn.Hex(), "tokenOut", order.TokenOut.Hex())
 		return nil, nil
@@ -542,7 +574,9 @@ func (s *Solver) skipExpiredOrder(ctx context.Context, order *submittedOrder, ch
 	if !orderExpired(order, chainTime) {
 		return false
 	}
-	observability.Decline(ctx, "order_skipped", "order expired before it could be filled")
+	observability.Decline(ctx, "order_skipped", fmt.Sprintf(
+		"order expired: chain time %d is not before deadline %d (expires %d, fillDeadline %d)",
+		chainTime.Unix(), orderDeadline(order).Unix(), order.Order.Expires, order.Order.FillDeadline))
 	observability.Log(ctx).Info(
 		"order skipped: expired", "orderId", order.OrderID, "quoteId", order.QuoteID,
 		"chainTime", uint32Unix(chainTime), "expires", order.Order.Expires,

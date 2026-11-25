@@ -66,7 +66,7 @@ func (s *Strategy) DecideFill(ctx context.Context, input types.FillInput) (*type
 		return nil, err
 	}
 	if out == nil {
-		return nil, nil
+		return nil, errors.Errorf("%w: webhook %s returned a null plan", types.ErrFillDeclined, decideFillRoute)
 	}
 	return out, nil
 }

@@ -167,13 +167,21 @@ func (e *Engine) Submit(ctx context.Context, intent *Intent) error {
 
 func (e *Engine) reserve(intent *Intent) error {
 	if !e.intent.CompareAndSwap(nil, intent) {
-		return ErrBusy
+		return e.errBusy()
 	}
 	if err := e.Spends.Reserve(intent.OrderID, intent.Spend); err != nil {
 		e.intent.CompareAndSwap(intent, nil)
 		return err
 	}
 	return nil
+}
+
+// errBusy names the fill that owns the signer lane.
+func (e *Engine) errBusy() error {
+	if pending := e.Pending(); pending != nil {
+		return errors.Errorf("%w: order %s owns the signer lane", ErrBusy, pending.OrderID)
+	}
+	return errors.Errorf("%w: another fill took the signer lane", ErrBusy)
 }
 
 func (e *Engine) send(ctx context.Context, intent *Intent) error {
@@ -318,7 +326,7 @@ func (e *Engine) Run(ctx context.Context, next func(context.Context, bool) (*Int
 
 func (e *Engine) startFill(ctx context.Context, intent *Intent) (<-chan bool, error) {
 	if e.Sender.Busy() {
-		return nil, ErrBusy
+		return nil, errors.Errorf("%w: the fill sender still tracks a transaction", ErrBusy)
 	}
 	if err := e.reserve(intent); err != nil {
 		return nil, err

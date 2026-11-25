@@ -17,13 +17,13 @@ func FillPlanFromQuote(input types.QuoteInput, out types.QuoteOutput) (*types.Fi
 		return nil, errors.Errorf("invalid fill-plan decision %q", out.Decision)
 	}
 	if out.QuotedAmountOut == nil || out.QuotedAmountOut.Sign() <= 0 {
-		return nil, errors.New("quote output has invalid quotedAmountOut")
+		return nil, errors.Errorf("quote output has invalid quotedAmountOut %v", out.QuotedAmountOut)
 	}
 	if len(out.Legs) == 0 {
 		return nil, errors.New("quote output has no legs")
 	}
 	if input.RequireSingleRoute && len(out.Legs) != 1 {
-		return nil, errors.New("single-route input requires exactly one leg")
+		return nil, errors.Errorf("single-route input requires exactly one leg, got %d", len(out.Legs))
 	}
 
 	candidates, err := indexCandidates(input.Candidates)
@@ -61,7 +61,7 @@ func FillPlanFromQuote(input types.QuoteInput, out types.QuoteOutput) (*types.Fi
 		return nil, errors.Errorf("strategy amountOut sum %s does not match quotedAmountOut %s", sumOut, out.QuotedAmountOut)
 	}
 	if input.RequiredAmountOut != nil && out.QuotedAmountOut.Cmp(input.RequiredAmountOut) < 0 {
-		return nil, errors.New("strategy output is below required amount out")
+		return nil, errors.Errorf("strategy output %s is below required amount out %s", out.QuotedAmountOut, input.RequiredAmountOut)
 	}
 	return &types.FillPlan{
 		QuoteID:         input.QuoteID,
@@ -109,23 +109,26 @@ func validateLeg(
 		return liquidlane.QuoteCandidate{}, errors.Errorf("unknown candidate %q", leg.CandidateID)
 	}
 	if candidate.Route.TokenOut != tokenOut {
-		return liquidlane.QuoteCandidate{}, errors.Errorf("candidate %q asset does not match tokenOut", leg.CandidateID)
+		return liquidlane.QuoteCandidate{}, errors.Errorf("candidate %q asset %s does not match tokenOut %s",
+			leg.CandidateID, candidate.Route.TokenOut.Hex(), tokenOut.Hex())
 	}
 	if leg.AmountIn == nil || leg.AmountIn.Sign() <= 0 {
-		return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d has invalid amountIn", index)
+		return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d has invalid amountIn %v", index, leg.AmountIn)
 	}
 	if leg.AmountOut == nil || leg.AmountOut.Sign() <= 0 {
-		return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d has invalid amountOut", index)
+		return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d has invalid amountOut %v", index, leg.AmountOut)
 	}
 	if candidate.MaxAmountOut == nil || candidate.MaxAmountOut.Sign() <= 0 ||
 		leg.AmountOut.Cmp(candidate.MaxAmountOut) > 0 {
-		return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d exceeds candidate maxAmountOut", index)
+		return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d amountOut %s exceeds candidate maxAmountOut %v",
+			index, leg.AmountOut, candidate.MaxAmountOut)
 	}
 	if candidate.Rate == nil || candidate.Rate.Sign() <= 0 {
-		return liquidlane.QuoteCandidate{}, errors.Errorf("candidate %q has invalid rate", leg.CandidateID)
+		return liquidlane.QuoteCandidate{}, errors.Errorf("candidate %q has invalid rate %v", leg.CandidateID, candidate.Rate)
 	}
 	if requireFullCoverage && (candidate.MaxAmountIn == nil || leg.AmountIn.Cmp(candidate.MaxAmountIn) > 0) {
-		return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d exceeds candidate maxAmountIn", index)
+		return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d amountIn %s exceeds candidate maxAmountIn %v",
+			index, leg.AmountIn, candidate.MaxAmountIn)
 	}
 	if achievable := candidate.AmountOutFor(leg.AmountIn); leg.AmountOut.Cmp(achievable) > 0 {
 		return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d output %s exceeds candidate payout %s", index, leg.AmountOut, achievable)

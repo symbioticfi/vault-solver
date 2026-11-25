@@ -20,6 +20,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/threef"
+	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 )
 
 type offerPassData struct {
@@ -124,8 +125,24 @@ func TestOfferPassMemoizesNegativeMembershipPerPin(t *testing.T) {
 	}
 	calls := 0
 	chain := eligibilityReads(t, pin, recipe, tree, func(ethereum.CallMsg) error { calls++; return policyRevertError{} })
-	if err := w.evaluate(t.Context(), chain, pin, markets, auctions, c.offers, nil); err != nil {
+	rec := tracetest.Install(t)
+	ctx, end := tracer.Start(t.Context(), "threef-merkle.offers.tick")
+	err := w.evaluate(ctx, chain, pin, markets, auctions, c.offers, nil)
+	end(err)
+	if err != nil {
 		t.Fatal(err)
+	}
+	events := tracetest.Ended(t, rec, "threef-merkle.offers.tick").Events()
+	found := false
+	for _, event := range events {
+		for _, attribute := range event.Attributes {
+			if event.Name == "declined" && attribute.Key == "reason" && strings.Contains(attribute.Value.AsString(), "policy consume") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("offer tick omitted policy rejection: %v", events)
 	}
 	if calls != 1 {
 		t.Fatalf("one rejected request simulated %d times at one pin", calls)

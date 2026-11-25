@@ -48,6 +48,7 @@ func (s *Strategy) DecideQuote(ctx context.Context, input types.QuoteInput) (*ty
 		return nil, err
 	}
 	if out == nil {
+		input.Trace.Decline("quote", "webhook-declined", "route", decideQuoteRoute, "response", "null")
 		return nil, nil
 	}
 	if err := validateQuote(input, out); err != nil {
@@ -62,7 +63,7 @@ func (s *Strategy) DecideFill(ctx context.Context, input types.FillInput) (*type
 		return nil, err
 	}
 	if out == nil {
-		return nil, nil
+		return nil, errors.Errorf("%w: webhook %s returned a null fill plan", types.ErrFillDeclined, decideFillRoute)
 	}
 	return out, nil
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
@@ -52,6 +53,28 @@ func TestWebhookStrategyDelegatesOneQuoteAndCurrentFill(t *testing.T) {
 		Quotes: []liquidlane.FillQuote{{Inventory: inventory, AmountIn: big.NewInt(100), MaxAmountOut: big.NewInt(100)}},
 	})
 	if err != nil || plan == nil || len(plan.Routes) != 1 || plan.Routes[0].RouteID != route.ID {
+		t.Fatalf("plan = %+v, err %v", plan, err)
+	}
+}
+
+func TestWebhookNullDecisionsNameTheDecline(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("null"))
+	}))
+	defer server.Close()
+	strategy := newWebhookTestStrategy(t, server.URL)
+
+	var declined []any
+	quote, err := strategy.DecideQuote(t.Context(), types.QuoteInput{
+		AmountIn: big.NewInt(100),
+		Trace:    func(_ string, fields ...any) { declined = fields },
+	})
+	if err != nil || quote != nil || len(declined) < 2 || declined[1] != "webhook-declined" {
+		t.Fatalf("quote = %+v, err %v, decline %v", quote, err, declined)
+	}
+	plan, err := strategy.DecideFill(t.Context(), types.FillInput{AmountIn: big.NewInt(100)})
+	if !errors.Is(err, types.ErrFillDeclined) || plan != nil || err.Error() != "fill declined: webhook /decide-fill returned a null fill plan" {
 		t.Fatalf("plan = %+v, err %v", plan, err)
 	}
 }
