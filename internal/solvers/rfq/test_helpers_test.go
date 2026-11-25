@@ -7,6 +7,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 
@@ -42,6 +43,7 @@ func (f *fakeQuoteCandidateReader) readQuoteCandidates(
 	tokenOut common.Address,
 	amount *big.Int,
 	pending pendingReservations,
+	trace liquidstrategies.DecisionTrace,
 ) ([]liquidlane.QuoteCandidate, error) {
 	matching := make([]liquidlane.Inventory, 0, len(inventory))
 	inputDecimals := f.inputDecimals
@@ -78,7 +80,7 @@ func (f *fakeQuoteCandidateReader) readQuoteCandidates(
 			MaxAmountOut: liquidlane.CloneBig(amountOut), MinDiscount: new(big.Int),
 		})
 	}
-	return liquidgreedy.NormalizeOracleInventory(amount, matching, quotes), nil
+	return liquidgreedy.NormalizeOracleInventory(amount, matching, quotes, trace), nil
 }
 
 func newDefaultTestStrategy() types.Strategy { return defaultstrategy.New() }

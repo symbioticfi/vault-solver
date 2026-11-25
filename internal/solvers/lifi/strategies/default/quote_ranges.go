@@ -1,15 +1,21 @@
 package defaultstrategy
 
 import (
+	"fmt"
 	"math/big"
 	"sort"
 	"time"
+
+	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 	"github.com/symbioticfi/vault-solver/internal/solvers/lifi/strategies/types"
 )
+
+// errNoQuote marks a pair the strategy declines to quote; the wrapping error names the failed check.
+var errNoQuote = errors.New("no quote")
 
 func (s *Strategy) buildQuoteRanges(
 	candidates []liquidlane.QuoteCandidate,
@@ -18,16 +24,19 @@ func (s *Strategy) buildQuoteRanges(
 ) ([]types.QuoteRange, map[liquidlane.CandidateID]liquidlane.QuoteCandidate, error) {
 	candidates = liquidgreedy.BestRouteCandidates(candidates, maxRoutes)
 	if len(candidates) == 0 {
-		return nil, nil, nil
+		return nil, nil, errors.Errorf("%w: no candidate survives best-route selection", errNoQuote)
 	}
 	maximum, routeCount, privateRouteCount := quoteBounds(candidates)
 	if maximum.Sign() <= 0 {
-		return nil, nil, nil
+		return nil, nil, errors.Errorf("%w: quote maximum %s across %d routes is not positive", errNoQuote, maximum, routeCount)
 	}
 	maxGasCost := pricing.MaxCost(routeCount, privateRouteCount)
 	breakpoints := quoteBreakpoints(maximum, s.minAmount, s.rangeCount)
-	used := make(map[liquidlane.CandidateID]liquidlane.QuoteCandidate)
+	if len(breakpoints) == 0 {
+		return nil, nil, errors.Errorf("%w: quote maximum %s is below minimum amount %s", errNoQuote, maximum, s.minAmount)
+	}
 	ranges := make([]types.QuoteRange, 0, len(breakpoints))
+	unsafe, lastUnpriced := 0, ""
 	lower := new(big.Int).Set(s.minAmount)
 	for _, upper := range breakpoints {
 		if upper.Cmp(lower) < 0 {
@@ -35,10 +44,11 @@ func (s *Strategy) buildQuoteRanges(
 		}
 		safeLower := s.firstSafeRangeInput(candidates, lower, upper, maxGasCost, routeCount)
 		if safeLower == nil {
+			unsafe++
 			lower = new(big.Int).Add(upper, big.NewInt(1))
 			continue
 		}
-		quoteRange, err := s.priceQuoteRange(
+		quoteRange, unpriced, err := s.priceQuoteRange(
 			candidates, maxRoutes, safeLower, upper, maxGasCost, routeCount, pricing,
 		)
 		if err != nil {
@@ -46,13 +56,23 @@ func (s *Strategy) buildQuoteRanges(
 		}
 		if quoteRange != nil {
 			ranges = append(ranges, *quoteRange)
+		} else {
+			lastUnpriced = unpriced
 		}
 		lower = new(big.Int).Add(upper, big.NewInt(1))
 	}
-	if len(ranges) > 0 {
-		for _, candidate := range candidates {
-			used[candidate.ID] = candidate
+	if len(ranges) == 0 {
+		reason := fmt.Sprintf(
+			"no range priced up to maximum %s: %d of %d ranges have no input whose loss-adjusted floor rate pays positive output (max gas cost %s)",
+			maximum, unsafe, len(breakpoints), maxGasCost)
+		if lastUnpriced != "" {
+			reason += "; last unpriced range: " + lastUnpriced
 		}
+		return nil, nil, errors.Errorf("%w: %s", errNoQuote, reason)
+	}
+	used := make(map[liquidlane.CandidateID]liquidlane.QuoteCandidate, len(candidates))
+	for _, candidate := range candidates {
+		used[candidate.ID] = candidate
 	}
 	return ranges, used, nil
 }
@@ -113,7 +133,8 @@ func (s *Strategy) priceQuoteRange(
 	maxGasCost *big.Int,
 	routeCount int,
 	pricing liquidstrategies.GasPricing,
-) (*types.QuoteRange, error) {
+) (quoteRange *types.QuoteRange, declineReason string, err error) {
+	trace, lastDecline := liquidstrategies.DecisionTrace(nil).RecordDeclines()
 	quoteAt := func(amount *big.Int) (*liquidstrategies.QuoteSolution, error) {
 		return liquidgreedy.SolveQuote(liquidstrategies.QuoteTask{
 			ExactInput:      amount,
@@ -123,15 +144,22 @@ func (s *Strategy) priceQuoteRange(
 			OutputBufferBps: 2 * s.cfg.PriceBufferBps,
 			InputPolicy:     liquidstrategies.RejectUncoveredInput,
 			GasPricing:      &pricing,
+			Trace:           trace,
 		})
 	}
 	lowerQuote, err := quoteAt(lower)
-	if err != nil || lowerQuote == nil {
-		return nil, err
+	if err != nil {
+		return nil, "", err
+	}
+	if lowerQuote == nil {
+		return nil, fmt.Sprintf("no quote at lower bound %s: %s", lower, lastDecline()), nil
 	}
 	upperQuote, err := quoteAt(upper)
-	if err != nil || upperQuote == nil {
-		return nil, err
+	if err != nil {
+		return nil, "", err
+	}
+	if upperQuote == nil {
+		return nil, fmt.Sprintf("no quote at upper bound %s: %s", upper, lastDecline()), nil
 	}
 
 	inDecimals := candidates[0].Route.TokenInDecimals
@@ -154,15 +182,17 @@ func (s *Strategy) priceQuoteRange(
 	if floorRate.Cmp(rate) < 0 {
 		rate = floorRate
 	}
-	if rate.Sign() <= 0 ||
-		liquidlane.AmountOutForRate(lower, rate, inDecimals, outDecimals).Sign() <= 0 {
-		return nil, nil
+	if rate.Sign() <= 0 {
+		return nil, fmt.Sprintf("range [%s,%s] rate %s is not positive", lower, upper, rate), nil
+	}
+	if liquidlane.AmountOutForRate(lower, rate, inDecimals, outDecimals).Sign() <= 0 {
+		return nil, fmt.Sprintf("range [%s,%s] rate %s pays zero output at its lower bound", lower, upper, rate), nil
 	}
 	return &types.QuoteRange{
 		MinAmount: new(big.Int).Set(lower),
 		MaxAmount: new(big.Int).Set(upper),
 		Quote:     fixedPointDecimal(rate, rateScaleDigits),
-	}, nil
+	}, "", nil
 }
 
 // maximumNonOverquotingRate returns the largest fixed-point rate whose rounded

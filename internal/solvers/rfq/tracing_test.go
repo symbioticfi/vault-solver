@@ -294,6 +294,46 @@ func TestExecution_OrderTraceRecordsLinkMiss(t *testing.T) {
 	}
 }
 
+func TestExecution_QueuedExpiryLogsOrder(t *testing.T) {
+	store := newStore(time.Now)
+	store.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
+	store.boundUnsignedWork("o1", time.Unix(0, 0))
+	execution := newExec(t, store, nil, nil)
+	log, capture := tracetest.CaptureLogs(t, 0)
+	execution.log = log
+	if !execution.expireQueued(observability.WithLogger(t.Context(), log), store.order("o1")) {
+		t.Fatal("expected queued order to expire")
+	}
+	lines := capture()
+	if len(lines) != 1 || !strings.Contains(lines[0], `"orderId":"o1"`) || !strings.Contains(lines[0], `"quoteId":"q1"`) {
+		t.Fatalf("queued expiry logs = %v", lines)
+	}
+	if strings.Contains(lines[0], `"tx":`) {
+		t.Fatalf("queued expiry with no known transaction = %v", lines)
+	}
+}
+
+func TestExecution_ExpiryLogsKnownTransaction(t *testing.T) {
+	for _, backendExpiry := range []bool{false, true} {
+		store := newStore(time.Now)
+		store.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
+		store.boundUnsignedWork("o1", time.Unix(0, 0))
+		hash := common.HexToHash("0xcafe")
+		store.markNonceUncertain("o1", hash, "unknown outcome", false)
+		execution := newExec(t, store, nil, nil)
+		log, capture := tracetest.CaptureLogs(t, 0)
+		ctx := observability.WithLogger(t.Context(), log)
+		if backendExpiry {
+			execution.markExpired(ctx, "o1", common.Hash{}, "backend status expired")
+		} else if !execution.expireUnsigned(ctx, store.order("o1")) {
+			t.Fatal("expected local expiry")
+		}
+		if lines := capture(); len(lines) != 1 || !strings.Contains(lines[0], hash.Hex()) {
+			t.Fatalf("expiry did not log the known transaction: %v", lines)
+		}
+	}
+}
+
 // A fill we refuse to send — here the backend resolved a discount to an adapter the plan never
 // quoted — is an expected skip, so it declines on the order span instead of erroring the trace.
 func TestExecution_OrderTraceDeclinesRefusedFill(t *testing.T) {

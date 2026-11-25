@@ -15,7 +15,7 @@ import (
 // Observe each revalidated configured direction once per refresh, irrespective of adapter count.
 // Zero capacity retains structural support; inventory cannot revive removed or expired proof.
 // Missing inventory is distinct from a strategy declining an available pair.
-func (s *Solver) observeQuoteBuildRejections(ctx context.Context, inventory []liquidlane.Inventory, quotes []types.Quote, reason string, unavailableDiscounts ...liquidlane.Inventory) {
+func (s *Solver) observeQuoteBuildRejections(ctx context.Context, inventory []liquidlane.Inventory, out types.QuoteOutput, reason string, unavailableDiscounts ...liquidlane.Inventory) {
 	seen := make(map[[2]common.Address]bool)
 	observe := func(r route, hasInventory bool) {
 		if !s.cfg.TokenPolicy.Allows(r.TokenIn) {
@@ -27,8 +27,9 @@ func (s *Solver) observeQuoteBuildRejections(ctx context.Context, inventory []li
 		}
 		seen[pair] = true
 		pairReason := reason
+		var detail []any
 		if pairReason == "" {
-			for _, q := range quotes {
+			for _, q := range out.Quotes {
 				if q.FromAsset == r.TokenIn && q.ToAsset == r.TokenOut {
 					return
 				}
@@ -36,13 +37,19 @@ func (s *Solver) observeQuoteBuildRejections(ctx context.Context, inventory []li
 			pairReason = "no_inventory"
 			if hasInventory {
 				pairReason = "strategy_declined"
+				detail = []any{"detail", "strategy reported no reason"}
+				for _, d := range out.Declines {
+					if d.FromAsset == r.TokenIn && d.ToAsset == r.TokenOut {
+						detail = []any{"detail", d.Reason}
+					}
+				}
 			} else if slices.ContainsFunc(unavailableDiscounts, func(base liquidlane.Inventory) bool {
 				return base.TokenIn == r.TokenIn && base.TokenOut == r.TokenOut
 			}) {
 				pairReason = "discount_api_error"
 			}
 		}
-		s.observeStandingQuoteRejection(ctx, r.TokenIn, r.TokenOut, pairReason, inventory)
+		s.observeStandingQuoteRejection(ctx, r.TokenIn, r.TokenOut, pairReason, inventory, detail...)
 	}
 	for _, item := range inventory {
 		observe(item.Route, true)
@@ -70,7 +77,8 @@ func (s *Solver) observeQuoteSubmitError(ctx context.Context, quotes []types.Quo
 	}
 }
 
-func (s *Solver) observeStandingQuoteRejection(ctx context.Context, in, out common.Address, reason string, inventory []liquidlane.Inventory) {
+// fields carry the unbounded detail behind reason to the log line only, never to the metric label.
+func (s *Solver) observeStandingQuoteRejection(ctx context.Context, in, out common.Address, reason string, inventory []liquidlane.Inventory, fields ...any) {
 	source := s.pairScopeSource(in, out, inventory)
 	if source == "" {
 		return
@@ -79,7 +87,7 @@ func (s *Solver) observeStandingQuoteRejection(ctx context.Context, in, out comm
 	if s.metrics != nil {
 		s.metrics.pairs.Standing(s.chainID, in, out, "rejected", reason)
 	}
-	observability.Log(ctx).WithValues(s.tokenMetadata.PairLogFields(in, out)...).V(1).Info("standing quote rejected", "chainId", s.chainID, "reason", reason, "tokenIn", in.Hex(), "tokenOut", out.Hex(), "pairInScope", true, "pairScope", "directed_route", "pairScopeSource", source)
+	observability.Log(ctx).WithValues(s.tokenMetadata.PairLogFields(in, out)...).V(1).Info("standing quote rejected", append([]any{"chainId", s.chainID, "reason", reason, "tokenIn", in.Hex(), "tokenOut", out.Hex(), "pairInScope", true, "pairScope", "directed_route", "pairScopeSource", source}, fields...)...)
 }
 
 func boundedStandingQuoteReason(reason string) string {

@@ -2,6 +2,8 @@ package rfq
 
 import (
 	"context"
+	"maps"
+	"regexp"
 	"strings"
 	"time"
 
@@ -29,13 +31,24 @@ func (s *Solver) pollAwardsWithin(ctx context.Context, forSubmission bool, budge
 	open := make(map[string]bool, len(rows))
 	var queued, unreserved []rfqbackend.OrdersResponseOrdersInner
 	pending := s.Pending()
+	log := observability.Log(refresh)
 	for _, row := range rows {
 		id := row.OrderId
-		if id == "" || open[id] {
+		switch {
+		case id == "":
+			log.Error(errors.New("awarded order has no orderId"), "RFQ award skipped", "quoteId", row.QuoteId)
+			continue
+		case open[id]:
+			log.V(1).Info("RFQ award skipped", "orderId", id, "reason", "repeated in the awarded orders feed")
 			continue
 		}
 		open[id] = true
-		if pending != nil && id == pending.OrderID || s.Spends.Finalized(id) {
+		switch {
+		case pending != nil && id == pending.OrderID:
+			log.V(1).Info("RFQ award not planned", "orderId", id, "reason", "its fill owns the signer lane")
+			continue
+		case s.Spends.Finalized(id):
+			log.V(1).Info("RFQ award not planned", "orderId", id, "reason", "already settled by this lane")
 			continue
 		}
 		queued = append(queued, row)
@@ -43,7 +56,14 @@ func (s *Solver) pollAwardsWithin(ctx context.Context, forSubmission bool, budge
 			unreserved = append(unreserved, row)
 		}
 	}
+	for id := range s.lastOpen {
+		if !open[id] && s.Spends.Queued(id) {
+			log.Info("RFQ award reservation released", "orderId", id, "reason", "order left the awarded orders feed")
+		}
+	}
+	s.lastOpen = open
 	s.Spends.PruneQueued(open)
+	maps.DeleteFunc(s.skipped, func(pass awardPass, _ string) bool { return !open[pass.orderID] })
 	if len(queued) == 0 {
 		return nil, s.markAwardRefresh(refresh, polledAt)
 	}
@@ -101,6 +121,34 @@ func (s *Solver) markAwardRefresh(ctx context.Context, polledAt time.Time) error
 	return nil
 }
 
+// logSkip says why an awarded order was left unfilled at Info, which a skipped award always
+// deserves, but only when the failed check changes: every poll repeats it otherwise.
+func (s *Solver) logSkip(ctx context.Context, pass awardPass, reason string) {
+	log := observability.Log(ctx)
+	if key := reasonKey(reason); s.skipped[pass] == key {
+		log = log.V(1)
+	} else {
+		if s.skipped == nil {
+			s.skipped = make(map[awardPass]string)
+		}
+		s.skipped[pass] = key
+	}
+	log.Info("RFQ award skipped", "orderId", pass.orderID, "reserve", pass.reserve, "reason", reason)
+}
+
+var reasonValues = regexp.MustCompile(`0x[0-9a-fA-F]+|[0-9][0-9a-zA-Zµ.]*`)
+
+// reasonKey names the failed check without the amounts, times and durations it compared, which
+// tick with the clock and the inventory; hex addresses stay, so a changed route set still counts.
+func reasonKey(reason string) string {
+	return reasonValues.ReplaceAllStringFunc(reason, func(value string) string {
+		if strings.HasPrefix(value, "0x") {
+			return value
+		}
+		return "#"
+	})
+}
+
 func (s *Solver) planAwards(ctx context.Context, rows []rfqbackend.OrdersResponseOrdersInner, listed []discounts.ListItem, observed filler.Observation, reserve bool) (*filler.Intent, error) {
 	price := s.prices.reader(observed.BlockHash, func(ctx context.Context, offers []discounts.ListItem) ([]liquidlane.Inventory, error, error) {
 		return s.InventoryAt(ctx, offers, observed.BlockNumber)
@@ -114,9 +162,10 @@ func (s *Solver) planAwards(ctx context.Context, rows []rfqbackend.OrdersRespons
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
-			observability.Log(ctx).V(1).Info("RFQ award planning skipped", "orderId", row.OrderId, "reserve", reserve, "reason", err.Error())
+			s.logSkip(ctx, awardPass{row.OrderId, reserve}, err.Error())
 			continue
 		}
+		delete(s.skipped, awardPass{row.OrderId, reserve})
 		if intent != nil {
 			if err := ctx.Err(); err != nil {
 				return nil, err

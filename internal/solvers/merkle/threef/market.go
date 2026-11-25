@@ -2,10 +2,13 @@ package threef
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 
 	ethereum "github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/rpc"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
@@ -101,7 +104,7 @@ func eligible(ctx context.Context, chain provider.Reader, snapshot provider.Snap
 	if err != nil {
 		var reverted rpc.DataError
 		if errors.As(err, &reverted) && reverted.ErrorData() != nil {
-			return errIneligible
+			return errors.Errorf("%w: policy consume for request %s reverted: %s", errIneligible, request.Hex(), revertDetail(reverted.ErrorData()))
 		}
 		return errors.New("3f eligibility read failed")
 	}
@@ -110,6 +113,26 @@ func eligible(ctx context.Context, chain provider.Reader, snapshot provider.Snap
 		return errors.New("3f invalid eligibility simulation")
 	}
 	return nil
+}
+
+// revertDetail decodes a revert payload's Error(string) or Panic reason, else returns its selector and
+// arguments raw: the policy and capability ABIs declare no custom errors to decode against.
+func revertDetail(data any) string {
+	text, ok := data.(string)
+	if !ok {
+		return fmt.Sprintf("%v", data)
+	}
+	raw, err := hexutil.Decode(text)
+	if err != nil {
+		return "undecodable revert data " + text
+	}
+	if reason, err := abi.UnpackRevert(raw); err == nil {
+		return reason
+	}
+	if len(raw) < 4 {
+		return "revert data " + text
+	}
+	return fmt.Sprintf("selector %s args %s", hexutil.Encode(raw[:4]), hexutil.Encode(raw[4:]))
 }
 
 func encodedValue(source uint8, value uint64) *big.Int {

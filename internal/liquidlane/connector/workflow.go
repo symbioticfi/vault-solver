@@ -222,8 +222,13 @@ func (w *Workflow) prepareLeg(ctx context.Context, request Request, member recip
 	if err != nil {
 		return Prepared{}, err
 	}
-	if remaining.Cmp(amountOut) < 0 || request.MaxAssets.Cmp(amountOut) < 0 {
-		return Prepared{}, ErrInsufficientCapacity
+	if remaining.Cmp(amountOut) < 0 {
+		return Prepared{}, errors.Errorf("%w: connector %s remainingAssets %s below required output %s",
+			ErrInsufficientCapacity, request.Venue.Hex(), remaining, amountOut)
+	}
+	if request.MaxAssets.Cmp(amountOut) < 0 {
+		return Prepared{}, errors.Errorf("%w: connector %s maxAssets %s below required output %s",
+			ErrInsufficientCapacity, request.Venue.Hex(), request.MaxAssets, amountOut)
 	}
 	assembled, err := assembleRoute(recipe, tree, request.Venue, request.TokenIn, w.Filler, request.AmountIn, amountOut, terms.Swap, terms.Signature)
 	if err != nil {

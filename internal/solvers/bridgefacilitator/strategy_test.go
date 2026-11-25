@@ -77,7 +77,7 @@ func TestBuildStrategyInputLiveCoverage(t *testing.T) {
 	offers := newOfferTracker()
 	seed(offers, adapter, 10, now.Add(time.Minute), 100)
 
-	input := buildStrategyInput(
+	input, _ := buildStrategyInput(
 		[]threef.AuctionDto{testAuctionDto(10, collateral, "100")},
 		[]*adapterOffering{{
 			target: Target{
@@ -107,7 +107,7 @@ func TestBuildStrategyInputLiveCoverage(t *testing.T) {
 	}
 
 	offers.reconcileAdapter(adapter, map[int64]offerState{10: {expiry: now.Add(time.Minute)}})
-	input = buildStrategyInput([]threef.AuctionDto{testAuctionDto(10, collateral, "100")}, nil, offers, now)
+	input, _ = buildStrategyInput([]threef.AuctionDto{testAuctionDto(10, collateral, "100")}, nil, offers, now)
 	if len(input.Auctions) != 1 || input.Auctions[0].RemainingAmount.Sign() != 0 {
 		t.Fatalf("auctions = %+v, want the auction kept with unknown live coverage counted as full", input.Auctions)
 	}
@@ -165,5 +165,30 @@ func testAuctionDto(id int64, depositAsset common.Address, amountRequested strin
 		DepositAsset: *threef.NewNullableAuctionDepositAssetDto(
 			threef.NewAuctionDepositAssetDto(depositAsset.Hex(), "USDC", 6),
 		),
+	}
+}
+
+func TestBuildStrategyInputSkipReasons(t *testing.T) {
+	collateral := common.HexToAddress("0x0000000000000000000000000000000000000003")
+	for _, tc := range []struct {
+		name   string
+		edit   func(*threef.AuctionDto)
+		reason string
+	}{
+		{"closed", func(a *threef.AuctionDto) { a.Status = "settled" }, `status "settled" is not open or solvable`},
+		{"bad request", func(a *threef.AuctionDto) { a.RequestId = "nope" }, `requestId "nope" is not an address`},
+		{"zero amount", func(a *threef.AuctionDto) { a.SetAmountRequested("0") }, `amountRequested "0" is missing or not positive`},
+		{"no rate", func(a *threef.AuctionDto) { a.MaxRate.Unset() }, "maxRate is unresolved"},
+		{"negative basis", func(a *threef.AuctionDto) { a.RateBasisSeconds = -1 }, "rateBasisSeconds -1 is negative"},
+		{"bad deposit asset", func(a *threef.AuctionDto) { a.DepositAsset.Unset() }, `depositAsset "" is not an address`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dto := testAuctionDto(7, collateral, "100")
+			tc.edit(&dto)
+			input, skips := buildStrategyInput([]threef.AuctionDto{dto}, nil, newOfferTracker(), time.Unix(100, 0))
+			if len(input.Auctions) != 0 || len(skips) != 1 || skips[0].AuctionID != 7 || skips[0].Reason != tc.reason {
+				t.Fatalf("auctions=%d skips=%+v, want one skip %q", len(input.Auctions), skips, tc.reason)
+			}
+		})
 	}
 }

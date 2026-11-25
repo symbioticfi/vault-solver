@@ -2,6 +2,7 @@ package uniswapx
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -95,6 +96,8 @@ func (s *Solver) recoverRecentExclusive(ctx context.Context, now time.Time) erro
 		obligation, obligationErr := exclusiveObligationFromEntry(entry, s.cfg, s.chainID)
 		if obligationErr != nil {
 			if errors.Is(obligationErr, errDifferentExclusiveFiller) {
+				observability.Log(ctx).V(1).Info("recent exclusive order not tracked",
+					"orderHash", entry.OrderHash, "reason", obligationErr.Error())
 				continue
 			}
 			return errors.Errorf(
@@ -172,9 +175,10 @@ func (s *Solver) pollSource(
 			s.observeExclusiveWin()
 			s.observeAward(ctx, order)
 		}
-		if !s.claim(order.Hash, now) {
+		if skip := s.claimSkip(order.Hash, now); skip != "" {
 			observability.Log(ctx).V(1).Info(
-				"order skipped: already handled or awaiting retry",
+				"order skipped",
+				"reason", skip,
 				"source", source,
 				"orderHash", order.Hash.Hex(),
 				"quoteId", order.QuoteID,
@@ -247,7 +251,10 @@ func (s *Solver) recordExclusivePollSuccess(now time.Time) {
 	}
 }
 
-func (s *Solver) claim(hash common.Hash, now time.Time) bool {
+func (s *Solver) claim(hash common.Hash, now time.Time) bool { return s.claimSkip(hash, now) == "" }
+
+// claimSkip claims hash for fill planning, or names why it is not claimable now.
+func (s *Solver) claimSkip(hash common.Hash, now time.Time) string {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
 	for key, filledAt := range s.filled {
@@ -262,19 +269,19 @@ func (s *Solver) claim(hash common.Hash, now time.Time) bool {
 			delete(s.ownedFillAttempts, key)
 		}
 	}
-	if _, exists := s.filled[hash]; exists {
-		return false
+	if filledAt, exists := s.filled[hash]; exists {
+		return fmt.Sprintf("order already completed at %d", filledAt.Unix())
 	}
 	if s.inFlight[hash] {
-		return false
+		return "order fill already in flight"
 	}
 	if retryAt, exists := s.retryAt[hash]; exists && retryAt.After(now) {
-		return false
+		return fmt.Sprintf("order retry scheduled at %d, now %d", retryAt.Unix(), now.Unix())
 	}
 	delete(s.retryAt, hash)
 	s.beginFillPlanning()
 	s.inFlight[hash] = true
-	return true
+	return ""
 }
 
 func (s *Solver) retry(hash common.Hash, now time.Time, failed bool) {

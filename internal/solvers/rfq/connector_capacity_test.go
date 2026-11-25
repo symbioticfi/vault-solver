@@ -62,7 +62,7 @@ func TestConnectorQuoteUsesBackendCapacityAndCurrentPolicyBudget(t *testing.T) {
 				}
 				return liquidlane.CapacityReservations{liquidlane.NewCapacityID(1, account, tokenOut): big.NewInt(tc.reserved)}
 			}
-			candidates, err := r.readConnectorCandidates(t.Context(), inventory, tokenIn, tokenOut, big.NewInt(100), pending)
+			candidates, err := r.readConnectorCandidates(t.Context(), inventory, tokenIn, tokenOut, big.NewInt(100), pending, nil)
 			if tc.wantErr != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 					t.Fatalf("expected capacity failure: %v", err)

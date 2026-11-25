@@ -58,8 +58,8 @@ func TestPrepareTakesConnectorPayment(t *testing.T) {
 		{name: "floored like the contract", gross: big.NewInt(101), remaining: 900, maxAssets: 900, want: 98},
 		{name: "oracle unreadable", remaining: 900, maxAssets: 900, wantErr: "getAmountOut"},
 		{name: "pays nothing", gross: big.NewInt(1), remaining: 900, maxAssets: 900, wantErr: "pays nothing"},
-		{name: "above policy budget", gross: big.NewInt(500), remaining: 489, maxAssets: 900, wantErr: "whole award"},
-		{name: "above advertised capacity", gross: big.NewInt(500), remaining: 900, maxAssets: 489, wantErr: "whole award"},
+		{name: "above policy budget", gross: big.NewInt(500), remaining: 489, maxAssets: 900, wantErr: "remainingAssets 489 below required output 490"},
+		{name: "above advertised capacity", gross: big.NewInt(500), remaining: 900, maxAssets: 489, wantErr: "maxAssets 489 below required output 490"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w, f := testWorkflow(t)

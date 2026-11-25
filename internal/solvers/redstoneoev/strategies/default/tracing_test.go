@@ -89,7 +89,7 @@ func TestBundleSkipLogsCarryTraceIDOnce(t *testing.T) {
 	}, pricedBundle{gasNative: big.NewInt(1), bidNative: big.NewInt(5)},
 		decisionState{CallbackNative: big.NewInt(1)}, big.NewInt(1))
 
-	if skip != types.SkipReasonCallbackBalance {
+	if skip.code != types.SkipReasonCallbackBalance || detailOf(skip.detail) != "callback balance 1 wei is below bid 5 wei" {
 		t.Fatalf("skip = %q, want %q", skip, types.SkipReasonCallbackBalance)
 	}
 	var skipped string

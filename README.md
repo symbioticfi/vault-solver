@@ -441,7 +441,9 @@ signed-discount resolution, calldata construction, or preflight before the trans
 result rejected before the worker lifecycle does not count toward the local fill breaker and is reported as
 `solver_bot_txmanager_admission_rejections_total{label="uniswapx-fill"}` rather than a terminal fill
 failure. `GET /ready` exposes that state and
-also returns not-ready when the latest snapshot has no quotable inventory;
+also returns not-ready when the latest snapshot has no quotable inventory. The `503` body stays generic
+because the quote port is published to the order provider; the failed check is logged as `not ready`
+with a `reason` at debug level;
 `GET /health` and its probe-friendly alias `GET /healthz` remain liveness-only.
 
 Every valid exclusive order assigned to the executor is tracked through `decayStartTime`. After that
@@ -973,6 +975,8 @@ not an order-ID label. Optional startup symbol/decimals warm-up is cancellable b
 cannot hold the HTTP/order loops behind a symbol RPC. Newly warmed trusted tokens emit
 `trusted token metadata` with chain/address and verified fields; unknown fields stay absent.
 LI.FI `discount_api_error` distinguishes a failed lookup for physical inventory from no inventory.
+A LI.FI `strategy_declined` rejection log carries `detail`, the check the default strategy failed for that
+pair (for example `quote maximum 5 is below minimum amount 10`); declined fills log the same kind of `reason`.
 
 UniswapX `quote returned` and RFQ `quote response returned` prove a successful local response write,
 not client receipt. Planner decisions, failed writes, assignments and confirmed fills are distinct

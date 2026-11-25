@@ -756,6 +756,20 @@ zero liquidity does not invalidate a resolved structural route. No counter reset
 registry or token cap is introduced. Cardinality follows supported route history × fixed outcomes,
 not quote IDs/count. Replica-local award observations are not globally unique economic wins.
 
+### Rejection reasons
+
+Every quote decline, fill skip and order failure names the check that failed and the values it
+compared, in its log line, its span decline and the order's `LastError`. Inventory dropped before
+the strategy (pair mismatch, discount offer filters, adapter quote and discount checks, connector
+checks, no unreserved capacity) is recorded on a per-plan `inventoryDrops` trace: each drop logs
+at V(1), and the plan keeps counts by reason plus the last drop with its values. A fill whose
+strategy fails appends a summary to its failure reason:
+`(<n> configured vaults, <a> of <r> direct inventories authorized, <d> discount inventories
+[(list discounts failed: <err>)], <c> candidates from <i> inventories, dropped: <reason> x<k>, ...;
+last: <decline with values>)`. A `listDiscounts` failure no longer silently empties the discount
+set; it shows up in that summary while the fill proceeds on direct inventory. Quote-path declines
+name only configured adapters, never unproven request tokens.
+
 ### Per-vault Merkle authority
 
 Merkle RFQ recipes may name a per-vault OpenZeppelin AccessManager as their caller.

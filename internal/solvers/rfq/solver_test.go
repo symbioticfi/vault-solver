@@ -161,7 +161,7 @@ func TestBuildServices_InternalFillScopesDiscounts(t *testing.T) {
 		{DiscountID: "0x" + strings.Repeat("c", 64), DiscountPrecision: "100000000", Adapter: common.HexToAddress("0xbb").Hex(),
 			TokenToRedeem: tIn.Hex(), Collateral: tOut.Hex(), Discount: "500", Deadline: 100, MaxAssets: "1000"},
 	}}}
-	inventory := exec.discountInventories(t.Context(), tIn, nil)
+	inventory := discountInventoriesFor(t, exec, nil)
 	if len(inventory) != 1 || inventory[0].Adapter != vlt {
 		t.Fatalf("fill inventory = %+v, want only configured native adapter", inventory)
 	}

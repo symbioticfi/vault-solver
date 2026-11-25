@@ -2,6 +2,8 @@ package bridgefacilitator
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -26,7 +28,7 @@ func (s *Solver) redeemAll(ctx context.Context) {
 	successfulReads := 0
 	for _, target := range s.targets {
 		scanStarted := time.Now()
-		ready, scanComplete, err := s.scanReadyToRedeem(ctx, target)
+		ready, gaps, err := s.scanReadyToRedeem(ctx, target)
 		scanDuration += time.Since(scanStarted)
 		if err != nil {
 			complete = false
@@ -34,10 +36,10 @@ func (s *Solver) redeemAll(ctx context.Context) {
 			continue
 		}
 		successfulReads++
-		if !scanComplete {
+		if len(gaps) > 0 {
 			complete = false
 			observability.Log(ctx).Info("redeem: incomplete scan; retaining last-known-good metric",
-				"adapter", target.Adapter.Hex(), "validReady", len(ready))
+				"adapter", target.Adapter.Hex(), "validReady", len(ready), "gaps", gapSummary(gaps))
 		}
 		totalReady += len(ready)
 		observability.Log(ctx).V(1).Info("redeem scan", "adapter", target.Adapter.Hex(), "ready", len(ready))
@@ -57,19 +59,28 @@ func (s *Solver) redeemAll(ctx context.Context) {
 // scanReadyToRedeem is the on-chain read stage of one adapter's redeem pass.
 func (s *Solver) scanReadyToRedeem(
 	ctx context.Context, target Target,
-) (ready []common.Address, complete bool, err error) {
+) (ready []common.Address, gaps []string, err error) {
 	ctx, end := tracer.Start(ctx, "3f.redeem.read", observability.AttrAdapter.String(target.Adapter.Hex()))
 	defer func() { end(err) }()
 
-	ready, complete, err = s.reader.readyToRedeem(ctx, target.Adapter)
+	ready, gaps, err = s.reader.readyToRedeem(ctx, target.Adapter)
 	switch {
 	case err != nil:
-	case !complete:
-		observability.Decline(ctx, "redeem_partial", "incomplete ready-request scan")
+	case len(gaps) > 0:
+		observability.Decline(ctx, "redeem_partial", "incomplete ready-request scan: "+gapSummary(gaps))
 	case len(ready) == 0:
 		observability.Decline(ctx, "redeem_skipped", "no requests ready to finalize")
 	}
-	return ready, complete, err
+	return ready, gaps, err
+}
+
+// gapSummary bounds a scan's gaps for logs and span declines: the count and the first few.
+func gapSummary(gaps []string) string {
+	const shown = 3
+	if len(gaps) <= shown {
+		return fmt.Sprintf("%d gaps: %s", len(gaps), strings.Join(gaps, "; "))
+	}
+	return fmt.Sprintf("%d gaps: %s; ...", len(gaps), strings.Join(gaps[:shown], "; "))
 }
 
 // redeemReady finalizes one scan's ready Requests in a single bounded

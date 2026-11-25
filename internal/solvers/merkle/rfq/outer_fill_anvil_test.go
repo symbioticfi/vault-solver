@@ -684,7 +684,7 @@ func TestAnvilSplitConnectorOrder(t *testing.T) {
 				t.Fatal(err)
 			}
 			solver.tokenPolicy = singleRoute
-			if intent, err := solver.planAward(t.Context(), row, listed, observed, false, solver.Inventory); intent != nil || err != nil {
+			if intent, err := solver.planAward(t.Context(), row, listed, observed, false, solver.Inventory); intent != nil || err == nil || !strings.Contains(err.Error(), "requires a single route") {
 				t.Fatalf("token policy should decline a split-only award: intent=%v err=%v", intent, err)
 			}
 			solver.tokenPolicy = tokenpolicy.Policy{}
