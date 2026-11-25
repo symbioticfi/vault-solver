@@ -2,6 +2,7 @@ package types
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"time"
 
@@ -9,6 +10,11 @@ import (
 
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 )
+
+// Text is a ready-made Detail.
+type Text string
+
+func (t Text) String() string { return string(t) }
 
 type Decision string
 
@@ -107,8 +113,9 @@ type BidOutput struct {
 	Decision Decision
 	// Reason is the skip code; a standard SkipReason* stays a bounded metric label.
 	Reason string
-	// Detail names the failed check and the values it compared. It is logged, never a metric label.
-	Detail        string
+	// Detail names the failed check and the values it compared. It is logged, never a metric label, and
+	// is a Stringer so a skip nobody logs never pays for formatting it.
+	Detail        fmt.Stringer
 	BidAmount     *big.Int
 	OperationData []byte
 }

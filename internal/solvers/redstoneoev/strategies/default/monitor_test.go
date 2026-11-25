@@ -43,7 +43,7 @@ func TestCandidatePriceSource(t *testing.T) {
 	var testMon testMonitor
 	testMon.log = logr.Discard()
 	testMon.snap.Store(snap)
-	testCands := testMon.candidates(auction, snap.markets[id].State.LastUpdate, types.AdapterSnapshot{}, nil)
+	testCands := testMon.candidates(auction, snap.markets[id].State.LastUpdate, types.AdapterSnapshot{}, new(rejectTally))
 	if len(testCands) != 1 || testCands[0].price.Cmp(framePx) != 0 {
 		t.Fatalf("test monitor auction price = %+v, want %v", testCands, framePx)
 	}
@@ -119,7 +119,7 @@ func TestSnapshotFreshForAuction(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := snapshotFreshForAuction(tc.snap, auction)
-			if got.code != tc.want || !strings.Contains(got.detail, tc.detail) {
+			if got.code != tc.want || !strings.Contains(detailOf(got.detail), tc.detail) {
 				t.Fatalf("snapshotFreshForAuction = %q, want code %q with detail containing %q", got, tc.want, tc.detail)
 			}
 		})

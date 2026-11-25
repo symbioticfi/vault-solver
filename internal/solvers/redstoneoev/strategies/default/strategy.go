@@ -214,7 +214,7 @@ func (s *Strategy) DecideBid(ctx context.Context, input types.BidInput) (types.B
 	var rejected rejectTally
 	scored := s.sizedLegs(ctx, s.candidates(ctx, input.Auction, nowTs, input.Adapter, &rejected), &rejected)
 	if len(scored) == 0 {
-		return skipf(skipNoLegs, "no liquidatable leg: %s", rejected.String()).bid(), nil
+		return bidSkip{code: skipNoLegs, detail: noLegsDetail{&rejected}}.bid(), nil
 	}
 	gasPrice := cloneBig(input.Context.MaxTxGasPrice)
 	priced, skip := s.pricedBundleFor(ctx, input, scored, gasPrice)
@@ -247,14 +247,14 @@ func (s *Strategy) preconditionSkip(input types.BidInput) (decisionState, bidSki
 	}
 	snap := s.mon.snapshot()
 	if snap == nil {
-		return decisionState{}, bidSkip{code: skipStaleState, detail: "position snapshot not loaded yet"}
+		return decisionState{}, bidSkip{code: skipStaleState, detail: types.Text("position snapshot not loaded yet")}
 	}
 	if age := input.Now.Sub(snap.updatedAt); s.maxAge > 0 && age > s.maxAge {
 		return decisionState{}, skipf(skipStaleState, "position snapshot age %s exceeds max age %s", age, s.maxAge)
 	}
 	st, ok := s.state.load()
 	if !ok || st.CallbackUpdatedAt.IsZero() {
-		return st, bidSkip{code: skipStaleState, detail: "callback balance not loaded yet"}
+		return st, bidSkip{code: skipStaleState, detail: types.Text("callback balance not loaded yet")}
 	}
 	if !freshAt(st.CallbackUpdatedAt, input.Now, s.maxAge) {
 		return st, skipf(skipStaleState, "callback balance age %s exceeds max age %s", input.Now.Sub(st.CallbackUpdatedAt), s.maxAge)
@@ -274,10 +274,14 @@ func (s *Strategy) sizedLegs(ctx context.Context, cands []evalItem, tally *rejec
 	_, end := s.tracer.Start(ctx, "oev.auction.size")
 	defer end(nil)
 	out := make([]scoredLeg, 0, len(cands))
+	var why legRejection
 	for _, it := range cands {
-		sized, rej := sizeLeg(it.cand, it.price, it.quote, it.accrued, s.cfg.Sizing)
-		if rej != nil {
-			tally.add(it.cand.MarketID, &it.cand.Borrower, rej)
+		sized, ok := sizeLeg(it.cand, it.price, it.quote, it.accrued, s.cfg.Sizing, &why)
+		if !ok {
+			if why.check == checkHealthy && tally.needsExample(checkHealthy) {
+				why.healthyValues(it.cand, it.price, it.accrued)
+			}
+			tally.add(it.cand.MarketID, it.cand.Borrower, &why)
 			continue
 		}
 		out = append(out, scoredLeg{

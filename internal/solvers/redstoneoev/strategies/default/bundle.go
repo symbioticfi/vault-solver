@@ -16,6 +16,7 @@ import (
 	liquidlanegas "github.com/symbioticfi/vault-solver/internal/liquidlane/gas"
 	"github.com/symbioticfi/vault-solver/internal/morpho"
 	"github.com/symbioticfi/vault-solver/internal/observability"
+	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
 )
 
 const (
@@ -69,7 +70,7 @@ type pricedBundle struct {
 // expected loan output per collateral against cached adapter liquidity and the settlement gas limit.
 func (e bundleEngine) selectBundleWithGas(scored []scoredLeg, laneState *liquidLaneState, gasLimit uint64, feedCount int) (chosenBundle, bidSkip) {
 	if len(scored) == 0 {
-		return chosenBundle{}, bidSkip{code: skipNoLegs, detail: "no sized legs to bundle"}
+		return chosenBundle{}, bidSkip{code: skipNoLegs, detail: types.Text("no sized legs to bundle")}
 	}
 	best, none := e.searchBundle(scored, laneState, gasLimit, feedCount, func(b chosenBundle) *big.Int {
 		return new(big.Int).Set(b.grossLoan)
@@ -84,7 +85,7 @@ func (e bundleEngine) selectBundleWithGas(scored []scoredLeg, laneState *liquidL
 // collateral budget. A lower-gross subset can beat a gross-best subset once gas and the bid are priced in.
 func (e bundleEngine) selectNetBundle(scored []scoredLeg, rate *big.Int, laneState *liquidLaneState, gasPrice *big.Int, gasLimit uint64, feedCount int) (chosenBundle, bidSkip) {
 	if len(scored) == 0 {
-		return chosenBundle{}, bidSkip{code: skipNoLegs, detail: "no sized legs to bundle"}
+		return chosenBundle{}, bidSkip{code: skipNoLegs, detail: types.Text("no sized legs to bundle")}
 	}
 	if rate == nil || rate.Sign() <= 0 {
 		return chosenBundle{}, skipf(skipGasUnprofitable, "loan/native gas rate %v is not positive", rate)
@@ -160,7 +161,10 @@ func (e bundleEngine) searchBundle(scored []scoredLeg, laneState *liquidLaneStat
 	}
 	beam := []bundleSearchState{start}
 	best := start
-	var dropped rejectTally // depth-0 drops; they explain an empty result
+	var (
+		dropped rejectTally // depth-0 drops; they explain an empty result
+		why     legRejection
+	)
 	for depth := 0; depth < maxDepth && depth < len(group); depth++ {
 		nextBeam := make([]bundleSearchState, 0, min(len(group), netBundleBeamWidth))
 		for _, state := range beam {
@@ -168,13 +172,21 @@ func (e bundleEngine) searchBundle(scored []scoredLeg, laneState *liquidLaneStat
 				if state.used[i] {
 					continue
 				}
-				trial, rej := e.extendBundleState(state, sl, i)
-				if rej == nil && !fitsGasLimit(legHints(trial.bundle.legs), laneState, gasLimit, feedCount) {
-					rej = reject("bundle exceeds settlement gas limit", "usable gas limit %d", usableGasLimit(gasLimit))
-				}
-				if rej != nil {
+				trial, ok := e.extendBundleState(state, sl, i, &why)
+				if ok && !fitsGasLimit(legHints(trial.bundle.legs), laneState, gasLimit, feedCount) {
+					ok = false
 					if depth == 0 {
-						dropped.add(sl.MarketId, &sl.Borrower, rej)
+						why = legRejection{check: checkGasLimit, n: int64(usableGasLimit(gasLimit))}
+					}
+				}
+				if !ok {
+					if depth == 0 {
+						// At depth 0 the replay sizes against the leg's own snapshot state.
+						if why.check == checkHealthy && dropped.needsExample(checkHealthy) {
+							src := sl.source
+							why.healthyValues(src.cand, src.price, src.cand.Market.State.TotalBorrowAssets)
+						}
+						dropped.add(sl.MarketId, sl.Borrower, &why)
 					}
 					continue
 				}
@@ -209,14 +221,16 @@ func bundleSearchDepth(gasLimit uint64, feedCount int) int {
 	return 1 + int((usable-fixed)/liquidlanegas.UnitsForRouteAt(liquidlanegas.RouteAcquire, false))
 }
 
-func (e bundleEngine) extendBundleState(state bundleSearchState, sl scoredLeg, idx int) (bundleSearchState, *legRejection) {
-	next, rej := e.replayScoredLeg(sl, state.markets)
-	if rej != nil {
-		return bundleSearchState{}, rej
+// extendBundleState adds sl to state; on false it writes the failed check to why.
+func (e bundleEngine) extendBundleState(state bundleSearchState, sl scoredLeg, idx int, why *legRejection) (bundleSearchState, bool) {
+	next, ok := e.replayScoredLeg(sl, state.markets, why)
+	if !ok {
+		return bundleSearchState{}, false
 	}
 	if !fitsCollateralBudget(state.consumed, next.scored) {
-		return bundleSearchState{}, reject("adapter collateral budget exceeded", "consumed %v + leg loan out %v > maxAssets %v",
-			orZero(state.consumed[next.scored.collateral]), next.scored.settlementLoanOut, next.scored.maxAssets)
+		*why = legRejection{check: checkBudget,
+			v: [6]*big.Int{state.consumed[next.scored.collateral], next.scored.settlementLoanOut, next.scored.maxAssets}}
+		return bundleSearchState{}, false
 	}
 	trial := bundleSearchState{
 		bundle:   cloneBundleWithLeg(state.bundle, next.scored),
@@ -229,16 +243,17 @@ func (e bundleEngine) extendBundleState(state bundleSearchState, sl scoredLeg, i
 		trial.markets[next.marketID] = next.market
 	}
 	commitCollateralBudget(trial.consumed, next.scored)
-	return trial, nil
+	return trial, true
 }
 
-func (e bundleEngine) replayScoredLeg(sl scoredLeg, markets map[common.Hash]bundleMarketState) (replayedScoredLeg, *legRejection) {
+func (e bundleEngine) replayScoredLeg(sl scoredLeg, markets map[common.Hash]bundleMarketState, why *legRejection) (replayedScoredLeg, bool) {
 	if !sl.replay {
-		return replayedScoredLeg{scored: sl}, nil
+		return replayedScoredLeg{scored: sl}, true
 	}
 	id := sl.source.cand.MarketID
 	if id == (common.Hash{}) {
-		return replayedScoredLeg{}, reject("replay leg has no market id", "borrower %s", sl.source.cand.Borrower.Hex())
+		*why = legRejection{check: checkNoMarketID, addr: sl.source.cand.Borrower}
+		return replayedScoredLeg{}, false
 	}
 	ms, ok := markets[id]
 	if !ok {
@@ -251,14 +266,14 @@ func (e bundleEngine) replayScoredLeg(sl scoredLeg, markets map[common.Hash]bund
 	cand := sl.source.cand
 	cand.Market = ms.info
 	cand.Position = pos
-	sized, rej := sizeLeg(cand, sl.source.price, sl.source.quote, ms.info.State.TotalBorrowAssets, e.cfg.Sizing)
-	if rej != nil {
-		return replayedScoredLeg{}, rej
+	sized, ok := sizeLeg(cand, sl.source.price, sl.source.quote, ms.info.State.TotalBorrowAssets, e.cfg.Sizing, why)
+	if !ok {
+		return replayedScoredLeg{}, false
 	}
 	replay, ok := morpho.ApplySeizeLiquidation(ms.info.State, pos, sized.leg.MaxSeizeAssets, sl.source.price)
 	if !ok {
-		return replayedScoredLeg{}, reject("seize replay rejected by Morpho state", "seize %v at price %v",
-			sized.leg.MaxSeizeAssets, sl.source.price)
+		*why = legRejection{check: checkSeizeReplay, v: [6]*big.Int{sized.leg.MaxSeizeAssets, sl.source.price}}
+		return replayedScoredLeg{}, false
 	}
 	nextMarket := cloneBundleMarketState(ms)
 	nextMarket.info.State = replay.Market
@@ -269,7 +284,7 @@ func (e bundleEngine) replayScoredLeg(sl scoredLeg, markets map[common.Hash]bund
 	nextLeg.profit = sized.profit
 	nextLeg.collateral = cand.Market.Params.CollateralToken
 	nextLeg.maxAssets = sl.source.quote.MaxAssets
-	return replayedScoredLeg{scored: nextLeg, marketID: id, market: nextMarket}, nil
+	return replayedScoredLeg{scored: nextLeg, marketID: id, market: nextMarket}, true
 }
 
 func sortedScoredLegs(scored []scoredLeg) []scoredLeg {

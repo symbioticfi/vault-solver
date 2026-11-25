@@ -21,7 +21,7 @@ type evalItem struct {
 type priceLookup func(id common.Hash, info MarketInfo) *big.Int
 
 func candidatesFromAuction(log logr.Logger, snap *snapshot, auction types.AuctionSnapshot, nowTs uint64) []evalItem {
-	return candidatesFromAuctionWithAdapter(log, snap, auction, nowTs, types.AdapterSnapshot{}, nil)
+	return candidatesFromAuctionWithAdapter(log, snap, auction, nowTs, types.AdapterSnapshot{}, new(rejectTally))
 }
 
 func candidatesFromAuctionWithAdapter(
@@ -41,12 +41,13 @@ func auctionPriceForMarket(frame map[common.Address]*big.Int, info MarketInfo) *
 	return frame[oracle]
 }
 
-// candidatesFromSnapshot records each market it drops in tally (nil-safe).
+// candidatesFromSnapshot records each market it drops in tally.
 func candidatesFromSnapshot(snap *snapshot, nowTs uint64, adapter types.AdapterSnapshot, tally *rejectTally, price priceLookup) []evalItem {
 	if snap == nil {
 		return nil
 	}
 	adapterQuotes := adapterQuotesByCollateral(adapter)
+	tally.adapter = adapter
 	var out []evalItem
 	for id, info := range snap.markets {
 		pos := snap.positions[id]
@@ -55,13 +56,12 @@ func candidatesFromSnapshot(snap *snapshot, nowTs uint64, adapter types.AdapterS
 		}
 		px := price(id, info)
 		if px == nil {
-			tally.add(id, nil, reject("no auction price for market oracle", "oracle %s, positions %d", info.Params.Oracle.Hex(), len(pos)))
+			tally.add(id, common.Address{}, &legRejection{check: checkNoAuctionPrice, addr: info.Params.Oracle, n: int64(len(pos))})
 			continue
 		}
 		quote, ok := quoteForMarket(snap, adapter, adapterQuotes, id, info)
 		if !ok {
-			tally.add(id, nil, reject("adapter has no usable quote for collateral", "collateral %s, positions %d: %s",
-				info.Params.CollateralToken.Hex(), len(pos), quoteGap(adapter, info.Params.CollateralToken)))
+			tally.add(id, common.Address{}, &legRejection{check: checkNoQuote, addr: info.Params.CollateralToken, n: int64(len(pos))})
 			continue
 		}
 		accruedState := morpho.AccruedMarketState(info.State, nowTs)
