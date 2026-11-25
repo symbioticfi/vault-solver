@@ -42,7 +42,7 @@ type Solver struct {
 	lastAwardRefresh atomic.Pointer[time.Time]
 	// Split pricing is owned by the award loop and scoped to its observed head.
 	prices splitPrices
-	// skipped is the last skip reason logged at Info per award and pass. Owned by the award loop
+	// skipped is the reasonKey of the last skip logged at Info per award and pass. Owned by the award loop
 	// goroutine (pollAwards), so it takes no lock; pruned to the open orders of each complete poll.
 	skipped map[awardPass]string
 	// lastOpen is the previous complete poll's open orders, so a release names the award. Same owner.

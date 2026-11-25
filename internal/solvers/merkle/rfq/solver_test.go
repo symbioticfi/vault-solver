@@ -480,7 +480,7 @@ func TestPlanAwardNamesTheFailedCheck(t *testing.T) {
 	}
 }
 
-func TestAwardSkipLogsAtInfoOnlyWhenTheReasonChanges(t *testing.T) {
+func TestAwardSkipLogsAtInfoOnlyWhenTheCheckChanges(t *testing.T) {
 	var levels []string
 	ctx := observability.WithLogger(t.Context(), funcr.NewJSON(func(obj string) {
 		var line struct {
@@ -494,10 +494,15 @@ func TestAwardSkipLogsAtInfoOnlyWhenTheReasonChanges(t *testing.T) {
 	}, funcr.Options{Verbosity: 1}))
 	s, backend, _ := awardSolver(t, &fillertest.Sender{})
 	pass := awardPass{orderID: "award", reserve: true}
-	for _, reason := range []string{"below required", "below required", "expired", "expired"} {
+	elapsed := "fill deadline elapsed during preparation: order expiry 1000, chain time 990 observed 12ms ago"
+	later := "fill deadline elapsed during preparation: order expiry 1000, chain time 1002 observed 1.5s ago"
+	first := "0x0000000000000000000000000000000000000042: unreserved 455 below required 456"
+	other := "0x0000000000000000000000000000000000000052: unreserved 455 below required 456"
+	for _, reason := range []string{elapsed, elapsed, later, first, other} {
 		s.logSkip(ctx, pass, reason)
 	}
-	if want := []string{"v0 below required", "v1 below required", "v0 expired", "v1 expired"}; !slices.Equal(levels, want) {
+	// Only the values changed, then the route did.
+	if want := []string{"v0 " + elapsed, "v1 " + elapsed, "v1 " + later, "v0 " + first, "v0 " + other}; !slices.Equal(levels, want) {
 		t.Fatalf("levels = %v, want %v", levels, want)
 	}
 	backend.rows = nil

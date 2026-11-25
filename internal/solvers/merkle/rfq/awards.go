@@ -3,6 +3,7 @@ package rfq
 import (
 	"context"
 	"maps"
+	"regexp"
 	"strings"
 	"time"
 
@@ -121,18 +122,31 @@ func (s *Solver) markAwardRefresh(ctx context.Context, polledAt time.Time) error
 }
 
 // logSkip says why an awarded order was left unfilled at Info, which a skipped award always
-// deserves, but only when its reason changes: every poll repeats it otherwise.
+// deserves, but only when the failed check changes: every poll repeats it otherwise.
 func (s *Solver) logSkip(ctx context.Context, pass awardPass, reason string) {
 	log := observability.Log(ctx)
-	if s.skipped[pass] == reason {
+	if key := reasonKey(reason); s.skipped[pass] == key {
 		log = log.V(1)
 	} else {
 		if s.skipped == nil {
 			s.skipped = make(map[awardPass]string)
 		}
-		s.skipped[pass] = reason
+		s.skipped[pass] = key
 	}
 	log.Info("RFQ award skipped", "orderId", pass.orderID, "reserve", pass.reserve, "reason", reason)
+}
+
+var reasonValues = regexp.MustCompile(`0x[0-9a-fA-F]+|[0-9][0-9a-zA-Zµ.]*`)
+
+// reasonKey names the failed check without the amounts, times and durations it compared, which
+// tick with the clock and the inventory; hex addresses stay, so a changed route set still counts.
+func reasonKey(reason string) string {
+	return reasonValues.ReplaceAllStringFunc(reason, func(value string) string {
+		if strings.HasPrefix(value, "0x") {
+			return value
+		}
+		return "#"
+	})
 }
 
 func (s *Solver) planAwards(ctx context.Context, rows []rfqbackend.OrdersResponseOrdersInner, listed []discounts.ListItem, observed filler.Observation, reserve bool) (*filler.Intent, error) {
