@@ -197,7 +197,7 @@ func (s *Solver) quote(ctx context.Context, request quoteRequest) (response quot
 	// a 500 without unwinding past here, and an unended span is never exported.
 	defer func() {
 		if err == nil && response.declineReason != "" {
-			observability.Decline(ctx, quoteDeclineDecision(response.declineReason), string(response.declineReason))
+			observability.Decline(ctx, quoteDeclineDecision(response.declineReason), string(response.declineReason)+": "+response.declineDetail)
 		}
 		end(err)
 	}()
@@ -351,7 +351,6 @@ func (s *Solver) quoteStateChange(
 	ctx context.Context, epoch uint64, state *quoteState, revision uint64,
 ) string {
 	now := s.currentTime()
-	wall := time.Now()
 	if err := ctx.Err(); err != nil {
 		return "quote context ended: " + err.Error()
 	}
@@ -364,7 +363,7 @@ func (s *Solver) quoteStateChange(
 	if current := s.capacity.Revision(); current != revision {
 		return fmt.Sprintf("capacity revision moved from %d to %d", revision, current)
 	}
-	if !state.expiresAt.After(wall) {
+	if wall := time.Now(); !state.expiresAt.After(wall) {
 		return fmt.Sprintf("quote state expired at %d, wall time %d", state.expiresAt.Unix(), wall.Unix())
 	}
 	if !state.expiresAt.After(time.Unix(now, 0)) {

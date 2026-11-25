@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/vault-solver/api/threef"
+	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 )
 
 type fakeClient struct {
@@ -22,6 +23,7 @@ type fakeClient struct {
 	created                []threef.CreateOfferDto
 	cancelled              []uint64
 	identityErr, createErr error
+	cancelErr              error
 	beforeCreate           func(threef.CreateOfferDto)
 	createdIDs             map[string]float32
 }
@@ -50,6 +52,9 @@ func (f *fakeClient) Create(_ context.Context, offer threef.CreateOfferDto) (*th
 }
 func (f *fakeClient) Cancel(_ context.Context, id uint64) (*threef.CancelOfferResponseDto, error) {
 	f.cancelled = append(f.cancelled, id)
+	if f.cancelErr != nil {
+		return nil, f.cancelErr
+	}
 	return &threef.CancelOfferResponseDto{Id: float32(id), Status: "CANCELLED"}, nil
 }
 
@@ -409,6 +414,33 @@ func TestTickCancelsSubmittedOvercommitButNeverAcceptedOrUIReplacement(t *testin
 			}
 			if len(c.cancelled) != want || len(c.created) != 0 {
 				t.Fatalf("created %d cancelled %d", len(c.created), len(c.cancelled))
+			}
+		})
+	}
+}
+
+func TestTickRecordsCancellationAfterConfirmation(t *testing.T) {
+	rec := tracetest.Install(t)
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "confirmed"},
+		{name: "failed", err: errors.New("cancel request failed")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bot, client, market := testBot(t)
+			client.offers = []threef.OfferDto{testOffer(market, 1, "SUBMITTED", "950000")}
+			client.cancelErr = tc.err
+			ctx, end := tracer.Start(t.Context(), tc.name)
+			err := bot.Tick(ctx, market, client.auctions)
+			end(err)
+			if !errors.Is(err, tc.err) {
+				t.Fatalf("cancel error = %v, want %v", err, tc.err)
+			}
+			reason, count := tracetest.EventAttr(tracetest.Ended(t, rec, tc.name), "declined", "reason")
+			if tc.err != nil && count != 0 || tc.err == nil && (count != 1 || !strings.Contains(reason, "reserved cash 950000 exceeds available cash 900000")) {
+				t.Fatalf("cancellation events = %d, reason %q", count, reason)
 			}
 		})
 	}

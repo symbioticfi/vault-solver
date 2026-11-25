@@ -15,7 +15,15 @@ func NewQuoteCandidate(
 	item liquidlane.Inventory,
 	maxAmountOut *big.Int,
 ) *liquidlane.QuoteCandidate {
+	return NewQuoteCandidateWithTrace(item, maxAmountOut, nil)
+}
+
+// NewQuoteCandidateWithTrace also records the check that dropped a candidate.
+func NewQuoteCandidateWithTrace(
+	item liquidlane.Inventory, maxAmountOut *big.Int, trace strategies.DecisionTrace,
+) *liquidlane.QuoteCandidate {
 	if maxAmountOut == nil || maxAmountOut.Sign() <= 0 {
+		trace.Decline("inventory", "buffered output capacity is not positive", "route", item.ID, "capacity", maxAmountOut)
 		return nil
 	}
 	candidate := liquidlane.QuoteCandidate{
@@ -37,13 +45,22 @@ func NewQuoteCandidate(
 		)
 	} else {
 		if item.MaxRate == nil || item.MaxRate.Sign() <= 0 {
+			trace.Decline("inventory", "no usable oracle price and fixed rate is not positive", "route", item.ID,
+				"price", item.Price, "discount", discount, "fixedRate", item.MaxRate)
 			return nil
 		}
 		candidate.MaxAmountIn = liquidlane.MaxAmountInForRate(
 			maxAmountOut, item.MaxRate, item.TokenInDecimals, item.TokenOutDecimals,
 		)
 	}
-	if candidate.MaxAmountIn.Sign() <= 0 || candidate.AmountOutFor(candidate.MaxAmountIn).Sign() <= 0 {
+	if candidate.MaxAmountIn.Sign() <= 0 {
+		trace.Decline("inventory", "buffered capacity rounds maximum input below one input unit", "route", item.ID,
+			"capacity", maxAmountOut, "rate", candidate.Rate, "maxInput", candidate.MaxAmountIn)
+		return nil
+	}
+	if out := candidate.AmountOutFor(candidate.MaxAmountIn); out.Sign() <= 0 {
+		trace.Decline("inventory", "maximum input rounds down to zero output", "route", item.ID,
+			"maxInput", candidate.MaxAmountIn, "rate", candidate.Rate)
 		return nil
 	}
 	return &candidate

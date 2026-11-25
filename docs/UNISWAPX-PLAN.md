@@ -719,8 +719,8 @@ an unknown decision, or differing decisions across attempted candidates/subprobl
 `strategy-declined`; the collector never presents the last candidate's reason as a universal failure.
 Errors and invalid returned quotes remain HTTP 503 with workflow outcome `error` and log/counter
 reason `strategy_error`. Successful strategy results ignore prior candidate declines.
-Every decline also carries an unbounded `detail` for the V(1) `quote declined` log (never a metric
-label): the exact failed check with its values, every recorded candidate decline, or which of the
+Every decline carries detail in the V(1) `quote declined` log and the span event. It names the
+failed check and its values, every recorded candidate decline, or which of the
 `blocked`/`state-changed` conditions fired. Pairs outside inventory scope keep their addresses out
 of the detail, as they do out of the request log fields.
 

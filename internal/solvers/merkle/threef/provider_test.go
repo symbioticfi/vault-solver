@@ -19,6 +19,8 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/provider"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	wire "github.com/symbioticfi/vault-solver/api/threef"
+	"github.com/symbioticfi/vault-solver/internal/observability"
+	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
 )
 
 func fixture(t *testing.T) (provider.Snapshot, recipes.Recipe, *recipes.Tree) {
@@ -178,11 +180,18 @@ func TestAggregateAuthorizationLeaseAndPreparationAreReadOnly(t *testing.T) {
 	}
 	now = now.Add(-100 * time.Second)
 	api.offers = nil
-	if err := runtime.ValidateLease(t.Context(), snapshot, out); !errors.Is(err, provider.ErrNotReady) || !strings.Contains(err.Error(), "no AWAITING_MINT offer for request") {
+	log, capture := tracetest.CaptureLogs(t, 1)
+	ctx := observability.WithLogger(t.Context(), log)
+	if err := runtime.ValidateLease(ctx, snapshot, out); !errors.Is(err, provider.ErrNotReady) || !strings.Contains(err.Error(), "no AWAITING_MINT offer for request") {
 		t.Fatalf("revoked API lease: %v", err)
 	}
-	if _, err := runtime.PrepareRecipe(t.Context(), snapshot, recipe, tree, nil); !errors.Is(err, provider.ErrNotReady) || !strings.Contains(err.Error(), "no AWAITING_MINT PUSH offer") {
+	if _, err := runtime.PrepareRecipe(ctx, snapshot, recipe, tree, nil); !errors.Is(err, provider.ErrNotReady) || !strings.Contains(err.Error(), "no AWAITING_MINT PUSH offer") {
 		t.Fatalf("no accepted offers must idle: %v", err)
+	}
+	lines := capture()
+	if len(lines) != 2 || !strings.Contains(lines[0], "no AWAITING_MINT offer for request") ||
+		!strings.Contains(lines[1], "no AWAITING_MINT PUSH offer") {
+		t.Fatalf("mint idle logs = %v", lines)
 	}
 	// An unauthenticated recipe fails before any HTTP or onchain authorization read.
 	api.calls = 0

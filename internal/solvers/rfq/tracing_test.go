@@ -266,6 +266,22 @@ func TestExecution_OrderTraceRecordsLinkMiss(t *testing.T) {
 	}
 }
 
+func TestExecution_QueuedExpiryLogsOrder(t *testing.T) {
+	store := newStore(time.Now)
+	store.upsertQueued(queuedOrder{OrderID: "o1", QuoteID: "q1"})
+	store.boundUnsignedWork("o1", time.Unix(0, 0))
+	execution := newExec(t, store, nil, nil)
+	log, capture := tracetest.CaptureLogs(t, 0)
+	execution.log = log
+	if !execution.expireQueued(observability.WithLogger(t.Context(), log), store.order("o1")) {
+		t.Fatal("expected queued order to expire")
+	}
+	lines := capture()
+	if len(lines) != 1 || !strings.Contains(lines[0], `"orderId":"o1"`) || !strings.Contains(lines[0], `"quoteId":"q1"`) {
+		t.Fatalf("queued expiry logs = %v", lines)
+	}
+}
+
 // A fill we refuse to send — here the backend resolved a discount to an adapter the plan never
 // quoted — is an expected skip, so it declines on the order span instead of erroring the trace.
 func TestExecution_OrderTraceDeclinesRefusedFill(t *testing.T) {

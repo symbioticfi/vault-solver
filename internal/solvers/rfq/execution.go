@@ -246,6 +246,7 @@ func (e *executionService) expireQueued(ctx context.Context, o *orderRecord) boo
 	if o = e.store.order(o.OrderID); o == nil || !o.Status.awaitsSubmission() {
 		return false
 	}
+	ctx = observability.WithLogger(ctx, e.log.WithValues("orderId", o.OrderID, "quoteId", o.QuoteID))
 	return e.expireUnsigned(ctx, o)
 }
 

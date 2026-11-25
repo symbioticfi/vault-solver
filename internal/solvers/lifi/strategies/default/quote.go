@@ -59,18 +59,15 @@ func (s *Strategy) DecideQuotes(_ context.Context, input types.QuoteInput) (type
 			continue
 		}
 		candidates := make([]liquidlane.QuoteCandidate, 0, len(inventory))
+		trace, lastDecline := liquidstrategies.DecisionTrace(nil).RecordDeclines()
 		for _, item := range inventory {
-			candidate := liquidgreedy.NewQuoteCandidate(
-				item,
-				liquidgreedy.QuoteCapacity(item, s.cfg.PriceBufferBps),
-			)
+			candidate := liquidgreedy.NewQuoteCandidateWithTrace(item, liquidgreedy.QuoteCapacity(item, s.cfg.PriceBufferBps), trace)
 			if candidate != nil {
 				candidates = append(candidates, *candidate)
 			}
 		}
 		if len(candidates) == 0 {
-			decline(key, "no quote candidate: %d items with capacity, all with zero buffered capacity or no positive rate",
-				len(inventory))
+			decline(key, "no quote candidate from %d allocated routes; last decline: %s", len(inventory), lastDecline())
 			continue
 		}
 		pricing, err := liquidstrategies.NewGasPricing(

@@ -987,20 +987,25 @@ func TestDecideQuotesNamesDeclinedPairs(t *testing.T) {
 	tests := map[string]struct {
 		minAmount  string
 		maxAssets  int64
+		maxRate    int64
 		validUntil time.Time
 		want       string
 	}{
 		"below minimum": {
-			minAmount: "1000001", maxAssets: 1_000_000,
+			minAmount: "1000001", maxAssets: 1_000_000, maxRate: 1_000_000_000_000_000_000,
 			want: "quote maximum 1000000 is below minimum amount 1000001",
 		},
 		"expired inventory": {
-			minAmount: "1", maxAssets: 1_000_000, validUntil: chainTime,
+			minAmount: "1", maxAssets: 1_000_000, maxRate: 1_000_000_000_000_000_000, validUntil: chainTime,
 			want: "no inventory with capacity: 1 items, 0 live past execution buffer",
 		},
 		"no capacity": {
 			minAmount: "1", maxAssets: 0,
 			want: "no inventory with capacity: 1 items, 1 live past execution buffer, 0 with capacity",
+		},
+		"capacity below one input unit": {
+			minAmount: "1", maxAssets: 1, maxRate: 2_000_000_000_000_000_000,
+			want: "buffered capacity rounds maximum input below one input unit route=route-1 capacity=1 rate=2000000000000000000 maxInput=0",
 		},
 	}
 	for name, tt := range tests {
@@ -1020,7 +1025,7 @@ func TestDecideQuotesNamesDeclinedPairs(t *testing.T) {
 						TokenInDecimals: 6, TokenOutDecimals: 6,
 					},
 					MaxAssets:  big.NewInt(tt.maxAssets),
-					MaxRate:    big.NewInt(1_000_000_000_000_000_000),
+					MaxRate:    big.NewInt(tt.maxRate),
 					ValidUntil: tt.validUntil,
 				}},
 			})

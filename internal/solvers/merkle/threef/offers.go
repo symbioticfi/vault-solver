@@ -122,7 +122,6 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 		if reason != "" {
 			observability.Log(ctx).Info("cancelling 3F offer", "account", market.Account.Hex(),
 				"offerId", offer.id, "auctionId", offer.auctionID, "reason", reason)
-			observability.Decline(ctx, "offer_cancelled", fmt.Sprintf("offer %d on auction %d: %s", offer.id, offer.auctionID, reason))
 			response, cancelErr := b.Client.Cancel(ctx, offer.id)
 			if cancelErr != nil {
 				return false, errors.Errorf("cancel 3F submitted offer: %w", cancelErr)
@@ -134,6 +133,7 @@ func (b *offerBot) tickInventory(ctx context.Context, market offerMarket, auctio
 			if idErr != nil || id != offer.id {
 				return false, errors.New("3F cancel returned a different offer")
 			}
+			observability.Decline(ctx, "offer_cancelled", fmt.Sprintf("offer %d on auction %d: %s", offer.id, offer.auctionID, reason))
 			return true, nil
 		}
 	}

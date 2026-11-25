@@ -17,6 +17,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/vault-solver/api/bindings/3f/request"
 	"github.com/symbioticfi/vault-solver/api/threef"
+	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
 var requestABI = request.NewIRequest()
@@ -118,7 +119,7 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 		return addresses[i].Cmp(addresses[j]) < 0
 	})
 	if len(addresses) == 0 {
-		return nil, errors.Errorf("%w: no AWAITING_MINT PUSH offer for account %s", provider.ErrNotReady, snapshot.Account.Hex())
+		return nil, mintNotReady(ctx, fmt.Sprintf("no AWAITING_MINT PUSH offer for account %s", snapshot.Account.Hex()))
 	}
 	inputs := map[uint]string{}
 	for _, market := range markets {
@@ -201,7 +202,7 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 	if len(observations) == 0 {
 		skips = append(skips, "no funding market resolved for the pending requests")
 	}
-	return nil, errors.Errorf("%w: %s", provider.ErrNotReady, strings.Join(skips, "; "))
+	return nil, mintNotReady(ctx, strings.Join(skips, "; "))
 }
 
 // A dynamic mint leaf commits the funding token, not a fixed collateral pair.
@@ -248,7 +249,7 @@ func (p *mintProvider) ValidateLease(ctx context.Context, snapshot provider.Snap
 		return err
 	}
 	if !p.time().Add(30 * time.Second).Before(record.Deadline) {
-		return errors.Errorf("%w: mint deadline %s is within 30s", provider.ErrNotReady, record.Deadline.Format(time.RFC3339))
+		return mintNotReady(ctx, fmt.Sprintf("mint deadline %s is within 30s", record.Deadline.Format(time.RFC3339)))
 	}
 	if err = p.API.Identity(ctx, snapshot.Account); err != nil {
 		return err
@@ -264,7 +265,7 @@ func (p *mintProvider) ValidateLease(ctx context.Context, snapshot provider.Snap
 			continue
 		}
 		if offer.ExecutionMode != "PUSH" || offer.MintDeadline.Get() == nil {
-			return errors.Errorf("%w: offer %v for request %s has execution mode %q or no mint deadline", provider.ErrNotReady, offer.Id, record.Request.Hex(), offer.ExecutionMode)
+			return mintNotReady(ctx, fmt.Sprintf("offer %v for request %s has execution mode %q or no mint deadline", offer.Id, record.Request.Hex(), offer.ExecutionMode))
 		}
 		deadline, e := time.Parse(time.RFC3339Nano, *offer.MintDeadline.Get())
 		if e != nil {
@@ -276,12 +277,19 @@ func (p *mintProvider) ValidateLease(ctx context.Context, snapshot provider.Snap
 		found = true
 	}
 	if !found {
-		return errors.Errorf("%w: no AWAITING_MINT offer for request %s", provider.ErrNotReady, record.Request.Hex())
+		return mintNotReady(ctx, fmt.Sprintf("no AWAITING_MINT offer for request %s", record.Request.Hex()))
 	}
 	if !p.time().Add(30 * time.Second).Before(earliest) {
-		return errors.Errorf("%w: earliest mint deadline %s is within 30s", provider.ErrNotReady, earliest.Format(time.RFC3339))
+		return mintNotReady(ctx, fmt.Sprintf("earliest mint deadline %s is within 30s", earliest.Format(time.RFC3339)))
 	}
 	return nil
+}
+
+// The keeper consumes ErrNotReady as idle, so record the reason before returning it.
+func mintNotReady(ctx context.Context, reason string) error {
+	observability.Log(ctx).V(1).Info("3f mint iteration waiting", "reason", reason)
+	observability.Decline(ctx, "mint_skipped", reason)
+	return errors.Errorf("%w: %s", provider.ErrNotReady, reason)
 }
 
 func (record *mint) Advance(_ context.Context, snapshot provider.Snapshot) (provider.Progress, error) {
