@@ -85,21 +85,27 @@ func TestForkIrisEndToEnd(t *testing.T) {
 	}
 	f := newForkEVM(t, endpoint)
 	f.setup()
+	// Paused at startup: discovery must keep the other markets.
+	f.pause(f.morpho)
 	f.startSolver()
 
 	var firm, morphoFirm quoteResponse
 	var firmRequest, morphoRequest quoteRequest
 	var pod, morphoPod common.Address
 	// Steps share chain state; make test-iris-fork runs with -failfast.
-	t.Run("2 startup discovers both markets and skips the claim executor", func(t *testing.T) {
-		f.waitLog(t, "iris markets discovered", 1)
+	t.Run("2 startup skips the paused and the claim executors", func(t *testing.T) {
+		f.waitDiscoveries(t, 1)
+		f.expectMarkets(t, 1)
 		logs := f.logs.String()
-		if !strings.Contains(logs, `"markets": 2`) && !strings.Contains(logs, `"markets":2`) {
-			t.Fatalf("expected two markets:\n%s", logs)
+		if !strings.Contains(logs, "iris executor paused") || !strings.Contains(logs, f.morpho.Hex()) {
+			t.Fatalf("morpho executor not reported paused:\n%s", logs)
 		}
 		if !strings.Contains(logs, "iris executor skipped") || !strings.Contains(logs, f.claim.Hex()) {
 			t.Fatalf("claim executor not skipped:\n%s", logs)
 		}
+		f.send(forkAdmin, f.morpho, executorBinding.PackSetCaller(f.manager))
+		f.waitDiscoveries(t, 2)
+		f.expectMarkets(t, 2)
 	})
 	t.Run("3 auth", func(t *testing.T) {
 		for _, value := range []string{"", "wrong"} {
@@ -127,6 +133,14 @@ func TestForkIrisEndToEnd(t *testing.T) {
 		if f.nonce(forkSigner) != before {
 			t.Fatal("indicative quote sent a transaction")
 		}
+
+		// Without cash or an Aave position the recipe cannot fund the bond.
+		f.rpcCall("anvil_impersonateAccount", forkAccount)
+		f.rpcCall("anvil_setBalance", forkAccount, "0x3635C9ADC5DEA00000")
+		f.send(forkAccount, forkAUSDC, erc20Binding.PackTransfer(forkAdmin, f.balance(forkAUSDC, forkAccount)))
+		f.expectDeclineAt(t, "/quote/indicative", f.request("unfunded"), "recipe_rejected")
+		f.send(forkAdmin, forkAUSDC, erc20Binding.PackTransfer(forkAccount, f.balance(forkAUSDC, forkAdmin)))
+		f.rpcCall("anvil_stopImpersonatingAccount", forkAccount)
 	})
 	t.Run("5 firm quote funds the bond from Aave", func(t *testing.T) {
 		before, supplied := f.nonce(forkSigner), f.balance(forkAUSDC, forkAccount)
@@ -256,12 +270,24 @@ func TestForkIrisEndToEnd(t *testing.T) {
 		equal(t, discovered, strings.Count(f.logs.String(), "iris markets discovered"), "unchanged state rediscovered")
 
 		f.setRecipe(f.aave, f.fixture.Offers[0].Recipe)
-		f.waitLog(t, "iris markets discovered", discovered+1)
+		f.waitDiscoveries(t, discovered+1)
 
+		// A caller the signer cannot route through leaves only that market out: the request
+		// fits Aave alone, and the Morpho market's caps are below it.
 		f.send(forkAdmin, f.aave, executorBinding.PackSetCaller(forkKeeper))
-		f.waitLog(t, "iris market refresh failed", 1)
-		f.expectDecline(t, f.request("caller moved"), "recipe_rejected")
+		f.waitDiscoveries(t, discovered+2)
+		f.expectDecline(t, f.request("caller moved"), "above_market_limits")
 		f.send(forkAdmin, f.aave, executorBinding.PackSetCaller(f.manager))
+		f.waitDiscoveries(t, discovered+3)
+
+		// A healthy market's change is picked up while another executor is paused.
+		f.pause(f.morpho)
+		f.waitDiscoveries(t, discovered+4)
+		f.setRecipe(f.aave, f.fixture.Offers[0].Recipe)
+		f.waitDiscoveries(t, discovered+5)
+		f.send(forkAdmin, f.morpho, executorBinding.PackSetCaller(f.manager))
+		f.waitDiscoveries(t, discovered+6)
+		f.expectMarkets(t, 2)
 
 		// A keeper role change leaves the recipe state alone: the quote path checks it.
 		time.Sleep(2 * f.refresh)
@@ -561,6 +587,22 @@ func (f *forkEVM) curatorBundle(adapter common.Address) []byte {
 	return raw
 }
 
+// pause clears the executor's caller, the way an operator stops it.
+func (f *forkEVM) pause(executor common.Address) {
+	f.send(forkAdmin, executor, executorBinding.PackSetCaller(common.Address{}))
+}
+
+// expectMarkets checks the latest discovery indexed want markets.
+func (f *forkEVM) expectMarkets(t *testing.T, want int) {
+	t.Helper()
+	logs := f.logs.String()
+	line := logs[strings.LastIndex(logs, "iris markets discovered"):]
+	line = line[:strings.IndexByte(line+"\n", '\n')]
+	if !strings.Contains(line, `"markets": `+strconv.Itoa(want)) && !strings.Contains(line, `"markets":`+strconv.Itoa(want)) {
+		t.Fatalf("expected %d markets: %s", want, line)
+	}
+}
+
 func (f *forkEVM) setRecipe(executor common.Address, encoded []byte) {
 	recipe, err := recipes.DecodeRecipe(encoded)
 	must(f.t, err)
@@ -621,7 +663,6 @@ solvers:
         # Mining a block that touches fresh mainnet state can take several seconds on a fork.
         deadlineWindow: 10s
         responseBudget: 20s
-        pollInterval: 200ms
 `
 	path := filepath.Join(dir, "iris.yaml")
 	must(t, os.WriteFile(path, []byte(config), 0o600))
@@ -677,7 +718,12 @@ func (f *forkEVM) post(t *testing.T, path string, r quoteRequest, auth string) (
 
 func (f *forkEVM) expectDecline(t *testing.T, r quoteRequest, reason string) {
 	t.Helper()
-	status, body := f.post(t, "/quote", r, forkAuthValue)
+	f.expectDeclineAt(t, "/quote", r, reason)
+}
+
+func (f *forkEVM) expectDeclineAt(t *testing.T, path string, r quoteRequest, reason string) {
+	t.Helper()
+	status, body := f.post(t, path, r, forkAuthValue)
 	if status != http.StatusNotFound || !bytes.Contains(body, []byte(`"`+reason+`"`)) {
 		t.Fatalf("%s: want %s, got %d %s", r.RequestID, reason, status, body)
 	}
@@ -883,8 +929,10 @@ func (f *forkEVM) rpcCall(method string, args ...any) {
 	must(f.t, f.rpc.CallContext(f.ctx, nil, method, args...))
 }
 
-func (f *forkEVM) waitLog(t *testing.T, message string, count int) {
+// waitDiscoveries waits until the solver has logged count market discoveries.
+func (f *forkEVM) waitDiscoveries(t *testing.T, count int) {
 	t.Helper()
+	const message = "iris markets discovered"
 	for deadline := time.Now().Add(30 * time.Second); time.Now().Before(deadline); time.Sleep(200 * time.Millisecond) {
 		if strings.Count(f.logs.String(), message) >= count {
 			return

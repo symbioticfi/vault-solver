@@ -502,19 +502,24 @@ is returned, and Iris pulls the bond from the account at `take`.
 - Markets are not configured. Each `recipeExecutors` entry is one market's offer executor,
   created in the curator UI (Automations, IRIS). The solver reads the market (tokens, venue,
   payload hash, BLM, bond LLTV, overdue terms) and its limits (principal cap, tenor cap, APR
-  floor) from the recipe. Morpho market payloads are read from `morpho`. An executor whose
-  recipe is not an offer program is logged and skipped. Every executor must serve `account`
-  through one caller (the vault's AccessManager, or the signer) that admits the signer.
-  Every `refreshInterval` the solver re-reads each executor's recipe hash and block and the
-  account root in one call, and rediscovers markets only when one changed.
-- `POST /quote` picks the cheapest market whose caps admit the request, prices it from the
-  `pricing` table (raised to the market's APR floor), sizes the bond as the recipe does (BLM
-  requirement plus 25%, rounded up), checks the curator's Iris allowance covers it and every
-  quote still open, simulates the recipe (which draws any bond shortfall from the curator's
-  funding venues), sends it, and returns the quote once the receipt shows the digest is
-  valid. The signature field is 65 zero bytes. One quote is signed at a time; others decline
-  with `solver_busy`.
-- `POST /quote/indicative` returns the same terms unsigned. Declines are `404` with a
+  floor) from the recipe. Morpho market payloads are read from `morpho`. Every executor must
+  serve `account` through a caller (the vault's AccessManager, or the signer) that admits
+  the signer. A paused executor, or one whose recipe is not an offer program, is logged and
+  left out while the other markets keep quoting. Every `refreshInterval` the solver
+  re-reads each executor's account, caller, recipe hash and block and the account root in
+  one call, and rediscovers markets only when one changed.
+- `POST /quote` tries the markets whose caps admit the request cheapest first. Each is
+  priced from the `pricing` table (raised to the market's APR floor), its bond sized as the
+  recipe does (BLM requirement plus 25%, rounded up), and the curator's Iris allowance must
+  cover it and every quote still open. The solver simulates the recipe (which draws any bond
+  shortfall from the curator's funding venues) for the passing markets, sends the cheapest
+  that passes, and returns the quote once the receipt shows the digest is valid. The
+  signature field is 65 zero bytes. One quote is signed at a time; others decline with
+  `solver_busy`, as does a request while the transaction manager is busy. A signature that
+  misses its window is dropped by the shared transaction manager rather than holding the
+  signer.
+- `POST /quote/indicative` returns the same terms unsigned, after the same checks and a
+  simulation of the signing recipe (nothing is sent), all in one RPC batch. Declines are `404` with a
   `reasons` entry, such as `no_market`, `above_market_limits`, `rate_above_max_fixed_rate`
   (with the rate), `insufficient_bond_allowance` or `insufficient_bond_balance`.
 - The quote deadline must reach the coordinator about 120 s ahead, so the solver dates it

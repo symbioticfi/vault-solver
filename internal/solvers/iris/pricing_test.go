@@ -92,7 +92,7 @@ func TestFreshAcceptsOnlyTheFinalWindow(t *testing.T) {
 	ok(t, !timing.fresh(now, uint64(now.Unix()+117)))
 }
 
-func TestSelectMarketTakesTheLowestRateUnderTheCeiling(t *testing.T) {
+func TestEligibleMarketsAreCheapestFirstUnderTheCeiling(t *testing.T) {
 	limits := Market{MaxDebt: big.NewInt(1e12), MaxDuration: big.NewInt(1e9), MinFixedRate: big.NewInt(1e14)}
 	a, b := limits, limits
 	a.Executor, b.Executor, b.VenueID = common.HexToAddress("0xA"), common.HexToAddress("0xB"), 1
@@ -105,22 +105,25 @@ func TestSelectMarketTakesTheLowestRateUnderTheCeiling(t *testing.T) {
 	ceiling := func(rate int64) request {
 		return request{Debt: big.NewInt(1e6), Duration: big.NewInt(86400), MaxFixedRate: big.NewInt(rate)}
 	}
-	m, rate, err := s.selectMarket([]Market{a, b}, ceiling(1e17))
+	eligible, err := s.eligibleMarkets([]Market{a, b}, ceiling(1e17))
 	must(t, err)
-	equal(t, b.Executor, m.Executor)
-	equal(t, big.NewInt(6e16), rate)
+	equal(t, 2, len(eligible))
+	equal(t, b.Executor, eligible[0].market.Executor)
+	equal(t, big.NewInt(6e16), eligible[0].quote.FixedRate)
+	equal(t, a.Executor, eligible[1].market.Executor)
 
-	m, _, err = s.selectMarket([]Market{a, b}, ceiling(65e15))
+	eligible, err = s.eligibleMarkets([]Market{a, b}, ceiling(65e15))
 	must(t, err)
-	equal(t, b.Executor, m.Executor)
+	equal(t, 1, len(eligible))
+	equal(t, b.Executor, eligible[0].market.Executor)
 
-	_, _, err = s.selectMarket([]Market{a, b}, ceiling(5e16))
+	_, err = s.eligibleMarkets([]Market{a, b}, ceiling(5e16))
 	var refused *declined
 	ok(t, errors.As(err, &refused), err)
 	equal(t, "rate_above_max_fixed_rate", refused.reason)
 	equal(t, big.NewInt(6e16), refused.rate)
 
-	_, _, err = s.selectMarket(nil, ceiling(1e17))
+	_, err = s.eligibleMarkets(nil, ceiling(1e17))
 	ok(t, errors.As(err, &refused), err)
 	equal(t, "no_market", refused.reason)
 }

@@ -23,7 +23,6 @@ const (
 	defaultQuoteTTL        = 2 * time.Minute
 	defaultDeadlineWindow  = 5 * time.Second
 	defaultResponseBudget  = 25 * time.Second
-	defaultPollInterval    = 500 * time.Millisecond
 	// rateStep is the Iris fixed-rate granularity (BP in Iris.sol).
 	rateStep = 100_000_000_000_000
 )
@@ -61,7 +60,6 @@ type rawTiming struct {
 	QuoteTTL       string `yaml:"quoteTtl"`
 	DeadlineWindow string `yaml:"deadlineWindow"`
 	ResponseBudget string `yaml:"responseBudget"`
-	PollInterval   string `yaml:"pollInterval"`
 }
 
 type rawRate struct {
@@ -95,7 +93,7 @@ type ServerConfig struct {
 
 // Timing places the on-chain signature and the quote deadline (docs/IRIS-PLAN.md §6).
 type Timing struct {
-	BlockTime, SubmitLead, ResponseSlack, QuoteTTL, DeadlineWindow, ResponseBudget, PollInterval time.Duration
+	BlockTime, SubmitLead, ResponseSlack, QuoteTTL, DeadlineWindow, ResponseBudget time.Duration
 }
 
 func parseConfig(node yaml.Node) (Config, error) {
@@ -224,7 +222,6 @@ func parseTiming(raw rawConfig) (Timing, error) {
 		{t.QuoteTTL, defaultQuoteTTL, "timing.quoteTtl", &timing.QuoteTTL},
 		{t.DeadlineWindow, defaultDeadlineWindow, "timing.deadlineWindow", &timing.DeadlineWindow},
 		{t.ResponseBudget, defaultResponseBudget, "timing.responseBudget", &timing.ResponseBudget},
-		{t.PollInterval, defaultPollInterval, "timing.pollInterval", &timing.PollInterval},
 	} {
 		d, err := parse.Duration(field.value, field.fallback, field.name)
 		if err != nil {

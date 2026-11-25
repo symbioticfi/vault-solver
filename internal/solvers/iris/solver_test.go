@@ -10,7 +10,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 )
 
 // stateChain answers only the recipe state reads; anything else means a full discovery ran.
@@ -29,37 +28,38 @@ func (c *stateChain) CallContract(_ context.Context, msg ethereum.CallMsg, _ *bi
 	return nil, errors.New("unexpected call")
 }
 
-func TestSnapshotWordsMatchTheOnChainEncoding(t *testing.T) {
-	snapshot := recipes.Snapshot{Caller: common.HexToAddress("0xCA11"), RecipeHash: common.HexToHash("0xAB"), RecipeBlock: 123456, Root: common.HexToHash("0x0F")}
-	words := snapshotWords([]recipes.PreparedRecipe{{Snapshot: snapshot}})
-	equal(t, 4, len(words))
-	caller, err := executorBinding.UnpackCaller(words[0].Bytes())
-	must(t, err)
-	equal(t, snapshot.Caller, caller)
-	hash, err := executorBinding.UnpackRecipeHash(words[1].Bytes())
-	must(t, err)
-	equal(t, snapshot.RecipeHash, common.Hash(hash))
-	block, err := executorBinding.UnpackRecipeBlock(words[2].Bytes())
-	must(t, err)
-	equal(t, snapshot.RecipeBlock, block.Uint64())
-	root, err := accountBinding.UnpackRoot(words[3].Bytes())
-	must(t, err)
-	equal(t, snapshot.Root, common.Hash(root))
+func TestCallerGroupsLeaveOutUnusableExecutors(t *testing.T) {
+	account, caller, other := common.HexToAddress("0xACC"), common.HexToAddress("0xCA11"), common.HexToAddress("0xCA12")
+	executors := []common.Address{common.HexToAddress("0xE0"), common.HexToAddress("0xE1"), common.HexToAddress("0xE2"), common.HexToAddress("0xE3")}
+	word := func(a common.Address) common.Hash { return common.BytesToHash(a.Bytes()) }
+	state := []common.Hash{
+		word(account), word(caller), {}, {},
+		word(account), {}, {}, {}, // paused
+		word(common.HexToAddress("0xBAD")), word(caller), {}, {},
+		word(account), word(other), {}, {},
+		{}, // root
+	}
+	s := &Solver{cfg: Config{Account: account, RecipeExecutors: executors}}
+	groups := s.callerGroups(context.Background(), state)
+	equal(t, map[common.Address][]common.Address{caller: {executors[0]}, other: {executors[3]}}, groups)
 }
 
 func TestRefreshSkipsDiscoveryOnlyWhileRecipeStateIsUnchanged(t *testing.T) {
 	executor, account := common.HexToAddress("0xE0"), common.HexToAddress("0xACC")
-	snapshot := recipes.Snapshot{Executor: executor, Account: account, Caller: common.HexToAddress("0xCA11"), RecipeHash: common.HexToHash("0xAB"), RecipeBlock: 7, Root: common.HexToHash("0x0F")}
-	built := snapshotWords([]recipes.PreparedRecipe{{Snapshot: snapshot}})
+	built := []common.Hash{
+		common.BytesToHash(account.Bytes()), common.BytesToHash(common.HexToAddress("0xCA11").Bytes()),
+		common.HexToHash("0xAB"), common.BigToHash(big.NewInt(7)), common.HexToHash("0x0F"),
+	}
 	selector := func(data []byte) [4]byte { return [4]byte(data[:4]) }
 	words := func() map[common.Address]map[[4]byte]common.Hash {
 		return map[common.Address]map[[4]byte]common.Hash{
 			executor: {
-				selector(executorBinding.PackCaller()):      built[0],
-				selector(executorBinding.PackRecipeHash()):  built[1],
-				selector(executorBinding.PackRecipeBlock()): built[2],
+				selector(executorBinding.PackAccount()):     built[0],
+				selector(executorBinding.PackCaller()):      built[1],
+				selector(executorBinding.PackRecipeHash()):  built[2],
+				selector(executorBinding.PackRecipeBlock()): built[3],
 			},
-			account: {selector(accountBinding.PackRoot()): built[3]},
+			account: {selector(accountBinding.PackRoot()): built[4]},
 		}
 	}
 	for _, tt := range []struct {
@@ -88,7 +88,7 @@ func TestRefreshSkipsDiscoveryOnlyWhileRecipeStateIsUnchanged(t *testing.T) {
 			err := s.refresh(context.Background())
 			if tt.skipped {
 				must(t, err)
-				equal(t, 4, chain.calls)
+				equal(t, len(built), chain.calls)
 				return
 			}
 			// The fake cannot serve discovery, so a changed word surfaces as a discovery error.

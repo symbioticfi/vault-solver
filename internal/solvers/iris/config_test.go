@@ -42,7 +42,7 @@ func TestParseConfigDefaults(t *testing.T) {
 	equal(t, uint64(1), *cfg.Pricing.Rules[0].VenueID)
 	equal(t, Timing{
 		BlockTime: defaultBlockTime, SubmitLead: defaultSubmitLead, QuoteTTL: defaultQuoteTTL, DeadlineWindow: defaultDeadlineWindow,
-		ResponseBudget: defaultResponseBudget, PollInterval: defaultPollInterval,
+		ResponseBudget: defaultResponseBudget,
 	}, cfg.Timing)
 	equal(t, time.Minute, cfg.RefreshInterval)
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/symbioticfi/merkle-executor/sdk/permissions"
 	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	"github.com/symbioticfi/merkle-executor/sdk/transaction"
 	"golang.org/x/sync/errgroup"
 	"gopkg.in/yaml.v3"
 
@@ -56,8 +57,14 @@ type chainReader interface {
 	recipes.Reader
 }
 
+// sender is the shared Merkle transaction manager's non-strict surface.
+type sender interface {
+	LaneReady() bool
+	SendAsync(ctx context.Context, req transaction.Request) (<-chan transaction.Result, bool)
+}
+
 // Solver serves the coordinator webhook. The market index is replaced whole by the refresh
-// loop and read lock-free; on-chain signing is serialized by the lane.
+// loop and read lock-free; firm quotes are signed one at a time.
 type Solver struct {
 	cfg       Config
 	chain     chainReader
@@ -65,13 +72,11 @@ type Solver struct {
 	signer    common.Address
 	maxGas    uint64
 	source    *permissions.Source
-	lane      *lane
+	sender    sender
 	authValue string
 	metrics   *metrics
 
 	markets atomic.Pointer[marketIndex]
-	// runCtx is the Run context: lane polling outlives the request that started it.
-	runCtx atomic.Pointer[context.Context]
 	// built holds the on-chain words the index was decoded from; only the refresh loop uses it.
 	built []common.Hash
 
@@ -106,7 +111,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	}
 	s := &Solver{
 		cfg: cfg, chain: deps.Chain, chainID: deps.Chain.ChainID(), signer: deps.Signer.Address(), maxGas: deps.MaxGas,
-		source: source, lane: newLane(manager.Sender(Name), manager.Ready, cfg.Timing.PollInterval),
+		source: source, sender: manager,
 		metrics: newMetrics(deps.Metrics),
 	}
 	if s.authValue = os.Getenv(cfg.Server.AuthValueEnv); s.authValue == "" {
@@ -115,16 +120,8 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 	return s, nil
 }
 
-func (s *Solver) background() context.Context {
-	if ctx := s.runCtx.Load(); ctx != nil {
-		return *ctx
-	}
-	return context.Background()
-}
-
 // Run discovers the account's markets, then serves quotes and refreshes the index until ctx ends.
 func (s *Solver) Run(ctx context.Context) error {
-	s.runCtx.Store(&ctx)
 	if err := s.refresh(ctx); err != nil {
 		return errors.Errorf("discover iris markets: %w", err)
 	}
@@ -159,57 +156,50 @@ func (s *Solver) Run(ctx context.Context) error {
 	return group.Wait()
 }
 
-// refresh rebuilds the market index from the configured executors. Every executor must
-// serve the configured account through one shared caller that admits the signer; an executor
-// whose recipe is not a usable offer program is skipped and logged.
+// refresh rebuilds the market index from the configured executors when their recipe state
+// changed. Executors that are paused (zero caller), serve another account, or hold no usable
+// offer program are skipped and logged, so the healthy markets stay quotable.
 func (s *Solver) refresh(ctx context.Context) (err error) {
 	ctx, end := tracer.Start(ctx, "iris.discover")
 	defer func() { end(err) }()
-	if s.built != nil {
-		current, err := s.recipeState(ctx)
+	state, err := s.recipeState(ctx)
+	if err != nil {
+		return err
+	}
+	if slices.Equal(state, s.built) {
+		return nil
+	}
+	prepared := make(map[common.Address]recipes.PreparedRecipe)
+	for caller, executors := range s.callerGroups(ctx, state) {
+		accounts := make([]common.Address, len(executors))
+		for i := range accounts {
+			accounts[i] = s.cfg.Account
+		}
+		results, err := recipes.DiscoverCandidates(ctx, s.chain, executors, accounts, caller, recipes.PreparationOptions{ChainID: s.chainID})
 		if err != nil {
 			return err
 		}
-		if slices.Equal(current, s.built) {
-			return nil
+		for i, result := range results {
+			if result.Err != nil {
+				s.skip(ctx, executors[i], result.Err)
+				continue
+			}
+			prepared[executors[i]] = result.Prepared
 		}
-	}
-	executors := s.cfg.RecipeExecutors
-	identities, err := recipes.DiscoverExecutors(ctx, s.chain, executors)
-	if err != nil {
-		return err
-	}
-	caller := identities[executors[0]].Caller
-	accounts := make([]common.Address, len(executors))
-	for i, executor := range executors {
-		identity := identities[executor]
-		if identity.Account != s.cfg.Account || identity.Caller != caller {
-			return errors.Errorf("executor %s must serve account %s through caller %s", executor.Hex(), s.cfg.Account.Hex(), caller.Hex())
-		}
-		accounts[i] = identity.Account
-	}
-	prepared, err := recipes.DiscoverBatch(ctx, s.chain, executors, accounts, caller, recipes.PreparationOptions{ChainID: s.chainID})
-	if err != nil {
-		return err
 	}
 	trees := make(map[common.Hash]*recipes.Tree)
 	markets := make([]Market, 0, len(prepared))
-	for _, member := range prepared {
-		snapshot := member.Snapshot
-		if _, err := recipes.RouteExecution(ctx, s.chain, snapshot, s.signer, executorBinding.PackExecute(nil, nil, nil, nil)); err != nil {
-			return errors.Errorf("executor %s does not admit the signer: %w", snapshot.Executor.Hex(), err)
+	for _, executor := range s.cfg.RecipeExecutors {
+		member, found := prepared[executor]
+		if !found {
+			continue
 		}
-		tree, ok := trees[snapshot.Root]
-		if !ok {
-			if tree, err = s.permissionTree(ctx, snapshot); err != nil {
-				return err
-			}
-			trees[snapshot.Root] = tree
-		}
-		market, err := s.admitMarket(member, tree)
+		market, err := s.admit(ctx, member, trees)
 		if err != nil {
-			// One unusable executor must not take the account's other markets down with it.
-			observability.Log(ctx).Error(err, "iris executor skipped", "executor", snapshot.Executor.Hex())
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			s.skip(ctx, executor, err)
 			continue
 		}
 		markets = append(markets, market)
@@ -222,9 +212,52 @@ func (s *Solver) refresh(ctx context.Context) (err error) {
 	}
 	index := newMarketIndex(markets)
 	s.markets.Store(&index)
-	s.built = snapshotWords(prepared)
+	s.built = state
 	observability.Log(ctx).Info("iris markets discovered", "markets", len(markets))
 	return nil
+}
+
+// callerGroups groups the executors serving the account by caller, for discovery. state is
+// recipeState's words.
+func (s *Solver) callerGroups(ctx context.Context, state []common.Hash) map[common.Address][]common.Address {
+	groups := make(map[common.Address][]common.Address)
+	for i, executor := range s.cfg.RecipeExecutors {
+		account := common.BytesToAddress(state[stateWords*i].Bytes())
+		caller := common.BytesToAddress(state[stateWords*i+1].Bytes())
+		switch {
+		case caller == (common.Address{}):
+			observability.Log(ctx).Info("iris executor paused", "executor", executor.Hex())
+		case account != s.cfg.Account:
+			s.skip(ctx, executor, errors.Errorf("executor serves account %s", account.Hex()))
+		default:
+			groups[caller] = append(groups[caller], executor)
+		}
+	}
+	return groups
+}
+
+// admit checks the executor routes the signer and decodes its offer recipe; trees caches the
+// permission tree per root.
+func (s *Solver) admit(ctx context.Context, member recipes.PreparedRecipe, trees map[common.Hash]*recipes.Tree) (Market, error) {
+	snapshot := member.Snapshot
+	if _, err := recipes.RouteExecution(ctx, s.chain, snapshot, s.signer, executorBinding.PackExecute(nil, nil, nil, nil)); err != nil {
+		return Market{}, errors.Errorf("executor does not admit the signer: %w", err)
+	}
+	tree, found := trees[snapshot.Root]
+	if !found {
+		var err error
+		if tree, err = s.permissionTree(ctx, snapshot); err != nil {
+			return Market{}, err
+		}
+		trees[snapshot.Root] = tree
+	}
+	return s.admitMarket(member, tree)
+}
+
+// skip logs an executor left out of the index; one unusable executor must not take the
+// account's other markets down with it.
+func (*Solver) skip(ctx context.Context, executor common.Address, err error) {
+	observability.Log(ctx).Error(err, "iris executor skipped", "executor", executor.Hex())
 }
 
 // admitMarket decodes an executor's offer recipe and checks the configured timing fits the
@@ -284,14 +317,17 @@ func (s *Solver) withMarketData(ctx context.Context, markets []Market) ([]Market
 	}), nil
 }
 
-// recipeState reads, in one multicall at latest, everything the SDK compares before admitting
-// a prepared recipe: each executor's caller, recipe hash and recipe block, then the account
-// root (the executor's account is immutable). Equal words mean the recipe bodies and the
-// permission tree the index was decoded from are unchanged.
+// stateWords is how many recipeState words each executor has.
+const stateWords = 4
+
+// recipeState reads, in one batch at latest, everything the SDK compares before admitting a
+// prepared recipe: each executor's account, caller, recipe hash and recipe block, then the
+// account root. Equal words mean the recipe bodies and the permission tree the index was
+// decoded from are unchanged.
 func (s *Solver) recipeState(ctx context.Context) ([]common.Hash, error) {
-	requests := make([]protocolio.ReadRequest, 0, 3*len(s.cfg.RecipeExecutors)+1)
+	requests := make([]protocolio.ReadRequest, 0, stateWords*len(s.cfg.RecipeExecutors)+1)
 	for _, executor := range s.cfg.RecipeExecutors {
-		for _, data := range [][]byte{executorBinding.PackCaller(), executorBinding.PackRecipeHash(), executorBinding.PackRecipeBlock()} {
+		for _, data := range [][]byte{executorBinding.PackAccount(), executorBinding.PackCaller(), executorBinding.PackRecipeHash(), executorBinding.PackRecipeBlock()} {
 			requests = append(requests, protocolio.ContractRead(executor, data, nil, true))
 		}
 	}
@@ -312,17 +348,6 @@ func (s *Solver) recipeState(ctx context.Context) ([]common.Hash, error) {
 		words[i] = common.Hash(data)
 	}
 	return words, nil
-}
-
-// snapshotWords encodes the discovery snapshots in recipeState's layout. It uses the
-// snapshots the index was built from, so a lagging read during discovery cannot mask a change.
-func snapshotWords(prepared []recipes.PreparedRecipe) []common.Hash {
-	words := make([]common.Hash, 0, 3*len(prepared)+1)
-	for _, member := range prepared {
-		snapshot := member.Snapshot
-		words = append(words, common.BytesToHash(snapshot.Caller.Bytes()), snapshot.RecipeHash, common.BigToHash(new(big.Int).SetUint64(snapshot.RecipeBlock)))
-	}
-	return append(words, prepared[0].Snapshot.Root)
 }
 
 func (s *Solver) permissionTree(ctx context.Context, snapshot recipes.Snapshot) (*recipes.Tree, error) {

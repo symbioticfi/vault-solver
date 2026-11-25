@@ -49,4 +49,3 @@ solvers:
         deadlineWindow: 5s
         # Needs the IRIS coordinator timeout raised above this for our endpoint.
         responseBudget: 25s
-        pollInterval: 500ms

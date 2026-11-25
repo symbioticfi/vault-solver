@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"math/big"
-	"sync"
 	"testing"
 	"time"
 
@@ -12,30 +11,64 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
-	"github.com/symbioticfi/merkle-executor/sdk/provider"
-	"github.com/symbioticfi/merkle-executor/sdk/recipes"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
 	"github.com/symbioticfi/merkle-executor/sdk/transaction"
 )
 
-// fakeChain answers the BLM requirement, the debt-token balance and the Iris allowance.
+// fakeChain answers the BLM requirement, the debt-token balance and the Iris allowance, and
+// any call from a sender as a sign simulation that fails with simulation. A market whose debt
+// token is short has no cash. It counts round trips: batches and head reads.
 type fakeChain struct {
 	requirement, balance, allowance *big.Int
+	short                           common.Address
+	simulation                      error
 	head                            *types.Header
+	trips                           int
+}
+
+// batchedChain serves read groups from fakeChain in one round trip, as the RPC batch does.
+type batchedChain struct{ *fakeChain }
+
+func (c *batchedChain) BatchRead(_ context.Context, requests []protocolio.ReadRequest) ([]protocolio.ReadResult, error) {
+	c.trips++
+	results := make([]protocolio.ReadResult, len(requests))
+	for i, r := range requests {
+		results[i].Data, results[i].Err = c.call(r.Call)
+	}
+	return results, nil
 }
 
 func (c *fakeChain) CallContract(_ context.Context, msg ethereum.CallMsg, _ *big.Int) ([]byte, error) {
+	c.trips++
+	return c.call(msg)
+}
+
+func (c *fakeChain) call(msg ethereum.CallMsg) ([]byte, error) {
 	switch {
+	case msg.From != (common.Address{}):
+		return nil, c.simulation
 	case bytes.HasPrefix(msg.Data, blmBinding.GetABI().Methods["bondRequirement"].ID):
-		return common.BigToHash(c.requirement).Bytes(), nil
+		return word(c.requirement), nil
+	case *msg.To == c.short && bytes.HasPrefix(msg.Data, erc20Binding.PackBalanceOf(common.Address{})[:4]):
+		return common.Hash{}.Bytes(), nil
 	case bytes.HasPrefix(msg.Data, erc20Binding.PackBalanceOf(common.Address{})[:4]):
-		return common.BigToHash(c.balance).Bytes(), nil
+		return word(c.balance), nil
 	case bytes.HasPrefix(msg.Data, erc20Binding.PackAllowance(common.Address{}, common.Address{})[:4]):
-		return common.BigToHash(c.allowance).Bytes(), nil
+		return word(c.allowance), nil
 	}
 	return nil, errors.New("unexpected call")
 }
 
+// word encodes n, nil as zero.
+func word(n *big.Int) []byte {
+	if n == nil {
+		return make([]byte, common.HashLength)
+	}
+	return common.BigToHash(n).Bytes()
+}
+
 func (c *fakeChain) HeaderByNumber(context.Context, *big.Int) (*types.Header, error) {
+	c.trips++
 	return c.head, nil
 }
 func (*fakeChain) FilterLogs(context.Context, ethereum.FilterQuery) ([]types.Log, error) {
@@ -52,7 +85,7 @@ func indicativeSolver(t *testing.T, chain *fakeChain) (*Solver, request) {
 		must(t, err)
 		markets = append(markets, m)
 	}
-	s := &Solver{cfg: Config{Pricing: Pricing{Default: big.NewInt(6e16)}}, chain: chain, chainID: big.NewInt(1)}
+	s := &Solver{cfg: Config{Pricing: Pricing{Default: big.NewInt(6e16)}, Timing: Timing{QuoteTTL: 2 * time.Minute}}, chain: &batchedChain{chain}, chainID: big.NewInt(1), signer: common.HexToAddress("0x516")}
 	index := newMarketIndex(markets)
 	s.markets.Store(&index)
 	// Aave (venue 0): 20k cap, 30 days, 4% floor. Morpho (venue 1): 5k cap, 7 days, 6.5% floor.
@@ -80,6 +113,7 @@ func TestIndicativeQuoteUsesEachMarketsLimits(t *testing.T) {
 			tt.mutate(&r)
 			response, err := s.quote(context.Background(), r, true)
 			must(t, err)
+			equal(t, 1, chain.trips, "one round trip")
 			equal(t, "37500000", response.Bond)
 			equal(t, tt.venue, response.VenueID)
 			equal(t, tt.rate, response.FixedRate)
@@ -116,6 +150,7 @@ func TestIndicativeQuoteDeclines(t *testing.T) {
 		{"above every market's limits", fakeChain{}, func(_ *Solver, r *request) {
 			r.Duration = big.NewInt(31 * 86400)
 		}, "above_market_limits"},
+		{"recipe cannot fund the bond", fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(1e9), simulation: errors.New("execution reverted")}, nil, "recipe_rejected"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -133,44 +168,6 @@ func TestIndicativeQuoteDeclines(t *testing.T) {
 	}
 }
 
-// fakeSender settles the submitted execution after polls polls, or drops it when stall is set.
-type fakeSender struct {
-	mu        sync.Mutex
-	active    bool
-	polls     int
-	stall     bool
-	submitted []transaction.ExecutionRequest
-}
-
-func (s *fakeSender) Submit(_ context.Context, req transaction.ExecutionRequest) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.active = true
-	s.submitted = append(s.submitted, req)
-	return nil
-}
-
-func (s *fakeSender) Poll(context.Context) (*transaction.ExecutionResult, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.stall {
-		s.active = false
-		return nil, nil
-	}
-	if s.polls--; s.polls > 0 {
-		return nil, nil
-	}
-	s.active = false
-	hash := common.HexToHash("0x1")
-	return &transaction.ExecutionResult{Hash: hash, Execution: &provider.Execution{TxHash: hash, BlockNumber: big.NewInt(9)}}, nil
-}
-
-func (s *fakeSender) Busy() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.active
-}
-
 func TestExpiredReservationsAreReleased(t *testing.T) {
 	s := &Solver{}
 	now := time.Now()
@@ -181,27 +178,57 @@ func TestExpiredReservationsAreReleased(t *testing.T) {
 	equal(t, 2, len(s.reservations))
 }
 
-func TestLaneOwnsOneExecutionUntilItSettles(t *testing.T) {
-	sender := &fakeSender{polls: 3}
-	l := &lane{sender: sender, poll: time.Millisecond}
-	call := recipes.ExecutorCall{Executor: common.HexToAddress("0xE0"), Data: []byte{1, 2, 3, 4}}
-	done, err := l.execute(context.Background(), context.Background(), call, time.Now().Add(time.Minute))
+func TestIndicativeQuoteFallsBackToAPostableMarket(t *testing.T) {
+	chain := &fakeChain{requirement: big.NewInt(30e6), allowance: big.NewInt(1e9), balance: big.NewInt(1e9), head: &types.Header{Number: big.NewInt(1)}}
+	s, r := indicativeSolver(t, chain)
+	markets := (*s.markets.Load())[[2]common.Address{fixtureWstETH, fixtureUSDC}]
+	// The cheaper Aave market settles in a token the account holds no cash in.
+	short := common.HexToAddress("0xD7")
+	markets[0].DebtToken, chain.short = short, short
+	index := newMarketIndex(markets)
+	s.markets.Store(&index)
+	s.reserve(Quote{DebtToken: short, Bond: big.NewInt(1), Deadline: big.NewInt(time.Now().Add(time.Minute).Unix())})
+	r.DebtToken = fixtureUSDC
+	candidates, err := s.eligibleMarkets(markets, r)
 	must(t, err)
-	_, err = l.execute(context.Background(), context.Background(), call, time.Now())
-	ok(t, errors.Is(err, errLaneBusy), err)
-	outcome := <-done
-	must(t, outcome.err)
-	equal(t, big.NewInt(9), outcome.result.Execution.BlockNumber)
-	equal(t, call.Executor, sender.submitted[0].To)
-	ok(t, !l.busy.Load())
+	equal(t, 2, len(candidates))
+	equal(t, uint64(0), candidates[0].market.VenueID, "aave is cheaper")
+	passing, err := s.preflight(context.Background(), candidates, big.NewInt(1), true)
+	must(t, err)
+	equal(t, 1, len(passing))
+	equal(t, uint64(1), passing[0].market.VenueID)
+
+	_, err = s.preflight(context.Background(), candidates[:1], big.NewInt(1), true)
+	var refused *declined
+	ok(t, errors.As(err, &refused), err)
+	equal(t, "insufficient_bond_balance", refused.reason)
 }
 
-func TestLaneStallsWhenTheSenderDropsTheExecution(t *testing.T) {
-	l := &lane{sender: &fakeSender{stall: true}, poll: time.Millisecond}
-	call := recipes.ExecutorCall{Executor: common.HexToAddress("0xE0"), Data: []byte{1, 2, 3, 4}}
-	done, err := l.execute(context.Background(), context.Background(), call, time.Now().Add(time.Minute))
-	must(t, err)
-	ok(t, errors.Is((<-done).err, errLaneStalled))
-	_, err = l.execute(context.Background(), context.Background(), call, time.Now().Add(time.Minute))
-	ok(t, errors.Is(err, errLaneStalled), err)
+func TestSignedBlock(t *testing.T) {
+	mined := &types.Receipt{Status: types.ReceiptStatusSuccessful, BlockNumber: big.NewInt(9)}
+	tests := []struct {
+		name   string
+		result transaction.Result
+		reason string
+	}{
+		{"mined", transaction.Result{Receipt: mined}, ""},
+		{"reverted", transaction.Result{Receipt: &types.Receipt{Status: types.ReceiptStatusFailed}}, "signature_reverted"},
+		{"never admitted", transaction.Result{NotAdmitted: true, Err: context.DeadlineExceeded}, "slot_missed"},
+		{"dropped after the window", transaction.Result{Attempts: []common.Hash{{1}}, Err: context.DeadlineExceeded}, "deadline_missed"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			block, err := signedBlock(tt.result)
+			if tt.reason == "" {
+				must(t, err)
+				equal(t, big.NewInt(9), block)
+				return
+			}
+			var refused *declined
+			ok(t, errors.As(err, &refused), err)
+			equal(t, tt.reason, refused.reason)
+		})
+	}
+	_, err := signedBlock(transaction.Result{Attempts: []common.Hash{{1}}, Err: transaction.ErrNonceConsumed})
+	ok(t, errors.Is(err, transaction.ErrNonceConsumed), err)
 }

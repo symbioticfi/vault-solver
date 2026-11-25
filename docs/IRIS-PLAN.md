@@ -39,13 +39,17 @@ from the quote fields inside a curator-approved recipe.
   The recipe holds only the payload's hash, so the payload is recovered on-chain: empty for
   pool venues, `Morpho.idToMarketParams` for a Morpho market id (`morpho` in config), all
   Morpho markets in one multicall per discovery. Discovery builds an index from (collateral,
-  debt) to markets; an executor whose recipe is not a usable offer program is logged and
-  skipped, so it cannot take the other markets down. It runs at startup and
-  again every `refreshInterval`; a failed refresh keeps the previous index.
-- Each refresh first reads, in one multicall, every executor's `caller`, `recipeHash` and
-  `recipeBlock` and the account `root`. These are the values the SDK compares before it
-  admits a prepared recipe. If they equal the discovery snapshot the index was built from,
-  discovery is skipped. Any `setRecipe` (even with the same body) moves `recipeBlock`, a new
+  debt) to markets. One executor never takes the other markets down: a paused one (zero
+  caller) or one serving another account is left out before discovery, and one the signer
+  cannot route through or whose recipe is not a usable offer program is skipped after the
+  SDK's per-member `DiscoverCandidates` (run once per caller). Each is logged. Discovery runs
+  at startup and again every `refreshInterval`; a failed refresh (a transport failure, or no
+  usable market) keeps the previous index.
+- Each refresh first reads, in one batch, every executor's `account`, `caller`,
+  `recipeHash` and `recipeBlock` and the account `root`. These are the values the SDK
+  compares before it admits a prepared recipe, and the same words pick the executors to
+  discover. If they equal the words the index was built from, discovery is skipped; a
+  paused executor's words change when it resumes. Any `setRecipe` (even with the same body) moves `recipeBlock`, a new
   tree moves `root`, so no recipe or tree change can be skipped. AccessManager grants and
   account roles are not in these values; quote-time admission checks them on every quote.
 - Execution calldata is `recipes.Assemble(recipe, tree, inputs, nil, nil)` with the nine
@@ -53,9 +57,16 @@ from the quote fields inside a curator-approved recipe.
   deadline, nonce), routed with `recipes.RouteExecution` (direct caller or
   AccessManager). `recipes.ValidatePreparedBatchForSender` authenticates and simulates the
   exact transaction at a fresh block before it is sent.
-- Sending uses the SDK `transaction.Manager` lane (`manager.Sender(Name)`): one execution in
-  flight. Firm quotes run one at a time end to end, so each sees the capacity the previous
-  one reserved; a request that arrives meanwhile is declined `solver_busy`.
+- Sending uses the shared SDK `transaction.Manager` through its non-strict `SendAsync`, with
+  the request deadline at the last moment the response could still be fresh (target slot
+  plus `deadlineWindow`). Past it the manager drops the request and frees the signer for
+  every solver on it; the stale transaction is replaced by the signer's next one at the same
+  nonce, or lands late and harmless (its bond stays reserved until the quote deadline). The
+  keeper `Sender` is not used: it is always strict, so a signature that never gets a receipt
+  would hold the signer until restart. A firm quote declines `solver_busy` when the manager
+  is not ready for new work. Firm quotes run one at a time end to end, so each sees the
+  capacity the previous one reserved; a request that arrives meanwhile is declined
+  `solver_busy`.
 - The HTTP server follows the uniswapx quote server: own listen address, `TraceHandler`,
   panic recovery, `Shutdown` on context end.
 
@@ -104,8 +115,15 @@ collateral token and venue id, most specific first. Rates are WAD and must be mu
 of 1e14. A configured rate below a market's APR floor is raised to the floor. Markets whose
 principal or tenor cap the request exceeds are skipped (`above_market_limits` when none is
 left). A market whose rate exceeds `maxFixedRate` declines with
-`rate_above_max_fixed_rate` and the rate. Among several candidate markets the lowest rate
-wins; ties keep executor order. The bond is fixed by the recipe: `r + (r+3)/4` for the BLM
+`rate_above_max_fixed_rate` and the rate. The remaining markets are tried cheapest first
+(ties keep executor order): one batched read gives every market's bond requirement, Iris
+allowance and cash, and the firm path simulates the passing markets' signing transactions
+five at a time, sending the cheapest that passes. An indicative quote is one RPC batch at
+latest: the same reads plus every market's sign execution simulated from the signer (no
+head read, no SDK re-authentication; the route is the one discovery admitted, and the
+account stands in for a missing borrower or receiver). The simulation runs the recipe's own
+funding, so a bond the account cannot fund declines `recipe_rejected` as IRIS requires. If none passes, the cheapest market's
+decline is returned. The bond is fixed by the recipe: `r + (r+3)/4` for the BLM
 requirement `r`; `maxBond` caps it further.
 
 Floating-rate aware pricing (venue rate plus spread and a duration premium) is §10 work.
@@ -183,8 +201,8 @@ would bypass the allowance cap.
   compile output (`testdata/ui/recipes.json`, from `make refresh-iris-fixture`) and its
   rejections; the recipe's bond rounding; Morpho payload recovery; pricing table; slot and
   deadline selection; per-market limits, floors, allowance and reservations against a
-  fake chain; lane ownership and stall against a fake sender; handler authentication and
-  declines.
+  fake chain; falling back to a pricier market whose bond is postable; send outcomes;
+  executor selection for discovery; handler authentication and declines.
 - Fork (`make test-iris-fork`, build tag `integration`, needs `ETH_RPC_URL_MAINNET`): anvil forks
   mainnet and the test runs the built binary from a YAML config against the deployed Iris,
   its default BLM, Aave Core, Morpho Blue, wstETH and USDC. It plays the coordinator, the
@@ -233,7 +251,7 @@ the zero signature and the registry headers).
 ## 9. Build phases
 
 1. Plan, config, digest, market decoding, pricing (this change).
-2. Discovery, quote flow, lane, HTTP server, metrics (this change).
+2. Discovery, quote flow, sending, HTTP server, metrics (this change).
 3. Fork test against the deployed Iris (done); README and example config polish.
 4. Curator UI recipes: one executor per market with per-market limits, bond funding from
    venues, reservations (done). Settlement is the UI's Claims recipe, run by its keeper.
