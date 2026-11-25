@@ -61,11 +61,19 @@ func (e *Engine) Sources(listed []discounts.ListItem, tokenIn, tokenOut common.A
 // Decimals reads a token's decimals.
 type Decimals func(ctx context.Context, token common.Address) (int, error)
 
+// InventoryReader prices a set of advertised connector discounts.
+type InventoryReader func(context.Context, []discounts.ListItem) (inventory []liquidlane.Inventory, skipped, err error)
+
 // Inventory prices every advertised connector discount with a configured recipe against its
 // connector's current policy. Offers that cannot be priced are dropped and reported in skipped,
 // next to the inventory that can; err reports a failure that leaves no inventory to trust, so
 // callers keep what they last published instead of an empty inventory.
 func (e *Engine) Inventory(ctx context.Context, listed []discounts.ListItem) (inventory []liquidlane.Inventory, skipped, err error) {
+	return e.InventoryAt(ctx, listed, nil)
+}
+
+// InventoryAt can use the block already observed by the award loop.
+func (e *Engine) InventoryAt(ctx context.Context, listed []discounts.ListItem, block *big.Int) (inventory []liquidlane.Inventory, skipped, err error) {
 	if e.Decimals == nil {
 		return nil, nil, errors.New("token decimals reader is not configured")
 	}
@@ -85,20 +93,20 @@ func (e *Engine) Inventory(ctx context.Context, listed []discounts.ListItem) (in
 		}
 		offers = append(offers, offer)
 	}
-	inventory, unread, err := connector.ReadInventory(ctx, e.Workflow.Chain, e.Workflow.ChainID.Int64(), offers)
+	inventory, unread, err := connector.ReadInventory(ctx, e.Workflow.Chain, e.Workflow.ChainID.Int64(), offers, block)
 	if err != nil {
 		return nil, nil, err
 	}
 	return inventory, errors.Join(append(dropped, unread)...), nil
 }
 
-// unreserved is the source's advertised funding less what this lane has spent from that
-// account and the listing does not reflect yet.
-func (e *Engine) unreserved(source Source, tokenOut common.Address) *big.Int {
+// Unreserved is the source's advertised funding less other awards' reservations
+// and spends its listing has yet to reflect.
+func (e *Engine) Unreserved(source Source, tokenOut common.Address, orderID string) *big.Int {
 	capacity := liquidlane.NewCapacityID(e.Workflow.ChainID.Int64(), source.Account, tokenOut)
-	reserved := e.Spends.Reservations([]liquidlane.Inventory{{
+	reserved := e.Spends.ReservationsExcluding([]liquidlane.Inventory{{
 		CapacityID: capacity, MaxAssets: source.MaxAssets, BlockNumber: source.Listing.BlockNumber,
-	}})[capacity]
+	}}, orderID)[capacity]
 	if reserved == nil {
 		return source.MaxAssets
 	}
@@ -180,6 +188,8 @@ func (e *Engine) matches(listed []discounts.ListItem, pair func(tokenIn, tokenOu
 type Observation struct {
 	// Chain is the latest block time; Wall is the local time sampled just before reading it.
 	Chain, Wall time.Time
+	BlockHash   common.Hash
+	BlockNumber *big.Int
 }
 
 // Observe reads the chain clock and retires spends whose signed deadline has passed.
@@ -189,11 +199,11 @@ func (e *Engine) Observe(ctx context.Context) (Observation, error) {
 	if err != nil {
 		return Observation{}, err
 	}
-	if header == nil || header.Time > ^uint64(0)>>1 {
-		return Observation{}, errors.New("invalid chain timestamp")
+	if header == nil || header.Number == nil || !header.Number.IsUint64() || header.Time > ^uint64(0)>>1 {
+		return Observation{}, errors.New("invalid chain header")
 	}
 	e.Spends.Expire(int64(header.Time))
-	return Observation{Chain: time.Unix(int64(header.Time), 0), Wall: wall}, nil
+	return Observation{Chain: time.Unix(int64(header.Time), 0), Wall: wall, BlockHash: header.Hash(), BlockNumber: header.Number}, nil
 }
 
 // SubmissionDeadline converts the earliest chain-time limit into the lane's wall-clock deadline.

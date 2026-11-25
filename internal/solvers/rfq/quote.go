@@ -33,9 +33,8 @@ type quoteService struct {
 	chainID       int64
 	tokenMetadata *chain.Decimals
 	executor      common.Address
-	// laneAvailable is safe for concurrent use and reports sender initialization. A busy lane does not
-	// block quoting: pending fills are accounted through reservations instead. It is sampled before
-	// and after quote planning so work is declined whenever either check observes a nonce conflict.
+	// laneAvailable is safe for concurrent use and reports execution readiness before and after
+	// quote planning. Reservations account for liquidity held by outstanding fills.
 	laneAvailable       func() bool
 	requireFullCoverage bool // Merkle recipes settle the exact discounted payout on each leg.
 	// reservations returns the liquidity held by won, unfinished orders against a resolved
@@ -137,7 +136,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 	}
 	configuredDirection = qs.configuredPairInScope(q)
 	if !qs.canQuote() {
-		observability.Log(ctx).V(1).Info("declining quote: transaction nonce lane unavailable", "quoteId", q.QuoteID)
+		observability.Log(ctx).V(1).Info("declining quote: execution lane unavailable", "quoteId", q.QuoteID)
 		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil
 	}
 	if parsed == nil {

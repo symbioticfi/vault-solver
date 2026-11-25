@@ -14,23 +14,36 @@ import (
 func TestBackendReadsAwardedExecutableOrders(t *testing.T) {
 	order, _, _ := connectorExecutionAward(common.HexToAddress("0x10"))
 	row := awardRow(t, order)
-	requests := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
-		if r.URL.Path != "/api/v1/orders" || r.Method != http.MethodGet || r.URL.Query().Get("filler") != strings.ToLower(order.Filler.Hex()) || r.URL.Query().Get("orderStatus") != "open" || r.URL.Query().Get("limit") != "100" {
-			t.Errorf("unexpected awarded-order request: %s %s", r.Method, r.URL)
+	filler := strings.ToLower(order.Filler.Hex())
+	for _, repeat := range []bool{false, true} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			query := r.URL.Query()
+			if r.URL.Path != "/api/v1/orders" || r.Method != http.MethodGet || query.Get("filler") != filler ||
+				query.Get("orderStatus") != "open" || query.Get("limit") != "100" || query.Get("sortKey") != "createdAt" || query.Get("sort") != "asc" {
+				t.Errorf("unexpected award request: %s %s", r.Method, r.URL)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			cursor := ""
+			if query.Get("cursor") == "" || repeat {
+				cursor = "page-two"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"orders": []rfqbackend.OrdersResponseOrdersInner{row}, "cursor": cursor})
+		}))
+		rows, err := newBackendClient(server.URL).orders(t.Context(), filler)
+		server.Close()
+		if repeat {
+			if err == nil || len(rows) != 0 {
+				t.Fatalf("repeated cursor returned partial results: %v", err)
+			}
+			continue
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{"orders": []rfqbackend.OrdersResponseOrdersInner{row}})
-	}))
-	defer server.Close()
-	rows, err := newBackendClient(server.URL).orders(t.Context(), strings.ToLower(order.Filler.Hex()))
-	if err != nil || len(rows) != 1 || requests != 1 {
-		t.Fatalf("requests=%d rows=%d error=%v", requests, len(rows), err)
-	}
-	decoded, _, err := decodeOrder(rows[0], order.Filler)
-	if err != nil || decoded.Request.AmountIn.Cmp(order.Request.AmountIn) != 0 {
-		t.Fatalf("awarded amount changed: %v", err)
+		if err != nil || len(rows) != 2 {
+			t.Fatalf("expected both award pages, got %d: %v", len(rows), err)
+		}
+		decoded, _, err := decodeOrder(rows[0], order.Filler)
+		if err != nil || decoded.Request.AmountIn.Cmp(order.Request.AmountIn) != 0 {
+			t.Fatalf("awarded amount changed: %v", err)
+		}
 	}
 }
 

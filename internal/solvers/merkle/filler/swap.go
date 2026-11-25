@@ -166,7 +166,7 @@ func (e *Engine) prepareSwap(ctx context.Context, swap Swap, listed []discounts.
 		// A connector pays at most its funding not yet spent by this lane: one below the order
 		// output can only take part in a split.
 		single := source
-		if single.MaxAssets = e.unreserved(source, swap.TokenOut); single.MaxAssets.Cmp(swap.MinAmountOut) < 0 {
+		if single.MaxAssets = e.Unreserved(source, swap.TokenOut, ""); single.MaxAssets.Cmp(swap.MinAmountOut) < 0 {
 			continue
 		}
 		// Keep an executable single-connector fill when one can settle the order.
@@ -184,7 +184,7 @@ func (e *Engine) prepareSwap(ctx context.Context, swap Swap, listed []discounts.
 		miss(source.Venue.Hex(), err)
 	}
 	if swap.MaxRoutes > 1 {
-		legs, err := e.Split(ctx, routes, swap.AmountIn, swap.MinAmountOut, swap.MaxRoutes, observed)
+		legs, err := e.Split(ctx, routes, swap.AmountIn, swap.MinAmountOut, swap.MaxRoutes, observed, "", e.Inventory)
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
