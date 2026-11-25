@@ -8,7 +8,6 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -454,30 +453,8 @@ func declineSkips(ctx context.Context, decision, msg string, skips []types.Offer
 	for i, skip := range skips {
 		reasons[i] = skip.String()
 	}
-	checks, examples := summarizeSkips(reasons)
+	checks, examples := observability.SummarizeReasons(reasons, observability.MaxReasonExamples)
 	debug.Info(msg, "decision", decision, "skipped", len(skips), "checks", checks, "examples", examples)
-}
-
-// maxSkipExamples caps the reasons one summary line carries verbatim.
-const maxSkipExamples = 20
-
-// skipValues matches the values inside a reason (quoted text, hex, numbers), masked to group reasons
-// by the check that produced them.
-var skipValues = regexp.MustCompile(`"[^"]*"|0x[0-9a-fA-F]+|[0-9]+`)
-
-// summarizeSkips counts reasons per check and keeps the first maxSkipExamples verbatim, followed by
-// "N more" when some were left out.
-func summarizeSkips(reasons []string) (checks map[string]int, examples []string) {
-	checks = make(map[string]int)
-	for _, reason := range reasons {
-		checks[skipValues.ReplaceAllString(reason, "#")]++
-	}
-	n := min(len(reasons), maxSkipExamples)
-	examples = reasons[:n:n] // full slice: appending "N more" must not overwrite reasons[n]
-	if more := len(reasons) - n; more > 0 {
-		examples = append(examples, fmt.Sprintf("%d more", more))
-	}
-	return checks, examples
 }
 
 // offerOnAuction validates, signs and submits one strategy offer under its own auction span. A true

@@ -3,8 +3,6 @@ package bridgefacilitator
 import (
 	"context"
 	"errors"
-	"fmt"
-	"maps"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -389,36 +387,8 @@ func TestRefreshTargetsAndHydrate_DiscoversFactoryEntityAfterEmptyStartup(t *tes
 	}
 }
 
-func TestSummarizeSkipsGroupsAndCaps(t *testing.T) {
-	var reasons []string
-	for i := range maxSkipExamples + 5 {
-		reasons = append(reasons, fmt.Sprintf("auction %d: status %q is not open or solvable", i, "settled"))
-	}
-	reasons = append(reasons, "auction 99 adapter 0xab: principal 50 is below minAssets 100")
-
-	checks, examples := summarizeSkips(reasons)
-	wantChecks := map[string]int{
-		"auction #: status # is not open or solvable":           maxSkipExamples + 5,
-		"auction # adapter #: principal # is below minAssets #": 1,
-	}
-	if !maps.Equal(checks, wantChecks) {
-		t.Fatalf("checks = %v, want %v", checks, wantChecks)
-	}
-	if len(examples) != maxSkipExamples+1 || examples[0] != reasons[0] || examples[maxSkipExamples] != "6 more" {
-		t.Fatalf("examples = %q, want the first %d reasons then \"6 more\"", examples, maxSkipExamples)
-	}
-	if reasons[maxSkipExamples] != fmt.Sprintf("auction %d: status %q is not open or solvable", maxSkipExamples, "settled") {
-		t.Fatal("summary overwrote the caller's reasons")
-	}
-
-	checks, examples = summarizeSkips(reasons[:2])
-	if len(checks) != 1 || len(examples) != 2 {
-		t.Fatalf("under the cap: checks = %v, examples = %q", checks, examples)
-	}
-}
-
 func TestDeclineSkipsLogsOnlyAtDebug(t *testing.T) {
-	skips := make([]types.OfferSkip, maxSkipExamples+3)
+	skips := make([]types.OfferSkip, observability.MaxReasonExamples+3)
 	for i := range skips {
 		skips[i] = types.OfferSkip{AuctionID: int64(i), Reason: "maxRate is unresolved"}
 	}
