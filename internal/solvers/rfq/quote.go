@@ -2,6 +2,7 @@ package rfq
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"slices"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 	liquidgreedy "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies/greedy"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies"
@@ -87,6 +89,7 @@ var quoteDecisionOutcomes = [...]quoteDecisionOutcome{
 type quoteDecision struct {
 	response          *quoteResponse
 	outcome           quoteDecisionOutcome
+	reason            string // the failed check of a decline, with its values
 	pairInScope       bool
 	metricPairInScope bool
 }
@@ -114,7 +117,7 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (decision qu
 			// A zero outcome means the pipeline panicked: end the span without recording a decision
 			// it never reached.
 			if decision.response == nil && decision.outcome != "" {
-				observability.Decline(ctx, "no_quote", string(decision.outcome))
+				observability.Decline(ctx, "no_quote", string(decision.outcome)+": "+decision.reason)
 			}
 			end(nil)
 		}
@@ -136,38 +139,41 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 	}
 	configuredDirection = qs.configuredPairInScope(q)
 	if !qs.canQuote() {
-		observability.Log(ctx).V(1).Info("declining quote: execution lane unavailable", "quoteId", q.QuoteID)
-		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil
+		return declineQuote(ctx, q.QuoteID, quoteDecisionLaneUnavailable, "execution lane unavailable",
+			"transaction nonce lane is not ready"), nil
 	}
-	if parsed == nil {
-		observability.Log(ctx).V(1).Info("declining quote: not quotable", "quoteId", q.QuoteID, "type", q.Type)
-		return quoteDecision{outcome: quoteDecisionNotQuotable}, nil
+	if parsed.declined != "" {
+		return declineQuote(ctx, q.QuoteID, quoteDecisionNotQuotable, "not quotable", parsed.declined), nil
 	}
 	if !qs.tokenPolicy.Allows(parsed.req.TokenIn) {
-		observability.Log(ctx).V(1).Info("declining quote: input token out of scope",
-			"quoteId", q.QuoteID, "scope", qs.tokenPolicy.Scope())
-		return quoteDecision{outcome: quoteDecisionNotQuotable}, nil
+		return declineQuote(ctx, q.QuoteID, quoteDecisionNotQuotable, "input token out of scope",
+			"tokenIn is outside token scope "+string(qs.tokenPolicy.Scope())), nil
 	}
 	if minIn, ok := qs.minAmountsIn[parsed.req.TokenIn]; ok && parsed.req.Amount.Cmp(minIn) < 0 {
-		observability.Log(ctx).V(1).Info("declining quote: input amount below configured minimum",
-			"quoteId", q.QuoteID)
-		return quoteDecision{outcome: quoteDecisionBelowMinimum}, nil
+		return declineQuote(ctx, q.QuoteID, quoteDecisionBelowMinimum, "input amount below configured minimum",
+			fmt.Sprintf("amount in %s is below configured minimum %s", parsed.req.Amount, minIn)), nil
 	}
 	req, inv := parsed.req, qs.whitelist.filter(parsed.inv)
+	if len(inv) == 0 {
+		return declineQuote(ctx, q.QuoteID, quoteDecisionNoCandidates, "no whitelisted adapters",
+			fmt.Sprintf("none of %d resolved inventories uses a whitelisted adapter", len(parsed.inv))), nil
+	}
 	inv = bestRouteInventory(inv)
 	if !qs.discountsEnabled {
-		inv = slices.DeleteFunc(slices.Clone(inv), func(item solverInventory) bool { return item.DiscountID != nil })
-	}
-	if len(inv) == 0 {
-		observability.Log(ctx).V(1).Info("declining quote: no whitelisted adapters", "quoteId", q.QuoteID)
-		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
+		direct := slices.DeleteFunc(slices.Clone(inv), func(item solverInventory) bool { return item.DiscountID != nil })
+		if len(direct) == 0 {
+			return declineQuote(ctx, q.QuoteID, quoteDecisionNoCandidates, "discounts disabled",
+				fmt.Sprintf("all %d whitelisted inventories are discounts and discounts are disabled", len(inv))), nil
+		}
+		inv = direct
 	}
 
 	requireSingleRoute := qs.tokenPolicy.RequiresSingleRoute(req.TokenIn)
-	candidates := qs.snapshotCandidates(ctx, inv, req)
+	drops := newInventoryDrops(ctx)
+	candidates := qs.snapshotCandidates(ctx, inv, req, drops.trace)
 	if len(candidates) == 0 {
-		observability.Log(ctx).V(1).Info("declining quote: no viable LiquidLane candidates", "quoteId", q.QuoteID)
-		return quoteDecision{outcome: quoteDecisionNoCandidates}, nil
+		return declineQuote(ctx, q.QuoteID, quoteDecisionNoCandidates, "no viable LiquidLane candidates",
+			fmt.Sprintf("no candidates from %d inventories, dropped: %s", len(inv), drops)), nil
 	}
 	// Cached route validation and the authenticated snapshot establish a known inventory pair.
 	// This is not a promise that the requested amount/strategy can be quoted.
@@ -179,8 +185,7 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: strategy: %w", err)
 	}
 	if out.Decision != types.DecisionQuote {
-		observability.Log(ctx).V(1).Info("declining quote: strategy declined", "quoteId", q.QuoteID, "reason", out.Reason)
-		return quoteDecision{outcome: quoteDecisionStrategyDeclined}, nil
+		return declineQuote(ctx, q.QuoteID, quoteDecisionStrategyDeclined, "strategy declined", out.Reason), nil
 	}
 	plan, err := strategies.FillPlanFromQuote(input, out)
 	if err != nil {
@@ -188,8 +193,8 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 	}
 	traceAdapter(ctx, plan.Legs)
 	if !qs.canQuote() {
-		observability.Log(ctx).V(1).Info("declining quote: transaction nonce lane no longer available", "quoteId", q.QuoteID)
-		return quoteDecision{outcome: quoteDecisionLaneUnavailable}, nil
+		return declineQuote(ctx, q.QuoteID, quoteDecisionLaneUnavailable, "transaction nonce lane no longer available",
+			"transaction nonce lane stopped being ready during planning"), nil
 	}
 
 	response := &quoteResponse{
@@ -209,24 +214,45 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 	}, nil
 }
 
+// declineQuote logs a quote decline at V(1) with the failed check, which it also keeps for the span.
+func declineQuote(ctx context.Context, quoteID string, outcome quoteDecisionOutcome, message, reason string) quoteDecision {
+	observability.Log(ctx).V(1).Info("declining quote: "+message, "quoteId", quoteID, "reason", reason)
+	return quoteDecision{outcome: outcome, reason: reason}
+}
+
 // snapshotCandidates prices the backend snapshot and subtracts local reservations without I/O.
+// Each dropped inventory item is declined on trace with the failed check.
 func (qs *quoteService) snapshotCandidates(
-	ctx context.Context, inv []solverInventory, req strategyRequest,
+	ctx context.Context, inv []solverInventory, req strategyRequest, trace liquidstrategies.DecisionTrace,
 ) (candidates []liquidlane.QuoteCandidate) {
 	_, end := tracer.Start(ctx, "rfq.quote.snapshot")
 	defer end(nil)
-	inv = slices.DeleteFunc(slices.Clone(inv), func(item solverInventory) bool {
-		return item.TokenIn != req.TokenIn || item.TokenOut != req.TokenOut || item.Vault == (common.Address{})
-	})
+	matching := make([]solverInventory, 0, len(inv))
+	for _, item := range inv {
+		switch {
+		// Only the configured adapter is named: the pair is unproven request data until it matches.
+		case item.TokenIn != req.TokenIn || item.TokenOut != req.TokenOut:
+			trace.Decline("inventory", "inventory pair is not the order pair", "adapter", item.Adapter)
+		case item.Vault == (common.Address{}):
+			trace.Decline("inventory", "inventory has no resolved vault", "adapter", item.Adapter)
+		default:
+			matching = append(matching, item)
+		}
+	}
 	var reservations liquidlane.CapacityReservations
 	if qs.reservations != nil {
-		reservations = qs.reservations("", inv)
+		reservations = qs.reservations("", matching)
 	}
-	allocated := liquidgreedy.AllocateInventoryCapacity(inv, reservations, 0)
+	allocated := liquidgreedy.AllocateInventoryCapacity(matching, reservations, 0)
+	declineUnallocated(trace, matching, allocated, reservations)
 	for _, item := range allocated {
-		if candidate := liquidgreedy.NewQuoteCandidate(item, item.MaxAssets); candidate != nil {
-			candidates = append(candidates, *candidate)
+		candidate := liquidgreedy.NewQuoteCandidate(item, item.MaxAssets)
+		if candidate == nil {
+			trace.Decline("inventory", "candidate prices no output", "route", item.ID,
+				"maxAssets", item.MaxAssets, "rate", item.MaxRate, "price", item.Price, "discount", item.Discount)
+			continue
 		}
+		candidates = append(candidates, *candidate)
 	}
 	return candidates
 }

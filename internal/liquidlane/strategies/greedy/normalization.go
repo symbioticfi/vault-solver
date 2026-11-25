@@ -4,6 +4,7 @@ import (
 	"math/big"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 )
 
 // NewQuoteCandidate converts an inventory alternative and its already-buffered
@@ -49,13 +50,16 @@ func NewQuoteCandidate(
 }
 
 // NormalizeOracleInventory turns amount-independent RFQ inventory into exact-input
-// greedy candidates using current, per-physical-route adapter quotes.
+// greedy candidates using current, per-physical-route adapter quotes. Each source it drops is
+// declined on trace with the failed check and its values.
 func NormalizeOracleInventory(
 	amountIn *big.Int,
 	sources []liquidlane.Inventory,
 	physical []liquidlane.FillQuote,
+	trace strategies.DecisionTrace,
 ) []liquidlane.QuoteCandidate {
 	if amountIn == nil || amountIn.Sign() <= 0 {
+		trace.Decline("inventory", "amount in is not positive", "amountIn", amountIn, "sources", len(sources))
 		return nil
 	}
 	quotes := make(map[liquidlane.RouteID]liquidlane.FillQuote, len(physical))
@@ -70,16 +74,25 @@ func NormalizeOracleInventory(
 	out := make([]liquidlane.QuoteCandidate, 0, len(sources))
 	for _, source := range sources {
 		quote, ok := quotes[source.ID]
-		if !ok || source.MaxAssets == nil || source.MaxAssets.Sign() <= 0 ||
-			quote.MaxAssets == nil || quote.MaxAssets.Sign() <= 0 {
+		switch {
+		case !ok:
+			trace.Decline("inventory", "no adapter quote with output for amount in", "route", source.ID, "amountIn", amountIn)
+			continue
+		case source.MaxAssets == nil || source.MaxAssets.Sign() <= 0:
+			trace.Decline("inventory", "inventory capacity is not positive", "route", source.ID, "maxAssets", source.MaxAssets)
+			continue
+		case quote.MaxAssets == nil || quote.MaxAssets.Sign() <= 0:
+			trace.Decline("inventory", "adapter capacity is not positive", "route", source.ID, "maxAssets", quote.MaxAssets)
 			continue
 		}
 		capacity := liquidlane.CloneBig(source.MaxAssets)
 		if quote.MaxAssets.Cmp(capacity) < 0 {
 			capacity.Set(quote.MaxAssets)
 		}
-		discount := payoutDiscount(source, quote)
+		discount, reason := payoutDiscount(source, quote)
 		if discount == nil {
+			trace.Decline("inventory", reason, "route", source.ID,
+				"discount", source.Discount, "adapterMinDiscount", quote.MinDiscount)
 			continue
 		}
 		// Price from the amount-specific quote, which is fresher than a snapshot price. A floored
@@ -92,7 +105,13 @@ func NormalizeOracleInventory(
 			source.AdapterMinDiscount = discount
 		}
 		candidate := NewQuoteCandidate(source, capacity)
-		if candidate == nil || seen[candidate.ID] {
+		if candidate == nil {
+			trace.Decline("inventory", "candidate prices no output", "route", source.ID,
+				"capacity", capacity, "price", source.Price, "discount", discount)
+			continue
+		}
+		if seen[candidate.ID] {
+			trace.Decline("inventory", "duplicate candidate", "candidate", candidate.ID)
 			continue
 		}
 		seen[candidate.ID] = true
@@ -101,21 +120,25 @@ func NormalizeOracleInventory(
 	return out
 }
 
-// payoutDiscount is the discount source pays at in the adapter's current state, or nil when the
-// source cannot execute. A signed discount below the adapter's minimum reverts. A direct swap is
-// bounded by the adapter's current minimum; a higher minimum the inventory was offered at stands.
-func payoutDiscount(source liquidlane.Inventory, quote liquidlane.FillQuote) *big.Int {
+// payoutDiscount is the discount source pays at in the adapter's current state, or nil and the
+// failed check when the source cannot execute. A signed discount below the adapter's minimum
+// reverts. A direct swap is bounded by the adapter's current minimum; a higher minimum the
+// inventory was offered at stands.
+func payoutDiscount(source liquidlane.Inventory, quote liquidlane.FillQuote) (*big.Int, string) {
 	if quote.MinDiscount == nil {
-		return nil
+		return nil, "adapter quote has no minimum discount"
 	}
 	if source.DiscountID != nil {
-		if source.Discount == nil || source.Discount.Cmp(quote.MinDiscount) < 0 {
-			return nil
+		if source.Discount == nil {
+			return nil, "signed discount has no value"
 		}
-		return source.Discount
+		if source.Discount.Cmp(quote.MinDiscount) < 0 {
+			return nil, "signed discount is below adapter minimum discount"
+		}
+		return source.Discount, ""
 	}
 	if source.AdapterMinDiscount != nil && source.AdapterMinDiscount.Cmp(quote.MinDiscount) > 0 {
-		return source.AdapterMinDiscount
+		return source.AdapterMinDiscount, ""
 	}
-	return quote.MinDiscount
+	return quote.MinDiscount, ""
 }

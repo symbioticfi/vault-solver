@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/parse"
@@ -388,14 +389,21 @@ func (s *store) scheduleEstimateRetry(orderID string, limit int, retryAt time.Ti
 
 // reserve replaces an active order's reservation. It refuses an order that has already left the
 // active set, so a plan finishing after a terminal transition cannot leak capacity.
-func (s *store) reserve(orderID string, reservations liquidlane.CapacityReservations) bool {
+func (s *store) reserve(orderID string, reservations liquidlane.CapacityReservations) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec, ok := s.orders[orderID]
-	if !ok || !rec.Status.active() || rec.Status == statusNonceUsed {
-		return false
+	switch {
+	case !ok:
+		return errors.New("order is no longer tracked")
+	case !rec.Status.active():
+		return errors.Errorf("order status %s is not active", rec.Status)
+	case rec.Status == statusNonceUsed:
+		return errors.New("order nonce is already used")
+	case !s.reservations.Set(orderID, reservations):
+		return errors.Errorf("reservations %v are not valid", reservations)
 	}
-	return s.reservations.Set(orderID, reservations)
+	return nil
 }
 
 // reserved reports whether an order already holds a reservation.

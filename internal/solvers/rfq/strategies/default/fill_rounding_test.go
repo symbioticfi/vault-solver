@@ -33,7 +33,7 @@ func TestBuildFillPlanSettlesAwardQuotedAtExactPayout(t *testing.T) {
 		Inventory: liquidlane.DirectInventory(route, capacity, nil), AmountIn: amountIn,
 		GrossAmountOut: gross, MaxAmountOut: required, MinDiscount: discount,
 	}
-	candidates := liquidgreedy.NormalizeOracleInventory(amountIn, []liquidlane.Inventory{source}, []liquidlane.FillQuote{physical})
+	candidates := liquidgreedy.NormalizeOracleInventory(amountIn, []liquidlane.Inventory{source}, []liquidlane.FillQuote{physical}, nil)
 	if len(candidates) != 1 {
 		t.Fatalf("candidates = %d, want 1", len(candidates))
 	}

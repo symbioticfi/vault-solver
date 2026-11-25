@@ -2,6 +2,7 @@ package rfq
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"sync"
 	"sync/atomic"
@@ -15,6 +16,7 @@ import (
 	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
+	liquidstrategies "github.com/symbioticfi/vault-solver/internal/liquidlane/strategies"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/rfq/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/tokenpolicy"
@@ -98,11 +100,12 @@ type fillReader interface {
 		tokenOut common.Address,
 		amountIn *big.Int,
 		pending pendingReservations,
+		trace liquidstrategies.DecisionTrace,
 	) ([]liquidlane.QuoteCandidate, error)
 	latestBlock(ctx context.Context) (uint64, time.Time, error)
 	readPermissionedVaultInventories(
 		ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,
-	) ([]solverInventory, error)
+	) (authorized []solverInventory, read int, err error)
 	// resolveVaults returns the config entries with Vault/Asset resolved from the adapter at startup
 	// (config carries only adapter addresses).
 	resolveVaults(ctx context.Context, vaults []recoveryVault) ([]recoveryVault, error)
@@ -353,8 +356,15 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 		return // transient; retried next cycle
 	}
 	if exec == nil {
-		observability.Decline(ctx, "fill_skipped", "order is no longer executable")
 		e.reconcileTerminalStatus(ctx, orderID)
+		status := orderStatus("untracked")
+		if latest := e.store.order(orderID); latest != nil {
+			status = latest.Status
+		}
+		reason := "backend lists no open order for filler " + lowerAddr(e.executor) +
+			"; local status after reconcile " + string(status)
+		observability.Decline(ctx, "fill_skipped", reason)
+		observability.Log(ctx).V(1).Info("fill skipped: order is no longer executable", "reason", reason)
 		return
 	}
 	order, err := decodeOrder(exec.encodedOrder)
@@ -382,10 +392,7 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	e.boundByOrderDeadline(orderID, order, chainTime, chainObservedAt)
 
 	selected, err := e.buildFillPlan(ctx, orderID, exec, order, outputToken, required, chainBlock)
-	if err != nil || selected == nil {
-		if err == nil {
-			err = errors.New("strategy returned no plan and no reason")
-		}
+	if err != nil {
 		e.fail(ctx, orderID, "strategy fill plan: "+err.Error())
 		return
 	}
@@ -398,7 +405,15 @@ func (e *executionService) submitOrder(ctx context.Context, orderID string) {
 	deadline := rfqFillDeadline(orderDeadline, discountValidUntil)
 	submissionDeadline, ok := liquidlane.SubmissionDeadline(deadline, chainTime, chainObservedAt, e.now())
 	if !ok {
-		e.fail(ctx, orderID, "fill execution deadline elapsed before submission")
+		source := "order deadline"
+		if deadline.Before(orderDeadline) {
+			source = "discount validUntil"
+		}
+		wallNow := e.now()
+		e.fail(ctx, orderID, fmt.Sprintf(
+			"fill execution deadline elapsed before submission: %s %s, chain time %s, wall time %s, planning took %s",
+			source, deadline.UTC().Format(time.RFC3339), chainTime.UTC().Format(time.RFC3339),
+			wallNow.UTC().Format(time.RFC3339), wallNow.Sub(chainObservedAt)))
 		return
 	}
 
@@ -756,14 +771,16 @@ func (e *executionService) buildFillPlan(
 		return e.store.pendingReservations(orderID, inventory)
 	}
 
+	summary := fillInventorySummary{vaults: len(e.vaults), drops: newInventoryDrops(ctx)}
 	// Direct inventories are filtered to adapters this executor is authorized to fill through. Skipped
 	// when no candidate vaults are configured (a discount-only solver), leaving discount legs only.
 	inv := make([]solverInventory, 0, len(e.vaults)+1)
 	if len(e.vaults) > 0 {
-		direct, derr := e.reader.readPermissionedVaultInventories(ctx, e.executor, order.Request.TokenIn, e.vaults)
+		direct, read, derr := e.reader.readPermissionedVaultInventories(ctx, e.executor, order.Request.TokenIn, e.vaults)
 		if derr != nil {
 			return nil, derr
 		}
+		summary.directRead, summary.directAuthorized = read, len(direct)
 		// Read after the header, so the state reflects at least snapshotBlock.
 		for index := range direct {
 			direct[index].BlockNumber = snapshotBlock
@@ -772,8 +789,12 @@ func (e *executionService) buildFillPlan(
 	}
 	// Discount inventories use the internal-only discounts API; external solvers skip it (adapters alone).
 	if e.discountsEnabled {
-		inv = append(inv, e.discountInventories(ctx, order.Request.TokenIn, inv)...)
+		var discounted []solverInventory
+		discounted, summary.discountsErr = e.discountInventories(ctx, order.Request.TokenIn, inv, summary.drops.trace)
+		summary.discounts = len(discounted)
+		inv = append(inv, discounted...)
 	}
+	summary.inventory = len(inv)
 	req := strategyRequest{
 		RequestID: exec.quoteID, QuoteID: exec.quoteID,
 		TokenIn: order.Request.TokenIn, TokenOut: outputToken, Amount: order.Request.AmountIn,
@@ -781,16 +802,20 @@ func (e *executionService) buildFillPlan(
 	requireSingleRoute := e.tokenPolicy.RequiresSingleRoute(req.TokenIn)
 	var candidates []liquidlane.QuoteCandidate
 	if len(inv) > 0 {
-		candidates, err = e.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount, pending)
+		candidates, err = e.reader.readQuoteCandidates(ctx, inv, req.TokenIn, req.TokenOut, req.Amount, pending, summary.drops.trace)
 		if err != nil {
 			return nil, errors.Errorf("fill: read LiquidLane candidates: %w", err)
 		}
 	}
+	summary.candidates = len(candidates)
 	exec.pairInScope = e.observeAwardPair(ctx, orderID, req, required, candidates)
 	input := newFillInput(e.chainID, e.executor, req, candidates, required, requireSingleRoute, e.now())
 	plan, err = e.strategy.BuildFillPlan(ctx, input)
-	if err != nil || plan == nil {
-		return plan, err
+	if err == nil && plan == nil {
+		err = errors.New("strategy returned no plan and no reason")
+	}
+	if err != nil {
+		return nil, errors.Errorf("%w (%s)", err, summary)
 	}
 	if verr := validateSingleRoute(input.RequireSingleRoute, len(plan.Legs)); verr != nil {
 		return nil, errors.Errorf("fill: strategy: %w", verr)
@@ -799,8 +824,8 @@ func (e *executionService) buildFillPlan(
 	if err != nil {
 		return nil, err
 	}
-	if !e.store.reserve(orderID, reservations) {
-		return nil, errors.New("fill: order is no longer active")
+	if err := e.store.reserve(orderID, reservations); err != nil {
+		return nil, errors.Errorf("fill: reserve capacity: %w", err)
 	}
 	return plan, nil
 }
@@ -916,14 +941,15 @@ func rfqFillDeadline(orderDeadline, discountValidUntil time.Time) time.Time {
 // discountInventories fetches offered discounts and turns those redeemable
 // against tokenIn into discount-leg candidates: keep discounts whose adapter is whitelisted, whose
 // tokenToRedeem == tokenIn, and whose adapter is not already permissioned. Solver-side candidate
-// normalization later filters collateral to the order's tokenOut.
+// normalization later filters collateral to the order's tokenOut. Each dropped offer is declined on
+// trace; a list failure is logged and returned so the fill can proceed on direct inventory alone.
 func (e *executionService) discountInventories(
-	ctx context.Context, tokenIn common.Address, direct []solverInventory,
-) []solverInventory {
+	ctx context.Context, tokenIn common.Address, direct []solverInventory, trace liquidstrategies.DecisionTrace,
+) ([]solverInventory, error) {
 	resp, err := e.backend.listDiscounts(ctx)
 	if err != nil {
 		backendErrorLogger(observability.Log(ctx), err).Error(err, "fill: list discounts")
-		return nil
+		return nil, err
 	}
 	seen := make(map[common.Address]bool, len(direct))
 	for _, d := range direct {
@@ -933,19 +959,20 @@ func (e *executionService) discountInventories(
 	var out []solverInventory
 	offers, issues := discounts.LiveOffers(resp, now)
 	for _, issue := range issues {
-		observability.Log(ctx).V(1).Info(
-			"recover: skip invalid discount", "discountId", issue.DiscountID, "error", issue.Err.Error(),
-		)
+		trace.Decline("inventory", "discount offer is invalid", "discountId", issue.DiscountID, "error", issue.Err.Error())
 	}
 	for _, offer := range offers {
-		if offer.TokenToRedeem != tokenIn {
-			continue
-		}
 		adapter := offer.Adapter
-		if !e.whitelist.allows(adapter) {
+		switch {
+		case offer.TokenToRedeem != tokenIn:
+			trace.Decline("inventory", "discount tokenToRedeem is not the order tokenIn", "discountId", offer.DiscountID,
+				"tokenToRedeem", offer.TokenToRedeem, "tokenIn", tokenIn)
 			continue
-		}
-		if seen[adapter] {
+		case !e.whitelist.allows(adapter):
+			trace.Decline("inventory", "discount adapter is not whitelisted", "discountId", offer.DiscountID, "adapter", adapter)
+			continue
+		case seen[adapter]:
+			trace.Decline("inventory", "discount adapter is already a direct inventory", "discountId", offer.DiscountID, "adapter", adapter)
 			continue
 		}
 		route := liquidlane.NewRoute(
@@ -961,7 +988,7 @@ func (e *executionService) discountInventories(
 		item.BlockNumber = offer.BlockNumber
 		out = append(out, item)
 	}
-	return out
+	return out, nil
 }
 
 // errDiscountAdapterMismatch marks a backend-resolved discount whose adapter differs from the
