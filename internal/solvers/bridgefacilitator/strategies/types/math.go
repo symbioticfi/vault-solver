@@ -75,12 +75,7 @@ func ExpectedReturn(principal *big.Int, rateBps float64, basisSeconds int64) *bi
 // competitive rate the adapter allows, rounded up so the realised yield is never a hair below the floor
 // (which would revert the fill). Returns 0 when there is no floor (minYieldPpm <= 0).
 func MinYieldReturn(principal, minYieldPpm *big.Int) *big.Int {
-	if principal == nil || principal.Sign() <= 0 || minYieldPpm == nil || minYieldPpm.Sign() <= 0 {
-		return new(big.Int)
-	}
-	num := new(big.Int).Mul(principal, minYieldPpm)
-	num.Add(num, bigCeilBias)
-	return num.Quo(num, bigYieldPpmScale)
+	return threefrates.MinYieldReturn(principal, minYieldPpm, yieldPpmScale)
 }
 
 // MeetsMinYield reports whether expectedReturn on principal clears the adapter's on-chain

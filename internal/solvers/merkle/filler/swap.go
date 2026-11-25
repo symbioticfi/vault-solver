@@ -74,7 +74,7 @@ func (b builtSwap) validUntil() time.Time {
 func (e *Engine) buildSwap(ctx context.Context, swap Swap, legs []Leg, resolve connector.ResolveDiscount, envelope Envelope) (builtSwap, error) {
 	requests := make([]connector.Request, len(legs))
 	for i, leg := range legs {
-		requests[i] = leg.Request(swap.TokenIn, leg.AmountIn, swap.TokenOut, nil)
+		requests[i] = leg.Request(swap.TokenIn, leg.AmountIn, swap.TokenOut)
 	}
 	prepared, err := e.Workflow.PrepareLegs(ctx, requests, resolve)
 	if err != nil {

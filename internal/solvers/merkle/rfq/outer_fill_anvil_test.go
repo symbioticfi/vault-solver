@@ -42,9 +42,16 @@ import (
 // All settlement contracts, including AccessManager, execute pinned canonical bytecode.
 // Only ERC20s, factories/root/oracle registries and the price feed are fixture contracts.
 func TestAnvilConnectorOuterFillCanonicalBoundaries(t *testing.T) {
-	for _, name := range []string{"valid fill", "bad signed terms", "bad discount signature", "bad order signature", "insufficient funding at simulation", "native recipe check", "unauthorized EOA", "manager fill", "manager invalid signature", "manager revoked"} {
+	for _, name := range []string{"valid fill", "one-unit payout surplus", "bad signed terms", "bad discount signature", "bad order signature", "insufficient funding at simulation", "native recipe check", "unauthorized EOA", "manager fill", "manager invalid signature", "manager revoked"} {
 		t.Run(name, func(t *testing.T) {
 			f := newOuterFillEVM(t)
+			const connectorPayout = 90
+			orderOutput := int64(connectorPayout)
+			if name == "one-unit payout surplus" {
+				orderOutput--
+				f.order.Outputs[0].Amount = big.NewInt(orderOutput)
+				f.protocolSignature = signOuterFillOrder(t, f.key, f.reactor, &f.order)
+			}
 			if strings.HasPrefix(name, "manager ") {
 				manager := f.deploy("AccessManager", f.signer)
 				f.send(f.signer, f.selected.RecipeExecutor, "RecipeExecutor", "setCaller", manager)
@@ -99,7 +106,7 @@ func TestAnvilConnectorOuterFillCanonicalBoundaries(t *testing.T) {
 			if f.reader.outerCalls != 1 {
 				t.Fatalf("full settlement was not simulated: calls=%d err=%v", f.reader.outerCalls, err)
 			}
-			if name != "valid fill" && name != "manager fill" {
+			if name != "valid fill" && name != "manager fill" && name != "one-unit payout surplus" {
 				if err == nil || len(data) != 0 || len(f.reader.revertData) < 4 {
 					t.Fatalf("canonical settlement accepted %s: data=%x revert=%x err=%v", name, data, f.reader.revertData, err)
 				}
@@ -135,11 +142,14 @@ func TestAnvilConnectorOuterFillCanonicalBoundaries(t *testing.T) {
 			if err != nil || len(f.reader.outerReturn) != 0 {
 				t.Fatalf("complete fill with empty return rejected: return=%x err=%v", f.reader.outerReturn, err)
 			}
+			if len(built.Legs) != 1 || built.Legs[0].AmountOut.Int64() != connectorPayout {
+				t.Fatalf("expected one leg with payout %d, got %+v", connectorPayout, built.Legs)
+			}
 			if !bytes.Equal(data, f.reader.outerData) || f.balance(tOut, f.account).Int64() != 90 || f.balance(tIn, f.signer).Int64() != 100 {
 				t.Fatal("simulation changed state or differed from submitted bytes")
 			}
 			receipt := f.transact(f.signer, &f.workflow.Filler, data)
-			if receipt.Status != types.ReceiptStatusSuccessful || len(receipt.Logs) == 0 || f.balance(tOut, f.recipient).Int64() != 90 || f.balance(tOut, f.account).Sign() != 0 || f.balance(tIn, f.account).Int64() != 100 || f.balance(tIn, f.signer).Sign() != 0 {
+			if receipt.Status != types.ReceiptStatusSuccessful || len(receipt.Logs) == 0 || f.balance(tOut, f.recipient).Int64() != orderOutput || f.balance(tOut, f.account).Sign() != 0 || f.balance(tIn, f.account).Int64() != 100 || f.balance(tIn, f.signer).Sign() != 0 {
 				t.Fatalf("canonical fill did not settle balances: receipt=%+v", receipt)
 			}
 		})

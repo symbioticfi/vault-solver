@@ -30,11 +30,11 @@ type Source struct {
 	Listing discounts.ListItem
 }
 
-// Request sizes the source's swap; a nil amountOut takes the connector's own payment.
-func (s Source) Request(tokenIn common.Address, amountIn *big.Int, tokenOut common.Address, amountOut *big.Int) connector.Request {
+// Request sizes the source's swap at the connector's own payment for amountIn.
+func (s Source) Request(tokenIn common.Address, amountIn *big.Int, tokenOut common.Address) connector.Request {
 	return connector.Request{
 		Venue: s.Venue, Executor: s.RecipeExecutor, DiscountID: s.DiscountID, MaxAssets: s.MaxAssets,
-		TokenIn: tokenIn, AmountIn: amountIn, TokenOut: tokenOut, AmountOut: amountOut,
+		TokenIn: tokenIn, AmountIn: amountIn, TokenOut: tokenOut,
 	}
 }
 
