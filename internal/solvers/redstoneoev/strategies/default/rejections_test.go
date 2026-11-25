@@ -1,6 +1,7 @@
 package defaultstrategy
 
 import (
+	"fmt"
 	"math/big"
 	"strings"
 	"testing"
@@ -30,8 +31,8 @@ func TestSizeLegNamesTheFailedCheck(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, rej := sizeLeg(cand, tc.price, tc.quote, accrued, full)
-			if rej == nil || rej.check != tc.want {
+			_, rej := sizeLegForTest(cand, tc.price, tc.quote, accrued, full)
+			if rej.check.String() != tc.want {
 				t.Fatalf("rejection = %v, want check %q", rej, tc.want)
 			}
 		})
@@ -39,30 +40,81 @@ func TestSizeLegNamesTheFailedCheck(t *testing.T) {
 }
 
 func TestRejectTallyCountsByCheckWithFirstExample(t *testing.T) {
-	var nilTally *rejectTally
-	nilTally.add(common.Hash{1}, nil, reject("ignored", "")) // nil-safe
-	if got := nilTally.String(); got != "no tracked positions" {
-		t.Fatalf("nil tally = %q", got)
+	if got := new(rejectTally).String(); got != "no tracked positions" {
+		t.Fatalf("empty tally = %q", got)
 	}
 
 	var tally rejectTally
 	b1, b2 := common.Address{1}, common.Address{2}
-	tally.add(common.Hash{1}, &b1, reject("position healthy at auction price", "price %d", 7))
-	tally.add(common.Hash{1}, &b2, reject("position healthy at auction price", "price %d", 8))
-	tally.add(common.Hash{2}, nil, reject("adapter has no usable quote for collateral", "positions %d", 3))
+	tally.add(common.Hash{1}, b1, &legRejection{check: checkPriceNotPositive, v: [6]*big.Int{big.NewInt(-7)}})
+	tally.add(common.Hash{1}, b2, &legRejection{check: checkPriceNotPositive, v: [6]*big.Int{big.NewInt(-8)}})
+	if !tally.needsExample(checkNoQuote) || tally.needsExample(checkPriceNotPositive) {
+		t.Fatal("needsExample must be true only before a check's first rejection")
+	}
+	tally.adapter = types.AdapterSnapshot{Address: common.Address{0xa}, Paused: true}
+	tally.add(common.Hash{2}, common.Address{}, &legRejection{check: checkNoQuote, addr: common.Address{3}, n: 3})
 	got := tally.String()
 	want := "3 rejections: 1x adapter has no usable quote for collateral (first market " + common.Hash{2}.Hex() +
-		": positions 3); 2x position healthy at auction price (first market " + common.Hash{1}.Hex() +
-		" borrower " + b1.Hex() + ": price 7)"
+		": collateral " + common.Address{3}.Hex() + ", positions 3: adapter is paused); 2x price not positive (first market " +
+		common.Hash{1}.Hex() + " borrower " + b1.Hex() + ": price -7)"
 	if got != want {
 		t.Fatalf("tally = %q\nwant    %q", got, want)
+	}
+}
+
+// Rejection text is what operators grep for; pin every check's wording.
+func TestLegRejectionText(t *testing.T) {
+	one, two, three := big.NewInt(1), big.NewInt(2), big.NewInt(3)
+	tests := []struct {
+		rej  legRejection
+		want string
+	}{
+		{legRejection{check: checkPriceNotPositive}, "price not positive: price <nil>"},
+		{legRejection{check: checkMaxRateNotPositive, v: [6]*big.Int{one}}, "adapter max rate not positive: maxRate 1"},
+		{legRejection{check: checkHealthy, v: [6]*big.Int{one, two, three, one, two, three}},
+			"position healthy at auction price: price 1, collateral 2, borrowShares 3, lltv 1, totalBorrowAssets 2, totalBorrowShares 3"},
+		{legRejection{check: checkNoCollateral, v: [6]*big.Int{one}, flag: true}, "no collateral to seize: collateral 1, allowFull true"},
+		{legRejection{check: checkSeizeZero, v: [6]*big.Int{one, two}},
+			"seize clamped to zero: collateral 1, full-debt max seize 2, adapter maxAssets <nil>"},
+		{legRejection{check: checkZeroLoanOut, v: [6]*big.Int{one, two}, n: 50}, "seize quotes zero loan out: seize 1, maxRate 2, haircutBps 50"},
+		{legRejection{check: checkProceedsBelowRepaid, v: [6]*big.Int{one, two, three}},
+			"proceeds do not cover repayment: expected loan out 1 <= repaid 2 for seize 3"},
+		{legRejection{check: checkNoAuctionPrice, addr: common.Address{1}, n: 4},
+			"no auction price for market oracle: oracle " + common.Address{1}.Hex() + ", positions 4"},
+		{legRejection{check: checkGasLimit, n: 9}, "bundle exceeds settlement gas limit: usable gas limit 9"},
+		{legRejection{check: checkBudget, v: [6]*big.Int{nil, two, three}},
+			"adapter collateral budget exceeded: consumed 0 + leg loan out 2 > maxAssets 3"},
+		{legRejection{check: checkNoMarketID, addr: common.Address{1}}, "replay leg has no market id: borrower " + common.Address{1}.Hex()},
+		{legRejection{check: checkSeizeReplay, v: [6]*big.Int{one, two}}, "seize replay rejected by Morpho state: seize 1 at price 2"},
+	}
+	for _, tc := range tests {
+		if got := tc.rej.String(); got != tc.want {
+			t.Errorf("String() = %q, want %q", got, tc.want)
+		}
+	}
+}
+
+// Rejecting a healthy position, the common case, must not allocate.
+func TestSizeLegHealthyRejectionDoesNotAllocate(t *testing.T) {
+	m := goldenMarket()
+	cand := Candidate{Market: MarketInfo{State: m}, Position: goldenBorrower()}
+	accrued := morpho.AccruedTotalBorrowAssets(m, m.LastUpdate)
+	price, q := mustBig("2000000000000000000000000000"), newQuote("1534500000000000000000", nil)
+	base := testing.AllocsPerRun(100, func() { morpho.IsLiquidatableAt(cand.Position, price, m.Lltv, accrued, m.TotalBorrowShares) })
+	got := testing.AllocsPerRun(100, func() {
+		if _, rej := sizeLegForTest(cand, price, q, accrued, SizingParams{}); rej.check != checkHealthy {
+			t.Fatalf("rejection = %v", rej)
+		}
+	})
+	if got > base {
+		t.Fatalf("sizeLeg healthy rejection allocates %.0f, liquidatability check alone %.0f", got, base)
 	}
 }
 
 func TestSelectBundleNamesGasLimitShortfall(t *testing.T) {
 	_, skip := testBundleEngine(Config{}).selectBundleWithGas(
 		[]scoredLeg{scoredFor(1, big.NewInt(1))}, nil, 1, defaultPriceUpdateFeeds)
-	if skip.code != skipNoLegs || !strings.Contains(skip.detail, "usable gas limit 0 is below") {
+	if skip.code != skipNoLegs || !strings.Contains(detailOf(skip.detail), "usable gas limit 0 is below") {
 		t.Fatalf("skip = %v, want no_legs naming the gas limit", skip)
 	}
 }
@@ -111,7 +163,7 @@ func TestPreconditionSkipNamesTheFailedCheck(t *testing.T) {
 				tc.edit(&in)
 			}
 			_, skip := s.preconditionSkip(in)
-			if skip.code != tc.code || !strings.Contains(skip.detail, tc.detail) {
+			if skip.code != tc.code || !strings.Contains(detailOf(skip.detail), tc.detail) {
 				t.Fatalf("skip = %v, want code %q with detail containing %q", skip, tc.code, tc.detail)
 			}
 		})
@@ -141,4 +193,17 @@ func TestQuoteGapNamesWhyNoQuote(t *testing.T) {
 			}
 		})
 	}
+}
+
+func sizeLegForTest(c Candidate, price *big.Int, q AdapterQuote, accrued *big.Int, sp SizingParams) (sizedLeg, legRejection) {
+	var why legRejection
+	sized, _ := sizeLeg(c, price, q, accrued, sp, &why)
+	return sized, why
+}
+
+func detailOf(d fmt.Stringer) string {
+	if d == nil {
+		return ""
+	}
+	return d.String()
 }

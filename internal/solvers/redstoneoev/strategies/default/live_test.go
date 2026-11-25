@@ -100,7 +100,7 @@ func TestLiveAPIMonitorSnapshotAndCandidates(t *testing.T) {
 	oracle := apiSnap.markets[targetMarket].Params.Oracle
 	price := apiSnap.prices[targetMarket]
 	auction := types.AuctionSnapshot{Prices: []types.AuctionPrice{{Oracle: oracle, Price: price}}}
-	cands := mon.candidates(auction, apiSnap.blockTime, types.AdapterSnapshot{}, nil)
+	cands := mon.candidates(auction, apiSnap.blockTime, types.AdapterSnapshot{}, new(rejectTally))
 	if len(cands) == 0 {
 		t.Fatal("apiMonitor.candidates returned no candidates for a snapshot position with matching oracle price")
 	}

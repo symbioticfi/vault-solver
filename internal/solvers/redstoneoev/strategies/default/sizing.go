@@ -66,25 +66,29 @@ func collForBudget(budget *big.Int, q AdapterQuote) *big.Int {
 // revert the Morpho borrowShares underflow) AND by the adapter's getMaxAssets redemption liquidity (so the
 // swap can't ask for more than the vault can allocate and revert InsufficientAllocate).
 //
-// Returns the callback leg, expected loan output, and gross loan profit (expectedLoanOut - repaid), or the
-// check that failed when the position cannot liquidate profitably here. Bundle and gas economics are
-// applied later by bundle selection and operationData.
-func sizeLeg(c Candidate, price *big.Int, q AdapterQuote, accrued *big.Int, sp SizingParams) (sizedLeg, *legRejection) {
+// Returns the callback leg, expected loan output, and gross loan profit (expectedLoanOut - repaid). On false
+// it writes the failed check to why (an out-parameter, so the hot path copies nothing when a leg sizes).
+// Bundle and gas economics are applied later by bundle selection and operationData.
+func sizeLeg(c Candidate, price *big.Int, q AdapterQuote, accrued *big.Int, sp SizingParams, why *legRejection) (sizedLeg, bool) {
 	m, p := c.Market.State, c.Position
 	if price == nil || price.Sign() <= 0 {
-		return sizedLeg{}, reject("price not positive", "price %v", price)
+		*why = legRejection{check: checkPriceNotPositive, v: [6]*big.Int{price}}
+		return sizedLeg{}, false
 	}
 	if q.MaxRate == nil || q.MaxRate.Sign() <= 0 {
-		return sizedLeg{}, reject("adapter max rate not positive", "maxRate %v", q.MaxRate)
+		*why = legRejection{check: checkMaxRateNotPositive, v: [6]*big.Int{q.MaxRate}}
+		return sizedLeg{}, false
 	}
 	if !morpho.IsLiquidatableAt(p, price, m.Lltv, accrued, m.TotalBorrowShares) {
-		return sizedLeg{}, reject("position healthy at auction price",
-			"price %v, collateral %v, borrowShares %v, lltv %v, totalBorrowAssets %v, totalBorrowShares %v",
-			price, p.Collateral, p.BorrowShares, m.Lltv, accrued, m.TotalBorrowShares)
+		// The common case: record only the check. Storing six pointers through why costs a GC write
+		// barrier each; healthyValues rebuilds them when a tally prints the example.
+		why.check = checkHealthy
+		return sizedLeg{}, false
 	}
 	target := targetSeize(p.Collateral, sp.AllowFullLiquidation)
 	if target.Sign() <= 0 {
-		return sizedLeg{}, reject("no collateral to seize", "collateral %v, allowFull %t", p.Collateral, sp.AllowFullLiquidation)
+		*why = legRejection{check: checkNoCollateral, v: [6]*big.Int{p.Collateral}, flag: sp.AllowFullLiquidation}
+		return sizedLeg{}, false
 	}
 	// LiquidationIncentiveFactor depends only on the market's lltv, so compute it ONCE here and feed it to
 	// both the full-debt clamp and the repayment quote (each recomputed it per leg before) — provably the
@@ -110,18 +114,18 @@ func sizeLeg(c Candidate, price *big.Int, q AdapterQuote, accrued *big.Int, sp S
 		}
 	}
 	if target.Sign() <= 0 {
-		return sizedLeg{}, reject("seize clamped to zero", "collateral %v, full-debt max seize %v, adapter maxAssets %v",
-			p.Collateral, maxSeize, q.MaxAssets)
+		*why = legRejection{check: checkSeizeZero, v: [6]*big.Int{p.Collateral, maxSeize, q.MaxAssets}}
+		return sizedLeg{}, false
 	}
 	expectedLoanOut := expectedLoanOutFor(target, q, sp.SwapHaircutBps)
 	if expectedLoanOut.Sign() <= 0 {
-		return sizedLeg{}, reject("seize quotes zero loan out", "seize %v, maxRate %v, haircutBps %d",
-			target, q.MaxRate, sp.SwapHaircutBps)
+		*why = legRejection{check: checkZeroLoanOut, v: [6]*big.Int{target, q.MaxRate}, n: int64(sp.SwapHaircutBps)}
+		return sizedLeg{}, false
 	}
 	repaid := morpho.RepaidAssetsForSeizeAt(target, price, lif, accrued, m.TotalBorrowShares)
 	if expectedLoanOut.Cmp(repaid) <= 0 {
-		return sizedLeg{}, reject("proceeds do not cover repayment", "expected loan out %v <= repaid %v for seize %v",
-			expectedLoanOut, repaid, target)
+		*why = legRejection{check: checkProceedsBelowRepaid, v: [6]*big.Int{expectedLoanOut, repaid, target}}
+		return sizedLeg{}, false
 	}
 	profit := new(big.Int).Sub(expectedLoanOut, repaid) // > 0 here
 	leg := selectedLeg{
@@ -129,7 +133,7 @@ func sizeLeg(c Candidate, price *big.Int, q AdapterQuote, accrued *big.Int, sp S
 		Borrower:       c.Borrower,
 		MaxSeizeAssets: target,
 	}
-	return sizedLeg{leg: leg, settlementLoanOut: settlementLoanOutFor(target, q), profit: profit}, nil
+	return sizedLeg{leg: leg, settlementLoanOut: settlementLoanOutFor(target, q), profit: profit}, true
 }
 
 func targetSeize(collateral *big.Int, allowFull bool) *big.Int {

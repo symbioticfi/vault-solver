@@ -272,8 +272,8 @@ func TestSelectBundleReplaysSameMarketSources(t *testing.T) {
 		borrower[19] = byteID
 		pos := morpho.PositionState{BorrowShares: mustBig("1200000000"), Collateral: mustBig("1000000000000000000")}
 		cand := Candidate{MarketID: market, Borrower: borrower, Market: info, Position: pos}
-		sized, rej := sizeLeg(cand, price, quote, info.State.TotalBorrowAssets, cfg.Sizing)
-		if rej != nil {
+		sized, rej := sizeLegForTest(cand, price, quote, info.State.TotalBorrowAssets, cfg.Sizing)
+		if rej.check != checkNone {
 			t.Fatal("fixture should size")
 		}
 		leg := sized.leg

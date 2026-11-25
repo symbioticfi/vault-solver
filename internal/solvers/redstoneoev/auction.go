@@ -11,6 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solvers/redstoneoev/strategies/types"
@@ -42,7 +43,7 @@ type bidDecision struct {
 	nonce      uint64
 	callback   common.Address
 	skip       string
-	skipDetail string
+	skipDetail fmt.Stringer // formatted only when logged or traced
 	// err is the real failure behind skip, if any. skip still drives metrics and logging; err only
 	// tells the bid span apart from an expected skip (spec §9.1).
 	err error
@@ -319,7 +320,7 @@ func auctionBidContext(ctx context.Context, a AuctionMessage, start time.Time) (
 
 func (s *Solver) logSkip(ctx context.Context, d bidDecision) {
 	log := observability.Log(ctx)
-	if d.skipDetail != "" {
+	if d.skipDetail != nil {
 		log.V(1).Info("no bid", "reason", d.skip, "detail", d.skipDetail)
 		return
 	}
@@ -331,17 +332,17 @@ func (s *Solver) logSkip(ctx context.Context, d bidDecision) {
 func strategySkip(out types.BidOutput) bidDecision {
 	code := types.BoundedSkipReason(out.Reason)
 	detail := out.Detail
-	if detail == "" && code != out.Reason {
-		detail = out.Reason
+	if detail == nil && code != out.Reason {
+		detail = types.Text(out.Reason)
 	}
 	return bidDecision{skip: code, skipDetail: detail}
 }
 
 func (d bidDecision) declineReason() string {
-	if d.skipDetail == "" {
+	if d.skipDetail == nil {
 		return d.skip
 	}
-	return d.skip + ": " + d.skipDetail
+	return d.skip + ": " + d.skipDetail.String()
 }
 
 func (s *Solver) bidExpired(ctx context.Context, a AuctionMessage, start time.Time) bool {
@@ -368,8 +369,8 @@ func (s *Solver) staleStateGate(ctx context.Context, now time.Time) bidDecision 
 	age := cacheAge(at, now)
 	observability.Log(ctx).Error(errors.New("executor state stale"), "bid skipped: cache exceeds intervals.executorStateMaxAgeMs",
 		"opsAge", age, "maxAge", s.cfg.ExecutorStateMaxAge)
-	return bidDecision{skip: skipExecutorStateStale, skipDetail: fmt.Sprintf(
-		"executor state age %s exceeds intervals.executorStateMaxAgeMs %s", age, s.cfg.ExecutorStateMaxAge)}
+	return bidDecision{skip: skipExecutorStateStale, skipDetail: types.Text(fmt.Sprintf(
+		"executor state age %s exceeds intervals.executorStateMaxAgeMs %s", age, s.cfg.ExecutorStateMaxAge))}
 }
 
 func cacheAge(at, now time.Time) string {
@@ -389,26 +390,26 @@ func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowF
 	ctx, end := tracer.Start(ctx, "oev.auction.bid",
 		observability.AttrAuctionID.String(a.ID), observability.AttrStrategy.String(s.strategyLabel()))
 	defer func() {
-		if d.err == nil && d.skip != "" {
+		if d.err == nil && d.skip != "" && trace.SpanFromContext(ctx).IsRecording() {
 			observability.Decline(ctx, "skipped", d.declineReason())
 		}
 		end(d.err)
 	}()
 	now := nowFn()
 	if tripped, why := s.breaker.tripped(now); tripped {
-		return bidDecision{skip: "breaker", skipDetail: why}
+		return bidDecision{skip: "breaker", skipDetail: types.Text(why)}
 	}
 	if stale := s.staleStateGate(ctx, now); stale.skip != "" {
 		return stale
 	}
 	st, ok := s.state.load()
 	if !ok {
-		return bidDecision{skip: "state_unknown", skipDetail: "executor state has not been read yet"}
+		return bidDecision{skip: "state_unknown", skipDetail: types.Text("executor state has not been read yet")}
 	}
 	if st.Exec.Locked {
-		return bidDecision{skip: "signer_locked", skipDetail: fmt.Sprintf(
+		return bidDecision{skip: "signer_locked", skipDetail: types.Text(fmt.Sprintf(
 			"executor %s reports signer %s locked (withdrawal requested), state read %s ago",
-			s.cfg.Executor.Hex(), s.deps.Signer.Address().Hex(), now.Sub(st.UpdatedAt))}
+			s.cfg.Executor.Hex(), s.deps.Signer.Address().Hex(), now.Sub(st.UpdatedAt)))}
 	}
 	if low := s.depositSkip(ctx, st); low.skip != "" {
 		return low
@@ -418,7 +419,7 @@ func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowF
 	if s.strategy == nil {
 		unconfigured := errors.New("strategy is not configured")
 		observability.Log(ctx).Error(unconfigured, "bid skipped")
-		return bidDecision{skip: "strategy_error", skipDetail: unconfigured.Error(), err: unconfigured}
+		return bidDecision{skip: "strategy_error", skipDetail: types.Text(unconfigured.Error()), err: unconfigured}
 	}
 	out, err := s.strategy.DecideBid(ctx, s.bidInput(ctx, a, now, st, inFlight, gasPrice))
 	if err != nil {
@@ -428,14 +429,14 @@ func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowF
 				outcome = auctionOutcomeTooLate
 			}
 			observability.Log(ctx).V(1).Info("strategy stopped with auction context", "reason", outcome)
-			return bidDecision{skip: outcome, skipDetail: "auction context done during strategy: " + err.Error()}
+			return bidDecision{skip: outcome, skipDetail: types.Text("auction context done during strategy: " + err.Error())}
 		}
 		observability.Log(ctx).Error(err, "strategy failed")
-		return bidDecision{skip: "strategy_error", skipDetail: err.Error(), err: err}
+		return bidDecision{skip: "strategy_error", skipDetail: types.Text(err.Error()), err: err}
 	}
 	if err := checkExecutionEnvelope(out); err != nil {
 		observability.Log(ctx).Error(err, "execution envelope rejected")
-		return bidDecision{skip: "strategy_invalid", skipDetail: err.Error(), err: err}
+		return bidDecision{skip: "strategy_invalid", skipDetail: types.Text(err.Error()), err: err}
 	}
 	if out.Decision == types.DecisionSkip {
 		return strategySkip(out)
@@ -449,7 +450,7 @@ func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowF
 	sig, err := SignBid(s.deps.Signer, s.chainID, callback, out.OperationData, bidNative, big.NewInt(int64(nonce)), gasPrice)
 	if err != nil {
 		observability.Log(ctx).Error(err, "sign bid failed")
-		return bidDecision{skip: "sign_error", skipDetail: err.Error(), err: err}
+		return bidDecision{skip: "sign_error", skipDetail: types.Text(err.Error()), err: err}
 	}
 
 	return bidDecision{
@@ -476,7 +477,7 @@ func (s *Solver) bidCapExceeded(ctx context.Context, bidNative *big.Int) bidDeci
 	}
 	observability.Log(ctx).Info("bid skipped: strategy bid exceeds configured cap",
 		"bidWei", bidNative, "maxBidWei", s.cfg.MaxBidWei)
-	return bidDecision{skip: skipBidCap, skipDetail: fmt.Sprintf("strategy bid %s wei exceeds maxBidWei %s", bidNative, s.cfg.MaxBidWei)}
+	return bidDecision{skip: skipBidCap, skipDetail: types.Text(fmt.Sprintf("strategy bid %s wei exceeds maxBidWei %s", bidNative, s.cfg.MaxBidWei))}
 }
 
 func (s *Solver) depositSkip(ctx context.Context, st cachedState) bidDecision {
@@ -486,7 +487,7 @@ func (s *Solver) depositSkip(ctx context.Context, st cachedState) bidDecision {
 	}
 	observability.Log(ctx).Info("bid skipped: executor deposit below minimum",
 		"depositWei", st.Exec.Deposit, "minDepositWei", minDeposit)
-	return bidDecision{skip: skipDepositLow, skipDetail: fmt.Sprintf("executor deposit %s wei is below minimum %s wei", deposit, minDeposit)}
+	return bidDecision{skip: skipDepositLow, skipDetail: types.Text(fmt.Sprintf("executor deposit %s wei is below minimum %s wei", deposit, minDeposit))}
 }
 
 func tooLate(emitMs int64, timeoutMs int, start, now time.Time) bool {
