@@ -81,8 +81,15 @@ func (s *Solver) prepareFill(
 	var preferred liquidlane.CandidateID
 	// Exclusivity is known only once the signed order arrives. The cache TTL
 	// bounds retention; chain time decides whether its source preference still applies.
+	var unpreferred string
 	if order.ExclusiveUntil == 0 || uint64(now.Unix()) <= order.ExclusiveUntil {
-		preferred = s.preferredSource(order, time.Now())
+		preferred, unpreferred = s.preferredSource(order, time.Now())
+	} else {
+		unpreferred = fmt.Sprintf("exclusivity ended at %d, chain time %d", order.ExclusiveUntil, now.Unix())
+	}
+	if unpreferred != "" {
+		observability.Log(ctx).V(1).Info("quoted source preference not applied", "orderHash", order.Hash.Hex(),
+			"quoteId", order.QuoteID, "reason", unpreferred)
 	}
 	var sourceErr error
 	var declines []string

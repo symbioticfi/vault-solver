@@ -114,7 +114,8 @@ func (s *Solver) refreshAdapterQuoteState(
 		maxFeePerGas: maxFee, chainTime: now, expiresAt: serverNow.Add(s.cfg.QuoteServer.QuoteTTL),
 		singleRouteFor: s.cfg.TokenPolicy.SingleRouteTokens(),
 	}) {
-		observability.Log(ctx).V(1).Info("quote state refresh discarded", "epoch", epoch)
+		observability.Log(ctx).V(1).Info("quote state refresh discarded: quote epoch moved during refresh",
+			"epoch", epoch, "currentEpoch", s.quoteEpoch.Load())
 		return observability.ExternalOperationSkipped, nil
 	}
 	if s.metrics != nil {

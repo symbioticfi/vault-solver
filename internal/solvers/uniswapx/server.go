@@ -70,12 +70,12 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
 		observation.reason = "invalid-json"
-		s.declineQuoteRequest(w, r, "invalid-json", "invalid request body")
+		s.declineQuoteRequest(w, r, "invalid-json", "invalid request body", "error", err.Error())
 		return
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		observation.reason = "trailing-json"
-		s.declineQuoteRequest(w, r, "trailing-json", "invalid request body")
+		s.declineQuoteRequest(w, r, "trailing-json", "invalid request body", "detail", "data follows the JSON request object")
 		return
 	}
 	pairInScope := s.quotePairInScope(request)
@@ -86,12 +86,13 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if request.RequestID == "" {
 		if request.BlockUntilTimestamp == nil || *request.BlockUntilTimestamp < 0 {
-			reason := "invalid-breaker-notification"
+			reason, detail := "invalid-breaker-notification", "blockUntilTimestamp is negative"
 			if request.BlockUntilTimestamp == nil {
-				reason = string(quoteDeclineMissingIDs)
+				reason, detail = string(quoteDeclineMissingIDs), "requestId is empty and blockUntilTimestamp is missing"
 			}
 			observation.reason = reason
-			s.declineQuoteRequest(w, r, reason, "invalid blockUntilTimestamp", s.quoteLogFields(request, pairInScope)...)
+			s.declineQuoteRequest(w, r, reason, "invalid blockUntilTimestamp",
+				append([]any{"detail", detail}, s.quoteLogFields(request, pairInScope)...)...)
 			return
 		}
 		observability.Log(r.Context()).V(1).Info(
@@ -123,8 +124,10 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 		observation.reason = "strategy_error"
 		s.observeQuote(quoteOutcomeError)
 		loggedErr := err
-		if !pairInScope {
-			loggedErr = errors.New("quote strategy failed before directed pair validation")
+		// Other strategies' errors may echo arbitrary pair details; the built-in ones fail on an
+		// out-of-scope pair only through input validation, which names no tokens.
+		if builtIn := s.cfg.Strategy.Name == types.DefaultName || s.cfg.Strategy.Name == types.SingleName; !pairInScope && !builtIn {
+			loggedErr = errors.Errorf("%s quote strategy failed before directed pair validation", s.cfg.Strategy.Name)
 		}
 		requestLog.Error(loggedErr, "quote failed", "reason", "strategy_error")
 		http.Error(w, "quote unavailable", http.StatusServiceUnavailable)
@@ -232,8 +235,8 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 	if blocked := s.quoteBlockReason(now); blocked != "" {
 		return declinedQuote(response, quoteDeclineBlocked, blocked), nil
 	}
-	if reason := s.validateQuoteRequest(request); reason != "" {
-		return declinedQuote(response, reason, string(reason)), nil
+	if reason, detail := s.validateQuoteRequest(request); reason != "" {
+		return declinedQuote(response, reason, detail), nil
 	}
 
 	// Unsupported pairs are logged without their addresses, so these details name only the check.
@@ -392,10 +395,7 @@ func (s *Solver) quoteBlockReason(now int64) string {
 	if !s.fillPath().laneAvailable() {
 		return "transaction nonce lane is paused"
 	}
-	if !s.exclusiveDeliveryHealthy() {
-		return "exclusive order delivery is unhealthy"
-	}
-	return ""
+	return s.exclusiveDeliveryProblem(time.Now())
 }
 
 func (s *Solver) timeBasedBlockUntil() int64 {
@@ -410,23 +410,31 @@ func (s *Solver) timeBasedBlockUntil() int64 {
 // validateQuoteRequest splits the existing semantic predicate without changing acceptance.
 // Precedence follows its original left-to-right order. Runtime blocking still precedes this
 // check; pair policy and amount validation still follow it. Zero swapper is valid upstream.
-func (s *Solver) validateQuoteRequest(request quoteRequest) quoteDeclineReason {
+// The detail names the failed field without echoing caller-supplied strings.
+func (s *Solver) validateQuoteRequest(request quoteRequest) (quoteDeclineReason, string) {
 	switch {
-	case request.RequestID == "" || request.QuoteID == "":
-		return quoteDeclineMissingIDs
+	case request.RequestID == "":
+		return quoteDeclineMissingIDs, "requestId is empty"
+	case request.QuoteID == "":
+		return quoteDeclineMissingIDs, "quoteId is empty"
 	case !supportedQuoteType(request.Type):
-		return quoteDeclineUnsupportedType
+		return quoteDeclineUnsupportedType, "type is not " + quoteTypeExactInput + " or " + quoteTypeExactOutput
 	case request.NumOutputs < 1:
-		return quoteDeclineInvalidOutputs
+		return quoteDeclineInvalidOutputs, fmt.Sprintf("numOutputs %d is below 1", request.NumOutputs)
 	case !supportedQuoteProtocol(request.Protocol):
-		return quoteDeclineUnsupportedProtocol
-	case request.TokenInChainID != s.chainID || request.TokenOutChainID != s.chainID:
-		return quoteDeclineUnsupportedChain
-	case !common.IsHexAddress(request.Swapper) || !common.IsHexAddress(request.TokenIn) ||
-		!common.IsHexAddress(request.TokenOut):
-		return quoteDeclineInvalidAddress
+		return quoteDeclineUnsupportedProtocol, "protocol is not v1 or v2"
+	case request.TokenInChainID != s.chainID:
+		return quoteDeclineUnsupportedChain, fmt.Sprintf("tokenInChainId %d is not chain %d", request.TokenInChainID, s.chainID)
+	case request.TokenOutChainID != s.chainID:
+		return quoteDeclineUnsupportedChain, fmt.Sprintf("tokenOutChainId %d is not chain %d", request.TokenOutChainID, s.chainID)
+	case !common.IsHexAddress(request.Swapper):
+		return quoteDeclineInvalidAddress, "swapper is not a hex address"
+	case !common.IsHexAddress(request.TokenIn):
+		return quoteDeclineInvalidAddress, "tokenIn is not a hex address"
+	case !common.IsHexAddress(request.TokenOut):
+		return quoteDeclineInvalidAddress, "tokenOut is not a hex address"
 	default:
-		return ""
+		return "", ""
 	}
 }
 
@@ -439,14 +447,17 @@ func supportedQuoteProtocol(value string) bool {
 }
 
 func validateStrategyQuote(input types.QuoteInput, quote *types.Quote) error {
-	if quote.AmountIn == nil || quote.AmountIn.Sign() <= 0 || quote.AmountOut == nil || quote.AmountOut.Sign() <= 0 {
-		return errors.New("strategy returned invalid quote amounts")
+	if quote.AmountIn == nil || quote.AmountIn.Sign() <= 0 {
+		return errors.Errorf("strategy returned non-positive quote amountIn %v", quote.AmountIn)
+	}
+	if quote.AmountOut == nil || quote.AmountOut.Sign() <= 0 {
+		return errors.Errorf("strategy returned non-positive quote amountOut %v", quote.AmountOut)
 	}
 	if input.AmountIn != nil && quote.AmountIn.Cmp(input.AmountIn) != 0 {
-		return errors.New("strategy changed exact-input amount")
+		return errors.Errorf("strategy changed exact-input amount %s to %s", input.AmountIn, quote.AmountIn)
 	}
 	if input.AmountOut != nil && quote.AmountOut.Cmp(input.AmountOut) != 0 {
-		return errors.New("strategy changed exact-output amount")
+		return errors.Errorf("strategy changed exact-output amount %s to %s", input.AmountOut, quote.AmountOut)
 	}
 	return nil
 }

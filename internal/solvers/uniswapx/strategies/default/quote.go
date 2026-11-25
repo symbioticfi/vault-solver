@@ -13,17 +13,21 @@ import (
 
 func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*types.Quote, error) {
 	if !input.QuoteExpiresAt.After(input.ChainTime) {
-		return nil, errors.New("quoteExpiresAt must be after chainTime")
+		return nil, errors.Errorf("quoteExpiresAt %d must be after chainTime %d",
+			input.QuoteExpiresAt.Unix(), input.ChainTime.Unix())
 	}
-	if (input.AmountIn == nil) == (input.AmountOut == nil) {
-		return nil, errors.New("exactly one quote amount must be set")
+	if input.AmountIn == nil && input.AmountOut == nil {
+		return nil, errors.New("neither quote amountIn nor amountOut is set")
+	}
+	if input.AmountIn != nil && input.AmountOut != nil {
+		return nil, errors.New("both quote amountIn and amountOut are set")
 	}
 	requestedAmount := input.AmountIn
 	if requestedAmount == nil {
 		requestedAmount = input.AmountOut
 	}
 	if requestedAmount.Sign() <= 0 {
-		return nil, errors.New("quote amount must be positive")
+		return nil, errors.Errorf("quote amount %s must be positive", requestedAmount)
 	}
 
 	validAfter := input.QuoteExpiresAt.Add(s.executionBuffer)

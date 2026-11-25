@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -97,6 +98,69 @@ func TestQuoteValidationReasonsAndPrecedence(t *testing.T) {
 			t.Fatalf("response=%+v err=%v", response, err)
 		}
 	})
+}
+
+func TestQuoteStateChangeNamesTheCondition(t *testing.T) {
+	in := common.HexToAddress("0x01")
+	for _, tc := range []struct {
+		name   string
+		change func(context.CancelFunc, *Solver, *quoteState)
+		want   string
+	}{
+		{"unchanged", func(context.CancelFunc, *Solver, *quoteState) {}, ""},
+		{"context", func(cancel context.CancelFunc, _ *Solver, _ *quoteState) { cancel() }, "quote context ended: context canceled"},
+		{"epoch", func(_ context.CancelFunc, s *Solver, _ *quoteState) { s.quoteEpoch.Store(2) }, "quote epoch moved from 0 to 2"},
+		{"replaced", func(_ context.CancelFunc, s *Solver, _ *quoteState) { s.quoteState.Store(&quoteState{}) }, "quote state was replaced"},
+		{"capacity", func(_ context.CancelFunc, s *Solver, _ *quoteState) {
+			s.capacity.Set("order", liquidlane.CapacityReservations{"budget": big.NewInt(1)})
+		}, "capacity revision moved from 0 to 1"},
+		{"wall expiry", func(_ context.CancelFunc, _ *Solver, state *quoteState) {
+			state.expiresAt = time.Now().Add(-time.Second)
+		}, "quote state expired at "},
+		{"chain expiry", func(_ context.CancelFunc, s *Solver, state *quoteState) {
+			s.chainTime.Store(state.expiresAt.Add(time.Minute).Unix())
+		}, fmt.Sprintf("quote state expired at %d, chain time ", time.Now().Add(time.Minute).Unix())},
+		{"blocked", func(_ context.CancelFunc, s *Solver, _ *quoteState) {
+			s.localBlockUntil.Store(time.Now().Add(time.Hour).Unix())
+		}, "local fade breaker blocks quotes until "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newQuoteTestSolver(t, in, &quoteTestStrategy{})
+			state := s.quoteState.Load()
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			tc.change(cancel, s, state)
+			got := s.quoteStateChange(ctx, 0, state, 0)
+			if tc.want == "" && got != "" || !strings.HasPrefix(got, tc.want) {
+				t.Fatalf("change = %q, want prefix %q", got, tc.want)
+			}
+			if tc.name == "wall expiry" && !strings.Contains(got, "wall time") {
+				t.Fatalf("wall expiry reported as %q", got)
+			}
+		})
+	}
+}
+
+func TestQuoteValidationDetailNamesTheField(t *testing.T) {
+	in, out := common.HexToAddress("0x01"), common.HexToAddress("0x02")
+	for _, tc := range []struct {
+		change func(*quoteRequest)
+		want   string
+	}{
+		{func(r *quoteRequest) { r.RequestID = "" }, "requestId is empty"},
+		{func(r *quoteRequest) { r.QuoteID = "" }, "quoteId is empty"},
+		{func(r *quoteRequest) { r.NumOutputs = 0 }, "numOutputs 0 is below 1"},
+		{func(r *quoteRequest) { r.TokenOutChainID = 8453 }, "tokenOutChainId 8453 is not chain 1"},
+		{func(r *quoteRequest) { r.Swapper = "bad" }, "swapper is not a hex address"},
+		{func(r *quoteRequest) { r.TokenOut = "0x12" }, "tokenOut is not a hex address"},
+	} {
+		s := newQuoteTestSolver(t, in, &quoteTestStrategy{})
+		r := validQuoteRequest(in, out)
+		tc.change(&r)
+		if _, got := s.validateQuoteRequest(r); got != tc.want {
+			t.Fatalf("detail = %q, want %q", got, tc.want)
+		}
+	}
 }
 
 func TestQuoteDeclineDetailNamesFailedCheck(t *testing.T) {

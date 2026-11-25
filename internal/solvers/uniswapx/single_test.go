@@ -15,6 +15,7 @@ import (
 	liquiddiscounts "github.com/symbioticfi/vault-solver/internal/liquidlane/discounts"
 	"github.com/symbioticfi/vault-solver/internal/observability/metricstest"
 	"github.com/symbioticfi/vault-solver/internal/observability/tracetest"
+	strategytypes "github.com/symbioticfi/vault-solver/internal/solvers/uniswapx/strategies/types"
 	"github.com/symbioticfi/vault-solver/internal/txmanager"
 	"go.opentelemetry.io/otel/codes"
 )
@@ -137,6 +138,53 @@ func TestFillDeclineNamesFailedCheck(t *testing.T) {
 				t.Fatalf("err = %v\nwant %s", err, want)
 			}
 		})
+	}
+}
+
+// capacityRacingStrategy reserves other capacity while the strategy decides, as a concurrent fill would.
+type capacityRacingStrategy struct {
+	strategytypes.Strategy
+
+	ledger *liquidlane.CapacityLedger
+}
+
+func (s capacityRacingStrategy) DecideFill(ctx context.Context, input strategytypes.FillInput) (*strategytypes.FillPlan, error) {
+	s.ledger.Set("other-order", liquidlane.CapacityReservations{"other": big.NewInt(1)})
+	return s.Strategy.DecideFill(ctx, input)
+}
+
+func TestFillDeclineNamesCapacityRevisionRace(t *testing.T) {
+	fixture := newDirectExecutionFixture(t)
+	useExecutionStrategy(t, fixture, "default")
+	fixture.solver.strategy = capacityRacingStrategy{Strategy: fixture.solver.strategy, ledger: &fixture.solver.capacity}
+	_, err := fixture.solver.startFill(t.Context(), []liquidlane.Route{fixture.route}, fixture.order, fixture.now, fixture.now)
+	want := "order is not fillable at current chain state: capacity revision moved from 0 to 1 during planning"
+	if !errors.Is(err, errOrderNotFillable) || err.Error() != want {
+		t.Fatalf("err = %v\nwant %s", err, want)
+	}
+}
+
+func TestClaimSkipNamesTheBlockingState(t *testing.T) {
+	now := time.Unix(1_000, 0)
+	hash := common.HexToHash("0x01")
+	solver := &Solver{
+		cfg:    &Config{OrderServer: OrderServerConfig{PollInterval: time.Second}},
+		filled: map[common.Hash]time.Time{}, inFlight: map[common.Hash]bool{},
+		retryAt: map[common.Hash]time.Time{}, attempts: map[common.Hash]int{},
+	}
+	if got := solver.claimSkip(hash, now); got != "" {
+		t.Fatalf("first claim skipped: %s", got)
+	}
+	if got := solver.claimSkip(hash, now); got != "order fill already in flight" {
+		t.Fatalf("in-flight skip = %q", got)
+	}
+	solver.retry(hash, now, false)
+	if got := solver.claimSkip(hash, now); got != "order retry scheduled at 1001, now 1000" {
+		t.Fatalf("retry skip = %q", got)
+	}
+	solver.complete(hash, now)
+	if got := solver.claimSkip(hash, now); got != "order already completed at 1000" {
+		t.Fatalf("completed skip = %q", got)
 	}
 }
 
@@ -345,7 +393,7 @@ func TestSelectionRetentionAndMatching(t *testing.T) {
 		{100, 5 * time.Second, "candidate"}, {101, 5 * time.Second, ""}, {100, 8 * time.Second, ""},
 	} {
 		fixture.order.AmountIn = big.NewInt(test.input)
-		if got := fixture.solver.preferredSource(fixture.order, fixture.now.Add(test.at)); got != test.want {
+		if got, _ := fixture.solver.preferredSource(fixture.order, fixture.now.Add(test.at)); got != test.want {
 			t.Fatalf("input=%d age=%s source=%s, want %s", test.input, test.at, got, test.want)
 		}
 	}

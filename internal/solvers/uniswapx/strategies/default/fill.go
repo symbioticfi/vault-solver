@@ -11,10 +11,10 @@ import (
 
 func (s *Strategy) DecideFill(_ context.Context, input types.FillInput) (*types.FillPlan, error) {
 	if input.AmountIn == nil || input.AmountIn.Sign() <= 0 {
-		return nil, errors.New("amountIn: must be positive")
+		return nil, errors.Errorf("amountIn %v: must be positive", input.AmountIn)
 	}
 	if input.OutputAmount == nil || input.OutputAmount.Sign() <= 0 {
-		return nil, errors.New("outputAmount: must be positive")
+		return nil, errors.Errorf("outputAmount %v: must be positive", input.OutputAmount)
 	}
 	if input.AmountIn.Cmp(s.minAmount) < 0 {
 		return nil, errors.Errorf("%w: amount in %s is below minimum amount %s",

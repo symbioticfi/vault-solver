@@ -2,6 +2,7 @@ package uniswapx
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"time"
 
@@ -171,8 +172,12 @@ func (s *Solver) startFill(
 	if order.TokenOut == (common.Address{}) {
 		return nil, declineFill(ctx, "fill_skipped", "order has no output token")
 	}
-	if order.Deadline == 0 || int64(order.Deadline) <= now.Unix() {
-		return nil, declineFill(ctx, "fill_skipped", "order deadline has passed")
+	if order.Deadline == 0 {
+		return nil, declineFill(ctx, "fill_skipped", "order has no deadline")
+	}
+	if int64(order.Deadline) <= now.Unix() {
+		return nil, declineFill(ctx, "fill_skipped",
+			fmt.Sprintf("order deadline %d is not after chain time %d", order.Deadline, now.Unix()))
 	}
 	routeSet, discountErr := s.routesWithDiscounts(ctx, routes, now, advertisedRouteFilter{tokenIn: order.TokenIn, tokenOut: order.TokenOut})
 	decisionRoutes, listed := routeSet.routes, routeSet.listed
@@ -239,7 +244,9 @@ func (s *Solver) startFill(
 	deadline := fillDeadline(order, discountValidUntil)
 	submissionDeadline, ok := liquidlane.SubmissionDeadline(deadline, now, chainObservedAt, time.Now())
 	if !ok {
-		return nil, declineFill(ctx, "fill_skipped", "fill execution deadline elapsed before submission")
+		return nil, declineFill(ctx, "fill_skipped", fmt.Sprintf(
+			"fill execution deadline %d elapsed before submission (chain time %d, observed %s ago)",
+			deadline.Unix(), now.Unix(), time.Since(chainObservedAt).Truncate(time.Millisecond)))
 	}
 	observability.Log(ctx).V(1).Info(
 		"order fill preflight succeeded",
@@ -354,7 +361,7 @@ func (s *Solver) submitFill(
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		return nil, errors.New("transaction submission was not accepted")
+		return nil, errors.New("transaction manager did not accept the fill (stopped or deadline reached before admission)")
 	}
 	return result, nil
 }
@@ -563,7 +570,7 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 		observability.Log(ctx).Info(
 			"order fill obsolete: order no longer fillable",
 			"source", order.Source, "orderHash", order.Hash.Hex(), "quoteId", order.QuoteID,
-			"tx", result.Hash.Hex(), "outcome", outcome,
+			"tx", result.Hash.Hex(), "outcome", outcome, "reason", errorReason(result.Err),
 		)
 		return
 	}
