@@ -24,10 +24,10 @@ func testWorkflow(t *testing.T) (*Workflow, connectortest.Fixture) {
 	return &Workflow{Chain: f.Chain, ChainID: big.NewInt(1), Source: f.Permissions, Filler: filler, Signer: f.Chain.Signer}, f
 }
 
-func testRequest(amountOut *big.Int) Request {
+func testRequest() Request {
 	return Request{
 		Venue: vlt, Executor: common.HexToAddress("0x43"), DiscountID: *connectortest.DiscountID(), MaxAssets: big.NewInt(900),
-		TokenIn: tIn, AmountIn: big.NewInt(123), TokenOut: tOut, AmountOut: amountOut,
+		TokenIn: tIn, AmountIn: big.NewInt(123), TokenOut: tOut,
 	}
 }
 
@@ -64,7 +64,7 @@ func TestPrepareTakesConnectorPayment(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			w, f := testWorkflow(t)
 			f.Chain.AmountOut, f.Chain.Remaining = tc.gross, big.NewInt(tc.remaining)
-			request := testRequest(nil)
+			request := testRequest()
 			request.MaxAssets = big.NewInt(tc.maxAssets)
 			legs, err := w.PrepareLegs(t.Context(), []Request{request}, resolveFixture)
 			if tc.wantErr != "" {

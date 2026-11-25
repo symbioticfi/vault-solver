@@ -34,6 +34,8 @@ func TestConnectorBuildSimulatesCompleteAwardedOrder(t *testing.T) {
 	resolved.ProtocolSignature = "0x" + strings.Repeat("cd", 1)
 	fixture := connectorExecutionFixture(t, resolved)
 	w, chain, recipe, leaf := fixture.workflow, fixture.reader, fixture.recipe, fixture.leaf
+	// At the fixture's 2% discount, gross 467 pays 457 against the signed minimum of 456.
+	chain.AmountOut = big.NewInt(467)
 	if len(recipe.Queries) != 3 {
 		t.Fatal("recipe contains queries beyond the original balance checks")
 	}
@@ -46,6 +48,9 @@ func TestConnectorBuildSimulatesCompleteAwardedOrder(t *testing.T) {
 	calldata, until := built.Calldata, built.ValidUntil
 	if len(built.Legs) != 1 || built.Legs[0].State.Account != chain.RecipeAccount || built.Legs[0].State.Asset != tOut || chain.IdentityReads != 2 {
 		t.Fatal("build did not return its single pinned connector identity")
+	}
+	if built.Legs[0].AmountOut.Int64() != 457 {
+		t.Fatalf("prepared payout = %s, want 457", built.Legs[0].AmountOut)
 	}
 	if !until.Equal(time.Unix(4102444800, 0)) {
 		t.Fatalf("discount expiry = %v", until)
@@ -85,7 +90,7 @@ func TestConnectorBuildSimulatesCompleteAwardedOrder(t *testing.T) {
 	}
 	inputs := route[2].([]*big.Int)
 	runtime := route[3].([][]byte)
-	if len(inputs) != 2 || inputs[0].Int64() != 123 || inputs[1].Int64() != 456 || !reflect.DeepEqual(route[0], recipe.Queries) || !reflect.DeepEqual(route[1], recipe.Steps) || len(runtime) != 2 {
+	if len(inputs) != 2 || inputs[0].Int64() != 123 || inputs[1].Int64() != 457 || !reflect.DeepEqual(route[0], recipe.Queries) || !reflect.DeepEqual(route[1], recipe.Steps) || len(runtime) != 2 {
 		t.Fatal("awarded inputs or committed recipe changed")
 	}
 	actionsType := merkleaccount.NewMerkleAccount().GetABI().Methods["manage"].Inputs
@@ -205,6 +210,7 @@ func connectorExecutionFixtureAt(t *testing.T, resolved *discounts.Resolved, rec
 		t.Fatal(err)
 	}
 	f := connectortest.NewFixture(t, terms.Swap, terms.Signature, recipeExecutor, rfqExecutor, [4]byte(executorBinding.GetABI().Methods["fill"].ID))
+	f.Chain.AmountOut = big.NewInt(466) // The signed 2% discount floors this to the default order minimum of 456.
 	workflow := &connector.Workflow{Chain: f.Chain, ChainID: big.NewInt(1), Source: f.Permissions, Filler: rfqExecutor, Signer: f.Chain.Signer}
 	return connectorExecutionFixtureData{workflow, f.Chain, f.Recipe, f.Leaf}
 }
@@ -246,7 +252,7 @@ func TestConnectorBuildAcceptsHeadAdvanceBetweenDiscoveryStages(t *testing.T) {
 	if built, err := buildFill(t.Context(), f.workflow, order, nil, []filler.Leg{{Source: selected}}, backend); err != nil || len(built.Calldata) == 0 {
 		t.Fatalf("ordinary head advance rejected: %v", err)
 	}
-	if reader.connectorReads != 3 || reader.simulationBlock != 8 || f.reader.OuterCalls != 1 {
+	if reader.connectorReads != 4 || reader.simulationBlock != 8 || f.reader.OuterCalls != 1 {
 		t.Fatalf("connector or settlement escaped prepared block: reads=%d simulation=%d", reader.connectorReads, reader.simulationBlock)
 	}
 }

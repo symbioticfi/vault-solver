@@ -120,6 +120,8 @@ Configure `rfq-filler` with the existing `adapters` list for native
 pricing and fills, or with `recipeExecutors` for Merkle connector pricing and fills.
 Setting both fails startup. The Merkle mode uses `curator` for permissions and keeps pending execution in RAM.
 One award can use multiple connectors, with capacity shared by funding account and asset.
+Each recipe uses the connector's full rounded payout, which must cover the signed
+order output together with the other legs.
 A Merkle filler keeps polling for awards and reserving their payouts during signing and
 confirmation. It quotes against the unreserved balance and submits fills sequentially.
 Quoting starts after the first completed reservation refresh and pauses if it goes stale for
