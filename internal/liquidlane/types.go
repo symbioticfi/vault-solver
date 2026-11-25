@@ -133,6 +133,25 @@ type FillQuote struct {
 	MinDiscount    *big.Int        `json:"minDiscount"`
 }
 
+// AmountOutFor returns the payout at amountIn before applying any capacity cap.
+func (q FillQuote) AmountOutFor(amountIn *big.Int) *big.Int {
+	if q.Pricing != nil {
+		return q.Pricing.AmountOutFor(amountIn)
+	}
+	if q.AmountIn == nil || q.AmountIn.Sign() <= 0 || q.MaxAmountOut == nil || amountIn == nil {
+		return new(big.Int)
+	}
+	return new(big.Int).Div(new(big.Int).Mul(q.MaxAmountOut, amountIn), q.AmountIn)
+}
+
+// AmountInFor returns the smallest input whose payout reaches amountOut.
+func (q FillQuote) AmountInFor(amountOut *big.Int) *big.Int {
+	if q.Pricing != nil {
+		return q.Pricing.AmountInFor(amountOut)
+	}
+	return MulDivUp(amountOut, q.AmountIn, q.MaxAmountOut)
+}
+
 type Auth struct {
 	Adapter     common.Address
 	MarketMaker common.Address

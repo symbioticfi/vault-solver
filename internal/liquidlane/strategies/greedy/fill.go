@@ -358,7 +358,7 @@ func fillRouteChoice(
 	return &fillAllocation{
 		candidate:        *best,
 		amountIn:         legAmount,
-		executableOutput: best.amountOutFor(legAmount),
+		executableOutput: best.quote.AmountOutFor(legAmount),
 		reservedOutput:   reservedCapacityOutput(*best, legAmount, priceBufferBps),
 	}
 }
@@ -387,16 +387,10 @@ func maxInputWithinCapacity(
 		maxOutput.Sub(maxOutput, big.NewInt(1))
 		maxOutput.Div(maxOutput, new(big.Int).Sub(precision, buffer))
 	}
-	var maxInput *big.Int
-	if pricing := quote.Pricing; pricing != nil {
-		maxInput = liquidlane.MaxAmountInForDiscountedAmountOutPrecision(
-			maxOutput, pricing.Price, pricing.Discount, quote.TokenInDecimals, quote.TokenOutDecimals, pricing.PricingPrecision(),
-		)
-	} else {
-		maxInput = new(big.Int).Add(maxOutput, big.NewInt(1))
-		maxInput.Mul(maxInput, quote.AmountIn)
+	// The last input within capacity is one unit below the first over it.
+	maxInput := quote.AmountInFor(new(big.Int).Add(maxOutput, big.NewInt(1)))
+	if maxInput.Sign() > 0 {
 		maxInput.Sub(maxInput, big.NewInt(1))
-		maxInput.Div(maxInput, quote.MaxAmountOut)
 	}
 	if maxInput.Cmp(inputLimit) > 0 {
 		maxInput.Set(inputLimit)
@@ -409,22 +403,10 @@ func reservedCapacityOutput(
 	amountIn *big.Int,
 	priceBufferBps int,
 ) *big.Int {
-	amountOut := candidate.amountOutFor(amountIn)
+	amountOut := candidate.quote.AmountOutFor(amountIn)
 	buffer := applyBpsUp(amountOut, priceBufferBps)
 	if candidate.quote.DiscountID != nil {
 		return amountOut.Add(amountOut, buffer)
 	}
 	return amountOut.Sub(amountOut, buffer)
-}
-
-func (candidate fillCandidate) amountOutFor(amountIn *big.Int) *big.Int {
-	quote := candidate.quote
-	if quote.Pricing != nil {
-		return quote.Pricing.AmountOutFor(amountIn)
-	}
-	if quote.AmountIn == nil || quote.AmountIn.Sign() <= 0 ||
-		quote.MaxAmountOut == nil || amountIn == nil {
-		return new(big.Int)
-	}
-	return new(big.Int).Div(new(big.Int).Mul(quote.MaxAmountOut, amountIn), quote.AmountIn)
 }
