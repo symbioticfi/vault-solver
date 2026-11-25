@@ -363,6 +363,47 @@ func TestReaderReadFillQuotesKeepsAmountSpecificFillWhenRateRoundsToZero(t *test
 	}
 }
 
+func TestReaderReadPricedFillQuotesChecksOraclePriceAgainstOrderQuote(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		outDecimals       int
+		gross, probePrice int64
+		wantPrice         int64
+	}{
+		{"matching probe", 6, 13, 1_900_000_000_000_000_000, 1_900_000_000_000_000_000},
+		{"inconsistent probe", 6, 13, 1_000_000_000_000_000_000, 0},
+		{"failed probe", 6, 13, 0, 0},
+		{"price identified by order quote", 25, 210, 0, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			route := testReaderRoute(1)
+			route.TokenInDecimals, route.TokenOutDecimals = 6, tc.outDecimals
+			probe := chain.CallResult{}
+			if tc.probePrice > 0 {
+				probe = successOutput(t, "getAmountOut", big.NewInt(tc.probePrice))
+			}
+			r := &Reader{chain: &scriptedLiquidLaneBackend{latest: [][]chain.CallResult{{
+				successOutput(t, "paused", false),
+				successOutput(t, "getMaxAssets", big.NewInt(100)),
+				successOutput(t, "getAmountOut", big.NewInt(tc.gross)),
+				successOutput(t, "minDiscount", big.NewInt(7_000)),
+				probe,
+			}}}}
+			quotes, err := r.ReadPricedFillQuotes(t.Context(), []Route{route}, route.TokenIn, big.NewInt(7))
+			if err != nil {
+				t.Fatalf("ReadPricedFillQuotes: %v", err)
+			}
+			if tc.wantPrice == 0 {
+				if len(quotes) != 0 {
+					t.Fatalf("quotes = %+v, want none", quotes)
+				}
+			} else if len(quotes) != 1 || quotes[0].Price == nil || quotes[0].Price.Int64() != tc.wantPrice {
+				t.Fatalf("quotes = %+v, want one with oracle price %d", quotes, tc.wantPrice)
+			}
+		})
+	}
+}
+
 func TestReaderReadGasSnapshotCombinesAcquireAndDeduplicatesVaultState(t *testing.T) {
 	route := testReaderRoute(1)
 	secondRoute := testReaderRoute(2)

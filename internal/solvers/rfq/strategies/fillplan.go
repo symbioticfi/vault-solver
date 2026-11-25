@@ -126,19 +126,12 @@ func validateLeg(
 	if candidate.Rate == nil || candidate.Rate.Sign() <= 0 {
 		return liquidlane.QuoteCandidate{}, errors.Errorf("candidate %q has invalid rate %v", leg.CandidateID, candidate.Rate)
 	}
-	var achievable *big.Int
-	if requireFullCoverage {
-		if candidate.MaxAmountIn == nil || leg.AmountIn.Cmp(candidate.MaxAmountIn) > 0 {
-			return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d amountIn %s exceeds candidate maxAmountIn %v",
-				index, leg.AmountIn, candidate.MaxAmountIn)
-		}
-		achievable = candidate.AmountOutFor(leg.AmountIn)
-	} else {
-		achievable = liquidlane.AmountOutForRate(leg.AmountIn, candidate.Rate, candidate.Route.TokenInDecimals, candidate.Route.TokenOutDecimals)
+	if requireFullCoverage && (candidate.MaxAmountIn == nil || leg.AmountIn.Cmp(candidate.MaxAmountIn) > 0) {
+		return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d amountIn %s exceeds candidate maxAmountIn %v",
+			index, leg.AmountIn, candidate.MaxAmountIn)
 	}
-	if leg.AmountOut.Cmp(achievable) > 0 {
-		return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d amountOut %s exceeds output %s achievable at candidate rate",
-			index, leg.AmountOut, achievable)
+	if achievable := candidate.AmountOutFor(leg.AmountIn); leg.AmountOut.Cmp(achievable) > 0 {
+		return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d output %s exceeds candidate payout %s", index, leg.AmountOut, achievable)
 	}
 	return candidate, nil
 }

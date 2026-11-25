@@ -358,7 +358,7 @@ func fillRouteChoice(
 	return &fillAllocation{
 		candidate:        *best,
 		amountIn:         legAmount,
-		executableOutput: scaledFillOutput(best.quote, legAmount),
+		executableOutput: best.amountOutFor(legAmount),
 		reservedOutput:   reservedCapacityOutput(*best, legAmount, priceBufferBps),
 	}
 }
@@ -387,10 +387,17 @@ func maxInputWithinCapacity(
 		maxOutput.Sub(maxOutput, big.NewInt(1))
 		maxOutput.Div(maxOutput, new(big.Int).Sub(precision, buffer))
 	}
-	maxInput := new(big.Int).Add(maxOutput, big.NewInt(1))
-	maxInput.Mul(maxInput, quote.AmountIn)
-	maxInput.Sub(maxInput, big.NewInt(1))
-	maxInput.Div(maxInput, quote.MaxAmountOut)
+	var maxInput *big.Int
+	if pricing := quote.Pricing; pricing != nil {
+		maxInput = liquidlane.MaxAmountInForDiscountedAmountOutPrecision(
+			maxOutput, pricing.Price, pricing.Discount, quote.TokenInDecimals, quote.TokenOutDecimals, pricing.PricingPrecision(),
+		)
+	} else {
+		maxInput = new(big.Int).Add(maxOutput, big.NewInt(1))
+		maxInput.Mul(maxInput, quote.AmountIn)
+		maxInput.Sub(maxInput, big.NewInt(1))
+		maxInput.Div(maxInput, quote.MaxAmountOut)
+	}
 	if maxInput.Cmp(inputLimit) > 0 {
 		maxInput.Set(inputLimit)
 	}
@@ -402,7 +409,7 @@ func reservedCapacityOutput(
 	amountIn *big.Int,
 	priceBufferBps int,
 ) *big.Int {
-	amountOut := scaledFillOutput(candidate.quote, amountIn)
+	amountOut := candidate.amountOutFor(amountIn)
 	buffer := applyBpsUp(amountOut, priceBufferBps)
 	if candidate.quote.DiscountID != nil {
 		return amountOut.Add(amountOut, buffer)
@@ -410,7 +417,11 @@ func reservedCapacityOutput(
 	return amountOut.Sub(amountOut, buffer)
 }
 
-func scaledFillOutput(quote liquidlane.FillQuote, amountIn *big.Int) *big.Int {
+func (candidate fillCandidate) amountOutFor(amountIn *big.Int) *big.Int {
+	quote := candidate.quote
+	if quote.Pricing != nil {
+		return quote.Pricing.AmountOutFor(amountIn)
+	}
 	if quote.AmountIn == nil || quote.AmountIn.Sign() <= 0 ||
 		quote.MaxAmountOut == nil || amountIn == nil {
 		return new(big.Int)

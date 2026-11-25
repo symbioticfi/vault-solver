@@ -107,7 +107,9 @@ It runs either in `external` mode (the open-source filler; quoting and filling s
 own adapters) or `internal` mode (Symbiotic-internal; adds the private discounts flow). The caller EOA
 must be an authorized caller of the RFQ `Executor` (its `setCallers` allowlist, granted by the owner).
 Native mode uses the deployed Executor callback that executes its swap arrays;
-extra callback calls remain empty. Merkle mode uses the generic-call Executor and
+extra callback calls remain empty. Native fills size and validate each leg at the adapter's
+current rounded payout. Strategy quote declines include their reason in the solver logs.
+Merkle mode uses the generic-call Executor and
 encodes its recipe calls explicitly. Keep each deployment on its matching mode;
 upgrading the solver does not require replacing native adapters or Executors.
 External mode also fails startup unless that executor has direct `owner`/`marketMaker`/`isFiller`
