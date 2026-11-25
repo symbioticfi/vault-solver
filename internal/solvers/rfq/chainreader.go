@@ -128,7 +128,7 @@ func (r *reader) readQuoteCandidates(
 			seen[item.ID] = true
 		}
 	}
-	quotes, err := r.ll.ReadFillQuotes(ctx, routes, tokenIn, amountIn)
+	quotes, err := r.ll.ReadPricedFillQuotes(ctx, routes, tokenIn, amountIn)
 	if err != nil {
 		return nil, err
 	}
