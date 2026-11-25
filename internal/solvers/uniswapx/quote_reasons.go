@@ -1,7 +1,6 @@
 package uniswapx
 
 import (
-	"fmt"
 	"strings"
 	"sync"
 
@@ -30,7 +29,7 @@ func (d *quoteStrategyDeclines) trace(next strategies.DecisionTrace) strategies.
 				}
 			}
 			d.mu.Lock()
-			d.details = append(d.details, formatDecline(fields))
+			d.details = append(d.details, strategies.FormatFields(fields))
 			if d.value == "" {
 				d.value = reason
 			} else if d.value != reason {
@@ -59,17 +58,6 @@ func (d *quoteStrategyDeclines) detail() string {
 		return "strategy returned no quote without recording a decline"
 	}
 	return strings.Join(d.details, "; ")
-}
-
-func formatDecline(fields []any) string {
-	var b strings.Builder
-	for i := 0; i+1 < len(fields); i += 2 {
-		if i > 0 {
-			b.WriteByte(' ')
-		}
-		fmt.Fprintf(&b, "%v=%v", fields[i], fields[i+1])
-	}
-	return b.String()
 }
 
 // Only these local planner decisions have established semantics. Never classify arbitrary

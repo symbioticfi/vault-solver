@@ -105,7 +105,8 @@ func (r *recipeSettlement) refreshQuoteState(ctx context.Context, _ []liquidlane
 		routes: routes, inventory: inventory, maxFeePerGas: new(big.Int), chainTime: now,
 		expiresAt: serverNow.Add(s.cfg.QuoteServer.QuoteTTL), singleRouteFor: s.cfg.TokenPolicy.SingleRouteTokens(),
 	}) {
-		observability.Log(ctx).V(1).Info("quote state refresh discarded", "epoch", epoch, "reason", "a newer quote refresh started before this one published")
+		observability.Log(ctx).V(1).Info("quote state refresh discarded: quote epoch moved during refresh",
+			"epoch", epoch, "currentEpoch", s.quoteEpoch.Load())
 		return observability.ExternalOperationSkipped, nil
 	}
 	if s.metrics != nil {
