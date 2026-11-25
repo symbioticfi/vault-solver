@@ -227,6 +227,47 @@ type policyRevertError struct{}
 func (policyRevertError) Error() string  { return "execution reverted" }
 func (policyRevertError) ErrorData() any { return "0x1234" }
 
+type revertDataError struct{ data any }
+
+func (revertDataError) Error() string    { return "execution reverted" }
+func (e revertDataError) ErrorData() any { return e.data }
+
+func TestEligibleKeepsPolicyRevertReason(t *testing.T) {
+	stringType, err := abi.NewType("string", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reason, err := abi.Arguments{{Type: stringType}}.Pack("pair not allowed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := common.HexToAddress("0x123456")
+	word := strings.Repeat("0", 63) + "1"
+	for _, tc := range []struct {
+		name string
+		data any
+		want string
+	}{
+		{"Error(string)", hexutil.Encode(append([]byte{0x08, 0xc3, 0x79, 0xa0}, reason...)), "pair not allowed"},
+		{"Panic(uint256)", "0x4e487b71" + strings.Repeat("0", 62) + "11", "arithmetic underflow or overflow"},
+		{"custom error", "0xdeadbeef" + word, "selector 0xdeadbeef args 0x" + word},
+		{"short payload", "0x1234", "revert data 0x1234"},
+		{"not hex", "nope", "undecodable revert data nope"},
+		{"not a string", 7, "7"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			chain := readFunc(func(context.Context, ethereum.CallMsg, *big.Int) ([]byte, error) {
+				return nil, revertDataError{tc.data}
+			})
+			err := eligible(t.Context(), chain, provider.Snapshot{}, mintMarket{}, request, new(big.Int))
+			want := "policy consume for request " + request.Hex() + " reverted: " + tc.want
+			if !errors.Is(err, errIneligible) || !strings.HasSuffix(err.Error(), want) {
+				t.Fatalf("err = %v, want errIneligible ending %q", err, want)
+			}
+		})
+	}
+}
+
 func TestMintSkipsIneligibleEarlierRequests(t *testing.T) {
 	for _, tc := range []struct {
 		name             string

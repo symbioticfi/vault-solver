@@ -177,7 +177,7 @@ func (p *mintProvider) PrepareRecipe(ctx context.Context, snapshot provider.Snap
 			}
 			if e = eligible(ctx, p.Chain, snapshot, market, address, observed.MinimumYield); e != nil {
 				if errors.Is(e, errIneligible) {
-					skip("market %s: request is not eligible", pair)
+					skip("market %s: %v", pair, e)
 					continue
 				}
 				return nil, e

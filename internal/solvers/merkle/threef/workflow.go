@@ -163,6 +163,13 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 	if w.bot.Send {
 		pending = w.bot.pending
 	}
+	// One debug line per pass names every ineligible request and the policy's revert reason.
+	var ineligible []string
+	defer func() {
+		if len(ineligible) > 0 {
+			observability.Log(ctx).V(1).Info("3F requests ineligible", "requests", ineligible)
+		}
+	}()
 	check := func(i int, request common.Address) error {
 		if _, known := memberships[i][request]; known {
 			return nil
@@ -170,6 +177,9 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 		err := eligible(ctx, chain, pin, markets[i], request, observations[i].MinimumYield)
 		if err != nil && !errors.Is(err, errIneligible) {
 			return err
+		}
+		if err != nil {
+			ineligible = append(ineligible, fmt.Sprintf("market %s/%s: %v", markets[i].Asset.Hex(), markets[i].UnderlyingAsset.Hex(), err))
 		}
 		memberships[i][request] = err == nil
 		return nil
