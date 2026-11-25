@@ -125,10 +125,12 @@ func (c QuoteCandidate) AmountInFor(amountOut *big.Int) *big.Int {
 type FillQuote struct {
 	Inventory
 
-	AmountIn       *big.Int `json:"amountIn"`
-	GrossAmountOut *big.Int `json:"grossAmountOut"`
-	MaxAmountOut   *big.Int `json:"maxAmountOut"`
-	MinDiscount    *big.Int `json:"minDiscount"`
+	// Pricing optionally supplies verified pricing for amounts below AmountIn.
+	Pricing        *QuoteCandidate `json:"-"`
+	AmountIn       *big.Int        `json:"amountIn"`
+	GrossAmountOut *big.Int        `json:"grossAmountOut"`
+	MaxAmountOut   *big.Int        `json:"maxAmountOut"`
+	MinDiscount    *big.Int        `json:"minDiscount"`
 }
 
 type Auth struct {

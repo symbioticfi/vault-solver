@@ -51,6 +51,54 @@ func TestBuildFillPlanSettlesAwardQuotedAtExactPayout(t *testing.T) {
 	}
 }
 
+func TestBuildFillPlanPricesSplitLegsAtAdapterPayout(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		amount, price, gross   int64
+		cap, legIn, legOut     int64
+		otherPrice, otherGross int64
+		total                  int64
+		private                bool
+	}{
+		{"direct", 7, 1_900_000_000_000_000_000, 13, 5, 3, 4, 1_000_000_000_000_000_000, 7, 8, false},
+		{"discount", 4, 1_350_000_000_000_000_000, 5, 2, 2, 1, 750_000_000_000_000_000, 3, 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			amountIn := big.NewInt(tc.amount)
+			first := liquidlane.NewRoute(1, vlt, vlt, tIn, tOut, 6, 6)
+			other := common.HexToAddress("0x04")
+			second := liquidlane.NewRoute(1, other, other, tIn, tOut, 6, 6)
+			left := liquidlane.DirectInventory(first, big.NewInt(tc.cap), nil)
+			right := liquidlane.DirectInventory(second, big.NewInt(10), nil)
+			left.Price, left.AdapterMinDiscount = big.NewInt(tc.price), big.NewInt(7_000)
+			right.Price, right.AdapterMinDiscount = big.NewInt(tc.otherPrice), new(big.Int)
+			source := left
+			if tc.private {
+				id := common.HexToHash("0xd")
+				source.DiscountID, source.Discount = &id, left.AdapterMinDiscount
+			}
+			candidates := liquidgreedy.NormalizeOracleInventory(amountIn, []liquidlane.Inventory{source, right}, []liquidlane.FillQuote{
+				{Inventory: left, AmountIn: amountIn, GrossAmountOut: big.NewInt(tc.gross),
+					MaxAmountOut: big.NewInt(tc.gross - 1), MinDiscount: left.AdapterMinDiscount},
+				{Inventory: right, AmountIn: amountIn, GrossAmountOut: big.NewInt(tc.otherGross),
+					MaxAmountOut: big.NewInt(tc.otherGross), MinDiscount: right.AdapterMinDiscount},
+			})
+			input := baseInput(candidates...)
+			input.AmountIn, input.RequiredAmountOut = amountIn, big.NewInt(tc.total)
+			plan, err := New().BuildFillPlan(t.Context(), input)
+			if err != nil || plan == nil || len(plan.Legs) != 2 {
+				t.Fatalf("expected two-leg fill, got %+v, %v", plan, err)
+			}
+			leg := plan.Legs[0]
+			if leg.Adapter != vlt || leg.AmountIn.Int64() != tc.legIn || leg.AmountOut.Int64() != tc.legOut ||
+				plan.QuotedAmountOut.Int64() != tc.total {
+				t.Fatalf("first leg = %+v, total = %s; want input %d, output %d, total %d",
+					leg, plan.QuotedAmountOut, tc.legIn, tc.legOut, tc.total)
+			}
+		})
+	}
+}
+
 // A fill that cannot be planned says which condition failed instead of returning no plan silently.
 func TestBuildFillPlanNamesTheFailedCondition(t *testing.T) {
 	candidate := quoteCandidate(vlt, 2, 100, 200, nil)

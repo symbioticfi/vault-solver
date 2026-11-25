@@ -87,6 +87,7 @@ var quoteDecisionOutcomes = [...]quoteDecisionOutcome{
 type quoteDecision struct {
 	response          *quoteResponse
 	outcome           quoteDecisionOutcome
+	reason            string
 	pairInScope       bool
 	metricPairInScope bool
 }
@@ -114,7 +115,11 @@ func (qs *quoteService) quote(ctx context.Context, q *quoteRequest) (decision qu
 			// A zero outcome means the pipeline panicked: end the span without recording a decision
 			// it never reached.
 			if decision.response == nil && decision.outcome != "" {
-				observability.Decline(ctx, "no_quote", string(decision.outcome))
+				reason := decision.reason
+				if reason == "" {
+					reason = string(decision.outcome)
+				}
+				observability.Decline(ctx, "no_quote", reason)
 			}
 			end(nil)
 		}
@@ -179,8 +184,8 @@ func (qs *quoteService) evaluate(ctx context.Context, q *quoteRequest) (decision
 		return quoteDecision{outcome: quoteDecisionError}, errors.Errorf("quote: strategy: %w", err)
 	}
 	if out.Decision != types.DecisionQuote {
-		observability.Log(ctx).V(1).Info("declining quote: strategy declined", "quoteId", q.QuoteID, "reason", out.Reason)
-		return quoteDecision{outcome: quoteDecisionStrategyDeclined}, nil
+		observability.Log(ctx).Info("declining quote: strategy declined", "quoteId", q.QuoteID, "reason", out.Reason)
+		return quoteDecision{outcome: quoteDecisionStrategyDeclined, reason: out.Reason}, nil
 	}
 	plan, err := strategies.FillPlanFromQuote(input, out)
 	if err != nil {

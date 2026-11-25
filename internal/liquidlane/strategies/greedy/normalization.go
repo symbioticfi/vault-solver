@@ -82,9 +82,10 @@ func NormalizeOracleInventory(
 		if discount == nil {
 			continue
 		}
-		// Price from the amount-specific quote, which is fresher than a snapshot price. A floored
-		// rate would price amountIn below the adapter's payout and miss an award quoted exactly.
-		source.Price = liquidlane.ImpliedPrice(amountIn, quote.GrossAmountOut, source.TokenInDecimals, source.TokenOutDecimals)
+		source.Price = quote.Price
+		if source.Price == nil {
+			source.Price = liquidlane.ImpliedPrice(amountIn, quote.GrossAmountOut, source.TokenInDecimals, source.TokenOutDecimals)
+		}
 		source.MaxRate = nil
 		if source.DiscountID != nil {
 			source.Discount = discount

@@ -134,6 +134,26 @@ func TestFillPlanFromQuoteRequiresConnectorInputCapacity(t *testing.T) {
 	}
 }
 
+func TestFillPlanFromQuoteChecksNativeAdapterRounding(t *testing.T) {
+	tokenIn, tokenOut := common.HexToAddress("0x01"), common.HexToAddress("0x02")
+	route := liquidlane.NewRoute(1, common.HexToAddress("0x03"), common.HexToAddress("0x04"), tokenIn, tokenOut, 6, 6)
+	id := liquidlane.NewCandidateID(route, nil)
+	input := types.QuoteInput{
+		TokenIn: tokenIn, TokenOut: tokenOut, AmountIn: big.NewInt(3),
+		Candidates: []liquidlane.QuoteCandidate{{
+			ID: id, Route: route, Price: big.NewInt(1_900_000_000_000_000_000), Discount: big.NewInt(7_000),
+			Rate: big.NewInt(1_886_700_000_000_000_000), MaxAmountOut: big.NewInt(9),
+		}},
+	}
+	for _, amountOut := range []int64{4, 5} {
+		out := types.QuoteOutput{Decision: types.DecisionQuote, QuotedAmountOut: big.NewInt(amountOut),
+			Legs: []types.QuoteLeg{{CandidateID: string(id), AmountIn: input.AmountIn, AmountOut: big.NewInt(amountOut)}}}
+		if _, err := FillPlanFromQuote(input, out); (err == nil) != (amountOut == 4) {
+			t.Errorf("payout %d: %v; only 4 should be accepted", amountOut, err)
+		}
+	}
+}
+
 func TestFillPlanFromQuoteRejectsRepeatedRoute(t *testing.T) {
 	tokenIn := common.HexToAddress("0x01")
 	tokenOut := common.HexToAddress("0x02")

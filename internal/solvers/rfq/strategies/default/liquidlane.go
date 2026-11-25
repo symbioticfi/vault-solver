@@ -128,10 +128,15 @@ func rfqFillTask(
 			return strategies.FillTask{}, nil, errors.Errorf("candidate %q has invalid identity", candidate.ID)
 		}
 		sources[candidateID] = candidate
+		var pricing *liquidlane.QuoteCandidate
+		if candidate.ExactPricing() {
+			pricing = &candidate
+		}
 		quotes = append(quotes, liquidlane.FillQuote{
 			Route: route, MaxAssets: liquidlane.CloneBig(candidate.MaxAmountOut),
 			MaxRate: liquidlane.CloneBig(candidate.Rate), DiscountID: liquidlane.CloneHash(candidate.DiscountID),
 			ValidUntil:   candidate.ValidUntil,
+			Pricing:      pricing,
 			AmountIn:     liquidlane.CloneBig(input.AmountIn),
 			MaxAmountOut: candidate.AmountOutFor(input.AmountIn),
 		})
