@@ -11,12 +11,20 @@ import (
 // One request owns the collector. The mutex also permits a strategy to trace parallel candidates;
 // DecideQuote must join its workers before returning. Different candidate failures deliberately
 // retain the generic strategy metric reason (the last attempted route is not a reason for every
-// route); the logged detail lists every decline instead.
+// route). Diagnostic detail keeps a bounded sample.
 type quoteStrategyDeclines struct {
-	mu      sync.Mutex
-	value   quoteDeclineReason
-	details []string
+	mu       sync.Mutex
+	value    quoteDeclineReason
+	details  strings.Builder
+	examples int
+	omitted  bool
 }
+
+const (
+	maxQuoteDeclineExamples = 8
+	maxQuoteDeclineBytes    = 2048
+	quoteDeclineOmitted     = "; more detail omitted"
+)
 
 func (d *quoteStrategyDeclines) trace(next strategies.DecisionTrace) strategies.DecisionTrace {
 	return func(message string, fields ...any) {
@@ -29,7 +37,7 @@ func (d *quoteStrategyDeclines) trace(next strategies.DecisionTrace) strategies.
 				}
 			}
 			d.mu.Lock()
-			d.details = append(d.details, strategies.FormatFields(fields))
+			d.addDetail(fields)
 			if d.value == "" {
 				d.value = reason
 			} else if d.value != reason {
@@ -50,14 +58,38 @@ func (d *quoteStrategyDeclines) reason() quoteDeclineReason {
 	return d.value
 }
 
-// detail lists every recorded decline for the quote log line.
+// addDetail runs under mu and reserves space for the omission marker.
+func (d *quoteStrategyDeclines) addDetail(fields []any) {
+	remaining := maxQuoteDeclineBytes - len(quoteDeclineOmitted) - d.details.Len()
+	if d.examples > 0 {
+		remaining -= len("; ")
+	}
+	if d.omitted || d.examples >= maxQuoteDeclineExamples || remaining <= 0 {
+		d.omitted = true
+		return
+	}
+	detail := strategies.FormatFields(fields)
+	if len(detail) > remaining {
+		detail = strings.ToValidUTF8(detail[:remaining], "")
+		d.omitted = true
+	}
+	if d.examples > 0 {
+		d.details.WriteString("; ")
+	}
+	d.details.WriteString(detail)
+	d.examples++
+}
+
 func (d *quoteStrategyDeclines) detail() string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if len(d.details) == 0 {
+	if d.examples == 0 {
 		return "strategy returned no quote without recording a decline"
 	}
-	return strings.Join(d.details, "; ")
+	if d.omitted {
+		return d.details.String() + quoteDeclineOmitted
+	}
+	return d.details.String()
 }
 
 // Only these local planner decisions have established semantics. Never classify arbitrary

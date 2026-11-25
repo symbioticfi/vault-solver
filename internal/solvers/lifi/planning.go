@@ -39,6 +39,7 @@ type preparedFill struct {
 type orderProcessingResult struct {
 	fill              *pendingFill
 	blockedOn         map[liquidlane.CapacityID]bool
+	capacityReason    string
 	depositNotVisible bool
 	// retrySoon defers the order to the bounded timed retry also used for deposits that are not
 	// visible yet: a dependency of the fill failed, not the order. Outside recovery, retryable
@@ -284,8 +285,9 @@ func (s *Solver) handleFillDecline(
 			declined, len(unreservedPlan.Routes), len(prepared.input.Reservations)))
 	}
 	return orderProcessingResult{
-		blockedOn: blockedOn,
-		outcome:   orderProcessingCapacityDeferred,
+		blockedOn:      blockedOn,
+		capacityReason: declined.Error(),
+		outcome:        orderProcessingCapacityDeferred,
 	}
 }
 

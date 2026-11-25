@@ -282,6 +282,32 @@ func TestStrategyDeclineCaptureIsBoundedAndOrderIndependent(t *testing.T) {
 	}
 }
 
+func TestQuoteDeclineDetailLimitsExamplesAndBytes(t *testing.T) {
+	for _, value := range []string{"small", strings.Repeat("é", 2048)} {
+		d := &quoteStrategyDeclines{}
+		trace := d.trace(nil)
+		for i := range 32 {
+			trace.Decline("quote", "insufficient-capacity", "candidate", i, "value", value)
+		}
+		trace.Decline("quote", "gas-exceeds-output")
+		detail := d.detail()
+		if len(detail) > 2048 || strings.Count(detail, "candidate=") > 8 ||
+			!strings.Contains(detail, "omitted") || d.reason() != quoteDeclineStrategy {
+			t.Fatalf("detail bytes=%d examples=%d reason=%s", len(detail), strings.Count(detail, "candidate="), d.reason())
+		}
+	}
+}
+
+func TestWebhookNullQuoteKeepsReasonWithoutLocalInventory(t *testing.T) {
+	in, out := common.Address{1}, common.Address{2}
+	s := newQuoteTestSolver(t, in, &quoteTestStrategy{})
+	s.cfg.Strategy.Name = types.WebhookName
+	response, err := s.quote(t.Context(), validQuoteRequest(in, out))
+	if err != nil || response.pairInScope || response.declineDetail != "webhook returned a null quote" {
+		t.Fatalf("out-of-inventory webhook decline = %+v, err %v", response, err)
+	}
+}
+
 func TestQuoteHTTPReasonsKeepExistingOutcomesAndLogs(t *testing.T) {
 	in, out := common.HexToAddress("0x01"), common.HexToAddress("0x02")
 	for _, tc := range []struct {

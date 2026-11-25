@@ -304,9 +304,12 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 		return response, err
 	}
 	if quote == nil {
-		detail := declines.detail()
-		if !response.pairInScope {
-			detail = "directed pair has no inventory route"
+		detail := "directed pair has no inventory route"
+		switch {
+		case response.pairInScope:
+			detail = declines.detail()
+		case s.cfg.Strategy.Name == types.WebhookName:
+			detail = "webhook returned a null quote"
 		}
 		return declinedQuote(response, declines.reason(), detail), nil
 	}
@@ -391,8 +394,8 @@ func (s *Solver) quoteBlockReason(now int64) string {
 			return fmt.Sprintf("%s blocks quotes until %d, now %d", block.name, block.until, now)
 		}
 	}
-	if !s.fillPath().laneAvailable() {
-		return "transaction nonce lane is paused"
+	if reason := s.fillPath().laneBlockReason(); reason != "" {
+		return reason
 	}
 	return s.exclusiveDeliveryProblem(time.Now())
 }

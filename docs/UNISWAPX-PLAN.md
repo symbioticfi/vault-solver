@@ -720,9 +720,10 @@ an unknown decision, or differing decisions across attempted candidates/subprobl
 Errors and invalid returned quotes remain HTTP 503 with workflow outcome `error` and log/counter
 reason `strategy_error`. Successful strategy results ignore prior candidate declines.
 Every decline carries detail in the V(1) `quote declined` log and the span event. It names the
-failed check and its values, every recorded candidate decline, or which of the
-`blocked`/`state-changed` conditions fired. Pairs outside inventory scope keep their addresses out
-of the detail, as they do out of the request log fields.
+failed check and its values or which of the `blocked` and `state-changed` conditions fired.
+Candidate detail shows up to eight examples within 2 KiB. All candidate declines still contribute
+to the metric reason. Pairs outside inventory scope keep their addresses out of the detail and
+request log fields.
 
 Existing workflow outcome labels are retained: semantic reasons map to `declined_invalid_request`,
 planner reasons to `declined_strategy`, exactly once. A shared LiquidLane `QuoteMetrics` helper now

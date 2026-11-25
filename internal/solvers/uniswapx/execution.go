@@ -74,11 +74,12 @@ func (s *Solver) fillLoop(
 				s.retry(order.Hash, time.Now(), false)
 				continue
 			}
-			if !s.fillPath().laneAvailable() {
+			if reason := s.fillPath().laneBlockReason(); reason != "" {
 				s.endFillPlanning()
 				s.retry(order.Hash, time.Now(), false)
 				observability.Log(orderCtx).V(1).Info(
-					"order fill deferred while transaction nonce lane is paused",
+					"order fill deferred by transaction lane",
+					"reason", reason,
 					"source", order.Source,
 					"orderHash", order.Hash.Hex(),
 					"quoteId", order.QuoteID,

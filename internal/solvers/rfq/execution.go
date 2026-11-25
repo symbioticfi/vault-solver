@@ -221,9 +221,14 @@ func (e *executionService) expireUnsigned(ctx context.Context, o *orderRecord) b
 
 // markExpired observes the bounded order outcome only once, when expiry follows retry exhaustion.
 func (e *executionService) markExpired(ctx context.Context, orderID string, txHash common.Hash, reason string) {
+	txHash, exhausted := e.store.markExpired(orderID, txHash, reason)
 	observability.Decline(ctx, "fill_expired", reason)
-	observability.Log(ctx).Info("order expired", "reason", reason, "tx", txHash.Hex())
-	if e.store.markExpired(orderID, txHash, reason) {
+	log := observability.Log(ctx)
+	if txHash != (common.Hash{}) {
+		log = log.WithValues("tx", txHash.Hex())
+	}
+	log.Info("order expired", "reason", reason)
+	if exhausted {
 		e.metrics.observeExpiredAfterNonceRetries()
 	}
 }
@@ -984,15 +989,23 @@ func (e *executionService) discountInventories(
 	for _, d := range direct {
 		seen[d.Adapter] = true
 	}
-	now := e.now()
-	var out []solverInventory
-	offers, issues := discounts.LiveOffers(resp, now)
-	for _, issue := range issues {
-		trace.Decline("inventory", "discount offer is invalid", "discountId", issue.DiscountID, "error", issue.Err.Error())
+	if resp == nil {
+		return nil, nil
 	}
-	for _, offer := range offers {
+	now := e.now().Unix()
+	var out []solverInventory
+	for _, listing := range resp.Discounts {
+		offer, err := discounts.ParseOffer(listing)
+		if err != nil {
+			trace.Decline("inventory", "discount offer is invalid", "discountId", listing.DiscountID, "error", err.Error())
+			continue
+		}
 		adapter := offer.Adapter
 		switch {
+		case offer.Deadline <= now:
+			trace.Decline("inventory", "discount offer expired", "discountId", offer.DiscountID,
+				"deadline", offer.Deadline, "now", now)
+			continue
 		case offer.TokenToRedeem != tokenIn:
 			trace.Decline("inventory", "discount tokenToRedeem is not the order tokenIn", "discountId", offer.DiscountID,
 				"tokenToRedeem", offer.TokenToRedeem, "tokenIn", tokenIn)

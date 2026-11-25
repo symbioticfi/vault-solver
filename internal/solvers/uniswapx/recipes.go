@@ -67,7 +67,19 @@ func (*recipeSettlement) onMerkleLane() bool { return true }
 // The Merkle lane owns one fill at a time, so it is unavailable until that fill settles: an
 // order awarded from a quote served meanwhile could miss its exclusivity window. A stalled lane
 // keeps its fill, and so stays unavailable until restart.
-func (r *recipeSettlement) laneAvailable() bool { return r.lane.Ready() && r.lane.Pending() == nil }
+func (r *recipeSettlement) laneBlockReason() string {
+	ready := r.lane.Ready()
+	if pending := r.lane.Pending(); pending != nil {
+		if r.lane.Stalled() {
+			return "recipe lane stalled while filling order " + pending.OrderID
+		}
+		return "recipe lane is filling order " + pending.OrderID
+	}
+	if !ready {
+		return "recipe transaction manager is not ready"
+	}
+	return ""
+}
 
 func (r *recipeSettlement) reservations(state *quoteState) liquidlane.CapacityReservations {
 	return r.lane.Reservations(state.inventory)

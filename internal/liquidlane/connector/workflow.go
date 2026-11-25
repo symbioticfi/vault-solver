@@ -206,8 +206,13 @@ func (w *Workflow) prepareLeg(ctx context.Context, request Request, member recip
 		return Prepared{}, errors.Errorf("connector remainingAssets decode: %w", err)
 	}
 	covers := func(amount *big.Int) error {
-		if remaining.Cmp(amount) < 0 || request.MaxAssets.Cmp(amount) < 0 {
-			return ErrInsufficientCapacity
+		if remaining.Cmp(amount) < 0 {
+			return errors.Errorf("%w: connector %s remainingAssets %s below required output %s",
+				ErrInsufficientCapacity, request.Venue.Hex(), remaining, amount)
+		}
+		if request.MaxAssets.Cmp(amount) < 0 {
+			return errors.Errorf("%w: connector %s maxAssets %s below required output %s",
+				ErrInsufficientCapacity, request.Venue.Hex(), request.MaxAssets, amount)
 		}
 		return nil
 	}

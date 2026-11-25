@@ -256,7 +256,7 @@ func Decline(ctx context.Context, decision, reason string) {
 		return
 	}
 	span.AddEvent("declined", trace.WithAttributes(
-		attribute.String("decision", decision), attribute.String("reason", reason),
+		attribute.String("decision", decision), attribute.String("reason", redactURLs(reason)),
 	))
 }
 

@@ -429,7 +429,7 @@ func (s *Solver) buildBidWithContext(ctx context.Context, a AuctionMessage, nowF
 				outcome = auctionOutcomeTooLate
 			}
 			observability.Log(ctx).V(1).Info("strategy stopped with auction context", "reason", outcome)
-			return bidDecision{skip: outcome, skipDetail: types.Text("auction context done during strategy: " + err.Error())}
+			return bidDecision{skip: outcome, skipDetail: types.Text("auction context done during strategy: " + ctxErr.Error())}
 		}
 		observability.Log(ctx).Error(err, "strategy failed")
 		return bidDecision{skip: "strategy_error", skipDetail: types.Text(err.Error()), err: err}

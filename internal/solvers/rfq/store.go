@@ -271,18 +271,18 @@ func (s *store) markStatusLocked(rec *orderRecord, status orderStatus, txHash co
 	rec.UpdatedAt = s.now()
 }
 
-// markExpired reports the first active-to-expired transition after retry exhaustion. The shared
-// store lock makes the event gate atomic with the status update; repeated polls cannot count it twice.
-func (s *store) markExpired(orderID string, txHash common.Hash, lastErr string) bool {
+// markExpired returns the recorded transaction hash and whether the order expired after retry
+// exhaustion. The store lock keeps the metric gate atomic with the status update.
+func (s *store) markExpired(orderID string, txHash common.Hash, lastErr string) (common.Hash, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec := s.orders[orderID]
 	if rec == nil || !rec.Status.active() {
-		return false
+		return txHash, false
 	}
 	exhausted := rec.NonceRetryExhausted
 	s.markStatusLocked(rec, statusExpired, txHash, lastErr)
-	return exhausted
+	return rec.TxHash, exhausted
 }
 
 // markNonceRetryExhausted retires resubmission, while keeping backend settlement observation until

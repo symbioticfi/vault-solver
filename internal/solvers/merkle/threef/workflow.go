@@ -165,7 +165,11 @@ func (w *offerWorkflow) evaluate(ctx context.Context, chain provider.Reader, pin
 	}
 	// One debug line per pass names the ineligible requests and the policy's revert reasons.
 	ineligible := newSkipLog(ctx)
-	defer ineligible.flush("3F requests ineligible")
+	defer func() {
+		if summary := ineligible.flush("3F requests ineligible"); summary != "" {
+			observability.Decline(ctx, "request_ineligible", summary)
+		}
+	}()
 	check := func(i int, request common.Address) error {
 		if _, known := memberships[i][request]; known {
 			return nil

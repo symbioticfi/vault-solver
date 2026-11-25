@@ -904,6 +904,7 @@ func (s *Solver) runOrderWorker(
 				"orderId", order.OrderID,
 				"onChainOrderId", order.OnChainOrderID,
 				"quoteId", order.QuoteID,
+				"reason", result.capacityReason,
 				"blockedCapacityGroups", len(result.blockedOn),
 				"pendingFills", pending.len(),
 				"retryQueue", retries.len(),

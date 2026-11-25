@@ -696,8 +696,13 @@ func TestExecution_DiscountInventoriesSkipsExpired(t *testing.T) {
 	e := newExec(t, st, be, &fakeTxm{})
 	e.now = func() time.Time { return time.Unix(2, 0) }
 	e.whitelist = buildAdapterWhitelist(true, []recoveryVault{{Adapter: vlt}})
-	if out := discountInventoriesFor(t, e, nil); len(out) != 0 {
+	trace, lastDecline := liquidstrategies.DecisionTrace(nil).RecordDeclines()
+	if out := discountInventoriesFor(t, e, trace); len(out) != 0 {
 		t.Fatalf("expired discount inventories = %+v", out)
+	}
+	if reason := lastDecline(); !strings.Contains(reason, "expired") ||
+		!strings.Contains(reason, "deadline=1") || !strings.Contains(reason, "now=2") {
+		t.Fatalf("expired discount decline = %q", reason)
 	}
 }
 
