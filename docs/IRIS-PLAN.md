@@ -72,7 +72,8 @@ market.
   version. The Quote type has 19 fields; `data` is hashed as `keccak256(data)`.
 - `IBlm.bondRequirement(Quote)` is a view; the solver calls it with the exact quote. IRIS
   ships no ABI artifact, so `api/abi/IrisBlm.json` is hand-vendored to that one function.
-- Coordinator response budget: 5 s by default, raisable per solver at onboarding.
+- Coordinator response budget: 5 s by default, raisable per solver at onboarding up to 60 s
+  (`overrides.timeout`), a limit IRIS documents for ERC-1271 solvers that sign on-chain.
 - `deadline` is accepted only within about 5 s of the 2-minute TTL: it must be close to
   120 s ahead of the coordinator's clock when the response arrives (ยง6).
 
@@ -115,11 +116,15 @@ Floating-rate aware pricing (venue rate plus spread and a duration premium) is ย
   about 120 s ahead when the coordinator reads the response. The solver targets the next
   slot that the transaction can make: `inclusion = head timestamp + k * blockTime`, the
   first slot at least `submitLead` from now, and signs `deadline = inclusion + 120 +
-  responseSlack`. The lead is rounded up to whole seconds. When the target skips the next
-  slot, the solver waits until the slot before the target starts before sending, so the
-  signature cannot land a slot early (which would put the deadline past the window). A
-  receipt in a later block makes the deadline too short; that quote is declined after the
-  fact (the digest stays harmless: it expires, and its bond stays reserved until then).
+  responseSlack`. The lead is rounded up to whole seconds and must cover the route and
+  simulation RPCs as well as propagation. The transaction is sent as soon as it is
+  simulated; if the target slot has already started by then it is not sent at all
+  (`slot_missed`), since it could only land late. A signature that lands a slot early is
+  fine: the response is held until `deadline - 120 - responseSlack`, so the coordinator,
+  receiving it `responseSlack` later, sees the deadline 120 s ahead. The deadline fixes the
+  response time either way, because it is signed before the transaction is sent. A receipt
+  in a later block makes the deadline too short; that quote is declined after the fact
+  (the digest stays harmless: it expires, and its bond stays reserved until then).
   The recipe allows a deadline at most 30 minutes past the signing block; discovery rejects
   a market when `quoteTtl + responseSlack + blockTime` exceeds that bound.
 - Budget. A request handler waits at most `responseBudget` for the receipt. With 12 s
@@ -239,7 +244,8 @@ the zero signature and the registry headers).
 ### 10.1 IRIS onboarding
 
 - [ ] Register the endpoint and the account as solver address.
-- [ ] Raise the coordinator response timeout to about 30 s.
+- [ ] Set `overrides.timeout` to 30000 (30 s; the maximum is 60 s), a few seconds above
+  `timing.responseBudget` (25 s).
 - [ ] Confirm the coordinator accepts a 65-byte zero signature for an ERC-1271 solver.
 - [ ] Agree the authentication header.
 

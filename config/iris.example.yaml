@@ -41,7 +41,9 @@ solvers:
         maxBond: "50000000000" # per quote, debt-token units
       timing:
         blockTime: 12s
+        # Lead before the target slot; covers the route and simulation RPCs plus propagation.
         submitLead: 2s
+        # Expected trip from our response to the coordinator.
         responseSlack: 0s
         quoteTtl: 2m
         deadlineWindow: 5s

@@ -91,16 +91,13 @@ func (s *Solver) quote(ctx context.Context, r request, indicative bool) (quoteRe
 	if err != nil {
 		return quoteResponse{}, err
 	}
-	if wait := time.Until(s.cfg.Timing.submitAt(inclusion)); wait > 0 {
-		select {
-		case <-time.After(wait):
-		case <-ctx.Done():
-			return quoteResponse{}, decline("signature_pending")
-		}
+	// A signature mined after its slot dates the deadline too early for the coordinator, so
+	// nothing is sent once the slot has started and the sender stops resubmitting then.
+	slot := time.Unix(int64(inclusion), 0)
+	if !time.Now().Before(slot) {
+		return quoteResponse{}, decline("slot_missed")
 	}
-	// The sender stops submitting once the target slot has passed: a later inclusion would
-	// date the deadline too early for the coordinator.
-	done, err := s.lane.execute(ctx, s.background(), call, time.Unix(int64(inclusion), 0))
+	done, err := s.lane.execute(ctx, s.background(), call, slot)
 	if errors.Is(err, errLaneBusy) {
 		return quoteResponse{}, decline("solver_busy")
 	}
@@ -125,6 +122,13 @@ func (s *Solver) quote(ctx context.Context, r request, indicative bool) (quoteRe
 	s.reserve(q)
 	if err := s.confirm(ctx, market, q, outcome.result.Execution.BlockNumber); err != nil {
 		return quoteResponse{}, err
+	}
+	if wait := time.Until(s.cfg.Timing.respondAt(deadline)); wait > 0 {
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return quoteResponse{}, decline("deadline_missed")
+		}
 	}
 	if !s.cfg.Timing.fresh(time.Now(), deadline) {
 		return quoteResponse{}, decline("deadline_missed")

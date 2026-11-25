@@ -205,6 +205,8 @@ Return `200` with the body below, or decline with `404` / `bond: "0"` (a `404` m
 > [!WARNING]
 >
 > The `deadline` window is tight: it is accepted only within the final \~5 seconds before the 2-minute TTL expires. Set `deadline` to **exactly 120 seconds ahead of your own clock** at signing time. The slack exists to absorb the trip back to the coordinator, not to allow shorter-lived quotes.
+>
+> The window is measured when your response reaches the coordinator. If you fix `deadline` before a slow step, such as an on-chain transaction that makes an ERC-1271 signature valid, set it about 120 seconds after the moment you expect your response to arrive, not after the moment you fixed it.
 
 Signature construction is covered in [Get Started](https://docs.iris.credit/rfq/running-a-solver/get-started.md#3-sign-the-quote); the checks these fields face are in [Validation](https://docs.iris.credit/rfq/running-a-solver/validation.md).
 
@@ -254,7 +256,7 @@ The shape of one registry entry; an organisation registers one entry per endpoin
 | `hash` | string | Yes | Opaque 32-byte organisation identifier, assigned by the team; shared across an organisation's entries |
 | `address` | string | Yes | Solver signing address; responses whose `solver` differs are dropped |
 | `headers` | object | No | Sent verbatim on every request; the hook for authenticating the caller |
-| `overrides.timeout` | number | No | Response budget in milliseconds; default `5000` |
+| `overrides.timeout` | number | No | Response budget in milliseconds; default `5000`, at most `60000` |
 | `chainIds` | number\[] | No | Restrict to specific chains. Omit for all |
 | `supportedTokens` | string\[] | No | Restrict by **debt** token, EIP-55. Omit for all |
 | `supportedVenues` | string\[] | No | Restrict by venue name, `aaveV3`, `morphoBlue` or `sparkLend`; matched against the request's `venueBitmap`. Omit for all |

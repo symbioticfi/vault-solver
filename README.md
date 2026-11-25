@@ -518,9 +518,12 @@ is returned, and Iris pulls the bond from the account at `take`.
   `reasons` entry, such as `no_market`, `above_market_limits`, `rate_above_max_fixed_rate`
   (with the rate), `insufficient_bond_allowance` or `insufficient_bond_balance`.
 - The quote deadline must reach the coordinator about 120 s ahead, so the solver dates it
-  from the slot the signature targets (`timing`) and declines a quote mined in a later slot.
+  from the slot the signature targets (`timing`), sends the signature at once, holds the
+  response if it lands early, and declines a quote mined in a later slot. `submitLead` must
+  cover the route and simulation RPCs as well as propagation; a signature that is not ready
+  before its slot starts is declined unsent (`slot_missed`).
   This needs `txManager.confirmations` of at most 1 and an IRIS response timeout above
-  `timing.responseBudget` (the IRIS default is 5 s).
+  `timing.responseBudget` (the IRIS default is 5 s; `overrides.timeout` allows up to 60 s).
 - `server.authHeader` and `server.authValueEnv` are required, because every firm request
   costs gas. Put the same header in the IRIS registry entry's `headers`.
 - Metrics: `iris_quote_requests_total{kind,outcome}` and `iris_quote_duration_seconds{kind}`.

@@ -56,18 +56,20 @@ func TestScheduleTargetsTheFirstReachableSlot(t *testing.T) {
 			inclusion, deadline := timing.schedule(time.Unix(int64(tt.now), 0), head)
 			equal(t, tt.wantInclusion, inclusion)
 			equal(t, tt.wantInclusion+120, deadline)
-			// Never send before the slot preceding the target, so it cannot land early.
-			submit := timing.submitAt(inclusion)
-			equal(t, int64(inclusion-12), submit.Unix())
-			equal(t, tt.name == "next slot is too close", submit.After(time.Unix(int64(tt.now), 0)), "wait")
+			// The response goes out once the target slot starts, even if the signature lands earlier.
+			equal(t, int64(inclusion), timing.respondAt(deadline).Unix())
 		})
 	}
 	// A fractional lead past a slot boundary moves to the next slot instead of truncating.
 	inclusion, _ := timing.schedule(time.Unix(int64(head+10), int64(500*time.Millisecond)), head)
 	equal(t, head+24, inclusion)
 	timing.ResponseSlack = 2 * time.Second
-	_, deadline := timing.schedule(time.Unix(int64(head+1), 0), head)
+	timing.DeadlineWindow = 5 * time.Second
+	inclusion, deadline := timing.schedule(time.Unix(int64(head+1), 0), head)
 	equal(t, head+12+122, deadline)
+	// The slack is spent on the way to the coordinator, so the deadline is fresh at the slot.
+	ok(t, timing.fresh(time.Unix(int64(inclusion), 0), deadline))
+	ok(t, timing.fresh(timing.respondAt(deadline), deadline))
 }
 
 func TestFreshAcceptsOnlyTheFinalWindow(t *testing.T) {
@@ -85,6 +87,9 @@ func TestFreshAcceptsOnlyTheFinalWindow(t *testing.T) {
 	for _, tt := range tests {
 		equal(t, tt.want, timing.fresh(now, uint64(tt.deadline)), "deadline now+%d", tt.deadline-now.Unix())
 	}
+	timing.ResponseSlack = 3 * time.Second
+	ok(t, timing.fresh(now, uint64(now.Unix()+123)))
+	ok(t, !timing.fresh(now, uint64(now.Unix()+117)))
 }
 
 func TestSelectMarketTakesTheLowestRateUnderTheCeiling(t *testing.T) {

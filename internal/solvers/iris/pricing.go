@@ -72,15 +72,15 @@ func (t Timing) schedule(now time.Time, headTimestamp uint64) (inclusion, deadli
 	return inclusion, inclusion + uint64((t.QuoteTTL+t.ResponseSlack)/time.Second)
 }
 
-// submitAt is when the slot before inclusion starts. Sending earlier could land the signature
-// a slot early, which puts the deadline past the coordinator's window.
-func (t Timing) submitAt(inclusion uint64) time.Time {
-	return time.Unix(int64(inclusion), 0).Add(-t.BlockTime)
+// respondAt is the first moment the coordinator, receiving the response responseSlack
+// later, accepts the deadline. A signature mined before its target slot waits until then.
+func (t Timing) respondAt(deadline uint64) time.Time {
+	return time.Unix(int64(deadline), 0).Add(-t.QuoteTTL - t.ResponseSlack)
 }
 
-// fresh reports whether the coordinator still accepts the deadline: it must lie within the
-// final deadlineWindow of the quote TTL measured from now.
+// fresh reports whether the coordinator accepts the deadline of a response sent now: it must
+// lie within the final deadlineWindow of the quote TTL measured from arrival, responseSlack later.
 func (t Timing) fresh(now time.Time, deadline uint64) bool {
-	latest := now.Add(t.QuoteTTL).Unix()
+	latest := now.Add(t.ResponseSlack + t.QuoteTTL).Unix()
 	return int64(deadline) <= latest && int64(deadline) >= latest-int64(t.DeadlineWindow/time.Second)
 }

@@ -28,6 +28,8 @@ func TestParseRequest(t *testing.T) {
 	must(t, err)
 	equal(t, common.HexToAddress("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"), r.DebtToken)
 	equal(t, big.NewInt(3), r.VenueBitmap)
+	equal(t, common.HexToAddress("0xaaccE4EC50328120eF3899a978E87FcA6B8bBE84"), r.Borrower)
+	equal(t, r.Borrower, r.Receiver)
 
 	tests := []struct {
 		name   string
@@ -36,6 +38,7 @@ func TestParseRequest(t *testing.T) {
 		{"other chain", func(q *quoteRequest) { q.ChainID = 5 }},
 		{"no request id", func(q *quoteRequest) { q.RequestID = "" }},
 		{"no borrower", func(q *quoteRequest) { q.Borrower = "" }},
+		{"no receiver", func(q *quoteRequest) { q.Receiver = "" }},
 		{"zero debt", func(q *quoteRequest) { q.Debt = "0" }},
 		{"bad bitmap", func(q *quoteRequest) { q.VenueBitmap = "x" }},
 	}

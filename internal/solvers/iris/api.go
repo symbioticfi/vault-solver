@@ -86,11 +86,14 @@ func parseRequest(body quoteRequest, chainID *big.Int, indicative bool) (request
 	}
 	r := request{RequestID: body.RequestID, QuoteID: body.QuoteID}
 	var err error
-	for value, target := range map[string]*common.Address{body.Borrower: &r.Borrower, body.Receiver: &r.Receiver} {
-		if value == "" && indicative {
+	for _, field := range []struct {
+		value, name string
+		target      *common.Address
+	}{{body.Borrower, "borrower", &r.Borrower}, {body.Receiver, "receiver", &r.Receiver}} {
+		if field.value == "" && indicative {
 			continue
 		}
-		if *target, err = parse.NonZeroAddress(value, "borrower/receiver"); err != nil {
+		if *field.target, err = parse.NonZeroAddress(field.value, field.name); err != nil {
 			return request{}, err
 		}
 	}
