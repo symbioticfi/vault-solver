@@ -110,7 +110,7 @@ func (s *Solver) fillLoop(
 				if errors.Is(err, errOrderNotFillable) {
 					s.observeFillOutcome(fillOutcomeDeclined)
 					observability.Log(orderCtx).V(1).Info("order not fillable yet", "source", order.Source,
-						"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID)
+						"orderHash", order.Hash.Hex(), "quoteId", order.QuoteID, "reason", err.Error())
 					continue
 				}
 				observability.Log(orderCtx).Error(
@@ -230,6 +230,9 @@ func (s *Solver) startFill(
 	}
 	prepared, err := s.prepareFill(ctx, order, fillInput, decisionRoutes, now, chainObservedAt, reservationRevision)
 	if err != nil {
+		if discountErr != nil {
+			err = errors.Errorf("%w (discount route refresh failed: %v)", err, discountErr)
+		}
 		return nil, err
 	}
 	plan, data, discountValidUntil := prepared.plan, prepared.data, prepared.validUntil
@@ -313,16 +316,29 @@ func (s *Solver) orderObsolete(order *resolvedOrder) func(context.Context) (bool
 // pairing the event and sentinel keeps unfillable plans out of error statistics.
 func declineFill(ctx context.Context, decision, reason string) error {
 	observability.Decline(ctx, decision, reason)
-	return errOrderNotFillable
+	return errors.Errorf("%w: %s", errOrderNotFillable, reason)
 }
 
-// decideFill runs the strategy as the uniswapx.fill.plan stage.
+// decideFill runs the strategy as the uniswapx.fill.plan stage. A strategy decline returns no plan,
+// a reason naming the failed check and a nil error.
 func (s *Solver) decideFill(
 	ctx context.Context, input types.FillInput,
-) (plan *types.FillPlan, err error) {
+) (plan *types.FillPlan, declined string, err error) {
 	ctx, end := tracer.Start(ctx, "uniswapx.fill.plan", observability.AttrStrategy.String(s.cfg.Strategy.Name))
 	defer func() { end(err) }()
-	return s.strategy.DecideFill(ctx, input)
+	plan, err = s.strategy.DecideFill(ctx, input)
+	switch {
+	case errors.Is(err, types.ErrFillDeclined):
+		declined, err = err.Error(), nil
+	case err != nil:
+		return nil, "", err
+	case plan == nil || len(plan.Routes) == 0:
+		declined = "strategy returned an empty fill plan"
+	default:
+		return plan, "", nil
+	}
+	observability.Decline(ctx, "fill_declined", declined)
+	return nil, declined, nil
 }
 
 // submitFill hands the fill to the shared txmanager as the uniswapx.fill.submit stage. The result is

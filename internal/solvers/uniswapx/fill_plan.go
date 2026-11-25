@@ -2,8 +2,10 @@ package uniswapx
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"slices"
+	"strings"
 	"time"
 
 	ethereum "github.com/ethereum/go-ethereum"
@@ -48,19 +50,20 @@ func (s *Solver) prepareFill(
 			return preparedFill{}, errors.Errorf("strategy returned invalid capacity reservations: %w", err)
 		}
 		if !s.setPendingReservations(ctx, order.Hash, reservations, revision) {
-			return preparedFill{}, declineFill(ctx, "fill_declined", "capacity changed during planning")
+			return preparedFill{}, declineFill(ctx, "fill_declined", fmt.Sprintf(
+				"capacity revision moved from %d to %d during planning", revision, s.capacity.Revision()))
 		}
 		revision++ // Only our own replacement may advance the version accepted by this attempt.
 		s.logFillPlan(ctx, order, plan, input.Quotes)
 		return s.preflightPlan(ctx, order, plan, routes, now)
 	}
 	if !s.cfg.singleSource() {
-		plan, err := s.decideFill(ctx, input)
+		plan, declined, err := s.decideFill(ctx, input)
 		if err != nil {
 			return preparedFill{}, err
 		}
-		if plan == nil || len(plan.Routes) == 0 {
-			return preparedFill{}, declineFill(ctx, "fill_declined", "strategy returned no fill plan")
+		if plan == nil {
+			return preparedFill{}, declineFill(ctx, "fill_declined", declined)
 		}
 		if err := validatePreparedFill(input, plan); err != nil {
 			return preparedFill{}, err
@@ -82,6 +85,7 @@ func (s *Solver) prepareFill(
 		preferred = s.preferredSource(order, time.Now())
 	}
 	var sourceErr error
+	var declines []string
 	for len(remaining) > 0 {
 		if err := ctx.Err(); err != nil {
 			return preparedFill{}, err
@@ -96,16 +100,22 @@ func (s *Solver) prepareFill(
 					break
 				}
 			}
+			if !tryingPreferred {
+				declines = append(declines, fmt.Sprintf("preferred source %s has no fill quote", preferred))
+			}
 			preferred = ""
 		}
-		plan, err := s.decideFill(ctx, input)
+		plan, declined, err := s.decideFill(ctx, input)
 		if err != nil {
 			return preparedFill{}, err
 		}
-		if plan == nil || len(plan.Routes) == 0 {
+		if plan == nil {
 			if tryingPreferred {
+				id := liquidlane.NewCandidateID(input.Quotes[0].Route, input.Quotes[0].DiscountID)
+				declines = append(declines, fmt.Sprintf("preferred source %s: %s", id, declined))
 				continue
 			}
+			declines = append(declines, fmt.Sprintf("remaining sources (%d): %s", len(input.Quotes), declined))
 			break
 		}
 		if err := validatePreparedFill(input, plan); err != nil {
@@ -132,7 +142,11 @@ func (s *Solver) prepareFill(
 	if sourceErr != nil {
 		return preparedFill{}, sourceErr
 	}
-	return preparedFill{}, declineFill(ctx, "fill_declined", "no source covers the awarded output")
+	if len(declines) == 0 {
+		declines = append(declines, "no fill quotes")
+	}
+	return preparedFill{}, declineFill(ctx, "fill_declined",
+		"no source covers the awarded output: "+strings.Join(declines, "; "))
 }
 
 func validatePreparedFill(input types.FillInput, plan *types.FillPlan) error {

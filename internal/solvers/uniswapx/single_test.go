@@ -122,6 +122,24 @@ func TestFillLoopRetriesDeclines(t *testing.T) {
 	}
 }
 
+func TestFillDeclineNamesFailedCheck(t *testing.T) {
+	for strategyName, want := range map[string]string{
+		"default": "order is not fillable at current chain state: fill declined: required amount out 90 exceeds max allocatable amount out 89",
+		"single": "order is not fillable at current chain state: no source covers the awarded output: " +
+			"remaining sources (1): fill declined: required amount out 90 exceeds max allocatable amount out 89",
+	} {
+		t.Run(strategyName, func(t *testing.T) {
+			fixture := newDirectExecutionFixture(t)
+			useExecutionStrategy(t, fixture, strategyName)
+			fixture.solver.reader.(*executionTestReader).snapshot.Direct[0].MaxAmountOut = big.NewInt(89)
+			_, err := fixture.solver.startFill(t.Context(), []liquidlane.Route{fixture.route}, fixture.order, fixture.now, fixture.now)
+			if !errors.Is(err, errOrderNotFillable) || err.Error() != want {
+				t.Fatalf("err = %v\nwant %s", err, want)
+			}
+		})
+	}
+}
+
 func TestSingleFillHonorsPreferenceAndReplacesFailedSource(t *testing.T) {
 	for _, test := range []struct {
 		name                                    string

@@ -79,7 +79,8 @@ func TestQuoteValidationReasonsAndPrecedence(t *testing.T) {
 		s := newQuoteTestSolver(t, in, &quoteTestStrategy{})
 		s.warmupUntil.Store(time.Now().Add(time.Hour).Unix())
 		response, err := s.quote(t.Context(), quoteRequest{})
-		if err != nil || response.declineReason != quoteDeclineBlocked {
+		if err != nil || response.declineReason != quoteDeclineBlocked ||
+			!strings.HasPrefix(response.declineDetail, "startup warmup blocks quotes until ") {
 			t.Fatalf("response=%+v err=%v", response, err)
 		}
 	})
@@ -91,10 +92,37 @@ func TestQuoteValidationReasonsAndPrecedence(t *testing.T) {
 		}
 		s.cfg.TokenPolicy = policy
 		response, err := s.quote(t.Context(), validQuoteRequest(in, out))
-		if err != nil || response.declineReason != quoteDeclinePairOutOfScope {
+		if err != nil || response.declineReason != quoteDeclinePairOutOfScope ||
+			response.declineDetail != "token policy does not allow tokenIn" {
 			t.Fatalf("response=%+v err=%v", response, err)
 		}
 	})
+}
+
+func TestQuoteDeclineDetailNamesFailedCheck(t *testing.T) {
+	in, out := common.HexToAddress("0x01"), common.HexToAddress("0x02")
+	for _, tc := range []struct {
+		name   string
+		change func(*Solver, *quoteRequest)
+		want   string
+	}{
+		{"identical pair", func(_ *Solver, r *quoteRequest) { r.TokenOut = r.TokenIn }, "tokenIn equals tokenOut"},
+		{"zero output", func(_ *Solver, r *quoteRequest) { r.TokenOut = (common.Address{}).Hex() }, "tokenOut is the zero address"},
+		{"no state", func(s *Solver, _ *quoteRequest) { s.quoteState.Store(nil) }, "no quote state published"},
+		{"epoch", func(s *Solver, _ *quoteRequest) { s.quoteEpoch.Store(3) }, "quote state epoch 0 differs from current epoch 3"},
+		{"expired", func(s *Solver, _ *quoteRequest) { s.quoteState.Load().expiresAt = time.Unix(5, 0) }, "quote state expired at 5, now "},
+		{"no inventory route", func(*Solver, *quoteRequest) {}, "directed pair has no inventory route"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newQuoteTestSolver(t, in, &quoteTestStrategy{})
+			r := validQuoteRequest(in, out)
+			tc.change(s, &r)
+			response, err := s.quote(t.Context(), r)
+			if err != nil || !strings.HasPrefix(response.declineDetail, tc.want) {
+				t.Fatalf("detail=%q err=%v; want prefix %q", response.declineDetail, err, tc.want)
+			}
+		})
+	}
 }
 
 func TestQuoteSupportedRequestsRemainAccepted(t *testing.T) {
@@ -127,9 +155,10 @@ func TestQuoteLocalPlannerReportsRealDeclinesWithoutDebugLogging(t *testing.T) {
 				name     string
 				capacity int64
 				want     quoteDeclineReason
+				detail   string
 			}{
-				{"no routes", 0, quoteDeclineNoMatchingRoutes},
-				{"capacity", 50, quoteDeclineInsufficientCapacity},
+				{"no routes", 0, quoteDeclineNoMatchingRoutes, "directed pair has no inventory route"},
+				{"capacity", 50, quoteDeclineInsufficientCapacity, "reason=insufficient-capacity"},
 			} {
 				t.Run(name+mode+tc.name, func(t *testing.T) {
 					local, err := defaultstrategy.New(defaultstrategy.Config{Name: name})
@@ -147,8 +176,8 @@ func TestQuoteLocalPlannerReportsRealDeclinesWithoutDebugLogging(t *testing.T) {
 					r := validQuoteRequest(in, out)
 					r.Type = mode
 					response, err := s.quote(t.Context(), r)
-					if err != nil || response.declineReason != tc.want {
-						t.Fatalf("response=%+v err=%v; want %s", response, err, tc.want)
+					if err != nil || response.declineReason != tc.want || !strings.Contains(response.declineDetail, tc.detail) {
+						t.Fatalf("response=%+v err=%v; want %s (%s)", response, err, tc.want, tc.detail)
 					}
 				})
 			}
@@ -173,6 +202,13 @@ func TestStrategyDeclineCaptureIsBoundedAndOrderIndependent(t *testing.T) {
 		}
 		if got := d.reason(); got != want {
 			t.Fatalf("reasons=%v got=%s want=%s", reasons, got, want)
+		}
+		wantDetail := "strategy returned no quote without recording a decline"
+		if len(reasons) > 0 {
+			wantDetail = "reason=" + strings.Join(reasons, "; reason=")
+		}
+		if got := d.detail(); got != wantDetail {
+			t.Fatalf("reasons=%v detail=%q want=%q", reasons, got, wantDetail)
 		}
 	}
 	for _, reason := range []string{"no-matching-routes", "no-candidates", "amount-below-minimum", "no-allocation", "gas-exceeds-output", "minimum-input-cannot-cover-output"} {

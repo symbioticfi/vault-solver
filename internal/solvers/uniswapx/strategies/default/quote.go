@@ -31,7 +31,7 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 	availableInventory := greedy.ReserveInventoryCapacity(liveInventory, input.Reservations, s.cfg.InventoryReserveBps)
 	allocatedInventory := s.allocateInventory(availableInventory)
 	candidates := make([]liquidlane.QuoteCandidate, 0, len(allocatedInventory))
-	matchingInventory := 0
+	matchingInventory, rejectedCandidates := 0, 0
 	for _, item := range allocatedInventory {
 		if item.TokenIn != input.TokenIn || item.TokenOut != input.TokenOut {
 			continue
@@ -41,9 +41,11 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 			item,
 			greedy.QuoteCapacity(item, s.cfg.PriceBufferBps),
 		)
-		if candidate != nil {
-			candidates = append(candidates, *candidate)
+		if candidate == nil {
+			rejectedCandidates++
+			continue
 		}
+		candidates = append(candidates, *candidate)
 	}
 	if len(candidates) == 0 {
 		input.Trace.Decline(
@@ -52,8 +54,9 @@ func (s *Strategy) DecideQuote(_ context.Context, input types.QuoteInput) (*type
 			"tokenOut", input.TokenOut.Hex(),
 			"inventory", len(input.Inventory),
 			"liveInventory", len(liveInventory),
+			"allocatedInventory", len(allocatedInventory),
 			"pairInventory", matchingInventory,
-			"allocatedInventory", matchingInventory,
+			"rejectedCandidates", rejectedCandidates,
 			"reservations", len(input.Reservations),
 		)
 		return nil, nil

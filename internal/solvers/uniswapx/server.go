@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -132,7 +133,7 @@ func (s *Solver) quoteHandler(w http.ResponseWriter, r *http.Request) {
 	if response.AmountOut == "0" {
 		observation.reason = string(response.declineReason)
 		s.observeQuoteDecline(response.declineReason)
-		requestLog.V(1).Info("quote declined", "reason", response.declineReason)
+		requestLog.V(1).Info("quote declined", "reason", response.declineReason, "detail", response.declineDetail)
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
@@ -228,27 +229,40 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 		response.AmountIn = request.Amount
 	}
 	now := s.currentTime()
-	if s.quoteBlocked(now) {
-		return declinedQuote(response, quoteDeclineBlocked), nil
+	if blocked := s.quoteBlockReason(now); blocked != "" {
+		return declinedQuote(response, quoteDeclineBlocked, blocked), nil
 	}
 	if reason := s.validateQuoteRequest(request); reason != "" {
-		return declinedQuote(response, reason), nil
+		return declinedQuote(response, reason, string(reason)), nil
 	}
 
+	// Unsupported pairs are logged without their addresses, so these details name only the check.
 	tokenIn := common.HexToAddress(request.TokenIn)
 	tokenOut := common.HexToAddress(request.TokenOut)
-	if tokenIn == tokenOut || tokenOut == (common.Address{}) || !s.cfg.TokenPolicy.Allows(tokenIn) {
-		return declinedQuote(response, quoteDeclinePairOutOfScope), nil
+	switch {
+	case tokenIn == tokenOut:
+		return declinedQuote(response, quoteDeclinePairOutOfScope, "tokenIn equals tokenOut"), nil
+	case tokenOut == (common.Address{}):
+		return declinedQuote(response, quoteDeclinePairOutOfScope, "tokenOut is the zero address"), nil
+	case !s.cfg.TokenPolicy.Allows(tokenIn):
+		return declinedQuote(response, quoteDeclinePairOutOfScope, "token policy does not allow tokenIn"), nil
 	}
 	requestAmount, amountOK := new(big.Int).SetString(request.Amount, 10)
 	if !amountOK || requestAmount.Sign() <= 0 {
-		return declinedQuote(response, quoteDeclineInvalidAmount), nil
+		return declinedQuote(response, quoteDeclineInvalidAmount, "amount is not a positive integer"), nil
 	}
 	epoch := s.quoteEpoch.Load()
 	reservationRevision := s.capacity.Revision()
 	state := s.quoteState.Load()
-	if state == nil || state.epoch != epoch || !state.expiresAt.After(time.Unix(now, 0)) {
-		return declinedQuote(response, quoteDeclineQuoteStateUnavailable), nil
+	switch {
+	case state == nil:
+		return declinedQuote(response, quoteDeclineQuoteStateUnavailable, "no quote state published"), nil
+	case state.epoch != epoch:
+		return declinedQuote(response, quoteDeclineQuoteStateUnavailable,
+			fmt.Sprintf("quote state epoch %d differs from current epoch %d", state.epoch, epoch)), nil
+	case !state.expiresAt.After(time.Unix(now, 0)):
+		return declinedQuote(response, quoteDeclineQuoteStateUnavailable,
+			fmt.Sprintf("quote state expired at %d, now %d", state.expiresAt.Unix(), now)), nil
 	}
 	// Wall expiry and a leading observed chain clock can each shorten the usable snapshot lifetime.
 	// Neither the handler socket timeout nor a cooperative strategy replaces the publication check.
@@ -280,23 +294,24 @@ func (s *Solver) evaluateQuote(ctx context.Context, request quoteRequest) (quote
 		input.AmountOut = requestAmount
 	}
 	quote, err := s.decideQuote(ctx, input)
-	if ctx.Err() != nil {
-		return declinedQuote(response, quoteDeclineStateChanged), nil
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return declinedQuote(response, quoteDeclineStateChanged, "quote context ended during strategy decision: "+ctxErr.Error()), nil
 	}
 	if err != nil {
 		return response, err
 	}
 	if quote == nil {
-		return declinedQuote(response, declines.reason()), nil
+		detail := declines.detail()
+		if !response.pairInScope {
+			detail = "directed pair has no inventory route"
+		}
+		return declinedQuote(response, declines.reason(), detail), nil
 	}
 	if err := validateStrategyQuote(input, quote); err != nil {
 		return response, err
 	}
-	now = s.currentTime()
-	if ctx.Err() != nil || s.quoteEpoch.Load() != epoch || s.quoteState.Load() != state ||
-		s.capacity.Revision() != reservationRevision || !state.expiresAt.After(time.Now()) ||
-		!state.expiresAt.After(time.Unix(now, 0)) || s.quoteBlocked(now) {
-		return declinedQuote(response, quoteDeclineStateChanged), nil
+	if changed := s.quoteStateChange(ctx, epoch, state, reservationRevision); changed != "" {
+		return declinedQuote(response, quoteDeclineStateChanged, changed), nil
 	}
 	response.selectedCandidate = quote.CandidateID
 	response.AmountIn = quote.AmountIn.String()
@@ -321,15 +336,66 @@ func (s *Solver) decideQuote(
 	return s.strategy.DecideQuote(ctx, input)
 }
 
-func declinedQuote(response quoteResponse, reason quoteDeclineReason) quoteResponse {
+// declinedQuote sets the bounded metric reason and the logged detail naming the failed check.
+func declinedQuote(response quoteResponse, reason quoteDeclineReason, detail string) quoteResponse {
 	response.declineReason = reason
+	response.declineDetail = detail
 	return response
 }
 
+// quoteStateChange names the first condition that invalidates a decided quote, or "" when none does.
+func (s *Solver) quoteStateChange(
+	ctx context.Context, epoch uint64, state *quoteState, revision uint64,
+) string {
+	now := s.currentTime()
+	wall := time.Now()
+	if err := ctx.Err(); err != nil {
+		return "quote context ended: " + err.Error()
+	}
+	if current := s.quoteEpoch.Load(); current != epoch {
+		return fmt.Sprintf("quote epoch moved from %d to %d", epoch, current)
+	}
+	if s.quoteState.Load() != state {
+		return "quote state was replaced"
+	}
+	if current := s.capacity.Revision(); current != revision {
+		return fmt.Sprintf("capacity revision moved from %d to %d", revision, current)
+	}
+	if !state.expiresAt.After(wall) {
+		return fmt.Sprintf("quote state expired at %d, wall time %d", state.expiresAt.Unix(), wall.Unix())
+	}
+	if !state.expiresAt.After(time.Unix(now, 0)) {
+		return fmt.Sprintf("quote state expired at %d, chain time %d", state.expiresAt.Unix(), now)
+	}
+	return s.quoteBlockReason(now)
+}
+
 func (s *Solver) quoteBlocked(now int64) bool {
-	return s.timeBasedBlockUntil() > now ||
-		!s.fillPath().laneAvailable() ||
-		!s.exclusiveDeliveryHealthy()
+	return s.quoteBlockReason(now) != ""
+}
+
+// quoteBlockReason names what blocks quoting at now, or "" when quoting is open.
+func (s *Solver) quoteBlockReason(now int64) string {
+	for _, block := range []struct {
+		name  string
+		until int64
+	}{
+		{"upstream breaker", s.blockUntil.Load()},
+		{"local fade breaker", s.localBlockUntil.Load()},
+		{"missed exclusive order breaker", s.exclusiveBlockUntil.Load()},
+		{"startup warmup", s.warmupUntil.Load()},
+	} {
+		if block.until > now {
+			return fmt.Sprintf("%s blocks quotes until %d, now %d", block.name, block.until, now)
+		}
+	}
+	if !s.fillPath().laneAvailable() {
+		return "transaction nonce lane is paused"
+	}
+	if !s.exclusiveDeliveryHealthy() {
+		return "exclusive order delivery is unhealthy"
+	}
+	return ""
 }
 
 func (s *Solver) timeBasedBlockUntil() int64 {
