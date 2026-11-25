@@ -573,16 +573,17 @@ refresh uses (`paused`, `getMaxAssets`, `getMaxRate`) — each adapter's `vault`
   layer below).
 - **Leg pricing** — the adapter pays a swap in two floored steps: `getAmountOut` floors
   `amountIn × price × 10^outDec / (1e18 × 10^inDec)`, then the discount floors again (the signed discount
-  of a discount swap, or the adapter `minDiscount` bounding a direct swap). No per-token rate reproduces
-  that, and pricing above the payout is not an adapter revert (`InvalidSwapRate` cannot trigger, since
-  `discount ≥ minDiscount`); it reverts in `Reactor._fill`, which pulls the order's *signed* outputs out of
-  the Executor after `execute()` returns. With no `priceBufferBps` in RFQ there is no slack for it. Every
+  of a discount swap, or the adapter `minDiscount` bounding a direct swap). An overstated direct
+  payout reverts in the adapter. An overstated signed-discount payout can leave the Executor short
+  of the output the Reactor must transfer. RFQ has no `priceBufferBps`. Every
   `adapters[]` entry therefore carries `discount` instead of a rate: the signed discount on discount-backed
   entries and the adapter `minDiscount` on direct ones; fill-time discount inventory takes the signed
-  discount from `/discounts`. `NormalizeOracleInventory` prices each leg from the live `getAmountOut` at the
-  order amount, `AmountOutAfterDiscount(GrossAmountOut, discount)`, converted to a rate whose round trip
-  floors, so a candidate never prices above the payout and gives up at most one unit. A signed discount
-  below the adapter's current minimum is dropped, since the adapter reverts it; a direct leg prices at the
+  discount from `/discounts`. Native fill planning reads the oracle price and the order-sized
+  `getAmountOut` in one multicall and checks that they agree. When the token decimals make a price
+  probe impossible, the order-sized result identifies the integer price directly. Fill sizing,
+  payout and webhook validation then use the adapter's two floors at each leg's input amount.
+  A signed discount below the adapter's current minimum is dropped, since the adapter reverts it.
+  A direct leg prices at the
   higher of its entry's discount and the current minimum. The field is required and replaces `maxRate`, so
   this solver and symbioticfi/rfq-backend#403 deploy together.
 - **Quote latency** — `/quote` is synchronous in the backend's fan-out and performs no RPC calls.

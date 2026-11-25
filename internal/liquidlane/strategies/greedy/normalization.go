@@ -82,18 +82,16 @@ func NormalizeOracleInventory(
 		if discount == nil {
 			continue
 		}
-		rate := liquidlane.RateForAmountOut(
-			liquidlane.AmountOutAfterDiscount(quote.GrossAmountOut, discount),
-			amountIn,
-			source.TokenInDecimals,
-			source.TokenOutDecimals,
-		)
-		if rate.Sign() <= 0 {
-			continue
+		source.Price = quote.Price
+		if source.Price == nil {
+			source.Price = liquidlane.ImpliedPrice(amountIn, quote.GrossAmountOut, source.TokenInDecimals, source.TokenOutDecimals)
 		}
-		source.MaxRate = rate
-		// The amount-specific quote is fresher than a snapshot price, so price at its rate.
-		source.Price, source.Discount = nil, nil
+		source.MaxRate = nil
+		if source.DiscountID != nil {
+			source.Discount = discount
+		} else {
+			source.AdapterMinDiscount = discount
+		}
 		candidate := NewQuoteCandidate(source, capacity)
 		if candidate == nil || seen[candidate.ID] {
 			continue

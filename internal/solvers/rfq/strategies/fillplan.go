@@ -124,17 +124,11 @@ func validateLeg(
 	if candidate.Rate == nil || candidate.Rate.Sign() <= 0 {
 		return liquidlane.QuoteCandidate{}, errors.Errorf("candidate %q has invalid rate", leg.CandidateID)
 	}
-	var achievable *big.Int
-	if requireFullCoverage {
-		if candidate.MaxAmountIn == nil || leg.AmountIn.Cmp(candidate.MaxAmountIn) > 0 {
-			return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d exceeds candidate maxAmountIn", index)
-		}
-		achievable = candidate.AmountOutFor(leg.AmountIn)
-	} else {
-		achievable = liquidlane.AmountOutForRate(leg.AmountIn, candidate.Rate, candidate.Route.TokenInDecimals, candidate.Route.TokenOutDecimals)
+	if requireFullCoverage && (candidate.MaxAmountIn == nil || leg.AmountIn.Cmp(candidate.MaxAmountIn) > 0) {
+		return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d exceeds candidate maxAmountIn", index)
 	}
-	if leg.AmountOut.Cmp(achievable) > 0 {
-		return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d exceeds output achievable at candidate rate", index)
+	if achievable := candidate.AmountOutFor(leg.AmountIn); leg.AmountOut.Cmp(achievable) > 0 {
+		return liquidlane.QuoteCandidate{}, errors.Errorf("leg %d output %s exceeds candidate payout %s", index, leg.AmountOut, achievable)
 	}
 	return candidate, nil
 }

@@ -166,6 +166,34 @@ func TestServer_QuoteTracingDeclines(t *testing.T) {
 	}
 }
 
+func TestServer_DiscountCapacityDeclineIncludesUncoveredInput(t *testing.T) {
+	rec := tracetest.Install(t)
+	srv := testServer()
+	log, capture := tracetest.CaptureLogs(t, 0)
+	srv.quotes.log, srv.quotes.discountsEnabled = log, true
+	body := validQuoteBody()
+	discountID := common.HexToHash("0xd").Hex()
+	body.Adapters[0].DiscountID, body.Adapters[0].MaxAssets = &discountID, "600000"
+	if rr := postQuote(t, srv.handler(), body, ""); rr.Code != http.StatusNoContent {
+		t.Fatalf("quote = %d, want 204", rr.Code)
+	}
+
+	// An additional 10^12 - 1 input units still round to the same output cap.
+	const uncovered = "remainingAmountIn=399999000000000001"
+	if lines := strings.Join(capture(), "\n"); !strings.Contains(lines, uncovered) {
+		t.Errorf("production logs lack uncovered input: %s", lines)
+	}
+	span := tracetest.Ended(t, rec, "rfq.quote")
+	for _, event := range span.Events() {
+		for _, attr := range event.Attributes {
+			if event.Name == "declined" && attr.Key == "reason" && strings.Contains(attr.Value.AsString(), uncovered) {
+				return
+			}
+		}
+	}
+	t.Errorf("quote span lacks uncovered input: %+v", span.Events())
+}
+
 // TestExecution_OrderTraceLinksToQuote pins the fill trace and its best-effort link back to the
 // quote that produced the order (spec §12).
 func TestExecution_OrderTraceLinksToQuote(t *testing.T) {
