@@ -45,6 +45,8 @@ type Solver struct {
 	// skipped is the last skip reason logged at Info per award and pass. Owned by the award loop
 	// goroutine (pollAwards), so it takes no lock; pruned to the open orders of each complete poll.
 	skipped map[awardPass]string
+	// lastOpen is the previous complete poll's open orders, so a release names the award. Same owner.
+	lastOpen map[string]bool
 }
 
 type awardPass struct {
@@ -114,7 +116,7 @@ func (s *Solver) planAward(ctx context.Context, row rfqbackend.OrdersResponseOrd
 		}
 	}
 	if len(routes) == 0 && len(reasons) == 0 {
-		reasons = append(reasons, fmt.Sprintf("no connector discount with a configured route and supported precision for %s -> %s", order.Request.TokenIn.Hex(), token.Hex()))
+		reasons = append(reasons, s.Unmatched(listed, order.Request.TokenIn, token))
 	}
 	plan := func(legs []filler.Leg) (*filler.Intent, error) {
 		if reserve {

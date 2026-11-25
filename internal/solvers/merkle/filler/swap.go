@@ -195,7 +195,7 @@ func (e *Engine) prepareSwap(ctx context.Context, swap Swap, listed []discounts.
 		miss(source.Venue.Hex(), err)
 	}
 	if len(reasons) == 0 {
-		note("pair", fmt.Sprintf("no connector discount with a configured route and supported precision for %s -> %s", swap.TokenIn.Hex(), swap.TokenOut.Hex()))
+		note("pair", e.Unmatched(listed, swap.TokenIn, swap.TokenOut))
 	}
 	if swap.MaxRoutes > 1 {
 		legs, err := e.Split(ctx, routes, swap.AmountIn, swap.MinAmountOut, swap.MaxRoutes, observed, "", e.Inventory)
@@ -263,7 +263,7 @@ func NewSwaps(name string, cfg Config, provider discounts.Provider, deps solver.
 // no fill.
 func (s *Swaps) Fill(ctx context.Context, swap Swap, envelope Envelope) (*Intent, error) {
 	if s.Pending() != nil {
-		return nil, ErrBusy
+		return nil, s.errBusy()
 	}
 	listed, err := s.Discounts.ListDiscounts(ctx)
 	if err != nil {

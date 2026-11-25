@@ -30,13 +30,24 @@ func (s *Solver) pollAwardsWithin(ctx context.Context, forSubmission bool, budge
 	open := make(map[string]bool, len(rows))
 	var queued, unreserved []rfqbackend.OrdersResponseOrdersInner
 	pending := s.Pending()
+	log := observability.Log(refresh)
 	for _, row := range rows {
 		id := row.OrderId
-		if id == "" || open[id] {
+		switch {
+		case id == "":
+			log.Error(errors.New("awarded order has no orderId"), "RFQ award skipped", "quoteId", row.QuoteId)
+			continue
+		case open[id]:
+			log.V(1).Info("RFQ award skipped", "orderId", id, "reason", "repeated in the awarded orders feed")
 			continue
 		}
 		open[id] = true
-		if pending != nil && id == pending.OrderID || s.Spends.Finalized(id) {
+		switch {
+		case pending != nil && id == pending.OrderID:
+			log.V(1).Info("RFQ award not planned", "orderId", id, "reason", "its fill owns the signer lane")
+			continue
+		case s.Spends.Finalized(id):
+			log.V(1).Info("RFQ award not planned", "orderId", id, "reason", "already settled by this lane")
 			continue
 		}
 		queued = append(queued, row)
@@ -44,6 +55,12 @@ func (s *Solver) pollAwardsWithin(ctx context.Context, forSubmission bool, budge
 			unreserved = append(unreserved, row)
 		}
 	}
+	for id := range s.lastOpen {
+		if !open[id] && s.Spends.Queued(id) {
+			log.Info("RFQ award reservation released", "orderId", id, "reason", "order left the awarded orders feed")
+		}
+	}
+	s.lastOpen = open
 	s.Spends.PruneQueued(open)
 	maps.DeleteFunc(s.skipped, func(pass awardPass, _ string) bool { return !open[pass.orderID] })
 	if len(queued) == 0 {

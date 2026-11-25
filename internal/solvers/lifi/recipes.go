@@ -116,7 +116,7 @@ func recipeEnvelope(order *submittedOrder) filler.Envelope {
 func (r *recipeSettlement) fillOrder(ctx context.Context, _ []route, order *submittedOrder, orderID common.Hash, _ *liquidlane.CapacityReservations) orderProcessingResult {
 	s := r.s
 	if pending := r.lane.Pending(); pending != nil {
-		observability.Decline(ctx, "fill_deferred", "recipe lane owns another fill")
+		observability.Decline(ctx, "fill_deferred", "recipe lane owns the fill of order "+pending.OrderID)
 		blockedOn := make(map[liquidlane.CapacityID]bool, len(pending.Spend.Amounts))
 		for capacityID := range pending.Spend.Amounts {
 			blockedOn[capacityID] = true

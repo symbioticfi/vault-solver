@@ -43,7 +43,7 @@ func TestMultipleExecutorsShareRouting(t *testing.T) {
 	wrongRWA := listing
 	wrongRWA.TokenToRedeem = common.HexToAddress("0xbad").Hex()
 	intent, err := prepareAtHead(t, s, awardRow(t, order), []discounts.ListItem{wrongRWA, listing})
-	if err == nil || intent != nil || !strings.Contains(err.Error(), "no connector discount with a configured route") {
+	if err == nil || intent != nil || !strings.Contains(err.Error(), "0 with precision other than 100000000, 1 without a configured recipe route") {
 		t.Fatalf("ambiguous local recipes reached fill: %v", err)
 	}
 }

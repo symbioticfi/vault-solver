@@ -121,14 +121,14 @@ func TestAwardSizingOnlyUsesSignedTuple(t *testing.T) {
 		want   string
 	}{
 		{"valid", func(*executor.IReactorOrder) {}, ""},
-		{"different filler", func(o *executor.IReactorOrder) { o.Filler = vlt }, "filler"},
-		{"zero input", func(o *executor.IReactorOrder) { o.Request.AmountIn = new(big.Int) }, "input"},
-		{"deadline overflow", func(o *executor.IReactorOrder) { o.Request.Deadline = new(big.Int).Lsh(big.NewInt(1), 255) }, "deadline"},
-		{"missing output", func(o *executor.IReactorOrder) { o.Outputs = nil }, "outputs"},
+		{"different filler", func(o *executor.IReactorOrder) { o.Filler = vlt }, "order filler " + vlt.Hex() + " is not this filler"},
+		{"zero input", func(o *executor.IReactorOrder) { o.Request.AmountIn = new(big.Int) }, "order input amount 0 is not a positive uint256"},
+		{"deadline overflow", func(o *executor.IReactorOrder) { o.Request.Deadline = new(big.Int).Lsh(big.NewInt(1), 255) }, "is not a positive int64"},
+		{"missing output", func(o *executor.IReactorOrder) { o.Outputs = nil }, "order has no outputs"},
 		{"split output tokens", func(o *executor.IReactorOrder) {
 			o.Outputs = append(o.Outputs, executor.IReactorOutput{Token: tIn, Amount: big.NewInt(1), Recipient: vlt})
-		}, "one output"},
-		{"zero payment", func(o *executor.IReactorOrder) { o.Outputs[0].Amount = new(big.Int) }, "positive"},
+		}, "order output 1 pays " + tIn.Hex() + ", not the first output's token " + tOut.Hex()},
+		{"zero payment", func(o *executor.IReactorOrder) { o.Outputs[0].Amount = new(big.Int) }, "order output 0 amount 0 is not positive"},
 		{"payment overflow", func(o *executor.IReactorOrder) { o.Outputs[0].Amount = new(big.Int).Lsh(big.NewInt(1), 256) }, "uint256"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -427,7 +427,7 @@ func TestPrepareRequiresConnectorPrecision(t *testing.T) {
 			item := discounts.ListItem{DiscountPrecision: precision, Adapter: vlt.Hex(), TokenToRedeem: tIn.Hex(),
 				Collateral: tOut.Hex(), DiscountID: connectortest.DiscountID().Hex(), MaxAssets: "900"}
 			intent, err := prepareAtHead(t, &s, awardRow(t, order), []discounts.ListItem{item})
-			if err == nil || intent != nil || !strings.Contains(err.Error(), "supported precision") {
+			if err == nil || intent != nil || !strings.Contains(err.Error(), "1 with precision other than "+connector.PrecisionText) {
 				t.Fatalf("precision %q: intent=%v err=%v", precision, intent, err)
 			}
 			if f.reader.OuterCalls != 0 {
@@ -503,5 +503,41 @@ func TestAwardSkipLogsAtInfoOnlyWhenTheReasonChanges(t *testing.T) {
 	backend.rows = nil
 	if _, err := s.pollAwards(t.Context(), false); err != nil || len(s.skipped) != 0 {
 		t.Fatalf("complete poll kept skip state for a closed award: %v %v", s.skipped, err)
+	}
+}
+
+func TestAwardFeedSkipsAndReleasesAreLogged(t *testing.T) {
+	var lines []string
+	ctx := observability.WithLogger(t.Context(), funcr.NewJSON(func(obj string) {
+		var line struct {
+			Msg     string `json:"msg"`
+			OrderID string `json:"orderId"`
+			Reason  string `json:"reason"`
+			Error   string `json:"error"`
+		}
+		if err := json.Unmarshal([]byte(obj), &line); err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, strings.Join([]string{line.Msg, line.OrderID, line.Reason + line.Error}, "|"))
+	}, funcr.Options{Verbosity: 1}))
+	s, backend, _ := awardSolver(t, &fillertest.Sender{})
+	unnamed := backend.rows[0]
+	unnamed.OrderId = ""
+	backend.rows = append(backend.rows, backend.rows[0], unnamed)
+	if _, err := s.pollAwards(ctx, false); err != nil || !s.Spends.Queued("award") {
+		t.Fatalf("award was not reserved: %v", err)
+	}
+	backend.rows = nil
+	if _, err := s.pollAwards(ctx, false); err != nil || s.Spends.Queued("award") {
+		t.Fatalf("closed award kept its reservation: %v", err)
+	}
+	for _, want := range []string{
+		"RFQ award skipped|award|repeated in the awarded orders feed",
+		"RFQ award skipped||awarded order has no orderId",
+		"RFQ award reservation released|award|order left the awarded orders feed",
+	} {
+		if !slices.Contains(lines, want) {
+			t.Fatalf("missing log %q in %v", want, lines)
+		}
 	}
 }

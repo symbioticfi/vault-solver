@@ -124,8 +124,8 @@ func TestSwapRejectsUnfillableOrders(t *testing.T) {
 		{name: "missing output", mutate: func(f *swapFixture) { f.swap.MinAmountOut = nil }, want: "no output amount", is: ErrNotFillable},
 		{name: "expired", mutate: func(f *swapFixture) { f.swap.Expiry = time.Unix(7, 0) }, want: "expiry 7 is not after chain time 7", is: ErrNotFillable},
 		{name: "elapsed in wall time", mutate: func(f *swapFixture) { f.swap.Expiry = time.Unix(1000, 0) }, want: "order expiry 1000, signed terms valid until 4102444800", is: ErrNotFillable, outer: 1},
-		{name: "nothing advertised", mutate: func(f *swapFixture) { f.discounts.Listed = nil }, want: "no connector discount with a configured route", is: ErrNotFillable},
-		{name: "native precision", mutate: func(f *swapFixture) { f.discounts.Listed[0].DiscountPrecision = "1000000" }, want: "supported precision", is: ErrNotFillable},
+		{name: "nothing advertised", mutate: func(f *swapFixture) { f.discounts.Listed = nil }, want: "0 connector discounts listed for", is: ErrNotFillable},
+		{name: "native precision", mutate: func(f *swapFixture) { f.discounts.Listed[0].DiscountPrecision = "1000000" }, want: "1 with precision other than 100000000", is: ErrNotFillable},
 		{name: "insufficient capacity", mutate: func(f *swapFixture) { f.discounts.Listed[0].MaxAssets = "489" }, want: "insufficient capacity for the whole award; split: disabled, order allows 0 route(s)", is: ErrNotFillable},
 		{name: "recipe caller differs", mutate: func(f *swapFixture) { f.chain.RecipeCaller = common.HexToAddress("0x88") }, want: "prepare connector settlement"},
 		{name: "settlement reverts", mutate: func(f *swapFixture) { f.chain.OuterErr = errors.New("execution reverted") }, want: "simulation", is: ErrSimulation, outer: 1},
@@ -196,7 +196,7 @@ func TestInventoryPricesAdvertisedConnectorDiscounts(t *testing.T) {
 		return 18, nil
 	}
 	inventory, err, readErr := f.swaps.Inventory(t.Context(), []discounts.ListItem{native, wrongDecimals, f.discounts.Listed[0]})
-	if readErr != nil || len(inventory) != 1 || err == nil || !strings.Contains(err.Error(), "decimals mismatch") {
+	if readErr != nil || len(inventory) != 1 || err == nil || !strings.Contains(err.Error(), "advertised output decimals 8 differ from token decimals 6") {
 		t.Fatalf("inventory=%d err=%v, want one priced offer and the skipped listing reported", len(inventory), err)
 	}
 	item := inventory[0]
