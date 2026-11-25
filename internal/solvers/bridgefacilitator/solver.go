@@ -6,6 +6,7 @@ package bridgefacilitator
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"strings"
 	"sync/atomic"
@@ -409,11 +410,8 @@ func (s *Solver) buildOfferInput(
 	ctx, end := tracer.Start(ctx, "3f.auction.view")
 	defer end(nil) // a pure conversion; auctions it drops are declines, not failures
 
-	input := buildStrategyInput(auctions, offerings, s.offers, now)
-	if len(input.Auctions) < len(auctions) {
-		observability.Decline(ctx, "auction_skipped",
-			"auctions closed or missing a field the offer needs")
-	}
+	input, skips := buildStrategyInput(auctions, offerings, s.offers, now)
+	declineSkips(ctx, "auction_skipped", "auctions not offerable", skips)
 	return input
 }
 
@@ -424,10 +422,28 @@ func (s *Solver) decideOffers(ctx context.Context, input types.OfferInput) (out 
 	defer func() { end(err) }()
 
 	out, err = s.strategy.DecideOffers(ctx, input)
-	if err == nil && len(out.Offers) == 0 {
+	if err != nil {
+		return out, err
+	}
+	if len(out.Offers) == 0 && len(out.Skips) == 0 {
 		observability.Decline(ctx, "offer_declined", "strategy returned no offers")
 	}
-	return out, err
+	declineSkips(ctx, "offer_declined", "strategy skipped offers", out.Skips)
+	return out, nil
+}
+
+// declineSkips writes every skip on one debug line and puts the count and first reason on the span
+// decline, so the cause survives with debug logging off without a log line per auction each pass.
+func declineSkips(ctx context.Context, decision, msg string, skips []types.OfferSkip) {
+	if len(skips) == 0 {
+		return
+	}
+	reasons := make([]string, len(skips))
+	for i, skip := range skips {
+		reasons[i] = skip.String()
+	}
+	observability.Log(ctx).V(1).Info(msg, "decision", decision, "skips", reasons)
+	observability.Decline(ctx, decision, fmt.Sprintf("%s: %d skipped, first %s", msg, len(skips), reasons[0]))
 }
 
 // offerOnAuction validates, signs and submits one strategy offer under its own auction span. A true

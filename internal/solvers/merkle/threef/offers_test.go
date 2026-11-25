@@ -462,17 +462,42 @@ func TestFitsTermsNativeAuthorizationBounds(t *testing.T) {
 	maximum := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 128), big.NewInt(1))
 	m.MaxPrincipal, m.MinimumYield1e8 = maximum, new(big.Int)
 	auction := threef.AuctionDto{AdditionalProperties: map[string]any{exactMaxRateKey: "10000"}}
-	fits, err := fitsTerms(m, maximum, maximum, auction)
-	if err != nil || !fits {
-		t.Fatalf("uint128 boundary rejected: %v %v", fits, err)
+	mismatch, err := termsMismatch(m, maximum, maximum, auction)
+	if err != nil || mismatch != "" {
+		t.Fatalf("uint128 boundary rejected: %q %v", mismatch, err)
 	}
 	tooLarge := new(big.Int).Add(maximum, big.NewInt(1))
 	m.MaxPrincipal = tooLarge
 	for _, pair := range [][2]*big.Int{{tooLarge, big.NewInt(1)}, {big.NewInt(1), tooLarge}} {
-		fits, err = fitsTerms(m, pair[0], pair[1], auction)
-		if err != nil || fits {
-			t.Fatalf("unexecutable native authorization accepted: %v %v", fits, err)
+		mismatch, err = termsMismatch(m, pair[0], pair[1], auction)
+		if err != nil || !strings.Contains(mismatch, "exceeds uint128") {
+			t.Fatalf("unexecutable native authorization accepted: %q %v", mismatch, err)
 		}
+	}
+}
+
+func TestTermsMismatchNamesBound(t *testing.T) {
+	m := testMarket()
+	m.MaxPrincipal, m.MinimumYield1e8 = big.NewInt(1000000000), big.NewInt(1000000)
+	auction := threef.AuctionDto{RateBasisSeconds: 31536000, AdditionalProperties: map[string]any{exactMaxRateKey: "1500"}}
+	for _, tc := range []struct {
+		name             string
+		principal, yield int64
+		want             string
+	}{
+		{"zero yield", 1000000000, 0, "principal 1000000000 and return 0 must be positive"},
+		{"above maxPrincipal", 1000000001, 150000000, "principal 1000000001 exceeds maxPrincipal 1000000000"},
+		{"below policy floor", 1000000000, 9999999, "return 9999999 is below policy minimum 10000000"},
+		{"below auction floor", 1000000000, 37499999, "return 37499999 is below auction minimum 37500000"},
+		{"above auction ceiling", 1000000000, 150000001, "return 150000001 exceeds auction maximum 150000000"},
+		{"fits", 1000000000, 150000000, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := termsMismatch(m, big.NewInt(tc.principal), big.NewInt(tc.yield), auction)
+			if err != nil || got != tc.want {
+				t.Fatalf("mismatch=%q err=%v, want %q", got, err, tc.want)
+			}
+		})
 	}
 }
 
@@ -504,9 +529,9 @@ func TestFitsTermsAuctionRateBasis(t *testing.T) {
 			m := testMarket()
 			m.MaxPrincipal, m.MinimumYield1e8 = big.NewInt(1000000000), new(big.Int)
 			auction := threef.AuctionDto{RateBasisSeconds: tc.basis, AdditionalProperties: map[string]any{exactMaxRateKey: "1500"}}
-			fits, err := fitsTerms(m, m.MaxPrincipal, big.NewInt(tc.yield), auction)
-			if fits != tc.wantFits || (err != nil) != tc.wantError {
-				t.Fatalf("fits=%v, err=%v", fits, err)
+			mismatch, err := termsMismatch(m, m.MaxPrincipal, big.NewInt(tc.yield), auction)
+			if fits := mismatch == "" && err == nil; fits != tc.wantFits || (err != nil) != tc.wantError {
+				t.Fatalf("mismatch=%q, err=%v", mismatch, err)
 			}
 		})
 	}

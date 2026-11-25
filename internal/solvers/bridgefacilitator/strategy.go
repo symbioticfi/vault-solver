@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/api/threef"
 	"github.com/symbioticfi/vault-solver/internal/solvers/bridgefacilitator/strategies"
@@ -23,13 +24,14 @@ func newStrategy(spec StrategyConfig) (types.Strategy, error) {
 	return strategies.New(name, spec.Config, strategies.Deps{})
 }
 
-// buildStrategyInput converts the solver-owned API/on-chain snapshot into the compact strategy request.
+// buildStrategyInput converts the solver-owned API/on-chain snapshot into the compact strategy request,
+// returning a skip for each auction it leaves out.
 func buildStrategyInput(
 	auctions []threef.AuctionDto,
 	offerings []*adapterOffering,
 	offers *offerTracker,
 	now time.Time,
-) types.OfferInput {
+) (types.OfferInput, []types.OfferSkip) {
 	adapters := make([]types.AdapterSnapshot, 0, len(offerings))
 	for _, off := range offerings {
 		adapters = append(adapters, types.AdapterSnapshot{
@@ -47,10 +49,12 @@ func buildStrategyInput(
 	}
 
 	input := types.OfferInput{Now: now, Adapters: adapters}
+	var skips []types.OfferSkip
 	for i := range auctions {
 		av := auctionView{auctions[i]}
-		auction, ok := buildAuctionSnapshot(av, i, offers, now)
-		if !ok {
+		auction, err := buildAuctionSnapshot(av, i, offers, now)
+		if err != nil {
+			skips = append(skips, types.OfferSkip{AuctionID: int64(av.dto.Id), Reason: err.Error()})
 			continue
 		}
 		input.Auctions = append(input.Auctions, auction)
@@ -65,7 +69,7 @@ func buildStrategyInput(
 			Open:           st.open,
 		})
 	}
-	return input
+	return input, skips
 }
 
 func auctionViewsByID(auctions []threef.AuctionDto) map[int64]auctionView {
@@ -82,30 +86,30 @@ func buildAuctionSnapshot(
 	originalIndex int,
 	offers *offerTracker,
 	now time.Time,
-) (types.AuctionSnapshot, bool) {
+) (types.AuctionSnapshot, error) {
 	auctionID := int64(av.dto.Id)
 	if !av.isOpen() {
-		return types.AuctionSnapshot{}, false
+		return types.AuctionSnapshot{}, errors.Errorf("status %q is not open or solvable", av.dto.Status)
 	}
 	request := av.requestAddr()
 	if request == (common.Address{}) {
-		return types.AuctionSnapshot{}, false
+		return types.AuctionSnapshot{}, errors.Errorf("requestId %q is not an address", av.dto.RequestId)
 	}
 	amountRequested := av.amountRequested()
 	if amountRequested == nil || amountRequested.Sign() <= 0 {
-		return types.AuctionSnapshot{}, false
+		return types.AuctionSnapshot{}, errors.Errorf("amountRequested %q is missing or not positive", av.dto.GetAmountRequested())
 	}
 	rateBps, rateOk := av.maxRateBps()
 	if !rateOk {
-		return types.AuctionSnapshot{}, false
+		return types.AuctionSnapshot{}, errors.New("maxRate is unresolved")
 	}
 	basis, basisOk := av.rateBasisSeconds()
 	if !basisOk {
-		return types.AuctionSnapshot{}, false
+		return types.AuctionSnapshot{}, errors.Errorf("rateBasisSeconds %v is negative", av.dto.GetRateBasisSeconds())
 	}
 	depositAsset := av.depositAsset()
 	if !common.IsHexAddress(depositAsset) {
-		return types.AuctionSnapshot{}, false
+		return types.AuctionSnapshot{}, errors.Errorf("depositAsset %q is not an address", depositAsset)
 	}
 	// Unknown live principal counts as full coverage. The auction still reaches the strategy: adapters
 	// offer independently, so one adapter's live offer never hides the auction from the others.
@@ -127,7 +131,7 @@ func buildAuctionSnapshot(
 		RemainingAmount:  remaining,
 		MaxRateBps:       rateBps,
 		RateBasisSeconds: basis,
-	}, true
+	}, nil
 }
 
 func adapterID(adapter common.Address) string {

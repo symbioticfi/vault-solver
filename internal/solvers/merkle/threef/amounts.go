@@ -1,6 +1,7 @@
 package threef
 
 import (
+	"fmt"
 	"math/big"
 	"regexp"
 
@@ -66,15 +67,30 @@ func minimumReturn(principal, rate *big.Int) *big.Int {
 	return quotient
 }
 
-func fitsTerms(m offerMarket, principal, yield *big.Int, auction threef.AuctionDto) (bool, error) {
-	if principal.Sign() <= 0 || yield.Sign() <= 0 || principal.BitLen() > 128 || yield.BitLen() > 128 || principal.Cmp(m.MaxPrincipal) > 0 || yield.Cmp(minimumReturn(principal, m.MinimumYield1e8)) < 0 {
-		return false, nil
+// termsMismatch names the native authorization or auction rate bound the offer breaks, "" when it fits.
+func termsMismatch(m offerMarket, principal, yield *big.Int, auction threef.AuctionDto) (string, error) {
+	switch {
+	case principal.Sign() <= 0 || yield.Sign() <= 0:
+		return fmt.Sprintf("principal %s and return %s must be positive", principal, yield), nil
+	case principal.BitLen() > 128 || yield.BitLen() > 128:
+		return fmt.Sprintf("principal %s or return %s exceeds uint128", principal, yield), nil
+	case principal.Cmp(m.MaxPrincipal) > 0:
+		return fmt.Sprintf("principal %s exceeds maxPrincipal %s", principal, m.MaxPrincipal), nil
+	}
+	if floor := minimumReturn(principal, m.MinimumYield1e8); yield.Cmp(floor) < 0 {
+		return fmt.Sprintf("return %s is below policy minimum %s", yield, floor), nil
 	}
 	minimum, maximum, err := auctionReturnBounds(principal, auction)
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	return yield.Cmp(minimum) >= 0 && yield.Cmp(maximum) <= 0, nil
+	switch {
+	case yield.Cmp(minimum) < 0:
+		return fmt.Sprintf("return %s is below auction minimum %s", yield, minimum), nil
+	case yield.Cmp(maximum) > 0:
+		return fmt.Sprintf("return %s exceeds auction maximum %s", yield, maximum), nil
+	}
+	return "", nil
 }
 
 func auctionReturnBounds(principal *big.Int, auction threef.AuctionDto) (minimum, maximum *big.Int, err error) {
