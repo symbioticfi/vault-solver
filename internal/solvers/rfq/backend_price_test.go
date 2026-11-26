@@ -73,7 +73,7 @@ func TestQuoteUsesBackendSnapshotWithoutRPC(t *testing.T) {
 func TestHINCQuoteUsesSixDecimalShares(t *testing.T) {
 	hinc := common.HexToAddress("0x015C477A4E2881C4B3bB8999f59ee4A04e812344")
 	s := testServer()
-	s.quotes.minAmountsIn = minAmountsFor(t, hinc, "1000000")
+	s.quotes.minAmountsIn = minAmountsFor(t, hinc, "1000")
 	s.quotes.discountsEnabled = true
 	s.quotes.resolveRoute = testConnectorQuoteRoute(common.HexToAddress("0x43"))
 	body := validQuoteBody()
@@ -83,16 +83,15 @@ func TestHINCQuoteUsesSixDecimalShares(t *testing.T) {
 	entry := &body.Adapters[0]
 	entry.TokenInDecimals = &decimals
 	entry.Price = "974023721000000000000"
-	entry.MaxAssets = "1000000000"
 	entry.DiscountID, entry.DiscountPrecision = &discountID, "100000000"
 
-	body.Amount = "999999"
+	body.Amount = "999"
 	rr := do(t, s.handler(), http.MethodPost, "/quote", testSecret, body)
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("below minimum: status=%d, want 204", rr.Code)
 	}
 
-	body.Amount = "1000000"
+	body.Amount = "1000"
 	rr = do(t, s.handler(), http.MethodPost, "/quote", testSecret, body)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("at minimum: status=%d: %s", rr.Code, rr.Body.String())
@@ -101,8 +100,8 @@ func TestHINCQuoteUsesSixDecimalShares(t *testing.T) {
 	if err := json.Unmarshal(rr.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if response.AmountOut != "974023721" {
-		t.Fatalf("USDC output=%s, want 974023721", response.AmountOut)
+	if response.AmountOut != "974023" {
+		t.Fatalf("USDC output=%s, want 974023", response.AmountOut)
 	}
 }
 
