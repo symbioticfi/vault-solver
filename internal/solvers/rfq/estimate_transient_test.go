@@ -17,9 +17,10 @@ import (
 
 // These shared Reactor/Executor error signatures describe a failed external operation, not proof
 // that the order is permanently invalid. The selectors and address word are literal ABI fixtures.
-var transientEstimateFixtures = []struct{ name, data string }{
-	{name: "FailedCall", data: "d6bda275"},
-	{name: "SafeERC20FailedOperation", data: "5274afe7" + strings.Repeat("0", 63) + "1"},
+var transientEstimateFixtures = []struct{ name, data, revert string }{
+	{name: "FailedCall", data: "d6bda275", revert: "FailedCall()"},
+	{name: "SafeERC20FailedOperation", data: "5274afe7" + strings.Repeat("0", 63) + "1",
+		revert: "SafeERC20FailedOperation(token=0x0000000000000000000000000000000000000001)"},
 }
 
 func TestExecutionTransientEstimateErrorsRetryFreshOpenOrder(t *testing.T) {
@@ -36,7 +37,7 @@ func TestExecutionTransientEstimateErrorsRetryFreshOpenOrder(t *testing.T) {
 			e.log = funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{})
 			syncCycle(t.Context(), e)
 			if rec := st.order("o1"); rec.Status != statusRetryWaiting || rec.EstimateRetries != 1 ||
-				rec.EstimateErrorName != tc.name || !st.reserved("o1") || errorLogCount(logs) != 0 {
+				rec.EstimateErrorName != tc.revert || !st.reserved("o1") || errorLogCount(logs) != 0 {
 				t.Fatalf("external operation failed permanently before a fresh retry: order=%+v logs=%v", rec, logs)
 			}
 			firstCalldata := bytes.Clone(txm.lastReq.Data)
@@ -84,7 +85,7 @@ func TestExecutionTransientEstimateErrorsUseCountedRetryBudget(t *testing.T) {
 						now = now.Add(e.pollInterval)
 					}
 					if rec := st.order("o1"); rec.Status != statusFailed || rec.EstimateRetries != limit ||
-						rec.NonceRetries != 0 || rec.EstimateErrorName != tc.name || !rec.RetryRetired ||
+						rec.NonceRetries != 0 || rec.EstimateErrorName != tc.revert || !rec.RetryRetired ||
 						txm.calls != 1+limit || st.reserved("o1") {
 						t.Fatalf("retry budget did not retire persistent external failure: order=%+v sends=%d", rec, txm.calls)
 					}
@@ -92,7 +93,7 @@ func TestExecutionTransientEstimateErrorsUseCountedRetryBudget(t *testing.T) {
 						t.Fatalf("persistent operation must report Error once: %v", logs)
 					}
 					for _, entry := range logs {
-						if strings.Contains(entry, `"error"`) && !strings.Contains(entry, tc.name) {
+						if strings.Contains(entry, `"error"`) && !strings.Contains(entry, tc.revert) {
 							t.Fatalf("permanent failure lost the decoded revert name: %s", entry)
 						}
 					}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-errors/errors"
 
+	"github.com/symbioticfi/vault-solver/api/bindings/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/executor"
 	"github.com/symbioticfi/vault-solver/api/bindings/rfq/reactor"
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -24,87 +25,77 @@ const (
 	estimateRevertFatal     estimateRevertKind = "fatal"
 )
 
+// revertDecoder names every revert RFQ calls can surface: Reactor, Executor and connector errors,
+// the LiquidLane core contracts, Error(string) and Panic.
+var revertDecoder = liquidlane.RevertDecoder(
+	&reactor.ReactorMetaData, &executor.ExecutorMetaData, &connector.LiquidLaneConnectorMetaData)
+
 // classifyEstimateRevert uses the vendored contracts' generated decoders. Exact ABI lengths stop
 // malformed data from being treated as terminal proof; generated UnpackError requires four bytes.
+// The returned description is the decoded revert, whatever the kind.
 func classifyEstimateRevert(err error) (estimateRevertKind, string) {
 	var revert *txmanager.ExecutionRevertError
 	if !errors.As(err, &revert) {
 		return estimateNotReverted, ""
 	}
+	description := revertDecoder.Describe(revert.Data)
 	if len(revert.Data) < 4 {
-		return estimateRevertUnknown, "unknown"
+		return estimateRevertUnknown, description
 	}
+	kind, size := estimateRevertUnknown, -1
 	decoded, decodeErr := reactor.NewReactor().UnpackError(revert.Data)
 	if decodeErr == nil {
-		kind, name, size := reactorEstimateError(decoded)
-		if size == len(revert.Data) && canonicalErrorArguments(revert.Data, decoded) {
-			return kind, name
-		}
-		return estimateRevertUnknown, "unknown"
+		kind, size = reactorEstimateError(decoded)
+	} else if decoded, decodeErr = executor.NewExecutor().UnpackError(revert.Data); decodeErr == nil {
+		kind, size = executorEstimateError(decoded)
 	}
-	decoded, decodeErr = executor.NewExecutor().UnpackError(revert.Data)
-	if decodeErr == nil {
-		kind, name, size := executorEstimateError(decoded)
-		if size == len(revert.Data) && canonicalErrorArguments(revert.Data, decoded) {
-			return kind, name
-		}
+	if kind == estimateRevertUnknown {
+		return kind, description
 	}
-	return estimateRevertUnknown, "unknown"
+	if size != len(revert.Data) || !canonicalErrorArguments(revert.Data, decoded) {
+		return estimateRevertUnknown, description + " (non-canonical encoding)"
+	}
+	return kind, description
 }
 
-func reactorEstimateError(decoded any) (estimateRevertKind, string, int) {
+func reactorEstimateError(decoded any) (estimateRevertKind, int) {
 	switch decoded := decoded.(type) {
 	case *reactor.ReactorNonceUsed:
-		return estimateRevertNonceUsed, "NonceUsed", 4
+		return estimateRevertNonceUsed, 4
 	case *reactor.ReactorExpiredRequest:
-		return estimateRevertExpired, "ExpiredRequest", 4
-	case *reactor.ReactorInvalidFiller:
-		return estimateRevertFatal, "InvalidFiller", 4
-	case *reactor.ReactorInvalidAdapter:
-		return estimateRevertFatal, "InvalidAdapter", 4
+		return estimateRevertExpired, 4
+	case *reactor.ReactorInvalidFiller, *reactor.ReactorInvalidAdapter, *reactor.ReactorInvalidAmountIn,
+		*reactor.ReactorInvalidOutput, *reactor.ReactorInvalidProtocolSignature, *reactor.ReactorInvalidTokenIn,
+		*reactor.ReactorInvalidShortString:
+		return estimateRevertFatal, 4
 	case *reactor.ReactorInsufficientBalance:
-		return estimateRevertFatal, "InsufficientBalance", 68
+		return estimateRevertFatal, 68
 	case *reactor.ReactorSafeERC20FailedOperation:
-		return estimateRevertRetryable, "SafeERC20FailedOperation", 36
-	case *reactor.ReactorInvalidAmountIn:
-		return estimateRevertFatal, "InvalidAmountIn", 4
-	case *reactor.ReactorInvalidOutput:
-		return estimateRevertFatal, "InvalidOutput", 4
-	case *reactor.ReactorInvalidProtocolSignature:
-		return estimateRevertFatal, "InvalidProtocolSignature", 4
-	case *reactor.ReactorInvalidTokenIn:
-		return estimateRevertFatal, "InvalidTokenIn", 4
+		return estimateRevertRetryable, 36
 	case *reactor.ReactorFailedCall:
-		return estimateRevertRetryable, "FailedCall", 4
-	case *reactor.ReactorInvalidShortString:
-		return estimateRevertFatal, "InvalidShortString", 4
+		return estimateRevertRetryable, 4
 	case *reactor.ReactorStringTooLong:
-		return estimateRevertFatal, "StringTooLong", 68 + ((len(decoded.Str)+31)/32)*32
+		return estimateRevertFatal, 68 + ((len(decoded.Str)+31)/32)*32
 	default:
-		return estimateRevertUnknown, "unknown", -1
+		return estimateRevertUnknown, -1
 	}
 }
 
-func executorEstimateError(decoded any) (estimateRevertKind, string, int) {
+func executorEstimateError(decoded any) (estimateRevertKind, int) {
 	switch decoded.(type) {
-	case *executor.ExecutorAddressEmptyCode:
-		return estimateRevertFatal, "AddressEmptyCode", 36
-	case *executor.ExecutorNotCaller:
-		return estimateRevertFatal, "NotCaller", 4
-	case *executor.ExecutorNotReactor:
-		return estimateRevertFatal, "NotReactor", 4
-	case *executor.ExecutorOwnableInvalidOwner:
-		return estimateRevertFatal, "OwnableInvalidOwner", 36
-	case *executor.ExecutorOwnableUnauthorizedAccount:
-		return estimateRevertFatal, "OwnableUnauthorizedAccount", 36
+	case *executor.ExecutorNotCaller, *executor.ExecutorNotReactor:
+		return estimateRevertFatal, 4
+	case *executor.ExecutorAddressEmptyCode, *executor.ExecutorOwnableInvalidOwner,
+		*executor.ExecutorOwnableUnauthorizedAccount:
+		return estimateRevertFatal, 36
 	case *executor.ExecutorFailedCall:
-		return estimateRevertRetryable, "FailedCall", 4
+		return estimateRevertRetryable, 4
 	case *executor.ExecutorInsufficientBalance:
-		return estimateRevertFatal, "InsufficientBalance", 68
+		return estimateRevertFatal, 68
 	case *executor.ExecutorSafeERC20FailedOperation:
-		return estimateRevertRetryable, "SafeERC20FailedOperation", 36
+		return estimateRevertRetryable, 36
 	default:
-		return estimateRevertUnknown, "unknown", -1
+		return estimateRevertUnknown, -1
 	}
 }
 

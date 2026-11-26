@@ -23,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/signer"
 )
@@ -112,6 +113,9 @@ type Request struct {
 	// hash, including receipts found after an uncertain result. It must not perform I/O or mutate
 	// business state; the manager may invoke it after the request's caller has resumed.
 	ObserveReceipt func(context.Context, Result)
+	// RevertDecoder names custom errors in the reason replayed for a mined revert. Nil still
+	// decodes Error(string) and Panic(uint256).
+	RevertDecoder *chain.RevertDecoder
 }
 
 // Outcome is the terminal transaction state observed by the manager.
@@ -1236,9 +1240,10 @@ func (m *Manager) confirmPendingReceipt(ctx context.Context, pending *pendingTra
 		m.rememberConfirmedNonce(pending.nonce)
 	}
 	if receipt.Status == types.ReceiptStatusFailed {
-		revertErr := errors.Errorf("tx %s reverted on-chain", attempt.hash.Hex())
+		reason := m.minedRevertReason(ctx, pending.req.RevertDecoder, attempt.tx, receipt.BlockNumber)
+		revertErr := errors.Errorf("tx %s reverted on-chain (%s)", attempt.hash.Hex(), reason)
 		if err != nil {
-			revertErr = errors.Errorf("tx %s reverted on-chain; confirmation wait: %w", attempt.hash.Hex(), err)
+			revertErr = errors.Errorf("tx %s reverted on-chain (%s); confirmation wait: %w", attempt.hash.Hex(), reason, err)
 		}
 		observability.Log(ctx).Info("transaction reverted",
 			"label", pending.req.Label,

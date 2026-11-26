@@ -546,7 +546,7 @@ func (m *Manager) handleStall(
 			return false // no normal rebroadcast past the deadline or a shutdown request
 		case err != nil:
 			observability.Log(ctx).V(1).Info("stalled transaction re-estimate failed; rebroadcasting",
-				"label", pending.req.Label, "nonce", pending.nonce, "error", err.Error())
+				"label", pending.req.Label, "nonce", pending.nonce, "error", pending.req.RevertDecoder.Explain(err).Error())
 		case gas > pending.gas:
 			return replace(replaceIntent{reason: replaceReasonGas, gas: withGasHeadroom(gas, headroomBps)})
 		}

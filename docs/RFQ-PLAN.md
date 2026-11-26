@@ -172,7 +172,12 @@ A new self-contained `internal/solvers/rfq/` implementing `solver.Solver` — no
   expires the order, while known setup, authorization and input-validation errors
   fail with an Error and failed-fill outcome once. Generic `FailedCall` and
   `SafeERC20FailedOperation` errors are retryable because they do not prove a permanent order defect.
-  The decoded names remain in reconciliation and exhaustion diagnostics. `InsufficientBalance`
+  The decoded revert, with its arguments, remains in reconciliation and exhaustion diagnostics; an
+  error the classification does not know (a LiquidLane or connector error, `Error(string)`, a panic,
+  an unknown selector or a non-canonical payload) still stays `unknown` but is described by the
+  shared decoder rather than logged as a bare `unknown`. The fill request sets `RevertDecoder`, so the txmanager's
+  replayed reason for a mined revert names RFQ errors in the result error that every later decline,
+  log and stored cause reads. `InsufficientBalance`
   remains fatal: this OpenZeppelin selector means native ETH shortage, distinct from ERC20 or vault
   inventory errors; the solver sends no arbitrary executor calls and accepts only ERC20 outputs.
   Transient, undecoded and malformed reverts can rebuild an eligible open order after polling backoff,

@@ -64,6 +64,16 @@ decoded RPC revert bytes when supplied. A write relay's pre-admission simulation
 the lane is released immediately. The integration decodes protocol errors, reconciles current
 business state and chooses log severity. The manager logs estimate transport/RPC availability failures
 at Error, but does not page on execution reverts before integration reconciliation.
+A mined revert's receipt carries no reason, so the manager replays the signed call (sender, target,
+gas, value, calldata) through `chain.RevertDecoder.MinedRevert` when the backend implements
+`chain.MinedCallReplayer`, and appends the reason to the `reverted` result's error. The replay runs on
+the parent block's state with the mined block's number and timestamp, so later transactions in the
+block do not leak in and deadline checks see the time it ran at; earlier transactions in the block
+are still missing, so it is a best-effort explanation. It runs on the lifecycle owner only for a
+failed receipt, bounded by the helper's 5s budget. A backend without replay yields
+`revert reason unavailable: no replay`. Custom errors are named only when the request sets
+`RevertDecoder`; without it the manager still decodes `Error(string)` and `Panic(uint256)`, which
+keeps it protocol-agnostic. Solvers set `RevertDecoder` and never replay mined reverts themselves.
 
 ## 3. Configuration and time budgets
 

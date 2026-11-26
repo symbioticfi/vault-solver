@@ -2,8 +2,12 @@ package txmanager
 
 import (
 	"bytes"
+	"context"
+	"math/big"
 	"strings"
 
+	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 
 	"github.com/symbioticfi/vault-solver/internal/chain"
@@ -52,4 +56,20 @@ func executionRevert(err error) *ExecutionRevertError {
 		return nil
 	}
 	return &ExecutionRevertError{Data: data, Cause: err}
+}
+
+// minedRevertReason replays a reverted transaction to name the revert its receipt lacks. It runs on
+// the lifecycle owner only for a failed receipt; MinedRevert bounds the replay. A nil decoder still
+// names Error(string) and Panic(uint256).
+func (m *Manager) minedRevertReason(
+	ctx context.Context, decoder *chain.RevertDecoder, tx *types.Transaction, block *big.Int,
+) string {
+	replayer, ok := m.backend.(chain.MinedCallReplayer)
+	if !ok || tx == nil || tx.To() == nil {
+		return "revert reason unavailable: no replay"
+	}
+	// The gas limit is kept so an out-of-gas revert reproduces.
+	return decoder.MinedRevert(ctx, replayer, ethereum.CallMsg{
+		From: m.signer.Address(), To: tx.To(), Gas: tx.Gas(), Value: tx.Value(), Data: tx.Data(),
+	}, block)
 }
