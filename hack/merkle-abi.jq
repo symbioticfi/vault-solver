@@ -1,7 +1,7 @@
 # Solver-facing projection of canonical Foundry artifacts; keep complete tuple types.
 .abi | map(select(
   if $contract == "LiquidLaneConnector" then
-    .type == "function" and (
+    .type == "error" or .type == "function" and (
       .name == "account" or .name == "outputAsset" or
       .name == "eip712Domain" or .name == "getAmountOut" or .name == "minDiscount" or
       .name == "remainingAssets" or

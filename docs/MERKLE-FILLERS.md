@@ -114,6 +114,9 @@ adapter-backed solver; the `webhook` strategy is rejected. See
   same funding) reverts the fill. The order is then planned again from fresh state: UniswapX on
   its retry path, counting the failure toward its breaker; LI.FI after re-reading the order
   status, at most twice per order.
+- Reverts are decoded with the connector, LiquidLane core, Merkle recipe contracts and the lane's
+  settlement contracts. A mined revert is named by replaying the fill at the parent block, so a
+  revert caused by an earlier transaction in the same block replays clean and says so.
 - A pending fill is bounded by the order and discount deadlines. It is not cancelled early
   when the order becomes unfillable.
 - A fill is submitted only while the order and its signed discount stay valid for

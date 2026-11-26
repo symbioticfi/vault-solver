@@ -80,7 +80,7 @@ func (r *Routes) build(ctx context.Context) (map[common.Address]route, error) {
 	for _, member := range prepared {
 		snapshot, recipe := member.Snapshot, member.Recipe
 		if _, err := recipes.RouteExecution(ctx, w.Chain, snapshot, w.Filler, recipeexecutor.NewRecipeExecutor().PackExecute(nil, nil, nil, nil)); err != nil {
-			return nil, err
+			return nil, w.Explain(err)
 		}
 		tree, err := w.permissionTree(ctx, snapshot)
 		if err != nil {
@@ -95,7 +95,8 @@ func (r *Routes) build(ctx context.Context) (map[common.Address]route, error) {
 			return nil, err
 		}
 		if state.Account != snapshot.Account || state.Asset != asset {
-			return nil, errors.New("recipe payment connector account or asset mismatch")
+			return nil, errors.Errorf("recipe %s payment connector %s pays %s from %s, recipe approves %s from %s",
+				snapshot.Executor.Hex(), venue.Hex(), state.Asset.Hex(), state.Account.Hex(), asset.Hex(), snapshot.Account.Hex())
 		}
 		actions, err := recipes.ManagedActions(recipe, tree)
 		if err != nil {

@@ -1,6 +1,7 @@
 package filler
 
 import (
+	"bytes"
 	"context"
 	"math/big"
 	"strings"
@@ -8,9 +9,12 @@ import (
 	"testing"
 	"time"
 
+	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr/funcr"
+	"github.com/symbioticfi/merkle-executor/sdk/protocolio"
+	"github.com/symbioticfi/merkle-executor/sdk/recipes"
 	"github.com/symbioticfi/merkle-executor/sdk/transaction"
 
 	"github.com/symbioticfi/vault-solver/internal/liquidlane"
@@ -31,7 +35,7 @@ func testSpend() connector.Spend {
 }
 
 func pendingEngine(sender *fillertest.Sender, intent *Intent) *Engine {
-	e := &Engine{Name: "test", Sender: sender, Spends: connector.NewSpendLedger(), Workflow: &connector.Workflow{Filler: connectortest.Venue}}
+	e := &Engine{Name: "test", Sender: sender, Spends: connector.NewSpendLedger(), Workflow: &connector.Workflow{Filler: connectortest.Venue, Chain: &replayChain{}}}
 	e.intent.Store(intent)
 	return e
 }
@@ -328,6 +332,52 @@ func TestAwaitTreatsConfirmationWaitAsProgress(t *testing.T) {
 			}
 			if tc.wantError && !strings.Contains(failures[0], `"orderId"="award"`) {
 				t.Fatalf("receipt error is missing the award ID: %v", failures)
+			}
+		})
+	}
+}
+
+// replayChain answers the replay of a mined fill like the host chain client.
+type replayChain struct {
+	recipes.Reader
+
+	err   error
+	block *big.Int
+	call  ethereum.CallMsg
+}
+
+func (c *replayChain) ReplayMinedCall(_ context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error) {
+	c.call, c.block = msg, block
+	return nil, c.err
+}
+
+func TestRevertedFillNamesItsReplayedRevert(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"decoded", protocolio.Failure("call contract on read RPC", connectortest.Revert("InvalidDiscount()")), "replay of block 8 reverted with InvalidDiscount()"},
+		{"no payload", &connectortest.RevertError{}, "replay of block 8 reverted: execution reverted"},
+		{"replay passes", nil, "replay of block 8 did not revert (an earlier transaction in the block changed the state)"},
+		{"replay fails", errors.New("connection refused"), "revert reason unavailable: replay of block 8 failed: connection refused"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sender := &fillertest.Sender{IsBusy: true, Result: fillertest.Confirmed()}
+			sender.Result.Reverted = true
+			intent := &Intent{OrderID: "award", Data: []byte{1, 2, 3, 4}, Spend: testSpend()}
+			e := pendingEngine(sender, intent)
+			chain := &replayChain{err: tc.err}
+			e.Workflow.Chain, e.Workflow.Signer = chain, common.HexToAddress("0x5")
+			if err := e.Spends.Reserve("award", intent.Spend); err != nil {
+				t.Fatal(err)
+			}
+			got := e.AwaitNative(t.Context())
+			if got.Outcome != txmanager.OutcomeReverted || !strings.HasSuffix(got.Err.Error(), "reverted in block 8: "+tc.want) {
+				t.Fatalf("result = %+v, want revert %q", got, tc.want)
+			}
+			if chain.block.Uint64() != 8 || chain.call.From != e.Workflow.Signer || *chain.call.To != e.Workflow.Filler || !bytes.Equal(chain.call.Data, intent.Data) {
+				t.Fatalf("replay call = %+v at block %v", chain.call, chain.block)
 			}
 		})
 	}

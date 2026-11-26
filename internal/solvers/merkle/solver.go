@@ -11,12 +11,16 @@ import (
 
 	"github.com/go-errors/errors"
 	"github.com/symbioticfi/merkle-executor/sdk/keeper"
+	"github.com/symbioticfi/vault-solver/internal/liquidlane/connector"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 	"github.com/symbioticfi/vault-solver/internal/solver"
 	"gopkg.in/yaml.v3"
 )
 
 const Name = "merkle"
+
+// reverts names keeper reverts: the recipe executor, account and AccessManager are among its contracts.
+var reverts = connector.RevertDecoder()
 
 //nolint:gochecknoinits // Self-registration is the solver framework's plugin contract.
 func init() { solver.Register(Name, factory) }
@@ -37,7 +41,7 @@ func (s *Solver) Run(ctx context.Context) error {
 			return err
 		}
 		if err := s.keeper.Tick(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			observability.Log(ctx).Error(err, "merkle workflow iteration failed")
+			observability.Log(ctx).Error(reverts.Explain(err), "merkle workflow iteration failed")
 		}
 		select {
 		case <-ctx.Done():
