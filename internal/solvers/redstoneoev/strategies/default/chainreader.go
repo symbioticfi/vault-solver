@@ -20,6 +20,10 @@ var (
 	callbackABI = callback.NewSymbioticOevSolver()
 	morphoABI   = morphobinding.NewMorpho()
 	oracleABI   = oracle.NewMorphoOracle()
+
+	revertDecoder = chain.RevertDecoderFor(
+		&callback.SymbioticOevSolverMetaData, &morphobinding.MorphoMetaData, &oracle.MorphoOracleMetaData,
+	)
 )
 
 type chainReader struct {
@@ -52,7 +56,8 @@ func (r *chainReader) ResolveParams(ctx context.Context, morphoAddr common.Addre
 	out := make(map[common.Hash]MarketParams, len(ids))
 	for i, id := range ids {
 		if !res[i].Success {
-			observability.Log(ctx).V(1).Info("dropping market: idToMarketParams call reverted", "id", id.Hex())
+			observability.Log(ctx).V(1).Info("dropping market: idToMarketParams call reverted", "id", id.Hex(),
+				"revert", revertDecoder.Describe(res[i].ReturnData))
 			continue
 		}
 		mp, derr := decodeMarketParams(res[i].ReturnData)
@@ -92,12 +97,19 @@ func (r *chainReader) ReadCallbackMorpho(ctx context.Context, callback common.Ad
 	if err != nil {
 		return common.Address{}, err
 	}
-	if len(res) != 1 || !res[0].Success {
-		return common.Address{}, nil
+	if len(res) != 1 {
+		return common.Address{}, errors.Errorf("callback MORPHO read: got %d results, want 1", len(res))
+	}
+	if !res[0].Success {
+		return common.Address{}, errors.Errorf("callback %s.MORPHO() reverted: %s",
+			callback.Hex(), revertDecoder.Describe(res[0].ReturnData))
 	}
 	morphoAddr, err := callbackABI.UnpackMORPHO(res[0].ReturnData)
 	if err != nil {
 		return common.Address{}, errors.Errorf("decode callback MORPHO: %w", err)
+	}
+	if morphoAddr == (common.Address{}) {
+		return common.Address{}, errors.Errorf("callback %s.MORPHO() returned the zero address", callback.Hex())
 	}
 	return morphoAddr, nil
 }
@@ -126,7 +138,7 @@ func (r *chainReader) ReadTestMarketStates(ctx context.Context, morphoAddr commo
 		priceRes := res[i*2+1]
 		if !marketRes.Success || !priceRes.Success {
 			observability.Log(ctx).V(1).Info("dropping market: read reverted", "id", id.Hex(),
-				"marketOk", marketRes.Success, "priceOk", priceRes.Success)
+				"market", callOutcome(marketRes), "price", callOutcome(priceRes))
 			continue
 		}
 		state, ok := decodeTestMarketState(marketRes.ReturnData, params[id])
@@ -173,7 +185,8 @@ func (r *chainReader) ReadTestPositions(ctx context.Context, morphoAddr common.A
 	out := make(map[common.Hash]map[common.Address]morpho.PositionState, len(ids))
 	for i, s := range slots {
 		if !res[i].Success {
-			observability.Log(ctx).V(1).Info("dropping position: read reverted", "id", s.id.Hex(), "borrower", s.borrower.Hex())
+			observability.Log(ctx).V(1).Info("dropping position: read reverted", "id", s.id.Hex(), "borrower", s.borrower.Hex(),
+				"revert", revertDecoder.Describe(res[i].ReturnData))
 			continue
 		}
 		pos, err := morphoABI.UnpackPosition(res[i].ReturnData)
@@ -191,6 +204,14 @@ func (r *chainReader) ReadTestPositions(ctx context.Context, morphoAddr common.A
 		out[s.id][s.borrower] = morpho.PositionState{BorrowShares: pos.BorrowShares, Collateral: pos.Collateral}
 	}
 	return out, nil
+}
+
+// callOutcome is "ok" for a successful multicall sub-call, else its decoded revert.
+func callOutcome(r chain.CallResult) string {
+	if r.Success {
+		return "ok"
+	}
+	return "reverted: " + revertDecoder.Describe(r.ReturnData)
 }
 
 func decodeMarketParams(data []byte) (MarketParams, error) {

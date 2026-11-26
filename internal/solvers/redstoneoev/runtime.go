@@ -44,6 +44,7 @@ func (s *Solver) Run(ctx context.Context) error {
 	cancel()
 	wg.Wait()
 	s.auctionWorkers.Wait()
+	s.replays.Wait()
 	return err
 }
 

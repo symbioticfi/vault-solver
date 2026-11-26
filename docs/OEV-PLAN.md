@@ -91,9 +91,11 @@ A self-contained `internal/solvers/redstoneoev/` implementing `solver.Solver` â€
   `auction-result`) because the frame arrives on both the broadcast `oev/liquidations` and the
   callback-scoped `oev/notify/<callback>` subscription, so a result may belong to another solver. We are a
   state-reading bot, **not** a log-indexer: there is no `FilterLogs` scan. A result for our callback wakes
-  the solver-owned Executor/adapter refresh loop; it is not forwarded into the strategy interface. If a
-  settlement receipt is available from RedStone's `txHash`, the bot decodes callback `LegResult`/`PayBidResult` logs from that
-  receipt for diagnostics. Realized profit is read off the callback's loan-token balance / balance sheet,
+  the solver-owned Executor/adapter refresh loop; it is not forwarded into the strategy interface. The frame
+  carries no revert data, so for a failed result of ours with a `txHash` the bot replays that tx through the
+  shared `chain.RevertDecoder.MinedRevert` (parent state at the mined block's number and time; off the WS
+  reader, one at a time, once per result) and logs the decoded revert as `liquidation-failure-replay`;
+  earlier txs in the same block are not replayed, so this is best effort. Realized profit is read off the callback's loan-token balance / balance sheet,
   not event accounting.
 - **`Run(ctx)`** owns the resilient WS client (connect with `x-api-key`, subscribe `oev/liquidations` +
   `oev/notify/<callback>` for the solver-configured callback, reconnect with backoff + jitter, ~7 h proactive

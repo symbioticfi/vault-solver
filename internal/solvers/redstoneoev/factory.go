@@ -55,6 +55,7 @@ func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {
 		stateRefreshCh: make(chan struct{}, 1),
 		log:            log,
 		links:          observability.NewSpanLinks(),
+		replayer:       deps.Chain,
 	}
 	if deps.Metrics != nil {
 		s.metrics, err = newMetrics(deps.Metrics.Registerer(), cfg.Strategy.Name, s.wonReservationMetrics)

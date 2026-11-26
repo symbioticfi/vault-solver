@@ -66,6 +66,12 @@ type Solver struct {
 	// Admission happens on the WS reader before spawning; at most one decision runs.
 	auctionBusy    atomic.Bool
 	auctionWorkers sync.WaitGroup
+
+	// replayer re-runs our failed settlements to name the revert; nil disables it. replayBusy admits one
+	// replay at a time and replays joins them on shutdown.
+	replayer   settlementReplayer
+	replayBusy atomic.Bool
+	replays    sync.WaitGroup
 }
 
 // Name identifies the solver.
