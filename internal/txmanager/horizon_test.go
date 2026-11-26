@@ -1,6 +1,8 @@
 package txmanager
 
 import (
+	"github.com/symbioticfi/vault-solver/internal/chain"
+
 	"context"
 	"math/big"
 	"strings"
@@ -262,8 +264,8 @@ func TestIsBlockOverrideUnsupported(t *testing.T) {
 		{err: errors.New("execution reverted"), want: false},
 		{err: errors.New("dial tcp: connection refused"), want: false},
 	} {
-		if got := isBlockOverrideUnsupported(tc.err); got != tc.want {
-			t.Errorf("isBlockOverrideUnsupported(%v) = %v, want %v", tc.err, got, tc.want)
+		if got := chain.IsBlockOverrideUnsupported(tc.err); got != tc.want {
+			t.Errorf("IsBlockOverrideUnsupported(%v) = %v, want %v", tc.err, got, tc.want)
 		}
 	}
 }

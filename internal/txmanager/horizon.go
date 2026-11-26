@@ -5,7 +5,6 @@ import (
 	"math"
 	"math/big"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/go-errors/errors"
@@ -13,8 +12,8 @@ import (
 	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
-	"github.com/ethereum/go-ethereum/rpc"
 
+	"github.com/symbioticfi/vault-solver/internal/chain"
 	"github.com/symbioticfi/vault-solver/internal/observability"
 )
 
@@ -466,7 +465,7 @@ func (m *Manager) estimateHorizonGas(
 	call := ethereum.CallMsg{From: m.signer.Address(), To: &req.To, Value: req.Value, Data: req.Data}
 	if estimator, ok := m.backend.(NextBlockGasEstimator); ok {
 		gas, err = estimator.EstimateGasNextBlock(ctx, call, parent, m.horizon.blockTime)
-		if err == nil || !isBlockOverrideUnsupported(err) {
+		if err == nil || !chain.IsBlockOverrideUnsupported(err) {
 			return gas, m.horizon.gasHeadroomBps, err
 		}
 		if m.overrideFallbackLogged.CompareAndSwap(false, true) {
@@ -480,22 +479,6 @@ func (m *Manager) estimateHorizonGas(
 
 func withGasHeadroom(gas uint64, bps int) uint64 {
 	return gas + gas*uint64(bps)/basisPoints
-}
-
-// isBlockOverrideUnsupported recognizes an endpoint that rejects eth_estimateGas's fourth
-// (blockOverrides) parameter, as opposed to a call that reverts or a transport failure.
-func isBlockOverrideUnsupported(err error) bool {
-	var rpcErr rpc.Error
-	if errors.As(err, &rpcErr) && (rpcErr.ErrorCode() == -32602 || rpcErr.ErrorCode() == -32601) {
-		return true
-	}
-	message := strings.ToLower(err.Error())
-	for _, marker := range []string{"too many arguments", "invalid params", "invalid argument", "unknown field"} {
-		if strings.Contains(message, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 // horizonIntent is the replacement a horizon decision asks for: a fee change of the normal call, or a

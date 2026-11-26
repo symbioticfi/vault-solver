@@ -110,17 +110,17 @@ func TestRevertDataAndExplain(t *testing.T) {
 	}
 }
 
-type fakeCaller struct {
+type fakeReplayer struct {
 	err   error
 	block *big.Int
 }
 
-func (f *fakeCaller) CallContract(_ context.Context, _ ethereum.CallMsg, block *big.Int) ([]byte, error) {
+func (f *fakeReplayer) ReplayMinedCall(_ context.Context, _ ethereum.CallMsg, block *big.Int) ([]byte, error) {
 	f.block = block
 	return nil, f.err
 }
 
-func TestMinedRevertReplaysOnParentState(t *testing.T) {
+func TestMinedRevertReplaysTheMinedBlock(t *testing.T) {
 	t.Parallel()
 	parsed, _ := abi.JSON(strings.NewReader(testErrorsABI))
 	decoder := NewRevertDecoder(&parsed)
@@ -129,22 +129,22 @@ func TestMinedRevertReplaysOnParentState(t *testing.T) {
 		err  error
 		want string
 	}{
-		"decoded":        {dataRPCError{data: payload}, "replay at block 99 reverted with InvalidProtocolSignature()"},
-		"no payload":     {errors.New("execution reverted: Ownable: caller is not the owner"), "replay at block 99 reverted: execution reverted: Ownable: caller is not the owner"},
-		"did not revert": {nil, "replay at block 99 did not revert (an earlier transaction in block 100 changed the state)"},
-		"read failed":    {errors.New("context deadline exceeded"), "revert reason unavailable: replay at block 99 failed: context deadline exceeded"},
+		"decoded":        {dataRPCError{data: payload}, "replay of block 100 reverted with InvalidProtocolSignature()"},
+		"no payload":     {errors.New("execution reverted: Ownable: caller is not the owner"), "replay of block 100 reverted: execution reverted: Ownable: caller is not the owner"},
+		"did not revert": {nil, "replay of block 100 did not revert (an earlier transaction in the block changed the state)"},
+		"read failed":    {errors.New("context deadline exceeded"), "revert reason unavailable: replay of block 100 failed: context deadline exceeded"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			caller := &fakeCaller{err: tc.err}
-			if got := decoder.MinedRevert(t.Context(), caller, ethereum.CallMsg{}, big.NewInt(100)); got != tc.want {
+			replayer := &fakeReplayer{err: tc.err}
+			if got := decoder.MinedRevert(t.Context(), replayer, ethereum.CallMsg{}, big.NewInt(100)); got != tc.want {
 				t.Fatalf("MinedRevert = %q, want %q", got, tc.want)
 			}
-			if caller.block.Int64() != 99 {
-				t.Fatalf("replayed at %s, want the parent block 99", caller.block)
+			if replayer.block.Int64() != 100 {
+				t.Fatalf("replayed block %s, want 100", replayer.block)
 			}
 		})
 	}
-	if got := decoder.MinedRevert(t.Context(), &fakeCaller{}, ethereum.CallMsg{}, nil); got != "revert reason unavailable: unknown inclusion block" {
+	if got := decoder.MinedRevert(t.Context(), &fakeReplayer{}, ethereum.CallMsg{}, nil); got != "revert reason unavailable: unknown inclusion block" {
 		t.Fatalf("nil block = %q", got)
 	}
 }
