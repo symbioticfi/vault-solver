@@ -42,12 +42,16 @@ func (d *Decimals) Get(ctx context.Context, token common.Address) (int, error) {
 	}
 	d.mu.Unlock()
 
-	res, err := d.chain.Multicall(ctx, []Call{{Target: token, Data: erc20B.PackDecimals()}})
+	// AllowFailure keeps a reverting decimals() from reverting the whole multicall, so its payload survives.
+	res, err := d.chain.Multicall(ctx, []Call{{Target: token, AllowFailure: true, Data: erc20B.PackDecimals()}})
 	if err != nil {
 		return 0, err
 	}
-	if len(res) != 1 || !res[0].Success {
-		return 0, errors.Errorf("erc20.decimals() reverted for %s", token)
+	if len(res) != 1 {
+		return 0, errors.Errorf("erc20.decimals() for %s: multicall returned %d results, want 1", token, len(res))
+	}
+	if !res[0].Success {
+		return 0, errors.Errorf("erc20.decimals() reverted for %s: %s", token, plainReverts.Describe(res[0].ReturnData))
 	}
 	v, err := decodeDecimals(res[0].ReturnData)
 	if err != nil {

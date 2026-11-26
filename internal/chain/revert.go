@@ -18,6 +18,9 @@ import (
 
 const maxRevertValueLen = 66
 
+// plainReverts names Error(string) and Panic payloads for chain-level reads that know no contract ABI.
+var plainReverts = NewRevertDecoder()
+
 // panicSelector is Panic(uint256), which abi.UnpackRevert decodes without saying it was a panic.
 var panicSelector = [4]byte{0x4e, 0x48, 0x7b, 0x71}
 
