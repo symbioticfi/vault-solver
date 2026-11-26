@@ -6,7 +6,6 @@ import (
 	"math/big"
 	"time"
 
-	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"go.opentelemetry.io/otel/trace"
@@ -28,8 +27,6 @@ var (
 type pendingUniswapFill struct {
 	order  *resolvedOrder
 	result <-chan txmanager.Result
-	// call replays a mined revert to recover its reason; unset when the sender is not ours.
-	call ethereum.CallMsg
 	// span and end keep the uniswapx.fill span open from submission until the transaction result
 	// arrives: span carries the outcome attributes, end closes it. startFill sets both, and end is
 	// idempotent, so the span is never ended twice.
@@ -278,6 +275,7 @@ func (s *Solver) startFill(
 		Obsolete:       s.orderObsolete(order),
 		Label:          "uniswapx-fill",
 		ObserveReceipt: observeReceipt,
+		RevertDecoder:  revertDecoder,
 	})
 	if err != nil {
 		return nil, err
@@ -293,7 +291,6 @@ func (s *Solver) startFill(
 	)
 	return &pendingUniswapFill{
 		order: order, result: result,
-		call: ethereum.CallMsg{From: s.solverAddress, To: &order.Executor, Data: data},
 		span: trace.SpanFromContext(ctx), end: end,
 	}, nil
 }
@@ -591,7 +588,7 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 		return
 	}
 	if !outcome.Included() {
-		err = s.explainFillFailure(ctx, fill, result)
+		err = explainFillFailure(result)
 		s.observeFillOutcome(liquidlane.FillOutcomeFailure)
 		s.retry(order.Hash, now, true)
 		s.recordOrderFillFailure(ctx, order, now)
@@ -620,16 +617,13 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 	s.complete(order.Hash, now)
 }
 
-// explainFillFailure names why a fill was not included; a mined revert is replayed for its reason.
-func (s *Solver) explainFillFailure(ctx context.Context, fill *pendingUniswapFill, result txmanager.Result) error {
+// explainFillFailure names why a fill was not included. txmanager already adds the replayed reason
+// of a mined revert; estimate and relay reverts are decoded here.
+func explainFillFailure(result txmanager.Result) error {
 	if result.Err == nil {
 		return errors.Errorf("unknown transaction outcome %q", result.Outcome)
 	}
-	if result.Outcome != txmanager.OutcomeReverted || fill.call.To == nil || result.Receipt == nil {
-		return revertDecoder.Explain(result.Err)
-	}
-	return errors.Errorf("%w (%s)", result.Err,
-		revertDecoder.MinedRevert(ctx, s.chain, fill.call, result.Receipt.BlockNumber))
+	return revertDecoder.Explain(result.Err)
 }
 
 // recordOwnedFillAttempt retains signed ownership across retries without changing failure budgets.

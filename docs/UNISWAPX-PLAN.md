@@ -152,11 +152,9 @@ error classification, retry backoff, and the public preflight-failure breaker ap
 
 Preflight, gas-estimate and executor-caller reverts are decoded with the LiquidLane core and executor
 ABIs (`liquidlane.RevertDecoder`), so a failure reads `NotCaller()` rather than `execution reverted`.
-A mined revert carries no payload, so a native fill is replayed through the shared
-`RevertDecoder.MinedRevert`: the parent block's state with the mined block's number and timestamp
-overridden, so deadline and decay checks see the right time and later transactions in the block do not
-leak in. The UniswapX reactor's
-and Permit2's errors are not vendored and decode as their raw selector.
+A mined revert carries no payload, so the fill request sets `RevertDecoder` and the txmanager replays
+it (see the TXMANAGER plan); the solver only decodes estimate and relay reverts. The UniswapX
+reactor's and Permit2's errors are not vendored and decode as their raw selector.
 
 ### Fill capacity and retries
 

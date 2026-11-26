@@ -185,11 +185,6 @@ func (r *reader) orderStatus(ctx context.Context, inputSettler common.Address, o
 	return status, nil
 }
 
-// minedRevert names why a fill reverted on chain by replaying it on its block's parent state.
-func (r *reader) minedRevert(ctx context.Context, call ethereum.CallMsg, block *big.Int) string {
-	return lifiReverts.MinedRevert(ctx, r.chain, call, block)
-}
-
 func (r *reader) latestBlockNumber(ctx context.Context) (uint64, error) {
 	n, err := r.chain.BlockNumber(ctx)
 	if err != nil {

@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/go-errors/errors"
@@ -43,9 +42,7 @@ type pendingFill struct {
 	orderID        common.Hash
 	reservationKey string
 	retryDeadline  time.Time
-	// call replays an adapter fill that reverted on chain; a recipe fill leaves it zero.
-	call   ethereum.CallMsg
-	result <-chan txmanager.Result
+	result         <-chan txmanager.Result
 }
 
 type fillCompletion struct {

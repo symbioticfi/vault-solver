@@ -150,7 +150,6 @@ type transactionManager interface {
 
 type contractCaller interface {
 	CallContract(ctx context.Context, call ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
-	chain.MinedCallReplayer
 }
 
 func factory(raw yaml.Node, deps solver.Deps) (solver.Solver, error) {

@@ -12,10 +12,8 @@ import (
 	"testing"
 	"time"
 
-	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	ethtypes "github.com/ethereum/go-ethereum/core/types"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/logr/funcr"
@@ -1266,10 +1264,8 @@ func TestCompleteFillTreatsIncludedTransactionAsSuccess(t *testing.T) {
 
 func TestCompleteFillDecodesReverts(t *testing.T) {
 	notCaller := notCallerRevert(t)
-	executorAddress := common.HexToAddress("0xe")
 	tests := []struct {
 		name   string
-		call   ethereum.CallMsg
 		result txmanager.Result
 		want   string
 	}{
@@ -1280,13 +1276,12 @@ func TestCompleteFillDecodesReverts(t *testing.T) {
 			want: `estimate gas "lifi-fill": execution reverted (revert NotCaller())`,
 		},
 		{
-			name: "mined revert replayed",
-			call: ethereum.CallMsg{To: &executorAddress},
+			name: "mined revert keeps the txmanager replay reason",
 			result: txmanager.Result{
-				Outcome: txmanager.OutcomeReverted, Receipt: &ethtypes.Receipt{BlockNumber: big.NewInt(7)},
-				Err: errors.New("tx 0xc reverted on-chain"),
+				Outcome: txmanager.OutcomeReverted,
+				Err:     errors.New("tx 0xc reverted on-chain (replay of block 7 reverted with NotCaller())"),
 			},
-			want: "tx 0xc reverted on-chain (revert replay of block 7 reverted with NotCaller())",
+			want: "tx 0xc reverted on-chain (replay of block 7 reverted with NotCaller())",
 		},
 	}
 	for _, tt := range tests {
@@ -1294,11 +1289,11 @@ func TestCompleteFillDecodesReverts(t *testing.T) {
 			var logs []string
 			solver := &Solver{
 				log:    funcr.NewJSON(func(entry string) { logs = append(logs, entry) }, funcr.Options{}),
-				reader: fakeLifiReader{minedRevertReason: "replay of block 7 reverted with NotCaller()"},
+				reader: fakeLifiReader{},
 			}
 			fill := &pendingFill{
 				order:   &submittedOrder{OrderID: "order-1", QuoteID: "quote-1"},
-				orderID: common.HexToHash("0x1"), reservationKey: "order-1", call: tt.call,
+				orderID: common.HexToHash("0x1"), reservationKey: "order-1",
 			}
 			pending := &pendingFillState{byOrder: map[string]*pendingFill{"order-1": fill}}
 			err := solver.completeFill(solverContext(t, solver), pending, fillCompletion{fill: fill, result: tt.result})

@@ -9,7 +9,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"github.com/go-logr/logr"
@@ -83,7 +82,6 @@ type chainReader interface {
 	) (fillSnapshotSet, error)
 	orderIdentifier(ctx context.Context, inputSettler common.Address, order inputsettler.StandardOrder) (common.Hash, error)
 	orderStatus(ctx context.Context, inputSettler common.Address, orderID common.Hash) (uint8, error)
-	minedRevert(ctx context.Context, call ethereum.CallMsg, block *big.Int) string
 	latestBlockNumber(ctx context.Context) (uint64, error)
 	latestBlockTime(ctx context.Context) (time.Time, error)
 }
