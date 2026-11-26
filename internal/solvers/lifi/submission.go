@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"time"
 
+	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 
@@ -158,6 +159,7 @@ func (s *Solver) submitFill(
 		orderID:        calldata.OrderID,
 		reservationKey: reservationKey,
 		retryDeadline:  retryDeadline,
+		call:           ethereum.CallMsg{From: s.caller, To: &s.cfg.Executor, Data: calldata.Finalise},
 		result:         result,
 	}, nil
 }
@@ -251,9 +253,12 @@ func (s *Solver) completeFill(
 		)
 		return err
 	}
-	err = completion.result.Err
+	err = lifiReverts.Explain(completion.result.Err)
 	if err == nil {
 		err = errors.Errorf("unknown transaction outcome %q", outcome)
+	}
+	if outcome == txmanager.OutcomeReverted && fill.call.To != nil && completion.result.Receipt != nil {
+		err = errors.Errorf("%w (revert %s)", err, s.reader.minedRevert(ctx, fill.call, completion.result.Receipt.BlockNumber))
 	}
 	observability.Log(ctx).Error(err, "order fill failed",
 		"orderId", fill.order.OrderID,

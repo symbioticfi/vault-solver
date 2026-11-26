@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 
@@ -21,23 +22,24 @@ import (
 )
 
 type fakeLifiReader struct {
-	orderID          common.Hash
-	orderIDFn        func(inputsettler.StandardOrder) common.Hash
-	status           uint8
-	statusErr        error
-	statusFn         func() (uint8, error)
-	statusForOrderFn func(common.Hash) (uint8, error)
-	latestBlock      uint64
-	latestBlockErr   error
-	fill             []liquidlane.FillQuote
-	fillSet          *fillSnapshotSet
-	fillSetFn        func() fillSnapshotSet
-	fillSnapshotsFn  func() []liquidlane.FillQuote
-	omitGasFacts     bool
-	routes           []route
-	executorErr      error
-	directAuthErr    error
-	governanceFeeErr error
+	orderID           common.Hash
+	orderIDFn         func(inputsettler.StandardOrder) common.Hash
+	status            uint8
+	statusErr         error
+	minedRevertReason string
+	statusFn          func() (uint8, error)
+	statusForOrderFn  func(common.Hash) (uint8, error)
+	latestBlock       uint64
+	latestBlockErr    error
+	fill              []liquidlane.FillQuote
+	fillSet           *fillSnapshotSet
+	fillSetFn         func() fillSnapshotSet
+	fillSnapshotsFn   func() []liquidlane.FillQuote
+	omitGasFacts      bool
+	routes            []route
+	executorErr       error
+	directAuthErr     error
+	governanceFeeErr  error
 }
 
 func (f fakeLifiReader) resolveRoutes(context.Context, []common.Address) ([]route, error) {
@@ -115,6 +117,10 @@ func (f fakeLifiReader) orderStatus(_ context.Context, _ common.Address, orderID
 		return f.statusFn()
 	}
 	return f.status, f.statusErr
+}
+
+func (f fakeLifiReader) minedRevert(context.Context, ethereum.CallMsg, *big.Int) string {
+	return f.minedRevertReason
 }
 
 func (f fakeLifiReader) latestBlockNumber(context.Context) (uint64, error) {
