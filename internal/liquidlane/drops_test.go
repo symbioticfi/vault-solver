@@ -122,3 +122,19 @@ func TestReadAdapterSnapshotErrorNamesDecodedRevert(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestSummarizeDropsBoundsTheReason(t *testing.T) {
+	t.Parallel()
+	if got := SummarizeDrops(nil); got != "" {
+		t.Fatalf("empty = %q", got)
+	}
+	drops := make([]Drop, 7)
+	for i := range drops {
+		drops[i] = Drop{Adapter: common.BigToAddress(big.NewInt(int64(i + 1))), Reason: "adapter is paused"}
+	}
+	got := SummarizeDrops(drops)
+	if !strings.HasPrefix(got, "7 dropped reads: adapter 0x0000000000000000000000000000000000000001: adapter is paused; ") ||
+		!strings.HasSuffix(got, "; 2 more") || strings.Count(got, "adapter is paused") != 5 {
+		t.Fatalf("summary = %q", got)
+	}
+}

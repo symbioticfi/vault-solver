@@ -398,3 +398,17 @@ func TestSelectionRetentionAndMatching(t *testing.T) {
 		}
 	}
 }
+
+func TestFillDeclineNamesSnapshotDrops(t *testing.T) {
+	fixture := newDirectExecutionFixture(t)
+	useExecutionStrategy(t, fixture, "default")
+	reader := fixture.solver.reader.(*executionTestReader)
+	reader.snapshot.Direct[0].MaxAmountOut = big.NewInt(89)
+	reader.snapshot.Drops = []liquidlane.Drop{{Adapter: common.HexToAddress("0xb"), Reason: "adapter is paused"}}
+	_, err := fixture.solver.startFill(t.Context(), []liquidlane.Route{fixture.route}, fixture.order, fixture.now, fixture.now)
+	want := "order is not fillable at current chain state: fill declined: required amount out 90 exceeds max allocatable amount out 89" +
+		" (1 dropped reads: adapter 0x000000000000000000000000000000000000000b: adapter is paused)"
+	if !errors.Is(err, errOrderNotFillable) || !strings.EqualFold(err.Error(), want) {
+		t.Fatalf("err = %v\nwant %s", err, want)
+	}
+}

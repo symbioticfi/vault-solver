@@ -5,6 +5,7 @@ package snapshot
 import (
 	"context"
 	"math/big"
+	"slices"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-logr/logr"
@@ -28,6 +29,8 @@ type Fill struct {
 	Physical    []liquidlane.FillQuote
 	GasSnapshot *liquidlanegas.Snapshot
 	GasPrices   *liquidlanegas.PriceSnapshot
+	// Drops are the routes the reads left out, with why, for a fill that cannot be planned.
+	Drops []liquidlane.Drop
 }
 
 type liquidReader interface {
@@ -166,6 +169,11 @@ func (r *Reader) Fill(
 	amountIn *big.Int,
 	trace ...liquidlane.DropTrace,
 ) (Fill, error) {
+	var drops []liquidlane.Drop
+	if len(trace) == 0 {
+		trace = []liquidlane.DropTrace{liquidlane.LogDrops(ctx)}
+	}
+	trace = append(slices.Clone(trace), func(d liquidlane.Drop) { drops = append(drops, d) })
 	physical, err := r.liquid.ReadFillQuotes(ctx, routes, tokenIn, amountIn, trace...)
 	if err != nil {
 		return Fill{}, err
@@ -188,7 +196,7 @@ func (r *Reader) Fill(
 	if err != nil {
 		return Fill{}, err
 	}
-	return Fill{Direct: direct, Physical: physical, GasSnapshot: gasSnapshot, GasPrices: prices}, nil
+	return Fill{Direct: direct, Physical: physical, GasSnapshot: gasSnapshot, GasPrices: prices, Drops: drops}, nil
 }
 
 func (r *Reader) readGas(

@@ -95,7 +95,7 @@ func (f *fakeRecoveryReader) readQuoteCandidates(
 }
 
 func (f *fakeRecoveryReader) readPermissionedVaultInventories(
-	context.Context, common.Address, common.Address, []recoveryVault,
+	context.Context, common.Address, common.Address, []recoveryVault, liquidstrategies.DecisionTrace,
 ) ([]solverInventory, int, error) {
 	return f.permInv, len(f.permInv), f.permErr
 }

@@ -2,6 +2,7 @@ package liquidlane
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -40,10 +41,33 @@ func dropSink(ctx context.Context, traces []DropTrace) DropTrace {
 			}
 		}
 	}
+	return LogDrops(ctx)
+}
+
+// LogDrops logs each drop at V(1); it is what a read given no trace does.
+func LogDrops(ctx context.Context) DropTrace {
 	log := observability.Log(ctx).V(1)
 	return func(d Drop) {
 		log.Info("liquidlane: read dropped", "adapter", d.Adapter.Hex(), "tokenIn", d.TokenIn.Hex(), "reason", d.Reason)
 	}
+}
+
+// maxSummarizedDrops bounds a failure reason built from a read's drops.
+const maxSummarizedDrops = 5
+
+// SummarizeDrops lists the first few drops and counts the rest, for a failure reason.
+func SummarizeDrops(drops []Drop) string {
+	if len(drops) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, min(len(drops), maxSummarizedDrops)+1)
+	for _, d := range drops[:min(len(drops), maxSummarizedDrops)] {
+		parts = append(parts, d.String())
+	}
+	if extra := len(drops) - maxSummarizedDrops; extra > 0 {
+		parts = append(parts, fmt.Sprintf("%d more", extra))
+	}
+	return fmt.Sprintf("%d dropped reads: %s", len(drops), strings.Join(parts, "; "))
 }
 
 // collectDrops keeps drops for an error that must say why a read came back incomplete.

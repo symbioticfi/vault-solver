@@ -18,6 +18,7 @@ type fakeLiquidReader struct {
 	authorized []liquidlane.Route
 	gas        *liquidlanegas.Snapshot
 	gasReads   int
+	fillDrops  []liquidlane.Drop
 }
 
 func (f *fakeLiquidReader) ResolveRoutes(context.Context, []common.Address) ([]liquidlane.Route, error) {
@@ -48,12 +49,17 @@ func (f *fakeLiquidReader) FilterAuthorized(
 }
 
 func (f *fakeLiquidReader) ReadFillQuotes(
-	context.Context,
-	[]liquidlane.Route,
-	common.Address,
-	*big.Int,
-	...liquidlane.DropTrace,
+	_ context.Context,
+	_ []liquidlane.Route,
+	_ common.Address,
+	_ *big.Int,
+	traces ...liquidlane.DropTrace,
 ) ([]liquidlane.FillQuote, error) {
+	for _, d := range f.fillDrops {
+		for _, trace := range traces {
+			trace(d)
+		}
+	}
 	return f.quotes, nil
 }
 
@@ -152,5 +158,22 @@ func TestReaderBuildsQuoteAndFillSnapshots(t *testing.T) {
 	}
 	if liquid.gasReads != 2 {
 		t.Fatalf("gas reads = %d, want 2 from enabled reader only", liquid.gasReads)
+	}
+}
+
+func TestFillCollectsDropsAndForwardsThem(t *testing.T) {
+	t.Parallel()
+	drop := liquidlane.Drop{Adapter: common.HexToAddress("0xa"), Reason: "getAmountOut reverted: \"stale price\""}
+	liquid := &fakeLiquidReader{fillDrops: []liquidlane.Drop{drop}}
+	reader := newReader(liquid, nil)
+	var forwarded []liquidlane.Drop
+	fill, err := reader.Fill(t.Context(), nil, common.Address{}, common.Address{}, big.NewInt(1),
+		func(d liquidlane.Drop) { forwarded = append(forwarded, d) })
+	if err != nil || len(fill.Drops) != 1 || fill.Drops[0] != drop || len(forwarded) != 1 {
+		t.Fatalf("fill drops = %+v forwarded = %+v err = %v", fill.Drops, forwarded, err)
+	}
+	// Without a caller trace the drops are still collected (and logged at V(1)).
+	if fill, err = reader.Fill(t.Context(), nil, common.Address{}, common.Address{}, big.NewInt(1)); err != nil || len(fill.Drops) != 1 {
+		t.Fatalf("untraced fill drops = %+v err = %v", fill.Drops, err)
 	}
 }

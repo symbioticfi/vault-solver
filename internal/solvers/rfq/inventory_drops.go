@@ -84,3 +84,12 @@ func (s fillInventorySummary) String() string {
 	fmt.Fprintf(&b, ", %d candidates from %d inventories, dropped: %s", s.candidates, s.inventory, s.drops)
 	return b.String()
 }
+
+// liquidLaneDrops records the shared reader's dropped reads on trace under one bounded reason, with
+// the adapter, token and decoded detail as fields, so a fill summary counts them and shows the last.
+func liquidLaneDrops(trace liquidstrategies.DecisionTrace) liquidlane.DropTrace {
+	return func(d liquidlane.Drop) {
+		trace.Decline("inventory", "liquidlane read dropped",
+			"adapter", d.Adapter.Hex(), "tokenIn", d.TokenIn.Hex(), "detail", d.Reason)
+	}
+}

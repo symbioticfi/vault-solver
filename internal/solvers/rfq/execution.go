@@ -104,7 +104,7 @@ type fillReader interface {
 	) ([]liquidlane.QuoteCandidate, error)
 	latestBlock(ctx context.Context) (uint64, time.Time, error)
 	readPermissionedVaultInventories(
-		ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault,
+		ctx context.Context, executor, tokenIn common.Address, vaults []recoveryVault, trace liquidstrategies.DecisionTrace,
 	) (authorized []solverInventory, read int, err error)
 	// resolveVaults returns the config entries with Vault/Asset resolved from the adapter at startup
 	// (config carries only adapter addresses).
@@ -806,7 +806,7 @@ func (e *executionService) buildFillPlan(
 	// when no candidate vaults are configured (a discount-only solver), leaving discount legs only.
 	inv := make([]solverInventory, 0, len(e.vaults)+1)
 	if len(e.vaults) > 0 {
-		direct, read, derr := e.reader.readPermissionedVaultInventories(ctx, e.executor, order.Request.TokenIn, e.vaults)
+		direct, read, derr := e.reader.readPermissionedVaultInventories(ctx, e.executor, order.Request.TokenIn, e.vaults, summary.drops.trace)
 		if derr != nil {
 			return nil, derr
 		}

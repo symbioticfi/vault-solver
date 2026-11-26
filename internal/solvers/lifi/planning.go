@@ -34,6 +34,8 @@ type preparedFill struct {
 	signedDiscounts         map[common.Hash]*discounts.Signed
 	transactionMaxFeePerGas *big.Int
 	chainObservedAt         time.Time
+	// drops are the routes the fill snapshot left out, named in a decline reason.
+	drops []liquidlane.Drop
 }
 
 type orderProcessingResult struct {
@@ -237,6 +239,9 @@ func (s *Solver) handleFillDecline(
 	declined error,
 ) orderProcessingResult {
 	decline := func(reason string) orderProcessingResult {
+		if dropped := liquidlane.SummarizeDrops(prepared.drops); dropped != "" {
+			reason += " (" + dropped + ")"
+		}
 		observability.Decline(ctx, "fill_declined", reason)
 		observability.Log(ctx).V(1).Info(
 			"order fill strategy declined",
@@ -506,6 +511,7 @@ func (s *Solver) prepareFill(
 		signedDiscounts:         state.signedDiscounts,
 		transactionMaxFeePerGas: transactionMaxFeePerGas,
 		chainObservedAt:         state.chainObservedAt,
+		drops:                   state.snapshots.Drops,
 	}, nil
 }
 

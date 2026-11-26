@@ -239,6 +239,9 @@ func (s *Solver) startFill(
 		if discountErr != nil {
 			err = errors.Errorf("%w (discount route refresh failed: %v)", err, discountErr)
 		}
+		if dropped := liquidlane.SummarizeDrops(snapshot.Drops); dropped != "" {
+			err = errors.Errorf("%w (%s)", err, dropped)
+		}
 		return nil, err
 	}
 	plan, data, discountValidUntil := prepared.plan, prepared.data, prepared.validUntil
