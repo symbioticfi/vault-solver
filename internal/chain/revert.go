@@ -1,10 +1,13 @@
 package chain
 
 import (
+	"context"
 	"fmt"
 	"math/big"
 	"strings"
+	"time"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind/v2"
 	"github.com/ethereum/go-ethereum/common"
@@ -146,4 +149,36 @@ func formatRevertValue(value any) string {
 		s = s[:maxRevertValueLen] + "…"
 	}
 	return s
+}
+
+// ContractCaller is the eth_call surface MinedRevert needs; *Client and go-ethereum clients satisfy it.
+type ContractCaller interface {
+	CallContract(ctx context.Context, msg ethereum.CallMsg, block *big.Int) ([]byte, error)
+}
+
+const minedRevertReplayTimeout = 5 * time.Second
+
+// MinedRevert describes why a mined transaction reverted by replaying it as an eth_call on its parent
+// block's state; receipts carry no revert data. Best effort and bounded: transactions earlier in the
+// same block are not applied, so the replay may succeed, and a failed read only says so. msg must be
+// the reverted transaction's sender, target, value and calldata. Call it only on the failure path.
+func (d *RevertDecoder) MinedRevert(ctx context.Context, caller ContractCaller, msg ethereum.CallMsg, block *big.Int) string {
+	if block == nil || block.Sign() <= 0 {
+		return "revert reason unavailable: unknown inclusion block"
+	}
+	ctx, cancel := context.WithTimeout(ctx, minedRevertReplayTimeout)
+	defer cancel()
+	parent := new(big.Int).Sub(block, big.NewInt(1))
+	_, err := caller.CallContract(ctx, msg, parent)
+	if err == nil {
+		return fmt.Sprintf("replay at block %s did not revert (an earlier transaction in block %s changed the state)", parent, block)
+	}
+	data, reverted := RevertData(err)
+	if !reverted {
+		return fmt.Sprintf("revert reason unavailable: replay at block %s failed: %v", parent, err)
+	}
+	if len(data) == 0 {
+		return fmt.Sprintf("replay at block %s reverted: %v", parent, err)
+	}
+	return fmt.Sprintf("replay at block %s reverted with %s", parent, d.Describe(data))
 }

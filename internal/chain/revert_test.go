@@ -1,10 +1,12 @@
 package chain
 
 import (
+	"context"
 	"math/big"
 	"strings"
 	"testing"
 
+	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/crypto"
@@ -105,5 +107,44 @@ func TestRevertDataAndExplain(t *testing.T) {
 	}
 	if _, reverted := RevertData(nil); reverted {
 		t.Fatal("nil is not a revert")
+	}
+}
+
+type fakeCaller struct {
+	err   error
+	block *big.Int
+}
+
+func (f *fakeCaller) CallContract(_ context.Context, _ ethereum.CallMsg, block *big.Int) ([]byte, error) {
+	f.block = block
+	return nil, f.err
+}
+
+func TestMinedRevertReplaysOnParentState(t *testing.T) {
+	t.Parallel()
+	parsed, _ := abi.JSON(strings.NewReader(testErrorsABI))
+	decoder := NewRevertDecoder(&parsed)
+	payload := hexutil.Encode(crypto.Keccak256([]byte("InvalidProtocolSignature()"))[:4])
+	for name, tc := range map[string]struct {
+		err  error
+		want string
+	}{
+		"decoded":        {dataRPCError{data: payload}, "replay at block 99 reverted with InvalidProtocolSignature()"},
+		"no payload":     {errors.New("execution reverted: Ownable: caller is not the owner"), "replay at block 99 reverted: execution reverted: Ownable: caller is not the owner"},
+		"did not revert": {nil, "replay at block 99 did not revert (an earlier transaction in block 100 changed the state)"},
+		"read failed":    {errors.New("context deadline exceeded"), "revert reason unavailable: replay at block 99 failed: context deadline exceeded"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			caller := &fakeCaller{err: tc.err}
+			if got := decoder.MinedRevert(t.Context(), caller, ethereum.CallMsg{}, big.NewInt(100)); got != tc.want {
+				t.Fatalf("MinedRevert = %q, want %q", got, tc.want)
+			}
+			if caller.block.Int64() != 99 {
+				t.Fatalf("replayed at %s, want the parent block 99", caller.block)
+			}
+		})
+	}
+	if got := decoder.MinedRevert(t.Context(), &fakeCaller{}, ethereum.CallMsg{}, nil); got != "revert reason unavailable: unknown inclusion block" {
+		t.Fatalf("nil block = %q", got)
 	}
 }
