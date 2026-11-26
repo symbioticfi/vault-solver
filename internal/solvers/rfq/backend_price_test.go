@@ -74,11 +74,16 @@ func TestHINCQuoteUsesSixDecimalShares(t *testing.T) {
 	hinc := common.HexToAddress("0x015C477A4E2881C4B3bB8999f59ee4A04e812344")
 	s := testServer()
 	s.quotes.minAmountsIn = minAmountsFor(t, hinc, "1000")
+	s.quotes.discountsEnabled = true
+	s.quotes.resolveRoute = testConnectorQuoteRoute(common.HexToAddress("0x43"))
 	body := validQuoteBody()
 	decimals := 6
+	discountID := common.HexToHash("0x1234").Hex()
 	body.TokenIn = hinc.Hex()
-	body.Adapters[0].TokenInDecimals = &decimals
-	body.Adapters[0].Price = "974023721000000000000"
+	entry := &body.Adapters[0]
+	entry.TokenInDecimals = &decimals
+	entry.Price = "974023721000000000000"
+	entry.DiscountID, entry.DiscountPrecision = &discountID, "100000000"
 
 	body.Amount = "999"
 	rr := do(t, s.handler(), http.MethodPost, "/quote", testSecret, body)
