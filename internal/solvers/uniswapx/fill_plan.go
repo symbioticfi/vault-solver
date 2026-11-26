@@ -181,7 +181,7 @@ func (s *Solver) preflightPlan(
 		return preparedFill{}, err
 	}
 	if _, err := s.chain.CallContract(ctx, ethereum.CallMsg{From: s.solverAddress, To: &order.Executor, Data: data}, nil); err != nil {
-		return preparedFill{}, errors.Errorf("%w: %w", errFillPreflight, err)
+		return preparedFill{}, errors.Errorf("%w: %w", errFillPreflight, revertDecoder.Explain(err))
 	}
 	return preparedFill{plan: plan, data: data, validUntil: until}, nil
 }

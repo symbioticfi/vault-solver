@@ -6,6 +6,7 @@ import (
 	"math/big"
 	"time"
 
+	ethereum "github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/go-errors/errors"
 	"go.opentelemetry.io/otel/trace"
@@ -27,6 +28,8 @@ var (
 type pendingUniswapFill struct {
 	order  *resolvedOrder
 	result <-chan txmanager.Result
+	// call replays a mined revert to recover its reason; unset when the sender is not ours.
+	call ethereum.CallMsg
 	// span and end keep the uniswapx.fill span open from submission until the transaction result
 	// arrives: span carries the outcome attributes, end closes it. startFill sets both, and end is
 	// idempotent, so the span is never ended twice.
@@ -290,6 +293,7 @@ func (s *Solver) startFill(
 	)
 	return &pendingUniswapFill{
 		order: order, result: result,
+		call: ethereum.CallMsg{From: s.solverAddress, To: &order.Executor, Data: data},
 		span: trace.SpanFromContext(ctx), end: end,
 	}, nil
 }
@@ -544,7 +548,8 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 	s.fillPath().fillSettled()
 	if result.NotAdmitted {
 		// The lane refusing a fill is an expected outcome, not a failure of this fill.
-		observability.Decline(ctx, "fill_not_admitted", errorReason(result.Err))
+		resultErr := revertDecoder.Explain(result.Err)
+		observability.Decline(ctx, "fill_not_admitted", errorReason(resultErr))
 		s.observeFillOutcome(liquidlane.FillOutcomeNotAdmitted)
 		s.retry(order.Hash, now, false)
 		observability.Log(ctx).V(1).Info(
@@ -552,7 +557,7 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 			"source", order.Source,
 			"orderHash", order.Hash.Hex(),
 			"quoteId", order.QuoteID,
-			"error", result.Err,
+			"error", resultErr,
 		)
 		return
 	}
@@ -586,10 +591,7 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 		return
 	}
 	if !outcome.Included() {
-		err = result.Err
-		if err == nil {
-			err = errors.Errorf("unknown transaction outcome %q", outcome)
-		}
+		err = s.explainFillFailure(ctx, fill, result)
 		s.observeFillOutcome(liquidlane.FillOutcomeFailure)
 		s.retry(order.Hash, now, true)
 		s.recordOrderFillFailure(ctx, order, now)
@@ -616,6 +618,18 @@ func (s *Solver) completePendingFill(ctx context.Context, fill *pendingUniswapFi
 	}
 	s.recordFillSuccess()
 	s.complete(order.Hash, now)
+}
+
+// explainFillFailure names why a fill was not included; a mined revert is replayed for its reason.
+func (s *Solver) explainFillFailure(ctx context.Context, fill *pendingUniswapFill, result txmanager.Result) error {
+	if result.Err == nil {
+		return errors.Errorf("unknown transaction outcome %q", result.Outcome)
+	}
+	if result.Outcome != txmanager.OutcomeReverted || fill.call.To == nil || result.Receipt == nil {
+		return revertDecoder.Explain(result.Err)
+	}
+	return errors.Errorf("%w (%s)", result.Err,
+		revertDecoder.MinedRevert(ctx, s.chain, fill.call, result.Receipt.BlockNumber))
 }
 
 // recordOwnedFillAttempt retains signed ownership across retries without changing failure budgets.

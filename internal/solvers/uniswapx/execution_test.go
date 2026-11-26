@@ -459,6 +459,10 @@ func (f contractCallerFunc) CallContract(
 	return f(ctx, call, blockNumber)
 }
 
+func (f contractCallerFunc) ReplayMinedCall(ctx context.Context, call ethereum.CallMsg, block *big.Int) ([]byte, error) {
+	return f(ctx, call, block)
+}
+
 type directExecutionFixture struct {
 	now      time.Time
 	route    liquidlane.Route
